@@ -43,8 +43,8 @@ const container = document.getElementById("root")!;
 const root = createRoot(container);
 // listOwners as the server answers it (sessionOwnership.performListOwners).
 const ownersReply = (owners: any[], extra: Record<string, any> = {}) => ({
-  conversation_id: id, short_id: "jx1", owners, owner_ids: owners.map((o) => o.user_id), role: null, role_id: null,
-  driver: owners[0] ? { kind: "user", user_id: owners[0].user_id } : null, driver_user_id: null, runner: null, can_edit: true, ...extra,
+  conversation_id: id, short_id: "jx1", owners, owner_ids: owners.map((o) => o.user_id), role: null,
+  runner: null, author_id: null, bots: [], can_edit: true, ...extra,
 });
 const setOwners = (owners: any[], extra: Record<string, any> = {}) => replies.set("sessionOwnership:listOwners", ownersReply(owners, extra));
 let generation = 0;
@@ -117,16 +117,16 @@ test("owners are faces on the chip, named on hover", async () => {
 });
 
 test("the driver is ringed and a paused role greyed", async () => {
+  // The role and the driver live on the session row; the owners row carries the role's face.
+  useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: runner.id, org_role_id: "role1", driver_user_id: "me" } } });
   setOwners([{ user_id: "me", name: "Ashot" }], {
     role: { role_id: "role1", short_id: "or-1", handle: "evals", name: "Eval Suite lead", avatar: null },
-    role_id: "role1",
-    driver: { kind: "user", user_id: "me" },
-    driver_user_id: "me",
   });
   await render(true);
   expect(ownersSeg()!.title).toBe("Owners: Ashot (driver), Eval Suite lead (paused)");
   expect(ownersSeg()!.querySelectorAll(".own-drv").length).toBe(1);
   expect(ownersSeg()!.querySelectorAll(".own-paused").length).toBe(1);
+  useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: runner.id } } });
 });
 
 test("existing owners remain selected when another teammate claims", async () => {
@@ -175,10 +175,12 @@ test("Save sends the whole staged change once, and the faces follow at once", as
   await click(document.querySelector("[data-owners-save]"));
   expect(dispatched).toHaveLength(1);
   expect(dispatched[0][1]).toEqual({ add: ["me"] });
-  // The view paints on the store row; the inverse puts it back.
-  expect(dispatched[0][2]).toEqual({ owner_ids: ["jason", "me"], role_id: null, driver: { kind: "user", user_id: "jason" } });
-  expect(dispatched[0][3]).toEqual({ change: { remove: ["me"] }, view: { owner_ids: ["jason"], role_id: null, driver: { kind: "user", user_id: "jason" } } });
+  // Undo takes the person back off.
+  expect(dispatched[0][2]).toEqual({ remove: ["me"] });
+  // Each fact in its home, by the server's own rule: the people on the owners
+  // row, and the wheel pinned to Jason on the session row (adding never hands it over).
   expect((useInboxStore.getState() as any).sessionOwners[id].owner_ids).toEqual(["jason", "me"]);
+  expect((useInboxStore.getState() as any).conversations[id].driver_user_id).toBe("jason");
   expect(ownersSeg()!.title).toBe("Owners: Jason (driver), Ashot");
   // The server echoes the Save: the pending view settles and goes.
   setOwners([{ user_id: "jason", name: "Jason" }, { user_id: "me", name: "Ashot" }]);

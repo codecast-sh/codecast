@@ -17,6 +17,7 @@
 // of what each edit does to a tree.
 import { create, current, isDraft } from "mutative";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
+import { applyOwnersChangeTo, listedOwnerIds, ownersFactsFromRead, type OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
 import { createDecisionAreasSlice, type DecisionAreasSliceActions } from "./decisionAreasSlice";
 import {
   countStates,
@@ -236,18 +237,14 @@ export type SessionDriverTarget = { kind: "role" } | { kind: "user"; user_id: st
 export type SessionOwnersChange = {
   add?: string[];
   remove?: string[];
+  /** Rows put back as they were (an undo of a remove). */
+  restore?: OwnerRowFact[];
   role?: string | null;
   driver?: SessionDriverTarget;
-  leave?: { move_to_device_id?: string };
+  /** `runner_id`/`runner_is_bot` name the account the move hands it to: the
+   *  store needs them to paint the result; only the device goes to the server. */
+  leave?: { move_to_device_id?: string; runner_id?: string; runner_is_bot?: boolean };
   note?: string;
-};
-
-/** What a Save paints on the sessionOwners row before the server answers:
- *  the fields listOwners echoes back exactly. */
-export type SessionOwnersView = {
-  owner_ids: string[];
-  role_id: string | null;
-  driver: { kind: "role"; role_id: string } | { kind: "user"; user_id: string } | null;
 };
 
 export type OrgCreateRoleInput = {
@@ -311,11 +308,11 @@ export type OrgSliceActions = DecisionAreasSliceActions & {
    *  Resolves to the reparent result (told counts + the new parent) so the
    *  caller can toast both things once the server echoes. */
   reparentOrgSession: (conversationId: string, target: OrgReparentSessionTarget, opts?: { row?: OrgSession | null; note?: string; from_session?: string }) => Promise<ReparentResult | undefined>;
-  /** The owners menu's Save: `view` paints on the sessionOwners row (and the
-   *  role on the session row) now, `change` rides one dispatch to
-   *  applyOwnersChange. `inverse` is the change and view that put it back,
-   *  which the undo policy replays; null when nothing can (a leave moved it). */
-  applySessionOwners: (conversationId: string, change: SessionOwnersChange, view: SessionOwnersView, inverse?: { change: SessionOwnersChange; view: SessionOwnersView } | null) => void;
+  /** The owners menu's Save: the shared owners rule paints the result in each
+   *  fact's one home (the people on the sessionOwners row, the role and the
+   *  driver on the session row), and `change` rides one dispatch to
+   *  applyOwnersChange. `inverse` puts it back for undo; null when nothing can. */
+  applySessionOwners: (conversationId: string, change: SessionOwnersChange, inverse?: SessionOwnersChange | null) => void;
   /** Change a role's reports_to. Resolves to the reparent result (told counts). */
   reparentOrgRole: (roleId: string, reportsTo: OrgParentRef, note?: string) => Promise<ReparentResult | undefined>;
   /** Change who a team member reports to (null: nobody). Dispatch runs orgPeople.reparentPerson. */
@@ -1449,23 +1446,25 @@ export function createOrgSlice(): OrgSliceImpl {
       }
     }),
 
-    // The owners menu's Save. The sessionOwners row takes the view (a
-    // localFirst collection: the fields hold until listOwners echoes them)
-    // and the session row its role, in the same tick.
-    applySessionOwners: action(function (this: OrgDraft, conversationId: string, change: SessionOwnersChange, view: SessionOwnersView, _inverse?: { change: SessionOwnersChange; view: SessionOwnersView } | null) {
+    // The owners menu's Save, painted by the same rule the server runs
+    // (shared/contracts/sessionOwners), so what lands here is what listOwners
+    // and the inbox row answer, and the fields this holds release on the echo.
+    applySessionOwners: action(function (this: OrgDraft, conversationId: string, change: SessionOwnersChange, _inverse?: SessionOwnersChange | null) {
       const draft = this as OrgDraft & {
-        sessionOwners?: Record<string, { owner_ids?: string[]; role_id?: string | null; driver?: SessionOwnersView["driver"] }>;
-        sessions?: Record<string, { org_role_id?: string | null; standing_role_id?: string | null }>;
+        sessionOwners?: Record<string, any>;
+        sessions?: Record<string, any>;
+        conversations?: Record<string, any>;
+        currentUser?: { _id?: string } | null;
       };
-      const row = draft.sessionOwners?.[conversationId];
-      if (row) {
-        row.owner_ids = view.owner_ids;
-        row.role_id = view.role_id;
-        row.driver = view.driver;
-      }
-      if (change.role === undefined) return;
-      const session = draft.sessions?.[conversationId];
-      if (session && !session.standing_role_id) session.org_role_id = change.role;
+      const people = draft.sessionOwners?.[conversationId];
+      const home = draft.sessions?.[conversationId] ?? draft.conversations?.[conversationId];
+      if (!people || !home || home.standing_role_id) return;
+      const before = ownersFactsFromRead(people, home);
+      const to = change.leave?.runner_id ? { runner_id: change.leave.runner_id, runner_is_bot: !!change.leave.runner_is_bot } : undefined;
+      const next = applyOwnersChangeTo(before, { ...change, leave: change.leave ? { move_to: to } : undefined }, { actor: String(draft.currentUser?._id ?? ""), now: Date.now() });
+      people.owner_ids = listedOwnerIds(next);
+      if ((home.org_role_id ?? null) !== next.role_id) home.org_role_id = next.role_id;
+      if ((home.driver_user_id ?? null) !== next.driver_user_id) home.driver_user_id = next.driver_user_id;
     }),
 
     reparentOrgPerson: action(function (this: OrgDraft, _teamId: string, userId: string, reportsTo: string | null) {

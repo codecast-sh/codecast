@@ -9,7 +9,7 @@
  *
  * The menu stages every change (remove, leave, add, make driver) and applies
  * nothing until Save, which sends the whole change in one store action
- * (applySessionOwners) and paints it at once through useOwners' pending view.
+ * (applySessionOwners), which paints it at once by the server's own rule.
  * Leaving a session that runs on your account first moves it to a team
  * machine, so it stays somewhere someone can see it.
  */
@@ -17,7 +17,7 @@
 import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { Plus, Search, UserCheck, X, ChevronRight, BadgePlus } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
-import { useOwnerCandidates, pickRoster, type OwnersApi, type OwnerRole, type SessionDriver } from "../hooks/useOwners";
+import { useOwnerCandidates, pickRoster, snapshotsOf, type OwnersApi, type OwnerRole, type SessionDriver } from "../hooks/useOwners";
 import { addPeople, addPerson, addRole, diffOwners, driverKey, leave, removePerson, removeRole, type OwnersDraft } from "../lib/ownersDraft";
 import { useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
@@ -176,10 +176,10 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
 
   // Leave, the move with it, and everything else land as one change, so a
   // refusal (the move or the leave) rolls the whole Save back.
-  const { added, removed, leaving: iLeave, roleChanged, driverChanged, dirty, change, view, inverse } = diffOwners(initial, draft, { meId, initialDriverUserId: owners.row?.driver_user_id ?? null });
+  const { added, removed, leaving: iLeave, roleChanged, driverChanged, dirty, change, inverse } = diffOwners(initial, draft, { meId, initialDriverUserId: owners.session.driver_user_id, snapshots: snapshotsOf(owners.row, initial.ownerIds) });
   const save = () => {
     if (!dirty) return;
-    owners.applyChange(change, view, inverse);
+    owners.applyChange(change, inverse);
     onClose();
   };
 
@@ -216,9 +216,9 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
   // A teammate who only sees the session reads the owners: no ×, no Make
   // driver, no candidates (the server refuses the rest anyway).
   const readOnly = !owners.canEdit;
-  // The only owner of a session someone else runs cannot leave it: nobody
-  // would be left to own it.
-  const soleOwner = !!meId && draft.ownerIds.length === 1 && draft.ownerIds[0] === meId && !runsOnMine;
+  // The only owner of a session an agent box runs cannot leave it: nobody
+  // would be left to own it (a person who runs it would take it over).
+  const soleOwner = !!meId && draft.ownerIds.length === 1 && draft.ownerIds[0] === meId && !runsOnMine && !!owners.runner?.is_bot;
   const ownerRow = (key: string, face: ReactNode, name: string, sub: string, onRemove: (() => void) | null, removeLabel: string, driverOf: SessionDriver | null, dim = false) => (
     <div key={key} className={ROW} data-owner-row={key} onMouseEnter={(e) => e.currentTarget.setAttribute("data-highlighted", "")} onMouseLeave={(e) => e.currentTarget.removeAttribute("data-highlighted")}>
       {face}
@@ -273,7 +273,7 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
       {meId && isPerson(owners.currentUser) && !draft.ownerIds.includes(meId) && !iLeave && (
         <button type="button" data-take-ownership className={`${ROW} w-full text-sol-cyan`} onClick={() => {
           // A claim is one press: the server lets anyone who sees the session take it.
-          if (readOnly) { owners.applyChange({ add: [meId] }, { ...view, owner_ids: [...view.owner_ids, meId] }, { change: { remove: [meId] }, view }); onClose(); }
+          if (readOnly) { owners.applyChange({ add: [meId] }, { remove: [meId] }); onClose(); }
           else add({ key: `p:${meId}`, kind: "person", person: personOf(meId) });
         }}>
           <UserCheck className="w-3.5 h-3.5" /> Take ownership

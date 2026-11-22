@@ -36,6 +36,25 @@ export type OwnersChangeInput = {
   leave?: { move_to?: { runner_id: string; runner_is_bot: boolean } };
 };
 
+/**
+ * The facts as a client holds them: the people from an owners read
+ * (sessionOwnership.listOwners: `owners`, where a starter with no row is
+ * `implicit`, plus `runner`, `author_id` and `bots`), and the role, the driver
+ * and the primary from the session row. The web store paints a Save from
+ * exactly this, so a server test can prove the read is enough.
+ */
+export function ownersFactsFromRead(read: any, sessionRow: any): OwnersFacts {
+  return {
+    rows: ((read?.owners ?? []) as any[]).filter((o) => !o.implicit).map((o) => ({ user_id: String(o.user_id), added_at: Number(o.added_at ?? 0) })),
+    author_id: read?.author_id ? String(read.author_id) : null,
+    runner_id: String(read?.runner?.user_id ?? sessionRow?.user_id ?? ""),
+    bots: ((read?.bots ?? []) as unknown[]).map(String),
+    role_id: sessionRow?.org_role_id ? String(sessionRow.org_role_id) : null,
+    driver_user_id: sessionRow?.driver_user_id ? String(sessionRow.driver_user_id) : null,
+    primary_id: sessionRow?.owner_user_id ? String(sessionRow.owner_user_id) : null,
+  };
+}
+
 /** Rows in the order they were added (stable for equal stamps). */
 export function sortedRows(rows: OwnerRowFact[]): OwnerRowFact[] {
   return rows.map((r, i) => ({ r, i })).sort((a, b) => a.r.added_at - b.r.added_at || a.i - b.i).map(({ r }) => r);

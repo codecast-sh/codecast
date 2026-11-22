@@ -599,8 +599,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   // The owners menu's Save (sessionOwnership.applyOwnersChange): people added
   // and removed, the role, and who drives, in one transaction.
+  // The store's change also names the move's account (for its own paint);
+  // the server takes the device and finds the account itself.
   applySessionOwners: async (ctx, _userId, [conversationId, change]: [string, any]) =>
-    ctx.runMutation!((api as any).sessionOwnership.applyOwnersChange, { session_id: conversationId, change }),
+    ctx.runMutation!((api as any).sessionOwnership.applyOwnersChange, {
+      session_id: conversationId,
+      change: { ...change, ...(change?.leave ? { leave: change.leave.move_to_device_id ? { move_to_device_id: change.leave.move_to_device_id } : {} } : {}) },
+    }),
   // The assignee acknowledges a handoff (the banner's Got it, an inbox pill).
   ackSessionAssignment: async (ctx, _userId, [conversationId]: [string]) =>
     ctx.runMutation!((api as any).sessionOwnership.ackSessionAssignment, { session_id: conversationId }),

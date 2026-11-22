@@ -353,15 +353,16 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["sessionGoals.forConversation"],
     writtenBy: ["sessionGoals"],
   },
-  // A session's owners (convex sessionOwnership.listOwners): one row per
+  // A session's people (convex sessionOwnership.listOwners): one row per
   // conversation, keyed by its id, fed while its header is mounted, so delta.
-  // The people, the role, who drives and who runs it; the header's faces and
-  // the owners menu read it. localFirst: a Save writes owner_ids, role_id,
-  // driver and driver_user_id on the draft before applyOwnersChange lands.
+  // The owners in order, who runs it and who started it; the header's faces
+  // and the owners menu read it. The role and the driver live on the session
+  // row. localFirst: a Save writes owner_ids by the shared owners rule
+  // (shared/contracts/sessionOwners) before applyOwnersChange lands.
   sessionOwners: {
     persistence: { kind: "collection", key: "sessionOwners" },
     // Every field but the ids is a list or an object: compared by content.
-    sync: { isDelta: true, deepFields: ["owners", "owner_ids", "role", "driver", "runner"] },
+    sync: { isDelta: true, deepFields: ["owners", "owner_ids", "role", "runner", "bots"] },
     localFirst: true,
     feeds: ["sessionOwnership.listOwners"],
     writtenBy: ["sessionOwnership"],

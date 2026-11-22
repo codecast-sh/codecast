@@ -6,12 +6,13 @@
  * by the web header (AssignmentBadge, OwnersMenu) and the mobile
  * AssignmentChip.
  *
- * Local-first: listOwners FEEDS the `sessionOwners` store collection (one row
- * per conversation, keyed by its id) and this hook reads that row. Every
- * write is the store's applySessionOwners action, which patches owner_ids,
- * role_id and driver on the row before applyOwnersChange lands, so the faces
- * and the menu repaint in the same tick, undo and redo included; a refusal
- * rolls the row back through the store's own refusal path.
+ * Local-first: listOwners FEEDS the `sessionOwners` store collection (the
+ * people, one row per conversation) and this hook reads that row; the role and
+ * the driver come from the session row, their one home. Every write is the
+ * store's applySessionOwners action, which paints each fact in its home by the
+ * rule the server runs (shared/contracts/sessionOwners) before
+ * applyOwnersChange lands; a refusal rolls it back through the store's own
+ * refusal path.
  *
  * MOBILE-SAFE by construction: this file is bundled into the Expo app, so no
  * DOM, no sonner, no window/document (see shared-code Hermes traps). The
@@ -26,8 +27,8 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { peopleOf } from "@codecast/shared/team/memberKind";
-import type { SessionOwnersChange, SessionOwnersView } from "../store/orgSlice";
-import { driverKey } from "../lib/ownersDraft";
+import type { SessionOwnersChange } from "../store/orgSlice";
+import { driverOf, type OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
 
 type OwnerInfo = {
   user_id: string;
@@ -59,22 +60,26 @@ export type SessionDriver = { kind: "role"; role_id: string } | { kind: "user"; 
 /** The account that runs the session, whether or not it owns it. */
 export type OwnerRunner = OwnerInfo & { is_bot: boolean };
 
-/** The `sessionOwners` row: listOwners as the server answers it, keyed by the
- *  conversation. `owners`, `role` and `runner` are enrichment the server
- *  derives; `owner_ids`, `role_id` and `driver` are what a Save writes. */
+/** The `sessionOwners` row: the PEOPLE of a session, as listOwners answers,
+ *  keyed by the conversation. `owner_ids` is what a Save writes; `owners`,
+ *  `runner`, `author_id`, `bots` and the role's face are enrichment the server
+ *  derives. The role and the driver live on the session row, their one home. */
 export type SessionOwnersRow = {
   _id: string;
   short_id: string;
   conversation_id: string;
-  owners: OwnerInfo[];
+  owners: (OwnerInfo & { implicit?: boolean })[];
   owner_ids: string[];
+  /** The filed role's face (name, handle, avatar), for when the org tree is not loaded. */
   role: OwnerRole | null;
-  role_id: string | null;
-  driver: SessionDriver | null;
-  driver_user_id: string | null;
   runner: OwnerRunner | null;
+  author_id: string | null;
+  bots: string[];
   can_edit: boolean;
 };
+
+/** The session row's half of the owners facts: the role, the driver, the primary. */
+export type SessionOwnerFacts = { role_id: string | null; driver_user_id: string | null; primary_id: string | null; runner_id: string | null };
 
 
 /**
@@ -100,9 +105,11 @@ export type OwnersEnv = {
   teamMembers: any[] | undefined;
   currentUser: any;
   notify?: (msg: string, kind: "success" | "error") => void;
-  // The store write (useStoreOwnersEnv): applySessionOwners with the view it
-  // paints and the change that puts it back.
-  apply: (change: SessionOwnersChange, view: SessionOwnersView, inverse: { change: SessionOwnersChange; view: SessionOwnersView } | null) => void;
+  // The store write (useStoreOwnersEnv): applySessionOwners with the change
+  // that puts it back.
+  apply: (change: SessionOwnersChange, inverse: SessionOwnersChange | null) => void;
+  // The session row's facts: the role, the driver, the primary, the runner.
+  session: SessionOwnerFacts;
   // The assignee's acknowledgement (store ackSessionAssignment).
   ack: () => void;
   // A role's face for a role id the row does not describe yet (just added).
@@ -154,25 +161,40 @@ export function useOwnerCandidates(
   return data?.team_members;
 }
 
-// A server from before the owners fields (a deploy gap) answers only `owners`:
-// derive the rest so the header still draws, read-only.
-const selectOwnersRow = (d: any) => (d ? [{
-  owner_ids: (d.owners ?? []).map((o: OwnerInfo) => o.user_id), role: null, role_id: null, driver: null, driver_user_id: null, runner: null, can_edit: false,
-  ...d, _id: String(d.conversation_id), conversation_id: String(d.conversation_id),
-}] : []);
+// The people only: the role and the driver the server also answers have their
+// home on the session row. A server from before these fields (a deploy gap)
+// answers only `owners`: derive the rest so the header still draws, read-only.
+const selectOwnersRow = (d: any) => {
+  if (!d) return [];
+  const { role_id: _r, driver: _d, driver_user_id: _du, ...people } = d;
+  return [{
+    owner_ids: (d.owners ?? []).map((o: OwnerInfo) => o.user_id), role: null, runner: null, author_id: null, bots: [], can_edit: false,
+    ...people, _id: String(d.conversation_id), conversation_id: String(d.conversation_id),
+  }];
+};
 const ownersRowSig = (r: SessionOwnersRow) => [
   (r.owner_ids ?? []).join(","),
-  r.role_id ?? "",
+  r.role?.role_id ?? "",
   r.role?.name ?? "",
-  driverKey(r.driver) ?? "",
-  r.driver_user_id ?? "",
   r.runner?.user_id ?? "",
   r.can_edit ? 1 : 0,
   (r.owners ?? []).map((o) => `${o.user_id}:${o.name ?? ""}:${o.image ?? ""}:${o.seen_at ?? ""}:${o.added_at ?? ""}`).join(","),
 ].join("|");
 
-/** The row as a Save's view: what applySessionOwners writes. */
-export const viewOfRow = (r: Pick<SessionOwnersRow, "owner_ids" | "role_id" | "driver">): SessionOwnersView => ({ owner_ids: r.owner_ids, role_id: r.role_id, driver: r.driver });
+/** The rows a removal can be undone with: put back exactly as they were. */
+export function snapshotsOf(row: Pick<SessionOwnersRow, "owners"> | null, ids: string[]): OwnerRowFact[] {
+  return (row?.owners ?? []).filter((o) => !o.implicit && ids.includes(o.user_id) && o.added_at).map((o) => ({
+    user_id: o.user_id, added_by: o.added_by ?? o.user_id, added_at: o.added_at!,
+    ...(o.seen_at ? { seen_at: o.seen_at } : {}), ...(o.note ? { note: o.note } : {}),
+  }));
+}
+
+/** Undo's change for a removal: the rows back in place, or a plain add for an owner who had none. */
+function putBack(row: SessionOwnersRow | null, ids: string[]): SessionOwnersChange {
+  const restore = snapshotsOf(row, ids);
+  const add = ids.filter((id) => !restore.some((r) => r.user_id === id));
+  return { ...(restore.length ? { restore } : {}), ...(add.length ? { add } : {}) };
+}
 
 export function useOwners(conversationId: string, env: OwnersEnv) {
   const { teamMembers, currentUser, implicitOwnerId } = env;
@@ -190,10 +212,11 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
 
   const ownerList: string[] = row ? row.owner_ids : implicitOwnerId ? [implicitOwnerId] : [];
   const ownerIds = useMemo(() => new Set(ownerList), [ownerList.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
-  const role: OwnerRole | null = !row?.role_id ? null
-    : row.role?.role_id === row.role_id ? row.role
-    : env.roleById?.(row.role_id) ?? { role_id: row.role_id, short_id: "", handle: "", name: "Role", avatar: null };
-  const driver = row?.driver ?? null;
+  const facts = env.session;
+  const role: OwnerRole | null = !facts.role_id ? null
+    : row?.role?.role_id === facts.role_id ? row.role
+    : env.roleById?.(facts.role_id) ?? { role_id: facts.role_id, short_id: "", handle: "", name: "Role", avatar: null };
+  const driver = driverOf(facts, ownerList) as SessionDriver | null;
   const runner = row?.runner ?? null;
 
   const roster: any[] = useMemo(() => teamMembers ?? [], [teamMembers]);
@@ -236,41 +259,35 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     return out.sort((a, b) => a.at - b.at);
   }, [row, memberById]);
 
-  /** One Save: `view` paints on the row now, `change` goes to the server, and
-   *  `inverse` (null when nothing can put it back, as after a move) is undo's. */
-  const applyChange = (change: SessionOwnersChange, view: SessionOwnersView, inverse: { change: SessionOwnersChange; view: SessionOwnersView } | null) => {
+  /** One Save: the store paints it by the shared rule, `change` goes to the
+   *  server, and `inverse` (null when nothing can put it back) is undo's. */
+  const applyChange = (change: SessionOwnersChange, inverse: SessionOwnersChange | null) => {
     if (!row) return;
-    env.apply(change, view, inverse);
+    env.apply(change, inverse);
   };
 
-  // Who drives once `removed` is gone: the role, else the first person left.
-  const fallbackDriver = (ids: string[], roleId: string | null): SessionDriver | null =>
-    roleId ? { kind: "role", role_id: roleId } : ids[0] ? { kind: "user", user_id: ids[0] } : null;
-
   /** The phone's single toggle: add or remove one person; `note` rides an add
-   *  to the person added. */
+   *  to the person added. Taking yourself off is a leave. */
   const toggle = (id: string, note?: string) => {
     if (!row) return;
-    const before = viewOfRow(row);
-    const removing = ownerIds.has(id);
-    const owner_ids = removing ? row.owner_ids.filter((x) => x !== id) : [...row.owner_ids, id];
-    const driver = removing && driverKey(row.driver) === `p:${id}` ? fallbackDriver(owner_ids, row.role_id) : row.driver;
-    const change: SessionOwnersChange = removing ? { remove: [id] } : { add: [id], ...(note?.trim() ? { note: note.trim() } : {}) };
-    applyChange(change, { owner_ids, role_id: row.role_id, driver }, { change: removing ? { add: [id] } : { remove: [id] }, view: before });
+    if (ownerIds.has(id)) {
+      applyChange({ remove: [id] }, id === meId ? null : putBack(row, [id]));
+      return;
+    }
+    applyChange({ add: [id], ...(note?.trim() ? { note: note.trim() } : {}) }, { remove: [id] });
   };
 
   /** File the session under a role: the role becomes an owner and drives. */
   const moveToRole = (roleId: string, _roleName?: string) => {
     if (!row) return;
-    applyChange({ role: roleId }, { owner_ids: row.owner_ids, role_id: roleId, driver: { kind: "role", role_id: roleId } },
-      { change: { role: row.role_id, driver: row.driver_user_id ? { kind: "user", user_id: row.driver_user_id } : { kind: "none" } }, view: viewOfRow(row) });
+    applyChange({ role: roleId }, { role: facts.role_id, driver: facts.driver_user_id ? { kind: "user", user_id: facts.driver_user_id } : { kind: "none" } });
   };
 
-  /** Remove every person (the phone's "clear"); the role stays. */
+  /** The phone's "clear": everyone but you comes off; the role stays. */
   const clearAll = () => {
-    if (!row || row.owner_ids.length === 0) return;
-    applyChange({ remove: row.owner_ids }, { owner_ids: [], role_id: row.role_id, driver: fallbackDriver([], row.role_id) },
-      { change: { add: row.owner_ids }, view: viewOfRow(row) });
+    if (!row) return;
+    const others = ownerList.filter((id) => id !== meId);
+    if (others.length) applyChange({ remove: others }, putBack(row, others));
   };
 
   // Bots (Mr Bot, Anchors) can't own a session — a bot's inbox is nobody's.
@@ -292,7 +309,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   // A refusal or a failure wins over a cached row: the controls go rather than offer a write the server refuses.
   const canManage = feed.refused || feed.error ? false : row ? true : undefined;
   const canEdit = !!row?.can_edit;
-  return { row, ownerIds, ownerList, implicitOwnerId, role, driver, runner, displayFor, toggle, moveToRole, applyChange, handoffs, clearAll, selectable, currentUser, handoff, myAssignment, ack, canManage, canEdit };
+  return { row, session: facts, ownerIds, ownerList, implicitOwnerId, role, driver, runner, displayFor, toggle, moveToRole, applyChange, handoffs, clearAll, selectable, currentUser, handoff, myAssignment, ack, canManage, canEdit };
 }
 
 export type OwnersApi = ReturnType<typeof useOwners>;

@@ -3,7 +3,7 @@ import { makeFakeDb } from "./testDb";
 import { performCreateRole } from "./orgRoles";
 import { ownersFactsOf, performApplyOwnersChange, performListOwners } from "./sessionOwnership";
 import { ownerRowsOf } from "./sessionOwners";
-import { applyOwnersChangeTo, driverOf, listedOwnerIds, type OwnersChangeInput } from "@codecast/shared/contracts/sessionOwners";
+import { applyOwnersChangeTo, driverOf, listedOwnerIds, ownersFactsFromRead, type OwnersChangeInput } from "@codecast/shared/contracts/sessionOwners";
 
 // The web store paints a Save with shared/contracts/sessionOwners before the
 // server answers, and holds those fields until the answer matches. These run
@@ -39,7 +39,11 @@ const conv = (db: any) => db._tables.conversations[0];
 /** Apply `change` both ways and require the same answer. */
 async function parity(db: any, actor: string, change: OwnersChangeInput & Record<string, any>) {
   const ctx = ctxOf(db);
-  const expected = applyOwnersChangeTo(await ownersFactsOf(ctx, conv(db)), change, { actor, now: Date.now() });
+  // What the store holds before the Save: the owners read and the session row.
+  const storeFacts = ownersFactsFromRead(await performListOwners(ctx, actor as any, "sess1"), { ...conv(db) });
+  const facts = await ownersFactsOf(ctx, conv(db));
+  expect(storeFacts).toEqual({ ...facts, rows: facts.rows });
+  const expected = applyOwnersChangeTo(storeFacts, change, { actor, now: Date.now() });
   await performApplyOwnersChange(ctx, actor as any, { session_id: "sess1", change: change as any });
   const read = (await performListOwners(ctx, ME as any, "sess1"))!;
   expect(read.owner_ids).toEqual(listedOwnerIds(expected));

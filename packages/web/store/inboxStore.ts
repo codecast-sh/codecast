@@ -972,6 +972,8 @@ export type InboxSession = {
   // Org pointers and, when one is set, a snapshot of that role so the row can
   // wear the role's face and name without the org tree loaded.
   org_role_id?: string | null;
+  // The person who took the wheel from the role (schema: who drives).
+  driver_user_id?: string | null;
   standing_role_id?: string | null;
   role?: SessionRoleSnapshot | null;
   // Kept-for-later flag. Drives the Favorites top-level view (a long-term set,

@@ -45,13 +45,19 @@ export function useStoreOwnersEnv(
     return undefined;
   })();
   const { roles } = useOrgRoles();
+  // The role, the driver and the primary owner live on the session row.
+  const [roleId, driverUserId, primaryId, runnerId] = useInboxStore(useShallow((s) => {
+    const row = sessionRowOf(s, conversationId);
+    return [row?.org_role_id ?? null, row?.driver_user_id ?? null, row?.owner_user_id ?? null, row?.user_id ?? null] as const;
+  }));
   return {
+    session: { role_id: roleId, driver_user_id: driverUserId, primary_id: primaryId, runner_id: runnerId },
     teamMembers,
     currentUser,
     implicitOwnerId,
     notify,
     ack: () => useInboxStore.getState().ackSessionAssignment(conversationId),
-    apply: (change, view, inverse) => useInboxStore.getState().applySessionOwners(conversationId, change, view, inverse),
+    apply: (change, inverse) => useInboxStore.getState().applySessionOwners(conversationId, change, inverse),
     roleById: (roleId) => {
       const r = roles.find((x) => x._id === roleId);
       return r ? { role_id: r._id, short_id: r.short_id, handle: r.handle, name: r.name, avatar: (r as any).avatar ?? null } : null;

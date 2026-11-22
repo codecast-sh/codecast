@@ -1,11 +1,12 @@
 // The owners menu's staged change (components/OwnersMenu): who owns the
 // session and who drives, as the person edits it before Save, and the one
-// change Save sends, the view it paints on the store row, and the change and
-// view that put it back. Pure, so the rules are tested without the menu: one
+// change Save sends and the change that puts it back (the store paints the
+// result by the shared owners rule). Pure, so the rules are tested without the menu: one
 // role at a time and it drives when added; taking away the driver hands the
 // wheel to the role, else the first person; leaving rides the change itself.
 import type { OwnerRole, SessionDriver } from "../hooks/useOwners";
-import type { SessionDriverTarget, SessionOwnersChange, SessionOwnersView } from "../store/orgSlice";
+import type { SessionDriverTarget, SessionOwnersChange } from "../store/orgSlice";
+import type { OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
 
 export type MoveTo = { device_id: string; is_remote: boolean; label: string; runner_id: string; runner_is_bot: boolean };
 
@@ -65,19 +66,18 @@ export type OwnersDiff = {
   driverChanged: boolean;
   dirty: boolean;
   change: SessionOwnersChange;
-  /** What the store row shows once the change lands, as listOwners will echo it. */
-  view: SessionOwnersView;
-  /** The change and view that put it back; null after a move, which undo cannot reverse. */
-  inverse: { change: SessionOwnersChange; view: SessionOwnersView } | null;
+  /** The change that puts it back; null for a leave, which nobody here can undo. */
+  inverse: SessionOwnersChange | null;
 };
 
 /**
  * `meId` makes taking yourself out a leave (the server's leave rule, with the
  * move when there is one) rather than a plain remove. `initialDriverUserId` is
- * the row's driver_user_id: an undo of a driver change puts back a driver
- * nobody chose as unset, never as a stamped person.
+ * the session's driver_user_id: an undo puts back a driver nobody chose as
+ * unset, never as a stamped person. `snapshots` are the owner rows as they
+ * stand, so an undo of a remove puts each back in its place.
  */
-export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meId?: string; initialDriverUserId?: string | null } = {}): OwnersDiff {
+export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meId?: string; initialDriverUserId?: string | null; snapshots?: OwnerRowFact[] } = {}): OwnersDiff {
   const added = draft.ownerIds.filter((id) => !initial.ownerIds.includes(id));
   const gone = initial.ownerIds.filter((id) => !draft.ownerIds.includes(id));
   const leaving = !!opts.meId && gone.includes(opts.meId);
@@ -86,31 +86,26 @@ export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meI
   // Setting a role makes it drive on the server, so a person who should drive
   // instead is named after it.
   const driverChanged = !!draft.driver && (!sameDriver(draft.driver, initial.driver) || (roleChanged && !!draft.role && draft.driver.kind === "user"));
+  const move = draft.moveTo;
   const change: SessionOwnersChange = {
     ...(added.length ? { add: added } : {}),
     ...(removed.length ? { remove: removed } : {}),
     ...(roleChanged ? { role: draft.role?.role_id ?? null } : {}),
     ...(driverChanged && draft.driver ? { driver: target(draft.driver) } : {}),
-    ...(leaving ? { leave: draft.moveTo ? { move_to_device_id: draft.moveTo.device_id } : {} } : {}),
+    ...(leaving ? { leave: move ? { move_to_device_id: move.device_id, runner_id: move.runner_id, runner_is_bot: move.runner_is_bot } : {} } : {}),
   };
-  // With nobody left, the person whose account now runs it owns it.
-  const runnerOwns = draft.ownerIds.length === 0 && !!draft.moveTo && !draft.moveTo.runner_is_bot;
-  const ownerIds = runnerOwns ? [draft.moveTo!.runner_id] : draft.ownerIds;
-  const driver = draft.driver ?? fallbackDriver({ ownerIds, role: draft.role });
-  const view: SessionOwnersView = { owner_ids: ownerIds, role_id: draft.role?.role_id ?? null, driver };
-  const initialView: SessionOwnersView = { owner_ids: initial.ownerIds, role_id: initial.role?.role_id ?? null, driver: initial.driver };
   const undoDriver: SessionDriverTarget = opts.initialDriverUserId
     ? { kind: "user", user_id: opts.initialDriverUserId }
     : initial.role && initial.driver?.kind === "role" ? { kind: "role" } : { kind: "none" };
-  const inverse = draft.moveTo ? null : {
-    change: {
-      ...(gone.length ? { add: gone } : {}),
-      ...(added.length ? { remove: added } : {}),
-      ...(roleChanged ? { role: initial.role?.role_id ?? null } : {}),
-      ...(driverChanged || roleChanged ? { driver: undoDriver } : {}),
-    } as SessionOwnersChange,
-    view: initialView,
+  const restore = (opts.snapshots ?? []).filter((r) => removed.includes(r.user_id));
+  const readd = removed.filter((id) => !restore.some((r) => r.user_id === id));
+  const inverse: SessionOwnersChange | null = leaving ? null : {
+    ...(restore.length ? { restore } : {}),
+    ...(readd.length ? { add: readd } : {}),
+    ...(added.length ? { remove: added } : {}),
+    ...(roleChanged ? { role: initial.role?.role_id ?? null } : {}),
+    ...(driverChanged || roleChanged ? { driver: undoDriver } : {}),
   };
   const dirty = added.length > 0 || gone.length > 0 || roleChanged || driverChanged;
-  return { added, removed, leaving, roleChanged, driverChanged, dirty, change, view, inverse };
+  return { added, removed, leaving, roleChanged, driverChanged, dirty, change, inverse };
 }

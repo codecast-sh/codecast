@@ -877,17 +877,13 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
 
   // ── Org record (display-only history items) ────────────────────────────────
   reparentOrgSession: org(reparentSessionLabel),
-  // The owners menu's Save carries the change and view that put it back
-  // (args[3]), built from the owners it was opened on: undo replays that,
-  // and its own inverse is the Save again. A leave that moved the session
-  // has none: nothing here moves it back.
+  // The owners menu's Save carries the change that puts it back (args[2]),
+  // built from the owners it was opened on: undo replays that, and its own
+  // inverse is the Save again. A leave has none: nothing here moves it back.
   applySessionOwners: {
     spec: {
       label: (ctx) => `Changed the owners of ${sessionTitle(ctx.before, ctx.args[0] as string)}`,
-      inverse: (ctx) => {
-        const back = ctx.args[3] as { change: unknown; view: unknown } | null | undefined;
-        return back ? [call("applySessionOwners", ctx.args[0], back.change, back.view, { change: ctx.args[1], view: ctx.args[2] })] : null;
-      },
+      inverse: (ctx) => (ctx.args[2] ? [call("applySessionOwners", ctx.args[0], ctx.args[2], ctx.args[1])] : null),
     },
   },
   reparentOrgRole: org((ctx) => `Moved ${roleName(ctx.before, ctx.args[0] as string)} in the org`),
