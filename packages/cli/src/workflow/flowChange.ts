@@ -245,8 +245,10 @@ async function branchTip(root: string, change: FrozenChange, runWorktree: string
     throw new Error(`Could not fetch the pull request's branch ${change.branch} from origin: ${(err.stderr || err.message).trim()}`);
   });
   const tip = await git(root, ["rev-parse", tracking]);
-  // The commits at `head` the fetched tip lacks: what moving `head` to it would drop.
-  const lostFrom = async (head: string) => (await isAncestor(root, head, tip)) ? [] : (await git(root, ["log", "--format=%h %s", `${tip}..${head}`])).split("\n").filter(Boolean);
+  // The commits at `head` whose change the fetched tip does not carry: what moving `head` to it would drop. A commit
+  // the tip holds an equivalent patch of (a rebase, force-pushed) is not lost (`git cherry` marks it "-").
+  const lostFrom = async (head: string) => (await isAncestor(root, head, tip)) ? []
+    : (await git(root, ["cherry", "-v", tip, head])).split("\n").filter((l) => l.startsWith("+ ")).map((l) => `${l.slice(2, 11)} ${l.slice(43)}`);
   const holder = await checkedOutAt(root, change.branch);
   if (!holder) {
     const current = await gitTry(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${change.branch}`]);
