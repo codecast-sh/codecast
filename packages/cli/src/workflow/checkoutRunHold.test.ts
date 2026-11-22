@@ -49,9 +49,36 @@ describe("the checkout's pass hold", () => {
     expect(holdOf().pid).toBe(process.pid);
   });
 
-  test("recording a run never overwrites a hold another process took", async () => {
+  test("recording a run throws, and overwrites nothing, when another process holds the checkout", async () => {
     await claimCheckoutRun(gitDir, async () => false, DEAD);
-    recordCheckoutRun(gitDir, "run-2", "ct-10", process.pid);
+    expect(() => recordCheckoutRun(gitDir, "run-2", "ct-10", process.pid)).toThrow(CheckoutRunHeld);
     expect(holdOf()).toEqual({ pid: DEAD, at: expect.any(Number) });
+  });
+
+  test("two passes that both judge one stale hold: one takes the checkout, the other is refused", async () => {
+    fs.mkdirSync(path.join(gitDir, "codecast"), { recursive: true });
+    fs.writeFileSync(path.join(gitDir, "codecast", "checkout-run.json"), JSON.stringify({ pid: DEAD, run_id: "run-old", at: 1 }));
+    // Both read the stale hold and ask after its run before either moves it.
+    let asked = 0;
+    let release!: () => void;
+    const together = new Promise<void>((r) => { release = r; });
+    const runLive = async () => { if (++asked === 2) release(); await together; return false; };
+    const [first, second] = await Promise.allSettled([claimCheckoutRun(gitDir, runLive, process.pid), claimCheckoutRun(gitDir, runLive, process.ppid)]);
+    expect([first.status, second.status].sort()).toEqual(["fulfilled", "rejected"]);
+    const lost = (first.status === "rejected" ? first : second) as PromiseRejectedResult;
+    expect(lost.reason).toBeInstanceOf(CheckoutRunHeld);
+    expect(lost.reason.message).toContain("is starting a pass");
+    expect(holdOf().pid).toBe(first.status === "fulfilled" ? process.pid : process.ppid);
+    expect(fs.readdirSync(path.join(gitDir, "codecast"))).toEqual(["checkout-run.json"]);
+  });
+
+  test("a hold still starting after five minutes is a reused pid's, and is taken over", async () => {
+    fs.mkdirSync(path.join(gitDir, "codecast"), { recursive: true });
+    // process.ppid is alive, as a reused pid would be.
+    fs.writeFileSync(path.join(gitDir, "codecast", "checkout-run.json"), JSON.stringify({ pid: process.ppid, at: Date.now() - 4 * 60_000 }));
+    await expect(claimCheckoutRun(gitDir, async () => true, process.pid)).rejects.toThrow("is starting a pass");
+    fs.writeFileSync(path.join(gitDir, "codecast", "checkout-run.json"), JSON.stringify({ pid: process.ppid, at: Date.now() - 6 * 60_000 }));
+    await claimCheckoutRun(gitDir, async () => true, process.pid);
+    expect(holdOf().pid).toBe(process.pid);
   });
 });
