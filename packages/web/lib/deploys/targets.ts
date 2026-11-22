@@ -5,7 +5,7 @@
 // Pure: no store, no React.
 import { worstCi, type CommitCiState, type DeployTargetPolicy, type QueueGroup } from "@codecast/shared/contracts/deployTargets";
 import { prNumberOf } from "@codecast/shared/changes";
-import type { DeployView } from "@codecast/shared/contracts/deploys";
+import type { DeployPushSummary, DeployView } from "@codecast/shared/contracts/deploys";
 import type { TargetState } from "../ship/journey";
 
 export type DeployTargetRow = {
@@ -73,7 +73,7 @@ export type TeamDeployRow = {
   created_at: number;
   live_at: number | null;
   finished_at: number | null;
-};
+} & Partial<DeployPushSummary>;
 
 export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null };
 
@@ -130,6 +130,12 @@ export function teamRowOfView(v: DeployView & { after?: TeamDeployRow["after"] }
     ...(v.steps ? { steps: v.steps.map(({ id, status }) => ({ id, status })) } : {}),
     commit_rows: v.commits.map((c) => ({ sha: c.sha, subject: c.subject, ...(c.author ? { author: c.author } : {}), ...(c.conversation_id ? { conversation_id: String(c.conversation_id) } : {}) })),
     tasks: v.carries.map((c) => ({ short_id: c.task_short_id, title: c.task_title })),
+    // How the push got there, as a list row carries it: the names stay on the view.
+    dirty: v.dirty ?? null,
+    machine: v.machine ?? null,
+    pushed_via: v.pushed_via ?? null,
+    adds_count: v.adds?.length ?? 0,
+    drops_count: v.drops?.length ?? 0,
     after: v.after ?? null,
     created_at: v.created_at,
     live_at: v.live_at,

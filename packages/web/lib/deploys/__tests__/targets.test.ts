@@ -78,6 +78,13 @@ describe("a deploy alone", () => {
     const row = teamRowOfView(view as any, "team:x");
     expect(row).toMatchObject({ workspace: "team:x", short_id: "dp-28", action: "deploy", started_by: "Ada", commits: 3, sessions: [{ conversation_id: "conv1" }], tasks: [{ short_id: "ct-1", title: "Fix it" }] });
     expect(row.commit_rows?.map((c) => c.sha)).toEqual(["c1", "c2", "c3"]);
+    // A view without a push record reads as a clean row.
+    expect(row).toMatchObject({ dirty: null, machine: null, pushed_via: null, adds_count: 0, drops_count: 0 });
+  });
+  test("carries how the push got there as counts, never the names", () => {
+    const row = teamRowOfView({ ...view, dirty: 3, machine: "ana-mac", pushed_via: "dev watcher", adds: ["fn:a:b"], drops: ["index:t.i", "table:t"] } as any, "team:x");
+    expect(row).toMatchObject({ dirty: 3, machine: "ana-mac", pushed_via: "dev watcher", adds_count: 1, drops_count: 2 });
+    expect(row).not.toHaveProperty("drops");
   });
   test("is a rebuild only when it sent the sha already live", () => {
     const base = { status: "live" as const, action: "deploy" as const, commits: 0 };

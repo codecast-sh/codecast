@@ -20,7 +20,7 @@ import { commitUrl, normalizeRepository, shortSha } from "./lib/gitRefs";
 import { recordExternalEvent } from "./externalEvents";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
-import { recordDeployMarker } from "./deploys";
+import { adderOf, isOwnWatcherPush, latestLiveDeploy, recordDeployMarker } from "./deploys";
 import { normalizeDeployTarget } from "@codecast/shared/contracts/deploys";
 
 const SURFACE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -129,13 +129,19 @@ export const markDeploy = mutation({
     // the same commit): one marker. A rollback to an earlier sha is a change
     // of what runs, so it gets a marker of its own.
     const previous = await latestDeploy(ctx, teamId, repository, surface);
+    const live = await latestLiveDeploy(ctx, `team:${teamId}`, surface, repository);
     // A deploy of the same commit with uncommitted files is a different deploy, and one that changed what runs is news.
-    if (previous?.sha === sha && !args.deploy && !args.dirty && !args.adds?.length && !args.drops?.length) {
+    // So is a clean deploy of a sha whose live deploy went out dirty or from the watcher: the tree it ran was not the sha's.
+    if (previous?.sha === sha && !args.deploy && !args.dirty && !args.adds?.length && !args.drops?.length
+      && (!live || (!live.dirty && live.pushed_via !== "dev watcher"))) {
       return { ok: true as const, event_id: previous._id, team_id: teamId, repository, surface, sha, version: version ?? null };
     }
 
     const now = Date.now();
-    const eventId = await recordExternalEvent(ctx, {
+    // A watcher push that lands on its own last push of the sha (recordDeployMarker) is that push again, not a new
+    // ship: it keeps the push's event, so a long uncommitted session is one event, not one per save.
+    const again = args.via === "dev watcher" && isOwnWatcherPush(live, { machine: args.machine, repository, sha }) ? live.event_ids[0] : undefined;
+    const eventId = again ?? await recordExternalEvent(ctx, {
       source: "codecast",
       team_id: teamId,
       repository,
@@ -173,13 +179,17 @@ export const markDeploy = mutation({
   },
 });
 
-/** The latest deploy that put a name on a surface. */
-export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number };
+/**
+ * The latest deploy that put a name on a surface. `committed_in` names the first clean deploy.sh push after it that
+ * kept the name: by then the name was in a commit, whoever's push first put it there.
+ */
+export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number; committed_in?: string };
 
 /**
  * For each name, the latest deploy of the repository's surface (among its
  * latest ADDED_BY_SCAN) whose adds hold it: who put it there, from which
- * machine and path. Names no deploy added are left out.
+ * machine and path, and the deploy that showed it committed (deploys.adderOf).
+ * Names no deploy added are left out.
  */
 export const addedBy = query({
   args: {
@@ -206,11 +216,12 @@ export const addedBy = query({
       .withIndex("by_workspace_target_created", (q) => q.eq("workspace", `team:${teamId}`).eq("target", target))
       .order("desc")
       .take(ADDED_BY_SCAN);
-    const adders = rows.filter((d) => d.repository === normalizeRepository(repository) && d.adds?.length);
+    const mine = rows.filter((d) => d.repository === normalizeRepository(repository));
     const found: AddedBy[] = [];
     for (const name of new Set(args.names)) {
-      const d = adders.find((x) => x.adds!.includes(name));
-      if (!d) continue;
+      const hit = adderOf(mine, name);
+      if (!hit) continue;
+      const d = hit.adder;
       found.push({
         name,
         deploy: d.short_id,
@@ -219,6 +230,7 @@ export const addedBy = query({
         via: d.pushed_via ?? null,
         at: d.live_at ?? d.created_at,
         dirty: d.dirty ?? 0,
+        ...(hit.committed_in ? { committed_in: hit.committed_in.short_id } : {}),
       });
     }
     return { found };

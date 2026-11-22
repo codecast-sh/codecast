@@ -321,7 +321,15 @@ export const recordShipPass = mutation({
     pr_url: v.optional(v.string()),
     commits: v.array(v.object({ sha: v.optional(v.string()), message: v.string(), files: v.number(), session_id: v.optional(v.string()), conversation_id: v.optional(v.string()) })),
     held: v.array(v.object({ group: v.string(), paths: v.number(), note: v.optional(v.string()) })),
-    deploys: v.array(v.object({ name: v.string(), stage: v.string(), ok: v.boolean(), target: v.optional(v.string()), output: v.optional(v.string()), dirty: v.optional(v.number()) })),
+    deploys: v.array(v.object({
+      name: v.string(), stage: v.string(), ok: v.boolean(), target: v.optional(v.string()), output: v.optional(v.string()), dirty: v.optional(v.number()),
+      // The push the step made, as deploy.sh reports it (changesDeploy.markDeploy takes the same): the machine, the
+      // path, and the names it put on the target and took off it.
+      machine: v.optional(v.string()),
+      via: v.optional(v.union(v.literal("deploy.sh"), v.literal("dev watcher"))),
+      adds: v.optional(v.array(v.string())),
+      drops: v.optional(v.array(v.string())),
+    })),
     started_at: v.number(),
   },
   handler: async (ctx, args) => {
@@ -370,6 +378,10 @@ export const recordShipPass = mutation({
           ...(step.ok ? {} : { note: (step.output ?? "").slice(-1500) || `${step.name} failed` }),
           ...(!args.pushed && step.ok ? { note: `deployed from ${sha.slice(0, 10)}, which the ship did not push` } : {}),
           ...(step.dirty ? { dirty: step.dirty } : {}),
+          ...(step.machine?.trim() ? { machine: step.machine.trim() } : {}),
+          ...(step.via ? { pushed_via: step.via } : {}),
+          ...(step.adds?.length ? { adds: step.adds } : {}),
+          ...(step.drops?.length ? { drops: step.drops } : {}),
           ship_pass_id: passId,
           at: now,
         });

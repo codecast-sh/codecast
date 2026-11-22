@@ -17,6 +17,7 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 import { execFileAsync, spawn } from "../proc.js";
 import { SESSION_TRAILER_KEY, sessionTrailerValue } from "@codecast/shared/blame";
@@ -340,6 +341,35 @@ export interface RunOptions {
   exec?: (command: string, cwd: string, log: Log, env?: Record<string, string>) => Promise<{ code: number; output: string }>;
 }
 
+/** What a deploy step's push did to its target, as the step reports it (packages/convex/deploy.sh writes it). */
+export type PushChanges = { machine?: string; via?: "deploy.sh"; adds?: string[]; drops?: string[] };
+
+/**
+ * Run a deploy step with a file it may fill with what its push put on its
+ * target and took off it (`{ adds, drops }`, named in CAST_PUSH_CHANGES_FILE).
+ * The ship records the deploy, so these ride on its record; a step that
+ * writes nothing reports nothing.
+ */
+export async function runDeployStep(
+  run: (env: Record<string, string>) => Promise<{ code: number; output: string }>,
+): Promise<{ code: number; output: string; changes: PushChanges }> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-push-"));
+  const file = path.join(dir, "changes.json");
+  try {
+    const r = await run({ CAST_PUSH_CHANGES_FILE: file });
+    let changes: PushChanges = {};
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+      const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
+      const adds = names(raw?.adds), drops = names(raw?.drops);
+      changes = { machine: os.hostname(), via: "deploy.sh", ...(adds.length ? { adds } : {}), ...(drops.length ? { drops } : {}) };
+    } catch { /* the step wrote nothing */ }
+    return { ...r, changes };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export interface ShipOutcome {
   ok: boolean;
   stage: "plan" | "commit" | "replay" | "level" | "check" | "deploy" | "push" | "done";
@@ -351,7 +381,7 @@ export interface ShipOutcome {
   level?: LevelResult;
   check?: { command: string; ok: boolean; ignored?: string[]; output?: string };
   /** Each deploy step's result; a step that names a target records a deploy of it (deploys.md DP11). */
-  deploys: Array<{ name: string; stage: string; ok: boolean; output?: string; target?: string; dirty?: number }>;
+  deploys: Array<{ name: string; stage: string; ok: boolean; output?: string; target?: string; dirty?: number } & PushChanges>;
   /** The upstream commit the pass replayed onto. */
   base?: string;
   import_gaps?: string[];
@@ -578,8 +608,8 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
       out.stage = "deploy";
       log(`deploying ${step.name}: ${step.run}`);
       const dirty = step.target ? await dirtyUnder(root, step.when) : 0;
-      const r = await exec(step.run, root, log, { ...shipEnv, CAST_SHIP_TIP: tip });
-      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(step.target ? { target: step.target } : {}), ...(dirty ? { dirty } : {}), ...(r.code ? { output: r.output.slice(-6000) } : {}) });
+      const r = await runDeployStep((env) => exec(step.run, root, log, { ...shipEnv, CAST_SHIP_TIP: tip, ...env }));
+      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(step.target ? { target: step.target } : {}), ...(dirty ? { dirty } : {}), ...(r.code === 0 ? r.changes : {}), ...(r.code ? { output: r.output.slice(-6000) } : {}) });
       if (r.code !== 0) return fail("deploy", `${step.name} failed before the push; nothing was pushed`);
     }
 
@@ -611,8 +641,8 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
     for (const step of steps.filter((s) => s.stage === "after_push")) {
       out.stage = "deploy";
       log(`deploying ${step.name}: ${step.run}`);
-      const r = await exec(step.run, root, log, { ...shipEnv, CAST_SHIP_TIP: tip });
-      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(step.target ? { target: step.target } : {}), ...(r.code ? { output: r.output.slice(-6000) } : {}) });
+      const r = await runDeployStep((env) => exec(step.run, root, log, { ...shipEnv, CAST_SHIP_TIP: tip, ...env }));
+      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(step.target ? { target: step.target } : {}), ...(r.code === 0 ? r.changes : {}), ...(r.code ? { output: r.output.slice(-6000) } : {}) });
       if (r.code !== 0) return { ...out, ok: false, stage: "deploy", reason: `pushed, but ${step.name} failed` };
     }
     return { ...out, ok: true, stage: "done" };

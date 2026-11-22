@@ -131,8 +131,7 @@ describe("cast ship added-by", () => {
     writeFileSync(file, JSON.stringify({ adds: ["fn:x:y"], drops: ["table:voiceprints"] }));
     await run("--surface", "backend", "--names", file, "index:voiceprints.by_user");
     expect(calls).toEqual([{ url: "https://cast.example/cli/deploys/added-by", body: { api_token: "tok", repository: "codecast-sh/codecast", surface: "backend", names: ["index:voiceprints.by_user", "table:voiceprints"] } }]);
-    expect(printed.at(-1)).toContain("index:voiceprints.by_user  dp-2372 uncommitted push by Ashot Petrosian on MacBook-Pro-182");
-    expect(printed.at(-1)).toContain("78 uncommitted files");
+    expect(printed.at(-1)).toContain("index:voiceprints.by_user  dp-2372 push with 78 uncommitted files by Ashot Petrosian on MacBook-Pro-182");
   });
 
   test("with nothing to ask it posts nothing", async () => {
@@ -142,6 +141,7 @@ describe("cast ship added-by", () => {
   });
 
   test("a watcher push reads as one", () => {
-    expect(formatAddedBy([{ ...FOUND[0], via: "dev watcher", dirty: 0 }])).toContain("dp-2372 dev watcher by Ashot Petrosian");
+    expect(formatAddedBy([{ ...FOUND[0], via: "dev watcher", dirty: 0 }])).toContain("dp-2372 dev watcher push by Ashot Petrosian");
+    expect(formatAddedBy([{ ...FOUND[0], committed_in: "dp-2380" }])).toContain("; committed since (dp-2380 carried it)");
   });
 });

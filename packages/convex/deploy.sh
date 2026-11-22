@@ -72,7 +72,8 @@ restore_env() {
     for f in ${HELD[@]+"${HELD[@]}"}; do [ -f "$f.deployhold" ] && mv "$f.deployhold" "$f"; done
     HELD=()
 }
-trap 'restore_env; release_lock' EXIT
+OWN_CHANGES=""
+trap 'restore_env; release_lock; [ -n "$OWN_CHANGES" ] && rm -f "$OWN_CHANGES"' EXIT
 
 # Prod is self-hosted. The admin key comes from the vault when the shell does
 # not carry it: the macOS Interactive re-exec above keeps no credentials, and
@@ -92,10 +93,17 @@ DIRTY="$(git -C "$ROOT" status --porcelain -- packages/convex/convex packages/sh
 # there. It warns and never refuses: the marker below carries the list, and
 # the server tells whoever's uncommitted push it was. Prod unreadable, the
 # push goes ahead without it.
-CHANGES="$(mktemp "${TMPDIR:-/tmp}/convex-push-changes.XXXXXX")"
-if ! ${WITH_KEY[@]+"${WITH_KEY[@]}"} bun scripts/prod-diff.ts --out "$CHANGES"; then
+# Under `cast ship checkout` the ship names the file (CAST_PUSH_CHANGES_FILE),
+# reads it after this step and puts it on the deploy it records.
+if [ -n "${CAST_PUSH_CHANGES_FILE:-}" ]; then
+    CHANGES="$CAST_PUSH_CHANGES_FILE"
+else
+    CHANGES="$(mktemp "${TMPDIR:-/tmp}/convex-push-changes.XXXXXX" 2>/dev/null)" || CHANGES=""
+    OWN_CHANGES="$CHANGES"
+fi
+if [ -z "$CHANGES" ] || ! ${WITH_KEY[@]+"${WITH_KEY[@]}"} bun scripts/prod-diff.ts --out "$CHANGES"; then
     echo "warning: could not read what this push changes on prod; pushing without that check" >&2
-    rm -f "$CHANGES"
+    [ -n "$CHANGES" ] && rm -f "$CHANGES"
     CHANGES=""
 fi
 
@@ -118,7 +126,8 @@ case " $* " in *" --dry-run "*) MARK_DRY="--dry-run" ;; esac
 MARK_EXTRA=()
 [ "$DIRTY" != "0" ] && MARK_EXTRA+=(--dirty "$DIRTY")
 # The machine it went out from and what it changed, for a cast that knows those flags (an older one records the rest).
-if command -v cast >/dev/null 2>&1 && cast ship mark --help 2>/dev/null | grep -q -- '--changes'; then
+MARK_HELP="$(command -v cast >/dev/null 2>&1 && cast ship mark --help 2>/dev/null || true)"
+if [[ "$MARK_HELP" == *--changes* ]]; then
     MARK_EXTRA+=(--via deploy.sh)
     [ -n "$CHANGES" ] && MARK_EXTRA+=(--changes "$CHANGES")
 fi
@@ -134,5 +143,4 @@ elif CAST_HTTP_TIMEOUT_MS=15000 cast ship mark --surface backend --sha "$SHA" ${
 else
     echo "warning: deploy marker for backend at ${SHA:0:7} not recorded; the deploy itself succeeded" >&2
 fi
-[ -n "$CHANGES" ] && rm -f "$CHANGES"
 exit 0

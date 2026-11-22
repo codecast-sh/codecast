@@ -208,6 +208,7 @@ describe("drops name the push that put them there", () => {
     expect(describeAdder({ ...adder, via: "dev watcher", dirty: 2 })).toStartWith("dp-2372, dev watcher by Ashot on MBP-182");
     expect(describeAdder({ ...adder, dirty: 0, machine: null })).toStartWith("dp-2372, push of a commit by Ashot, ");
     expect(describeAdder(undefined)).toBe("no recorded push added it");
+    expect(describeAdder({ ...adder, via: "dev watcher", committed_in: "dp-2380" })).toEndWith("; committed since (dp-2380 carried it)");
   });
 
   test("the summary puts each adder beside its drop, and says nothing about adders it could not ask", () => {

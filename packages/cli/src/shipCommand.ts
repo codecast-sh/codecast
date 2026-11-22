@@ -44,7 +44,7 @@ export type MarkOptions = {
 export type PushChanges = { adds?: string[]; drops?: string[] };
 
 /** The pushes that put each name on the surface: `cast ship added-by`. */
-export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number };
+export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number; committed_in?: string };
 
 /** The checkout the command stands in: its GitHub repository and HEAD. */
 export type LocalCheckout = { repository: string | null; head: string | null };
@@ -84,10 +84,10 @@ export function readChanges(path: string | undefined): PushChanges {
 /** Each name with the push that put it there, a line each. */
 export function formatAddedBy(found: AddedBy[]): string {
   return found.map((f) => {
-    const how = f.via === "dev watcher" ? "dev watcher" : f.dirty > 0 ? "uncommitted push" : "push";
+    const how = f.via === "dev watcher" ? "dev watcher push" : f.dirty > 0 ? `push with ${f.dirty} uncommitted file${f.dirty === 1 ? "" : "s"}` : "push of a commit";
     const who = [f.by, f.machine ? `on ${f.machine}` : null].filter(Boolean).join(" ");
-    const dirty = f.dirty > 0 ? `, ${f.dirty} uncommitted file${f.dirty === 1 ? "" : "s"}` : "";
-    return `${f.name}  ${f.deploy} ${how}${who ? ` by ${who}` : ""}, ${new Date(f.at).toLocaleString()}${dirty}`;
+    const since = f.committed_in ? `; committed since (${f.committed_in} carried it)` : "";
+    return `${f.name}  ${f.deploy} ${how}${who ? ` by ${who}` : ""}, ${new Date(f.at).toLocaleString()}${since}`;
   }).join("\n");
 }
 

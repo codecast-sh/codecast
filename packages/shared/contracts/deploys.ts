@@ -144,6 +144,18 @@ export function summarizeAfter(from: number, to: number, open: boolean, problems
   return { from, to, open, problems, errors, regressions, reopened, new_errors: newErrors, quiet: regressions === 0 && errors.length === 0 };
 }
 
+/** Which path pushed a deploy: deploy.sh, or the dev watcher pushing a working tree. */
+export type DeployPushedVia = "deploy.sh" | "dev watcher";
+
+/** What a list row says of a push (the targets view's history): how many names it added and dropped, never the names. */
+export type DeployPushSummary = {
+  dirty: number | null;
+  machine: string | null;
+  pushed_via: DeployPushedVia | null;
+  adds_count: number;
+  drops_count: number;
+};
+
 /** A deploy as every reader gets it (deploys.list, deploys.get). */
 export type DeployView = {
   _id: string;
@@ -172,8 +184,8 @@ export type DeployView = {
   /** The hostname of the machine that pushed it. */
   machine?: string | null;
   /** Which push path sent it. */
-  pushed_via?: "deploy.sh" | "dev watcher" | null;
-  /** Names it put on the target and took off it (`fn:`, `http:`, `index:`, `table:`). */
+  pushed_via?: DeployPushedVia | null;
+  /** Names it put on the target and took off it (`fn:`, `http:`, `index:`, `table:`); a list row has only their counts (DeployPushSummary). */
   adds?: string[];
   drops?: string[];
   created_at: number;

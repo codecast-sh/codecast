@@ -29,7 +29,7 @@
 // The state machine is `Gate`, with every side effect injected, so the test
 // beside this file drives it with fakes; `main` below wires the real ones.
 import { spawn } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, statSync, watch, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 
@@ -142,8 +142,9 @@ export class Gate {
       }
 
       this.dirty = false;
+      this.io.log("Typecheck green.");
       const changes = await this.io.diff();
-      this.io.log("Typecheck green, pushing to prod…");
+      this.io.log("Pushing to prod…");
       const code = await this.io.push();
       // A push that went out changed prod, even one that has to go around again.
       if (code === 0) await this.io.record(changes);
@@ -284,31 +285,37 @@ async function uncommittedCount(): Promise<number> {
   return r.code === 0 ? r.stdout.split("\n").filter((l) => l.trim()).length : 0;
 }
 
-let markTakesChanges: boolean | null = null;
+/** The `cast ship mark` that records a watcher push, or null when this cast
+ *  can't say the push came from the watcher (no `--via`): a plain mark would
+ *  read as a deploy, finishing and superseding the line's deploys and firing
+ *  deploy triggers on every save. */
+export function watcherMarkArgs(markHelp: string, sha: string, dirty: number, changesFile?: string): string[] | null {
+  if (!markHelp.includes("--changes")) return null;
+  return ["cast", "ship", "mark", "--surface", "backend", "--sha", sha, "--via", "dev watcher",
+    ...(dirty > 0 ? ["--dirty", String(dirty)] : []), ...(changesFile ? ["--changes", changesFile] : [])];
+}
+
+let markHelp: string | null = null;
 
 async function record(changes: PushChanges | null): Promise<void> {
   try {
-    // An older cast knows none of --via/--changes: record the push the way it can.
-    if (markTakesChanges === null) {
+    if (markHelp === null) {
       const help = await run(["cast", "ship", "mark", "--help"], { cwd: ROOT, timeoutMs: 15_000 });
-      markTakesChanges = help.code === 0 && help.stdout.includes("--changes");
+      markHelp = help.code === 0 ? help.stdout : "";
     }
+    if (!watcherMarkArgs(markHelp, "", 0)) return log("Push not recorded: this cast is older than `cast ship mark --via`; update cast to record watcher pushes.");
     const head = await run(["git", "rev-parse", "HEAD"], { cwd: ROOT, timeoutMs: 10_000 });
     const sha = head.stdout.trim();
     if (head.code !== 0 || !sha) return log("Push not recorded: no HEAD commit.");
     const dirty = await uncommittedCount();
-    const args = ["cast", "ship", "mark", "--surface", "backend", "--sha", sha];
-    if (dirty > 0) args.push("--dirty", String(dirty));
-    if (markTakesChanges) {
-      args.push("--via", "dev watcher");
-      if (changes) {
-        const file = join(mkdtempSync(join(tmpdir(), "convex-push-")), "changes.json");
-        writeFileSync(file, JSON.stringify(changes));
-        args.push("--changes", file);
-      }
+    const dir = changes ? mkdtempSync(join(tmpdir(), "convex-push-")) : null;
+    try {
+      if (dir) writeFileSync(join(dir, "changes.json"), JSON.stringify(changes));
+      const r = await run(watcherMarkArgs(markHelp, sha, dirty, dir ? join(dir, "changes.json") : undefined)!, { cwd: ROOT, timeoutMs: 30_000 });
+      log(r.code === 0 ? `Recorded this push${dirty ? ` (${dirty} uncommitted file${dirty === 1 ? "" : "s"})` : ""}.` : "Push not recorded (cast missing, logged out or offline); the push itself went out.");
+    } finally {
+      if (dir) rmSync(dir, { recursive: true, force: true });
     }
-    const r = await run(args, { cwd: ROOT, timeoutMs: 30_000 });
-    log(r.code === 0 ? `Recorded this push${dirty ? ` (${dirty} uncommitted file${dirty === 1 ? "" : "s"})` : ""}.` : "Push not recorded (cast missing, logged out or offline); the push itself went out.");
   } catch (e) {
     log(`Push not recorded: ${(e as Error)?.message ?? e}`);
   }

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { FAILED_PUSH_RETRY_MS, Gate, QUIET_MS, STALE_RETRY_MS, bundledSources, shipsToProd, signatureOf, type CheckResult, type PushChanges } from "./gated-push";
+import { FAILED_PUSH_RETRY_MS, Gate, QUIET_MS, STALE_RETRY_MS, bundledSources, shipsToProd, signatureOf, type CheckResult, type PushChanges, watcherMarkArgs } from "./gated-push";
 
 // The pusher's contract, driven with fakes: a push happens only for a quiet,
 // fresh, green tree, and a tree that moved under the push goes around again.
@@ -197,5 +197,18 @@ describe("every push says what it changes on prod and is recorded", () => {
     const h = harness({ changes: { adds: [], drops: ["index:voiceprints.by_user"] } });
     expect(await h.gate.tick()).toBe("pushed");
     expect(h.calls.push).toBe(1);
+  });
+});
+
+describe("the mark that records a watcher push", () => {
+  test("a cast that knows --via records it as the watcher's, with what it changed", () => {
+    expect(watcherMarkArgs("  --via <path>\n  --changes <file>", "abc", 3, "/t/c.json")).toEqual(
+      ["cast", "ship", "mark", "--surface", "backend", "--sha", "abc", "--via", "dev watcher", "--dirty", "3", "--changes", "/t/c.json"]);
+    expect(watcherMarkArgs("--changes", "abc", 0)).toEqual(["cast", "ship", "mark", "--surface", "backend", "--sha", "abc", "--via", "dev watcher"]);
+  });
+
+  test("an older cast records nothing rather than a mark that reads as a deploy", () => {
+    expect(watcherMarkArgs("  --dirty <n>\n  --deploy <dp-N>", "abc", 3)).toBeNull();
+    expect(watcherMarkArgs("", "abc", 0)).toBeNull();
   });
 });

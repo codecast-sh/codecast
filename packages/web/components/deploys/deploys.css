@@ -164,6 +164,12 @@ a.dpp-headci:hover span { text-decoration: underline; }
 .dpp-detail dt { color: var(--sol-text-dim); }
 .dpp-detail dd { margin: 0; color: var(--sol-text); min-width: 0; }
 .dpp-detail .dpp-log { margin-left: 0; color: var(--sol-text-muted); }
+.dpp-names-k[data-kind="dropped"] { color: var(--sol-red); font-weight: 600; }
+.dpp-names-k[data-kind="added"] { color: var(--sol-green); font-weight: 600; }
+.dpp-names { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 2px; }
+.dpp-names code { color: var(--sol-text); overflow-wrap: anywhere; }
+.dpp-names-more { margin-top: 2px; font: inherit; font-size: 12px; color: var(--sol-blue); background: none; border: 0; padding: 2px 0; cursor: pointer; }
+.dpp-names-more:hover { text-decoration: underline; }
 .dpp-detail-sessions { list-style: none; margin: 0; padding: 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .dpp-detail-sessions a { display: inline-block; padding: 1px 8px; border-radius: 999px; background: color-mix(in srgb, var(--sol-violet) 10%, transparent); color: var(--sol-text); text-decoration: none; }
 .dpp-detail-sessions a:hover { text-decoration: underline; }

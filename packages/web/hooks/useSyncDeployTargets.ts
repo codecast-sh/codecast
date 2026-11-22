@@ -52,7 +52,7 @@ export function useSyncTeamDeployRecords(teamId: string | null | undefined) {
 }
 
 const targetSig = (t: DeployTargetRow) => `${t.name}|${t.policy}|${t.can_deploy ? 1 : 0}|${t.queue?.head_sha ?? ""}|${t.queue?.commits ?? 0}|${t.queue?.head_ci ?? ""}|${t.queue?.groups?.length ?? 0}|${t.queue?.groups?.map((g) => `${g.key}:${g.commits.length}:${g.ci}`).join(",") ?? ""}`;
-const deploySig = (d: TeamDeployRow) => `${d.status}|${d.sha ?? ""}|${d.live_at ?? 0}|${d.finished_at ?? 0}|${d.steps?.map((s) => `${s.id}:${s.status}`).join(",") ?? ""}|${d.note ?? ""}|${d.short_id}|${d.sessions?.length ?? 0}|${d.tasks?.length ?? 0}`;
+const deploySig = (d: TeamDeployRow) => `${d.status}|${d.sha ?? ""}|${d.live_at ?? 0}|${d.finished_at ?? 0}|${d.steps?.map((s) => `${s.id}:${s.status}`).join(",") ?? ""}|${d.note ?? ""}|${d.short_id}|${d.sessions?.length ?? 0}|${d.tasks?.length ?? 0}|${d.pushed_via ?? ""}|${d.machine ?? ""}|${d.dirty ?? 0}|${d.adds_count ?? 0}|${d.drops_count ?? 0}`;
 
 /** Reader: a team's targets and deploys from the store. With a repository, only that one's targets are fed. */
 export function useDeployTargets(teamId: string | null | undefined, repository?: string | null): { targets: DeployTargetRow[]; deploys: TeamDeployRow[]; ready: boolean } {
