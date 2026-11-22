@@ -133,9 +133,11 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
   // branch is reset to right after creation (seedBase), so the GC can tell
   // "still the laptop's tree" from host-made work and heal can rebuild it.
   const seed = opts.startPoint ? seedFieldsFor(repoRoot, opts.startPoint) : undefined;
-  const seedFields = seed
-    ? { startPoint: seed.startPoint, seedBase: seed.seedBase }
-    : { ...(previous?.startPoint ? { startPoint: previous.startPoint } : {}), ...(previous?.seedBase ? { seedBase: previous.seedBase } : {}) };
+  const purpose = opts.purpose ?? previous?.purpose;
+  const seedFields = {
+    ...(seed ? { startPoint: seed.startPoint, seedBase: seed.seedBase } : { ...(previous?.startPoint ? { startPoint: previous.startPoint } : {}), ...(previous?.seedBase ? { seedBase: previous.seedBase } : {}) }),
+    ...(purpose ? { purpose } : {}),
+  };
 
   const prepared = await withPortReservations(repoRoot, async (reservations) => {
     const existing = readState(repoRoot, name);
@@ -562,6 +564,7 @@ function workspaceToState(ws: Workspace): PersistedWorkspaceState {
     ...(ws.noPorts ? { noPorts: true } : {}),
     ...(ws.startPoint ? { startPoint: ws.startPoint } : {}),
     ...(ws.seedBase ? { seedBase: ws.seedBase } : {}),
+    ...(ws.purpose ? { purpose: ws.purpose } : {}),
   };
 }
 

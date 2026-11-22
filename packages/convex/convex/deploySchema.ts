@@ -161,4 +161,21 @@ export const deployTables = {
   })
     .index("by_device_path", ["device_id", "path"])
     .index("by_workspace_repository", ["workspace", "repository"]),
+
+  // Who is sending a repository's before-merge deploys and landing them now
+  // (repoLeases.ts): a Merge station or `cast ship checkout`, on any machine.
+  // One row per repository; a holder renews it while it works, and a row past
+  // `expires_at` holds nothing.
+  repo_leases: defineTable({
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    repository: v.string(),
+    token: v.string(),
+    holder: v.string(),
+    holder_user_id: v.id("users"),
+    acquired_at: v.number(),
+    expires_at: v.number(),
+  })
+    .index("by_repository", ["repository"])
+    .index("by_workspace_repository", ["workspace", "repository"]),
 };

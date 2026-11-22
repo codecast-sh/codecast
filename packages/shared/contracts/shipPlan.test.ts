@@ -91,8 +91,8 @@ describe("resolveShipPlan", () => {
     const plan = resolveShipPlan({ ...base, lineGate: { decisionId: "d1" }, line: granted });
     expect(plan.merge).toMatchObject({ will: true, via: "role", runId: "r1", role: "release" });
     expect(plan.merge.why).toContain("The role that owns this flow, @release, holds a merge grant (1 of 3 merges today)");
-    expect(plan.steps.join(" ")).toContain("cast flow merge");
-    expect(shipBrief(plan, base)).toContain("cast flow merge --run r1 --branch fix-login --into main --task ct-42");
+    expect(plan.steps.join(" ")).toContain("cast line merge");
+    expect(shipBrief(plan, base)).toContain("cast line merge --run r1 --branch fix-login --into main --task ct-42");
     // The station's own cast ship run, after the card is answered, merges the same way.
     expect(resolveShipPlan({ ...base, line: granted }).merge.via).toBe("role");
     // A switch that is on but out of allowance, or off, does not merge.

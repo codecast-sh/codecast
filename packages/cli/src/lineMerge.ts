@@ -45,11 +45,11 @@ export function checksGreen(rollup: unknown): { green: boolean; detail: string }
   return bad.length ? { green: false, detail: bad.join(", ") } : { green: true, detail: `${rollup.length} checks green` };
 }
 
-/** Merge `branch` into `into`. With a pull request, `gh pr merge --rebase`
- *  after its checks are green; without one, a fast forward push onto the
- *  default branch of what landingCommit says lands, read again when the
- *  default branch moves between the read and the push. */
-export function mergeBranch(args: { cwd: string; branch: string; into: string; pr_url: string | null; exec?: Exec }): MergeOutcome {
+/** Merge `branch` into `into`. With a pull request, `mergePullRequest` after
+ *  its checks are green; without one, a fast forward push onto the default
+ *  branch of what landingCommit says lands, read again when the default branch
+ *  moves between the read and the push. */
+export function mergeBranch(args: { cwd: string; branch: string; into: string; pr_url: string | null; exec?: Exec; wait?: Wait }): MergeOutcome {
   const exec = args.exec ?? defaultExec;
   const { cwd, branch, into } = args;
   const fetch = exec("git", ["fetch", "origin", branch, into], cwd);
@@ -69,9 +69,9 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
     const onto = exec("git", ["rev-parse", `origin/${into}`], cwd).stdout.trim();
     const undone = onto ? undoneChanges(exec, cwd, onto, sha) : [];
     if (undone.length) return { kind: "left", reason: undoneReason(branch, into, undone) };
-    const merge = exec("gh", ["pr", "merge", args.pr_url, "--rebase", "--delete-branch"], cwd);
-    if (merge.status !== 0) return { kind: "left", reason: `gh pr merge failed: ${(merge.stderr || merge.stdout).trim().split("\n")[0]}` };
-    return { kind: "merged", sha, into, via: "pr" };
+    const merged = mergePullRequest(exec, cwd, { pr: args.pr_url, head: sha, into, wait: args.wait });
+    if ("reason" in merged) return { kind: "left", reason: merged.reason };
+    return { kind: "merged", sha: merged.sha, into, via: "pr" };
   }
   // No pull request: the push is a fast forward, so history stays flat.
   for (let attempt = 1; ; attempt++) {
@@ -88,6 +88,59 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
     const said = (push.stderr || push.stdout).trim();
     if (attempt >= 3 || !/\[rejected\]|non-fast-forward|fetch first/i.test(said)) return { kind: "left", reason: `git push failed: ${said.split("\n")[0]}` };
     exec("git", ["fetch", "origin", into], cwd);
+  }
+}
+
+const firstLine = (r: { stdout: string; stderr: string }) => (r.stderr || r.stdout).trim().split("\n")[0];
+
+export type Wait = (ms: number) => void;
+export const sleepSync: Wait = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
+/** The squash commit's body: each of the branch's own commits whole, as a `* ` bullet, the shape GitHub gives a
+ *  squash, so every Codecast-Session trailer stays in the trailer block that ends its commit's bullet, where
+ *  `cast blame` reads it (shared/blame splitSessionTrailer). A repository whose squash default is the PR's
+ *  description would otherwise drop them all. Null when the branch's commits cannot be read, and gh writes its own. */
+export function squashBody(exec: Exec, cwd: string, head: string, into: string): string | null {
+  const log = exec("git", ["log", "--reverse", "--format=%B%x00", `origin/${into}..${head}`], cwd);
+  if (log.status !== 0) return null;
+  const messages = log.stdout.split("\0").map((m) => m.trim()).filter(Boolean);
+  return messages.length ? messages.map((m) => `* ${m}`).join("\n\n") : null;
+}
+
+/** `gh pr merge --squash` pinned to the head that was checked (never --admin), and the sha that landed. gh deletes
+ *  the branch locally as well as on GitHub, and exits non-zero when the local half fails (the branch is checked out
+ *  in another worktree) after the merge went through, so a failed merge is read again before it counts as one. */
+export function mergePullRequest(exec: Exec, cwd: string, args: { pr: string; head: string; into: string; wait?: Wait }): { sha: string } | { reason: string } {
+  const body = squashBody(exec, cwd, args.head, args.into);
+  const merge = exec("gh", ["pr", "merge", args.pr, "--squash", "--match-head-commit", args.head, ...(body ? ["--body", body] : []), "--delete-branch"], cwd);
+  if (merge.status !== 0) {
+    let merged = false;
+    try { merged = JSON.parse(exec("gh", ["pr", "view", args.pr, "--json", "state"], cwd).stdout)?.state === "MERGED"; } catch {}
+    if (!merged) return { reason: `gh pr merge failed: ${firstLine(merge)}` };
+  }
+  return landedSha(exec, cwd, args.pr, args.into, args.wait);
+}
+
+const LANDED_TRIES = 6;
+const LANDED_WAIT_MS = 2000;
+
+/** The sha a merged pull request landed as: its merge commit, read back from GitHub and found on origin's `into`.
+ *  GitHub's git replicas can trail its API for a moment after a merge, so it reads again for about ten seconds
+ *  before it calls the merge missing. A pull request GitHub calls merged whose commit the default branch does not
+ *  hold has landed nothing. */
+export function landedSha(exec: Exec, cwd: string, pr: string, into: string, wait: Wait = sleepSync): { sha: string } | { reason: string } {
+  for (let attempt = 1; ; attempt++) {
+    let sha = "";
+    try { sha = String(JSON.parse(exec("gh", ["pr", "view", pr, "--json", "mergeCommit"], cwd).stdout)?.mergeCommit?.oid ?? ""); } catch {}
+    let reason = `gh says ${pr} is merged, but names no merge commit`;
+    if (sha) {
+      const fetch = exec("git", ["fetch", "origin", into], cwd);
+      if (fetch.status !== 0) reason = `gh says ${pr} merged as ${sha.slice(0, 10)}, but origin/${into} could not be fetched to find it: ${firstLine(fetch)}`;
+      else if (exec("git", ["merge-base", "--is-ancestor", sha, `origin/${into}`], cwd).status === 0) return { sha };
+      else reason = `gh says ${pr} merged as ${sha.slice(0, 10)}, but origin/${into} does not hold that commit`;
+    }
+    if (attempt >= LANDED_TRIES) return { reason };
+    wait(LANDED_WAIT_MS);
   }
 }
 

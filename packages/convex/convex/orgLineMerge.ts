@@ -189,16 +189,18 @@ export async function personAuthorized(ctx: any, run: any): Promise<PersonAuthor
 }
 
 /**
- * `cast workflow clear <run> --why`: the run's own graph cleared it to land with no card (a founder-intent read that
- * passed). Written only by the run's own runner account, while the run is running, from the station it stands at,
- * and only from a script station: the graph the run executes (its `workflows` row, the composed graph the runner
- * pushed at start) names that station `command` (shape parallelogram), the runner reported no session on it, and the
- * run is not waiting on its change's session (a fix station hands work to that session and reports none). The stamp
- * names the run's attempt, and anything that moves the run back (workflow_runs.resumeRunAt, landAgainCore, a trial
- * rebuild) drops it.
- * An agent that fakes the runner's progress reports could still stamp; whoever holds the owner's token and git can push main anyway.
+ * The Merge station's ask (`/cli/workflow-runs/clear`): the run's own graph cleared it to land with no card. Written
+ * only by the run's own runner account, while the run is running, from the station it stands at, and only from a script
+ * station: the graph the run executes (the version it pinned, lib/runGraph.ts) names that station `command` (shape
+ * parallelogram), the runner reported no session on it, and the run is not waiting on its change's session (a fix
+ * station hands work to that session and reports none). It stands on what the server itself recorded in this attempt
+ * (unproven): a green CI verdict on the head being merged, posted by a script station of the graph while it ran
+ * (recordCiVerdictCore), and a reviewer session station that ran a session and finished, both with edge paths to that
+ * station. A flow that only writes its own ci.json and review.json cannot clear. The stamp names the run's attempt, and
+ * anything that moves the run back (workflow_runs.resumeRunAt, landAgainCore, a trial rebuild) drops it. An agent that
+ * fakes the runner's progress reports could still stamp; whoever holds the owner's token and git can push main anyway.
  */
-export async function clearForMergeCore(ctx: any, userId: Id<"users">, args: { run_id: string; why: string }, now = Date.now()): Promise<{ run_id: string; node_id: string; attempt: number }> {
+export async function clearForMergeCore(ctx: any, userId: Id<"users">, args: { run_id: string; why: string; head_sha?: string; ci_changed?: boolean }, now = Date.now()): Promise<{ run_id: string; node_id: string; attempt: number }> {
   const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
   if (!run || String(run.user_id) !== String(userId)) throw new Error("Only the run's own runner clears it to land");
   const why = args.why.trim();
@@ -206,17 +208,203 @@ export async function clearForMergeCore(ctx: any, userId: Id<"users">, args: { r
   if (run.status !== "running" || !run.current_node_id) throw new Error(`The run is ${run.status}: only a running station clears it to land`);
   const station = (run.node_statuses ?? []).find((n: any) => n.node_id === run.current_node_id);
   if (!station || station.status !== "running") throw new Error(`${run.current_node_id} is not running: only the station the run stands at clears it`);
-  const node = ((await runWorkflowOf(ctx, run))?.nodes ?? []).find((n: any) => n.id === run.current_node_id);
+  const graph = await runWorkflowOf(ctx, run);
+  const node = (graph?.nodes ?? []).find((n: any) => n.id === run.current_node_id);
   if (station.session_id || run.waiting_on_session || node?.type !== "command") {
     throw new Error(`${run.current_node_id} is not a script station of the run's graph: only a flow's script station clears a run to land`);
   }
   const attempt = runAttempt(run);
+  const gap = unproven(graph, run, attempt, args.head_sha);
+  if (gap) throw new Error(`${run.current_node_id} cannot clear the run: ${gap}. Only a graph whose CI recorded green on the head it merges and whose reviewer said ship on that head, both leading to it, clears a run to land`);
+  // A change to CI's own config can change what green means, so it needs a person's word as well.
+  if ((args.ci_changed || run.ci_verdict?.ci_changed) && !(await personShippedRun(ctx, run, attempt))) {
+    throw new Error("this change edits CI; a person must answer Ship on this run's card");
+  }
   await ctx.db.patch(run._id, { merge_cleared: { at: now, node_id: run.current_node_id, why: why.slice(0, 500), by: userId, attempt }, updated_at: now });
   return { run_id: String(run._id), node_id: run.current_node_id, attempt };
 }
 
+/** A person answered Ship on one of this run's own cards in this attempt. */
+async function personShippedRun(ctx: any, run: any, attempt: number): Promise<boolean> {
+  const rows: any[] = run.task_id
+    ? await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", run.task_id).eq("status", "answered")).order("desc").take(100)
+    : [];
+  if (run.gate_decision_id && !rows.some((d) => String(d._id) === String(run.gate_decision_id))) {
+    const own = await ctx.db.get(run.gate_decision_id);
+    if (own) rows.push(own);
+  }
+  return rows.some((d) => (String(d.workflow_run_id ?? "") === String(run._id) || String(d._id) === String(run.gate_decision_id ?? ""))
+    && isShipAnswer(d) && d.answered_by?.kind === "user" && (d.resolved_at ?? 0) >= attempt);
+}
+
+/** Whether an edge path leads from station `from` to station `to` in the run's graph. */
+function leadsTo(graph: any, from: string, to: string): boolean {
+  const edges: Array<{ from: string; to: string }> = graph?.edges ?? [];
+  const seen = new Set([from]);
+  for (const queue = [from]; queue.length; ) {
+    const at = queue.shift();
+    for (const e of edges.filter((x) => x.from === at)) {
+      if (e.to === to) return true;
+      if (!seen.has(e.to)) { seen.add(e.to); queue.push(e.to); }
+    }
+  }
+  return false;
+}
+
+/** The heads a review of `reviewed` covers in this attempt: that head, and every head a recorded rebase chain leads
+ *  to from it, link by link (R to X, then X to Y). */
+function coveredHeads(run: any, attempt: number, reviewed: string): Set<string> {
+  const links = (run.station_rebases ?? []).filter((r: any) => r.attempt === attempt);
+  const heads = new Set([reviewed]);
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const r of links) if (heads.has(r.from) && !heads.has(r.to)) { heads.add(r.to); grew = true; }
+  }
+  return heads;
+}
+
+/** What the run has not proven in this attempt, or null: a green CI verdict the server holds for `head` from a
+ *  station that leads to the one the run stands at, and the reviewer's ship, reported by the reviewer node's own
+ *  session, on that head, or on the head the station's own recorded rebase turned into it. */
+function unproven(graph: any, run: any, attempt: number, head: string | undefined): string | null {
+  const reaches = (from: string) => leadsTo(graph, from, run.current_node_id);
+  const ci = run.ci_verdict;
+  if (!ci || ci.attempt !== attempt) return "no CI verdict was recorded in this attempt";
+  if (!ci.green) return `CI recorded red on ${ci.head_sha.slice(0, 10)}`;
+  if (!head || ci.head_sha !== head) return `CI's green is on ${ci.head_sha.slice(0, 10)}, not on the head being merged (${head ? head.slice(0, 10) : "none named"})`;
+  if (!reaches(ci.node_id)) return `the CI station ${ci.node_id} does not lead to it`;
+  const review = run.review_verdict;
+  if (!review || review.attempt !== attempt) return "no reviewer verdict was recorded in this attempt";
+  if (review.verdict !== "ship") return `the reviewer said ${review.verdict}`;
+  if (!reaches(review.node_id)) return `the review station ${review.node_id} does not lead to it`;
+  if (!coveredHeads(run, attempt, review.head_sha).has(head)) return `the reviewer read ${review.head_sha.slice(0, 10)}, not the head being merged (${head.slice(0, 10)}), and no rebase of the station's own turned one into the other`;
+  return null;
+}
+
+const SHA = /^[0-9a-f]{40}$/;
+
+/** The canonical ids of the calling session: the conversation its agent session id names (or that id itself, when
+ *  it is a conversation's), as its full id and as the short id the runner reports on the stations it spawns. */
+async function callerIds(ctx: any, userId: Id<"users">, sessionRef: string): Promise<Set<string>> {
+  if (!sessionRef) return new Set();
+  const byAgent = await ctx.db.query("conversations").withIndex("by_session_id", (q: any) => q.eq("session_id", sessionRef)).take(5);
+  const asId = ctx.db.normalizeId?.("conversations", sessionRef);
+  const direct = asId ? await ctx.db.get(asId) : null;
+  const ids = new Set<string>();
+  for (const c of [...byAgent, ...(direct ? [direct] : [])]) {
+    if (String(c.user_id) !== String(userId)) continue;
+    ids.add(String(c._id));
+    ids.add(c.short_id ?? String(c._id).slice(0, 7));
+  }
+  return ids;
+}
+
+/**
+ * `cast flow review-verdict`: the reviewer's verdict and the head it read, reported by the reviewer's own session,
+ * so a clearance binds the review to a head. The session names itself, and only itself: the server finds the
+ * running run and the reviewer node (type agent, marked `reviewer`, run in this attempt) whose reported session is
+ * exactly that session, so a prompt needs to know neither its run nor its node's id in a composed graph.
+ * This keeps a confused agent or a stale verdict from counting; it is no defence against a process that holds the
+ * account's token, which could push the default branch directly anyway.
+ */
+export async function recordReviewVerdictCore(ctx: any, userId: Id<"users">, args: { session_id?: string; verdict: string; head_sha: string; round?: string; run_id?: string; node_id?: string }, now = Date.now()): Promise<{ run_id: string; node_id: string; attempt: number }> {
+  if (!SHA.test(args.head_sha)) throw new Error(`${args.head_sha} is not a commit sha`);
+  if (!["ship", "changes", "rejected"].includes(args.verdict)) throw new Error(`${args.verdict} is not a verdict: ship, changes or rejected`);
+  const ids = await callerIds(ctx, userId, String(args.session_id ?? ""));
+  if (!ids.size) throw new Error("This session is not one of your sessions codecast knows: a review verdict is recorded from the reviewer station's own session");
+  const runs: any[] = args.run_id
+    ? [await ctx.db.get(args.run_id as Id<"workflow_runs">)].filter((r) => r && String(r.user_id) === String(userId) && r.status === "running")
+    : await ctx.db.query("workflow_runs").withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "running")).take(200);
+  const found: Array<{ run: any; node_id: string; attempt: number }> = [];
+  for (const run of runs) {
+    const attempt = runAttempt(run);
+    const mine = (run.node_statuses ?? []).filter((s: any) => ids.has(String(s.session_id ?? "")) && (s.started_at ?? 0) >= attempt && (!args.node_id || s.node_id === args.node_id));
+    if (!mine.length) continue;
+    const nodes = (await runWorkflowOf(ctx, run))?.nodes ?? [];
+    for (const s of mine) if (nodes.some((n: any) => n.id === s.node_id && n.type === "agent" && n.reviewer === true)) found.push({ run, node_id: s.node_id, attempt });
+  }
+  if (!found.length) throw new Error("This session is no running run's reviewer station in this attempt: only the reviewer station's own session records its review verdict");
+  if (found.length > 1) throw new Error(`This session is the reviewer station of ${found.length} running runs; pass --run to name one`);
+  const { run, node_id, attempt } = found[0];
+  await ctx.db.patch(run._id, { review_verdict: { node_id, verdict: args.verdict, head_sha: args.head_sha, ...(args.round ? { round: args.round.slice(0, 100) } : {}), at: now, attempt }, updated_at: now });
+  return { run_id: String(run._id), node_id, attempt };
+}
+
+/**
+ * A station of the run rebased its pull request's head onto the default branch and pushed it (Merge before a retest,
+ * the PR station waiting for main): the review of `from` covers `to`. Only the run's own runner, from the script
+ * station running now. The server cannot tell a rebase from any other commit, so the Merge station checks each link
+ * itself before it trusts one (workflow/rebaseRecord.ts verifyRebaseChain); this record says only who claimed it.
+ */
+export async function recordStationRebaseCore(ctx: any, userId: Id<"users">, args: { run_id: string; from: string; to: string }, now = Date.now()): Promise<{ attempt: number }> {
+  const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
+  if (!run || String(run.user_id) !== String(userId)) throw new Error("Only the run's own runner records its rebase");
+  if (!SHA.test(args.from) || !SHA.test(args.to) || args.from === args.to) throw new Error("a rebase names two different commit shas");
+  const station = (run.node_statuses ?? []).find((s: any) => s.node_id === run.current_node_id);
+  const node = ((await runWorkflowOf(ctx, run))?.nodes ?? []).find((n: any) => n.id === run.current_node_id);
+  if (run.status !== "running" || station?.status !== "running" || station.session_id || node?.type !== "command") {
+    throw new Error(`${run.current_node_id} is not a running script station: only a station's own script records its rebase`);
+  }
+  const attempt = runAttempt(run);
+  await ctx.db.patch(run._id, { station_rebases: [...(run.station_rebases ?? []), { from: args.from, to: args.to, at: now, attempt }].slice(-10), updated_at: now });
+  return { attempt };
+}
+
+/** What the server holds for this attempt that a merge stands on: the reviewer's verdict and the head it read, and
+ *  the recorded rebase links. The Merge station verifies the chain from that head itself, and trusts no file for it. */
+export async function mergeProofCore(ctx: any, userId: Id<"users">, runId: string): Promise<{ review: { verdict: string; head_sha: string; node_id: string } | null; rebases: Array<{ from: string; to: string }> }> {
+  const run = await ctx.db.get(runId as Id<"workflow_runs">);
+  if (!run || String(run.user_id) !== String(userId)) throw new Error("Only the run's own runner reads what its merge stands on");
+  const attempt = runAttempt(run);
+  const r = run.review_verdict?.attempt === attempt ? run.review_verdict : null;
+  return {
+    review: r ? { verdict: r.verdict, head_sha: r.head_sha, node_id: r.node_id } : null,
+    rebases: (run.station_rebases ?? []).filter((x: any) => x.attempt === attempt).map((x: any) => ({ from: x.from, to: x.to })),
+  };
+}
+
+export const mergeProof = query({
+  args: { api_token: v.string(), run_id: v.string() },
+  handler: async (ctx, { api_token, run_id }) => mergeProofCore(ctx, await requireToken(ctx, api_token), run_id),
+});
+
+export const recordReviewVerdict = mutation({
+  args: { api_token: v.string(), session_id: v.optional(v.string()), verdict: v.string(), head_sha: v.string(), round: v.optional(v.string()), run_id: v.optional(v.string()), node_id: v.optional(v.string()) },
+  handler: async (ctx, { api_token, ...args }) => recordReviewVerdictCore(ctx, await requireToken(ctx, api_token), args),
+});
+
+export const recordStationRebase = mutation({
+  args: { api_token: v.string(), run_id: v.string(), from: v.string(), to: v.string() },
+  handler: async (ctx, { api_token, ...args }) => recordStationRebaseCore(ctx, await requireToken(ctx, api_token), args),
+});
+
+/**
+ * `cast flow ci --run --node`: the CI station's verdict, reported by the station itself while it runs, so a clearance
+ * stands on what the server holds rather than on a ci.json any script can write. Only the run's own runner account,
+ * for a script station of the run's graph that is running now, in this attempt, with no session on it.
+ */
+export async function recordCiVerdictCore(ctx: any, userId: Id<"users">, args: { run_id: string; node_id: string; green: boolean; head_sha: string; ci_changed?: boolean }, now = Date.now()): Promise<{ attempt: number }> {
+  const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
+  if (!run || String(run.user_id) !== String(userId)) throw new Error("Only the run's own runner records its CI verdict");
+  if (run.status !== "running") throw new Error(`The run is ${run.status}: only a running CI station records a verdict`);
+  if (!/^[0-9a-f]{40}$/.test(args.head_sha)) throw new Error(`${args.head_sha} is not a commit sha`);
+  const attempt = runAttempt(run);
+  const node = ((await runWorkflowOf(ctx, run))?.nodes ?? []).find((n: any) => n.id === args.node_id);
+  const station = (run.node_statuses ?? []).find((s: any) => s.node_id === args.node_id);
+  if (node?.type !== "command" || station?.status !== "running" || station.session_id || (station.started_at ?? 0) < attempt) {
+    throw new Error(`${args.node_id} is not a running script station of the run's graph: only the CI station records a verdict, while it runs`);
+  }
+  await ctx.db.patch(run._id, { ci_verdict: { node_id: args.node_id, green: args.green, head_sha: args.head_sha, ...(args.ci_changed ? { ci_changed: true } : {}), at: now, attempt }, updated_at: now });
+  return { attempt };
+}
+
+export const recordCiVerdict = mutation({
+  args: { api_token: v.string(), run_id: v.string(), node_id: v.string(), green: v.boolean(), head_sha: v.string(), ci_changed: v.optional(v.boolean()) },
+  handler: async (ctx, { api_token, ...args }) => recordCiVerdictCore(ctx, await requireToken(ctx, api_token), args),
+});
+
 export const clearForMerge = mutation({
-  args: { api_token: v.string(), run_id: v.string(), why: v.string() },
+  args: { api_token: v.string(), run_id: v.string(), why: v.string(), head_sha: v.optional(v.string()), ci_changed: v.optional(v.boolean()) },
   handler: async (ctx, { api_token, ...args }) => clearForMergeCore(ctx, await requireToken(ctx, api_token), args),
 });
 

@@ -8,7 +8,24 @@ import { spawnSync } from "../proc.js";
 import { formatAgeShort } from "../publishCommand.js";
 import { git } from "../wipSnapshot.js";
 import { inboxRoster } from "./cli.js";
-import { makePlan, planPath, runPlan, shipSpec, type ShipGroup, type ShipOutcome, type ShipPlan } from "./shipCheckout.js";
+import { makePlan, planPath, runPlan, shipSpec, type Log, type ShipGroup, type ShipOutcome, type ShipPlan } from "./shipCheckout.js";
+import { holdRepoLease, leaseHolder, leaseRouteMissing, type LeasePost } from "./repoLease.js";
+
+/** The repository's lease for the ship's before-push deploys and push. A server that cannot be asked about it (one older
+ *  than the lease, with no route for it) does not stop a person's ship: it says so and goes on, as the ship did before
+ *  there was a lease. Any other failure stops the ship rather than deploy beside another holder. */
+async function checkoutLease(root: string, post: LeasePost, log: Log): Promise<() => Promise<void>> {
+  const { readLocalGitContext } = await import("../prCommand.js");
+  const repository = readLocalGitContext(root).repository;
+  if (!repository) return async () => {};
+  try {
+    return (await holdRepoLease(post, { repository, holder: leaseHolder("cast ship checkout"), log })).release;
+  } catch (err) {
+    if (!leaseRouteMissing(err)) throw err;
+    log(`warning: this server has no lease on ${repository}'s deploys (it needs a newer deployment); a Merge station elsewhere may deploy between this deploy and its push`);
+    return async () => {};
+  }
+}
 
 export interface CheckoutOptions {
   plan?: string | boolean;
@@ -170,7 +187,7 @@ async function runCast(args: string[], cwd: string): Promise<number> {
   return spawnSync(cmd, [...prefixArgs, ...args], { cwd, stdio: "inherit", env: process.env }).status ?? 1;
 }
 
-export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: Record<string, unknown>) => Promise<any>, runFlow: (args: string[], cwd: string) => Promise<number> = runCast): Promise<void> {
+export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: Record<string, unknown>) => Promise<any>, runFlow: (args: string[], cwd: string) => Promise<number> = runCast, post?: LeasePost): Promise<void> {
   const startedAt = Date.now();
   const root = (await git(process.cwd(), ["rev-parse", "--show-toplevel"]));
   const flow = shipSpec(root).flow;
@@ -208,7 +225,7 @@ export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: 
     return;
   }
 
-  const result = await runPlan(plan, { noCheck: opts.check === false, noPush: opts.push === false, noDeploy: opts.deploy === false, log });
+  const result = await runPlan(plan, { noCheck: opts.check === false, noPush: opts.push === false, noDeploy: opts.deploy === false, log, ...(post ? { lease: (l: Log) => checkoutLease(root, post, l) } : {}) });
   // Recorded whatever the outcome, so a stopped ship is as visible as a shipped one; a record that fails warns and never fails the ship.
   if (record && (result.commits.length || result.deploys.length || !result.ok)) {
     try {

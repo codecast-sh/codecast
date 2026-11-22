@@ -19,7 +19,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFileAsync, spawn } from "../proc.js";
+import { execFileAsync, spawn, type ChildProcess } from "../proc.js";
 import { SESSION_TRAILER_KEY, sessionTrailerValue } from "@codecast/shared/blame";
 import { isCredentialFilePath, liveVendorToken, PRIVATE_KEY_RE } from "../secretPatterns.js";
 import { readSessionLinkCache } from "../localConversationMap.js";
@@ -339,6 +339,9 @@ export interface RunOptions {
   log?: Log;
   /** Overridable for tests. */
   exec?: (command: string, cwd: string, log: Log, env?: Record<string, string>) => Promise<{ code: number; output: string }>;
+  /** The repository's lease (land/repoLease.ts), held from the first before-push deploy through the push, so a Merge
+   *  station's deploy and merge, on any machine, never land between them; returns its release. */
+  lease?: (log: Log) => Promise<() => Promise<void>>;
 }
 
 /** What a deploy step's push did to its target, as the step reports it (packages/convex/deploy.sh writes it). */
@@ -398,10 +401,12 @@ export interface ShipOutcome {
   pr?: string;
 }
 
-/** Run a shell command, streaming nothing, capturing the tail of its output. */
-export function runShell(command: string, cwd: string, log: Log, env: Record<string, string> = {}): Promise<{ code: number; output: string }> {
+/** Run a shell command, streaming nothing, capturing the tail of its output. Given `onChild`, the command runs in a
+ *  process group of its own, handed over so a caller can stop the whole group (the Merge station on SIGTERM). */
+export function runShell(command: string, cwd: string, log: Log, env: Record<string, string> = {}, onChild?: (child: ChildProcess) => void): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn("/bin/bash", ["-c", command], { cwd, env: { ...process.env, CAST_SHIP: "1", ...env } });
+    const child = spawn("/bin/bash", ["-c", command], { cwd, env: { ...process.env, CAST_SHIP: "1", ...env }, ...(onChild ? { detached: true } : {}) });
+    onChild?.(child);
     let output = "";
     const take = (b: Buffer) => { output = (output + b.toString()).slice(-200_000); };
     child.stdout.on("data", take);
@@ -514,6 +519,7 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
   const problems = await validatePlan(root, plan);
   if (problems.length) return fail("plan", problems.join("\n"));
   const release = lock(gitDir);
+  let leased: (() => Promise<void>) | null = null;
   try {
     const shipping = plan.groups.filter((g) => g.ship && g.paths.length);
     out.held = plan.groups.filter((g) => !g.ship && g.paths.length).map((g) => ({ group: g.id, paths: g.paths, ...(g.note ? { note: g.note } : {}) }));
@@ -614,6 +620,7 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
 
     // 6. Deploys that must precede the push (a backend the pushed client calls).
     const steps = opts.noDeploy ? [] : deploysFor(spec.deploy, shippedPaths);
+    if (opts.lease && steps.some((s) => s.stage === "before_push")) leased = await opts.lease(log);
     for (const step of steps.filter((s) => s.stage === "before_push")) {
       out.stage = "deploy";
       log(`deploying ${step.name}: ${step.run}`);
@@ -646,6 +653,8 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
     await relabelCommits(root, upstreamSha, tip, out);
     await gitTry(root, ["update-ref", `refs/remotes/${upstream}`, tip]);
     log(`pushed ${tip.slice(0, 9)} to ${upstream}`);
+    await leased?.();
+    leased = null;
 
     // 8. The rest of the deploys.
     for (const step of steps.filter((s) => s.stage === "after_push")) {
@@ -657,6 +666,7 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
     }
     return { ...out, ok: true, stage: "done" };
   } finally {
+    await leased?.();
     release();
   }
 }

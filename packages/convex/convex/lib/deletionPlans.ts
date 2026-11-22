@@ -288,6 +288,7 @@ function plans() {
     byWorkspace("checkouts", "by_workspace_repository"),
     byWorkspace("deploys", "by_workspace_created"),
     byWorkspace("ship_passes", "by_workspace_finished"),
+    byWorkspace("repo_leases", "by_workspace_repository"),
     byWorkspace("trial_cards", "by_workspace_created"),
     byWorkspace("line_labels", "by_workspace_at"),
     byWorkspace("team_kit_items", "by_workspace_updated", { children: [under("team_kit_versions", "by_item_version", "item_id")] }),

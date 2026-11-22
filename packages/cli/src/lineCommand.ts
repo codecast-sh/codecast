@@ -75,7 +75,8 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
       else for (const r of out) console.log(r.error ? `${r.task}: ${r.error}` : r.queued);
       if (out.some((r) => r.error)) process.exitCode = 1;
     });
-  line
+  // Under `cast flow`, `merge` is the change flow's Merge station (flowStations.ts): the role's merge is `cast line merge`.
+  if (line.name() === "line") line
     .command("merge")
     .description("Merge an approved run's branch into the default branch when the role's flow allows it (the Standard steps' merge node)")
     .requiredOption("--run <id>", "The workflow run")

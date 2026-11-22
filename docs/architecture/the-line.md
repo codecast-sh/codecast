@@ -323,8 +323,8 @@ newest first (`session_decisions.by_task`), with the run's own
   Ship carries to a rerun, so a task shipped at its card lands without asking
   again; anything else refuses until a person answers Ship on a later card. A
   Ship covers the task, not a commit: only a newer verdict revokes it.
-- Otherwise the run merges only when its own graph cleared it to land: a
-  script station called `cast workflow clear $run_id --why "<text>"`
+- Otherwise the run merges only when its own graph cleared it to land: its
+  Merge station (`cast flow merge`) asked `/cli/workflow-runs/clear`
   (`orgLineMerge.clearForMerge`), which stamps `workflow_runs.merge_cleared`
   (when, the station, its words, the runner's account, the attempt). Only the
   run's own runner account may write it, while the run is running, from the
@@ -333,9 +333,35 @@ newest first (`session_decisions.by_task`), with the run's own
   station `command` (shape parallelogram), the runner reported no session on
   it, and the run is not waiting on its change's session. So no agent station
   clears its own change, the fix stations that hand work back to that session
-  included. An agent that fakes the runner's progress reports could still
-  stamp; whoever holds the owner's token and git credentials can push main
-  anyway. The stamp holds only in the attempt it was
+  included. The server must also hold the change's proof from this attempt.
+  The first part is a green CI verdict on the head being merged (the stamp
+  names it, `head_sha`). `cast flow ci --run --node` records that verdict from
+  its own running script station (`orgLineMerge.recordCiVerdict`,
+  `workflow_runs.ci_verdict`). The second part is the reviewer's ship on that
+  same head. The reviewer's session records it with `cast flow review-verdict`
+  (`orgLineMerge.recordReviewVerdict`, `review_verdict`), naming only itself:
+  the server finds the running run, and the type agent node marked `reviewer`
+  that ran in this attempt, whose reported session is exactly that session.
+  A review of head R also covers each head a chain of recorded rebases leads
+  to from it, R to X, then X to Y (`recordStationRebase`, `station_rebases`).
+  The run's script station running at the time records each link: Merge
+  before a retest, or the PR station waiting for main. The server cannot tell
+  a rebase from any other commit, so the Merge station re-derives every link
+  before it trusts it (`workflow/rebaseRecord.ts`). Both stations need an
+  edge path to the clearing station. When the CI verdict or the stamp says the
+  change edits CI's own config (`ci_changed`), a person must also have
+  answered Ship on one of this run's own cards in this attempt.
+
+  What this protects against is a confused or mistaken agent and stale state:
+  - a flow that writes its own ci.json and review.json;
+  - a head pushed after the review;
+  - a verdict from an earlier attempt;
+  - a subject session posting a verdict as if it were the reviewer.
+
+  It is not a defence against a process that holds the owner's token. Such a
+  process can post any verdict as the runner, or as the reviewer's session id,
+  and it can push the default branch directly anyway. The stamp holds only in
+  the attempt it was
   written in (`visits_reset_at`, else `created_at`), and every way a run is
   moved back drops it: `resumeRunAt` (resume, queued resume, reask, the trial's
   resumes), `landAgainCore` and a trial rebuild. The person who started the run
@@ -354,8 +380,9 @@ merge --run $run_id --branch $branch --into $default_branch --cwd
 $project_path` (the runner now sets `$run_id`). The step asks the server
 first (`orgLineMerge.check`: the switch, the grant and its expiry, today's
 count against the limit), then lands the branch: with a pull request named in
-the handoff's evidence, `gh pr merge --rebase` once every check is green and
-the PR is open and mergeable; without one, a fast forward push onto the
+the handoff's evidence, `gh pr merge --squash --match-head-commit <head>` once
+every check is green and the PR is open and mergeable, recording the PR's
+merge commit only once origin's default branch holds it; without one, a fast forward push onto the
 default branch. A branch the default branch has moved past lands its own
 commits replayed on top (authors, messages and session trailers kept, merges
 of the default branch into it dropped), but only when the default branch

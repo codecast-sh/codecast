@@ -30,7 +30,7 @@ writes files nobody in the checkout has changed.
 | Import gap | When groups are held, a shipped file that imports a held file stops the pass: the tree would typecheck and the commit would not. | `importGaps` |
 | Level | The checkout moves to the result. Files equal to the result are only re-indexed; files nobody touched are rewritten; files edited since the freeze are merged three-way from their frozen content, so typing during a ship is kept, never overwritten. | `level.ts` |
 | Check | `[ship] check` runs in the checkout, then the test files the pass changed. `CAST_SHIP_BASE` names the upstream commit the pass replayed onto, so `cast check --changed-since $CAST_SHIP_BASE` checks only the programs holding a changed file. Errors only in files the pass left out are ignored. With more projects than the machine's watcher cap (6 here, 7 projects), a pass touching all of them cold-starts one or two programs, about two minutes. | `runPlan` |
-| Deploy, push | `before_push` deploy steps whose paths match, then the push. If upstream moved meanwhile, the commits replay onto it and the checkout levels again. Then `after_push` steps. | `runPlan` |
+| Deploy, push | `before_push` deploy steps whose paths match, then the push. If upstream moved meanwhile, the commits replay onto it and the checkout levels again. Then `after_push` steps. The repository's lease on the server (`land/repoLease.ts`) is held from the first `before_push` step through the push, so a change flow's Merge station on any machine never deploys or merges in between (flows.md, Merge). | `runPlan` |
 
 On the real checkout (768 files, 43 sessions) a plan takes under a second warm
 and the pass about 6 seconds before the check and deploys.

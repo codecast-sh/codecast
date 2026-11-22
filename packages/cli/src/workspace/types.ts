@@ -332,6 +332,16 @@ export interface Workspace {
   startPoint?: string;
   /** The commit HEAD is reset to after setup (the laptop's HEAD for a seeded worktree). */
   seedBase?: string;
+  /** Set only on a workspace a tool made for itself: what its own sweep may remove. */
+  purpose?: WorkspacePurpose;
+}
+
+/** A tool's own workspace (the Merge station's scratch tree): the process that made it and when. A workspace without
+ *  one is a person's, whatever its name. */
+export interface WorkspacePurpose {
+  kind: "merge-scratch";
+  pid: number;
+  started_at: number;
 }
 
 /** Options accepted by acquire(). */
@@ -349,6 +359,8 @@ export interface AcquireOptions {
   startPoint?: string;
   /** Second branch name, tried once only when `branch` already exists (only with `startPoint`). */
   altBranch?: string;
+  /** Marks the workspace as a tool's own (Workspace.purpose). */
+  purpose?: WorkspacePurpose;
   /** Override resource index (default: auto-allocated). */
   resourceIndex?: number;
   /** Skip install/generate/migrate (assume already done). */

@@ -3,8 +3,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { extractSessionTrailer } from "@codecast/shared/blame";
-import { checksGreen, defaultExec, mergeBranch, runMergeStep, type Exec, type MergeCheck } from "./lineMerge";
+import { extractSessionTrailer, splitSessionTrailer } from "@codecast/shared/blame";
+import { checksGreen, defaultExec, landedSha, mergeBranch, mergePullRequest, runMergeStep, squashBody, type Exec, type MergeCheck } from "./lineMerge";
 
 // The line's merge step (the-line.md L12), driven with a scripted git/gh and
 // a scripted server: what it merges, what it leaves to a person, and that a
@@ -269,15 +269,56 @@ describe("mergeBranch", () => {
     } finally { r.done(); }
   });
 
-  test("with a pull request: checks must be green and the PR open, then gh merges with a rebase", () => {
+  test("with a pull request: checks must be green and the PR open, then gh squashes the checked head and the merge commit on main is the sha", () => {
     const pr = "https://github.com/o/r/pull/5";
     const red = scripted({ "git rev-parse": { stdout: "abc\n" }, "gh pr view": { stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", statusCheckRollup: [{ name: "ci", conclusion: "FAILURE" }] }) } });
     expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: red.exec })).toEqual({ kind: "left", reason: "checks are not green: ci=FAILURE" });
     expect(red.calls.some((c) => c.args[0] === "pr" && c.args[1] === "merge")).toBe(false);
 
-    const green = scripted({ "git rev-parse": { stdout: "abc\n" }, "gh pr view": { stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", statusCheckRollup: [{ name: "ci", conclusion: "SUCCESS" }] }) } });
-    expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: green.exec })).toEqual({ kind: "merged", sha: "abc", into: "main", via: "pr" });
-    expect(green.calls.find((c) => c.args[0] === "pr" && c.args[1] === "merge")?.args).toEqual(["pr", "merge", pr, "--rebase", "--delete-branch"]);
+    const view = { state: "OPEN", mergeable: "MERGEABLE", statusCheckRollup: [{ name: "ci", conclusion: "SUCCESS" }], mergeCommit: { oid: "squashed" } };
+    const green = scripted({ "git rev-parse": { stdout: "abc\n" }, "gh pr view": { stdout: JSON.stringify(view) } });
+    expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: green.exec })).toEqual({ kind: "merged", sha: "squashed", into: "main", via: "pr" });
+    expect(green.calls.find((c) => c.args[0] === "pr" && c.args[1] === "merge")?.args).toEqual(["pr", "merge", pr, "--squash", "--match-head-commit", "abc", "--delete-branch"]);
+    expect(green.calls.some((c) => c.args.join(" ") === "merge-base --is-ancestor squashed origin/main")).toBe(true);
+
+    // gh calls it merged, but main does not hold the commit: nothing landed.
+    const absent = scripted({ "git rev-parse": { stdout: "abc\n" }, "gh pr view": { stdout: JSON.stringify(view) }, "git merge-base --is-ancestor": { status: 1 } });
+    const waits: number[] = [];
+    expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: absent.exec, wait: (ms) => waits.push(ms) })).toEqual({ kind: "left", reason: `gh says ${pr} merged as squashed, but origin/main does not hold that commit` });
+    // Read again for about ten seconds first: GitHub's git replicas trail its API.
+    expect(waits.reduce((a, b) => a + b, 0)).toBe(10_000);
+
+    // A replica that catches up on the third read lands.
+    let reads = 0;
+    const lagging: Exec = (cmd, args, cwd) => (args[0] === "merge-base" && args[1] === "--is-ancestor" ? { status: ++reads >= 3 ? 0 : 1, stdout: "", stderr: "" } : green.exec(cmd, args, cwd));
+    expect(landedSha(lagging, "/repo", pr, "main", () => {})).toEqual({ sha: "squashed" });
+    expect(reads).toBe(3);
+
+    // gh exits 1 after merging when it cannot delete the local branch: the PR reads merged, so it counts.
+    const localHalf = scripted({ "gh pr merge": { status: 1, stderr: "failed to delete local branch b" }, "gh pr view": { stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: "squashed" } }) } });
+    expect(mergePullRequest(localHalf.exec, "/repo", { pr, head: "abc", into: "main" })).toEqual({ sha: "squashed" });
+    const refused = scripted({ "gh pr merge": { status: 1, stderr: "Head branch was modified" }, "gh pr view": { stdout: JSON.stringify({ state: "OPEN" }) } });
+    expect(mergePullRequest(refused.exec, "/repo", { pr, head: "abc", into: "main" })).toEqual({ reason: "gh pr merge failed: Head branch was modified" });
+  });
+});
+
+describe("squashBody", () => {
+  test("carries each of the branch's commits whole, in GitHub's squash shape, so blame reads every session's trailer", () => {
+    const r = gitRepo();
+    const s1 = "jx7389x8e30114ecc93nk6txzn8jnxrg";
+    const s2 = "jx7ek23bt01nysvawb3781jg558jnpme";
+    try {
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.commit("x.txt", "1\n", `Add x\n\nCodecast-Session: https://codecast.sh/conversation/${s1}`);
+      const head = r.commit("y.txt", "2\n", `Add y\n\nCodecast-Session: https://codecast.sh/conversation/${s2}`);
+      r.git(r.work, "fetch", "-q", "origin");
+      const body = squashBody(defaultExec, r.work, head, "main")!;
+      expect(body).toBe(`* Add x\n\nCodecast-Session: https://codecast.sh/conversation/${s1}\n\n* Add y\n\nCodecast-Session: https://codecast.sh/conversation/${s2}`);
+      // Each trailer block ends its commit's bullet, so blame finds both; the squash names the newest.
+      const squash = `Squash (#5)\n\n${body}`;
+      expect(extractSessionTrailer(squash)).toBe(s2);
+      expect(splitSessionTrailer(squash).message).not.toContain("Codecast-Session");
+    } finally { r.done(); }
   });
 });
 

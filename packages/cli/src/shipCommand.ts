@@ -209,7 +209,7 @@ A push that upstream rejected because it moved is replayed and retried on its ow
     .action(async (options: import("./land/shipCheckoutCli.js").CheckoutOptions) => {
       const { runCheckoutCommand } = await import("./land/shipCheckoutCli.js");
       try {
-        await runCheckoutCommand(options, (body) => apiPost(deps, "/cli/deploys/ship-pass", body, { exitOnError: false }));
+        await runCheckoutCommand(options, (body) => apiPost(deps, "/cli/deploys/ship-pass", body, { exitOnError: false }), undefined, (path, body) => apiPost(deps, path, body, { exitOnError: false }));
       } catch (err) {
         console.error(String((err as Error)?.message ?? err));
         process.exit(1);

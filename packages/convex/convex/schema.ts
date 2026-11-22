@@ -8867,6 +8867,15 @@ export default defineSchema({
     // wrote it and its words, the runner's account, and the attempt (runAttempt). Valid only in that attempt; every
     // resume, reask and land-again drops it.
     merge_cleared: v.optional(v.object({ at: v.number(), node_id: v.string(), why: v.string(), by: v.id("users"), attempt: v.number() })),
+    // The CI station's verdict as it reported it from its own running node (orgLineMerge.recordCiVerdict): green or
+    // not on which pull-request head, in which attempt. A clearance to land needs a green one on the head it merges.
+    // `ci_changed`: the pull request edits CI's own config, so a clearance also needs a person's Ship on the run's card.
+    ci_verdict: v.optional(v.object({ node_id: v.string(), green: v.boolean(), head_sha: v.string(), ci_changed: v.optional(v.boolean()), at: v.number(), attempt: v.number() })),
+    // The reviewer's verdict as its own session reported it (orgLineMerge.recordReviewVerdict): on which head, in which round.
+    review_verdict: v.optional(v.object({ node_id: v.string(), verdict: v.string(), head_sha: v.string(), round: v.optional(v.string()), at: v.number(), attempt: v.number() })),
+    // The Merge station's own rebases of a reviewed head, pushed to be tested again (orgLineMerge.recordStationRebase):
+    // a review of `from` covers `to`, which differs only by the default branch it sits on. The newest few.
+    station_rebases: v.optional(v.array(v.object({ from: v.string(), to: v.string(), at: v.number(), attempt: v.number() }))),
     graph_hash: v.optional(v.string()), // LE14: content hash of the graph the runner executed (parser.graphHash)
     graph_nodes: v.optional(v.array(v.object({ id: v.string(), h: v.string() }))), // LE14: each station's hash in that graph (parser.graphNodeHashes)
     // The machine whose runner drives the run (its device id): where the run

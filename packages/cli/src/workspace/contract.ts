@@ -24,6 +24,7 @@ import type {
   ContractResult,
   Workspace,
   WorkspaceManifest,
+  WorkspacePurpose,
   WorkspaceState,
 } from "./types.js";
 
@@ -53,6 +54,8 @@ export interface PersistedWorkspaceState {
   seedBase?: string;
   /** Session uuids that acquired or attached to this workspace (recordWorkspaceSession). */
   sessions?: string[];
+  /** Set only on a workspace a tool made for itself (Workspace.purpose). */
+  purpose?: WorkspacePurpose;
 }
 
 /** Canonical projection of persisted state back into a Workspace. */
@@ -71,6 +74,7 @@ export function stateToWorkspace(s: PersistedWorkspaceState): Workspace {
     chrome: s.chrome,
     ...(s.startPoint ? { startPoint: s.startPoint } : {}),
     ...(s.seedBase ? { seedBase: s.seedBase } : {}),
+    ...(s.purpose ? { purpose: s.purpose } : {}),
   };
 }
 

@@ -688,6 +688,7 @@ import type * as replays from "../replays.js";
 import type * as replaysHttp from "../replaysHttp.js";
 import type * as replaysSearch from "../replaysSearch.js";
 import type * as repoFlows from "../repoFlows.js";
+import type * as repoLeases from "../repoLeases.js";
 import type * as repoPublicHttp from "../repoPublicHttp.js";
 import type * as repoSessions from "../repoSessions.js";
 import type * as repos from "../repos.js";
@@ -1512,6 +1513,7 @@ declare const fullApi: ApiFromModules<{
   replaysHttp: typeof replaysHttp;
   replaysSearch: typeof replaysSearch;
   repoFlows: typeof repoFlows;
+  repoLeases: typeof repoLeases;
   repoPublicHttp: typeof repoPublicHttp;
   repoSessions: typeof repoSessions;
   repos: typeof repos;

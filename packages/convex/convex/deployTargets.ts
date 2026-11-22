@@ -65,7 +65,7 @@ const targetValidator = v.object({
 });
 
 /** The team a CLI call means: the one it names (a member), else the repository's (deployTeamFor). */
-async function teamFor(ctx: any, userId: Id<"users">, repository: string, teamId?: Id<"teams">): Promise<Id<"teams">> {
+export async function teamFor(ctx: any, userId: Id<"users">, repository: string, teamId?: Id<"teams">): Promise<Id<"teams">> {
   if (teamId) {
     await requireTeamMembership(ctx, userId, teamId);
     return teamId;

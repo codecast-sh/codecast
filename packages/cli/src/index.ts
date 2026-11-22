@@ -22795,17 +22795,6 @@ workflow
   });
 
 workflow
-  .command("clear <run>")
-  .description("For a flow's script station only (shape=parallelogram, script=...): the run's own graph cleared the change to land with no card (a founder-intent read that passed). A run no role is behind then merges under the person who started it. Refused from any agent or session station, fix stations included, and from any station but the one the run stands at; a resume, reask or land-again drops it. <run> is the run id ($run_id in the station's script)")
-  .requiredOption("--why <text>", stdinText("What cleared it, recorded with the merge"))
-  .option("--json", "Machine-readable output")
-  .action(async (run: string, options: { why: string; json?: boolean }) => {
-    const r = await cliPost("/cli/workflow-runs/clear", { run_id: run, why: options.why });
-    if (options.json) { printJson(r); return; }
-    console.log(`cleared to land at ${r.node_id}`);
-  });
-
-workflow
   .command("reask <task>")
   .description("Ask a line run's decision again on the stations as they are now: the run picks up at the station that presents the decision (the one its gate names as asker), which posts its own question, and the old decision is withdrawn. For a run waiting on a decision, or one that failed while standing at it. Run it on the machine that holds the run")
   .option("--at <node>", "Pick the run up at this station instead (needed when the gate it waits at is gone from the graph)")

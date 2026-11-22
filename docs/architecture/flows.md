@@ -372,6 +372,152 @@ signed by the run ("Change run"), and so are its notifications
 check's failing steps in one line, and the comment links the run's page for
 the full output.
 
+### Merge: the station names the sha that landed
+
+`cast flow merge --pr <n> --branch <branch> --dir $run_dir`
+(`workflow/mergeStation.ts`) is the change flow's Merge station. It reads
+`ci.json` and `review.json` from `$run_dir` and nowhere else, and refuses
+(exit 2) unless CI is green, `ci.json` names the `head_sha` it tested, and the
+review said ship on a `head_sha` it names. A pull request whose head is not
+CI's sha, because something was pushed after CI, goes back to CI (exit 3)
+before anything is stamped. That sha is the one `--match-head-commit` pins, so
+only the head CI tested merges. It must also be the head the reviewer read, or
+one a chain of the stations' own rebases leads to from it (R to X to Y). Both
+come from the server's record for this attempt
+(`/cli/workflow-runs/merge-proof`), never from review.json or rebase.json. The
+station checks each link against git before it trusts it: with B the
+default-branch commit `to` sits on, `git merge-tree --write-tree` of B and
+`from` over their merge base must give exactly `to`'s tree. Any other head,
+or a link that fails the check, is refused (exit 2) with "it must be reviewed
+again". The station then stamps the
+run cleared by its own graph (`orgLineMerge.clearForMerge`) for that head.
+The server accepts the stamp only when it holds these from this attempt, from
+stations that lead to Merge (the-line.md):
+
+- the green verdict `cast flow ci` recorded for that head from its running
+  station;
+- the reviewer's ship, recorded by the reviewer's own session with `cast flow
+  review-verdict`, on that head or on one a recorded rebase chain leads to
+  from it;
+- when the change edits CI's own config (`ci.json`'s `ci_changed`, sent with
+  the stamp and in the CI verdict), a person's Ship on this run's card. Without
+  one the station exits 2 with "this change edits CI; a person must answer
+  Ship".
+
+The files in `$run_dir` are what the graph routes on, and the server's record is
+what authorizes. Both protect against confused or mistaken agents and stale
+state. Neither protects against a process holding the owner's token, which
+could push the default branch directly anyway. The station asks `/cli/line/merge/check`, and refuses
+with the server's words when nothing authorizes the merge. It never passes
+`--admin`.
+
+Two holds keep deploys and merges in order:
+
+- **The checkout's merge lock** (`<git common dir>/codecast/merge.lock`;
+  `workflow/mergeScratch.ts`), from the rebase to the landed sha. It orders
+  stations on one checkout. It is a file made with O_EXCL that names its
+  holder's pid and that process's start time, so a pid a reboot reused holds
+  nothing. A lock whose holder is gone is removed only under a takeover claim
+  (one waiter at a time), and only if it still holds what was judged gone.
+- **The repository's lease on the server** (`repo_leases`,
+  `convex/repoLeases.ts`, `land/repoLease.ts`), from the first before-merge
+  step to the landed sha. It orders stations and `cast ship checkout` (from its
+  first before-push deploy to its push) on every machine. There is one lease
+  per repository, whichever workspace takes it, since every workspace connected
+  to a repository deploys the same production. Taking it needs access to the
+  station's run workspace, so it never depends on how many teams connected the
+  repository; `cast ship checkout`, which has no run, needs the repository's
+  team. A holder renews it every minute, and it lapses ten minutes
+  after the last renewal. A renewal extends only the holder's own row and never
+  takes a lease back. A station that finds it held waits and names the holder.
+  A holder counts the lease lost when a renewal is refused or none has
+  succeeded for five minutes.
+  The station asks the server outright before each step and before the merge,
+  and refuses (exit 2) when the lease is no longer its own.
+
+The station works in a worktree it acquires under the main checkout, set up
+(env files, `bun install`) only when a step will run. The workspace state marks
+it as the station's own (`purpose: merge-scratch`, with the station's pid and
+start time). It is released afterwards. On SIGTERM it is released only once the
+running step's whole process group has stopped, which boots out deploy.sh's
+launchd job; a step that will not stop leaves its tree in place. The next
+station sweeps only trees marked as its own, named `merge-scratch-*`, older
+than three hours and whose maker is gone. A person's workspace named `merge-*`
+is never touched. Each round
+fetches the default branch fresh and rebases onto it. A conflict exits 1,
+naming the files and the default branch's commits that touched them. So does a
+change that would set the default branch's recent work back (a stale copy
+built on an old tree, lineMerge's `undoneChanges`): the line names each file
+with the commit it would undo and says to rebuild the change on the default
+branch, which the change's session does as well as anyone. When the
+default branch changed one of the change's files since `ci.json`'s
+`tested_main_sha`, a model judges whether the two diffs interact. It runs on
+the call node's path, `/cli/model/call`, with the diffs fenced as untrusted
+data. Interacting, or no answer, records the rebase as a link from the head CI
+tested to the rebased head, on the server and in `$run_dir/rebase.json`
+(`recordRebase` in `workflow/rebaseRecord.ts`, which the PR station also uses
+when it rebases while waiting for main). It then pushes the rebased branch and
+exits 3. The run goes back to CI on a head the
+review still covers. Files the default branch did not share merge without a
+retest.
+
+The before-merge steps are the `[[ship.deploy]]` steps with
+`stage = "before_push"` that the default branch's own line profile names (read
+at the commit the change is rebased onto, so a change never decides its own
+deploys), whose `when` globs match the change's files. They run from the
+rebased tree (codecast: the typing guard and `packages/convex/deploy.sh`, from
+a tree that holds origin/main). Any of these starts another round on the new
+default branch, up to three:
+
+- the default branch moves before a step;
+- it moves while a step fails, as deploy.sh refusing a tree that is BEHIND does;
+- it moves under a step's paths while the step runs.
+
+A step that fails otherwise exits 2 with its output's tail. Once a step has
+gone out, production must not keep a backend the default branch lacks. So any
+exit that merged nothing first sends those steps again from the default branch
+as it is then, still under the lease, records that deploy, and says so: "nothing
+merged, so backend went out again from main at <sha>". If the lease was lost
+and cannot be taken back, the line says exactly what is deployed instead.
+
+The merge is `gh pr merge --squash --match-head-commit <ci.json's head_sha>`.
+Its body lists the branch's commits and keeps each distinct
+`Codecast-Session` trailer, so `cast blame` still finds every session. The
+station prints the PR's merge commit only once origin's default branch holds
+it, reading again for about ten seconds while GitHub's replicas catch up. If gh
+reports a merge whose commit the default branch lacks, it exits 2.
+
+When the landed commit differs, under a step's paths, from the tree that step
+deployed, the step runs again. That happens when the default branch moved
+after the last check, or when the squash differs from the local rebase. It runs
+from the default branch as it is then, which holds the landed commit (deploy.sh
+refuses a tree behind main), and the tree is set up again when dependencies
+changed. The station writes `$run_dir/merge.json` = {sha, pr, url} and records
+the merge on the run (`/cli/line/merge/record`) as `cast line merge` does. It
+records each step's target as deployed at the sha it went out from, through
+`/cli/deploys/ship-pass` as `cast ship checkout` does (deploys.md DP11), so
+Deploy finds the backend live. merge.json is written the moment the merge
+lands, and a station stopped after that point still prints the sha and exits 0.
+A rerun that finds the pull request already merged sends the before-merge steps
+its commit calls for again from the default branch, since the attempt that
+merged may have died before it could. A crash exits 2 with `station crashed:
+<error>`, so exit 1 always means the change must be rebuilt on the default
+branch.
+
+`cast flow review-verdict --verdict <v> --head <sha> [--round <r>]`
+(`flowStations.ts`) is what the reviewer's session runs to record its verdict.
+The session names itself from its own environment, as every `cast` command run
+inside a session does. The server finds the running run and the reviewer node
+(composed ids such as `review__review` included) whose reported session is
+exactly that session in this attempt, so the prompt needs neither the run nor
+the node. `--run` and `--node` are there only for a session that is the
+reviewer of more than one.
+
+A lease lost after a step went out may mean another holder deployed over it.
+Before exiting, the station waits up to fifteen minutes to take the lease back,
+then sends main. A station stopped while it sends a step again says, on the way
+out, that production may run a backend the default branch lacks.
+
 ### Deploy: the run waits for the deploy that carries the change
 
 Both change flows end at Deploy, after Land (the `ship` segment, labelled Land
