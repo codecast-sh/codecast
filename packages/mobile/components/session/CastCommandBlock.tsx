@@ -26,7 +26,7 @@ import {
 } from '@codecast/web/components/castCommand';
 import { decideOutputId } from '@codecast/web/components/conversation/classify';
 import { flowCommandTarget, pipelineCommandRepo } from '@codecast/web/lib/line/flowCommandOutput';
-import { editFromOutput } from '@codecast/web/lib/line/flowEditCard';
+import { editFromOutput } from '@codecast/web/lib/line/flowEditFence';
 import { FlowCard, FlowEditCard, FlowPipelineCard, FlowRunCard } from './FlowCard';
 import { stripAnsiCodes } from '@codecast/web/lib/ansi';
 import { THREAD_STATE_STATUS_META } from '@codecast/web/lib/threadState';

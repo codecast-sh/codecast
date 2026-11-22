@@ -3,7 +3,7 @@
 import { segmentTopOf } from "@codecast/shared/contracts/flowPool";
 import type { FlowEdit } from "@codecast/shared/contracts/flowEdit";
 import type { ShippedFlow } from "./flowPool";
-import { asEdit } from "./flowEditCard";
+import { asEdit } from "./flowEditFence";
 
 export const FLOW_FENCE_LANG = "flow";
 
