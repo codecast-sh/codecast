@@ -198,7 +198,7 @@ export interface ShipSpec {
   /** Deploy steps, each run when the shipped commits touch one of its paths. */
   deploy: ShipDeployStep[];
   /**
-   * The flow a pass runs through (`cast flow run <flow> --checkout`), or "default" for the workspace's default flow.
+   * The flow a pass runs through (`cast flow run <flow> --checkout`), always named: shipping never takes a default flow.
    * Set, `cast ship checkout` pushes nothing itself: the flow's stages check, land and deploy the pass.
    */
   flow?: string;
