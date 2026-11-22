@@ -12,9 +12,6 @@ mock.module("convex/react", () => ({ ...convexReact, useAction: () => () => {} }
 mock.module("next/link", () => ({ default: ({ children, ...props }: any) => <a {...props}>{children}</a> }));
 mock.module("../../repo/RepoWindowControl", () => ({ RepoWindowControl: () => null }));
 mock.module("../../comments/CommentAvatar", () => ({ CommentAvatar: () => null }));
-// The production band's hooks boot the store (localStorage, IndexedDB), which this DOM-less process has none of.
-mock.module("../../../hooks/usePrDeploy", () => ({ usePrDeploy: () => ({}) }));
-mock.module("../../pr/PRDeploy", () => ({ PRDeployBand: () => null, PRReachChip: () => null, PRShipsTo: () => null }));
 // The session pill resolves titles from the live store; here it is the link
 // it becomes, named by the title the header hands it.
 mock.module("../../EntityIdPill", () => ({

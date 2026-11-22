@@ -21,8 +21,7 @@ import { RepoWindowControl } from "../repo/RepoWindowControl";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { EntityIdPill } from "../EntityIdPill";
 import { PRLinked, PRReviewers } from "./PRLinked";
-import { PRDeployBand, PRReachChip, PRShipsTo } from "./PRDeploy";
-import { usePrDeploy } from "../../hooks/usePrDeploy";
+import { PRDeployBand, PRReachChip, PRShipsTo, usePrDeploy } from "./PRDeploy";
 import { copyToClipboard, relTimeShort } from "../../lib/utils";
 import { withShortcut } from "../../shortcuts/registry";
 import {
@@ -438,8 +437,7 @@ export function PRHeader({
             <span className="text-sol-text-dim">GitHub has not said yet</span>
           )}
         </Figure>
-        {/* Only once the files are in: until then where it ships is unknown, not empty. */}
-        {deploy.open && deploy.declares && deploy.shipsTo && (
+        {deploy.open && deploy.declares && (
           <Figure label="Ships to">
             <PRShipsTo model={deploy} />
           </Figure>

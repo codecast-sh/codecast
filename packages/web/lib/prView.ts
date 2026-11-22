@@ -7,10 +7,7 @@
 // testable without a DOM and the components stay layout only.
 
 import { isQuietExternalEvent, type ExternalEventAccent } from "./externalEvents";
-import { checkLabel, checkOutcome, type CheckOutcome } from "@codecast/shared/contracts";
-
-// The phone reads a check's outcome from here, as it always has; the rule lives in shared/contracts/prRefs.
-export { checkOutcome, type CheckOutcome };
+import { checkLabel } from "@codecast/shared/contracts";
 import type { CodeAnchorText } from "@codecast/shared/comments";
 import {
   diffLineKey,
@@ -32,6 +29,23 @@ export type PrCheck = {
   suite_id?: string;
   event?: string;
 };
+
+export type CheckOutcome = "passed" | "failed" | "pending" | "skipped";
+
+/** A check run reports `status` while it runs and `conclusion` once it ends.
+ *  GitHub also reports commit statuses, whose state lands in `status`. */
+export function checkOutcome(check: Pick<PrCheck, "status" | "conclusion">): CheckOutcome {
+  const conclusion = (check.conclusion ?? "").toLowerCase();
+  const status = (check.status ?? "").toLowerCase();
+  if (conclusion) {
+    if (conclusion === "success" || conclusion === "neutral") return "passed";
+    if (conclusion === "skipped" || conclusion === "stale") return "skipped";
+    return "failed";
+  }
+  if (status === "success") return "passed";
+  if (status === "failure" || status === "error") return "failed";
+  return "pending";
+}
 
 export const CHECK_OUTCOME_ACCENT: Record<CheckOutcome, ExternalEventAccent> = {
   passed: "green",
