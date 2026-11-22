@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { CheckoutRunHeld, claimCheckoutRun, recordCheckoutRun } from "./checkoutRunHold";
+import { CheckoutRunHeld, claimCheckoutRun, processStart, recordCheckoutRun } from "./checkoutRunHold";
 
 let gitDir = "";
 beforeEach(() => { gitDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-checkout-hold-")); });
@@ -72,12 +72,18 @@ describe("the checkout's pass hold", () => {
     expect(fs.readdirSync(path.join(gitDir, "codecast"))).toEqual(["checkout-run.json"]);
   });
 
-  test("a hold still starting after five minutes is a reused pid's, and is taken over", async () => {
-    fs.mkdirSync(path.join(gitDir, "codecast"), { recursive: true });
-    // process.ppid is alive, as a reused pid would be.
-    fs.writeFileSync(path.join(gitDir, "codecast", "checkout-run.json"), JSON.stringify({ pid: process.ppid, at: Date.now() - 4 * 60_000 }));
+  test("a starting hold stands while its starter lives, however long; a dead starter's or a reused pid's is taken over", async () => {
+    const file = path.join(gitDir, "codecast", "checkout-run.json");
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // process.ppid is a live process: its hold from long ago, with its own start time, still stands.
+    fs.writeFileSync(file, JSON.stringify({ pid: process.ppid, started: processStart(process.ppid), at: 1 }));
     await expect(claimCheckoutRun(gitDir, async () => true, process.pid)).rejects.toThrow("is starting a pass");
-    fs.writeFileSync(path.join(gitDir, "codecast", "checkout-run.json"), JSON.stringify({ pid: process.ppid, at: Date.now() - 6 * 60_000 }));
+    // The same number on a process that started at another time is not the starter.
+    fs.writeFileSync(file, JSON.stringify({ pid: process.ppid, started: "Mon Jan  1 00:00:00 2001", at: 1 }));
+    await claimCheckoutRun(gitDir, async () => true, process.pid);
+    expect(holdOf()).toMatchObject({ pid: process.pid, started: processStart(process.pid) });
+    // A dead starter's hold goes.
+    fs.writeFileSync(file, JSON.stringify({ pid: DEAD, started: "Mon Jan  1 00:00:00 2001", at: Date.now() }));
     await claimCheckoutRun(gitDir, async () => true, process.pid);
     expect(holdOf().pid).toBe(process.pid);
   });
