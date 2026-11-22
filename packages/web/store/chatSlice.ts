@@ -534,6 +534,14 @@ function driveChatSend(
   clientId: string,
   opts?: ChatSendOptions,
 ): Promise<ChatSendResult | undefined> | undefined {
+  // chat.sendMessage refuses a line with no text and no attachment, and the
+  // outbox would re-drive that refusal forever. Hold it back here, where every
+  // send, retry and edit of an unsent line passes (ct-91208). A row already on
+  // screen keeps its failed state, so discard stays the way out.
+  if (!content.trim() && !opts?.attachments?.length) {
+    settleSend(clientId, new Error("A message needs text or an attachment"));
+    return undefined;
+  }
   // (The impl type says void because the BODY returns nothing; the middleware
   // wraps an asyncAction to resolve with the dispatch result.)
   const sent = get().dispatchChatSend(channelId, content, clientId, opts) as Promise<ChatSendResult | undefined> | undefined;
