@@ -161,6 +161,10 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     ["pins dormant on its check", () => ({})],
     ["reads waiting on its background work", (n) => n >= 2 ? { work_state: "dormant", agent_status: "waiting" } : {}],
     ["has a daemon gone dark", (n) => n >= 2 ? { is_live: false } : {}],
+    ["reads dormant on its own dormant pin", (n) => {
+      if (n >= 2) pinned = { state: "Waiting on the eval replay", status: "dormant" };
+      return n >= 2 ? { work_state: "dormant", is_live: true } : {};
+    }],
   ];
   test.each(waits)("a hand that %s for 45 minutes is not killed, and routes on its handoff after", async (_, rowAt) => {
     // An idle machine: a loaded one stretches the quiet window past 45 minutes, and the test would prove nothing.
@@ -179,6 +183,23 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     expect(await run("implement", 10800)).toBe("completed");
     expect(reached("verify")).toBe(true);
     expect(failReason()).not.toContain("killed after");
+  }, 30000);
+
+  test("a snoozed hand that declared no wait is killed at its quiet window, not its cap", async () => {
+    // A person's snooze (or a filed rest, or a standing trigger) reads dormant with nothing at work and no dormant pin.
+    loadSpy = spyOn(nodeOs, "loadavg").mockReturnValue([0, 0, 0]);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const res = await realFetch(url, init);
+      if (!String(url).endsWith("/cli/inbox")) return res;
+      const body = await res.json();
+      Object.assign(body.sessions[0], { work_state: "dormant", agent_status: "idle" });
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    jumpAt = 5;
+    jumpMs = 45 * 60_000;
+    expect(await run("implement", 10800)).toBe("failed");
+    expect(failReason()).toMatch(/^hand jx7hand killed after \d+m at implement \(it showed no work for 30m\)$/);
   }, 30000);
 
   test.each(builders)("%s: a hand parked on its task's wait outlives the node's timeout and routes on its handoff after", async (id) => {

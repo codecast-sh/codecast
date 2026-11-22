@@ -827,12 +827,14 @@ async function waitOnStation(
     const state: string = row.work_state || "idle";
     if (row.is_live) wasLive = true;
     // A transcript that moved or a working status is work, and so is a wait the hand declared: its background work
-    // still running (waiting), a dormant pin, or a daemon gone dark under it. Those are held below until the hand's
-    // cap, as before the quiet window existed: builders' handoffs landed 1 to 60+ minutes after their turn (ct-60145).
-    // A dormant pin holds until the transcript moves on; a settle after that reads the pin again (below).
+    // still running (waiting), its own dormant pin (heldDormant, below), or a daemon gone dark under it. Those are held
+    // until the hand's cap, as before the quiet window existed: builders' handoffs landed 1 to 60+ minutes after their
+    // turn (ct-60145). A row that merely reads dormant is not: a person's snooze or filed rest, a standing trigger, or a
+    // subject's dormant claim from before its brief all read so with nothing at work. A dormant pin holds until the
+    // transcript moves on; a settle after that reads the pin again.
     const moved = (row.message_count ?? 0) !== lastCount;
     if (moved && lastCount >= 0) heldDormant = false;
-    if (moved || heldDormant || state === "working" || state === "dormant" || HAND_AT_WORK.has(row.agent_status ?? "")) watch.active();
+    if (moved || heldDormant || state === "working" || HAND_AT_WORK.has(row.agent_status ?? "")) watch.active();
     lastCount = row.message_count ?? 0;
     // A hand whose start failed (its machine refused it, or a cloud host's
     // preparation failed) reads idle, never live and never killed: nothing
@@ -932,6 +934,12 @@ async function waitOnStation(
     const restPin = !subject && state === "dormant" && row.agent_status !== "waiting" && !row.is_killed
       ? await cliCall(options, "/cli/sessions/state/get", { session: conversationId })
       : undefined;
+    // A row that reads dormant on the hand's own dormant pin is the wait it declared, held as the settled read is (below).
+    if (restPin?.status === "dormant" && !row.awaiting_input && !row.blocked_on) {
+      if (!heldDormant) console.log(`${c.dim}  ${shortId}: pinned dormant, waiting for its wake${c.reset}`);
+      heldDormant = true;
+      watch.active();
+    }
     const settled = state === "done" || state === "needs_input" || (!!subject && state === "dormant") || row.is_killed || (wasLive && !row.is_live)
       || restPin?.status === "done";
     if (!settled) continue;
