@@ -169,6 +169,13 @@ export type DeployView = {
   rollback_of?: string | null;
   /** Files under its sources that went out uncommitted with the sha. */
   dirty?: number | null;
+  /** The hostname of the machine that pushed it. */
+  machine?: string | null;
+  /** Which push path sent it. */
+  pushed_via?: "deploy.sh" | "dev watcher" | null;
+  /** Names it put on the target and took off it (`fn:`, `http:`, `index:`, `table:`). */
+  adds?: string[];
+  drops?: string[];
   created_at: number;
   live_at: number | null;
   finished_at: number | null;

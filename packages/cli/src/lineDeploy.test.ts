@@ -5,7 +5,7 @@ import path from "node:path";
 import { parseWorkflowSource, validateWorkflow } from "./workflow/parser";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates";
 import { spawnSync } from "node:child_process";
-import { deployEnv, deployFailureSignal, expandDeployCommand, failedStep, followJobs, jobsVerdict, pinnedSha, returnDeploy, runDeployStep, waitForCi, watchDeploy } from "./lineDeploy";
+import { deployEnv, deployFailureSignal, expandDeployCommand, failedStep, followJobs, formatDeploy, jobsVerdict, pinnedSha, returnDeploy, runDeployStep, waitForCi, watchDeploy } from "./lineDeploy";
 import { askUntilRead, releaseRequest, requestShaFor } from "./deployCommand";
 
 // The line's deploy stage (deploys.md DP2, DP8, DP9): each step runs a
@@ -267,5 +267,28 @@ describe("a release with no --sha", () => {
     let other = 0;
     await expect(askUntilRead(async () => { other++; throw new Error("dp-8 is already going out to cli"); }, { sleep: async () => {}, now: () => 0 })).rejects.toThrow("already going out");
     expect(other).toBe(1);
+  });
+});
+
+describe("cast line deploy show", () => {
+  const base = { short_id: "dp-9", target: "backend", sha: "7975db5eed352f8839223ea71023225380a5af86", status: "live", live_at: 1, trigger: "outside", source: "cast ship mark", started_by: { name: "Ashot" }, carries: [] };
+
+  test("a push from uncommitted files says so, with where it came from and what it changed", () => {
+    const text = formatDeploy({ ...base, dirty: 78, pushed_via: "deploy.sh", machine: "MacBook-Pro-182", adds: ["table:voiceprints", "index:voiceprints.by_user"], drops: ["fn:old:gone"] });
+    expect(text).toContain("pushed by deploy.sh on MacBook-Pro-182 · 78 uncommitted files went out with 7975db5");
+    expect(text).toContain("added 2\n  table:voiceprints\n  index:voiceprints.by_user");
+    expect(text).toContain("dropped 1\n  fn:old:gone");
+  });
+
+  test("a clean deploy reads as before", () => {
+    const text = formatDeploy(base);
+    expect(text).not.toContain("pushed");
+    expect(text).not.toContain("added");
+    expect(text).toContain("carried 0");
+  });
+
+  test("a long list is cut at twenty", () => {
+    const adds = Array.from({ length: 25 }, (_, i) => `fn:m:f${i}`);
+    expect(formatDeploy({ ...base, adds })).toContain("… and 5 more");
   });
 });

@@ -35,7 +35,9 @@ export const ENTITY_TYPE = v.union(
   // A weekly card, by its week key (weeklyCards.ts). Direct recipients only.
   v.literal("weekly_card"),
   // A metric watch, by its short id (metricAlerts.ts). Direct recipients only.
-  v.literal("metric_watch")
+  v.literal("metric_watch"),
+  // A deploy, by its short id (deploys.noticeDroppedWork). Direct recipients only.
+  v.literal("deploy")
 );
 
 export const NOTIFICATION_TYPE = v.union(
@@ -83,6 +85,8 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("card_waiting"),
   v.literal("change_shipped"),
   v.literal("cause_reopened"),
+  // A deploy took off what the recipient's uncommitted push put on its target.
+  v.literal("deploy_dropped_work"),
   // A task assigned to the recipient is unblocked and no session owns it.
   v.literal("task_unblocked"),
   // Someone outside a decision's people answered it for them.

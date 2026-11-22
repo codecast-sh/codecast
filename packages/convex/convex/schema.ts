@@ -4302,6 +4302,14 @@ export default defineSchema({
     // Files under the target's sources that were uncommitted when it went out:
     // the sha names every commit up to it, and these went too.
     dirty: v.optional(v.number()),
+    // The hostname of the machine that pushed it.
+    machine: v.optional(v.string()),
+    // Which push path sent it: deploy.sh, or the dev watcher (scripts/gated-push.ts) pushing a working tree.
+    pushed_via: v.optional(v.union(v.literal("deploy.sh"), v.literal("dev watcher"))),
+    // What it put on the target that was not there before, and what it took off, as names (`fn:<module>:<export>`,
+    // `http:<METHOD> <path>`, `index:<table>.<index>`, `table:<table>`). At most 500 each, 200 characters a name.
+    adds: v.optional(v.array(v.string())),
+    drops: v.optional(v.array(v.string())),
     // The `cast ship checkout` pass that sent it (DP11).
     ship_pass_id: v.optional(v.id("ship_passes")),
     // The line-deploy run that carries it through its steps (DP8): each
@@ -4965,6 +4973,9 @@ export default defineSchema({
       v.literal("card_waiting"),
       v.literal("change_shipped"),
       v.literal("cause_reopened"),
+      // A deploy took off what the recipient's uncommitted push had put on its
+      // target (deploys.noticeDroppedWork). Entity is the dropping deploy.
+      v.literal("deploy_dropped_work"),
       // The last blocker of a task assigned to the recipient cleared and no
       // session owns it (taskWaits.onUnblocked, task-graph.md TG2).
       v.literal("task_unblocked"),
@@ -5025,7 +5036,9 @@ export default defineSchema({
       // A weekly card by its week key: opens /week on that week.
       v.literal("weekly_card"),
       // A metric watch by its short id: opens /ops/metrics/mw-N.
-      v.literal("metric_watch")
+      v.literal("metric_watch"),
+      // A deploy by its short id: opens /deploys?deploy=dp-N.
+      v.literal("deploy")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -9026,7 +9039,9 @@ export default defineSchema({
       // A weekly card, for its owner's Monday notice. Same reason.
       v.literal("weekly_card"),
       // A metric watch, for its alert to the people it names. Same reason.
-      v.literal("metric_watch")
+      v.literal("metric_watch"),
+      // A deploy, for the notice that it dropped someone's work. Same reason.
+      v.literal("deploy")
     ),
     entity_id: v.string(),
     reason: v.union(

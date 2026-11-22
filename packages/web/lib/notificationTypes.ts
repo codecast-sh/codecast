@@ -81,6 +81,8 @@ export const taskTypes = new Set([
   "card_waiting",
   "change_shipped",
   "cause_reopened",
+  // A deploy took off what the person's uncommitted push put live (convex deploys.ts noticeDroppedWork).
+  "deploy_dropped_work",
 ]);
 
 export const typeLabels: Record<string, string> = {
@@ -117,6 +119,7 @@ export const typeLabels: Record<string, string> = {
   card_waiting: "card waiting on you",
   change_shipped: "change shipped",
   cause_reopened: "problem came back",
+  deploy_dropped_work: "dropped your work",
   decision_answered_for_you: "answered for you",
   decision_passed: "passed you a decision",
   decision_escalated: "escalated a decision to you",
@@ -165,6 +168,7 @@ export const typeColors: Record<string, string> = {
   card_waiting: "text-sol-orange",
   change_shipped: "text-sol-green",
   cause_reopened: "text-red-400",
+  deploy_dropped_work: "text-sol-orange",
   decision_answered_for_you: "text-sol-yellow",
   decision_passed: "text-sol-yellow",
   decision_escalated: "text-sol-orange",
@@ -278,6 +282,8 @@ export function notificationRoute(
   if (entityType === "weekly_card") return `/week?w=${encodeURIComponent(entityId)}`;
   // A metric watch by its short id: its page, chart and alert.
   if (entityType === "metric_watch") return `/ops/metrics/${encodeURIComponent(entityId)}`;
+  // A deploy by its short id: the Deploys page open on it.
+  if (entityType === "deploy") return `/deploys?deploy=${encodeURIComponent(entityId)}`;
   // A role's page opens on its Scope tab, where a person who reports to it
   // reads their goals with what moved and what stalled.
   if (entityType === "org_role") return `/org/${entityId}`;

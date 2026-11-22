@@ -327,6 +327,8 @@ describe('mobileNotificationRoute', () => {
     expect(mobileNotificationRoute({ entity_type: 'device', entity_id: 'd1' })).toBe('/settings/devices');
     expect(mobileNotificationRoute({ entity_type: 'machine', entity_id: 'dev-9' })).toBe('/offload/dev-9');
     expect(mobileNotificationRoute({ entity_type: 'metric_watch', entity_id: 'mw-4' })).toBe('/metric/mw-4');
+    expect(mobileNotificationRoute({ entity_type: 'deploy', entity_id: 'dp-2374' })).toBe('/deploy/dp-2374');
+    expect(mobileNotificationRoute({ link: '/deploys?deploy=dp-2374', entity_type: 'deploy', entity_id: 'dp-2374' })).toBe('/deploy/dp-2374');
     expect(mobileNotificationRoute({ entity_type: 'weekly_card', entity_id: '2026-W47' })).toBe('/week?w=2026-W47');
     expect(mobileNotificationRoute({ entity_type: 'passkey', entity_id: 'pk' })).toBe('/passkeys');
     expect(mobileNotificationRoute({ entity_type: 'team', entity_id: 't' })).toBe('/settings/team');

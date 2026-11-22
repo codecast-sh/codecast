@@ -4483,6 +4483,8 @@ cliRoute("/cli/pr/notes", async (ctx, body) => {
 
 // `cast ship mark`: a deploy marker for the Changes page (changesDeploy.ts).
 cliRoute("/cli/changes/mark-deploy", async (ctx, body) => ctx.runMutation((api as any).changesDeploy.markDeploy, body));
+// Which deploy put each name (a function, route, index or table) on a surface: who to ask before dropping it.
+cliRoute("/cli/deploys/added-by", async (ctx, body) => ctx.runQuery((api as any).changesDeploy.addedBy, body));
 
 cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));

@@ -35,7 +35,7 @@ type Notification = {
   read: boolean;
   created_at: number;
   conversation_id?: Id<"conversations">;
-  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel" | "device" | "machine" | "passkey" | "weekly_card" | "metric_watch";
+  entity_type?: "task" | "doc" | "plan" | "conversation" | "artifact" | "chat_channel" | "device" | "machine" | "passkey" | "weekly_card" | "metric_watch" | "deploy";
   entity_id?: string;
   chat_message_id?: string;
   link?: string;
@@ -103,6 +103,7 @@ function notificationIcon(type: string): { name: React.ComponentProps<typeof Fon
     case "card_waiting": return { name: "question-circle", color: Theme.orange };
     case "change_shipped": return { name: "rocket", color: Theme.green };
     case "cause_reopened": return { name: "undo", color: Theme.red };
+    case "deploy_dropped_work": return { name: "unlink", color: Theme.orange };
     case "decision_answered_for_you": return { name: "question-circle", color: Theme.yellow };
     case "decision_passed": return { name: "share", color: Theme.yellow };
     case "decision_escalated": return { name: "level-up", color: Theme.orange };
