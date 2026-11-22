@@ -186,7 +186,9 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
     : resumeState === "failed" ? "Resume timed out"
     : sessionError ? "Session error"
     : null;
-  const stallAction = stallWord === "Resume timed out" ? "Retry" : stallWord === "Session error" ? "Resume" : null;
+  // Retry and Resume send the same daemon command the banner does, so they
+  // wait on the same right: a co-owner who cannot command sees the stall alone.
+  const stallAction = !canCommand ? null : stallWord === "Resume timed out" ? "Retry" : stallWord === "Session error" ? "Resume" : null;
   const seatHeadState = useMemo(() => {
     if (!seat || headOpen) return undefined;
     const stall: SeatStall = stallWord ? { word: stallWord, ...(stallAction ? { action: { label: stallAction, onClick: handleManualResume } } : {}) } : null;
