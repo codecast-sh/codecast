@@ -292,18 +292,40 @@ const GENERATED_DIRS = new Set(["_generated", "__generated__", "generated", "__s
 const ROOT_GENERATED = new Set(["next-env.d.ts", "tsconfig.tsbuildinfo", ".pnp.cjs", ".pnp.loader.mjs", "worker-configuration.d.ts"]);
 
 /**
+ * The workspace members' directory patterns a JavaScript repository's root declares (package.json `workspaces`, as an
+ * array or under `packages`, or pnpm-workspace.yaml's `packages`), or null when the root is no workspace root.
+ */
+function workspacePatterns(root: string): string[] | null {
+  const read = (f: string) => { try { return fs.readFileSync(path.join(root, f), "utf-8"); } catch { return null; } };
+  const pnpm = read("pnpm-workspace.yaml");
+  if (pnpm !== null) {
+    const listed = [...pnpm.matchAll(/^\s*-\s*['"]?([^'"#\s]+)['"]?/gm)].map((m) => m[1]).filter((g) => !g.startsWith("!"));
+    return listed.length ? listed : null;
+  }
+  try {
+    const ws = JSON.parse(read("package.json") ?? "{}").workspaces;
+    const listed = (Array.isArray(ws) ? ws : Array.isArray(ws?.packages) ? ws.packages : []).filter((g: unknown): g is string => typeof g === "string" && !g.startsWith("!"));
+    return listed.length ? listed : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Whether a file no session's edit names, changed after a brief, is one a writer's shell made from what the writers
  * changed (`theirs`): a lockfile whose manifest a writer changed in its directory or below (at the root, the root's
- * own manifest), a file beside a writer's changed source (the same directory, or a generator's directory whose
+ * own manifest, or in a workspace root any member's package.json, since an install there rewrites the one root
+ * lockfile and a member's manifest shipped without it fails a frozen-lockfile install), a file beside a writer's changed source (the same directory, or a generator's directory whose
  * parent holds one), or a file a build writes at the root. Every session's work meets at the root, so a root file
  * is never made by a writer only because it sits beside one. Another session's `bun install` or codegen is neither.
  */
-function madeByWriter(p: string, theirs: string[]): boolean {
+function madeByWriter(p: string, theirs: string[], workspaces: string[] | null): boolean {
   const dir = (f: string) => f.includes("/") ? f.slice(0, f.lastIndexOf("/")) : "";
   const base = (f: string) => f.slice(f.lastIndexOf("/") + 1);
   const under = (d: string, f: string) => d === "" ? dir(f) === "" : f.startsWith(`${d}/`);
   const manifests = LOCKFILES[base(p)];
-  if (manifests) return theirs.some((t) => manifests.includes(base(t)) && under(dir(p), t));
+  const member = (t: string) => dir(p) === "" && base(t) === "package.json" && !!workspaces?.some((g) => new Bun.Glob(g.replace(/\/+$/, "")).match(dir(t)));
+  if (manifests) return theirs.some((t) => manifests.includes(base(t)) && (under(dir(p), t) || (manifests.includes("package.json") && member(t))));
   if (dir(p) === "") return ROOT_GENERATED.has(p) && theirs.length > 0;
   if (theirs.some((t) => dir(t) === dir(p))) return true;
   const segs = dir(p).split("/");
@@ -334,13 +356,14 @@ async function refreezeCheckoutChange(root: string, before: FrozenChange, roster
       i++;
     }
   }
+  const workspaces = workspacePatterns(root);
   const keep: Keep = (p, conversation, changed) => {
     if (paths.has(p) || (!!conversation && writers.has(conversation))) return true;
     if (conversation) return false;
     if (movedTo.has(p)) return keep(movedTo.get(p)!, null, changed) === true;
     if (!lateShellWrite(p)) return false;
     const theirs = changed.filter((c) => !!c.conversation && writers.has(c.conversation)).map((c) => c.path);
-    return madeByWriter(p, theirs) || "changed after the brief, and no writer's change makes it (not its manifest's lockfile, nor generated beside its source)";
+    return madeByWriter(p, theirs, workspaces) || "changed after the brief, and no writer's change makes it (not its manifest's lockfile, nor generated beside its source)";
   };
   // The session the run was started from stays its subject: it hears findings that name none of the change's files.
   const subject = { ...(before.session ? { session: before.session } : {}), ...(before.conversation ? { conversation: before.conversation } : {}) };
