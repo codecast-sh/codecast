@@ -80,8 +80,9 @@ export type SavedViewRow = {
 // sessions work; "time" = flat, newest-first by creation (started_at) — a
 // stable chronology that doesn't move; "bucket" = sections per manual label;
 // "plan" = sections per plan; "trigger" = trigger-first — every armed trigger
-// (and loop/subagent) is a group header with the sessions it drives beneath.
-export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan" | "project" | "goal" | "reports" | "trigger";
+// (and loop/subagent) is a group header with the sessions it drives beneath;
+// "machine" = sections per machine the session runs on.
+export type InboxViewMode = "grouped" | "recent" | "time" | "bucket" | "plan" | "project" | "goal" | "reports" | "trigger" | "machine";
 
 export type ClientLayouts = {
   dashboard?: { sidebar: number; main: number };
