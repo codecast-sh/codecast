@@ -25,6 +25,9 @@ export type FrozenChange = {
   shared: Array<{ path: string; also: string[] }>;
   /** Files the session wrote that stay out: credentials, with why. */
   held: Array<{ path: string; why: string }>;
+  /** The run works on another machine (`cast flow run --device`): the branch is on origin, and the run fetches it again
+   *  after each fix rather than reading the subject's checkout, which is not on that machine. */
+  pushed?: boolean;
 };
 
 const CHANGE_FILE = "change.json";
@@ -66,6 +69,7 @@ export function readFrozenChange(runDir: string | undefined): FrozenChange | nul
 
 /** How the run takes the subject's fix back, as the briefs say it ($change_return): its edits, or the branch it names. */
 export function changeReturnWords(change: Partial<FrozenChange>): string {
+  if (change.pushed && change.source !== "pr") return `This run works on another machine: commit the fix to branch ${change.branch} and push it (git push origin ${change.branch}); when you end your turn the run fetches that branch again`;
   if (change.source === "pr") return `Push the fix to the pull request's branch ${change.branch}; when you end your turn the run fetches that branch again`;
   if (change.source === "branch" || change.source === "task") return `Commit the fix to branch ${change.branch}; when you end your turn the run reads that branch again`;
   return "When you end your turn the run freezes this session's edits again";
