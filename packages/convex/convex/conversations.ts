@@ -11808,24 +11808,34 @@ const RETIRE_BUSY_STATUSES = new Set(["working", "thinking", "compacting", "star
 export async function retireRefusal(ctx: { db: any }, conv: any, expectedMessageCount: number, now: number): Promise<string | null> {
   if (conv.inbox_killed_at) return "it is already stopped";
   if ((conv.message_count ?? 0) !== expectedMessageCount) return `it has moved since the run read it (${expectedMessageCount} messages then, ${conv.message_count ?? 0} now)`;
-  for (const status of ["pending", "injected", "held"]) {
-    const queued = await ctx.db.query("pending_messages").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id).eq("status", status)).first();
-    if (queued) return "a message is queued for it";
-  }
-  const armed = (await tasksOriginatedBy(ctx, conv._id)).find((t: any) => t.status === "scheduled" || t.status === "running" || t.status === "paused");
-  if (armed) return "a trigger is armed on it";
   const liveAgent = async (id: Id<"conversations">) => (await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", id)).collect())
     .filter((m: any) => now - (m.last_heartbeat ?? 0) < HEARTBEAT_ALIVE_MS);
+  const held = await queuedOrArmed(ctx, conv._id);
+  if (held) return `${held} for it`;
   if ((await liveAgent(conv._id)).some((m: any) => RETIRE_BUSY_STATUSES.has(m.agent_status ?? ""))) return "it is working";
+  // The kill cascades to its nested sessions, live or not, and takes their queued messages and triggers with them.
   const [subs, spawned] = await Promise.all([
     ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conv._id)).take(200),
     ctx.db.query("conversations").withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", conv._id)).take(200),
   ]);
   for (const child of [...subs, ...spawned]) {
     if (child.inbox_killed_at || nestParentIdOf(child) !== conv._id.toString()) continue;
-    if ((await liveAgent(child._id)).length) return `its nested session ${child.short_id ?? String(child._id).slice(0, 7)} is live`;
+    const name = child.short_id ?? String(child._id).slice(0, 7);
+    if ((await liveAgent(child._id)).length) return `its nested session ${name} is live`;
+    const childHeld = await queuedOrArmed(ctx, child._id);
+    if (childHeld) return `${childHeld} for its nested session ${name}`;
   }
   return null;
+}
+
+/** What a kill of this conversation would drop: a queued message, or an armed trigger. */
+async function queuedOrArmed(ctx: { db: any }, id: Id<"conversations">): Promise<string | null> {
+  for (const status of ["pending", "injected", "held"]) {
+    const queued = await ctx.db.query("pending_messages").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", id).eq("status", status)).first();
+    if (queued) return "a message is queued";
+  }
+  const armed = (await tasksOriginatedBy(ctx, id)).find((t: any) => t.status === "scheduled" || t.status === "running" || t.status === "paused");
+  return armed ? "a trigger is armed" : null;
 }
 
 // A flow run retires the session its change came from once that change is live (flows.md FL4): the same kill as
