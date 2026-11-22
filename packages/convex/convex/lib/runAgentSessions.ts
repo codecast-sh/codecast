@@ -8,7 +8,7 @@ import { findConversationByAnyRef } from "../conversationSessionLookup";
 // already. `budget` caps conversation lookups so list queries stay bounded — runs are
 // enriched most-recent-first and older ones degrade to plain (non-clickable) rows.
 /** `cast task handoff`'s comment (taskClaim.handoffCommentText): "Handoff: <status>", a blank line, the evidence. */
-const HANDOFF_COMMENT = /^Handoff: (\w+)\s*\n?([\s\S]*)$/;
+export const HANDOFF_COMMENT = /^Handoff: (\w+)\s*\n?([\s\S]*)$/;
 
 /** Each station session's last handoff on the run's task, by conversation id:
  *  how a builder ended (done, blocked, needs_context) is its handoff, which
