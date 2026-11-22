@@ -13,11 +13,12 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { activeTeamIdOf } from "../../lib/activeTeam";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
-import { orderTargets, rebuiltOnly, recordTargets, rollbackTarget, sessionWords, sessionsOf, sourceWord, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
+import { isMineCommit, mineOnly, orderTargets, prOfSubject, rebuiltOnly, recordTargets, rollbackTarget, sessionWords, sessionsOf, sourceWord, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
 import type { Press } from "./DeployPress";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { rollBackHere } from "../../lib/deploys/press";
 import { ageShort } from "../../lib/lineFlow";
+import { prPageHref } from "../../lib/repoView";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import type { CommitCiState, QueueGroup } from "@codecast/shared/contracts/deployTargets";
 import { entityRoute } from "@codecast/shared/entities";
@@ -149,6 +150,14 @@ function HeadCi({ ci, url }: { ci: CommitCiState; url: string | null }) {
 
 function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: DeployTargetRow; deploys: ReadonlyArray<TeamDeployRow>; now: number; onPress: (p: Press) => void; openDeploy: string | null }) {
   const [open, setOpen] = useState<string | null>(openDeploy);
+  const [mineOn, setMineOn] = useState(false);
+  const login = useInboxStore((s) => (s.currentUser as { github_username?: string } | null)?.github_username ?? null);
+  const name = useInboxStore((s) => (s.currentUser as { name?: string } | null)?.name ?? null);
+  const me = { login, name };
+  const mineCount = t.queue.groups.reduce((n, g) => n + g.commits.filter((c) => isMineCommit(c.author, me)).length, 0);
+  // With none of yours left waiting the toggle goes away, so the filter must too, or the list strands empty.
+  const mineShown = mineOn && mineCount > 0;
+  const groups = mineShown ? mineOnly(t.queue.groups, me) : t.queue.groups;
   const n = targetNow(t, deploys);
   const back = rollbackTarget(n.history, n.live);
   const waiting = t.queue.commits;
@@ -189,12 +198,12 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy }: { target: 
 
       <div className="dpp-body" data-record-only={t.record_only ? "" : undefined}>
       {t.record_only ? null : <section className="dpp-sec" data-deploy-waiting>
-        <h3>Waiting on main{t.queue.known ? <span className="dpp-num">{waiting} {waiting === 1 ? "commit" : "commits"}</span> : null}{sessions ? <span className="dpp-h-sub">· {sessions} {sessions === 1 ? "session" : "sessions"}</span> : null}{t.queue.untouched ? <span className="dpp-h-sub" title={`${t.queue.untouched} commits on main change no file ${t.name} ships`}>· {t.queue.untouched} not for {t.name}</span> : null}</h3>
+        <h3>Waiting on main{t.queue.known ? <span className="dpp-num">{waiting} {waiting === 1 ? "commit" : "commits"}</span> : null}{sessions ? <span className="dpp-h-sub">· {sessions} {sessions === 1 ? "session" : "sessions"}</span> : null}{t.queue.untouched ? <span className="dpp-h-sub" title={`${t.queue.untouched} commits on main change no file ${t.name} ships`}>· {t.queue.untouched} not for {t.name}</span> : null}{mineCount ? <button type="button" className="dpp-mine" aria-pressed={mineShown} onClick={() => setMineOn((v) => !v)} data-deploy-mine>Mine<span className="dpp-num">{mineCount}</span></button> : null}</h3>
         {!t.queue.known ? <p className="dpp-none" data-deploy-queue-unknown>Live <code>{short(n.live?.sha)}</code> is not on main, so what waits here can't be counted.</p>
         : waiting === 0 ? <p className="dpp-none">Everything on main is live here.</p> : (
           <ul className="dpp-groups">
-            {t.queue.groups.map((g) => <SessionGroup key={g.key} g={g} now={now} />)}
-            {t.queue.commits > t.queue.shown ? <li className="dpp-more">{t.queue.commits - t.queue.shown} older commits</li> : null}
+            {groups.map((g) => <SessionGroup key={g.key} g={g} now={now} repository={t.repository} me={me} />)}
+            {!mineShown && t.queue.commits > t.queue.shown ? <li className="dpp-more">{t.queue.commits - t.queue.shown} older commits</li> : null}
           </ul>
         )}
       </section>}
@@ -314,13 +323,14 @@ function DeploySessions({ d }: { d: TeamDeployRow }) {
 }
 
 function StatusMark({ status }: { status: TeamDeployRow["status"] }) {
+  // A request a later deploy overtook will never start: it reads as stopped, not as going out.
   return <span className="dpp-status" data-status={status} title={status}>{status === "live" ? <Check className="w-3 h-3" strokeWidth={3} /> : status === "failed" ? <X className="w-3 h-3" strokeWidth={3} /> : status === "cancelled" ? <i className="dpp-ci-none" /> : <Loader2 className="w-3 h-3 animate-spin" />}</span>;
 }
 
 /** One session's commits waiting on a target: the session first, then its commits with CI. */
 const GROUP_SHOWN = 5;
 
-function SessionGroup({ g, now }: { g: QueueGroup; now: number }) {
+function SessionGroup({ g, now, repository, me }: { g: QueueGroup; now: number; repository: string; me: { login: string | null; name: string | null } }) {
   const [all, setAll] = useState(false);
   const tasks = [...new Map(g.commits.flatMap((c) => c.tasks).map((t) => [t.task_id, t])).values()];
   const authors = [...new Set(g.commits.map((c) => c.author).filter(Boolean))] as string[];
@@ -336,14 +346,19 @@ function SessionGroup({ g, now }: { g: QueueGroup; now: number }) {
         <span className="dpp-group-n">{g.commits.length} {g.commits.length === 1 ? "commit" : "commits"}</span>
       </div>
       <ul className="dpp-commits">
-        {shown.map((c) => (
-          <li key={c.sha} className="dpp-commit">
-            <CiMark ci={c.ci} url={c.ci_url} />
-            <code>{short(c.sha)}</code>
-            <span className="dpp-subject">{c.subject}</span>
-            <span className="dpp-age">{ago(now, c.at)}</span>
-          </li>
-        ))}
+        {shown.map((c) => {
+          const { pr, subject } = prOfSubject(c.subject);
+          const mine = isMineCommit(c.author, me);
+          return (
+            <li key={c.sha} className="dpp-commit" data-mine={mine ? "" : undefined} data-deploy-commit={c.sha}>
+              <CiMark ci={c.ci} url={c.ci_url} />
+              <code>{short(c.sha)}</code>
+              {pr ? <Link className="dpp-pr" href={prPageHref(repository, pr)} data-deploy-pr={pr}>#{pr}</Link> : <span />}
+              <span className="dpp-subject" title={c.author ?? undefined}>{subject}</span>
+              <span className="dpp-age">{ago(now, c.at)}</span>
+            </li>
+          );
+        })}
         {g.commits.length > GROUP_SHOWN ? (
           <li><button type="button" className="dpp-expand" onClick={() => setAll((a) => !a)} data-deploy-group-more>{all ? "Fewer" : `${g.commits.length - GROUP_SHOWN} more`}</button></li>
         ) : null}

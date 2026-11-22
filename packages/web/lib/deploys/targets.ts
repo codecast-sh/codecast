@@ -3,7 +3,8 @@
 // and what derives from them at read time. A target's live deploy, the one
 // going out and its history are read from its deploys, never stored on it.
 // Pure: no store, no React.
-import type { CommitCiState, DeployTargetPolicy, QueueGroup } from "@codecast/shared/contracts/deployTargets";
+import { worstCi, type CommitCiState, type DeployTargetPolicy, type QueueGroup } from "@codecast/shared/contracts/deployTargets";
+import { prNumberOf } from "@codecast/shared/changes";
 import type { DeployView } from "@codecast/shared/contracts/deploys";
 import type { TargetState } from "../ship/journey";
 
@@ -223,4 +224,25 @@ export function recordTargets(declared: ReadonlyArray<DeployTargetRow>, deploys:
 export function sessionWords(s: { title?: string | null; short_id?: string | null; conversation_id: string }): string {
   const t = (s.title ?? "").replace(/<\/?[a-z_][^>]*>/gi, " ").replace(/\s+/g, " ").trim();
   return t || s.short_id || s.conversation_id.slice(0, 7);
+}
+
+/** A squash-merged commit's pull request: GitHub's trailing "(#N)" taken off the subject, so the number can lead the row. */
+export function prOfSubject(subject: string): { pr: number | null; subject: string } {
+  const pr = prNumberOf(subject);
+  return { pr, subject: pr ? subject.replace(/\s*\(#\d+\)\s*$/, "") : subject };
+}
+
+/** Whether the viewer wrote a commit: its author is their GitHub login or their name. */
+export function isMineCommit(author: string | null | undefined, me: { login?: string | null; name?: string | null }): boolean {
+  if (!author) return false;
+  const a = author.toLowerCase();
+  return [me.login, me.name].some((x) => !!x && x.toLowerCase() === a);
+}
+
+/** A target's waiting groups cut to the viewer's own commits; a group with none of them drops out. */
+export function mineOnly(groups: ReadonlyArray<QueueGroup>, me: { login?: string | null; name?: string | null }): QueueGroup[] {
+  return groups.flatMap((g) => {
+    const commits = g.commits.filter((c) => isMineCommit(c.author, me));
+    return commits.length ? [{ ...g, commits, ci: worstCi(commits.map((c) => c.ci)) }] : [];
+  });
 }

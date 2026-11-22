@@ -90,7 +90,12 @@ a.dpp-session:hover { text-decoration: underline; }
 .dpp-task { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--sol-blue); text-decoration: none; flex: none; }
 .dpp-group-n { margin-left: auto; font-size: var(--fs-meta); color: var(--sol-text-dim); flex: none; }
 .dpp-commits { list-style: none; margin: 0; padding: 4px 0; }
-.dpp-commit { display: grid; grid-template-columns: 16px 60px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 12px; }
+.dpp-commit { display: grid; grid-template-columns: 16px 60px 44px minmax(0, 1fr) auto; align-items: center; gap: 8px; padding: 4px 12px; }
+.dpp-commit[data-mine] { background: color-mix(in srgb, var(--sol-blue) 9%, transparent); box-shadow: inset 2px 0 0 var(--sol-blue); }
+.dpp-pr { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--sol-blue); text-decoration: none; }
+.dpp-pr:hover { text-decoration: underline; }
+.dpp-mine { margin-left: auto; display: inline-flex; align-items: center; gap: 6px; font: inherit; font-size: 12px; font-weight: 500; color: var(--sol-text-muted); background: none; border: 1px solid var(--dp-rule); border-radius: 999px; padding: 2px 10px; cursor: pointer; }
+.dpp-mine[aria-pressed="true"] { color: var(--sol-blue); border-color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 12%, transparent); }
 .dpp-commit code { color: var(--sol-text-muted); }
 .dpp-subject { font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dpp-more { font-size: 12px; color: var(--sol-text-dim); padding: 2px 4px; }
