@@ -233,9 +233,10 @@ async function checkedOutAt(root: string, branch: string): Promise<string | null
  * fetched first, into origin's remote-tracking ref: a fetch into the branch itself is refused while a worktree (the
  * run's own, from an earlier stage) has it checked out. The local branch then follows: the worktree that has it
  * checked out is reset to the fetched tip, or the ref moves when none does. A worktree holding uncommitted work is
- * never reset, nor one other than the run's own (`runWorktree`) that the fetched tip does not fast-forward, since
- * that would drop its commits; the run's own holds no work, so it follows a force-push too. Neither, nor a fetch that
- * fails, is ever read as "nothing new": each stops the refreeze, saying why.
+ * never reset, and neither a worktree other than the run's own (`runWorktree`) nor a branch no worktree holds moves
+ * unless the fetched tip fast-forwards it, since that would drop its commits; the run's own holds no work, so it
+ * follows a force-push too. A refusal, like a fetch that fails, is never read as "nothing new": each stops the
+ * refreeze, saying why.
  */
 async function branchTip(root: string, change: FrozenChange, runWorktree: string | null): Promise<string> {
   if (change.source !== "pr") return git(root, ["rev-parse", `refs/heads/${change.branch}`]);
@@ -244,17 +245,21 @@ async function branchTip(root: string, change: FrozenChange, runWorktree: string
     throw new Error(`Could not fetch the pull request's branch ${change.branch} from origin: ${(err.stderr || err.message).trim()}`);
   });
   const tip = await git(root, ["rev-parse", tracking]);
+  // The commits at `head` the fetched tip lacks: what moving `head` to it would drop.
+  const lostFrom = async (head: string) => (await isAncestor(root, head, tip)) ? [] : (await git(root, ["log", "--format=%h %s", `${tip}..${head}`])).split("\n").filter(Boolean);
   const holder = await checkedOutAt(root, change.branch);
   if (!holder) {
+    const current = await gitTry(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${change.branch}`]);
+    const lost = current ? await lostFrom(current) : [];
+    if (lost.length) throw new Error(`The pull request's branch ${change.branch} has commits here the pushed branch lacks (${lost.join("; ")}): moving it would drop them, so push them or move them to another branch first`);
     await git(root, ["update-ref", `refs/heads/${change.branch}`, tip]);
   } else {
     if (await git(holder, ["status", "--porcelain", "--untracked-files=no"])) {
       throw new Error(`The pull request's branch ${change.branch} is checked out in ${holder}, which holds uncommitted work: finish or clear it there, then the run can take the branch's new commits`);
     }
     const real = (p: string) => { try { return fs.realpathSync(p); } catch { return p; } };
-    const head = await git(holder, ["rev-parse", "HEAD"]);
-    if ((!runWorktree || real(holder) !== real(runWorktree)) && !(await isAncestor(root, head, tip))) {
-      const lost = (await git(root, ["log", "--format=%h %s", `${tip}..${head}`])).split("\n").filter(Boolean);
+    const lost = !runWorktree || real(holder) !== real(runWorktree) ? await lostFrom(await git(holder, ["rev-parse", "HEAD"])) : [];
+    if (lost.length) {
       throw new Error(`The pull request's branch ${change.branch} is checked out in ${holder}, which has commits the pushed branch lacks (${lost.join("; ")}): moving it would drop them, so push or move them there first`);
     }
     await git(holder, ["reset", "--quiet", "--hard", tip]);
