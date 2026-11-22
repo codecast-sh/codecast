@@ -42,8 +42,7 @@ async function scheduleNeedsInputCheck(
   // push must not chime and the settle classifier must not invent a verdict for
   // a turn that never happened. Standing the schedule down is what keeps a
   // resume out of both (ct-49533).
-  // The turn is over, so the cards it asked are all in: their grouped push goes out.
-  if (!ACTIVE_AGENT_STATUSES.has(agentStatus)) await releaseDecisionPushes(ctx, conversationId, Date.now());
+  if (!ACTIVE_AGENT_STATUSES.has(agentStatus)) await releaseDecisionPushes(ctx, conversationId, Date.now()); // the turn's cards are all in: their grouped push goes out
   if (sessionBoundary) return;
   // A spawned worker that settles tells the session it reports to.
   if (!ACTIVE_AGENT_STATUSES.has(agentStatus)) await scheduleWorkerSettle(ctx, conversationId, statusTs);
