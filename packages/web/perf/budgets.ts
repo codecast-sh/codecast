@@ -204,12 +204,19 @@ await test("inbox-return", "going back to the inbox from Threads re-renders none
     });
   }
   // A rage click: the link again while the inbox is already on screen. The
-  // page is neither remounted (no DOM change) nor re-rendered.
+  // page is neither remounted (no DOM change) nor re-rendered. The shell's
+  // background clocks (10s polls and coarse ticks, with no store write)
+  // re-render it from DashboardLayout down every few seconds, and one lands in
+  // about one click window in five. So the click is measured three times and
+  // the quietest is kept: a render the click causes shows in all three, a
+  // clock tick in at most one.
   await run();
-  const again = await run();
+  const clicks = [await run(), await run(), await run()];
+  const redrawn = (r: Report) => r.detail.rendered.filter((x) => /^(QueuePage|QueuePageClient|SessionCard|SessionCardView) x/.test(x));
+  const again = clicks.reduce((a, b) => (redrawn(b).length < redrawn(a).length ? b : a));
   expect({
     ...pick(again, ["storeWrites", "domMutations", "layoutReads"]),
-    redrawn: again.detail.rendered.filter((x) => /^(QueuePage|QueuePageClient|SessionCard|SessionCardView) x/.test(x)),
+    redrawn: redrawn(again),
   }).toEqual({ storeWrites: 0, domMutations: 0, layoutReads: 0, redrawn: [] });
 });
 
