@@ -220,6 +220,8 @@ export const fullText = query({
 
 const TYPED_PAGE_MAX = 1000;
 const PASTED_BLOCK_RE = /<pasted_content(?=[\s>])[^>]*>[\s\S]*?<\/pasted_content[^>]*>/g;
+// A paste the log cut at SEND_TEXT_CAP has lost its closing tag: the rest is paste.
+const CUT_PASTE_RE = /<pasted_content(?=[\s>])[^>]*>[\s\S]*$/;
 
 export type TypedRow = {
   at: number;
@@ -255,7 +257,7 @@ export const typedSince = query({
       messages.push({
         at: send.timestamp,
         session: c.short_id ?? key.slice(0, 7),
-        chars: send.text.replace(PASTED_BLOCK_RE, "").trim().length,
+        chars: send.text.replace(PASTED_BLOCK_RE, "").replace(CUT_PASTE_RE, "").trim().length,
         kind: send.decision ? (send.decision.picked ? "decision_picked" : "decision_written") : "message",
       });
     }

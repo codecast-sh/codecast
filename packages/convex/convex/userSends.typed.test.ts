@@ -34,6 +34,8 @@ async function seed() {
     await send(me, work, 4000, "Ship it", { decision: { question: "Which way?", picked: true } });
     await send(me, work, 5000, "Hold until Thursday", { decision: { question: "Ship now?", picked: false } });
     await send(me, testRun, 6000, "a test suite's prompt");
+    // The log cut this paste at its cap, closing tag and all.
+    await send(me, work, 7000, "why does it fail? <pasted_content id=\"2\">" + "x".repeat(7950), { clipped: true });
   });
   return t;
 }
@@ -41,6 +43,7 @@ async function seed() {
 test("the person's sends since a time, oldest first, without text", async () => {
   const t = await seed();
   const page = await t.query(api.userSends.typedSince, { api_token: TOKEN, since: 2000 });
+  page.messages = page.messages.filter((m) => m.at < 7000);
   expect(page).toEqual({
     messages: [
       { at: 2000, session: "jx7work", chars: "fix the build".length, kind: "message" },
@@ -53,6 +56,12 @@ test("the person's sends since a time, oldest first, without text", async () => 
   expect(JSON.stringify(page)).not.toContain("fix the build");
 });
 
+test("a paste the log cut at its cap counts only the words around it", async () => {
+  const t = await seed();
+  const page = await t.query(api.userSends.typedSince, { api_token: TOKEN, since: 7000 });
+  expect(page.messages).toEqual([{ at: 7000, session: "jx7work", chars: "why does it fail?".length, kind: "message" }]);
+});
+
 test("pages walk the window with the cursor each page returns", async () => {
   const t = await seed();
   const first = await t.query(api.userSends.typedSince, { api_token: TOKEN, since: 2000, limit: 2 });
@@ -61,9 +70,11 @@ test("pages walk the window with the cursor each page returns", async () => {
   const second = await t.query(api.userSends.typedSince, { api_token: TOKEN, since: 2000, after: first.next!, limit: 2 });
   expect(second.messages.map((m) => m.at)).toEqual([4000, 5000]);
   const last = await t.query(api.userSends.typedSince, { api_token: TOKEN, since: 2000, after: second.next!, limit: 2 });
-  // The test-run session's row is read and dropped, which ends the window.
-  expect(last.messages).toEqual([]);
-  expect(last.next).toBeNull();
+  // The test-run session's row at 6000 is read and dropped.
+  expect(last.messages.map((m) => m.at)).toEqual([7000]);
+  expect(last.next).toBe(7000);
+  const end = await t.query(api.userSends.typedSince, { api_token: TOKEN, since: 2000, after: last.next!, limit: 2 });
+  expect(end).toEqual({ messages: [], next: null });
 });
 
 test("a bad token is refused", async () => {
