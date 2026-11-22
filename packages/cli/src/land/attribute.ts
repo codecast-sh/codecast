@@ -75,6 +75,11 @@ const TAIL_BYTES = 256 * 1024;
  * 4: only the paths a command writes, each from the cd in effect (shellWrites.ts).
  */
 export const CACHE_VERSION = 4;
+/**
+ * The hash of the code that decides what a cached line credits (attributeCacheRules.test.ts). A change that moves it
+ * bumps CACHE_VERSION, or, when it cannot change a credit, only this pin.
+ */
+export const CACHE_RULES_HASH = "d82fb90a0f7a95f8";
 
 export function isMidTurn(s: Pick<SessionEdits, "status">): boolean {
   return !!s.status && MID_TURN.has(s.status);
