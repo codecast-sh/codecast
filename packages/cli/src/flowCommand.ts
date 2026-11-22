@@ -438,6 +438,17 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         if (slug === "-") await keepSessionFlow(found, deps);
         return;
       }
+      // One pass through a flow per checkout at a time: a second would freeze, brief and land the same files again.
+      const checkoutGitDir = opts.checkout ? spawnSync("git", ["-C", top, "rev-parse", "--absolute-git-dir"], { encoding: "utf-8" }).stdout.trim() : "";
+      if (opts.checkout) {
+        const { claimCheckoutRun } = await import("./workflow/checkoutRunHold.js");
+        const runLive = async (runId: string) => {
+          const read = await deps.cliPost("/cli/workflow-runs/list", { run_id: runId, limit: 1, slim: true }).catch(() => null);
+          if (!Array.isArray(read?.runs)) return null;
+          return ["pending", "running", "paused"].includes(String(read.runs[0]?.status ?? ""));
+        };
+        await claimCheckoutRun(checkoutGitDir, runLive).catch((err) => { console.error(err instanceof Error ? err.message : String(err)); process.exit(1); });
+      }
       if (!task) {
         const made = await cast(["task", "create", changeTitle, "-d", `A change run through the ${found.label} flow (${found.slug}).`, "--found-during", "none"], top);
         task = (made.out + made.err).match(/\bct-\d+\b/)?.[0];
@@ -507,6 +518,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const started = await cast(runArgs, top);
       const runId = started.out.match(/"run_id"\s*:\s*"([^"]+)"/)?.[1];
       if (started.code !== 0 || !runId) { console.error((started.err || started.out).trim()); process.exit(1); }
+      if (opts.checkout) (await import("./workflow/checkoutRunHold.js")).recordCheckoutRun(checkoutGitDir, runId, task);
       const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [] };
       if (opts.json) { console.log(JSON.stringify(result)); return; }
       console.log(`${bold(found.label)} started on ${task}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
