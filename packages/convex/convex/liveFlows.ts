@@ -22,7 +22,7 @@ import { problemSourceOf } from "./workflows";
 import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
 import { projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { flowRouteFor } from "./lib/flowRoute";
-import { agentAssignee, claimSlot, freeSlots, isReadyCause, lineLoadFor, lineOwnerOf, takeAdmissible, type LineLoad, type LineLoads, type RunPlace } from "./orgLine";
+import { agentAssignee, claimSlot, freeSlots, isReadyCause, lineLoadFor, lineOwnerOf, loadWorking, takeAdmissible, type LineLoad, type LineLoads, type RunPlace } from "./orgLine";
 
 type Ctx = { db: any };
 
@@ -147,7 +147,7 @@ export async function planLiveFlow(ctx: Ctx, flow: any, roles: any[], now: numbe
     let load: LineLoad | null = null;
     if (!waiting) {
       load = await lineLoadFor(ctx, c.role, now, loads, roles, needs);
-      if (freeSlots(load) <= 0) waiting = `${load.working} run${load.working === 1 ? " is" : "s are"} working on @${c.role.handle}'s machine${load.pool ? "s" : ""}`;
+      if (freeSlots(load) <= 0) waiting = `${loadWorking(load)} run${loadWorking(load) === 1 ? " is" : "s are"} working on @${c.role.handle}'s machine${load.pool ? "s" : ""}`;
     }
     if (!waiting && load) {
       const place = claimSlot(load);
@@ -192,7 +192,7 @@ export async function liveFlowView(ctx: Ctx, flow: any, now = Date.now()): Promi
   for (const r of team) if (r.status === "active") await lineLoadFor(ctx, r, now, loads, roles);
   // Leads seated in different folders of one checkout share its pool: count each pool, and each runner's own machine, once.
   const distinct = new Map([...loads.values()].map((l) => [l.pool ? l.pool.slots.map((sl) => sl.device).sort().join(",") : `runner:${l.runner}`, l]));
-  const totals = [...distinct.values()].reduce((t, l) => ({ working: t.working + l.working, cap: t.cap + l.cap }), { working: 0, cap: 0 });
+  const totals = [...distinct.values()].reduce((t, l) => ({ working: t.working + loadWorking(l), cap: t.cap + l.cap }), { working: 0, cap: 0 });
   const online = [...distinct.values()].reduce((n, l) => n + (l.pool?.slots.length ?? 0), 0);
   const machines = { online, total: online + [...distinct.values()].reduce((n, l) => n + (l.pool?.offline ?? 0), 0) };
   const plan = await planLiveFlow(ctx, flow, roles, now, LIVE_FLOW_SHOWN, loads);
