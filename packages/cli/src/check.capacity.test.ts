@@ -7,30 +7,21 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
-import { machineMemoryProbe, parseVmStat, type MachineMemory, type Peak } from "./watcherMemory.js";
+import { countFloorWatchers } from "./watcherMemory.js";
 import { CheckFailure, summarize } from "./checkOutcome.js";
 import { EXIT_BUSY } from "./infraExit.js";
-import { BIG_BUILD_BYTES, capacityFor, checkProject, coldBuildCap, coldBuildsFit, COLD_BUILDS_ENV, eventsPath, lastLogLine, listQueue, listWatchers, machineCapacity, makeRoom, readWatchState, statePath, WANTED_MS, watchDir, watcherIdentity, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { capacityFor, checkProject, eventsPath, lastLogLine, listQueue, listWatchers, machineCapacity, makeRoom, readWatchState, statePath, WANTED_MS, watchDir, watcherIdentity, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
 const realIdentity = watcherIdentity.matches;
-const realMemory = machineMemoryProbe.read;
-const realColdBuilds = process.env[COLD_BUILDS_ENV];
 beforeEach(() => {
-  // The cold-build cap follows this machine's cores; these tests pin it, and the cases about it set their own.
-  process.env[COLD_BUILDS_ENV] = "16";
   isolation = isolateCodecastDir("cast-check-test-");
   // These tests stand in for a watcher with their own pid.
   watcherIdentity.matches = (command, pid) => pid === process.pid || realIdentity(command, pid);
-  // This machine's free memory changes under the tests: they admit by the cap unless a case gives the machine's numbers.
-  machineMemoryProbe.read = () => null;
 });
 afterEach(() => {
   isolation.restore();
   watcherIdentity.matches = realIdentity;
-  machineMemoryProbe.read = realMemory;
-  if (realColdBuilds === undefined) delete process.env[COLD_BUILDS_ENV];
-  else process.env[COLD_BUILDS_ENV] = realColdBuilds;
 });
 
 describe("the machine wide watcher cap", () => {
@@ -212,8 +203,11 @@ describe("admission by memory", () => {
       else process.env.CAST_CHECK_RESERVE_GB = before;
     });
 
-    test("an ask queues for memory behind a wanted pass, and gives up as busy", async () => {
-      seed("busy0", { inProgress: true, askedAt: Date.now(), peakRssBytes: GB });
+    // The count rule always admits its number (one per 12 GB): memory decides only past it, so the machine is filled to it first.
+    const floor = () => countFloorWatchers(os.totalmem());
+
+    test("past the count rule's number, an ask queues for memory behind wanted passes, and gives up as busy", async () => {
+      for (let i = 0; i < floor(); i++) seed(`busy${i}`, { inProgress: true, askedAt: Date.now(), peakRssBytes: GB });
       const notes: string[] = [];
       const err = await checkProject({ name: "next", tsconfig: "x" }, "/tree", { budgetMs: 1, start: () => { throw new Error("must not start"); }, note: (l) => notes.push(l) }).catch((e) => e);
       expect(err).toBeInstanceOf(CheckFailure);
@@ -222,7 +216,7 @@ describe("admission by memory", () => {
     });
 
     test("a queued ask answers 75 within the queue's own wait, however long the caller would have waited", async () => {
-      seed("busy0", { inProgress: true, askedAt: Date.now(), peakRssBytes: GB });
+      for (let i = 0; i < floor(); i++) seed(`busy${i}`, { inProgress: true, askedAt: Date.now(), peakRssBytes: GB });
       const t = Date.now();
       const err = await checkProject({ name: "next", tsconfig: "x" }, "/tree", { budgetMs: 60_000, queueWaitMs: 1_500, start: () => { throw new Error("must not start"); } }).catch((e) => e);
       expect(err.kind).toBe("busy");
@@ -230,8 +224,8 @@ describe("admission by memory", () => {
       expect(summarize([{ project: "next", failure: err }]).exit).toBe(EXIT_BUSY);
     });
 
-    test("an idle watcher is stopped to make room, by the peak it reached", async () => {
-      seed("idle0", { peakRssBytes: GB, askedAt: 1 });
+    test("past the count rule's number, an idle watcher is stopped to make room, by the peak it reached", async () => {
+      for (let i = 0; i < floor(); i++) seed(`idle${i}`, { peakRssBytes: GB, askedAt: i + 1 });
       const killed: number[] = [];
       const notes: string[] = [];
       const start = (root: string, project: { name: string; tsconfig: string }) =>
@@ -292,175 +286,15 @@ describe("the 128 GB machine the first version throttled (MacBook-Pro-182, 2026-
     expect(concurrent({ learnedP95s: [], peaks: () => [] })).toBeGreaterThanOrEqual(10);
   });
 
-  test("when memory says the machine is full, one watcher still runs, and no more", () => {
-    expect(concurrent({ env: { CAST_CHECK_RESERVE_GB: "127" }, use: () => 8 * GB })).toBe(1);
+  test("even when memory says the machine is full, the count rule's 10 always run", () => {
+    expect(concurrent({ env: { CAST_CHECK_RESERVE_GB: "127" }, use: () => 8 * GB })).toBe(10);
   });
 
   test("the numbers check-status showed then are now a machine with room", () => {
     const cap = capacityFor({ totalBytes: 128 * GB, maxWatchers: 16, env: {}, needPeaks: () => [], peaksOf: (w) => peaksFor(w.project), learnedP95s: Object.values(learned).map((g) => g * GB), measure: () => 0 });
     expect(cap.budgetBytes).toBe(Math.round(128 * GB * 0.8));
-    expect(cap.capBytes).toBe(Math.round(128 * GB * 0.8));
-    expect(cap.pressure).toBe(false);
+    expect(cap.minWatchers).toBe(10);
     expect(cap.coldBytes).toBe(5.4 * GB);
     expect(cap.needBytes).toBe(5.4 * GB);
   });
-});
-
-describe("admission by what the machine can give now", () => {
-  const GB = 2 ** 30;
-  // `vm_stat` on the 128 GB laptop the fixed budget put 21 GB into swap (2026-11-21, load ~260).
-  const laptopVmStat = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
-Pages free:                                     7821.
-Pages active:                                1481968.
-Pages inactive:                              1479206.
-Pages speculative:                               678.
-Pages throttled:                                   0.
-Pages wired down:                            1062436.
-Pages purgeable:                                   8.
-File-backed pages:                            966961.
-Anonymous pages:                             1994891.`;
-  const laptop: MachineMemory = { availableBytes: parseVmStat(laptopVmStat)!, swapUsedBytes: 21.0 * GB, swapTotalBytes: 21.5 * GB, pressureLevel: 2 };
-  const warm = (gb: number): Peak[] => [1, 2, 3].map((at) => ({ at, bytes: gb * GB, outcome: "clean" as const }));
-  const sizes = new Map<string, number>();
-  const seed = (project: string, gb: number, extra: Partial<WatchState> = {}) => {
-    const root = `/wt/${project}`;
-    writeWatchState(watchDir(root, project), { pid: process.pid, project, tsconfig: "x", root, startedAt: 1, inProgress: false, finishedAt: 1, firstFinishedAt: 1, errors: 0, askedAt: 1, peakRssBytes: gb * GB, ...extra });
-    sizes.set(watchDir(root, project), gb * GB);
-  };
-  const capacity = (memory: MachineMemory | null) => capacityFor({
-    totalBytes: 128 * GB, maxWatchers: 16, env: {},
-    needPeaks: () => warm(5.4), peaksOf: () => warm(5.4), learnedP95s: [5.4 * GB],
-    measure: (w) => sizes.get(w.dir) ?? 0, watchers: listWatchers, memory: () => memory,
-  });
-  afterEach(() => sizes.clear());
-
-  /** The laptop's 16 watchers: 10 idle, 4 stuck "checking" that nobody asked about for hours, 2 passes someone waits on. */
-  const seedLaptop = () => {
-    for (let i = 0; i < 10; i++) seed(`idle${i}`, 3, { askedAt: 100 + i });
-    for (let i = 0; i < 4; i++) seed(`stuck${i}`, 5, { inProgress: true, askedAt: Date.now() - 2 * 60 * 60_000 });
-    for (let i = 0; i < 2; i++) seed(`wanted${i}`, 6, { inProgress: true, askedAt: Date.now() });
-  };
-
-  test("on the laptop in swap, a new watcher only replaces the least recently asked: the machine never takes on more", () => {
-    seedLaptop();
-    const cap = capacity(laptop);
-    // 62 GB held, 16 GB available: under the fixed rule that was room for 40 GB more (a 102.4 GB budget).
-    expect(cap.pressure).toBe(true);
-    expect(cap.budgetBytes).toBe(62 * GB);
-    const evicted = makeRoom(cap, () => {})!;
-    expect(evicted.map((w) => w.project)).toEqual(["idle0", "idle1", "idle2"]);
-    const live = listWatchers();
-    expect(live.map((w) => w.project)).toEqual(expect.arrayContaining(["wanted0", "wanted1"]));
-    // Freed 9 GB for a 6.75 GB need: the fleet shrinks by what it gave up, and the event says why.
-    expect(live.reduce((a, w) => a + sizes.get(w.dir)!, 0) + cap.needBytes!).toBeLessThanOrEqual(62 * GB);
-    expect(fs.readFileSync(eventsPath(), "utf-8")).toMatch(/evict idle0 .*62\.0 GB reserved of 62\.0 GB under memory pressure, need 6\.8 GB/);
-  });
-
-  test("short of memory, eviction also pays back what available memory falls short of the bar", () => {
-    seedLaptop();
-    // Linux has no kernel verdict: swap more than half used with 4 GB available is pressure, 8.8 GB short of twice the 6.4 GB margin.
-    const cap = capacity({ availableBytes: 4 * GB, swapUsedBytes: 6 * GB, swapTotalBytes: 8 * GB });
-    expect(cap.pressure).toBe(true);
-    const evicted = makeRoom(cap, () => {})!;
-    // 6.75 GB need + 8.8 GB deficit: six idle watchers (18 GB), not the three the need alone takes.
-    expect(evicted.map((w) => w.project)).toEqual(["idle0", "idle1", "idle2", "idle3", "idle4", "idle5"]);
-  });
-
-  test("when only wanted passes are left to stop, the ask waits rather than push the machine further", () => {
-    for (let i = 0; i < 2; i++) seed(`wanted${i}`, 6, { inProgress: true, askedAt: Date.now() });
-    expect(makeRoom(capacity(laptop), () => { throw new Error("nothing here may be stopped"); })).toBeNull();
-  });
-
-  test("an empty machine under pressure still runs the first watcher an ask needs, but nothing behind it", () => {
-    const cap = capacity(laptop);
-    expect(makeRoom(cap, () => {})).toEqual([]);
-    expect(makeRoom({ ...cap, strict: true }, () => {}, Date.now(), new Set(), false)).toBeNull();
-  });
-
-  test("a calm machine admits beside live watchers what is available beyond the margin, and no more", () => {
-    seed("web", 5, { askedAt: 1 });
-    seed("cli", 2, { askedAt: 2 });
-    // 7 GB held + 20 GB available - 6.4 GB margin: a 6.75 GB need fits beside them.
-    expect(makeRoom(capacity({ availableBytes: 20 * GB, swapUsedBytes: 0, swapTotalBytes: 0, pressureLevel: 1 }), () => {})).toEqual([]);
-    // 10 GB available leaves 3.6 GB: the less recently asked one goes.
-    expect(makeRoom(capacity({ availableBytes: 10 * GB, swapUsedBytes: 0, swapTotalBytes: 0, pressureLevel: 1 }), () => {})?.map((w) => w.project)).toEqual(["web"]);
-  });
-
-  test("nearly full swap with plenty available is old swap, not pressure", () => {
-    seed("web", 5);
-    const cap = capacity({ availableBytes: 40 * GB, swapUsedBytes: 3 * GB, swapTotalBytes: 4 * GB });
-    expect(cap.pressure).toBe(false);
-    expect(makeRoom(cap, () => {})).toEqual([]);
-  });
-});
-
-describe("cold builds: first passes run a few at a time", () => {
-  const GB = 2 ** 30;
-
-  test("the cap scales with cores, 1 to 3, unless set", () => {
-    expect(coldBuildCap(4, {})).toBe(1);
-    expect(coldBuildCap(12, {})).toBe(2);
-    expect(coldBuildCap(18, {})).toBe(3);
-    expect(coldBuildCap(64, {})).toBe(3);
-    expect(coldBuildCap(18, { [COLD_BUILDS_ENV]: "5" })).toBe(5);
-    expect(coldBuildCap(18, { [COLD_BUILDS_ENV]: "0" })).toBe(3);
-  });
-
-  test("a big project counts as two, and one always runs on a machine building nothing", () => {
-    const big = BIG_BUILD_BYTES + GB;
-    expect(coldBuildsFit([], big, 1)).toBe(true);
-    expect(coldBuildsFit([null, 2 * GB], null, 3)).toBe(true);
-    expect(coldBuildsFit([null, 2 * GB, null], null, 3)).toBe(false);
-    // Two small fit in three; two big do not.
-    expect(coldBuildsFit([null], null, 3)).toBe(true);
-    expect(coldBuildsFit([big], big, 3)).toBe(false);
-    expect(coldBuildsFit([big], null, 3)).toBe(true);
-    expect(coldBuildsFit([big], null, 2)).toBe(false);
-  });
-
-  test("the boot burst: 16 asks at once start at most the cap, the rest as first passes finish, in order", async () => {
-    process.env[COLD_BUILDS_ENV] = "3";
-    const started: string[] = [];
-    const start = (root: string, project: { name: string; tsconfig: string }) => {
-      started.push(project.name);
-      writeWatchState(watchDir(root, project.name), { pid: process.pid, project: project.name, tsconfig: project.tsconfig, root, startedAt: Date.now(), inProgress: true, askedAt: Date.now() });
-    };
-    const notes: string[] = [];
-    const names = Array.from({ length: 16 }, (_, i) => `p${String(i).padStart(2, "0")}`);
-    const asks: Array<Promise<unknown>> = [];
-    for (const name of names) {
-      asks.push(checkProject({ name, tsconfig: "x" }, "/tree", { start, maxWatchers: 16, budgetMs: 400_000, queueWaitMs: 400_000, note: (l) => notes.push(`${name}: ${l}`) }));
-      // Joining one after another fixes the order the queue keeps.
-      await new Promise((r) => setTimeout(r, 5));
-    }
-    const cold = () => listWatchers().filter((w) => !w.firstFinishedAt);
-    // Starts come seconds apart on a loaded machine: wait for the count expected, then a while longer to see no more.
-    const startsReach = async (n: number) => {
-      for (const until = Date.now() + 90_000; started.length < n && Date.now() < until; ) {
-        await new Promise((r) => setTimeout(r, 250));
-        expect(cold().length).toBeLessThanOrEqual(3);
-      }
-      await new Promise((r) => setTimeout(r, 2_000));
-      expect(cold().length).toBeLessThanOrEqual(3);
-      expect(started).toEqual(names.slice(0, n));
-    };
-    await startsReach(3);
-    expect(notes).toContain("p03: queued: waiting for 3 cold builds to finish (3 first passes at a time on this machine); starting when one does (cast queue lists them)");
-    // An ask for a watcher that already exists is never held by the cap: it waits on that watcher's pass, not the queue.
-    const again = await checkProject({ name: "p00", tsconfig: "x" }, "/tree", { start, maxWatchers: 16, budgetMs: 1_000 }).catch((e) => e);
-    expect(again).toBeInstanceOf(CheckFailure);
-    expect(again.kind).toBe("wait-elapsed");
-    expect(started).toHaveLength(3);
-    // Finishing one first pass lets exactly one more start.
-    const finish = (w: WatchState & { dir: string }) => writeWatchState(w.dir, { ...w, inProgress: false, finishedAt: Date.now(), firstFinishedAt: Date.now(), errors: 0 });
-    finish(cold()[0]!);
-    await startsReach(4);
-    while (started.length < names.length) {
-      const next = Math.min(names.length, started.length + cold().length);
-      for (const w of cold()) finish(w);
-      await startsReach(next);
-    }
-    for (const w of cold()) finish(w);
-    await Promise.all(asks);
-  }, 400_000);
 });

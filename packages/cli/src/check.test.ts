@@ -13,7 +13,7 @@ import { heapCapMb, heapDeath, isNativeFrame, tscNodeOptions, TSC_HEAP_MB } from
 import { CheckFailure, summarize } from "./checkOutcome.js";
 import { acquireFileLock } from "./lockFile.js";
 import { EXIT_BUSY } from "./infraExit.js";
-import { listWatchers, removeOwnState, stopWatcher, watcherIdentity, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, tscFileVersion, unlistedChanges, projectsTouching, buildInfoPath, IDLE_EXIT_MS, STUCK_PASS_MS, watcherExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
+import { listWatchers, removeOwnState, stopWatcher, watcherIdentity, checkProject, lastLogLine, logPath, classifyWatchLine, filesNotAsChecked, tscFileVersion, unlistedChanges, projectsTouching, buildInfoPath, IDLE_EXIT_MS, shouldIdleExit, tscBinary, tscInTree, nearestTsconfig, outputPath, readCheckConfig, readWatchState, resolveProjects, slugOf, watchDir, watchReducer, writeWatchState, type WatchState } from "./check.js";
 
 let isolation: IsolatedCodecastDir;
 const realIdentity = watcherIdentity.matches;
@@ -482,35 +482,18 @@ describe("a watcher stopped for --fresh", () => {
   });
 });
 
-describe("watcher exit", () => {
-  const t = 10_000_000;
-  const base = { startedAt: t - 2 * IDLE_EXIT_MS, inProgress: false };
-
-  test("a watcher exits only when idle past the window", () => {
-    expect(watcherExit({ ...base, askedAt: t - IDLE_EXIT_MS - 1 }, true, t)).toBe("idle");
-    expect(watcherExit({ ...base, askedAt: t - IDLE_EXIT_MS + 1 }, true, t)).toBeNull();
+describe("idle exit", () => {
+  test("a watcher exits only when idle past the window, and never while a pass is in flight", () => {
+    const t = 10_000_000;
+    const base = { startedAt: t - 2 * IDLE_EXIT_MS, inProgress: false };
+    expect(shouldIdleExit({ ...base, askedAt: t - IDLE_EXIT_MS - 1 }, t)).toBe(true);
+    expect(shouldIdleExit({ ...base, askedAt: t - IDLE_EXIT_MS + 1 }, t)).toBe(false);
     // The first pass finishing is as good as an ask: someone waited for it.
-    expect(watcherExit({ ...base, askedAt: t - 2 * IDLE_EXIT_MS, firstFinishedAt: t - 1000 }, true, t)).toBeNull();
+    expect(shouldIdleExit({ ...base, askedAt: t - 2 * IDLE_EXIT_MS, firstFinishedAt: t - 1000 }, t)).toBe(false);
     // Passes that edits trigger afterwards do not keep an unasked watcher alive.
-    expect(watcherExit({ ...base, askedAt: t - 2 * IDLE_EXIT_MS, firstFinishedAt: t - 2 * IDLE_EXIT_MS, finishedAt: t - 1000 } as any, true, t)).toBe("idle");
-  });
-
-  test("a pass in flight is given up only when nobody asked in the window and it has run past the stuck bound", () => {
-    // Someone is waiting (their heartbeat refreshes askedAt): a first pass on a loaded machine keeps going, however long.
-    expect(watcherExit({ ...base, inProgress: true, askedAt: t - 60_000, passStartedAt: t - 3 * IDLE_EXIT_MS }, true, t)).toBeNull();
-    // Nobody asked for an hour, and the pass has run 40 minutes: stuck.
-    expect(watcherExit({ ...base, inProgress: true, askedAt: t - 60 * 60_000, passStartedAt: t - 40 * 60_000 }, true, t)).toBe("stuck");
-    // Nobody asked for an hour, but the pass started 5 minutes ago (an edit triggered it): let it finish, then idle-exit.
-    expect(watcherExit({ ...base, inProgress: true, askedAt: t - 60 * 60_000, passStartedAt: t - 5 * 60_000 }, true, t)).toBeNull();
-    // A first pass has no passStartedAt of its own until tsc says so: the watcher's start stands in.
-    expect(watcherExit({ ...base, inProgress: true, askedAt: t - 60 * 60_000 }, true, t)).toBe("stuck");
-    expect(watcherExit({ ...base, inProgress: true, askedAt: t - 2 * IDLE_EXIT_MS, passStartedAt: t - STUCK_PASS_MS + 1 }, true, t)).toBeNull();
-    expect(watcherExit({ ...base, inProgress: true, askedAt: t - 2 * IDLE_EXIT_MS, passStartedAt: t - STUCK_PASS_MS - 1 }, true, t)).toBe("stuck");
-  });
-
-  test("a watcher whose tree or tsconfig is gone exits at once, whatever it was doing", () => {
-    expect(watcherExit({ ...base, inProgress: true, askedAt: t }, false, t)).toBe("gone");
-    expect(watcherExit({ ...base, askedAt: t }, false, t)).toBe("gone");
+    expect(shouldIdleExit({ ...base, askedAt: t - 2 * IDLE_EXIT_MS, firstFinishedAt: t - 2 * IDLE_EXIT_MS, finishedAt: t - 1000 } as any, t)).toBe(true);
+    // A first pass still building on a loaded machine is not idle, however old.
+    expect(shouldIdleExit({ ...base, inProgress: true, askedAt: t - 3 * IDLE_EXIT_MS }, t)).toBe(false);
   });
 });
 

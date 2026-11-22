@@ -422,35 +422,19 @@ export interface WatchState {
 }
 
 export const IDLE_EXIT_MS = 45 * 60_000;
-/** How long a pass nobody asks about may run before its watcher gives it up. */
-export const STUCK_PASS_MS = 30 * 60_000;
 
 /**
- * Why a watcher should exit now, or null.
- *
- * gone: its tree or tsconfig no longer exists (a scratch dir, a removed
- * worktree), so nobody can ask about it again.
- *
- * idle: nobody has asked in IDLE_EXIT_MS, measured from the later of the
- * last ask and the first finished pass. Later passes do not count: an agent
- * editing the tree triggers them without anyone asking, and two such
- * watchers burned 150% CPU for nobody (2026-10-14).
- *
- * stuck: a pass in flight, unasked for IDLE_EXIT_MS and running longer than
- * STUCK_PASS_MS. A pass someone waits on is never given up: on a loaded
- * machine a first pass can outlive the idle window, and a watcher that quit
- * then threw the whole build away (2026-09-17). A waiting asker refreshes
- * askedAt every ASK_HEARTBEAT_MS, so only a pass nobody asks about qualifies;
- * watchers stuck "checking" for hours held memory for nobody (2026-11-21).
- * Last ask is the only measure of interest: an Agent-tool subagent works in
- * a worktree with no process of its own there.
+ * Exit when nobody has asked in IDLE_EXIT_MS, measured from the later of the
+ * last ask and the first finished pass. A pass in flight never counts as
+ * idle: on a loaded machine a first pass can outlive the idle window, and a
+ * watcher that quit then threw the whole build away (seen 2026-09-17). Later
+ * passes do not count: an agent editing the tree triggers them without anyone
+ * asking, and two such watchers burned 150% CPU for nobody (2026-10-14).
  */
-export function watcherExit(state: Pick<WatchState, "inProgress" | "askedAt" | "firstFinishedAt" | "startedAt" | "passStartedAt">, treeExists: boolean, now = Date.now()): "gone" | "idle" | "stuck" | null {
-  if (!treeExists) return "gone";
+export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" | "firstFinishedAt" | "startedAt">, now = Date.now()): boolean {
+  if (state.inProgress) return false;
   const last = Math.max(state.askedAt ?? 0, state.firstFinishedAt ?? 0, state.startedAt);
-  if (now - last <= IDLE_EXIT_MS) return null;
-  if (!state.inProgress) return "idle";
-  return now - (state.passStartedAt ?? state.startedAt) > STUCK_PASS_MS ? "stuck" : null;
+  return now - last > IDLE_EXIT_MS;
 }
 /**
  * How long a pass that did not check the tree on disk may wait for tsc to
@@ -763,9 +747,8 @@ export async function runWatcher(root: string, project: string, tsconfig: string
       recordPeak(repo, project, { at: Date.now(), bytes: state.peakRssBytes, outcome: "clean", root });
     },
   });
-  // footprint's figure is a lifetime peak, so the sample at the pass's end (onDone) misses nothing; one a minute keeps a
-  // long pass's peak current for admission. RSS (off macOS) is a figure of the moment, so it is sampled more often.
-  const sampler = setInterval(() => { if (state.inProgress) sample(); }, process.platform === "darwin" ? 60_000 : 5_000);
+  // footprint's figure is a lifetime peak, so a sparse sample misses nothing; RSS (off macOS) is sampled the same way.
+  const sampler = setInterval(() => { if (state.inProgress) sample(); }, 5_000);
   if (seedBuildInfo(root, project)) console.log(`seeded the first pass from ${mainCheckoutOf(root)}`);
   // Incremental: a restarted watcher (the slot cap stops idle ones) and a
   // seeded worktree re-check only what changed since the recorded pass.
@@ -806,13 +789,11 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   child.stdout?.on("data", onData);
   child.stderr?.on("data", onData);
   const idle = setInterval(() => {
-    const why = watcherExit(readWatchState(dir) ?? state, fs.existsSync(path.join(root, tsconfig)));
-    if (!why) return;
-    const detail = why === "gone" ? `its tree is gone (no ${tsconfig})` : why === "stuck" ? "a pass nobody asked about ran too long" : "";
-    console.log(`exiting: ${detail || "nobody asked"}`);
-    logWatcherEvent(why === "gone" ? "stop" : "idle-exit", { project, root }, detail);
-    child.kill("SIGTERM");
-    clearInterval(idle);
+    if (shouldIdleExit(readWatchState(dir) ?? state)) {
+      logWatcherEvent("idle-exit", { project, root });
+      child.kill("SIGTERM");
+      clearInterval(idle);
+    }
   }, 60_000);
   const stop = (): void => {
     child.kill("SIGTERM");

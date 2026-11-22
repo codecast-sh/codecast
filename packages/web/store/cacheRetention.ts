@@ -13,7 +13,6 @@ import { isConvexId } from "../lib/entityLinks";
 import { PR_STATE_OF_KIND, SESSION_COMMIT_KINDS, SESSION_PUSH_KIND, prThreadKey } from "../lib/externalEventOutcomes";
 import { CLIENT_SYNC_REGISTRY } from "./clientSyncRegistry";
 import { DETAIL_ROW_CAPS } from "../lib/detailRows";
-import { isRetiredSettingsKey } from "../lib/settingsData";
 
 // The message page the server sends on open (useConversationMessages' snapshot
 // fetch). The persisted cache keeps the same tail per conversation, applied
@@ -329,12 +328,6 @@ export const COLLECTION_RETENTION: Record<string, (rows: any[], now: number) => 
   pullRequestDetails: detailRetention(MAX_CACHED_PULL_REQUEST_DETAILS),
   deployReach: detailRetention(DETAIL_ROW_CAPS.deployReach),
   externalEvents: partitionExternalEventRetention,
-  settingsData: (rows) => {
-    const keep: any[] = [];
-    const drop: string[] = [];
-    for (const row of rows) (isRetiredSettingsKey(String(row?._id ?? "")) ? drop.push(String(row._id)) : keep.push(row));
-    return { keep, drop };
-  },
   mySends: (rows, now) => partitionCacheRetention(rows, now, {
     ttlMs: Number.POSITIVE_INFINITY,
     maxRows: MAX_CACHED_MY_SENDS,

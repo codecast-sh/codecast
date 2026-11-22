@@ -13595,14 +13595,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
-  // The coverage poll marks a refused send failed on every pass, in every
-  // window, for as long as the row stays: a row already failed is left alone,
-  // or each pass was a new pendingMessages and a rewrite of its journal row.
   markOptimisticAsFailed: sync(function (this: Draft, convId: string, clientId: string) {
-    const isRow = (m: Message) => m._clientId === clientId || m._id === clientId;
+    const mark = (m: Message): Message => {
+      if (m._clientId === clientId || m._id === clientId) {
+        return { ...m, _isFailed: true as const };
+      }
+      return m;
+    };
     const pending = this.pendingMessages[convId];
-    if (pending?.some((m) => isRow(m) && !m._isFailed)) {
-      this.pendingMessages[convId] = pending.map((m) => (isRow(m) && !m._isFailed ? { ...m, _isFailed: true as const } : m));
+    if (pending) {
+      this.pendingMessages[convId] = pending.map(mark);
     }
   }),
 

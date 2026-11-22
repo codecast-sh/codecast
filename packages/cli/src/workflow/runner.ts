@@ -11,7 +11,7 @@ import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition } from "./condition";
 import { keepEnds } from "./keepEnds";
-import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
+import { executeCommand, expandScriptVars, recordNodeOutput } from "./commandStation";
 import { planReadiness } from "../planReadiness.js";
 import { readGateCard } from "../cardFile.js";
 import { agentResultPreview, resultPreview } from "./chainWorkflow.js";
@@ -21,7 +21,7 @@ import { argvOnLaunchAccount } from "../ccAccounts.js";
 import { deviceId } from "../remote/device.js";
 import { LineProfileError, lineProfileVars, loadLineProfile } from "../lineProfile.js";
 import { deadEndReason, profileFailure, quotedTitle, taskStopCard } from "./runFailure.js";
-import { claimRun, clearVisits, fanoutOf, readCheckpoint, resumePoint, runnerStamp, withOptionWords, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
+import { claimRun, clearVisits, readCheckpoint, resumePoint, runnerStamp, withOptionWords, writeCheckpoint, type ResumePoint, type ResumeRow } from "./runResume.js";
 import { buildNodePrompt, expandAgentPrompt, expandPromptVars, presentsDecision, resolveModel, stationBrief } from "./nodePrompt";
 import * as fs from "fs";
 import * as path from "path";
@@ -273,7 +273,7 @@ async function executeCliAgent(
 
   if (options.runId) {
     await reportProgress(options, {
-      current_node_id: fanoutOf(graph, node.id) ?? node.id,
+      current_node_id: node.id,
       node_id: node.id,
       node_status: "running",
       session_id: sessionName,
@@ -522,8 +522,8 @@ async function waitOnStation(
   // same worktree beside it. One not back within the grace is not coming
   // (recovery off, its revive budget spent): it is stopped, so a late revive
   // finds it retired, and the station starts anew.
-  const left = !subject ? options.resumed?.hands[node.id] ?? null : null;
-  if (options.resumed) delete options.resumed.hands[node.id];
+  const left = !subject && options.resumed?.hand && options.resumed.node_id === node.id ? options.resumed.hand : null;
+  if (options.resumed) options.resumed.hand = null;
   const leftRow = left ? ((await cliCall(options, "/cli/inbox", { session_ids: [left], show_all: true, limit: 5 }))?.sessions || []).find((r: any) => r.id === left) : null;
   let reattach = !!leftRow && !leftRow.is_killed;
   if (reattach && !leftRow.is_live && leftRow.work_state !== "done" && !(await revivedInTime(left!, options))) {
@@ -582,9 +582,8 @@ async function waitOnStation(
   const { conversationId, shortId } = hand;
 
   // The subject is no hand of the run's: it is reported as what the run waits on (executeSubjectNode), never as the station's session.
-  // A fanout's branch leaves the run at its fanout: a run resumed at the branch would skip its siblings (runResume.ts).
   if (options.runId && !subject) {
-    await reportProgress(options, { current_node_id: fanoutOf(graph, node.id) ?? node.id, node_id: node.id, node_status: "running", session_id: shortId });
+    await reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", session_id: shortId });
   }
 
   const timeout = handTimeoutMs(node, options);
@@ -956,8 +955,7 @@ async function executeFanout(
   graph: WorkflowGraph,
   state: WorkflowRunState,
   cwd: string,
-  options: RunOptions,
-  checkpoint: () => void,
+  options: RunOptions
 ): Promise<NodeOutcome> {
   const branches = graph.edges.filter(e => e.from === node.id).map(e => graph.nodes.get(e.to)).filter((n): n is WorkflowNode => !!n);
   if (branches.length === 0) {
@@ -971,13 +969,9 @@ async function executeFanout(
     const ctx = { ...state.context };
     let outcome: NodeOutcome;
     if (options.dryRun) outcome = "success";
-    else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd, stationWatch(options));
+    else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd);
     else if (branch.type === "call") outcome = await executeCallNode(branch, graph, ctx, cwd, options);
-    // A hand is checkpointed when it starts, so a resumed fanout waits on it rather than starting a second (runResume.ts).
-    else if ((branch.type === "agent" || branch.type === "prompt") && branch.backend === "session") outcome = await executeSessionNode(branch, graph, ctx, cwd, options, () => {
-      for (const key of [`${branch.id}.session_id`, `${branch.id}.conversation_id`]) if (ctx[key]) state.context[key] = ctx[key];
-      checkpoint();
-    });
+    else if ((branch.type === "agent" || branch.type === "prompt") && branch.backend === "session") outcome = await executeSessionNode(branch, graph, ctx, cwd, options);
     else if ((branch.type === "agent" || branch.type === "prompt") && branch.backend && branch.backend !== "builtin") outcome = await executeCliAgent(branch, graph, ctx, cwd, options);
     else if (branch.type === "agent" || branch.type === "prompt") outcome = await executeAgent(branch, graph, ctx, cwd, options);
     else outcome = "success";
@@ -1246,7 +1240,7 @@ export interface RunOptions {
   /** Continue this run row from where it stands instead of from start (runResume.ts). */
   resume?: ResumeRow;
   /** Set by runWorkflow on a resume: the gate and the hand the node it resumes at left open, each taken once. */
-  resumed?: Pick<ResumePoint, "node_id" | "gate" | "hands">;
+  resumed?: Pick<ResumePoint, "node_id" | "gate" | "hand">;
   /**
    * How this run continues in a fresh runner (the daemon's runner passes one
    * that hands off and exits; runResume.ts handOffRun). Given, a gate answered
@@ -1273,22 +1267,6 @@ class RunEndedOnServer extends Error {}
  */
 function stopIfEnded(options: RunOptions): void {
   if (options.endedOnServer) throw new RunEndedOnServer(options.endedOnServer);
-}
-
-/**
- * What a command station watches while its script runs: whether a person stopped the run. A cancel from the web
- * reaches no runner inside a station, so the station's processes ran on to its timeout (25 hours for a parked wait).
- */
-function stationWatch(options: RunOptions): StationWatch {
-  if (!options.runId || !options.convexSiteUrl || !options.apiToken) return {};
-  return {
-    ended: async () => {
-      const run = (await cliCall(options, "/cli/workflow-runs/get", { run_id: options.runId }))?.run;
-      if (run?.status !== "completed" && run?.status !== "failed") return false;
-      options.endedOnServer ??= run.fail_reason || `the run is ${run.status}`;
-      return true;
-    },
-  };
 }
 
 /** A run's pinned flow versions as one comparable string. */
@@ -1896,7 +1874,7 @@ async function driveRun(
     }
     // A run waiting days at its card can lose its checkout; its branch puts it back.
     if (!options.dryRun) await restoreRunTree(cwd, state.context);
-    options.resumed = { node_id: resumeAt.node_id, gate: resumeAt.gate, hands: resumeAt.hands };
+    options.resumed = { node_id: resumeAt.node_id, gate: resumeAt.gate, hand: resumeAt.hand };
     console.log(`${c.dim}Resuming at ${graph.nodes.get(resumeAt.node_id)?.label ?? resumeAt.node_id} (state from the ${resumeAt.from})${c.reset}`);
     // The line's own text is read as it is now (line-versions.md LV4).
     for (const node of refreshedOnResume(graph, state.completed)) await executeCommand(node, state.context, cwd);
@@ -2065,11 +2043,9 @@ async function runNodeLoop(
     state.currentNodeId = current.id;
     // A round sent back only because main moved under the change (a clash) is not the station failing: up to its
     // max_free_visits such rounds spend none of its visits (a person's answer starts the count again, clearVisits). Ten runs ran out of Build visits on clashes alone after the
-    // Nov 5 lift, each Eval finding that main had moved again while the run rebuilt and waited. An entry along a free
-    // edge is free even as the node's first visit since a gate cleared the counts: the line's first red-CI round after
-    // a Ship answer spent a Build visit, so its budget depended on which kind of round came first.
+    // Nov 5 lift, each Eval finding that main had moved again while the run rebuilt and waited.
     const freeUsed = Number(state.context[`${current.id}.free.visits`] || 0);
-    const free = state.context[`${current.id}.free_visit`] === "1" && freeUsed < (current.max_free_visits ?? 0);
+    const free = state.context[`${current.id}.free_visit`] === "1" && (state.visitCounts[current.id] || 0) > 0 && freeUsed < (current.max_free_visits ?? 0);
     delete state.context[`${current.id}.free_visit`];
     if (free) state.context[`${current.id}.free.visits`] = String(freeUsed + 1);
     const visits = (state.visitCounts[current.id] || 0) + (free ? 0 : 1);
@@ -2136,7 +2112,7 @@ async function runNodeLoop(
     } else if (current.type === "start") {
       outcome = "success";
     } else if (current.type === "command") {
-      outcome = await executeCommand(current, state.context, cwd, stationWatch(options));
+      outcome = await executeCommand(current, state.context, cwd);
     } else if (current.type === "call") {
       outcome = await executeCallNode(current, graph, state.context, cwd, options);
     } else if (current.type === "human" && options.runId) {
@@ -2144,7 +2120,7 @@ async function runNodeLoop(
     } else if (current.type === "human") {
       outcome = await executeHumanGate(current, graph, state.context);
     } else if (current.type === "parallel_fanout") {
-      outcome = await executeFanout(current, graph, state, cwd, options, () => checkpoint());
+      outcome = await executeFanout(current, graph, state, cwd, options);
     } else if (current.type === "parallel_fanin") {
       outcome = "success";
     } else if ((current.type === "agent" || current.type === "prompt") && current.backend === "subject") {

@@ -65,8 +65,6 @@ export interface WorkflowNode {
   script?: string;
   // Command nodes: seconds the script may run (default 120).
   timeout?: number;
-  // Command nodes: seconds with no output before the runner flags the station as silent (default 1800, 0 never).
-  silent?: number;
   // Control flow
   max_visits?: number;
   /** How many entries along `free_visit` edges this node takes without counting them toward max_visits. */

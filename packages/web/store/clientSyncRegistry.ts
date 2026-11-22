@@ -46,15 +46,6 @@ export type ClientSyncRegistryEntry = {
     kind: PersistenceKind;
     key: string;
     perWindow?: boolean;
-    // A collection's liveness fields: server-derived counters and clocks
-    // that move on every message, model call or heartbeat. A row whose
-    // change touches only these reaches disk on the slow liveness flush
-    // (idbCache), not once per change.
-    liveFields?: readonly string[];
-    // A meta key's liveFields may be dotted paths into nested rows
-    // ("people.counts"), and its list rows are matched by this field, in any
-    // order (default `_id`).
-    rowKey?: string;
   };
   // How the collection syncs (see RegistrySyncOpts). Omit for meta keys.
   sync?: RegistrySyncOpts;
@@ -146,18 +137,7 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   sessions: {
     writtenBy: ["conversations"],
-    persistence: {
-      kind: "collection",
-      key: "sessions",
-      // Measured on a desktop app with ~60 working agents: 9 of every 10
-      // session-row writes changed only these fields, each rewriting the
-      // whole 3.4 KB row, and the browser process spent a core compacting
-      // the IndexedDB they landed in.
-      liveFields: [
-        "updated_at", "message_count", "last_role_is_user", "context_tokens", "last_model_call_at",
-        "activity", "daemon_alive_until", "producing_until", "last_heartbeat", "last_turn_origin",
-      ],
-    },
+    persistence: { kind: "collection", key: "sessions" },
     localFirst: true,
     // Inbox triage gestures (dismiss/stash/pin) write the session row itself,
     // but the server-side row is the conversation. Without this mapping the
@@ -1199,21 +1179,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // a role; ORG_SYNC_REGISTRY fills a roles-only push from the held tree.
   orgTree: {
     writtenBy: ["orgRoles", "orgSplit", "orgHandoff", "orgLineMerge", "orgTemplates", "orgTemplateLearning"],
-    // Session tallies, the sessions' own clocks and states, presence, the
-    // standing agents' pinned state and each role's day counters move with
-    // every agent's turn (a roles-only push changed only `roles.counters`,
-    // measured 2026-11-21); the 60 KB tree reaches disk for those on the
-    // liveness flush. People rows are keyed by user_id, roles and sessions by _id.
-    persistence: {
-      kind: "meta",
-      key: "orgTree",
-      rowKey: "user_id",
-      liveFields: [
-        "people.counts", "people.total", "people.presence", "people.sessions.updated_at", "people.sessions.state",
-        "roles.counts", "roles.total", "roles.counters", "roles.sessions.updated_at", "roles.sessions.state",
-        "roles.standing.state", "roles.standing.state_line", "roles.standing.state_status", "roles.standing.state_at",
-      ],
-    },
+    persistence: { kind: "meta", key: "orgTree" },
     hydration: { phase: "deferred", merge: "fill" },
     sync: { kind: "singleton" },
     feeds: ["org.tree", "org.roles"],
@@ -1606,19 +1572,7 @@ export const CLIENT_SYNC_REGISTRY = {
   // landed (machineRosterLive) — a stale roster must not veto a freshly cloned
   // path — so persistence helps display and never the gate.
   machineRoster: {
-    // Every daemon beat moves its sync telemetry, and the server orders the
-    // roster by last_seen, so the list also reorders; those reach disk on the
-    // liveness flush.
-    persistence: {
-      kind: "meta",
-      key: "machineRoster",
-      rowKey: "device_id",
-      liveFields: [
-        "last_seen", "online", "pending_sync_count", "oldest_pending_ms", "pending_sync_messages",
-        "pending_sync_conversations", "sync_no_progress_ms", "loop_freeze_ms", "loop_freeze_1h_ms",
-        "loop_freeze_max_ms", "loop_freeze_top",
-      ],
-    },
+    persistence: { kind: "meta", key: "machineRoster" },
     feeds: ["devices.listDevices"],
   },
   // Team machines on the viewer's teams, with members and load
@@ -1939,17 +1893,7 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   teamMembers: {
     writtenBy: ["teams"],
-    // Presence moves on every teammate's heartbeat and conversation switch;
-    // the roster reaches disk for those on the liveness flush. No local
-    // action writes these fields (role, profile and removal go at once).
-    persistence: {
-      kind: "meta",
-      key: "teamMembers",
-      liveFields: [
-        "daemon_last_seen", "last_heartbeat", "last_seen", "presence_input_at", "presence_state",
-        "viewing_conversation_id", "viewing_since", "recent_session_updated", "recent_session_messages",
-      ],
-    },
+    persistence: { kind: "meta", key: "teamMembers" },
     localFirst: true,
     sync: { kind: "list" },
   },
@@ -2035,20 +1979,6 @@ export const COLLECTION_STORE_KEYS = registryEntries
 export const META_STORE_KEYS = registryEntries
   .filter(([, entry]) => entry.persistence?.kind === "meta")
   .map(([key]) => key) as ClientSyncMetaStoreKey[];
-
-/** Each persisted meta key's liveness fields and row key (`persistence.liveFields`, `persistence.rowKey`). */
-export const META_LIVE_FIELDS: Record<string, { fields: readonly string[]; rowKey: string }> = Object.fromEntries(
-  registryEntries
-    .filter(([, entry]) => entry.persistence?.kind === "meta" && entry.persistence.liveFields?.length)
-    .map(([key, entry]) => [key, { fields: entry.persistence!.liveFields!, rowKey: entry.persistence!.rowKey ?? "_id" }])
-);
-
-/** Each persisted collection's liveness fields (`persistence.liveFields`). */
-export const COLLECTION_LIVE_FIELDS: Record<string, ReadonlySet<string>> = Object.fromEntries(
-  registryEntries
-    .filter(([, entry]) => entry.persistence?.kind === "collection" && entry.persistence.liveFields?.length)
-    .map(([key, entry]) => [key, new Set(entry.persistence!.liveFields)])
-);
 
 
 // Boot-hydration apply lists, derived so a persisted key can never silently

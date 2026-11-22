@@ -295,7 +295,6 @@ export class Parser {
     if (attrs.reviewer !== undefined) node.reviewer = attrs.reviewer === true || attrs.reviewer === "true";
     if (attrs.temperature !== undefined) node.temperature = attrs.temperature as number;
     if (attrs.timeout !== undefined) node.timeout = Number(attrs.timeout);
-    if (attrs.silent !== undefined) node.silent = Number(attrs.silent);
     if (attrs.max_visits !== undefined) node.max_visits = attrs.max_visits as number;
     if (attrs.max_free_visits !== undefined) node.max_free_visits = Number(attrs.max_free_visits);
     if (attrs.max_retries !== undefined) node.max_retries = attrs.max_retries as number;

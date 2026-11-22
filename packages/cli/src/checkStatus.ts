@@ -6,27 +6,19 @@
 
 import * as os from "node:os";
 import * as path from "node:path";
-import { coldBuildCap, isColdBuild, listWatchers, machineCapacity } from "./check.js";
+import { listWatchers, machineCapacity } from "./check.js";
 import { machineCap } from "./machineCaps.js";
-import { fmtGb, learnedSizes, MIN_SAMPLES, procTable, reserveBytes, treeRssBytes, type LearnedSize, type MachineMemory } from "./watcherMemory.js";
+import { fmtGb, learnedSizes, MIN_SAMPLES, procTable, reserveBytes, treeRssBytes, type LearnedSize } from "./watcherMemory.js";
 
 export interface WatcherStatus {
   totalBytes: number;
-  /** What watchers may hold now: measured, never above capBytes. */
   budgetBytes: number;
-  /** Total memory less reserveBytes. */
-  capBytes: number;
   reserveBytes: number;
-  /** What the machine could give when measured; null when it could not be read. */
-  memory: MachineMemory | null;
-  pressure: boolean;
   ceilingBytes: number;
   coldBytes: number;
   maxWatchers: number;
+  minWatchers: number;
   heldBytes: number;
-  /** Watchers still on their first pass, and how many may run at once (checkCapacity.ts). */
-  coldBuilds: number;
-  coldCap: number;
   watchers: Array<{ project: string; root: string; pid: number; checking: boolean; errors?: number; finishedAt?: number; rssBytes: number; holdBytes: number }>;
   learned: LearnedSize[];
 }
@@ -42,16 +34,12 @@ export function watcherStatus(): WatcherStatus {
   return {
     totalBytes: os.totalmem(),
     budgetBytes: cap.budgetBytes,
-    capBytes: cap.capBytes,
     reserveBytes: reserveBytes(),
-    memory: cap.memory,
-    pressure: cap.pressure,
     ceilingBytes: cap.ceilingBytes,
     coldBytes: cap.coldBytes,
     maxWatchers: cap.maxWatchers,
+    minWatchers: cap.minWatchers,
     heldBytes: watchers.reduce((a, w) => a + w.holdBytes, 0),
-    coldBuilds: live.filter(isColdBuild).length,
-    coldCap: coldBuildCap(),
     watchers,
     learned: learnedSizes(cap.ceilingBytes, cap.coldBytes),
   };
@@ -68,12 +56,8 @@ const table = (rows: string[][]): string[] => {
 };
 
 export function renderWatcherStatus(s: WatcherStatus, now = Date.now()): string {
-  const measured = s.memory
-    ? `${fmtGb(s.memory.availableBytes)} available now, swap ${fmtGb(s.memory.swapUsedBytes)} of ${fmtGb(s.memory.swapTotalBytes)} used${s.pressure ? ", under memory pressure: a new watcher only replaces old ones" : ""}; `
-    : "memory available now unreadable; ";
   const lines = [
-    `Typecheck memory  ${fmtGb(s.heldBytes)} reserved of ${fmtGb(s.budgetBytes)}  (${fmtGb(s.totalBytes)} machine: ${measured}never above ${fmtGb(s.capBytes)}, ${fmtGb(s.reserveBytes)} kept for everything else; up to ${s.maxWatchers} watchers as memory allows)`,
-    `Cold builds       ${s.coldBuilds}/${s.coldCap} running  (first passes; more wait in the queue, a project past 8 GB counts as two)`,
+    `Typecheck memory  ${fmtGb(s.heldBytes)} reserved of ${fmtGb(s.budgetBytes)}  (${fmtGb(s.totalBytes)} machine, ${fmtGb(s.reserveBytes)} kept for everything else; ${s.minWatchers} watchers always run, up to ${s.maxWatchers} as memory allows)`,
   ];
   if (s.watchers.length) {
     lines.push("", "Watchers");

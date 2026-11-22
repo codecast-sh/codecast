@@ -1,7 +1,7 @@
 import { useCallback } from "react";
 import type { FunctionReturnType } from "convex/server";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { isConvexId, useInboxStore } from "../store/inboxStore";
+import { isConvexId, quantizePresenceList, useInboxStore } from "../store/inboxStore";
 import { useIsSyncHost } from "./useSyncRole";
 import { useSyncCollection } from "./useSyncCollection";
 import { settingsDataKey, TEAM_SCOPED_SETTINGS } from "../lib/settingsData";
@@ -17,6 +17,7 @@ const queries = {
   // The person's mail and calendar connection through Whisk (the simple
   // lane's connections, home and /welcome). Read on demand, not in the global set.
   whiskConnection: api.whisk.connection,
+  teamMembers: api.teams.getTeamMembers,
   // The active team's own record (name, invite code) for the team settings row.
   team: api.teams.getTeam,
   githubInstallations: api.githubApp.listInstallations,
@@ -48,11 +49,19 @@ const HOST_FED: readonly SettingsDataName[] = [
   "directoryMappings",
   "accountProfiles",
   "connections",
+  "teamMembers",
   "githubInstallations",
   "personalGithubInstallations",
   "agentBoxes",
 ];
 const HOST_FED_SET = new Set<SettingsDataName>(HOST_FED);
+
+// Applied to a push before the store's content compare. The roster re-pushes on
+// every teammate's daemon heartbeat; quantized like the store's own teamMembers
+// copy, a heartbeat that changes nothing shown is a no-op write.
+const NORMALIZE: Partial<Record<SettingsDataName, (value: unknown) => unknown>> = {
+  teamMembers: quantizePresenceList,
+};
 
 function useSettingsFeed(name: SettingsDataName, requestedTeamId?: string | null) {
   const userId = useInboxStore((s) => s.currentUser?._id);
@@ -66,7 +75,7 @@ function useSettingsFeed(name: SettingsDataName, requestedTeamId?: string | null
     ? "skip"
     : teamQuery ? { team_id: teamId }
       : name === "syncProjects" ? { limit: 100 } : {};
-  const select = useCallback((value: unknown) => [{ _id: key, value }], [key]);
+  const select = useCallback((value: unknown) => [{ _id: key, value: NORMALIZE[name]?.(value) ?? value }], [key, name]);
   const result = useSyncCollection("settingsData", queries[name], args as any, { select });
   return { key, error: result.error };
 }

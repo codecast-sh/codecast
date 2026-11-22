@@ -6,10 +6,9 @@
  * project) so a repo's worktrees learn together. A new watcher reserves p95 of
  * the recent clean peaks times 1.25, or the full ceiling while fewer than three
  * are known or since its last death by memory, and starts only when every live
- * watcher's hold plus that reservation fits in what the machine can give:
- * what live watchers measure plus memory available now, never above total
- * memory minus a reserve for everything else (`admissionBudget`). The
- * reservation rule is ported from pandora/engine/admission.py (MIT).
+ * watcher's hold plus that reservation fits in the machine's budget: total
+ * memory minus a reserve for everything else. The reservation rule is ported
+ * from pandora/engine/admission.py (MIT).
  */
 
 import * as fs from "node:fs";
@@ -67,45 +66,28 @@ export function procTable(): ProcTable {
 const UNIT: Record<string, number> = { B: 1, KB: 1024, MB: 1024 ** 2, GB: 1024 ** 3 };
 
 /**
- * macOS's own figure for each process's memory (what Activity Monitor shows),
- * now and at its peak, from one `footprint` report. Unlike RSS it counts
- * compressed and swapped pages, so it does not shrink when the machine is
- * short of memory, which is when admission needs it most. A pid footprint
- * cannot read is absent (footprint still exits 0 for the others).
+ * macOS's own figure for a process's memory (what Activity Monitor shows), now
+ * and at its peak. Unlike RSS it counts compressed and swapped pages, so it does
+ * not shrink when the machine is short of memory, which is when admission needs
+ * it most. Null off macOS or when `footprint` cannot read the pid.
  */
-export function parseFootprints(text: string): Map<number, { now: number; peak: number }> {
-  const out = new Map<number, { now: number; peak: number }>();
-  let pid = 0;
-  for (const line of text.split("\n")) {
-    const head = /\[(\d+)\]:.*\bFootprint:/.exec(line);
-    if (head) {
-      pid = Number(head[1]);
-      continue;
-    }
-    const m = /^\s*(phys_footprint|phys_footprint_peak):\s*([\d.]+)\s*(B|KB|MB|GB)\b/.exec(line);
-    if (!m || !pid) continue;
-    const bytes = Number(m[2]) * UNIT[m[3]!]!;
-    const f = out.get(pid) ?? { now: bytes, peak: bytes };
-    if (m[1] === "phys_footprint") f.now = bytes;
-    else f.peak = bytes;
-    out.set(pid, f);
-  }
-  return out;
-}
-
-/** Footprints of the given pids from a single `footprint` call; empty off macOS or when it fails. */
-export function footprintsOf(pids: number[]): Map<number, { now: number; peak: number }> {
-  const live = pids.filter((p) => p > 0);
-  if (process.platform !== "darwin" || !live.length) return new Map();
-  const r = spawnSync("footprint", ["--noCategories", ...live.flatMap((p) => ["-p", String(p)])], { encoding: "utf-8", timeout: 5_000 });
-  return r.status === 0 ? parseFootprints(String(r.stdout ?? "")) : new Map();
+export function footprintOf(pid: number): { now: number; peak: number } | null {
+  if (process.platform !== "darwin" || !(pid > 0)) return null;
+  const r = spawnSync("footprint", ["-p", String(pid)], { encoding: "utf-8", timeout: 5_000 });
+  if (r.status !== 0) return null;
+  const read = (key: string) => {
+    const m = new RegExp(`^\\s*${key}:\\s*([\\d.]+)\\s*(B|KB|MB|GB)\\b`, "m").exec(String(r.stdout ?? ""));
+    return m ? Number(m[1]) * UNIT[m[2]!]! : null;
+  };
+  const now = read("phys_footprint");
+  return now === null ? null : { now, peak: read("phys_footprint_peak") ?? now };
 }
 
 /** The most the given pids have held, summed: their footprint peaks on macOS, else their RSS now. */
 export function peakOfPids(pids: number[]): number {
   const live = pids.filter((p) => p > 0);
-  const prints = footprintsOf(live);
-  if (live.length && live.every((p) => prints.has(p))) return live.reduce((a, p) => a + prints.get(p)!.peak, 0);
+  const prints = live.map(footprintOf);
+  if (live.length && prints.every(Boolean)) return prints.reduce((a, f) => a + f!.peak, 0);
   return rssOfPids(live);
 }
 
@@ -201,6 +183,15 @@ export function coldReservationBytes(budget: number, learnedP95s: number[] = [],
   return Math.max(FLOOR_BYTES, Math.min(estimate, watcherCeilingBytes(env), Math.max(budget / 2, FLOOR_BYTES)));
 }
 
+/**
+ * The fewest watchers the machine runs whatever memory says: the count rule
+ * that came before memory admission (one per 12 GB, 2 to 16). Memory only
+ * ever adds watchers above it.
+ */
+export function countFloorWatchers(total = os.totalmem()): number {
+  return Math.min(16, Math.max(2, Math.floor(total / GiB / 12)));
+}
+
 /** What a project is expected to reach: its p95 once warm, else the cold estimate (the ceiling since a death by memory). */
 export function expectedBytes(peaks: Peak[], ceiling = watcherCeilingBytes(), cold = ceiling): number {
   const usable = usablePeaks(peaks);
@@ -257,121 +248,9 @@ export function reserveBytes(total = os.totalmem(), env: NodeJS.ProcessEnv = pro
   return set(env[RESERVE_ENV]) ?? set(readLocalConfig()?.check?.reserve_gb) ?? Math.max(RESERVE_FLOOR_BYTES, Math.round(total * RESERVE_SHARE));
 }
 
-/** The most typecheck watchers may share on this machine: total memory less the reserve. What they may take now is `admissionBudget`, measured. */
+/** The memory typecheck watchers share on this machine. */
 export function budgetBytes(total = os.totalmem(), env: NodeJS.ProcessEnv = process.env): number {
   return Math.max(0, total - reserveBytes(total, env));
-}
-
-// ---------------------------------------------------------------------------
-// What the machine can give now, measured
-// ---------------------------------------------------------------------------
-
-export interface MachineMemory {
-  /** RAM the machine can hand out without compressing or swapping anything. */
-  availableBytes: number;
-  swapUsedBytes: number;
-  swapTotalBytes: number;
-  /** macOS's own verdict (kern.memorystatus_vm_pressure_level): 1 normal, 2 warn, 4 critical. Absent elsewhere. */
-  pressureLevel?: number;
-}
-
-/**
- * macOS available memory from `vm_stat`: free, speculative and purgeable
- * pages, plus the inactive pages that are file-backed. The rest of the
- * inactive list is anonymous memory, reclaimed only by compressing or
- * swapping it, so counting it called a swapping machine 23 GB free.
- */
-export function parseVmStat(text: string): number | null {
-  const page = Number(/page size of (\d+) bytes/.exec(text)?.[1]);
-  const pages = (key: string): number => Number(new RegExp(`^${key}:\\s+(\\d+)`, "m").exec(text)?.[1] ?? NaN);
-  const [free, inactive] = [pages("Pages free"), pages("Pages inactive")];
-  if (!(page > 0) || !Number.isFinite(free) || !Number.isFinite(inactive)) return null;
-  const fileBacked = pages("File-backed pages");
-  const extra = (n: number) => (Number.isFinite(n) ? n : 0);
-  return page * (free + extra(pages("Pages speculative")) + extra(pages("Pages purgeable")) + Math.min(inactive, Number.isFinite(fileBacked) ? fileBacked : inactive));
-}
-
-const SIZE_UNIT: Record<string, number> = { K: 1024, M: MiB, G: GiB };
-
-/** Swap and the kernel's pressure level from `sysctl vm.swapusage kern.memorystatus_vm_pressure_level`. */
-export function parseDarwinSysctl(text: string): Pick<MachineMemory, "swapUsedBytes" | "swapTotalBytes" | "pressureLevel"> | null {
-  const m = /total = ([\d.]+)([KMG])\s+used = ([\d.]+)([KMG])/.exec(text);
-  if (!m) return null;
-  const level = Number(/memorystatus_vm_pressure_level:\s*(\d+)/.exec(text)?.[1]);
-  return { swapTotalBytes: Number(m[1]) * SIZE_UNIT[m[2]!]!, swapUsedBytes: Number(m[3]) * SIZE_UNIT[m[4]!]!, ...(level > 0 ? { pressureLevel: level } : {}) };
-}
-
-/** Linux: MemAvailable and swap from /proc/meminfo. */
-export function parseMeminfo(text: string): MachineMemory | null {
-  const kb = (key: string): number => Number(new RegExp(`^${key}:\\s+(\\d+) kB`, "m").exec(text)?.[1] ?? NaN) * 1024;
-  const [available, swapTotal, swapFree] = [kb("MemAvailable"), kb("SwapTotal"), kb("SwapFree")];
-  if (!Number.isFinite(available)) return null;
-  const total = Number.isFinite(swapTotal) ? swapTotal : 0;
-  return { availableBytes: available, swapTotalBytes: total, swapUsedBytes: Math.max(0, total - (Number.isFinite(swapFree) ? swapFree : total)) };
-}
-
-const MEMORY_TTL_MS = 2_000;
-let lastMemory: { at: number; value: MachineMemory | null } | null = null;
-
-/**
- * What the machine can give now: one `vm_stat` and one `sysctl` on macOS,
- * a file read on Linux, null elsewhere or when they fail. Kept for two
- * seconds, so one admission decision (which sizes the ask and the head of
- * the queue) measures once.
- */
-export function readMachineMemory(now = Date.now()): MachineMemory | null {
-  if (lastMemory && now - lastMemory.at < MEMORY_TTL_MS) return lastMemory.value;
-  let value: MachineMemory | null = null;
-  try {
-    if (process.platform === "darwin") {
-      const vm = spawnSync("vm_stat", [], { encoding: "utf-8", timeout: 5_000 });
-      const sys = spawnSync("sysctl", ["vm.swapusage", "kern.memorystatus_vm_pressure_level"], { encoding: "utf-8", timeout: 5_000 });
-      const available = parseVmStat(String(vm.stdout ?? ""));
-      const swap = parseDarwinSysctl(String(sys.stdout ?? ""));
-      if (available !== null && swap) value = { availableBytes: available, ...swap };
-    } else if (process.platform === "linux") {
-      value = parseMeminfo(fs.readFileSync("/proc/meminfo", "utf-8"));
-    }
-  } catch {}
-  lastMemory = { at: now, value };
-  return value;
-}
-
-/** The measuring admission calls, replaceable in tests. */
-export const machineMemoryProbe = { read: (): MachineMemory | null => readMachineMemory() };
-
-/** What admission leaves free for everything else to grow into: 2 GB or a twentieth of the machine, whichever is more. */
-export function memoryMarginBytes(total: number): number {
-  return Math.max(2 * GiB, Math.round(total * 0.05));
-}
-
-/**
- * The machine is short of memory: macOS says so (warn or critical), or swap
- * is more than half used while available memory is under twice the margin.
- * Swap alone is no signal: macOS grows its swap files as it goes and drains
- * them slowly, so a calm machine can show them nearly full.
- */
-export function underPressure(m: MachineMemory, total: number): boolean {
-  if ((m.pressureLevel ?? 0) >= 2) return true;
-  return m.swapTotalBytes > 0 && m.swapUsedBytes > m.swapTotalBytes / 2 && m.availableBytes < 2 * memoryMarginBytes(total);
-}
-
-/**
- * The memory watchers may hold now: what live watchers measure (killing
- * them frees it) plus what the machine has available beyond the margin,
- * never above the cap (total less the reserve). Under pressure watchers get
- * no headroom at all: a new watcher only replaces older ones, and whatever
- * available memory falls short of twice the margin is taken back from them
- * too. Unmeasured (null), the cap alone. A fixed cap of 102 GB on a 128 GB
- * laptop whose other processes held 50 GB put it 21 GB into swap (2026-11-21).
- */
-export function admissionBudget(input: { totalBytes: number; capBytes: number; watcherBytes: number; memory: MachineMemory | null }): { budgetBytes: number; pressure: boolean } {
-  const { memory } = input;
-  if (!memory) return { budgetBytes: input.capBytes, pressure: false };
-  const margin = memoryMarginBytes(input.totalBytes);
-  const pressure = underPressure(memory, input.totalBytes);
-  const headroom = pressure ? Math.min(0, memory.availableBytes - 2 * margin) : memory.availableBytes - margin;
-  return { budgetBytes: Math.max(0, Math.min(input.capBytes, input.watcherBytes + headroom)), pressure };
 }
 
 /**
