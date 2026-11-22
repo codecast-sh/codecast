@@ -114,7 +114,7 @@ const TASK_STATUS_ICON: Record<string, { icon: React.ComponentProps<typeof Feath
   dropped: { icon: 'x-circle', color: Theme.textDim },
 };
 
-type FeatherName = React.ComponentProps<typeof Feather>['name'];
+export type FeatherName = React.ComponentProps<typeof Feather>['name'];
 
 // The web pill's deploy and reach glyphs (components/deploys/deployRefLook), in Feather.
 const DEPLOY_ICON: Record<DeployPillState, FeatherName> = {
@@ -125,7 +125,7 @@ const DEPLOY_ICON: Record<DeployPillState, FeatherName> = {
   failed: 'x-circle',
   cancelled: 'minus-circle',
 };
-const REACH_ICON: Record<ReachState, FeatherName> = {
+export const REACH_ICON: Record<ReachState, FeatherName> = {
   live: 'check-circle',
   going_out: 'upload-cloud',
   queued: 'clock',
@@ -135,7 +135,7 @@ const REACH_ICON: Record<ReachState, FeatherName> = {
 };
 // A failure must be seen before it is read: about twice the tint every other pill wears.
 const FAILED_TINT = '33';
-const toneColor = (t: Palette, tone: DeployTone) =>
+export const toneColor = (t: Palette, tone: DeployTone) =>
   ({ green: t.green, yellow: t.yellow, red: t.red, orange: t.orange, muted: t.textMuted, dim: t.textDim })[tone];
 
 /**

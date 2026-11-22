@@ -3,7 +3,8 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { useInboxStore } from "../inboxStore";
 import { HYDRATION_CRITICAL_KEYS, REPLICATION_CLASSIFICATION } from "../clientSyncRegistry";
-import { settingsDataKey } from "../../lib/settingsData";
+import { settingsDataKey, TEAM_SCOPED_SETTINGS } from "../../lib/settingsData";
+import { COLLECTION_RETENTION } from "../cacheRetention";
 
 describe("settings local cache", () => {
   beforeEach(() => useInboxStore.setState({ settingsData: {} }));
@@ -24,7 +25,7 @@ describe("settings local cache", () => {
   });
 
   test("reconciles changed, empty and revoked payloads without retaining stale rows", () => {
-    const key = settingsDataKey("teamMembers", "alice", "team-a")!;
+    const key = settingsDataKey("githubInstallations", "alice", "team-a")!;
     const store = useInboxStore.getState();
     store.syncTable("settingsData", [{ _id: key, value: [{ _id: "member", role: "admin" }] }]);
     store.syncTable("settingsData", [{ _id: key, value: [{ _id: "member", role: "member" }] }]);
@@ -36,10 +37,10 @@ describe("settings local cache", () => {
   });
 
   test("keeps identity and explicit team queries separate", () => {
-    expect(settingsDataKey("teamMembers", "alice", "team-a")).not.toBe(settingsDataKey("teamMembers", "alice", "team-b"));
+    expect(settingsDataKey("githubInstallations", "alice", "team-a")).not.toBe(settingsDataKey("githubInstallations", "alice", "team-b"));
     expect(settingsDataKey("accountProfiles", "alice")).not.toBe(settingsDataKey("accountProfiles", "bob"));
     expect(settingsDataKey("accountProfiles", "alice", "team-a")).toBe(settingsDataKey("accountProfiles", "alice", "team-b"));
-    expect(settingsDataKey("teamMembers", "alice", null)).toBeNull();
+    expect(settingsDataKey("githubInstallations", "alice", null)).toBeNull();
     expect(settingsDataKey("githubInstallations", "alice", null)).toBeNull();
     expect(settingsDataKey("connections", null, "team-a")).toBeNull();
   });
@@ -51,6 +52,21 @@ describe("settings local cache", () => {
     const before = useInboxStore.getState().settingsData[key];
     useInboxStore.getState().syncTable("settingsData", payload());
     expect(useInboxStore.getState().settingsData[key]).toBe(before);
+  });
+
+  // The roster was fed twice, into the store's teamMembers and into a settings
+  // row, and the team settings page read the row while the role and remove
+  // actions wrote teamMembers. Each heartbeat also rewrote both on disk.
+  test("the team roster has one home, and its old settings rows leave the disk at boot", () => {
+    expect(TEAM_SCOPED_SETTINGS.has("teamMembers")).toBe(false);
+    const root = join(import.meta.dir, "../..");
+    expect(readFileSync(join(root, "hooks/useSyncSettings.ts"), "utf8")).not.toContain("getTeamMembers");
+    const { keep, drop } = COLLECTION_RETENTION.settingsData(
+      [{ _id: "alice:team-a:teamMembers", value: [] }, { _id: "alice:user:accountProfiles", value: {} }],
+      Date.now(),
+    );
+    expect(drop).toEqual(["alice:team-a:teamMembers"]);
+    expect(keep.map((r) => r._id)).toEqual(["alice:user:accountProfiles"]);
   });
 
   test("panels do not wait for cached user data or click-triggered imports", () => {
