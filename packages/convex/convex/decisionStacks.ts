@@ -20,7 +20,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { liveRoleByHandle, userCanAccessRole, userCanAdminRole, type ScopedSeat } from "./lib/orgAccess";
 import { OPEN_CATEGORIES } from "./lib/decisionCategory";
 import { findDecision, findStack, finalizeAnswer, answerRefusal, refreshHolder, activeGrantFor, GRANT_TTL_MS } from "./sessionDecisions";
-import { currentDecisions } from "./lib/superseded";
+import { currentDecisions, newLineMemo, type LineMemo } from "./lib/superseded";
 
 type Ctx = { db: any };
 type StackRow = Doc<"decision_stacks">;
@@ -80,8 +80,8 @@ async function membersOf(ctx: Ctx, stack: StackRow): Promise<Doc<"session_decisi
 
 // The list row: the stack plus its progress, so the queue groups and the
 // checklist header count without loading every member.
-async function listRow(ctx: Ctx, stack: StackRow) {
-  const members = await currentDecisions(ctx, await membersOf(ctx, stack));
+async function listRow(ctx: Ctx, stack: StackRow, memo?: LineMemo) {
+  const members = await currentDecisions(ctx, await membersOf(ctx, stack), memo);
   const resolved = members.filter((m) => m.status !== "pending").length;
   const next = members.find((m) => m.status === "pending");
   return {
@@ -376,7 +376,8 @@ export async function listStacksCore(ctx: Ctx, userId: Id<"users">, opts: { incl
   }
   const stacks = Array.from(out.values()).filter((s) => opts.include_done || s.status === "open");
   stacks.sort((a, b) => (a.status === b.status ? b.created_at - a.created_at : a.status === "open" ? -1 : 1));
-  return Promise.all(stacks.map((s) => listRow(ctx, s)));
+  const memo = newLineMemo();
+  return Promise.all(stacks.map((s) => listRow(ctx, s, memo)));
 }
 
 export const listStacks = query({

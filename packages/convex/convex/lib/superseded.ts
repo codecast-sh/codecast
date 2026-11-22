@@ -128,9 +128,8 @@ export async function decisionSuperseded(ctx: Ctx, d: Pick<Doc<"session_decision
 }
 
 /** The rows that still stand: every read that lists or counts decisions filters through this, never `get` (a superseded decision's own page opens). */
-export async function currentDecisions<T extends Pick<Doc<"session_decisions">, "status" | "workflow_run_id" | "gate_node_id" | "task_id">>(ctx: Ctx, rows: T[]): Promise<T[]> {
+export async function currentDecisions<T extends Pick<Doc<"session_decisions">, "status" | "workflow_run_id" | "gate_node_id" | "task_id">>(ctx: Ctx, rows: T[], memo: LineMemo = newLineMemo()): Promise<T[]> {
   const out: T[] = [];
-  const memo = newLineMemo();
   for (const r of rows) if (!(await decisionSuperseded(ctx, r, memo))) out.push(r);
   return out;
 }
