@@ -562,6 +562,12 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
   const winner = answered.find((r) => r.outcome !== "success" && r.own["station_blocked"]) ?? answered.find((r) => r.outcome !== "success");
   if (winner) {
     for (const [k, v] of Object.entries(winner.own)) if (context[k] !== v) context[k] = v;
+    // A writer's ask reaches a person who must know which session to answer, and about which files.
+    if (context["station_blocked"]) {
+      const asks = `${winner.w.shortId} (writer of ${[...winner.w.files, ...(winner.w.unclaimed ?? [])].join(", ")}) asks: `;
+      context["blocked_note"] = `${asks}${context["blocked_note"] ?? ""}`;
+      context["last_error"] = `${asks}${context["last_error"] ?? ""}`.slice(0, 2000);
+    }
     await callOff(results.filter((r) => r.stopped).map((r) => r.w), `${winner.w.shortId} ${winner.own["station_blocked"] ? "is waiting on a person" : "could not finish"}`);
     return winner.outcome;
   }
