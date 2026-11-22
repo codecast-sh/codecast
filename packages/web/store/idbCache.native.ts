@@ -1,6 +1,6 @@
 import { captureException } from "./pendingInputError";
 import { readPendingMessageJournal, writePendingMessageJournal, type PendingJournalStorage } from "./pendingMessageJournal";
-import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, type PendingMessages } from "./pendingMessageJournal";
+import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, retireStalePendingRecords, type PendingMessages } from "./pendingMessageJournal";
 // expo-sqlite's kv-store default export is an AsyncStorage-compatible, SQLite-backed
 // key-value store (getItem/setItem/removeItem + multiGet). It is durable and survives
 // app restart — the RN replacement for the web Dexie engine. Metro resolves this
@@ -176,7 +176,9 @@ async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
   }
   const keys: string[] = Storage.getAllKeysSync();
   const rows = keys.filter(key => key.startsWith(prefix)).map(key => JSON.parse(Storage.getItemSync(key)));
-  return pendingMessagesFromRecords(rows);
+  const { kept, retired } = retireStalePendingRecords(rows, Date.now());
+  for (const row of retired) Storage.setItemSync(prefix + row.id, JSON.stringify(row));
+  return pendingMessagesFromRecords(kept);
 }
 
 function dropLegacyBlob(blobKey: string) {
