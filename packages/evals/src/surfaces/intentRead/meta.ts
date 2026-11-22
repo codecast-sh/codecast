@@ -19,5 +19,5 @@ export const meta: SurfaceMeta = {
   // One Opus call over a session's typed lines (up to the station's 63 KB record) and a diff.
   maxUsdPerRep: 0.4,
   criteria:
-    'clears only when a line the run starter typed explicitly tells this work to ship (a ship word, an accepted plan that ships it, or a /drive request), whose condition the change meets, and which no later line or card answer takes back, and only when the change stays inside what they asked for; otherwise it asks. Its why names what they asked for and why the change is or is not covered.',
+    'clears only when a line the run starter typed, or their own answer on a decision card (choosing to ship this work in any form the card offered), explicitly tells this work to ship (a ship word, an accepted plan that ships it, or a /drive request), whose condition the change meets, and which no later line or card answer takes back, and only when the change stays inside what they asked for; otherwise it asks. Its why names what they asked for and why the change is or is not covered.',
 };

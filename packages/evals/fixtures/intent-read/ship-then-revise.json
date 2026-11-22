@@ -25,12 +25,14 @@
         "created_at": "2026-11-21T17:18:00.000Z"
       }
     ],
-    "verdicts": [
+    "cards": [
       {
         "card": "sd-2001",
-        "user_name": "Dana",
+        "on_task": true,
+        "question": "Ship the PR numbers and Mine toggle on Deploys?",
         "answer": "Revise",
         "note": "The Mine toggle hides the deploy button for everyone else's groups; keep it visible.",
+        "user_name": "Dana",
         "created_at": "2026-11-21T19:02:00.000Z"
       }
     ],
