@@ -165,7 +165,7 @@ describe("a dead runner's record", () => {
 
   test("leaves alone a leaderless group of another program that took a recorded group id", async () => {
     // Another program's group whose leader exited, as crash handlers leave them: its id is all a stale record shares with it.
-    const out = Bun.spawnSync(["perl", "-MPOSIX", "-e", `POSIX::setsid(); my $c = fork(); if (!$c) { open STDOUT, ">/dev/null"; exec "sleep", "600" } print "$c\n"; exit 0`]);
+    const out = Bun.spawnSync(["perl", "-MPOSIX", "-e", `POSIX::setsid(); my $c = fork(); if (!$c) { open STDOUT, ">/dev/null"; open STDERR, ">/dev/null"; exec "sleep", "600" } print "$c\n"; exit 0`]);
     const member = Number(String(out.stdout).trim());
     strays.push(member);
     await pollUntil(() => { const r = rowOf(member); return !!r && r.pgid !== undefined && !alive(r.pgid); }, "a group whose leader has exited", { ms: 5_000 });
