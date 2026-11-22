@@ -9311,6 +9311,13 @@ export async function scanInboxConversations(
     const held = myOwnerRowById.get(idStr);
     // An empty owner window proves nothing when it was never read.
     if (held || (!truncated.has("owned") && !opts.namedOnly)) return Promise.resolve(held ?? null);
+    // A conversation with no owner_user_id has no owner rows at all: the
+    // cache names the primary owner whenever one exists (every owner-row
+    // writer resyncs it through syncPrimaryOwnerCache). Only a row with an
+    // owner can have me among its owners, so only that row pays the read; on
+    // a full account the per-row read for every candidate and child put
+    // listInboxSessions past Convex's limits (ct-73243).
+    if (!conv.owner_user_id) return Promise.resolve(null);
     let hit = ownerLookups.get(idStr);
     if (!hit) {
       hit = sessionOwnerRow(ctx, conv._id, userId).then((row: any) => {
