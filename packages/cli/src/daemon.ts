@@ -111,7 +111,7 @@ import {
 import { worktreeEnv, worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
 import { startMirrorProcess } from "./cloud/mirror/process.js";
-import { releaseSessionWorktree, runTreesInUseVia } from "./worktreeGc.js";
+import { releaseSessionMadeWorktrees, releaseSessionWorktree, runTreesInUseVia } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { defaultRemote, knownValuesInPush, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { createTurnSnapshot, type TurnSnapshot } from "./treeSnapshot.js";
@@ -6829,6 +6829,9 @@ async function killConversationBackends(
     // Its folder is gone, so an SDK session can no longer resume where it ran: a later Restart
     // finds its folder the way a tmux resume does.
     if (verdict.action === "released" && teardown.killedSdk) await claudeSdkBackend?.stop(conversationId, { forget: true });
+    // The trees it made that its pane's cwd never shows: workspaces it acquired from the main
+    // checkout, and its Claude Code subagents' worktrees (worktreeGc.ts releaseSessionMadeWorktrees).
+    if (sessionId) await releaseSessionMadeWorktrees(sessionId, gcCwd, log).catch((err) => log(`[WORKTREE-GC] made-worktree release failed: ${String(err).slice(0, 120)}`));
   }
 
   if (!result) result = sessionId ? "no_process" : "no_session";
@@ -23437,6 +23440,7 @@ async function reapOneTerminal(
       ? syncServiceRef.isWorktreeShared(convId, p)
       : Promise.reject(new Error("No session roster")), runTreesInUseVia(liveWorkflowRunIds)).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
     reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
+    await releaseSessionMadeWorktrees(sessionId, gcCwd, log).catch((err) => log(`[WORKTREE-GC] made-worktree release failed: ${String(err).slice(0, 120)}`));
   }
   return true;
 }
