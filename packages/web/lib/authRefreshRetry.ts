@@ -12,8 +12,8 @@
 // that failed in transit: when the browser says it is offline, on the next
 // `online` event; otherwise with a backoff from 1s to 30s that an `online`
 // event cuts short, never more than one attempt a second. A real refusal is
-// untouched: a null token, or an error that came from the auth function,
-// passes straight through as before.
+// untouched: a null token, or an error that came from the auth function (the
+// http client's 560 path), passes straight through as before.
 
 type FetchToken = (args: { forceRefreshToken: boolean }) => Promise<string | null | undefined>;
 type AuthClient = {
@@ -24,12 +24,19 @@ type AuthClient = {
 const MIN_GAP_MS = 1000;
 const MAX_DELAY_MS = 30_000;
 
-/** True when the refresh never reached the auth function: the network, an overload, a gateway. */
+/**
+ * True when the refresh never got an answer from the auth function. The only
+ * answer that counts is the http client's 560 path, a function error: a
+ * ConvexError, or a message the server shaped ("[Request ID: …] Server Error",
+ * "Uncaught …"). Everything else (a network TypeError, a gateway page, an
+ * overload, a JSON 500 from the backend, any other non-ok body the client
+ * throws verbatim) died on the way and is worth asking again.
+ */
 export function isRefreshInTransit(error: unknown): boolean {
-  if (error instanceof TypeError) return true;
   if ((error as { codecastInTransit?: unknown } | null)?.codecastInTransit === true) return true;
+  if ((error as { name?: unknown } | null)?.name === "ConvexError") return false;
   const message = String((error as { message?: unknown } | null)?.message ?? error);
-  return /ExpiredInQueue|Overloaded|Bad Gateway|Service Unavailable|Gateway Time-?out|<html/i.test(message);
+  return !/Server Error|Uncaught /.test(message);
 }
 
 function waitToRetry(attempt: number, lastAttemptAt: number, cancelled: () => boolean, signal: AbortSignal): Promise<void> {

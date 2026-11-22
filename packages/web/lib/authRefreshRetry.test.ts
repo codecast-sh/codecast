@@ -62,8 +62,8 @@ describe("retryRefreshInTransit (ct-74162)", () => {
   test("a real refusal passes straight through: null signs out, an error from the function rejects", async () => {
     const refused = retryRefreshInTransit(async () => null, new AbortController().signal);
     expect(await refused({ forceRefreshToken: true })).toBeNull();
-    const failing = retryRefreshInTransit(async () => { throw new Error("Invalid refresh token"); }, new AbortController().signal);
-    await expect(failing({ forceRefreshToken: true })).rejects.toThrow("Invalid refresh token");
+    const failing = retryRefreshInTransit(async () => { throw new Error("[Request ID: 3f2a] Server Error"); }, new AbortController().signal);
+    await expect(failing({ forceRefreshToken: true })).rejects.toThrow("Server Error");
   });
 
   test("a newer setAuth or clearAuth ends the old config's retry loop", async () => {
@@ -87,6 +87,11 @@ describe("retryRefreshInTransit (ct-74162)", () => {
     expect(isRefreshInTransit(Object.assign(new Error("x"), { codecastInTransit: true }))).toBe(true);
     expect(isRefreshInTransit(new Error('{"code":"ExpiredInQueue"}'))).toBe(true);
     expect(isRefreshInTransit(new Error("<html><title>503 Service Unavailable</title></html>"))).toBe(true);
-    expect(isRefreshInTransit(new Error("Invalid refresh token"))).toBe(false);
+    // A backend 5xx the http client throws verbatim never reached the auth function.
+    expect(isRefreshInTransit(new Error('{"code":"InternalServerError","message":"Your request could not be completed. Try again later."}'))).toBe(true);
+    // The 560 path: the auth function itself answered with an error.
+    expect(isRefreshInTransit(new Error("[Request ID: 3f2a] Server Error"))).toBe(false);
+    expect(isRefreshInTransit(new Error("Uncaught Error: Could not verify code"))).toBe(false);
+    expect(isRefreshInTransit(Object.assign(new Error("refused"), { name: "ConvexError", data: "refused" }))).toBe(false);
   });
 });
