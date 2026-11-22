@@ -1,6 +1,4 @@
 import { captureError } from '@/lib/analytics';
-import { ChangesProvider } from '@codecast/web/components/changes/ChangesContext';
-import { sessionRepository } from '@codecast/web/lib/repoNavigation';
 import { MOVE_VERBS, moveAgentOptions, sessionMoveVerbs } from '@codecast/web/lib/sessionControl';
 import { forkSessionAsAgent, sessionRowFor, switchSessionAgent } from '@codecast/web/lib/sessionAgentActions';
 import { usePinnedAgentIds } from '@codecast/web/hooks/usePinnedAgents';
@@ -4496,8 +4494,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   return (
     <ProposalBatchContext.Provider value={proposalBatch}>
-    {/* A branch a message names draws as its change, read from this session's repository (changes.md CH4). */}
-    <ChangesProvider repository={conversation ? sessionRepository(conversation as any) : null}>
       <Stack.Screen options={SCREEN_NO_HEADER} />
       <KeyboardAvoidingView
         // iOS: KAV 'padding' (resets cleanly via keyboardWillHide). Android:
@@ -5088,7 +5084,6 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         visible={galleryVisible}
         onClose={() => setGalleryVisible(false)}
       />
-    </ChangesProvider>
     </ProposalBatchContext.Provider>
   );
 }

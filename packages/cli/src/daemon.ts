@@ -111,7 +111,7 @@ import {
 import { worktreeEnv, worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
 import { startMirrorProcess } from "./cloud/mirror/process.js";
-import { releaseSessionMadeWorktrees, releaseSessionWorktree, runTreesInUseVia } from "./worktreeGc.js";
+import { releaseSessionWorktree, runTreesInUseVia } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { defaultRemote, knownValuesInPush, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { createTurnSnapshot, type TurnSnapshot } from "./treeSnapshot.js";
@@ -6822,9 +6822,6 @@ async function killConversationBackends(
   await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
 
   if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardown.killedSdk || teardownPlan.reapPidTree) && !error) {
-    // First the trees it made that its pane's cwd never shows (workspaces it acquired, its Claude Code
-    // subagents' worktrees): its own tree's release can take gcCwd away, and the repo is found from it.
-    if (sessionId) await releaseSessionMadeWorktrees(sessionId, gcCwd, log).catch((err) => log(`[WORKTREE-GC] made-worktree release failed: ${String(err).slice(0, 120)}`));
     const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef
       ? syncServiceRef.isWorktreeShared(conversationId, p)
       : Promise.reject(new Error("No session roster")), runTreesInUseVia(liveWorkflowRunIds));
@@ -23436,8 +23433,6 @@ async function reapOneTerminal(
   await killTmuxSessionAndTree(tmux);
   reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
   if (gcCwd) {
-    // Before its own tree: that release can take gcCwd away (releaseSessionMadeWorktrees).
-    await releaseSessionMadeWorktrees(sessionId, gcCwd, log).catch((err) => log(`[WORKTREE-GC] made-worktree release failed: ${String(err).slice(0, 120)}`));
     const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef && convId
       ? syncServiceRef.isWorktreeShared(convId, p)
       : Promise.reject(new Error("No session roster")), runTreesInUseVia(liveWorkflowRunIds)).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));

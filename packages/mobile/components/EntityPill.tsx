@@ -9,6 +9,9 @@ import { useSyncOrgProposal } from '@codecast/web/hooks/useSyncOrgProposals';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme, type Palette } from '@/constants/Theme';
+import { solColor } from '@/lib/solColor';
+import { accentVar } from '@codecast/web/lib/externalEvents';
+import { PR_STATE_META, prStateKey } from '@codecast/web/lib/prView';
 import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { openLink } from '@/lib/links';
@@ -17,13 +20,12 @@ import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
 import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { MobileIdentityFace } from '@/components/identity';
 import { useMessageLongPress } from '@/components/MessageLongPress';
-import { deployTitle } from '@codecast/web/lib/line/deployWords';
-import { repoObjectTitle } from '@codecast/web/lib/repoObjects';
-import { deployPillState, deployPillSuffix, deployTone, isRollback, runRefKey, type DeployPillState, type DeployTone } from '@codecast/web/lib/deploys/deployPill';
-import { useRefLifecycle } from '@codecast/web/hooks/useRefLifecycle';
-import { ChangeWords } from '@/components/ChangeText';
-import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
 import type { ReachState } from '@codecast/shared/contracts/deployReach';
+import { deployTitle } from '@codecast/web/lib/line/deployWords';
+import { repoObjectRefOf, repoObjectTitle } from '@codecast/web/lib/repoObjects';
+import { REACH_LOOK, deployPillState, deployPillSuffix, deployTone, isRollback, runRefKey, type DeployPillState, type DeployTone } from '@codecast/web/lib/deploys/deployPill';
+import { useDeployReach } from '@codecast/web/hooks/useDeployReach';
+import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
 
 
 // Detection comes from the shared mention vocabulary, the same tables web reads
@@ -112,7 +114,7 @@ const TASK_STATUS_ICON: Record<string, { icon: React.ComponentProps<typeof Feath
   dropped: { icon: 'x-circle', color: Theme.textDim },
 };
 
-export type FeatherName = React.ComponentProps<typeof Feather>['name'];
+type FeatherName = React.ComponentProps<typeof Feather>['name'];
 
 // The web pill's deploy and reach glyphs (components/deploys/deployRefLook), in Feather.
 const DEPLOY_ICON: Record<DeployPillState, FeatherName> = {
@@ -123,7 +125,7 @@ const DEPLOY_ICON: Record<DeployPillState, FeatherName> = {
   failed: 'x-circle',
   cancelled: 'minus-circle',
 };
-export const REACH_ICON: Record<ReachState, FeatherName> = {
+const REACH_ICON: Record<ReachState, FeatherName> = {
   live: 'check-circle',
   going_out: 'upload-cloud',
   queued: 'clock',
@@ -133,7 +135,7 @@ export const REACH_ICON: Record<ReachState, FeatherName> = {
 };
 // A failure must be seen before it is read: about twice the tint every other pill wears.
 const FAILED_TINT = '33';
-export const toneColor = (t: Palette, tone: DeployTone) =>
+const toneColor = (t: Palette, tone: DeployTone) =>
   ({ green: t.green, yellow: t.yellow, red: t.red, orange: t.orange, muted: t.textMuted, dim: t.textDim })[tone];
 
 /**
@@ -223,8 +225,11 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   const deployState = type === 'deploy' && entity ? deployPillState(entity) : null;
   const ticks = deployState === 'waiting' || deployState === 'going_out';
   const now = useNowWhen((t) => (ticks ? deployPillSuffix(entity, t) : ''), 15_000);
-  // A pull request or commit says where it stands as its change: the web's track and word (changes.md CH4).
-  const change = useRefLifecycle(type === 'pr' || type === 'commit' ? type : null, entity);
+  // A merged pull request or a commit carries how far it has gone toward production.
+  const reachRef = entity && ((type === 'pr' && entity.state === 'merged') || type === 'commit') ? repoObjectRefOf(type, entity, 40) : null;
+  const reach = useDeployReach(reachRef);
+  // A pull request with no reach to say says its state: open, draft, closed, or merged when nothing deploys it.
+  const prState = type === 'pr' && entity && !reach ? PR_STATE_META[prStateKey(entity)] : null;
 
   // Unknown id shape, a Convex id resolving to no entity table, or the
   // transient state while resolveIdType is in flight.
@@ -287,7 +292,16 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
       {/* NBSP so the icon never strands on the previous line when the pill wraps */}
       {' '}{label}
       {deployState && ` · ${deployPillSuffix(entity, now)}`}
-      {change && <ChangeWords lifecycle={change} />}
+      {prState && <RNText style={{ color: solColor(accentVar(prState.accent), Theme) }}>{' · '}{prState.label.toLowerCase()}</RNText>}
+      {reach && (
+        <RNText style={{ color: toneColor(Theme, REACH_LOOK[reach.state].tone) }}>
+          {' · '}
+          {/* A failed deploy wears a red tint of its own, as on the web. */}
+          <RNText style={{ color: toneColor(Theme, REACH_LOOK[reach.state].tone), ...(reach.state === 'failed' ? { backgroundColor: Theme.red + FAILED_TINT } : null) }}>
+            <Feather name={REACH_ICON[reach.state]} size={9} color={toneColor(Theme, REACH_LOOK[reach.state].tone)} />{' '}{REACH_LOOK[reach.state].word}
+          </RNText>
+        </RNText>
+      )}
     </RNText>
   );
 }

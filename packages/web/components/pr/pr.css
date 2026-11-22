@@ -331,10 +331,6 @@
     justify-content: flex-start;
     padding-bottom: 0.35rem;
   }
-  /* Stacked, the target's name is the way to its deploys; the arrow alone would take a line. */
-  .pr-deploy-open {
-    display: none;
-  }
 }
 .pr-deploy-dp {
   font-family: var(--font-mono, ui-monospace, monospace);

@@ -5,7 +5,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { execFileAsync } from "../proc.js";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import type { RepoFlow, RepoFlowsReport } from "@codecast/shared/contracts/repoFlows";
 import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
@@ -36,7 +37,7 @@ export function repoFlowsReport(cwd: string, remote: string | null): RepoFlowsRe
 /** The checkout's origin remote, read without holding the event loop: this runs in the daemon's warmer too. */
 async function originOf(cwd: string): Promise<string | null> {
   try {
-    const { stdout } = await execFileAsync("git", ["-C", cwd, "remote", "get-url", "origin"], { encoding: "utf-8", timeout: 5_000 });
+    const { stdout } = await promisify(execFile)("git", ["-C", cwd, "remote", "get-url", "origin"], { encoding: "utf-8", timeout: 5_000 });
     return stdout.trim() || null;
   } catch {
     return null;

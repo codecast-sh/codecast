@@ -7,7 +7,7 @@ import type { WorkflowGraph } from "./workflow/types.js";
 import { graphExtends, parseWorkflowSource } from "./workflow/parser.js";
 import { describeFlow, type PoolFlow } from "./workflow/flowPool.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
-import type { FoundFlow } from "./flowFind.js";
+import type { FoundFlow } from "./flowCommand.js";
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
 const bold = (s: string) => `\x1b[1m${s}\x1b[0m`;

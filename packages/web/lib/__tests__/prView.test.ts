@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test";
 import {
   formatFailingChecksPrompt,
   buildPrTimeline,
+  checkOutcome,
   compareChecks,
   dayLabel,
   foldChecks,
@@ -19,7 +20,6 @@ import {
   type CodeCommentRow,
   type PrCheck,
 } from "../prView";
-import { checkOutcome } from "@codecast/shared/contracts";
 
 const check = (over: Partial<PrCheck>): PrCheck => ({
   name: "build",

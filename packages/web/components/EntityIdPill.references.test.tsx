@@ -232,8 +232,8 @@ function render(markdown: string): string {
 
 // The pill's visible text, with the surrounding markup stripped — what a reader
 // actually sees where the id was written.
-// A pull request's or commit's change segment (its track and word, last in the pill) is checked on its own; the label is the name.
-const withoutPrState = (html: string) => html.replace(/<span class="chg-seg"[\s\S]*?(?=<\/a>)/g, "");
+// A pull request's state segment is checked on its own (data-pr-state); the label is the name.
+const withoutPrState = (html: string) => html.replace(/<span data-pr-state="[^"]*"[^>]*>[^<]*<\/span>/g, "");
 
 function pillText(html: string): string {
   const m = withoutPrState(html).match(/<a [^>]*class="not-prose[^"]*"[^>]*>.*?<span[^>]*>([^<]*)<\/span><\/a>/);
@@ -654,9 +654,7 @@ describe("pull request references", () => {
   test("#N in a repository bound conversation reads as the title once the row is in hand", () => {
     const html = renderIn("codecast-sh/codecast", "landed PR #482 this morning");
     expect(pillText(html)).toBe("#482 Fix the auth race");
-    // An open pull request says where it stands as its change, the track and word the Branches page gives it.
-    expect(html).toMatch(/<span class="chg-seg" data-tone="muted" data-change-segment="check">/);
-    expect(html).toContain('<span class="chg-word">not checked');
+    expect(html).toContain('data-pr-state="open"');
     expect(html).toContain('href="/pr/codecast-sh/codecast/482"');
   });
 

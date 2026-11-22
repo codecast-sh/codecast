@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { acquireFailureLine } from "./flowAcquire.js";
+import { acquireFailureLine } from "./flowCommand.js";
 
 test("a broken worktree is named with its failed checks and the way to repair it, never as raw JSON", () => {
   const out = JSON.stringify({ name: "change-ct-9", state: "broken", contract: { ok: false, failures: [{ name: "install", reason: "bun install exited 1" }], warnings: [] } });

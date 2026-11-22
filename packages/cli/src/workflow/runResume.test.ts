@@ -433,26 +433,23 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     merge -> exit
   }`);
 
-  test("a run whose row stands at a fanout branch resumes at the fanout, keeping what finished and waiting on the branch's hand", () => {
+  test("a run whose row stands at a fanout branch resumes at the fanout, waiting on the branch's hand", () => {
     const at = { node_statuses: [{ node_id: "start", status: "completed", outcome: "success", completed_at: 1 }, { node_id: "review", status: "running", session_id: "jxreview1" }] };
-    const checkpoint = { run_id: runId, node_id: "checks", started: true, visit_counts: { start: 1, checks: 1 }, completed: ["start"], node_outcomes: { start: "success" as const }, context: { "review.conversation_id": "conv_review_1", "checks.finished": "ci", "ci.json": "{\"green\":true}" }, at: 1000 };
+    const checkpoint = { run_id: runId, node_id: "checks", started: true, visit_counts: { start: 1, checks: 1 }, completed: ["start"], node_outcomes: { start: "success" as const }, context: { "review.conversation_id": "conv_review_1" }, at: 1000 };
     const resumed = resumePoint(fanout(), { status: "running", current_node_id: "review", ...at }, checkpoint)!;
     expect(resumed.node_id).toBe("checks");
     expect(resumed.hands).toEqual({ review: "conv_review_1" });
-    expect(resumed.finished).toEqual(["ci"]);
-    expect(resumed.context["ci.json"]).toBe("{\"green\":true}");
     expect(resumed.visit_counts.checks ?? 0).toBe(0);
     // With no checkpoint on this machine the row alone still puts it at the fanout.
     expect(resumePoint(fanout(), { status: "running", current_node_id: "review", ...at }, null)!.node_id).toBe("checks");
   });
 
-  test("a run killed mid-fanout runs only the branch that had not finished, reattached to its live hand, and the join reads them all", async () => {
+  test("a run killed mid-fanout runs every branch again, reattached to the live hand, and the join reads them all", async () => {
     hangOn = "/cli/inbox";
     hangHand = "conv_review_1";
     void runWorkflow(fanout(), options());
     const runDir = lineRunDir(tmpDir, `line-${runId}`);
     await until(() => readCheckpoint(runDir, runId)?.context["review.conversation_id"] === "conv_review_1"
-      && readCheckpoint(runDir, runId)?.context["checks.finished"] === "ci"
       && calls.some((c) => c.route === "/cli/inbox" && c.body.session_ids?.[0] === "conv_review_1"));
     // The branch reported its own node running, but left the run standing at its fanout.
     expect(progress().some((c) => c.body.node_id === "review" && c.body.node_status === "running" && c.body.current_node_id === "checks")).toBe(true);
@@ -465,9 +462,7 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     const outcome = await runWorkflow(fanout(), options({ resume: row({ current_node_id: "review", node_statuses: [{ node_id: "start", status: "completed", outcome: "success", completed_at: 1 }, { node_id: "review", status: "running", session_id: "jxreview1" }] }) }));
     expect(outcome).toBe("completed");
     expect(calls.some((c) => c.route === "/cli/spawn")).toBe(false);
-    // CI finished green before the kill: kept, not run again, and its JSON still routes the join.
-    expect(fs.readFileSync(path.join(runDir, "ci.log"), "utf-8")).toBe("ran\n");
-    expect(progress().some((c) => c.body.node_id === "ci")).toBe(false);
+    expect(progress().some((c) => c.body.node_id === "ci" && c.body.node_status === "completed")).toBe(true);
     expect(progress().some((c) => c.body.node_id === "review" && c.body.node_status === "completed" && c.body.session_id === "jxreview1")).toBe(true);
     expect(fs.readFileSync(path.join(runDir, "route.log"), "utf-8")).toBe("merged\n");
   }, 30000);

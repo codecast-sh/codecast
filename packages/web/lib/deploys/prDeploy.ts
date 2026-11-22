@@ -4,7 +4,7 @@
 // places it will go once it merges. Pure: no store, no React.
 import { DORMANT_TARGET_MS, type DeployReach, type ReachDeployRef, type ReachState, type TargetReach } from "@codecast/shared/contracts/deployReach";
 import { commitTouchesTarget, type CommitCiState } from "@codecast/shared/contracts/deployTargets";
-import { REACH_LOOK, deployAgo } from "./deployPill";
+import { REACH_LOOK } from "./deployPill";
 import { deploysOf, targetNow, type DeployTargetRow, type TeamDeployRow } from "./targets";
 
 /** One target a merged pull request goes to: its reach, and what a reader can do about it there. */
@@ -150,63 +150,4 @@ export function prShipsTo(
     .filter((t) => !(someNamePaths && t.paths.length === 0) && commitTouchesTarget(t.paths, files))
     .map((target) => ({ target, idle: idleByHistory(target, deploys, now) }))
     .sort((a, b) => Number(a.idle) - Number(b.idle) || a.target.name.localeCompare(b.target.name));
-}
-
-/** A deploy as a row names it: its short sha, else its dp-N. */
-export const deployLabel = (d: { sha?: string | null; short_id: string }) => (d.sha ? d.sha.slice(0, 7) : d.short_id);
-
-export const CI_WORDS: Record<Exclude<CommitCiState, "none">, string> = { passed: "CI passed", failed: "CI failed", running: "CI running" };
-
-/**
- * One piece of what a row says after its state, in order. Each surface draws them its own way (a deploy is a link on
- * web, a sha in the line on the phone), but the words and their order are these, on both.
- */
-export type PrRowPart =
-  | { key: string; kind: "text"; text: string; tone?: "dim" | "strong" }
-  | { key: string; kind: "deploy"; before: string; deploy: ReachDeployRef; after?: string; tone?: "dim" }
-  | { key: string; kind: "ci"; ci: Exclude<CommitCiState, "none">; url: string | null };
-
-const forOf = (from: number, to: number) => deployAgo(from, to).replace(/ ago$/, "");
-
-/** What a row says after its state: the deploy and when, how long it has waited, what waits with it, what is live instead. */
-export function prRowParts(row: PrDeployRow, now: number, mergedAt: number | null): PrRowPart[] {
-  const d = row.deploy;
-  const parts: PrRowPart[] = [];
-  const inDeploy = (verb: string) => {
-    if (!d) return;
-    parts.push({ key: "d", kind: "deploy", before: "in ", deploy: d });
-    parts.push({ key: "t", kind: "text", text: `${verb} ${deployAgo(d.at, now)}` });
-  };
-  switch (row.state) {
-    case "live":
-      inDeploy("went live");
-      if (d && mergedAt && d.at > mergedAt) parts.push({ key: "lag", kind: "text", text: `${forOf(mergedAt, d.at)} after merge`, tone: "dim" });
-      break;
-    case "going_out": inDeploy("started"); break;
-    case "queued": inDeploy("asked for"); break;
-    case "failed": inDeploy("failed"); break;
-    case "rolled_back":
-      if (d) parts.push({ key: "w", kind: "deploy", before: "was live in ", deploy: d });
-      if (row.now) parts.push({ key: "n", kind: "deploy", before: "rolled back to ", deploy: row.now, after: ` ${deployAgo(row.now.at, now)}` });
-      break;
-    case "waiting":
-      if (mergedAt) parts.push({ key: "w", kind: "text", text: `waiting ${forOf(mergedAt, now)}`, tone: "strong" });
-      break;
-  }
-  if (row.queue) {
-    const { others: o, atLeast } = row.queue;
-    const plus = atLeast ? "+" : "";
-    const text = o == null ? "with older commits" : o === 0 && !plus ? "the only commit waiting" : `with ${o}${plus} other ${o === 1 && !plus ? "commit" : "commits"}`;
-    parts.push({ key: "q", kind: "text", text });
-    if (row.queue.ci !== "none") parts.push({ key: "ci", kind: "ci", ci: row.queue.ci, url: row.queue.ciUrl });
-  }
-  if ((row.state === "waiting" || row.state === "failed") && row.now) parts.push({ key: "now", kind: "deploy", before: "live now ", deploy: row.now, tone: "dim" });
-  return parts;
-}
-
-/** The parts as one line of plain words, for a surface that draws no links (the phone). */
-export function prRowLine(parts: ReadonlyArray<PrRowPart>): string {
-  return parts
-    .map((p) => (p.kind === "text" ? p.text : p.kind === "ci" ? CI_WORDS[p.ci] : `${p.before}${deployLabel(p.deploy)}${p.after ?? ""}`))
-    .join(" · ");
 }

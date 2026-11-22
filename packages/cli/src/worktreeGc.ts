@@ -382,11 +382,6 @@ async function removeWorktree(repoRoot: string, name: string, worktreePath: stri
  * session's transcript directory names each one
  * (`<session>/subagents/agent-<id>.jsonl`). Each goes under the content rule,
  * when no process sits in it and no other session acquired it. Its branch stays.
- *
- * The tree `cwd` sits in is the session's own and is left to
- * releaseSessionWorktree, which also asks the roster and the live runs. Call
- * this one first: once the own tree is released, `cwd` is gone and the
- * repository can no longer be found from it.
  */
 export async function releaseSessionMadeWorktrees(
   sessionId: string,
@@ -403,11 +398,8 @@ export async function releaseSessionMadeWorktrees(
   const { listStates } = await import("./workspace/contract.js");
   const kept: GcVerdict[] = [];
   const candidates = new Set<string>();
-  const real = (p: string) => { try { return fs.realpathSync(p); } catch { return path.resolve(p); } };
-  const own = real(cwd);
-  const holdsCwd = (tree: string) => { const t = real(tree); return own === t || own.startsWith(`${t}/`); };
   for (const s of listStates(repoRoot)) {
-    if (!s.sessions?.includes(sessionId) || path.resolve(s.path) === path.resolve(repoRoot) || !fs.existsSync(s.path) || holdsCwd(s.path)) continue;
+    if (!s.sessions?.includes(sessionId) || path.resolve(s.path) === path.resolve(repoRoot) || !fs.existsSync(s.path)) continue;
     if (s.sessions.some((other) => other !== sessionId)) kept.push({ action: "kept", name: s.name, path: s.path, reason: "another session acquired it too" });
     else candidates.add(s.path);
   }
