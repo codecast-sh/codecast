@@ -16,6 +16,8 @@ import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 import { IdentityPrefsOverride } from "../../hooks/useIdentityPrefs";
 import { identityPrefsOf } from "../../lib/sessionIdentity";
 import { tabTitle } from "../../lib/tabTitle";
+import { sessionCardTitle } from "../../lib/sessionCard";
+import { pendingAsk } from "../../lib/conversationTitle";
 
 const NOW = Date.UTC(2026, 10, 22, 18, 0);
 const UI = { show_model_badge: true, show_agent_icon: true } as Record<string, unknown>;
@@ -100,5 +102,44 @@ describe("an untitled session with an undelivered first message", () => {
 
   test("the three tabs read three different names", () => {
     expect(new Set(ASKS.map(([id]) => tabText(id))).size).toBe(3);
+  });
+});
+
+// The card's name and the tab's, from one session row and its pending sends.
+const names = (session: Record<string, unknown>, pending: Array<{ role: string; content: string }> = []) => {
+  const id = "jx74d1qsuz7sfpd3iym1q40aa41mihe8";
+  const tab = { id: "t", path: `/inbox?s=${id}`, sessionId: id, title: "", createdAt: 0 } as AppTab;
+  const s = { ...row(id), ...session };
+  return {
+    card: sessionCardTitle(s, pendingAsk(pending)),
+    tab: tabTitle(tab, { [id]: s }, {}, [], "me", undefined, null, { pendingMessages: { [id]: pending } }),
+  };
+};
+
+describe("the message name holds until a real title replaces it", () => {
+  const ask = "Why does the deploy script skip the lockfile check? It used to run it.\nSee CI.";
+
+  test("card and tab cut a multi-sentence ask to the same name", () => {
+    const { card, tab } = names({}, [{ role: "user", content: ask }]);
+    expect(card).toBe("Why does the deploy script skip the lockfile check?");
+    expect(tab).toBe(card);
+  });
+
+  test("once delivered (pending cleared, first_prompt set) the tab keeps the message name, not the id", () => {
+    const { card, tab } = names({ first_prompt: ask });
+    expect(card).toBe("Why does the deploy script skip the lockfile check?");
+    expect(tab).toBe(card);
+  });
+
+  test("a real title replaces the message name on card and tab", () => {
+    const { card, tab } = names({ title: "Lockfile check in deploy", first_prompt: ask }, [{ role: "user", content: ask }]);
+    expect(card).toBe("Lockfile check in deploy");
+    expect(tab).toBe("Lockfile check in deploy");
+  });
+
+  test("with nothing written, the card says Untitled and the tab the short id", () => {
+    const { card, tab } = names({});
+    expect(card).toBe("Untitled");
+    expect(tab).toBe("jx74d1q");
   });
 });
