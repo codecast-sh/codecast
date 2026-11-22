@@ -75,7 +75,18 @@ function prWorld(checkedOut = true) {
     git(seed, "push", "-qf", origin, "fix");
     return git(origin, "rev-parse", "fix");
   };
-  return { root, origin, worktree: checkedOut ? worktree : null, runDir, first, push, forcePush };
+  // The session rebased the branch onto a main that moved, and force-pushed it: every change it had is still there.
+  const rebasePush = () => {
+    git(seed, "checkout", "-q", "main");
+    write(seed, "b.ts", "export const b = 1;\n");
+    git(seed, "add", "b.ts");
+    git(seed, "commit", "-qm", "main moved");
+    git(seed, "checkout", "-q", "fix");
+    git(seed, "rebase", "-q", "main");
+    git(seed, "push", "-qf", origin, "main", "fix");
+    return git(origin, "rev-parse", "fix");
+  };
+  return { root, origin, worktree: checkedOut ? worktree : null, runDir, first, push, forcePush, rebasePush };
 }
 
 describe("a pull request's change is frozen again from what its session pushed", () => {
@@ -135,6 +146,30 @@ describe("a pull request's change is frozen again from what its session pushed",
     const local = git(root, "commit-tree", `${git(root, "rev-parse", "fix")}^{tree}`, "-p", "fix", "-m", "unpushed local work");
     git(root, "update-ref", "refs/heads/fix", local);
     await expect(refreezeSessionChange(root, runDir, null)).rejects.toThrow(/branch fix has commits here the pushed branch lacks \(\w+ unpushed local work\)/);
+    expect(git(root, "rev-parse", "fix")).toBe(local);
+  }, 180_000);
+
+  test("a rebase force-pushed over the branch moves it: the tip carries every change it had", async () => {
+    const { root, origin, runDir, first, rebasePush } = prWorld(false);
+    const pushed = rebasePush();
+    // Not a fast-forward: the old commits are not under the new tip.
+    expect(() => git(origin, "merge-base", "--is-ancestor", first, pushed)).toThrow();
+    const { change } = await refreezeSessionChange(root, runDir, null);
+    expect(change.tip).toBe(pushed);
+    expect(git(root, "rev-parse", "fix")).toBe(pushed);
+  }, 180_000);
+
+  test("a rebase force-pushed over local-only work still refuses, naming only that work", async () => {
+    const { root, runDir, rebasePush } = prWorld(false);
+    rebasePush();
+    git(root, "checkout", "-q", "fix");
+    write(root, "c.ts", "export const c = 1;\n");
+    git(root, "add", "c.ts");
+    git(root, "commit", "-qm", "unpushed local work");
+    git(root, "checkout", "-q", "main");
+    const local = git(root, "rev-parse", "fix");
+    const refused = refreezeSessionChange(root, runDir, null);
+    await expect(refused).rejects.toThrow(/lacks \(\w+ unpushed local work\)/);
     expect(git(root, "rev-parse", "fix")).toBe(local);
   }, 180_000);
 
