@@ -76,18 +76,20 @@ export async function freezeSessionChange(root: string, session: string, opts: {
 }
 
 /**
- * Where a named branch stands now. The session fixing it may be on another machine (a run started over ssh), where
- * its commit reaches this checkout only through origin, so the branch is fetched too and origin's tip is taken when
- * it is ahead of this checkout's.
+ * Where a named branch stands now, against `change.tip`, the tip the run last froze. The session fixing it may be on
+ * another machine (a run started over ssh), where its commit reaches this checkout only through origin, so the branch
+ * is fetched too. The run's worktree holds no work of its own, so whichever side moved off the frozen tip holds the
+ * fix: this checkout's first, else origin's, rebased or force-pushed included, unless origin only lags the frozen tip.
  */
 async function branchTip(root: string, change: FrozenChange): Promise<string> {
   const remoteRef = `refs/remotes/origin/${change.branch}`;
   await git(root, ["fetch", "--quiet", "origin", `+${change.branch}:${remoteRef}`]).catch(() => "");
   const read = (ref: string) => git(root, ["rev-parse", "--verify", "--quiet", ref]).catch(() => "");
   const [local, remote] = await Promise.all([read(`refs/heads/${change.branch}`), read(remoteRef)]);
-  if (!local || !remote || local === remote) return local || remote;
-  const behind = await git(root, ["merge-base", "--is-ancestor", local, remote]).then(() => true, () => false);
-  return behind ? remote : local;
+  if (local && local !== change.tip) return local;
+  if (!remote || remote === change.tip) return local || remote;
+  const lags = await git(root, ["merge-base", "--is-ancestor", remote, change.tip]).then(() => true, () => false);
+  return lags ? local : remote;
 }
 
 /**

@@ -201,5 +201,22 @@ describe("a named branch's fix comes back to the run", () => {
     const local = git(worktree, "rev-parse", "HEAD");
     const home = await refreezeSessionChange(here, runDir, worktree);
     expect(home.change.tip).toBe(local);
+
+    // Origin still holds the earlier fix, behind what the run froze: nothing moved.
+    const still = await refreezeSessionChange(here, runDir, worktree);
+    expect(still.moved).toBe(false);
+    expect(still.change.tip).toBe(local);
+
+    // The conflict fix: rebuilt there on an older base and force-pushed, so it descends from nothing the run holds.
+    git(there, "fetch", "--quiet", "origin");
+    git(there, "reset", "--quiet", "--hard", base);
+    write(there, "a.txt", "rebased there\n");
+    git(there, "commit", "--quiet", "-am", "fix rebased there");
+    git(there, "push", "--quiet", "--force", "origin", "feat");
+    const rebased = git(there, "rev-parse", "HEAD");
+    const forced = await refreezeSessionChange(here, runDir, worktree);
+    expect(forced.moved).toBe(true);
+    expect(forced.change.tip).toBe(rebased);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(rebased);
   });
 });
