@@ -1,6 +1,7 @@
 import { withInboxView } from "../../lib/inboxViewHistory";
-import { useState, useCallback, useRef, memo, useMemo, useDeferredValue, lazy, Suspense, type ReactNode } from "react";
+import { useState, useCallback, useRef, memo, useMemo, lazy, Suspense, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
+import { useBoundedDeferredValue } from "../../hooks/useBoundedDeferredValue";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useEventListener } from "../../hooks/useEventListener";
 import { useMissingSessionLookup } from "../../hooks/useMissingSessionRow";
@@ -42,6 +43,7 @@ import { standingRoleIdOf } from "../../lib/sessionIdentity";
 import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVisit";
 import { requestSessionRestart } from "../../lib/sessionCommands";
 import { SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
+import { windowOrgTree } from "../../store/orgSlice";
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
 // the inbox loads it only when a seat is opened. The dynamic import also keeps
@@ -75,8 +77,11 @@ export const InboxConversation = memo(function InboxConversation({ sessionId: li
   // highlight still moves instantly off the live id. Renaming the prop to
   // liveSessionId means every existing reference below reads the deferred value,
   // so the whole pane (body + banners + resume target) stays self-consistent and
-  // swaps atomically when the next conversation is ready.
-  const sessionId = useDeferredValue(liveSessionId);
+  // swaps atomically when the next conversation is ready. Bounded: a session
+  // streaming on screen re-renders this pane on every message, and each of
+  // those renders restarts the deferred mount, so a plain useDeferredValue
+  // never lands and the pane stays on the old conversation.
+  const sessionId = useBoundedDeferredValue(liveSessionId);
   const {
     conversation,
     hasMoreAbove,
@@ -336,7 +341,7 @@ export function SessionPage(props: InboxConversationProps) {
   // A seat whose role the tree does not hold (one the viewer cannot read, or a
   // cold cache still filling) stays a plain session rather than a page that
   // says it cannot find the role.
-  const roleKnown = useInboxStore((s) => !!roleId && !!s.orgTree?.roles.some((r) => r._id === roleId));
+  const roleKnown = useInboxStore((s) => !!roleId && !!windowOrgTree(s)?.roles.some((r) => r._id === roleId));
   const ask = useSessionViewAsk(sessionId);
   const [visit, setVisit] = useState(() => ({ sessionId, plain: ask != null, ask }));
   // A new session, or a new ask for the one on screen: this visit's answer.
@@ -408,7 +413,12 @@ export function QueuePageClient() {
   // Which surface the inbox home shows: the fleet board (default) or the
   // chronological feed. Persisted per-user (stamped LWW).
   const inboxHome = useInboxStore((s) => resolveInboxHome(s.clientState.ui));
-  const sortedSessions = useMemo(() => sortSessions(sessions), [sessions]);
+  // Sorted once per structural change (the same signature this component
+  // wakes on): sorting every row classifies each one, and the sessions
+  // object is new on every heartbeat, so any other re-render re-sorted all.
+  const sessionsSig = sessionsWakeSig(sessions);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const sortedSessions = useMemo(() => sortSessions(sessions), [sessionsSig]);
 
 
   const isPopstateRef = useRef(false);
