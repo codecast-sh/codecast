@@ -116,12 +116,13 @@ hold.
 
 One checkout runs one such pass at a time. The pass that holds it is written
 to `.git/codecast/checkout-run.json` (`checkoutRunHold.ts`): the starting
-`cast flow run`'s pid until its run exists, then the run's id. A second `cast
-flow run --checkout`, or `cast ship checkout` with `flow` set, is refused
-before it freezes anything while that run is pending, running or paused,
-naming it. A hold whose starter died, or is still starting after five
-minutes (its pid may be another process's now), or whose run ended is stale
-and taken over, so nothing has to clear it. A stale hold is moved aside and
+`cast flow run`'s pid and start time until its run exists, then the run's id
+(a `--foreground` run holds it by that pid while it runs here, and by its id
+when it stops at a person's gate). A second `cast flow run --checkout`, or
+`cast ship checkout` with `flow` set, is refused before it freezes anything
+while that run is pending, running or paused, naming it. A hold whose starter
+died, or whose pid now belongs to a process that started at another time, or
+whose run ended is stale and taken over, so nothing has to clear it. A stale hold is moved aside and
 read again before it is deleted, so two passes that both judged it stale
 cannot delete each other's fresh hold: one takes the checkout and the other is
 refused.
