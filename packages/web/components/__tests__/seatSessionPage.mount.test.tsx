@@ -45,7 +45,7 @@ const SEAT = "seat0000000000000000000000000000";
 const HAND = "hand0000000000000000000000000000";
 const STRAY = "stray000000000000000000000000000";
 const ROLE = "role-head";
-const env = { qs: "" };
+const env = { qs: "", conv: {} as Record<string, unknown> };
 
 // Only the transports and the heavy leaves are faked; the inbox page, the
 // pane, the switch and the store are real.
@@ -78,7 +78,7 @@ mock.module("../../hooks/useMissingSessionRow", () => ({ useMissingSessionRow: (
 mock.module("../../hooks/useTitlebarHead", () => ({ useTitlebarHead: () => ({ current: null }) }));
 mock.module("../../hooks/useConversationMessages", () => ({
   useConversationMessages: (id: string) => ({
-    conversation: { _id: id, messages: [], is_own: true, updated_at: Date.now() },
+    conversation: { _id: id, messages: [], is_own: true, updated_at: Date.now(), ...env.conv },
     hasMoreAbove: false, hasMoreBelow: false, isLoadingOlder: false, isLoadingNewer: false,
     loadOlder: () => {}, loadNewer: () => {}, jumpToStart: () => {}, jumpToEnd: () => {}, jumpToTimestamp: () => {},
     effectiveTargetMessageId: undefined, isJumpingToTarget: false,
@@ -309,6 +309,23 @@ test("a stall replaces the state word at rest; the banner waits behind the expan
   await click("[data-seat-head-toggle]");
   expect(q("[data-seat-head]")?.hasAttribute("data-seat-stall")).toBe(false);
   expect(q("[data-error-banner]")).not.toBeNull();
+}, 600_000);
+
+// ct-91098 / eg-2899: the stall's Resume is the resumeSession command, which
+// only the runner and the assigned owner may send (commandsSession).
+test("the stall offers Resume to the runner and the assigned owner, and to no other viewer", async () => {
+  const offered: Record<string, boolean> = {};
+  for (const viewer of ["runner", "owner", "teammate"]) {
+    env.conv = { user_id: "runner", owner_user_id: "owner" };
+    await mount("", { [SEAT]: row(SEAT, { standing_role_id: ROLE, role: roleSnapshot, session_error: "the agent died" }) });
+    await go((s) => { useInboxStore.setState({ currentUser: { ...(s.currentUser as any), _id: viewer } as any }); });
+    await open(HAND);
+    await open(SEAT);
+    expect(q("[data-seat-stall]")?.textContent).toContain("Session error");
+    offered[viewer] = q("[data-seat-stall-action]") !== null;
+  }
+  env.conv = {};
+  expect(offered).toEqual({ runner: true, owner: true, teammate: false });
 }, 600_000);
 
 // The fold is CSS over the real header, so no action is rebuilt and none can
