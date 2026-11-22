@@ -2,8 +2,10 @@
 // A leaf, so every module that moves a decision between people imports it
 // without closing a cycle through sessionDecisions.ts.
 import type { Id } from "../_generated/dataModel";
+import { announceDecisionWaiting } from "./decisionPush";
+import { settleDecisionWaiting } from "./decisionRing";
 
-type Ctx = { db: any };
+type Ctx = { db: any; scheduler?: any };
 
 // Keep decision_inbox in lockstep with asked_user_ids: insert missing pending
 // rows, delete rows for people who are no longer in the set. Deleting is
@@ -11,12 +13,16 @@ type Ctx = { db: any };
 // listForUserCore, so marking it done would leave the card on their stack.
 // `queue: false` (a role hears the decision, routeFor) inserts nothing: a
 // row already in front of a person stays there, and no new one is made.
+// Each person a new row is made for hears it on their phone
+// (lib/decisionPush.ts); `announce: false` is for a caller that sends its own
+// notice (a pass, an escalation, a share-out by area).
 export async function syncDecisionInbox(
   ctx: Ctx,
   decisionId: Id<"session_decisions">,
   people: Id<"users">[],
   now: number,
   queue = true,
+  opts: { announce?: boolean } = {},
 ): Promise<void> {
   const wanted = new Set(people.map(String));
   const existing = await ctx.db
@@ -24,6 +30,7 @@ export async function syncDecisionInbox(
     .withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId))
     .collect();
   const have = new Set<string>();
+  const removed: string[] = [];
   for (const row of existing) {
     const key = String(row.user_id);
     if (wanted.has(key)) {
@@ -31,10 +38,19 @@ export async function syncDecisionInbox(
       if (row.status !== "pending") await ctx.db.patch(row._id, { status: "pending" });
     } else {
       await ctx.db.delete(row._id);
+      removed.push(key);
     }
   }
+  // Handed to someone else: the people it left stop being told it waits on them.
+  if (removed.length) {
+    const decision = await ctx.db.get(decisionId);
+    if (decision) await settleDecisionWaiting(ctx, decision.conversation_id, removed);
+  }
+  const added: Id<"users">[] = [];
   for (const userId of queue ? people : []) {
     if (have.has(String(userId))) continue;
     await ctx.db.insert("decision_inbox", { decision_id: decisionId, user_id: userId, status: "pending", created_at: now });
+    added.push(userId);
   }
+  if (opts.announce !== false) await announceDecisionWaiting(ctx, decisionId, added, now);
 }
