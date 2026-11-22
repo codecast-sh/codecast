@@ -5,7 +5,7 @@ import { publish } from "./deployTargets";
 import { stampMainOrder } from "./deployTargetsCi";
 import { correctDeploySha } from "./deployTargets";
 import { recordDeployMarker } from "./deploys";
-import { get } from "./deployReach";
+import { get, many } from "./deployReach";
 
 // How far a merged pull request or a commit on main has gone toward
 // production (deploys.md DP16), read end to end from the tables. Synthetic data only.
@@ -70,9 +70,10 @@ async function world() {
   t.pull_requests.push({ _id: "pr_13", team_id: TEAM, github_pr_id: 100, repository: REPO, number: 13, title: "Open", body: "", state: "open", author_github_username: "ana", linked_session_ids: [], created_at: NOW, updated_at: NOW });
   const as = (user: string) => ({ ...ctx, auth: { getUserIdentity: async () => ({ subject: `${user}|sess` }) } });
   const reach = (ref: string, user = ME) => (get as any)._handler(as(user), { ref });
+  const reachMany = (refs: string[], user = ME) => (many as any)._handler(as(user), { refs });
   const mark = (target: string, n: number, status: "live" | "running" | "failed" = "live", at = NOW) =>
     recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target, sha: sha(n), repository: REPO, source: "m", status, at });
-  return { t, ctx, reach, mark };
+  return { t, ctx, reach, reachMany, mark };
 }
 
 describe("a merged pull request's reach", () => {
@@ -159,6 +160,27 @@ describe("a commit's reach", () => {
   });
 });
 
+describe("a landed run's commit, by its full sha alone", () => {
+  test("reads from the repository main ordered it in, alone or a few at once; a branch commit, a short sha or a stranger gets nothing", async () => {
+    const w = await world();
+    await w.mark("web", 1, "live", NOW - 9_000);
+    const one = await w.reach(sha(4));
+    expect(one).toMatchObject({ _id: sha(4), ref: sha(4), state: "waiting", sha: sha(4) });
+    expect(one.targets.map((x: any) => [x.target, x.state, x.now?.short_id ? "now" : null])).toEqual([["web", "waiting", "now"]]);
+    expect(await w.reach(sha(7))).toBeNull();
+    expect(await w.reach(sha(4).slice(0, 12))).toBeNull();
+    expect(await w.reach(sha(4), STRANGER)).toBeNull();
+    const rows = await w.reachMany([sha(4), sha(3), sha(7), "not-a-sha"]);
+    expect(rows.map((r: any) => [r._id, r.state])).toEqual([[sha(4), "waiting"], [sha(3), "waiting"]]);
+  });
+});
+
+test("a full sha on main in two repositories reads from the one with targets", async () => {
+  const w = await world();
+  // The same commit mirrored into a fork with no targets, listed first.
+  w.t.commits.unshift({ ...w.t.commits.find((c: any) => c.sha === sha(4)), _id: "commit_fork", repository: "fork/app", team_id: TEAM });
+  const r = await w.reach(sha(4));
+  expect(r?.targets.map((x: any) => x.target)).toEqual(["web"]);
 test("a deploy's corrected sha moves its place on main: commits after it are no longer live", async () => {
   const w = await world();
   await w.mark("web", 4, "live", NOW - 4_000);

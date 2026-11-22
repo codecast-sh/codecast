@@ -10,10 +10,10 @@ import { stableRefId } from "../store/wakeSig";
 import { isViewersWorkflow } from "../store/lineWorkflowSlice";
 import { useFeederWorkspace } from "./useWorkspaceArgs";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
-import { appPool, takesSessionChange } from "../lib/line/flowPool";
-import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
+import { appPool } from "../lib/line/flowPool";
+import { sourceTakesSessionChange, takesSessionChange } from "@codecast/shared/contracts/flowPool";
 
-const graphTakesBranch = (w: { source?: string | null }) => flowGraphAttr(w?.source, "kind") === "line" && /\bbranch\b/.test(flowGraphAttr(w?.source, "takes") ?? "");
+const graphTakesBranch = (w: { source?: string | null }) => sourceTakesSessionChange(w?.source);
 
 const api = _api as any;
 
@@ -208,15 +208,20 @@ export function useSessionFlowRuns(conversationId: string | null | undefined): a
   // the viewer's own flows and those published to the workspace.
   const { workflows: own } = useWorkflows();
   const published = useWorkspaceCollection<any>("workflows", workflowSig);
-  const teamFlows = useMemo(() => {
-    const out: string[] = [];
-    for (const w of [...own, ...published]) if (graphTakesBranch(w)) out.push(w.slug, w.name);
-    return out.sort().join("|");
+  const [teamFlows, otherFlows] = useMemo(() => {
+    const takes: string[] = [];
+    const not: string[] = [];
+    for (const w of [...own, ...published]) (graphTakesBranch(w) ? takes : not).push(w.slug, w.name);
+    return [takes.sort().join("|"), not.sort().join("|")];
   }, [own, published]);
   const where = useMemo(() => {
     const ok = new Set([...SHIPPED_SESSION_FLOWS, ...teamFlows.split("|").filter(Boolean)]);
-    return (r: any) => !!conversationId && String(r.spawner_conversation_id ?? "") === conversationId && r.run_kind !== "workflow" && (ok.has(r.workflow_slug ?? "") || ok.has(r.workflow_name ?? ""));
-  }, [conversationId, teamFlows]);
+    // A flow this window holds no graph of (a teammate's session wrote it) is judged by the server, which fed the run
+    // only because its graph takes the change; a flow known not to take it (a segment, a deploy, the line) never is.
+    const known = new Set([...ok, ...appPool().flatMap((f) => [f.slug, f.name]), ...otherFlows.split("|").filter(Boolean)]);
+    const takes = (name: string) => ok.has(name) || (!!name && !known.has(name));
+    return (r: any) => !!conversationId && String(r.spawner_conversation_id ?? "") === conversationId && r.run_kind !== "workflow" && (takes(r.workflow_slug ?? "") || ok.has(r.workflow_name ?? ""));
+  }, [conversationId, teamFlows, otherFlows]);
   const rows = useWorkflowRuns(where);
   return rows.length || ready ? rows.slice().sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)) : undefined;
 }

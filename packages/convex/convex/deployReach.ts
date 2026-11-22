@@ -17,6 +17,8 @@ import { deployReach, type DeployReach, type ReachChange, type ReachDeploy } fro
 const REACH_DEPLOYS = 20;
 const PR_REF = /^([^/\s#@]+\/[^/\s#@]+)#(\d+)$/;
 const COMMIT_REF = /^([^/\s#@]+\/[^/\s#@]+)@([0-9a-f]{7,40})$/i;
+/** A full sha alone: a run knows the commit it merged but not the repository's name, which the commit's own row carries. */
+const BARE_SHA = /^[0-9a-f]{40}$/i;
 
 /** The deploys of each target the change touches, with a place on main for every one that went out after the live one. */
 async function reachOf(ctx: any, userId: any, repository: string, change: ReachChange, files: string[] | null): Promise<DeployReach | null> {
@@ -85,18 +87,39 @@ export const get = query({
       return reach ? { ...reach, _id: ref, ref } : null;
     }
     const c = COMMIT_REF.exec(ref);
-    if (c) {
-      const repository = normalizeRepository(c[1]!);
-      const prefix = c[2]!.toLowerCase();
-      // Every row of the commit (a session's and the webhook's): readable through any, ordered on main by the one that is.
-      const rows: Doc<"commits">[] = (await ctx.db.query("commits").withIndex("by_sha", (q: any) => q.gte("sha", prefix).lt("sha", `${prefix}~`)).take(20))
-        .filter((r: Doc<"commits">) => r.sha.startsWith(prefix) && (!r.repository || normalizeRepository(r.repository) === repository));
-      const commit = rows.find((r) => r.main_at != null);
-      // A commit main never ordered is on a branch: nothing deploys it.
-      if (!commit || !(await accessibleCommits(ctx, userId, rows)).length) return null;
-      const reach = await reachOf(ctx, userId, repository, { sha: commit.sha, main_at: commit.main_at!, merged_at: commit.main_at! }, commit.files?.map((f) => f.filename) ?? null);
-      return reach ? { ...reach, _id: ref, ref } : null;
-    }
+    if (c) return commitReach(ctx, userId, ref, c[2]!, normalizeRepository(c[1]!));
+    if (BARE_SHA.test(ref)) return commitReach(ctx, userId, ref, ref, null);
     return null;
   },
 });
+
+/** The reach of each of a few full shas (a team's landed runs, for their sessions' inbox cards): one subscription for all. */
+export const many = query({
+  args: { refs: v.array(v.string()) },
+  handler: async (ctx, args): Promise<Array<DeployReach & { _id: string; ref: string }>> => {
+    const userId = await requireUserOrToken(ctx, undefined);
+    // The client asks for at most this many (LANDED_REACH_MAX); a longer ask is cut, and the rest read as unknown.
+    const refs = [...new Set(args.refs.map((r) => r.trim()).filter((r) => BARE_SHA.test(r)))].slice(0, 25);
+    const out = await Promise.all(refs.map((ref) => commitReach(ctx, userId, ref, ref, null)));
+    return out.filter((r): r is DeployReach & { _id: string; ref: string } => !!r);
+  },
+});
+
+/** A main commit's reach, by a sha prefix in a named repository, or by a full sha in whichever repository main ordered it. */
+async function commitReach(ctx: any, userId: any, ref: string, sha: string, repository: string | null): Promise<(DeployReach & { _id: string; ref: string }) | null> {
+  const prefix = sha.toLowerCase();
+  // Every row of the commit (a session's and the webhook's): readable through any, ordered on main by the one that is.
+  const rows: Doc<"commits">[] = (await ctx.db.query("commits").withIndex("by_sha", (q: any) => q.gte("sha", prefix).lt("sha", `${prefix}~`)).take(20))
+    .filter((r: Doc<"commits">) => r.sha.startsWith(prefix) && (!repository || !r.repository || normalizeRepository(r.repository) === repository));
+  // A commit main never ordered is on a branch: nothing deploys it. A full sha alone may sit on main in more than one
+  // repository (a fork beside its upstream): each is tried in turn, through the rows of that repository only.
+  const repos = repository ? [repository] : [...new Set(rows.filter((r) => r.main_at != null && r.repository).map((r) => normalizeRepository(r.repository!)))];
+  for (const repo of repos) {
+    const mine = repository ? rows : rows.filter((r) => r.repository && normalizeRepository(r.repository) === repo);
+    const commit = mine.find((r) => r.main_at != null);
+    if (!commit || !(await accessibleCommits(ctx, userId, mine)).length) continue;
+    const reach = await reachOf(ctx, userId, repo, { sha: commit.sha, main_at: commit.main_at!, merged_at: commit.main_at! }, commit.files?.map((f) => f.filename) ?? null);
+    if (reach) return { ...reach, _id: ref, ref };
+  }
+  return null;
+}
