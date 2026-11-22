@@ -454,6 +454,7 @@ import type * as lib_roleIconValidator from "../lib/roleIconValidator.js";
 import type * as lib_roleInitiatives from "../lib/roleInitiatives.js";
 import type * as lib_rowByRef from "../lib/rowByRef.js";
 import type * as lib_runAgentSessions from "../lib/runAgentSessions.js";
+import type * as lib_runDevicePlace from "../lib/runDevicePlace.js";
 import type * as lib_runLog from "../lib/runLog.js";
 import type * as lib_runnerDevice from "../lib/runnerDevice.js";
 import type * as lib_sanitize from "../lib/sanitize.js";
@@ -1276,6 +1277,7 @@ declare const fullApi: ApiFromModules<{
   "lib/roleInitiatives": typeof lib_roleInitiatives;
   "lib/rowByRef": typeof lib_rowByRef;
   "lib/runAgentSessions": typeof lib_runAgentSessions;
+  "lib/runDevicePlace": typeof lib_runDevicePlace;
   "lib/runLog": typeof lib_runLog;
   "lib/runnerDevice": typeof lib_runnerDevice;
   "lib/sanitize": typeof lib_sanitize;

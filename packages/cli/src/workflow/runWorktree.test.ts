@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseWorkflowSource } from "./parser.js";
 import { lineRunDir, runWorkflow } from "./runner.js";
-import { restoreRunWorktree } from "./runWorktree.js";
+import { restoreRunWorktree, stopRunBrowser } from "./runWorktree.js";
 
 // Real git: what matters is git's own refusal to check out a branch whose
 // removed worktree it still lists, and that the branch's commits come back.
@@ -102,6 +102,62 @@ describe("a resumed run's worktree", () => {
     }
     expect(fs.readFileSync(path.join(lineRunDir(repoRoot, name), "shipped.txt"), "utf8").trim()).toBe("the approved change");
   }, 30000);
+
+  // ct-98941: a station that starts its workspace's Chrome (`cast ws browser`) leaves none running for the
+  // stations after it, so a run parked at a gate, on CI or at Go live holds no browser.
+  test("a browser a station starts is stopped when that station ends, and none is left when the run ends", async () => {
+    const name = "line-ct-9";
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".codecast", "workspace.toml"), "[browser]\nenabled = true\n\n[browser.cdp_port]\nbase = 38900\nrange = 100\n");
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "manifest");
+    const { acquireWorkspace } = await import("../workspace/lifecycle.js");
+    await acquireWorkspace(repoRoot, name, { branch: `codecast/${name}`, skipSetup: true, skipHooks: true, skipPool: true });
+    // A stand-in Chrome: binds its CDP port and sleeps.
+    const fake = path.join(repoRoot, "fake-chrome");
+    fs.writeFileSync(fake, `#!${process.execPath}\nconst port = Number(process.argv.find((a) => a.startsWith("--remote-debugging-port="))!.split("=")[1]);\nBun.listen({ hostname: "127.0.0.1", port, socket: { data() {} } });\nsetInterval(() => {}, 1 << 30);\n`, { mode: 0o755 });
+    // What `cast ws browser <name>` does, run by the station itself.
+    const starter = path.join(repoRoot, "start-browser.ts");
+    fs.writeFileSync(starter, `import { startWorkspaceBrowser } from ${JSON.stringify(path.join(import.meta.dir, "..", "workspace", "lifecycle.ts"))};\nconst c = await startWorkspaceBrowser(process.argv[2], process.argv[3]);\nawait Bun.write(process.argv[4], String(c.pid));\nprocess.exit(0);\n`);
+    const graph = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      build [label="Build", backend=session, agent=claude, prompt="build it", isolated=true]
+      browse [shape=parallelogram, script="mkdir -p $run_dir && ${process.execPath} ${starter} ${repoRoot} $worktree $run_dir/pid"]
+      after [shape=parallelogram, script="kill -0 $(cat $run_dir/pid) 2>/dev/null && echo alive > $run_dir/after.txt || echo gone > $run_dir/after.txt"]
+      exit [shape=Msquare]
+      start -> build -> browse -> after -> exit
+    }`);
+    const savedChromium = process.env.CODECAST_CHROMIUM;
+    process.env.CODECAST_CHROMIUM = fake;
+    const fetched = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as unknown as typeof fetch;
+    const log = console.log;
+    console.log = () => {};
+    try {
+      const done = (node_id: string, completed_at: number) => ({ node_id, status: "completed", completed_at });
+      const outcome = await runWorkflow(graph, {
+        cwd: repoRoot, runId: "run-1", runSession: "conv_run", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1,
+        resume: { status: "running", current_node_id: "browse", node_statuses: [done("start", 1), done("build", 2)] },
+      } as any);
+      expect(outcome).toBe("completed");
+    } finally {
+      globalThis.fetch = fetched;
+      console.log = log;
+      if (savedChromium === undefined) delete process.env.CODECAST_CHROMIUM; else process.env.CODECAST_CHROMIUM = savedChromium;
+    }
+    const pid = Number(fs.readFileSync(path.join(lineRunDir(repoRoot, name), "pid"), "utf8"));
+    expect(pid).toBeGreaterThan(0);
+    expect(fs.readFileSync(path.join(lineRunDir(repoRoot, name), "after.txt"), "utf8").trim()).toBe("gone");
+    const { readState } = await import("../workspace/contract.js");
+    expect(readState(repoRoot, name)?.chrome).toBeUndefined();
+    expect(readState(repoRoot, name)?.env.CDP_PORT).toBeUndefined();
+  }, 30000);
+
+  test("a run whose worktree has no browser stops nothing", async () => {
+    expect(await stopRunBrowser(repoRoot, { worktree: NAME })).toBe(false);
+    expect(await stopRunBrowser(repoRoot, {})).toBe(false);
+    expect(await stopRunBrowser(os.tmpdir(), { worktree: NAME })).toBe(false);
+  });
 
   test("with no branch left there is nothing to put back, and no checkout is made from main", async () => {
     fs.rmSync(tree(), { recursive: true, force: true });
