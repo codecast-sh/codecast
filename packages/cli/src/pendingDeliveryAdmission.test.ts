@@ -62,9 +62,13 @@ describe("the daemon's delivery", () => {
     const { functionBlock } = await import("./test-helpers/sourceRegion");
     const deliver = functionBlock(fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8"), "deliverMessageIntoSession").text;
     expect(deliver).toContain("createDeliveryAdmission(syncService, messageId, conversationId, () => injectedMessageTs.has(messageId))");
-    // Every injection path admits before it marks and pastes.
+    // Every injection path asks through the same admission, so a cancel that
+    // lands between the claim and that path's paste stops it.
+    for (const step of ["admit_first", "admit_app_server", "admit_sdk", "admit_claude_cloud", "admit_started", "admit_live", "admit_proc"]) {
+      expect(deliver).toContain(`deliveryStep(messageId, "${step}", admit)`);
+    }
+    expect([...deliver.matchAll(/deliveryStep\(messageId, "admit_[a-z_]+", (\w+)\)/g)].map(m => m[1]).every(fn => fn === "admit")).toBe(true);
     const live = deliver.indexOf('deliveryStep(messageId, "admit_live", admit)');
-    expect(live).toBeGreaterThan(-1);
     expect(deliver.indexOf("markInjectedBestEffort(", live)).toBeGreaterThan(live);
   });
 });

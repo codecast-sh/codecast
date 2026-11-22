@@ -171,13 +171,13 @@ async function rependPendingMessage(
 export async function patchPendingMessageStatus(
   ctx: { db: any },
   message: { _id: Id<"pending_messages">; conversation_id: Id<"conversations">; status: string; delivery_disposition_reason?: string },
-  patch: { status: PendingStatus; delivered_at?: number; paste_verified_at?: number }
+  patch: { status: PendingStatus; delivered_at?: number; paste_verified_at?: number; delivery_disposition_reason?: string }
 ): Promise<boolean> {
   if (isFencedPendingMessage(message)) return false;
   if (isTerminalPendingStatus(message.status)) return false;
   // Leaving the unconfirmed state (a late echo, a cancel) drops the reason with it.
   const leavesUnconfirmed = isUnconfirmedRow(message) && patch.status !== "failed";
-  await ctx.db.patch(message._id, leavesUnconfirmed ? { ...patch, delivery_disposition_reason: undefined } : patch);
+  await ctx.db.patch(message._id, leavesUnconfirmed ? { delivery_disposition_reason: undefined, ...patch } : patch);
   if (patch.status === "delivered") await clearPaneRefused(ctx, message.conversation_id);
   if (patch.status === "delivered" || patch.status === "cancelled") {
     await clearHasPendingIfQuiet(ctx, message.conversation_id);
@@ -1234,9 +1234,25 @@ function sendStatusOf(row: any): string {
   return row.status;
 }
 
-/** A cancelled row the agent may still hold: its paste was accepted (paste_verified_at, kept through the cancel), or its fenced delivery was abandoned as ambiguous. */
-function cancelledMayHaveReached(row: { status: string; merged_into?: unknown; paste_verified_at?: number; delivery_status?: string }): boolean {
-  return row.status === "cancelled" && !row.merged_into && (!!row.paste_verified_at || /ambiguous/.test(row.delivery_status ?? ""));
+/** A cancelled row the agent may still hold: its paste was accepted (paste_verified_at, kept through the cancel), it was cancelled once handed to the daemon (CANCELLED_AFTER_HANDOVER_REASON), or its fenced delivery was abandoned as ambiguous. */
+function cancelledMayHaveReached(row: { status: string; merged_into?: unknown; paste_verified_at?: number; delivery_status?: string; delivery_disposition_reason?: string }): boolean {
+  return row.status === "cancelled" && !row.merged_into && (
+    !!row.paste_verified_at
+    || row.delivery_disposition_reason === CANCELLED_AFTER_HANDOVER_REASON
+    || /ambiguous/.test(row.delivery_status ?? "")
+  );
+}
+
+// Stamped on a row cancelled while "injected" or unconfirmed: the daemon had
+// already taken it to paste, so the agent may hold it even though the row
+// stopped. The stamp is what keeps every later read saying "unconfirmed" when
+// the paste was never verified (an injected row is marked before its paste).
+const CANCELLED_AFTER_HANDOVER_REASON = "cancelled_after_handover";
+
+// Stops a row the agent may already hold. "cancelled" is terminal, so neither
+// the stale-injected healer nor the dead-session reviver re-pends it.
+async function cancelHandedOverRow(ctx: { db: any }, message: any): Promise<boolean> {
+  return patchPendingMessageStatus(ctx, message, { status: "cancelled" as const, delivery_disposition_reason: CANCELLED_AFTER_HANDOVER_REASON });
 }
 
 export const sendStatus = query({
@@ -1377,15 +1393,13 @@ export async function cancelPendingMessageForUser(
     await clearHasPendingIfQuiet(ctx, message.conversation_id);
     return "cancelled";
   }
-  // Pasted into the session: the agent may already hold the text, so the row
-  // is left for its echo and the caller is told it was not taken back.
-  if (message.status === "injected") return "injected";
-  // Accepted with no echo: stop it from moving again, but never report it as
-  // withdrawn, because the agent may have read it. Its paste_verified_at stays
-  // on the cancelled row, so every later read still says "unconfirmed".
-  if (isUnconfirmedRow(message)) {
-    await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
-    return "unconfirmed";
+  // Handed to the daemon (injected, possibly not yet pasted) or accepted with
+  // no echo: the agent may already hold the text. The row stops so nothing
+  // sends it again, and the caller is told it was not taken back.
+  if (message.status === "injected" || isUnconfirmedRow(message)) {
+    const answer = message.status === "injected" ? "injected" : "unconfirmed";
+    await cancelHandedOverRow(ctx, message);
+    return answer;
   }
   const updated = await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
   return updated ? "cancelled" : message.status;
@@ -1596,7 +1610,7 @@ export const cancelPendingMessage = mutation({
     // The row stops either way (this is the daemon's give-up path), but a
     // row the agent may hold is not reported as withdrawn.
     const mayHaveReached = message.status === "injected" || isUnconfirmedRow(message);
-    const updated = await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
+    const updated = mayHaveReached ? await cancelHandedOverRow(ctx, message) : await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
     const status = !updated ? (message.status === "cancelled" && cancelledMayHaveReached(message) ? "unconfirmed" : message.status)
       : mayHaveReached ? "unconfirmed" : "cancelled";
 

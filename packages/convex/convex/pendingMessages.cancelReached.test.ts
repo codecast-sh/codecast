@@ -29,13 +29,18 @@ const forUser = (ctx: any) => cancelPendingMessageForUser(ctx, OWNER, "conv" as 
 const legacy = async (ctx: any) => (await (cancelPendingMessage as any)._handler(ctx, { message_id: "msg" })).status;
 
 const INJECTED = { status: "injected", paste_verified_at: 1 };
+// The common case: the daemon marks the row injected before it pastes.
+const INJECTED_UNPASTED = { status: "injected" };
 const UNCONFIRMED = { status: "failed", delivery_disposition_reason: UNCONFIRMED_DELIVERY_REASON, paste_verified_at: 1 };
 
 describe("a person's cancel of a message that may already have reached the agent", () => {
-  test("an injected (pasted) row answers injected and is left for its echo", async () => {
-    const w = world(INJECTED);
-    expect(await forUser(w.ctx)).toBe("injected");
-    expect(w.row().status).toBe("injected");
+  test("an injected row stops, answers injected, and a repeat cancel says unconfirmed", async () => {
+    for (const row of [INJECTED, INJECTED_UNPASTED]) {
+      const w = world(row);
+      expect(await forUser(w.ctx)).toBe("injected");
+      expect(w.row().status).toBe("cancelled");
+      expect(await forUser(w.ctx)).toBe("unconfirmed");
+    }
   });
 
   test("a failed-unconfirmed row stops, answers unconfirmed, and a repeat cancel still says so", async () => {
@@ -58,7 +63,7 @@ describe("a person's cancel of a message that may already have reached the agent
 
 describe("the daemon's give-up cancel (cancelPendingMessage)", () => {
   test("an injected or unconfirmed row stops but answers unconfirmed", async () => {
-    for (const row of [INJECTED, UNCONFIRMED]) {
+    for (const row of [INJECTED, INJECTED_UNPASTED, UNCONFIRMED]) {
       const w = world(row);
       expect(await legacy(w.ctx)).toBe("unconfirmed");
       expect(w.row().status).toBe("cancelled");

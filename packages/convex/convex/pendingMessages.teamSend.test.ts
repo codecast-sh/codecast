@@ -16,6 +16,7 @@ import {
   DEAD_SESSION_REVIVE_WINDOW_MS,
   planDeadSessionRevive,
   sendStatusFor,
+  cancelPendingMessageForUser,
 } from "./pendingMessages";
 
 // ── In-memory Convex-ish DB ──────────────────────────────────────────────────
@@ -1035,5 +1036,26 @@ describe("stuck message pass split into plan and apply", () => {
     await db.patch(tables.pending_messages[0]._id, { status: "undeliverable", retry_count: 10, created_at: now - 600000 });
     await db.patch("msBob", { agent_status: "working", agent_status_updated_at: now - 60000 });
     expect(await planStuckMessageIds(ctx as any, now)).toEqual([]);
+  });
+});
+
+// ct-98180: the daemon marks a row "injected" before it pastes, so a cancel
+// there may or may not have beaten the paste. The cancel must stop the row
+// (no healer pass sends it again) and still say it may have reached.
+describe("a person's cancel of a message handed to the daemon", () => {
+  test.each([true, false])("an injected row with no verified paste stays stopped through the healer (session live: %s)", async bobLive => {
+    const now = Date.now();
+    const { ctx, db, tables } = world({ bobLive, now });
+    await performSessionSend(ctx as any, "uBob" as any, { to: "jxbob01", body: "stop this one" });
+    const msg = tables.pending_messages[0];
+    await db.patch(msg._id, { status: "injected", created_at: now - 600_000 });
+    await db.patch("msBob", { agent_status: bobLive ? "idle" : "dormant" });
+
+    expect(await cancelPendingMessageForUser(ctx as any, "uBob" as any, "convBob" as any, { messageId: msg._id })).toBe("injected");
+    expect(await healAndNotifyStuckMessages(ctx as any, now)).toMatchObject({ revived: 0 });
+    expect(await collectDeliverableForOwner(ctx as any, "uBob" as any, "devBob")).toHaveLength(0);
+    expect((await db.get(msg._id))?.status).toBe("cancelled");
+    // A repeat cancel still says it may have reached, not that it was withdrawn.
+    expect(await cancelPendingMessageForUser(ctx as any, "uBob" as any, "convBob" as any, { messageId: msg._id })).toBe("unconfirmed");
   });
 });
