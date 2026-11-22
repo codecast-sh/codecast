@@ -128,6 +128,26 @@ test("opening an uncached session from chat never writes the conversation the pe
   expect(useInboxStore.getState().currentSessionId).toBe(TARGET);
   expect(window.location.pathname).toBe(`/conversation/${TARGET}`);
   expect(writes.filter((w) => w.includes(LEFT))).toEqual([]);
-  // One Back press returns to the chat: no stale entry was stacked on top.
-  expect(writes.filter((w) => w.startsWith("push"))).toEqual([]);
+  // The link already wrote B: the pane writes nothing at all, so one Back
+  // press returns to the chat with no stale entry stacked on top.
+  expect(writes).toEqual([]);
+}, 120_000);
+
+test("a cached target lands the same way: the pane selects it in place and writes nothing", async () => {
+  // Back on the inbox (still on B), the person goes to chat again, and this
+  // time opens A, which the inbox already holds.
+  await act(async () => useInboxStore.getState().navigateToSession(TARGET));
+  realPush(null, "", "/chat/hx7md1p2dqqxh14r42w7fn3zws8ccpnj");
+  await render(false);
+  await settle();
+
+  realPush(null, "", `/conversation/${LEFT}`);
+  writes.length = 0;
+  env.qs = `s=${LEFT}`;
+  await render(true);
+  await settle();
+
+  expect(useInboxStore.getState().currentSessionId).toBe(LEFT);
+  expect(window.location.pathname).toBe(`/conversation/${LEFT}`);
+  expect(writes).toEqual([]);
 }, 120_000);

@@ -24,7 +24,7 @@ import {
 } from "../store/stageSplit";
 import { tabNavigate } from "../src/compat/tabRouting";
 import { DEFAULT_TAB_PATH, isNonTabRoute } from "./tabRoutes";
-import { inboxTabSessionId, pathLabel, tabNeedsUrlRestore } from "./pathLabel";
+import { inboxTabSessionId, pathLabel, tabAddressPath, tabNeedsUrlRestore } from "./pathLabel";
 import { borrowsTabShell } from "./desktop";
 import { directConversationId } from "./desktopHandoff";
 import { routeElsewhere, routeOwner } from "./desktopApps";
@@ -161,7 +161,7 @@ function syncUrl() {
   if (tab.path === live) return;
   if (isNonTabRoute(window.location.pathname)) return;
   if (!tabNeedsUrlRestore(window.location.pathname, tab.path)) return;
-  window.history.replaceState({ tabNav: true, tabId: tab.id }, "", tab.path);
+  window.history.replaceState({ tabNav: true, tabId: tab.id }, "", tabAddressPath(tab.path));
 }
 
 /**

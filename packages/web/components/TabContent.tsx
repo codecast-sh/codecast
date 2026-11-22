@@ -5,7 +5,7 @@ import { useMountEffect } from "../hooks/useMountEffect";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
 import { isPrewarmTab, clearPrewarmTab } from "../lib/openIntent";
 import { tabSessionId } from "../lib/tabTitle";
-import { conversationTabPath, pathLabel, tabNeedsUrlRestore } from "../lib/pathLabel";
+import { conversationTabPath, pathLabel, tabAddressPath, tabNeedsUrlRestore } from "../lib/pathLabel";
 import { SessionPrewarm } from "./SessionPrewarm";
 import { stageRenderLayout } from "../lib/stage";
 import { useNarrowStage } from "../hooks/useNarrowStage";
@@ -56,7 +56,7 @@ function TabPane({ tab, isActive, children }: { tab: AppTab; isActive: boolean; 
     if (!isActive) return;
     if (window.location.pathname !== pathname) {
       if (!tabNeedsUrlRestore(window.location.pathname, tab.path)) return;
-      window.history.replaceState(null, "", tab.path);
+      window.history.replaceState(null, "", tabAddressPath(tab.path));
     }
   }, [isActive, tab.path, pathname]);
 
