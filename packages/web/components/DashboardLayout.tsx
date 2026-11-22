@@ -422,6 +422,25 @@ const ShellOverlays = memo(function ShellOverlays() {
 
 export function DashboardLayout(props: DashboardLayoutProps) {
   const isNested = useContext(DashboardNestCtx);
+  if (isNested) return <>{props.children}</>;
+  // The undo card's host sits above DashboardLayoutInner's branch returns:
+  // its doorways (⌘⌥Z, the held peek, a toast's History) are installed by
+  // useGlobalShortcutActions in every branch, a browser pane's page and the
+  // guest frame included, and an open card with nothing on screen silences
+  // every undo toast.
+  return (
+    <DashboardBootGate allowUnhydratedGuest={props.allowUnhydratedGuest}>
+      <DashboardNestCtx.Provider value={true}>
+        <DashboardLayoutInner {...props} />
+        <UndoTimelineHost />
+      </DashboardNestCtx.Provider>
+    </DashboardBootGate>
+  );
+}
+
+/** The "Loading" status every dashboard page waits behind until the local
+ *  cache has hydrated; exported so a test can mount it over a real cache. */
+export function DashboardBootGate(props: { allowUnhydratedGuest?: boolean; children: ReactNode }) {
   const authGate = useAuthGate(useLocalAuth);
   // Hold the boot loader until the IDB hydration pass lands (clientStateInitialized
   // flips true even when the cache is empty or unreadable, so this can't hang).
@@ -432,7 +451,6 @@ export function DashboardLayout(props: DashboardLayoutProps) {
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const isSettledGuest = props.allowUnhydratedGuest &&
     authGate === "guest";
-  if (isNested) return <>{props.children}</>;
   // A settled anonymous share viewer intentionally has no principal store, so
   // `clientStateInitialized` will remain false forever. Let only that explicit
   // route reach DashboardLayoutInner's read-only guest branch.
@@ -453,17 +471,7 @@ export function DashboardLayout(props: DashboardLayoutProps) {
       </>
     );
   }
-  // The undo card's host sits above DashboardLayoutInner's branch returns:
-  // its doorways (⌘⌥Z, the held peek, a toast's History) are installed by
-  // useGlobalShortcutActions in every branch, a browser pane's page and the
-  // guest frame included, and an open card with nothing on screen silences
-  // every undo toast.
-  return (
-    <DashboardNestCtx.Provider value={true}>
-      <DashboardLayoutInner {...props} />
-      <UndoTimelineHost />
-    </DashboardNestCtx.Provider>
-  );
+  return <>{props.children}</>;
 }
 
 // Eager background-sync hooks isolated into their own component so a failing
