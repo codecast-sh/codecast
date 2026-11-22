@@ -9,6 +9,8 @@ import { useCollectionRows } from "./useCollectionRows";
 import { stableRefId } from "../store/wakeSig";
 import { isViewersWorkflow } from "../store/lineWorkflowSlice";
 import { useFeederWorkspace } from "./useWorkspaceArgs";
+import { useWatchEffect } from "./useWatchEffect";
+import { cachedAt, pinDetailRows } from "../lib/detailRows";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 
 const api = _api as any;
@@ -188,6 +190,11 @@ export function useWorkflow(id: string | null | undefined): any | null | undefin
 
 type PinnedRun = { _id: string; workflow_id?: string | null; graph_version_id?: string | null; flow_versions?: ReadonlyArray<{ version_id: string }> | null };
 
+/** A pinned graph as the capped `runGraphs` collection holds it: stamped with when it was last fed (lib/detailRows). */
+const RUN_GRAPH_FEED = {
+  select: (row: any) => (row ? [{ ...row, _cachedAt: cachedAt((useInboxStore.getState().runGraphs as any)?.[row._id], Date.now()) }] : []),
+};
+
 /** The version a run pinned (convex lib/runGraph.ts): a library run's flow version, else its pin. */
 const pinOf = (run: PinnedRun | null | undefined) => run?.flow_versions?.[0]?.version_id ?? run?.graph_version_id ?? null;
 
@@ -199,7 +206,9 @@ const pinOf = (run: PinnedRun | null | undefined) => run?.flow_versions?.[0]?.ve
  */
 export function useRunWorkflow(run: PinnedRun | null | undefined): any | null | undefined {
   const pin = pinOf(run);
-  const { ready, error } = useSyncCollection("runGraphs", api.workflow_runs.pinnedGraphOfRun, pin && run ? { run_id: run._id } : "skip", ONE_ROW);
+  const { ready, error } = useSyncCollection("runGraphs", api.workflow_runs.pinnedGraphOfRun, pin && run ? { run_id: run._id } : "skip", RUN_GRAPH_FEED);
+  // The card on screen holds its graph against the collection's cap.
+  useWatchEffect(() => (pin ? pinDetailRows("runGraphs", [pin]) : undefined), [pin]);
   // A refusal answers as "no pinned graph" does: a backend without the query yet, or a version that kept no content
   // (one from before every push kept it), draws the row.
   const answered = ready || !!error;
