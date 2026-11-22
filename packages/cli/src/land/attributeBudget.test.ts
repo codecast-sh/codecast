@@ -116,3 +116,19 @@ describe("a relative path is read from where the command stands when it names it
     expect(shellWrites("echo y > README.md/bun.lock", main, main)).toEqual([]);
   });
 });
+
+describe("the attribution cache", () => {
+  test("a cache written by an earlier reading is read afresh, not trusted: its credits were made under other rules", async () => {
+    const { defaultConfigDir } = await import("../config/configDir");
+    const now = Date.now();
+    fs.mkdirSync(path.join(root, ".git"));
+    const file = transcript("ran-only", [JSON.stringify({ type: "assistant", timestamp: new Date(now - 1000).toISOString(), cwd: root, message: { role: "assistant", content: [{ type: "tool_use", name: "Bash", input: { command: "bun a.ts > /tmp/log.txt" } }] } })], "conv_ran");
+    fs.writeFileSync(path.join(root, "a.ts"), "x");
+    // What version 3 (every path a writing command named) read this transcript as: a.ts written, though the
+    // command only ran it. 1.1.252's daemons kept exactly such credits.
+    const cache = path.join(defaultConfigDir(), "cache", "land-attribution.json");
+    fs.mkdirSync(path.dirname(cache), { recursive: true });
+    fs.writeFileSync(cache, JSON.stringify({ version: 3, roots: { [root]: { [file]: { offset: fs.statSync(file).size, size: fs.statSync(file).size, cwd: root, writes: { "a.ts": now - 1000 } } } } }));
+    expect(attributeEdits(root, ["a.ts"], { since: 0, now }).owners.get("a.ts")).toBeUndefined();
+  });
+});

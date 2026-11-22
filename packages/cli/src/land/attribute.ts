@@ -69,7 +69,12 @@ const MID_TURN = new Set(["working", "thinking", "compacting", "permission_block
 /** A mid-turn hook status this old says nothing about now. */
 const STATUS_TRUST_MS = 15 * 60_000;
 const TAIL_BYTES = 256 * 1024;
-const CACHE_VERSION = 3;
+/**
+ * Bumped whenever what a transcript line is read as changes: the cache keeps each transcript's writes as read and
+ * reads only what was appended since, so a fix to the reading reaches lines already read only through a new version.
+ * 4: only the paths a command writes, each from the cd in effect (shellWrites.ts).
+ */
+export const CACHE_VERSION = 4;
 
 export function isMidTurn(s: Pick<SessionEdits, "status">): boolean {
   return !!s.status && MID_TURN.has(s.status);
