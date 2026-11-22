@@ -591,7 +591,7 @@ host and token: cast integrations connect <provider>`,
   },
   {
     token: "typed",
-    description: "When you typed into sessions: times and lengths, no text",
+    description: "When you typed messages into codecast sessions, on every machine and workspace: time, session and length, no text",
     hasOptions: true,
     load: () => import("./typedCommand.js").then((m) => m.registerTypedCommand),
   },
