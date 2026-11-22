@@ -954,6 +954,12 @@ async function waitOnStation(
       askedOnce = false;
       continue;
     }
+    // A writer whose brief's delivery cannot be read may have only ended a turn of its own: it has answered once it
+    // has also pinned since the brief went out.
+    if (subject?.awaitDelivery && briefAt === null && !row.is_killed && !(typeof pinned?.at === "number" && pinned.at > subject.sentAt)) {
+      askedOnce = false;
+      continue;
+    }
     // conversations.getThreadState: the pinned text is `state`, its status `status`.
     const pinnedText: string = typeof pinned?.state === "string" ? pinned.state : "";
     // A hand that pinned dormant said a machine wakes it next: a background
