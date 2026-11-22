@@ -47,35 +47,42 @@ const FAILING = new RegExp(`${SIGNAL_WORDS}|\\bCONFLICT\\b`, "i");
 const QUIET_RESULT = /^\s*\((?:pass|skip|todo)\)/;
 // bun prints each test file's path alone on a line, then its results.
 const TEST_HEADER = /^\s*\S+\.(?:test|spec)\.[cm]?[jt]sx?:\s*$/;
+// bun's closing recap of the failed tests, after the last file's results.
+const RECAP = /^\s*\d+ tests? failed:?\s*$/;
+// eslint and other linters print each file's path alone on a line, then its problems.
+const PATH_LINE = /^\s*(?:[A-Za-z]:)?[\w.@\-/\\]*[/\\][\w.@\-]+\.[A-Za-z]\w*\s*$/;
 // How far a line may sit from a failing one and still belong to it: a stack trace or code frame under its error.
 const NEAR = 6;
 
 /**
- * The lines of a finding that can name a file: git's `Auto-merging` lines go (every file a merge touches, conflict
- * or not), and so does a test runner's header for a file whose tests all passed. Paths under any of `roots` (the
- * checkout, the run's worktree) read relative, as the change names them.
+ * The lines of a finding that can name a file, each with whether it says something failed or sits near a line that
+ * does. A file's section (a test file's header, a linter's path line, bun's closing recap) bounds that nearness, so
+ * one file's error never reaches the next file's name. git's `Auto-merging` lines go (every file a merge touches,
+ * conflict or not), and so do a passed test's line and a test file's header when nothing in its section failed. Paths under any of `roots`
+ * (the checkout, the run's worktree) read relative, as the change names them.
  */
 function findingLines(text: string, roots: string[]): Array<{ line: string; failing: boolean }> {
   let clean = text.replace(ANSI, "").replace(/\r/g, "");
   for (const r of [...new Set(roots.filter(Boolean))].sort((a, b) => b.length - a.length)) clean = clean.split(`${r.replace(/\/+$/, "")}/`).join("");
   const lines = clean.split("\n");
   const failing = (l: string) => FAILING.test(l) && !QUIET_RESULT.test(l);
-  const passedHeader = (i: number) => {
-    if (!TEST_HEADER.test(lines[i])) return false;
-    for (let j = i + 1; j < lines.length && !TEST_HEADER.test(lines[j]); j++) if (failing(lines[j])) return false;
-    return true;
-  };
-  const kept = lines.map((line, i) => ({ line, i })).filter(({ line, i }) => !/^\s*Auto-merging\s/.test(line) && !passedHeader(i));
+  const section: number[] = [];
+  lines.forEach((l, i) => { section[i] = (section[i - 1] ?? 0) + (TEST_HEADER.test(l) || RECAP.test(l) || PATH_LINE.test(l) ? 1 : 0); });
+  const passedHeader = (i: number) => TEST_HEADER.test(lines[i]) && !lines.some((l, j) => j > i && section[j] === section[i] && failing(l));
+  // A passed, skipped or todo test's name may hold a file's name; it names nothing that failed.
+  const kept = lines.map((line, i) => ({ line, i })).filter(({ line, i }) => !/^\s*Auto-merging\s/.test(line) && !QUIET_RESULT.test(line) && !passedHeader(i));
   const failingAt = kept.filter(({ line }) => failing(line)).map(({ i }) => i);
-  return kept.map(({ line, i }) => ({ line, failing: failingAt.some((f) => Math.abs(f - i) <= NEAR) }));
+  return kept.map(({ line, i }) => ({ line, failing: failingAt.some((f) => Math.abs(f - i) <= NEAR && section[f] === section[i]) }));
 }
 
 /**
  * The files of a checkout change a finding names, split by whether a session's edit wrote them: `writers` groups
- * them by that session, `unclaimed` are the ones no session wrote. A file is named by its path, never as the tail of
- * a longer one (`src/a.ts` inside `packages/x/src/a.ts`), or by a basename no other file of the change shares, standing
- * alone or as a location (`a.ts:12`, `a.ts(12,5)`), never inside another path (`node_modules/x/index.ts`). Lines that
- * say something failed, and those beside them, are read first; only a finding with no file named there is read whole.
+ * them by that session, `unclaimed` are the ones no session wrote. A file is named by its path; by a tail of it that
+ * starts at a `/` and no other file of the change ends with (a tool run inside a package prints paths from there:
+ * `src/a.ts(12,5)` for `packages/cli/src/a.ts`); or by a basename no other file of the change shares, standing alone
+ * or as a location (`a.ts:12`, `a.ts(12,5)`). None of these is named inside a longer path (`src/a.ts` within
+ * `lib/src/a.ts`, `index.ts` within `node_modules/x/index.ts`). Lines that say something failed, and those beside
+ * them in the same file's section, are read first; only a finding with no file named there is read whole.
  */
 export function writersNamed(
   change: { paths: string[]; writers?: Record<string, { conversation: string; session: string }> },
@@ -85,14 +92,18 @@ export function writersNamed(
   const base = (p: string) => p.slice(p.lastIndexOf("/") + 1);
   const sharing = new Map<string, number>();
   for (const p of change.paths) sharing.set(base(p), (sharing.get(base(p)) ?? 0) + 1);
+  // The tails of a path from each `/` on (two segments or more), kept when no other file of the change ends with one.
+  const tails = (p: string) => {
+    const parts = p.split("/");
+    return parts.slice(1, -1).map((_, k) => parts.slice(k + 1).join("/"))
+      .filter((t) => change.paths.filter((q) => q === t || q.endsWith(`/${t}`)).length === 1);
+  };
   // Bounded on both sides, so a.ts is not named by data.ts or a.tsx, nor src/a.ts by lib/src/a.ts.
   const byPath = (p: string) => new RegExp(`(?:^|[^\\w.\\-/\\\\@])${escapeRe(p)}(?![\\w\\-/\\\\]|\\.\\w)`);
   const byBase = (name: string) => new RegExp(`(?:^|[^\\w.\\-/\\\\@])${escapeRe(name)}(?=:\\d|\\(\\d+,|[\\s,;'"\`)\\]]|[.:](?:\\s|$)|$)`);
+  const tests = new Map(change.paths.map((p) => [p, [byPath(p), ...tails(p).map(byPath), ...(sharing.get(base(p)) === 1 && base(p) !== p ? [byBase(base(p))] : [])]]));
   const lines = findingLines(text, roots);
-  const namedIn = (subset: string[]) => change.paths.filter((p) => {
-    const tests = [byPath(p), ...(sharing.get(base(p)) === 1 && base(p) !== p ? [byBase(base(p))] : [])];
-    return subset.some((l) => tests.some((t) => t.test(l)));
-  });
+  const namedIn = (subset: string[]) => change.paths.filter((p) => subset.some((l) => tests.get(p)!.some((t) => t.test(l))));
   const strong = namedIn(lines.filter((l) => l.failing).map((l) => l.line));
   const named = strong.length ? strong : namedIn(lines.map((l) => l.line));
   const byWriter = new Map<string, Writer>();
