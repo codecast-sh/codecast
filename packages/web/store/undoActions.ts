@@ -120,6 +120,23 @@ function afterSessionExits(ids: string[], commit: (leaving: Map<string, Element 
 // refused on every retry and never reached the server, so it is sent in slices.
 const KILL_DISPATCH_ROWS = 500;
 
+// The old-sessions sweep sends its ids in one dispatch up to this many (the
+// same 1024-key argument limit), and a bigger sweep in slices of it, as one undo.
+const DISMISS_DISPATCH_ROWS = 500;
+
+/** "Dismiss all N" old sessions: exactly `ids`, as one undoable gesture whose
+ *  toast offers Undo. The app's own undo takes it back the same way. */
+export function dismissStaleSessions(ids: string[]): void {
+  if (ids.length === 0) return;
+  const label = `Dismissed ${counted(ids.length, "old session")} (still searchable)`;
+  gestureToast(label, () =>
+    undoAsOne(label, () => {
+      const store = useInboxStore.getState();
+      for (let i = 0; i < ids.length; i += DISMISS_DISPATCH_ROWS) store.markSessionsDismissed(ids.slice(i, i + DISMISS_DISPATCH_ROWS));
+    }),
+  );
+}
+
 /** Animate a session card sliding out, then stash or kill it. */
 export function animatedHideSession(id: string, mode: HideSessionMode, opts?: HideSessionOpts) {
   void animatedHideSessions([id], mode, opts);

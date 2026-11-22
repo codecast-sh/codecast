@@ -12312,18 +12312,50 @@ export async function stampBrowserPaneOfferHandled(
   return { changed: true };
 }
 
-// The most rows one bulk call may touch. The web sends a big sweep as ordered
-// chunks of this size, so no single mutation reads past its limits.
-export const BULK_DISMISS_MAX = 100;
+// Rows one transaction stamps before it hands the rest to the next page.
+// Every patch to a conversation also writes the change feed and the sync log,
+// so a page stays at the size the old age sweep drained in.
+const DISMISS_PAGE_ROWS = 100;
 
-// "Dismiss all N" from the inbox's old-sessions prompt: dismisses exactly the
-// sessions the prompt counted and listed, never a set re-derived by age here. An
-// age sweep also took the session the person had open and any old row the
+// "Dismiss all N" from the inbox's old-sessions prompt dismisses exactly the
+// sessions the prompt counted and listed, never a set re-derived by age here.
+// An age sweep also took the session the person had open and any old row the
 // window did not hold, so the number on the button stopped matching what was
 // acted on (ct-98161). Only the caller's own rows, and never one pinned,
-// snoozed or already dismissed in the meantime. `at` is the client's clock, the
-// value the web wrote optimistically, so the Undo can clear exactly this
-// sweep's stamps and nothing a later dismiss wrote.
+// snoozed or already dismissed in the meantime. `at` is the stamp the web wrote
+// optimistically, so the server's echo matches the local row. The web reaches
+// this through its markSessionsDismissed action (dispatch.ts); the first page
+// lands in the caller's transaction and the rest follow in order.
+export async function dismissSessionsExactly(
+  ctx: MutationCtx,
+  userId: Id<"users">,
+  ids: readonly string[],
+  at: number,
+): Promise<number> {
+  let dismissed = 0;
+  for (const raw of ids.slice(0, DISMISS_PAGE_ROWS)) {
+    const id = ctx.db.normalizeId("conversations", raw);
+    const conv = id ? await ctx.db.get(id) : null;
+    if (!conv || conv.user_id !== userId) continue;
+    if (conv.inbox_dismissed_at || conv.inbox_pinned_at || conv.inbox_snoozed_until) continue;
+    await ctx.db.patch(conv._id, { inbox_dismissed_at: at });
+    dismissed++;
+  }
+  const rest = ids.slice(DISMISS_PAGE_ROWS);
+  if (rest.length) {
+    await ctx.scheduler.runAfter(0, internal.conversations.dismissSessionsPage, { user_id: userId, ids: [...rest], at });
+  }
+  return dismissed;
+}
+
+export const dismissSessionsPage = internalMutation({
+  args: { user_id: v.id("users"), ids: v.array(v.string()), at: v.number() },
+  handler: async (ctx, args) => {
+    noteWriteCause(ctx, "web:markSessionsDismissed");
+    await dismissSessionsExactly(ctx, args.user_id, args.ids, args.at);
+  },
+});
+
 export const dismissStaleInboxSessions = mutation({
   args: {
     ids: v.array(v.id("conversations")),
@@ -12332,40 +12364,8 @@ export const dismissStaleInboxSessions = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    if (args.ids.length > BULK_DISMISS_MAX) throw new Error(`At most ${BULK_DISMISS_MAX} sessions per call`);
     const at = args.at ?? Date.now();
-    let dismissed = 0;
-    for (const id of args.ids) {
-      const conv = await ctx.db.get(id);
-      if (!conv || conv.user_id !== userId) continue;
-      if (conv.inbox_dismissed_at || conv.inbox_pinned_at || conv.inbox_snoozed_until) continue;
-      await ctx.db.patch(id, { inbox_dismissed_at: at });
-      dismissed++;
-    }
-    return { at, dismissed };
-  },
-});
-
-// The Undo on that sweep's toast: clears the dismiss stamp from the rows that
-// still carry this sweep's `at`. A row dismissed again since (another stamp),
-// or brought back already, is left as it is.
-export const restoreStaleInboxSessions = mutation({
-  args: {
-    ids: v.array(v.id("conversations")),
-    at: v.number(),
-  },
-  handler: async (ctx, args) => {
-    const userId = await getAuthUserId(ctx);
-    if (!userId) throw new Error("Not authenticated");
-    if (args.ids.length > BULK_DISMISS_MAX) throw new Error(`At most ${BULK_DISMISS_MAX} sessions per call`);
-    let restored = 0;
-    for (const id of args.ids) {
-      const conv = await ctx.db.get(id);
-      if (!conv || conv.user_id !== userId || conv.inbox_dismissed_at !== args.at) continue;
-      await ctx.db.patch(id, { inbox_dismissed_at: undefined });
-      restored++;
-    }
-    return { restored };
+    return { at, dismissed: await dismissSessionsExactly(ctx, userId, args.ids, at) };
   },
 });
 

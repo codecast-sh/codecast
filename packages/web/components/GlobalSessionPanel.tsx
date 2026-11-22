@@ -58,9 +58,8 @@ import { standingRoleIdOf } from "../lib/sessionIdentity";
 import { isUnderRole } from "@codecast/shared/contracts";
 import { AuthErrorBadge } from "./AuthErrorBadge";
 import { toast } from "sonner";
-import type { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { SwitchReview } from "./consequential/ConsequentialSwitch";
-import { dismissStaleLedger } from "./consequential/ledgers";
+import { StaleSessionsPrompt } from "./inbox/StaleSessionsPrompt";
+import { staleSessionsOf } from "../lib/staleSessions";
 import { toastWriteError } from "../lib/dispatchBinding";
 import { animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
 
@@ -1525,19 +1524,6 @@ const HOLD_DEST_COLORS: Partial<Record<string, string>> = {
 
 const STALE_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const STALE_PROMPT_THRESHOLD = 10;
-// The server's cap on one bulk dismiss call (conversations.BULK_DISMISS_MAX).
-const STALE_DISMISS_CHUNK = 100;
-// One call per chunk, each after the last, so a later write (the Undo's
-// restore) chained on the result never overtakes one still in flight.
-async function sendInChunks<T>(ids: T[], send: (chunk: T[]) => Promise<unknown>): Promise<void> {
-  for (let i = 0; i < ids.length; i += STALE_DISMISS_CHUNK) {
-    try {
-      await send(ids.slice(i, i + STALE_DISMISS_CHUNK));
-    } catch {
-      // Best-effort: the local write already stands.
-    }
-  }
-}
 // "Not now" rests the prompt for this long — persisted in client UI prefs so it
 // survives reloads and follows the user across devices instead of resurfacing
 // every time the panel mounts.
@@ -2206,19 +2192,10 @@ function SessionListPanelImpl({
   // Sorted newest-first so the borderline ones (the sessions most worth a
   // second look before a sweep) lead the review list.
   const staleCutoff = coarseNow - STALE_SESSION_MS;
-  const staleSessions = useMemo(() => {
-    return (Object.values(s.sessions) as InboxSession[])
-      .filter(
-        (sess) =>
-          !isSessionHidden(sess) &&
-          !sess.is_pinned &&
-          !sess.inbox_snoozed_until &&
-          sess._id !== activeSessionId &&
-          // An unstamped row is unknown, not ancient: never offer it for dismissal.
-          !!sess.updated_at && sess.updated_at < staleCutoff,
-      )
-      .sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
-  }, [s.sessions, activeSessionId, staleCutoff]);
+  const staleSessions = useMemo(
+    () => staleSessionsOf(Object.values(s.sessions) as InboxSession[], activeSessionId, staleCutoff),
+    [s.sessions, activeSessionId, staleCutoff],
+  );
   // The snooze is a persisted pref, not component state: a "Not now" used to
   // evaporate on every reload, so the prompt kept coming back.
   const stalePromptSnoozedAt = s.clientState.ui?.inbox_stale_prompt_snoozed_at ?? 0;
@@ -2226,12 +2203,6 @@ function SessionListPanelImpl({
   const snoozeStalePrompt = useCallback(() => {
     useInboxStore.getState().updateClientUI({ inbox_stale_prompt_snoozed_at: Date.now() });
   }, []);
-  // "Show them" — expands the list of sessions the sweep would dismiss, as
-  // ordinary cards, so the count is never a mystery number.
-  const [staleListOpen, setStaleListOpen] = useState(false);
-  const [staleReviewing, setStaleReviewing] = useState(false);
-  const dismissStaleMutation = useMutation(api.conversations.dismissStaleInboxSessions);
-  const restoreStaleMutation = useMutation(api.conversations.restoreStaleInboxSessions);
   const showStalePrompt = staleSessions.length > STALE_PROMPT_THRESHOLD && !stalePromptSnoozed;
 
   // Sessions parked on a limit/auth/connection banner — the fleet-level revive
@@ -2289,38 +2260,6 @@ function SessionListPanelImpl({
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
-  // "Dismiss all N" acts on exactly the N sessions the prompt counted, never an
-  // age sweep the server re-derives (that also took the open session and rows
-  // this window never held). It opens the shared confirm flow
-  // (components/consequential) first, and its toast offers Undo.
-  const handleDismissStale = useCallback(() => {
-    setStaleReviewing(false);
-    const ids = staleSessions.map((sess) => sess._id);
-    const count = ids.length;
-    // One stamp for the local clear, the server write and the Undo, so the Undo
-    // takes back this sweep's rows and nothing a later dismiss wrote.
-    const at = Date.now();
-    // Instant, optimistic local dismiss (sync — no per-row dispatch storm). This
-    // is the durable, user-visible clear; it persists to IDB on its own.
-    useInboxStore.getState().markSessionsDismissed(ids, at);
-    snoozeStalePrompt();
-    setStaleListOpen(false);
-    // A local stub has no server row to stamp. The rest go in ordered chunks;
-    // a failed chunk leaves the local clear standing, so it never alarms anyone.
-    const serverIds = ids.filter(isConvexId) as Id<"conversations">[];
-    const sent = sendInChunks(serverIds, (chunk) => dismissStaleMutation({ ids: chunk, at }));
-    toast.success(`Dismissed ${count} old session${count === 1 ? "" : "s"}`, {
-      description: "Still searchable anytime.",
-      action: {
-        label: "Undo",
-        onClick: () => {
-          useInboxStore.getState().unmarkSessionsDismissed(ids, at);
-          // After the dismiss has landed, so a restore can never run ahead of it.
-          void sent.then(() => sendInChunks(serverIds, (chunk) => restoreStaleMutation({ ids: chunk, at })));
-        },
-      },
-    });
-  }, [staleSessions, dismissStaleMutation, restoreStaleMutation, snoozeStalePrompt]);
 
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
   // Cap how many rows each section renders. A section like "Needs You" can
@@ -3322,71 +3261,12 @@ function SessionListPanelImpl({
           fresh={blockedIncidentTs > 0}
         />
         {showStalePrompt && (
-          <div className="m-2 rounded-md border border-sol-yellow/30 bg-sol-yellow/[0.06]">
-            <div className="px-3 py-2.5">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="text-xs font-semibold text-sol-text">Clear out your working set?</div>
-                <div className="mt-0.5 text-meta leading-snug text-sol-text-muted">
-                  <span className="font-semibold text-sol-yellow">{staleSessions.length}</span> sessions have had
-                  no activity since {formatShortDate(staleCutoff)}. Dismissing them clears the inbox; they stay
-                  searchable and open by link. Pinned sessions are kept.
-                </div>
-              </div>
-              <button
-                onClick={snoozeStalePrompt}
-                className="shrink-0 rounded p-0.5 text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text"
-                title="Not now"
-                aria-label="Dismiss this prompt"
-              >
-                <X className="h-3.5 w-3.5" />
-              </button>
-            </div>
-            <div className="mt-2 flex items-center gap-3">
-              <button
-                onClick={() => setStaleListOpen((v) => !v)}
-                className="flex items-center gap-1 text-meta font-semibold text-sol-yellow transition-colors hover:text-sol-yellow/80"
-                aria-expanded={staleListOpen}
-              >
-                <ChevronRight className={`h-3 w-3 transition-transform ${staleListOpen ? "rotate-90" : ""}`} />
-                {staleListOpen ? "Hide them" : "Show them"}
-              </button>
-              <button
-                onClick={() => setStaleReviewing(true)}
-                aria-haspopup="dialog"
-                aria-expanded={staleReviewing}
-                className="rounded bg-sol-yellow/15 px-2.5 py-1 text-meta font-semibold text-sol-yellow transition-colors hover:bg-sol-yellow/25 modern:h-6 modern:rounded-control modern:bg-sol-yellow/10 modern:py-0 modern:font-medium modern:hover:bg-sol-yellow/15"
-              >
-                {`Dismiss all ${staleSessions.length}`}
-              </button>
-              {staleReviewing && (
-                <SwitchReview
-                  ledger={dismissStaleLedger({
-                    titles: staleSessions.map((sess) => cleanTitle(sess.title || "") || "Untitled session"),
-                    since: formatShortDate(staleCutoff),
-                  })}
-                  onClose={() => setStaleReviewing(false)}
-                  onConfirm={handleDismissStale}
-                />
-              )}
-              <button
-                onClick={snoozeStalePrompt}
-                className="text-meta text-sol-text-dim transition-colors hover:text-sol-text"
-              >
-                Not now
-              </button>
-            </div>
-            </div>
-            {/* The review list: the exact dismiss set, rendered as the same cards
-                as the rest of the inbox (flat, so a nested subagent that would be
-                dismissed shows as its own row). Each card's idle age says how
-                long it has sat; pin a card to hold it out of the sweep. */}
-            {staleListOpen && (
-              <div className="border-t border-sol-yellow/20">
-                {renderSection("Would be dismissed", staleSessions, "text-sol-yellow", undefined, true, { key: "stale_review" })}
-              </div>
-            )}
-          </div>
+          <StaleSessionsPrompt
+            sessions={staleSessions}
+            since={staleCutoff}
+            onSnooze={snoozeStalePrompt}
+            list={() => renderSection("Would be dismissed", staleSessions, "text-sol-yellow", undefined, true, { key: "stale_review" })}
+          />
         )}
         {flatView ? (
           renderSection("All", flatList, "text-sol-cyan", undefined, true, { reorderable: viewMode === "time" })
