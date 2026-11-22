@@ -23,7 +23,7 @@ and repos copied whole graphs instead of saying how they differ.
 | Word | Meaning |
 |---|---|
 | pipeline | a project's change flow, main, and release flow, read as one |
-| change flow | the flow a session's change runs when it presses Ship: the team's default flow as this repo resolves it (`.codecast/flows/change.cast` before the shipped `change`) |
+| change flow | the flow a session's change runs when it presses Ship: the team's default flow as this repo resolves it (a repo flow named change, in the repo's own flows directory, before the shipped `change`) |
 | release flow | the flow a release runs: main's commits since what is live, as one batch, out to every target they touch |
 | station | one step: what it does, who does it (agent, command, person, rule, eval, deploy), and when it runs |
 | backbone | the library flow a project's flow extends; its stations are inherited |
