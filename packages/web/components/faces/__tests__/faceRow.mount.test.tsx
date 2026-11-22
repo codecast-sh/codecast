@@ -110,7 +110,7 @@ const restoreGlobals = replaceGlobals({
 });
 const { createRoot } = await import("react-dom/client");
 const { FaceRow, FloatingFaceRow } = await import("../FaceRow");
-const { faceRowSize, floatingRowSize } = await import("../../../lib/faces/layout");
+const { faceRowSize, floatingRowSize, CARD_OPEN_MS, CARD_CLOSE_MS } = await import("../../../lib/faces/layout");
 const { EngagementCard } = await import("../EngagementCard");
 const { walkieStageWords } = await import("../../../hooks/useWalkie");
 const { useInboxStore } = await import("../../../store/inboxStore");
@@ -1018,4 +1018,55 @@ describe("the engagement card renders the model's card", () => {
     expect(h.q(".face-row-track")).toBeNull();
     expect(h.q(".face-row")!.lastElementChild!.className).toBe("face-row-strip");
   });
+});
+
+// ── the rage click (ct-73217) ───────────────────────────────────────────────
+//
+// Replay rp-2595: a hover opened "Cam"'s card, a click on the face changed
+// nothing visible (it only pinned the card), so the person clicked twice more:
+// the second click closed the card and the third opened it again. A click on
+// a face shows that it took, and a burst of clicks never closes the card.
+describe("a burst of clicks on a face (ct-73217)", () => {
+  const wait = (ms: number) => act(async () => void (await new Promise((r) => setTimeout(r, ms))));
+  const enter = (seat: Element) =>
+    act(async () => void seat.dispatchEvent(new dom.window.MouseEvent("mouseover", { bubbles: true, relatedTarget: null })));
+  const leave = (seat: Element) =>
+    act(async () =>
+      void seat.dispatchEvent(new dom.window.MouseEvent("mouseout", { bubbles: true, relatedTarget: dom.window.document.body })),
+    );
+  const pinnedMark = (h: Awaited<ReturnType<typeof mount>>) => h.q(".face-row-below")?.getAttribute("data-pinned") ?? null;
+
+  test("a click on a hover-opened card visibly pins it, and it stays open after the pointer leaves", async () => {
+    const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+    const seat = h.q('[data-face-id="u-ann"]')!;
+    await enter(seat);
+    await wait(CARD_OPEN_MS + 50);
+    expect(h.q("[data-member-card]")).not.toBeNull();
+    expect(pinnedMark(h)).toBeNull();
+    await h.click(h.circle(ANN));
+    expect(h.q("[data-member-card]")).not.toBeNull();
+    expect(pinnedMark(h)).toBe("1");
+    await leave(seat);
+    await wait(CARD_CLOSE_MS + 80);
+    expect(h.q("[data-member-card]")).not.toBeNull();
+  });
+
+  for (const start of ["cold", "hover-opened"] as const) {
+    test(`three clicks within a second, from a ${start} row, never close the card and end pinned`, async () => {
+      const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+      if (start === "hover-opened") {
+        await enter(h.q('[data-face-id="u-ann"]')!);
+        await wait(CARD_OPEN_MS + 50);
+        expect(h.q("[data-member-card]")).not.toBeNull();
+      }
+      const openAfter: boolean[] = [];
+      for (let i = 0; i < 3; i++) {
+        await h.click(h.circle(ANN));
+        openAfter.push(h.q("[data-member-card]") != null);
+        await wait(100);
+      }
+      expect(openAfter).toEqual([true, true, true]);
+      expect(pinnedMark(h)).toBe("1");
+    });
+  }
 });
