@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
-import { CHECKOUT_PATHS_MAX, LEVEL_STUCK_FILE_MS, type CheckoutLevel, type CheckoutTold } from "@codecast/shared/contracts/checkouts";
-import { conflictGroups, dirtyPaths, groupUncommitted, nextLevel, reportCheckouts, tellWriters } from "./checkoutReport.js";
+import { CHECKOUT_PATHS_MAX, levelAskClientId, LEVEL_STUCK_FILE_MS, type CheckoutLevel, type CheckoutTold } from "@codecast/shared/contracts/checkouts";
+import { conflictGroups, dirtyPaths, groupUncommitted, LEVEL_SEND_ATTEMPTS_MAX, loadCheckoutState, nextLevel, reportCheckouts, tellWriters } from "./checkoutReport.js";
 import type { SessionEdits } from "./attribute.js";
 import type { LevelResult } from "./level.js";
 import { updateSyncRecord } from "../syncLedger.js";
@@ -45,6 +45,23 @@ describe("the level sweep's state on a checkout", () => {
     expect(done.state.stuck).toBeUndefined();
     expect(nextLevel(done.state, { root: "/r", skipped: "level" }, 3_000).level).toEqual({ state: "level", levelled_at: 2_000 });
     expect(nextLevel(done.state, { root: "/r", skipped: "holds commits upstream lacks" }, 3_000).level).toEqual({ state: "off", reason: "holds commits upstream lacks" });
+  });
+
+  test("a ship, a rebase or an unreadable HEAD mid-episode shows the checkout off but keeps the episode; a lasting skip ends it", () => {
+    const told: CheckoutTold[] = [{ at: 2_000, files: 1, to: "session", conversation_id: "conv_a" }];
+    const stuck = nextLevel({}, refused("/r", ["a.ts"]), 1_000).state;
+    const asked = { ...stuck, stuck: { ...stuck.stuck!, told } };
+    for (const skipped of ["a ship is running", "a rebase or merge is in progress", "HEAD or its upstream could not be read"]) {
+      const paused = nextLevel(asked, { root: "/r", skipped }, 3_000);
+      expect(paused.level).toEqual({ state: "off", reason: skipped });
+      // The same files refused after it: the episode it paused, its start and who it told, not a new one.
+      expect(nextLevel(paused.state, refused("/r", ["a.ts"]), 4_000).level).toMatchObject({ state: "stuck", since: 1_000, told });
+    }
+    for (const skipped of ["level not enabled", "a worktree", "not on main", "holds commits upstream lacks"]) {
+      const ended = nextLevel(asked, { root: "/r", skipped }, 3_000);
+      expect(ended.state.stuck).toBeUndefined();
+      expect(nextLevel(ended.state, refused("/r", ["a.ts"]), 4_000).level).toMatchObject({ since: 4_000, told: [] });
+    }
   });
 });
 
@@ -89,7 +106,7 @@ describe("a stuck level tells each writer about its own files, once", () => {
     const sends: Array<{ to: string; body: string; clientId: string }> = [];
     const deps = { post: async (p: string, x: any) => { posts.push([p, structuredClone(x)]); return {}; }, sendBrief: async (to: string, body: string, clientId: string) => { sends.push({ to, body, clientId }); return "sent" as const; } };
     const out = await tellWriters(deps, report, level(), { owners }, held, { host: "laptop", now: 7, dir });
-    expect(out).toEqual({ told: [{ at: 7, files: 100, to: "session", conversation_id: "conv_a" }, { at: 7, files: 20, to: "session", conversation_id: "conv_b" }, { at: 7, files: 3, to: "finding" }], unreachable: [], notes: [] });
+    expect(out).toEqual({ told: [{ at: 7, files: 100, to: "session", conversation_id: "conv_a" }, { at: 7, files: 20, to: "session", conversation_id: "conv_b" }, { at: 7, files: 3, to: "finding" }], unreachable: [], failed: [] });
     expect(sends.map((s) => s.to)).toEqual(["conv_a", "conv_b"]);
     // Never a person's message: the sessions are reached through the machine wake alone.
     expect(posts.map(([p]) => p)).toEqual(["/cli/signal/add"]);
@@ -137,7 +154,7 @@ describe("a stuck level tells each writer about its own files, once", () => {
     const out = await tellWriters(deps, report, level(), { owners }, held, { dir });
     expect(out.told).toEqual([]);
     expect(out.unreachable).toEqual(["conv_b"]);
-    expect(out.notes).toEqual(["could not reach conv_a; asking again next pass", "could not file the finding (offline); filing again next pass"]);
+    expect(out.failed).toEqual([{ who: "conv_a", why: "the send failed" }, { who: "", why: "offline" }]);
   });
 });
 
@@ -260,12 +277,19 @@ describe("reporting a machine's checkouts", () => {
     expect(findings[0][1].detail_md).toContain("  c.ts");
     expect(lastReport().level.told).toEqual([expect.objectContaining({ to: "session", conversation_id: "conv_a", files: 1 }), expect.objectContaining({ to: "finding", files: 1 })]);
 
+    // The id the pipeline page's ask uses too, so a writer told there is not told again here.
+    const since = lastReport().level.since;
+    expect(toA.clientId).toBe(levelAskClientId({ device_id: "dev-6", path: root, files: ["a.ts", "b.ts", "c.ts"], since, conversation: "conv_a" }));
+
+    // B starts resolving its merge file before the retry: the same upstream, so the retry leaves it alone.
+    fs.writeFileSync(path.join(merges, "b.ts"), "resolved by hand\n");
     // The next pass asks B again, with the same client id, and nobody else.
     const failedId = sends.find((s) => s.to === "conv_b")!.clientId;
     await reportCheckouts([outcome], { ...deps, now: Date.now() });
     expect(sends.map((s) => s.to).sort()).toEqual(["conv_a", "conv_b", "conv_b"]);
     expect(sends[2].clientId).toBe(failedId);
     expect(sends[2].clientId).toMatch(/^level-told:/);
+    expect(fs.readFileSync(path.join(merges, "b.ts"), "utf-8")).toBe("resolved by hand\n");
     expect(posts.filter(([p]) => p === "/cli/signal/add")).toHaveLength(1);
     const told = lastReport().level.told;
     expect(told.map((t: CheckoutTold) => (t.to === "session" ? t.conversation_id : "finding")).sort()).toEqual(["conv_a", "conv_b", "finding"]);
@@ -274,6 +298,29 @@ describe("reporting a machine's checkouts", () => {
     await reportCheckouts([outcome], { ...deps, now: Date.now() });
     expect(sends).toHaveLength(3);
     expect(posts.some(([p]) => p === "/cli/messages/send")).toBe(false);
+  });
+
+  test("a writer whose sends keep failing is tried each pass up to the cap, logged once, then given up for the episode", async () => {
+    const root = repo();
+    const head = sh(root, "rev-parse", "HEAD");
+    fs.writeFileSync(path.join(root, "a.ts"), "edited\n");
+    const transcript = path.join(configDir, "writer-cap.jsonl");
+    fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: new Date().toISOString(), cwd: root, message: { role: "assistant", content: [{ type: "tool_use", name: "Edit", input: { file_path: path.join(root, "a.ts") } }] } }) + "\n");
+    updateSyncRecord(transcript, { conversationId: "conv_cap" });
+    const sends: string[] = [];
+    const logs: string[] = [];
+    const stateFile = path.join(configDir, "state-7.json");
+    const deps = { post: async () => ({}), sendBrief: async (to: string) => { sends.push(to); return "failed" as const; }, deviceId: "dev-7", repositoryOf: () => "acme/app", stateFile, host: "laptop", askDir: configDir, log: (l: string) => logs.push(l) };
+    const outcome = refused(root, ["a.ts"], undefined, head);
+    await reportCheckouts([outcome], { ...deps, now: Date.now() - LEVEL_STUCK_FILE_MS - 2 * MIN });
+    for (let i = 0; i < LEVEL_SEND_ATTEMPTS_MAX + 2; i++) await reportCheckouts([outcome], { ...deps, now: Date.now() });
+    expect(sends).toEqual(Array(LEVEL_SEND_ATTEMPTS_MAX).fill("conv_cap"));
+    expect(logs.filter((l) => l.includes("could not reach conv_cap"))).toHaveLength(1);
+    expect(logs.filter((l) => l.includes("gave up on conv_cap"))).toHaveLength(1);
+    const episode = (loadCheckoutState(stateFile).roots[root] as any).stuck;
+    expect(episode.attempts).toEqual({ conv_cap: LEVEL_SEND_ATTEMPTS_MAX });
+    expect(episode.unreachable).toEqual(["conv_cap"]);
+    expect(episode.told).toEqual([]);
   });
 
   test("dirty paths read every status: a modified first file, a rename by its new name, an untracked file", async () => {

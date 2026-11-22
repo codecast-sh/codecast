@@ -22,6 +22,13 @@ import { shipLockHeld, shipSpec, upstreamRef } from "./shipCheckout.js";
 export const LEVEL_FETCH_MS = 60_000;
 const lastFetch = new Map<string, number>();
 
+/**
+ * Skips that pass on their own. A stuck episode outlives them (checkoutReport nextLevel): ended by each, a ship every
+ * half hour would keep its writers from ever hearing, and each ship would ask them again.
+ */
+export const TRANSIENT_SKIPS = { ship: "a ship is running", rebase: "a rebase or merge is in progress", unread: "HEAD or its upstream could not be read" } as const;
+export const isTransientSkip = (reason: string) => (Object.values(TRANSIENT_SKIPS) as string[]).includes(reason);
+
 export type LevelSweepOutcome =
   | { root: string; skipped: string; gitDir?: string }
   | { root: string; gitDir: string; result: LevelResult };
@@ -32,9 +39,9 @@ export async function levelOne(root: string, now = Date.now()): Promise<LevelSwe
   if (!gitDir) return { root, skipped: "not a git checkout" };
   // A linked worktree's git dir lives under the main one's worktrees/.
   if (path.basename(path.dirname(gitDir)) === "worktrees") return { root, skipped: "a worktree" };
-  if (shipLockHeld(gitDir)) return { root, skipped: "a ship is running" };
+  if (shipLockHeld(gitDir)) return { root, skipped: TRANSIENT_SKIPS.ship };
   if (fs.existsSync(path.join(gitDir, "rebase-merge")) || fs.existsSync(path.join(gitDir, "rebase-apply")) || fs.existsSync(path.join(gitDir, "MERGE_HEAD"))) {
-    return { root, skipped: "a rebase or merge is in progress" };
+    return { root, skipped: TRANSIENT_SKIPS.rebase };
   }
   let upstream: string;
   try { upstream = await upstreamRef(root); } catch { return { root, skipped: "no upstream" }; }
@@ -48,7 +55,7 @@ export async function levelOne(root: string, now = Date.now()): Promise<LevelSwe
   const head = await gitTry(root, ["rev-parse", "HEAD"]);
   const up = await gitTry(root, ["rev-parse", upstream]);
   if (head && head === up) return { root, gitDir, skipped: "level" };
-  if (!head || !up) return { root, skipped: "level" };
+  if (!head || !up) return { root, skipped: TRANSIENT_SKIPS.unread };
   if (!(await isAncestor(root, head, up))) {
     // Commits pushed from elsewhere (a detached worktree, a cherry-pick) leave
     // the checkout diverged but holding nothing upstream lacks: `git cherry`
