@@ -163,6 +163,17 @@ export function shipPassBody(plan: ShipPlan, r: ShipOutcome, repository: string,
 }
 
 /**
+ * A ship refuses a [ship] key this cast does not read, where every other reader of the manifest reads past it: the
+ * key may route the pass (a newer cast's setting, or a typo of `flow`), and skipping it would push straight past the
+ * flow's checks and review.
+ */
+export function shipKeyRefusal(spec: { ignored?: string[] }): string | null {
+  if (!spec.ignored?.length) return null;
+  const keys = spec.ignored.map((k) => `'${k}'`).join(", ");
+  return `.codecast/workspace.toml: [ship] ${keys} ${spec.ignored.length > 1 ? "are not keys" : "is not a key"} this cast reads, so it does not ship: a newer cast's setting? cast update; a typo? fix it`;
+}
+
+/**
  * The `cast flow run` a pass goes through when `[ship] flow` names a flow, or null when it names none (and on a dry
  * run, which only plans). The flow freezes the checkout as its change and checks, lands and deploys it, so this
  * command pushes nothing. Flags that steer a pass this command pushes itself would be dropped silently, so they are
@@ -191,7 +202,8 @@ export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: 
   const startedAt = Date.now();
   const root = (await git(process.cwd(), ["rev-parse", "--show-toplevel"]));
   const spec = shipSpec(root);
-  for (const k of spec.ignored ?? []) log(`! .codecast/workspace.toml: [ship] '${k}' is not a key this cast reads, so it is ignored (a newer cast's setting? cast update; a typo? fix it)`);
+  const refused = shipKeyRefusal(spec);
+  if (refused) throw new Error(refused);
   const flow = spec.flow;
   const flowArgs = checkoutFlowArgs(flow, opts);
   if (flowArgs) {

@@ -6,7 +6,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseManifestText } from "../workspace/manifest.js";
-import { checkoutFlowArgs, runCheckoutCommand, steerPlan } from "./shipCheckoutCli.js";
+import { checkoutFlowArgs, runCheckoutCommand, shipKeyRefusal, steerPlan } from "./shipCheckoutCli.js";
 import { defaultMessage, type ShipGroup, type ShipPlan } from "./shipCheckout.js";
 
 const group = (id: string, over: Partial<ShipGroup> = {}): ShipGroup => ({
@@ -73,6 +73,12 @@ describe("[ship] flow: a pass runs through a flow", () => {
     expect(parseManifestText(`[ship]\nmode = "direct"\n`).ship?.ignored).toBeUndefined();
   });
 
+  test("a ship refuses an unknown [ship] key, naming it: a typo of flow must not push straight past the flow", () => {
+    expect(shipKeyRefusal(parseManifestText(`[ship]\nflwo = "change"\n`).ship!)).toBe(".codecast/workspace.toml: [ship] 'flwo' is not a key this cast reads, so it does not ship: a newer cast's setting? cast update; a typo? fix it");
+    expect(shipKeyRefusal({ ignored: ["a", "b"] })).toContain("'a', 'b' are not keys");
+    expect(shipKeyRefusal(parseManifestText(`[ship]\nflow = "change"\n`).ship!)).toBeNull();
+  });
+
   test("set, the pass is the named flow's checkout change; a dry run only plans; steering flags and --no-fetch are refused", () => {
     expect(checkoutFlowArgs(undefined, {})).toBeNull();
     expect(checkoutFlowArgs("change", {})).toEqual(["flow", "run", "change", "--checkout"]);
@@ -107,6 +113,33 @@ describe("[ship] flow: a pass runs through a flow", () => {
       fs.rmSync(root, { recursive: true, force: true });
     }
     expect(ran).toEqual([{ args: ["flow", "run", "change", "--checkout"], cwd: root }]);
+    expect(records).toEqual([]);
+  });
+
+  test("cast ship checkout with a misspelled flow key refuses, running no flow and pushing nothing", async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cast-ship-typo-")));
+    const env = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" };
+    const git = (...args: string[]) => execFileSync("git", ["-C", root, ...args], { env, encoding: "utf-8" });
+    git("init", "-q", "-b", "main");
+    fs.mkdirSync(path.join(root, ".codecast"));
+    fs.writeFileSync(path.join(root, ".codecast", "workspace.toml"), `[ship]\nmode = "direct"\nflwo = "change"\n`);
+    git("add", "-A");
+    git("commit", "-qm", "base");
+    fs.writeFileSync(path.join(root, "a.ts"), "export const a = 1;\n");
+    const cwd = process.cwd();
+    const ran: string[][] = [];
+    const records: unknown[] = [];
+    process.chdir(root);
+    let refused: unknown;
+    try {
+      await runCheckoutCommand({}, async (body) => { records.push(body); }, async (args) => { ran.push(args); return 0; }).catch((err) => { refused = err; });
+      expect(git("status", "--porcelain")).toContain("a.ts");
+    } finally {
+      process.chdir(cwd);
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+    expect(String(refused)).toContain("[ship] 'flwo' is not a key this cast reads, so it does not ship");
+    expect(ran).toEqual([]);
     expect(records).toEqual([]);
   });
 });
