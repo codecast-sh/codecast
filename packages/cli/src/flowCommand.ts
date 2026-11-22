@@ -537,7 +537,15 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const started = await cast(runArgs, top);
       const runId = started.out.match(/"run_id"\s*:\s*"([^"]+)"/)?.[1];
       if (started.code !== 0 || !runId) { console.error((started.err || started.out).trim()); process.exit(1); }
-      if (opts.checkout) (await import("./workflow/checkoutRunHold.js")).recordCheckoutRun(checkoutGitDir, runId, task);
+      if (opts.checkout) {
+        try {
+          (await import("./workflow/checkoutRunHold.js")).recordCheckoutRun(checkoutGitDir, runId, task);
+        } catch (err) {
+          // The run is going; the checkout's hold says another pass has it, so a second pass is not kept out.
+          console.error(`${err instanceof Error ? err.message : String(err)} Run ${runId} is going; cancel it (cast workflow cancel ${runId}) if the other pass holds the same files.`);
+          process.exitCode = 1;
+        }
+      }
       const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [] };
       if (opts.json) { console.log(JSON.stringify(result)); return; }
       console.log(`${bold(found.label)} started on ${task}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
