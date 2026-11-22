@@ -92,6 +92,33 @@ describe("the store's guess is the server's answer", () => {
     expect(conv(db).driver_user_id).toBe(ME);
   });
 
+  test("a run a role started gives nobody a starter row, and has no starter until the role comes off", async () => {
+    const db = fixtures({ role_started: true }, []);
+    const growth = await performCreateRole(ctxOf(db), ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    conv(db).org_role_id = growth._id;
+    const before = (await performListOwners(ctxOf(db), ME as any, "sess1"))!;
+    expect(before.owners).toEqual([]);
+    expect(before.owner_ids).toEqual([]);
+    expect(before.driver).toEqual({ kind: "role", role_id: growth._id });
+    // The account it runs on adds a teammate: the runner gets no row.
+    const read = await parity(db, ME, { add: [MATE] });
+    expect(read.owner_ids).toEqual([MATE]);
+    expect(read.driver).toEqual({ kind: "role", role_id: growth._id });
+    await parity(db, ME, { remove: [MATE] });
+    expect((await ownerRowsOf(ctxOf(db), CONV as any)).length).toBe(0);
+    // Released from the role, it is the runner's again.
+    const released = await parity(db, ME, { role: null });
+    expect(released.owner_ids).toEqual([ME]);
+  });
+
+  test("taking ownership of a run a role started makes you its only person owner", async () => {
+    const db = fixtures({ role_started: true }, []);
+    const growth = await performCreateRole(ctxOf(db), ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    conv(db).org_role_id = growth._id;
+    const read = await parity(db, MATE, { add: [MATE] });
+    expect(read.owner_ids).toEqual([MATE]);
+  });
+
   test("a role, a person who takes the wheel, and the role again", async () => {
     const db = fixtures({}, [[ME, 1]]);
     const growth = await performCreateRole(ctxOf(db), ME as any, { name: "Growth", handle: "growth", team_id: TEAM });

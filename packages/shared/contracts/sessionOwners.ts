@@ -6,7 +6,8 @@
 //
 // The facts are the conversation's, as stored: its owner rows, the author and
 // runner (whose human is the owner while there are no rows), the role it is
-// filed under, the person who took the wheel, and the primary-owner cache.
+// filed under and whether a role started it, the person who took the wheel,
+// and the primary-owner cache.
 
 export type OwnerRowFact = { user_id: string; added_at: number; added_by?: string; seen_at?: number; note?: string };
 
@@ -17,6 +18,10 @@ export type OwnersFacts = {
   /** Which of the people named here are agent accounts (never owners). */
   bots: string[];
   role_id: string | null;
+  /** conversations.role_started: a role started it, so no person did. */
+  role_started: boolean;
+  /** conversations.standing_role_id: it is a role's own session. */
+  standing_role_id: string | null;
   driver_user_id: string | null;
   /** conversations.owner_user_id: the primary owner cache. */
   primary_id: string | null;
@@ -39,8 +44,8 @@ export type OwnersChangeInput = {
 /**
  * The facts as a client holds them: the people from an owners read
  * (sessionOwnership.listOwners: `owners`, where a starter with no row is
- * `implicit`, plus `runner`, `author_id` and `bots`), and the role, the driver
- * and the primary from the session row. The web store paints a Save from
+ * `implicit`, plus `runner`, `author_id`, `bots` and `role_started`), and the
+ * role, the driver and the primary from the session row. The web store paints a Save from
  * exactly this, so a server test can prove the read is enough.
  */
 export function ownersFactsFromRead(read: any, sessionRow: any): OwnersFacts {
@@ -50,6 +55,8 @@ export function ownersFactsFromRead(read: any, sessionRow: any): OwnersFacts {
     runner_id: String(read?.runner?.user_id ?? sessionRow?.user_id ?? ""),
     bots: ((read?.bots ?? []) as unknown[]).map(String),
     role_id: sessionRow?.org_role_id ? String(sessionRow.org_role_id) : null,
+    role_started: !!read?.role_started,
+    standing_role_id: sessionRow?.standing_role_id ? String(sessionRow.standing_role_id) : null,
     driver_user_id: sessionRow?.driver_user_id ? String(sessionRow.driver_user_id) : null,
     primary_id: sessionRow?.owner_user_id ? String(sessionRow.owner_user_id) : null,
   };
@@ -60,8 +67,20 @@ export function sortedRows(rows: OwnerRowFact[]): OwnerRowFact[] {
   return rows.map((r, i) => ({ r, i })).sort((a, b) => a.r.added_at - b.r.added_at || a.i - b.i).map(({ r }) => r);
 }
 
-/** The person who started it: the author, else the runner, never an agent. */
-export function starterOf(f: Pick<OwnersFacts, "author_id" | "runner_id" | "bots">): string | null {
+// Started by a role: a session the role started on its own (role_started),
+// or a role's standing session, while it is still filed under a role. No
+// person started it, so no person owns it without a row: it is the role's
+// alone and in no person's inbox (inboxProjection isHeldByRoleAlone). It is
+// provenance, never an absent owner: a person's own session filed under a
+// role has no owner rows either, and it stays theirs.
+export function startedByRole(row: { org_role_id?: unknown; role_started?: boolean | null; standing_role_id?: unknown }): boolean {
+  return !!row.org_role_id && (!!row.role_started || !!row.standing_role_id);
+}
+
+/** The person who started it: the author, else the runner, never an agent,
+ *  and nobody when a role started it. */
+export function starterOf(f: Pick<OwnersFacts, "author_id" | "runner_id" | "bots" | "role_id" | "role_started" | "standing_role_id">): string | null {
+  if (startedByRole({ org_role_id: f.role_id, role_started: f.role_started, standing_role_id: f.standing_role_id })) return null;
   for (const id of [f.author_id, f.runner_id]) if (id && !f.bots.includes(id)) return id;
   return null;
 }
@@ -74,11 +93,20 @@ export function listedOwnerIds(f: OwnersFacts): string[] {
   return starter ? [starter] : [];
 }
 
-/** Who drives: the person who took the wheel while they still own it, else
- *  the filed role, else the primary owner, else the first owner. */
+// The role drives the session: it is filed under a role and no person took
+// over (driver_user_id unset). What it waits on is the role's to answer, so
+// the inbox files it as working ("With <role>") instead of in a person's
+// needs input. A person driving (the role paused) files it like any session.
+export function roleDrives(row: { org_role_id?: unknown; driver_user_id?: unknown }): boolean {
+  return !!row.org_role_id && !row.driver_user_id;
+}
+
+/** Who drives, ONE rule: the filed role unless a person took the wheel
+ *  (roleDrives), else that person while they own it, else the primary owner,
+ *  else the first owner. */
 export function driverOf(f: Pick<OwnersFacts, "role_id" | "driver_user_id" | "primary_id">, ownerIds: string[]): SessionDriverFact | null {
+  if (f.role_id && roleDrives({ org_role_id: f.role_id, driver_user_id: f.driver_user_id })) return { kind: "role", role_id: f.role_id };
   if (f.driver_user_id && ownerIds.includes(f.driver_user_id)) return { kind: "user", user_id: f.driver_user_id };
-  if (f.role_id) return { kind: "role", role_id: f.role_id };
   const primary = f.primary_id && ownerIds.includes(f.primary_id) ? f.primary_id : ownerIds[0];
   return primary ? { kind: "user", user_id: primary } : null;
 }

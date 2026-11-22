@@ -75,6 +75,8 @@ export type SessionOwnersRow = {
   runner: OwnerRunner | null;
   author_id: string | null;
   bots: string[];
+  /** A role started it: while it is filed under a role, it has no starter owner. */
+  role_started?: boolean;
   can_edit: boolean;
 };
 

@@ -29,9 +29,10 @@ export function useStoreOwnersEnv(
   base: Pick<OwnersEnv, "teamMembers" | "currentUser"> & { notify: NonNullable<OwnersEnv["notify"]> },
 ): OwnersEnv {
   const { teamMembers, currentUser, notify } = base;
+  // A run a role holds alone has no starter owner (shared starterOf).
   const starterIds = useInboxStore(useShallow((s) => {
     const row = sessionRowOf(s, conversationId);
-    return [row?.author_user_id ?? null, row?.user_id ?? null] as const;
+    return row?.role_alone ? [null, null] as const : [row?.author_user_id ?? null, row?.user_id ?? null] as const;
   }));
   const implicitOwnerId = (() => {
     const isBot = (id: string) => {

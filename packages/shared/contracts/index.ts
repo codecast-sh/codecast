@@ -118,6 +118,8 @@ export * from "./githubAppInstallState";
 // Convex overlay and the CLI inbox both call, the time-flip stamps and the
 // order-independent digest every client compares against (sync-convergence C3, C8).
 export * from "./inboxProjection";
+// Who started a session and who drives it, read by the inbox placement too.
+export { roleDrives, startedByRole } from "./sessionOwners";
 export * from "./appSurfaces";
 // How a pull request is named: one parser for the reference forms people type
 // and one builder for the codecast page link, shared by the CLI, Convex and web.

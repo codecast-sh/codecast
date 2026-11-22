@@ -1,6 +1,7 @@
 import { HOSTED_AGENT_TYPE } from "./assistant";
 import { DORMANT_CLAIM_TTL_MS } from "./agentStatus";
 import { deriveLiveAt, rowLiveDeadlines } from "./inboxProjection";
+import { roleDrives, startedByRole } from "./sessionOwners";
 import { describe, expect, test } from "bun:test";
 import {
   INBOX_BUCKETS,
@@ -27,9 +28,7 @@ import {
   selectWorkingSet,
   shouldShowInInbox,
   isHeldByRoleAlone,
-  startedByRole,
   personWorkState,
-  roleDrives,
   type InboxBucket,
   type InboxPlacementInput,
   type RollupRow,

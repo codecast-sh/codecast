@@ -15,7 +15,7 @@ import {
   ownerRowsOf,
   type OwnerRowSnapshot,
 } from "./sessionOwners";
-import { driverOf as sharedDriverOf, listedOwnerIds, humanRunnerOf, isLeave, leaveLeavesAnOwner, pinnedDriverAfterAdd, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
+import { driverOf as sharedDriverOf, listedOwnerIds, humanRunnerOf, isLeave, leaveLeavesAnOwner, pinnedDriverAfterAdd, starterOf, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { routeUpWaitingSession } from "./agentTasks";
 import { requireRole, userCanAdminRole } from "./lib/orgAccess";
@@ -450,10 +450,11 @@ async function reparentSessionCore(
     } else {
       // The person who started a session owns it before any row exists. An
       // owners-list add writes that row first, so adding a teammate never
-      // takes the session out of its starter's inbox.
-      if (mode === "add" && !dropRole && (await listSessionOwnerIds(ctx, conversation._id)).length === 0) {
-        const starter = await humanStarterUser(ctx, conversation);
-        if (starter && !desiredKeys.has(String(starter._id))) await addSessionOwnerRow(ctx, conversation._id, starter._id, starter._id);
+      // takes the session out of its starter's inbox. A run a role started
+      // has no starter (shared starterOf), so it gives nobody a row.
+      if (mode === "add" && factsBefore && factsBefore.rows.length === 0) {
+        const starter = starterOf(factsBefore);
+        if (starter && !desiredKeys.has(starter)) await addSessionOwnerRow(ctx, conversation._id, starter as Id<"users">, starter as Id<"users">);
       }
       for (const user of desired) {
         if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId, handoff ?? note)) added.push(user._id);
@@ -714,20 +715,17 @@ export async function ownersFactsOf(ctx: { db: any }, conversation: any): Promis
     runner_id: String(conversation.user_id),
     bots,
     role_id: conversation.org_role_id ? String(conversation.org_role_id) : null,
+    role_started: !!conversation.role_started,
+    standing_role_id: conversation.standing_role_id ? String(conversation.standing_role_id) : null,
     driver_user_id: conversation.driver_user_id ? String(conversation.driver_user_id) : null,
     primary_id: conversation.owner_user_id ? String(conversation.owner_user_id) : null,
   };
 }
 
-// The owner set as the session shows it: its owner rows, else the human who
-// started it.
+// The owner set as the session shows it (shared listedOwnerIds): its owner
+// rows, else the human who started it, and nobody for a run a role started.
 async function ownerIdsOrStarter(ctx: { db: any }, conversation: any): Promise<string[]> {
-  const ids = (await listSessionOwnerIds(ctx, conversation._id)).map(String);
-  if (ids.length === 0) {
-    const starter = await humanStarterUser(ctx, conversation);
-    if (starter) ids.push(String(starter._id));
-  }
-  return ids;
+  return listedOwnerIds(await ownersFactsOf(ctx, conversation));
 }
 
 // `none` hands the wheel back to the default: the role if one is filed,
@@ -1110,14 +1108,16 @@ export async function performListOwners(
   runner: OwnerRunner | null;
   author_id: string | null;
   bots: string[];
+  role_started: boolean;
   can_edit: boolean;
 } | null> {
   const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) return null;
   const facts = await ownersFactsOf(ctx, conversation);
   const owners = await listOwnerInfos(ctx, conversation._id);
-  if (owners.length === 0) {
-    const starter = await humanStarterUser(ctx, conversation);
+  const starterId = owners.length === 0 ? starterOf(facts) : null;
+  if (starterId) {
+    const starter = await ctx.db.get(starterId as Id<"users">);
     if (starter) {
       const startedAt = conversation.started_at ?? conversation._creationTime ?? Date.now();
       owners.push({
@@ -1160,6 +1160,7 @@ export async function performListOwners(
     runner,
     author_id: facts.author_id,
     bots: facts.bots,
+    role_started: facts.role_started,
     can_edit: String(conversation.user_id) === String(authUserId) || owners.some((o) => o.user_id === String(authUserId)),
   };
 }
