@@ -23,6 +23,7 @@ import { defaultMessage, freezeAndAttribute, makePlan, trailerFor, upstreamRef, 
 import type { SessionEdits } from "../land/attribute.js";
 import type { RosterRow } from "../land/scan.js";
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { execFileAsync } from "../proc.js";
 import { git, gitTry } from "../wipSnapshot.js";
 import type { FrozenChange } from "./flowChangeFile.js";
@@ -269,16 +270,61 @@ async function branchTip(root: string, change: FrozenChange, runWorktree: string
   return tip;
 }
 
-/** A checkout's change frozen again: its files and any file one of its writers now holds (a fix may add a test), cut per writer as before. */
-async function refreezeCheckoutChange(root: string, before: FrozenChange, roster?: Roster): Promise<FrozenChange> {
+/**
+ * The upstream commit when it holds every one of `paths` as the checkout holds them now (a file gone from both is
+ * held too), so a pass with nothing left uncommitted has landed; else null.
+ */
+async function passLandedOn(root: string, paths: string[]): Promise<string | null> {
+  const upstream = await upstreamRef(root).catch(() => "HEAD");
+  const sha = upstream === "HEAD" ? null : await gitTry(root, ["rev-parse", `${upstream}^{commit}`]);
+  if (!sha || !paths.length) return null;
+  const theirs = new Map(((await gitTry(root, ["ls-tree", "-r", "-z", sha, "--", ...paths])) ?? "").split("\0").filter(Boolean).map((l) => {
+    const tab = l.indexOf("\t");
+    return [l.slice(tab + 1), l.slice(0, tab).split(" ")[2]] as const;
+  }));
+  for (const p of paths) {
+    const ours = fs.existsSync(path.join(root, p)) ? await git(root, ["hash-object", "--", p]) : null;
+    if (ours !== (theirs.get(p) ?? null)) return null;
+  }
+  return sha;
+}
+
+/**
+ * A checkout's change frozen again: its files, any file one of its writers now holds (a fix may add a test), and,
+ * when `since` is given (the brief went out then), any changed file no session's edit names that was written or
+ * moved after it, since a writer's shell makes those (a lockfile, codegen output, a `git mv` target); cut per writer
+ * as before. A pass whose files the checkout no longer changes because upstream already holds them has landed: the
+ * change comes back as it was, with `landed` set.
+ */
+async function refreezeCheckoutChange(root: string, before: FrozenChange, roster?: Roster, since?: number): Promise<FrozenChange> {
   const paths = new Set(before.paths);
   const writers = new Set(Object.values(before.writers ?? {}).map((w) => w.conversation));
-  const change = await freezeCheckoutChange(root, {
-    branch: before.branch, worktree: before.worktree, title: before.title ?? null, roster,
-    keep: (p, conversation) => paths.has(p) || (!!conversation && writers.has(conversation)),
-  });
+  // A rename keeps a file's mtime and moves its ctime.
+  const touched = (p: string) => { try { const st = fs.lstatSync(path.join(root, p)); return Math.max(st.mtimeMs, st.ctimeMs); } catch { return 0; } };
+  const lateShellWrite = (p: string) => since !== undefined && touched(p) > since;
+  // A `git mv` source is gone, so nothing dates it: it goes with the target written after the brief.
+  const movedAway = new Set<string>();
+  if (since !== undefined) {
+    const entries = ((await gitTry(root, ["status", "--porcelain=v1", "-z", "--untracked-files=no"])) ?? "").split("\0");
+    for (let i = 0; i < entries.length; i++) {
+      if (!/^R|^.R/.test(entries[i])) continue;
+      if (lateShellWrite(entries[i].slice(3))) movedAway.add(entries[i + 1]);
+      i++;
+    }
+  }
   // The session the run was started from stays its subject: it hears findings that name none of the change's files.
-  return { ...change, ...(before.session ? { session: before.session } : {}), ...(before.conversation ? { conversation: before.conversation } : {}) };
+  const subject = { ...(before.session ? { session: before.session } : {}), ...(before.conversation ? { conversation: before.conversation } : {}) };
+  try {
+    const change = await freezeCheckoutChange(root, {
+      branch: before.branch, worktree: before.worktree, title: before.title ?? null, roster,
+      keep: (p, conversation) => paths.has(p) || (!!conversation && writers.has(conversation)) || (!conversation && (lateShellWrite(p) || movedAway.has(p))),
+    });
+    return { ...change, ...subject };
+  } catch (err) {
+    const landed = err instanceof NoCheckoutChange ? await passLandedOn(root, before.paths) : null;
+    if (!landed) throw err;
+    return { ...before, landed };
+  }
 }
 
 /**
@@ -288,13 +334,13 @@ async function refreezeCheckoutChange(root: string, before: FrozenChange, roster
  * as it stands now. A checkout's change is frozen again from the checkout as it
  * is now (refreezeCheckoutChange). Returns the new change and whether anything moved.
  */
-export async function refreezeSessionChange(root: string, runDir: string, worktreePath: string | null, opts: { roster?: Roster } = {}): Promise<{ change: FrozenChange; moved: boolean }> {
+export async function refreezeSessionChange(root: string, runDir: string, worktreePath: string | null, opts: { roster?: Roster; since?: number } = {}): Promise<{ change: FrozenChange; moved: boolean }> {
   const { readFrozenChange, writeFrozenChange } = await import("./flowChangeFile.js");
   const before = readFrozenChange(runDir);
   if (!before || (!before.session && before.source !== "checkout")) throw new Error("The run's change did not come from a session, so there is no session's change to freeze again");
   // A named branch or pull request is the change: the session fixes it by committing there (a pull request's by pushing).
   const change: FrozenChange = before.source === "checkout"
-    ? await refreezeCheckoutChange(root, before, opts.roster)
+    ? await refreezeCheckoutChange(root, before, opts.roster, opts.since)
     : before.source === "session"
     ? await freezeSessionChange(root, before.conversation ?? before.session!, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null })
     : { ...before, tip: await branchTip(root, before, worktreePath) };
