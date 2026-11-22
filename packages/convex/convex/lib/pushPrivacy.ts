@@ -39,6 +39,7 @@ export const PUSH_TYPE_LABELS: Record<string, [string, string]> = {
   chat_dm: ["direct message", "direct messages"],
   chat_added: ["channel invite", "channel invites"],
   chat_post: ["channel message", "channel messages"],
+  call_chat: ["huddle chat line", "huddle chat lines"],
   daemon_overloaded: ["overloaded daemon", "overloaded daemons"],
   machine_overloaded: ["overloaded machine", "overloaded machines"],
   goal_stall: ["stalled focus item", "stalled focus items"],

@@ -37,6 +37,8 @@ export const PREFERENCE_MAP: Record<string, string> = {
   chat_dm: "mention",
   chat_added: "chat_activity",
   chat_post: "chat_activity",
+  // A line in the chat of a huddle you are in: chat activity, muted with it.
+  call_chat: "chat_activity",
   // A frozen daemon delays deliveries and echoes, which is what session_error
   // already means to a reader. Riding that key keeps the alert under a mute
   // switch that exists rather than inventing one with no settings row.

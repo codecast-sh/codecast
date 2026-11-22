@@ -26,7 +26,8 @@ import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { huddleChatLineHeader, isAskDelivery, isHuddlePass, isMeetRoomKey, isRecRoomKey, isRoomlessKey, isToolResultCarrier, reportedWorkIds } from "@codecast/shared/contracts";
 import { characterOf } from "@codecast/shared/contracts/sessionCharacter";
-import { authorizeRoom, canReadRoomlessCall } from "./callRooms";
+import { authorizeRoom, canReadRoomlessCall, liveMembers } from "./callRooms";
+import { emitNotification } from "./notificationRouter";
 import { MAX_ATTACHMENTS } from "./chatText";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { scheduleFaceLeave, scheduleFaceTell } from "./callFace";
@@ -282,7 +283,12 @@ export const post = mutation({
     const live = await liveTranscriptFor(ctx, args.room_key);
     if (!live) return;
     const poster = await ctx.db.get(userId);
-    await relayLineToFeeds(ctx, live._id, poster?.name ?? poster?.email ?? "Someone", text, attachments.map((a) => a.storage_id));
+    const posterName = poster?.name ?? poster?.email ?? "Someone";
+    // A line typed on an ended call's page belongs to that call: nobody in it
+    // to ring now.
+    const forLive = !(named && named.room_key === args.room_key) || named._id === live._id;
+    if (forLive) await notifyCallChat(ctx, { transcript: live, text, author: { user_id: userId, name: posterName } });
+    await relayLineToFeeds(ctx, live._id, posterName, text, attachments.map((a) => a.storage_id));
   },
 });
 
@@ -315,6 +321,59 @@ export async function relayLineToFeeds(
       image_storage_ids: imageIds.length > 0 ? imageIds : undefined,
     });
   }
+}
+
+/** A line in a live huddle's chat reaches everyone else in that huddle: one
+ *  bell row each, opening the call, whose page reads its chat beside the
+ *  words. The people in it are the live seats of the room (liveMembers). A
+ *  person's line names them and never reaches them; an agent's mirrored line
+ *  names the agent (no account behind it, so `actor_user_id` stays empty and
+ *  the person who fed it hears it like everyone else) and rings no phone,
+ *  like every line a machine writes (agent-channels.md C3). A line typed on
+ *  an ended call's page, or in a room with no record running, has no huddle
+ *  to reach. */
+export async function notifyCallChat(
+  ctx: any,
+  args: {
+    transcript: Doc<"transcripts">;
+    text: string;
+    author: { user_id: Id<"users">; name: string } | { agent: AgentIdentity };
+  },
+): Promise<number> {
+  const { transcript } = args;
+  if (transcript.status !== "live") return 0;
+  const seats: Doc<"call_members">[] = await ctx.db
+    .query("call_members")
+    .withIndex("by_room", (q: any) => q.eq("room_key", transcript.room_key))
+    .collect();
+  const authorId = "user_id" in args.author ? String(args.author.user_id) : null;
+  const recipients: Id<"users">[] = [];
+  for (const seat of liveMembers(seats, Date.now())) {
+    const key = String(seat.user_id);
+    if (key === authorId || recipients.some((r) => String(r) === key)) continue;
+    const person = await ctx.db.get(seat.user_id);
+    if (!person || person.is_bot) continue;
+    recipients.push(seat.user_id);
+  }
+  if (recipients.length === 0) return 0;
+  const agent = "agent" in args.author ? args.author.agent : null;
+  const name = agent ? agent.name : (args.author as { name: string }).name;
+  const body = args.text.length > 280 ? `${args.text.slice(0, 279)}…` : args.text;
+  const words = body || "attached an image";
+  const { notified } = await emitNotification(ctx, {
+    event_type: "call_chat",
+    ...(authorId ? { actor_user_id: args.author.user_id as Id<"users"> } : {}),
+    actor_name: name,
+    ...(agent?.character_avatar ? { actor_avatar: agent.character_avatar } : {}),
+    entity_type: "call",
+    entity_id: String(transcript._id),
+    message: `${name} in the huddle chat: ${words}`,
+    recipient_ids: recipients,
+    push_subtitle: transcript.title ? `huddle · ${transcript.title}` : "huddle chat",
+    push_body: words,
+    ...(agent ? { push: false } : {}),
+  });
+  return notified;
 }
 
 export async function liveTranscriptFor(ctx: any, roomKey: string): Promise<Doc<"transcripts"> | null> {
@@ -462,6 +521,10 @@ export const mirrorAgentTurn = internalMutation({
     }
     await ctx.db.patch(feed._id, { last_mirrored_message_id: replies[replies.length - 1]._id });
     if (posted.length === 0) return { mirrored: false, reason: "passed" };
+    const agent = await agentIdentity(ctx, args.conversation_id);
+    if (agent) {
+      for (const m of posted) await notifyCallChat(ctx, { transcript, text: agentLineText(m), author: { agent } });
+    }
     // A meeting on another platform has its own chat, where its people
     // actually are: the bot says the reply there too (meetingBots.sayInMeeting).
     if (isMeetRoomKey(feed.room_key)) {

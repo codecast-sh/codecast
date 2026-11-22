@@ -4933,6 +4933,8 @@ export default defineSchema({
       // Someone added you to a private channel or a group message.
       v.literal("chat_added"),
       v.literal("chat_post"),
+      // A line in a huddle's call chat, to everyone else in the huddle (callChat.ts).
+      v.literal("call_chat"),
       // One machine's daemon event loop froze past the budget in the last hour
       // (daemonLogs.checkDeviceLoopFreeze). Entity is the device, not a session:
       // the whole machine is late, not one conversation.
@@ -5013,7 +5015,9 @@ export default defineSchema({
       // A weekly card by its week key: opens /week on that week.
       v.literal("weekly_card"),
       // A metric watch by its short id: opens /ops/metrics/mw-N.
-      v.literal("metric_watch")
+      v.literal("metric_watch"),
+      // A huddle by its transcript id: a call chat line opens /calls/<id>.
+      v.literal("call")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -8951,7 +8955,9 @@ export default defineSchema({
       // A weekly card, for its owner's Monday notice. Same reason.
       v.literal("weekly_card"),
       // A metric watch, for its alert to the people it names. Same reason.
-      v.literal("metric_watch")
+      v.literal("metric_watch"),
+      // A huddle, for its call chat lines. Direct recipients only. Same reason.
+      v.literal("call")
     ),
     entity_id: v.string(),
     reason: v.union(
