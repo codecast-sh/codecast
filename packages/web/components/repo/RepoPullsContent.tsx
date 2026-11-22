@@ -21,6 +21,10 @@ import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { prPageHref, repoTreeHref, type RepoRouteFamily } from "../../lib/repoView";
 import { relTimeShort } from "../../lib/utils";
 import { serverErrorText } from "../../lib/errorCause";
+import { useDeployReach } from "../../hooks/useDeployReach";
+import { repoObjectId } from "../../lib/entityLinks";
+import { REACH_LOOK } from "../../lib/deploys/deployPill";
+import { FAILED_ICON, REACH_ICON, TONE_TEXT } from "../../lib/deploys/deployLook";
 
 type Filter = "open" | "merged" | "closed" | "mine" | "shepherded";
 
@@ -31,6 +35,23 @@ const FETCH_STATE: Record<Filter, "open" | "closed" | "all"> = {
 
 const isMerged = (pull: RepoPull) => !!pull.merged_at;
 const isShepherded = (pull: RepoPull) => !!pull.shepherd_enabled || !!pull.conversation_id;
+
+/** Merged this recently, a row reads its reach: a reader scans for what is not live yet, and older merges are. */
+const REACH_WINDOW_MS = 14 * 24 * 60 * 60 * 1000;
+
+/** A merged row's reach: live, or what holds it. Nothing for a change no target deploys. */
+function RowReach({ repository, number }: { repository: string; number: number }) {
+  const reach = useDeployReach(repoObjectId({ type: "pr", repository, number }));
+  if (!reach) return null;
+  const look = REACH_LOOK[reach.state];
+  const Icon = REACH_ICON[reach.state];
+  return (
+    <span data-pull-reach={reach.state} className={`inline-flex items-center gap-1 ${TONE_TEXT[look.tone]}`} title="Where this change runs in production">
+      <Icon aria-hidden className={`size-3 shrink-0 ${reach.state === "failed" ? FAILED_ICON : ""}`} />
+      {look.word}
+    </span>
+  );
+}
 
 function matches(pull: RepoPull, filter: Filter, login: string | undefined): boolean {
   if (filter === "open") return pull.state === "open";
@@ -55,6 +76,9 @@ export function RepoPullsContent({ repository, family }: { repository: string; f
 
   const fetched = read.data?.pulls ?? [];
   const rows = fetched.filter((pull) => matches(pull, filter, login));
+  // Reach is read for the signed-in only (the public read joins nothing), and for the recent merges on screen.
+  const [now] = useState(() => Date.now());
+  const reads = (pull: RepoPull) => joined && isMerged(pull) && now - (pull.merged_at ?? 0) < REACH_WINDOW_MS;
   // The signed-in read joins these; the public one never does.
   const joined = fetched.some((pull) => pull.shepherd_enabled !== undefined);
 
@@ -124,6 +148,7 @@ export function RepoPullsContent({ repository, family }: { repository: string; f
               </span>
             )}
             {isShepherded(pull) && <span className="text-sol-cyan">shepherded</span>}
+            {reads(pull) && <RowReach repository={repository} number={pull.number} />}
           </div>
         </div>
       </div>)}

@@ -21,6 +21,7 @@ import { RepoWindowControl } from "../repo/RepoWindowControl";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { EntityIdPill } from "../EntityIdPill";
 import { PRLinked, PRReviewers } from "./PRLinked";
+import { PRDeployBand, PRReachChip, PRShipsTo, usePrDeploy } from "./PRDeploy";
 import { copyToClipboard, relTimeShort } from "../../lib/utils";
 import { withShortcut } from "../../shortcuts/registry";
 import {
@@ -331,7 +332,10 @@ export function PRHeader({
   checksHref,
   filesHref,
   onOpenComments,
+  authed = false,
 }: {
+  /** Signed in: the team's deploy targets (each one's queue and press) are read. */
+  authed?: boolean;
   /** Where the figures lead: the checks view, the diff, the first open thread. */
   checksHref?: string;
   filesHref?: string;
@@ -357,6 +361,7 @@ export function PRHeader({
   const [editNonce, setEditNonce] = useState(0);
   const editTitle = () => setEditNonce((n) => n + 1);
   const verbs = typeof actions === "function" ? actions({ editTitle }) : actions;
+  const deploy = usePrDeploy(pr, repository, authed);
 
   return (
     <header className="pr-band border-b border-sol-border/60 px-5 pt-4 pb-3 shrink-0">
@@ -393,6 +398,8 @@ export function PRHeader({
           <StateIcon className="w-3.5 h-3.5" />
           {state.label}
         </Chip>
+        {/* A merged one's next question: is it live. */}
+        <PRReachChip model={deploy} Chip={Chip} />
         <span className="flex items-center gap-1.5 text-[12px] text-sol-text-muted">
           <CommentAvatar
             name={pr.author_github_username ?? "?"}
@@ -422,11 +429,19 @@ export function PRHeader({
           {merge ? (
             <span style={{ color: accentVar(merge.accent) }}>{merge.label}</span>
           ) : stateKey === "merged" || stateKey === "closed" ? (
-            <span style={{ color: accentVar(state.accent) }}>{state.label}</span>
+            <span style={{ color: accentVar(state.accent) }} title={pr.merged_at || pr.closed_at ? new Date(pr.merged_at ?? pr.closed_at).toLocaleString() : undefined}>
+              {state.label}
+              {(pr.merged_at ?? pr.closed_at) ? <span className="ml-1.5 text-sol-text-dim">{relTimeShort(pr.merged_at ?? pr.closed_at)} ago</span> : null}
+            </span>
           ) : (
             <span className="text-sol-text-dim">GitHub has not said yet</span>
           )}
         </Figure>
+        {deploy.open && deploy.declares && (
+          <Figure label="Ships to">
+            <PRShipsTo model={deploy} />
+          </Figure>
+        )}
         <Figure label="Open comments" onClick={openComments > 0 ? onOpenComments : undefined} title={withShortcut("Go to the first open thread", "pr.nextThread")}>
           <span className={openComments > 0 ? "text-sol-yellow" : "text-sol-text-muted"}>
             <CircleDot className="w-3 h-3 inline mr-1 -mt-px" />
@@ -444,6 +459,7 @@ export function PRHeader({
           </span>
         </Figure>
       </div>
+      <PRDeployBand model={deploy} />
     </header>
   );
 }
