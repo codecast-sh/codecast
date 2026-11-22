@@ -400,7 +400,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // The change on its own branch and worktree, named as the run's isolated stations name theirs.
       const worktree = runSlug(graph, { task_id: task }, "run");
       const runDir = lineRunDir(top, worktree);
-      const { writeFrozenChange } = await import("./workflow/flowChange.js");
+      const { writeFrozenChange, originTip, freezeSessionChange } = await import("./workflow/flowChange.js");
       let change: import("./workflow/flowChange.js").FrozenChange | null = null;
       // A worktree an earlier run of this change made, read before its branch moves: one holding work of its own is never reset.
       const earlierPath = (await cast(["ws", "path", worktree], top)).out.trim();
@@ -422,17 +422,14 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();
         if (!head) { console.error(`No branch ${branch} here`); process.exit(1); }
         const { branchChangePaths } = await import("./workflow/flowChangeFile.js");
-        const remoteTip = await (await import("./workflow/flowChange.js")).originTip(top, branch);
+        const remoteTip = await originTip(top, branch);
         // The files the branch changes, so a station gated on paths (when=) runs when they say it should.
         change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps, task)), base: head, tip: head, ...(remoteTip ? { remote_tip: remoteTip } : {}), branch, worktree, paths: branchChangePaths(top, branch), shared: [], held: [] };
       } else if (sessionRef) {
-        const { freezeSessionChange } = await import("./workflow/flowChange.js");
-        try {
-          change = await freezeSessionChange(top, sessionRef, { branch: `codecast/${worktree}`, worktree, title: changeTitle, only });
-        } catch (err) {
+        change = await freezeSessionChange(top, sessionRef, { branch: `codecast/${worktree}`, worktree, title: changeTitle, only }).catch((err: unknown) => {
           console.error(err instanceof Error ? err.message : String(err));
           process.exit(1);
-        }
+        });
       }
       if (change) {
         // The workspace's setup (its install) runs here, before the run starts: it can take minutes.
