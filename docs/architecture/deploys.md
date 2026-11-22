@@ -324,16 +324,19 @@ Deploys page) parses through `contracts/deployTargets`.
 The targets have their own file because released CLIs validate
 workspace.toml strictly (an unknown key in `[[ship.deploy]]` or at the top
 level refuses the whole manifest, and with it `cast ship` and workspace
-acquire). Keep workspace.toml to the keys the oldest CLI in use reads. An
-unknown key in `[ship]` is read past and named by `cast ship checkout`, but
-CLIs released before that rule refuse it like the rest, so a repository
-writes a new `[ship]` key only once `min_cli_version` is at or past a release
-that reads it or reads past it. deploy.toml is read past that: a target key this CLI does not know is
+acquire). Keep workspace.toml to the keys the oldest CLI in use reads.
+deploy.toml is read past that: a target key this CLI does not know is
 ignored and named (`cast line deploy targets` prints it), so a file written
 for a newer CLI still deploys. CLIs before 1.1.249 refuse an unknown target
 key instead, and a pressed deploy of that repository fails on them: raise
 `min_cli_version` to a release that knows a key before any repository writes
 it (`gate` and `rollout` came after `ci` and `finish`, which 1.1.235 reads).
+
+`[ship]` is the one workspace.toml table read the same way from 1.1.256: an
+unknown key is ignored and named by `cast ship checkout`, as a newer cast's
+setting or a typo. CLIs before 1.1.256 refuse it with the whole manifest, so
+a repository adds a `[ship]` key only once `min_cli_version` reaches a release
+that reads it.
 
 ## DP11. Every way a target goes live leaves a dp-N
 

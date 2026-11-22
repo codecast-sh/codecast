@@ -191,7 +191,7 @@ export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: 
   const startedAt = Date.now();
   const root = (await git(process.cwd(), ["rev-parse", "--show-toplevel"]));
   const spec = shipSpec(root);
-  if (spec.ignored) log(`! [ship] ${spec.ignored.map((k) => `'${k}'`).join(", ")}: not known to this cast, so ignored; update cast to use ${spec.ignored.length > 1 ? "them" : "it"}`);
+  for (const k of spec.ignored ?? []) log(`! .codecast/workspace.toml: [ship] '${k}' is not a key this cast reads, so it is ignored (a newer cast's setting? cast update; a typo? fix it)`);
   const flow = spec.flow;
   const flowArgs = checkoutFlowArgs(flow, opts);
   if (flowArgs) {
