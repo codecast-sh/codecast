@@ -332,9 +332,9 @@ key instead, and a pressed deploy of that repository fails on them: raise
 `min_cli_version` to a release that knows a key before any repository writes
 it (`gate` and `rollout` came after `ci` and `finish`, which 1.1.235 reads).
 
-`[ship]` is the one workspace.toml table read the same way from 1.1.256: an
+`[ship]` is the one workspace.toml table read the same way from 1.1.258: an
 unknown key is ignored and named by `cast ship checkout`, as a newer cast's
-setting or a typo. CLIs before 1.1.256 refuse it with the whole manifest, so
+setting or a typo. CLIs before 1.1.258 refuse it with the whole manifest, so
 a repository adds a `[ship]` key only once `min_cli_version` reaches a release
 that reads it.
 
