@@ -1,4 +1,6 @@
 import { useCallback, useRef } from "react";
+import { markInboxAnswered } from "../lib/bootPhase";
+import { useWatchEffect } from "./useWatchEffect";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useConvex } from "convex/react";
 import { useInboxStore, InboxSession, claimsViewer, isConvexId } from "../store/inboxStore";
@@ -99,6 +101,8 @@ export function useLiveInboxSessions(opts?: { onSync?: (sessions: any[]) => void
   const isSyncHost = useIsSyncHost();
   const { data: inboxSessions, error } = useSplitQueryNoThrow(api.conversations.listInboxSessions, isSyncHost ? LIST_INBOX_SESSIONS_ARGS : "skip", "list");
   useFeederError("conversations.listInboxSessions", error);
+  const answered = inboxSessions !== undefined || !!error;
+  useWatchEffect(() => { if (answered) markInboxAnswered(); }, [answered]);
   const convex = useConvex();
   const onSyncRef = useRef(opts?.onSync);
   onSyncRef.current = opts?.onSync;

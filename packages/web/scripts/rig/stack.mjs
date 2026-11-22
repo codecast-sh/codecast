@@ -12,9 +12,10 @@
 //   docs/architecture/sync-sim.md ("Disposable Convex deployment") run by
 //   script: a scratch copy of the tree with no .env.local in it, `convex dev`
 //   as an anonymous local deployment on 127.0.0.1, with the production
-//   variables unset. Its database lives in
-//   ~/.convex/anonymous-convex-backend-state/anonymous-agent/, so the seeded
-//   world survives restarts. `--refresh` copies the tree over the scratch
+//   variables unset. Its database lives in the scratch copy's
+//   packages/convex/.convex/local/default/ (older CLIs: under
+//   ~/.convex/anonymous-convex-backend-state/), so the seeded world survives
+//   restarts. `--refresh` copies the tree over the scratch
 //   copy again and the watcher pushes the change. Two backend caps are
 //   raised (the CLI passes its environment to the backend it spawns): a
 //   function's JS time from 1s to 30s (DATABASE_UDF_USER_TIMEOUT_SECONDS) and
@@ -46,8 +47,11 @@ export const REPO = resolve(HERE, "../../../..");
 export const WEB_DIR = resolve(HERE, "../..");
 export const SCRATCH = process.env.RIG_SCRATCH || "/tmp/codecast-smoke-deploy";
 export const WEB_PORT = Number(process.env.RIG_WEB_PORT || 3297);
-const TMUX_CONVEX = "smoke-deploy";
-const TMUX_WEB = "smoke-web";
+const TMUX_PREFIX = process.env.RIG_TMUX_PREFIX || "";
+const TMUX_CONVEX = `${TMUX_PREFIX}smoke-deploy`;
+const TMUX_WEB = `${TMUX_PREFIX}smoke-web`;
+const ANON_NAME = process.env.RIG_ANON_NAME || "anonymous-agent";
+const PORT_FLAGS = process.env.RIG_CONVEX_PORT ? ` --local-cloud-port ${process.env.RIG_CONVEX_PORT} --local-site-port ${Number(process.env.RIG_CONVEX_PORT) + 1}` : "";
 const ANON_STATE = join(homedir(), ".convex/anonymous-convex-backend-state");
 export const PROD_CONVEX_URL = "https://convex.codecast.sh";
 
@@ -66,7 +70,8 @@ export function localDeployment() {
     throw new Error(`refusing: ${envFile} names ${convexUrl} ${deployment}, not a local anonymous deployment`);
   }
   const name = deployment.slice("anonymous:".length);
-  const config = JSON.parse(readFileSync(join(ANON_STATE, name, "config.json"), "utf8"));
+  const projectLocal = join(SCRATCH, "packages/convex/.convex/local/default/config.json");
+  const config = JSON.parse(readFileSync(existsSync(projectLocal) ? projectLocal : join(ANON_STATE, name, "config.json"), "utf8"));
   const siteUrl = `http://127.0.0.1:${config.ports?.site ?? Number(new URL(convexUrl).port) + 1}`;
   return { kind: "local", name, convexUrl, siteUrl, adminKey: config.adminKey, appUrl: `http://localhost:${WEB_PORT}` };
 }
@@ -133,7 +138,7 @@ function copyTree() {
   }
   const travelled = execSync(`find "${SCRATCH}" -name .env.local -not -path '*/node_modules/*' -not -path '${SCRATCH}/packages/convex/.env.local'`, { encoding: "utf8" }).trim();
   if (travelled) throw new Error(`refusing: an .env.local travelled into the scratch copy:\n${travelled}`);
-  writeFileSync(join(SCRATCH, "sim.env"), "CONVEX_DEPLOYMENT=anonymous:anonymous-agent\n");
+  writeFileSync(join(SCRATCH, "sim.env"), `CONVEX_DEPLOYMENT=anonymous:${ANON_NAME}\n`);
 }
 
 /** Convex Auth signs its sessions with JWT_PRIVATE_KEY and serves JWKS; a
@@ -174,7 +179,7 @@ export async function stackUp({ refresh = false, log = console.log } = {}) {
     log("starting the local deployment (tmux smoke-deploy); the first push takes minutes");
     execFileSync("tmux", ["new", "-d", "-s", TMUX_CONVEX, "-c", join(SCRATCH, "packages/convex")]);
     pushing = true;
-    execFileSync("tmux", ["send-keys", "-t", TMUX_CONVEX, "env -u CONVEX_SELF_HOSTED_URL -u CONVEX_SELF_HOSTED_ADMIN_KEY -u CONVEX_DEPLOYMENT -u CONVEX_DEPLOY_KEY CONVEX_AGENT_MODE=anonymous DATABASE_UDF_USER_TIMEOUT_SECONDS=30 ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS=120 npx convex dev --env-file ../../sim.env --codegen disable --typecheck disable --tail-logs disable", "Enter"]);
+    execFileSync("tmux", ["send-keys", "-t", TMUX_CONVEX, `env -u CONVEX_SELF_HOSTED_URL -u CONVEX_SELF_HOSTED_ADMIN_KEY -u CONVEX_DEPLOYMENT -u CONVEX_DEPLOY_KEY CONVEX_AGENT_MODE=anonymous DATABASE_UDF_USER_TIMEOUT_SECONDS=30 ISOLATE_ANALYZE_USER_TIMEOUT_SECONDS=120 ${PORT_FLAGS ? `RIG_ANON_PORTS=1 RIG_ANON_DEPLOYMENT=${ANON_NAME} ` : ""}npx convex dev --env-file ../../sim.env --codegen disable --typecheck disable --tail-logs disable${PORT_FLAGS}`, "Enter"]);
   }
   const dep = await until("the local deployment's .env.local", () => {
     try {

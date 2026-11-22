@@ -144,3 +144,5 @@ export { SIDE_ANSWER_EXPIRE_MS, explainAskFailure } from "./sessionAsk";
 export * from "./systemResources";
 export * from "./resourceOffloadPolicy";
 export * from "./testArtifacts";
+export * from "./speakers";
+export * from "./speakerTurns";
