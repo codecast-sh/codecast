@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from "bun:test";
+import { afterAll, describe, expect, mock, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
 
@@ -7,6 +7,8 @@ import { hashToken } from "./apiTokens";
 const sent: any[] = [];
 const real = { ...(await import("./pendingMessages")) };
 mock.module("./pendingMessages", () => ({ ...real, performSessionSend: async (_ctx: any, userId: string, args: any) => { sent.push({ userId, ...args }); return { ok: true }; } }));
+// bun applies mock.module to the whole test process, so put the real module back for the files that run after this one.
+afterAll(() => { mock.module("./pendingMessages", () => real); });
 const { askCheckoutCore } = await import("./checkoutAsk");
 const { forTeam, report } = await import("./checkouts");
 
