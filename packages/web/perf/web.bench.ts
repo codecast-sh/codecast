@@ -34,6 +34,9 @@ const WORKLOAD: Record<string, string> = {
   "load an inbox of 5000 sessions": "inbox-load",
   // One drawn session's heartbeat through the liveness overlay.
   "heartbeat in an inbox of 5000 sessions": "inbox-heartbeat",
+  // A click from the org chart to a cached conversation and back, through the
+  // real tab shell and compat Link.
+  "org chart to a conversation and back": "org-nav",
   // A 1,560-line diff shown whole, highlighted, in a warm app.
   "open a long diff": "diff",
 };
@@ -52,6 +55,7 @@ export default bench({
     "a message arrives in an open conversation": harnessCase(),
     "load an inbox of 5000 sessions": harnessCase(["cards"]),
     "heartbeat in an inbox of 5000 sessions": harnessCase(),
+    "org chart to a conversation and back": harnessCase(["commitsInClick", "domMutationsInClick"]),
     "open a long diff": harnessCase(["diffLines"]),
   },
 });
