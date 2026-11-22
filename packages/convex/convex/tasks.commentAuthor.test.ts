@@ -47,7 +47,6 @@ describe("task comment session authors", () => {
   const readers = {
     "task detail": async (ctx: any) => (await (webGetTaskDetail as any)._handler(ctx, { id: "ct-1" })).comments,
     "task reference": async (ctx: any) => (await (webGet as any)._handler(ctx, { short_id: "ct-1" })).comments,
-    "change feed": async (ctx: any) => (await (webGetByIds as any)._handler(ctx, { ids: [TASK] })).items[0].comments,
     "CLI show": async (ctx: any) => (await (get as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-1" })).comments,
     "CLI context": async (ctx: any) => (await (context as any)._handler(ctx, { api_token: TOKEN, short_id: "ct-1" })).comments,
   };
@@ -69,6 +68,13 @@ describe("task comment session authors", () => {
       expect(comment.conversation_id).toBeUndefined();
     });
   }
+
+  test("the change feed's refetch carries the count, the thread comes from the detail", async () => {
+    const { ctx } = await fixture();
+    const [row] = (await (webGetByIds as any)._handler(ctx, { ids: [TASK] })).items;
+    expect(row.comments).toBeUndefined();
+    expect(row.comment_count).toBe(1);
+  });
 
   test("deleted sessions and human comments render without a session link", async () => {
     const { ctx } = await fixture();
