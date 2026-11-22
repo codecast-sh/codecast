@@ -181,11 +181,13 @@ cd "$1"
 v=$(curl -fsSL https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE)
 case "$v" in [0-9]*.*) ;; *) exit 1 ;; esac
 [ -d "$v" ] && exit 0
-rm -rf ".partial-$v"; mkdir ".partial-$v"
-curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/$v/$2/chrome-$2.zip" -o ".partial-$v/cft.zip"
-ditto -x -k ".partial-$v/cft.zip" ".partial-$v"
-rm ".partial-$v/cft.zip"
-mv ".partial-$v" "$v"
+partial=".partial-$v-$$"
+trap 'rm -rf "$partial"' EXIT
+mkdir "$partial"
+curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/$v/$2/chrome-$2.zip" -o "$partial/cft.zip"
+ditto -x -k "$partial/cft.zip" "$partial"
+rm "$partial/cft.zip"
+[ -d "$v" ] || mv "$partial" "$v"
 ls | grep '^[0-9]' | sort -t. -k1,1nr -k2,2nr -k3,3nr -k4,4nr | tail -n +3 | while read -r old; do rm -rf "$old"; done`;
   try {
     const child = spawn("/bin/sh", ["-c", script, "chrome-for-testing", dir, platformName], { stdio: "ignore", detached: true });
