@@ -249,7 +249,7 @@ import { stampSessionCommand } from "./sessionCommandStamp";
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, savedDefaultProject, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
-import { projectChipLabel, workProjectChipKey, workProjectOf, type WorkProjectSource } from "./workProjects";
+import { machineChipKey, projectChipLabel, workProjectChipKey, workProjectOf, type WorkProjectSource } from "./workProjects";
 import { pendingJoinRow } from "../lib/teamMachines";
 import { projectRootOf } from "../lib/recentProjectPaths";
 import { cloudPlacementFor, CLOUD_SESSION_SOURCES, isHostedAgentType, type CloudSessionSource } from "@codecast/shared/contracts";
@@ -4802,10 +4802,14 @@ export function computeChipCounts(
   /** Per folder: sessions active in the last 30 days and the newest activity,
    *  which rank the rail Filter menu's short list (lib/railFolderFilter). */
   projectActivity: Record<string, FolderActivity>;
+  /** Per machine (`mc:<device>` keys, same chip axis), biggest first. Its own
+   *  list so surfaces that can't name a device never show a raw key. */
+  machineCounts: Array<[string, number]>;
 } {
   const bucketCounts: Record<string, number> = {};
   const projCounts: Record<string, number> = {};
   const workCounts: Record<string, number> = {};
+  const machineCounts: Record<string, number> = {};
   const projectPathByName: Record<string, string> = {};
   const projectActivity: Record<string, FolderActivity> = {};
   const windowStart = Date.now() - FOLDER_ACTIVE_WINDOW_MS;
@@ -4826,6 +4830,10 @@ export function computeChipCounts(
       const key = workProjectChipKey(work);
       workCounts[key] = (workCounts[key] || 0) + 1;
     }
+    if (s.owner_device_id) {
+      const key = machineChipKey(s.owner_device_id);
+      machineCounts[key] = (machineCounts[key] || 0) + 1;
+    }
   }
   const byCount = (a: [string, number], b: [string, number]) => b[1] - a[1];
   return {
@@ -4833,6 +4841,7 @@ export function computeChipCounts(
     projectCounts: [...Object.entries(projCounts).sort(byCount), ...Object.entries(workCounts).sort(byCount)],
     projectPathByName,
     projectActivity,
+    machineCounts: Object.entries(machineCounts).sort(byCount),
   };
 }
 
@@ -5091,6 +5100,23 @@ export function groupSessionsForLabelView(
       .filter((g) => g.items.length > 0),
   );
   return { labelGroups: primaryGroups, projectGroups };
+}
+
+// "By machine" lens: one group per machine that runs a session
+// (owner_device_id), biggest first. A session no machine owns yet falls to the
+// project tier like every other lens. The panel and keyboard order share it.
+export function groupSessionsByMachine(items: InboxSession[]): {
+  machineGroups: Array<{ deviceId: string; items: InboxSession[] }>;
+  projectGroups: Array<{ name: string; items: InboxSession[] }>;
+} {
+  const { primaryGroups, projectGroups } = groupSessionsBy(
+    items,
+    (sess) => sess.owner_device_id ?? null,
+    (byMachine) => Array.from(byMachine.entries())
+      .map(([deviceId, list]) => ({ deviceId, items: list.sort(byPinThenActivity) }))
+      .sort((a, b) => b.items.length - a.items.length),
+  );
+  return { machineGroups: primaryGroups, projectGroups };
 }
 
 // "By plan" lens: the sibling of groupSessionsForLabelView, keyed on the
@@ -5527,11 +5553,13 @@ export function passesFilterTerms(terms: readonly BucketFilterTerm[] | undefined
 }
 
 /** The keys a session answers to on the project chip axis: its folder's name,
- *  and `pj:<id>` for the project it works in (store/workProjects). */
-export function projectAxisKeys(s: Pick<InboxSession, "_id" | "git_root" | "project_path">, projectOf?: (sessionId: string) => string | null): string[] {
+ *  `pj:<id>` for the project it works in, and `mc:<device>` for the machine
+ *  that runs it (store/workProjects). */
+export function projectAxisKeys(s: Pick<InboxSession, "_id" | "git_root" | "project_path" | "owner_device_id">, projectOf?: (sessionId: string) => string | null): string[] {
   const keys = [getProjectName(s.git_root, s.project_path)];
   const project = projectOf?.(s._id);
   if (project) keys.push(workProjectChipKey(project));
+  if (s.owner_device_id) keys.push(machineChipKey(s.owner_device_id));
   return keys;
 }
 
@@ -5942,6 +5970,13 @@ export function computeVisualOrder(state: {
     return [
       ...planGroups.flatMap((g) => (collapsed[`plan_${g.key}`] || planTierFolded(planTierOf(g.standing.state), collapsed) ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? [] : g.items)),
+    ];
+  }
+  if (mode === "machine") {
+    const { machineGroups, projectGroups } = groupSessionsByMachine(base);
+    return [
+      ...machineGroups.flatMap((g) => (collapsed[`machine_${g.deviceId}`] ? [] : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`machineproj_${g.name}`] ? [] : g.items)),
     ];
   }
   if (isOrgLensMode(mode)) {
