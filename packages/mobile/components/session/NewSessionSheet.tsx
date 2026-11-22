@@ -57,6 +57,10 @@ export function ComposeHost() {
   const seed = useCompose((s) => s.seed);
   const opens = useCompose((s) => s.opens);
   const router = useRouter();
+  // Nothing until the first opening: each opening mounts a fresh sheet
+  // anyway, and a closed one ran every hook and store subscription in it from
+  // boot on.
+  if (opens === 0) return null;
   return (
     <SheetBoundary key={opens}>
       <NewSessionSheet

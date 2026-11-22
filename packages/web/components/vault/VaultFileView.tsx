@@ -21,7 +21,7 @@ import { useVaultEntryState } from "./useVaultEntry";
 import { buttonVariants } from "../ui/button";
 
 /** Bytes, in the unit a person would say out loud. */
-function formatSize(bytes: number): string {
+export function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ["KB", "MB", "GB"];
   let value = bytes / 1024;
@@ -66,7 +66,7 @@ function NoPreview({
 /** Code with a line-number gutter. Prism does the highlighting — the same
  *  grammars the app's code blocks use, so a `.ts` file reads identically here
  *  and in a conversation. */
-const CodeText = memo(function CodeText({ content, path }: { content: string; path: string }) {
+export const CodeText = memo(function CodeText({ content, path }: { content: string; path: string }) {
   const lines = useMemo(() => content.split("\n"), [content]);
   const html = useMemo(
     () => highlightCode(content, languageForPath(path)),

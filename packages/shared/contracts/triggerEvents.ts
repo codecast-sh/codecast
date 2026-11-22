@@ -84,6 +84,13 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
   // (transcripts.setSummary). Only an owner who may read the call is woken
   // (canReadCall), so a recording or a private huddle reaches nobody else.
   call_ended: derived("call_ended"),
+
+  // ── Derived chat events ──
+  // Fired once per line that lands in a team channel, typed here or mirrored
+  // in from Slack (chat.postChatMessage). A trigger names the one channel it
+  // watches (`channel_id`, checked at save against what its owner can read),
+  // and a burst inside the coalescing window is one run that reads them all.
+  chat_message: derived("chat_message"),
 };
 
 /**
@@ -144,6 +151,7 @@ export const TRIGGER_EVENT_LABELS: Record<string, string> = {
   deploy_live: "a deploy went live",
   deploy_failed: "a deploy failed",
   call_ended: "call ended",
+  chat_message: "message in a channel",
   [SESSION_NEEDS_INPUT_EVENT]: "a session under the role needs input",
   [ORG_AREA_CHANGE_EVENT]: "an area of the company changed and it lasted",
 };
@@ -187,6 +195,13 @@ export function isCallTriggerEvent(name: string | undefined): boolean {
   return !!name && CALL_TRIGGER_EVENTS.includes(name);
 }
 
+/** The events about a chat channel. A channel narrows them, and must. */
+export const CHAT_TRIGGER_EVENTS = ["chat_message"];
+
+export function isChatTriggerEvent(name: string | undefined): boolean {
+  return !!name && CHAT_TRIGGER_EVENTS.includes(name);
+}
+
 /**
  * The shorthand a stored filter came from, so a trigger reads back in the same
  * words it was armed with. Falls back to the raw pair for a filter nothing
@@ -215,6 +230,9 @@ export interface TriggerScopeFilter extends TriggerEventFilter {
   repository?: string;
   pr_number?: number;
   source?: string;
+  channel_id?: string;
+  /** The channel's name, joined in at read time for display; never stored. */
+  channel_name?: string;
 }
 
 /** What a trigger is watching, in one line, so nobody has to guess its scope. */
@@ -224,6 +242,7 @@ export function describeEventScope(filter: TriggerScopeFilter): string {
     return `on ${name} from ${filter.source ? `source ${filter.source}` : "every source you can see"}`;
   }
   if (isCallTriggerEvent(filter.event_type)) return `on ${name} for every call you can read`;
+  if (isChatTriggerEvent(filter.event_type)) return `on ${name} in ${filter.channel_name ? `#${filter.channel_name}` : "one channel"}`;
   const where = filter.repository
     ? `${filter.repository}${filter.pr_number ? `#${filter.pr_number}` : ""}`
     : "every repository you can see";
@@ -242,8 +261,9 @@ export function eventFilterForSave(eventName: string, prior: TriggerScopeFilter 
   if (!base) return undefined;
   const out: TriggerScopeFilter = { ...base };
   if (prior && isIngestTriggerEvent(eventName) && prior.source) out.source = prior.source;
+  if (prior && isChatTriggerEvent(eventName) && prior.channel_id) out.channel_id = prior.channel_id;
   // --repo narrows every repository event (push, issue_*, pr_*); --pr only pull requests.
-  if (prior && !isIngestTriggerEvent(eventName) && !isCallTriggerEvent(eventName) && prior.repository) out.repository = prior.repository;
+  if (prior && !isIngestTriggerEvent(eventName) && !isCallTriggerEvent(eventName) && !isChatTriggerEvent(eventName) && prior.repository) out.repository = prior.repository;
   if (prior && isPrTriggerEvent(eventName) && prior.pr_number !== undefined) out.pr_number = prior.pr_number;
   return out;
 }

@@ -4,7 +4,7 @@
 // over the view picked. It opens on Session, the project's default session,
 // with the rest of its sessions in the inbox beside it (the Inbox toggle
 // filters it to the project). The other views sit in the menu: Tasks, the
-// list /tasks uses; Timeline, everything that happened with the update
+// list /tasks uses; Outputs, what its work produced; Timeline, everything that happened with the update
 // composer on top; About, what it is for, its charter, deadline, the goals it
 // serves and its repositories; Flow, how its problems run; and Expectations,
 // how its product should behave. The address names a
@@ -34,9 +34,11 @@ import { useQueryNoThrow } from "../../../hooks/useQueryNoThrow";
 import { AuthGuard } from "../../../components/AuthGuard";
 import { DashboardLayout } from "../../../components/DashboardLayout";
 import { toast } from "sonner";
-import { ChevronDown, Copy, History, LayoutGrid, Info, ListChecks, MessagesSquare, ScrollText, Workflow } from "lucide-react";
+import { ChevronDown, Copy, History, LayoutGrid, Info, ListChecks, MessagesSquare, PackageOpen, ScrollText, Workflow } from "lucide-react";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../../components/ui/dropdown-menu";
 import { ProjectSession } from "../../../components/projects/ProjectSession";
+import { ProjectOutputs } from "../../../components/projects/ProjectOutputs";
+import { ProjectPinButton } from "../../../components/projects/ProjectPinButton";
 import { projectDefaultSessionOf } from "../../../lib/projectDefaultSession";
 import { ProjectInboxFilter } from "../../../components/projects/ProjectInboxFilter";
 import { ProjectLineTab } from "../../../components/line/ProjectLineTab";
@@ -61,13 +63,15 @@ const api = _api as any;
 // happens, and its default session is where you take part in it. Tasks is
 // what is to do, Timeline is what happened, with the next update on top; Flow
 // is how work flows through it. The key stays "sessions" so old links land.
-const PROJECT_TABS = ["sessions", "tasks", "timeline", "about", "flow", "expectations"] as const;
+const PROJECT_TABS = ["sessions", "tasks", "outputs", "timeline", "about", "flow", "expectations"] as const;
 type ProjectTab = (typeof PROJECT_TABS)[number];
 const PROJECT_ACCENT = "var(--sol-cyan)";
 const TABS: IntentTab<ProjectTab>[] = [
   // The project as a workspace (session-projects.md SP5): its default session.
   { key: "sessions", label: "Session", icon: MessagesSquare },
   { key: "tasks", label: "Tasks", icon: ListChecks },
+  // What its work produced: pull requests by what they need, pages, docs, images.
+  { key: "outputs", label: "Outputs", icon: PackageOpen },
   { key: "timeline", label: "Timeline", icon: History },
   // What it is for, its charter, its repositories.
   { key: "about", label: "About", icon: Info },
@@ -205,6 +209,7 @@ function ProjectDetailContent() {
       )}
       <ProjectViewMenu tabs={tabs} active={tab} onTab={setTab} counts={{ tasks: openTasks }} shortId={project.short_id} />
       <ProjectInboxFilter projectId={project._id} hasMain={hasMain} />
+      <ProjectPinButton projectId={project._id} title={project.title} />
   </>);
   const actions = <>{verbs}{share}</>;
   const glyph = <span className={cn("w-2 h-2 rotate-45 rounded-[2px] flex-shrink-0", projectDotClass(project))} data-project-glyph />;
@@ -268,6 +273,10 @@ function ProjectDetailContent() {
           <TaskHrefProvider place={taskPlace}>
             <TaskListContent projectId={projectId} />
           </TaskHrefProvider>
+        </div>
+      ) : tab === "outputs" ? (
+        <div className={body}>
+          <ProjectOutputs projectId={project._id} />
         </div>
       ) : tab === "timeline" ? (
         <div className={body}>
