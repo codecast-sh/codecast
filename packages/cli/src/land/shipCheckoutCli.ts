@@ -144,7 +144,8 @@ export function shipPassBody(plan: ShipPlan, r: ShipOutcome, repository: string,
  * command pushes nothing. Flags that steer a pass this command pushes itself would be dropped silently, so they are
  * refused, `--no-fetch` among them: the flow always cuts the pass onto freshly fetched upstream.
  */
-export function checkoutFlowArgs(flow: string | undefined, opts: CheckoutOptions): string[] | null {
+export function checkoutFlowArgs(named: string | undefined, opts: CheckoutOptions): string[] | null {
+  const flow = named?.trim();
   if (!flow || opts.dryRun) return null;
   const steered = [
     opts.plan !== undefined && "--plan", opts.only !== undefined && "--only", opts.hold && "--hold", opts.commitsOnly && "--commits-only",

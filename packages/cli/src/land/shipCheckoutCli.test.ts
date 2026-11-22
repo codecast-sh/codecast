@@ -69,6 +69,8 @@ describe("[ship] flow: a pass runs through a flow", () => {
   test("set, the pass is the named flow's checkout change; a dry run only plans; steering flags and --no-fetch are refused", () => {
     expect(checkoutFlowArgs(undefined, {})).toBeNull();
     expect(checkoutFlowArgs("change", {})).toEqual(["flow", "run", "change", "--checkout"]);
+    expect(checkoutFlowArgs("  change \n", {})).toEqual(["flow", "run", "change", "--checkout"]);
+    expect(checkoutFlowArgs("   ", {})).toBeNull();
     expect(checkoutFlowArgs("change", { json: true })).toEqual(["flow", "run", "change", "--checkout", "--json"]);
     expect(() => checkoutFlowArgs("change", { fetch: false })).toThrow("--no-fetch only steers");
     expect(checkoutFlowArgs("change", { dryRun: true })).toBeNull();
