@@ -98,15 +98,18 @@ export async function poolDeviceIds(ctx: Ctx, runner: string): Promise<Set<strin
   return new Set(devices.filter((d) => d.line_slots?.length).map((d) => String(d.device_id)));
 }
 
-/** The slots the runs on a machine use now: a run waiting on a person, parked, or with no role or task uses none. */
-export async function deviceWorking(ctx: Ctx, device: string, waiting: Set<string>): Promise<number> {
+/**
+ * The slots the runs on a machine use now, counted up to `cap` (its slot's runs): a run waiting on a person, parked,
+ * or with no role or task uses none. The count stops at a full machine, since one more run changes nothing a slot
+ * decides: a machine holding thousands of runs that never ended read past the 100 MB a query may read (Union, Nov 22).
+ */
+export async function deviceWorking(ctx: Ctx, device: string, waiting: Set<string>, cap: number): Promise<number> {
   let working = 0;
   for (const status of WORKING_RUN_STATUSES) {
-    const runs: any[] = await ctx.db
-      .query("workflow_runs")
-      .withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", device).eq("status", status))
-      .collect();
-    for (const r of runs) if (await holdsSlot(ctx, r, waiting)) working++;
+    if (working >= cap) break;
+    for await (const r of ctx.db.query("workflow_runs").withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", device).eq("status", status))) {
+      if (await holdsSlot(ctx, r, waiting) && ++working >= cap) break;
+    }
   }
   return working;
 }
