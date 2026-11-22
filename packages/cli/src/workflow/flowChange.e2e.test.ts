@@ -183,7 +183,7 @@ describe("a named branch's fix comes back to the run", () => {
     const base = git(here, "rev-parse", "feat");
     const runDir = path.join(sandbox, "run-dir");
     fs.mkdirSync(runDir, { recursive: true });
-    writeFrozenChange(runDir, { source: "branch", session: "jx7aaaa", base, tip: base, branch: "feat", worktree: "run-wt", paths: [], shared: [], held: [] } as any);
+    writeFrozenChange(runDir, { source: "branch", session: "jx7aaaa", base, tip: base, remote_tip: base, branch: "feat", worktree: "run-wt", paths: [], shared: [], held: [] } as any);
 
     execFileSync("git", ["clone", "--quiet", "--branch", "feat", origin, there], { env: { ...process.env, ...ENV } });
     write(there, "a.txt", "fixed there\n");
@@ -218,5 +218,33 @@ describe("a named branch's fix comes back to the run", () => {
     expect(forced.moved).toBe(true);
     expect(forced.change.tip).toBe(rebased);
     expect(git(worktree, "rev-parse", "HEAD")).toBe(rebased);
+  });
+
+  // Rebased here before the run, while origin still holds the push from before it: that older copy is not a fix.
+  test("a branch rebased here keeps its tip when origin holds the copy from before the rebase and nothing was fixed", async () => {
+    const origin = path.join(sandbox, "origin-stale.git");
+    const here = path.join(sandbox, "here-stale");
+    execFileSync("git", ["init", "--quiet", "--bare", "-b", "main", origin]);
+    execFileSync("git", ["clone", "--quiet", origin, here], { env: { ...process.env, ...ENV } });
+    write(here, "a.txt", "v1\n");
+    git(here, "add", "a.txt");
+    git(here, "commit", "--quiet", "-m", "v1");
+    git(here, "push", "--quiet", "origin", "HEAD:main", "HEAD:refs/heads/feat");
+    const pushed = git(here, "rev-parse", "HEAD");
+    write(here, "a.txt", "v2\n");
+    git(here, "commit", "--quiet", "--amend", "-am", "v2");
+    const amended = git(here, "rev-parse", "HEAD");
+    git(here, "branch", "feat", amended);
+    git(here, "fetch", "--quiet", "origin");
+    const worktree = path.join(sandbox, "run-wt-stale");
+    git(here, "worktree", "add", "--quiet", worktree, "feat");
+    const runDir = path.join(sandbox, "run-dir-stale");
+    fs.mkdirSync(runDir, { recursive: true });
+    writeFrozenChange(runDir, { source: "branch", session: "jx7aaaa", base: amended, tip: amended, remote_tip: pushed, branch: "feat", worktree: "run-wt-stale", paths: [], shared: [], held: [] } as any);
+
+    const again = await refreezeSessionChange(here, runDir, worktree);
+    expect(again.moved).toBe(false);
+    expect(again.change.tip).toBe(amended);
+    expect(fs.readFileSync(path.join(worktree, "a.txt"), "utf-8")).toBe("v2\n");
   });
 });

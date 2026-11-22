@@ -75,21 +75,27 @@ export async function freezeSessionChange(root: string, session: string, opts: {
   };
 }
 
+/** Origin's tip of `branch`, fetched now; empty when origin has no such branch or cannot be reached. */
+export async function originTip(root: string, branch: string): Promise<string> {
+  const remoteRef = `refs/remotes/origin/${branch}`;
+  await git(root, ["fetch", "--quiet", "origin", `+${branch}:${remoteRef}`]).catch(() => "");
+  return git(root, ["rev-parse", "--verify", "--quiet", remoteRef]).catch(() => "");
+}
+
 /**
- * Where a named branch stands now, against `change.tip`, the tip the run last froze. The session fixing it may be on
- * another machine (a run started over ssh), where its commit reaches this checkout only through origin, so the branch
- * is fetched too. The run's worktree holds no work of its own, so whichever side moved off the frozen tip holds the
- * fix: this checkout's first, else origin's, rebased or force-pushed included, unless origin only lags the frozen tip.
+ * Where a named branch stands now, against what the run last froze. The session fixing it may be on another machine
+ * (a run started over ssh), where its commit reaches this checkout only through origin. The run's worktree holds no
+ * work of its own, so the side that moved since the freeze holds the fix: this checkout's branch off the frozen tip
+ * first, else origin's off the tip it had then (`remote_tip`), rebased or force-pushed included.
  */
-async function branchTip(root: string, change: FrozenChange): Promise<string> {
-  const remoteRef = `refs/remotes/origin/${change.branch}`;
-  await git(root, ["fetch", "--quiet", "origin", `+${change.branch}:${remoteRef}`]).catch(() => "");
-  const read = (ref: string) => git(root, ["rev-parse", "--verify", "--quiet", ref]).catch(() => "");
-  const [local, remote] = await Promise.all([read(`refs/heads/${change.branch}`), read(remoteRef)]);
-  if (local && local !== change.tip) return local;
-  if (!remote || remote === change.tip) return local || remote;
-  const lags = await git(root, ["merge-base", "--is-ancestor", remote, change.tip]).then(() => true, () => false);
-  return lags ? local : remote;
+async function branchTip(root: string, change: FrozenChange): Promise<{ tip: string; remote_tip?: string }> {
+  const [local, remote] = await Promise.all([
+    git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${change.branch}`]).catch(() => ""),
+    originTip(root, change.branch),
+  ]);
+  const pushed = !!remote && remote !== (change.remote_tip ?? "") && remote !== change.tip;
+  const tip = local && local !== change.tip ? local : pushed ? remote : local || change.tip;
+  return { tip, ...(remote ? { remote_tip: remote } : {}) };
 }
 
 /**
@@ -105,7 +111,7 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
   // A named branch or pull request is the change: the session fixes it by committing there (a pull request's by pushing).
   const change: FrozenChange = before.source === "session"
     ? await freezeSessionChange(root, before.conversation ?? before.session, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null })
-    : { ...before, tip: await branchTip(root, before) };
+    : { ...before, ...(await branchTip(root, before)) };
   const tree = (rev: string) => git(root, ["rev-parse", `${rev}^{tree}`]).then((s) => s.trim()).catch(() => rev);
   const moved = (await tree(before.tip)) !== (await tree(change.tip));
   // The run's worktree holds no work of its own: it is the change, so it follows the new tip.

@@ -422,8 +422,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();
         if (!head) { console.error(`No branch ${branch} here`); process.exit(1); }
         const { branchChangePaths } = await import("./workflow/flowChangeFile.js");
+        const remoteTip = await (await import("./workflow/flowChange.js")).originTip(top, branch);
         // The files the branch changes, so a station gated on paths (when=) runs when they say it should.
-        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps, task)), base: head, tip: head, branch, worktree, paths: branchChangePaths(top, branch), shared: [], held: [] };
+        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps, task)), base: head, tip: head, ...(remoteTip ? { remote_tip: remoteTip } : {}), branch, worktree, paths: branchChangePaths(top, branch), shared: [], held: [] };
       } else if (sessionRef) {
         const { freezeSessionChange } = await import("./workflow/flowChange.js");
         try {
