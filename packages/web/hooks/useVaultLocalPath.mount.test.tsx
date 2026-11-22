@@ -160,6 +160,21 @@ test("a refused lookup preserves the link and retries when reconnected", async (
   expect(useVaultStore.getState().activeVaultId).toBe(located.id);
 });
 
+test("a lookup that failed offers Retry, which asks the daemon again", async () => {
+  await update({ endpoint });
+  await mount();
+  await answer(0, { error: "boom" }, 500);
+  const { opError, opErrorActions, quickSwitchOpen } = useVaultStore.getState();
+  expect(opError).toContain("vault locate: 500");
+  expect(quickSwitchOpen).toBe(false);
+  expect(opErrorActions?.message).toBe(opError);
+  await act(async () => opErrorActions?.retry?.());
+  expect(useVaultStore.getState().opError).toBeNull();
+  expect(requests).toHaveLength(2);
+  await answer(1, { vault: located, rel: "SKILL.md" });
+  expect(useVaultStore.getState().activeVaultId).toBe(located.id);
+});
+
 test("an older daemon asks for an update rather than claiming the file is missing", async () => {
   await update({ endpoint });
   const view = await mount();
@@ -241,7 +256,6 @@ test("a teammate's path with no same-named checkout here says it does not exist"
   await answer(0, { error: "no such path" }, 404);
   expect(requests).toHaveLength(1);
   expect(useVaultStore.getState().opError).toBe(`${foreign} does not exist on this machine.`);
-  expect(useVaultStore.getState().quickSwitchOpen).toBe(true);
-  expect(useVaultStore.getState().quickSwitchSeed).toBe("gone.md");
+  expect(useVaultStore.getState().opErrorActions).toEqual({ message: `${foreign} does not exist on this machine.`, file: foreign });
   expect(view.routes).toEqual([]);
 });
