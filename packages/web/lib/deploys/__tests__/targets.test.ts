@@ -139,6 +139,13 @@ describe("a dev watcher's push on the target", () => {
     expect(rollbackTarget(now.history, now.live)?.short_id).toBe("dp-1");
   });
 
+  test("over a watcher push of the same sha, Roll back returns to the real deploy of it", () => {
+    const real = row({ short_id: "dp-1", sha: "aaa", created_at: 1, live_at: 1 });
+    const watcher = row({ short_id: "dp-2", sha: "aaa", created_at: 2, live_at: 2, pushed_via: "dev watcher" });
+    const now = targetNow(t, [real, watcher]);
+    expect(rollbackTarget(now.history, now.live)?.short_id).toBe("dp-1");
+  });
+
   test("an older watcher push is never the deploy a Roll back returns to", () => {
     const first = row({ short_id: "dp-1", sha: "aaa", created_at: 1, live_at: 1 });
     const watcher = row({ short_id: "dp-2", sha: "bbb", created_at: 2, live_at: 2, pushed_via: "dev watcher" });

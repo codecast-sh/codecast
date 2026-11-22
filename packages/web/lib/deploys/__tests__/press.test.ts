@@ -26,6 +26,11 @@ describe("roll back here", () => {
     expect(rollBackHere(d[0], target(), [...d, dp("dp-3", "running", 3)])).toBeNull();
     expect(rollBackHere(d[0], undefined, d)).toBeNull();
   });
+  test("over a dev watcher's push, the real deploy of the same sha is the way back", () => {
+    const real = dp("dp-1", "live", 1, { sha: "aaa0000" });
+    const watcher = dp("dp-2", "live", 2, { sha: "aaa0000", pushed_via: "dev watcher", dirty: 3 });
+    expect(rollBackHere(real, target(), [real, watcher])).toMatchObject({ action: "redeploy", of: { _id: "dp-1" } });
+  });
   test("never for a dev watcher's push: it ran files no sha holds", () => {
     const watcher = dp("dp-1", "live", 1, { pushed_via: "dev watcher", dirty: 2 });
     expect(rollBackHere(watcher, target(), [watcher, d[1]])).toBeNull();

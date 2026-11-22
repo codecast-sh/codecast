@@ -21,6 +21,7 @@ import { recordExternalEvent } from "./externalEvents";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
 import { adderOf, latestLiveDeploy, ownWatcherRowFor, recordDeployMarker } from "./deploys";
+import { sameSha } from "./deployCarries";
 import { normalizeDeployTarget } from "@codecast/shared/contracts/deploys";
 
 const SURFACE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -133,15 +134,20 @@ export const markDeploy = mutation({
     const live = await latestLiveDeploy(ctx, `team:${teamId}`, surface, repository);
     // A deploy of the same commit with uncommitted files is a different deploy, and one that changed what runs is news.
     // So is a clean deploy of a sha whose live deploy went out dirty or from the watcher: the tree it ran was not the sha's.
+    // So is one of a sha the target no longer runs (a workflow run rolled it back since this repository's last marker).
     if (previous?.sha === sha && !args.deploy && !args.dirty && !args.adds?.length && !args.drops?.length
-      && (!live || (!live.dirty && live.pushed_via !== "dev watcher"))) {
+      && (!live || (!live.dirty && live.pushed_via !== "dev watcher" && sameSha(live.sha, sha)))) {
       return { ok: true as const, event_id: previous._id, team_id: teamId, repository, surface, sha, version: version ?? null };
     }
 
     const now = Date.now();
-    // A watcher push that lands on its machine's row of the sha (deploys.ownWatcherRow) is that push again, not a new
-    // ship: it keeps the push's event, so a long uncommitted session is one event, not one per save.
-    const own = args.via === "dev watcher" ? await ownWatcherRowFor(ctx, `team:${teamId}`, surface, { machine: args.machine, repository, sha }) : null;
+    const user = await ctx.db.get(userId);
+    const startedBy = { kind: "person" as const, name: user?.name ?? user?.github_username ?? "someone", user_id: userId };
+    // A watcher push that lands on its pusher's row of the sha from that machine (deploys.ownWatcherRow) is that push
+    // again, not a new ship: it keeps the push's event, so a long uncommitted session is one event, not one per save.
+    const own = args.via === "dev watcher"
+      ? await ownWatcherRowFor(ctx, `team:${teamId}`, surface, { machine: args.machine, repository, sha, started_by: startedBy })
+      : null;
     const again = own?.event_ids[0];
     const eventId = again ?? await recordExternalEvent(ctx, {
       source: "codecast",
@@ -158,7 +164,6 @@ export const markDeploy = mutation({
     });
     // The marker is a deploy object too (deploys.md DP1): it finishes the
     // line's deploy on this surface, or records one of its own.
-    const user = await ctx.db.get(userId);
     const deploy = await recordDeployMarker(ctx, {
       workspace: `team:${teamId}`,
       team_id: teamId,
@@ -175,7 +180,7 @@ export const markDeploy = mutation({
       // Sent exactly when the push's diff ran, empty or not: a deploy whose diff ran is evidence of what its tree held.
       ...(args.adds ? { adds: args.adds } : {}),
       ...(args.drops ? { drops: args.drops } : {}),
-      started_by: { kind: "person", name: user?.name ?? user?.github_username ?? "someone", user_id: userId },
+      started_by: startedBy,
       at: now,
     });
     return { ok: true as const, event_id: eventId, team_id: teamId, repository, surface, sha, version: version ?? null, deploy };

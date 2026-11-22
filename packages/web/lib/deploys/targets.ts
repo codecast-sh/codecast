@@ -170,6 +170,8 @@ export function targetNow(t: Pick<DeployTargetRow, "name" | "repository">, deplo
 
 /** The earlier live deploy a Roll back returns to: the newest live one before the live deploy, on another sha. */
 export function rollbackTarget(history: ReadonlyArray<TeamDeployRow>, live: TeamDeployRow | null): TeamDeployRow | null {
+  // Over a dev watcher's push, going back means the last real deploy, even on the same sha: it puts the committed tree back.
+  if (live && isWatcherPush(live)) return history.find((d) => d.status === "live" && !isWatcherPush(d) && !!d.sha) ?? null;
   return history.find((d) => d.status === "live" && !isWatcherPush(d) && d._id !== live?._id && !!d.sha && d.sha !== live?.sha) ?? null;
 }
 

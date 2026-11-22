@@ -103,7 +103,8 @@ else
 fi
 if [ -z "$CHANGES" ] || ! ${WITH_KEY[@]+"${WITH_KEY[@]}"} bun scripts/prod-diff.ts --out "$CHANGES"; then
     echo "warning: could not read what this push changes on prod; pushing without that check" >&2
-    [ -n "$CHANGES" ] && rm -f "$CHANGES"
+    # The ship still records where the push came from; with no lists in it, nobody reads it as "dropped nothing".
+    if [ -n "${CAST_PUSH_CHANGES_FILE:-}" ]; then echo '{}' > "$CAST_PUSH_CHANGES_FILE"; elif [ -n "$CHANGES" ]; then rm -f "$CHANGES"; fi
     CHANGES=""
 fi
 
