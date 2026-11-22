@@ -39,6 +39,7 @@ import { useBulkMoveSessions, useMoveTargets } from "../hooks/useBulkMoveSession
 import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
+import { makeCollectionSig } from "../store/wakeSig";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, projectOfFromState, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { projectChipLabel } from "../store/workProjects";
 import { resolveRecentVisits, visitTimeAgo, visitObjectLabel, type ResolvedVisit } from "../lib/recentVisits";
@@ -1550,6 +1551,15 @@ const MARKDOWN_RE = /\.(md|markdown)$/i;
 // keyed per show (app/palette). Its only prop (`standalone`) is stable, so memo
 // severs any parent cascade — combined with snapshotting session data at mount
 // (above), the palette re-renders only on its OWN state, not on session churn.
+const MEMBER_PRESENCE = new Set(["viewing_conversation_id", "viewing_since", "daemon_last_seen", "presence_input_at", "last_seen", "last_active_at"]);
+// By content: each roster push decodes fresh arrays (focus_project_ids: []),
+// so a by-reference signature flipped on every presence move.
+const teamIdentitySig = makeCollectionSig<Record<string, any>>((m) => {
+  let sig = "";
+  for (const k in m) if (!MEMBER_PRESENCE.has(k)) sig += k + ":" + JSON.stringify(m[k]) + ";";
+  return sig;
+});
+
 function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const [query, setQuery] = useState("");
   // The result groups rank against a deferred copy: the box shows each key at
@@ -1597,7 +1607,13 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // the sidebar kill button (the webList subscription inside is deduped).
   const { killManyWithNotice } = useTriggerKillNotice();
   const { user: currentUser } = useCurrentUser();
-  const teamMembers = useInboxStore((s) => s.teamMembers.length > 0 ? s.teamMembers : undefined);
+  // Who the teammates are, not where they are: presence moves several times a
+  // minute and re-rendered every row of an open palette.
+  const teamMembersSig = useInboxStore((s) => teamIdentitySig(s.teamMembers as any));
+  const teamMembers = useMemo(() => {
+    const members = useInboxStore.getState().teamMembers;
+    return members.length > 0 ? members : undefined;
+  }, [teamMembersSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const openDm = useOpenDm();
 
   const open = standalone || paletteOpen;
@@ -1798,7 +1814,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   }, [recentPool, rankQuery, standingOf, favorites, pick]);
   // The machine most recents run on goes unsaid; a row names its machine only
   // when it runs somewhere else (a cloud host, the other laptop).
-  const machineRoster = useInboxStore((s) => (open ? s.machineRoster : EMPTY_ROSTER)) as Device[];
+  // Read at open: the roster's liveness ticks would re-render every row, and
+  // a machine's name does not change while the palette is up.
+  const machineRoster = useMemo(() => (open ? useInboxStore.getState().machineRoster : EMPTY_ROSTER), [open]) as Device[];
   const hostedFirst = useOnlyHostedAgent();
   const deviceOfRecent = useMemo(() => {
     if (machineRoster.length < 2) return () => undefined;
@@ -2549,6 +2567,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
                 conversationId={PALETTE_PICK_DRAFT}
                 bareComposer
                 chatMentionMode={chatTarget}
+                sessionReplies={chatTarget}
                 mentionTeamId={activeTeamId ? String(activeTeamId) : undefined}
                 composerPlaceholder={pick.notePlaceholder}
                 autoFocusInput
