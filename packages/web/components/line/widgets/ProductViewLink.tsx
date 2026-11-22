@@ -1,11 +1,12 @@
 // The markdown door to product views: a `view:<ref>` link payload (written by
 // remarkEntityIds) becomes the view itself when hoisted alone on its line, or
 // a pill in running text. The component code loads only where one appears.
-import { Suspense, lazy } from "react";
+import { Suspense } from "react";
 import { viewRefFromPayload } from "../../../lib/productViewRefs";
+import { lazyNamed } from "../../../lib/lazyNamed";
 
-const ProductViewEmbed = lazy(() => import("./ProductView").then((m) => ({ default: m.ProductViewEmbed })));
-const ProductViewPill = lazy(() => import("./ProductView").then((m) => ({ default: m.ProductViewPill })));
+const ProductViewEmbed = lazyNamed(() => import("./ProductView"), "ProductViewEmbed");
+const ProductViewPill = lazyNamed(() => import("./ProductView"), "ProductViewPill");
 
 /** The view a link's payload names, as an embed (`block`) or a pill; null when the payload is not a view reference. */
 export function productViewLink(payload: string, block: boolean) {

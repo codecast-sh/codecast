@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback, memo, lazy, Suspense } from "react";
+import { useState, useMemo, useCallback, memo, Suspense } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { DiffLineAnnotation, SelectedLineRange } from "@pierre/diffs/react";
 import { useInboxStore } from "../store/inboxStore";
@@ -22,6 +22,7 @@ import { buildDiffModel, diffRows, type DiffRow } from "../lib/diffModel";
 import type { PendingComment } from "../lib/quoteFormat";
 import type { CodeAnchorText } from "@codecast/shared/comments";
 import { captureDiffAnchor, placeInDiff, type DiffPlacement } from "../lib/diffAnchorPlacement";
+import { lazyNamed } from "../lib/lazyNamed";
 
 // Lazy on purpose, not just for bundle size: FileLineThread pulls the comment
 // rail machinery (CommentComposer → ConversationView's MessageInput), and this
@@ -30,9 +31,7 @@ import { captureDiffAnchor, placeInDiff, type DiffPlacement } from "../lib/diffA
 // MarkdownRenderer first. The dynamic edge keeps diff rendering outside the
 // ConversationView module graph; the thread only loads when a diff actually has
 // durable comments.
-const FileLineThread = lazy(() =>
-  import("./comments/FileLineThread").then((m) => ({ default: m.FileLineThread })),
-);
+const FileLineThread = lazyNamed(() => import("./comments/FileLineThread"), "FileLineThread");
 
 // Stable empty references so the comment selector/props don't churn renders when
 // a diff has no line comments (the common case).

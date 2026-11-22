@@ -72,7 +72,7 @@ describe("offline boot auth", () => {
       "ConversationTerminalSplit",
       "SessionHuddleButton",
     ]) {
-      expect(source).toContain(`const ${component} = lazy(() => import(`);
+      expect(source).toContain(`const ${component} = lazyNamed(() => import(`);
     }
   });
 

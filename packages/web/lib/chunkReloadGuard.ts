@@ -126,9 +126,9 @@ async function servedBuildDiffers(): Promise<boolean> {
 // Vite dispatches `vite:preloadError` when a dynamic import's JS or CSS
 // preload fails, and rethrows unless the event is cancelled. A preload that
 // fails OUTSIDE a React boundary (a route warmup, an idle prefetch, a lazy
-// import awaited in an event handler) otherwise leaves the tab stale with
-// nothing to recover it. Reload on it, under the same budget as the boundary
-// path; the rethrown chunk-load error is in analytics' ignore list.
+// import awaited in an event handler) therefore reaches Sentry as an unhandled
+// rejection and nothing recovers the tab. Reload on it instead, under the same
+// budget as the boundary path.
 export function installStaleChunkReload(): void {
   window.addEventListener("vite:preloadError", (event) => {
     const message = (event as Event & { payload?: unknown }).payload;
@@ -136,13 +136,12 @@ export function installStaleChunkReload(): void {
     // Only staleness. A preload that failed because the user is offline, or
     // for any other reason, must not spend the budget or hide its own report.
     if (!isChunkLoadError(summary)) return;
-    // Never cancel the event. Cancelling makes Vite RESOLVE the failed import
-    // with undefined, and every `import(...).then((m) => ({ default: m.X }))`
-    // lazy loader then throws "Cannot read properties of undefined (reading
-    // 'X')" (ct-91263: SettingsModal in DashboardLayout), an ordinary-looking
-    // TypeError that analytics reports and the error boundary cannot classify.
-    // Letting Vite rethrow keeps the chunk-load error itself, which analytics
-    // ignores and the boundary recognises, while the reload is under way.
-    tryReloadForStaleChunk();
+    // Order matters. Cancelling the event makes Vite RESOLVE the failed
+    // dynamic import instead of rejecting it, so a React.lazy waiting on it
+    // receives undefined and throws something far less legible. Only cancel
+    // once a reload is actually under way (the page is leaving, and the
+    // rejection would add a report nobody reads). If the budget is spent, let
+    // Vite rethrow so the error boundary still renders its reload UI.
+    if (tryReloadForStaleChunk()) event.preventDefault();
   });
 }

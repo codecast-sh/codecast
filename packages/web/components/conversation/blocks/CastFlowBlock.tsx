@@ -5,17 +5,18 @@
 // session wrote on stdin included; a dry run draws it with what it would run on. Anything else
 // (`ls`, `import`, a failed start) keeps the one-line row with its output
 // behind a click.
-import { Suspense, lazy, useState } from "react";
+import { Suspense, useState } from "react";
 import { Workflow } from "lucide-react";
 import { flowCommandTarget, pipelineCommandRepo, stripAnsi } from "../../../lib/line/flowCommandOutput";
 import { editFromOutput } from "../../../lib/line/flowEditFence";
 import { useIsModernStyle } from "../../../hooks/useVisualStyle";
 import { pressable } from "../../ops/parts";
+import { lazyNamed } from "../../../lib/lazyNamed";
 
-const FlowRunCard = lazy(() => import("../../line/widgets/FlowFence").then((m) => ({ default: m.FlowRunCard })));
-const FlowCard = lazy(() => import("../../line/widgets/FlowFence").then((m) => ({ default: m.FlowCard })));
-const FlowEditCard = lazy(() => import("../../line/widgets/FlowEditCard").then((m) => ({ default: m.FlowEditCard })));
-const FlowPipelineCard = lazy(() => import("../../line/widgets/FlowPipelineCard").then((m) => ({ default: m.FlowPipelineCard })));
+const FlowRunCard = lazyNamed(() => import("../../line/widgets/FlowFence"), "FlowRunCard");
+const FlowCard = lazyNamed(() => import("../../line/widgets/FlowFence"), "FlowCard");
+const FlowEditCard = lazyNamed(() => import("../../line/widgets/FlowEditCard"), "FlowEditCard");
+const FlowPipelineCard = lazyNamed(() => import("../../line/widgets/FlowPipelineCard"), "FlowPipelineCard");
 
 const Cold = () => <div className="my-2 h-24 max-w-[860px] rounded-xl border border-sol-border/30 bg-sol-bg-alt/40" aria-busy />;
 
