@@ -1,4 +1,4 @@
-import { lazy, memo, Suspense, useMemo } from "react";
+import { memo, Suspense, useMemo } from "react";
 import { Search } from "lucide-react";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { UserMenu } from "../UserMenu";
@@ -17,10 +17,9 @@ import { useInboxStore, useTrackedStore, sessionsWakeSig, pendingSendWakeSig, re
 import { agentFleetCounts } from "../../lib/liveness";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useOpenSession } from "../../hooks/useOpenSession";
+import { lazyNamed } from "../../lib/lazyNamed";
 
-const TeamAvatarBar = lazy(() =>
-  import("../TeamAvatarBar").then((module) => ({ default: module.TeamAvatarBar })),
-);
+const TeamAvatarBar = lazyNamed(() => import("../TeamAvatarBar"), "TeamAvatarBar");
 
 // The "N agents running" badge is the ONLY thing in the dashboard shell that
 // needs the full sessions map. Keeping its subscription here (rather than in

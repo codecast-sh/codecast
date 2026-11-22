@@ -1,13 +1,14 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { Suspense, useMemo, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { captureException } from "@sentry/react";
 import { ArrowLeft, Copy } from "lucide-react";
 import { TemplateGallery } from "./TemplateGallery";
 import { builtinHires, cannotHireReason, templateTools, EXECUTIVE_ASSISTANT_HIRE, HEAD_OF_PEOPLE_HIRE, type BuiltinHire, type CatalogTemplate } from "./templateCatalog";
+import { lazyNamed } from "../../lib/lazyNamed";
 // The seat cards live with the conversation surface; loaded on pick, as the
 // header panel loads them, so the hire dialog's graph never reaches the chat.
-const HireHeadOfPeopleCard = lazy(() => import("../anchor/AnchorConversation").then((m) => ({ default: m.HireHeadOfPeopleCard })));
-const HireAssistantCard = lazy(() => import("../anchor/AnchorConversation").then((m) => ({ default: m.HireAssistantCard })));
+const HireHeadOfPeopleCard = lazyNamed(() => import("../anchor/AnchorConversation"), "HireHeadOfPeopleCard");
+const HireAssistantCard = lazyNamed(() => import("../anchor/AnchorConversation"), "HireAssistantCard");
 import { useAnchors } from "../../hooks/useSyncAnchors";
 import { globalAssistantOf } from "../../lib/headerPins";
 import { copyToClipboard } from "../../lib/utils";

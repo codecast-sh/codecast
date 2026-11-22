@@ -11,11 +11,12 @@ import {
   DropdownMenuLabel,
 } from "./ui/dropdown-menu";
 import { Check, CheckCheck, ChevronDown, LogIn, Plus, User, UserPlus } from "lucide-react";
-import { useState, lazy, Suspense, forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useState, Suspense, forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 import type { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { TeamCrest } from "./team/TeamCrest";
+import { lazyNamed } from "../lib/lazyNamed";
 
-const InviteModal = lazy(() => import("./InviteModal").then(m => ({ default: m.InviteModal })));
+const InviteModal = lazyNamed(() => import("./InviteModal"), "InviteModal");
 
 /** The picker's trigger: the workspace's crest (or the person glyph) and its
  *  name. In the rail it is the header of the workspace's block of pages, so it

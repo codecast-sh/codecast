@@ -7,7 +7,7 @@
 // redirect here (see lib/vault/vaultHref.ts). Internal names, the store and the
 // daemon routes keep the vault vocabulary; the command group is `cast files`.
 
-import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTabContext } from "../../lib/tabParams";
 import { useVaultLocalPath } from "../../hooks/useVaultLocalPath";
@@ -76,11 +76,10 @@ import {
   type VaultViewMode,
 } from "../../lib/vault/viewMode";
 import { useTitlebarHead } from "../../hooks/useTitlebarHead";
+import { lazyNamed } from "../../lib/lazyNamed";
 
 // sigma + graphology are ~40kB gzip: nobody who doesn't open the graph pays.
-const VaultGraphView = lazy(() =>
-  import("../../components/vault/VaultGraphView").then((m) => ({ default: m.VaultGraphView })),
-);
+const VaultGraphView = lazyNamed(() => import("../../components/vault/VaultGraphView"), "VaultGraphView");
 
 // A 24px target per icon, so a glyph is easy to hit and the row's width is known.
 const headerButtonClass = "inline-flex size-6 shrink-0 items-center justify-center rounded text-sol-text-dim hover:bg-sol-bg-alt hover:text-sol-text transition-colors";

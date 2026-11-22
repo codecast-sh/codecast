@@ -3,13 +3,12 @@
 // The shortcut handler declines (returns false) when no vault is known, so
 // Cmd+O stays inert in vault-less workspaces.
 
-import { lazy, Suspense, useRef } from "react";
+import { Suspense, useRef } from "react";
 import { useShortcutAction } from "../../shortcuts";
 import { useVaultStore } from "../../store/vaultStore";
+import { lazyNamed } from "../../lib/lazyNamed";
 
-const VaultQuickSwitcher = lazy(() =>
-  import("./VaultQuickSwitcher").then((m) => ({ default: m.VaultQuickSwitcher })),
-);
+const VaultQuickSwitcher = lazyNamed(() => import("./VaultQuickSwitcher"), "VaultQuickSwitcher");
 
 export function VaultQuickSwitcherDock() {
   const open = useVaultStore((s) => s.quickSwitchOpen);

@@ -14,7 +14,7 @@ import { DocTypeMark } from "./docs/DocTypeMark";
 import { useTeamFeature, useCallsAvailable, useWorkspaceFeature, workspaceHasFeatureNow } from "../lib/teamFeatures";
 import type { TeamFeatureKey } from "@codecast/shared/contracts";
 import { pagePath, palettePages, queryNamesPage } from "../lib/navPages";
-import { useState, useCallback, useDeferredValue, useMemo, useRef, memo, lazy, Suspense } from "react";
+import { useState, useCallback, useDeferredValue, useMemo, useRef, memo, Suspense } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useIdentityPrefs } from "../hooks/useIdentityPrefs";
 import { useShortcuts, isMac, type ShortcutAction } from "../shortcuts";
@@ -59,6 +59,7 @@ import { memberAvatarUrl, memberDisplayName } from "../lib/liveEntities";
 import { useOrgRoles } from "../hooks/useOrgRoles";
 import { useRolesAndPeopleOptions } from "../hooks/useRolesAndPeopleOptions";
 import { isPerson } from "@codecast/shared/team/memberKind";
+import { lazyNamed } from "../lib/lazyNamed";
 
 const NO_MEMBERS: any[] = [];
 import { compactDuration, teammateWhereabouts, type TeammateWhereabouts } from "./presence/memberPresence";
@@ -101,9 +102,7 @@ import { formatDateSmart } from "@codecast/shared/time";
 
 // Loaded only on the confirm step so the search palette does not pull the
 // composer module (and the HMR cycle that comes with an eager import).
-const PaletteMessageInput = lazy(() =>
-  import("./MessageInput").then((m) => ({ default: m.MessageInput })),
-);
+const PaletteMessageInput = lazyNamed(() => import("./MessageInput"), "MessageInput");
 import { forkSessionAsAgent, switchSessionAgent } from "../lib/sessionAgentActions";
 import { PALETTE_KIND, PALETTE_ORG, paletteActions, paletteObjectPath, paletteDigitIndex, paletteActionForKey, paletteItemScore, palettePageValue, paletteValue, type PaletteTargetType, type PalettePerson } from "../lib/paletteActions";
 import { useOpenDm } from "../hooks/useOpenDm";

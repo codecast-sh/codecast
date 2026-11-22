@@ -1,5 +1,5 @@
 import { withInboxView } from "../../lib/inboxViewHistory";
-import { useState, useCallback, useRef, memo, useMemo, lazy, Suspense, type ReactNode } from "react";
+import { useState, useCallback, useRef, memo, useMemo, Suspense, type ReactNode } from "react";
 import { ChevronRight } from "lucide-react";
 import { useBoundedDeferredValue } from "../../hooks/useBoundedDeferredValue";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
@@ -44,11 +44,12 @@ import { settleSessionViewAsk, useSessionViewAsk } from "../../lib/sessionViewVi
 import { requestSessionRestart } from "../../lib/sessionCommands";
 import { SeatHeadState, RolePageControl, type SeatStall } from "../../components/org/scope/SeatHead";
 import { windowOrgTree } from "../../store/orgSlice";
+import { lazyNamed } from "../../lib/lazyNamed";
 
 // The role page is a whole surface (the board's tabs, the org tree feeder), so
 // the inbox loads it only when a seat is opened. The dynamic import also keeps
 // the two modules out of a static cycle: the role page mounts InboxConversation.
-const ScopePageInner = lazy(() => import("../../components/org/scope/ScopePage").then((m) => ({ default: m.ScopePageInner })));
+const ScopePageInner = lazyNamed(() => import("../../components/org/scope/ScopePage"), "ScopePageInner");
 
 /** What the role page asks of the pane when the session is a role's standing
  *  session (initiatives-projects-role-page.md I3). The pane stays the session

@@ -6,7 +6,7 @@
 // callbacks. It subscribes to the few fields of this session's row it passes
 // on, never the whole row or the whole map.
 
-import { lazy, memo, Suspense, useCallback, useMemo } from "react";
+import { memo, Suspense, useCallback, useMemo } from "react";
 import { useTrackedStore, useInboxStore, getSessionRenderKey } from "../../store/inboxStore";
 import { animatedHideSession } from "../../store/undoActions";
 import { useMissingSessionLookup } from "../../hooks/useMissingSessionRow";
@@ -15,6 +15,7 @@ import { ConversationPlaceholder } from "../ConversationPlaceholder";
 import { ConversationUnavailable } from "../ConversationUnavailable";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { PaneControls } from "./PaneControls";
+import { lazyNamed } from "../../lib/lazyNamed";
 
 // Loaded on first use: the conversation renderer lives in the inbox page's
 // module, and pulling it in at import time would hang the whole inbox off
@@ -22,9 +23,7 @@ import { PaneControls } from "./PaneControls";
 // opening a session renders anywhere (initiatives-projects-role-page.md I3):
 // a role's standing session is the role page here too, with the pane's own
 // expand and close controls kept in its header.
-const SessionPage = lazy(() =>
-  import("../../app/inbox/QueuePageClient").then((m) => ({ default: m.SessionPage })),
-);
+const SessionPage = lazyNamed(() => import("../../app/inbox/QueuePageClient"), "SessionPage");
 
 const noop = () => {};
 

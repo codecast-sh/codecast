@@ -14,7 +14,7 @@
 // Cross-component state is in inboxStore's ephemeral review fields; the store
 // choreography is in lib/reviewActions.
 
-import React, { lazy, memo, Suspense, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { memo, Suspense, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import type { PendingComment, ReviewVerdict } from "../lib/quoteFormat";
@@ -41,8 +41,9 @@ import { openForwardToChat } from "../lib/forwardToChat";
 import { parseMessageHash } from "../lib/messageHash";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { TOOLBAR_BTN, TOOLBAR_SHELL } from "./conversation/toolbarStyles";
+import { lazyNamed } from "../lib/lazyNamed";
 
-const RightCommentRail = lazy(() => import("./comments/RightCommentRail").then((m) => ({ default: m.RightCommentRail })));
+const RightCommentRail = lazyNamed(() => import("./comments/RightCommentRail"), "RightCommentRail");
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // Comment-rail sizing (px). When the empty left margin is at least MIN, float the

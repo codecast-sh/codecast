@@ -18,7 +18,7 @@ import { usePaletteSessionCommands } from "../lib/paletteSessionCommands";
 import Link from "next/link";
 import { dragCarriesPane } from "../lib/stage";
 import { useRouter } from "next/navigation";
-import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, useContext, Fragment, lazy, Suspense, type ForwardedRef } from "react";
+import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, useContext, Fragment, Suspense, type ForwardedRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -219,6 +219,7 @@ import { createScrollHold, type ScrollHold } from "../lib/virtualList/scrollHold
 import { VLIST_LEGACY } from "../lib/virtualList/legacyFlags";
 import { useScrollSeek } from "../hooks/useScrollSeek";
 import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
+import { lazyNamed } from "../lib/lazyNamed";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
 /** Agent states in which the session is waiting on its human, not working. */
@@ -233,9 +234,9 @@ const STICKY_FORCE = (() => {
 })();
 const api = _typedApi as any;
 
-const CommentDock = lazy(() => import("./comments/CommentDock").then((m) => ({ default: m.CommentDock })));
-const ConversationTerminalSplit = lazy(() => import("./terminal/ConversationTerminal").then((m) => ({ default: m.ConversationTerminalSplit })));
-const SessionHuddleButton = lazy(() => import("./calls/OccupancyChip").then((m) => ({ default: m.SessionHuddleButton })));
+const CommentDock = lazyNamed(() => import("./comments/CommentDock"), "CommentDock");
+const ConversationTerminalSplit = lazyNamed(() => import("./terminal/ConversationTerminal"), "ConversationTerminalSplit");
+const SessionHuddleButton = lazyNamed(() => import("./calls/OccupancyChip"), "SessionHuddleButton");
 
 const EMPTY_PENDING: any[] = [];
 const EMPTY_MESSAGES: any[] = [];
