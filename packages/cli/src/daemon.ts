@@ -22112,6 +22112,7 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
     if (root) roots.add(root);
   }
   if (!roots.size) return;
+<<<<<<< HEAD
   const { levelOne, describeLevel } = await import("./land/levelSweep.js");
   const outcomes = [];
   for (const root of roots) {
@@ -22121,6 +22122,25 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
     // A refusal repeats every pass until someone moves the edit: say it when it changes, not every minute.
     if (line && line !== lastLevelLine.get(root)) log(`[LEVEL] ${line}`);
     lastLevelLine.set(root, line);
+=======
+  const { sweepOne } = await import("./land/levelSweep.js");
+  // A conflict that holds a checkout back is briefed to the session that wrote the file.
+  const send = async (to: string, body: string): Promise<boolean> => {
+    const siteUrl = getSiteUrl();
+    const token = getAuthToken();
+    if (!siteUrl || !token) return false;
+    const resp = await fetch(`${siteUrl}/cli/messages/send`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: token, to, body, wake: true }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    return resp.ok && !((await resp.json().catch(() => null)) as { error?: unknown } | null)?.error;
+  };
+  for (const root of roots) {
+    const line = await sweepOne(root, { send }).catch(() => null);
+    if (line) log(`[LEVEL] ${line}`);
+>>>>>>> b681a1775 (Brief the writer of a file that holds a shared checkout behind upstream)
   }
   // Off the sweep's path: a checkout's first attribution reads up to two weeks of transcripts, and levels keep their minute.
   if (!checkoutReportInProgress) {
