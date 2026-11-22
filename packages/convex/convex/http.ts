@@ -1566,6 +1566,7 @@ http.route({
           card: body.card,
           // `cast decide --run`: a cast command for a person to run (commandRun.ts).
           run: typeof body.run === "string" ? body.run : undefined,
+          run_on: typeof body.run_on === "string" ? body.run_on : undefined,
           // LM5: the expectations proposal the decision settles.
           proposal: body.proposal,
         });
@@ -3214,6 +3215,7 @@ http.route({
       const result = await ctx.runQuery(api.agentTasks.listTasks, {
         api_token: body.api_token,
         status: body.status,
+        ...(body.project_id ? { project_id: body.project_id } : {}),
       });
       return new Response(JSON.stringify(result), {
         status: 200,
@@ -3990,10 +3992,14 @@ cliRoute("/cli/projects/comment-update", async (ctx, body) => {
 cliRoute("/cli/projects/timeline", async (ctx, body) => {
   return await ctx.runQuery(api.projectUpdates.timeline, body);
 });
+// A session's project as it reads it (session-projects.md SP6): its charter, instructions and memory.
+cliRoute("/cli/projects/context", async (ctx, body) => ctx.runQuery((api as any).projectContext.forSession, body));
 // A session in a project (session-projects.md): `cast project join`.
 cliRoute("/cli/projects/set-session", async (ctx, body) => {
   return await ctx.runMutation(api.sessionProjects.setSessionProject, body);
 });
+// What a project produced (ct-94262): `cast project outputs`.
+cliRoute("/cli/projects/outputs", async (ctx, body) => ctx.runQuery((api as any).projectOutputs.get, { api_token: body.api_token, project_id: body.id }));
 
 // Initiatives (initiatives-projects-role-page.md I1): `cast initiative`.
 for (const [verb, fn] of [

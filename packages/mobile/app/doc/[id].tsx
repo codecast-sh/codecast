@@ -1,11 +1,14 @@
-import { useMemo } from "react";
 import { stripTitleHeading } from "@codecast/shared/docs";
+import { useTextSize } from '@/hooks/useTextSize';
+import { sizeStyle } from '@/lib/textSize';
 import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
   View as RNView,
   ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
 } from 'react-native';
 import { Text as RNText } from '@/components/Themed';
 import { useLocalSearchParams, useRouter, Stack } from "expo-router";
@@ -22,13 +25,16 @@ import { DOC_TYPE_CONFIG } from "@/components/DocItem";
 import { MarkdownContent } from "@/components/MarkdownRenderer";
 import { describeDates } from "@codecast/shared/time";
 import { isArtifactDocType } from "@codecast/shared/artifacts";
-import { openWebPage, WEB_ORIGIN } from "@/lib/links";
+import { ArtifactView } from "@/components/artifacts/ArtifactView";
 
 export default function DocDetailScreen() {
   const Theme = useTheme();
+  const textSize = useTextSize();
   const { id, share } = useLocalSearchParams<{ id: string; share?: string }>();
   const router = useRouter();
-  const docs = useInboxStore((s) => s.docs);
+  // The one row, not the collection: a whole-collection subscription would
+  // repaint this page on every doc sync across the workspace.
+  const storeDoc = useInboxStore((s) => (id ? s.docs[id] : undefined));
   const docsLoading = useFeedLoading("docs");
   // The persisted body cache (docDetails): prefetched for recent docs and kept
   // by every open, so the body paints on the first frame; the live detail
@@ -36,11 +42,6 @@ export default function DocDetailScreen() {
   const docKey = id && isConvexId(id) ? id : undefined;
   const liveDetail = useSyncDocDetail(docKey);
   const cachedDetail = useInboxStore((s) => (docKey ? s.docDetails[docKey] : undefined)) as any;
-
-  const storeDoc = useMemo(() => {
-    if (!id) return undefined;
-    return docs[id] ?? Object.values(docs).find((d) => d._id === id);
-  }, [docs, id]);
 
   // A share link carries the token along (?share=). When the doc isn't in the
   // viewer's store — a guest, or a teammate before docs sync — the public
@@ -84,16 +85,36 @@ export default function DocDetailScreen() {
   // title in its own header, so the body renders without it.
   const content = stripTitleHeading(docDetail?.content ?? doc.content ?? "");
 
+  const header = (
+    <Stack.Screen
+      options={{
+        title: cfg.label,
+        headerStyle: { backgroundColor: Theme.bgAlt },
+        headerTintColor: Theme.text,
+        headerTitleStyle: sizeStyle({ fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted }, textSize),
+      }}
+    />
+  );
+
+  // Boards, sheets and dashboards fill the screen with their own live view.
+  if (isArtifactDocType(doc.doc_type)) {
+    return (
+      <>
+        {header}
+        <KeyboardAvoidingView
+          style={styles.container}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={90}
+        >
+          <ArtifactView doc={doc} />
+        </KeyboardAvoidingView>
+      </>
+    );
+  }
+
   return (
     <>
-      <Stack.Screen
-        options={{
-          title: cfg.label,
-          headerStyle: { backgroundColor: Theme.bgAlt },
-          headerTintColor: Theme.text,
-          headerTitleStyle: { fontSize: 14, fontFamily: uiFace(Mono.semiBold), color: Theme.textMuted },
-        }}
-      />
+      {header}
       <ScrollView style={styles.container} contentContainerStyle={styles.content}>
         <RNText style={styles.title}>{doc.title || "Untitled"}</RNText>
 
@@ -126,19 +147,7 @@ export default function DocDetailScreen() {
           </TouchableOpacity>
         )}
 
-        {isArtifactDocType(doc.doc_type) ? (
-          // Boards, sheets and dashboards are drawn by the web app; the phone opens them there.
-          <TouchableOpacity
-            style={styles.webOnly}
-            onPress={() => void openWebPage(`${WEB_ORIGIN}/docs/${doc._id}`)}
-            activeOpacity={0.7}
-            accessibilityRole="link"
-          >
-            <FontAwesome name={cfg.icon as any} size={18} color={cfg.color} />
-            <RNText style={styles.webOnlyText}>Open {cfg.label.toLowerCase()} on the web</RNText>
-            <FontAwesome name="external-link" size={12} color={Theme.textMuted0} />
-          </TouchableOpacity>
-        ) : content ? (
+        {content ? (
           <RNView style={styles.section}>
             <MarkdownContent text={content} baseStyle={styles.bodyText} />
           </RNView>
@@ -266,23 +275,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 14,
     color: Theme.text,
     lineHeight: 21,
-  },
-  webOnly: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 14,
-    backgroundColor: Theme.bgAlt,
-    borderRadius: 10,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: Theme.borderLight,
-    marginTop: Spacing.sm,
-  },
-  webOnlyText: {
-    flex: 1,
-    fontSize: 15,
-    color: Theme.text,
   },
   emptyContent: {
     alignItems: "center",
