@@ -7,8 +7,8 @@ import {
   performRemoveSessionOwner,
   performListOwners,
   performListOwnerCandidates,
-  OWNER_CANDIDATE_CAP,
 } from "./sessionOwnership";
+import { OWNER_CANDIDATE_CAP } from "./lib/sessionOwnerRules";
 
 // Fixtures: Mr Bot runs a team-visible session; Jason and Ashot are teammates.
 // Samvit lives in a SECOND team, whose session jx3abcd is run by Ashot — the

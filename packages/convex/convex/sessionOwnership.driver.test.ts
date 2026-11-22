@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performCreateRole, performReparentSession } from "./orgRoles";
-import { performApplyOwnersChange, performListOwners, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners, withLeaveRules } from "./sessionOwnership";
+import { performApplyOwnersChange, performListOwners, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners } from "./sessionOwnership";
+import { withLeaveRules } from "./lib/sessionOwnerRules";
 
 // A role is an owner beside the people, and exactly one owner drives
 // (schema.ts conversations.driver_user_id): the filed role while no person

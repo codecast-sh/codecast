@@ -247,3 +247,17 @@ export async function setSessionOwnerRows(
   if (changed) await syncPrimaryOwnerCache(ctx, conversationId, primary);
   return changed;
 }
+
+// Put removed rows back exactly as they were: who added them, when, the
+// note and the ack. A row already present stays as it is.
+export async function restoreOwnerRows(ctx: { db: any }, conversationId: Id<"conversations">, rows: OwnerRowSnapshot[]): Promise<void> {
+  const present = new Set((await listSessionOwnerIds(ctx, conversationId)).map(String));
+  let changed = false;
+  for (const r of rows) {
+    if (present.has(r.user_id)) continue;
+    await ctx.db.insert("session_owners", { conversation_id: conversationId, user_id: r.user_id as Id<"users">, added_by: r.added_by as Id<"users">, added_at: r.added_at, ...(r.seen_at ? { seen_at: r.seen_at } : {}), ...(r.note ? { note: r.note } : {}) });
+    present.add(r.user_id);
+    changed = true;
+  }
+  if (changed) await syncPrimaryOwnerCache(ctx, conversationId);
+}

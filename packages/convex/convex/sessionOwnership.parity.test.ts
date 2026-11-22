@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performCreateRole } from "./orgRoles";
-import { ownersFactsOf, performApplyOwnersChange, performListOwners } from "./sessionOwnership";
+import { performApplyOwnersChange, performListOwners } from "./sessionOwnership";
+import { ownersFactsOf } from "./lib/sessionOwnerRules";
 import { ownerRowsOf } from "./sessionOwners";
 import { applyOwnersChangeTo, driverOf, listedOwnerIds, ownersFactsFromRead, type OwnersChangeInput } from "@codecast/shared/contracts/sessionOwners";
 
