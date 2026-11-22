@@ -75,10 +75,19 @@ export async function freezeSessionChange(root: string, session: string, opts: {
   };
 }
 
-/** Where a named branch stands now; a pull request's is fetched first, since its session pushes rather than commits here. */
+/**
+ * Where a named branch stands now. The session fixing it may be on another machine (a run started over ssh), where
+ * its commit reaches this checkout only through origin, so the branch is fetched too and origin's tip is taken when
+ * it is ahead of this checkout's.
+ */
 async function branchTip(root: string, change: FrozenChange): Promise<string> {
-  if (change.source === "pr") await git(root, ["fetch", "--quiet", "origin", `+${change.branch}:${change.branch}`]).catch(() => "");
-  return (await git(root, ["rev-parse", `refs/heads/${change.branch}`])).trim();
+  const remoteRef = `refs/remotes/origin/${change.branch}`;
+  await git(root, ["fetch", "--quiet", "origin", `+${change.branch}:${remoteRef}`]).catch(() => "");
+  const read = (ref: string) => git(root, ["rev-parse", "--verify", "--quiet", ref]).catch(() => "");
+  const [local, remote] = await Promise.all([read(`refs/heads/${change.branch}`), read(remoteRef)]);
+  if (!local || !remote || local === remote) return local || remote;
+  const behind = await git(root, ["merge-base", "--is-ancestor", local, remote]).then(() => true, () => false);
+  return behind ? remote : local;
 }
 
 /**
