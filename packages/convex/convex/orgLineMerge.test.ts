@@ -164,6 +164,15 @@ describe("a merge no role is behind", () => {
     expect(tables.task_comments.at(-1).text).toBe(`merged codecast/line-ct-7 into main at abc123def4: authorized by ${why}`);
   });
 
+  test("a clear on the starter's cited word merges under them and says which line it rests on", async () => {
+    const { ctx, tables, run } = solo();
+    const cited = { cite: { conversation_short_id: "jx7b0m0", line: 115 }, quote: "Yes, ship this", name: "Host" };
+    await clearForMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", why: "they said ship", cited }, NOW + 1);
+    expect(run().merge_cleared).toMatchObject({ node_id: "intent_gate", cite: cited.cite, quote: "Yes, ship this", attempt: NOW });
+    expect(tables.task_comments.at(-1).text).toBe(`Landed on Host's word: "Yes, ship this" (jx7b0m0:115), no card.`);
+    expect(await check(ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: `Host's own word "Yes, ship this" (jx7b0m0:115), checked at intent_gate` } });
+  });
+
   test("only a running script station of the run, on its own runner's account, clears it; an agent account is no person", async () => {
     const other = solo();
     await expect(clearForMergeCore(other.ctx, "users_someone" as any, { run_id: "workflow_runs_1", why: "x" })).rejects.toThrow("Only the run's own runner");
