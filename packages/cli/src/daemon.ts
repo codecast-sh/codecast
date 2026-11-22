@@ -22150,9 +22150,10 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
   if (!roots.size) return;
   const { sweepOne } = await import("./land/levelSweep.js");
   const { classifySendError } = await import("./land/levelConflicts.js");
-  // A conflict that holds a checkout back is briefed to the session that wrote
-  // the file, as a machine wake: a person's message would clear its pinned
-  // state and pull it into the inbox.
+  // A level conflict is briefed to the session that wrote the file (a raced
+  // level at once, here; a held one by the checkout report once it has stuck),
+  // as a machine wake: a person's message would clear its pinned state and
+  // pull it into the inbox.
   const svc = syncServiceRef;
   const send = svc && getAuthToken()
     ? async (to: string, body: string, clientId: string) => {
@@ -22178,7 +22179,7 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
   // Off the sweep's path: a checkout's first attribution reads up to two weeks of transcripts, and levels keep their minute.
   if (!checkoutReportInProgress) {
     checkoutReportInProgress = true;
-    void reportCheckoutsAfterSweep(outcomes).finally(() => { checkoutReportInProgress = false; });
+    void reportCheckoutsAfterSweep(outcomes, send ?? (async () => "failed" as const)).finally(() => { checkoutReportInProgress = false; });
   }
 }
 
@@ -22186,7 +22187,7 @@ const lastLevelLine = new Map<string, string | null>();
 let checkoutReportInProgress = false;
 
 /** Each swept checkout's state to the server, on change only (land/checkoutReport.ts, contracts/checkouts.ts). */
-async function reportCheckoutsAfterSweep(outcomes: import("./land/levelSweep.js").LevelSweepOutcome[]): Promise<void> {
+async function reportCheckoutsAfterSweep(outcomes: import("./land/levelSweep.js").LevelSweepOutcome[], sendBrief: import("./land/levelConflicts.js").SendBrief): Promise<void> {
   const siteUrl = getSiteUrl();
   const token = getAuthToken();
   if (!siteUrl || !token || !outcomes.length) return;
@@ -22198,7 +22199,7 @@ async function reportCheckoutsAfterSweep(outcomes: import("./land/levelSweep.js"
     if (!resp.ok || data?.error) throw new Error(data?.error ?? `${urlPath} answered ${resp.status}`);
     return data;
   };
-  await reportCheckouts(outcomes, { post, deviceId: deviceId(), repositoryOf: (root) => readLocalGitContext(root).repository ?? null, log }).catch((e) => log(`[LEVEL] checkout report: ${(e as Error)?.message ?? e}`));
+  await reportCheckouts(outcomes, { post, sendBrief, deviceId: deviceId(), repositoryOf: (root) => readLocalGitContext(root).repository ?? null, log }).catch((e) => log(`[LEVEL] checkout report: ${(e as Error)?.message ?? e}`));
 }
 const WIP_SNAPSHOT_CONCURRENCY = 3;
 // PUSHES per pass, not sessions per pass. Every eligible session is snapshotted
