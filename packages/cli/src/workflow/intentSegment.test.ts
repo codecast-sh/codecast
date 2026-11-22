@@ -71,6 +71,10 @@ describe("the intent segment", () => {
     const git = (...a: string[]) => spawnSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", ...a], { encoding: "utf-8" });
     git("init", "-q");
     git("commit", "-q", "--allow-empty", "-m", "base");
+    // The change's branch, one commit past the base.
+    git("checkout", "-q", "-b", "fix-deploys");
+    git("commit", "-q", "--allow-empty", "-m", "fix the deploys page");
+    git("checkout", "-q", "-");
     log = path.join(tmp, "cast.log");
     const bin = path.join(tmp, "bin");
     fs.mkdirSync(bin);
@@ -87,6 +91,8 @@ if (verb === "flow asker") {
 }
 if (verb === "flow blind") { console.log(JSON.stringify({ files: 1, added: 3, removed: 1, text: "diff --git a/deploys.tsx b/deploys.tsx" })); process.exit(0); }
 if (verb === "workflow clear") {
+  // A commit lands on the branch between the read and the clear.
+  if (process.env.FAKE_MOVE_BRANCH) require("child_process").spawnSync("sh", ["-c", "cd " + ${JSON.stringify(repo)} + " && git update-ref refs/heads/fix-deploys $(git -c user.name=t -c user.email=t@t commit-tree -m late -p fix-deploys 'fix-deploys^{tree}')"]);
   const opts = {};
   for (let i = 3; i < args.length; i += 2) opts[args[i].replace(/^--/, "")] = args[i + 1];
   const { clearRun } = await import(${JSON.stringify(path.join(import.meta.dir, "runsCli.ts"))});
@@ -104,20 +110,21 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
     console.log = original.log;
     process.env.PATH = original.path;
     delete process.env.FAKE_ASKER_FAIL;
+    delete process.env.FAKE_MOVE_BRANCH;
     fs.rmSync(tmp, { recursive: true, force: true });
   });
 
   const runDir = () => lineRunDir(repo, "intentcase-ct-7");
   /** Freeze a change for the run, as `cast flow run` does; `conversation` is its session, absent from a plain shell. */
-  const freeze = (conversation: string | null) => {
+  const freeze = (conversation: string | null, branch = "fix-deploys") => {
     fs.mkdirSync(runDir(), { recursive: true });
     fs.writeFileSync(path.join(runDir(), "change.json"), JSON.stringify({
-      source: "branch", branch: "fix-deploys", worktree: "fix-deploys", base: "b", tip: "t", paths: [], shared: [], held: [],
+      source: "branch", branch, worktree: "fix-deploys", base: "b", tip: "t", paths: [], shared: [], held: [],
       ...(conversation ? { conversation, session: "jx7lead" } : {}),
     }));
   };
-  const run = async (conversation: string | null = "conv_lead") => {
-    freeze(conversation);
+  const run = async (conversation: string | null = "conv_lead", branch?: string) => {
+    freeze(conversation, branch);
     const outcome = await runWorkflow(parseWorkflowSource(FLOW), { cwd: repo, taskId: "ct-7", runId: "run_1", apiToken: "tok", convexSiteUrl: server.url.origin, pollIntervalMs: 1 });
     expect(outcome).toBe("completed");
     // The station's own output, not the runner's echo of its script.
@@ -128,7 +135,7 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
   const casts = () => (fs.existsSync(log) ? fs.readFileSync(log, "utf-8").trim().split("\n").map((l) => JSON.parse(l)) : []);
   const clears = () => seen.filter((s) => s.route === "/cli/workflow-runs/clear");
   const intentFile = () => path.join(runDir(), "intent.json");
-  const head = () => spawnSync("git", ["-C", repo, "rev-parse", "HEAD"], { encoding: "utf-8" }).stdout.trim();
+  const head = () => spawnSync("git", ["-C", repo, "rev-parse", "fix-deploys"], { encoding: "utf-8" }).stdout.trim();
 
   test("the shipped segment validates, and composed it reads the asker, the change and the run's task", async () => {
     expect(validateWorkflow(parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.intent))).toEqual([]);
@@ -143,12 +150,24 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
     expect(call.prompt).not.toMatch(/\$\w/);
   });
 
-  test("a valid answer clears through the server with the cited line and quote, and writes intent.json with HEAD", async () => {
+  test("a valid answer clears through the server with the cited line and quote, and writes intent.json with the head Change diffed", async () => {
     fs.mkdirSync(runDir(), { recursive: true });
+    const diffed = head();
     expect(await run()).toBe("landed");
+    expect(casts().find((a) => a[0] === "flow" && a[1] === "blind")).toEqual(
+      ["flow", "blind", "diff", "--base", "main", "--head", diffed, "--redact", "fix-deploys", "fix-deploys", "jx7lead", "conv_lead"],
+    );
     expect(casts().find((a) => a[0] === "flow" && a[1] === "asker")).toEqual(["flow", "asker", "conv_lead", "--task", "ct-7", "--run", "run_1"]);
     expect(clears().map((c) => c.body)).toEqual([{ api_token: "tok", run_id: "run_1", why: SHIP.why, cite: { conversation_short_id: "jx7lead", line: 115 }, quote: SHIP.quote }]);
-    expect(JSON.parse(fs.readFileSync(intentFile(), "utf-8"))).toEqual({ starter_id: "u_ana", starter_name: "Ana", cite: "jx7lead:115", quote: SHIP.quote, head: head() });
+    expect(JSON.parse(fs.readFileSync(intentFile(), "utf-8"))).toEqual({ starter_id: "u_ana", starter_name: "Ana", cite: "jx7lead:115", quote: SHIP.quote, head: diffed });
+  });
+
+  test("a commit that lands on the branch after the read is not the head intent.json records", async () => {
+    const diffed = head();
+    process.env.FAKE_MOVE_BRANCH = "1";
+    expect(await run()).toBe("landed");
+    expect(head()).not.toBe(diffed);
+    expect(JSON.parse(fs.readFileSync(intentFile(), "utf-8")).head).toBe(diffed);
   });
 
   test("a quote with quotes, a dollar sign and an apostrophe reaches the server as written", async () => {
@@ -165,6 +184,7 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
     ["a failed model call", () => { model = { ok: false, reason: "budget", error: "no room", cost_usd: 0 }; }, "conv_lead"],
     ["no line cited", () => { model = { ...model, json: { ...SHIP, line: 0 } }; }, "conv_lead"],
     ["no session behind the change", () => {}, null],
+    ["a branch that does not resolve", () => {}, "conv_lead|no-such-branch"],
     ["the asker failing", () => { process.env.FAKE_ASKER_FAIL = "1"; }, "conv_lead"],
     ["the server refusing the citation", () => { clearAnswer = { error: "Not cleared: jx7lead:115 is not a line a person typed" }; }, "conv_lead"],
   ];
@@ -174,7 +194,8 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
       // A stale clear from an earlier run never reads as this one's.
       fs.writeFileSync(intentFile(), '{"starter_id": "u_old"}');
       arrange();
-      expect(await run(conversation)).toBe("asked");
+      const [conv, branch] = conversation ? conversation.split("|") : [null, undefined];
+      expect(await run(conv, branch)).toBe("asked");
       expect(fs.existsSync(intentFile())).toBe(false);
       if (name !== "the server refusing the citation") expect(clears()).toEqual([]);
     });
@@ -183,8 +204,8 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
   test("the clear script quotes every value the model wrote", () => {
     const clear = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.intent).nodes.get("clear")!.script!;
     const read = JSON.stringify({ ...SHIP, quote: "it's; rm -rf /", why: "$(whoami)" });
-    expect(expandScriptVars(clear, { run_id: "run_1", run_dir: "/r", worktree: "wt", "read.json": read })).toBe(
-      `mkdir -p '/r' && _wt="$(cast ws path 'wt')" && [ -n "$_wt" ] && cd "$_wt" && cast workflow clear 'run_1' --cite 'jx7lead':'115' --quote 'it'\\''s; rm -rf /' --why '$(whoami)' --record '/r'/intent.json`,
+    expect(expandScriptVars(clear, { run_id: "run_1", run_dir: "/r", "read.json": read })).toBe(
+      `_head="$(cat '/r'/intent-head)" && cast workflow clear 'run_1' --cite 'jx7lead':'115' --quote 'it'\\''s; rm -rf /' --why '$(whoami)' --record '/r'/intent.json --head "$_head"`,
     );
   });
 });

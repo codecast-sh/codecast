@@ -159,19 +159,16 @@ export async function showRun(deps: PublishDeps, ref: string, options: { session
  * `cast workflow clear <run>`: a script station clears its run to land with no card. With `cite` (the intent
  * segment) the server clears only on the run starter's own typed line holding `quote`, and `record` then gets
  * {starter_id, starter_name, cite, quote, head}: the starter the server checked, the line and words it checked, and
- * this checkout's HEAD, read before the stamp so a checkout with no HEAD clears nothing.
+ * `head`, the commit the read was given (the one the intent segment's Change station diffed).
  */
-export async function clearRun(deps: PublishDeps, run: string, options: { why: string; cite?: string; quote?: string; record?: string; json?: boolean }): Promise<void> {
+export async function clearRun(deps: PublishDeps, run: string, options: { why: string; cite?: string; quote?: string; record?: string; head?: string; json?: boolean }): Promise<void> {
   const cite = options.cite?.match(/^(.+):(\d+)$/);
   if (options.cite !== undefined && !cite) fail("--cite is <session short id>:<line>");
   if (!!cite !== (options.quote !== undefined)) fail("--cite and --quote go together");
   if (options.record && !cite) fail("--record needs --cite");
-  let head = "";
-  if (options.record) {
-    const { spawnSync } = await import("node:child_process");
-    const git = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf-8" });
-    head = git.status === 0 ? git.stdout.trim() : fail(`not cleared: no HEAD in ${process.cwd()}`);
-  }
+  const head = options.head?.trim() ?? "";
+  if (!!options.record !== !!head) fail("--record and --head <sha> go together");
+  if (head && !/^[0-9a-f]{40}$/.test(head)) fail(`--head is a full commit sha, not ${head}`);
   const r = await apiPost(deps, "/cli/workflow-runs/clear", {
     run_id: run, why: options.why,
     ...(cite ? { cite: { conversation_short_id: cite[1], line: Number(cite[2]) }, quote: options.quote } : {}),

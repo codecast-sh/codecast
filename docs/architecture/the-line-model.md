@@ -78,9 +78,11 @@ A person's earlier typed word counts as their answer. When the person who
 started a run already told the work to ship, in a line they typed into a
 session the change came through, and the change stays inside what they asked
 for, the run lands on that word and no card is posted (flows.md FL4, Intent).
-A program's words never count: a brief, a relayed "approved" or an agent's
-message is not the person's, and code checks the cited line before the run
-may land.
+A program's words never count: a brief, a relayed "approved", an agent's
+message or text the person quoted or pasted is not their word, and code checks
+the cited line before the run may land. Between a typed word and an answer on
+a card, the newer one stands: a Revise after "ship it" takes it back, and
+"ship it" after a Revise outranks it.
 
 ## LM5. Grounding: goals rank, expectations detect
 

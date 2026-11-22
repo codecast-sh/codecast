@@ -345,28 +345,40 @@ own turn.
 
 Between Review and Decide the `change` flow runs Intent (`templates/intent.cast`),
 which lands the change with no card when the person who started the run
-already told this work to ship. Asker reads the lines people typed into the
-sessions the change came through and the run's starter (`cast flow asker
+already told this work to ship. Asker reads, in the order they were said, the
+words people typed into the sessions the change came through and their
+answers on the task's Ship cards, and the run's starter (`cast flow asker
 $change_conversation --task --run`: the chain walk and provenance of
-`originator.ts`, so a brief, a relay or an agent's "approved" never appears),
-Change reads the diff as the judge does, and Read, a model call
-(`intent/asker.md`), answers `{ship, session, line, quote, in_scope, why}`:
-an explicit ship word or an accepted plan that ships, from the starter, and a
-change inside what they asked for. Clear then sends `cast workflow clear --cite
+`originator.ts`). Only a message's typed part counts (`typedPart`): what a
+composer send handed over as typed (`pending_messages.typed_text`, never the
+quotes, mention context or attachments folded around it; a joint send hands
+over none), or a terminal line with its pasted blocks and mention context
+taken out, a slash command as `/name args`. A brief, a relay, an agent's
+"approved", an echo whose words a queue row of the session holds, and a
+session another one handed its work to read as program. Change records the
+commit it diffs (`$run_dir/intent-head`) and reads the diff as the judge does,
+and Read, a model call (`intent/asker.md`), answers `{ship, session, line,
+quote, in_scope, why}`: an explicit ship word, an accepted plan that ships or
+a /drive request, from the starter, not taken back later, and a change inside
+what they asked for. Clear then sends `cast workflow clear --cite
 <session>:<line> --quote`, and the server is the gate (`verifyCitation`): the
-cited session is on the run's change chain (walked from the run's spawner, its
-task's change session and the session that filed the task, as the run's
-starter may read them), the line is typed (`typed_composer` or `typed_local`),
-its person is `run.user_id` and no agent account, and it holds the quote with
-whitespace folded. Only then is `merge_cleared` stamped, with the cite and
-quote, and the task says `Landed on <name>'s word: "<quote>" (<session>:<line>),
-no card.`; Land authorizes on that stamp (orgLineMerge `personAuthorized`,
-rule 4). Every other ending is Ask and Decide posts its card: no session behind
-the change, a failed script or call, an answer that is not JSON, ship false,
-out of scope, or a refused citation. A clear writes `$run_dir/intent.json`
-(`{starter_id, starter_name, cite, quote, head}`, the starter the server
-checked and the worktree's HEAD at the clear) for flows that compose the
-segment; Asker removes any earlier copy first.
+cited session is on the run's change chain (walked from the run's spawner and
+the session that filed its task, as the run's starter may read them; task
+comments name no anchor), the line is typed, its person is `run.user_id` and
+no agent account, it holds the quote with whitespace folded, and no person
+answered other than Ship on the task's cards after it. The check guards
+against honest misreads, not a token holder forging a session's links, who
+could push main anyway. Only then is `merge_cleared` stamped, with the cite,
+the quote and when the line was typed, and the task says `<name> said to ship:
+"<quote>" (<session>:<line>), checked against the record.` Land weighs that
+word against the person's card verdicts and the newest wins (orgLineMerge
+`personAuthorized`). Every other ending is Ask and Decide posts its card: no
+session behind the change, a branch that does not resolve, a failed script or
+call, an answer that is not JSON, ship false, out of scope, or a refused
+citation. A clear writes `$run_dir/intent.json` (`{starter_id, starter_name,
+cite, quote, head}`, the starter the server checked and the commit Change
+diffed) for flows that compose the segment; Asker removes any earlier copy
+first.
 
 A run on a task, a branch or a pull request started from inside a
 session has that session as its subject too (`callingSubject` in
