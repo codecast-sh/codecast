@@ -27,6 +27,7 @@ import { rosterDeviceOf, deviceWakesOnUse } from "../DeviceBadge";
 import { localDeviceIdOf } from "../../hooks/useLocalDeviceId";
 import { useTipActions, checkMilestone } from "../../tips";
 import { formatIdleDuration, sessionCardTitle } from "../../lib/sessionCard";
+import { pendingAsk } from "../../lib/conversationTitle";
 import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { ModernSessionCardView } from "./ModernSessionCard";
@@ -80,7 +81,7 @@ function leadRoleOf(session: { org_role_id?: string | null; standing_role_id?: s
 // The card's name off its own store row: the hosted name rule for hosted
 // rows, the session's title otherwise.
 function liveCardTitle(s: Parameters<typeof hostedRowTitle>[0], cardId: string, hosted: boolean, session: InboxSession): string {
-  return hosted ? hostedRowTitle(s, cardId) : sessionCardTitle(s.sessions[cardId] ?? session);
+  return hosted ? hostedRowTitle(s, cardId) : sessionCardTitle(s.sessions[cardId] ?? session, pendingAsk(s.pendingMessages[cardId]));
 }
 
 // The placement the Modern card reads where no section decides its word, as
