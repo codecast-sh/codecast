@@ -11,8 +11,11 @@ import { isLoopFresh, LOOP_OVERDUE_GRACE_MS, type LoopState } from "./loopState"
 import { openTasksVouchForWaiting } from "./openTasks";
 import { isHostedAgentType } from "./agentClients";
 import type { WorkState } from "./workState";
+import { isNoiseTitle, type InboxRowIdentity, type RunLogIdentity, isRunLog, isNestedIdentity, isOrphanOrSubagent, type RollupRow, rollupParentIdOf } from "./inboxMembership";
 // Field ownership (design C1): which channel writes which row field.
 export * from "./inboxFields";
+// Membership identity (subagents, rollups, stacked asks).
+export * from "./inboxMembership";
 
 // ── Buckets ──────────────────────────────────────────────────────────────────
 
@@ -52,6 +55,7 @@ export const INBOX_TRUNCATION_KINDS = [
   "snoozed",
   "stashed",
   "owned",
+  "adopted",
   "members",
   "member_rows",
   "foreign_scan",
@@ -120,7 +124,16 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // only while its last activity is within HISTORY_IMPORT_INBOX_MS.
 // v25: a hibernated session files by the verdict it carries (done, a
 // structural wake, or the person's move) instead of always parking as dormant.
-export const INBOX_PROJECTION_VERSION = 25 as const;
+// v26: a nested session the person talked to (inbox_adopted_at, a flow
+// station opened from its decision) stands alone: it is its own member
+// through the adopted window, files by its own facts and no longer rides its
+// parent.
+// v27: a process that exits while a standing trigger or loop owns its next
+// wake files under dormant, not needs_input (isExitBeforeArmedWake): a
+// trigger-run session ends its turn this way and the trigger resumes it.
+// v28: the first row past the fold's gap folds with everything older. It used
+// to stay shown, so filing the oldest shown row surfaced the next older one.
+export const INBOX_PROJECTION_VERSION = 28 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -329,6 +342,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // into the "work in flight" arm below and file it WORKING forever (found by
   // the two-replica simulation, 2026-09-01).
   if (isExitAfterDone(input)) return hasMsgs ? doneRest() : "idle";
+  if (isExitBeforeArmedWake(input)) return hasMsgs ? "dormant" : "idle";
   if (dead || isUnresponsive) return hasMsgs ? "needs_input" : "idle";
 
   // Settled with content: who acts next? A rest verdict names a machine (dormant)
@@ -386,17 +400,33 @@ export function isExitAfterDone(input: Pick<WorkStateInput, "agentStatus" | "dec
   );
 }
 
+// The process exited while a standing trigger or a live /loop owns the
+// session's next wake, with nothing queued and no declared block. A trigger
+// delivers into a stopped session by resuming it, so the exit ends a run, not
+// the session: the wake the system verified stands. A declared block still
+// claims the human, and queued work still needs a restart.
+export function isExitBeforeArmedWake(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus" | "hasPending" | "isUnresponsive" | "armedTriggerHome" | "armedLoopHome">): boolean {
+  return (
+    !!input.agentStatus &&
+    DEAD_AGENT_STATUSES.has(input.agentStatus) &&
+    !!(input.armedTriggerHome || input.armedLoopHome) &&
+    input.declaredStatus !== "blocked" &&
+    !input.hasPending &&
+    !input.isUnresponsive
+  );
+}
+
 // The machine cannot proceed, or is gone: an open ask, a permission prompt, an
 // unresolved API-error banner, a dead or unresponsive agent with output, or the
 // agent's own declared block. The one condition that surfaces an anchor row out
 // of `hidden`, and what keeps a standing trigger's home from collapsing under
 // its schedule row.
-export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pendingApiError" | "agentStatus" | "messageCount" | "isUnresponsive" | "declaredStatus" | "hasPending">): boolean {
+export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pendingApiError" | "agentStatus" | "messageCount" | "isUnresponsive" | "declaredStatus" | "hasPending" | "armedTriggerHome" | "armedLoopHome">): boolean {
   const hasMsgs = input.messageCount > 0;
   if (input.awaitingInput) return true;
   if (input.pendingApiError && hasMsgs) return true;
   if (input.agentStatus === "permission_blocked") return true;
-  if (!!input.agentStatus && DEAD_AGENT_STATUSES.has(input.agentStatus) && hasMsgs && !isExitAfterDone(input)) return true;
+  if (!!input.agentStatus && DEAD_AGENT_STATUSES.has(input.agentStatus) && hasMsgs && !isExitAfterDone(input) && !isExitBeforeArmedWake(input)) return true;
   if (isDeclaredBlocked(input) && hasMsgs) return true;
   return input.isUnresponsive;
 }
@@ -644,122 +674,6 @@ export function digestProjection(entries: Iterable<readonly [string, string, boo
     laneB = (laneB + Math.imul(h, h | 1)) >>> 0;
   }
   return hex8(laneA) + hex8(laneB);
-}
-
-// ── Membership: the visibility rule ─────────────────────────────────────────
-
-// Lifted from convex/inboxFilters.ts so the server scan and every replica run
-// ONE implementation (design C4); convex re-exports these back.
-export const NOISE_TITLE_PREFIXES = ["[Using:", "[Request", "[SUGGESTION MODE:"] as const;
-
-export function isNoiseTitle(title: string | null | undefined): boolean {
-  const t = title?.trim() || "";
-  if (!t) return false;
-  if (t.toLowerCase() === "warmup") return true;
-  return NOISE_TITLE_PREFIXES.some((p) => t.startsWith(p));
-}
-
-// A row that can never be its own projection member: subagents, workflow subs,
-// and rows with a parent pointer but no parent message (orphans). Their state
-// surfaces only on the parent (asking rollup, producing grace).
-export interface InboxRowIdentity {
-  is_subagent?: boolean | null;
-  is_workflow_sub?: boolean | null;
-  parent_conversation_id?: unknown;
-  parent_message_uuid?: string | null;
-}
-
-// A workflow run's own log: the conversation a run opens for itself to carry
-// its step events (is_workflow_primary, born with the run). Nobody talks in it
-// and its record lives on the run page, so it is never a row in any list a
-// person browses (inbox, feed, search); a direct link still opens it. Its
-// session id is no marker: born wf-<runId>, the daemon can rebind it to a real
-// one. A person's own session that hosts a run carries the run pointer
-// (workflow_run_id) only, never the flag (unmarkRunHosts repaired the old ones).
-export interface RunLogIdentity {
-  is_workflow_primary?: boolean | null;
-  workflow_run_id?: unknown;
-}
-
-export function isRunLog(conv: RunLogIdentity): boolean {
-  return !!conv.is_workflow_primary && !!conv.workflow_run_id;
-}
-
-export function isOrphanOrSubagent(conv: InboxRowIdentity): boolean {
-  if (conv.is_subagent === true) return true;
-  if (conv.is_workflow_sub === true) return true;
-  if (conv.parent_conversation_id && !conv.parent_message_uuid) return true;
-  return false;
-}
-
-// The parent a child's state rolls up to (its open ask lifts the parent into
-// QUESTIONS; its producing status parks the settled parent). ONE rule for the
-// server pool grouping (groupPoolChildren) and the replica's asking
-// derivation, so a parent can never be lifted on one side only:
-//   - a row that is never its own member (isOrphanOrSubagent) rolls up to its
-//     parent_conversation_id;
-//   - a plan handoff (parent pointer + parent message, not a subagent) is its
-//     own member and speaks for itself — no rollup;
-//   - an agent-team teammate (spawned_by + agent_team_name, no parent pointer)
-//     is its own member AND rolls up to its lead: the lead card is where the
-//     team's asks surface.
-export interface RollupRow extends InboxRowIdentity {
-  spawned_by_conversation_id?: unknown;
-  agent_team_name?: string | null;
-  agent_name?: string | null;
-  /** The role this session reports to (a role's session). */
-  org_role_id?: unknown;
-  /** Set when the row IS a role's standing session. */
-  standing_role_id?: unknown;
-  /** A nested child of this row is live (the overlay's child_live fact). */
-  child_live?: boolean | null;
-  /** The role put this session in front of the person; it stands alone again. */
-}
-
-export function rollupParentIdOf(row: RollupRow): string | null {
-  if (row.parent_conversation_id) {
-    return isOrphanOrSubagent(row) ? String(row.parent_conversation_id) : null;
-  }
-  if (row.agent_team_name && row.agent_name !== "team-lead" && row.spawned_by_conversation_id) return String(row.spawned_by_conversation_id);
-  return null;
-}
-
-// Whether a pending `cast decide` row lifts its session into QUESTIONS (and
-// counts in the queue, its badge and /questions). ONE rule for the server's
-// pending-decide set and the replica's, so a session is never lifted on one
-// side only. A blocking ask parks its session, so it waits on a person. An
-// advisory ask does not: the agent is already working on its default, so it
-// stays inside its own session and never interrupts. The exception is a row
-// someone filed into a named stack on purpose, which is where "answer all
-// defaults" resolves advisories.
-export interface StackedAskRow {
-  status: string;
-  blocking?: boolean;
-  stack_id?: unknown;
-}
-
-export function isStackedAsk(d: StackedAskRow): boolean {
-  return d.status === "pending" && (!!d.blocking || !!d.stack_id);
-}
-
-// Whether an answered advisory ask still takes a person's answer. The agent
-// went ahead on its default the moment it asked, so an answer on record (its
-// default applied by a stack policy, or a person's earlier pick) is a course
-// it is already on, and a person may still change it: the new answer reaches
-// the agent as one more message. A blocking ask, a gate on a run (its run
-// already routed on the answer) and a role's answer under a grant (reopened
-// through its own path) stay settled. ONE rule for the dispatch guard, the
-// server's settle hook and the web store, so no rail accepts what another
-// refuses.
-export interface AdvisoryAnswerRow {
-  status: string;
-  blocking?: boolean;
-  workflow_run_id?: unknown;
-  answered_by?: { kind: string } | null;
-}
-
-export function advisoryAnswerOpen(d: AdvisoryAnswerRow): boolean {
-  return d.status === "answered" && d.blocking === false && !d.workflow_run_id && d.answered_by?.kind !== "role";
 }
 
 // ── Riding the lead ─────────────────────────────────────────────────────────
@@ -1032,6 +946,7 @@ export const INBOX_WINDOW_CAPS = {
   stashed: 200,
   snoozed: 200,
   owned: 200,
+  adopted: 100,
 } as const;
 
 export type WorkingSetWindow = keyof typeof INBOX_WINDOW_CAPS;
@@ -1081,8 +996,10 @@ export interface WorkingSetRow extends InboxVisibilityRow, RollupRow {
 // eligibility and the fold's exemption, and the server's recent index pins
 // the same four fields to absent (schema by_user_plain_updated), so the scan
 // and the replica cut the recent window over the same rows.
-export function isFiled(row: Pick<WorkingSetRow, "inbox_pinned_at" | "inbox_dismissed_at" | "inbox_stashed_at" | "inbox_snoozed_until">): boolean {
-  return !!(row.inbox_pinned_at || row.inbox_dismissed_at || row.inbox_stashed_at || row.inbox_snoozed_until);
+// An adoption stamp files the row too: it holds its seat through the adopted
+// window, and the server's recent index never reads a nested row at all.
+export function isFiled(row: Pick<WorkingSetRow, "inbox_pinned_at" | "inbox_dismissed_at" | "inbox_stashed_at" | "inbox_snoozed_until" | "inbox_adopted_at">): boolean {
+  return !!(row.inbox_pinned_at || row.inbox_dismissed_at || row.inbox_stashed_at || row.inbox_snoozed_until || row.inbox_adopted_at);
 }
 
 // Window eligibility BEFORE caps ([] = nonmember). Top-level rows only, after
@@ -1099,7 +1016,11 @@ export function inWorkingSet(row: WorkingSetRow, epoch: number): WorkingSetWindo
     !isFiled(row) && (row.status === "active" || row.status === "completed") && row.updated_at >= horizon && !isStaleHistoryImport(row, epoch);
   if (recentEligible) windows.push("recent");
   if (row.inbox_pinned_at) windows.push("pinned");
-  if (!row.inbox_killed_at) {
+  if (row.inbox_adopted_at && row.inbox_adopted_at >= horizon) windows.push("adopted");
+  // The server reads the hide windows over top-level rows only (is_subagent
+  // pinned at the index), so an adopted child holds its seat through the
+  // adopted window alone and files under its hide stamp by placement.
+  if (!row.inbox_killed_at && !isNestedIdentity(row)) {
     if (row.inbox_dismissed_at && row.inbox_dismissed_at >= horizon) windows.push("dismissed");
     if (row.inbox_stashed_at && row.inbox_stashed_at >= horizon) windows.push("stashed");
     if (row.inbox_snoozed_until) windows.push("snoozed");
@@ -1117,6 +1038,7 @@ const WINDOW_SORT_KEY: Record<Exclude<WorkingSetWindow, "owned">, (row: WorkingS
   dismissed: (r) => r.inbox_dismissed_at ?? 0,
   stashed: (r) => r.inbox_stashed_at ?? 0,
   snoozed: (r) => r.inbox_snoozed_until ?? 0,
+  adopted: (r) => r.inbox_adopted_at ?? 0,
 };
 
 export type WorkingSetMember<Row extends WorkingSetRow = WorkingSetRow> = {
@@ -1173,14 +1095,15 @@ export function isFoldExempt(row: WorkingSetRow): boolean {
 
 // The per-row half of the fold, given the cut: exempt rows never fold, queued
 // work (has_pending_messages) is about to move so it never folds either, and
-// everything else folds when its activity is under the cut. A cutoff of 0
-// means no fold. The shared loop below and the server's per-row flag
-// (convex belowFoldFor) both call this, so the two cannot diverge.
+// everything else folds when its activity is at or under the cut, the newest
+// activity on the old side of the gap. A cutoff of 0 means no fold. The
+// shared loop below and the server's per-row flag (convex belowFoldFor) both
+// call this, so the two cannot diverge.
 export function isBelowFoldAt(row: WorkingSetRow, cutoff: number): boolean {
   if (cutoff <= 0) return false;
   if (isFoldExempt(row)) return false;
   if (row.has_pending_messages) return false;
-  return row.updated_at < cutoff;
+  return row.updated_at <= cutoff;
 }
 
 // Deterministic 12h gap cut by updated_at over members NOT filed on purpose
@@ -1523,12 +1446,30 @@ export function childAskingAt(row: { child_asking?: boolean | null; child_asking
   return !!row.child_asking && (row.child_asking_until == null || t < row.child_asking_until);
 }
 
+// The structural parks a row's facts stand behind: a standing or once trigger
+// that injects into it, or a fresh /loop wakeup. Each holds only while the
+// machine delivered the last turn, and a hosted conversation's routine never
+// parks it (its answers file like any turn).
+export function rowArmedHomes(
+  row: Pick<ProjectableInboxRow, "armed_trigger_kind" | "loop_state" | "agent_type" | "last_turn_allows_park" | "last_message_preview" | "last_user_message">,
+  epoch: number,
+): { armedTriggerHome: boolean; armedOnceTriggerHome: boolean; armedLoopHome: boolean } {
+  const park = rowLastTurnAllowsPark(row);
+  const kind = row.armed_trigger_kind ?? "none";
+  const hosted = isHostedAgentType(row.agent_type);
+  const loop = row.loop_state;
+  return {
+    armedTriggerHome: kind === "standing" && park && !hosted,
+    armedOnceTriggerHome: kind === "once" && park && !hosted,
+    armedLoopHome: !!loop && loop.status === "armed" && isLoopFresh(loop, epoch) && park,
+  };
+}
+
 export function placeProjectableRow(
   row: ProjectableInboxRow,
   asking: boolean,
   epoch: number,
 ): InboxPlacement {
-  const park = rowLastTurnAllowsPark(row);
   const loop = row.loop_state;
   // The wakes the system can stand behind. Trigger and loop homes are counted
   // raw here (not gated on `park`): a human who spoke last starts a turn that
@@ -1552,12 +1493,7 @@ export function placeProjectableRow(
     snoozed: !!row.inbox_snoozed_until && row.inbox_snoozed_until > epoch,
     snoozeDue: !!row.inbox_snoozed_until && row.inbox_snoozed_until <= epoch,
     userRest: userRestOf(row),
-    // A hosted conversation's routine delivers each run's answer into it, so
-    // the answer files like any finished turn (done, or the person's move
-    // when it asks them), never parked behind the next firing.
-    armedTriggerHome: (row.armed_trigger_kind ?? "none") === "standing" && park && !isHostedAgentType(row.agent_type),
-    armedLoopHome: !!loop && loop.status === "armed" && isLoopFresh(loop, epoch) && park,
-    armedOnceTriggerHome: (row.armed_trigger_kind ?? "none") === "once" && park && !isHostedAgentType(row.agent_type),
+    ...rowArmedHomes(row, epoch),
     childProducing: childProducingAt(row, epoch),
     settleVerdict: isSettleVerdictCurrent(row as { settle_verdict_at?: number | null; updated_at: number }) ? (row.settle_verdict ?? null) : null,
     declaredStatus: row.thread_state_status ?? null,

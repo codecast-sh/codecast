@@ -10,6 +10,7 @@ import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { QueueChip, askingSessionLine } from '@/components/decisions/QueueMeta';
 import { openLink } from '@/lib/links';
 import { rosterEscalationTargets, useInboxStore, type DecisionAnswerInput, type SessionDecisionItem } from '@codecast/web/store/inboxStore';
+import { windowOrgTree } from '@codecast/web/store/orgSlice';
 import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
 import { decisionQueueItems } from '@codecast/web/lib/decisionQueue';
 import { useDecisionDraft } from '@codecast/web/hooks/useDecisionDraft';
@@ -17,10 +18,12 @@ import { useSyncDecisionDetail, useDecisionDetail } from '@codecast/web/hooks/us
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import type { AnswerDraft } from '@codecast/web/lib/decisionAnswer';
 import { AnswerButton, AnswerControls, appAnswerLook } from '@/components/decisions/AnswerControls';
-import { decisionAnswerLabel } from '@codecast/shared/contracts';
 
 import { DecisionThread } from '@/components/decisions/DecisionThread';
-import { reportUrl, useDecisionAnswer } from '@/components/decisions/DecisionCard';
+import { SettledDecision } from '@/components/decisions/SettledDecision';
+import { useDecisionAnswer } from '@/components/decisions/DecisionCard';
+import { pageShareUrl } from '@codecast/shared/entities';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 // One `cast decide` at a time. The queue (useDecisionQueue) is the same model
 // web's stepper walks; this screen shows the decision named in the route and,
@@ -96,19 +99,22 @@ export default function DecisionScreen() {
 
   const title = queued ? `${position + 1} of ${decideQueue.length}` : 'Decision';
 
-  // Settled: say how, and move on.
+  // Settled: the answer on record, its history, and a way to change it.
   if (!item) {
-    const settled = row && row.status !== 'pending'
-      ? row.status === 'answered' ? `Answered: ${decisionAnswerLabel(row, row) ?? ''}` : row.status === 'withdrawn' ? 'The agent withdrew this question.' : 'Dismissed.'
-      : 'This decision is no longer in your queue.';
+    if (!row || row.status === 'pending') {
+      return (
+        <>
+          <Stack.Screen options={{ title, headerBackTitle: 'Back' }} />
+          <View style={[styles.center, { backgroundColor: Theme.bg }]}>
+            <Text style={styles.muted}>This decision is no longer in your queue.</Text>
+          </View>
+        </>
+      );
+    }
     return (
       <>
-        <Stack.Screen options={{ title, headerBackTitle: 'Back' }} />
-        <ScrollView style={{ backgroundColor: Theme.bg }} contentContainerStyle={styles.body}>
-          <Text style={styles.question}>{source.question}</Text>
-          <Text style={styles.muted}>{settled}</Text>
-          {nextId ? <AnswerButton look={look} label="Next decision" onPress={goNext} /> : null}
-        </ScrollView>
+        <Stack.Screen options={{ title: 'Decision', headerBackTitle: 'Back' }} />
+        <SettledDecision row={row} nextId={nextId} onNext={goNext} />
       </>
     );
   }
@@ -134,7 +140,7 @@ export default function DecisionScreen() {
               {docBody && docBody !== contextMd?.trim() ? <MarkdownContent text={docBody} baseStyle={styles.context} /> : null}
             </CollapsibleBody>
           ) : null}
-          {reportSlug ? <LinkRow label="Open the report" onPress={() => openLink(reportUrl(reportSlug))} /> : null}
+          {reportSlug ? <LinkRow label="Open the report" onPress={() => openLink(pageShareUrl(reportSlug))} /> : null}
 
           <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} guarded={(i) => approvesPersonsAct(source, i)} />
 
@@ -189,7 +195,7 @@ function HandoffNote({ row }: { row: SessionDecisionItem }) {
   const note = up?.note ?? row.passed_to?.note;
   const by = useInboxStore((s) => {
     const id = up?.by ?? row.passed_to?.by;
-    const m = id ? (s.teamMembers ?? []).find((u: any) => String(u._id) === id) : null;
+    const m = id ? teamMembersOf(s).find((u: any) => String(u._id) === id) : null;
     return m?.name ?? m?.email ?? null;
   });
   if (row.status !== 'pending' || !note) return null;
@@ -208,8 +214,8 @@ function HandoffPanel({ mode, decisionId, holderKey, onDone }: { mode: 'pass' | 
   const [note, setNote] = useState('');
   const [to, setTo] = useState<string | null>(null);
   const meId = useInboxStore((s) => String(s.currentUser?._id ?? ''));
-  const members = useInboxStore((s) => s.teamMembers);
-  const orgPeople = useInboxStore((s) => s.orgTree?.people);
+  const members = useInboxStore(teamMembersOf);
+  const orgPeople = useInboxStore((s) => windowOrgTree(s)?.people);
   const passDecision = useInboxStore((s) => s.passDecision);
   const escalateDecision = useInboxStore((s) => s.escalateDecision);
   const people = useMemo(() => (members ?? []).filter((m: any) => !m.is_bot && String(m._id) !== meId && holderKey !== `user:${m._id}`), [members, meId, holderKey]);
