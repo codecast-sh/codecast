@@ -35,7 +35,7 @@ import { webBaseUrl } from "../config/readLocalConfig.js";
 import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
-import { releaseEndedRunTree, restoreRunTree } from "./runWorktree.js";
+import { releaseEndedRunTree, restoreRunTree, stopRunBrowser } from "./runWorktree.js";
 
 function resolveNextNode(
   graph: WorkflowGraph,
@@ -2140,6 +2140,8 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     return "failed";
   } finally {
     await parker?.stop();
+    // A run that ended mid-station (on the server, or by a throw) leaves no browser behind either.
+    if (!options.dryRun) await stopRunBrowser(cwd, ran.state?.context ?? initialContext);
     claim?.release();
     // Whatever ended the run (it completed, failed, or was cancelled on the server), its
     // worktree goes once main holds all of it; its branch stays (runWorktree.ts).
@@ -2489,6 +2491,8 @@ async function runNodeLoop(
     } else {
       outcome = "success";
     }
+    // A browser the station started ends with it, so a run waiting at a gate, on CI or at Go live holds none (ct-98941).
+    if (!options.dryRun) await stopRunBrowser(cwd, state.context);
     // A person's answer is the next attempt: a Revise sent back to a build that spent its visits is carried out (Oct 26).
     if (current.type === "human" && outcome !== "failure" && !options.dryRun && !state.context["human.gate.no_card"]) clearVisits(state.visitCounts, state.context);
     // "No decision of yours stands" is news for the one visit the gate sent back. Left set, every later visit (a card
