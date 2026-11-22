@@ -10,6 +10,7 @@ import { describe, test, expect, beforeEach, afterEach, setSystemTime, spyOn } f
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import nodeOs from "node:os";
 import { parseWorkflowSource } from "./parser.js";
 import { runWorkflow, type RunOptions } from "./runner.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
@@ -21,9 +22,9 @@ const builders = ["implement", "implement_line"];
 
 // The station with the shipped line's own edges out of it, between a start and
 // the two places they lead: verify, and the stopped exit.
-const graphFor = (id: string) => parseWorkflowSource(`digraph line {
+const graphFor = (id: string, timeout = 600) => parseWorkflowSource(`digraph line {
   start [shape=Mdiamond]
-  ${id} [label="Build", backend=session, agent=claude, timeout=600, prompt="build it"]
+  ${id} [label="Build", backend=session, agent=claude, timeout=${timeout}, prompt="build it"]
   verify [shape=parallelogram, script="true"]
   exit [shape=Msquare]
   stopped [shape=Msquare, label="Stopped", stop="$handoff_note"]
@@ -102,7 +103,7 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     fs.rmSync(tmpDir, { recursive: true });
   });
 
-  const run = (id: string) => runWorkflow(graphFor(id), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
+  const run = (id: string, timeout?: number) => runWorkflow(graphFor(id, timeout), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
   const reached = (id: string) => calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === id);
   const failReason = () => calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.fail_reason).map((c) => String(c.body.fail_reason)).pop() ?? "";
 
@@ -149,6 +150,33 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     expect(calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === id && c.body.node_status === "failed")).toBe(true);
     expect(failReason()).toContain("ran 10m, its station's limit");
     expect(failReason()).toMatch(/^hand jx7hand killed after \d+m at \w+: it ran 10m/);
+  }, 30000);
+
+  // A hand waiting on work it declared shows no transcript growth for as long as the work takes, and lives to its
+  // cap (Implement and Prove set timeout=10800), never only the 30-minute quiet window.
+  const waits: Array<[string, (n: number) => Record<string, unknown>]> = [
+    ["pins dormant on its check", () => ({})],
+    ["reads waiting on its background work", (n) => n >= 2 ? { work_state: "dormant", agent_status: "waiting" } : {}],
+    ["has a daemon gone dark", (n) => n >= 2 ? { is_live: false } : {}],
+  ];
+  test.each(waits)("a hand that %s for 45 minutes is not killed, and routes on its handoff after", async (_, rowAt) => {
+    // An idle machine: a loaded one stretches the quiet window past 45 minutes, and the test would prove nothing.
+    const load = spyOn(nodeOs, "loadavg").mockReturnValue([0, 0, 0]);
+    afterEach(() => load.mockRestore());
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const res = await realFetch(url, init);
+      if (!String(url).endsWith("/cli/inbox")) return res;
+      const body = await res.json();
+      Object.assign(body.sessions[0], rowAt(reads));
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    jumpAt = 5;
+    jumpMs = 45 * 60_000;
+    handoffAt = 8;
+    expect(await run("implement", 10800)).toBe("completed");
+    expect(reached("verify")).toBe(true);
+    expect(failReason()).not.toContain("killed after");
   }, 30000);
 
   test.each(builders)("%s: a hand parked on its task's wait outlives the node's timeout and routes on its handoff after", async (id) => {

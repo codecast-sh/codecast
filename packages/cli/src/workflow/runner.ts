@@ -755,7 +755,7 @@ async function waitOnStation(
     const row = (inbox?.sessions || []).find((r: any) => r.id === conversationId);
     if (!row) {
       // A hand the read never returns would otherwise wait in silence until
-      // the node's timeout kills it: say so once, with the reason at hand.
+      // its quiet window ends it: say so once, with the reason at hand.
       if (lastState !== "unseen" && Date.now() - startMs > 60_000) {
         console.log(`${c.yellow}  ${shortId}: the session read ${inbox ? "does not list this hand" : "is failing"}, so the run cannot see it settle${c.reset}`);
         lastState = "unseen";
@@ -764,12 +764,14 @@ async function waitOnStation(
     }
     const state: string = row.work_state || "idle";
     if (row.is_live) wasLive = true;
-    // A transcript that moved, or a working status, is work: the hand's quiet window starts again.
-    if (state === "working" || AGENT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) !== lastCount) watch.active();
+    // A transcript that moved or a working status is work, and so is a wait the hand declared: its background work
+    // still running (waiting), a dormant pin, or a daemon gone dark under it. Those are held below until the hand's
+    // cap, as before the quiet window existed: builders' handoffs landed 1 to 60+ minutes after their turn (ct-60145).
+    if (state === "working" || state === "dormant" || HAND_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) !== lastCount) watch.active();
     lastCount = row.message_count ?? 0;
     // A hand whose start failed (its machine refused it, or a cloud host's
     // preparation failed) reads idle, never live and never killed: nothing
-    // would settle it before the node's timeout, three hours at prove. Once
+    // would settle it before its quiet window ends, 30 minutes on. Once
     // the error has stood past the first-sync grace, the station fails with it.
     if (!wasLive && row.message_count === 0 && row.session_error) {
       emptySince ||= Date.now();
@@ -788,12 +790,14 @@ async function waitOnStation(
     // daemon while the row is still live, and the settle below catches it
     // there. A daemon frozen for 199s under load settled a hand mid tool
     // call and routed the run to failure (agentwatch Build, 2026-10-14).
-    // Wait for the daemon to come back, or for the node's timeout; a hand
-    // that declared done before the silence keeps that answer.
+    // Wait for the daemon to come back, or for the hand's cap (its node's
+    // timeout): a dark row is no quiet hand; a hand that declared done before
+    // the silence keeps that answer.
     const dark = wasLive && !row.is_live && !row.is_killed && row.agent_status !== "hibernated";
     if (dark && state !== "done") {
       if (lastState !== "dark") console.log(`${c.dim}  ${shortId}: its daemon has gone quiet, waiting for it to report again${c.reset}`);
       lastState = "dark";
+      watch.active();
       askedOnce = false;
       continue;
     }
@@ -872,14 +876,15 @@ async function waitOnStation(
     // check, a replay, a Monitor. Its row reads needs_input or not live while
     // it waits, and that is the pause, not its answer: the Implement hand of
     // ct-59998 pinned dormant on a check and an eval, and the run routed on
-    // the empty handoff (2026-10-16). Wait within the node's timeout for it to
-    // pin again. It still settles on done, on being killed, and on a real ask:
+    // the empty handoff (2026-10-16). Wait within the hand's cap (its node's
+    // timeout), never its quiet window, for it to pin again. It still settles on done, on being killed, and on a real ask:
     // an open question, or an error it does not come back from by itself.
     // The run's subject is the exception: it pins dormant naming this run as its wake ("the run re-checks when this
     // turn ends", ct-85419 waited 15 minutes at Fix check), so its dormant pin after the brief is its answer.
     if (!subject && pinned?.status === "dormant" && state !== "done" && !row.is_killed && !row.awaiting_input && !row.blocked_on) {
       if (!heldDormant) console.log(`${c.dim}  ${shortId}: pinned dormant, waiting for its wake${c.reset}`);
       heldDormant = true;
+      watch.active();
       askedOnce = false;
       const waiting = await taskWaiting((route, body) => cliCall(options, route, body), options.taskId);
       if (waiting && clock.park()) console.log(`${c.dim}  ${shortId}: its task waits (${waiting}); the node's clock stops until it clears${c.reset}`);
@@ -927,7 +932,7 @@ async function waitOnStation(
     if (answersByHandoff) {
       // A hand that ended a turn while its own check runs in the background
       // (the Bash tool backgrounds past 120s) has not answered yet: the ask
-      // has it pin dormant, which the wait above holds to the node's timeout.
+      // has it pin dormant, which the wait above holds to the hand's cap (the node's timeout).
       // Its handoff landed 1 to 60+ minutes later on 14 runs (ct-60145).
       if (!askedForHandoffAt && !row.is_killed) {
         askedForHandoffAt = Date.now();
@@ -963,6 +968,9 @@ async function waitOnStation(
 // Agent statuses of a hand inside a turn: whatever its row's work_state says, it is at work (a subject has not
 // answered yet, and no hand is quiet).
 const AGENT_AT_WORK = new Set(["working", "thinking", "compacting"]);
+// A hand whose background work still runs reads waiting between its turns: not at work for a subject's answer, but
+// no quiet hand either.
+const HAND_AT_WORK = new Set([...AGENT_AT_WORK, "waiting"]);
 
 // How long a hand asked for its missing handoff has to start answering before
 // a finished reading counts again: the message lands at its next turn.
