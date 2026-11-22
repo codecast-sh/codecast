@@ -1,7 +1,7 @@
 // A trigger run as the conversation draws it (org-staffing.md S25): the
 // scheduled-task frame an inject run arrives in, the prompt header a spawned
 // run opens with, and a role's run with its card, folded to one line.
-import { useState } from "react";
+import { useState, memo } from "react";
 import Link from "next/link";
 import { ChevronDown, ChevronRight, CornerDownLeft, Zap } from "lucide-react";
 import { WORKER_SETTLE_WORDS, parseScheduledTask, roleCardInitiativeLine, withoutStashedRunNote, type ScheduledTaskFrame, type WaitingSession } from "@codecast/shared/contracts";
@@ -56,7 +56,7 @@ function WaitingSessionLine({ waiting: w, firedAt, words, wordsClass = "text-sol
   return (
     <div className="mx-3 mb-1.5 flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[12px]" data-waiting-session={w.short_id}>
       <EntityIdPill shortId={w.short_id} compact />
-      {w.role && <span className="text-sol-text-dim">@{w.role}</span>}
+      {(w.role ?? w.silent_lead) && <span className="text-sol-text-dim">@{w.role ?? w.silent_lead}</span>}
       <span className={wordsClass} title={w.since ? formatFullTimestamp(w.since) : undefined}>{words ?? waitingWords(w, firedAt)}</span>
       {w.state && <span className="basis-full truncate text-sol-text" title={w.state}>{w.state}</span>}
     </div>
@@ -71,6 +71,8 @@ function WaitingSessionLine({ waiting: w, firedAt, words, wordsClass = "text-sol
 /** The change the area watch fired for (org-staffing.md S29), in a few words on the closed line. */
 function changeWords(c: NonNullable<ScheduledTaskFrame["change"]>): string {
   if (c.kind === "unowned_project") return `"${c.project_title}" has no owner`;
+  if (c.kind === "plan_without_project") return `${c.record} "${c.record_title}" has no project`;
+  if (c.kind === "project_without_goal") return `"${c.record_title}" serves no goal`;
   return `@${c.role_handle} has read ${AREA_STATUS_WORDS[c.to]} at two checks in a row`;
 }
 
@@ -78,6 +80,7 @@ function changeWords(c: NonNullable<ScheduledTaskFrame["change"]>): string {
  *  the person (ConversationView turnEndedSilent). A wake it answered needs
  *  no mark: the answer is the next thing on screen. */
 function RoleWakeBlock({ frame, timestamp, unanswered = false }: { frame: ScheduledTaskFrame; timestamp: number; unanswered?: boolean }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [open, setOpen] = useState(false);
   const role = frame.role!;
   const w = frame.waiting;
@@ -142,6 +145,7 @@ const WORKER_TONE: Record<string, string> = {
 /** One worker's report: who, what it settled on and its pinned line, on one
  *  quiet row that opens in place to the whole line. */
 function WorkerReportRow({ worker: w, timestamp, first }: { worker: WaitingSession; timestamp: number; first: boolean }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [open, setOpen] = useState(false);
   const toggle = () => w.state && setOpen(!open);
   return (
@@ -190,7 +194,8 @@ function HostedRoutineRunLine({ frame, timestamp }: { frame: ScheduledTaskFrame;
   );
 }
 
-export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = false, unanswered = false }: { content: string; timestamp: number; hosted?: boolean; unanswered?: boolean }) {
+export const ScheduledTaskBlock = memo(function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = false, unanswered = false }: { content: string; timestamp: number; hosted?: boolean; unanswered?: boolean }) {
+  "use no memo"; // formatRelativeTime() reads the clock as this renders; compiled, the time shown would stop moving.
   const [showPlumbing, setShowPlumbing] = useState(false);
   const [showPrompt, setShowPrompt] = useState(false);
   const content = rawContent.replace(/<system-reminder>[\s\S]*?<\/system-reminder>/g, '').trim();
@@ -267,4 +272,4 @@ export function ScheduledTaskBlock({ content: rawContent, timestamp, hosted = fa
       )}
     </div>
   );
-}
+});

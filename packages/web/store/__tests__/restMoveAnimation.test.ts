@@ -1,7 +1,7 @@
 import { beforeAll, describe, expect, test } from "bun:test";
 import { JSDOM } from "jsdom";
 import { useInboxStore } from "../inboxStore";
-import { animatedSetSessionRest } from "../undoActions";
+import { animatedMoveSessions, animatedSetSessionRest } from "../undoActions";
 
 // Filing a row as dormant (or any rest verdict) moves it between inbox
 // sections the way a stash moves it out: the card collapses where it was, the
@@ -14,6 +14,7 @@ beforeAll(() => {
   for (const key of ["window", "document", "MutationObserver", "Element", "HTMLElement", "Event"] as const) {
     (globalThis as any)[key] = (dom.window as any)[key];
   }
+  (globalThis as any).requestAnimationFrame ??= (cb: () => void) => setTimeout(cb, 0);
 });
 
 const seed = () => useInboxStore.setState({
@@ -75,5 +76,25 @@ describe("a rest verdict animates the row between sections", () => {
     seed();
     await animatedSetSessionRest(ID, "done");
     expect((useInboxStore.getState().sessions[ID] as any).user_rest).toBe("done");
+  });
+});
+
+describe("a write that keeps the row on the page", () => {
+  test("a deferred row React only reorders comes back whole and grows in where it sits", async () => {
+    document.body.innerHTML = "";
+    seed();
+    const at = mountCard("needs_input");
+
+    animatedMoveSessions([ID], "Deferred 1 session", (id) => useInboxStore.getState().deferSession(id));
+    expect(at.wrapper.classList.contains("session-dismissing")).toBe(true);
+
+    at.wrapper.dispatchEvent(new Event("animationend"));
+    await tick();
+    expect((useInboxStore.getState().sessions[ID] as any).is_deferred).toBe(true);
+    // The same node, moved by React rather than replaced: after the next frame
+    // it is no longer collapsed, and it plays the entrance.
+    await tick();
+    expect(at.wrapper.classList.contains("session-dismissing")).toBe(false);
+    expect(at.wrapper.classList.contains("session-entering")).toBe(true);
   });
 });

@@ -6,6 +6,7 @@ import { useInboxStore, InboxSession, classifySession, claimsViewer, isSub, isCo
 import { agentStatusAt } from "../lib/liveness";
 import { WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
 import { startWarmLoop } from "./inboxWarm";
+import { useInboxAnswered } from "../lib/bootPhase";
 import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
 import { useConvexSync } from "./useConvexSync";
@@ -36,6 +37,7 @@ import { useMountEffect } from "./useMountEffect";
 // big page times out the UDF. Cut once per cold or resynced cache; from then on
 // the sync log is the only healer (see the floor effect below).
 const SESSIONS_FLOOR_WINDOW_MS = WORKING_SET_RECENCY_MS;
+const FLOOR_SINCE_BUCKET_MS = 6 * 60 * 60 * 1000;
 const SESSIONS_FLOOR_PAGE_SIZE = 75;
 const SESSIONS_FLOOR_PAGE_DELAY_MS = 60;
 // The stub sweep's cadence: a timer plus the wake bus, because timers freeze
@@ -239,8 +241,11 @@ export function runInboxFloorStep(convex: Pick<ConvexReactClient, "query">, flag
   if (!hydrated || wsKey === "skip" || floorStamped || !logStamped) return;
   // ONE stable lower bound for the whole floor: it becomes the paginated
   // index bound, and a wall-clock value recomputed per page would make each
-  // page a different query (InvalidCursor).
-  const floorSince = Date.now() - SESSIONS_FLOOR_WINDOW_MS;
+  // page a different query (InvalidCursor). Rounded down to a fixed boundary
+  // so it is stable across launches too: a resumed checkpoint's cursor is
+  // only valid for the query that produced it, and a per-launch bound made
+  // every resume fail with InvalidCursor after ~6s of retries.
+  const floorSince = Math.floor((Date.now() - SESSIONS_FLOOR_WINDOW_MS) / FLOOR_SINCE_BUCKET_MS) * FLOOR_SINCE_BUCKET_MS;
   const cachedRows = Object.entries(useInboxStore.getState().sessions);
   const cached = cachedRows.filter(([, row]) => byIdsMustReturn(row, principalId)).map(([id]) => id);
   // Foreign rows that claim this principal: the floor may not return them, and
@@ -300,7 +305,8 @@ export function useSyncInboxSessions() {
   // whole payload re-sends each time, so a second subscriber doubled the
   // desktop's largest stream (34 MB in 90s per window, 2026-10-08).
   const isSyncHost = useIsSyncHost();
-  const favorites = useQueryNoThrow(api.conversations.listFavoriteSessions, isSyncHost ? { include_liveness: false } : "skip");
+  const inboxAnswered = useInboxAnswered();
+  const favorites = useQueryNoThrow(api.conversations.listFavoriteSessions, isSyncHost && inboxAnswered ? { include_liveness: false } : "skip");
   useFeederError("conversations.listFavoriteSessions", favorites.error);
   const favoriteSessions = favorites.data;
   const liveness = useSplitQueryNoThrow(api.conversations.sessionsLiveness, isSyncHost ? {} : "skip", "liveness");

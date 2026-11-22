@@ -17,6 +17,7 @@ const { act } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { useVaultStore } = await import("../store/vaultStore");
 const { useVaultLocalPath } = await import("./useVaultLocalPath");
+const { ConvexProvider } = await import("convex/react");
 const initial = useVaultStore.getState();
 const originalFetch = globalThis.fetch;
 const roots: ReturnType<typeof createRoot>[] = [];
@@ -56,20 +57,23 @@ afterAll(() => {
   closeDomWindow(dom);
 });
 
-async function mount(path: string | null = localPath) {
+async function mount(path: string | null = localPath, opts: { conv?: string; convex?: object } = {}) {
   const routes: string[] = [];
   const router = { replace: (href: string) => { routes.push(href); } };
-  function Probe({ path }: { path: string | null }) {
-    useVaultLocalPath(path, 23, router);
+  const seen: { remote: ReturnType<typeof useVaultLocalPath> } = { remote: null };
+  function Inner({ path }: { path: string | null }) {
+    seen.remote = useVaultLocalPath(path, 23, router, opts.conv);
     return null;
   }
+  const Probe = ({ path }: { path: string | null }) =>
+    opts.convex ? <ConvexProvider client={opts.convex as never}><Inner path={path} /></ConvexProvider> : <Inner path={path} />;
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
   roots.push(root);
   const render = (next: string | null) => act(() => root.render(<Probe path={next} />));
   await render(path);
-  return { routes, render };
+  return { routes, render, seen };
 }
 
 const update = (state: Parameters<typeof useVaultStore.setState>[0]) => act(() => useVaultStore.setState(state));
@@ -213,4 +217,52 @@ test("a failed daemon lookup opens the file rather than calling it outside the v
   await answer(0, { error: "boom" }, 500);
   expect(useVaultStore.getState().opError).toBeNull();
   expect(view.routes).toEqual([`/files?f=${encodeURIComponent(rel)}&l=23`]);
+});
+
+test("a path from a teammate's machine opens the same file in this machine's checkout", async () => {
+  await update({ endpoint });
+  const foreign = "/Users/jason/code/app/docs/notes.md";
+  const view = await mount(foreign);
+  await answer(0, { error: "no such path" }, 404);
+  expect(new URL(requests[1].url).searchParams.get("path")).toBe(`${known.root}/docs/notes.md`);
+  await answer(1, { vault: known, rel: "docs/notes.md" });
+  expect(view.routes).toEqual([`/files?path=${encodeURIComponent(`${known.root}/docs/notes.md`)}&l=23`]);
+  expect(useVaultStore.getState().opError).toBeNull();
+});
+
+test("a teammate's path with no exact copy opens in the same-named checkout, where the scan can find it", async () => {
+  await update({ endpoint });
+  const view = await mount("/Users/jason/code/app/docs/moved.md");
+  await answer(0, { error: "no such path" }, 404);
+  await answer(1, { error: "no such path" }, 404);
+  expect(view.routes).toEqual([`/files?path=${encodeURIComponent(`${known.root}/docs/moved.md`)}&l=23`]);
+});
+
+test("a teammate's path with no same-named checkout here says it does not exist", async () => {
+  await update({ endpoint });
+  const foreign = "/Users/jason/code/other/docs/gone.md";
+  const view = await mount(foreign);
+  await answer(0, { error: "no such path" }, 404);
+  expect(requests).toHaveLength(1);
+  expect(useVaultStore.getState().opError).toBe(`${foreign} does not exist on this machine.`);
+  expect(view.routes).toEqual([]);
+});
+
+test("a file missing here, with no same-named checkout, is read from the conversation's machine", async () => {
+  const asked: unknown[] = [];
+  const convex = {
+    mutation: async (_fn: unknown, args: unknown) => {
+      asked.push(args);
+      return { ok: true, command_id: "cmd1", device_id: "there", machine: "MacBook-Pro-182" };
+    },
+    query: async () => ({ executed_at: 1, result: JSON.stringify({ exists: true, content: "# Daily", size: 7 }) }),
+  };
+  await update({ endpoint });
+  const view = await mount(localPath, { conv: "conv1", convex });
+  await answer(0, { error: "no such path" }, 404);
+  expect(useVaultStore.getState().opError).toBeNull();
+  expect(asked).toEqual([{ conversation_id: "conv1", path: localPath }]);
+  await act(() => new Promise((r) => setTimeout(r, 600)));
+  expect(view.seen.remote).toMatchObject({ status: "ready", machine: "MacBook-Pro-182", content: "# Daily" });
+  expect(view.routes).toEqual([]);
 });
