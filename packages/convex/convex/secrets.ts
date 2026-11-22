@@ -297,9 +297,8 @@ async function clearApprovals(ctx: any, row: SecretRow, which: "approved" | "all
     // Deleted before the withdraw, so its settle finds no approval to mark denied.
     await ctx.db.delete(a._id);
     if (a.status !== "pending") continue;
-    // A batched decision still covering other secrets stays open for them.
-    const others = await ctx.db.query("secret_approvals").withIndex("by_decision", (q: any) => q.eq("decision_id", a.decision_id)).collect();
-    if (others.some((o: Doc<"secret_approvals">) => o.status === "pending")) continue;
+    // A batched decision still covering other secrets stays open for them, rewritten to name only those.
+    if (await refreshApprovalDecision(ctx, a.decision_id)) continue;
     const decision = await ctx.db.get(a.decision_id);
     if (decision?.status === "pending") await withdrawCore(ctx, decision, now, undefined, reason);
   }
@@ -929,11 +928,7 @@ export const setTouchId = mutation({
       await ctx.db.patch(row._id, { touch_id: args.touch_id, ...metaStamp(row, userId) });
       await recordSecretEvent(ctx, row, args.touch_id ? "touch_id_on" : "touch_id_off", { actor: userId });
       const pending = await ctx.db.query("secret_approvals").withIndex("by_secret_conversation", (q) => q.eq("secret_id", row._id)).collect();
-      for (const a of pending) {
-        if (a.status !== "pending") continue;
-        const covered = await approvalSecrets(ctx, a.decision_id);
-        await ctx.db.patch(a.decision_id, { touch_id: covered.some((r) => r.touch_id) || undefined });
-      }
+      for (const a of pending) if (a.status === "pending") await refreshApprovalDecision(ctx, a.decision_id);
     }
     return { id: String(row._id), short_id: row.short_id, name: row.name, touch_id: args.touch_id };
   },
@@ -1204,19 +1199,49 @@ const PURPOSE_PHRASE: Record<SecretReadPurpose, string> = {
 /** "a", "a and b", "a, b and c". */
 const joinNames = (names: string[]) => (names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
 
-/** The secrets an Ask first decision covers: every approval filed on it. */
+/** The secrets an Ask first decision still waits on: every pending approval filed on it. */
 async function approvalSecrets(ctx: any, decisionId: Id<"session_decisions">): Promise<SecretRow[]> {
   const rows = await ctx.db.query("secret_approvals").withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId)).collect();
-  return (await Promise.all(rows.map((a: Doc<"secret_approvals">) => ctx.db.get(a.secret_id)))).filter(Boolean);
+  const pending = rows.filter((a: Doc<"secret_approvals">) => a.status === "pending");
+  return (await Promise.all(pending.map((a: Doc<"secret_approvals">) => ctx.db.get(a.secret_id)))).filter(Boolean);
+}
+
+const ASKS_TO_USE = " asks to use ";
+
+/** What Approve grants, naming every secret the decision covers. */
+function approvalSubject(rows: SecretRow[]): string {
+  const named = joinNames(rows.map((r) => `${r.name} (${r.short_id})`));
+  const subject = rows.length > 1 ? `${named} are Ask first in the Vault. Approve lets this session read all of them` : `${named} is Ask first in the Vault. Approve lets this session read it`;
+  return `${subject} until the session ends, for ${SECRET_APPROVAL_TTL_MS / 3_600_000} hours at most, and a new value asks again.`;
 }
 
 /** An Ask first decision's context: the agent's why first (its own words), then what Approve grants. */
 function approvalContext(rows: SecretRow[], purpose: SecretReadPurpose, why: string | undefined): string {
   const site = purpose === "signin" ? rows.find((r) => r.sites?.[0])?.sites?.[0] : undefined;
   const reason = why?.trim() ? `Why: ${why.trim()}` : `To ${site ? `sign in to ${site}` : PURPOSE_PHRASE[purpose]}.`;
-  const named = joinNames(rows.map((r) => `${r.name} (${r.short_id})`));
-  const subject = rows.length > 1 ? `${named} are Ask first in the Vault. Approve lets this session read all of them` : `${named} is Ask first in the Vault. Approve lets this session read it`;
-  return `${reason}\n\n${subject} until the session ends, for ${SECRET_APPROVAL_TTL_MS / 3_600_000} hours at most, and a new value asks again.`;
+  return `${reason}\n\n${approvalSubject(rows)}`;
+}
+
+/**
+ * Rewrite an open Ask first decision to the secrets it still waits on: its
+ * question and context name only those, and it asks for Touch ID only while
+ * one of them has it on. False when none is left, so the caller withdraws it.
+ */
+async function refreshApprovalDecision(ctx: any, decisionId: Id<"session_decisions">): Promise<boolean> {
+  const rows = await approvalSecrets(ctx, decisionId);
+  if (!rows.length) return false;
+  const decision = await ctx.db.get(decisionId);
+  if (decision?.status !== "pending") return true;
+  const at = decision.question.indexOf(ASKS_TO_USE);
+  const question = at < 0 ? decision.question : decision.question.slice(0, at + ASKS_TO_USE.length) + joinNames(rows.map((r) => r.name));
+  const old = decision.context_md ?? "";
+  const cut = old.lastIndexOf("\n\n");
+  const context_md = `${cut < 0 ? old : old.slice(0, cut)}\n\n${approvalSubject(rows)}`;
+  const touch_id = rows.some((r) => r.touch_id) || undefined;
+  if (question !== decision.question || context_md !== decision.context_md || touch_id !== decision.touch_id) {
+    await ctx.db.patch(decisionId, { question, context_md, touch_id, updated_at: Date.now() });
+  }
+  return true;
 }
 
 /**
@@ -1267,7 +1292,7 @@ async function askFirstGate(
     const names = joinNames(batch.map((r) => r.name));
     const asked = await askCore(ctx, { userId: conversation.user_id }, {
       session_id: conversation.session_id,
-      question: `${conversation.title || conversation.short_id || "A session"} asks to use ${names}`,
+      question: `${conversation.title || conversation.short_id || "A session"}${ASKS_TO_USE}${names}`,
       options: [{ label: APPROVE_FOR_SESSION }, { label: DENY }],
       context_md: approvalContext(batch, purpose, why),
       category: "access",
@@ -1310,7 +1335,7 @@ export const recordReads = internalMutation({
       const held = await askFirstGate(ctx, args.user_id, rows, args.conversation_id, args.purpose ?? "get", args.why);
       if (held) return held;
     } else {
-      // A reveal of an Ask first secret takes a passkey: the click may be an agent driving the person's own browser.
+      // A reveal of a Touch ID secret takes a passkey: the click may be an agent driving the person's own browser.
       for (const id of args.ids) {
         const row = await ctx.db.get(id);
         const refusal = row?.touch_id ? await consumePresence(ctx, args.user_id, "reveal", String(row._id), args.grant) : null;

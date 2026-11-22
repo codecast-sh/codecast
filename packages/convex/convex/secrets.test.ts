@@ -595,12 +595,19 @@ test("switching off Ask first on one secret of a batched decision keeps it open 
     await as(ana).action(api.secrets.create, { name, kind: "key", payload: { value: `${name}-value-123456` }, team_id: acme });
     await as(ana).mutation(api.secrets.setAskFirst, { ref: name, ask_first: true });
   }
-  const held = await read(t, ["stripe-live", "prod-db"]);
-  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false });
+  await as(ana).mutation(api.secrets.setTouchId, { ref: "stripe-live", touch_id: true });
+  const held = await read(t, ["stripe-live", "prod-db"], { why: "refund order 123\n\nand check the ledger" });
+  expect((await t.run(async (ctx: any) => ctx.db.query("session_decisions").first())).touch_id).toBe(true);
+  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false, grant: await touch(t, as, ana, "ask_first_off", "stripe-live") });
   const [decision] = await t.run(async (ctx: any) => ctx.db.query("session_decisions").collect());
   expect(decision.status).toBe("pending");
   expect(decision.short_id).toBe(held.needs_approval.decision);
-  await answer(t, as, ana, held.needs_approval.decision, 0);
+  // It names only what it still waits on, and no longer asks for the dropped secret's Touch ID.
+  expect(decision.question).toBe("Wire up billing asks to use prod-db");
+  expect(decision.context_md).toStartWith("Why: refund order 123\n\nand check the ledger\n\nprod-db (");
+  expect(decision.context_md).not.toContain("stripe-live");
+  expect(decision.touch_id).toBeUndefined();
+  await as(ana).mutation(api.sessionDecisions.resolve, { decision_id: decision._id, status: "answered", answer_index: 0 });
   expect((await read(t, ["stripe-live", "prod-db"])).secrets.length).toBe(2);
 });
 
