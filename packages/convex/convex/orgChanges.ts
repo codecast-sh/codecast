@@ -313,7 +313,7 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
   }
   if (w.table === "conversations" && "org_role_id" in patch) {
     const owners = (await sessionParent(ctx, current)).owner_user_ids;
-    await performReparentSession(ctx, userId, { session_id: w.id, target: patch.org_role_id ? { kind: "role", role_id: patch.org_role_id } : { kind: "user", owners: (await sessionParent(ctx, current)).owner_user_ids.length ? (await sessionParent(ctx, current)).owner_user_ids : [String(current.owner_user_id ?? current.user_id)] } });
+    await performReparentSession(ctx, userId, { session_id: w.id, target: patch.org_role_id ? { kind: "role", role_id: patch.org_role_id } : { kind: "user", owners: (await sessionParent(ctx, current)).owner_user_ids.length ? (await sessionParent(ctx, current)).owner_user_ids : [String(current.owner_user_id ?? current.user_id)], drop_role: true } });
     if (!owners.length) {
       for (const id of (await sessionParent(ctx, current)).owner_user_ids) await removeSessionOwnerRow(ctx, current._id, id as Id<"users">);
       await syncPrimaryOwnerCache(ctx, current._id);
@@ -366,7 +366,7 @@ export async function performUndo(ctx: Ctx, userId: Id<"users">, args: { batch: 
       for (const w of [...step.writes].reverse()) await restoreWrite(ctx, userId, w);
       if (step.parent) {
         const c = await ctx.db.get(step.row.subject.id);
-        await performReparentSession(ctx, userId, { session_id: c._id, target: { kind: "user", owners: step.parent.owner_user_ids, mode: "set" } });
+        await performReparentSession(ctx, userId, { session_id: c._id, target: { kind: "user", owners: step.parent.owner_user_ids, mode: "set", drop_role: true } });
         if (step.parent.org_role_id) await performReparentSession(ctx, userId, { session_id: c._id, target: { kind: "role", role_id: step.parent.org_role_id } });
       }
       await noteOrgChange(ctx, userId, { workspace: step.row.workspace, team_id: plan.target.team_id }, { kind: step.inverse.kind, subject: step.inverse.subject, before: step.inverse.before, after: step.inverse.after, effects: step.inverse.effects, labels: step.inverse.labels });

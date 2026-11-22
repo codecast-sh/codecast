@@ -597,6 +597,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...(opts?.from_session ? { from_session: opts.from_session } : {}),
     });
   },
+  // The owners menu's Save (sessionOwnership.applyOwnersChange): people added
+  // and removed, the role, and who drives, in one transaction.
+  applySessionOwners: async (ctx, _userId, [conversationId, change]: [string, any]) =>
+    ctx.runMutation!((api as any).sessionOwnership.applyOwnersChange, { session_id: conversationId, change }),
   reparentOrgRole: async (ctx, _userId, [roleId, reportsTo, note]: [string, any, string | undefined]) => {
     return await ctx.runMutation!((api as any).orgRoles.reparent, { role_id: roleId, reports_to: reportsTo, ...(note ? { note } : {}) });
   },

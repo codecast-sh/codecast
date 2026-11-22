@@ -1403,6 +1403,12 @@ export default defineSchema({
     // it. Absent on rows from before the stamp: read as filed, and
     // `migrations:releaseFolderHeldSessions` sorts them by the org log.
     org_role_hold: v.optional(v.union(v.literal("bound"), v.literal("filed"))),
+    // Who drives: the one owner that messages the agent. Role filed and this
+    // unset: the role drives. Role filed and this set: that person drives and
+    // the role is paused. No role: this names the driving person, and unset
+    // means the primary owner. Written by sessionOwnership (setSessionDriver,
+    // the reparent core: a role target clears it, removing the person clears it).
+    driver_user_id: v.optional(v.id("users")),
     // RETIRED (org-staffing.md S28): the escalation stamp `cast escalate` wrote.
     // Nothing reads or writes it. It stays in the schema only until
     // `migrations:clearEscalationStamps` has run in prod (rows still carry it,

@@ -273,7 +273,8 @@ describe("orgRoles.reparentSession + retire", () => {
   });
 
   // org-staffing.md S11: the ownership menu and the chart are one gesture.
-  test("adding an owner re-homes the session under that person and clears the role pointer; the session is told once", async () => {
+  // A role is an owner beside the people: adding a person keeps it.
+  test("adding an owner keeps the role, which still drives; the session is told only when its line changes", async () => {
     const db = fixtures({ conversations: [conv()], session_owners: [{ _id: "so1", conversation_id: "c".repeat(32), user_id: ME, added_by: ME, added_at: 1 }] });
     const ctx = ctxOf(db);
     const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
@@ -281,33 +282,34 @@ describe("orgRoles.reparentSession + retire", () => {
     expect(filed.reports_to).toMatchObject({ kind: "role", name: "Growth" });
     expect(filed.told).toEqual({ sessions: 1, roles: 0 });
 
-    // `cast own`: Mate is added, keeps Me as an owner, and the chart follows Mate.
+    // `cast own`: Mate is added beside Me, and the role stays filed.
     const res = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: ["mate@x.ai"], mode: "add" }, handoff: "Take it from here." });
-    expect(res.org_role_id).toBeNull();
-    expect(db._tables.conversations[0].org_role_id).toBeUndefined();
+    expect(res.org_role_id).toBe(role._id);
+    expect(db._tables.conversations[0].org_role_id).toBe(role._id);
     expect(db._tables.session_owners.map((r: any) => r.user_id).sort()).toEqual([ME, MATE].sort());
-    expect(db._tables.conversations[0].owner_user_id).toBe(MATE);
-    expect(res.reports_to).toEqual({ kind: "user", user_id: MATE, name: "Mate" });
-    expect(res.told).toEqual({ sessions: 1, roles: 0 });
+    expect(res.reports_to).toMatchObject({ kind: "role", name: "Growth" });
+    expect(res.told).toEqual({ sessions: 0, roles: 0 });
 
-    // The line rides the session message rail, from the acting person, with the note.
+    // The line rides the session message rail, from the acting person.
     const pending = db._tables.pending_messages;
-    expect(pending).toHaveLength(2);
+    expect(pending).toHaveLength(1);
     expect(pending[0].content).toBe(`<session-message from="unknown" name="Me">\nYou now report to Growth (@growth): what you need from a person goes to it first, and \`cast send @growth\` reaches it.\n</session-message>`);
-    expect(pending[1].content).toBe(`<session-message from="unknown" name="Me">\nYou now report to Mate: your questions and decisions go to them. Note handed to Mate with this session: "Take it from here."\n</session-message>`);
-    expect(pending[1].from_user_id).toBe(ME);
-    expect(pending[1].conversation_id).toBe("c".repeat(32));
+    expect(pending[0].from_user_id).toBe(ME);
+    expect(pending[0].conversation_id).toBe("c".repeat(32));
 
-    // A move that changes nothing tells nobody.
-    const again = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: ["mate@x.ai"], mode: "add" } });
-    expect(again.told).toEqual({ sessions: 0, roles: 0 });
-    expect(db._tables.pending_messages).toHaveLength(2);
+    // Taking the role off is the re-homing: the line goes to the primary owner, and the session hears it.
+    const off = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "role", role_id: null } });
+    expect(off.org_role_id).toBeNull();
+    expect(db._tables.conversations[0].org_role_id).toBeUndefined();
+    expect(db._tables.conversations[0].org_role_hold).toBeUndefined();
+    expect(off.reports_to).toMatchObject({ kind: "user" });
+    expect(off.told).toEqual({ sessions: 1, roles: 0 });
+    expect(db._tables.session_owners.map((r: any) => r.user_id).sort()).toEqual([ME, MATE].sort());
 
-    // Removing an owner is not a re-homing: Mate leaves, Me is the line again, and the session hears it.
+    // Removing an owner leaves the rest.
     const gone = await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: ["mate@x.ai"], mode: "remove" } });
     expect(gone.removed).toEqual([MATE]);
     expect(db._tables.conversations[0].owner_user_id).toBe(ME);
-    expect(gone.told).toEqual({ sessions: 1, roles: 0 });
   });
 
   // Review findings on S11.

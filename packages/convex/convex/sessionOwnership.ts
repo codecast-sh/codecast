@@ -218,10 +218,13 @@ async function listOwnerInfos(
 // Who a session reports to is one gesture everywhere: the ownership menu
 // (take ownership, add an owner, remove one, replace the set), `cast own` /
 // `cast disown`, and dragging a session on the org chart all land here. It is
-// the ONE place session_owners and conversations.org_role_id change together:
-// a person target re-homes the session under that person (they become the
-// primary owner the chart files it under) and clears the role pointer; a role
-// target sets the pointer and leaves the owners alone. Every move that changes
+// the ONE place session_owners and conversations.org_role_id change together.
+// A role is an owner beside the people: an owners-list target (the ownership
+// menu, `cast own`) changes only the person set and keeps the role; a bare
+// `user_id` target (the chart's drop on a person, a hold's release) re-homes
+// the session under that person and takes the role off. A role target sets
+// the one role (replacing any other) and makes it the driver; a `null` role
+// takes it off. Every move that changes
 // the reporting line tells the agent once, through the session message rail,
 // from the acting person.
 //
@@ -235,12 +238,14 @@ export type ReparentSessionTarget =
   // person); the ownership menu passes owner refs with the set arithmetic it
   // wants. `add` re-homes under the added person; `set` under the first
   // listed; `remove` leaves the reporting line to whoever remains.
-  | { kind: "user"; user_id?: Id<"users">; owners?: string[]; mode?: "set" | "add" | "remove" }
+  // `drop_role` takes the role off as well; it defaults to on for the bare
+  // `user_id` form and off for the owners list.
+  | { kind: "user"; user_id?: Id<"users">; owners?: string[]; mode?: "set" | "add" | "remove"; drop_role?: boolean }
   // `hold` says why the role holds it (org-staffing.md S35): `bound`, the
   // rule moved it for the work it is bound to, so a binding may move it
   // again; `filed` (default), a person or role put it there, so only a
-  // person or role moves it.
-  | { kind: "role"; role_id: string; hold?: "bound" | "filed" };
+  // person or role moves it. `role_id: null` removes the role.
+  | { kind: "role"; role_id: string | null; hold?: "bound" | "filed" };
 
 export type ReportsTo =
   | { kind: "user"; user_id: Id<"users">; name: string }
@@ -359,7 +364,7 @@ async function reparentSessionCore(
 ): Promise<ReparentSessionResult> {
   const note = args.note?.trim() || undefined;
   const handoff = args.handoff?.trim() || undefined;
-  const targetRole = args.target.kind === "role" ? known?.batch.role ?? await requireRole(ctx, authUserId, args.target.role_id, "access") : null;
+  const targetRole = args.target.kind === "role" && args.target.role_id ? known?.batch.role ?? await requireRole(ctx, authUserId, args.target.role_id, "access") : null;
   const canReshapeTarget = known ? known.batch.canReshape : targetRole ? await userCanAdminRole(ctx, authUserId, targetRole) : false;
   // Who may file: a person target is the ownership rule (the runner, or any
   // teammate who can see the session); a role target is an owner, or a team
@@ -377,7 +382,7 @@ async function reparentSessionCore(
   // T1). Filed under a role it would count as that role's hand, be interrupted
   // by a pause and spend its hand cap. One refusal here, so every door (the
   // chart, the ownership menu, the CLI) inherits it.
-  if (args.target.kind === "role" && (conversation.standing_role_id || conversation.anchor_id)) {
+  if (targetRole && (conversation.standing_role_id || conversation.anchor_id)) {
     throw new Error("That session is a standing agent's own thread; it cannot be filed under a role");
   }
   // A role's own session is owned by whom the role reports to (S28,
@@ -401,6 +406,13 @@ async function reparentSessionCore(
   const removed: Id<"users">[] = [];
   let owners: OwnerInfo[];
   let roleId: Id<"org_roles"> | undefined = conversation.org_role_id;
+  // Removing the person who drives hands the wheel back (role, else the
+  // primary owner).
+  const clearDriverIfRemoved = async () => {
+    if (conversation.driver_user_id && removed.some((id) => String(id) === String(conversation.driver_user_id))) {
+      await ctx.db.patch(conversation._id, { driver_user_id: undefined });
+    }
+  };
 
   if (args.target.kind === "user") {
     // A bare `user_id` is the chart's drop on a person: it ADDS that person
@@ -408,6 +420,10 @@ async function reparentSessionCore(
     // does not silently lose the other. The owner list form is the picker's,
     // which holds the whole desired set.
     const mode = args.target.mode ?? (args.target.owners ? "set" : "add");
+    const dropRole = args.target.drop_role ?? !!args.target.user_id;
+    // Who drives before the change: an owners-list change never moves the
+    // wheel to the person it adds, even though the primary owner follows them.
+    const driverBefore = dropRole ? null : driverOf(conversation, await ownerIdsOrStarter(ctx, conversation));
     const refs = args.target.owners ?? (args.target.user_id ? [args.target.user_id.toString()] : []);
     const desiredKeys = new Set<string>();
     const desired: any[] = [];
@@ -449,13 +465,25 @@ async function reparentSessionCore(
     // leaves the line to whoever remains, oldest first.
     const preferred = mode === "remove" ? undefined : desired[desired.length - 1]?._id;
     await syncPrimaryOwnerCache(ctx, conversation._id, preferred);
-    // A person is now the parent: the role pointer comes off (S11). A remove
-    // is not a re-homing, so a session filed under a role stays there.
-    if (mode !== "remove" && desired.length > 0 && roleId) {
+    await clearDriverIfRemoved();
+    if (driverBefore?.kind === "user" && !conversation.driver_user_id && mode !== "remove") {
+      const ids = (await listSessionOwnerIds(ctx, conversation._id)).map(String);
+      const now = driverOf((await ctx.db.get(conversation._id)) ?? conversation, ids);
+      if (ids.includes(String(driverBefore.user_id)) && !(now?.kind === "user" && String(now.user_id) === String(driverBefore.user_id))) {
+        await ctx.db.patch(conversation._id, { driver_user_id: driverBefore.user_id });
+      }
+    }
+    // A re-homing under a person (the chart's drop, a release) takes the role
+    // off; adding owners from the menu keeps it, since a role is an owner too.
+    if (dropRole && mode !== "remove" && desired.length > 0 && roleId) {
       await ctx.db.patch(conversation._id, { org_role_id: undefined, org_role_hold: undefined });
       roleId = undefined;
     }
     owners = mode === "set" ? desired.map(toOwnerInfo) : await listOwnerInfos(ctx, conversation._id);
+  } else if (!targetRole) {
+    if (roleId) await ctx.db.patch(conversation._id, { org_role_id: undefined, org_role_hold: undefined });
+    roleId = undefined;
+    owners = await listOwnerInfos(ctx, conversation._id);
   } else {
     if (targetRole.status === "retired") throw new Error("That role is retired");
     // A team role only takes sessions routed to its team; a personal role
@@ -463,7 +491,8 @@ async function reparentSessionCore(
     if (targetRole.team_id && (conversation.team_id?.toString() ?? null) !== targetRole.team_id.toString()) {
       throw new Error("That session is not in the role's team");
     }
-    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id, org_role_hold: args.target.hold ?? "filed" });
+    // One role at a time, and the role it is filed under drives.
+    await ctx.db.patch(conversation._id, { org_role_id: targetRole._id, org_role_hold: args.target.hold ?? "filed", driver_user_id: undefined });
     roleId = targetRole._id;
     owners = await listOwnerInfos(ctx, conversation._id);
   }
@@ -647,6 +676,88 @@ export async function performSetSessionOwner(
   return { ok: true, short_id: result.short_id, owner: result.owners[0] ?? null };
 }
 
+// ── The driver ───────────────────────────────────────────────────────────────
+// Exactly one owner drives: the role while it is filed and no person has taken
+// over, else `driver_user_id`, else the primary owner. Pure, so the owners
+// query and the tests read the same rule.
+export type SessionDriver = { kind: "role"; role_id: Id<"org_roles"> } | { kind: "user"; user_id: Id<"users"> };
+
+export function driverOf(conversation: { org_role_id?: Id<"org_roles">; driver_user_id?: Id<"users">; owner_user_id?: Id<"users"> }, ownerIds: string[]): SessionDriver | null {
+  const named = conversation.driver_user_id && ownerIds.includes(String(conversation.driver_user_id)) ? conversation.driver_user_id : undefined;
+  if (named) return { kind: "user", user_id: named };
+  if (conversation.org_role_id) return { kind: "role", role_id: conversation.org_role_id };
+  const primary = conversation.owner_user_id && ownerIds.includes(String(conversation.owner_user_id)) ? conversation.owner_user_id : ownerIds[0];
+  return primary ? { kind: "user", user_id: primary as Id<"users"> } : null;
+}
+
+// The owner set as the session shows it: its owner rows, else the human who
+// started it.
+async function ownerIdsOrStarter(ctx: { db: any }, conversation: any): Promise<string[]> {
+  const ids = (await listSessionOwnerIds(ctx, conversation._id)).map(String);
+  if (ids.length === 0) {
+    const starter = await humanStarterUser(ctx, conversation);
+    if (starter) ids.push(String(starter._id));
+  }
+  return ids;
+}
+
+export type DriverTarget = { kind: "role" } | { kind: "user"; user_id: string };
+
+// Hand the wheel to the filed role or to one of the people who own it. A
+// person must already own the session (or be its human starter while nobody
+// does); a role must be the one it is filed under.
+export async function performSetSessionDriver(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  args: { session_id: string; driver: DriverTarget },
+): Promise<{ ok: true; short_id: string; conversation_id: Id<"conversations">; driver: SessionDriver }> {
+  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+  const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
+  if (args.driver.kind === "role") {
+    if (!conversation.org_role_id) throw new Error(`Session ${shortId} is not filed under a role, so no role can drive it`);
+    if (conversation.driver_user_id) await ctx.db.patch(conversation._id, { driver_user_id: undefined });
+    return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "role", role_id: conversation.org_role_id } };
+  }
+  const ownerIds = await ownerIdsOrStarter(ctx, conversation);
+  const userId = args.driver.user_id;
+  if (!ownerIds.includes(userId)) throw new Error("Only an owner of the session can drive it; add them as an owner first");
+  if (String(conversation.driver_user_id ?? "") !== userId) await ctx.db.patch(conversation._id, { driver_user_id: userId as Id<"users"> });
+  return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "user", user_id: userId as Id<"users"> } };
+}
+
+// One Save of the owners menu: people added and removed, the role set,
+// replaced or taken off (`role` undefined leaves it), and who drives, applied
+// in one transaction through the reparent core so each part keeps its tell,
+// its notification and its org-log row. Adds land first so a newly added
+// person can be made driver; the driver is set last so it wins over the
+// role's claim to drive.
+export type OwnersChange = {
+  add?: string[];
+  remove?: string[];
+  role?: string | null;
+  driver?: DriverTarget;
+  note?: string;
+};
+
+export async function performApplyOwnersChange(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  args: { session_id: string; change: OwnersChange; from_session?: string },
+): Promise<{ results: ReparentSessionResult[]; driver: SessionDriver | null }> {
+  const { change } = args;
+  const results: ReparentSessionResult[] = [];
+  const run = (target: ReparentSessionTarget) => performReparentSession(ctx, authUserId, { session_id: args.session_id, target, handoff: change.note, from_session: args.from_session });
+  if (change.add?.length) results.push(await run({ kind: "user", owners: change.add, mode: "add" }));
+  if (change.role !== undefined) {
+    const before = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+    if (String(before.org_role_id ?? "") !== String(change.role ?? "")) results.push(await run({ kind: "role", role_id: change.role }));
+  }
+  if (change.remove?.length) results.push(await run({ kind: "user", owners: change.remove, mode: "remove" }));
+  if (change.driver) await performSetSessionDriver(ctx, authUserId, { session_id: args.session_id, driver: change.driver });
+  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+  return { results, driver: driverOf(conversation, await ownerIdsOrStarter(ctx, conversation)) };
+}
+
 // ── Public mutations ─────────────────────────────────────────────────────────
 // Each fires the "assigned to you" notification for whoever it NEWLY added —
 // the piece that turns a silent reassignment into an actual handoff. Claiming a
@@ -748,6 +859,43 @@ export const ackSessionAssignment = mutation({
   },
 });
 
+// Who drives: the filed role, or one of the people who own it.
+export const setSessionDriver = mutation({
+  args: {
+    session_id: SESSION_REF,
+    driver: v.union(v.object({ kind: v.literal("role") }), v.object({ kind: v.literal("user"), user_id: v.string() })),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => performSetSessionDriver(ctx, await requireAuth(ctx, args.api_token), { session_id: args.session_id, driver: args.driver }),
+});
+
+// The owners menu's Save: the whole change in one transaction.
+export const applyOwnersChange = mutation({
+  args: {
+    session_id: SESSION_REF,
+    change: v.object({
+      add: v.optional(v.array(v.string())),
+      remove: v.optional(v.array(v.string())),
+      role: v.optional(v.union(v.string(), v.null())),
+      driver: v.optional(v.union(v.object({ kind: v.literal("role") }), v.object({ kind: v.literal("user"), user_id: v.string() }))),
+      note: v.optional(v.string()),
+    }),
+    from_session: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await requireAuth(ctx, args.api_token);
+    const out = await withOrgChange(ctx, authUserId, { kind: "session", door: args.from_session ? "cli" : "chart", gesture: args.from_session ? "command" : "drag" }, () =>
+      performApplyOwnersChange(ctx, authUserId, { session_id: args.session_id, change: args.change, from_session: args.from_session }));
+    for (const r of out.results) {
+      await notifySessionAssigned(ctx, r.conversation_id, r.added, authUserId, args.change.note?.trim());
+      await notifySessionOwnershipChanged(ctx, r.conversation_id, r, authUserId);
+    }
+    const last = out.results[out.results.length - 1];
+    return { told: out.results.reduce((t, r) => ({ sessions: t.sessions + r.told.sessions, roles: t.roles + r.told.roles, deferred: (t.deferred ?? 0) + (r.told.deferred ?? 0) }), { sessions: 0, roles: 0, deferred: 0 }), reports_to: last?.reports_to ?? null, short_id: last?.short_id ?? null, driver: out.driver };
+  },
+});
+
 // Remove one owner, leaving the rest (`cast disown`).
 export const removeSessionOwner = mutation({
   args: {
@@ -827,6 +975,9 @@ export async function performListOwners(
   short_id: string;
   conversation_id: Id<"conversations">;
   owners: OwnerInfo[];
+  role: OwnerRole | null;
+  driver: SessionDriver | null;
+  runner: OwnerRunner | null;
 } | null> {
   const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) return null;
@@ -846,12 +997,45 @@ export async function performListOwners(
       });
     }
   }
+  const roleDoc = conversation.org_role_id ? await ctx.db.get(conversation.org_role_id) : null;
+  const role: OwnerRole | null = roleDoc ? {
+    role_id: roleDoc._id,
+    short_id: roleDoc.short_id,
+    handle: roleDoc.handle,
+    name: roleDoc.name,
+    avatar: roleDoc.avatar ?? null,
+    hold: conversation.org_role_hold ?? "filed",
+  } : null;
+  const runnerDoc = await ctx.db.get(conversation.user_id);
+  const runner: OwnerRunner | null = runnerDoc ? {
+    ...toOwnerInfo(runnerDoc),
+    image: avatarOf(runnerDoc),
+    is_bot: !!runnerDoc.is_bot,
+  } : null;
   return {
     short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
     conversation_id: conversation._id,
     owners,
+    role,
+    driver: driverOf(roleDoc ? conversation : { ...conversation, org_role_id: undefined }, owners.map((o) => o.user_id)),
+    runner,
   };
 }
+
+// The role owner as the owners menu draws it: its face and how it holds the
+// session. At most one per session (conversations.org_role_id).
+export type OwnerRole = {
+  role_id: Id<"org_roles">;
+  short_id: string;
+  handle: string;
+  name: string;
+  avatar: string | null;
+  hold: "bound" | "filed";
+};
+
+// The account that runs the session: always shown, marked as the runner,
+// whether or not it is also an owner.
+export type OwnerRunner = OwnerInfo & { is_bot: boolean };
 
 export const listOwners = query({
   args: { session_id: SESSION_REF, api_token: v.optional(v.string()) },
