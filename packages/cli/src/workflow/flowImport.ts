@@ -270,6 +270,9 @@ export function scriptFlowFiles(trace: ScriptTrace, opts: { kind: "line" | "segm
     entryOf.push(fan);
     exitOf.push(join);
   }
+  if (shaped.steps.some((step) => step.stations.length > 1)) {
+    notes.push(`Side by side: a failed branch stops the flow at its Join, which then routes only on an edge that asks about the outcome; add one (condition="outcome = failure") to send a failure somewhere.`);
+  }
   lines.push(`  start -> ${entryOf[0]}`);
   for (let i = 0; i < shaped.steps.length; i++) {
     const next = i + 1 < shaped.steps.length ? entryOf[i + 1] : "done";
