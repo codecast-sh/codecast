@@ -107,6 +107,43 @@ describe("listForWeb read budget", () => {
   });
 });
 
+// ct-88526: prod still hit the cap (eg-2812) after the per-owner scan cap,
+// because the scan grows with team size: every teammate adds up to
+// GALLERY_SCAN_PER_OWNER pages, each costing a workspace read, hidden ones too.
+describe("listForWeb read budget on a big team", () => {
+  test("a 20-member team with hundreds of pages each, half hidden, stays under the cap", async () => {
+    const members = Array.from({ length: 20 }, (_, i) => `u${i + 1}`);
+    const pages: any[] = [];
+    const conversations: any[] = [];
+    const comments: any[] = [];
+    for (const owner of members) {
+      for (let i = 0; i < 600; i++) {
+        const conv = `${owner}-c${i}`;
+        conversations.push({ _id: conv, team_id: i % 2 ? "t2" : "t1" });
+        const id = `${owner}-p${i}`;
+        pages.push(page(id, owner, { session_conversation_id: conv, updated_at: i * members.length + members.indexOf(owner) }));
+        for (let c = 0; c < 5; c++) comments.push({ _id: `${id}-m${c}`, artifact_id: id, status: c ? "resolved" : "open" });
+      }
+    }
+    const reads = { n: 0 };
+    const ctx = fakeCtx("u1", {
+      users: members.map((_id) => ({ _id })),
+      team_memberships: [
+        ...members.map((u, i) => ({ _id: `m${i}`, user_id: u, team_id: "t1", visibility: "full" })),
+        ...members.slice(1).map((u, i) => ({ _id: `n${i}`, user_id: u, team_id: "t2", visibility: "full" })),
+      ],
+      conversations,
+      artifact_comments: comments,
+      artifacts: pages,
+    }, reads);
+    const handler = (listForWeb as any)._handler ?? (listForWeb as any).handler;
+    const { artifacts } = await handler(ctx, {});
+    expect(reads.n).toBeLessThan(4096);
+    expect(artifacts.length).toBeGreaterThan(0);
+    expect(artifacts.every((a: any) => a.workspace === "team:t1" || a.mine)).toBe(true);
+  });
+});
+
 // F48: team editing reaches exactly the pages listForWeb shows a teammate:
 // members of the page's own team, never of every team the owner is in.
 import { teamEditAuth } from "./artifacts";
