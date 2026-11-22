@@ -17,7 +17,7 @@ import type { Report, Workload } from "./harness";
 const only = process.argv[2] as Workload | undefined;
 if (!only) {
   let failed = 0;
-  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
+  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff", "inbox-return"]) {
     const child = Bun.spawnSync(["bun", import.meta.path, workload], { stdout: "inherit", stderr: "inherit" });
     if (child.exitCode !== 0) failed++;
   }
@@ -169,6 +169,21 @@ await test("diff", "opening a long diff draws its first 150 rows in 2 commits an
       // scroller's height and scrollHeight and the file's offset in it.
       layoutReads: 32,
       reads: ["getBoundingClientRect x23", "scrollHeight x4", "getComputedStyle x3", "offsetHeight x2"],
+    });
+  }
+});
+
+await test("inbox-return", "going back to the inbox from Threads re-renders none of the session rail's 50 cards", async () => {
+  await setup("inbox-return");
+  for (const r of await twice()) {
+    const renders = (name: string) => Number(r.detail.rendered.find((x) => x.startsWith(`${name} x`))?.split(" x")[1] ?? 0);
+    expect({ cards: r.counts.cards, SessionCard: renders("SessionCard"), SessionCardView: renders("SessionCardView") }).toEqual({
+      // The rail stays open beside the inbox, drawing its bounded list.
+      cards: 50,
+      // A route change moves the tab's path; no session row changed, so no
+      // card has anything new to draw (ct-97296: the shell re-rendered every
+      // card, twice, and the page froze for seconds).
+      SessionCard: 0, SessionCardView: 0,
     });
   }
 });
