@@ -88,13 +88,13 @@ export function isCodexProgramLaunch(metadata: CodexSessionMetadata | undefined)
 
 /**
  * The marks a Codex thread's conversation carries, as the claude path stamps them (parser detectCliFlags):
- * --print for a program launch, --interactive for Codex's own terminal UI (originator codex_cli_rs, source cli),
- * the one place a person types the prompts. An IDE extension, an app-server thread (codecast's own) or anything
- * else carries neither and reads as a program's (convex lib/messageProvenance).
+ * --print for a program launch, --interactive where a person types the prompts: Codex's own terminal UI and its
+ * VS Code extension (originator codex_cli_rs, source cli or vscode). An app-server thread (codecast's own) or
+ * anything else carries neither and reads as a program's (convex lib/messageProvenance).
  */
 export function codexLaunchFlags(metadata: CodexSessionMetadata | undefined): string | undefined {
   if (isCodexProgramLaunch(metadata)) return "--print";
-  return metadata?.source === "cli" && metadata.originator === "codex_cli_rs" ? "--interactive" : undefined;
+  return (metadata?.source === "cli" || metadata?.source === "vscode") && metadata.originator === "codex_cli_rs" ? "--interactive" : undefined;
 }
 
 export function isCompletedStandaloneCodexReview(

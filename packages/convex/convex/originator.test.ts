@@ -141,6 +141,33 @@ describe("message provenance by path", () => {
     expect((await originator(interactive)).typed.map((l: any) => l.provenance)).toEqual(["typed_local"]);
   });
 
+  test("the daemon's heal marks an old session interactive: only the owner's, only that mark, never one already marked", async () => {
+    const { t, eve, conv, echo, originator } = await seed();
+    const mark = (conversation_id: unknown, token = ANA_TOKEN) => t.mutation(api.conversations.markInteractive, { api_token: token, conversation_id });
+    const flagsOf = async (c: unknown) => (await t.run((ctx: any) => ctx.db.get(c))).cli_flags;
+    // A session recorded before the mark: its terminal line reads as program until the heal.
+    const old = await conv({ cli_flags: "--dangerously-skip-permissions" });
+    await echo(old, "ship it");
+    expect((await originator(old)).typed).toEqual([]);
+    expect(await mark(old)).toEqual({ marked: true });
+    expect(await flagsOf(old)).toBe("--dangerously-skip-permissions --interactive");
+    expect((await originator(old)).typed.map((l: any) => l.provenance)).toEqual(["typed_local"]);
+    // A second heal changes nothing, and a -p session is never marked.
+    expect(await mark(old)).toEqual({ marked: false });
+    const printed = await conv({ cli_flags: "--print" });
+    expect(await mark(printed)).toEqual({ marked: false });
+    expect(await flagsOf(printed)).toBe("--print");
+    // A session with no flags at all gains just the mark.
+    const bare = await conv({ cli_flags: undefined });
+    await mark(bare);
+    expect(await flagsOf(bare)).toBe("--interactive");
+    // Another account's session is refused, and stays as it was.
+    const evesOld = await conv({ user_id: eve, cli_flags: undefined });
+    await expect(mark(evesOld)).rejects.toThrow("Only the session's own account");
+    await expect(mark(old, EVE_TOKEN)).rejects.toThrow("Only the session's own account");
+    expect(await flagsOf(evesOld)).toBeUndefined();
+  });
+
   test("/drive and its arguments read as the person's line; the skill text it expands to does not", async () => {
     const { conv, echo, originator } = await seed();
     const c = await conv();

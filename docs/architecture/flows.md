@@ -357,8 +357,11 @@ with its `<pasted_content>` blocks and mention context taken out, a slash
 command as `/name args`. A short paste the terminal took as typing, or text
 pasted into the composer box, cannot be told from typing and counts. A
 terminal line counts only in a session the daemon marked `--interactive`
-(Claude Code's `cli` entrypoint, Codex's terminal UI); the Agent SDK, `-p`, an
-IDE, any other agent and an unmarked session read as program, as do a brief, a
+(Claude Code's `cli` entrypoint, Codex's terminal UI or VS Code extension),
+read from the transcript head at create and, for a session recorded before
+the mark, on its next sync (`conversations.markInteractive`, which only adds
+that mark to the caller's own unmarked session); the Agent SDK, `-p`, any
+other agent and an unmarked session read as program, as do a brief, a
 relay, an agent's "approved", an echo whose words a queue row of the session
 holds, and a session another one handed its work to. Change records the
 commit it diffs (`$run_dir/intent-head`) and reads the diff as the judge does,

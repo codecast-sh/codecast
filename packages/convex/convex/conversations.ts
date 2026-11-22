@@ -12896,6 +12896,26 @@ export const switchSessionAgent = mutation({
   },
 });
 
+/**
+ * The daemon's heal for a session recorded before it marked interactive launches: it read the transcript head as
+ * one a person runs at a terminal (cli parser detectCliFlags, codexLaunchFlags), so the session gains
+ * `--interactive`, the mark lib/messageProvenance needs to read a terminal line as typed. Only on the caller's own
+ * conversation, only that mark, and never on a session already marked either way: no other flag is added or removed.
+ */
+export const markInteractive = mutation({
+  args: { api_token: v.string(), conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<{ marked: boolean }> => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || String(conversation.user_id) !== String(auth.userId)) throw new Error("Only the session's own account marks it interactive");
+    const flags = (conversation.cli_flags ?? "").split(/\s+/).filter(Boolean);
+    if (flags.includes("--interactive") || flags.includes("--print")) return { marked: false };
+    await ctx.db.patch(conversation._id, { cli_flags: [...flags, "--interactive"].join(" ") });
+    return { marked: true };
+  },
+});
+
 export const linkSessions = mutation({
   args: {
     parent_conversation_id: v.id("conversations"),
