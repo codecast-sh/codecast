@@ -6822,6 +6822,9 @@ async function killConversationBackends(
   await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
 
   if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardown.killedSdk || teardownPlan.reapPidTree) && !error) {
+    // First the trees it made that its pane's cwd never shows (workspaces it acquired, its Claude Code
+    // subagents' worktrees): its own tree's release can take gcCwd away, and the repo is found from it.
+    if (sessionId) await releaseSessionMadeWorktrees(sessionId, gcCwd, log).catch((err) => log(`[WORKTREE-GC] made-worktree release failed: ${String(err).slice(0, 120)}`));
     const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef
       ? syncServiceRef.isWorktreeShared(conversationId, p)
       : Promise.reject(new Error("No session roster")), runTreesInUseVia(liveWorkflowRunIds));
@@ -6829,9 +6832,6 @@ async function killConversationBackends(
     // Its folder is gone, so an SDK session can no longer resume where it ran: a later Restart
     // finds its folder the way a tmux resume does.
     if (verdict.action === "released" && teardown.killedSdk) await claudeSdkBackend?.stop(conversationId, { forget: true });
-    // The trees it made that its pane's cwd never shows: workspaces it acquired from the main
-    // checkout, and its Claude Code subagents' worktrees (worktreeGc.ts releaseSessionMadeWorktrees).
-    if (sessionId) await releaseSessionMadeWorktrees(sessionId, gcCwd, log).catch((err) => log(`[WORKTREE-GC] made-worktree release failed: ${String(err).slice(0, 120)}`));
   }
 
   if (!result) result = sessionId ? "no_process" : "no_session";
@@ -23436,11 +23436,12 @@ async function reapOneTerminal(
   await killTmuxSessionAndTree(tmux);
   reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
   if (gcCwd) {
+    // Before its own tree: that release can take gcCwd away (releaseSessionMadeWorktrees).
+    await releaseSessionMadeWorktrees(sessionId, gcCwd, log).catch((err) => log(`[WORKTREE-GC] made-worktree release failed: ${String(err).slice(0, 120)}`));
     const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef && convId
       ? syncServiceRef.isWorktreeShared(convId, p)
       : Promise.reject(new Error("No session roster")), runTreesInUseVia(liveWorkflowRunIds)).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
     reaperLog(`worktree ${verdict.action}${"reason" in verdict && verdict.reason ? ` (${verdict.reason})` : ""} for ${gcCwd}`, false);
-    await releaseSessionMadeWorktrees(sessionId, gcCwd, log).catch((err) => log(`[WORKTREE-GC] made-worktree release failed: ${String(err).slice(0, 120)}`));
   }
   return true;
 }

@@ -435,6 +435,35 @@ describe("releaseSessionMadeWorktrees", () => {
     expect(fs.existsSync(ws.path)).toBe(true);
   }, 60_000);
 
+  test("a session working in its own workspace releases what it acquired and leaves its own tree to releaseSessionWorktree", async () => {
+    const { repo } = makeRepo();
+    const acquire = async (name: string) => {
+      const ws = (await acquireWorkspace(repo, name, { branch: `feat/${name}`, skipPool: true, skipSetup: true, skipHooks: true, noPorts: true })).workspace;
+      recordWorkspaceSession(repo, name, SID);
+      return ws.path;
+    };
+    const own = await acquire("own");
+    const other = await acquire("other");
+    fs.mkdirSync(path.join(own, "src")); // the pane sits below its tree's root
+    const out = await releaseSessionMadeWorktrees(SID, path.join(own, "src"), () => {}, deps(path.join(repo, "none")));
+    expect(out.map((v) => v.action !== "skipped" && v.path)).toEqual([other]);
+    expect(fs.existsSync(other)).toBe(false);
+    expect(fs.existsSync(own)).toBe(true);
+    // The daemon then releases the session's own tree the usual way.
+    expect(await releaseSessionWorktree(own, () => {}, async () => false)).toMatchObject({ action: "released" });
+  }, 60_000);
+
+  test("both kill paths release the made trees before the session's own, whose release can take its cwd away", () => {
+    const source = fs.readFileSync(path.join(import.meta.dir, "daemon.ts"), "utf8");
+    const kill = source.slice(source.indexOf("async function killConversationBackends("), source.indexOf("async function killConversationBackendsForAgentSwitch("));
+    const reap = source.slice(source.indexOf("const gcCwd = opts.gcWorktree"), source.indexOf("async function reapOrphanEngines("));
+    for (const body of [kill, reap]) {
+      const made = body.indexOf("releaseSessionMadeWorktrees(");
+      expect(made).toBeGreaterThan(-1);
+      expect(made).toBeLessThan(body.indexOf("releaseSessionWorktree(gcCwd"));
+    }
+  });
+
   test("its Claude Code agent trees go, a dead agent's lock with them, so the branch checks out again", async () => {
     const repo = fs.realpathSync(makeRepo().repo); // git lists worktrees by real path
     const projects = path.join(path.dirname(repo), "projects");
