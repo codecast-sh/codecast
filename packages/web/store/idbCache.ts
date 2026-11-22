@@ -1,4 +1,4 @@
-import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, type PendingMessages } from "./pendingMessageJournal";
+import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, retireStalePendingRecords, type PendingMessages } from "./pendingMessageJournal";
 import { clearPendingMessageJournal, readPendingMessageJournal, writePendingMessageJournal } from "./pendingMessageJournal";
 import Dexie from "dexie";
 import { captureException } from "@sentry/react";
@@ -270,7 +270,9 @@ async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
       await db.meta.delete("queuedMessages");
     }
     const rows = await db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${ownerId}:`).toArray();
-    return pendingMessagesFromRecords(rows.map(row => row.value));
+    const { kept, retired } = retireStalePendingRecords(rows.map(row => row.value), Date.now());
+    for (const row of retired) await db.meta.put({ key: pendingInputKey(ownerId, row.id), value: row });
+    return pendingMessagesFromRecords(kept);
   });
 }
 
