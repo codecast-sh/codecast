@@ -5,24 +5,28 @@
  * session that wrote it (attribute.ts, as `cast ship checkout` reads it), and
  * the sweep's state on it. Reported when that changes, never every minute.
  *
- * A level refused on the same files for LEVEL_STUCK_FILE_MS asks for help,
- * once per episode per writer: each session that last wrote some of the
- * conflicting files hears about those files only (the `cast send` path), and
- * the files no session wrote go to one finding on the repository's project.
- * The episode and who it has told are kept on disk, so a daemon restart
- * neither forgets nor asks again.
+ * A level held on the same files for LEVEL_STUCK_FILE_MS asks for help, once
+ * per episode per writer: each session that last wrote some of the
+ * conflicting files hears about those files only, as a machine wake with the
+ * brief and merge files of levelConflicts.ts, and the files no session wrote
+ * go to one finding on the repository's project. The episode, who it has told
+ * and who could never be told are kept on disk, so a daemon restart neither
+ * forgets nor asks again.
  */
 
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { formatSessionMessage } from "@codecast/shared/contracts";
 import {
   CHECKOUT_IDLE_MS, CHECKOUT_PATHS_MAX, CHECKOUT_SESSIONS_MAX, checkoutHash, LEVEL_STUCK_FILE_MS,
-  levelAskWords, toldOf, type CheckoutLevel, type CheckoutReport, type CheckoutSession, type CheckoutTold,
+  toldOf, type CheckoutLevel, type CheckoutReport, type CheckoutSession, type CheckoutTold,
 } from "@codecast/shared/contracts/checkouts";
 import { defaultConfigDir } from "../config/configDir.js";
 import { gitTry } from "../wipSnapshot.js";
 import { attributeEdits, isMidTurn, type Attribution } from "./attribute.js";
+import { heldBrief, mergeDir, writeMerges, type SendBrief } from "./levelConflicts.js";
 import type { LevelSweepOutcome } from "./levelSweep.js";
 import { attributionSince, upstreamRef } from "./shipCheckout.js";
 
@@ -31,8 +35,11 @@ type Post = (urlPath: string, body: Record<string, unknown>) => Promise<any>;
 /** A stuck level's ask waits for the writer to be known. */
 class DeferFiling extends Error {}
 
-/** One root's stuck episode: the files, why, since when, and who has been told (`filed`: an earlier daemon's single ask, read as told). */
-type Episode = { key: string; files: string[]; reason: string; since: number; told?: CheckoutTold[]; filed?: { at: number; to: "session"; conversation_id: string } | { at: number; to: "finding" } | null };
+/**
+ * One root's stuck episode: the files, why, since when, who has been told (`filed`: an earlier daemon's single ask,
+ * read as told), and the writers the server will never deliver to (`unreachable`: not told, and not asked again).
+ */
+type Episode = { key: string; files: string[]; reason: string; since: number; told?: CheckoutTold[]; unreachable?: string[]; filed?: { at: number; to: "session"; conversation_id: string } | { at: number; to: "finding" } | null };
 
 /** The last grouping of a root's uncommitted paths, kept while the same paths stay dirty (attribution reads every transcript). */
 type Grouped = { sig: string; at: number; uncommitted: CheckoutReport["uncommitted"] };
@@ -193,60 +200,78 @@ export function conflictGroups(files: string[], attribution: Pick<Attribution, "
   return { writers, nobody };
 }
 
-/** Where an ask's full file list and its set-aside patch go: on this machine, beside each other, named by who it is for. */
-export function askFiles(r: Pick<CheckoutReport, "device_id" | "path">, who: string, dir = path.join(os.tmpdir(), "codecast-level")): { list: string; patch: string } {
-  const base = `${path.basename(r.path)}-${checkoutHash([r.device_id, r.path])}-${who.replace(/[^\w-]/g, "")}`;
-  return { list: path.join(dir, `${base}.txt`), patch: path.join(dir, `${base}.patch`) };
+/** Where an ask's full file list goes: on this machine, named by the checkout and who it is for. */
+export function listFile(r: Pick<CheckoutReport, "device_id" | "path">, who: string, dir = path.join(os.tmpdir(), "codecast-level")): string {
+  return path.join(dir, `${path.basename(r.path)}-${checkoutHash([r.device_id, r.path])}-${who.replace(/[^\w-]/g, "")}.txt`);
 }
 
-/** The words of one ask (contracts/checkouts levelAskWords), on this machine: the list file it names is written here. */
-export function conflictWords(r: Pick<CheckoutReport, "path" | "upstream" | "behind">, level: Pick<Extract<CheckoutLevel, { state: "stuck" }>, "files" | "since">, mine: string[], files: { list: string; patch: string }, opts: { host?: string; whose: "session" | "nobody" }): { title: string; body: string } {
-  return levelAskWords(r, level, mine, files, { host: opts.host ?? os.hostname(), whose: opts.whose });
+/** The same ask retried lands once: keyed by the device, the checkout, the episode (its files and start) and the writer. */
+export function tellClientId(r: Pick<CheckoutReport, "device_id" | "path">, level: Pick<Extract<CheckoutLevel, { state: "stuck" }>, "files" | "since">, conversation: string): string {
+  const h = createHash("sha256").update([r.device_id, r.path, level.files.join("\n"), String(level.since), conversation].join("\n")).digest("hex");
+  return `level-told:${h.slice(0, 24)}`;
 }
+
+/** What the checkout is held at: the level's base (HEAD) and the upstream commit it could not reach. */
+export type Held = { gitDir: string; from: string; to: string };
 
 /**
  * Ask everyone a stuck level has not asked yet this episode: each session about the conflicting files it last wrote,
- * and one finding for the files no session wrote. Each ask's full list is written to a file the ask names.
+ * as a machine wake, and one finding for the files no session wrote. Each ask's full list is written to a file it
+ * names, and each file's three-way merge under the checkout's merge directory. A send that failed is not counted
+ * told, so a later pass asks again (with the same client id); a writer the server will never deliver to (a
+ * teammate's session) comes back in `unreachable`, to be skipped for the rest of the episode.
  */
-export async function tellWriters(post: Post, report: CheckoutReport, level: Extract<CheckoutLevel, { state: "stuck" }>, attribution: Pick<Attribution, "owners"> | null, opts: { teamId?: string | null; host?: string; now?: number; dir?: string } = {}): Promise<CheckoutTold[]> {
+export async function tellWriters(deps: { post: Post; sendBrief: SendBrief }, report: CheckoutReport, level: Extract<CheckoutLevel, { state: "stuck" }>, attribution: Pick<Attribution, "owners"> | null, held: Held, opts: { teamId?: string | null; host?: string; now?: number; dir?: string; unreachable?: string[] } = {}): Promise<{ told: CheckoutTold[]; unreachable: string[]; notes: string[] }> {
   const at = opts.now ?? Date.now();
+  const host = opts.host ?? os.hostname();
   const { writers, nobody } = conflictGroups(level.files, attribution);
-  const asked = new Set(level.told.map((t) => (t.to === "session" ? t.conversation_id : "")));
-  const out: CheckoutTold[] = [];
-  const listed = (who: string, mine: string[]) => {
-    const files = askFiles(report, who, opts.dir);
-    fs.mkdirSync(path.dirname(files.list), { recursive: true });
-    fs.writeFileSync(files.list, `${mine.join("\n")}\n`);
-    return files;
+  const skip = new Set([...level.told.map((t) => (t.to === "session" ? t.conversation_id : "")), ...(opts.unreachable ?? [])]);
+  const told: CheckoutTold[] = [];
+  const unreachable: string[] = [];
+  const notes: string[] = [];
+  const dir = mergeDir(held.gitDir);
+  const brief = async (who: string, mine: string[], whose: "session" | "nobody") => {
+    const list = listFile(report, who, opts.dir);
+    fs.mkdirSync(path.dirname(list), { recursive: true });
+    fs.writeFileSync(list, `${mine.join("\n")}\n`);
+    const merges = await writeMerges(report.path, dir, mine, held.from, held.to);
+    return heldBrief({ root: report.path, host, upstream: report.upstream ?? "origin/main", from: held.from, to: held.to, behind: report.behind, since: level.since, total: level.files.length, mine, list, dir, merges, whose });
   };
   for (const [conversation, mine] of writers) {
-    if (asked.has(conversation)) continue;
-    const { title, body } = conflictWords(report, level, mine, listed(conversation, mine), { host: opts.host, whose: "session" });
-    await post("/cli/messages/send", { to: conversation, body: `${title}\n\n${body}`, intent: "request", wake: true });
-    out.push({ at, files: mine.length, to: "session", conversation_id: conversation });
+    if (skip.has(conversation)) continue;
+    const { title, body } = await brief(conversation, mine, "session");
+    const message = formatSessionMessage("codecast", `${title}\n\n${body}`, { name: "level sweep" });
+    const outcome = await deps.sendBrief(conversation, message, tellClientId(report, level, conversation)).catch(() => "failed" as const);
+    if (outcome === "sent") told.push({ at, files: mine.length, to: "session", conversation_id: conversation });
+    else if (outcome === "unreachable") unreachable.push(conversation);
+    else notes.push(`could not reach ${conversation}; asking again next pass`);
   }
-  if (nobody.length && !asked.has("")) {
-    const { title, body } = conflictWords(report, level, nobody, listed("nobody", nobody), { host: opts.host, whose: "nobody" });
-    await post("/cli/signal/add", {
-      source: "level",
-      kind: "bug",
-      fingerprint: `level:${report.device_id}:${report.path}:${checkoutHash(nobody)}`,
-      title,
-      detail_md: body,
-      subject: `level:${report.repository}`,
-      project_path: report.path,
-      ...(opts.teamId ? { team_id: opts.teamId } : {}),
-    });
-    out.push({ at, files: nobody.length, to: "finding" });
+  if (nobody.length && !skip.has("")) {
+    const { title, body } = await brief("nobody", nobody, "nobody");
+    try {
+      await deps.post("/cli/signal/add", {
+        source: "level",
+        kind: "bug",
+        fingerprint: `level:${report.device_id}:${report.path}:${checkoutHash(nobody)}`,
+        title,
+        detail_md: body,
+        subject: `level:${report.repository}`,
+        project_path: report.path,
+        ...(opts.teamId ? { team_id: opts.teamId } : {}),
+      });
+      told.push({ at, files: nobody.length, to: "finding" });
+    } catch (e) {
+      notes.push(`could not file the finding (${(e as Error)?.message ?? e}); filing again next pass`);
+    }
   }
-  return out;
+  return { told, unreachable, notes };
 }
 
 /**
  * After a sweep: each root's level state moved on, a stuck episode past LEVEL_STUCK_FILE_MS filed once, and every
  * checkout whose report changed sent (checkouts.report). Roots no longer on disk are reported gone.
  */
-export async function reportCheckouts(outcomes: LevelSweepOutcome[], deps: { post: Post; deviceId: string; repositoryOf: (root: string) => string | null; now?: number; log?: (line: string) => void; stateFile?: string; host?: string; budgetMs?: number; askDir?: string }): Promise<{ sent: number; filed: number }> {
+export async function reportCheckouts(outcomes: LevelSweepOutcome[], deps: { post: Post; sendBrief: SendBrief; deviceId: string; repositoryOf: (root: string) => string | null; now?: number; log?: (line: string) => void; stateFile?: string; host?: string; budgetMs?: number; askDir?: string }): Promise<{ sent: number; filed: number }> {
   const now = deps.now ?? Date.now();
   const passEnds = Date.now() + (deps.budgetMs ?? REPORT_BUDGET_MS);
   const left = () => Math.max(0, passEnds - Date.now());
@@ -264,19 +289,24 @@ export async function reportCheckouts(outcomes: LevelSweepOutcome[], deps: { pos
     let report = read.report;
     next.state.grouped = read.grouped;
     const level = report.level;
-    if (level.state === "stuck" && level.files.length && now - level.since >= LEVEL_STUCK_FILE_MS) {
+    // Held: HEAD is still where the level started. A level that raced a writer moved it, and briefed that writer itself.
+    if (level.state === "stuck" && level.files.length && now - level.since >= LEVEL_STUCK_FILE_MS && "result" in o && report.head_sha === o.result.from) {
       try {
         const attribution = read.attribution ?? await attributeInSlices(o.root, level.files, now, left());
         // Who to ask is each file's last writer: until every transcript is read, ask nobody (a later pass will).
         if (attribution.partial) throw new DeferFiling();
-        const told = await tellWriters(deps.post, report, level, attribution, { host: deps.host, now, dir: deps.askDir });
-        if (told.length) {
-          const all = [...level.told, ...told];
-          next.state.stuck = { ...next.state.stuck!, told: all, filed: undefined };
-          report = { ...report, level: { ...level, told: all } };
-          filed += told.length;
-          log(`[LEVEL] ${o.root}: stuck since ${new Date(level.since).toISOString()} on ${level.files.length} file(s); asked ${told.map((t) => (t.to === "session" ? `${t.conversation_id} about ${t.files}` : `a finding about ${t.files}`)).join(", ")}`);
-        }
+        const episode = next.state.stuck!;
+        const { told, unreachable, notes } = await tellWriters(deps, report, level, attribution, { gitDir: o.gitDir, from: o.result.from, to: o.result.to }, { host: deps.host, now, dir: deps.askDir, unreachable: episode.unreachable });
+        const all = [...level.told, ...told];
+        next.state.stuck = { ...episode, told: all, filed: undefined, unreachable: [...(episode.unreachable ?? []), ...unreachable] };
+        report = { ...report, level: { ...level, told: all } };
+        filed += told.length;
+        const said = [
+          ...(told.length ? [`asked ${told.map((t) => (t.to === "session" ? `${t.conversation_id} about ${t.files}` : `a finding about ${t.files}`)).join(", ")}`] : []),
+          ...unreachable.map((c) => `${c} is a teammate's session, not told`),
+          ...notes,
+        ];
+        if (said.length) log(`[LEVEL] ${o.root}: stuck since ${new Date(level.since).toISOString()} on ${level.files.length} file(s); ${said.join("; ")}`);
       } catch (e) {
         if (!(e instanceof DeferFiling)) log(`[LEVEL] ${o.root}: could not file the stuck level: ${(e as Error)?.message ?? e}`);
       }
