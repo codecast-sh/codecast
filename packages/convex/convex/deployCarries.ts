@@ -5,7 +5,7 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import { extractTaskShortIds } from "./lib/gitRefs";
 import type { DeployRow } from "@codecast/shared/contracts/causeHistory";
-import { mainAtOf } from "./deployTargetsState";
+import { mainAtOf, newestFirst, notWatcher } from "./deployTargetsState";
 import { DAY, carriedBy, normalizeDeployTarget, type DeployMerge } from "@codecast/shared/contracts/deploys";
 
 /** How far back merges are read for the waiting set and a marker's carries. */
@@ -114,13 +114,17 @@ export async function workspaceMergeWindow(ctx: any, workspace: string, now: num
 /** A merge's run as a carry stores it: only a real run id. */
 export const runIdOf = (id: string | undefined) => (id && !id.startsWith("landed:") ? (id as Id<"workflow_runs">) : undefined);
 
-/** The deploys of a workspace, newest first. */
-export async function workspaceDeploys(ctx: any, workspace: string, take = DEPLOYS_SCAN): Promise<Doc<"deploys">[]> {
-  return await ctx.db
+/**
+ * The real deploys of a workspace, newest first: the dev watcher's pushes are left out before the read counts, so no
+ * pile of them pushes a real deploy out. `pushes` adds the workspace's newest that many rows of any kind.
+ */
+export async function workspaceDeploys(ctx: any, workspace: string, take = DEPLOYS_SCAN, opts: { pushes?: number } = {}): Promise<Doc<"deploys">[]> {
+  const read = () => ctx.db
     .query("deploys")
     .withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspace))
-    .order("desc")
-    .take(take);
+    .order("desc");
+  const real: Doc<"deploys">[] = await read().filter(notWatcher).take(take);
+  return opts.pushes ? newestFirst(real, await read().take(opts.pushes)) : real;
 }
 
 export const isLiveDeploy = (d: Doc<"deploys">) => d.status === "live";

@@ -146,9 +146,10 @@ export class Gate {
       const changes = await this.io.diff();
       this.io.log("Pushing to prod…");
       const code = await this.io.push();
+      // Read the tree before recording, so a save while the record runs is not taken for a mid-push edit.
+      const after = await this.io.signature();
       // A push that went out changed prod, even one that has to go around again.
       if (code === 0) await this.io.record(changes);
-      const after = await this.io.signature();
       if (after !== before) {
         this.io.log("Files changed while the push ran; that push may hold a mid-edit state, pushing again after the tree settles.");
         this.dirty = true;

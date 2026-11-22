@@ -18,8 +18,8 @@ import { useWorkspaceCollection } from "./useWorkspaceCollection";
 
 const RATES = makeFunctionReference<"query">("landedChanges:summary");
 
-type Deploy = { status: string; live_at?: number | null; created_at: number };
-const deploySig = (d: Deploy) => `${d.status}|${d.live_at ?? ""}`;
+type Deploy = { status: string; live_at?: number | null; created_at: number; pushed_via?: string | null };
+const deploySig = (d: Deploy) => `${d.status}|${d.live_at ?? ""}|${d.pushed_via ?? ""}`;
 
 /** A sample measured: changes merged, how many have settled (their window has passed), and the share of those no later fix traced back to. */
 const measure = (rows: ReadonlyArray<{ merged?: number; passed?: number; settled: number; regretted: number }>): Measured => {

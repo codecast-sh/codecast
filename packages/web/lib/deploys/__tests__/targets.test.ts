@@ -92,6 +92,9 @@ describe("a deploy alone", () => {
     expect(rebuiltOnly({ ...base, sha: "b", previous_sha: null })).toBe(true);
     expect(rebuiltOnly({ ...base, sha: "b", previous_sha: "a" })).toBe(false);
     expect(rebuiltOnly({ ...base, commits: 2, sha: "a", previous_sha: "a" })).toBe(false);
+    // Uncommitted files went out: something new, even on the same sha.
+    expect(rebuiltOnly({ ...base, sha: "a", previous_sha: "a", dirty: 3 })).toBe(false);
+    expect(rebuiltOnly({ ...base, sha: "a", previous_sha: "a", pushed_via: "dev watcher" })).toBe(false);
   });
 });
 

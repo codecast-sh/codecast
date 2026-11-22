@@ -35,6 +35,7 @@ import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { emitNotification } from "./notificationRouter";
 import { fillDeployRange } from "./deployTargets";
 import { afterFor, shapeView } from "./deploysView";
+import { notWatcher, RECENT_PUSHES, targetDeploys } from "./deployTargetsState";
 import { DEPLOY_FAILED_EVENT, DEPLOY_LIVE_EVENT } from "@codecast/shared/contracts";
 import {
   carriesForMarker,
@@ -69,6 +70,8 @@ const NAMES_MAX = 500;
 const NAME_MAX = 200;
 /** How far back through a target's deploys a dropped name's adder is looked for. */
 const ADDERS_SCAN = 200;
+/** A marker reads this many of the workspace's real deploys, and this many of its newest rows of any kind beside them. */
+const MARKER_SCAN = 100;
 /** A person told a deploy dropped their work is not told again for this long. */
 const DROPPED_WORK_QUIET_MS = 6 * 60 * 60 * 1000;
 
@@ -102,7 +105,8 @@ export function liveOf(recent: ReadonlyArray<Doc<"deploys">>, target: string, re
 export async function latestLiveDeploy(ctx: any, workspace: string, target: string, repository?: string, opts: { real?: boolean } = {}): Promise<Doc<"deploys"> | null> {
   const t = normalizeDeployTarget(target);
   if (!t) return null;
-  return liveOf(await workspaceDeploys(ctx, workspace, 100), t, repository ? normalizeRepository(repository) : undefined, opts) ?? null;
+  const recent = await workspaceDeploys(ctx, workspace, MARKER_SCAN, opts.real ? {} : { pushes: MARKER_SCAN });
+  return liveOf(recent, t, repository ? normalizeRepository(repository) : undefined, opts) ?? null;
 }
 
 /** Whether two pushes were made by one pusher: the same account, else (neither has one) the same name. */
@@ -137,7 +141,7 @@ export function ownWatcherRow(recent: ReadonlyArray<Doc<"deploys">>, target: str
 export async function ownWatcherRowFor(ctx: any, workspace: string, target: string, m: WatcherPush): Promise<Doc<"deploys"> | null> {
   const t = normalizeDeployTarget(target);
   if (!t) return null;
-  return ownWatcherRow(await workspaceDeploys(ctx, workspace, 100), t, m) ?? null;
+  return ownWatcherRow(await workspaceDeploys(ctx, workspace, MARKER_SCAN, { pushes: MARKER_SCAN }), t, m) ?? null;
 }
 
 /** When a deploy row last did something: a watcher's row goes live again on every save. */
@@ -202,6 +206,7 @@ export async function closeSuperseded(ctx: any, live: Doc<"deploys">, opts: { dr
     .query("deploys")
     .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", live.workspace).eq("target", live.target).lt("created_at", live.created_at))
     .order("desc")
+    .filter(notWatcher)
     .take(200);
   const stale = before.filter((d) => OPEN.has(d.status) && (!d.repository || !live.repository || d.repository === live.repository));
   if (!opts.dry) {
@@ -323,7 +328,8 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   const now = Date.now();
   const status = m.status ?? "live";
   const repository = m.repository ? normalizeRepository(m.repository) : undefined;
-  const recent = await workspaceDeploys(ctx, m.workspace, 100);
+  // Real deploys however many watcher pushes came since, and the newest rows of any kind: the watcher's own row, what runs.
+  const recent = await workspaceDeploys(ctx, m.workspace, MARKER_SCAN, { pushes: MARKER_SCAN });
   // The push's diff ran exactly when it reports adds and drops (each possibly empty); an older cast, or a prod the diff
   // could not read, reports neither, and its row records neither.
   const diffRan = Array.isArray(m.adds) || Array.isArray(m.drops);
@@ -492,11 +498,9 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
  */
 export async function noticeDroppedWork(ctx: any, d: Doc<"deploys">, names: ReadonlyArray<string>, by: Doc<"deploys">["started_by"]): Promise<void> {
   if (!names.length) return;
-  const rows: Doc<"deploys">[] = await ctx.db
-    .query("deploys")
-    .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", d.workspace).eq("target", d.target))
-    .order("desc")
-    .take(ADDERS_SCAN);
+  // Adders are watcher pushes and dirty deploys; what proves a name committed is a real deploy, kept however many watcher
+  // pushes came since.
+  const rows = await targetDeploys(ctx, d.workspace, d.target, ADDERS_SCAN, { pushes: ADDERS_SCAN });
   const others = rows.filter((x) => String(x._id) !== String(d._id) && (x.repository ?? null) === (d.repository ?? null));
   const self = by?.user_id ? String(by.user_id) : null;
   const people = new Map<string, { user_id: Id<"users">; pushes: Map<string, boolean>; names: string[] }>();
@@ -982,7 +986,7 @@ export const forTask = query({
 export async function projectDeployViews(ctx: any, project: Doc<"projects">, repositories: ReadonlyArray<string>, since: number) {
   const workspace = await resolveWorkspaceKey(ctx, project);
   const repos = repositories.length ? new Set(repositories.map((r) => normalizeRepository(r))) : null;
-  const all = (await workspaceDeploys(ctx, workspace)).filter((d) => (d.live_at ?? d.created_at) >= since || OPEN.has(d.status));
+  const all = (await workspaceDeploys(ctx, workspace, undefined, { pushes: RECENT_PUSHES })).filter((d) => (d.live_at ?? d.created_at) >= since || OPEN.has(d.status));
   const mine = all.filter((d) => inScope(d, String(project._id), repos));
   const after = await afterFor(ctx, workspace, mine, Date.now());
   const out = [];

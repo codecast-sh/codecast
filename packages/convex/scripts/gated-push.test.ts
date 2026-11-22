@@ -212,3 +212,17 @@ describe("the mark that records a watcher push", () => {
     expect(watcherMarkArgs("", "abc", 0)).toBeNull();
   });
 });
+
+describe("the record runs after the tree is read again", () => {
+  test("a save while the push is being recorded is not taken for a mid-push edit", async () => {
+    let sig = "a";
+    const gate = new Gate({
+      now: () => 1_000_000, treeIsFresh: async () => true, signature: async () => sig,
+      typecheck: async () => ({ errors: 0, diagnostics: "" }), push: async () => 0,
+      diff: async () => ({ adds: [], drops: [] }),
+      record: async () => { sig = "b"; },
+      log: () => {},
+    });
+    expect(await gate.tick()).toBe("pushed");
+  });
+});

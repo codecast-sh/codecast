@@ -535,7 +535,7 @@ describe("round-three fixes", () => {
     });
     const push = (n: number, at: number, over: Record<string, any> = {}) => t.run(async (ctx) =>
       recordDeployMarker(ctx, { workspace: ws, team_id: ids.team, target: "backend", sha: sha(n), repository: REPO, source: "test", pushed_via: "deploy.sh", machine: "ana-mac", at: base + at, ...over }));
-    const one = await push(1, 10_000);
+    await push(1, 10_000);
     const two = await push(2, 20_000);
     const watcher = await push(3, 30_000, { pushed_via: "dev watcher", dirty: 2 });
 
@@ -546,11 +546,11 @@ describe("round-three fixes", () => {
     expect(backend.queue.commits).toBe(2);
     // `cast deploy --sha`: the last real deploy's sha is what is already live.
     await expect(t.mutation(api.deployTargets.request, { api_token: tokens.ana, team_id: ids.team, target: "backend", sha: sha(2), here: true })).rejects.toThrow("is already live on backend");
-    // A rollback goes back from the last real deploy to the one before it.
+    // Over a watcher's push, a rollback goes back to the last real deploy: it puts the committed tree back.
     const rollback = await t.mutation(api.deployTargets.request, { api_token: tokens.ana, team_id: ids.team, target: "backend", action: "rollback", here: true });
-    expect(rollback).toMatchObject({ action: "rollback", sha: sha(1) });
+    expect(rollback).toMatchObject({ action: "rollback", sha: sha(2) });
     const asked = await t.run(async (ctx) => ctx.db.query("deploys").withIndex("by_short_id", (q) => q.eq("short_id", rollback.short_id)).first());
-    expect(asked).toMatchObject({ rollback_of: one, previous_sha: sha(2) });
+    expect(asked).toMatchObject({ rollback_of: two, previous_sha: sha(2) });
     await t.run(async (ctx) => ctx.db.patch(asked!._id, { status: "cancelled" }));
 
     // An error that started after the watcher push and before the next real deploy is in the real deploy's window.
@@ -781,5 +781,98 @@ describe("round-four fixes", () => {
     await pause();
     await mark("ana", { via: "deploy.sh", machine: "ana-mac", adds: [], drops: ["table:bens"] });
     expect(await notes()).toHaveLength(0);
+  });
+});
+
+describe("round-five fixes", () => {
+  const sha = (n: number) => String(n % 10).repeat(30) + String(n).padStart(10, "0");
+  async function withTarget() {
+    const s = await setup();
+    const ws = `team:${s.ids.team}`;
+    await s.t.mutation(api.deployTargets.publish, {
+      api_token: s.tokens.ana, team_id: s.ids.team, repository: REPO, root: "/repo",
+      targets: [{ name: "backend", command: "./deploy.sh $sha", rollback: "./rollback.sh $sha", runs: "here", live: { kind: "marker" }, policy: "press", paths: ["convex/**"] }],
+    });
+    const push = (n: number, at: number, over: Record<string, any> = {}) => s.t.run(async (ctx) =>
+      recordDeployMarker(ctx, { workspace: ws, team_id: s.ids.team, target: "backend", sha: sha(n), repository: REPO, source: "test", pushed_via: "deploy.sh", machine: "ana-mac", at, ...over }));
+    const view = async () => (await s.t.query(api.deployTargets.view, { api_token: s.tokens.ana, team_id: s.ids.team, target: "backend" })).targets[0];
+    const request = (over: Record<string, any> = {}) =>
+      s.t.mutation(api.deployTargets.request, { api_token: s.tokens.ana, team_id: s.ids.team, target: "backend", here: true, ...over });
+    const row = (shortId: string) => s.t.run(async (ctx) => ctx.db.query("deploys").withIndex("by_short_id", (q) => q.eq("short_id", shortId)).first());
+    return { ...s, ws, push, view, request, row };
+  }
+
+  test("both feeders of the Deploys page's rows send what each push was, the same for the same row", async () => {
+    const { t, ids, push, view } = await withTarget();
+    const base = Date.now() - 100_000;
+    await push(1, base + 1000, { adds: ["fn:a:one"], drops: [] });
+    await push(2, base + 2000, { pushed_via: "dev watcher", machine: "ben-mac", dirty: 3, adds: ["fn:b:two"], drops: ["table:gone", "fn:a:one"], started_by: { kind: "person", name: "Ben", user_id: ids.ben } });
+    const fromView = (await view()).history;
+    const fromList = await t.withIdentity({ subject: `${ids.ana}|test` }).query(api.deployRefs.recentForTeam, { team_id: ids.team });
+    const fields = (d: any) => ({ _id: d._id, pushed_via: d.pushed_via, machine: d.machine, dirty: d.dirty, adds_count: d.adds_count, drops_count: d.drops_count });
+    expect(fromView).toHaveLength(2);
+    expect(fromList.map(fields)).toEqual(fromView.map(fields));
+    expect(fields(fromList[0])).toMatchObject({ pushed_via: "dev watcher", machine: "ben-mac", dirty: 3, adds_count: 1, drops_count: 2 });
+  });
+
+  test("over a watcher push of the live sha, a rollback with no deploy named goes back to the last real deploy", async () => {
+    const { ids, push, request, row } = await withTarget();
+    const base = Date.now() - 100_000;
+    await push(1, base + 1000);
+    const two = await push(2, base + 2000);
+    await push(2, base + 3000, { pushed_via: "dev watcher", dirty: 3, started_by: { kind: "person", name: "Ana", user_id: ids.ana } });
+    const back = await request({ action: "rollback" });
+    expect(back).toMatchObject({ action: "rollback", sha: sha(2) });
+    expect(await row(back.short_id)).toMatchObject({ rollback_of: two });
+  });
+
+  test("a pile of watcher pushes never hides the real live deploy, the way back, a change's reach or an open line deploy", async () => {
+    const { t, ids, ws, push, view, request, row } = await withTarget();
+    const base = Date.now() - 1_000_000;
+    await t.run(async (ctx) => {
+      for (const n of [1, 2, 3]) {
+        await ctx.db.insert("commits", {
+          sha: sha(n), message: `change ${n}`, author_name: "Ana", author_email: "a@x", timestamp: base, files_changed: 1, insertions: 1, deletions: 0,
+          repository: REPO, team_id: ids.team, branch: "main", main_at: base + n,
+          files: [{ filename: `convex/f${n}.ts`, status: "modified", additions: 1, deletions: 0, changes: 1 }],
+        });
+      }
+    });
+    await push(1, base + 1000);
+    const two = await push(2, base + 2000);
+    // More watcher pushes than any window reads: 110 shas, three machines.
+    for (let i = 0; i < 110; i++) {
+      await push(100 + i, base + 3000 + i * 10, { pushed_via: "dev watcher", dirty: 1, machine: `m${i % 3}`, started_by: { kind: "person", name: "Ana", user_id: ids.ana } });
+    }
+    const now = await view();
+    expect(now.live).toMatchObject({ short_id: two });
+    expect(now.running).toMatchObject({ pushed_via: "dev watcher", sha: sha(209) });
+    expect(now.history[0]).toMatchObject({ pushed_via: "dev watcher" });
+
+    const back = await request({ action: "rollback" });
+    expect(back).toMatchObject({ sha: sha(2) });
+    expect(await row(back.short_id)).toMatchObject({ rollback_of: two });
+    await t.run(async (ctx) => ctx.db.patch((await ctx.db.query("deploys").withIndex("by_short_id", (q) => q.eq("short_id", back.short_id)).first())!._id, { status: "cancelled" }));
+
+    const reach = await t.withIdentity({ subject: `${ids.ana}|test` }).query(api.deployReach.get, { ref: `${REPO}@${sha(2)}` });
+    expect(reach!.targets[0]).toMatchObject({ state: "live", deploy: { short_id: two } });
+
+    // The Deploys page's list keeps every real deploy and only the newest watcher pushes.
+    const list = await t.withIdentity({ subject: `${ids.ana}|test` }).query(api.deployRefs.recentForTeam, { team_id: ids.team });
+    expect(list.filter((d) => d.pushed_via !== "dev watcher").map((d) => d.short_id)).toContain(two);
+    expect(list.filter((d) => d.pushed_via === "dev watcher").length).toBeLessThanOrEqual(10);
+
+    // A line deploy asked for before the pile is still open: the view shows it, a deploy waits on it, and a deploy.sh
+    // marker finishes it.
+    await t.run(async (ctx) => {
+      await ctx.db.insert("deploys", {
+        short_id: "dp-900", workspace: ws, team_id: ids.team, target: "backend", repository: REPO, status: "requested", trigger: "person",
+        source: "line", event_ids: [], carries: [], created_at: base + 2500, updated_at: base + 2500,
+      });
+    });
+    expect((await view()).open).toMatchObject({ short_id: "dp-900" });
+    await expect(request()).rejects.toThrow("dp-900 is already going out to backend");
+    expect(await push(3, base + 5000)).toBe("dp-900");
+    expect(await row("dp-900")).toMatchObject({ status: "live", sha: sha(3) });
   });
 });
