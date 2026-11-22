@@ -245,7 +245,8 @@ export const typedStep = internalQuery({
         user_name: names.get(userId) ?? null,
         provenance,
         text: words,
-        created_at: new Date(c.timestamp).toISOString(),
+        // When the person said it: a composer line's submit (its queue row), not when a queued send reached the agent.
+        created_at: new Date(provenance === "typed_composer" ? pending!.created_at : c.timestamp).toISOString(),
       });
     }
     // Convex values have no undefined, so absent fields are left out.

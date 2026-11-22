@@ -565,6 +565,20 @@ describe("a clear resting on a typed line", () => {
     expect(saidAt).toBeLessThan(before.now());
   });
 
+  test("a composer line is dated by its submit, not its delivery: a Revise between the two refuses it", async () => {
+    const s = await seedRun();
+    // "ship it" is sent behind a running turn; a Revise lands on the task's card; then the turn ends and it is delivered.
+    await s.as(s.ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(s.lead), "ship it", null, "cid-late", null, "ship it"] });
+    const [row] = (await s.pending(s.lead)).filter((r: any) => r.client_id === "cid-late");
+    await revise(s, row.created_at + 1);
+    await s.echo(s.lead, "ship it");
+    const read = await s.originator(s.lead);
+    expect(read.typed.find((l: any) => l.line === 4)).toMatchObject({ text: "ship it", created_at: new Date(row.created_at).toISOString() });
+    const r = await s.clear({ conversation_short_id: await s.sid(s.lead), line: 4 }, "ship it");
+    expect(r.error).toMatch(/a person answered Revise on sd-1 after .*:4 was typed/);
+    expect(await s.stamp()).toBeUndefined();
+  });
+
   test("the asker reads a person's answers on the task's Ship cards beside their typed lines", async () => {
     const s = await seedRun();
     await revise(s, s.now() + 60_000);
