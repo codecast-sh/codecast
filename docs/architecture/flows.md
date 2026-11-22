@@ -90,7 +90,7 @@ and runs that file.
 
 The web holds no parser and reads no checkout, so each checkout reports its
 repo's own flows: the session-start refresh (`stableContext.ts`,
-`workflow/repoFlowsReport.ts`) sends every non-draft `.codecast/flows` graph,
+`workflow/repoFlowsReport.ts`) sends every non-draft `.codecast/flows/*.cast` graph,
 parsed with its `extends` expanded, under the repository its origin remote
 names, whenever they changed since this machine last sent that repository's
 (`repo_flows`: one row per person and repository, read only by that person).
