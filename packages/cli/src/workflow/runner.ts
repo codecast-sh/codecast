@@ -487,17 +487,21 @@ function lastSaid(state: WorkflowRunState): string | undefined {
   return undefined;
 }
 
-/** One send of the run to its subject, named so a second attempt (or a second runner) lands it once: the server keeps the first message under a client_id. */
+/** What a send of the run to its subject is, as the start of its client_id: the run, and what is sent (a station, an answer, the end). */
 function subjectSendKey(options: RunOptions, context: Record<string, string>, what: string): string {
-  return `run:${options.runId || path.basename(context["run_dir"] || "local")}:${what}:${context[`${context["station_id"]}.visits`] || "1"}`;
+  return `run:${options.runId || path.basename(context["run_dir"] || "local")}:${what}`;
 }
 
 /**
  * Send to the run's subject. Quiet (sendSessionMessage `quiet`): a subject stashed out of sight stays there. A
- * backend older than this CLI refuses the arg it does not know, so a refused send goes again plain, under the same
- * client_id: if the first did land (the answer was lost, not the send) the server keeps that one.
+ * backend older than this CLI refuses the arg it does not know, so a refused send goes again plain. Each send gets a
+ * client_id of its own (the key and a nonce), shared only by that plain retry: if the first did land (the answer was
+ * lost, not the send) the server keeps that one. Nothing a run can count names a send once: visits restart after a
+ * person's answer and on a new attempt, and a resume repeats the visit it stopped in, so a second Revise brief keyed
+ * on them was dropped as a duplicate and its station waited out its timeout.
  */
-async function sendToSubject(options: RunOptions, subject: Subject, body: string, clientId: string, quiet: boolean): Promise<any> {
+async function sendToSubject(options: RunOptions, subject: Subject, body: string, key: string, quiet: boolean): Promise<any> {
+  const clientId = `${key}:${crypto.randomUUID().slice(0, 8)}`;
   const send = (q: boolean) => cliCall(options, "/cli/messages/send", { to: subject.conversationId, ...(options.runSession ? { from: options.runSession } : {}), body, wake: true, client_id: clientId, ...(q ? { quiet: true } : {}) });
   return (quiet ? await send(true) : null) ?? await send(false);
 }
