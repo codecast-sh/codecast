@@ -197,6 +197,18 @@ subject. A refreeze rebuilds it from the checkout as it is now, for the
 change's files and any file one of its writers now holds (a fix may add a
 test), still a commit per writer on the same branch.
 
+A station the subject would do (below) goes to the writers instead: the
+change's files that `$stop_reason` or the expanded brief names (by path, or by
+a basename no other file of the change shares) are grouped by the session
+that wrote them, and each writer gets the station's brief as a quiet send with
+a line naming its own failing files (`writersNamed`, `briefWriters`). The run
+waits on every briefed writer at once with the subject's wait, then freezes
+the pass again and goes on; the station's output names who was briefed. A
+finding that names no file of the change goes to the subject, and a run with
+none stops with it, as any run with no subject does. The writers are other
+people's sessions in a shared checkout, so nothing parks or retires them, nor
+the subject of a checkout's change.
+
 Every run binds to a task because the run's evidence, its gate decisions and
 its status already key on one (the-line.md L3, L6). The task is the record of
 the change; the session that made it stays linked to it.
