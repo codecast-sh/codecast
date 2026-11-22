@@ -7,8 +7,7 @@ import { useChatRail, useChatMembers, supersededChannelId } from "../../hooks/us
 import { useThreadUnread } from "../../hooks/useThreadsSync";
 import { ChannelContextMenu } from "../chat/ChannelMenu";
 import { useChannelMenu } from "../../hooks/useChannelMenu";
-import { channelDisplayName, dmCounterpart, memberName } from "../../lib/chatViews";
-import { dmOtherIds } from "@codecast/shared/chat";
+import { channelDisplayName, dmCounterpart, dmRoomName, memberName } from "../../lib/chatViews";
 import { CommentAvatar } from "../comments/CommentAvatar";
 import { readPins, isThreadsPin, pinApp, togglePin, type SidebarPin } from "../../lib/sidebarPins";
 import { ContextMenu, CtxItem, useContextMenu } from "../ui/context-menu";
@@ -152,10 +151,7 @@ export function PinnedRail({
       const isDm = (live?.kind ?? c?.kind) === "dm";
       const counterpart = live && isDm ? dmCounterpart(live, teamMembers) : undefined;
       const dmName = isDm && !live
-        ? channelDisplayName(
-            { name: "", kind: "dm", dmMemberIds: dmOtherIds(c?.dm_key, viewer) },
-            teamMembers,
-          )
+        ? dmRoomName(c, viewer, teamMembers)
         : undefined;
       return {
         ...base,

@@ -12,8 +12,8 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { ChatModalLegend } from "./ChatModalLegend";
 import { highlightMatch } from "../GlobalSearch";
 import { isConvexId } from "../../lib/entityLinks";
-import { dmOtherIds, startOfDay } from "@codecast/shared/chat";
-import { channelDisplayName, lineAuthorFor, memberHandles, memberName, type ChatMember } from "../../lib/chatViews";
+import { startOfDay } from "@codecast/shared/chat";
+import { channelDisplayName, dmRoomName, lineAuthorFor, memberHandles, memberName, type ChatMember } from "../../lib/chatViews";
 import type { ChatChannelView } from "./chatTypes";
 import type { ChatMessageRow } from "../../store/chatSlice";
 import "./chat.css";
@@ -202,10 +202,9 @@ export function ChatSearch({
   // — a DM is the other side, first names only past a 1:1 — so the search
   // header can never disagree with the rail beside it.
   const roomLabel = (h: SearchHit): { icon: React.ReactNode; label: string } => {
-    const label = channelDisplayName(
-      { name: h.channel_name || "unknown", kind: h.channel_kind as any, dmMemberIds: dmOtherIds(h.dm_key, String(viewer)) },
-      teamMembers,
-    );
+    const label = h.channel_kind === "dm"
+      ? dmRoomName({ name: h.channel_name || "", dm_key: h.dm_key }, String(viewer), teamMembers)
+      : channelDisplayName({ name: h.channel_name || "unknown", kind: h.channel_kind as any }, teamMembers);
     if (h.channel_kind === "dm") return { icon: <User className="w-3 h-3" />, label };
     const priv = channels.find((c) => c.id === h.channel_id)?.isPrivate;
     return { icon: priv ? <Lock className="w-3 h-3" /> : <Hash className="w-3 h-3" />, label };

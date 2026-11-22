@@ -18,7 +18,7 @@ import type { IdentityRow } from "./sessionIdentity";
 import { attachmentKind, type ChatAuthor, type ChatChannelView, type ChatMessageView, type ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
 import { chatRoomKey, titleLine } from "@codecast/shared/contracts";
-import { dmOtherIds, isClosedAgentPlaceholder, isSessionPartyId, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
+import { dmOtherIds, dmWatcher, isClosedAgentPlaceholder, isSessionPartyId, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
 import { isAgentMember, isPerson } from "@codecast/shared/team/memberKind";
 
 export type ChatMember = {
@@ -66,6 +66,29 @@ export function channelDisplayName(
     return ids.length > 1 ? full.split(/\s+/)[0] : full;
   });
   return names.join(", ");
+}
+
+/** What a DM room row is called for this viewer: the one way every surface
+ *  names a DM from its raw row (header, tab title, menu, toast, recents, pins,
+ *  search, both phone screens). It reads the parties AND whether the viewer
+ *  only watches the room (dmWatcher: their session's or their role's room with
+ *  someone else) from the same dm_key, so no caller can name a watched room as
+ *  a group of two (ct-79021). The rail builds its views in selectChatRail by
+ *  the same two reads. */
+export function dmRoomName(
+  row: { name?: string; dm_key?: string } | undefined,
+  viewerId: string,
+  members: ChatMember[] | undefined,
+): string {
+  return channelDisplayName(
+    {
+      name: row?.name ?? "",
+      kind: "dm",
+      dmMemberIds: dmOtherIds(row?.dm_key, viewerId),
+      dmWatching: dmWatcher(row?.dm_key, viewerId),
+    },
+    members,
+  );
 }
 
 /** The huddle room of a chat view. A DM or group thread huddles in the room

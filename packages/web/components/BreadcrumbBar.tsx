@@ -17,8 +17,7 @@
 import { memo, useMemo } from "react";
 import { usePathname } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
-import { channelDisplayName } from "../lib/chatViews";
-import { dmOtherIds } from "@codecast/shared/chat";
+import { dmRoomName } from "../lib/chatViews";
 import { Breadcrumbs, type Crumb } from "./Breadcrumbs";
 import { buildBreadcrumbs, type BreadcrumbLookups } from "../lib/breadcrumbs";
 import { tabStageLayout } from "../lib/stage";
@@ -96,10 +95,7 @@ function ClassicBreadcrumbBar() {
     const row = findRow(s.chatChannels, channelId);
     if (!row) return undefined;
     if ((row as any).kind === "dm") {
-      return channelDisplayName(
-        { name: "", kind: "dm", dmMemberIds: dmOtherIds((row as any).dm_key, String((s as any).currentUser?._id ?? "")) },
-        teamMembersOf(s),
-      );
+      return dmRoomName(row as any, String((s as any).currentUser?._id ?? ""), teamMembersOf(s));
     }
     return row.name;
   });
