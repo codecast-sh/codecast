@@ -50,6 +50,8 @@ export const lineTrialTables = {
     // Every waiting card of a workspace, however many newer ones were answered: the team's decision inbox lists them all.
     .index("by_workspace_status_created", ["workspace", "status", "created_at"])
     .index("by_project_created", ["project_id", "created_at"])
+    // A project's waiting cards, however many waiting cards its workspace holds (lineTrial.cards with a project).
+    .index("by_project_status_created", ["project_id", "status", "created_at"])
     .index("by_run", ["run_id"])
     .index("by_short_id", ["short_id"])
     .index("by_decision", ["decision_id"]),
