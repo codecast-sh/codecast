@@ -11358,7 +11358,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // ride a single dispatch and the kill sound plays once, not N times. Scale
   // is the user-curated stash list (tens) — each row NEEDS its own server
   // patch anyway (the per-conversation hide transition is what enqueues the
-  // agent teardown), so the markSessionsDismissed storm concern doesn't apply.
+  // agent teardown).
   killSessions: action(function (this: Draft, ids: string[]) {
     if (ids.length === 0) return;
     soundKill();
