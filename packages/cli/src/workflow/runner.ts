@@ -33,7 +33,7 @@ import { frozenChangeContext } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
 import { lineRunsRoot } from "./runDirs.js";
-import { restoreRunTree } from "./runWorktree.js";
+import { releaseEndedRunTree, restoreRunTree } from "./runWorktree.js";
 
 function resolveNextNode(
   graph: WorkflowGraph,
@@ -1814,8 +1814,10 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     console.error(`${c.yellow}Run ${options.runId} is already driven by pid ${claim.heldBy} on this machine${c.reset}`);
     return "invalid";
   }
+  // The run's state as driveRun leaves it, so its end can release the worktree it made.
+  const ran: { state?: WorkflowRunState } = {};
   try {
-    return await driveRun(graph, options, cwd, initialContext, startNode, hash, graphNodeHashes);
+    return await driveRun(graph, options, cwd, initialContext, startNode, hash, graphNodeHashes, ran);
   } catch (err) {
     if (!(err instanceof RunEndedOnServer)) throw err;
     // Nothing is reported: the run's end, its task and its hands were settled when it ended.
@@ -1823,6 +1825,9 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     return "failed";
   } finally {
     claim?.release();
+    // Whatever ended the run (it completed, failed, or was cancelled on the server), its
+    // worktree goes once main holds all of it; its branch stays (runWorktree.ts).
+    if (ran.state && !options.dryRun) await releaseEndedRunTree(cwd, ran.state.context);
   }
 }
 
@@ -1834,6 +1839,7 @@ async function driveRun(
   startNode: WorkflowNode,
   hash: string,
   graphNodeHashes: (g: WorkflowGraph) => Array<{ id: string; h: string }>,
+  ran: { state?: WorkflowRunState } = {},
 ): Promise<WorkflowRunOutcome> {
   // Where a resumed run continues: its checkpoint on this machine, else what the row holds.
   const resumeAt = options.resume && options.runId
@@ -1859,6 +1865,7 @@ async function driveRun(
     completed: [],
     failed: false,
   };
+  ran.state = state;
 
   // Per-run outcome record for goal gate checking (all completed nodes)
   const nodeOutcomes: Record<string, NodeOutcome> = {};

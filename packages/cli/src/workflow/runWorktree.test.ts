@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseWorkflowSource } from "./parser.js";
 import { lineRunDir, runWorkflow } from "./runner.js";
-import { restoreRunWorktree } from "./runWorktree.js";
+import { releaseEndedRunTree, restoreRunWorktree } from "./runWorktree.js";
 
 // Real git: what matters is git's own refusal to check out a branch whose
 // removed worktree it still lists, and that the branch's commits come back.
@@ -110,4 +110,31 @@ describe("a resumed run's worktree", () => {
     expect(await restoreRunWorktree(repoRoot, NAME, BRANCH)).toBe("no_branch");
     expect(fs.existsSync(tree())).toBe(false);
   });
+});
+
+describe("a run's end", () => {
+  const quiet = async (fn: () => Promise<void>) => { const log = console.log; console.log = () => {}; try { await fn(); } finally { console.log = log; } };
+  function withOrigin(): void {
+    const origin = path.join(repoRoot, "host-state", "origin.git");
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+    git(repoRoot, "remote", "add", "origin", origin);
+    git(repoRoot, "push", "-q", "origin", "main");
+    git(repoRoot, "fetch", "-q", "origin");
+    git(repoRoot, "remote", "set-head", "origin", "main");
+  }
+
+  test("releases the run's tree once main holds its change, and keeps the branch", async () => {
+    withOrigin();
+    git(repoRoot, "push", "-q", "origin", `${BRANCH}:main`); // the run landed its change
+    await quiet(() => releaseEndedRunTree(repoRoot, { worktree: NAME }));
+    expect(fs.existsSync(tree())).toBe(false);
+    expect(git(repoRoot, "worktree", "list")).not.toContain(NAME);
+    expect(git(repoRoot, "branch", "--list", BRANCH)).toContain(BRANCH);
+  }, 60_000); // lsof alone takes seconds on a loaded machine
+
+  test("keeps the tree while it holds work main lacks", async () => {
+    withOrigin();
+    await quiet(() => releaseEndedRunTree(repoRoot, { worktree: NAME }));
+    expect(fs.readFileSync(path.join(tree(), "outreach", "app.ts"), "utf8")).toBe("export const v = 2;\n");
+  }, 60_000);
 });
