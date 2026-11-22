@@ -13,6 +13,7 @@ import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthC
 import { installCallbackHandler } from "./lib/githubInstallCallback";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./lib/conversationRead";
+import { readOriginator } from "./lib/originatorChain";
 import { SHARED_CALL_VIDEO_PATH, signForCli } from "./callRecordings";
 import { SHARED_CALL_AUDIO_PATH, sharedCallAudio, sharedCallVideo } from "./lib/sharedCallMedia";
 import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMirror";
@@ -4179,6 +4180,17 @@ cliRoute("/cli/sessions/pin", async (ctx, body) => {
 });
 cliRoute("/cli/sessions/unpin", async (ctx, body) => {
   return await ctx.runMutation(api.conversations.unpinFromProfile, body);
+});
+// Who started a session's line of work and what people typed along it
+// (`cast flow asker`): its chain up to the originator, and each typed line
+// with its provenance, numbered as `cast read` numbers it.
+cliRoute("/cli/sessions/originator", async (ctx, body) => {
+  const { api_token, conversation_id, task } = body;
+  if (typeof api_token !== "string" || typeof conversation_id !== "string") return { error: "Missing api_token or conversation_id" };
+  return await readOriginator({
+    head: () => ctx.runQuery(internal.originator.chain, { api_token, conversation_id, ...(typeof task === "string" ? { task } : {}) }),
+    typedStep: (id, state) => ctx.runQuery(internal.originator.typedStep, { api_token, conversation_id: id, ...(state === undefined ? {} : { state }) }),
+  });
 });
 
 cliRoute("/cli/docs/share", async (ctx, body) => await ctx.runMutation(api.docs.generateShareLink, body));
