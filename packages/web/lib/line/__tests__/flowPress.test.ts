@@ -38,12 +38,26 @@ describe("a Ship press", () => {
     expect(next(formatDecisionAnswer({ id: "sd-1", question: "Keep the name?", answer: "Rename it" }))).toBe("a1");
   });
 
-  test("what reaches the session before it first answers folds into the turn that answers the press", () => {
+  const comment = { _id: "c", role: "user", content: '<task-comment task="ct-1" from="Ana">\nAbout ct-1\n</task-comment>', timestamp: 12 };
+  const report = { _id: "s", role: "user", content: '<session-message from="jx7005k">\nThe Built change passed.\n</session-message>', timestamp: 13 };
+  const toolCall = (id: string, at: number) => ({ _id: id, role: "assistant", content: "", tool_calls: [{ id: `${id}-call` }], timestamp: at });
+  const toolResult = (id: string, at: number) => ({ _id: id, role: "user", content: "", tool_results: [{ tool_use_id: `${id}-call` }], timestamp: at });
+
+  test("what lands mid-turn, between a tool call and its result, folds into the turn that answers the press", () => {
     // jx7dhj9, Nov 21: a task comment and another session's report arrived while it checked, then it answered the press.
-    const comment = { _id: "c", role: "user", content: '<task-comment task="ct-1" from="Ana">\nAbout ct-1\n</task-comment>', timestamp: 12 };
-    const report = { _id: "s", role: "user", content: '<session-message from="jx7005k">\nThe Built change passed.\n</session-message>', timestamp: 13 };
-    const msgs = [press(10), comment, report, said("a", "I didn't run the Change flow: it had nothing to take.", 14)];
+    const msgs = [press(10), toolCall("t1", 11), toolResult("r1", 11), comment, report, toolCall("t2", 14), toolResult("r2", 14), said("a", "I didn't run the Change flow: it had nothing to take.", 15)];
     expect(read(msgs)?.reply).toEqual({ id: "a", text: "I didn't run the Change flow: it had nothing to take." });
+  });
+
+  test("any message after the session's answer ends the turn, whoever sent it", () => {
+    const answered = [press(10), said("a1", "Not run: nothing to take.", 11)];
+    expect(read([...answered, report, said("a2", "Thanks, noted.", 14)])?.reply?.id).toBe("a1");
+    expect(read([...answered, comment, said("a2", "Done.", 14)])?.reply?.id).toBe("a1");
+  });
+
+  test("a message sent before the session answered the press is answered in the same turn", () => {
+    const later = { _id: "u2", role: "user", content: "Also rename the button", timestamp: 11 };
+    expect(read([press(10), later, said("a", "Not run, and renamed it.", 12)])?.reply?.id).toBe("a");
   });
 
   test("a long stretch of tool work after it does not lose it", () => {

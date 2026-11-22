@@ -1,8 +1,7 @@
 // What a person's press asks a session to do with flows (docs/architecture/flows.md FL4, FL5): the words the
 // session receives, kept beside the other flow libs so the components that send them stay components. Convex's typed-send
 // counters load this file (convex/lib/userSend.ts), so it stays free of DOM, React and web-only dependencies.
-import { parseDecisionAnswer } from "@codecast/shared/contracts";
-import { isStickyEligible } from "../stickyPrompt";
+
 
 /** What the session is asked: run its change through the flow, named after what the change does, and say how it ended. */
 export function runThroughMessage(flow: { slug: string; label: string }): string {
@@ -27,7 +26,7 @@ export function isFlowPressMessage(raw: string): boolean {
     (t.startsWith("Add the ") && t.includes("`cast flow import "));
 }
 
-export type PressMsg = { _id?: string; role?: string; content?: string; timestamp?: number; tool_results?: unknown[] };
+export type PressMsg = { _id?: string; role?: string; content?: string; timestamp?: number; tool_calls?: unknown[]; tool_results?: unknown[] };
 /** A Ship press no run has answered yet: when it was sent, its message, and the session's last words since (none yet: null). */
 export type Press = { at: number; id: string; reply: { id: string; text: string } | null };
 
@@ -47,10 +46,6 @@ export function pressSig(msgs: ReadonlyArray<PressMsg>, newestRunAt: number): st
   return sig;
 }
 
-/** A person's own words to the session: a typed or relayed ask, or a tapped decision. */
-const personSpoke = (m: PressMsg) =>
-  m.role === "user" && !m.tool_results?.length && !!m.content && (isStickyEligible(m.content) || !!parseDecisionAnswer(m.content));
-
 function scanPress(msgs: ReadonlyArray<PressMsg>, newestRunAt: number): string {
   // Far enough back for a session that did a long stretch of tool work after the press.
   let at = -1;
@@ -60,13 +55,17 @@ function scanPress(msgs: ReadonlyArray<PressMsg>, newestRunAt: number): string {
   }
   const press = at < 0 ? null : msgs[at]!;
   if (!press || (press.timestamp ?? 0) <= newestRunAt) return "";
-  // Its reply is the session's last words in the turn the press started. What reaches the session before it first
-  // answers (a comment, another session's report) folds into that turn; a person speaking after it answered starts the next.
+  // Its reply is the session's last words in the turn the press started. The turn ends at words that call no tool; a
+  // message after that (a person's, another session's) starts the next turn, while one that lands mid-turn, between a
+  // tool call and its result, folds into this one.
   let reply: PressMsg | null = null;
+  let ended = false;
   for (let i = at + 1; i < msgs.length; i++) {
     const m = msgs[i]!;
-    if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) reply = m;
-    else if (reply && personSpoke(m)) break;
+    if (m.role === "assistant") {
+      if (typeof m.content === "string" && m.content.trim()) reply = m;
+      ended = !m.tool_calls?.length;
+    } else if (ended && m.role === "user" && !m.tool_results?.length) break;
   }
   return [press.timestamp ?? 0, press._id ?? "", reply?._id ?? "", reply ? gist(reply.content!) : ""].join("\u0000");
 }
