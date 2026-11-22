@@ -8,6 +8,7 @@ import { internal } from "../_generated/api";
 import { IDLE_DIGEST_WINDOW_MS, isAssignedAwayFromOwnerSet } from "@codecast/shared/contracts";
 import { enqueuePush } from "../pushRouter";
 import { listSessionOwnerIds } from "../sessionOwners";
+import { cardRangFor } from "./decisionRing";
 
 export type SessionNotifType =
   | "session_idle"
@@ -59,6 +60,10 @@ export async function deliverSessionNotification(
   const user = await ctx.db.get(recipientId);
   if (!user) return false;
   if (sessionNotifOptedOut(user.notification_preferences as any, type)) return false;
+  // A session parked on a card that rang this person (lib/decisionPush.ts):
+  // "waiting for you" would be the same news again, without the question.
+  // Someone the card did not ring still hears the session wait.
+  if (type === "session_idle" && (await cardRangFor(ctx, conversationId, user))) return false;
 
   // Open window → this row joins the fold-up and stays quiet. Closed window →
   // it alerts now and opens the next one.
