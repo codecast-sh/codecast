@@ -18,7 +18,7 @@ import type { Press } from "./DeployPress";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { rollBackHere } from "../../lib/deploys/press";
 import { ageShort } from "../../lib/lineFlow";
-import { DEPLOY_LABELS, commitMatches, deployMatches, focusRef, focusRepository, focusTarget, focusWord, reachAnyDeploy, reachDeployOn, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
+import { DEPLOY_LABELS, FOCUS_PARAMS, commitMatches, deployMatches, focusRef, focusRepository, focusSettled, focusTarget, focusWord, reachAnyDeploy, reachDeployOn, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
 import { useDeployReach } from "../../hooks/useDeployReach";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -90,13 +90,21 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
     // The target the link opened stays open once the highlight goes.
     setPicked((was) => was ?? picked?._id ?? null);
     setFocus(null);
-    rewriteAddress({ pr: null, sha: null, task: null, session: null, branch: null, deploy: null, repo: null });
+    rewriteAddress(Object.fromEntries([...FOCUS_PARAMS, "repo"].map((k) => [k, null])));
   };
   const [pickedId, setPicked] = useState<string | null>(initialTarget ?? null);
   // A PR or commit's own reach says where it went out, so a deploy that listed only its newest commits still finds it.
   const inferredReach = useDeployReach(initialRepo ? null : focusRef(focus, focusRepository(null, allTargets))) ?? null;
   const reach = focus ? (initialRepo ? namedReach : inferredReach) : null;
   const focusAt = useMemo(() => (pickedId ? null : focusTarget(allTargets, deploys, focus, reach)), [pickedId, allTargets, deploys, focus, reach]);
+  // Once the link's target is settled, pin it, and write it into the address so a copy opens there too: a change that
+  // waits on two targets and goes out to one must not move the page to the other while it is being read.
+  const settled = !pickedId && !!focusAt && focusSettled(allTargets, focus, reach);
+  useEffect(() => {
+    if (!settled || !focusAt) return;
+    setPicked(focusAt._id);
+    rewriteAddress({ target: focusAt.name, ...(new Set(allTargets.map((t) => t.repository)).size > 1 ? { repo: focusAt.repository } : {}) });
+  }, [settled]); // eslint-disable-line react-hooks/exhaustive-deps -- pins once, the first time it settles
   // A deploy link opens at that deploy's target; a change's link opens where its reach says (focusAt), not at the deploy that found the team.
   const want = pickedId ?? (initialDeploy && where ? (where.repository ? `${where.repository}#${where.target}` : where.target) : null) ?? focusAt?._id ?? null;
   // A target is named alone (`target=production`); the repository the link names, when it names one, tells apart two

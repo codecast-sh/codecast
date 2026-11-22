@@ -27,6 +27,10 @@ export type DeployFocus =
   | { kind: "branch"; name: string }
   | { kind: "deploy"; id: string };
 
+/** Every kind of thing a link can point at, each read from the address param of its own name. One list, so the reader,
+ *  the clear button and the page's remount key never disagree about what a link is made of. */
+export const FOCUS_PARAMS = ["deploy", "pr", "sha", "task", "session", "branch"] as const satisfies ReadonlyArray<DeployFocus["kind"]>;
+
 type Params = { get(name: string): string | null };
 
 /** The one thing a link names, read from its address. A deploy wins, then a PR, a commit, a task, a session. */
@@ -92,6 +96,17 @@ export function deployMatches(d: Pick<TeamDeployRow, "short_id" | "sha" | "commi
 export function focusRef(f: DeployFocus | null, repository: string | null): string | null {
   if (!f || !repository) return null;
   return f.kind === "pr" ? `${repository}#${f.pr}` : f.kind === "sha" ? `${repository}@${f.sha}` : null;
+}
+
+/**
+ * Whether the target a link opens is settled, so the page can pin it and stop following live data: the thing waits
+ * on a target, or it is a kind reach does not cover, or its reach is in hand. A PR or commit that waits nowhere is
+ * only guessed from deploy records (which list a deploy's newest commits) until its reach arrives.
+ */
+export function focusSettled(targets: ReadonlyArray<DeployTargetRow>, f: DeployFocus | null, reach: DeployReach | null | undefined): boolean {
+  if (!f) return false;
+  if (f.kind !== "pr" && f.kind !== "sha") return true;
+  return !!reach || targets.some((t) => t.queue.groups.some((g) => g.commits.some((c) => commitMatches(c, f))));
 }
 
 /** A reach ref (`owner/repo#N`, `owner/repo@sha`) read back as the repository and the thing a Deploys link points at. */

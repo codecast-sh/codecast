@@ -137,3 +137,22 @@ test("a branch link finds the waiting commit that came from it, and opens with t
   expect(focusTarget([target("web", []), target("api", [c])], [], { kind: "branch", name: "jb/x" })?.name).toBe("api");
   expect(deploysFocusHref({ focus: { kind: "branch", name: "jb/x" } })).toBe("/deploys?branch=jb%2Fx");
 });
+
+describe("one list of link kinds, and when a link's target is settled", () => {
+  const { FOCUS_PARAMS, focusSettled } = require("../focus");
+  test("every kind in the list is one the address reader reads, by its own param", () => {
+    const sample: Record<string, string> = { deploy: "dp-1", pr: "12", sha: "abc1234", task: "ct-1", session: "jx7aaaa", branch: "jb/x" };
+    for (const k of FOCUS_PARAMS) expect(focusOf(params(`${k}=${encodeURIComponent(sample[k]!)}`))?.kind).toBe(k);
+    expect(Object.keys(sample).sort()).toEqual([...FOCUS_PARAMS].sort());
+  });
+  test("a PR waiting somewhere is settled at once; one waiting nowhere waits for its reach; other kinds never wait", () => {
+    const waiting = target("web", [commit("abc", "x (#7)")]);
+    const none = target("api", []);
+    const r = { state: "live" as const, sha: null, targets: [] };
+    expect(focusSettled([waiting, none], { kind: "pr", pr: 7 }, null)).toBe(true);
+    expect(focusSettled([none], { kind: "pr", pr: 7 }, null)).toBe(false);
+    expect(focusSettled([none], { kind: "pr", pr: 7 }, r)).toBe(true);
+    expect(focusSettled([none], { kind: "task", id: "ct-1" }, null)).toBe(true);
+    expect(focusSettled([none], null, r)).toBe(false);
+  });
+});
