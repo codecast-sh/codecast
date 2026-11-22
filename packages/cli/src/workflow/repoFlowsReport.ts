@@ -49,8 +49,8 @@ async function gitOut(cwd: string, args: string[]): Promise<string | null> {
 
 /**
  * Send the checkout's report when it differs from what this machine last sent for it, or that was over a day ago
- * (`cacheDir` holds the hash, its mtime when it was sent). A checkout with no flows is sent once, so a row left by
- * flows since removed goes away.
+ * (`cacheDir` holds the hash, its mtime when it was sent). A checkout with no flows reports that too, so the picker
+ * shows it none rather than another worktree's.
  */
 export async function reportRepoFlows(cwd: string, post: (report: RepoFlowsReport) => Promise<boolean>, cacheDir: string, now = Date.now()): Promise<"sent" | "unchanged" | "skipped"> {
   const root = await gitOut(cwd, ["rev-parse", "--show-toplevel"]);

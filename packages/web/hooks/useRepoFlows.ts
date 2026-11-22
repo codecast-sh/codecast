@@ -1,6 +1,6 @@
 // A checkout's own flows, as the viewer's machines reported them (convex repoFlows.forCheckout): the flows `cast flow
 // run` takes there ahead of the shipped ones of the same slug. The Ship picker mounts this while it is open.
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { makeFunctionReference } from "convex/server";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import type { RepoFlow } from "@codecast/shared/contracts/repoFlows";
@@ -36,8 +36,11 @@ export function checkoutRow(rows: ReadonlyArray<RepoFlowsRow>, root: string | nu
 
 /** The flows of the checkout at `root` (of `repository`), as `cast flow run` reads them there; none while unknown. */
 export function useRepoFlows(root: string | null, repository: string | null): RepoFlow[] {
-  useSyncCollection("repoFlows", FOR_CHECKOUT, root || repository ? { root, repository } : "skip");
-  const where = useMemo(() => (r: RepoFlowsRow) => (!!root && r.root === root) || (!!repository && r.repository === repository), [root, repository]);
+  // The answer is whole for this checkout: a row of it the answer lacks was pruned on the server, and a row with no
+  // root is a cached report from before checkouts were the key.
+  const dropAbsent = useCallback((r: Partial<RepoFlowsRow>) => !r.root || r.root === root, [root]);
+  useSyncCollection("repoFlows", FOR_CHECKOUT, root || repository ? { root, repository } : "skip", { dropAbsent });
+  const where = useMemo(() => (r: RepoFlowsRow) => !!r.root && (r.root === root || (!!repository && r.repository === repository)), [root, repository]);
   const rows = useCollectionRows<RepoFlowsRow>("repoFlows", { where, sig: rowSig });
   return useMemo(() => checkoutRow(rows, root)?.flows ?? NONE, [rows, root]);
 }

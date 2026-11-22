@@ -26,7 +26,7 @@ const MAX_FLOWS = 40;
  *  A live checkout reports at least daily (repoFlowsReport.ts RESEND_MS). */
 const STALE_MS = 14 * 24 * 60 * 60 * 1000;
 
-/** `/cli/repo-flows/report`: replace the reporter's flows for one checkout; none removes its row. */
+/** `/cli/repo-flows/report`: replace the reporter's flows for one checkout, an empty list included. */
 export const report = mutation({
   args: { api_token: v.string(), root: v.string(), repository: v.string(), hash: v.string(), flows: v.array(repoFlowValidator) },
   handler: async (ctx, { api_token, root, repository, hash, flows }) => {
@@ -41,10 +41,7 @@ export const report = mutation({
       .take(20);
     for (const r of stale) if (r.root !== root) await ctx.db.delete(r._id);
     const row = await ctx.db.query("checkout_flows").withIndex("by_user_root", (q) => q.eq("user_id", auth.userId).eq("root", root)).first();
-    if (!flows.length) {
-      if (row) await ctx.db.delete(row._id);
-      return { ok: true };
-    }
+    // A checkout with no flows keeps its row, with none: it runs the shipped flows, never another worktree's.
     // An unchanged report still says the checkout is alive (the CLI sends one a day), so it outlives the prune above.
     if (row?.hash === hash) {
       await ctx.db.patch(row._id, { updated_at: now });
