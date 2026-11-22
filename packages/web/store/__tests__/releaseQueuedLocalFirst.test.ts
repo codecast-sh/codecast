@@ -44,4 +44,24 @@ describe("Send now on the shared queue is local-first", () => {
     useInboxStore.getState().syncTable("pendingMessageStatus", [status([row("a", 1), row("b", 2)], { updated_at: 5 })]);
     expect(held()).toEqual([]);
   });
+
+  it("takes a newer push as it is", async () => {
+    useInboxStore.getState().syncTable("pendingMessageStatus", [status([row("a", 1), row("b", 2)])]);
+    useInboxStore.getState().releaseQueued(CONV);
+    // A row queued after the press is held on the server and stays in line;
+    // the released rows went on to delivery.
+    useInboxStore.getState().syncTable("pendingMessageStatus", [status([row("a", 1, { status: "delivered" }), row("c", 3)])]);
+    expect(held()).toEqual(["c"]);
+  });
+
+  it("puts the rows back in line when the server refuses the release", () => {
+    useInboxStore.getState().syncTable("pendingMessageStatus", [status([row("a", 1), row("b", 2)])]);
+    useInboxStore.getState().releaseQueued(CONV);
+    expect(held()).toEqual([]);
+    useInboxStore.getState().rollbackRelease(CONV);
+    expect(held()).toEqual(["a", "b"]);
+    // And the server's own held rows stay in line on the next push.
+    useInboxStore.getState().syncTable("pendingMessageStatus", [status([row("a", 1), row("b", 2)], { updated_at: 6 })]);
+    expect(held()).toEqual(["a", "b"]);
+  });
 });

@@ -25,7 +25,7 @@ import { carryNodeSessions } from "../lib/workflowRun";
 import { runFilesOf } from "../lib/calls/callVideo";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
-import { mergeQueueRows, reorderQueueRows } from "../lib/sharedQueue";
+import { carryReleasedQueueRows, mergeQueueRows, rehold, reorderQueueRows } from "../lib/sharedQueue";
 import { parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
 export { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
@@ -6481,6 +6481,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   cancelPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string }) => Promise<string>;
   queueMessage: (convId: string, content: string, clientId: string) => void;
   releaseQueued: (convId: string) => void;
+  /** A refused releaseQueued: the rows it let go back in the line (lib/dispatchBinding). */
+  rollbackRelease: (convId: string) => void;
   reorderQueued: (convId: string, messageId: string, beforeId: string | null) => void;
   mergeQueued: (convId: string, messageId: string, intoId: string) => void;
   /** `quoteIds`: the composer quotes this message carries, stamped sent by the server (quoteDrafts.ts). */
@@ -8331,6 +8333,11 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
   // Run feeds overlay with different session budgets: a bare node keeps the
   // session another feed attached (lib/workflowRun carryNodeSessions).
   workflowRuns: { ...REGISTRY_SYNC_OPTS.workflowRuns, normalize: (rows: any, state: any) => carryNodeSessions(rows, state?.workflowRuns) },
+  // "Send now" lets the queued rows go on the draft; a push computed before
+  // the release reached the server, still saying held, keeps them let go
+  // (lib/sharedQueue carryReleasedQueueRows). A refusal puts them back
+  // (rollbackRelease).
+  pendingMessageStatus: { ...REGISTRY_SYNC_OPTS.pendingMessageStatus, normalize: (rows: any, state: any) => carryReleasedQueueRows(rows, state?.pendingMessageStatus) },
 };
 
 const SYNC_REGISTRY: Record<string, SyncOpts> = Object.fromEntries(
@@ -12042,6 +12049,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
   releaseQueued: action(function (this: Draft, convId: string) {
     const row = (this as any).pendingMessageStatus?.[convId];
     for (const r of row?.inflight ?? []) if (r.status === "held" && r.queued) r.status = "pending";
+  }),
+
+  // pendingMessageStatus holds no lock to roll back, so a refused release
+  // from any caller (the button, an outbox replay) lands here.
+  rollbackRelease: sync(function (this: Draft, convId: string) {
+    rehold((this as any).pendingMessageStatus?.[convId]?.inflight);
   }),
 
   reorderQueued: action(function (this: Draft, convId: string, messageId: string, beforeId: string | null) {
