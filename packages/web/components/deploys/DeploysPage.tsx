@@ -37,8 +37,9 @@ const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 7) : "—"
 const ago = (now: number, at: number | null | undefined) => (at ? ageShort(now - at) : "");
 
 /**
- * Bring the highlighted row to the middle of the screen, and keep it there while the page above it settles (queues
- * and history arrive after the first paint). The viewer's own scroll, or 1.5s, ends it.
+ * Bring the highlighted row to the middle of whatever scrolls it (the pane, or in two columns the column that holds
+ * it), and keep it there while the sections above it settle (queues and history arrive after the first paint). The
+ * viewer's own scroll, or 1.5s, ends it.
  */
 function keepFocusInView(): () => void {
   const pane = document.querySelector("[data-deploy-pane]");
@@ -46,7 +47,8 @@ function keepFocusInView(): () => void {
   const center = () => pane?.querySelector(".dpp-commit[data-focus], [data-focus] > .dpp-dp-row")?.scrollIntoView({ block: "center" });
   const frame = requestAnimationFrame(center);
   const watch = pane ? new ResizeObserver(center) : null;
-  if (pane) watch!.observe(pane.closest(".dpp") ?? pane);
+  // A column keeps its own height while its sections grow, so watch the sections themselves.
+  if (pane) for (const s of pane.querySelectorAll("[data-deploy-col] > *")) watch!.observe(s);
   const stop = () => { cancelAnimationFrame(frame); watch?.disconnect(); for (const e of ["wheel", "touchstart", "keydown"]) window.removeEventListener(e, stop); clearTimeout(timer); };
   const timer = setTimeout(stop, 1500);
   for (const e of ["wheel", "touchstart", "keydown"]) window.addEventListener(e, stop, { passive: true });
@@ -122,34 +124,33 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
       {teams.map((t) => <option key={t._id} value={t._id}>{t.name}</option>)}
     </select>
   ) : null;
-  // `dpp-frame` is the page's own width (deploys.css): a narrow pane stacks the targets above the target.
-  // Classic and Minimal: the page's name at the top of the targets rail.
+  // `dpp-frame` is the page's own width (deploys.css): it decides one column or two, never the window.
+  // Classic and Minimal: the page's name at the start of the targets row.
   // Modern: the page header over the targets and the target.
   const header = <PageHeader legacy={null} title="Deploys" count={allTargets.length || null} actions={teamPicker} />;
   const railTitle = !modern && <div className="dpp-title-row"><h1 className="dpp-title">Deploys</h1>{teamPicker}</div>;
   const frame = modern ? "dpp-frame dpp-frame--headed" : "dpp-frame";
-  if (!ready && allTargets.length === 0) return <div className={frame}>{header}<div className="dpp" aria-busy><nav className="dpp-rail">{railTitle}</nav><div className="dpp-main dpp-cold" /></div></div>;
-  if (allTargets.length === 0) return <div className={frame}>{header}<div className="dpp" data-deploys-none><nav className="dpp-rail">{railTitle}</nav><div className="dpp-empty">No deploys yet</div></div></div>;
+  if (!ready && allTargets.length === 0) return <div className={frame}>{header}<div className="dpp" aria-busy><nav className="dpp-targets">{railTitle}</nav><div className="dpp-main dpp-cold" /></div></div>;
+  if (allTargets.length === 0) return <div className={frame}>{header}<div className="dpp" data-deploys-none><nav className="dpp-targets">{railTitle}</nav><div className="dpp-empty">No deploys yet</div></div></div>;
 
   return (
     <div className={frame}>
     {header}
     <div className="dpp" data-deploys-page>
-      <nav className="dpp-rail" aria-label="Deploy targets">
+      <nav className="dpp-targets" aria-label="Deploy targets">
         {railTitle}
         <ul>
           {ordered.map((t) => {
             const n = targetNow(t, deploys);
             const tone = targetTone(t, n);
+            const waiting = t.queue.known ? t.queue.commits : 0;
             return (
               <li key={t._id}>
-                <button type="button" className="dpp-target" aria-current={picked?._id === t._id ? "true" : undefined} data-tone={tone} onClick={() => setPicked(t._id)} data-deploy-target={t.name}>
+                <button type="button" className="dpp-target" aria-current={picked?._id === t._id ? "true" : undefined} data-tone={tone} onClick={() => setPicked(t._id)} title={targetWords(t, n, tone)} data-deploy-target={t.name}>
                   <ToneMark tone={tone} />
                   <span className="dpp-target-name">{t.name}{repos.size > 1 ? <span className="dpp-repo">{t.repository.split("/").pop()}</span> : null}</span>
-                  <span className="dpp-target-state">{targetWords(t, n, tone)}</span>
-                  <span className="dpp-target-live">{n.live ? <><code>{short(n.live.sha)}</code> {ago(now, n.live.live_at ?? n.live.created_at)}</> : "no live version known"}</span>
+                  {waiting ? <span className="dpp-target-n" data-deploy-target-waiting={waiting}>{waiting}</span> : null}
                 </button>
-                {tone === "waiting" ? <WaitingSessions t={t} onOpen={(key) => { setPicked(t._id); requestAnimationFrame(() => document.querySelector(`[data-deploy-group="${key}"]`)?.scrollIntoView({ block: "start", behavior: "smooth" })); }} /> : null}
               </li>
             );
           })}
@@ -159,25 +160,6 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
       {press.review}
     </div>
     </div>
-  );
-}
-
-/** The sessions a target's waiting commits came from, a press from their place in the queue. */
-function WaitingSessions({ t, onOpen }: { t: DeployTargetRow; onOpen: (key: string) => void }) {
-  const groups = t.queue.groups;
-  const shown = groups.slice(0, 3);
-  return (
-    <ul className="dpp-rail-sessions" data-deploy-rail-sessions={t.name}>
-      {shown.map((g) => (
-        <li key={g.key}>
-          <button type="button" onClick={() => onOpen(g.key)} title={g.session?.title ?? "Commits with no Codecast-Session trailer"}>
-            <span className="dpp-rail-session" data-none={g.session ? undefined : ""}>{g.session ? g.session.title || g.session.short_id : "Not from a session"}</span>
-            <span className="dpp-num">{g.commits.length}</span>
-          </button>
-        </li>
-      ))}
-      {groups.length > shown.length ? <li className="dpp-dim dpp-rail-more">+{groups.length - shown.length} more</li> : null}
-    </ul>
   );
 }
 
@@ -278,9 +260,11 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
       {n.open ? <GoingOut d={n.open} now={now} /> : n.failed ? <Failed d={n.failed} /> : null}
       {focus ? <FocusChip focus={focus} waiting={focusWaiting} deploys={focusDeploys} live={n.live} onClear={onClearFocus} /> : null}
 
-      <div className="dpp-body" data-record-only={t.record_only ? "" : undefined}>
-      {t.record_only ? null : <OnItsWay repository={t.repository} />}
+      {/* Before main on the left, main and after on the right: two columns once the page is wide (deploys.css), each its own scroll. */}
+      <div className="dpp-body">
+      {t.record_only ? null : <div className="dpp-col" data-deploy-col="before"><OnItsWay repository={t.repository} /></div>}
 
+      <div className="dpp-col" data-deploy-col="after">
       {t.record_only ? null : <section className="dpp-sec" data-deploy-waiting>
         <h3>Waiting on main{t.queue.known ? <span className="dpp-num">{waiting} {waiting === 1 ? "commit" : "commits"}</span> : null}{sessions ? <span className="dpp-h-sub">· {sessions} {sessions === 1 ? "session" : "sessions"}</span> : null}{t.queue.untouched ? <span className="dpp-h-sub" title={`${t.queue.untouched} commits on main change no file ${t.name} ships`}>· {t.queue.untouched} not for {t.name}</span> : null}<LabelSwitch labels={labels} onToggle={onToggleLabel} />{mineCount ? <button type="button" className="dpp-mine" aria-pressed={mineShown} onClick={() => setMineOn((v) => !v)} data-deploy-mine>Mine<span className="dpp-num">{mineCount}</span></button> : null}</h3>
         {!t.queue.known ? <p className="dpp-none" data-deploy-queue-unknown>Live <code>{short(n.live?.sha)}</code> is not on main, so what waits here can't be counted.</p>
@@ -314,6 +298,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
           ))}
         </ul>
       </section>
+      </div>
       </div>
     </section>
   );

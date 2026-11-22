@@ -54,7 +54,7 @@ const Row = memo(function Row({ row, at }: { row: ChangeRow; at: number }) {
         );
       })}
       <span className="chb-age">{row.updated_at ? deployAgo(row.updated_at, at).replace(" ago", "") : ""}</span>
-      <ChangeChip lifecycle={l} hover={false} at={at} className="chb-compact" />
+      <ChangeChip lifecycle={l} hover={false} at={at} bare className="chb-compact" />
     </>
   );
   const aria = `${vehicleName(v)}: ${l.now.word}`;
