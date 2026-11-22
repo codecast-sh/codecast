@@ -1319,8 +1319,17 @@ const ConversationViewInner = (
     const projectKey = conversation?._id ? newProjectStartedBy(conversation._id) : null;
     if (projectKey) sentRouter.push(newProjectHref(projectKey));
     setUserScrolled(false);
+    // A paged window (a deep link or a search hit) has not loaded the newest
+    // rows, the sent message among them, so scrolling to the loaded end leaves
+    // it out of view. Jump to the live end the way "Scroll to bottom" does.
+    if (paginationPropsRef.current.hasMoreBelow && onJumpToEnd) {
+      jumpDirectionRef.current = 'end';
+      setJumpPending('end');
+      onJumpToEnd();
+      return;
+    }
     requestAnimationFrame(() => scrollToBottomFnRef.current());
-  }, [setUserScrolled, conversation?._id, sentRouter]);
+  }, [setUserScrolled, conversation?._id, sentRouter, onJumpToEnd, setJumpPending]);
 
   // Double-Esc opens the unified branch map drilled straight into the current
   // branch's messages (the old standalone navigator is retired into the map).
