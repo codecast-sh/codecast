@@ -68,7 +68,7 @@ test("the float is above the work, on every desktop, click-through, revealed wit
   assert.equal(setSize(rig, sender, "float"), "float");
   assert.deepEqual(win.last("setAlwaysOnTop"), [true, "status"]);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [true, { forward: true }]);
-  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: true, skipTransformProcessType: true }]);
   assert.equal(win.isResizable(), false);
   // A glance kept beside the work: shown, never focused.
   assert.equal(win.did("showInactive").length, 1);

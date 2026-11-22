@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ComponentType, type ReactNode } from 'react';
 import {
-  Animated, BackHandler, Easing, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet,
+  Animated, BackHandler, Easing, Keyboard, KeyboardAvoidingView, PanResponder, Platform, Pressable, StyleSheet,
   View, useWindowDimensions,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -33,6 +33,9 @@ function PopupView({ popup }: { popup: Popup & { id: number } }) {
   const sheet = popup.kind === 'sheet';
 
   useEffect(() => {
+    // The overlay lives in the app's window and the iOS keyboard in a higher
+    // one, so a sheet sliding up from the bottom would land behind the keyboard.
+    if (sheet) Keyboard.dismiss();
     if (popup.kind === 'alert' && popup.buttons.some((b) => b.style === 'destructive')) {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
     }

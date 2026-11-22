@@ -19,12 +19,31 @@ type PageModule = { default: ComponentType<any> };
 const lazyPages: Map<string, LazyExoticComponent<ComponentType<any>>> =
   ((globalThis as any).__codecastLazyPages ??= new Map());
 const lazyLoaders = new Map<string, () => Promise<unknown>>();
+// Page modules whose import has resolved. React.lazy suspends on its first
+// render even when the module is already loaded (the import promise settles a
+// microtask later), and a fallback committed at boot holds every other
+// resolved boundary back for React's 300ms reveal throttle. A page found here
+// is handed to React as a thenable that settles synchronously, so it renders
+// in the same commit.
+const loadedPages = new Map<string, PageModule>();
 
 export function lazyPage(key: string, loader: () => Promise<PageModule>) {
-  lazyLoaders.set(key, loader);
+  const load = () => loader().then((module) => { loadedPages.set(key, module); return module; });
+  lazyLoaders.set(key, load);
   let c = lazyPages.get(key);
-  if (!c) { c = lazy(() => loadPage(key, loader)); lazyPages.set(key, c); }
+  if (!c) {
+    c = lazy(() => {
+      const loaded = loadedPages.get(key);
+      return loaded ? ({ then: (resolve: (m: PageModule) => void) => resolve(loaded) } as Promise<PageModule>) : loadPage(key, load);
+    });
+    lazyPages.set(key, c);
+  }
   return c;
+}
+
+/** Start importing a registered page now, so its first render does not suspend. */
+export function preloadPage(key: string): void {
+  void lazyLoaders.get(key)?.().catch(() => {});
 }
 
 // How a page import that failed in dev gets another chance. Injectable so the

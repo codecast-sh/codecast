@@ -186,3 +186,11 @@
   border: 1px solid color-mix(in srgb, var(--sol-text-dim) 35%, var(--sol-border));
   background: color-mix(in srgb, var(--sol-text-dim) 8%, transparent);
 }
+
+.decision-doc .decision-next-bar {
+  position: sticky; bottom: 0; z-index: 10;
+  padding: 0.75rem 0;
+  border-top: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  background: color-mix(in srgb, var(--sol-bg) 92%, transparent);
+  backdrop-filter: blur(8px);
+}

@@ -19,7 +19,7 @@ export const FILES_ROUTE = "/files";
 
 /** The query keys filesHref mints. One of them on a /vault URL marks an old
  *  Files link rather than the Vault. */
-const FILES_QUERY_KEYS = ["f", "path", "l", "view"];
+const FILES_QUERY_KEYS = ["f", "path", "l", "view", "conv"];
 
 /** The /files URL an old `/vault?f=…` Files link stands for, query intact, or
  *  null when the path is not one (a bare /vault is the Vault page). */
@@ -46,12 +46,16 @@ export function isFilesPath(path: string): boolean {
  * when it opens (`resolveVaultTarget`), then rewrites itself to `?f=`. Links
  * in conversation prose mint this form because the author never knows which
  * vault a file belongs to; the machine that has the files does.
+ *
+ * `conversation` rides along with `localPath`: the conversation the path was
+ * written in, whose machine the page asks for the file when this one lacks it.
  */
 export function filesHref(
-  opts: { path?: string | null; line?: number; graph?: boolean; localPath?: string | null } = {},
+  opts: { path?: string | null; line?: number; graph?: boolean; localPath?: string | null; conversation?: string | null } = {},
 ): string {
   const params = new URLSearchParams();
   if (opts.localPath) params.set("path", opts.localPath);
+  if (opts.localPath && opts.conversation) params.set("conv", opts.conversation);
   else if (opts.path) params.set("f", opts.path);
   if (opts.line) params.set("l", String(opts.line));
   if (opts.graph) params.set("view", "graph");
