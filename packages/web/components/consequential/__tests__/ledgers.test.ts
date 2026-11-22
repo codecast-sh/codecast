@@ -24,6 +24,7 @@ test("every ledger reads at a glance: no sentence, no long value", () => {
     L.featuresAllLedger({ group: "Browser", machine: "MacBook", names: ["Browser", "Computer"] }),
     L.routineActivateLedger({ title: "Ads daily", every: "1d", applies: true, cost }),
     L.killSessionsLedger({ total: 3, working: ["Busy one"] }),
+    L.dismissStaleLedger({ titles: ["Old one", "Older one"], since: "Oct 23" }),
     L.openAccountLedger({ email: "claude@almostcandid.com", percent: 7, machines: ["line-1", "line-2"], lineHosts: true, sessions: 26, resumesIn: "3d 2h" }),
     roleOnlineLedger({ handle: "growth", name: "Growth lead", host: "Ashot", startsOnItsOwn: true, sessionsPerDay: 6 }),
   ];
