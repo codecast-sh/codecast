@@ -7,12 +7,16 @@
 // socket went anonymous, the next expiry signed people out, and the rejection
 // escaped as an "Uncaught" toast.
 //
-// The rewrite removes nothing up front. A refresh token the server rejects
-// still signs out: auth:signIn answers `tokens: null`, and setToken(null)
-// clears both keys as before. Only a THROWN call (overload, network, a 5xx)
-// keeps the token and answers with the current access token, which is what
-// the Convex client already holds, so it neither rejects nor retries in a
-// loop; the next reconnect or scheduled refetch tries again.
+// The rewrite removes nothing up front and sorts a failed call by cause:
+// - The server refuses the refresh token (auth:signIn answers `tokens: null`,
+//   or throws its own error): both keys are cleared and the window signs out,
+//   and a thrown error still rejects, as upstream does.
+// - The call never reached a healthy server (ExpiredInQueue / Overloaded, or a
+//   fetch TypeError): it is retried up to 3 attempts, 1s then 2s apart plus up
+//   to 0.5s jitter, inside the cross-window refresh lock so windows queue
+//   instead of piling on. When the attempts run out the refresh token stays,
+//   the current access token is returned (the Convex client keeps the socket
+//   until it expires), and one console.warn records it. Nothing rejects.
 //
 // Idempotent: skipped when the sentinel is present.
 
@@ -29,12 +33,27 @@ const BEFORE = `                    setIsRefreshingToken(true);
                     });`;
 
 const AFTER = `                    setIsRefreshingToken(true);
-                    // ${SENTINEL}: keep the refresh token until Convex answers; a thrown call (overload, network) is not a logout.
+                    // ${SENTINEL}: keep the refresh token until Convex answers (ct-91563).
+                    const isTransient = (error) => error instanceof TypeError ||
+                        /ExpiredInQueue|Overloaded/.test(String(error?.message ?? error));
                     try {
-                        await verifyCodeAndSetToken({ refreshToken });
-                    }
-                    catch (error) {
-                        logVerbose(\`refresh failed, keeping the refresh token: \${error}\`);
+                        for (let attempt = 1;; attempt++) {
+                            try {
+                                await verifyCodeAndSetToken({ refreshToken });
+                                break;
+                            }
+                            catch (error) {
+                                if (!isTransient(error)) {
+                                    await setToken({ shouldStore: true, tokens: null });
+                                    throw error;
+                                }
+                                if (attempt >= 3) {
+                                    console.warn(\`[convex-auth] refresh failed \${attempt} times, keeping the refresh token: \${error?.message ?? error}\`);
+                                    break;
+                                }
+                                await new Promise((resolve) => setTimeout(resolve, 1000 * 2 ** (attempt - 1) + Math.random() * 500));
+                            }
+                        }
                     }
                     finally {
                         setIsRefreshingToken(false);
