@@ -100,6 +100,12 @@ const CONTINUE_MS = 5_000;
 // target says nothing about an ask that arrives later.
 const JUMP_FRESH_MS = 10_000;
 const jumpedHere = (targetNonce: number | undefined) => targetNonce !== undefined && Date.now() - targetNonce < JUMP_FRESH_MS;
+// The ask whose "asked … ago" line was pressed, and when. The jump opens the
+// session in the inbox, which can draw the card anew (from a thread page, or a
+// pane remounted on the switch) before the server has located the ask and set
+// a target: that card opens folded too, or the press would be undone.
+let foldedByAskJump: { key: string; at: number } | null = null;
+const askJumpedHere = (key: string) => foldedByAskJump?.key === key && Date.now() - foldedByAskJump.at < JUMP_FRESH_MS;
 
 export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, allRows, onAllRows, targetNonce, scrollToMessage }: {
   item: QueueItem;
@@ -134,7 +140,7 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   const [size, setSize] = useState<Size>(() => {
     if (startSize) return startSize;
     const continuing = settledFromSheet?.conversationId === item.conversationId && Date.now() - settledFromSheet.at < CONTINUE_MS;
-    if (!stepper && jumpedHere(targetNonce)) return "line";
+    if (!stepper && (jumpedHere(targetNonce) || askJumpedHere(item.key))) return "line";
     return item.blocking || stepper || continuing ? "full" : "line";
   });
   useWatchEffect(() => {
@@ -212,9 +218,12 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
     // lookup of an ask older than the loaded rows (findAskMessage), and a
     // fold that waited with it left the press doing nothing visible. Do not
     // leave the queue for the list — the jump opens the session at the ask.
-    if (!stepper) setSize("line");
+    if (!stepper) {
+      foldedByAskJump = { key: item.key, at: Date.now() };
+      setSize("line");
+    }
     void jumpToDecisionAsk();
-  }, [canJumpToAsk, jumpToDecisionAsk, stepper]);
+  }, [canJumpToAsk, jumpToDecisionAsk, stepper, item.key]);
 
   const defaultLabel = item.defaultOption !== undefined ? options.find((o) => o.index === item.defaultOption)?.label : undefined;
 

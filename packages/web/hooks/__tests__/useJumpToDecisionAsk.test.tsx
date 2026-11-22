@@ -22,10 +22,12 @@ const restoreGlobals = replaceGlobals({
 
 // The server's findAskMessage answers only when the test says so.
 let answer: (v: { message_id: string; timestamp: number } | null) => void = () => {};
+let fail: (e: Error) => void = () => {};
+let asked = 0;
 const real = { ...(await import("convex/react")) };
 mock.module("convex/react", () => ({
   ...real,
-  useConvex: () => ({ query: () => new Promise((resolve) => { answer = resolve; }) }),
+  useConvex: () => ({ query: () => { asked++; return new Promise((resolve, reject) => { answer = resolve; fail = reject; }); } }),
 }));
 
 const React = await import("react");
@@ -98,6 +100,57 @@ describe("useJumpToDecisionAsk", () => {
     expect(st.sessions[CONV].inbox_killed_at).toBeNull();
     // A nested asker is adopted: it stands alone in the inbox from now on.
     expect(st.sessions[CONV].inbox_adopted_at).toBeGreaterThan(0);
+    await act(async () => root.unmount());
+  });
+
+  // ct-98091: the decision sheet's "asked … ago" line. Wherever the ask is,
+  // the thread opens on the asking session, and it scrolls to the ask exactly
+  // when one is located.
+  const viewing = () => ({
+    sessions: { [CONV]: { _id: CONV, title: "Asker" } },
+    currentSessionId: null, viewingDismissedId: null, pendingNavigateId: null,
+    pendingScrollToMessageId: null, pendingScrollToMessageTimestamp: null,
+  });
+  async function press(messages: any[] = []) {
+    useInboxStore.setState({ ...viewing(), messages: { [CONV]: messages } } as any);
+    const root = createRoot(document.getElementById("root")!);
+    await act(async () => root.render(<MemoryRouter initialEntries={["/inbox"]}><Probe /></MemoryRouter>));
+    const before = asked;
+    let result: Promise<boolean> = Promise.resolve(false);
+    await act(async () => { result = jump!(); });
+    return { root, result, queried: () => asked > before };
+  }
+
+  it("scrolls to the ask in the loaded rows without asking the server", async () => {
+    const { root, result, queried } = await press([
+      { _id: "m_before", timestamp: 1 },
+      { _id: "m_ask", timestamp: 7, tool_calls: [{ id: "t1", name: "Bash", input: `cast decide "Ship it?" ${DECISION}` }] },
+    ]);
+    expect(await result).toBe(true);
+    expect(queried()).toBe(false);
+    expect(useInboxStore.getState().currentSessionId).toBe(CONV);
+    expect(useInboxStore.getState().pendingScrollToMessageId).toBe("m_ask");
+    expect(useInboxStore.getState().pendingScrollToMessageTimestamp).toBe(7);
+    await act(async () => root.unmount());
+  });
+
+  it("opens the session with no scroll target when the server finds no ask", async () => {
+    const { root, result, queried } = await press();
+    expect(queried()).toBe(true);
+    await act(async () => { answer(null); });
+    expect(await result).toBe(true);
+    expect(useInboxStore.getState().currentSessionId).toBe(CONV);
+    expect(useInboxStore.getState().pendingScrollToMessageId).toBeNull();
+    await act(async () => root.unmount());
+  });
+
+  it("opens the session with no scroll target when the server lookup fails", async () => {
+    const { root, result, queried } = await press();
+    expect(queried()).toBe(true);
+    await act(async () => { fail(new Error("offline")); });
+    expect(await result).toBe(true);
+    expect(useInboxStore.getState().currentSessionId).toBe(CONV);
+    expect(useInboxStore.getState().pendingScrollToMessageId).toBeNull();
     await act(async () => root.unmount());
   });
 });
