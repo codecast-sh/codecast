@@ -10,6 +10,11 @@
 
 /** The conversations this process already asked about, so each is asked once per daemon life. */
 const asked = new Set<string>();
+/** The server has no conversations.markInteractive (an older deployment): nothing is asked again this daemon life. */
+let unsupported = false;
+
+// How Convex answers a call to a function the deployment does not have.
+const MISSING_FUNCTION = /Could not find (?:public )?function/i;
 
 /** Ask the server to mark `conversationId` interactive when the flags read from its head say a person runs it. */
 export function healInteractiveMark(
@@ -18,16 +23,24 @@ export function healInteractiveMark(
   headFlags: string | null | undefined,
   log: (line: string) => void = () => {},
 ): void {
-  if (!headFlags?.split(/\s+/).includes("--interactive") || asked.has(conversationId)) return;
+  if (unsupported || !headFlags?.split(/\s+/).includes("--interactive") || asked.has(conversationId)) return;
   asked.add(conversationId);
   mark(conversationId).catch((err) => {
-    // A failed ask is asked again on a later pass.
+    const message = err instanceof Error ? err.message : String(err);
+    if (MISSING_FUNCTION.test(message)) {
+      // An older server: asking again on every pass for every session would only spend the shared write throttle.
+      if (!unsupported) log(`The server cannot mark sessions interactive yet (${message}); not asking again until the daemon restarts`);
+      unsupported = true;
+      return;
+    }
+    // Any other failure is asked again on a later pass.
     asked.delete(conversationId);
-    log(`Could not mark ${conversationId.slice(0, 12)} interactive: ${err instanceof Error ? err.message : String(err)}`);
+    log(`Could not mark ${conversationId.slice(0, 12)} interactive: ${message}`);
   });
 }
 
-/** For tests: forget what was asked. */
+/** For tests: forget what was asked, and that the server lacked the function. */
 export function resetInteractiveMarks(): void {
   asked.clear();
+  unsupported = false;
 }

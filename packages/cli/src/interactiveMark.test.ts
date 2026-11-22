@@ -35,6 +35,21 @@ describe("healInteractiveMark", () => {
     expect(asked).toEqual(["conv_tui", "conv_ide"]);
   });
 
+  test("a server without the function stops every ask for the rest of the daemon life, after one", async () => {
+    const lines: string[] = [];
+    const old = async (id: string) => {
+      asked.push(id);
+      throw new Error("[Request ID: 1] Server Error\nCould not find public function for 'conversations:markInteractive'. Did you forget to run `npx convex dev` or `npx convex deploy`?");
+    };
+    healInteractiveMark(old, "conv_a", "--interactive", (l) => lines.push(l));
+    await Promise.resolve();
+    await Promise.resolve();
+    for (const id of ["conv_a", "conv_b", "conv_c"]) healInteractiveMark(old, id, "--interactive", (l) => lines.push(l));
+    expect(asked).toEqual(["conv_a"]);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("not asking again until the daemon restarts");
+  });
+
   test("an ask that failed is asked again on a later pass", async () => {
     let fail = true;
     const flaky = async (id: string) => { asked.push(id); if (fail) throw new Error("offline"); };
