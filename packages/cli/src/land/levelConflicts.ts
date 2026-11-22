@@ -26,7 +26,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatSessionMessage } from "@codecast/shared/contracts";
-import { LEVEL_FORBID, levelAskWords, type LevelMerge } from "@codecast/shared/contracts/checkouts";
+import { LEVEL_FORBID, levelAskWords, shellWord, type LevelMerge } from "@codecast/shared/contracts/checkouts";
 import { execFileAsync } from "../proc.js";
 import { gitTry } from "../wipSnapshot.js";
 import { attributeEdits, type Attribution } from "./attribute.js";
@@ -39,15 +39,22 @@ import type { LevelResult } from "./level.js";
  */
 export type SendBrief = (to: string, body: string, clientId: string) => Promise<"sent" | "failed" | "unreachable">;
 
+/** What the server answers for a send no retry will change: another user's conversation, one that is gone, a hosted one, a malformed call. */
+const PERMANENT_REFUSALS = [
+  /can only send messages to your own conversations/,
+  /Conversation not found/,
+  /hosted conversation/,
+  /ArgumentValidationError|does not match validator/,
+];
+
 /**
- * A send that threw: "unreachable" when the server refused because the
- * conversation is not the token user's (pendingMessages.sendMessageToSession),
- * which no retry changes; "failed" for anything transient (a timeout, a 5xx,
- * the network).
+ * A send that threw: "unreachable" when the server refused for good
+ * (PERMANENT_REFUSALS: pendingMessages.sendMessageToSession), which no retry
+ * changes; "failed" for anything transient (a timeout, a 5xx, the network).
  */
 export function classifySendError(e: unknown): "failed" | "unreachable" {
   const text = String((e as Error)?.message ?? e);
-  return /can only send messages to your own conversations/.test(text) ? "unreachable" : "failed";
+  return PERMANENT_REFUSALS.some((r) => r.test(text)) ? "unreachable" : "failed";
 }
 
 export interface BriefDeps {
@@ -68,6 +75,8 @@ const COMMITS_MAX = 10;
 export const mergeDir = (gitDir: string) => path.join(gitDir, "codecast", "level-conflicts");
 /** Merge files of stale copies a raced level left behind; kept past the level, pruned after STALE_KEEP_MS. */
 export const staleDir = (gitDir: string) => path.join(gitDir, "codecast", "level-stale");
+/** Beside a merge directory: which upstream commit each of its merge files was made against, and what it made. */
+const madeFile = (dir: string) => `${dir}.made.json`;
 const STALE_KEEP_MS = 86_400_000;
 
 /** Remove stale-copy merge files older than a day, and the directories they leave empty. Wall clock: it reads file mtimes. */
@@ -84,12 +93,15 @@ export function pruneStale(gitDir: string): void {
     }
     return empty;
   };
-  try { if (walk(dir)) fs.rmSync(dir, { recursive: true, force: true }); } catch {}
+  try { if (walk(dir)) { fs.rmSync(dir, { recursive: true, force: true }); fs.rmSync(madeFile(dir), { force: true }); } } catch {}
 }
 
 /** Forget the held conflicts' merge files: the checkout is level again. */
 export function clearMerges(gitDir: string): void {
   fs.rmSync(mergeDir(gitDir), { recursive: true, force: true });
+  fs.rmSync(madeFile(mergeDir(gitDir)), { force: true });
+  // An earlier daemon's per-path brief record, which nothing reads now.
+  fs.rmSync(path.join(gitDir, "codecast", "level-conflicts.json"), { force: true });
 }
 
 /** Each path's mode in `rev`; "" when it has none. */
@@ -154,12 +166,24 @@ async function writeMerge(root: string, dir: string, rel: string, from: string, 
   }
 }
 
-/** A three-way merge of each path under `dir`, from the level's base `from` and upstream `to`. Never throws. */
+/**
+ * A three-way merge of each path under `dir`, from the level's base `from` and upstream `to`. A path whose merge was
+ * already made against this `to` is left alone: its writer may be resolving the markers in it (a retried ask, the
+ * finding filed again). Never throws.
+ */
 export async function writeMerges(root: string, dir: string, paths: string[], from: string, to: string): Promise<Map<string, LevelMerge>> {
-  const modes = await upstreamModes(root, to, paths).catch(() => new Map<string, string>());
-  const merges = new Map<string, LevelMerge>();
-  for (const p of paths) merges.set(p, await writeMerge(root, dir, p, from, to, modes.get(p) ?? ""));
-  return merges;
+  let made: Record<string, { to: string; merge: LevelMerge }> = {};
+  try { made = JSON.parse(fs.readFileSync(madeFile(dir), "utf-8")) ?? {}; } catch {}
+  const fresh = paths.filter((p) => made[p]?.to !== to);
+  const modes = fresh.length ? await upstreamModes(root, to, fresh).catch(() => new Map<string, string>()) : new Map<string, string>();
+  for (const p of fresh) made[p] = { to, merge: await writeMerge(root, dir, p, from, to, modes.get(p) ?? "") };
+  if (fresh.length) {
+    try {
+      fs.mkdirSync(path.dirname(dir), { recursive: true });
+      fs.writeFileSync(madeFile(dir), JSON.stringify(made));
+    } catch {}
+  }
+  return new Map(paths.map((p) => [p, made[p].merge]));
 }
 
 /** The upstream commits in from..to that touched any of `paths`, newest first, capped. */
@@ -195,8 +219,8 @@ function oldestMtime(root: string, paths: string[], now: number): number {
   return oldest;
 }
 
-function action(p: string, m: LevelMerge, to: string): string {
-  const show = `git show ${to.slice(0, 9)}:${p}`;
+function action(root: string, p: string, m: LevelMerge, to: string): string {
+  const show = `git -C ${shellWord(root)} show ${shellWord(`${to.slice(0, 9)}:${p}`)}`;
   switch (m.kind) {
     case "merged": return `Three-way merge with conflict markers: ${m.file}. Resolve the markers there and write the result over ${p}, or redo your edit on upstream's version (${show}).`;
     case "upstream-deleted": return `Upstream deletes ${p}. Delete your copy, or move your edit to where upstream moved that code.`;
@@ -210,7 +234,7 @@ async function racedBrief(root: string, r: LevelResult, paths: string[], merges:
   const one = paths.length === 1;
   const lines = [`The shared checkout ${root} moved to upstream ${r.to.slice(0, 9)}, but your ${paths.join(", ")} changed while it moved and still ${one ? "lacks" : "lack"} upstream's change: as ${one ? "it stands" : "they stand"}, ${one ? "it" : "they"} would revert that change when shipped.`];
   for (const p of paths) {
-    lines.push("", `${p} changed upstream in:`, ...(await upstreamCommits(root, r.from, r.to, [p])), action(p, merges.get(p) ?? { kind: "none" }, r.to));
+    lines.push("", `${p} changed upstream in:`, ...(await upstreamCommits(root, r.from, r.to, [p])), action(root, p, merges.get(p) ?? { kind: "none" }, r.to));
   }
   lines.push("", `Edit only the ${one ? "file" : "files"} named here. ${LEVEL_FORBID}`, "Once your file carries upstream's change, nothing else is needed.");
   return formatSessionMessage("codecast", lines.join("\n"), { name: "level sweep" });
