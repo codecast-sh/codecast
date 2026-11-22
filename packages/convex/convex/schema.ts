@@ -8737,6 +8737,9 @@ export default defineSchema({
     // The machine whose runner drives the run (its device id): where the run
     // is resumed when that runner dies (cli workflow/runResume.ts).
     runner_device: v.optional(v.string()),
+    // A run placed on another of its owner's machines (`cast flow run --device`): the change it works on, pushed to
+    // origin, which that machine fetches and freezes in its own checkout before the run starts (cli workflow/placedChange.ts).
+    placed_change: v.optional(v.any()),
     // The last time a person asked for the run to be resumed (the trace's Resume).
     resume_requested_at: v.optional(v.number()),
     // A rerun from the trial page: its runner sets the earlier run's branch
