@@ -129,4 +129,27 @@ export const deployTables = {
     updated_at: v.number(),
   })
     .index("by_workspace_repository", ["workspace", "repository"]),
+
+  // One checkout of a repository on one device (contracts/checkouts.ts,
+  // ct-98780): where it stands against origin's default branch, its
+  // uncommitted work by session, and the level sweep's state on it, as the
+  // device's daemon last reported it (on change only). Keyed by device and path;
+  // `workspace` is the repository's team, else the reporter's own.
+  checkouts: defineTable({
+    workspace: v.string(),
+    team_id: v.optional(v.id("teams")),
+    repository: v.string(),
+    device_id: v.string(),
+    path: v.string(),
+    // CheckoutReport less repository, device_id and path: drawn as sent.
+    report: v.any(),
+    hash: v.string(),
+    // The device's name as its owner set it, so the page names the machine.
+    device_label: v.optional(v.string()),
+    reporter_user_id: v.id("users"),
+    reported_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_device_path", ["device_id", "path"])
+    .index("by_workspace_repository", ["workspace", "repository"]),
 };
