@@ -68,8 +68,10 @@ globalThis.fetch = (async (input: any, init?: any) => {
       return new Response("<html><head><title>504 Gateway Time-out</title></head><body>504 Gateway Time-out</body></html>", { status: 504, headers: { "content-type": "text/html" } });
     case "refused":
       return json({ status: "success", value: { tokens: null }, logLines: [] }, 200);
+    // The 560 shape a thrown function error has on the wire (authRefreshRetry
+    // reads "Server Error"/"Uncaught" as the function's own answer).
     case "invalid":
-      return json({ status: "error", errorMessage: "Invalid refresh token", logLines: [] }, 560);
+      return json({ status: "error", errorMessage: "[Request ID: 3f2a] Server Error\nUncaught Error: Invalid refresh token", logLines: [] }, 560);
     case "ok":
       return json({ status: "success", value: { tokens: { token: issue(`s${signInCalls.length}`), refreshToken: `refresh-${signInCalls.length}` } }, logLines: [] }, 200);
   }
