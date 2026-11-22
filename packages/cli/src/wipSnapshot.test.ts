@@ -700,6 +700,16 @@ describe("createWipSnapshotStrict (the cloud seed, ct-49433)", () => {
     expect((await createWipSnapshotStrict(cwd, { exclude: CLOUD_SEED_EXCLUDES }))!.dirty).toBe(true);
   });
 
+  test("a worktree nested under an untracked dir is not recorded as a gitlink; files beside it are", async () => {
+    const { cwd } = repo();
+    fs.mkdirSync(path.join(cwd, "worktrees"));
+    git(cwd, ["worktree", "add", "-q", "-b", "w1", path.join(cwd, "worktrees", "w1")]);
+    fs.writeFileSync(path.join(cwd, "worktrees", "notes.txt"), "real\n");
+    const snap = (await createWipSnapshotStrict(cwd))!;
+    expect(git(cwd, ["ls-tree", "-r", snap.tree]).split("\n").filter((l) => l.startsWith("160000 "))).toEqual([]);
+    expect(git(cwd, ["ls-tree", "-r", "--name-only", snap.tree]).split("\n")).toContain("worktrees/notes.txt");
+  });
+
   test("returns null only for no HEAD; a clean tree snapshots to HEAD's own tree", async () => {
     const empty = tmpdir("empty");
     git(empty, ["init", "-q", "-b", "main"]);
