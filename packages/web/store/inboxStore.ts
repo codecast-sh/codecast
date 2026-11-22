@@ -42,6 +42,7 @@ import {
   DispatchNotWiredError,
   isParkedDispatchError,
   isRefusedDispatchError,
+  StaleDispatchBindingError,
   sync,
   bindUndoStore,
   type DurableCreateContinuation,
@@ -14036,6 +14037,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
     try {
       realId = await get().ensureSessionCreated(stubId);
     } catch (err) {
+      // A binding rewire (token refresh, principal switch) fenced the create.
+      // Its outbox row redelivers under the new binding and the tracked
+      // create is already cleared, so the next sweep heals: not a failure.
+      if (err instanceof StaleDispatchBindingError) return null;
       // A stranded new session whose re-create failed: its first message is
       // still only local, so this is the moment that message gets lost.
       console.error(`[stub-heal] re-create failed for ${stubId}`, err);
