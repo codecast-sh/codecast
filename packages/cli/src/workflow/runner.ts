@@ -1245,11 +1245,23 @@ async function executeFanout(
   const fanin = findFanin(node, graph);
   const startedAt = Date.now();
   console.log(`${c.dim}  ${branches.length} branches: ${branches.map(b => b.label).join(", ")}${fanin ? ` → ${fanin.label}` : ""}${c.reset}`);
+  // A resumed fanout keeps the branches that finished green before its runner died (their outputs are in the
+  // checkpoint) and runs only the rest: a CI already read is not polled again for a review that was cut short.
+  const kept = new Set(options.resumed?.node_id === node.id ? options.resumed.finished : []);
+  if (options.resumed) options.resumed.finished = [];
+  const finishedKey = `${node.id}.finished`;
+  state.context[finishedKey] = [...kept].join(" ");
   const sem = countingSemaphore(4);
   const results = await Promise.all(branches.map(branch => sem.run(async () => {
+    if (kept.has(branch.id)) {
+      console.log(`  ${c.green}✓${c.reset} ${branch.label} ${c.dim}(finished before the resume)${c.reset}`);
+      return { branch, outcome: "success" as NodeOutcome, error: undefined };
+    }
     // A branch's keys from an earlier round go first: only what it sets this round flows back below, so a key it
     // leaves unset would otherwise keep the last round's value (a review's old json routed a looping flow, jx7389x).
-    for (const k of Object.keys(state.context)) if (k.startsWith(`${branch.id}.`)) delete state.context[k];
+    // A hand the resume waits on again keeps its name: it is this round's, not the last one's.
+    const waitedOn = options.resumed?.hands[branch.id] ? [`${branch.id}.session_id`, `${branch.id}.conversation_id`] : [];
+    for (const k of Object.keys(state.context)) if (k.startsWith(`${branch.id}.`) && !waitedOn.includes(k)) delete state.context[k];
     const ctx = { ...state.context };
     let outcome: NodeOutcome;
     if (options.dryRun) outcome = "success";
@@ -1275,9 +1287,15 @@ async function executeFanout(
     state.visitCounts[branch.id] = (state.visitCounts[branch.id] || 0) + 1;
     state.completed.push(branch.id);
     state.context[`${branch.id}.outcome`] = outcome;
+    if (outcome === "success") {
+      state.context[finishedKey] = [state.context[finishedKey], branch.id].filter(Boolean).join(" ");
+      checkpoint();
+    }
     console.log(`  ${outcome === "success" ? c.green + "✓" : c.red + "✗"} ${branch.label}${c.reset}`);
     return { branch, outcome, error: ctx["last_error"] };
   })));
+  // Only a fanout cut short reads it: a later visit runs every branch.
+  delete state.context[finishedKey];
   const failed = results.filter(r => r.outcome !== "success");
   if (fanin) {
     state.context[`${fanin.id}.output`] = results
@@ -1536,7 +1554,7 @@ export interface RunOptions {
   /** Continue this run row from where it stands instead of from start (runResume.ts). */
   resume?: ResumeRow;
   /** Set by runWorkflow on a resume: the gate and the hand the node it resumes at left open, each taken once. */
-  resumed?: Pick<ResumePoint, "node_id" | "gate" | "hands">;
+  resumed?: Pick<ResumePoint, "node_id" | "gate" | "hands" | "finished">;
   /**
    * How this run continues in a fresh runner (the daemon's runner passes one
    * that hands off and exits; runResume.ts handOffRun). Given, a gate answered
@@ -2190,7 +2208,7 @@ async function driveRun(
     }
     // A run waiting days at its card can lose its checkout; its branch puts it back.
     if (!options.dryRun) await restoreRunTree(cwd, state.context);
-    options.resumed = { node_id: resumeAt.node_id, gate: resumeAt.gate, hands: resumeAt.hands };
+    options.resumed = { node_id: resumeAt.node_id, gate: resumeAt.gate, hands: resumeAt.hands, finished: resumeAt.finished };
     console.log(`${c.dim}Resuming at ${graph.nodes.get(resumeAt.node_id)?.label ?? resumeAt.node_id} (state from the ${resumeAt.from})${c.reset}`);
     // The line's own text is read as it is now (line-versions.md LV4).
     for (const node of refreshedOnResume(graph, state.completed)) await executeCommand(node, state.context, cwd);

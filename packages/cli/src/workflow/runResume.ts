@@ -265,6 +265,8 @@ export interface ResumePoint {
   gate: { node_id: string; response: string | null; open: boolean } | null;
   /** The hands session stations had running when the runner died, by station (a fanout's session branches each have one), to wait on again rather than start anew. */
   hands: Record<string, string>;
+  /** A fanout's branches that finished green before its runner died: their outputs are in the checkpoint, so only the rest run again. */
+  finished: string[];
   from: "checkpoint" | "row";
 }
 
@@ -352,17 +354,18 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
   // run passed there (a lost card picked up on the graph file as it is now):
   // the run first makes what the gate now reads, from the earliest such station.
   const unmade = node.type === "human" && !asked ? unmadeBefore(graph, nodeId, completed) : null;
-  if (unmade) return { node_id: unmade, visit_counts, completed, node_outcomes, context, gate: null, hands: {}, from: atCheckpoint ? "checkpoint" : "row" };
+  if (unmade) return { node_id: unmade, visit_counts, completed, node_outcomes, context, gate: null, hands: {}, finished: [], from: atCheckpoint ? "checkpoint" : "row" };
   const gate = node.type === "human"
     ? { node_id: nodeId, response: asked && row.gate_response ? withOptionWords(row.gate_response, row.gate_answer) : null, open: asked && row.status === "paused" && (!!row.gate_decision_id || !!row.gate_card) }
     : null;
-  const stations = node.type === "parallel_fanout" ? graph.edges.filter((e) => e.from === nodeId).map((e) => e.to) : [nodeId];
+  const finished = node.type === "parallel_fanout" && atCheckpoint?.started ? (atCheckpoint.context[`${nodeId}.finished`] ?? "").split(" ").filter(Boolean) : [];
+  const stations = node.type === "parallel_fanout" ? graph.edges.filter((e) => e.from === nodeId).map((e) => e.to).filter((id) => !finished.includes(id)) : [nodeId];
   const hands: Record<string, string> = {};
   for (const id of stations) {
     const hand = atCheckpoint?.context[`${id}.conversation_id`];
     if (hand && graph.nodes.get(id)?.backend === "session") hands[id] = hand;
   }
-  return { node_id: nodeId, visit_counts, completed, node_outcomes, context, gate, hands, from: atCheckpoint ? "checkpoint" : "row" };
+  return { node_id: nodeId, visit_counts, completed, node_outcomes, context, gate, hands, finished, from: atCheckpoint ? "checkpoint" : "row" };
 }
 
 /** The fanout `nodeId` is a branch of, or null. */
