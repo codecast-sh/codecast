@@ -14,32 +14,14 @@ import * as path from "node:path";
 import { holdUntil, libraryTree, liveFlowLines, namesLiveFlow, variantChangeLines, variantChanges, variantSummary, type LibraryNode, type LiveFlow, type VariantChanges } from "./flowLibrary.js";
 import type { WorkflowGraph } from "./workflow/types.js";
 import { graphExtends, parseWorkflowSource } from "./workflow/parser.js";
-import { describeFlow, flowLine, poolFlows, workspaceDefaultFlow, type PoolFlow, type PushedPoolRow } from "./workflow/flowPool.js";
-import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
+import { flowLine } from "./workflow/flowPool.js";
 import type { Workspace } from "./resolveWorkspace.js";
-import { choiceOption, notFoundLine } from "./argChecks.js";
+import { choiceOption } from "./argChecks.js";
 import { staleRepoFlow } from "./workflow/staleRepoFlow.js";
 import { registerFlowEditCommand } from "./flowEditCommand.js";
 import { baseOf, graphOf, printVariantChanges } from "./flowBase.js";
-
-/**
- * Why `cast ws acquire --json` left no worktree to run in, in words. A
- * worktree whose contract failed prints its JSON and exits 2: the failed
- * checks are the reason, and the worktree stays, broken, until it is healed.
- */
-export function acquireFailureLine(worktree: string, out: string, err: string): string {
-  const last = out.trim().split("\n").pop() ?? "";
-  let ws: { state?: string; contract?: { failures?: Array<{ name: string; reason?: string }>; warnings?: Array<{ name: string; reason?: string }> } | null } | null = null;
-  try {
-    ws = last.startsWith("{") ? JSON.parse(last) : null;
-  } catch {}
-  if (ws?.state === "broken") {
-    const checks = ws.contract?.failures?.length ? ws.contract.failures : ws.contract?.warnings ?? [];
-    const why = checks.map((c) => `${c.name}${c.reason ? `: ${c.reason}` : ""}`).join("; ");
-    return `The worktree ${worktree} for the change is broken${why ? ` (${why})` : ""}. Repair it with cast ws heal ${worktree}, or remove it with cast ws destroy ${worktree}, then run this again.`;
-  }
-  return `Could not make the worktree for the change: ${(err || out).trim().split("\n").pop()}`;
-}
+import { findFlow, poolWorkspace, readPool, shortSessionId, type FoundFlow, type PoolAt } from "./flowFind.js";
+import { acquireFailureLine } from "./flowAcquire.js";
 
 export interface FlowDeps {
   cliPost: (urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number; throwOnError?: boolean }) => Promise<any>;
@@ -666,7 +648,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .command("trace <script>", { hidden: true })
     .description("Print the graph a Claude Code workflow script would run, as JSON (the daemon's tracer)")
     .action(async (script: string) => {
-      const { traceScriptGraph } = await import("./workflow/flowImport.js");
+      const { traceScriptGraph, launchArgs } = await import("./workflow/flowImport.js");
       const text = fs.readFileSync(script, "utf-8");
       console.log(JSON.stringify(await traceScriptGraph(text, launchArgs(script, text))));
     });
@@ -693,7 +675,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--args <json>", "The args the script reads (default: the args its run was launched with, when this machine ran it)")
     .action(async (script: string, opts: { as: string; slug?: string; force?: boolean; args?: string }) => {
       await deps.requireFlows(await deps.readWorkspace());
-      const { importWorkflowScript } = await import("./workflow/flowImport.js");
+      const { importWorkflowScript, resolveScript, launchArgs } = await import("./workflow/flowImport.js");
       const cwd = deps.realCwd();
       const file = resolveScript(script, cwd);
       const text = fs.readFileSync(file, "utf-8");
@@ -796,17 +778,6 @@ async function readLive(deps: FlowDeps, at: PoolAt): Promise<{ flows: LiveFlow[]
   }
 }
 
-export type FoundFlow = PoolFlow & { source: string };
-
-/** A session's 7-character codecast id, from whatever id the caller holds (its codecast id, or its agent's session id). */
-async function shortSessionId(session: string | null, deps: FlowDeps): Promise<string | null> {
-  if (!session) return null;
-  if (/^jx[a-z0-9]{5,}$/.test(session)) return session.slice(0, 7);
-  const { readLocalConversationMap } = await import("./localConversationMap.js");
-  const conv = readLocalConversationMap()[session];
-  return conv ? String(conv).slice(0, 7) : session.slice(0, 8);
-}
-
 /**
  * A flow this session wrote on stdin, kept for what comes next: where its file is (run it again, or edit it,
  * by that path) and pushed as the session's own draft graph, so the transcript draws it before any run.
@@ -825,107 +796,4 @@ function printSlots(f: Pick<FoundFlow, "stations" | "slug">): void {
   const how = { empty: "empty", default: "default steps", generated: "filled here" } as const;
   for (const s of slots) console.log(`  ${s.id.padEnd(16)} ${how[s.slot!.filled].padEnd(14)} ${dim(s.slot!.does)}`);
   if (slots.some((s) => s.slot!.filled === "empty")) console.log(dim(`  fill them from a flow with graph [extends="${f.slug}"] and subgraph <slot> { ... }`));
-}
-
-/**
- * The workspace a flow read names (flows.md FL2): the team given, else the team this directory is mapped to, else the
- * active one. `ownsDefault` says whether that team's default flow is this directory's: a team named or mapped, never
- * the active team of an unmapped directory, whose session start names no team's default either.
- */
-type PoolAt = Promise<{ ws: Workspace; ownsDefault: boolean }>;
-async function poolWorkspace(deps: FlowDeps, team?: string): PoolAt {
-  if (team) return { ws: await deps.readWorkspace(team), ownsDefault: true };
-  const mapped = await deps.directoryTeam();
-  return mapped ? { ws: { kind: "team", teamId: mapped }, ownsDefault: true } : { ws: await deps.readWorkspace(), ownsDefault: false };
-}
-
-/** The flows published to the workspace's pool (/cli/workflows/pool, flows.md FL2), and the default flow this directory takes from it. */
-async function fetchPool(deps: FlowDeps, at: PoolAt): Promise<{ flows: PushedPoolRow[]; default_flow: string | null }> {
-  const { ws, ownsDefault } = await at;
-  const r = await deps.cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {}, { throwOnError: true });
-  return { flows: r?.flows ?? [], default_flow: ownsDefault ? r?.default_flow ?? null : null };
-}
-
-/** The pool as this session sees it (the repo's, the shipped, and the workspace's published flows), and the workspace's
- *  default flow in it: the one a nameless `cast flow run` runs. `failed` says why the workspace's pool could not be
- *  read: the local flows still list, but no default can be told from them. */
-async function readPool(deps: FlowDeps, at: PoolAt): Promise<{ flows: PoolFlow[]; defaultFlow: PoolFlow | null; failed: string | null }> {
-  const read = await fetchPool(deps, at).then(
-    (r) => ({ ...r, failed: null }),
-    (err: unknown) => ({ flows: [], default_flow: null, failed: err instanceof Error ? err.message : String(err) }),
-  );
-  const flows = poolFlows(deps.realCwd(), await shortSessionId(deps.callingSession() ?? null, deps), read.flows);
-  return { flows, defaultFlow: read.failed ? null : workspaceDefaultFlow(flows, read.default_flow), failed: read.failed };
-}
-
-async function findFlow(slug: string, deps: FlowDeps, pool?: PoolFlow[]): Promise<FoundFlow> {
-  if (slug === "-") {
-    // A graph this session writes now: kept in the checkout as its draft, the library flows it names pinned beside it.
-    const { readStdin, writeSessionFlow } = await import("./workflow/sessionFlow.js");
-    const text = readStdin();
-    if (!text.trim()) { console.error("No graph on stdin: pipe a flow's digraph in, e.g. cast flow run - <<'EOF' ... EOF"); process.exit(1); }
-    const top = (spawnSync("git", ["-C", deps.realCwd(), "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim() || deps.realCwd();
-    try {
-      const kept = writeSessionFlow(top, text, await shortSessionId(deps.callingSession() ?? null, deps), (pool ?? (await readPool(deps, poolWorkspace(deps))).flows));
-      return { ...describeFlow(kept.slug, kept.source, "repo", kept.file), source: kept.source };
-    } catch (err) {
-      console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
-  }
-  const abs = path.resolve(deps.realCwd(), slug);
-  if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
-    const source = fs.readFileSync(abs, "utf-8");
-    return { ...describeFlow(path.basename(abs).replace(/\.cast$/, ""), source, "repo", abs), source };
-  }
-  const f = (pool ?? (await readPool(deps, poolWorkspace(deps))).flows).find((p) => p.slug === slug.replace(/\.cast$/, ""));
-  if (!f) {
-    console.error(notFoundLine("flow", slug, "cast flow ls"));
-    process.exit(1);
-  }
-  return { ...f, source: f.file ? fs.readFileSync(f.file, "utf-8") : BUILTIN_WORKFLOW_TEMPLATES[f.slug] };
-}
-
-/** A script path, or a dynamic workflow run id whose script the session kept (`<session>/workflows/scripts/<name>-<wf_id>.js`). */
-function resolveScript(ref: string, cwd: string): string {
-  const abs = path.resolve(cwd, ref);
-  if (fs.existsSync(abs)) return abs;
-  if (/^wf_[\w-]+$/.test(ref)) {
-    const projects = path.join(process.env.HOME ?? "", ".claude", "projects");
-    for (const proj of fs.existsSync(projects) ? fs.readdirSync(projects) : []) {
-      const projDir = path.join(projects, proj);
-      for (const sess of fs.readdirSync(projDir)) {
-        const dir = path.join(projDir, sess, "workflows", "scripts");
-        if (!fs.existsSync(dir)) continue;
-        const hit = fs.readdirSync(dir).find((f) => f.endsWith(`-${ref}.js`));
-        if (hit) return path.join(dir, hit);
-      }
-    }
-  }
-  console.error(`No workflow script at ${ref} (a path, or a wf_ run id this machine ran)`);
-  process.exit(1);
-}
-
-/**
- * The args a kept script's run was launched with: the Workflow call in its
- * session's transcript (`<project>/<session>.jsonl`, beside `<session>/workflows/scripts/`)
- * whose script is this one. Undefined when the script was not kept by a session here.
- */
-function launchArgs(file: string, text: string): unknown {
-  const m = file.match(/^(.*)\/([^/]+)\/workflows\/scripts\/[^/]+$/);
-  if (!m) return undefined;
-  const transcript = path.join(m[1], `${m[2]}.jsonl`);
-  if (!fs.existsSync(transcript)) return undefined;
-  const base = path.basename(file);
-  let found: unknown;
-  for (const line of fs.readFileSync(transcript, "utf-8").split("\n")) {
-    if (!line.includes('"Workflow"') || !line.includes('"tool_use"')) continue;
-    try {
-      for (const b of JSON.parse(line)?.message?.content ?? []) {
-        if (b?.type !== "tool_use" || b.name !== "Workflow" || b.input?.args === undefined) continue;
-        if (b.input.script === text || String(b.input.scriptPath ?? "").endsWith(base)) found = b.input.args;
-      }
-    } catch {}
-  }
-  return found;
 }

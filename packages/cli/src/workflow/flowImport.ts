@@ -345,3 +345,47 @@ export async function traceScriptGraph(script: string, args?: unknown) {
     script,
   };
 }
+
+/** A script path, or a dynamic workflow run id whose script the session kept (`<session>/workflows/scripts/<name>-<wf_id>.js`). */
+export function resolveScript(ref: string, cwd: string): string {
+  const abs = path.resolve(cwd, ref);
+  if (fs.existsSync(abs)) return abs;
+  if (/^wf_[\w-]+$/.test(ref)) {
+    const projects = path.join(process.env.HOME ?? "", ".claude", "projects");
+    for (const proj of fs.existsSync(projects) ? fs.readdirSync(projects) : []) {
+      const projDir = path.join(projects, proj);
+      for (const sess of fs.readdirSync(projDir)) {
+        const dir = path.join(projDir, sess, "workflows", "scripts");
+        if (!fs.existsSync(dir)) continue;
+        const hit = fs.readdirSync(dir).find((f) => f.endsWith(`-${ref}.js`));
+        if (hit) return path.join(dir, hit);
+      }
+    }
+  }
+  console.error(`No workflow script at ${ref} (a path, or a wf_ run id this machine ran)`);
+  process.exit(1);
+}
+
+/**
+ * The args a kept script's run was launched with: the Workflow call in its
+ * session's transcript (`<project>/<session>.jsonl`, beside `<session>/workflows/scripts/`)
+ * whose script is this one. Undefined when the script was not kept by a session here.
+ */
+export function launchArgs(file: string, text: string): unknown {
+  const m = file.match(/^(.*)\/([^/]+)\/workflows\/scripts\/[^/]+$/);
+  if (!m) return undefined;
+  const transcript = path.join(m[1], `${m[2]}.jsonl`);
+  if (!fs.existsSync(transcript)) return undefined;
+  const base = path.basename(file);
+  let found: unknown;
+  for (const line of fs.readFileSync(transcript, "utf-8").split("\n")) {
+    if (!line.includes('"Workflow"') || !line.includes('"tool_use"')) continue;
+    try {
+      for (const b of JSON.parse(line)?.message?.content ?? []) {
+        if (b?.type !== "tool_use" || b.name !== "Workflow" || b.input?.args === undefined) continue;
+        if (b.input.script === text || String(b.input.scriptPath ?? "").endsWith(base)) found = b.input.args;
+      }
+    } catch {}
+  }
+  return found;
+}
