@@ -100,7 +100,7 @@ export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string
       return { error: `${target.name ?? "They"} is not on this session's team` };
     }
     await ctx.db.patch(row._id, { passed_to, escalated: undefined, holder: { kind: "user", id: to.id }, holder_key: `user:${to.id}`, asked_user_ids: [target._id], updated_at: now });
-    await syncDecisionInbox(ctx, row._id, [target._id], now);
+    await syncDecisionInbox(ctx, row._id, [target._id], now, true, { announce: false });
     await noticeHandoff(ctx, row, "decision_passed", userId, [target._id], note);
     await recordHandoffEntry(ctx, row, { event: "passed", by: userId, to: { kind: "user", ids: [String(target._id)] }, note, at: now });
     return { passed: true };
@@ -155,7 +155,7 @@ export async function escalateCore(ctx: Ctx, userId: Id<"users">, decisionId: st
     asked_user_ids: to,
     updated_at: now,
   });
-  await syncDecisionInbox(ctx, row._id, to, now);
+  await syncDecisionInbox(ctx, row._id, to, now, true, { announce: false });
   await noticeHandoff(ctx, row, "decision_escalated", userId, to, note);
   await recordHandoffEntry(ctx, row, { event: "escalated", by: userId, to: { kind: "user", ids: to.map(String) }, note, at: now });
   return { escalated: true, to };

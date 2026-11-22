@@ -277,6 +277,9 @@ export default defineSchema({
       // dropped (tasks.ts notifyTaskStatus). Absent reads as OFF: status
       // moves are the board's, like Linear's opt-in "status changes".
       task_status_changes: v.optional(v.boolean()),
+      // A laptop or daemon under sustained load (machine_overloaded,
+      // daemon_overloaded). Absent reads as ON.
+      machine_alerts: v.optional(v.boolean()),
     })),
     // Cooldown stamp for the email digest — at most one digest per cooldown
     // window, and items created before this stamp are never re-emailed.
@@ -4969,6 +4972,8 @@ export default defineSchema({
       v.literal("decision_passed"),
       v.literal("decision_escalated"),
       v.literal("decision_assigned"),
+      // A card waiting on the recipient: every card one session asked in one turn (lib/decisionPush.ts).
+      v.literal("decision_waiting"),
       // A comment in the thread of a decision the recipient owns or takes part in (decisionThread.ts).
       v.literal("decision_comment"),
       // Finding a team by work email (teamDiscovery.ts): someone asked to
@@ -8765,6 +8770,9 @@ export default defineSchema({
     // The machine whose runner drives the run (its device id): where the run
     // is resumed when that runner dies (cli workflow/runResume.ts).
     runner_device: v.optional(v.string()),
+    // A run placed on another of its owner's machines (`cast flow run --device`): the change it works on, pushed to
+    // origin, which that machine fetches and freezes in its own checkout before the run starts (cli workflow/placedChange.ts).
+    placed_change: v.optional(v.any()),
     // The last time a person asked for the run to be resumed (the trace's Resume).
     resume_requested_at: v.optional(v.number()),
     // A rerun from the trial page: its runner sets the earlier run's branch
