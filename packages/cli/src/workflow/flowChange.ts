@@ -4,16 +4,19 @@
 // the frozen tree the way `cast ship checkout` makes its commits, on a branch
 // of its own, so nothing in the shared tree moves.
 //
-// Every file the session wrote goes in, including one another session also
-// wrote after it (attribution is per file, so that file carries the other
-// session's lines too, and the change says so). Dropping a file the session
-// wrote would run the flow on part of its change, which is worse than carrying
-// a neighbour's edit the change names.
+// Every file the session wrote goes in. A file another session also changed
+// goes in with only this session's lines when its edits can be replayed onto
+// the committed file (ownLines.ts); otherwise it goes in whole, carrying the
+// other session's lines too, and the change names it as shared. Dropping a
+// file the session wrote would run the flow on part of its change, which is
+// worse than carrying a neighbour's edit the change names.
+import { spawnSync } from "node:child_process";
 import { buildCommits } from "../land/commitGroups.js";
 import { defaultMessage, freezeAndAttribute, upstreamRef } from "../land/shipCheckout.js";
 import type { SessionEdits } from "../land/attribute.js";
 import { git } from "../wipSnapshot.js";
 import type { FrozenChange } from "./flowChangeFile.js";
+import { ownVersion, sessionTranscripts, type Writer } from "./ownLines.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 
 /** Whether `ref` (a codecast id, its 7-character short id, or the agent's own session id) names this session. */
@@ -52,11 +55,37 @@ export async function previewSessionChange(root: string, session: string, only?:
   const globs = (only ?? []).map((g) => new Bun.Glob(g));
   const wrote = frozen.changes.map((c) => c.path).filter((p) => inDiff(mine, p) && (!globs.length || globs.some((g) => g.match(p))));
   const held = wrote.filter((p) => heldWhy(p)).map((p) => ({ path: p, why: heldWhy(p)! }));
-  const paths = wrote.filter((p) => !heldWhy(p)).sort();
-  const shared = paths
-    .map((p) => ({ path: p, also: attribution.sessions.filter((s) => s !== mine && inDiff(s, p)).map(idOf) }))
-    .filter((s) => s.also.length);
-  return { frozen, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held };
+  const kept = wrote.filter((p) => !heldWhy(p)).sort();
+  // A file another session also changed goes in with only this session's lines when every writer's replayed edits
+  // account for it (ownLines.ts); one the session left as committed drops out. The rest go in whole, named as shared
+  // with why.
+  const transcriptsOf = new Map<SessionEdits, string[]>();
+  const writer = (s: SessionEdits, p: string): Writer => {
+    if (!transcriptsOf.has(s)) transcriptsOf.set(s, sessionTranscripts(s));
+    return { id: idOf(s), transcripts: transcriptsOf.get(s)!, lastWrite: s.edits.get(p) ?? 0, client: s.client };
+  };
+  const cuts = new Map<string, string>();
+  const unchanged = new Set<string>();
+  const shared: FrozenChange["shared"] = [];
+  for (const p of kept) {
+    const others = attribution.sessions.filter((s) => s !== mine && inDiff(s, p));
+    if (!others.length) continue;
+    const change = frozen.changes.find((c) => c.path === p);
+    const base = gitBlob(root, `${frozen.base}:${p}`);
+    const own = ownVersion({ root, rel: p, base, frozen: change?.blob ? gitBlob(root, change.blob) : null, since: committedAt.get(p) ?? 0, mine: writer(mine, p), others: others.map((s) => writer(s, p)) });
+    if (!own.ok) shared.push({ path: p, also: others.map(idOf), why: own.why });
+    else if (own.content === base) unchanged.add(p);
+    else cuts.set(p, spawnSync("git", ["-C", root, "hash-object", "-w", "--stdin"], { input: own.content, encoding: "utf-8" }).stdout.trim());
+  }
+  const paths = kept.filter((p) => !unchanged.has(p));
+  const own = cuts.size ? { ...frozen, changes: frozen.changes.map((c) => (cuts.has(c.path) ? { ...c, blob: cuts.get(c.path)! } : c)) } : frozen;
+  return { frozen: own, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held };
+}
+
+/** A blob's exact content (`<rev>:<path>` or a blob id), or null when there is none. */
+function gitBlob(root: string, spec: string): string | null {
+  const r = spawnSync("git", ["-C", root, "cat-file", "blob", spec], { encoding: "utf-8", maxBuffer: 64 * 1024 * 1024 });
+  return r.status === 0 ? r.stdout : null;
 }
 
 /**

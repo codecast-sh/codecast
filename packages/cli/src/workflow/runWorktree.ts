@@ -49,3 +49,38 @@ export async function restoreRunWorktree(cwd: string, name: string, branch: stri
   await acquireWorkspace(repoRoot, name, { branch, skipPool: true });
   return "restored";
 }
+
+/**
+ * A run that ended takes its checkout with it once that checkout holds
+ * nothing main lacks (worktreeGc.ts contentKeepReason): it made the tree, so
+ * it removes it. Its branch stays, so a resume puts the tree back
+ * (restoreRunWorktree). A tree a process still sits in, or with work main
+ * lacks, is left to the daemon's sweep (land/sweep.ts), which shows the
+ * latter to the run's task.
+ */
+export async function releaseEndedRunTree(cwd: string, context: Record<string, string>): Promise<void> {
+  const name = context["worktree"];
+  if (!name) return;
+  try {
+    const repoRoot = execFileSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+    const { readState } = await import("../workspace/contract.js");
+    const tree = readState(repoRoot, name)?.path ?? path.join(repoRoot, ".codecast", "worktrees", name);
+    if (!fs.existsSync(tree)) return;
+    const { readProcessCwds } = await import("../land/scan.js");
+    const cwds = await readProcessCwds();
+    if (!cwds || cwds.some((p) => p === tree || p.startsWith(`${tree}/`))) {
+      console.log(`${c.dim}Kept worktree ${name}: ${cwds ? "a running process sits in it" : "could not read which processes sit in it"}${c.reset}`);
+      return;
+    }
+    const { contentKeepReason, releaseTree } = await import("../worktreeGc.js");
+    const reason = await contentKeepReason(tree, repoRoot);
+    if (reason) {
+      console.log(`${c.dim}Kept worktree ${name}: ${reason}${c.reset}`);
+      return;
+    }
+    await releaseTree(repoRoot, tree);
+    console.log(`${c.dim}Released worktree ${name}; its branch stays${c.reset}`);
+  } catch (err) {
+    console.error(`${c.yellow}Could not release worktree ${name}: ${(err as Error).message.split("\n")[0]}${c.reset}`);
+  }
+}

@@ -7,9 +7,9 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { createGitCapabilityStore } from "./gitCapability";
-import { keepReason, probeWorktree, releaseSessionWorktree, runTreesInUseVia, type WorktreeProbe } from "./worktreeGc";
+import { keepReason, lockHolds, probeWorktree, releaseSessionMadeWorktrees, releaseSessionWorktree, releaseTree, runTreesInUseVia, type WorktreeProbe } from "./worktreeGc";
 import { acquireWorkspace } from "./workspace/lifecycle";
-import { readState } from "./workspace/contract";
+import { readState, recordWorkspaceSession } from "./workspace/contract";
 
 let savedCodecastDir: string | undefined;
 beforeEach(() => {
@@ -370,4 +370,120 @@ describe("line run worktrees: released once no live run or session works in them
     commit(wt, "local work", { "feature.txt": "unmerged work\n" });
     expect(await releaseSessionWorktree(wt, () => {}, async () => false, runTreesInUseVia(async () => new Set()))).toMatchObject({ action: "kept", reason: "1 commit(s) not on origin" });
   }, 30_000);
+});
+
+// A session that runs `cast ws acquire` from the main checkout, or spawns Claude Code subagents
+// with worktree isolation, makes trees its own cwd never shows; they go when it ends.
+describe("releaseSessionMadeWorktrees", () => {
+  const SID = "11111111-2222-3333-4444-555555555555";
+  /** Push `wt`'s branch to origin's main, the way a landed change arrives. */
+  const land = (repo: string, wt: string) => {
+    sh(sh(repo, "git", ["remote", "get-url", "origin"]), "git", ["config", "receive.denyCurrentBranch", "ignore"]);
+    sh(wt, "git", ["push", "-q", "origin", "HEAD:main"]);
+    sh(repo, "git", ["fetch", "-q", "origin"]);
+  };
+  /** A Claude Code agent tree, locked the way Claude Code locks one, and its transcript under SID. */
+  function agentTree(repo: string, projects: string, id: string, lockPid: number): string {
+    const wt = path.join(repo, ".claude", "worktrees", `agent-${id}`);
+    sh(repo, "git", ["worktree", "add", "-q", "-b", `worktree-agent-${id}`, wt]);
+    sh(repo, "git", ["worktree", "lock", "--reason", `claude agent agent-${id} (pid ${lockPid})`, wt]);
+    fs.mkdirSync(path.join(projects, "-repo", SID, "subagents"), { recursive: true });
+    fs.writeFileSync(path.join(projects, "-repo", SID, "subagents", `agent-${id}.jsonl`), "");
+    return wt;
+  }
+  const deps = (projects: string, cwds: string[] = []) => ({ claudeProjects: projects, processCwds: async () => cwds });
+
+  test("a workspace it acquired goes once main holds it; its branch stays", async () => {
+    const { repo } = makeRepo();
+    const ws = (await acquireWorkspace(repo, "fix-x", { branch: "feat/fix-x", skipPool: true, skipSetup: true, skipHooks: true, noPorts: true })).workspace;
+    recordWorkspaceSession(repo, "fix-x", SID);
+    commit(ws.path, "fix", { "fix.txt": "fixed\n" });
+    land(repo, ws.path);
+    const out = await releaseSessionMadeWorktrees(SID, repo, () => {}, deps(path.join(repo, "none")));
+    expect(out).toMatchObject([{ action: "released", name: "fix-x" }]);
+    expect(fs.existsSync(ws.path)).toBe(false);
+    expect(sh(repo, "git", ["branch", "--list", "feat/fix-x"])).toContain("feat/fix-x");
+  }, 60_000);
+
+  test("kept: work main lacks, another session acquired it too, a process sits in it", async () => {
+    const { repo } = makeRepo();
+    const mk = async (name: string, sessions: string[]) => {
+      const ws = (await acquireWorkspace(repo, name, { branch: `feat/${name}`, skipPool: true, skipSetup: true, skipHooks: true, noPorts: true })).workspace;
+      for (const s of sessions) recordWorkspaceSession(repo, name, s);
+      return ws.path;
+    };
+    const unlanded = await mk("unlanded", [SID]);
+    commit(unlanded, "wip", { "wip.txt": "not on main\n" });
+    const shared = await mk("shared", [SID, "other-session"]);
+    const busy = await mk("busy", [SID]);
+    const out = await releaseSessionMadeWorktrees(SID, repo, () => {}, deps(path.join(repo, "none"), [path.join(busy, "packages")]));
+    const reason = (p: string) => out.find((v) => v.action === "kept" && v.path === p && v.reason);
+    expect(reason(unlanded)).toMatchObject({ reason: "1 commit(s) not on origin" });
+    expect(reason(shared)).toMatchObject({ reason: "another session acquired it too" });
+    expect(reason(busy)).toMatchObject({ reason: "a running process sits in it" });
+    expect([unlanded, shared, busy].every((p) => fs.existsSync(p))).toBe(true);
+  }, 60_000);
+
+  test("kept when the process table could not be read", async () => {
+    const { repo } = makeRepo();
+    const ws = (await acquireWorkspace(repo, "unread", { branch: "feat/unread", skipPool: true, skipSetup: true, skipHooks: true, noPorts: true })).workspace;
+    recordWorkspaceSession(repo, "unread", SID);
+    commit(ws.path, "fix", { "fix.txt": "fixed\n" });
+    land(repo, ws.path);
+    const out = await releaseSessionMadeWorktrees(SID, repo, () => {}, { claudeProjects: path.join(repo, "none"), processCwds: async () => null });
+    expect(out).toMatchObject([{ action: "kept", reason: "could not read which processes sit in it" }]);
+    expect(fs.existsSync(ws.path)).toBe(true);
+  }, 60_000);
+
+  test("its Claude Code agent trees go, a dead agent's lock with them, so the branch checks out again", async () => {
+    const repo = fs.realpathSync(makeRepo().repo); // git lists worktrees by real path
+    const projects = path.join(path.dirname(repo), "projects");
+    const done = agentTree(repo, projects, "a1", 999_999);
+    commit(done, "agent work", { "agent.txt": "done\n" });
+    land(repo, done);
+    const pending = agentTree(repo, projects, "a2", 999_999);
+    commit(pending, "agent wip", { "wip.txt": "not landed\n" });
+    const out = await releaseSessionMadeWorktrees(SID, repo, () => {}, deps(projects));
+    expect(out.find((v) => v.action !== "skipped" && v.path === done)?.action).toBe("released");
+    expect(out.find((v) => v.action !== "skipped" && v.path === pending)).toMatchObject({ action: "kept", reason: "1 commit(s) not on origin" });
+    expect(sh(repo, "git", ["worktree", "list"])).not.toContain("agent-a1");
+    sh(repo, "git", ["worktree", "add", "-q", path.join(path.dirname(repo), "back"), "worktree-agent-a1"]);
+  }, 60_000);
+
+  test("another session's agents and an agent still running are left alone", async () => {
+    const { repo } = makeRepo();
+    const projects = path.join(path.dirname(repo), "projects");
+    const running = agentTree(repo, projects, "a3", process.pid); // a live pid holds the lock
+    land(repo, running);
+    const out = await releaseSessionMadeWorktrees("another-session", repo, () => {}, deps(projects));
+    expect(out).toEqual([]);
+    const mine = await releaseSessionMadeWorktrees(SID, repo, () => {}, deps(projects));
+    expect(mine[0]).toMatchObject({ action: "kept", reason: expect.stringMatching(/^remove failed: locked/) });
+    expect(fs.existsSync(running)).toBe(true);
+  }, 60_000);
+});
+
+describe("releaseTree", () => {
+  // ct-52977: `git worktree remove --force` failed halfway and left a checkout in use with 116 tracked files gone.
+  test("a release that fails leaves the checkout whole", async () => {
+    const { repo } = makeRepo();
+    const wt = path.join(path.dirname(repo), "trees", "stuck");
+    fs.mkdirSync(path.dirname(wt));
+    sh(repo, "git", ["worktree", "add", "-q", "-b", "feat/stuck", wt]);
+    commit(wt, "work", { "a.txt": "a\n", "b.txt": "b\n" });
+    fs.chmodSync(path.dirname(wt), 0o555); // the rename into the trash is refused
+    try {
+      await expect(releaseTree(repo, wt)).rejects.toThrow();
+    } finally {
+      fs.chmodSync(path.dirname(wt), 0o755);
+    }
+    expect(fs.readFileSync(path.join(wt, "a.txt"), "utf-8")).toBe("a\n");
+    expect(sh(wt, "git", ["status", "--porcelain"])).toBe("");
+  }, 30_000);
+
+  test("lockHolds reads the pid out of a lock reason", () => {
+    expect(lockHolds("claude agent agent-x (pid 42)", (p) => p === 42)).toBe(true);
+    expect(lockHolds("pid=43", () => false)).toBe(false);
+    expect(lockHolds("a person locked it", () => false)).toBe(true);
+  });
 });
