@@ -8,7 +8,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { attributeEdits, type SessionEdits } from "./attribute.js";
-import { briefLevelConflicts, RETRY_MS, type BriefDeps } from "./levelConflicts.js";
+import { briefLevelConflicts, classifySendError, RETRY_MS, type BriefDeps } from "./levelConflicts.js";
 import { sweepOne } from "./levelSweep.js";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
@@ -197,18 +197,35 @@ describe("a level conflict reaches its writer", () => {
     expect(record(gitDir).paths["a.txt"].briefed).toBe(true);
   }, 300_000);
 
-  test("a teammate's session the server will never deliver to is not asked again until the file changes", async () => {
+  test("a teammate's session the server will never deliver to is not asked again until a blob or the owner changes", async () => {
     const { shared, upstream, sent, writers, reply, sweep } = world();
     writers.set("a.txt", OTHER);
     upstream({ "a.txt": A.replace("one", "theirs") }, "Rename the first line");
     reply("unreachable");
-    expect(await sweep(T)).toContain(`${OTHER.slice(0, 7)} is a teammate's session; brief not sent (a.txt)`);
-    expect(await sweep(T + RETRY_MS)).toContain(`${OTHER.slice(0, 7)} is a teammate's session; brief not sent (a.txt)`);
+    const teammate = `${OTHER.slice(0, 7)} is a teammate's session; brief not sent (a.txt)`;
+    expect(await sweep(T)).toContain(teammate);
+    // Same blobs, same owner, past the retry window: no send.
+    expect(await sweep(T + RETRY_MS)).toContain(teammate);
     expect(sent).toHaveLength(1);
+    // The file changes on disk: tried again.
     write(shared, "a.txt", A.replace("one", "theirs, edited again"));
-    await sweep(T + RETRY_MS + 60_000);
+    expect(await sweep(T + RETRY_MS + 60_000)).toContain(teammate);
     expect(sent).toHaveLength(2);
+    // Same blobs, a new owner (its transcript arrived late): briefed.
+    writers.set("a.txt", CONV);
+    reply("sent");
+    expect(await sweep(T + RETRY_MS + 120_000)).toContain(teammate);
+    expect(sent).toHaveLength(2);
+    expect(await sweep(T + 2 * RETRY_MS + 60_000)).toContain(`briefed ${CONV.slice(0, 7)} (a.txt)`);
+    expect(sent.map((m) => m.to)).toEqual([OTHER, OTHER, CONV]);
   }, 300_000);
+
+  test("the ownership refusal is told apart from a transient failure", () => {
+    expect(classifySendError(new Error("[Request ID: 1a2b] Server Error\nUncaught Error: Unauthorized: can only send messages to your own conversations\n    at handler"))).toBe("unreachable");
+    for (const transient of [new Error("fetch failed"), Object.assign(new Error("The operation timed out."), { name: "TimeoutError" }), new Error("[Request ID: 3c4d] Server Error"), new Error("502 Bad Gateway"), "ECONNRESET"]) {
+      expect(classifySendError(transient)).toBe("failed");
+    }
+  });
 
   test("a merge file that cannot be written still briefs, and the brief is recorded so it is not sent again", async () => {
     const { gitDir, upstream, sent, writers, sweep } = world();
@@ -231,14 +248,18 @@ describe("a level conflict reaches its writer", () => {
     await sweep(T);
     expect(sent.map((m) => m.to)).toEqual([CONV]);
 
+    // The writer typing on: no attribution inside the retry window, and no second brief after it.
     write(shared, "a.txt", A.replace("one", "mine, still"));
     expect(await sweep(T + 60_000)).toContain("already briefed");
+    expect(attributions).toHaveLength(1);
+    expect(await sweep(T + RETRY_MS)).toContain("already briefed");
     expect(attributions).toHaveLength(2);
     expect(sent).toHaveLength(1);
 
     writers.set("a.txt", OTHER);
     write(shared, "a.txt", A.replace("one", "someone else's"));
-    expect(await sweep(T + 120_000)).toContain(`briefed ${OTHER.slice(0, 7)} (a.txt)`);
+    expect(await sweep(T + RETRY_MS + 60_000)).toContain("already briefed");
+    expect(await sweep(T + 2 * RETRY_MS)).toContain(`briefed ${OTHER.slice(0, 7)} (a.txt)`);
     expect(sent.map((m) => m.to)).toEqual([CONV, OTHER]);
   }, 300_000);
 
@@ -259,33 +280,43 @@ describe("a level conflict reaches its writer", () => {
 });
 
 describe("a level that raced a writer", () => {
-  test("HEAD moved to upstream with the file left stale: its writer hears the file would revert upstream's change; the merge file survives the next level", async () => {
+  test("HEAD moved to upstream with the file left stale: its writer, already briefed that the checkout was held, hears the file would revert upstream's change; the merge file survives the next level and is pruned after a day", async () => {
     const { shared, gitDir, upstream, sent, writers, deps } = world();
     writers.set("a.txt", CONV);
     const from = sh(shared, "rev-parse", "HEAD");
     upstream({ "a.txt": A.replace("one", "theirs") }, "Rename the first line");
     const to = sh(shared, "rev-parse", "origin/main");
-    // What levelCheckout leaves when a file kept changing during the level: the branch on `to`, the file as it was.
-    sh(shared, "update-ref", "refs/heads/main", to, from);
-    const r = { ok: false, from, to, written: [], deleted: [], absorbed: [], merged: [], kept: [], conflicts: ["a.txt"], reason: "kept changing" };
-
+    const r = { ok: false, from, to, written: [], deleted: [], absorbed: [], merged: [], kept: [], conflicts: ["a.txt"], reason: "conflict" };
+    // First the conflict holds the checkout, and the writer hears that.
     expect(await briefLevelConflicts(shared, gitDir, r, deps(T))).toContain(`briefed ${CONV.slice(0, 7)} (a.txt)`);
+    expect(sent[0].body).toContain("cannot follow upstream");
+
+    // Then a level races the writer: the branch on `to`, the file as it was (what levelCheckout leaves).
+    sh(shared, "update-ref", "refs/heads/main", to, from);
+    expect(await briefLevelConflicts(shared, gitDir, { ...r, reason: "kept changing" }, deps(T + 60_000))).toContain(`briefed ${CONV.slice(0, 7)} (a.txt)`);
+    expect(sent).toHaveLength(2);
+    expect(sent[1].clientId).not.toBe(sent[0].clientId);
     const stale = path.join(gitDir, "codecast", "level-stale", "a.txt");
-    expect(sent[0].body).toContain(`moved to upstream ${to.slice(0, 9)}`);
-    expect(sent[0].body).toContain("would revert that change");
-    expect(sent[0].body).toContain(stale);
+    expect(sent[1].body).toContain(`moved to upstream ${to.slice(0, 9)}`);
+    expect(sent[1].body).toContain("would revert that change");
+    expect(sent[1].body).toContain(stale);
     expect(fs.readFileSync(stale, "utf-8")).toContain("<<<<<<< yours");
 
     // The next sweep finds the checkout level and clears the held record, not the stale copy's merge.
     const { sweepOne: next } = await import("./levelSweep.js");
-    await next(shared, deps(T + 60_000));
+    await next(shared, deps(T + 120_000));
     expect(fs.existsSync(stale)).toBe(true);
+    // A day on, the sweep prunes it.
+    const dayAgo = new Date(Date.now() - 2 * 86_400_000);
+    fs.utimesSync(stale, dayAgo, dayAgo);
+    await next(shared, deps(T + 180_000));
+    expect(fs.existsSync(path.join(gitDir, "codecast", "level-stale"))).toBe(false);
 
     // HEAD neither where the level started nor where it went: nothing to say.
     write(shared, "z.txt", "z\n");
     sh(shared, "add", "z.txt");
     sh(shared, "commit", "-qm", "local");
-    expect(await briefLevelConflicts(shared, gitDir, r, deps(T + 120_000))).toBeNull();
-    expect(sent).toHaveLength(1);
+    expect(await briefLevelConflicts(shared, gitDir, r, deps(T + 240_000))).toBeNull();
+    expect(sent).toHaveLength(2);
   }, 300_000);
 });

@@ -166,14 +166,15 @@ built on HEAD, the base its frozen content grew from, then replayed with the
 checkout's own unlanded commits onto that upstream in the object store
 (`replayOnto`), so Check and Review test the change on what it would land on,
 and every reviewer's diff starts there (`$diff_base`, the change's `base`,
-else the default branch). When the replay fails, the branch stays on the
+else the remote's default branch). When the replay fails, the branch stays on the
 HEAD-based commit and `change.json` records `behind`: a `conflict` (with its
 paths), which Ship's rebase meets again and routes to the session, or an
 `unreplayable` history (a merge commit in the checkout's own), with the
 reason; `cast flow run` prints it in one line. A checkout already holding
 upstream, or with none, keeps the commit on HEAD. A change whose every file
 upstream already holds at its frozen content is `landed`: `cast flow run`
-says so and starts nothing, and a refreeze records it and the run says so.
+says so and starts nothing (under `--json`, `{landed, upstream}`), and a
+refreeze records it and the run ends done there.
 Attribution is per file, so a file another session also wrote carries
 that session's lines too; the run includes it and names the other session
 rather than leave out part of the change. Credential files stay out. The
@@ -195,6 +196,18 @@ file; the session that ran the command, when there is one, is the run's
 subject. A refreeze rebuilds it from the checkout as it is now, for the
 change's files and any file one of its writers now holds (a fix may add a
 test), still a commit per writer on the same branch.
+
+A station the subject would do (below) goes to the writers instead: the
+change's files that `$stop_reason` or the expanded brief names (by path, or by
+a basename no other file of the change shares) are grouped by the session
+that wrote them, and each writer gets the station's brief as a quiet send with
+a line naming its own failing files (`writersNamed`, `briefWriters`). The run
+waits on every briefed writer at once with the subject's wait, then freezes
+the pass again and goes on; the station's output names who was briefed. A
+finding that names no file of the change goes to the subject, and a run with
+none stops with it, as any run with no subject does. The writers are other
+people's sessions in a shared checkout, so nothing parks or retires them, nor
+the subject of a checkout's change.
 
 Every run binds to a task because the run's evidence, its gate decisions and
 its status already key on one (the-line.md L3, L6). The task is the record of
