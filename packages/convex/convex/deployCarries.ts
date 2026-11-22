@@ -5,7 +5,7 @@
 import type { Doc, Id } from "./_generated/dataModel";
 import { extractTaskShortIds } from "./lib/gitRefs";
 import type { DeployRow } from "@codecast/shared/contracts/causeHistory";
-import { mainAtOf, newestFirst, notWatcher } from "./deployTargetsState";
+import { mainAtOf } from "./deployTargetsState";
 import { DAY, carriedBy, normalizeDeployTarget, type DeployMerge } from "@codecast/shared/contracts/deploys";
 
 /** How far back merges are read for the waiting set and a marker's carries. */
@@ -114,17 +114,13 @@ export async function workspaceMergeWindow(ctx: any, workspace: string, now: num
 /** A merge's run as a carry stores it: only a real run id. */
 export const runIdOf = (id: string | undefined) => (id && !id.startsWith("landed:") ? (id as Id<"workflow_runs">) : undefined);
 
-/**
- * The real deploys of a workspace, newest first: the dev watcher's pushes are left out before the read counts, so no
- * pile of them pushes a real deploy out. `pushes` adds the workspace's newest that many rows of any kind.
- */
-export async function workspaceDeploys(ctx: any, workspace: string, take = DEPLOYS_SCAN, opts: { pushes?: number } = {}): Promise<Doc<"deploys">[]> {
-  const read = () => ctx.db
+/** The deploys of a workspace, newest first. */
+export async function workspaceDeploys(ctx: any, workspace: string, take = DEPLOYS_SCAN): Promise<Doc<"deploys">[]> {
+  return await ctx.db
     .query("deploys")
     .withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspace))
-    .order("desc");
-  const real: Doc<"deploys">[] = await read().filter(notWatcher).take(take);
-  return opts.pushes ? newestFirst(real, await read().take(opts.pushes)) : real;
+    .order("desc")
+    .take(take);
 }
 
 export const isLiveDeploy = (d: Doc<"deploys">) => d.status === "live";
@@ -147,8 +143,7 @@ export async function previousCut(ctx: any, d: Doc<"deploys">, cuts?: ReadonlyMa
     .order("desc")
     .take(30);
   for (const x of earlier) {
-    // A watcher's push carried nothing, so its range belongs to the next real deploy.
-    if (x._id === d._id || x.status !== "live" || x.pushed_via === "dev watcher" || (x.live_at ?? x.created_at) > at) continue;
+    if (x._id === d._id || x.status !== "live" || (x.live_at ?? x.created_at) > at) continue;
     const cut = x.cut_at ?? cuts?.get(String(x._id));
     if (cut != null) return cut;
   }
@@ -188,8 +183,7 @@ export async function carriesForMarker(ctx: any, row: Doc<"deploys">, now: numbe
       if (at != null) m.main_at = at;
     }
   }
-  // A watcher's push is a working tree, never the first deploy to carry a fix.
-  const deploys = (await workspaceDeploys(ctx, row.workspace)).filter((d) => isLiveDeploy(d) && d.pushed_via !== "dev watcher").map((d) => (String(d._id) === String(row._id) ? self : withCut(d)));
+  const deploys = (await workspaceDeploys(ctx, row.workspace)).filter(isLiveDeploy).map((d) => (String(d._id) === String(row._id) ? self : withCut(d)));
   const carries: Doc<"deploys">["carries"] = carriedBy(self, merges, deploys).map((c) => ({
     task_id: c.task_id as Id<"tasks">,
     ...(runIdOf(c.run_id) ? { run_id: runIdOf(c.run_id) } : {}),

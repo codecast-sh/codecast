@@ -20,16 +20,16 @@ import { commitUrl, normalizeRepository, shortSha } from "./lib/gitRefs";
 import { recordExternalEvent } from "./externalEvents";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
-import { adderOf, latestLiveDeploy, ownWatcherRowFor, recordDeployMarker } from "./deploys";
+import { adderOf, latestLiveDeploy, recordDeployMarker, recordDevPush, targetPushes } from "./deploys";
 import { sameSha } from "./deployCarries";
-import { targetDeploys } from "./deployTargetsState";
-import { normalizeDeployTarget } from "@codecast/shared/contracts/deploys";
+import { devPushedOver } from "./deployTargetsState";
+import { normalizeDeployTarget, type AddedBy } from "@codecast/shared/contracts/deploys";
 
 const SURFACE = /^[a-z][a-z0-9-]{0,31}$/;
 const SHA = /^[0-9a-f]{7,40}$/;
 /** Names a push may report it added or dropped, and names one lookup may ask about. */
 const NAMES_MAX = 500;
-/** How far back through a target's deploys a name's adder is looked for. */
+/** How far back through a target's deploys, and through its dev pushes, a name's adder is looked for. */
 const ADDED_BY_SCAN = 200;
 
 /**
@@ -108,12 +108,14 @@ export const markDeploy = mutation({
     deploy: v.optional(v.string()),
     // The hostname of the machine that pushed.
     machine: v.optional(v.string()),
-    // Which push path sent it.
+    // Which push path sent it. A dev watcher's push is recorded as a dev push, not a deploy (deploys.recordDevPush).
     via: v.optional(v.union(v.literal("deploy.sh"), v.literal("dev watcher"))),
     // Names the push put on the surface and took off it (`fn:`, `http:`, `index:`, `table:`); deploys.ts caps them. Both
     // are sent, possibly empty, exactly when the push's diff ran, and both left out when it did not.
     adds: v.optional(v.array(v.string())),
     drops: v.optional(v.array(v.string())),
+    // When the push's diff read prod (ms): a deploy keeping a name proves it committed only for pushes before this.
+    changes_read_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
@@ -127,6 +129,26 @@ export const markDeploy = mutation({
 
     if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
     const teamId = args.team_id ?? (await deployTeamFor(ctx, userId, repository));
+    const user = await ctx.db.get(userId);
+    const startedBy = { kind: "person" as const, name: user?.name ?? user?.github_username ?? "someone", user_id: userId };
+
+    // A dev watcher's push is not a deploy: a dev push, and nothing else (no event, no deploy, no trigger).
+    if (args.via === "dev watcher") {
+      await recordDevPush(ctx, {
+        workspace: `team:${teamId}`,
+        team_id: teamId,
+        target: surface,
+        repository,
+        sha,
+        ...(args.machine?.trim() ? { machine: args.machine.trim() } : {}),
+        started_by: startedBy,
+        ...(args.dirty ? { dirty: args.dirty } : {}),
+        ...(args.adds ? { adds: args.adds } : {}),
+        ...(args.drops ? { drops: args.drops } : {}),
+        at: Date.now(),
+      });
+      return { ok: true as const, dev_push: true as const, event_id: null, team_id: teamId, repository, surface, sha, version: version ?? null, deploy: null };
+    }
 
     // The surface already runs this sha (a retried deploy.sh, a redeploy of
     // the same commit): one marker. A rollback to an earlier sha is a change
@@ -134,23 +156,16 @@ export const markDeploy = mutation({
     const previous = await latestDeploy(ctx, teamId, repository, surface);
     const live = await latestLiveDeploy(ctx, `team:${teamId}`, surface, repository);
     // A deploy of the same commit with uncommitted files is a different deploy, and one that changed what runs is news.
-    // So is a clean deploy of a sha whose live deploy went out dirty or from the watcher: the tree it ran was not the sha's.
-    // So is one of a sha the target no longer runs (a workflow run rolled it back since this repository's last marker).
+    // So is a clean deploy of a sha whose live deploy went out dirty: the tree it ran was not the sha's. So is one of a
+    // sha the target no longer runs (a workflow run rolled it back since this repository's last marker), and one over a
+    // dev push: it put the committed tree back.
     if (previous?.sha === sha && !args.deploy && !args.dirty && !args.adds?.length && !args.drops?.length
-      && (!live || (!live.dirty && live.pushed_via !== "dev watcher" && sameSha(live.sha, sha)))) {
+      && (!live || (!live.dirty && sameSha(live.sha, sha) && !(await devPushedOver(ctx, live))))) {
       return { ok: true as const, event_id: previous._id, team_id: teamId, repository, surface, sha, version: version ?? null };
     }
 
     const now = Date.now();
-    const user = await ctx.db.get(userId);
-    const startedBy = { kind: "person" as const, name: user?.name ?? user?.github_username ?? "someone", user_id: userId };
-    // A watcher push that lands on its pusher's row of the sha from that machine (deploys.ownWatcherRow) is that push
-    // again, not a new ship: it keeps the push's event, so a long uncommitted session is one event, not one per save.
-    const own = args.via === "dev watcher"
-      ? await ownWatcherRowFor(ctx, `team:${teamId}`, surface, { machine: args.machine, repository, sha, started_by: startedBy })
-      : null;
-    const again = own?.event_ids[0];
-    const eventId = again ?? await recordExternalEvent(ctx, {
+    const eventId = await recordExternalEvent(ctx, {
       source: "codecast",
       team_id: teamId,
       repository,
@@ -181,24 +196,19 @@ export const markDeploy = mutation({
       // Sent exactly when the push's diff ran, empty or not: a deploy whose diff ran is evidence of what its tree held.
       ...(args.adds ? { adds: args.adds } : {}),
       ...(args.drops ? { drops: args.drops } : {}),
+      ...(args.changes_read_at != null ? { changes_read_at: args.changes_read_at } : {}),
       started_by: startedBy,
       at: now,
     });
-    return { ok: true as const, event_id: eventId, team_id: teamId, repository, surface, sha, version: version ?? null, deploy };
+    return { ok: true as const, dev_push: false as const, event_id: eventId, team_id: teamId, repository, surface, sha, version: version ?? null, deploy };
   },
 });
 
 /**
- * The latest deploy that put a name on a surface. `committed_in` names the first clean deploy after it, other than a
- * watcher's, whose diff ran and kept the name: by then the name was in a commit, whoever's push first put it there.
- */
-export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number; committed_in?: string };
-
-/**
- * For each name, the latest deploy of the repository's surface (among its
- * latest ADDED_BY_SCAN) whose adds hold it: who put it there, from which
- * machine and path, and the deploy that showed it committed (deploys.adderOf).
- * Names no deploy added are left out.
+ * For each name, the push of the repository's surface active last (among its
+ * latest ADDED_BY_SCAN deploys and dev pushes) whose adds hold it: who put it
+ * there, from which machine and path, and the deploy that showed it committed
+ * (deploys.adderOf). Names no push added are left out.
  */
 export const addedBy = query({
   args: {
@@ -220,21 +230,21 @@ export const addedBy = query({
 
     if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
     const teamId = args.team_id ?? (await deployTeamFor(ctx, userId, repository));
-    const rows = await targetDeploys(ctx, `team:${teamId}`, target, ADDED_BY_SCAN, { pushes: ADDED_BY_SCAN });
-    const mine = rows.filter((d) => d.repository === normalizeRepository(repository));
+    const pushes = await targetPushes(ctx, `team:${teamId}`, target, normalizeRepository(repository), ADDED_BY_SCAN);
     const found: AddedBy[] = [];
     for (const name of new Set(args.names)) {
-      const hit = adderOf(mine, name);
+      const hit = adderOf(pushes, name);
       if (!hit) continue;
-      const d = hit.adder;
+      const { adder } = hit;
       found.push({
         name,
-        deploy: d.short_id,
-        by: d.started_by?.name ?? null,
-        machine: d.machine ?? null,
-        via: d.pushed_via ?? null,
-        at: d.live_at ?? d.created_at,
-        dirty: d.dirty ?? 0,
+        deploy: adder.kind === "deploy" ? adder.row.short_id : null,
+        dev_push: adder.kind === "dev_push",
+        by: adder.row.started_by?.name ?? null,
+        machine: adder.row.machine ?? null,
+        via: adder.kind === "deploy" ? adder.row.pushed_via ?? null : "dev watcher",
+        at: adder.at,
+        dirty: adder.row.dirty ?? 0,
         ...(hit.committed_in ? { committed_in: hit.committed_in.short_id } : {}),
       });
     }

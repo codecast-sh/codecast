@@ -5,7 +5,7 @@ import path from "node:path";
 import { parseWorkflowSource, validateWorkflow } from "./workflow/parser";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates";
 import { spawnSync } from "node:child_process";
-import { deployEnv, deployFailureSignal, expandDeployCommand, failedStep, followJobs, formatDeploy, jobsVerdict, pinnedSha, returnDeploy, runDeployStep, waitForCi, watchDeploy } from "./lineDeploy";
+import { deployEnv, deployFailureSignal, devPushLine, expandDeployCommand, failedStep, followJobs, formatDeploy, formatTargets, jobsVerdict, pinnedSha, returnDeploy, runDeployStep, waitForCi, watchDeploy } from "./lineDeploy";
 import { askUntilRead, releaseRequest, requestShaFor } from "./deployCommand";
 
 // The line's deploy stage (deploys.md DP2, DP8, DP9): each step runs a
@@ -290,5 +290,28 @@ describe("cast line deploy show", () => {
   test("a long list is cut at twenty", () => {
     const adds = Array.from({ length: 25 }, (_, i) => `fn:m:f${i}`);
     expect(formatDeploy({ ...base, adds })).toContain("… and 5 more");
+  });
+});
+
+describe("cast line deploy targets", () => {
+  const NOW = 1_700_000_000_000;
+  const queue = { known: true, commits: 0, untouched: 0, groups: [], shown: 0, head_ci: "passed" };
+  const live = { short_id: "dp-9", sha: "7975db5eed352f88", live_at: NOW - 3_600_000, created_at: NOW - 3_600_000 };
+  const push = { sha: "1a2b3c4d5e", machine: "ana-mac", by: "Ana", at: NOW - 3 * 60_000, dirty: 2, adds_count: 0, drops_count: 0 };
+
+  test("a dev push on top of the live deploy reads as one line under it", () => {
+    const lines = formatTargets({ targets: [{ name: "backend", live, open: null, queue, dev_push: push }] }, NOW).split("\n");
+    expect(lines[0]).toStartWith("backend  live: dp-9 7975db5ee");
+    expect(lines[1]).toBe("  uncommitted push · ana-mac · Ana · 3m ago · 2 files");
+    expect(lines[2]).toBe("  nothing waiting");
+  });
+
+  test("with no dev push, nothing is added", () => {
+    expect(formatTargets({ targets: [{ name: "backend", live, open: null, queue, dev_push: null }] }, NOW)).not.toContain("push");
+  });
+
+  test("what the push added and dropped, and a clean tree's sha", () => {
+    expect(devPushLine({ ...push, by: null, adds_count: 1, drops_count: 2 }, NOW)).toBe("uncommitted push · ana-mac · 3m ago · 2 files · added 1 · dropped 2");
+    expect(devPushLine({ ...push, dirty: 0, at: NOW - 5_000 }, NOW)).toBe("dev push of 1a2b3c4 · ana-mac · Ana · just now");
   });
 });

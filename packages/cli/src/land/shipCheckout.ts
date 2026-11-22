@@ -342,11 +342,11 @@ export interface RunOptions {
 }
 
 /** What a deploy step's push did to its target, as the step reports it (packages/convex/deploy.sh writes it). */
-export type PushChanges = { machine?: string; via?: "deploy.sh"; adds?: string[]; drops?: string[] };
+export type PushChanges = { machine?: string; via?: "deploy.sh"; adds?: string[]; drops?: string[]; changes_read_at?: number };
 
 /**
  * Run a deploy step with a file it may fill with what its push put on its
- * target and took off it (`{ adds, drops }`, named in CAST_PUSH_CHANGES_FILE).
+ * target and took off it (`{ adds, drops, read_at }`, named in CAST_PUSH_CHANGES_FILE).
  * The ship records the deploy, so these ride on its record; a step that
  * writes nothing reports nothing.
  */
@@ -366,7 +366,9 @@ export async function runDeployStep(
         // Both lists, empty or not, only when its diff ran: their presence says so.
         if (Array.isArray(raw.adds) && Array.isArray(raw.drops)) {
           const names = (v: unknown[]) => v.filter((x): x is string => typeof x === "string");
-          changes = { ...changes, adds: names(raw.adds), drops: names(raw.drops) };
+          // read_at: when the diff read prod, so a later push's record can say what it knew.
+          const readAt = typeof raw.read_at === "number" && Number.isFinite(raw.read_at) ? raw.read_at : undefined;
+          changes = { ...changes, adds: names(raw.adds), drops: names(raw.drops), ...(readAt ? { changes_read_at: readAt } : {}) };
         }
       }
     } catch { /* the step wrote nothing */ }

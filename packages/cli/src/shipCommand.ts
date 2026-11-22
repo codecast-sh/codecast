@@ -40,11 +40,12 @@ export type MarkOptions = {
   json?: boolean;
 };
 
-/** What one push changed on the surface, by name (`fn:<module>:<export>`, `index:<table>.<index>`, ...). */
-export type PushChanges = { adds?: string[]; drops?: string[] };
+/** What one push changed on the surface, by name (`fn:<module>:<export>`, `index:<table>.<index>`, ...), and when its
+ *  diff read prod (prod-diff's `read_at`). */
+export type PushChanges = { adds?: string[]; drops?: string[]; changes_read_at?: number };
 
-/** The pushes that put each name on the surface: `cast ship added-by`. */
-export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number; committed_in?: string };
+/** The pushes that put each name on the surface: `cast ship added-by`. A dev push (the dev watcher's) is no deploy, so it has no dp-N. */
+export type AddedBy = { name: string; deploy: string | null; dev_push: boolean; by: string | null; machine: string | null; via: string | null; at: number; dirty: number; committed_in?: string };
 
 /** The checkout the command stands in: its GitHub repository and HEAD. */
 export type LocalCheckout = { repository: string | null; head: string | null };
@@ -54,7 +55,7 @@ async function readCheckout(cwd: string = process.cwd()): Promise<LocalCheckout>
 }
 
 /** The body `/cli/changes/mark-deploy` takes; flags win over the checkout. */
-export function markBody(options: MarkOptions, local: LocalCheckout, changes: PushChanges = {}, machine: string = hostname()): { repository: string; surface: string; sha: string; version?: string; dirty?: number; deploy?: string; via?: string; machine?: string; adds?: string[]; drops?: string[] } {
+export function markBody(options: MarkOptions, local: LocalCheckout, changes: PushChanges = {}, machine: string = hostname()): { repository: string; surface: string; sha: string; version?: string; dirty?: number; deploy?: string; via?: string; machine?: string; adds?: string[]; drops?: string[]; changes_read_at?: number } {
   const repository = options.repo ?? local.repository;
   if (!repository) throw new Error("No GitHub repository here: run inside a checkout with a GitHub origin, or pass --repo <owner/name>.");
   const sha = options.sha ?? local.head;
@@ -69,26 +70,27 @@ export function markBody(options: MarkOptions, local: LocalCheckout, changes: Pu
     ...(options.via ? { via: options.via } : {}),
     ...(options.via || options.machine ? { machine: options.machine ?? machine } : {}),
     // Both lists go exactly when the diff ran, empty or not: the server reads their presence as "this push's changes are known".
-    ...(changes.adds && changes.drops ? { adds: changes.adds, drops: changes.drops } : {}),
+    ...(changes.adds && changes.drops ? { adds: changes.adds, drops: changes.drops, ...(changes.changes_read_at ? { changes_read_at: changes.changes_read_at } : {}) } : {}),
   };
 }
 
-/** `--changes <file>`: the JSON prod-diff writes, `{ adds, drops }`. */
+/** `--changes <file>`: the JSON prod-diff writes, `{ adds, drops, read_at }`. */
 export function readChanges(path: string | undefined): PushChanges {
   if (!path) return {};
   const raw = JSON.parse(readFileSync(path, "utf-8"));
   const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined);
   const adds = names(raw?.adds), drops = names(raw?.drops);
-  return adds && drops ? { adds, drops } : {};
+  const readAt = typeof raw?.read_at === "number" && Number.isFinite(raw.read_at) ? raw.read_at : undefined;
+  return adds && drops ? { adds, drops, ...(readAt ? { changes_read_at: readAt } : {}) } : {};
 }
 
 /** Each name with the push that put it there, a line each. */
 export function formatAddedBy(found: AddedBy[]): string {
   return found.map((f) => {
-    const how = f.via === "dev watcher" ? "dev watcher push" : f.dirty > 0 ? `push with ${f.dirty} uncommitted file${f.dirty === 1 ? "" : "s"}` : "push of a commit";
+    const how = f.dev_push ? "dev watcher push" : f.dirty > 0 ? `push with ${f.dirty} uncommitted file${f.dirty === 1 ? "" : "s"}` : "push of a commit";
     const who = [f.by, f.machine ? `on ${f.machine}` : null].filter(Boolean).join(" ");
     const since = f.committed_in ? `; committed since (${f.committed_in} carried it)` : "";
-    return `${f.name}  ${f.deploy} ${how}${who ? ` by ${who}` : ""}, ${new Date(f.at).toLocaleString()}${since}`;
+    return `${f.name}  ${f.deploy && !f.dev_push ? `${f.deploy} ` : ""}${how}${who ? ` by ${who}` : ""}, ${new Date(f.at).toLocaleString()}${since}`;
   }).join("\n");
 }
 
@@ -219,7 +221,7 @@ A push that upstream rejected because it moved is replayed and retried on its ow
     .option("--deploy <dp-N>", "The deploy this finishes: one codecast asked for, whose path now says what went out")
     .option("--via <path>", "What pushed it: deploy.sh or dev watcher (records the machine too)")
     .option("--machine <name>", "The machine it was pushed from (default: this one's hostname, with --via)")
-    .option("--changes <file>", "JSON { adds, drops }: what the push put on the surface and took off it, by name")
+    .option("--changes <file>", "JSON { adds, drops, read_at }: what the push put on the surface and took off it, by name, and when that was read")
     .option("--dry-run", "Print the marker without recording it")
     .option("--json", "Machine-readable output")
     .action(async (options: MarkOptions) => {

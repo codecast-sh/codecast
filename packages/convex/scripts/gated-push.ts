@@ -73,7 +73,7 @@ export function bundledSources(root: string): { dir: string; prefix: string }[] 
 export type CheckResult = { errors: number; diagnostics: string };
 
 /** What a push puts on prod and takes off it, by name (scripts/prod-diff.ts). */
-export type PushChanges = { adds: string[]; drops: string[] };
+export type PushChanges = { adds: string[]; drops: string[]; read_at?: number };
 
 export type GateIO = {
   now: () => number;
@@ -258,7 +258,12 @@ async function push(): Promise<number> {
   return r.code;
 }
 
+/** HEAD and the uncommitted count as the push bundles them: read before the push, recorded after it. */
+let atPush: { sha: string; dirty: number } | null = null;
+
 async function diff(): Promise<PushChanges | null> {
+  const head = await run(["git", "rev-parse", "HEAD"], { cwd: ROOT, timeoutMs: 10_000 });
+  atPush = head.code === 0 && head.stdout.trim() ? { sha: head.stdout.trim(), dirty: await uncommittedCount() } : null;
   // The summary (and each drop's adder) prints on stderr, straight into this pane.
   const r = spawn("bun", [join(PKG, "scripts", "prod-diff.ts"), "--json"], { cwd: PKG, stdio: ["ignore", "pipe", "inherit"], env: process.env });
   let stdout = "";
@@ -273,8 +278,8 @@ async function diff(): Promise<PushChanges | null> {
     return null;
   }
   try {
-    const { adds, drops } = JSON.parse(stdout);
-    return { adds, drops };
+    const { adds, drops, read_at } = JSON.parse(stdout);
+    return { adds, drops, ...(typeof read_at === "number" ? { read_at } : {}) };
   } catch {
     return null;
   }
@@ -307,10 +312,8 @@ async function record(changes: PushChanges | null): Promise<void> {
       markHelp = help.stdout;
     }
     if (!watcherMarkArgs(markHelp, "", 0)) return log("Push not recorded: this cast is older than `cast ship mark --via`; update cast to record watcher pushes.");
-    const head = await run(["git", "rev-parse", "HEAD"], { cwd: ROOT, timeoutMs: 10_000 });
-    const sha = head.stdout.trim();
-    if (head.code !== 0 || !sha) return log("Push not recorded: no HEAD commit.");
-    const dirty = await uncommittedCount();
+    if (!atPush) return log("Push not recorded: no HEAD commit.");
+    const { sha, dirty } = atPush;
     const dir = changes ? mkdtempSync(join(tmpdir(), "convex-push-")) : null;
     try {
       if (dir) writeFileSync(join(dir, "changes.json"), JSON.stringify(changes));

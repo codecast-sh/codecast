@@ -293,6 +293,22 @@ export function commitCiState(runs: readonly CommitCiRun[]): CommitCiState {
   return "passed";
 }
 
+/**
+ * A targets view row's `dev_push`: uncommitted work prod runs on top of the target's live deploy, the dev watcher's
+ * push saved last after that deploy went live. Null when none has since.
+ */
+export type TargetDevPush = {
+  sha: string;
+  machine: string | null;
+  /** The pusher's name. */
+  by: string | null;
+  /** The last save. */
+  at: number;
+  dirty: number;
+  adds_count: number;
+  drops_count: number;
+};
+
 // ── the waiting queue ────────────────────────────────────────────────────────
 
 export type QueueCommit = {

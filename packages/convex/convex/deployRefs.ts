@@ -8,7 +8,6 @@ import { query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation, canAccessTask, workspaceGrantsAccess } from "./lib/access";
-import { workspaceDeploys } from "./deployCarries";
 import { pushSummary } from "./deployTargetsState";
 
 export const whereIs = query({
@@ -23,8 +22,6 @@ export const whereIs = query({
 });
 
 const RECENT = 80;
-/** The dev watcher's newest pushes the list carries beside the real deploys: what prod runs now, never a pile of saves. */
-const RECENT_WATCHER = 10;
 /** The commits a deploy row lists by name; the rest are counted. */
 const COMMIT_ROWS = 40;
 
@@ -36,8 +33,7 @@ export const recentForTeam = query({
     if (!userId) return [];
     const workspace = `team:${args.team_id}`;
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return [];
-    // Real deploys are never pushed out by watcher pushes; only the newest few of those come along.
-    const rows: Doc<"deploys">[] = await workspaceDeploys(ctx, workspace, RECENT, { pushes: RECENT_WATCHER });
+    const rows: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_workspace_created", (q) => q.eq("workspace", workspace)).order("desc").take(RECENT);
     const convs = new Map<string, { title: string | null } | null>();
     const tasks = new Map<string, { short_id: string | null; title: string | null } | null>();
     const convOf = async (id: Id<"conversations">) => {

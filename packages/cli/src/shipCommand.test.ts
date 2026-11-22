@@ -3,7 +3,7 @@ import { Command } from "commander";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { formatAddedBy, markBody, readChanges, registerShipCommand, type LocalCheckout } from "./shipCommand";
+import { formatAddedBy, markBody, readChanges, registerShipCommand, type AddedBy, type LocalCheckout } from "./shipCommand";
 import { clearWorkspaceCache } from "./resolveWorkspace";
 
 const SHA = "ca172db32aa0e4b1c0de5e1f00d2a7c3b4e5f601";
@@ -22,7 +22,9 @@ describe("markBody", () => {
     // A push whose diff did not run sends no lists at all, so nobody reads it as "dropped nothing".
     expect(markBody({ surface: "backend", via: "deploy.sh" }, HERE, {}, "box-1")).not.toHaveProperty("drops");
     expect(markBody({ surface: "backend", machine: "named" }, HERE, {}, "box-1")).toMatchObject({ machine: "named" });
-    expect(markBody({ surface: "backend" }, HERE, {}, "box-1")).not.toHaveProperty("machine");
+    expect(markBody({ surface: "backend" }, HERE, {}, "box-1")).not.toHaveProperty("machine");    // When the diff read prod goes with the lists, and never without them.
+    expect(markBody({ surface: "backend", via: "deploy.sh" }, HERE, { adds: [], drops: ["fn:x:y"], changes_read_at: 1234 }, "box-1")).toMatchObject({ drops: ["fn:x:y"], changes_read_at: 1234 });
+    expect(markBody({ surface: "backend", via: "deploy.sh" }, HERE, { changes_read_at: 1234 }, "box-1")).not.toHaveProperty("changes_read_at");
   });
 
   test("--changes reads prod-diff's JSON and keeps only names", () => {
@@ -30,6 +32,10 @@ describe("markBody", () => {
     const file = join(dir, "c.json");
     writeFileSync(file, JSON.stringify({ adds: ["fn:a:b", 7], drops: ["index:t.i"], tree_ms: 9 }));
     expect(readChanges(file)).toEqual({ adds: ["fn:a:b"], drops: ["index:t.i"] });
+    writeFileSync(file, JSON.stringify({ adds: [], drops: ["fn:x:y"], read_at: 1_700_000_000_000 }));
+    expect(readChanges(file)).toEqual({ adds: [], drops: ["fn:x:y"], changes_read_at: 1_700_000_000_000 });
+    writeFileSync(file, JSON.stringify({ adds: [], drops: [], read_at: "soon" }));
+    expect(readChanges(file)).toEqual({ adds: [], drops: [] });
     expect(readChanges(undefined)).toEqual({});
     writeFileSync(file, JSON.stringify({ adds: [] }));
     expect(readChanges(file)).toEqual({});
@@ -110,7 +116,7 @@ describe("cast ship added-by", () => {
   const realLog = console.log;
   let calls: Array<{ url: string; body: any }>;
   let printed: string[];
-  const FOUND = [{ name: "index:voiceprints.by_user", deploy: "dp-2372", by: "Ashot Petrosian", machine: "MacBook-Pro-182", via: "deploy.sh", at: Date.UTC(2026, 10, 22, 5, 21), dirty: 78 }];
+  const FOUND: AddedBy[] = [{ name: "index:voiceprints.by_user", deploy: "dp-2372", dev_push: false, by: "Ashot Petrosian", machine: "MacBook-Pro-182", via: "deploy.sh", at: Date.UTC(2026, 10, 22, 5, 21), dirty: 78 }];
 
   beforeEach(() => {
     calls = [];
@@ -144,8 +150,15 @@ describe("cast ship added-by", () => {
     expect(JSON.parse(printed.at(-1)!)).toEqual({ found: [] });
   });
 
-  test("a watcher push reads as one", () => {
-    expect(formatAddedBy([{ ...FOUND[0], via: "dev watcher", dirty: 0 }])).toContain("dp-2372 dev watcher push by Ashot Petrosian");
+  test("a dev push reads as the watcher's, with no deploy", () => {
+    const at = Date.UTC(2026, 10, 22, 5, 21);
+    const line = formatAddedBy([{ name: "fn:a:b", deploy: null, dev_push: true, by: "Ana", machine: "ana-mac", via: "dev watcher", at, dirty: 2 }]);
+    expect(line).toBe(`fn:a:b  dev watcher push by Ana on ana-mac, ${new Date(at).toLocaleString()}`);
+    expect(formatAddedBy([{ name: "fn:a:b", deploy: null, dev_push: true, by: "Ana", machine: "ana-mac", via: null, at, dirty: 0, committed_in: "dp-2380" }])).toEndWith("; committed since (dp-2380 carried it)");
+  });
+
+  test("a deploy reads with its dp-N", () => {
+    expect(formatAddedBy([{ ...FOUND[0], dirty: 0 }])).toContain("index:voiceprints.by_user  dp-2372 push of a commit by Ashot Petrosian on MacBook-Pro-182");
     expect(formatAddedBy([{ ...FOUND[0], committed_in: "dp-2380" }])).toContain("; committed since (dp-2380 carried it)");
   });
 });

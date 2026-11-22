@@ -40,9 +40,7 @@ async function reachOf(ctx: any, userId: any, repository: string, change: ReachC
     if (!access.has(t.workspace)) access.set(t.workspace, await workspaceGrantsAccess(ctx, userId, t.workspace));
     if (!access.get(t.workspace) || !commitTouchesTarget(t.paths, files)) continue;
     // Reach reads back to the first live deploy that held the change; an older one only names which deploy took it out.
-    // A watcher's push is nobody's deploy: it takes no change on main live, and reach reads from the real deploy that
-    // went live last.
-    const deploys = (await targetDeploys(ctx, t.workspace, t.name, REACH_DEPLOYS)).filter((d) => (!d.repository || d.repository === repository) && d.pushed_via !== "dev watcher");
+    const deploys = (await targetDeploys(ctx, t.workspace, t.name, REACH_DEPLOYS)).filter((d) => !d.repository || d.repository === repository);
     const live = liveDeployOf(deploys);
     const out: ReachDeploy[] = [];
     for (const d of deploys) {

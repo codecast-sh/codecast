@@ -16,7 +16,7 @@
 //
 // Usage:
 //   bun packages/convex/scripts/prod-diff.ts [--json] [--out <file>]
-//     Summary on stderr; with --json, {adds, drops, tree_ms, prod_ms} on
+//     Summary on stderr; with --json, {adds, drops, read_at, tree_ms, prod_ms} on
 //     stdout; --out writes the same JSON to a file. Exit 0 when the diff ran,
 //     drops or not; exit 3 when the tree or prod could not be read (callers
 //     fail open), the reason on stderr.
@@ -149,15 +149,15 @@ export function diffNames(tree: Iterable<string>, prod: Iterable<string>): { add
 export const SUMMARY_ADDS_SHOWN = 10;
 
 /** The recorded push that put a name on prod (`cast ship added-by`). */
-export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number; committed_in?: string };
+export type AddedBy = { name: string; deploy: string | null; dev_push?: boolean; by: string | null; machine: string | null; via: string | null; at: number; dirty: number; committed_in?: string };
 
 /** Who put a dropped name there, in words: "dp-2372, uncommitted push by Ashot on MBP, 11/21 9:21 PM". */
 export function describeAdder(a: AddedBy | undefined): string {
   if (!a) return "no recorded push added it";
-  const how = a.via === "dev watcher" ? "dev watcher" : a.dirty > 0 ? `uncommitted push (${a.dirty} file${a.dirty === 1 ? "" : "s"})` : "push of a commit";
+  const how = a.dev_push || a.via === "dev watcher" ? "dev watcher push" : a.dirty > 0 ? `uncommitted push (${a.dirty} file${a.dirty === 1 ? "" : "s"})` : "push of a commit";
   const who = [a.by, a.machine ? `on ${a.machine}` : null].filter(Boolean).join(" ");
   const since = a.committed_in ? `; committed since (${a.committed_in} carried it)` : "";
-  return `${a.deploy}, ${how}${who ? ` by ${who}` : ""}, ${new Date(a.at).toLocaleString()}${since}`;
+  return `${a.deploy ? `${a.deploy}, ` : ""}${how}${who ? ` by ${who}` : ""}, ${new Date(a.at).toLocaleString()}${since}`;
 }
 
 export function formatSummary(diff: { adds: string[]; drops: string[] }, ms?: { tree_ms: number; prod_ms: number }, addedBy?: AddedBy[]): string {
@@ -326,6 +326,8 @@ async function main(argv: string[]): Promise<number> {
     return EXIT_UNREADABLE;
   }
 
+  // When prod was read: a push recorded later proves nothing about what reached prod after this moment.
+  const readAt = Date.now();
   const [tree, prod] = await Promise.allSettled([timed(runTreeChild), timed(() => prodNames(url, key))]);
   if (tree.status === "rejected" || prod.status === "rejected") {
     if (tree.status === "rejected") console.error(`prod-diff: cannot read the tree: ${(tree.reason as Error)?.message ?? tree.reason}`);
@@ -333,7 +335,7 @@ async function main(argv: string[]): Promise<number> {
     return EXIT_UNREADABLE;
   }
 
-  const result = { ...diffNames(tree.value.value, prod.value.value), tree_ms: tree.value.ms, prod_ms: prod.value.ms };
+  const result = { ...diffNames(tree.value.value, prod.value.value), read_at: readAt, tree_ms: tree.value.ms, prod_ms: prod.value.ms };
   const addedBy = result.drops.length ? addersOf(result.drops) : undefined;
   console.error(formatSummary(result, result, addedBy));
   const text = JSON.stringify(result, null, 2);

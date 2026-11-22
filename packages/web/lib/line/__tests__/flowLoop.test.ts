@@ -24,7 +24,7 @@ describe("the whole loop", () => {
     map, library, now: NOW, queued: 4,
     owned: [{ merge: true, projects: [{}, {}] }, { merge: false, projects: [{}] }] as any,
     runs: [run("1", "change", "running", "review__review"), run("2", "change", "paused", "decide__decide"), run("3", "change", "running", "ship__rebase"), run("4", "onefix", "running", "build"), run("5", "change", "completed", "deploy")],
-    deploys: [{ status: "live", live_at: NOW - 1000, created_at: NOW - 2000 }, { status: "live", live_at: NOW - 900, created_at: NOW - 900, pushed_via: "dev watcher" }, { status: "failed", created_at: NOW - 1000 }, { status: "building", created_at: NOW - 500 }, { status: "live", live_at: NOW - 3 * 86_400_000, created_at: NOW - 3 * 86_400_000 }],
+    deploys: [{ status: "live", live_at: NOW - 1000, created_at: NOW - 2000 }, { status: "failed", created_at: NOW - 1000 }, { status: "building", created_at: NOW - 500 }, { status: "live", live_at: NOW - 3 * 86_400_000, created_at: NOW - 3 * 86_400_000 }],
   });
 
   test("the rules: sources, owners, prompts in the live flows, checks and person gates, how many roles merge on their own", () => {

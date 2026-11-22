@@ -3,7 +3,7 @@
 // and what derives from them at read time. A target's live deploy, the one
 // going out and its history are read from its deploys, never stored on it.
 // Pure: no store, no React.
-import { worstCi, type CommitCiState, type DeployTargetPolicy, type QueueGroup } from "@codecast/shared/contracts/deployTargets";
+import { worstCi, type CommitCiState, type DeployTargetPolicy, type QueueGroup, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 import { prNumberOf } from "@codecast/shared/changes";
 import type { DeployPushSummary, DeployView } from "@codecast/shared/contracts/deploys";
 import type { TargetState } from "../ship/journey";
@@ -27,6 +27,9 @@ export type DeployTargetRow = {
   /** No checkout declared it: the page knows it only from its deploy records (no queue, no press). */
   record_only?: boolean;
   last_read?: { sha?: string; version?: string; at: number; error?: string } | null;
+  /** The newest dev push (a dev watcher's push from a working tree) after the live deploy went live: prod runs
+   *  someone's uncommitted work on top of that deploy. Never a deploy itself. */
+  dev_push?: TargetDevPush | null;
   queue: {
     known: boolean;
     truncated: boolean;
@@ -98,9 +101,9 @@ export const sessionsOf = (d: Pick<TeamDeployRow, "sessions">): DeploySession[] 
  * sha already live. With no commits named but a new sha, its commits are only
  * unrecorded (or none touched the target), so it is not called a rebuild.
  */
-export function rebuiltOnly(d: Pick<TeamDeployRow, "status" | "action" | "commits" | "sha" | "previous_sha" | "dirty" | "pushed_via">): boolean {
-  // A push with uncommitted files (a dev watcher's, or a dirty deploy.sh) shipped something new even on the same sha.
-  if (d.dirty || isWatcherPush(d)) return false;
+export function rebuiltOnly(d: Pick<TeamDeployRow, "status" | "action" | "commits" | "sha" | "previous_sha" | "dirty">): boolean {
+  // A push with uncommitted files shipped something new even on the same sha.
+  if (d.dirty) return false;
   return d.status === "live" && d.action === "deploy" && !d.commits && (!d.previous_sha || d.previous_sha === d.sha);
 }
 
@@ -156,25 +159,18 @@ export function deploysOf(t: Pick<DeployTargetRow, "name" | "repository">, deplo
 /** Whether a newer deploy of the target went live after this one was asked for. */
 export const supersededBy = (d: Pick<TeamDeployRow, "created_at">, live: Pick<TeamDeployRow, "created_at"> | null): boolean => !!live && live.created_at > d.created_at;
 
-/** A dev watcher's push: prod runs it, but it is nobody's deploy (it supersedes nothing and is never a rollback point). */
-export const isWatcherPush = (d: Pick<TeamDeployRow, "pushed_via">) => d.pushed_via === "dev watcher";
-
 export function targetNow(t: Pick<DeployTargetRow, "name" | "repository">, deploys: ReadonlyArray<TeamDeployRow>) {
   const mine = deploysOf(t, deploys);
-  const lives = mine.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at));
-  const live = lives[0] ?? null;
+  const live = mine.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at))[0] ?? null;
   // A deploy asked for before the live one never went out as asked (the server closes it as superseded): not going out.
-  // A watcher push leaves the line's deploys waiting, so only a real deploy counts here.
-  const open = mine.find((d) => isOpen(d) && !supersededBy(d, lives.find((l) => !isWatcherPush(l)) ?? null)) ?? null;
+  const open = mine.find((d) => isOpen(d) && !supersededBy(d, live)) ?? null;
   const failed = mine[0]?.status === "failed" ? mine[0] : null;
   return { live, open, failed, history: mine };
 }
 
 /** The earlier live deploy a Roll back returns to: the newest live one before the live deploy, on another sha. */
 export function rollbackTarget(history: ReadonlyArray<TeamDeployRow>, live: TeamDeployRow | null): TeamDeployRow | null {
-  // Over a dev watcher's push, going back means the last real deploy, even on the same sha: it puts the committed tree back.
-  if (live && isWatcherPush(live)) return history.find((d) => d.status === "live" && !isWatcherPush(d) && !!d.sha) ?? null;
-  return history.find((d) => d.status === "live" && !isWatcherPush(d) && d._id !== live?._id && !!d.sha && d.sha !== live?.sha) ?? null;
+  return history.find((d) => d.status === "live" && d._id !== live?._id && !!d.sha && d.sha !== live?.sha) ?? null;
 }
 
 /** The target's state in a glance: going out, failed, waiting with N commits, or up to date. */

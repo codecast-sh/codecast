@@ -19,6 +19,14 @@ describe("a ship's deploy step", () => {
     expect(fs.existsSync(seen)).toBe(false);
   });
 
+  test("when its diff read prod rides along with the lists", async () => {
+    const r = await runDeployStep(async (env) => { fs.writeFileSync(env.CAST_PUSH_CHANGES_FILE!, JSON.stringify({ adds: [], drops: ["fn:x:y"], read_at: 1_700_000_000_000 })); return { code: 0, output: "" }; });
+    expect(r.changes).toEqual({ machine: os.hostname(), via: "deploy.sh", adds: [], drops: ["fn:x:y"], changes_read_at: 1_700_000_000_000 });
+    // Without the lists (the diff failed), a read time alone says nothing.
+    const bare = await runDeployStep(async (env) => { fs.writeFileSync(env.CAST_PUSH_CHANGES_FILE!, JSON.stringify({ read_at: 5 })); return { code: 0, output: "" }; });
+    expect(bare.changes).toEqual({ machine: os.hostname(), via: "deploy.sh" });
+  });
+
   test("a step that writes nothing reports nothing", async () => {
     const r = await runDeployStep(async () => ({ code: 0, output: "ok" }));
     expect(r).toEqual({ code: 0, output: "ok", changes: {} });

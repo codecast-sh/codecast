@@ -4,17 +4,16 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { workspaceGrantsAccess } from "./lib/accessKeys";
 import { nextShortId } from "./counters";
 import { enqueueConfigCommand } from "./users";
-import { DEPLOY_SHORT_ID_PREFIX, liveDeployOf, liveDeploys } from "@codecast/shared/contracts/deploys";
+import { DEPLOY_SHORT_ID_PREFIX, liveDeploys } from "@codecast/shared/contracts/deploys";
 import { canRedeploySha, commitTouchesTarget } from "@codecast/shared/contracts/deployTargets";
 import { teamKey } from "./deployTargetsCi";
-import { COMMITS_MAX, commitBySha, deployCommitsOf, mainCommitsAfter, RECENT_PUSHES, repositoryArg, targetDeploys, targetRows } from "./deployTargetsState";
+import { COMMITS_MAX, commitBySha, deployCommitsOf, mainCommitsAfter, repositoryArg, targetDeploys, targetRows } from "./deployTargetsState";
 
 /**
  * Ask for a deploy of one target: main's head (`deploy`), an earlier deploy's
  * sha again (`redeploy`, only for a command that takes `$sha`), or the
  * target's rollback command (`rollback`, back to the live deploy before the
- * current one, to the last real deploy over a dev watcher's push, or the one
- * named). The machine that published the target runs
+ * current one, or the one named). The machine that published the target runs
  * it (`cast line deploy run dp-N`, the line-deploy graph), and the deploy ends
  * live or failed.
  */
@@ -34,27 +33,20 @@ export async function requestTargetDeployCore(
   if (t.runs === "push") throw new Error(`${name} deploys itself when main moves; there is nothing to send from here`);
   if (!t.command) throw new Error(`${name} names no command`);
   if (!args.here && (!t.device_id || !t.root)) throw new Error(`No machine publishes ${name}, so nothing can run it`);
-  const deploys = await targetDeploys(ctx, workspace, name, 60, { pushes: RECENT_PUSHES });
+  const deploys = await targetDeploys(ctx, workspace, name);
   const open = deploys.find((d) => (d.status === "requested" || d.status === "running") && (!d.repository || d.repository === t.repository));
   if (open) throw new Error(`${open.short_id} is already going out to ${name} (${open.status}); wait for it to finish`);
-  // What a deploy goes on from, a rollback goes back from, and "already live" means: the real deploy that went live
-  // last. A watcher's push runs on prod but is nobody's deploy.
-  const lives = liveDeploys(deploys, { repository: t.repository, real: true });
+  // What a deploy goes on from, a rollback goes back from, and "already live" means: the deploy that went live last.
+  const lives = liveDeploys(deploys, { repository: t.repository });
   const live = lives[0];
-  // What prod runs now, a watcher's push included.
-  const runsNow = liveDeployOf(deploys, { repository: t.repository });
   let sha: string | undefined;
   let rollbackOf: string | undefined;
   if (args.sha !== undefined && action !== "deploy") throw new Error(`A ${action} sends the sha of the deploy it names (of); sha names the commit of a deploy`);
   if (action !== "deploy") {
     const of = args.of
       ? deploys.find((d) => d.short_id === args.of!.toLowerCase())
-      // Over a watcher's push, going back means the last real deploy, even at the same sha: it puts the committed tree
-      // back (the web's rollbackTarget).
-      : runsNow?.pushed_via === "dev watcher" ? live
       : lives.find((d) => d._id !== live?._id && d.sha && d.sha !== live?.sha);
     if (!of?.sha) throw new Error(args.of ? `No deploy ${args.of} of ${name} with a sha` : `No earlier live deploy of ${name} to go back to`);
-    if (of.pushed_via === "dev watcher") throw new Error(`${of.short_id} is a dev watcher's push of uncommitted files; it is not a deploy to go back to`);
     if (action === "redeploy" && !canRedeploySha(t)) throw new Error(`${name}'s command sends the tree it runs in, not a sha: it cannot redeploy ${of.short_id}${t.rollback ? "; use its rollback" : ""}`);
     if (action === "rollback" && !t.rollback) throw new Error(`${name} names no rollback command`);
     sha = of.sha;
