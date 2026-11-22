@@ -137,26 +137,35 @@ The message is a machine wake from codecast's level sweep (origin
 `scheduler`), so it leaves the writer's pinned state and a hidden stash
 alone, and it revives a killed writer: the checkout stays stuck until
 someone reconciles the file. Each send carries a client id derived from the
-checkout, the writer and upstream's blobs, so a retried send lands once.
+checkout, the writer, the kind of brief, the upstream commit and upstream's
+blobs, so a retried send lands once. A send that takes over 10 seconds counts
+as failed, so one hung call cannot stall the sweep of every other checkout.
 
 `.git/codecast/level-conflicts.json` keeps, per conflicting path, upstream's
-blob of it, the blob on disk, the writer and whether it was briefed. On a
-busy main a standing conflict costs an `ls-tree` and a `hash-object` a sweep
-and no attribution. Upstream changing the file briefs again; the file
-changing on disk attributes again and briefs only a new writer. A path no
+blob of it, the blob on disk, the writer and which brief it got. On a busy
+main a standing conflict costs an `ls-tree` and a `hash-object` a sweep and
+no attribution. Upstream changing the file briefs again; the file changing on
+disk attributes again, at most every 15 minutes while its writer types on,
+and briefs only a new writer. A path no
 transcript explains, or a brief that failed, is tried again after 15
 minutes, since a transcript can reach the sync ledger after the write it
 records; the daemon's `[LEVEL]` log line names writerless paths every sweep.
-A writer the server will never deliver to (a teammate's session, which this
-machine's token may not message) is named in that line and tried again only
-when either blob changes.
-A machine that is signed out attributes nothing. A clean level, or a
+A writer the server will never deliver to is named in that line and tried
+again only when either blob or the writer changes.
+
+Known limit: a teammate's session gets no brief. The server delivers this
+machine's messages only to its own user's conversations, which is fine in
+practice because a shared checkout's writers are normally the person's own
+sessions. A machine that is signed out attributes nothing. A clean level, or a
 checkout found already level, clears the record and the merge files.
 
 A level that raced a writer (a file kept changing while it moved) leaves
 HEAD on upstream and that file without upstream's change. Its writer is told
 the file would revert upstream's change as it stands, with the merge saved
-under `.git/codecast/level-stale/<path>`, which a later level does not clear.
+under `.git/codecast/level-stale/<path>`, which a later level does not clear;
+the sweep prunes those files a day after they were written. A writer told
+earlier that the checkout was held still gets this brief: the record keeps
+which kind of brief each path got.
 
 ## Fix forward
 
