@@ -22,6 +22,7 @@ const SEGMENT: Partial<Record<InboxViewMode, string>> = {
   plan: 'Plan',
   project: 'Project',
   goal: 'Goal',
+  machine: 'Machine',
 };
 
 /** The labels and projects that can narrow the inbox, with how many rows
