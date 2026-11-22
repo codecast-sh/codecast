@@ -157,6 +157,7 @@ describe("a dormant target keeps its row but does not set the change's state", (
     const r = deployReach(ON_MAIN, [{ target: "production", deploys: production }, { target: "aivery-operator", deploys: operator }], now)!;
     expect(r.state).toBe("live");
     expect(r.targets.map((t) => [t.target, t.state])).toEqual([["production", "live"], ["aivery-operator", "waiting"]]);
+    expect(r.targets.map((t) => [t.target, !!t.dormant])).toEqual([["production", false], ["aivery-operator", true]]);
   });
   test("a target with a deploy open, or one in the week, still speaks; when all are dormant, all speak", () => {
     const production = [dp("live", { sha: SHA, created_at: now - DAY, live_at: now - DAY })];
