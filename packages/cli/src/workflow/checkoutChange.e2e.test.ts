@@ -178,11 +178,13 @@ describe("a shared checkout's pass is one flow change", () => {
     const since = Date.now() + 5;
     await new Promise((r) => setTimeout(r, 20));
     edit(A, "src/a.ts", "export const a = 'good';\n");
+    // A adds a dependency, and its install rewrites the lockfile.
+    edit(A, "package.json", "{ \"dependencies\": { \"x\": \"1\" } }\n");
     write(root, "bun.lock", "{ lockfile: 1 }\n");
     git(root, "mv", "src/f.ts", "src/e.ts");
 
     const { change: again } = await refreezeSessionChange(root, runDir, null, { roster, since });
-    expect(again.paths).toEqual(["bun.lock", "notes.txt", "src/a.ts", "src/b.ts", "src/e.ts", "src/f.ts"]);
+    expect(again.paths).toEqual(["bun.lock", "notes.txt", "package.json", "src/a.ts", "src/b.ts", "src/e.ts", "src/f.ts"]);
     expect(again.behind).toBeUndefined();
     expect(git(root, "show", `${again.tip}:bun.lock`)).toBe("{ lockfile: 1 }");
     expect(git(root, "show", `${again.tip}:src/e.ts`)).toBe("export const f = 1;");
@@ -191,7 +193,32 @@ describe("a shared checkout's pass is one flow change", () => {
     // Without a brief to date them by, unattributed newcomers stay out as before.
     writeFrozenChange(runDir, change);
     const { change: undated } = await refreezeSessionChange(root, runDir, null, { roster });
-    expect(undated.paths).toEqual(["notes.txt", "src/a.ts", "src/b.ts"]);
+    expect(undated.paths).toEqual(["notes.txt", "package.json", "src/a.ts", "src/b.ts"]);
+  }, 180_000);
+
+  test("a refreeze holds out what another session's install or codegen wrote after the brief", async () => {
+    const { root, edit } = checkoutWorld();
+    const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
+    const runDir = path.join(root, ".git", "run-pass");
+    writeFrozenChange(runDir, change);
+    const since = Date.now() + 5;
+    await new Promise((r) => setTimeout(r, 20));
+    edit(A, "src/a.ts", "export const a = 'good';\n");
+    // Nobody among the writers changed a manifest or anything under gen/: some other session's shell wrote these.
+    write(root, "bun.lock", "{ lockfile: 2 }\n");
+    write(root, "gen/_generated/api.ts", "export const api = {};\n");
+
+    const { change: again } = await refreezeSessionChange(root, runDir, null, { roster, since });
+    expect(again.paths).toEqual(["notes.txt", "src/a.ts", "src/b.ts"]);
+    const held = Object.fromEntries(again.held.map((h) => [h.path, h.why]));
+    expect(held["bun.lock"]).toMatch(/^changed after the brief, and no writer's change makes it/);
+    expect(held["gen/_generated/api.ts"]).toMatch(/^changed after the brief, and no writer's change makes it/);
+    expect(() => git(root, "cat-file", "-e", `${again.tip}:bun.lock`)).toThrow();
+    // Codegen beside a writer's source goes in: A's change under src/ regenerates src/_generated.
+    write(root, "src/_generated/api.ts", "export const api = { a: 1 };\n");
+    writeFrozenChange(runDir, change);
+    const { change: third } = await refreezeSessionChange(root, runDir, null, { roster, since });
+    expect(third.paths).toContain("src/_generated/api.ts");
   }, 180_000);
 
   test("a refreeze of a pass upstream already holds, the checkout levelled under it, comes back landed", async () => {
