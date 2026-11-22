@@ -38,7 +38,7 @@ import { checkRateLimit } from "./rateLimit";
 import { resolveTeamForPath, buildShareUpdate, isTeamMember } from "./privacy";
 import { applyMembershipVisibilityChange } from "./teams";
 import { isTeamVisibilityLevel } from "./teamVisibility";
-import { resumeConversationSession } from "./daemonCommandUtils";
+import { resumeConversationSession, withCommandRouting } from "./daemonCommandUtils";
 import { addDepCore, removeDepCore, resolveAssigneeToUserId, recalcPlanProgress, subscribeUser } from "./tasks";
 import { resolveWorkerParentConversation, resolveTaskGitContext } from "./lib/taskLaunch";
 import { api, internal } from "./_generated/api";
@@ -3436,9 +3436,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         ...(extraArgs || {}),
       });
     } catch (e: any) {
-      // Re-throw with routing context: the bare "Not authorized" from the
-      // target mutation is undiagnosable in server logs (no args are logged).
-      throw new Error(`convCommand ${command} conv=${convId} user=${userId}: ${e?.message ?? e}`);
+      throw withCommandRouting(e, command, convId, String(userId));
     }
   },
 };

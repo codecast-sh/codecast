@@ -284,6 +284,11 @@ const IGNORED_ERROR_PATTERNS: RegExp[] = [
   // A doc editor behind a CLI rewrite: the server refuses its steps and the
   // editor's gap detector remounts it from the new snapshot (docSync.stepsAfter).
   literalPattern(DOC_REWRITTEN_ERROR),
+  // A session command the server refused because the viewer may not command
+  // that session (convex daemonCommandUtils.sessionCommandRefused): an expected
+  // answer the UI already shows, typed so it never files as a new bug (eg-2899).
+  // An untyped server failure carries no code and still reports.
+  /SESSION_COMMAND_REFUSED/,
 ];
 
 function isIgnoredError(message: string | undefined): boolean {

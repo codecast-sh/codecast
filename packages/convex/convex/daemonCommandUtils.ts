@@ -1,3 +1,4 @@
+import { ConvexError } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { ACTIVE_AGENT_STATUSES, MID_TURN_AGENT_STATUSES, commandsSession, localAgentTypeOf } from "@codecast/shared/contracts";
 import { enqueuePendingMessage, releaseQueuedForUser, resetConversationPendingMessages } from "./pendingMessages";
@@ -209,6 +210,37 @@ export async function enqueueHibernateSession(
 // keep their own variants — they must proceed on ghost rows this rejects.
 // A missing row is its own error: the web resume path escalates
 // "Conversation not found" to the ghost-restore restart.
+//
+// The refusal is an expected answer, not a server failure, so it is a typed
+// ConvexError (SESSION_COMMAND_REFUSED): a plain Error reaches the client as
+// "Server Error" and the web reporter files it as a new bug (eg-2899). The
+// message keeps "Not authorized", which dispatchRefusalReason turns into the
+// person's words.
+export const SESSION_COMMAND_REFUSED = "SESSION_COMMAND_REFUSED";
+
+export function sessionCommandRefused(conversationId: string, userId: string): never {
+  throw new ConvexError({
+    code: SESSION_COMMAND_REFUSED,
+    message: "Not authorized",
+    retryable: false,
+    conversation_id: conversationId,
+    user_id: userId,
+  });
+}
+
+/**
+ * convCommand's re-throw: the bare "Not authorized" from the target mutation
+ * is undiagnosable in server logs (no args are logged), so the error gains the
+ * command, conversation and user. A typed refusal stays a ConvexError carrying
+ * them as data; anything else stays a plain Error, a real failure.
+ */
+export function withCommandRouting(e: unknown, command: string, conversationId: string, userId: string): Error {
+  if (e instanceof ConvexError && e.data && typeof e.data === "object") {
+    return new ConvexError({ ...(e.data as Record<string, any>), command, conversation_id: conversationId, user_id: userId });
+  }
+  return new Error(`convCommand ${command} conv=${conversationId} user=${userId}: ${(e as any)?.message ?? e}`);
+}
+
 export async function requireSessionCommandTarget(
   ctx: DbCtx,
   userId: Id<"users">,
@@ -216,9 +248,7 @@ export async function requireSessionCommandTarget(
 ): Promise<Doc<"conversations">> {
   const conv = await ctx.db.get(conversationId);
   if (!conv) throw new Error("Conversation not found");
-  if (!commandsSession(conv, userId)) {
-    throw new Error("Not authorized");
-  }
+  if (!commandsSession(conv, userId)) sessionCommandRefused(String(conversationId), String(userId));
   return conv;
 }
 

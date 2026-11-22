@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { ConvexError } from "convex/values";
-import { requireSessionCommandTarget, resumeConversationSession } from "./daemonCommandUtils";
+import { SESSION_COMMAND_REFUSED, requireSessionCommandTarget, resumeConversationSession, withCommandRouting } from "./daemonCommandUtils";
 import { makeFakeDb } from "./testDb";
 
 // ct-91098 / eg-2899: a viewer on /threads sent convCommand("resumeSession")
@@ -46,5 +46,21 @@ describe("a session command from someone who may not command the session", () =>
     const ctx = { db: makeFakeDb({ conversations: [conv] }) } as any;
     expect((await requireSessionCommandTarget(ctx, RUNNER, "conversations_1" as any)).user_id).toBe(RUNNER);
     expect((await requireSessionCommandTarget(ctx, OWNER, "conversations_1" as any)).user_id).toBe(RUNNER);
+  });
+
+  test("convCommand's routing re-throw keeps the refusal typed and names command, conversation and user", async () => {
+    const ctx = { db: makeFakeDb({ conversations: [conv] }) } as any;
+    const inner = await refusal(resumeConversationSession(ctx, STRANGER, "conversations_1" as any));
+    const routed = withCommandRouting(inner, "resumeSession", "conversations_1", STRANGER);
+    expectTypedRefusal(routed);
+    expect((routed as ConvexError<any>).data).toMatchObject({
+      code: SESSION_COMMAND_REFUSED, retryable: false, command: "resumeSession", conversation_id: "conversations_1", user_id: STRANGER,
+    });
+  });
+
+  test("a real failure under convCommand stays a plain Error", () => {
+    const routed = withCommandRouting(new Error("boom"), "resumeSession", "conversations_1", RUNNER);
+    expect(routed).not.toBeInstanceOf(ConvexError);
+    expect(routed.message).toBe(`convCommand resumeSession conv=conversations_1 user=${RUNNER}: boom`);
   });
 });
