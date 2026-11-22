@@ -65,7 +65,12 @@ finally:
     if status is None:
         exited, state = os.waitpid(pid, os.WNOHANG)
         if not exited:
-            os.killpg(pid, signal.SIGKILL)
+            # The loop also ends when the installer closes the terminal: then it is exiting, not stuck, and its group may
+            # hold no live process, which macOS refuses to signal (EPERM). Either way, its own exit status is the answer.
+            try:
+                os.killpg(pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
             _, state = os.waitpid(pid, 0)
         status = os.waitstatus_to_exitcode(state)
     os.close(fd)
