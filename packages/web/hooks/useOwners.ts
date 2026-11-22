@@ -27,7 +27,7 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { peopleOf } from "@codecast/shared/team/memberKind";
-import type { SessionOwnersChange } from "../store/orgSlice";
+import type { SessionOwnersChange } from "../store/sessionOwnersSlice";
 import { driverOf, type OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
 
 type OwnerInfo = {

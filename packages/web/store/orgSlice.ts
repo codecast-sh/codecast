@@ -17,8 +17,9 @@
 // of what each edit does to a tree.
 import { create, current, isDraft } from "mutative";
 import { action, asyncAction, sync } from "./mutativeMiddleware";
-import { applyOwnersChangeTo, listedOwnerIds, ownersFactsFromRead, type OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
 import { createDecisionAreasSlice, type DecisionAreasSliceActions } from "./decisionAreasSlice";
+import { createSessionOwnersSlice, type SessionOwnersSliceActions } from "./sessionOwnersSlice";
+import type { ReparentResult } from "./reparentResult";
 import {
   countStates,
   sameParent,
@@ -86,46 +87,6 @@ export type OrgIntent =
 
 /** What a revert tells the person: `at` keys the toast so it fires once. */
 export type OrgIntentNotice = { text: string; at: number };
-
-/** What orgRoles.reparentSession / reparent echo back (org-staffing.md S11):
- *  who the subject now reports to, and how many agents were told. The web
- *  reads this to toast both things at once. */
-export type ReparentResult = {
-  short_id?: string;
-  reports_to?: { kind: "user" | "role"; name: string } | null;
-  /** `deferred` counts a session too stale to wake for one sentence: the line
-   *  is parked and it reads it when it next runs. Never "was told". */
-  told?: { sessions: number; roles: number; deferred?: number };
-};
-
-/**
- * The one toast a reparent shows (S11). It must say only what actually
- * happened, because the three deliveries differ:
- *
- * - A SESSION move enqueues a real message into that session (tellSession), so
- *   "the session was told" is literally true: it arrives in its transcript.
- * - A session too stale to wake for one sentence is DEFERRED instead: the line
- *   is parked and it reads it on its next turn. Saying "was told" there would
- *   have someone open a transcript that has not received anything yet, so it
- *   says when it will arrive instead.
- * - A ROLE move wakes the role once and files one PASSIVE fact per live hand
- *   into the ROLE's own next frame (tellRoleMoved enqueues against role._id,
- *   not against the hand). Nothing reaches a hand's transcript, so calling them
- *   "told" would send a founder hunting for a line that was never written.
- *   They are noted in the role's frame, and that is what this says.
- */
-export function reparentToastLine(subject: string, parentName: string, kind: "session" | "role", told?: { sessions: number; roles: number; deferred?: number }): string {
-  const head = `${subject} now reports to ${parentName}`;
-  if (kind === "session") {
-    if (told?.sessions) return `${head}; the session was told.`;
-    if (told?.deferred) return `${head}; it will be told when it next runs.`;
-    return `${head}.`;
-  }
-  const hands = told?.sessions ?? 0;
-  const noted = hands ? `${hands} hand${hands === 1 ? "" : "s"} noted in its frame` : "";
-  if (told?.roles) return noted ? `${head}; the role was told, ${noted}.` : `${head}; the role was told.`;
-  return noted ? `${head}; ${noted}.` : `${head}.`;
-}
 
 /** An intent older than this is abandoned: the dispatch failed or was
  *  rejected and no echo will ever agree with it. */
@@ -227,26 +188,6 @@ export type OrgReparentSessionTarget =
   | { kind: "user"; user_id?: string; owners?: string[]; mode?: "set" | "add" | "remove"; drop_role?: boolean }
   | { kind: "role"; role_id: string | null };
 
-/** Who drives a session: the role it is filed under, one of its people, or
- *  (`none`) the default, which is how an undo puts back a driver nobody chose. */
-export type SessionDriverTarget = { kind: "role" } | { kind: "user"; user_id: string } | { kind: "none" };
-
-/** One Save of the owners menu (sessionOwnership.applyOwnersChange): people
- *  added and removed, the role set or taken off (`role` absent leaves it),
- *  who drives, and leaving (after a move off your account when it runs there). */
-export type SessionOwnersChange = {
-  add?: string[];
-  remove?: string[];
-  /** Rows put back as they were (an undo of a remove). */
-  restore?: OwnerRowFact[];
-  role?: string | null;
-  driver?: SessionDriverTarget;
-  /** `runner_id`/`runner_is_bot` name the account the move hands it to: the
-   *  store needs them to paint the result; only the device goes to the server. */
-  leave?: { move_to_device_id?: string; runner_id?: string; runner_is_bot?: boolean };
-  note?: string;
-};
-
 export type OrgCreateRoleInput = {
   name: string;
   handle: string;
@@ -298,7 +239,7 @@ export type OrgUpdateRoleInput = {
   keeps_reports_inside?: boolean;
 };
 
-export type OrgSliceActions = DecisionAreasSliceActions & {
+export type OrgSliceActions = DecisionAreasSliceActions & SessionOwnersSliceActions & {
   /** Move a session under a person (ownership) or a role (org_role_id) — the one
    *  path for the chart drag AND the ownership menu (org-staffing.md S11). The
    *  target carries the menu's owner-set arithmetic ({ owners, mode }); the
@@ -308,11 +249,6 @@ export type OrgSliceActions = DecisionAreasSliceActions & {
    *  Resolves to the reparent result (told counts + the new parent) so the
    *  caller can toast both things once the server echoes. */
   reparentOrgSession: (conversationId: string, target: OrgReparentSessionTarget, opts?: { row?: OrgSession | null; note?: string; from_session?: string }) => Promise<ReparentResult | undefined>;
-  /** The owners menu's Save: the shared owners rule paints the result in each
-   *  fact's one home (the people on the sessionOwners row, the role and the
-   *  driver on the session row), and `change` rides one dispatch to
-   *  applyOwnersChange. `inverse` puts it back for undo; null when nothing can. */
-  applySessionOwners: (conversationId: string, change: SessionOwnersChange, inverse?: SessionOwnersChange | null) => void;
   /** Change a role's reports_to. Resolves to the reparent result (told counts). */
   reparentOrgRole: (roleId: string, reportsTo: OrgParentRef, note?: string) => Promise<ReparentResult | undefined>;
   /** Change who a team member reports to (null: nobody). Dispatch runs orgPeople.reparentPerson. */
@@ -1389,6 +1325,7 @@ export function createOrgSlice(): OrgSliceImpl {
   return {
     // Who decides for which areas, and Share out (store/decisionAreasSlice.ts).
     ...createDecisionAreasSlice(),
+    ...createSessionOwnersSlice(),
     orgTree: null,
 
     orgTreeServer: null,
@@ -1426,11 +1363,9 @@ export function createOrgSlice(): OrgSliceImpl {
       // The session row carries the role too (role chips, the session map):
       // it moves in the same tick, and the echo of the conversation confirms it.
       // Mirrors performReparentSession: a role's own standing session never
-      // moves, and any person target but a remove clears the role.
+      // moves; a role target sets or clears the role; a person target clears
+      // it only when it re-homes (a bare user_id or drop_role).
       const session = (this as OrgDraft & { sessions?: Record<string, { org_role_id?: string | null; standing_role_id?: string | null }> }).sessions?.[conversationId];
-      // Mirrors performReparentSession: a role target sets or clears the
-      // role; a person target clears it only when it re-homes (a bare user_id
-      // or drop_role), never when the owners list changes.
       if (session && !session.standing_role_id) {
         if (target.kind === "role") session.org_role_id = target.role_id;
         else if (target.mode !== "remove" && (target.drop_role ?? !!target.user_id)) session.org_role_id = null;
@@ -1444,27 +1379,6 @@ export function createOrgSlice(): OrgSliceImpl {
         applyOrgIntent(tree, intent, row);
         pushIntent(this, intent);
       }
-    }),
-
-    // The owners menu's Save, painted by the same rule the server runs
-    // (shared/contracts/sessionOwners), so what lands here is what listOwners
-    // and the inbox row answer, and the fields this holds release on the echo.
-    applySessionOwners: action(function (this: OrgDraft, conversationId: string, change: SessionOwnersChange, _inverse?: SessionOwnersChange | null) {
-      const draft = this as OrgDraft & {
-        sessionOwners?: Record<string, any>;
-        sessions?: Record<string, any>;
-        conversations?: Record<string, any>;
-        currentUser?: { _id?: string } | null;
-      };
-      const people = draft.sessionOwners?.[conversationId];
-      const home = draft.sessions?.[conversationId] ?? draft.conversations?.[conversationId];
-      if (!people || !home || home.standing_role_id) return;
-      const before = ownersFactsFromRead(people, home);
-      const to = change.leave?.runner_id ? { runner_id: change.leave.runner_id, runner_is_bot: !!change.leave.runner_is_bot } : undefined;
-      const next = applyOwnersChangeTo(before, { ...change, leave: change.leave ? { move_to: to } : undefined }, { actor: String(draft.currentUser?._id ?? ""), now: Date.now() });
-      people.owner_ids = listedOwnerIds(next);
-      if ((home.org_role_id ?? null) !== next.role_id) home.org_role_id = next.role_id;
-      if ((home.driver_user_id ?? null) !== next.driver_user_id) home.driver_user_id = next.driver_user_id;
     }),
 
     reparentOrgPerson: action(function (this: OrgDraft, _teamId: string, userId: string, reportsTo: string | null) {

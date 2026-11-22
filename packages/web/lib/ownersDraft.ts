@@ -5,7 +5,7 @@
 // role at a time and it drives when added; taking away the driver hands the
 // wheel to the role, else the first person; leaving rides the change itself.
 import type { OwnerRole, SessionDriver } from "../hooks/useOwners";
-import type { SessionDriverTarget, SessionOwnersChange } from "../store/orgSlice";
+import type { SessionDriverTarget, SessionOwnersChange } from "../store/sessionOwnersSlice";
 import type { OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
 
 export type MoveTo = { device_id: string; is_remote: boolean; label: string; runner_id: string; runner_is_bot: boolean };

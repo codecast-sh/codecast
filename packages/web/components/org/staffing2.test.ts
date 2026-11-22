@@ -3,7 +3,8 @@
 // chip a seat draws (S10). These are the pieces the menu, the chart and the
 // cards all read, so they are pinned here rather than in any one surface.
 import { describe, expect, it } from "bun:test";
-import { reparentToastLine, reparentTreeParent } from "../../store/orgSlice";
+import { reparentTreeParent } from "../../store/orgSlice";
+import { reparentToastLine } from "../../store/reparentResult";
 import { roleTenureChip } from "./orgMeta";
 import { layoutOrgTree } from "./orgLayout";
 import { CARD } from "./orgCardModel";
