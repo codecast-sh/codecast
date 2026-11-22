@@ -35,6 +35,7 @@ import {
 import { canAccessConversation, viewingAccessStamp, workspaceGrantsAccess, workspaceKey } from "./lib/access";
 import type { Id } from "./_generated/dataModel";
 import { PUSH_TYPE_LABELS } from "./lib/pushPrivacy";
+import { DECISION_PUSH_TYPE, liveDecisionPush } from "./lib/decisionRing";
 
 // Client heartbeats every ~30s while visible; background browser tabs get
 // throttled to ~1/min, so "fresh" tolerates two missed beats. Sleeping the
@@ -116,9 +117,13 @@ export function summarizePushBatch(
     return { title: r.title, body: r.body, data: r.data ?? {} };
   }
   const counts = new Map<string, number>();
+  let total = 0;
   for (const r of rows) {
     const key = r.type && PUSH_TYPE_LABELS[r.type] ? r.type : "other";
-    counts.set(key, (counts.get(key) ?? 0) + 1);
+    // A card push carries every card its session asked in one turn.
+    const n = r.type === DECISION_PUSH_TYPE ? (r.data?.decision_ids?.length || 1) : 1;
+    counts.set(key, (counts.get(key) ?? 0) + n);
+    total += n;
   }
   const parts: string[] = [];
   for (const [key, n] of counts) {
@@ -131,11 +136,11 @@ export function summarizePushBatch(
     parts.push(`${otherCount} ${otherCount === 1 ? "update" : "updates"}`);
   }
   return {
-    title: `${rows.length} notifications`,
+    title: `${total} notifications`,
     body: parts.join(" · "),
     // No conversationId on purpose: tapping an aggregate opens the app (and
     // its notification list), not one arbitrary session out of many.
-    data: { type: "aggregate", count: rows.length },
+    data: { type: "aggregate", count: total },
   };
 }
 
@@ -346,12 +351,15 @@ export async function enqueuePush(
     subtitle?: string;
     body: string;
     data?: any;
+    // Not before this: a decision card's push waits for its session's turn to
+    // end (lib/decisionPush.ts), which releases it sooner.
+    hold_until?: number;
   },
 ): Promise<void> {
   if (!opts.user.push_token || !opts.user.notifications_enabled) return;
   const now = Date.now();
   const { active } = await readPresence(ctx, opts.user, now);
-  const dueAt = now + (active ? HOLD_WHILE_ACTIVE_MS : AWAY_DEBOUNCE_MS);
+  const dueAt = Math.max(now + (active ? HOLD_WHILE_ACTIVE_MS : AWAY_DEBOUNCE_MS), opts.hold_until ?? 0);
   await ctx.db.insert("push_outbox", {
     user_id: opts.user._id,
     notification_id: opts.notification_id,
@@ -416,6 +424,21 @@ export async function performPushFlush(ctx: any, userId: any): Promise<void> {
         continue;
       }
     }
+    // A card push says only what still waits on the person: cards answered
+    // or handed elsewhere since it was staged drop out, and with none left
+    // the push does too.
+    if (row.type === DECISION_PUSH_TYPE) {
+      const live = await liveDecisionPush(ctx, row);
+      if (!live) {
+        await ctx.db.delete(row._id);
+        gone.add(row._id);
+        continue;
+      }
+      if (live !== row) {
+        await ctx.db.patch(row._id, { title: live.title, body: live.body, data: live.data });
+        Object.assign(row, { title: live.title, body: live.body, data: live.data });
+      }
+    }
     // Hold this round if either: the user is at the computer with machine-wide
     // presence on (keeps re-deferring, so the push waits until they actually
     // walk away instead of escalating on a timer), or the user came back to the
@@ -469,7 +492,7 @@ export async function performPushFlush(ctx: any, userId: any): Promise<void> {
   // of theirs that stopped and is waiting on them. Those ride the
   // time-sensitive interruption level so they break through a Focus mode; an
   // agent that has stopped is the one thing the human cannot afford to miss.
-  const ADDRESSED = new Set(["chat_mention", "chat_dm", "chat_here", "session_idle", "permission_request"]);
+  const ADDRESSED = new Set(["chat_mention", "chat_dm", "chat_here", "session_idle", "permission_request", DECISION_PUSH_TYPE]);
   const isChat = sendable.some((r: any) => CHAT_TYPES.has(r.type));
   const addressed = sendable.some((r: any) => ADDRESSED.has(r.type));
   // The icon badge is the bell's own number, so the phone and the app agree.

@@ -12,6 +12,7 @@ import { useCoarseNow } from "./useCoarseNow";
 import { pendingEdits, pipelineCheckout, pipelineModel, type PipelineModel, type PipelineRun } from "../lib/line/pipelineModel";
 import { useInboxStore } from "../store/inboxStore";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { sessionRemoteOf } from "./useRepoFlows";
 import type { Pipeline } from "../lib/line/pipelineTypes";
 
 const teamOf = (workspace: string | null | undefined) => (workspace?.startsWith("team:") ? workspace.slice(5) : null);
@@ -51,7 +52,7 @@ function proposalsSig(s: State): string {
     const first = messages[id]?.find((m) => m.role === "user")?.content;
     if (!first?.startsWith("cast flow edit ")) continue;
     const row = ((s.sessions as Record<string, SessionRow>)[id] ?? (s.conversations as Record<string, SessionRow>)[id]) as SessionRow | undefined;
-    rows.push({ id, title: row?.title ?? null, project_path: row?.project_path ?? row?.git_root ?? null, repository: repositoryKeyOfRemote(row?.git_remote_url) ?? null, ended: !!row?.inbox_killed_at, first });
+    rows.push({ id, title: row?.title ?? null, project_path: row?.project_path ?? row?.git_root ?? null, repository: repositoryKeyOfRemote(sessionRemoteOf(s as any, id)) ?? null, ended: !!row?.inbox_killed_at, first });
   }
   return JSON.stringify(rows);
 }
@@ -71,8 +72,8 @@ export function useEditWhere(p: Pipeline | null): { root: string; device: string
     const { root, device } = pipelineCheckout(p);
     if (root && device && roster.some((d) => d.device_id === device)) return JSON.stringify({ root, device, machine: name(device) });
     let best: CheckoutRow | null = null;
-    for (const row of Object.values(s.sessions as Record<string, CheckoutRow>)) {
-      if (!row?.git_root || repositoryKeyOfRemote(row.git_remote_url) !== p.repository) continue;
+    for (const [id, row] of Object.entries(s.sessions as Record<string, CheckoutRow>)) {
+      if (!row?.git_root || repositoryKeyOfRemote(sessionRemoteOf(s as any, id)) !== p.repository) continue;
       if (!best || (row.updated_at ?? 0) > (best.updated_at ?? 0)) best = row;
     }
     // The checkout lives on the machine that ran that session: the edit session starts there, named.

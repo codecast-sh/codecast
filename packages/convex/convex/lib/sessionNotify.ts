@@ -8,6 +8,7 @@ import { internal } from "../_generated/api";
 import { IDLE_DIGEST_WINDOW_MS, isAssignedAwayFromOwnerSet } from "@codecast/shared/contracts";
 import { enqueuePush } from "../pushRouter";
 import { listSessionOwnerIds } from "../sessionOwners";
+import { hasRingingCard } from "./decisionRing";
 
 export type SessionNotifType =
   | "session_idle"
@@ -157,6 +158,9 @@ export async function deliverSessionNotificationToParties(
   title: string,
   message: string,
 ): Promise<boolean> {
+  // A session parked on a decision card rings as that card (lib/decisionPush.ts):
+  // "waiting for you" would be the same news again, without the question.
+  if (type === "session_idle" && (await hasRingingCard(ctx, conversation._id))) return false;
   // Recipients are the UNION of the canonical owner set and the owner_user_id
   // cache. The cache is a safety net, not a second source of truth: a legacy row
   // written before the session_owners backfill has a cached owner but no join
