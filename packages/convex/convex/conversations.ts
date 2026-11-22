@@ -81,7 +81,7 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, ownerRowsForUser, sessionOwnerRow, teamOwnerRowsForUser } from "./sessionOwners";
 import { isTeamOwnedConversation, overlayViewerTriage, recordViewerTriage, refuseHidingTeamSession } from "./lib/viewerTriage";
-import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
+import { hideConversationForViewer, isRunnerOrOwner, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, navPromptField, navPromptPatch, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
 import {
   isTeamMember,
@@ -12488,11 +12488,15 @@ const DISMISS_PAGE_ROWS = 100;
 // sessions the prompt counted and listed, never a set re-derived by age here.
 // An age sweep also took the session the person had open and any old row the
 // window did not hold, so the number on the button stopped matching what was
-// acted on (ct-98161). Only the caller's own rows, and never one pinned,
-// snoozed or already dismissed in the meantime. `at` is the stamp the web wrote
-// optimistically, so the server's echo matches the local row. The web reaches
-// this through its markSessionsDismissed action (dispatch.ts); the first page
-// lands in the caller's transaction and the rest follow in order.
+// acted on (ct-98161). Never a row pinned or snoozed in the meantime. A row the
+// caller runs or owns (the owner set, as the dispatch patch gate and every
+// other triage gesture read it) gets the stamp, unless it is already dismissed;
+// `at` is the stamp the web wrote optimistically, so the server's echo matches
+// the local row. A teammate's row the caller can see is hidden for the caller
+// alone (inbox_hides), the way a kill of it is, so it does not come back on
+// the next push; one the caller cannot see is skipped. The web reaches this
+// through its markSessionsDismissed action (dispatch.ts); the first page lands
+// in the caller's transaction and the rest follow in order.
 export async function dismissSessionsExactly(
   ctx: MutationCtx,
   userId: Id<"users">,
@@ -12503,8 +12507,12 @@ export async function dismissSessionsExactly(
   for (const raw of ids.slice(0, DISMISS_PAGE_ROWS)) {
     const id = ctx.db.normalizeId("conversations", raw);
     const conv = id ? await ctx.db.get(id) : null;
-    if (!conv || conv.user_id !== userId) continue;
-    if (conv.inbox_dismissed_at || conv.inbox_pinned_at || conv.inbox_snoozed_until) continue;
+    if (!conv || conv.inbox_pinned_at || conv.inbox_snoozed_until) continue;
+    if (!(await isRunnerOrOwner(ctx, conv, userId))) {
+      if (await hideConversationForViewer(ctx, userId, conv, "dismiss", at)) dismissed++;
+      continue;
+    }
+    if (conv.inbox_dismissed_at) continue;
     await ctx.db.patch(conv._id, { inbox_dismissed_at: at });
     dismissed++;
   }

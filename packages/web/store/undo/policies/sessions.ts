@@ -28,15 +28,22 @@ const onSession = (verb: string | ((ctx: UndoCtx) => string), extra?: Partial<Un
 
 const isSessionCell = (c: CellChange) => c.store === "sessions" || c.store === "conversations";
 
-// One restoreSession per row the hide touched, read from the cells so a
-// partial undo sends none for a row it skipped. Owners land through the
+// The rows a hide touched, read from the cells so a partial undo names none it
+// skipped.
+const hiddenRowIds = (ctx: UndoCtx): string[] => [...new Set(ctx.changes.filter(isSessionCell).map((c) => c.id))];
+
+// One restoreSession per row the hide touched. Owners land through the
 // patches the first invocation carries; for anyone else the server's
 // restoreSession side effect drops their inbox_hides record (it is a no-op for
 // the runner and owners, who never get one).
 function restoreEachHidden(ctx: UndoCtx): Invocation[] {
-  const ids: string[] = [];
-  for (const c of ctx.changes) if (isSessionCell(c) && !ids.includes(c.id)) ids.push(c.id);
-  return ids.map((id) => ({ action: "restoreSession", args: [id], runDraft: false }));
+  return hiddenRowIds(ctx).map((id) => ({ action: "restoreSession", args: [id], runDraft: false }));
+}
+
+// The old-sessions sweep's undo: one dispatch for every row it touched.
+function restoreDismissedSweep(ctx: UndoCtx): Invocation[] {
+  const ids = hiddenRowIds(ctx);
+  return ids.length ? [{ action: "restoreSessions", args: [ids], runDraft: false }] : [];
 }
 
 // The server's kill transition also stamps inbox_killed_at (cleanup.ts
@@ -222,12 +229,14 @@ export const SESSIONS_UNDO_POLICY: UndoPolicy = {
       ...CLOSE,
     },
   },
-  // "Dismiss all N" old sessions. The server stamps only the caller's own rows
-  // (no inbox_hides record), so one applyUndoPatches pass of the captured cells
-  // takes the whole sweep back.
+  // "Dismiss all N" old sessions. The server stamps the rows the caller runs or
+  // owns and records an inbox_hides row for a teammate's, so the undo is one
+  // restoreSessions dispatch: its patches clear the stamps, and its side effect
+  // drops those hides (a no-op for the caller's own rows).
   markSessionsDismissed: {
     spec: {
       label: (ctx) => `Dismissed ${counted(((ctx.args[0] ?? []) as string[]).length, "old session")} (still searchable)`,
+      inverse: restoreDismissedSweep,
       restoreView: true,
     },
   },

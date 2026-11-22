@@ -11380,11 +11380,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
 
   // "Dismiss all N" old sessions: dismisses exactly this set, as one undoable
   // gesture. One dispatch carries the ids and the stamp (the return value) to
-  // the server's markSessionsDismissed side effect, which stamps only the
-  // caller's own rows that are not pinned or snoozed, in pages on its own clock
-  // (dispatch.ts), rather than a patch per row through the hide teardown. The
-  // undo engine records the cells, so the toast's Undo and the app's own undo
-  // both put the rows back through applyUndoPatches. Skips already-dismissed rows.
+  // the server's markSessionsDismissed side effect, which stamps the rows the
+  // caller runs or owns and hides a teammate's for the caller alone, never one
+  // pinned or snoozed, in pages on its own clock (dispatch.ts), rather than a
+  // patch per row through the hide teardown. The undo engine records the cells,
+  // so the toast's Undo and the app's own undo both put the rows back with one
+  // restoreSessions dispatch (policies/sessions.ts). Skips already-dismissed rows.
   markSessionsDismissed: action(function (this: Draft, ids: string[]) {
     const now = Date.now();
     const stamped: string[] = [];

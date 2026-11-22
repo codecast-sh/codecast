@@ -106,7 +106,10 @@ describe("Dismiss all old sessions", () => {
     sent = [];
     toasts[0]!.opts.action.onClick();
     expect(dismissed()).toEqual([]);
-    expect(sent.map((s) => s.action)).toEqual(["applyUndoPatches"]);
+    // One dispatch: its patches clear the stamps, and it names the rows so the
+    // server drops a hide it recorded for a teammate's.
+    expect(sent.map((s) => s.action)).toEqual(["restoreSessions"]);
+    expect([...sent[0]!.args[0]].sort()).toEqual(ids);
     const undo = sent[0]!.patches.conversations;
     expect(Object.keys(undo).sort()).toEqual(ids);
     for (const fields of Object.values<any>(undo)) expect(fields).toEqual({ inbox_dismissed_at: null });

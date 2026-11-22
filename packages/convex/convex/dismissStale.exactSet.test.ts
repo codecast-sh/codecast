@@ -107,6 +107,49 @@ describe("the web's markSessionsDismissed dispatch", () => {
     vi.useRealTimers();
   });
 
+  test("rows the caller owns but did not start are stamped, and a teammate's is hidden for the caller until Undo", async () => {
+    vi.useFakeTimers();
+    const t = convexTest(schema, allModules);
+    const ids = await t.run(async (ctx) => {
+      const me = await ctx.db.insert("users", { name: "Ann", email: "ann@x.dev" } as any);
+      const mate = await ctx.db.insert("users", { name: "Bo", email: "bo@x.dev" } as any);
+      const team = await ctx.db.insert("teams", { name: "Team", created_at: old } as any);
+      for (const u of [me, mate]) {
+        await ctx.db.insert("team_memberships", { user_id: u, team_id: team, role: "member", joined_at: old, visibility: "full" } as any);
+      }
+      const conv = (extra: object) =>
+        ctx.db.insert("conversations", {
+          user_id: mate, agent_type: "claude_code", session_id: crypto.randomUUID(),
+          started_at: old, updated_at: old, message_count: 1, is_private: true, status: "completed", ...extra,
+        } as any);
+      // Bo started all three. I am the primary owner of one, a secondary owner
+      // of the next, and the third is Bo's, shared with the team.
+      const primary = await conv({ owner_user_id: me });
+      const secondary = await conv({});
+      await ctx.db.insert("session_owners", { conversation_id: secondary, user_id: me, added_by: mate, added_at: old } as any);
+      const teammate = await conv({ is_private: false, team_id: team, team_visibility: "full" });
+      return { me, primary, secondary, teammate };
+    });
+    const as = t.withIdentity({ subject: `${ids.me}|session` });
+    const hides = () =>
+      t.run(async (ctx) => (await ctx.db.query("inbox_hides").collect()).map((h: any) => [h.conversation_id, h.kind]));
+    const at = Date.now();
+    const list = [ids.primary, ids.secondary, ids.teammate];
+
+    await as.mutation(api.dispatch.dispatch, { action: "markSessionsDismissed", args: [list], result: at });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await stamps(t, { primary: ids.primary, secondary: ids.secondary, teammate: ids.teammate })).toEqual({ primary: at, secondary: at, teammate: undefined });
+    expect(await hides()).toEqual([[ids.teammate, "dismiss"]]);
+
+    // The web's undo: one restoreSessions dispatch whose patches clear the stamps.
+    const undo = { conversations: Object.fromEntries(list.map((id) => [id, { inbox_dismissed_at: null }])) };
+    await as.mutation(api.dispatch.dispatch, { action: "restoreSessions", args: [list], patches: undo });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    expect(await stamps(t, { primary: ids.primary, secondary: ids.secondary, teammate: ids.teammate })).toEqual({ primary: undefined, secondary: undefined, teammate: undefined });
+    expect(await hides()).toEqual([]);
+    vi.useRealTimers();
+  });
+
   test("the undo the web sends back clears exactly the sweep's rows and changes no other", async () => {
     vi.useFakeTimers();
     const t = convexTest(schema, allModules);
@@ -118,7 +161,7 @@ describe("the web's markSessionsDismissed dispatch", () => {
 
     // The patches web lib/__tests__/dismissStale.guard.test.ts shows the undo sending.
     const undo = { conversations: { [ids.a]: { inbox_dismissed_at: null }, [ids.b]: { inbox_dismissed_at: null } } };
-    await as.mutation(api.dispatch.dispatch, { action: "applyUndoPatches", args: [], patches: undo });
+    await as.mutation(api.dispatch.dispatch, { action: "restoreSessions", args: [[ids.a, ids.b]], patches: undo });
     await t.finishAllScheduledFunctions(vi.runAllTimers);
 
     expect(await stamps(t, ids)).toEqual({ a: undefined, b: undefined, open: undefined, foreign: undefined, pinned: undefined, earlier: old });
