@@ -11,6 +11,9 @@ import {
   readWorkspaceState,
   releaseWorkspace,
   ROOT_WORKSPACE_NAME,
+  startWorkspaceBrowser,
+  stopAllWorkspaceBrowsers,
+  stopWorkspaceBrowser,
   validateWorkspace,
 } from "./lifecycle.js";
 import { readState, setState, writeState } from "./contract.js";
@@ -44,7 +47,7 @@ afterEach(() => {
 });
 
 describe("workspace port reservations", () => {
-  const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true };
+  const opts = { skipSetup: true, skipHooks: true, skipPool: true };
 
   test("operation ownership survives process boundaries and fails closed after a crashed holder", async () => {
     const marker = path.join(repoRoot, "lease-held");
@@ -653,76 +656,107 @@ describe("listWorkspaces", () => {
   });
 });
 
-describe("acquireWorkspace — with browser enabled", () => {
-  test("a Chrome that will not start leaves a ready workspace without a browser", async () => {
+// A workspace's Chrome starts only on demand and stops with the station or
+// the run (ct-98941). A stand-in binds the CDP port and sleeps, so these rules
+// are tested without launching a real browser.
+describe("workspace browser: on demand only", () => {
+  let savedChromium: string | undefined;
+  const cdpBase = 38700;
+  const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  const manifest = (enabled: boolean) => {
     fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
-    fs.writeFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "[browser]\nenabled = true\n\n[browser.cdp_port]\nbase = 39800\nrange = 100\n");
-    const broken = path.join(repoRoot, "not-chrome");
-    fs.writeFileSync(broken, "not a program", { mode: 0o644 });
-    const saved = process.env.CODECAST_CHROMIUM;
-    process.env.CODECAST_CHROMIUM = broken;
-    try {
-      const r = await acquireWorkspace(repoRoot, "feat-no-browser");
-      expect(r.workspace.state).toBe("ready");
-      expect(r.workspace.chrome).toBeUndefined();
-    } finally {
-      if (saved === undefined) delete process.env.CODECAST_CHROMIUM; else process.env.CODECAST_CHROMIUM = saved;
-    }
+    fs.writeFileSync(path.join(repoRoot, ".codecast/workspace.toml"), `[browser]\nenabled = ${enabled}\n\n[browser.cdp_port]\nbase = ${cdpBase}\nrange = 100\n`);
+    execSync("git add . && git commit -q -m manifest", { cwd: repoRoot });
+  };
+  const opts = { skipSetup: true, skipHooks: true, skipPool: true };
+
+  beforeEach(() => {
+    savedChromium = process.env.CODECAST_CHROMIUM;
+    const fake = path.join(repoRoot, "fake-chrome");
+    fs.writeFileSync(fake, `#!${process.execPath}
+const port = Number(process.argv.find((a) => a.startsWith("--remote-debugging-port="))!.split("=")[1]);
+Bun.listen({ hostname: "127.0.0.1", port, socket: { data() {} } });
+setInterval(() => {}, 1 << 30);
+`, { mode: 0o755 });
+    process.env.CODECAST_CHROMIUM = fake;
+  });
+  afterEach(() => {
+    if (savedChromium === undefined) delete process.env.CODECAST_CHROMIUM; else process.env.CODECAST_CHROMIUM = savedChromium;
   });
 
-  test("launches Chrome and exposes CDP port; releaseWorkspace stops it", async () => {
-    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
-    fs.writeFileSync(
-      path.join(repoRoot, ".codecast/workspace.toml"),
-      `
-[browser]
-enabled = true
-headless = true
-
-[browser.cdp_port]
-# A base no other test file binds: chrome.test.ts launches real Chrome on 397xx
-# just before this file runs, and a port it has not released yet bumps the slot.
-base = 38700
-range = 100
-`,
-    );
-
-    const r = await acquireWorkspace(repoRoot, "feat-browser");
+  test("acquire and heal start no browser, even with [browser] enabled", async () => {
+    manifest(true);
+    const r = await acquireWorkspace(repoRoot, "feat", opts);
     expect(r.workspace.state).toBe("ready");
-    expect(r.workspace.chrome).toBeDefined();
-    const chrome = r.workspace.chrome!;
-    expect(chrome.pid).toBeGreaterThan(0);
-    expect(chrome.cdpPort).toBe(38700);
+    expect(r.workspace.chrome).toBeUndefined();
+    expect(r.workspace.env.CDP_PORT).toBeUndefined();
+    const healed = await healWorkspace(repoRoot, "feat");
+    expect(healed.chrome).toBeUndefined();
+    expect(readState(repoRoot, "feat")?.chrome).toBeUndefined();
+  });
 
-    // CDP /json/version is reachable.
-    const ver = (await fetch(`http://127.0.0.1:${chrome.cdpPort}/json/version`).then((res) =>
-      res.json(),
-    )) as { Browser?: string };
-    expect(typeof ver.Browser).toBe("string");
+  test("a start runs one, records its port, and a second start reuses it; a stop ends it and clears the record", async () => {
+    manifest(true);
+    await acquireWorkspace(repoRoot, "feat", opts);
+    const chrome = await startWorkspaceBrowser(repoRoot, "feat");
+    expect(chrome.cdpPort).toBe(cdpBase);
+    expect(alive(chrome.pid)).toBe(true);
+    expect(readState(repoRoot, "feat")?.env.CDP_PORT).toBe(String(cdpBase));
+    expect(readState(repoRoot, "feat")?.env.CODECAST_CDP_PORT).toBeUndefined();
+    expect((await startWorkspaceBrowser(repoRoot, "feat")).pid).toBe(chrome.pid);
 
-    // PID is alive prior to release.
-    let alive = false;
-    try {
-      process.kill(chrome.pid, 0);
-      alive = true;
-    } catch {
-      alive = false;
-    }
-    expect(alive).toBe(true);
+    expect(await stopWorkspaceBrowser(repoRoot, "feat")).toBe(true);
+    expect(alive(chrome.pid)).toBe(false);
+    const after = readState(repoRoot, "feat")!;
+    expect(after.chrome).toBeUndefined();
+    expect(after.env.CDP_PORT).toBeUndefined();
+    expect(await stopWorkspaceBrowser(repoRoot, "feat")).toBe(false);
+  }, 20000);
 
-    // Release stops Chrome.
-    await releaseWorkspace(repoRoot, "feat-browser");
-    // Give the OS a moment to reap.
-    await new Promise((res) => setTimeout(res, 300));
-    let stillAlive = false;
-    try {
-      process.kill(chrome.pid, 0);
-      stillAlive = true;
-    } catch {
-      stillAlive = false;
-    }
-    expect(stillAlive).toBe(false);
-  }, 25000);
+  test("a project that has not enabled one is refused, naming the setting", async () => {
+    await acquireWorkspace(repoRoot, "plain", opts);
+    await expect(startWorkspaceBrowser(repoRoot, "plain")).rejects.toThrow("[browser] enabled = true");
+    expect(readState(repoRoot, "plain")?.chrome).toBeUndefined();
+  });
+
+  test("a Chrome that will not start throws and leaves no record", async () => {
+    manifest(true);
+    await acquireWorkspace(repoRoot, "feat", opts);
+    const broken = path.join(repoRoot, "not-chrome");
+    fs.writeFileSync(broken, "not a program", { mode: 0o644 });
+    process.env.CODECAST_CHROMIUM = broken;
+    await expect(startWorkspaceBrowser(repoRoot, "feat")).rejects.toThrow();
+    expect(readState(repoRoot, "feat")?.chrome).toBeUndefined();
+  });
+
+  test("release stops a running one", async () => {
+    manifest(true);
+    await acquireWorkspace(repoRoot, "feat", opts);
+    const chrome = await startWorkspaceBrowser(repoRoot, "feat");
+    await releaseWorkspace(repoRoot, "feat");
+    expect(alive(chrome.pid)).toBe(false);
+  }, 20000);
+
+  test("stop --all ends every running one and names them", async () => {
+    manifest(true);
+    await acquireWorkspace(repoRoot, "a", opts);
+    await acquireWorkspace(repoRoot, "b", opts);
+    await acquireWorkspace(repoRoot, "c", opts);
+    const a = await startWorkspaceBrowser(repoRoot, "a");
+    const b = await startWorkspaceBrowser(repoRoot, "b");
+    expect((await stopAllWorkspaceBrowsers(repoRoot)).sort()).toEqual(["a", "b"]);
+    expect(alive(a.pid) || alive(b.pid)).toBe(false);
+  }, 20000);
+
+  test("rebuilding a broken workspace stops the browser its old record ran", async () => {
+    manifest(true);
+    await acquireWorkspace(repoRoot, "feat", opts);
+    const chrome = await startWorkspaceBrowser(repoRoot, "feat");
+    setState(repoRoot, "feat", "broken");
+    const r = await acquireWorkspace(repoRoot, "feat", opts);
+    expect(r.workspace.chrome).toBeUndefined();
+    expect(alive(chrome.pid)).toBe(false);
+  }, 20000);
 });
 
 describe("acquireWorkspace + warm pool integration", () => {
@@ -815,8 +849,8 @@ range = 100
   test("state.path is the repo root, ports skip a worktree's reservation, the tracked manifest is untouched, a rerun keeps the index", async () => {
     withManifest();
     const tracked = fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8");
-    const wt = await acquireWorkspace(repoRoot, "iso", { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true });
-    const r = await acquireRootCheckout(repoRoot, { skipBrowser: true });
+    const wt = await acquireWorkspace(repoRoot, "iso", { skipSetup: true, skipHooks: true, skipPool: true });
+    const r = await acquireRootCheckout(repoRoot, {});
     expect(r.created).toBe(true);
     expect(r.workspace.name).toBe(ROOT_WORKSPACE_NAME);
     expect(r.workspace.path).toBe(fs.realpathSync(repoRoot));
@@ -833,7 +867,7 @@ range = 100
     expect(state.path).toBe(fs.realpathSync(repoRoot));
     expect(state.branch).toBe("main");
     expect(state.manifest.backend).toBe("local");
-    const again = await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    const again = await acquireRootCheckout(repoRoot, { skipSetup: true });
     expect(again.created).toBe(false);
     expect(again.workspace.resourceIndex).toBe(r.workspace.resourceIndex);
     expect(again.workspace.ports).toEqual(r.workspace.ports);
@@ -849,7 +883,7 @@ range = 100
     fs.writeFileSync(path.join(inputs, ".codecast/workspace.toml"), manifest.replace("[ports.web]", "[env]\nSNAP = \"one\"\n[ports.web]"));
     fs.writeFileSync(path.join(inputs, ".env"), "laptop copy\n");
     const before = fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8");
-    const r = await acquireRootCheckout(repoRoot, { inputRoot: inputs, skipSetup: true, skipBrowser: true });
+    const r = await acquireRootCheckout(repoRoot, { inputRoot: inputs, skipSetup: true });
     expect(fs.readFileSync(path.join(repoRoot, ".env"), "utf8")).toBe("laptop copy\n");
     expect(fs.readFileSync(path.join(repoRoot, ".codecast/workspace.toml"), "utf8")).toBe(before);
     expect(r.workspace.env.SNAP).toBe("one");
@@ -859,7 +893,7 @@ range = 100
 
   test("branch follows HEAD across runs; validateWorkspace and heal pass after a branch switch", async () => {
     withManifest();
-    await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    await acquireRootCheckout(repoRoot, { skipSetup: true });
     expect(readState(repoRoot, ROOT_WORKSPACE_NAME)!.branch).toBe("main");
     execSync("git checkout -q -b codecast/cloud-abc123", { cwd: repoRoot });
     expect((await validateWorkspace(repoRoot, ROOT_WORKSPACE_NAME)).ok).toBe(true);
@@ -870,7 +904,7 @@ range = 100
     expect(listWorkspaces(repoRoot).find((w) => w.name === ROOT_WORKSPACE_NAME)!.branch).toBe("codecast/cloud-abc123");
     expect(readState(repoRoot, ROOT_WORKSPACE_NAME)!.branch).toBe("main");
     execSync("git checkout -q -b codecast/cloud-def456", { cwd: repoRoot });
-    const r = await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    const r = await acquireRootCheckout(repoRoot, { skipSetup: true });
     expect(r.workspace.branch).toBe("codecast/cloud-def456");
     expect(r.created).toBe(false);
     execSync("git checkout -q main", { cwd: repoRoot });
@@ -882,7 +916,7 @@ range = 100
   test("acquireWorkspace refuses the reserved name; releaseWorkspace drops only the state dir and never the repo", async () => {
     withManifest();
     await expect(acquireWorkspace(repoRoot, ROOT_WORKSPACE_NAME, { skipPool: true })).rejects.toThrow(/reserved for the main checkout/);
-    const r = await acquireRootCheckout(repoRoot, { skipSetup: true, skipBrowser: true });
+    const r = await acquireRootCheckout(repoRoot, { skipSetup: true });
     expect(fs.existsSync(path.join(repoRoot, ".codecast/workspaces", ROOT_WORKSPACE_NAME, "state.json"))).toBe(true);
     await releaseWorkspace(repoRoot, ROOT_WORKSPACE_NAME);
     expect(fs.existsSync(path.join(repoRoot, ".codecast/workspaces", ROOT_WORKSPACE_NAME))).toBe(false);
@@ -890,13 +924,13 @@ range = 100
     expect(fs.existsSync(path.join(repoRoot, "README.md"))).toBe(true);
     expect(fs.existsSync(path.join(repoRoot, ".codecast/workspace.toml"))).toBe(true);
     // The freed ports are reusable by a worktree.
-    const wt = await acquireWorkspace(repoRoot, "after", { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true });
+    const wt = await acquireWorkspace(repoRoot, "after", { skipSetup: true, skipHooks: true, skipPool: true });
     expect(wt.workspace.ports.web).toBe(r.workspace.ports.web);
   });
 });
 
 describe("shared directories", () => {
-  const opts = { skipSetup: true, skipHooks: true, skipBrowser: true, skipPool: true };
+  const opts = { skipSetup: true, skipHooks: true, skipPool: true };
 
   /** Commit a gitignore and install a dependency directory in the main checkout. */
   function installShared(): string {
