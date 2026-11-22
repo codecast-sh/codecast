@@ -1,4 +1,5 @@
-import React, { useState } from "react";
+import React, { useState, memo } from "react";
+import { KEEP_DRAG_OFF_CARD } from "../../lib/keepOffCard";
 import { useLabelColor } from "../../lib/labelColors";
 import { Tag, UserCheck, CheckSquare, Square } from "lucide-react";
 import { formatRelative, formatDateFull } from "../../lib/utils";
@@ -480,6 +481,7 @@ export function UnreadDot() {
 
 /** The card's tick while a selection is live: every card shows its box, so
  *  the mode is visible, and the box itself toggles the card. */
+
 export function SelectTick({ sessionId, isSelected, selecting, onToggle }: { sessionId: string; isSelected: boolean; selecting: boolean; onToggle?: (id: string) => void }) {
   if (!selecting) return null;
   const Icon = isSelected ? CheckSquare : Square;
@@ -554,7 +556,7 @@ export function SessionProjectChip({ project, label, directory, className = "", 
  *  card (the Sub-agents and workers view option lists them), so this line is
  *  what keeps them in sight. Quiet ink; only "needs you" takes the accent, and
  *  it opens the first worker waiting. */
-export function CardWorkersLine({
+export const CardWorkersLine = memo(function CardWorkersLine({
   count,
   needsYou,
   onOpen,
@@ -585,5 +587,38 @@ export function CardWorkersLine({
         </>
       )}
     </div>
+  );
+});
+
+/** On a card whose subagent rows are folded away: how many of them are
+ *  running now, in the subagent rows' violet and arrow. Opens the most
+ *  recently active.
+ *  Silent at zero. */
+export function FoldedSubagentsMark({ count, onOpen, className = "" }: { count: number; onOpen?: () => void; className?: string }) {
+  if (count <= 0) return null;
+  const words = `${count} ${count === 1 ? "subagent" : "subagents"} running`;
+  const look = `inline-flex items-center gap-0.5 shrink-0 px-0.5 rounded text-meta font-semibold tabular-nums text-sol-violet ${className}`;
+  const body = (
+    <>
+      <svg aria-hidden className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.6}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M6 4v12h12" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M14 12l4 4-4 4" />
+      </svg>
+      {count}
+    </>
+  );
+  if (!onOpen) return <span data-sv-folded-subagents={count} title={words} aria-label={words} className={look}>{body}</span>;
+  return (
+    <button
+      type="button"
+      data-sv-folded-subagents={count}
+      title={`${words}; open the most recently active`}
+      aria-label={`${words}; open the most recently active`}
+      {...KEEP_DRAG_OFF_CARD}
+      onClick={(e) => { e.stopPropagation(); onOpen(); }}
+      className={`${look} hover:bg-sol-violet/10`}
+    >
+      {body}
+    </button>
   );
 }
