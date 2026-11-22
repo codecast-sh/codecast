@@ -289,6 +289,7 @@ function sessions(fixes: Record<string, () => void | Promise<void>>) {
   const calls: Array<{ route: string; body: any }> = [];
   const messages: Record<string, number> = { [A]: 10, [B]: 10, [CALLER]: 10 };
   const busy = new Set<string>();
+  const pins: Record<string, { status: string; state: string; at: number }> = {};
   globalThis.fetch = (async (url: any, init: any) => {
     const route = String(url).replace(/^https?:\/\/[^/]+/, "");
     const body = JSON.parse(init?.body || "{}");
@@ -300,10 +301,14 @@ function sessions(fixes: Record<string, () => void | Promise<void>>) {
       const fixing = /^Check failed/.test(body.body) ? fixes[to]?.() : undefined;
       if (fixing) {
         busy.add(to);
-        void fixing.then(() => { messages[to] += 3; busy.delete(to); });
-      } else messages[to] = (messages[to] ?? 0) + 3;
+        void fixing.then(() => { messages[to] += 3; busy.delete(to); pins[to] = { status: "done", state: "fixed", at: Date.now() }; });
+      } else {
+        messages[to] = (messages[to] ?? 0) + 3;
+        if (/^Check failed/.test(body.body)) pins[to] = { status: "done", state: "fixed", at: Date.now() };
+      }
       return reply({ ok: true });
     }
+    if (route === "/cli/sessions/state/get") return reply(pins[body.session] ?? {});
     return reply({ ok: true });
   }) as typeof fetch;
   const briefs = () => calls.filter((c) => c.route === "/cli/messages/send" && /^Check failed/.test(c.body.body)).map((c) => c.body);
@@ -384,7 +389,7 @@ type Ctl = { row: (id: string) => Row; deliver: (id: string) => void; settle: (i
  * /cli/messages/status reports it. `briefed[conversation]` runs on its brief; `unreadable` sessions are missing from
  * every read; a send to `refuse` fails.
  */
-function scripted(briefed: Record<string, (ctl: Ctl) => void>, opts: { busy?: string[]; unreadable?: string[]; refuse?: string[] } = {}) {
+function scripted(briefed: Record<string, (ctl: Ctl) => void>, opts: { busy?: string[]; unreadable?: string[]; refuse?: string[]; noStatus?: boolean } = {}) {
   const calls: Array<{ route: string; body: any }> = [];
   const rows: Record<string, Row> = Object.fromEntries([A, B, CALLER].map((id) => [id, { work_state: opts.busy?.includes(id) ? "working" : "done", message_count: 10 }]));
   const sends: Record<string, Array<{ created_at: number; status: string; delivered_at?: number }>> = {};
@@ -400,6 +405,7 @@ function scripted(briefed: Record<string, (ctl: Ctl) => void>, opts: { busy?: st
     const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
     if (route === "/cli/inbox") return reply({ sessions: (body.session_ids ?? []).filter((id: string) => id in rows && !opts.unreadable?.includes(id)).map((id: string) => ({ id, is_live: true, is_killed: false, ...rows[id] })) });
     if (route === "/cli/sessions/state/get") return reply(rows[body.session]?.pin ?? {});
+    if (route === "/cli/messages/status" && opts.noStatus) return reply({ error: "No such route" });
     if (route === "/cli/messages/status") return reply({ to_short_id: String(body.to).slice(0, 7), sends: [...(sends[body.to] ?? [])].reverse() });
     if (route === "/cli/messages/send") {
       if (opts.refuse?.includes(body.to)) return reply({ error: "refused" });
@@ -448,6 +454,22 @@ describe("writers answer for themselves", () => {
     }, { busy: [A] });
     expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("completed");
     // A freeze at the end of A's own turn would fail Check again and brief A a second time.
+    expect(s.briefs(A)).toHaveLength(1);
+    expect(git(root, "show", "codecast/change-ct-9:src/a.ts")).toBe("export const a = 'good';");
+  }, 1_200_000);
+
+  test("where the brief's delivery cannot be read, a writer's own turn ending without a pin since the brief is no answer", async () => {
+    const { root, edit } = checkoutWorld();
+    edit(B, "src/b.ts", "export const b = 'good';\n");
+    const s = scripted({
+      [A]: (ctl) => {
+        // Its own turn ends, growing the transcript past the brief but pinning nothing new; then it takes the brief.
+        setTimeout(() => ctl.settle(A, undefined, 3), 300);
+        setTimeout(() => { ctl.row(A).work_state = "working"; }, 900);
+        setTimeout(() => { edit(A, "src/a.ts", "export const a = 'good';\n"); ctl.settle(A, { status: "done", state: "fixed a.ts" }); }, 1200);
+      },
+    }, { busy: [A], noStatus: true });
+    expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("completed");
     expect(s.briefs(A)).toHaveLength(1);
     expect(git(root, "show", "codecast/change-ct-9:src/a.ts")).toBe("export const a = 'good';");
   }, 1_200_000);
