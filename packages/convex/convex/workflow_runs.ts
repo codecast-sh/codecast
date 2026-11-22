@@ -168,14 +168,14 @@ async function gateStackRef(ctx: Ctx, userId: Id<"users">, run: any, stack: stri
   return created.error ? undefined : created.short_id;
 }
 
-/** A session's newest decision still waiting and bound to no run: the one it posted for the gate to adopt. */
-/** The session of the station a gate names (`asker=`), by any ref the runner sends (its hand's short id, or a full
- *  session id): the run's own session wins a short-id collision. */
 /** A task's comments, for the handoffs changeSessionOf reads. */
 async function taskCommentsOf(ctx: Ctx, taskId: Id<"tasks">) {
   return ctx.db.query("task_comments").withIndex("by_task_id", (q: any) => q.eq("task_id", taskId)).collect();
 }
 
+/** A session's newest decision still waiting and bound to no run: the one it posted for the gate to adopt. */
+/** The session of the station a gate names (`asker=`), by any ref the runner sends (its hand's short id, or a full
+ *  session id): the run's own session wins a short-id collision. */
 export async function stationSession(ctx: Ctx, ref: string | undefined, runId: Id<"workflow_runs">): Promise<Doc<"conversations"> | null> {
   if (!ref) return null;
   return ((await findConversationByAnyRefWhere(ctx as any, ref, (c: any) => String(c.workflow_run_id ?? "") === String(runId)))
