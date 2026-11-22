@@ -22113,39 +22113,10 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
   }
   if (!roots.size) return;
   const { levelOne, describeLevel } = await import("./land/levelSweep.js");
-  const outcomes = [];
   for (const root of roots) {
-    const outcome = await levelOne(root).catch((e) => ({ root, skipped: String((e as Error)?.message ?? e) }));
-    outcomes.push(outcome);
-    const line = describeLevel(outcome);
-    // A refusal repeats every pass until someone moves the edit: say it when it changes, not every minute.
-    if (line && line !== lastLevelLine.get(root)) log(`[LEVEL] ${line}`);
-    lastLevelLine.set(root, line);
+    const line = describeLevel(await levelOne(root).catch((e) => ({ root, skipped: String((e as Error)?.message ?? e) })));
+    if (line) log(`[LEVEL] ${line}`);
   }
-  // Off the sweep's path: a checkout's first attribution reads up to two weeks of transcripts, and levels keep their minute.
-  if (!checkoutReportInProgress) {
-    checkoutReportInProgress = true;
-    void reportCheckoutsAfterSweep(outcomes).finally(() => { checkoutReportInProgress = false; });
-  }
-}
-
-const lastLevelLine = new Map<string, string | null>();
-let checkoutReportInProgress = false;
-
-/** Each swept checkout's state to the server, on change only (land/checkoutReport.ts, contracts/checkouts.ts). */
-async function reportCheckoutsAfterSweep(outcomes: import("./land/levelSweep.js").LevelSweepOutcome[]): Promise<void> {
-  const siteUrl = getSiteUrl();
-  const token = getAuthToken();
-  if (!siteUrl || !token || !outcomes.length) return;
-  const { reportCheckouts } = await import("./land/checkoutReport.js");
-  const { readLocalGitContext } = await import("./prCommand.js");
-  const post = async (urlPath: string, body: Record<string, unknown>) => {
-    const resp = await fetch(`${siteUrl}${urlPath}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_token: token, ...body }) });
-    const data = await resp.json().catch(() => null);
-    if (!resp.ok || data?.error) throw new Error(data?.error ?? `${urlPath} answered ${resp.status}`);
-    return data;
-  };
-  await reportCheckouts(outcomes, { post, deviceId: deviceId(), repositoryOf: (root) => readLocalGitContext(root).repository ?? null, log }).catch((e) => log(`[LEVEL] checkout report: ${(e as Error)?.message ?? e}`));
 }
 const WIP_SNAPSHOT_CONCURRENCY = 3;
 // PUSHES per pass, not sessions per pass. Every eligible session is snapshotted
