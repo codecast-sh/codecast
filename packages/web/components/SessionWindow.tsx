@@ -1,14 +1,13 @@
-import { lazy, memo, Suspense, useCallback, useRef } from "react";
+import { memo, Suspense, useCallback, useRef } from "react";
 import { Rnd } from "react-rnd";
 import { useWindowManager, type WindowState } from "../store/windowManagerStore";
 import { useTrackedStore, isSessionEffectivelyIdle, getSessionRenderKey } from "../store/inboxStore";
+import { lazyNamed } from "../lib/lazyNamed";
 
 // What opening a session renders anywhere (initiatives-projects-role-page.md
 // I3): a role's standing session is the role page in a window too. Loaded on
 // first use, so the inbox page's module is not on this window's import graph.
-const SessionPage = lazy(() =>
-  import("../app/inbox/QueuePageClient").then((m) => ({ default: m.SessionPage })),
-);
+const SessionPage = lazyNamed(() => import("../app/inbox/QueuePageClient"), "SessionPage");
 import { sessionCardTitle } from "../lib/sessionCard";
 import { SessionGlyph } from "./identity";
 import { identityRowOf } from "../lib/sessionIdentity";

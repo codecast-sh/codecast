@@ -11,7 +11,7 @@
 
 import { useWorkspaceFeature } from "../../lib/teamFeatures";
 import { TopbarButton } from "../TopbarButton";
-import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
+import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowUpRight, X } from "lucide-react";
 import { useInboxStore, useTrackedStore } from "../../store/inboxStore";
@@ -35,16 +35,11 @@ import { sessionPanePath, startPaneDrag } from "../../lib/stage";
 import { RoleOffer } from "../org/scope/RoleOffer";
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { lazyNamed } from "../../lib/lazyNamed";
 
-const AnchorConversation = lazy(() =>
-  import("./AnchorConversation").then((module) => ({ default: module.AnchorConversation })),
-);
-const AnchorOnboarding = lazy(() =>
-  import("./AnchorConversation").then((module) => ({ default: module.AnchorOnboarding })),
-);
-const HireAssistantCard = lazy(() =>
-  import("./AnchorConversation").then((module) => ({ default: module.HireAssistantCard })),
-);
+const AnchorConversation = lazyNamed(() => import("./AnchorConversation"), "AnchorConversation");
+const AnchorOnboarding = lazyNamed(() => import("./AnchorConversation"), "AnchorOnboarding");
+const HireAssistantCard = lazyNamed(() => import("./AnchorConversation"), "HireAssistantCard");
 
 export function AnchorPanel() {
   const open = useInboxStore((st) => st.anchorPanel.open);

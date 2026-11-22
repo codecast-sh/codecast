@@ -1,13 +1,12 @@
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import { MIRROR_STATE_LABEL } from "@codecast/convex/convex/lib/slackMirror";
 import { SlackLogo } from "../components/SlackLogo";
 import { NavCount } from "../components/sidebar/navPrimitives";
 import type { ChatRailChannel } from "../store/chatSlice";
 import { chatViewRoomKey, type ChatMember } from "./chatViews";
+import { lazyNamed } from "./lazyNamed";
 
-const OccupancyChip = lazy(() =>
-  import("../components/calls/OccupancyChip").then((module) => ({ default: module.OccupancyChip })),
-);
+const OccupancyChip = lazyNamed(() => import("../components/calls/OccupancyChip"), "OccupancyChip");
 
 /** The live signals a chat row wears wherever it lives — the Chat sublist and
  *  the pinned rail spread this same pair, so the rules can't drift: a huddle

@@ -8,7 +8,7 @@
 // The look lives in modernRail.css under [data-modern-rail], so Simple view's
 // and Minimal's [data-sv-nav] rules keep to the classic rail.
 
-import { lazy, memo, Suspense, useRef, type ReactNode, type Ref } from "react";
+import { memo, Suspense, useRef, type ReactNode, type Ref } from "react";
 import { PhoneCall, Plus } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../../lib/teamFeatures";
@@ -34,10 +34,11 @@ import { TeamSwitcher } from "../TeamSwitcher";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { AppPopOutButton } from "../desktop/AppPopOutButton";
 import "./modernRail.css";
+import { lazyNamed } from "../../lib/lazyNamed";
 
-const LiveNowRail = lazy(() => import("../calls/LiveNow").then((module) => ({ default: module.LiveNowRail })));
+const LiveNowRail = lazyNamed(() => import("../calls/LiveNow"), "LiveNowRail");
 // The Ops count reads the Ops models, which the shell's first paint never needs.
-const OpsRailCount = lazy(() => import("./OpsRailCount").then((module) => ({ default: module.OpsRailCount })));
+const OpsRailCount = lazyNamed(() => import("./OpsRailCount"), "OpsRailCount");
 
 /** What waits on you: a tinted pill. A count of replies: a red one. */
 const NEEDS_YOU = "bg-sol-cyan/15 text-sol-cyan";

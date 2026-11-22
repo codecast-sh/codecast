@@ -1,5 +1,5 @@
 "use client";
-import { lazy, memo, Suspense, useCallback, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { memo, Suspense, useCallback, useMemo, useState, type MouseEvent as ReactMouseEvent } from "react";
 import {
   useInboxStore,
   useTrackedStore,
@@ -41,15 +41,14 @@ import { ModernFleetBody } from "./fleet/ModernFleetBoard";
 import { hostedStopOf } from "../lib/hostedNotice";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { modernDialog, modernScrim } from "./ui/modernLook";
+import { lazyNamed } from "../lib/lazyNamed";
 
 // The drill-in shows the session page every other way of opening a session
 // shows (app/inbox/QueuePageClient SessionPage: its resume ladder, the trigger
 // panel, a role's page for a standing session), with the overlay's own expand
 // and close in its header, as the stage pane does. Lazy: that module renders
 // this board, so a static import would be a cycle.
-const SessionPage = lazy(() =>
-  import("../app/inbox/QueuePageClient").then((m) => ({ default: m.SessionPage })),
-);
+const SessionPage = lazyNamed(() => import("../app/inbox/QueuePageClient"), "SessionPage");
 // The fleet board: the inbox home surface when clientState.ui.inbox_home is
 // "board" (the default). Every visible session as a dense two-line tile,
 // grouped into NEEDS YOU / RUNNING / FINISHED bands — supervision by scanning,
