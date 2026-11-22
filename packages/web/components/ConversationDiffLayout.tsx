@@ -27,6 +27,7 @@ import { shareTokenArg } from "../lib/shareTokenScope";
 import { devRenderCount } from "../lib/devRenderCount";
 import { requestFilePathMenu } from "../lib/filePathMenu";
 import { filePathHref } from "../lib/filePathLinks";
+import { DiffPanelContext } from "../lib/diffPanelLinks";
 import { keyBelongsElsewhere } from "../shortcuts/keyOwnership";
 import { matchesAction } from "../shortcuts";
 import { useFollowSurface } from "../hooks/useFollowSurface";
@@ -348,11 +349,15 @@ export function ConversationDiffLayout({
   }
 
   // Desktop: diff panel closed - simple layout
+  // A changed file named in the transcript opens the diff panel on it
+  // (lib/diffPanelLinks) wherever the panel can open beside it.
   if (!diffPanelOpen || hideDiff) {
     return (
-      <div className={`${heightClass} w-full overflow-y-auto relative`}>
-        <ConversationView {...conversationViewProps} />
-      </div>
+      <DiffPanelContext.Provider value={!hideDiff}>
+        <div className={`${heightClass} w-full overflow-y-auto relative`}>
+          <ConversationView {...conversationViewProps} />
+        </div>
+      </DiffPanelContext.Provider>
     );
   }
 
@@ -371,8 +376,9 @@ export function ConversationDiffLayout({
         {/* Conversation Panel */}
         <Panel id="content-panel" minSize="15%">
           <div className="h-full relative overflow-y-auto">
-
-            <ConversationView {...conversationViewProps} hostsCommentRail={false} />
+            <DiffPanelContext.Provider value>
+              <ConversationView {...conversationViewProps} hostsCommentRail={false} />
+            </DiffPanelContext.Provider>
           </div>
         </Panel>
 

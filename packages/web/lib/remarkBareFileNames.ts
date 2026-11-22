@@ -2,8 +2,9 @@
 // constitution.md") becomes a candidate link. The parse cannot know whether
 // the session changed that file (the render cache is keyed by text alone), so
 // the node carries the name in BARE_FILE_ATTR and EntityAwareLink decides with
-// the conversation's FilePathContext: a file the session changed opens in
-// Files, anything else renders as the words it was written as.
+// the conversation's FilePathContext: a file the session changed opens in the
+// diff panel (lib/diffPanelLinks), anything else renders as the words it was
+// written as. A code span (`constitution.md`) is EntityAwareCode's to link.
 
 import { findAndReplace } from "mdast-util-find-and-replace";
 import { BARE_FILE_NAME_SCAN_RE } from "./filePathLinks";

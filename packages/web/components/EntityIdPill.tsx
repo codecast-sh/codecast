@@ -95,8 +95,9 @@ import { DocEmbed } from "./DocEmbed";
 import { DatePill } from "./DatePill";
 import { FilePathLink } from "./FilePathLink";
 import { useTaskPlace } from "../lib/taskHrefContext";
-import { FilePathContext, editedFileNamed, filePathMention, parseFilePathHref, type FilePathContextValue } from "../lib/filePathLinks";
+import { FilePathContext, editedFileNamed, filePathMention, isBareFileName, parseFilePathHref, resolveMentionPath, type FilePathContextValue } from "../lib/filePathLinks";
 import { BARE_FILE_ATTR } from "../lib/remarkBareFileNames";
+import { DiffPanelContext, openChangedFileInDiff } from "../lib/diffPanelLinks";
 import { useKnownWorktrees } from "../hooks/useKnownWorktrees";
 import { worktreeRefOfCode } from "./worktree/worktreeModel";
 import { WorktreePill } from "./worktree/WorktreePill";
@@ -595,8 +596,25 @@ function MentionedChange({ change, label }: { change: RepoChange; label: string 
   return <ChangeChip lifecycle={row.lifecycle} label={label} links={row.links} writers={row.writers} />;
 }
 
+/**
+ * A file named in a transcript. A plain click on a file the session changed
+ * opens the conversation's diff panel on it, when one sits beside this
+ * transcript; anything else opens in Files (FilePathLink).
+ */
+function TranscriptFileLink({ path, line, children }: { path: string; line?: number; children: React.ReactNode }) {
+  const pathCtx = useContext(FilePathContext);
+  const hasDiffPanel = useContext(DiffPanelContext);
+  const onClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+    if (!hasDiffPanel || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+    const abs = resolveMentionPath(path, pathCtx) ?? path;
+    if (openChangedFileInDiff(abs, pathCtx)) e.preventDefault();
+  };
+  return <FilePathLink path={path} line={line} onClick={onClick}>{children}</FilePathLink>;
+}
+
 export function EntityAwareCode({ children, className, ...allProps }: any) {
   const text = String(children);
+  const pathCtx = useContext(FilePathContext);
   const worktrees = useKnownWorktrees();
   const { mention: mentionInfo, rest: props } = takeMentionProps(allProps);
   const entity = !className && isEntityId(text);
@@ -619,7 +637,10 @@ export function EntityAwareCode({ children, className, ...allProps }: any) {
   // `lib/foo.ts:38` in backticks — the commonest way an agent names a file.
   // The code span keeps its look; the link wraps it.
   const mention = className ? null : filePathMention(text);
-  if (mention) return <FilePathLink path={mention.path} line={mention.line}>{code}</FilePathLink>;
+  if (mention) return <TranscriptFileLink path={mention.path} line={mention.line}>{code}</TranscriptFileLink>;
+  // `constitution.md`: a bare name links only to the one changed file it names.
+  const edited = className || !isBareFileName(text) ? undefined : editedFileNamed(text, pathCtx);
+  if (edited) return <TranscriptFileLink path={edited}>{code}</TranscriptFileLink>;
   return code;
 }
 
@@ -696,7 +717,7 @@ export function EntityAwareLink({ href, children, [BARE_FILE_ATTR]: bareFile, ..
   // session changed exactly one file of that name; otherwise the words.
   if (typeof bareFile === "string") {
     const edited = editedFileNamed(bareFile, pathCtx);
-    return edited ? <FilePathLink path={edited}>{children}</FilePathLink> : <>{children}</>;
+    return edited ? <TranscriptFileLink path={edited}>{children}</TranscriptFileLink> : <>{children}</>;
   }
   {
     // Transclusion: ![[doc:<id>]] arrives as a link whose TEXT is
@@ -782,7 +803,7 @@ export function EntityAwareLink({ href, children, [BARE_FILE_ATTR]: bareFile, ..
   // A file mention remarkEntityIds turned into a /files?path= link: re-resolve
   // it here, where the conversation's working directory is in context.
   const fileRef = parseFilePathHref(href);
-  if (fileRef) return <FilePathLink path={fileRef.path} line={fileRef.line}>{children}</FilePathLink>;
+  if (fileRef) return <TranscriptFileLink path={fileRef.path} line={fileRef.line}>{children}</TranscriptFileLink>;
   if (href?.startsWith("mention://")) {
     const name = decodeURIComponent(href.slice(10));
     return (
