@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { backfillRoleStartedPage } from "./migrations";
+import { backfillRoleStartedPage } from "./lib/roleStartedBackfill";
 
 // migrations:backfillRoleStarted: sessions a role started before
 // spawn.recordHandStart stamped `role_started` are stamped by the rule a new
