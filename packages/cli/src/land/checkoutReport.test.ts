@@ -4,7 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
 import { CHECKOUT_PATHS_MAX, levelAskClientId, LEVEL_STUCK_FILE_MS, type CheckoutLevel, type CheckoutTold } from "@codecast/shared/contracts/checkouts";
-import { conflictGroups, dirtyPaths, groupUncommitted, LEVEL_SEND_ATTEMPTS_MAX, loadCheckoutState, nextLevel, reportCheckouts, tellWriters } from "./checkoutReport.js";
+import { conflictGroups, dirtyPaths, groupUncommitted, LEVEL_SEND_BACKOFF_MAX_MS, levelSendBackoffMs, loadCheckoutState, nextLevel, reportCheckouts, tellWriters } from "./checkoutReport.js";
 import type { SessionEdits } from "./attribute.js";
 import type { LevelResult } from "./level.js";
 import { updateSyncRecord } from "../syncLedger.js";
@@ -138,7 +138,7 @@ describe("a stuck level tells each writer about its own files, once", () => {
     expect((await tellWriters(deps, report, level(all), { owners }, held, { dir })).told).toEqual([]);
     expect(sent).toEqual([]);
     // A writer the server refused for good is skipped for the rest of the episode.
-    expect((await tellWriters(deps, report, level(all.slice(1)), { owners }, held, { dir, unreachable: ["conv_a"] })).told).toEqual([]);
+    expect((await tellWriters(deps, report, level(all.slice(1)), { owners }, held, { dir, skip: ["conv_a"] })).told).toEqual([]);
     expect(sent).toEqual([]);
     // An earlier daemon's single ask (`filed`) counts as that writer told.
     const legacy = nextLevel({ stuck: { key: [...files].sort().join("\n"), files, reason: "r", since: 1, filed: { at: 1, to: "session", conversation_id: "conv_a" } } as any }, refused("/r", files), 2);
@@ -283,9 +283,11 @@ describe("reporting a machine's checkouts", () => {
 
     // B starts resolving its merge file before the retry: the same upstream, so the retry leaves it alone.
     fs.writeFileSync(path.join(merges, "b.ts"), "resolved by hand\n");
-    // The next pass asks B again, with the same client id, and nobody else.
+    // Inside B's one-minute backoff nobody is asked; past it, B is asked again with the same client id, and nobody else.
     const failedId = sends.find((s) => s.to === "conv_b")!.clientId;
     await reportCheckouts([outcome], { ...deps, now: Date.now() });
+    expect(sends).toHaveLength(2);
+    await reportCheckouts([outcome], { ...deps, now: Date.now() + MIN });
     expect(sends.map((s) => s.to).sort()).toEqual(["conv_a", "conv_b", "conv_b"]);
     expect(sends[2].clientId).toBe(failedId);
     expect(sends[2].clientId).toMatch(/^level-told:/);
@@ -295,32 +297,36 @@ describe("reporting a machine's checkouts", () => {
     expect(told.map((t: CheckoutTold) => (t.to === "session" ? t.conversation_id : "finding")).sort()).toEqual(["conv_a", "conv_b", "finding"]);
 
     // Everyone told: nothing more this episode.
-    await reportCheckouts([outcome], { ...deps, now: Date.now() });
+    await reportCheckouts([outcome], { ...deps, now: Date.now() + 2 * MIN });
     expect(sends).toHaveLength(3);
     expect(posts.some(([p]) => p === "/cli/messages/send")).toBe(false);
   });
 
-  test("a writer whose sends keep failing is tried each pass up to the cap, logged once, then given up for the episode", async () => {
+  test("a writer whose sends fail for a while is tried again on a doubling backoff, and told once a send goes through", async () => {
     const root = repo();
     const head = sh(root, "rev-parse", "HEAD");
     fs.writeFileSync(path.join(root, "a.ts"), "edited\n");
     const transcript = path.join(configDir, "writer-cap.jsonl");
     fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: new Date().toISOString(), cwd: root, message: { role: "assistant", content: [{ type: "tool_use", name: "Edit", input: { file_path: path.join(root, "a.ts") } }] } }) + "\n");
     updateSyncRecord(transcript, { conversationId: "conv_cap" });
-    const sends: string[] = [];
+    const sends: number[] = [];
     const logs: string[] = [];
     const stateFile = path.join(configDir, "state-7.json");
-    const deps = { post: async () => ({}), sendBrief: async (to: string) => { sends.push(to); return "failed" as const; }, deviceId: "dev-7", repositoryOf: () => "acme/app", stateFile, host: "laptop", askDir: configDir, log: (l: string) => logs.push(l) };
+    // Five transient failures (an outage of a quarter hour), then the server takes it.
+    let failures = 5;
+    let at = 0;
+    const deps = { post: async () => ({}), sendBrief: async () => { sends.push(at); return failures-- > 0 ? "failed" as const : "sent" as const; }, deviceId: "dev-7", repositoryOf: () => "acme/app", stateFile, host: "laptop", askDir: configDir, log: (l: string) => logs.push(l) };
     const outcome = refused(root, ["a.ts"], undefined, head);
-    await reportCheckouts([outcome], { ...deps, now: Date.now() - LEVEL_STUCK_FILE_MS - 2 * MIN });
-    for (let i = 0; i < LEVEL_SEND_ATTEMPTS_MAX + 2; i++) await reportCheckouts([outcome], { ...deps, now: Date.now() });
-    expect(sends).toEqual(Array(LEVEL_SEND_ATTEMPTS_MAX).fill("conv_cap"));
-    expect(logs.filter((l) => l.includes("could not reach conv_cap"))).toHaveLength(1);
-    expect(logs.filter((l) => l.includes("gave up on conv_cap"))).toHaveLength(1);
+    const start = Date.now();
+    await reportCheckouts([outcome], { ...deps, now: start - LEVEL_STUCK_FILE_MS - 2 * MIN });
+    // One pass a minute for 40 minutes: sends go at 0, 1, 3, 7, 15 and 31, waiting 1, 2, 4, 8 and 16 minutes between.
+    for (at = 0; at <= 40; at++) await reportCheckouts([outcome], { ...deps, now: start + at * MIN });
+    expect(sends).toEqual([0, 1, 3, 7, 15, 31]);
+    expect(logs.filter((l) => l.includes("could not reach conv_cap")).map((l) => l.match(/trying again in (\d+)m/)![1])).toEqual(["1", "2", "4", "8", "16"]);
     const episode = (loadCheckoutState(stateFile).roots[root] as any).stuck;
-    expect(episode.attempts).toEqual({ conv_cap: LEVEL_SEND_ATTEMPTS_MAX });
-    expect(episode.unreachable).toEqual(["conv_cap"]);
-    expect(episode.told).toEqual([]);
+    expect(episode.told).toEqual([expect.objectContaining({ to: "session", conversation_id: "conv_cap" })]);
+    expect(episode.unreachable).toEqual([]);
+    expect(levelSendBackoffMs(20)).toBe(LEVEL_SEND_BACKOFF_MAX_MS);
   });
 
   test("dirty paths read every status: a modified first file, a rename by its new name, an untracked file", async () => {
