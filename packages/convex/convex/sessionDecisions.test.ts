@@ -724,6 +724,10 @@ describe("review wave 1 regressions", () => {
     const noSession = await listForSessionCore(ctx, { userId: HOST }, { task: "ct-7" });
     expect(noSession.decisions).toHaveLength(1);
     expect(noSession.decisions[0].task_id).toBeDefined();
+    // A card no run posted carries no run; a run's gate card names its run, whatever the run's own gate says now.
+    expect(noSession.decisions[0].workflow_run_id).toBeUndefined();
+    await ctx.db.patch(noSession.decisions[0].id, { workflow_run_id: "workflow_runs_1" });
+    expect((await listForSessionCore(ctx, { userId: HOST }, { task: "ct-7" })).decisions[0].workflow_run_id).toBe("workflow_runs_1");
     // Without a session there is no message count to measure drift against.
     expect(noSession.decisions[0].messages_since).toBeUndefined();
     // With the asking session, the same row carries messages_since.

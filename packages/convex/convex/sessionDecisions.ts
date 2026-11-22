@@ -1656,6 +1656,9 @@ function cliRowShape(r: DecisionRow, conversation?: any) {
     impact_reason: r.impact_reason,
     task_id: r.task_id,
     station: r.station,
+    // The run whose gate posted the card, which a resume does not clear (the run's own gate_decision_id it does):
+    // a flow reads a task's own gate cards by it, as Land's personAuthorized does.
+    workflow_run_id: r.workflow_run_id,
     stack_id: r.stack_id,
     holder: r.holder,
     hops: r.hops,
