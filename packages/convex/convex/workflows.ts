@@ -116,7 +116,8 @@ export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, 
 
 // `serves`: a list or null (a push: written as the file says), undefined (the web: left as it is).
 // `library`: "switch" puts the flow in the library (`cast flow save`, a session's Save); "new" only a flow this write creates (the web's).
-export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, save, library, ...args }: { name: string; slug: string; label?: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish; save?: boolean; library?: "switch" | "new" }) {
+// `web`: the web's settings edit, which never moves a flow off its file's version (flowVersions.ts recordWorkflowVersion).
+export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, save, library, web, ...args }: { name: string; slug: string; label?: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish; save?: boolean; library?: "switch" | "new"; web?: boolean }) {
   const now = Date.now();
   const existing = await workflowBySlug(ctx, userId, args.slug);
 
@@ -140,7 +141,7 @@ export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_
       ...(library === "switch" && existing.runs_from !== "library" ? { runs_from: "library" as const } : {}),
       updated_at: now,
     });
-    const version = await recordWorkflowVersion(ctx, existing._id, userId, args.origin, now);
+    const version = await recordWorkflowVersion(ctx, existing._id, userId, args.origin, now, web);
     return { id: existing._id, updated: true, ...(version ? { version_id: version.id } : {}) };
   }
 
@@ -191,7 +192,7 @@ export const webUpsert = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not signed in");
     if (!LINE_SLUG_RE.test(args.slug)) throw new Error("A workflow slug is 1 to 64 characters of a-z, 0-9 and -");
-    return await upsertWorkflowFor(ctx, userId, { ...args, save: true, library: "new" });
+    return await upsertWorkflowFor(ctx, userId, { ...args, save: true, library: "new", web: true });
   },
 });
 

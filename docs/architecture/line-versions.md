@@ -56,11 +56,12 @@ line. A run from before pins, or pinned to a version from before ct-98653,
 reads the row as the rules above say.
 
 **The row stands at the version its runs would read.** A push from a file, a
-library save, a restore and `cast flow pin` move `workflows.version_id`: a pin
-to the library stands at its current version, a pin to the repo at its file's
-newest push. A write from no file (a web settings edit) records a version but
-leaves a row that stands at a file's version where it is, so a settings edit
-never detaches a flow's later runs from its checkout. A library flow's run
+push from no file (a CLI's shipped template), a library save, a restore and
+`cast flow pin` move `workflows.version_id`: a pin to the library stands at its
+current version, a pin to the repo at its file's newest push (recorded from the
+file the row names when the flow never pushed one). A web settings edit records
+a version but leaves a row that stands at a file's version where it is, so a
+settings edit never detaches a flow's later runs from its checkout. A library flow's run
 reads its current version, never `version_id`.
 
 A card or run carries the root reason, not a wrapper: a card whose run waits

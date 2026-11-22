@@ -72,9 +72,11 @@ async function keptGraph(ctx: any, workflowId: Id<"workflows">, snapshot: Snapsh
  * otherwise with its graph kept apart (workflow_version_graphs), which only the
  * run that pins it reads (lib/runGraph.ts). `origin` is what a push from a file
  * says; a write with none (the web's, a shipped template's) is hashed by
- * content and has no line. Returns the version the row now stands at.
+ * content and has no line. Returns the version recorded, which the row now
+ * stands at, except after a web settings edit (`keepFile`) of a row that
+ * stands at a file's version.
  */
-export async function recordWorkflowVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }>; device_id?: string; root?: string; file?: string; files?: Snapshot["files"] } | undefined, now = Date.now()) {
+export async function recordWorkflowVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }>; device_id?: string; root?: string; file?: string; files?: Snapshot["files"] } | undefined, now = Date.now(), keepFile = false) {
   const row: Doc<"workflows"> | null = await ctx.db.get(workflowId);
   if (!row) return null;
   if (row.runs_from !== "library") {
@@ -83,9 +85,9 @@ export async function recordWorkflowVersion(ctx: any, workflowId: Id<"workflows"
     const pushed_from = origin?.device_id && origin.root ? { device_id: origin.device_id, root: origin.root } : undefined;
     const graph = JSON.stringify(snapshot).length <= SNAPSHOT_MAX_BYTES ? () => keptGraph(ctx, workflowId, snapshot) : undefined;
     const recorded = await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, undefined, { ...(pushed_from ? { line: placeLine(pushed_from), pushed_from } : {}), graph });
-    // A write from no file (a web settings edit) never detaches a flow from its file: the row keeps standing at the
-    // file's version, which carries the checkout its runs read.
-    if (!pushed_from && (await standsOnFile(ctx, row))) return recorded;
+    // A web settings edit never detaches a flow from its file: the row keeps standing at the file's version, which
+    // carries the checkout its runs read. A push from no file (a CLI's shipped template) stands where it pushed.
+    if (keepFile && !pushed_from && (await standsOnFile(ctx, row))) return recorded;
     return await standAt(ctx, row, recorded);
   }
   const snapshot = snapshotOfRow(row);
@@ -300,7 +302,10 @@ async function pinCore(ctx: any, userId: Id<"users">, ref: string, to: "library"
   // The row stands where its runs now read: the library's current version, or its file's newest push.
   const standing = to === "library" ? await currentVersion(ctx, row._id) : await fileVersionOf(ctx, row);
   if (standing) await standAt(ctx, row, { id: standing._id });
-  else if (to === "library") await recordWorkflowVersion(ctx, row._id, userId, row.origin ? { graph_hash: row.origin.graph_hash, nodes: row.origin.nodes } : undefined, now);
+  // A library flow never pushed from a file since it was saved there: its file, as the row last named it, is a version
+  // of its own, so its runs read that checkout.
+  else if (to === "repo") { if (row.origin?.device_id && row.origin.root) await recordWorkflowVersion(ctx, row._id, userId, row.origin, now); }
+  else await recordWorkflowVersion(ctx, row._id, userId, row.origin ? { graph_hash: row.origin.graph_hash, nodes: row.origin.nodes } : undefined, now);
   return { slug: row.slug, runs_from: to };
 }
 

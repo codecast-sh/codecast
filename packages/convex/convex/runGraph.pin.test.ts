@@ -372,6 +372,28 @@ describe("the row stands at the version its runs would read", () => {
     expect(got.workflow.origin?.file).toBe("packages/cli/src/workflow/templates/change.cast");
   });
 
+  test("Union pushes from its file, an older CLI pushes the shipped template: a run naming no version is the template's", async () => {
+    const { t, push, daemon } = await setup();
+    await push(unionPush(1));
+    // `cast flow run change` on a CLI from before runs named their version: the template from no file, then a run.
+    const { origin: _o, ...template } = codecastPush;
+    const { id } = await push(template);
+    const { run_id } = await t.mutation(api.workflow_runs.createFromCli, { api_token: TOKEN, workflow_name: "change", workflow_id: id, project_path: "/code/codecast" });
+    const got = await daemon(run_id);
+    expect(ids(got.workflow.nodes)).toEqual(ids(CODECAST.nodes));
+    expect(got.workflow.origin?.root).not.toBe("/code/union-mobile/.codecast/worktrees/s1");
+  });
+
+  test("a flow saved to the library from its file, then pinned to its repo, runs from that file", async () => {
+    const { t, owner, push, daemon } = await setup();
+    // `cast flow save` from the checkout: the flow starts in the library, with no version from a file.
+    const { id } = await push({ ...codecastPush, library: true });
+    await t.mutation(api.flowVersions.fromCli, { api_token: TOKEN, op: "pin", flow: "change", to: "repo" });
+    const got = await daemon(await runNamingNoVersion(t, owner, id));
+    expect(got.workflow.origin?.root).toBe("/code/codecast");
+    expect(ids(got.workflow.nodes)).toEqual(ids(CODECAST.nodes));
+  });
+
   test("a library flow's run starts on its current version, whatever version the row stands at", async () => {
     const { t, push } = await setup();
     const { id } = await push(codecastPush);
