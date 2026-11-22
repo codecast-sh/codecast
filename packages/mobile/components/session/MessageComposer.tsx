@@ -42,9 +42,9 @@ export type ComposerRecording = PickedRecording & { begun: BegunRecording | null
 // create lands, when this is a session started a moment ago). An image still
 // uploading rides the bubble as its local preview; the send goes out once
 // the uploads settle, the same detached path as web MessageInput.
-// `typed`: the person's own words from a composer, so the server marks the
-// send theirs (composerChannel); product-assembled sends leave it out.
-export function dispatchComposerSend(conversationId: string, content: string, images?: OptimisticImage[], typed?: true) {
+// `typed`: the words the person typed in a composer, so the server marks that
+// part of the send theirs (composerChannel); product-assembled sends leave it out.
+export function dispatchComposerSend(conversationId: string, content: string, images?: OptimisticImage[], typed?: string) {
   const store = useInboxStore.getState();
   const clientId = store.addOptimisticMessage(conversationId, content, images?.length ? images : undefined);
   if (!images?.some(img => img.uploading)) {

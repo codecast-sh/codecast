@@ -1875,7 +1875,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     message = review.text;
     const quoteIds = review.quoteIds;
     // "Send together" (lib/jointSend): others' live drafts fold in as named parts.
+    // A joint turn carries others' words, so none of it is marked this person's typed words.
+    const beforeJoint = message;
     if (!forking) message = takeJointSend(conversationId, message);
+    const typedWords = message === beforeJoint ? typed : undefined;
     // An attached screen recording rides as its tag (a fork leaves it here).
     if (!forking) message = screenRec.take(message);
     // Attached files ride as tags the daemon turns into local paths.
@@ -1962,8 +1965,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             useInboxStore.getState().stampPendingDispatchContent(resolvedId, clientId, expandedContent);
           }
         }
-        // typed: the person's own words from this composer (server composerChannel).
-        sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId, quoteIds.length > 0 ? quoteIds : undefined, true);
+        // typed: what the person typed in this box, before quotes, mentions and attachments (server composerChannel).
+        sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId, quoteIds.length > 0 ? quoteIds : undefined, typedWords);
         // Hand the resolved id + the send's clientId to the popup so it can paint
         // this same message optimistically in the MAIN window (send & open) without
         // a second send — same clientId means it dedupes against the server echo.
@@ -2058,7 +2061,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             useInboxStore.getState().stampPendingDispatchContent(resolvedId, clientId, expanded);
           }
         }
-        sendMessage(resolvedId, expanded, undefined, clientId, undefined, true);
+        sendMessage(resolvedId, expanded, undefined, clientId, undefined, next);
         setSentAt(Date.now());
         sentContentRef.current = next;
         setShowStuckBanner(false);
@@ -2178,7 +2181,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       if (stop) {
         void useInboxStore.getState().stopAndSend(conversationId, text, clientId).catch((err) => toast.error(err instanceof Error ? err.message : "Could not stop and send"));
         onMessageSent?.();
-      } else if (canQueryServer && !hostedConversation) useInboxStore.getState().queueMessage(conversationId, text, clientId, true);
+      } else if (canQueryServer && !hostedConversation) useInboxStore.getState().queueMessage(conversationId, text, clientId, text);
       else setQueuedMessages(prev => [...prev, text]);
     } catch (error) {
       captureException(error);

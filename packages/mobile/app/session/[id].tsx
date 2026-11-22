@@ -2587,7 +2587,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     // lays out without animating, and the bubble would snap in instead of rising.
     requestAnimationFrame(() => {
       try {
-        dispatchComposerSend(conversationId, content, sendImages, true);
+        dispatchComposerSend(conversationId, content, sendImages, trimmedMessage);
         // Reported only once the send is committed: a refused one is retried.
         suggestion.settleSend(trimmedMessage);
       } catch (error) {

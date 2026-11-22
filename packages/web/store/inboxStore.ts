@@ -6479,18 +6479,18 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // force: "Send anyway" on a message held for a dialog (delivery_force).
   retryPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string; force?: boolean }) => Promise<string>;
   cancelPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string }) => Promise<string>;
-  /** `typed`: only the composer's own submit passes it (server composerChannel). */
-  queueMessage: (convId: string, content: string, clientId: string, typed?: true) => void;
+  /** `typed`: the words the person typed, passed only by the composer's own submit (server composerChannel). */
+  queueMessage: (convId: string, content: string, clientId: string, typed?: string) => void;
   releaseQueued: (convId: string) => void;
   reorderQueued: (convId: string, messageId: string, beforeId: string | null) => void;
   mergeQueued: (convId: string, messageId: string, intoId: string) => void;
   /** `quoteIds`: the composer quotes this message carries, stamped sent by the server (quoteDrafts.ts). */
-  /** `typed`: only the composer's own submit passes it, so the server marks the send a person's typed words (composerChannel). */
-  sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string, quoteIds?: string[], typed?: true) => void;
+  /** `typed`: the words the person typed in the box, passed only by the composer's own submit, so the server marks that part of the send theirs (composerChannel). */
+  sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string, quoteIds?: string[], typed?: string) => void;
   // sendMessage for a conversation that may still be a local stub (a session
   // started a moment ago): resolves the real id first, then sends under the
   // same client id as the optimistic bubble.
-  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string, typed?: true) => void;
+  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string, typed?: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
   stopAndSend: (convId: string, content: string, clientId: string) => Promise<any>;
@@ -12037,7 +12037,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // agent's turn, in the session's shared queue for everyone in it. The
   // server releases the row when the turn ends
   // (managedSessions.applyAgentStatus), or now via releaseQueued.
-  queueMessage: action(function (this: Draft, convId: string, content: string, clientId: string, _typed?: true) {
+  queueMessage: action(function (this: Draft, convId: string, content: string, clientId: string, _typed?: string) {
     draftQueuedRow(this, convId, content, clientId);
   }),
 
@@ -12056,7 +12056,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (row?.inflight) row.inflight = mergeQueueRows(row.inflight, messageId, intoId);
   }),
 
-  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string, _quoteIds?: string[], _typed?: true) {
+  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string, _quoteIds?: string[], _typed?: string) {
     clearSessionSnoozeInDraft(this, _convId);
     notePendingMessageSendRequested(_clientId);
     // A message into a session that is asking you something IS the answer —
@@ -12093,9 +12093,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // is still on its way (parked, or fenced by a binding rewire) leaves the
   // bubble pending: the stranded-stub sweep re-creates and re-sends it under
   // the same client id. Only a refused create fails the bubble.
-  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string, typed?: true) => {
+  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string, typed?: string) => {
     const send = (id: string) => typed
-      ? get().sendMessage(id, content, imageIds, clientId, undefined, true)
+      ? get().sendMessage(id, content, imageIds, clientId, undefined, typed)
       : get().sendMessage(id, content, imageIds, clientId);
     if (isConvexId(convId)) {
       send(convId);
