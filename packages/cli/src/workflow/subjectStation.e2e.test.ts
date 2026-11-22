@@ -583,6 +583,31 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     expect(end.result_preview).toMatch(/^Retired jx7ssss: its change is live from main at [0-9a-f]{10} and it has no other work\.$/);
   }, 60_000);
 
+  test("a subject a person brought back from the run's stash is never retired: it hears the end instead", async () => {
+    const w = landWorld(PUSH);
+    // Land waits until the run has read the subject back in the inbox after stashing it.
+    const graph = parseWorkflowSource(`digraph change {
+      graph [label="Change", on_failure=stop]
+      start [shape=Mdiamond]
+      land [label="Land", shape=parallelogram, script="while [ ! -f ${w.root}.go ]; do sleep 0.05; done; ${PUSH}"]
+      exit [shape=Msquare, label="Done"]
+      start -> land -> exit
+    }`, w.root);
+    const s: ReturnType<typeof server> = server(() => {}, {
+      row: () => {
+        if (!routes(s, "/cli/sessions/dismiss").length) return {};
+        fs.writeFileSync(`${w.root}.go`, "");
+        return { bucket: "done" };
+      },
+    });
+    const { outcome, runDir } = await start(w.root, graph, { run: { subjectParkMs: 20 } });
+    expect(outcome).toBe("completed");
+    expect(git(w.root, "show", "origin/main:a.txt")).toBe("good");
+    expect(readCheckpoint(runDir, "run-9")?.context.subject_kept).toBe("1");
+    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
+    expect(s.sent().at(-1)!.body).toContain("is over: Done.");
+  }, 60_000);
+
   test("a parked subject is retired too, and is not resumed to hear a gate's answer", async () => {
     const { root } = landWorld(PUSH);
     const graph = parseWorkflowSource(`digraph change {
