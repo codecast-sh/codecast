@@ -158,7 +158,8 @@ describe("pendingBannerState", () => {
     // daemon delivers on its next pass; only the generous budget may escalate.
     for (const s of ["dormant", "waiting", "done"] as LiveAgentStatus[]) {
       expect(pendingBannerState(s, opts({ bootGraceElapsed: false }))).toBe("queued");
-      expect(pendingBannerState(s, opts({ bootGraceElapsed: true }))).toBe("stuck");
+      // "waiting" holds the message until the agent's background task ends (ct-98179).
+      expect(pendingBannerState(s, opts({ bootGraceElapsed: true }))).toBe(s === "waiting" ? "queued" : "stuck");
       expect(pendingBannerState(s, opts({ messageReachedSession: true }))).toBe("none");
     }
   });
