@@ -21,7 +21,7 @@ digraph change {
   tests -> read
   review -> read
   read -> merge [condition="tests.exit_code = 0 and review.json.verdict = ship", label="green, approved"]
-  read -> fix
+  read -> fix [condition="outcome = failure or review.json.verdict != ship"]
   fix -> open
   merge -> deploy [condition="outcome = success"]
   merge -> unmerged
