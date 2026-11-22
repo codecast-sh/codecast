@@ -28,7 +28,7 @@ export const EXECUTION_PROTOCOL_CAPABILITIES = [
   "runtime-inspection-v1",
 ] as const;
 
-type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
+type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse" | "antigravity";
 type RuntimeTransport = "tmux" | "app-server" | "external";
 type RuntimeCapability = (typeof EXECUTION_PROTOCOL_CAPABILITIES)[number];
 type SuccessorPolicy = "drain-current" | "cancel-unstarted";
@@ -151,6 +151,7 @@ function strictConversationAgent(agentType: unknown): AgentClientId {
     case "pi":
     case "grok":
     case "muse":
+    case "antigravity":
       return agentType;
     default:
       return fail("INVALID_EXECUTION_AGENT", `unsupported conversation agent ${String(agentType)}`);
@@ -2531,6 +2532,7 @@ const agentClientValidator = v.union(
   v.literal("pi"),
   v.literal("grok"),
   v.literal("muse"),
+  v.literal("antigravity"),
 );
 const transportValidator = v.union(
   v.literal("tmux"),

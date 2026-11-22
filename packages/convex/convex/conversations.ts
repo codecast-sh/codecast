@@ -1401,6 +1401,7 @@ export const createConversation = mutation({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     ),
     session_id: v.string(),
     project_hash: v.optional(v.string()),
@@ -1762,6 +1763,7 @@ export const createQuickSession = mutation({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
@@ -6068,6 +6070,7 @@ export const forkFromMessage = mutation({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     )),
     // `cast fork --cloud`: the branch runs on the cloud host, in a worktree the
     // CLI already acquired there. Routing goes to that device, the row and the
@@ -12507,6 +12510,7 @@ export const reconfigureSession = mutation({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
@@ -12737,6 +12741,7 @@ const switchAgentType = v.union(
   v.literal("pi"),
   v.literal("grok"),
   v.literal("muse"),
+  v.literal("antigravity"),
 );
 
 // Stay on THIS conversation: patch agent/model, drop a transcript divider, and

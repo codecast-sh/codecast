@@ -4151,7 +4151,7 @@ export async function spawnSessionForTask(
 export const assignToAgent = mutation({
   args: {
     short_id: v.string(),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi"), v.literal("grok"), v.literal("muse")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi"), v.literal("grok"), v.literal("muse"), v.literal("antigravity")),
     // Optional lead-in the user types before launch (defaults to "lets do this
     // task" in the palette). Prepended to the structured task prompt below.
     initial_message: v.optional(v.string()),

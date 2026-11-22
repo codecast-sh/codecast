@@ -1128,7 +1128,7 @@ export const reparentSession = mutation({
 
 // ── Standing agent (org-roles-standing.md T1, T2, T4) ────────────────────────
 
-const BACKENDS = new Set(["claude", "claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse"]);
+const BACKENDS = new Set(["claude", "claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse", "antigravity"]);
 function normalizeBackend(raw: string | undefined): string | undefined {
   const b = (raw ?? "").trim().toLowerCase();
   if (!b) return undefined;
