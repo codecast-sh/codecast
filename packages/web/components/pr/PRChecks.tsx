@@ -6,16 +6,14 @@ import { useInboxStore } from "../../store/inboxStore";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { accentSoft, accentVar } from "../../lib/externalEvents";
 import { relTimeShort } from "../../lib/utils";
-import { checkLabel } from "@codecast/shared/contracts";
+import { checkLabel, checkOutcome, type CheckOutcome } from "@codecast/shared/contracts";
 import type { PRDetailsRead } from "../../hooks/usePRDetails";
 import { PRDetailsFrame } from "./PRDetailsFrame";
 import {
   CHECK_OUTCOME_ACCENT,
-  checkOutcome,
   compareChecks,
   foldChecks,
   formatFailingChecksPrompt,
-  type CheckOutcome,
   type PrCheck,
 } from "../../lib/prView";
 

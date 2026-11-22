@@ -120,6 +120,23 @@ export function checkLabel(check: { name: string; event?: string }): string {
   return check.event ? `${check.name} (${check.event})` : check.name;
 }
 
+export type CheckOutcome = "passed" | "failed" | "pending" | "skipped";
+
+/** A check run reports `status` while it runs and `conclusion` once it ends.
+ *  GitHub also reports commit statuses, whose state lands in `status`. */
+export function checkOutcome(check: { status: string; conclusion?: string | null }): CheckOutcome {
+  const conclusion = (check.conclusion ?? "").toLowerCase();
+  const status = (check.status ?? "").toLowerCase();
+  if (conclusion) {
+    if (conclusion === "success" || conclusion === "neutral") return "passed";
+    if (conclusion === "skipped" || conclusion === "stale") return "skipped";
+    return "failed";
+  }
+  if (status === "success") return "passed";
+  if (status === "failure" || status === "error") return "failed";
+  return "pending";
+}
+
 export type ShepherdPrState = {
   state?: string;
   draft?: boolean;

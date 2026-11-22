@@ -5,6 +5,7 @@
 // and every deploy with the sessions it carried and a way back. Reads the
 // store only (hooks/useSyncDeployTargets); a press paints at once and the
 // confirm flow (components/consequential) carries its weight.
+import { OnItsWay } from "../changes/OnItsWay";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { Check, CircleDashed, Loader2, RotateCcw, X } from "lucide-react";
@@ -275,6 +276,8 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
       {focus ? <FocusChip focus={focus} waiting={focusWaiting} deploys={focusDeploys} live={n.live} onClear={onClearFocus} /> : null}
 
       <div className="dpp-body" data-record-only={t.record_only ? "" : undefined}>
+      {t.record_only ? null : <OnItsWay repository={t.repository} />}
+
       {t.record_only ? null : <section className="dpp-sec" data-deploy-waiting>
         <h3>Waiting on main{t.queue.known ? <span className="dpp-num">{waiting} {waiting === 1 ? "commit" : "commits"}</span> : null}{sessions ? <span className="dpp-h-sub">· {sessions} {sessions === 1 ? "session" : "sessions"}</span> : null}{t.queue.untouched ? <span className="dpp-h-sub" title={`${t.queue.untouched} commits on main change no file ${t.name} ships`}>· {t.queue.untouched} not for {t.name}</span> : null}<LabelSwitch labels={labels} onToggle={onToggleLabel} />{mineCount ? <button type="button" className="dpp-mine" aria-pressed={mineShown} onClick={() => setMineOn((v) => !v)} data-deploy-mine>Mine<span className="dpp-num">{mineCount}</span></button> : null}</h3>
         {!t.queue.known ? <p className="dpp-none" data-deploy-queue-unknown>Live <code>{short(n.live?.sha)}</code> is not on main, so what waits here can't be counted.</p>

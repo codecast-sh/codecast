@@ -1,0 +1,116 @@
+// Every change on a repository, each with its lifecycle (docs/architecture/
+// changes.md), for the chips the branches, deploys and pipeline pages and a
+// message's branch reference draw. Mounts the feeders the pages already mount
+// (checkouts, deploy targets, the repository's pull requests; GitHub's branch
+// list only when asked), reads the store, and assembles (lib/changes/assemble).
+// A landed change's reach is read from the store's deployReach rows; the row
+// that draws a change feeds and pins its own with useChangeReach, so a chip
+// nobody draws costs no subscription.
+import type { RepoChangeRows } from "../lib/changes/assemble";
+import { useMemo } from "react";
+import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
+import { useInboxStore, isConvexId } from "../store/inboxStore";
+import { activeTeamIdOf } from "../lib/activeTeam";
+import { joinPullRequestDetail, type PullRequestDetailRow } from "../lib/detailRows";
+import { assemble, findChange, withReach, type AssembledChange, type ChangePullRequest } from "../lib/changes/assemble";
+import { changeLifecycle, type Lifecycle } from "../lib/changes/lifecycle";
+import { useCheckouts, useSyncCheckouts } from "./useSyncCheckouts";
+import { useDeployTargets } from "./useSyncDeployTargets";
+import { useSyncPullRequests } from "./useSyncTimeline";
+import { useCollectionRows } from "./useCollectionRows";
+import { useCoarseNow } from "./useCoarseNow";
+import { useDeployReach, type DeployReachRow } from "./useDeployReach";
+
+export type RepoChange = AssembledChange & { lifecycle: Lifecycle };
+
+/** How many of the repository's newest pull requests are fed: enough to hold a week's merged ones and every open one touched lately. */
+const PR_LIMIT = 50;
+
+const prSig = (p: ChangePullRequest) => `${p.state}|${p.files_synced_at ?? 0}|${p.draft ? 1 : 0}|${p.auto_merge ? 1 : 0}|${p.closed_at ?? 0}|${p.head_ref ?? ""}|${p.head_sha ?? ""}|${p.checks_state ?? ""}|${p.review_decision ?? ""}|${p.mergeable_state ?? ""}|${p.merge_commit_sha ?? ""}|${p.linked_session_ids?.length ?? 0}`;
+const detailSig = (d: PullRequestDetailRow) => `${d.checks_state ?? ""}|${d.checks?.length ?? 0}`;
+const reachSig = (r: DeployReachRow) => `${r.state}|${r.targets?.map((t) => `${t.target}:${t.state}:${t.deploy?.short_id ?? ""}:${t.now?.short_id ?? ""}`).join(",") ?? ""}`;
+
+type TitleRow = { title?: string | null };
+
+/** The conversations a change names, for their titles. */
+function writerIds(checkouts: ReadonlyArray<CheckoutRow>, prs: ReadonlyArray<ChangePullRequest>): string {
+  const ids = new Set<string>();
+  for (const r of checkouts) for (const s of r.uncommitted.sessions) if (s.conversation_id) ids.add(s.conversation_id);
+  for (const p of prs) for (const id of p.linked_session_ids ?? []) ids.add(String(id));
+  return [...ids].sort().join(",");
+}
+
+/**
+ * Every change on `repository` in flight or finished within the week, freshest first. `teamId` defaults to the active
+ * team. `branches`, GitHub's branch list a page already read (the branches page): a pushed branch with commits main lacks
+ * that no checkout or pull request names becomes a change of its own.
+ */
+export function useRepoChanges(repository: string | null | undefined, teamId?: string | null, opts?: { branches?: RepoChangeRows["branches"] }): { ready: boolean; changes: RepoChange[] } {
+  const activeTeam = useInboxStore((s) => {
+    const id = activeTeamIdOf(s);
+    return id && isConvexId(id) ? id : null;
+  });
+  const team = teamId === undefined ? activeTeam : teamId;
+  const repo = repository?.toLowerCase() ?? null;
+
+  const checkoutsFeed = useSyncCheckouts(team);
+  const checkouts = useCheckouts(team, repo);
+  const { targets, ready: targetsReady } = useDeployTargets(team);
+  const prsFeed = useSyncPullRequests(repo ? { repository: repo, limit: PR_LIMIT } : "skip");
+
+  const prWhere = useMemo(() => (p: ChangePullRequest) => !!repo && p.repository?.toLowerCase() === repo, [repo]);
+  const prRows = useCollectionRows<ChangePullRequest & { _id: string }>("pullRequests", { where: prWhere, sig: prSig });
+  // Checks live on a pull request's detail row, held only for the few a person opened: laid on when present.
+  const details = useCollectionRows<PullRequestDetailRow>("pullRequestDetails", { sig: detailSig });
+  const prs = useMemo(() => {
+    const byId = new Map(details.map((d) => [d._id, d]));
+    return prRows.map((p) => joinPullRequestDetail(p, byId.get(String(p._id))));
+  }, [prRows, details]);
+
+  const ids = useMemo(() => writerIds(checkouts, prs), [checkouts, prs]);
+  const titleSig = useInboxStore((s) => JSON.stringify(Object.fromEntries((ids ? ids.split(",") : []).map((id) => {
+    const row = ((s.sessions as Record<string, TitleRow>)[id] ?? (s.conversations as Record<string, TitleRow>)[id]) as TitleRow | undefined;
+    return [id, row?.title ?? null];
+  }))));
+
+  const now = useCoarseNow(60_000);
+  const assembled = useMemo(() => {
+    if (!repo) return [];
+    const titles = JSON.parse(titleSig) as Record<string, string | null>;
+    return assemble({
+      repository: repo,
+      now,
+      checkouts,
+      pullRequests: prs,
+      targets: targetsReady ? targets : undefined,
+      branches: opts?.branches ?? null,
+      titleOf: (id) => titles[id],
+    });
+  }, [repo, now, checkouts, prs, targets, targetsReady, opts?.branches, titleSig]);
+
+  // Reach rows some surface fed (useChangeReach, a pill): read, never fed, here.
+  const refsKey = assembled.map((c) => c.reach_ref).filter(Boolean).join("\n");
+  const reachWhere = useMemo(() => {
+    const refs = new Set(refsKey ? refsKey.split("\n") : []);
+    return (r: DeployReachRow) => refs.has(r._id);
+  }, [refsKey]);
+  const reach = useCollectionRows<DeployReachRow>("deployReach", { where: reachWhere, sig: reachSig });
+
+  const changes = useMemo(() => {
+    const byRef = new Map(reach.filter((r) => r.targets?.length).map((r) => [r._id, r]));
+    // A row with no targets is an answer (it touches none); no row is a question not answered yet.
+    const read = new Set(reach.map((r) => r._id));
+    return assembled.map((c) => {
+      const laid = withReach(c, c.reach_ref ? byRef.get(c.reach_ref) : undefined, !c.reach_ref || read.has(c.reach_ref));
+      return { ...laid, lifecycle: changeLifecycle(laid.facts, now) };
+    });
+  }, [assembled, reach, now]);
+
+  const ready = !!repo && checkoutsFeed.ready && targetsReady && prsFeed.ready;
+  return { ready, changes };
+}
+
+/** Feed and pin a landed change's reach while its row is drawn; useRepoChanges reads it back. Call it in each row. */
+export function useChangeReach(reachRef: string | null | undefined): DeployReachRow | undefined {
+  return useDeployReach(reachRef ?? null);
+}

@@ -1,4 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect, useContext, useMemo } from "react";
+import { useChangesRepository, useMentionedChange } from "../hooks/useMentionedChange";
+import { UnlistedBranch } from "./changes/UnlistedBranch";
+import { ChangeChip } from "./changes/ChangeChip";
+import { changeRowOf } from "../lib/changes/rows";
+import { useChangeReach, type RepoChange } from "../hooks/useRepoChanges";
 import { repoObjectDeepHref } from "../lib/repoView";
 import { ShortId } from "./ShortId";
 import Link from "next/link";
@@ -575,19 +580,33 @@ function takeMentionProps(props: any): { mention: MentionInfo; rest: any } {
   };
 }
 
+/** A change a message names, its reach fed while drawn. */
+function MentionedChange({ change, label }: { change: RepoChange; label: string }) {
+  useChangeReach(change.reach_ref);
+  const row = changeRowOf(change);
+  return <ChangeChip lifecycle={row.lifecycle} label={label} links={row.links} writers={row.writers} />;
+}
+
 export function EntityAwareCode({ children, className, ...allProps }: any) {
   const text = String(children);
   const worktrees = useKnownWorktrees();
   const { mention: mentionInfo, rest: props } = takeMentionProps(allProps);
+  const entity = !className && isEntityId(text);
+  // A worktree named by its folder or by the branch it has checked out. Checked
+  // before the file link, which would otherwise claim the folder as a path.
+  const worktree = className || entity || !worktrees ? null : worktreeRefOfCode(text, worktrees.checkouts);
+  // A branch on its way to live draws as its change (changes.md CH4), whether a worktree, a pull request or a push
+  // carries it. Asked before any return: a streaming span's text can turn into an entity id between renders.
+  const change = useMentionedChange(className || entity ? "" : text, !!worktree && worktree.worktree.branch === text);
+  const changesRepo = useChangesRepository();
   // The fallback keeps a non-entity Convex-shaped string (message id, hash)
   // rendered as the inline code it was written as.
-  if (!className && isEntityId(text)) {
+  if (entity) {
     return <EntityIdPill shortId={text} mention={mentionInfo} fallback={<code className={className} {...props}>{children}</code>} />;
   }
   const code = <code className={className} {...props}>{children}</code>;
-  // A worktree named by its folder or by the branch it has checked out. Checked
-  // before the file link, which would otherwise claim the folder as a path.
-  const worktree = className || !worktrees ? null : worktreeRefOfCode(text, worktrees.checkouts);
+  if (change === "unlisted") return <UnlistedBranch repository={changesRepo!} name={text}>{code}</UnlistedBranch>;
+  if (change) return <MentionedChange change={change} label={text} />;
   if (worktree) return <WorktreePill repository={worktrees!.repository} path={worktree.worktree.path}>{text}</WorktreePill>;
   // `lib/foo.ts:38` in backticks — the commonest way an agent names a file.
   // The code span keeps its look; the link wraps it.
