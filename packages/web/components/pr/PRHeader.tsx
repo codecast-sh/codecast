@@ -437,7 +437,8 @@ export function PRHeader({
             <span className="text-sol-text-dim">GitHub has not said yet</span>
           )}
         </Figure>
-        {deploy.open && deploy.declares && (
+        {/* Only once the files are in: until then where it ships is unknown, not empty. */}
+        {deploy.open && deploy.declares && deploy.shipsTo && (
           <Figure label="Ships to">
             <PRShipsTo model={deploy} />
           </Figure>
