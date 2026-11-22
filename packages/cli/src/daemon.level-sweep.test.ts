@@ -32,6 +32,11 @@ describe("the level sweep's clock", () => {
     const sweep = functionBlock(source, "sweepLevelCheckouts").text;
     expect(sweep).toMatch(/sendMessageToSession\(to, body, "scheduler", clientId\)/);
     expect(sweep).not.toContain("/cli/messages/send");
+    // The stuck level's ask (checkoutReport.ts) rides the same send.
+    expect(sweep).toMatch(/reportCheckoutsAfterSweep\(outcomes, send \?\?/);
+    const report = functionBlock(source, "reportCheckoutsAfterSweep").text;
+    expect(report).toMatch(/reportCheckouts\(outcomes, \{ post, sendBrief,/);
+    expect(report).not.toContain("/cli/messages/send");
   });
 
   test("daemon start arms it on its own interval", () => {
