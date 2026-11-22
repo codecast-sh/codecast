@@ -20,14 +20,23 @@ import {
 // whole query or mutation.
 type Ctx = Pick<QueryCtx, "db"> | Pick<MutationCtx, "db">;
 
+/** Rows one reader has already loaded: pass one cache to many calls and a
+ *  parent, task or plan shared by several sessions is read once. */
+export type SessionProjectCache = {
+  sessions: Map<string, Doc<"conversations"> | null>;
+  taskProjects: Map<string, string | null>;
+  planProjects: Map<string, string | null>;
+};
+export const sessionProjectCache = (): SessionProjectCache => ({ sessions: new Map(), taskProjects: new Map(), planProjects: new Map() });
+
 /** The project a stored session works in: loads its parent chain and the tasks
  *  and plans the chain is bound to, then applies the shared rule. */
-export async function effectiveSessionProjectId(ctx: Ctx, conv: Doc<"conversations">): Promise<Id<"projects"> | null> {
-  const sessions = new Map<string, Doc<"conversations">>();
-  const taskProjects = new Map<string, string | null>();
-  const planProjects = new Map<string, string | null>();
+export async function effectiveSessionProjectId(ctx: Ctx, conv: Doc<"conversations">, cache: SessionProjectCache = sessionProjectCache()): Promise<Id<"projects"> | null> {
+  const { sessions, taskProjects, planProjects } = cache;
+  const seen = new Set<string>();
   let cur: Doc<"conversations"> | null = conv;
-  while (cur && !sessions.has(cur._id.toString()) && sessions.size < SESSION_PROJECT_MAX_DEPTH) {
+  while (cur && !seen.has(cur._id.toString()) && seen.size < SESSION_PROJECT_MAX_DEPTH) {
+    seen.add(cur._id.toString());
     sessions.set(cur._id.toString(), cur);
     if (cur.project_id) break;
     if (cur.active_task_id && !taskProjects.has(cur.active_task_id.toString())) {
@@ -40,7 +49,9 @@ export async function effectiveSessionProjectId(ctx: Ctx, conv: Doc<"conversatio
     }
     const parentId = projectParentIdOf(cur);
     const parentKey = parentId ? ctx.db.normalizeId("conversations", parentId) : null;
-    cur = parentKey ? await ctx.db.get(parentKey) : null;
+    if (!parentKey) break;
+    if (!sessions.has(parentKey.toString())) sessions.set(parentKey.toString(), await ctx.db.get(parentKey));
+    cur = sessions.get(parentKey.toString()) ?? null;
   }
   const id = sessionProjectId(conv, {
     session: (sid) => sessions.get(sid),

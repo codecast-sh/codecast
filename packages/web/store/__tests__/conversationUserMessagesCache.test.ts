@@ -1,7 +1,7 @@
 import Dexie from "dexie";
 import "fake-indexeddb/auto";
 import { stampCacheOwner } from "./fixtures/signedInPrincipal";
-import { indexedDB, IDBKeyRange } from "fake-indexeddb";
+import { indexedDB, IDBKeyRange, IDBObjectStore } from "fake-indexeddb";
 import { describe, it, expect } from "bun:test";
 import {
   loadConversationMessages,
@@ -54,5 +54,29 @@ describe("conversation user-message cache", () => {
     expect(cached?.messages.length).toBe(1);
     expect(cached?.userMessages).toBeUndefined();
     expect(await loadConversationMessages(cid(4))).toBeNull();
+  });
+});
+
+describe("conversation cache misses", () => {
+  it("reads IDB once for a conversation it does not hold, again after this window writes it", async () => {
+    const conv = cid(777);
+    const proto = (IDBObjectStore as any).prototype;
+    const orig = proto.get;
+    let reads = 0;
+    proto.get = function (...args: any[]) {
+      if (this.name === "conversationMessages") reads++;
+      return orig.apply(this, args);
+    };
+    try {
+      expect(await loadConversationMessages(conv)).toBeNull();
+      expect(reads).toBe(1);
+      expect(await loadConversationMessages(conv)).toBeNull();
+      expect(reads).toBe(1);
+      writeConversationMessages(conv, [{ _id: "m9", role: "assistant", content: "x", timestamp: 1 }], { hasMoreAbove: false });
+      flushConversationMessages();
+      expect((await loadConversationMessages(conv))?.messages.map((m) => m._id)).toEqual(["m9"]);
+    } finally {
+      proto.get = orig;
+    }
   });
 });
