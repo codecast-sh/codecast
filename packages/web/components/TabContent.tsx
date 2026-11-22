@@ -1,5 +1,5 @@
 import { shellEntryPath } from "../lib/tabRoutes";
-import { useEffect, useMemo, useRef } from "react";
+import { useDeferredValue, useEffect, useMemo, useRef } from "react";
 import { useLocation } from "react-router";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useInboxStore, useTrackedStore, type AppTab } from "../store/inboxStore";
@@ -101,8 +101,20 @@ export function TabContent() {
   // closing an item follows it in every style.
   useMountEffect(() => (borrowsTabShell() ? undefined : startNavTrail()));
 
-  if (s.tabs.length === 0) return null;
-  return <TabStage tabs={s.tabs} storeActiveTabId={s.activeTabId} />;
+  // The pane follows the store one step behind, at transition priority. A tab
+  // move is a store write inside a click (tabNavigate → updateTab), and a store
+  // read through useSyncExternalStore renders synchronously, so without this
+  // the whole destination page rendered and committed inside the click's task
+  // (250-900 ms long frames moving between the org chart and a conversation,
+  // ct-97544). Deferred, the click commits at once and the swap renders in a
+  // later, interruptible pass; a destination that suspends keeps the current
+  // page up instead of a fallback. Both values defer together, so the pane
+  // never sees a tab list from one write and an active id from another.
+  const tabs = useDeferredValue(s.tabs);
+  const activeTabId = useDeferredValue(s.activeTabId);
+
+  if (tabs.length === 0) return null;
+  return <TabStage tabs={tabs} storeActiveTabId={activeTabId} />;
 }
 
 // Mounts once the first tab exists, so every hook below runs on every render
