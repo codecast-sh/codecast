@@ -277,6 +277,9 @@ export default defineSchema({
       // dropped (tasks.ts notifyTaskStatus). Absent reads as OFF: status
       // moves are the board's, like Linear's opt-in "status changes".
       task_status_changes: v.optional(v.boolean()),
+      // A laptop or daemon under sustained load (machine_overloaded,
+      // daemon_overloaded). Absent reads as ON.
+      machine_alerts: v.optional(v.boolean()),
     })),
     // Cooldown stamp for the email digest — at most one digest per cooldown
     // window, and items created before this stamp are never re-emailed.
@@ -4973,6 +4976,8 @@ export default defineSchema({
       v.literal("decision_passed"),
       v.literal("decision_escalated"),
       v.literal("decision_assigned"),
+      // A card waiting on the recipient: every card one session asked in one turn (lib/decisionPush.ts).
+      v.literal("decision_waiting"),
       // A comment in the thread of a decision the recipient owns or takes part in (decisionThread.ts).
       v.literal("decision_comment"),
       // Finding a team by work email (teamDiscovery.ts): someone asked to
