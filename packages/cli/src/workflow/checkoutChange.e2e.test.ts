@@ -164,6 +164,54 @@ describe("a shared checkout's pass is one flow change", () => {
     expect(readFrozenChange(runDir)?.tip).toBe(again.tip);
   }, 180_000);
 
+  test("a refreeze after a brief keeps what a writer's shell made after it: a lockfile, a git mv target and its source", async () => {
+    const { root, edit } = checkoutWorld();
+    const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
+    const runDir = path.join(root, ".git", "run-pass");
+    writeFrozenChange(runDir, change);
+    write(root, "stranger.txt", "written before the brief\n");
+    // ctime and mtime have whole-millisecond or coarser resolution: the brief goes out strictly after the stranger's write.
+    const since = Date.now() + 5;
+    await new Promise((r) => setTimeout(r, 20));
+    edit(A, "src/a.ts", "export const a = 'good';\n");
+    write(root, "bun.lock", "{ lockfile: 1 }\n");
+    git(root, "mv", "src/d.ts", "src/e.ts");
+
+    const { change: again } = await refreezeSessionChange(root, runDir, null, { roster, since });
+    expect(again.paths).toEqual(["bun.lock", "notes.txt", "src/a.ts", "src/b.ts", "src/d.ts", "src/e.ts"]);
+    expect(git(root, "show", `${again.tip}:bun.lock`)).toBe("{ lockfile: 1 }");
+    expect(git(root, "show", `${again.tip}:src/e.ts`)).toBe("export const d = 1;");
+    expect(() => git(root, "cat-file", "-e", `${again.tip}:src/d.ts`)).toThrow();
+    expect(() => git(root, "cat-file", "-e", `${again.tip}:stranger.txt`)).toThrow();
+    // Without a brief to date them by, unattributed newcomers stay out as before.
+    writeFrozenChange(runDir, change);
+    const { change: undated } = await refreezeSessionChange(root, runDir, null, { roster });
+    expect(undated.paths).toEqual(["notes.txt", "src/a.ts", "src/b.ts"]);
+  }, 180_000);
+
+  test("a refreeze of a pass upstream already holds, the checkout levelled under it, comes back landed", async () => {
+    const { root, origin, edit } = checkoutWorld();
+    const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
+    const runDir = path.join(root, ".git", "run-pass");
+    writeFrozenChange(runDir, change);
+    // Another pass landed exactly these files, and the level sweep moved the checkout onto it.
+    const other = path.join(path.dirname(root), "other");
+    git(path.dirname(root), "clone", "-q", origin, other);
+    for (const f of ["src/a.ts", "src/b.ts", "notes.txt"]) write(other, f, fs.readFileSync(path.join(root, f), "utf-8"));
+    git(other, "add", "-A");
+    git(other, "commit", "-qm", "the pass, landed elsewhere");
+    git(other, "push", "-q", "origin", "main");
+    git(root, "fetch", "-q", "origin");
+    git(root, "reset", "-q", "--hard", "origin/main");
+    void edit;
+
+    const { change: again, moved } = await refreezeSessionChange(root, runDir, null, { roster });
+    expect(moved).toBe(false);
+    expect(again.landed).toBe(git(origin, "rev-parse", "main"));
+    expect(again.tip).toBe(change.tip);
+    expect(readFrozenChange(runDir)?.landed).toBe(again.landed);
+  }, 180_000);
+
   test("a checkout with only held files has nothing to ship, and says what is held", async () => {
     const { root } = checkoutWorld();
     for (const f of ["src/a.ts", "src/b.ts"]) git(root, "checkout", "--", f);

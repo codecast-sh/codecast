@@ -32,7 +32,7 @@ import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { behindWords, frozenChangeContext } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
-import { checkoutChangeOf, failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
+import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { restoreRunTree } from "./runWorktree.js";
@@ -439,7 +439,7 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
   // A checkout's change: the finding goes to the writers of the files it names; one that names none goes on to the subject.
   const checkout = checkoutChangeOf(context["run_dir"]);
-  const writers = checkout ? writersNamed(checkout, `${context["stop_reason"] ?? ""}\n${expandAgentPrompt(node.prompt ?? "", graph, context)}`) : [];
+  const writers = checkout ? writersNamed(checkout, `${context["stop_reason"] ?? ""}\n${expandAgentPrompt(node.prompt ?? "", graph, context)}`, await findingRoots(cwd, context["worktree"])).writers : [];
   if (writers.length) return briefWriters(node, graph, context, cwd, options, writers);
   if (!subject) {
     context["last_error"] = `This run's change came from no session, so nobody can work on what the run found.${found}`;
@@ -526,10 +526,14 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
   if (failed) return failed;
   try {
     const { refreezeSessionChange, inboxRosterVia } = await import("./flowChange.js");
-    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call) });
+    // Files a writer's shell made after its brief (a lockfile, codegen output) are its fix too.
+    const since = Math.min(...waits.map((w) => w.sentAt));
+    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call), since });
     Object.assign(context, frozenChangeContext(context["run_dir"]));
-    const said = `briefed ${names}; ${moved
-      ? `froze the checkout's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
+    // Nothing is left to check or land: the run ends done here (runNodeLoop).
+    if (change.landed) context["change_landed"] = change.landed;
+    const said = `briefed ${names}; ${change.landed ? `the checkout's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
+      : moved ? `froze the checkout's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
       : "the checkout's change is as it was: the stage runs again on the same change"}`;
     console.log(`  ${c.green}✓${c.reset} ${said}`);
     recordNodeOutput(context, node.id, said);
@@ -961,8 +965,9 @@ async function waitOnStation(
   }
 
   console.log(`  ${c.red}timeout${c.reset}: ${shortId} ${over} — killing it`);
-  // The words before the colon are the engine's stop line the web reads (runReport.ts TIMED_OUT).
-  context["last_error"] = `hand ${shortId} killed after ${Math.round(clock.elapsed() / 60_000)}m at ${node.id}: it ${over}`;
+  // The engine's stop line the web reads (lineWords.ts HAND_KILLED): the station's id ends at a space, and the
+  // parenthesis says whether the hand went quiet or ran to its limit.
+  context["last_error"] = `hand ${shortId} killed after ${Math.round(clock.elapsed() / 60_000)}m at ${node.id} (it ${over})`;
   context["killed_hand"] = shortId;
   context["station_dead"] = node.id;
   return "failure";

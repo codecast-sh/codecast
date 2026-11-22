@@ -9,6 +9,7 @@ import { CARD_GATE_NODE_ID, isLineRun, passedUnansweredCard, type LineRunEnd } f
 import { threadStateHeadline, threadStateResult } from "@codecast/shared/contracts";
 import { choiceWords, closedAtStep, isLiveRun, runEnd } from "@codecast/shared/contracts/causeHistory";
 import { LINE_PHASES, phaseOfStation, type LinePhaseKey } from "@codecast/shared/contracts/linePhases";
+import { HAND_KILLED } from "@codecast/shared/contracts/lineWords";
 import { runNodeLine, runNodeRows, scriptLine, type RunNodeRow } from "../workflowRun";
 import { SHIPPED_LINE } from "./shippedLine.generated";
 import { lineRefHref } from "./lineWorkspaceUrl";
@@ -281,7 +282,6 @@ const HANDOFF_WORDS: Record<string, { step: string; stop: string }> = {
   needs_context: { step: "Handed off needs_context: stopped to ask for context", stop: "stopped to ask for context (a needs_context handoff)" },
   blocked: { step: "Handed off blocked: stopped until a person unblocks it", stop: "stopped blocked (a blocked handoff)" },
 };
-const TIMED_OUT = /^hand \S+ killed after (\d+)\s*m(?:in)?(?: at (\S+))?/;
 
 /** The line's stations that run as an agent's session: one with no session and no hand behind it never started. */
 const AGENT_STATIONS = new Set(SHIPPED_LINE.nodes.filter((n) => n.backend === "session").map((n) => n.id));
@@ -378,9 +378,11 @@ export function stationEnd(row: Pick<RunNodeRow, "id" | "session" | "status"> & 
   const s = row.session as ReportNode["session"];
   const handoff = s?.handoff && HANDOFF_WORDS[s.handoff.status];
   if (handoff) return { kind: "handoff", step: handoff.step, stop: (st) => `${st} ${handoff.stop}` };
-  const timeout = run.fail_reason?.trim().match(TIMED_OUT);
+  const timeout = run.fail_reason?.trim().match(HAND_KILLED);
   // A session that holds no message at its limit never ran a turn: it never started, it did not run long.
-  if (timeout && timeout[2] === row.id && s?.message_count === 0) return { kind: "never_started", step: `Never ran a turn: its session sat empty until the ${timeout[1]}m limit`, stop: (st) => `${st}'s session never ran a turn` };
+  if (timeout && timeout[2] === row.id && s?.message_count === 0) return { kind: "never_started", step: `Never ran a turn: its session sat empty ${timeout[3] ? `for ${timeout[3]}m` : `until the ${timeout[1]}m limit`}`, stop: (st) => `${st}'s session never ran a turn` };
+  // A session killed for showing no work went quiet; one killed at its station's limit ran out of time.
+  if (timeout && timeout[2] === row.id && timeout[3]) return { kind: "timed_out", step: `Showed no work for ${timeout[3]}m and was killed`, stop: (st) => `${st}'s session showed no work for ${timeout[3]} minutes` };
   if (timeout && timeout[2] === row.id) return { kind: "timed_out", step: `Ran out of time after ${timeout[1]}m and was killed`, stop: (st) => `${st}'s session ran out of time` };
   // The runner retires a station that finished: a kill speaks only for one the run stopped at.
   if (row.status !== "failed") return null;
@@ -991,14 +993,14 @@ export function failCause(run: Pick<ReportRun, "fail_reason" | "current_node_id"
     return out(`looped${m[1]}`, m[2], check ? `${checkWords(check)} ${m[1]} times, ${label(m[2])} stopped retrying` : `${label(m[2])} went round ${m[1]} times and stopped`);
   }
   // Timeouts group by station, whatever each run's limit was; the label names the time when the group's runs agree.
-  if ((m = raw.match(TIMED_OUT))) {
+  if ((m = raw.match(HAND_KILLED))) {
     // A session that holds no message at its limit never ran a turn: it never started working, it did not run long.
     const step = m[2] ?? at;
     const empty = (run.node_statuses?.find((n) => n.node_id === step)?.session as ReportNode["session"])?.message_count === 0;
     // A limit is the cause whatever an earlier check printed: the key carries no check, so one stall is one heading.
     // One that sat empty never started: it shares the heading of every other way a session never got going.
-    if (empty) return { key: `nosession:${step ?? ""}`, step, label: NEVER_STARTED_CAUSE, detail: `Never started: its session sat empty until the ${spanWords(Number(m[1]))} limit`, satEmpty: Number(m[1]), raw, check };
-    return { key: `killed:${step ?? ""}`, step, label: `Out of time, ${spanWords(Number(m[1]))}`, raw, check };
+    if (empty) return { key: `nosession:${step ?? ""}`, step, label: NEVER_STARTED_CAUSE, detail: `Never started: its session sat empty ${m[3] ? `for ${spanWords(Number(m[3]))}` : `until the ${spanWords(Number(m[1]))} limit`}`, satEmpty: Number(m[1]), raw, check };
+    return { key: `killed:${step ?? ""}`, step, label: m[3] ? `No work for ${spanWords(Number(m[3]))}` : `Out of time, ${spanWords(Number(m[1]))}`, raw, check };
   }
   if ((m = raw.match(/^gate (dismissed|withdrawn)$/))) return out(`gate-${m[1]}`, at, `Card ${m[1]}`);
   if ((m = raw.match(/^(\S+) is waiting on a person$/))) {
@@ -1124,7 +1126,7 @@ export function stopWords(run: ReportRun, at = labelOf(run, run.current_node_id)
   if (end) return `Stopped: ${end.label}.`;
   const looped = loopedStation(run);
   if (looped) return `Stopped: ${labelOf(run, looped.node)} looped ${TIMES[looped.times] ?? `${looped.times} times`}.`;
-  if ((m = why.match(TIMED_OUT))) return `Stopped: ${labelOf(run, m[2] ?? run.current_node_id)}'s session ran out of time.`;
+  if ((m = why.match(HAND_KILLED))) return `Stopped: ${labelOf(run, m[2] ?? run.current_node_id)}'s session ${m[3] ? `showed no work for ${m[3]} minutes` : "ran out of time"}.`;
   if ((m = why.match(/^gate (dismissed|withdrawn)$/))) return run.gate_node_id === CARD_GATE_NODE_ID || run.current_node_id === CARD_GATE_NODE_ID ? `Stopped: the decision was ${m[1]}.` : `Stopped: the question was ${m[1]}.`;
   if ((m = why.match(/^(\S+) is waiting on a person$/))) {
     const cap = runSpendCap(run, m[1]);
@@ -1139,13 +1141,17 @@ export function stopWords(run: ReportRun, at = labelOf(run, run.current_node_id)
  *  killed after 30m at build" reads "Ran out of time: stopped at its 30 min limit"). A station that handed the problem
  *  back first says that, since the handoff is how it ended and the time limit only closed its session. */
 export function stepFailWords(run: ReportRun, stepId: string): string {
-  const timeout = run.fail_reason?.trim().match(TIMED_OUT);
+  const timeout = run.fail_reason?.trim().match(HAND_KILLED);
   if (timeout && (!timeout[2] || timeout[2] === stepId)) {
     const node = nodeOf(run, stepId);
     const handoff = (node?.session as ReportNode["session"])?.handoff?.status;
+    // Killed for showing no work, or at its station's time limit.
+    const quiet = timeout[3] && `${timeout[3]} min`;
     const limit = `${timeout[1]} min`;
-    if ((node?.session as ReportNode["session"])?.message_count === 0) return `Its session never ran a turn: it sat empty until the ${limit} limit closed it.`;
-    return handoff && HANDOFF_WORDS[handoff] ? `It handed the problem back ${handoff === "blocked" ? "blocked" : "asking for context"}, then its session was closed at the ${limit} time limit.` : `Ran out of time: stopped at its ${limit} limit.`;
+    if ((node?.session as ReportNode["session"])?.message_count === 0) return quiet ? `Its session never ran a turn: it sat empty for ${quiet} and was closed.` : `Its session never ran a turn: it sat empty until the ${limit} limit closed it.`;
+    const closed = quiet ? `closed after ${quiet} with no work` : `closed at the ${limit} time limit`;
+    if (handoff && HANDOFF_WORDS[handoff]) return `It handed the problem back ${handoff === "blocked" ? "blocked" : "asking for context"}, then its session was ${closed}.`;
+    return quiet ? `Went quiet: stopped after ${quiet} with no work.` : `Ran out of time: stopped at its ${limit} limit.`;
   }
   return stopWords(run).replace(/^Stopped at [^:]+: /, "").replace(/^Stopped: /, "").replace(/^\w/, (c) => c.toUpperCase());
 }
@@ -1155,7 +1161,7 @@ export function stepFailWords(run: ReportRun, stepId: string): string {
  *  minutes."): no session ids, no step fractions (learning-loop.md LL6). */
 export function lastRunWords(run: ReportRun): string {
   const day = shortDay(run.updated_at || run.created_at);
-  const timeout = run.fail_reason?.trim().match(TIMED_OUT);
+  const timeout = run.fail_reason?.trim().match(HAND_KILLED);
   if (timeout) return `Last run ${day} stopped at ${labelOf(run, timeout[2] ?? run.current_node_id)} after ${timeout[1]} minutes.`;
   if (isLiveRun(run)) return `Running since ${shortDay(run.created_at)}, now at ${labelOf(run, run.current_node_id)}.`;
   if (run.status === "completed") return `Last run ${day} finished.`;
