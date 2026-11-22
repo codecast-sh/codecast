@@ -7,7 +7,7 @@ import { noteTrailBack, shownPlace } from "../lib/navTrailRecorder";
 import { canonicalPlacePath, placeOf, placeSessionId } from "../lib/navPlace";
 import { placeNamesOf, placeTitle } from "../lib/placeTitle";
 import { pathLabel } from "../lib/pathLabel";
-import { stageClose } from "../lib/stage";
+import { leafHasBeenAt, stageClose } from "../lib/stage";
 
 // The Modern back control's brain: where Back goes from the page this hook
 // runs in, under what name, and the move that gets there. Closing an item
@@ -128,7 +128,9 @@ export function useBackTarget(fallback?: { label: string; href: string } | null)
  * project returns to the project and one opened from a conversation returns
  * to the conversation; with no trail (a cold link) it goes to the list.
  * In a pane of a split (opened beside a conversation) the close closes that
- * pane: the pane has no trail, and going up would swap it to the list.
+ * pane when the pane opened on this detail: going up would swap it to a list
+ * it never showed. A pane that came here from its parent (a project's task)
+ * goes back up to it, as a tab would.
  * `href` is where the close goes, for a control drawn as a link; it stays the
  * same in a pane, so a modified click still opens it in a new tab.
  */
@@ -140,7 +142,7 @@ export function useNavCloseTarget(closeHref: string): { href: string; close: () 
   const fallback = useMemo(() => ({ label: "", href: closeHref }), [closeHref]);
   const target = useBackTarget(fallback);
   const close = useCallback(() => {
-    if (leafId) stageClose(leafId);
+    if (leafId && !leafHasBeenAt(leafId, closeHref)) stageClose(leafId);
     else if (target) target.go();
     else router.push(closeHref);
   }, [leafId, target, router, closeHref]);
