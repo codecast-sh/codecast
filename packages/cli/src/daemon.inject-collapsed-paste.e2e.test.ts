@@ -8,6 +8,7 @@ import { injectViaTmux } from "./daemon.js";
 import { TmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { shellQuote, spawnHarness, waitFor } from "./test-helpers/messagingHarness.js";
 import { isolateCodecastDir } from "./test-helpers/codecastDir.js";
+import { loadScaledMs } from "./test-helpers/machineLoad.js";
 
 // The delivery echo ledger these deliveries record into lives in CODECAST_DIR.
 const codecastDir = isolateCodecastDir();
@@ -41,7 +42,7 @@ test.skipIf(!Bun.which("tmux")).each([
       await waitFor(() => pane.capturePane().includes(agent === "claude" ? "[Pasted text #98]" : "[Pasted Content"));
       expect(journal.get(delivery.messageId)?.phase).toBe("paste");
     }
-    await injectViaTmux(target, payload, agent, { delivery, journal, gateBudgetMs: 1_500 });
+    await injectViaTmux(target, payload, agent, { delivery, journal, gateBudgetMs: loadScaledMs(1_500) });
     expect(state().queued).toEqual(["Existing worker report.", payload]);
     expect(journal.get(delivery.messageId)?.phase).toBe("verified");
     await injectViaTmux(target, payload, agent, { delivery, journal });

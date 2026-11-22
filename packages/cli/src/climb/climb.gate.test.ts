@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 import { GATE_LIMIT_DEFAULT_S, gateLimitS, runGate, tailLines } from "./gate";
+import { pollUntil } from "../test-helpers/pollUntil.js";
 
 let tmp: string;
 beforeEach(() => { tmp = fs.mkdtempSync(path.join(os.tmpdir(), "climb-gate-")); });
@@ -18,10 +19,11 @@ test("a gate past its limit is stopped with its whole process group, and says wh
   expect(run.timedOut).toBe(true);
   expect(run.ms).toBeLessThan(10_000);
   expect(run.tail).toContain("running the eval on the eval host");
+  // SIGKILL reached the group before runGate returned, but the orphaned child
+  // exits and is reaped on its own clock, so it may still answer for a moment.
   const child = Number(fs.readFileSync(pidFile, "utf8"));
-  let alive = true;
-  try { process.kill(child, 0); } catch { alive = false; }
-  expect(alive).toBe(false);
+  const gone = () => { try { process.kill(child, 0); return false; } catch { return true; } };
+  await pollUntil(gone, "the gate's child to exit", { ms: 2000 });
 });
 
 test("a gate within its limit finishes with its own exit code", async () => {
