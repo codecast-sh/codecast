@@ -17,6 +17,11 @@ const rowSig = (r: RepoFlowsRow) => `${r.repository}|${r.updated_at}`;
 /** The repository an origin remote names, the way a checkout reports its flows under it. */
 export const repositoryOfRemote = (remote: string | null | undefined): string | null => repositoryKeyOfRemote(remote ?? undefined);
 
+/** A session's origin remote. The sessions row often lacks it (only git_root), so the conversation row is read too. */
+export function sessionRemoteOf(s: { sessions?: Record<string, any>; conversations?: Record<string, any> }, id: string): string | null {
+  return s.sessions?.[id]?.git_remote_url ?? s.conversations?.[id]?.git_remote_url ?? null;
+}
+
 /** The flows the viewer's checkouts of `repository` reported; none while unknown or for no repository. */
 export function useRepoFlows(repository: string | null): RepoFlow[] {
   useSyncCollection("repoFlows", MINE, repository ? {} : "skip");

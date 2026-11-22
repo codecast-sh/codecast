@@ -12,7 +12,8 @@ import { WHO_WORDS, targetsFromLine, type Journey as JourneyModel, type JourneyS
 import { ageShort } from "../../lib/lineFlow";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
-import { deploysHref, sessionTargets, targetNow } from "../../lib/deploys/targets";
+import { sessionTargets, targetNow } from "../../lib/deploys/targets";
+import { deploysFocusHref, deploysHref, runFocus, type DeployFocus } from "../../lib/deploys/focus";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import "./ship.css";
 
@@ -176,14 +177,15 @@ export function JourneyView({ journey, run, now_ms, compact, actions, targets }:
       <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={run ? setOpen : undefined} />
       {opened ? <StageDetail stage={opened} now_ms={now_ms} /> : null}
       {run ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms}>{actions}</JourneyNowBar> : null}
-      {run && landed && team && run.spawner_conversation_id ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} /> : null}
+      {run && landed && team && run.spawner_conversation_id ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} focus={runFocus(run)} /> : null}
     </div>
   );
 }
 
-/** Where the session's landed change is on each target, each a step from its place on the Deploys page, with the press
- *  that sends it where it waits on a person. */
-export function SessionTargets({ teamId, conversationId, line, known: reached }: { teamId: string; conversationId: string; line?: string | null; known?: ReadonlyArray<TargetState> }) {
+/** Where the session's landed change is on each target, each a step from its place on the Deploys page (`focus`, the
+ *  landed commit when the caller knows it, else the session, highlighted there), with the press that sends it where it
+ *  waits on a person. */
+export function SessionTargets({ teamId, conversationId, line, known: reached, focus }: { teamId: string; conversationId: string; line?: string | null; known?: ReadonlyArray<TargetState>; focus?: DeployFocus | null }) {
   const { targets, deploys } = useDeployTargets(teamId);
   // What the store knows about the session's commits, then whatever else the Deploy stage's own line names.
   const mine = useMemo(() => {
@@ -207,7 +209,7 @@ export function SessionTargets({ teamId, conversationId, line, known: reached }:
         const canPress = t.state === "waiting" && !!row && row.runs === "here" && row.can_deploy && !targetNow(row, deploys).open;
         return (
           <li key={t.name} className="sj-target-item">
-            <Link className="sj-target" data-state={t.state} href={`/deploys?team=${teamId}&target=${encodeURIComponent(t.name)}`} data-session-target={t.name}>
+            <Link className="sj-target" data-state={t.state} href={deploysFocusHref({ team: teamId, target: t.name, focus: focus ?? { kind: "session", id: conversationId } })} data-session-target={t.name}>
               <i aria-hidden />{t.name}<span>{t.state === "live" ? t.deploy ?? "live" : t.state === "deploying" ? `going out${t.deploy ? ` · ${t.deploy}` : ""}` : t.state === "failed" ? "failed" : "waiting"}</span>
             </Link>
             {canPress ? <button type="button" className="sj-btn" data-primary onClick={() => press.open({ target: row!, action: "deploy", of: null })} data-session-deploy={t.name}>Deploy</button> : null}
