@@ -175,10 +175,11 @@ comes from the device, the checkout, the episode and the writer. A retried
 send lands once, and a writer already told from the pipeline page, whose ask
 carries the same id, is answered with that ask rather than a second. A send
 that takes over 10 seconds counts as failed. A failed send is not recorded as
-told, and the next pass asks again; the daemon logs the first failure, and
-after five it gives that writer up for the episode. The episode, who it told
-(`told`, which the checkouts page shows), the failed tries and who the server
-will never deliver to are kept in the daemon's `checkout-state.json`, so a
+told. It is tried again after 1, 2, 4 ... minutes, at most an hour apart, for as
+long as the episode lasts, and each failed try is logged once; only a refusal
+no retry changes gives a writer up. The episode, who it told (`told`, which
+the checkouts page shows), the failed tries and who the server will never
+deliver to are kept in the daemon's `checkout-state.json`, so a
 restart neither forgets nor asks again. Merge files already made against the
 same upstream commit are left as they are, since the writer may be resolving
 one.
