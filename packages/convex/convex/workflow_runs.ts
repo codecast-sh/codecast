@@ -31,6 +31,7 @@ import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
 import { flowAgents, missingAgentOn } from "./lib/linePlacement";
 import { agentDisplayName, deviceDisplayName } from "@codecast/shared/contracts";
+import { placeName, placeRunOnDevice } from "./lib/runDevicePlace";
 import { navPromptField } from "./userMessagesFilter";
 import { retainSessionCreator } from "./sessionLaunch";
 import { isSessionOwner } from "./sessionOwners";
@@ -810,6 +811,12 @@ export const createFromCli = mutation({
     // caller's own device id, so no other machine of the account takes it.
     detach: v.optional(v.boolean()),
     run_on_device: v.optional(v.string()),
+    // `cast flow run --device` (ct-98920): the whole run goes to this machine of the caller's, in its checkout of
+    // `place_origin` (lib/runDevicePlace), and `placed_change` is the change that machine fetches and freezes there
+    // (cli workflow/placedChange.ts). Refused, never moved elsewhere, when the machine is not the caller's or is offline.
+    place_device: v.optional(v.string()),
+    place_origin: v.optional(v.string()),
+    placed_change: v.optional(v.any()),
   },
   handler: async (ctx, args) => {
     const result = await verifyApiToken(ctx, args.api_token);
@@ -863,7 +870,21 @@ export const createFromCli = mutation({
     const needs = flowAgents(workflowRow?.nodes);
     // The asking machine, where a detached run stays when no pool takes it: held from line runs by an operator, or
     // without a sign-in one of its agents needs, it is no place for this run.
-    const asker: any = args.detach && args.run_on_device
+    if (args.place_device && !args.detach) throw new Error("A run placed on a machine is handed to its daemon: pass --detach");
+    const named = args.place_device
+      ? placeRunOnDevice({
+          devices: await ctx.db.query("devices").withIndex("by_user_id", (q) => q.eq("user_id", userId)).collect(),
+          target: args.place_device,
+          asker: args.run_on_device,
+          project_path: args.project_path,
+          origin: args.place_origin,
+          now,
+        })
+      : null;
+    if (named && "refusal" in named) throw new Error(`${taskRow?.short_id ?? workflowName} did not start: ${named.refusal}`);
+    const chosen = named && "device" in named ? named : null;
+    const asker: any = chosen ? chosen.row
+      : args.detach && args.run_on_device
       ? await ctx.db.query("devices").withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.run_on_device!)).first()
       : null;
     const missing = asker ? missingAgentOn(asker, needs) : null;
@@ -877,7 +898,8 @@ export const createFromCli = mutation({
     // pool machine with the most free runs, in its checkout, never the asking
     // machine. With the pool full nothing starts, and the problem goes back to
     // the line's queue for the sweep to start in rank order.
-    const lead = args.detach && lineRun && taskRow ? await projectLeadRole(ctx, taskRow) : null;
+    // A machine named outright (`--device`) wins over the pool.
+    const lead = args.detach && lineRun && taskRow && !chosen ? await projectLeadRole(ctx, taskRow) : null;
     const room = lead ? await admitRoleRun(ctx, lead, now, undefined, needs) : null;
     // The pool takes the runner's own runs, and anyone's the asking machine cannot run.
     const pooled = room?.pooled && (room.runner === String(userId) || unfit) ? room : null;
@@ -887,6 +909,7 @@ export const createFromCli = mutation({
       return { run_id: null, queued: await requeueForSweep(ctx, lead, taskRow, userId, now, pooled.waiting), primary_conversation_id: null, spawner_conversation_id: null };
     }
     const place = pooled && "place" in pooled ? pooled.place : undefined;
+    if (chosen && unfit) throw new Error(`${taskRow?.short_id ?? workflowName} did not start: ${unfit}`);
     if (!place && unfit) throw new Error(`${taskRow?.short_id ?? workflowName} did not start: ${unfit}, and no line machine can take it`);
     // A place on the team's pool runs as that machine's account, and the caller owns the run (orgLine.startRoleRun).
     const host = (place?.user ?? userId) as Id<"users">;
@@ -898,7 +921,7 @@ export const createFromCli = mutation({
       task: taskRow,
       plan: planRow,
       goal_override: args.goal_override,
-      project_path: place?.project_path ?? args.project_path,
+      project_path: place?.project_path ?? chosen?.project_path ?? args.project_path,
       spawner_conversation_id: spawner?._id,
       ...(place ? { org_role_id: lead._id } : {}),
       force: args.force,
@@ -908,10 +931,16 @@ export const createFromCli = mutation({
     await retainSessionCreator(ctx, primary_conversation_id, userId, host);
     // A placed run names its machine from the start, so the pool counts it there before a runner claims it.
     if (place) await ctx.db.patch(run_id, { runner_device: place.device });
-    if (args.detach) await queueRunOnDaemon(ctx, host, run_id, { device: place?.device ?? args.run_on_device, ...(version ? { slug: version.slug } : {}), now });
+    else if (chosen) await ctx.db.patch(run_id, { runner_device: chosen.device, ...(args.placed_change ? { placed_change: args.placed_change } : {}) });
+    const runnerDevice = place?.device ?? chosen?.device;
+    if (args.detach) await queueRunOnDaemon(ctx, host, run_id, { device: runnerDevice ?? args.run_on_device, ...(version ? { slug: version.slug } : {}), now });
     // The session the run speaks as, resolved here when the caller had none,
     // so a runner in the foreground asks its failure decisions through it.
-    return { run_id, primary_conversation_id, spawner_conversation_id: spawner?._id ?? null, ...(place ? { runner_device: place.device } : {}) };
+    return {
+      run_id, primary_conversation_id, spawner_conversation_id: spawner?._id ?? null,
+      ...(runnerDevice ? { runner_device: runnerDevice } : {}),
+      ...(chosen ? { runner_device_name: placeName(chosen.row), project_path: chosen.project_path } : {}),
+    };
   },
 });
 
