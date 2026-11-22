@@ -30,7 +30,7 @@ import { captureError } from "../lib/analytics";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import type { SyncOpts } from "../store/inboxStore";
 import { useConvexSync } from "./useConvexSync";
-import { useServerAuthSettled } from "./useServerAuthSettled";
+import { useServerAuthSettled, useServerIdentityLost } from "./useServerAuthSettled";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -41,16 +41,24 @@ import { useWatchEffect } from "./useWatchEffect";
  * once per distinct message per feeder — the subscription re-runs on the next
  * data change and the recovery poll re-probes on its own, so the same failure
  * can repeat every few seconds while the host is busy.
+ *
+ * Not reported while the server has lost an identity it had confirmed
+ * (useServerIdentityLost): every live query re-runs as an anonymous caller
+ * then, and a handler that requires one throws for a state useConvexSync
+ * already holds. The error is marked seen, so it stays quiet after the flip
+ * back until the re-authenticated answer replaces it.
  */
 export function useFeederError(feeder: string, error: Error | undefined): void {
   const lastRef = useRef<string | null>(null);
+  const identityLost = useServerIdentityLost();
   useWatchEffect(() => {
     if (!error) { lastRef.current = null; return; }
     if (lastRef.current === error.message) return;
     lastRef.current = error.message;
+    if (identityLost) return;
     console.warn(`[feeder:${feeder}] query failed; serving the cached rows`, error);
     captureError(error, { feeder });
-  }, [feeder, error]);
+  }, [feeder, error, identityLost]);
 }
 
 /**
