@@ -10,6 +10,7 @@ import { roleNow } from "./sheetModel";
 import { roleWords } from "../../orgStaffingTypes";
 import { compactAge } from "../../../../lib/threadState";
 import { useCoarseNow } from "../../../../hooks/useCoarseNow";
+import { useOpenLinkedSession } from "../../../../hooks/useOpenLinkedSession";
 
 /** What a sheet says when the store holds no such object for this workspace. */
 export function NotHere({ what }: { what: string }) {
@@ -19,11 +20,14 @@ export function NotHere({ what }: { what: string }) {
 /** A role's line in a Now. `onOpen` names the role (its face and name open
  *  its sheet), for a sheet that is not the role's own. Its own state line
  *  carries its age quietly. Nothing when the role has nothing live and wrote
- *  no line. */
+ *  no line. The words name the work, so when a session is on it they open
+ *  that session. */
 export function RoleNowLine({ role, onOpen }: { role: OrgRole; onOpen?: () => void }) {
   const now = roleNow(role);
   const clock = useCoarseNow(60_000);
+  const openLinked = useOpenLinkedSession();
   if (!now) return null;
+  const current = now.current;
   return (
     <NowLine data={{ "data-role-now": role.short_id }}>
       <NowBar sessions={role.sessions} />
@@ -34,7 +38,11 @@ export function RoleNowLine({ role, onOpen }: { role: OrgRole; onOpen?: () => vo
         </button>
       )}
       {onOpen && <span aria-hidden className="-mx-1" style={{ color: "var(--sol-text-dim)" }}>·</span>}
-      <span className="min-w-0 truncate" title={now.words} data-role-now-words>{now.words}</span>
+      {current ? (
+        <button type="button" onClick={() => openLinked(current)} className="min-w-0 truncate text-left hover:underline underline-offset-2" title={now.words} data-role-now-words>{now.words}</button>
+      ) : (
+        <span className="min-w-0 truncate" title={now.words} data-role-now-words>{now.words}</span>
+      )}
       {now.at && <span className="-ml-1 shrink-0" style={{ color: "var(--sol-text-dim)" }} data-role-now-age>· {compactAge(clock - now.at)}</span>}
       {now.current && (
         <span className="ml-auto inline-flex shrink-0 items-center gap-1.5 pl-1">
