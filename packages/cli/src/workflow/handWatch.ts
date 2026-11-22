@@ -50,3 +50,10 @@ export class HandWatch {
     return null;
   }
 }
+
+/** A pane's tail as work shows in it: an agent TUI's status line ticks its spinner and elapsed clock every second even
+ *  when the agent is hung ("✻ Thinking… (12m 3s · ↓ 1.2k tokens · esc to interrupt)"), so of that line only its token
+ *  count, which moves only when the agent does, is kept. */
+export function steadyTail(text: string): string {
+  return text.split("\n").map((line) => /esc to interrupt/i.test(line) ? (line.match(/[\d.,]+k?\s*tokens/gi) ?? []).join(" ") : line).join("\n");
+}
