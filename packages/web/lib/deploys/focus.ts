@@ -200,3 +200,22 @@ export function deploysFocusHref(o: { team?: string | null; repository?: string 
   const s = q.toString();
   return `/deploys${s ? `?${s}` : ""}`;
 }
+
+/**
+ * The Deploys page for a run's team, at the thing the run sent: the deploy its words name ("web dp-12", on that
+ * target), else the commit it landed, else its session.
+ */
+export function deploysHref(run: any, words?: string | null): string {
+  const team = typeof run?.workspace === "string" && run.workspace.startsWith("team:") ? run.workspace.slice(5) : null;
+  const named = words?.match(/(?:\b([a-z][a-z0-9-]{0,31}) )?\b(dp-\d+)/);
+  // "going out in dp-13" names a deploy but not its target; the page finds that from the deploy.
+  const target = named?.[1] && named[1] !== "in" ? named[1] : null;
+  return deploysFocusHref({ team, target, focus: named ? { kind: "deploy", id: named[2]! } : runFocus(run) });
+}
+
+/** What a run's change is on the Deploys page: the commit it landed on main, else the session that started it. */
+export function runFocus(run: any): DeployFocus | null {
+  const sha = run?.merge?.sha;
+  if (typeof sha === "string" && sha) return { kind: "sha", sha: sha.toLowerCase() };
+  return run?.spawner_conversation_id ? { kind: "session", id: String(run.spawner_conversation_id) } : null;
+}

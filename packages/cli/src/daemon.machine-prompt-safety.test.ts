@@ -312,7 +312,7 @@ function fixture(transport = "tmux", cached = true) {
       "classifyTmuxLiveState", "claudeTurnRunningOnPane", "livenessFromTmuxState", "isResumeCwdPicker", "turnStartedAtFor", "paneTextAfterLastMatch",
       "isDeliveryVerdict", "assertPromptAbsent", "inputGuard", "captureTmuxLiveState", "autoContinueArmedOnPane", "ensureTmuxReady", "withTmuxLock", "drainTmuxComposer", "tmuxComposerText", "tmuxComposerDraft",
       "tmuxWatchablePrefix", "promptIsOwnText", "holdScreen", "surfaceHeldDialog", "tmuxComposerPayloadMatcher", "tmuxComposerHoldsPayload", "composerShowsOnlyPayloadTail", "matchAtFullWindowSize", "awaitTmuxComposerPayload", "normalizePromptText",
-      "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "composerTextStart", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
+      "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "lineEndingAt", "skipSuggestionMenu", "composerTextStart", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "transcriptEchoes", "injectViaTmux", "injectViaTmuxInner",
       "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption", "isClaudeIdleResumeDialog", "isIdleResumeOptionRow",
@@ -323,7 +323,7 @@ function fixture(transport = "tmux", cached = true) {
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho", "heldFatal",
     ];
     const constants = [
-      "RESUME_CWD_PICKER_RE", "HOLD_SCREEN_ROWS", "UNREADABLE_SCREEN_HOLD_REASON", "MID_TURN_COMMAND_HOLD_REASON", "TURN_SPINNER_OR_INTERRUPT", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "INJECTABLE_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
+      "RESUME_CWD_PICKER_RE", "COMPOSER_RULE", "HOLD_SCREEN_ROWS", "UNREADABLE_SCREEN_HOLD_REASON", "MID_TURN_COMMAND_HOLD_REASON", "TURN_SPINNER_OR_INTERRUPT", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "INJECTABLE_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
       "PANE_TITLE_WORKING", "PANE_REBUILD_THRESHOLD", "PANE_REBUILD_WINDOW_MS", "PANE_REBUILD_MIN_GAP_MS", "unresolvablePanes", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
       "ANSI_ESCAPE_RE", "MACHINE_WAKE_IDLE_RESUME_CHOICE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME", "STARTED_FATAL_CONFIRM_MS", "fatalPaneSince",
     ].map(name => {

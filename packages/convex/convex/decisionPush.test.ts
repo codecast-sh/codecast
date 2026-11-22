@@ -1,0 +1,119 @@
+// Decision cards ring the phone (lib/decisionPush.ts): one push per card
+// group, held while the asking session's turn runs, trimmed at flush to what
+// still waits, and the session's own "waiting for you" push stands down while
+// a card is open.
+import { describe, expect, test } from "bun:test";
+import { askCore, withdrawCore } from "./sessionDecisions";
+import { HOST, seed, twoOptions } from "./testDecisions";
+import { performPushFlush, AWAY_DEBOUNCE_MS } from "./pushRouter";
+import { releaseDecisionPushes, DECISION_TURN_HOLD_MS } from "./lib/decisionPush";
+import { deliverSessionNotificationToParties } from "./lib/sessionNotify";
+import { emitNotification } from "./notificationRouter";
+
+function world(status?: string) {
+  const w = seed({
+    push_outbox: [],
+    push_ring: [],
+    notifications: [],
+    system_config: [],
+    user_presence: [],
+    devices: [],
+    managed_sessions: status ? [{ _id: "managed_plain", conversation_id: "conversations_plain", session_id: "sess-plain", agent_status: status }] : [],
+  });
+  Object.assign(w.tables.users.find((u: any) => u._id === HOST), { push_token: "ExponentPushToken[x]", notifications_enabled: true });
+  w.tables.conversations.find((c: any) => c._id === "conversations_plain").title = "Billing fix";
+  return w;
+}
+
+const ask = (ctx: any, question: string, extra: Record<string, unknown> = {}) =>
+  askCore(ctx, { userId: HOST }, { session_id: "sess-plain", question, options: twoOptions, context_md: "Why.", category: "approach", ...extra });
+
+const hostOutbox = (tables: any) => tables.push_outbox.filter((r: any) => r.user_id === HOST);
+
+describe("a card waiting on you rings your phone", () => {
+  test("one card from your own session: the session asks the question, the tap opens the card", async () => {
+    const { ctx, tables } = world();
+    const r = await ask(ctx, "Ship the billing fix now?");
+    expect(r.error).toBeUndefined();
+    const [row] = hostOutbox(tables);
+    expect(row).toMatchObject({ type: "decision_waiting", title: "Billing fix", body: "Ship the billing fix now?" });
+    expect(row.data).toMatchObject({ link: `/decisions/${r.short_id}`, decision_ids: [String(r.id)] });
+    expect(row.due_at - Date.now()).toBeLessThanOrEqual(AWAY_DEBOUNCE_MS);
+    expect(tables.notifications.filter((n: any) => n.type === "decision_waiting")).toHaveLength(1);
+  });
+
+  test("the cards one turn asks are one push, held until the turn ends", async () => {
+    const { ctx, tables, scheduled } = world("working");
+    await ask(ctx, "Ship the billing fix now?");
+    await ask(ctx, "Refund the two affected customers?");
+    await ask(ctx, "Email the team about it?");
+    const rows = hostOutbox(tables);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].title).toBe("Billing fix: 3 decisions");
+    expect(rows[0].body).toBe("1. Ship the billing fix now?\n2. Refund the two affected customers?\n3. Email the team about it?");
+    expect(rows[0].data.link).toBe("/decisions");
+    expect(rows[0].due_at - Date.now()).toBeGreaterThan(DECISION_TURN_HOLD_MS - 5_000);
+    expect(tables.notifications.filter((n: any) => n.type === "decision_waiting")).toHaveLength(1);
+
+    const now = Date.now();
+    await releaseDecisionPushes(ctx, "conversations_plain" as any, now);
+    expect(hostOutbox(tables)[0].due_at).toBe(now + AWAY_DEBOUNCE_MS);
+    expect(scheduled.at(-1)?.args).toEqual({ user_id: HOST });
+  });
+
+  test("an advisory card does not ring: its session goes ahead on the default", async () => {
+    const { ctx, tables } = world();
+    await ask(ctx, "Back off or switch keys?", { blocking: false, default_option: 0 });
+    expect(hostOutbox(tables)).toHaveLength(0);
+  });
+
+  test("cards answered or withdrawn before the flush drop out of the push, and none left sends nothing", async () => {
+    const { ctx, tables } = world("working");
+    const a = await ask(ctx, "Ship the billing fix now?");
+    await ask(ctx, "Refund the two affected customers?");
+    await withdrawCore(ctx, tables.session_decisions.find((d: any) => d._id === a.id), Date.now());
+    hostOutbox(tables)[0].due_at = Date.now();
+    await performPushFlush(ctx, HOST);
+    expect(tables.push_ring).toHaveLength(1);
+    expect(tables.push_ring[0]).toMatchObject({ type: "decision_waiting", title: "Billing fix", body: "Refund the two affected customers?" });
+
+    const { ctx: ctx2, tables: t2 } = world();
+    const b = await ask(ctx2, "Ship the billing fix now?");
+    await withdrawCore(ctx2, t2.session_decisions.find((d: any) => d._id === b.id), Date.now());
+    hostOutbox(t2)[0].due_at = Date.now();
+    await performPushFlush(ctx2, HOST);
+    expect(t2.push_ring).toHaveLength(0);
+    expect(hostOutbox(t2)).toHaveLength(0);
+  });
+
+  test("muting mentions mutes card pushes, like every other decision notice", async () => {
+    const { ctx, tables } = world();
+    tables.users.find((u: any) => u._id === HOST).notification_preferences = { mention: false };
+    await ask(ctx, "Ship the billing fix now?");
+    expect(hostOutbox(tables)).toHaveLength(0);
+  });
+});
+
+describe("a session parked on a card does not also ring as waiting", () => {
+  test("session_idle stands down while a blocking card is open, and rings once it is not", async () => {
+    const { ctx, tables } = world();
+    const conv = tables.conversations.find((c: any) => c._id === "conversations_plain");
+    const r = await ask(ctx, "Ship the billing fix now?");
+    expect(await deliverSessionNotificationToParties(ctx, conv, "session_idle", "Billing fix", "Done")).toBe(false);
+    // Errors are different news and still ring.
+    expect(await deliverSessionNotificationToParties(ctx, conv, "session_error", "Billing fix", "Signed out")).toBe(true);
+    await withdrawCore(ctx, tables.session_decisions.find((d: any) => d._id === r.id), Date.now());
+    expect(await deliverSessionNotificationToParties(ctx, conv, "session_idle", "Billing fix", "Done")).toBe(true);
+  });
+});
+
+describe("machine alerts have their own switch", () => {
+  test("machine_alerts off mutes an overloaded machine without muting session errors", async () => {
+    const { ctx, tables } = world();
+    tables.users.find((u: any) => u._id === HOST).notification_preferences = { machine_alerts: false, session_error: true };
+    const overload = await emitNotification(ctx, { event_type: "machine_overloaded", entity_type: "machine", entity_id: "dev1", direct_recipient_id: HOST, actor_name: "jb-m5-max", message: "CPU 99%" } as any);
+    expect(overload.notified).toBe(0);
+    const conv = tables.conversations.find((c: any) => c._id === "conversations_plain");
+    expect(await deliverSessionNotificationToParties(ctx, conv, "session_error", "Billing fix", "Signed out")).toBe(true);
+  });
+});
