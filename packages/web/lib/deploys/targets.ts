@@ -231,10 +231,13 @@ export function isMineCommit(author: string | null | undefined, me: { login?: st
   return [me.login, me.name].some((x) => !!x && x.toLowerCase() === a);
 }
 
-/** A target's waiting groups cut to the viewer's own commits; a group with none of them drops out. */
-export function mineOnly(groups: ReadonlyArray<QueueGroup>, me: { login?: string | null; name?: string | null }): QueueGroup[] {
+/**
+ * A target's waiting groups cut to the viewer's own commits; a group with none of them drops out. A commit `keep` names
+ * (the one a link points at) stays, so a link never opens on a commit the filter hid.
+ */
+export function mineOnly(groups: ReadonlyArray<QueueGroup>, me: { login?: string | null; name?: string | null }, keep?: (c: QueueGroup["commits"][number]) => boolean): QueueGroup[] {
   return groups.flatMap((g) => {
-    const commits = g.commits.filter((c) => isMineCommit(c.author, me));
+    const commits = g.commits.filter((c) => isMineCommit(c.author, me) || !!keep?.(c));
     return commits.length ? [{ ...g, commits, ci: worstCi(commits.map((c) => c.ci)) }] : [];
   });
 }
