@@ -84,3 +84,50 @@ test("the ✕ on a plan opened beside a conversation closes the pane in one pres
   // ...but closed: only the conversation remains.
   expect(paths).toEqual([`/inbox?s=${SESSION}`]);
 });
+
+// A pane that came to the detail from its parent is not closed by the detail's
+// close: a task opened inside a project pane goes back up to the project.
+const { useNavCloseTarget } = await import("../../../hooks/useNavTrail");
+function CloseButton({ closeHref }: { closeHref: string }) {
+  const { close } = useNavCloseTarget(closeHref);
+  return <button aria-label="Close" onClick={close} />;
+}
+
+test("a task opened inside a project pane closes back to the project, not the pane", async () => {
+  const PROJECT = "/projects/pj-1";
+  const TASK = "/projects/pj-1/ct-1";
+  useInboxStore.setState({
+    tabs: [{ id: "t1", path: `/inbox?s=${SESSION}`, title: "", createdAt: 0 }],
+    activeTabId: "t1",
+  } as any);
+  useInboxStore.getState().stageInsertLeaf("root", "right", PROJECT);
+  const leaf = leavesOf(activeTab().layout!).find((l) => l.path === PROJECT)!;
+  useInboxStore.getState().stageFocusLeaf(leaf.id);
+  // The person opens one of the project's tasks inside the pane.
+  stageNavigateLeaf(leaf.id, TASK, "push");
+  expect(leavesOf(activeTab().layout!).map((l) => l.path)).toContain(TASK);
+
+  const ctx = {
+    tabId: "t1",
+    ...parseTabLocation(TASK),
+    params: { id: "pj-1", taskId: "ct-1" },
+    isActive: true,
+    isVisible: true,
+    navigate: (p: string, m: "push" | "replace") => stageNavigateLeaf(leaf.id, p, m),
+    leafId: leaf.id,
+  };
+  root = createRoot(host);
+  await act(() => root!.render(
+    <MemoryRouter initialEntries={[TASK]}>
+      <TabParamsCtx.Provider value={ctx}>
+        <CloseButton closeHref={PROJECT} />
+      </TabParamsCtx.Provider>
+    </MemoryRouter>,
+  ));
+  await act(async () => host.querySelector<HTMLElement>("[aria-label='Close']")!.click());
+
+  const tab = activeTab();
+  const paths = tab.layout ? leavesOf(tab.layout).map((l) => l.path) : [tab.path];
+  // The pane stays, back on the project beside the conversation.
+  expect(paths).toEqual([`/inbox?s=${SESSION}`, PROJECT]);
+});
