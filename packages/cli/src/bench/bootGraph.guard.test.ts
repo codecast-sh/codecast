@@ -723,7 +723,9 @@ describe("command groups stay off the boot graph", () => {
     // 618 on 2026-11-22: processCwdCache.ts, one batched lsof for the cwd match
     // (was one shell-wrapped lsof per claude process, ~230 a minute), and
     // workspace/trash.ts, which removes a worktree whole or not at all.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(618);
+    // 619 the same day: workflow/stationProcs.ts, which ends a flow station's whole
+    // process tree and reaps a dead runner's stations by what their record proves.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(619);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
