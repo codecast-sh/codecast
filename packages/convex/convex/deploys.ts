@@ -88,9 +88,19 @@ export function capNames(...lists: Array<ReadonlyArray<string> | undefined>): st
   return [...all].sort((a, b) => nameClass(a) - nameClass(b) || (a < b ? -1 : a > b ? 1 : 0)).slice(0, NAMES_MAX);
 }
 
-/** The target's latest live deploy among `recent` (newest first), of the repository when both name one. */
+/**
+ * The target's current live deploy among `recent` (newest first), of the repository when both name one: the one
+ * that went live last. A watcher's row goes live again on every save, so creation order is not what runs.
+ */
 export function liveOf(recent: ReadonlyArray<Doc<"deploys">>, target: string, repository: string | undefined): Doc<"deploys"> | undefined {
-  return recent.find((d) => d.target === target && d.status === "live" && (!d.repository || !repository || d.repository === repository));
+  let best: Doc<"deploys"> | undefined;
+  for (const d of recent) {
+    if (d.target !== target || d.status !== "live" || (d.repository && repository && d.repository !== repository)) continue;
+    const at = d.live_at ?? d.created_at, bestAt = best ? best.live_at ?? best.created_at : 0;
+    // A tie goes to the row written later.
+    if (!best || at > bestAt || (at === bestAt && d._creationTime > best._creationTime)) best = d;
+  }
+  return best;
 }
 
 /** The target's latest live deploy, as a marker for it would find it. */
@@ -100,18 +110,38 @@ export async function latestLiveDeploy(ctx: any, workspace: string, target: stri
   return liveOf(await workspaceDeploys(ctx, workspace, 100), t, repository ? normalizeRepository(repository) : undefined) ?? null;
 }
 
-/** A watcher push lands on the target's live deploy only when that is its own last push: same machine, repository and sha. */
-export function isOwnWatcherPush(live: Doc<"deploys"> | null | undefined, m: { machine?: string; repository?: string; sha?: string }): live is Doc<"deploys"> {
+/**
+ * The row a watcher push lands on: its machine's latest watcher push of the same repository and sha on the target,
+ * while no other path's deploy has gone live there since that row began. Between real deploys each machine keeps one
+ * row per sha, however many saves and however two trees on different machines alternate.
+ */
+export function ownWatcherRow(recent: ReadonlyArray<Doc<"deploys">>, target: string, m: { machine?: string; repository?: string; sha?: string }): Doc<"deploys"> | undefined {
   const machine = m.machine?.trim().slice(0, NAME_MAX);
   const repository = m.repository ? normalizeRepository(m.repository) : undefined;
-  return !!live && live.pushed_via === "dev watcher" && !!machine && live.machine === machine
-    && (live.repository ?? null) === (repository ?? null) && !!m.sha && sameSha(live.sha, m.sha);
+  if (!machine || !m.sha) return undefined;
+  const row = recent.find((d) => d.target === target && d.status === "live" && d.pushed_via === "dev watcher" && d.machine === machine
+    && (d.repository ?? null) === (repository ?? null) && sameSha(d.sha, m.sha));
+  if (!row) return undefined;
+  const began = (d: Doc<"deploys">) => d.live_at ?? d.created_at;
+  const realSince = recent.some((d) => d.target === target && d.status === "live" && d.pushed_via !== "dev watcher"
+    && (!d.repository || !repository || d.repository === repository)
+    && (began(d) > row.created_at || (began(d) === row.created_at && d._creationTime > row._creationTime)));
+  return realSince ? undefined : row;
+}
+
+/** The row a watcher push lands on, read from the workspace's recent deploys (ownWatcherRow). */
+export async function ownWatcherRowFor(ctx: any, workspace: string, target: string, m: { machine?: string; repository?: string; sha?: string }): Promise<Doc<"deploys"> | null> {
+  const t = normalizeDeployTarget(target);
+  if (!t) return null;
+  return ownWatcherRow(await workspaceDeploys(ctx, workspace, 100), t, m) ?? null;
 }
 
 /**
  * Who put `name` on a target: the newest of `rows` (one target and repository, newest first) whose adds hold it.
- * `committed_in` is the earliest live deploy.sh push of a clean tree after it that kept the name (did not drop it):
- * that tree held the name, so by then it was in a commit. A live push that dropped it first ends the search.
+ * `committed_in` is the earliest clean live deploy after it, other than a watcher's, that kept the name (did not drop
+ * it): that tree held the name, so by then it was in a commit. A live push that dropped it first ends the search. Such
+ * a deploy is deploy.sh, a ship or a line deploy; an older cast's deploy.sh records no path, and its watcher records
+ * nothing.
  */
 export function adderOf(rows: ReadonlyArray<Doc<"deploys">>, name: string): { adder: Doc<"deploys">; committed_in: Doc<"deploys"> | null } | null {
   const i = rows.findIndex((x) => x.adds?.includes(name));
@@ -120,7 +150,7 @@ export function adderOf(rows: ReadonlyArray<Doc<"deploys">>, name: string): { ad
     const d = rows[j];
     if (d.status !== "live") continue;
     if (d.drops?.includes(name)) break;
-    if (!d.dirty && d.pushed_via === "deploy.sh") return { adder: rows[i], committed_in: d };
+    if (!d.dirty && d.pushed_via !== "dev watcher") return { adder: rows[i], committed_in: d };
   }
   return { adder: rows[i], committed_in: null };
 }
@@ -182,7 +212,8 @@ async function waitingFor(ctx: any, project: Doc<"projects">, workspace: string,
   const projectId = String(project._id);
   const [merges, deploys] = await Promise.all([workspaceMerges(ctx, workspace, now), workspaceDeploys(ctx, workspace)]);
   const mine = deploys.filter((d) => inScope(d, projectId, null));
-  const live = mine.filter(isLiveDeploy).map(deployRowOf);
+  // A watcher push carries no fix (it is uncommitted work on someone's machine), so it never takes a fix off the waiting set.
+  const live = mine.filter((d) => isLiveDeploy(d) && d.pushed_via !== "dev watcher").map(deployRowOf);
   // What an open deploy is sending, by run and by problem (a landed fix has no run).
   const sending = new Set(mine.filter((d) => OPEN.has(d.status)).flatMap((d) => d.carries.flatMap((c) => [String(c.task_id), ...(c.run_id ? [String(c.run_id)] : [])])));
   // One deploy ships one checkout: every project whose line publishes from the same root waits on it (Union's eight lines, one repo).
@@ -250,10 +281,12 @@ export type DeployMarker = {
  *
  * A dev watcher's push is a working tree, not a deploy anyone asked for: it
  * never finishes an open deploy nor lands on another path's row. It lands on
- * the target's live deploy only when that is its own last push (same machine,
- * repository and sha), and is a deploy of its own otherwise. Any other marker
+ * its machine's latest watcher row of the same repository and sha while no
+ * other path's deploy went live since (ownWatcherRow), going live again there,
+ * and is a deploy of its own otherwise. Any other marker
  * never lands on a watcher's row, and lands on a live deploy of its sha only
- * when both are dirty or both are clean.
+ * when both are dirty or both are clean, and (unless it names its deploy or
+ * run) only when that deploy is what the target runs now.
  *
  * Names the write newly drops are told to whoever's uncommitted push put them
  * there (noticeDroppedWork).
@@ -270,8 +303,10 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   const machine = m.machine?.slice(0, NAME_MAX);
 
   if (m.pushed_via === "dev watcher") {
-    const own = liveOf(recent, target, repository);
-    if (isOwnWatcherPush(own, m)) {
+    const own = ownWatcherRow(recent, target, { ...m, repository });
+    if (own) {
+      // Another push went live since this row's last save: everything this save drops is dropped again.
+      const wasLive = liveOf(recent, target, repository) === own;
       const nextAdds = capNames(own.adds, adds);
       const nextDrops = capNames(own.drops, drops);
       const patch: Partial<Doc<"deploys">> = {
@@ -284,7 +319,7 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
       if (m.event_id && !own.event_ids.some((e) => String(e) === String(m.event_id))) patch.event_ids = [...own.event_ids, m.event_id];
       await ctx.db.patch(own._id, patch);
       await stampEvent(ctx, m.event_id, own.short_id);
-      await noticeDroppedWork(ctx, { ...own, ...patch }, newNames(nextDrops, own.drops));
+      await noticeDroppedWork(ctx, { ...own, ...patch }, wasLive ? newNames(nextDrops, own.drops) : drops, m.started_by);
       return own.short_id;
     }
   }
@@ -299,7 +334,13 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   // or shipping the sha of a superseded deploy (a rollback) is a deploy of its own.
   // A watcher's push is a working tree, never what a run shipped.
   const currentLive = m.workflow_run ? liveOf(recent.filter((d) => d.pushed_via !== "dev watcher"), target, repository) : undefined;
-  const liveMatch = (d: Doc<"deploys">) => d.status === "live" && (!m.workflow_run || (status === "live" && d === currentLive));
+  // Any other marker speaks for the target as it runs now: it lands only on the target's current live deploy (or the
+  // deploy that already holds its event, a report of it again). An older live deploy of the sha was replaced since,
+  // so the sha going live again is a deploy of its own.
+  const runningNow = liveOf(recent, target, repository);
+  const liveMatch = (d: Doc<"deploys">) => d.status === "live" && (m.workflow_run
+    ? status === "live" && d === currentLive
+    : d === runningNow || (!!m.event_id && d.event_ids.some((e) => String(e) === String(m.event_id))));
 
   const same = watcher ? undefined : ownNamed || ownRun || recent.find((d) =>
     d.target === target && (liveMatch(d) || OPEN.has(d.status)) && runFree(d) && d.pushed_via !== "dev watcher"
@@ -357,7 +398,8 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     await ctx.db.patch(open._id, patch);
     await stampEvent(ctx, m.event_id, open.short_id);
     if (patch.status && patch.status !== open.status) await onDeployStatus(ctx, open._id);
-    if (patch.drops && (patch.status ?? open.status) === "live") await noticeDroppedWork(ctx, { ...open, ...patch }, newNames(patch.drops, open.drops));
+    // Whoever pushed is the dropper, not whoever asked for the deploy the push finished (a role, another person).
+    if (patch.drops && (patch.status ?? open.status) === "live") await noticeDroppedWork(ctx, { ...open, ...patch }, newNames(patch.drops, open.drops), m.started_by);
     return open.short_id;
   }
 
@@ -395,13 +437,14 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   };
   const id = await ctx.db.insert("deploys", base);
   const row = (await ctx.db.get(id))!;
-  if (status === "live") {
+  // A watcher's push is a working tree: it carries no fix, so the next real deploy of the target carries them.
+  if (status === "live" && m.pushed_via !== "dev watcher") {
     const carries = await carriesForMarker(ctx, row, now);
     if (carries.length) await ctx.db.patch(id, { carries });
   }
   await stampEvent(ctx, m.event_id, shortId);
   await onDeployStatus(ctx, id);
-  if (status === "live") await noticeDroppedWork(ctx, row, drops);
+  if (status === "live") await noticeDroppedWork(ctx, row, drops, m.started_by);
   return shortId;
 }
 
@@ -411,12 +454,13 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
  * (and repository) whose adds hold it (adderOf), counted only when that push
  * was dirty or the dev watcher's and no clean deploy.sh push after it kept the
  * name: what a commit holds and a later deploy took off was the commits'
- * decision, not lost work. The person who started this deploy is not told
- * about their own, and a person told in the last DROPPED_WORK_QUIET_MS is not
- * told again: two watchers on different trees drop each other's work on every
- * save.
+ * decision, not lost work. `by` is who pushed (not who asked for the deploy
+ * the push finished): they are not told about their own, and a person this
+ * pusher's drops reached in the last DROPPED_WORK_QUIET_MS is not told again
+ * about the same pusher's: two watchers on different trees drop each other's
+ * work on every save. Another pusher's drop is told.
  */
-export async function noticeDroppedWork(ctx: any, d: Doc<"deploys">, names: ReadonlyArray<string>): Promise<void> {
+export async function noticeDroppedWork(ctx: any, d: Doc<"deploys">, names: ReadonlyArray<string>, by: Doc<"deploys">["started_by"]): Promise<void> {
   if (!names.length) return;
   const rows: Doc<"deploys">[] = await ctx.db
     .query("deploys")
@@ -424,7 +468,7 @@ export async function noticeDroppedWork(ctx: any, d: Doc<"deploys">, names: Read
     .order("desc")
     .take(ADDERS_SCAN);
   const others = rows.filter((x) => String(x._id) !== String(d._id) && (x.repository ?? null) === (d.repository ?? null));
-  const self = d.started_by?.user_id ? String(d.started_by.user_id) : null;
+  const self = by?.user_id ? String(by.user_id) : null;
   const people = new Map<string, { user_id: Id<"users">; pushes: Map<string, boolean>; names: string[] }>();
   for (const name of names) {
     const found = adderOf(others, name);
@@ -444,7 +488,11 @@ export async function noticeDroppedWork(ctx: any, d: Doc<"deploys">, names: Read
     const told = await ctx.db
       .query("notifications")
       .withIndex("by_recipient_created", (q: any) => q.eq("recipient_user_id", p.user_id).gte("created_at", since))
-      .filter((q: any) => q.eq(q.field("type"), "deploy_dropped_work"))
+      // The same pusher, by account, else by the name a pusher without one (a role, a source) is shown under.
+      .filter((q: any) => q.and(
+        q.eq(q.field("type"), "deploy_dropped_work"),
+        by?.user_id ? q.eq(q.field("actor_user_id"), by.user_id) : q.eq(q.field("actor_name"), by?.name),
+      ))
       .first();
     if (told) continue;
     const n = p.names.length;
@@ -454,8 +502,8 @@ export async function noticeDroppedWork(ctx: any, d: Doc<"deploys">, names: Read
     const kind = kinds.size > 1 ? "watcher and uncommitted" : kinds.has(true) ? "watcher" : "uncommitted";
     await emitNotification(ctx, {
       event_type: "deploy_dropped_work",
-      ...(d.started_by?.user_id ? { actor_user_id: d.started_by.user_id } : {}),
-      ...(d.started_by?.name ? { actor_name: d.started_by.name } : {}),
+      ...(by?.user_id ? { actor_user_id: by.user_id } : {}),
+      ...(by?.name ? { actor_name: by.name } : {}),
       entity_type: "deploy",
       entity_id: d.short_id,
       link: `/deploys?deploy=${d.short_id}`,
@@ -901,10 +949,11 @@ export async function projectDeployViews(ctx: any, project: Doc<"projects">, rep
   const after = await afterFor(ctx, workspace, mine, Date.now());
   const out = [];
   for (const d of mine) {
-    const view = await shapeView(ctx, d);
+    // A list row counts the names a push added and dropped; the deploy itself (deploys.get) lists them.
+    const { adds, drops, ...view } = await shapeView(ctx, d);
     // One row per deploy, whichever project's feed brought it: its own project when the line sent it, none when it
     // ships the whole workspace's code. The store scopes rows by `workspace` (lineDeploys workspaceScoped).
-    out.push({ ...deployRowOf(d), ...view, workspace: d.workspace, after: after.get(String(d._id)) ?? null });
+    out.push({ ...deployRowOf(d), ...view, adds_count: adds?.length ?? 0, drops_count: drops?.length ?? 0, workspace: d.workspace, after: after.get(String(d._id)) ?? null });
   }
   return out;
 }

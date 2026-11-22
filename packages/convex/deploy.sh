@@ -87,6 +87,17 @@ WITH_KEY=()
 # the vendored platform packages).
 DIRTY="$(git -C "$ROOT" status --porcelain -- packages/convex/convex packages/shared platform/packages | wc -l | tr -d ' ')"
 
+# The CLI's own typecheck can take most of an hour under load, and anything
+# another machine pushes meanwhile would be missing from the diff below. A
+# green `cast check convex` already proved this tree, so the push skips its
+# own pass and follows the diff closely. Red, slow or no cast: the CLI checks
+# as it always did.
+TYPECHECK=()
+case " $* " in
+    *" --typecheck"*) ;;
+    *) if command -v cast >/dev/null 2>&1 && cast check convex >/dev/null 2>&1; then TYPECHECK=(--typecheck=disable); fi ;;
+esac
+
 # What this push changes on prod (scripts/prod-diff.ts, read-only): every
 # function, route, index and table prod has that this tree lacks is gone
 # after the push, so each is printed with the recorded push that put it
@@ -107,7 +118,7 @@ if [ -z "$CHANGES" ] || ! ${WITH_KEY[@]+"${WITH_KEY[@]}"} bun scripts/prod-diff.
     CHANGES=""
 fi
 
-${WITH_KEY[@]+"${WITH_KEY[@]}"} env -u CONVEX_DEPLOYMENT npx convex deploy -y "$@"
+${WITH_KEY[@]+"${WITH_KEY[@]}"} env -u CONVEX_DEPLOYMENT npx convex deploy -y ${TYPECHECK[@]+"${TYPECHECK[@]}"} "$@"
 restore_env
 
 # Tell the Changes page the backend now runs this commit (deploy marker,

@@ -20,7 +20,7 @@ import { commitUrl, normalizeRepository, shortSha } from "./lib/gitRefs";
 import { recordExternalEvent } from "./externalEvents";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
-import { adderOf, isOwnWatcherPush, latestLiveDeploy, recordDeployMarker } from "./deploys";
+import { adderOf, latestLiveDeploy, ownWatcherRowFor, recordDeployMarker } from "./deploys";
 import { normalizeDeployTarget } from "@codecast/shared/contracts/deploys";
 
 const SURFACE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -138,9 +138,10 @@ export const markDeploy = mutation({
     }
 
     const now = Date.now();
-    // A watcher push that lands on its own last push of the sha (recordDeployMarker) is that push again, not a new
+    // A watcher push that lands on its machine's row of the sha (deploys.ownWatcherRow) is that push again, not a new
     // ship: it keeps the push's event, so a long uncommitted session is one event, not one per save.
-    const again = args.via === "dev watcher" && isOwnWatcherPush(live, { machine: args.machine, repository, sha }) ? live.event_ids[0] : undefined;
+    const own = args.via === "dev watcher" ? await ownWatcherRowFor(ctx, `team:${teamId}`, surface, { machine: args.machine, repository, sha }) : null;
+    const again = own?.event_ids[0];
     const eventId = again ?? await recordExternalEvent(ctx, {
       source: "codecast",
       team_id: teamId,
