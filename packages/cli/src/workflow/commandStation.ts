@@ -7,7 +7,7 @@ import { c } from "../colors.js";
 import { extractJsonOutput, lookupContextVar } from "./condition";
 import { keepEnds } from "./keepEnds";
 import { outputSummary } from "./runFailure";
-import { STATION_KILL_GRACE_MS, endGroupLeftovers, endStation, endStationsOnExit, reapDeadRunnerStations, recordStations } from "./stationProcs";
+import { STATION_KILL_GRACE_MS, endGroupLeftovers, endStation, endStationsOnExit, readStationProcs, reapDeadRunnerStations, recordStations, type StationProc } from "./stationProcs";
 import type { NodeOutcome, WorkflowNode } from "./types";
 
 // One $name as both expanders read it. `$human_message` is the gate note,
@@ -115,20 +115,31 @@ export function stationExitCode(result: { status: number | null; signal?: NodeJS
   return 128 + ((result.signal && osConstants.signals[result.signal]) || 0);
 }
 
-// The process groups of the stations running now, with when each started. A
-// station's script runs in a group of its own, which nothing ends when the
-// runner does: a daemon restart stopped the runners on Union's line-1 and left
-// their Queue station's poller running under init for hours, beside the one
-// each resumed run started (Nov 15). A resumed run runs its station again, so
-// a station still running when its runner exits ends with it (TERM first, so a
-// trap can clean up), and a runner that dies by SIGKILL leaves the groups on
-// disk for the next station to end (stationProcs.ts).
-const runningGroups = new Map<number, { at: number; graceMs: number }>();
-const recordRunning = () => recordStations([...runningGroups].map(([pgid, { at }]) => ({ pgid, at })));
+// The stations running now: each one's process group, with the processes it
+// has as last read. A station's script runs in a group of its own, which
+// nothing ends when the runner does: a daemon restart stopped the runners on
+// Union's line-1 and left their Queue station's poller running under init for
+// hours, beside the one each resumed run started (Nov 15). A resumed run runs
+// its station again, so a station still running when its runner exits ends
+// with it (TERM first, so a trap can clean up), and a runner that dies by
+// SIGKILL leaves its stations' processes on disk for the next station to end
+// (stationProcs.ts). That record is read again at the station's start and on
+// every tick, so it holds what the station started since.
+const runningGroups = new Map<number, { graceMs: number; procs: StationProc[]; reading: boolean }>();
+const recordRunning = () => recordStations([...runningGroups].map(([pgid, { procs }]) => ({ pgid, procs })));
+function rereadStation(group: number): void {
+  const station = runningGroups.get(group);
+  if (!station || station.reading || process.platform === "win32") return;
+  station.reading = true;
+  void readStationProcs(group, station.procs)
+    .then((procs) => { station.procs = procs; }, () => {})
+    .finally(() => { station.reading = false; if (runningGroups.get(group) === station) recordRunning(); });
+}
 let endsWithRunner = false;
 function endWithRunner(group: number, graceMs: number): void {
-  runningGroups.set(group, { at: Date.now(), graceMs });
+  runningGroups.set(group, { graceMs, procs: [], reading: false });
   recordRunning();
+  rereadStation(group);
   if (endsWithRunner) return;
   endsWithRunner = true;
   process.on("exit", () => {
@@ -147,7 +158,8 @@ function stationEnded(group: number): void {
 /**
  * What a station watches while its script runs: `ended` says whether its run
  * ended elsewhere (a person cancelled it on the web), looked at every
- * `everyMs`, which is also how often silence is checked. `graceMs` is how long
+ * `everyMs`, which is also how often silence is checked and the station's
+ * processes are read again for its record. `graceMs` is how long
  * its processes get between TERM and KILL when it is cut off (tests shorten it).
  */
 export type StationWatch = { ended?: () => Promise<boolean>; everyMs?: number; graceMs?: number };
@@ -205,6 +217,7 @@ export async function executeCommand(
       if (child.pid) endWithRunner(child.pid, graceMs);
       const timer = setTimeout(() => { timedOut = true; end(); }, timeoutMs);
       const tick = setInterval(() => {
+        if (group) rereadStation(group);
         // A station that prints nothing for long is flagged, never cut off: its timeout is the bound.
         if (silentMs > 0 && !flagged && Date.now() - quietSince >= silentMs) {
           flagged = true;

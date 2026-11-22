@@ -7,7 +7,7 @@ import * as path from "node:path";
 import { pollUntil } from "../test-helpers/pollUntil.js";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "../test-helpers/codecastDir.js";
 import { executeCommand } from "./commandStation";
-import { KILL_IF_SAME, reapDeadRunnerStations, stationRecordDir } from "./stationProcs";
+import { KILL_IF_SAME, bootTimeMs, reapDeadRunnerStations, stationRecordDir } from "./stationProcs";
 import { snapshotProcessTable } from "../processTable.js";
 import type { WorkflowNode } from "./types";
 
@@ -81,7 +81,7 @@ describe("a station whose runner goes", () => {
       `import { stopRunOnSignals } from ${JSON.stringify(path.join(import.meta.dir, "runner.ts"))};`,
       `import { executeCommand } from ${JSON.stringify(path.join(import.meta.dir, "commandStation.ts"))};`,
       `stopRunOnSignals({} as any);`,
-      `await executeCommand(${JSON.stringify(node)} as any, {}, ${JSON.stringify(tmp)}, { graceMs: ${graceMs} });`,
+      `await executeCommand(${JSON.stringify(node)} as any, {}, ${JSON.stringify(tmp)}, { graceMs: ${graceMs}, everyMs: 200 });`,
     ].join("\n"));
     return Bun.spawn([process.execPath, file], { cwd: tmp, stdout: "ignore", stderr: "ignore", env: { ...process.env } });
   };
@@ -112,7 +112,8 @@ describe("a station whose runner goes", () => {
   test("ends at the next station any runner starts when its runner was SIGKILLed", async () => {
     const { node, started } = nastyStation("killed");
     const runner = runnerScript(node);
-    await pollUntil(() => started().length === 4 && fs.existsSync(path.join(stationRecordDir(), `${runner.pid}.json`)), "the station starting and its record", { ms: 15_000 });
+    const recorded = () => { try { return JSON.parse(fs.readFileSync(path.join(stationRecordDir(), `${runner.pid}.json`), "utf-8")).groups[0].procs.map((p: { pid: number }) => p.pid); } catch { return []; } };
+    await pollUntil(() => started().length === 4 && started().every((pid) => recorded().includes(pid)), "the station starting and its record naming its processes", { ms: 15_000 });
     runner.kill("SIGKILL");
     await runner.exited;
     expect(started().filter(alive)).toHaveLength(4);
@@ -120,6 +121,61 @@ describe("a station whose runner goes", () => {
     await pollUntil(() => !started().some(alive), "every station process ending", { ms: 30_000 });
     expect(fs.existsSync(path.join(stationRecordDir(), `${runner.pid}.json`))).toBe(false);
   }, 60_000);
+
+  test("ends what it recorded after the station's own script has exited, its group left with no leader", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "station-procs-"));
+    const pids = path.join(tmp, "pids");
+    const node = { id: "orphaned", type: "command", script: `( trap '' TERM; exec sleep 600 ) & echo $! > ${pids}; sleep 3`, timeout: 600 } as WorkflowNode;
+    const runner = runnerScript(node);
+    const record = () => { try { return JSON.parse(fs.readFileSync(path.join(stationRecordDir(), `${runner.pid}.json`), "utf-8")).groups[0]; } catch { return null; } };
+    await pollUntil(() => pidsIn(pids).length === 1 && !!record()?.procs.some((p: { pid: number }) => p.pid === pidsIn(pids)[0]), "the job starting and its record naming it", { ms: 15_000 });
+    const [job] = pidsIn(pids);
+    strays.push(job);
+    const group: number = record().pgid;
+    runner.kill("SIGKILL");
+    await runner.exited;
+    await pollUntil(() => !alive(group), "the station's script exiting", { ms: 15_000 });
+    expect(alive(job)).toBe(true);
+    expect(await reapDeadRunnerStations(undefined, graceMs)).toEqual([group]);
+    await pollUntil(() => !alive(job), "the job ending", { ms: 15_000 });
+  }, 60_000);
+});
+
+describe("a dead runner's record", () => {
+  const deadPid = async () => { const p = Bun.spawn(["true"]); await p.exited; return p.pid; };
+  const writeRecord = (runner: number, written: number, groups: unknown[]) => {
+    fs.mkdirSync(stationRecordDir(), { recursive: true });
+    const file = path.join(stationRecordDir(), `${runner}.json`);
+    fs.writeFileSync(file, JSON.stringify({ runner, written, groups }));
+    return file;
+  };
+  const rowOf = (pid: number) => snapshotProcessTable().find((p) => p.pid === pid);
+
+  test("is dropped unread when it was written before this boot, though it names a live process", async () => {
+    const proc = Bun.spawn(["perl", "-MPOSIX", "-e", "POSIX::setsid(); sleep 600"], { stdout: "ignore", stderr: "ignore" });
+    strays.push(proc.pid);
+    await pollUntil(() => rowOf(proc.pid)?.pgid === proc.pid, "the process leading a group of its own", { ms: 5_000 });
+    const row = rowOf(proc.pid)!;
+    const file = writeRecord(await deadPid(), bootTimeMs()! - 60_000, [{ pgid: row.pgid, at: 0, procs: [{ pid: row.pid, pgid: row.pgid, start: row.startedAt }] }]);
+    expect(await reapDeadRunnerStations(undefined, graceMs)).toEqual([]);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(alive(proc.pid)).toBe(true);
+  });
+
+  test("leaves alone a leaderless group of another program that took a recorded group id", async () => {
+    // Another program's group whose leader exited, as crash handlers leave them: its id is all a stale record shares with it.
+    const out = Bun.spawnSync(["perl", "-MPOSIX", "-e", `POSIX::setsid(); my $c = fork(); if (!$c) { open STDOUT, ">/dev/null"; exec "sleep", "600" } print "$c\n"; exit 0`]);
+    const member = Number(String(out.stdout).trim());
+    strays.push(member);
+    await pollUntil(() => { const r = rowOf(member); return !!r && r.pgid !== undefined && !alive(r.pgid); }, "a group whose leader has exited", { ms: 5_000 });
+    const group = rowOf(member)!.pgid!;
+    // The station that once had this id, as its runner recorded it before dying.
+    const file = writeRecord(await deadPid(), Date.now(), [{ pgid: group, at: Date.now(), procs: [{ pid: group, pgid: group, start: "Thu Jan 1 00:00:00 1970" }] }]);
+    expect(await reapDeadRunnerStations(undefined, graceMs)).toEqual([]);
+    expect(fs.existsSync(file)).toBe(false);
+    // The reap returns once every end it started has run its grace.
+    expect(alive(member)).toBe(true);
+  });
 });
 
 describe("a station that ends on its own", () => {
