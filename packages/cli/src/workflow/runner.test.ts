@@ -1150,7 +1150,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     // A Ctrl-C ends the run and the server stops its hands; a later resume
     // that reattached to the stopped hand read it as settled, with half a turn.
     inboxReads = [{ id: "conv_left", work_state: "needs_input", is_live: true, is_killed: true, message_count: 9 } as any];
-    const outcome = await runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, resumed: { node_id: "ground", hand: "conv_left" } } as any);
+    const outcome = await runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, resumed: { node_id: "ground", hands: { ground: "conv_left" } } } as any);
     expect(outcome).toBe("completed");
     expect(calls.filter(c => c.route === "/cli/spawn")).toHaveLength(1);
   }, 30000);
@@ -1164,7 +1164,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     inboxReads = [dead("working"), dead("needs_input"), dead("needs_input"), { ...dead("working"), is_live: true, agent_status: "working" }, dead("done")] as any;
     pinned = { state: "Halfway through the check", status: "working" };
     pinnedReads = [{ state: "Grounded ct-9", status: "done" }];
-    const outcome = await runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, resumed: { node_id: "ground", hand: "conv_left" } } as any);
+    const outcome = await runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, resumed: { node_id: "ground", hands: { ground: "conv_left" } } } as any);
     expect(outcome).toBe("completed");
     expect(calls.filter(c => c.route === "/cli/spawn" && /ground/i.test(JSON.stringify(c.body)))).toHaveLength(0);
     expect(inboxReads).toHaveLength(0);
@@ -1347,6 +1347,12 @@ describe("gatePayload asker", () => {
     expect(graphToPushPayload(g).nodes.find((n) => n.id === "decide")).toMatchObject({ asker: "card_write" });
     expect(gatePayload(node, g, { "card_write.session_id": "sess-card" })).toMatchObject({ asker_session_id: "sess-card" });
     expect(gatePayload(node, g, {})).not.toHaveProperty("asker_session_id");
+  });
+  test("names the session the change came from, so a run nobody's session started asks from it", () => {
+    const g = parseWorkflowSource(src);
+    const node = g.nodes.get("decide")!;
+    expect(gatePayload(node, g, { change_conversation: "jx7maker" })).toMatchObject({ subject_conversation_id: "jx7maker" });
+    expect(gatePayload(node, g, {})).not.toHaveProperty("subject_conversation_id");
   });
 });
 
