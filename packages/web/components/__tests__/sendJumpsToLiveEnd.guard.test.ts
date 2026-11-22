@@ -56,4 +56,14 @@ describe("sending a message lands on the real end of the transcript (ct-97968)",
   test("with newer messages not loaded, a send jumps to the live end (onJumpToEnd), not just the loaded rows' end", () => {
     expect(reaches("handleMessageSent", "onJumpToEnd")).toBe(true);
   });
+
+  // Which end to land on is decided once, in lib/landOnLiveEnd (unit-tested for
+  // both modes). Every handler for the reader's own send or Escape goes through
+  // it, and none scrolls to the loaded end on its own.
+  for (const handler of ["handleMessageSent", "handleSendEscape", "handleSendInlineMessage"]) {
+    test(`${handler} lands through landOnLiveEnd, never straight to the loaded end`, () => {
+      expect(reaches(handler, "landOnLiveEnd")).toBe(true);
+      for (const body of definitions(handler)) expect(body).not.toMatch(/scrollToBottomFnRef/);
+    });
+  }
 });
