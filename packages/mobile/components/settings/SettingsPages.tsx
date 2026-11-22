@@ -41,7 +41,7 @@ export const STATUS_OPTIONS = [
   { key: 'away', label: 'Away', icon: 'clock-o' as const, color: Theme.accent },
 ] as const;
 
-type NotificationType = 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_idle_digest' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity' | 'chat_activity' | 'live_activity';
+type NotificationType = 'team_session_start' | 'mention' | 'permission_request' | 'session_idle' | 'session_idle_digest' | 'session_error' | 'task_activity' | 'doc_activity' | 'plan_activity' | 'chat_activity' | 'live_activity' | 'machine_alerts';
 
 const SESSION_NOTIFICATIONS: Array<{ type: NotificationType; label: string; description: string }> = [
   { type: 'team_session_start', label: 'Team Sessions', description: 'When a team member starts a session' },
@@ -50,6 +50,7 @@ const SESSION_NOTIFICATIONS: Array<{ type: NotificationType; label: string; desc
   { type: 'session_idle', label: 'Session Idle', description: 'When a session is waiting for input' },
   { type: 'session_idle_digest', label: 'Hourly Digest', description: 'Fold waiting sessions into one alert an hour' },
   { type: 'session_error', label: 'Session Errors', description: 'When a session encounters an error' },
+  { type: 'machine_alerts', label: 'Machine Alerts', description: 'When a machine running your agents stays under heavy load' },
 ];
 
 const WORK_NOTIFICATIONS: Array<{ type: NotificationType; label: string; description: string }> = [

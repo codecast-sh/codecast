@@ -5,12 +5,12 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn } from "./proc.js";
-import { findChromeBinary, keychainArgs } from "./workspace/chrome.js";
+import { automationChromeBinary, keychainArgs } from "./workspace/chrome.js";
 
 const THUMB_TIMEOUT_MS = 10_000;
 
-/** The same Chrome discovery every launcher uses (CHROME_PATH, app bundles, PATH). */
-export const findChrome = findChromeBinary;
+/** The headless Chrome every codecast launcher uses: one the human's links can never reach (automationChromeBinary). */
+export const findChrome = (): string | null => automationChromeBinary();
 
 /** The headless command line for one thumbnail. Pure, so the flag set is
  * testable without spawning a browser. The throwaway profile dir keeps the
