@@ -531,7 +531,16 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (opts.foreground) {
         const { resolveCastInvocation } = await import("./castInvocation.js");
         const { cmd, prefixArgs } = resolveCastInvocation();
+        // This process's pid holds the checkout while the run goes here. A run it leaves live (at a person's gate)
+        // then holds it by its id.
         const r = spawnSync(cmd, [...prefixArgs, ...runArgs], { cwd: top, stdio: "inherit", env: process.env });
+        if (opts.checkout) {
+          const read = await deps.cliPost("/cli/workflow-runs/list", { task_id: task, limit: 1, slim: true }).catch(() => null);
+          const run = Array.isArray(read?.runs) ? read.runs[0] : null;
+          if (run?._id && ["pending", "running", "paused"].includes(String(run.status))) {
+            try { (await import("./workflow/checkoutRunHold.js")).recordCheckoutRun(checkoutGitDir, String(run._id), task); } catch (err) { console.error(err instanceof Error ? err.message : String(err)); }
+          }
+        }
         process.exit(r.status ?? 1);
       }
       const started = await cast(runArgs, top);
