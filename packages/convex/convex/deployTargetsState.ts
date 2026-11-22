@@ -96,7 +96,6 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
     tasks.push({ task_id: key, short_id: t?.short_id ?? null, title: t?.title ?? null });
   }
   const ci = await ciOf(ctx, c.repository!, c.sha);
-  const branch = await commitBranch(ctx, c, session ? convCache.get(session.conversation_id) : null);
   return {
     sha: c.sha,
     subject: c.message.split("\n")[0].slice(0, 200),
@@ -104,28 +103,10 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
     author: c.author_login ?? c.author_name ?? null,
     session,
     tasks,
-    branch,
     ci: ci.state,
     ci_url: ci.url,
   };
 }
-
-/**
- * The branch a commit on main came from. A squash merge's own row only knows the ref it landed on, so the branch is
- * its pull request's head (linked, else the "(#N)" its subject names), else the branch its session worked on. The
- * default branch names nothing.
- */
-export async function commitBranch(ctx: any, c: Doc<"commits">, conv: { git_branch?: string } | null): Promise<string | null> {
-  const prNumber = /\(#(\d+)\)\s*$/.exec(c.message.split("\n")[0])?.[1];
-  const pr: Doc<"pull_requests"> | null = c.pr_id
-    ? await ctx.db.get(c.pr_id)
-    : prNumber && c.repository
-      ? await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(c.repository!)).eq("number", Number(prNumber))).first()
-      : null;
-  const branch = pr?.head_ref ?? conv?.git_branch ?? null;
-  return branch && !DEFAULT_BRANCHES.has(branch) ? branch : null;
-}
-const DEFAULT_BRANCHES = new Set(["main", "master", "HEAD"]);
 
 /** Commits on main as a deploy's record keeps them, each with the session behind it (commitSession) and the tasks it links. */
 export async function deployCommitsOf(ctx: any, rows: Doc<"commits">[]) {

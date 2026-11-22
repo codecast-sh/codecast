@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isMineCommit, mineOnly, orderTargets, prOfSubject, rebuiltOnly, rollbackTarget, sessionTargets, targetNow, targetTone, teamRowOfView, type DeployTargetRow, type TeamDeployRow } from "../targets";
+import { orderTargets, rebuiltOnly, rollbackTarget, sessionTargets, targetNow, targetTone, teamRowOfView, type DeployTargetRow, type TeamDeployRow } from "../targets";
 
 const target = (name: string, over: Partial<DeployTargetRow> = {}, groups: DeployTargetRow["queue"]["groups"] = []): DeployTargetRow => ({
   _id: `r#${name}`, workspace: "team:t", team_id: "t", name, repository: "o/r", runs: "here", policy: "press", command: "x", rollback: null, paths: [],
@@ -85,31 +85,5 @@ describe("a deploy alone", () => {
     expect(rebuiltOnly({ ...base, sha: "b", previous_sha: null })).toBe(true);
     expect(rebuiltOnly({ ...base, sha: "b", previous_sha: "a" })).toBe(false);
     expect(rebuiltOnly({ ...base, commits: 2, sha: "a", previous_sha: "a" })).toBe(false);
-  });
-});
-
-describe("the viewer's pull requests in the queue", () => {
-  test("a squash merge's trailing (#N) becomes the PR number and leaves the subject", () => {
-    expect(prOfSubject("Gate reuses a floor pass (sd-4131) (#4431)")).toEqual({ pr: 4431, subject: "Gate reuses a floor pass (sd-4131)" });
-    expect(prOfSubject("Give the production broker web search")).toEqual({ pr: null, subject: "Give the production broker web search" });
-    expect(prOfSubject("Fix (#12) in the middle")).toEqual({ pr: null, subject: "Fix (#12) in the middle" });
-    expect(prOfSubject("Merge pull request #12 from a/b")).toEqual({ pr: 12, subject: "Merge pull request #12 from a/b" });
-  });
-  test("a commit is mine by GitHub login or name, ignoring case", () => {
-    const me = { login: "JasonBenn", name: "Jason Benn" };
-    expect(isMineCommit("jasonbenn", me)).toBe(true);
-    expect(isMineCommit("Jason Benn", me)).toBe(true);
-    expect(isMineCommit("Ashot Petrosian", me)).toBe(false);
-    expect(isMineCommit(null, me)).toBe(false);
-    expect(isMineCommit("x", { login: null, name: null })).toBe(false);
-  });
-  test("mine keeps only my commits, drops groups without any, and recomputes the group's CI", () => {
-    const c = (sha: string, author: string, ci: "passed" | "failed") => ({ sha, subject: "s", at: 1, author, session: null, tasks: [], ci, ci_url: null });
-    const groups = [
-      { key: "s:a", session: null, ci: "failed" as const, commits: [c("1", "JasonBenn", "passed"), c("2", "Ashot", "failed")] },
-      { key: "s:b", session: null, ci: "passed" as const, commits: [c("3", "Ashot", "passed")] },
-    ];
-    const out = mineOnly(groups, { login: "JasonBenn", name: null });
-    expect(out.map((g: any) => [g.key, g.commits.map((x: any) => x.sha), g.ci])).toEqual([["s:a", ["1"], "passed"]]);
   });
 });

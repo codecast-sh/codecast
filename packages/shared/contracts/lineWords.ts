@@ -22,26 +22,18 @@ export const roundsOutWords = (step: string): string => `${step} ran the most ro
 export const handedBackWords = (step: string, handoff: string): string =>
   `${step} handed the problem back: ${handoff === "needs_context" ? "it needs more context" : "it is blocked"}. The problem waits in review.`;
 
-/** The runner's kill note: "hand jx79c63 killed after 47m at dissolve (it showed no work for 30m)" or "… (it ran 240m,
- *  its station's limit)"; notes from before the parenthesis end at the station's id. Groups: the minutes it ran, the
- *  station's id, and the quiet window when it was killed for showing no work. */
-export const HAND_KILLED = /^hand \S+ killed after (\d+)\s*m(?:in)?(?: at ([^\s:(]+))?(?:\W+it showed no work for (\d+)m)?/;
-
-/** A station whose session ran past its time, or showed no work for a while, and was stopped: "Dissolve ran out of
- *  time after 30 minutes and was stopped. The problem is open again." */
-export const timedOutWords = (step: string, minutes: string, quietMinutes?: string): string =>
-  quietMinutes
-    ? `${step} showed no work for ${quietMinutes} minutes and was stopped. The problem is open again.`
-    : `${step} ran out of time after ${minutes} minutes and was stopped. The problem is open again.`;
+/** A station whose session ran past its time and was stopped: "Dissolve ran out of time after 30 minutes and was stopped. The problem is open again." */
+export const timedOutWords = (step: string, minutes: string): string =>
+  `${step} ran out of time after ${minutes} minutes and was stopped. The problem is open again.`;
 
 /** The engine's failure reason read as a stop: a dead end or a timeout by its station, else the reason as it is. */
 export function failReasonWords(reason: string, label: (id: string) => string = stepWords): string {
   const r = reason.trim();
   const m = /^no outgoing edge from (\S+)(?:.*?\boutcome (\w+))?/.exec(r);
   if (m) return deadEndWords(label(m[1]), m[2]);
-  // The runner's kill note names the session (HAND_KILLED); a person reads the step and the time.
-  const t = HAND_KILLED.exec(r);
-  if (t) return timedOutWords(t[2] ? label(t[2]) : "The session", t[1], t[3]);
+  // The runner's kill note names the session ("hand jx79c63 killed after 30m at dissolve"); a person reads the step and the time.
+  const t = /^hand \S+ killed after (\d+)\s*m(?:in)?(?: at (\S+))?/.exec(r);
+  if (t) return timedOutWords(t[2] ? label(t[2]) : "The session", t[1]);
   return runFailedWords(reason);
 }
 

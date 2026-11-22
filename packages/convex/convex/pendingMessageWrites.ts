@@ -27,8 +27,6 @@ export type PendingMessageInsertFields = {
   held?: boolean;
   // Held for the end of the agent's turn (schema pending_messages.queued).
   queued?: boolean;
-  // Handed over out of sight (schema pending_messages.quiet).
-  quiet?: boolean;
 };
 
 export class PendingMessageWriteError extends Error {
@@ -114,7 +112,6 @@ async function insertPendingMessageRow(
     human: fields.human || undefined,
     status: fields.held || fields.queued ? ("held" as const) : ("pending" as const),
     ...(fields.queued ? { queued: true } : {}),
-    ...(fields.quiet ? { quiet: true } : {}),
     created_at: fields.createdAt,
     retry_count: 0,
     ...(delivery

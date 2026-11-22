@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { DeployReach, TargetReach } from "@codecast/shared/contracts/deployReach";
-import { isDormant, prDeployRows, prReachHeadline, prShipsTo } from "../prDeploy";
+import { isDormant, prDeployRows, prReachHeadline, prRowLine, prRowParts, prShipsTo } from "../prDeploy";
 import type { DeployTargetRow, TeamDeployRow } from "../targets";
 
 const NOW = 1_800_000_000_000;
@@ -155,5 +155,34 @@ describe("prShipsTo", () => {
     const ts = [target("aivery-operator", { paths: ["b/**"] }), target("production", { paths: ["b/**"] })];
     const d = [dp("dp-310", "aivery-operator", "live", { live_at: NOW - 16 * DAY }), dp("dp-2240", "production", "live", { live_at: NOW - DAY / 3 })];
     expect(prShipsTo(ts, d, "o/r", ["b/x.ts"], NOW)!.map((x) => [x.target.name, x.idle])).toEqual([["production", false], ["aivery-operator", true]]);
+  });
+});
+
+describe("prRowParts and prRowLine", () => {
+  const HOUR = 3600_000;
+  const row = (over: Partial<import("../prDeploy").PrDeployRow>) => ({ target: "production", state: "waiting" as const, deploy: null, now: null, note: null, queue: null, press: null, pressWords: null, blocked: null, ...over });
+  // A deploy whose sha is not known reads as its dp-N.
+  const bare = (short_id: string, at: number, status: "live" | "failed" = "live") => ({ ...ref(short_id, at, status), sha: null });
+  const live = bare("dp-2240", NOW - 7 * HOUR);
+  test("a live row names its deploy, when, and how long after merge", () => {
+    const parts = prRowParts(row({ state: "live", deploy: live }), NOW, NOW - 9 * HOUR);
+    expect(parts.map((p) => p.key)).toEqual(["d", "t", "lag"]);
+    expect(prRowLine(parts)).toBe("in dp-2240 · went live 7h ago · 2h after merge");
+  });
+  test("a waiting row says how long, what waits with it, CI, and what is live instead", () => {
+    const parts = prRowParts(row({ now: live, queue: { others: 16, atLeast: false, ci: "running", ciUrl: null } }), NOW, NOW - 7 * HOUR);
+    expect(prRowLine(parts)).toBe("waiting 7h · with 16 other commits · CI running · live now dp-2240");
+  });
+  test("a failed row says what is live now too", () => {
+    const parts = prRowParts(row({ state: "failed", deploy: bare("dp-9", NOW - HOUR, "failed"), now: live }), NOW, null);
+    expect(prRowLine(parts)).toBe("in dp-9 · failed 1h ago · live now dp-2240");
+  });
+  test("a rolled-back row names both deploys", () => {
+    const parts = prRowParts(row({ state: "rolled_back", deploy: bare("dp-5", NOW - 2 * HOUR), now: bare("dp-4", NOW - HOUR) }), NOW, null);
+    expect(prRowLine(parts)).toBe("was live in dp-5 · rolled back to dp-4 1h ago");
+  });
+  test("a deploy reads as its short sha when it has one; no CI part when none ran", () => {
+    const parts = prRowParts(row({ now: { ...live, sha: "ca5afca75" }, queue: { others: 0, atLeast: false, ci: "none", ciUrl: null } }), NOW, null);
+    expect(prRowLine(parts)).toBe("the only commit waiting · live now ca5afca");
   });
 });

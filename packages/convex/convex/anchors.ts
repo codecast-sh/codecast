@@ -160,8 +160,6 @@ export type ProvisionStandingAgentOpts = {
   project_path?: string;
   model?: string;
   agent_type?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
-  // The machine a new standing session starts on (a fresh restart keeps the old seat's).
-  target_device_id?: string;
   bootstrap?: boolean;
   // Role provisioning: the role row and the extra bootstrap frame. `adopt` is
   // an existing conversation row that BECOMES the standing session
@@ -368,7 +366,6 @@ export async function provisionStandingAgent(
       conversationId,
       agentType: fromConvexAgentType(agentType),
       projectPath: args.project_path,
-      targetDeviceId: args.target_device_id,
       sessionId,
       model: args.model,
       createdAt: now,
@@ -726,9 +723,7 @@ export const decommissionAnchor = mutation({
 // Retire one anchor: kill its host session, drop its channel bindings and
 // roster seats, and mark the row. Shared by the admin verb above and by team
 // deletion, which retires every anchor the team owned.
-// `keepChannels` leaves the anchor's channel bindings for a caller that moves
-// them to the anchor replacing this one (a fresh role restart).
-export async function decommissionAnchorRow(ctx: any, anchor: any, opts?: { keepChannels?: boolean }): Promise<void> {
+export async function decommissionAnchorRow(ctx: any, anchor: any): Promise<void> {
   if (anchor.conversation_id) {
     const conv = await ctx.db.get(anchor.conversation_id);
     if (conv) {
@@ -739,7 +734,7 @@ export async function decommissionAnchorRow(ctx: any, anchor: any, opts?: { keep
       await killConversation(ctx, conv.user_id, { conversation_id: anchor.conversation_id, mark_completed: true }, { retiring: true, cause: "anchor_retire" });
     }
   }
-  const chans = opts?.keepChannels ? [] : await ctx.db
+  const chans = await ctx.db
     .query("anchor_channels")
     .withIndex("by_anchor", (q: any) => q.eq("anchor_id", anchor._id))
     .collect();

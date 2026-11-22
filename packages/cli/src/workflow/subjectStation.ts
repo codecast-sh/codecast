@@ -9,7 +9,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WorkflowGraph } from "./types";
-import { readFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 
 export type Subject = { conversationId: string; shortId: string };
 
@@ -20,112 +19,8 @@ export function subjectOf(context: Record<string, string>): Subject | null {
   return { conversationId, shortId: context["change_session"] || conversationId.slice(0, 7) };
 }
 
-/**
- * The run's change when it is a whole checkout's (flows.md FL4): a finding goes to the writers of the files it names,
- * and nothing parks or retires anyone, since the writers are other people's sessions in a shared checkout.
- */
-export function checkoutChangeOf(runDir: string | undefined): FrozenChange | null {
-  const change = readFrozenChange(runDir);
-  return change?.source === "checkout" ? change : null;
-}
-
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
-const SIGNAL_WORDS = String.raw`\b(error|errors|fail|failed|failing|failure|✗|×|expected|received|panic|exception|traceback|cannot|could not|not found|TS\d{4})\b`;
-const SIGNAL = new RegExp(SIGNAL_WORDS, "i");
-
-/**
- * A session that wrote files of a checkout's change, with the ones a finding names (flows.md FL4). The run's subject
- * also carries the named files no session wrote (`unclaimed`), which are its to fix or hand on.
- */
-export type Writer = Subject & { files: string[]; unclaimed?: string[] };
-
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-
-// A line that says something broke: SIGNAL, or a merge conflict. A test runner's pass, skip or todo line never does,
-// whatever its test's name says.
-const FAILING = new RegExp(`${SIGNAL_WORDS}|\\bCONFLICT\\b`, "i");
-const QUIET_RESULT = /^\s*\((?:pass|skip|todo)\)/;
-// bun prints each test file's path alone on a line, then its results.
-const TEST_HEADER = /^\s*\S+\.(?:test|spec)\.[cm]?[jt]sx?:\s*$/;
-// bun's closing recap of the failed tests, after the last file's results.
-const RECAP = /^\s*\d+ tests? failed:?\s*$/;
-// eslint and other linters print each file's path alone on a line, then its problems.
-const PATH_LINE = /^\s*(?:[A-Za-z]:)?[\w.@\-/\\]*[/\\][\w.@\-]+\.[A-Za-z]\w*\s*$/;
-// How far a line may sit from a failing one and still belong to it: a stack trace or code frame under its error.
-const NEAR = 6;
-
-/**
- * The lines of a finding that can name a file, each with whether it says something failed or sits near a line that
- * does. A file's section (a test file's header, a linter's path line, bun's closing recap) bounds that nearness, so
- * one file's error never reaches the next file's name. git's `Auto-merging` lines go (every file a merge touches,
- * conflict or not), and so do a passed test's line and a test file's header when nothing in its section failed. Paths under any of `roots`
- * (the checkout, the run's worktree) read relative, as the change names them.
- */
-function findingLines(text: string, roots: string[]): Array<{ line: string; failing: boolean }> {
-  let clean = text.replace(ANSI, "").replace(/\r/g, "");
-  for (const r of [...new Set(roots.filter(Boolean))].sort((a, b) => b.length - a.length)) clean = clean.split(`${r.replace(/\/+$/, "")}/`).join("");
-  const lines = clean.split("\n");
-  const failing = (l: string) => FAILING.test(l) && !QUIET_RESULT.test(l);
-  const section: number[] = [];
-  lines.forEach((l, i) => { section[i] = (section[i - 1] ?? 0) + (TEST_HEADER.test(l) || RECAP.test(l) || PATH_LINE.test(l) ? 1 : 0); });
-  const passedHeader = (i: number) => TEST_HEADER.test(lines[i]) && !lines.some((l, j) => j > i && section[j] === section[i] && failing(l));
-  // A passed, skipped or todo test's name may hold a file's name; it names nothing that failed.
-  const kept = lines.map((line, i) => ({ line, i })).filter(({ line, i }) => !/^\s*Auto-merging\s/.test(line) && !QUIET_RESULT.test(line) && !passedHeader(i));
-  const failingAt = kept.filter(({ line }) => failing(line)).map(({ i }) => i);
-  return kept.map(({ line, i }) => ({ line, failing: failingAt.some((f) => Math.abs(f - i) <= NEAR && section[f] === section[i]) }));
-}
-
-/**
- * The files of a checkout change a finding names, split by whether a session's edit wrote them: `writers` groups
- * them by that session, `unclaimed` are the ones no session wrote. A file is named by its path; by a tail of it that
- * starts at a `/` and no other file of the change ends with (a tool run inside a package prints paths from there:
- * `src/a.ts(12,5)` for `packages/cli/src/a.ts`); or by a basename no other file of the change shares, standing alone
- * or as a location (`a.ts:12`, `a.ts(12,5)`). None of these is named inside a longer path (`src/a.ts` within
- * `lib/src/a.ts`, `index.ts` within `node_modules/x/index.ts`). Lines that say something failed, and those beside
- * them in the same file's section, are read first; only a finding with no file named there is read whole.
- */
-export function writersNamed(
-  change: { paths: string[]; writers?: Record<string, { conversation: string; session: string }> },
-  text: string,
-  roots: string[] = [],
-): { writers: Writer[]; unclaimed: string[] } {
-  const base = (p: string) => p.slice(p.lastIndexOf("/") + 1);
-  const sharing = new Map<string, number>();
-  for (const p of change.paths) sharing.set(base(p), (sharing.get(base(p)) ?? 0) + 1);
-  // The tails of a path from each `/` on (two segments or more), kept when no other file of the change ends with one.
-  const tails = (p: string) => {
-    const parts = p.split("/");
-    return parts.slice(1, -1).map((_, k) => parts.slice(k + 1).join("/"))
-      .filter((t) => change.paths.filter((q) => q === t || q.endsWith(`/${t}`)).length === 1);
-  };
-  // Bounded on both sides, so a.ts is not named by data.ts or a.tsx, nor src/a.ts by lib/src/a.ts.
-  const byPath = (p: string) => new RegExp(`(?:^|[^\\w.\\-/\\\\@])${escapeRe(p)}(?![\\w\\-/\\\\]|\\.\\w)`);
-  const byBase = (name: string) => new RegExp(`(?:^|[^\\w.\\-/\\\\@])${escapeRe(name)}(?=:\\d|\\(\\d+,|[\\s,;'"\`)\\]]|[.:](?:\\s|$)|$)`);
-  const tests = new Map(change.paths.map((p) => [p, [byPath(p), ...tails(p).map(byPath), ...(sharing.get(base(p)) === 1 && base(p) !== p ? [byBase(base(p))] : [])]]));
-  const lines = findingLines(text, roots);
-  const namedIn = (subset: string[]) => change.paths.filter((p) => subset.some((l) => tests.get(p)!.some((t) => t.test(l))));
-  const strong = namedIn(lines.filter((l) => l.failing).map((l) => l.line));
-  const named = strong.length ? strong : namedIn(lines.map((l) => l.line));
-  const byWriter = new Map<string, Writer>();
-  const unclaimed: string[] = [];
-  for (const p of named) {
-    const w = change.writers?.[p];
-    if (!w) { unclaimed.push(p); continue; }
-    const entry = byWriter.get(w.conversation) ?? { conversationId: w.conversation, shortId: w.session, files: [] };
-    entry.files.push(p);
-    byWriter.set(w.conversation, entry);
-  }
-  return { writers: [...byWriter.values()], unclaimed };
-}
-
-/** A writer's brief: the station's, which of the failing files are its own, and which no session's edit names. */
-export function writerBrief(brief: string, writer: Writer): string {
-  const own = writer.files.length ? `\n\nYour files among the failing ones: ${writer.files.join(", ")}.` : "";
-  const nobody = writer.unclaimed?.length
-    ? `\n\nNo session's edit names these failing files, and you ran this pass, so they are yours to fix or hand to whoever wrote them: ${writer.unclaimed.join(", ")}.`
-    : "";
-  return `${brief}${own}${nobody}`;
-}
+const SIGNAL = /\b(error|errors|fail|failed|failing|failure|✗|×|expected|received|panic|exception|traceback|cannot|could not|not found|TS\d{4})\b/i;
 
 /**
  * What a session needs from a long failure: the lines that say what broke, with
@@ -161,13 +56,6 @@ export async function runWorktreePath(cwd: string, name: string | undefined): Pr
   const root = (await git(cwd, ["rev-parse", "--show-toplevel"]).catch(() => cwd)).trim();
   const at = readState(root, name)?.path ?? path.join(root, ".codecast", "worktrees", name);
   return fs.existsSync(at) ? at : null;
-}
-
-/** The directories a finding's absolute paths can start with: the checkout and the run's worktree, as given and resolved. */
-export async function findingRoots(cwd: string, worktree: string | undefined): Promise<string[]> {
-  const at = await runWorktreePath(cwd, worktree);
-  const real = (p: string) => { try { return fs.realpathSync(p); } catch { return p; } };
-  return [...new Set([cwd, at].filter((p): p is string => !!p).flatMap((p) => [p, real(p)]))];
 }
 
 /** How a run ended, said to the session it came from. */

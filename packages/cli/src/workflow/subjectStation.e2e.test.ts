@@ -4,18 +4,15 @@
 // The session hears Decide's answer and how the run ended. Real git and real
 // transcripts in an isolated CODECAST_DIR and HOME; the server is a fake that
 // plays the session.
-import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
-import nodeOs from "node:os";
 import * as path from "node:path";
 import { freezeSessionChange, writeFrozenChange } from "./flowChange";
 import { readFrozenChange } from "./flowChangeFile";
 import { parseWorkflowSource } from "./parser";
-import { lineRunDir, runSlug, runWorkflow, type RunOptions } from "./runner";
-import { readCheckpoint } from "./runResume";
-import { startSubjectParker } from "./subjectPark";
+import { lineRunDir, runSlug, runWorkflow } from "./runner";
 import { failureExcerpt, runEndMessage } from "./subjectStation";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
@@ -45,23 +42,22 @@ const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, 
 const CONV = "jx7ssssssssssssssssssssssssssss1";
 
 let worlds = 0;
-/** A shared checkout where session CONV changed a.txt, its transcript saying so; `edit` writes any file as the session. */
+/** A shared checkout where session CONV changed a.txt, its transcript saying so. */
 function world(content: string) {
   process.env.CODECAST_DIR = path.join(sandbox, `.codecast-${++worlds}`);
   const root = path.join(sandbox, `repo-${worlds}`);
   fs.mkdirSync(root);
   git(root, "init", "-q", "-b", "main");
   fs.writeFileSync(path.join(root, "a.txt"), "base\n");
-  fs.writeFileSync(path.join(root, "b.txt"), "base\n");
   git(root, "add", "-A");
   git(root, "commit", "-qm", "base");
   const dir = path.join(sandbox, ".claude", "projects", `-repo-${worlds}`);
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, `sess-${worlds}.jsonl`);
   const lines: object[] = [];
-  const edit = (text: string, name = "a.txt") => {
-    fs.writeFileSync(path.join(root, name), text);
-    lines.push({ type: "assistant", timestamp: new Date().toISOString(), cwd: root, message: { role: "assistant", content: [{ type: "tool_use", id: `t${lines.length}`, name: "Edit", input: { file_path: path.join(root, name), old_string: "x", new_string: "y" } }] } });
+  const edit = (text: string) => {
+    fs.writeFileSync(path.join(root, "a.txt"), text);
+    lines.push({ type: "assistant", timestamp: new Date().toISOString(), cwd: root, message: { role: "assistant", content: [{ type: "tool_use", id: `t${lines.length}`, name: "Edit", input: { file_path: path.join(root, "a.txt"), old_string: "x", new_string: "y" } }] } });
     fs.writeFileSync(file, lines.map((l) => JSON.stringify(l)).join("\n") + "\n");
     const ledgerFile = path.join(process.env.CODECAST_DIR!, "sync-ledger.json");
     fs.mkdirSync(path.dirname(ledgerFile), { recursive: true });
@@ -96,87 +92,40 @@ const graphIn = (root: string) => parseWorkflowSource(`digraph change {
   decide -> exit [label="[S] Ship :: Land it"]
 }`, root);
 
-type Play = {
-  /** The session pins dormant when it ends its turn. */
-  dormant?: boolean;
-  /** When that dormant pin was set; by default as it is read, so after any brief. */
-  pinnedAt?: number;
-  /** Fields the session's row reads with, over a settled live one; `briefed` says whether a brief has reached it. */
-  row?: (briefed: boolean) => Record<string, unknown>;
-  /** How many reads a brief's answer takes to show in the transcript (the station waits on it meanwhile). */
-  lag?: number;
-  /** The repository's deploy targets, read when the run asks (`cast line deploy targets`); none by default. */
-  targets?: () => unknown[];
-  /** What the server answers a retire with. */
-  retire?: () => Record<string, unknown>;
-  /** The server is older than `quiet` and refuses a send that carries it. */
-  refuseQuiet?: boolean;
-  /** A gate's answers, one per card the run raises; Ship by default. */
-  answers?: string[];
-};
-
-/** The server, playing the session: `fix` is what the session does when a brief reaches it. */
-function server(fix: () => void, play: Play = {}) {
-  const { dormant = false } = play;
+/** The server, playing the session: `fix` is what the session does when a brief reaches it; `dormant` has it pin dormant when it ends its turn. */
+function server(fix: () => void, dormant = false) {
   const calls: Array<{ route: string; body: any }> = [];
   let messages = 10;
-  let briefed = false;
-  let lagLeft = 0;
-  let owed = 0;
-  // The run's stash puts the row out of sight; a send that is not quiet brings it back.
-  let stashed = false;
-  // A message the server already holds under a client_id is not queued again (enqueuePendingMessage).
-  const held = new Set<string>();
-  let cards = 0;
   globalThis.fetch = (async (url: any, init: any) => {
     const route = String(url).replace(/^https?:\/\/[^/]+/, "");
     const body = JSON.parse(init?.body || "{}");
     calls.push({ route, body });
     const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
     if (route === "/cli/work/get") return reply({ title: "Make a.txt good", status: "in_progress" });
-    if (route === "/cli/inbox") {
-      if (lagLeft > 0) lagLeft--;
-      else { messages += owed; owed = 0; }
-      return reply({ sessions: [{ id: CONV, work_state: dormant ? "dormant" : "done", bucket: stashed ? "stashed" : "done", is_live: true, is_killed: false, message_count: messages, ...play.row?.(briefed) }] });
-    }
-    if (route === "/cli/sessions/state/get" && dormant) return reply({ state: "Fixed it; the run re-checks when this turn ends", status: "dormant", at: play.pinnedAt ?? Date.now() });
-    if (route === "/cli/sessions/dismiss") stashed = true;
-    if (route === "/cli/deploys/targets") return reply({ targets: play.targets?.() ?? [] });
-    if (route === "/cli/sessions/retire") return reply(play.retire?.() ?? { retired: true, short_id: CONV.slice(0, 7) });
+    if (route === "/cli/inbox") return reply({ sessions: [{ id: CONV, work_state: dormant ? "dormant" : "done", is_live: true, is_killed: false, message_count: messages }] });
+    if (route === "/cli/sessions/state/get" && dormant) return reply({ state: "Fixed it; the run re-checks when this turn ends", status: "dormant", at: Date.now() });
     if (route === "/cli/messages/send") {
-      if (play.refuseQuiet && body.quiet) return new Response(JSON.stringify({ error: "ArgumentValidationError: Object contains extra field `quiet`" }), { status: 400 });
-      if (body.client_id && held.has(body.client_id)) return reply({ ok: true });
-      if (body.client_id) held.add(body.client_id);
-      if (!body.quiet) stashed = false;
       // A brief starts a turn; the run's end and a gate's answer only inform.
-      if (/^Check failed/.test(body.body)) {
-        briefed = true;
-        fix();
-        lagLeft = play.lag ?? 0;
-        owed += 3;
-      } else messages += 3;
+      if (/^Check failed/.test(body.body)) fix();
+      messages += 3;
       return reply({ ok: true });
     }
-    if (route === "/cli/workflow-runs/gate") { cards++; return reply({ ok: true }); }
-    if (route === "/cli/workflow-runs/poll-gate") return reply({ status: "running", gate_response: play.answers?.[Math.max(0, cards - 1)] ?? "S" });
+    if (route === "/cli/workflow-runs/gate") return reply({ ok: true });
+    if (route === "/cli/workflow-runs/poll-gate") return reply({ status: "running", gate_response: "S" });
     return reply({ ok: true });
   }) as typeof fetch;
-  return {
-    calls,
-    sent: () => calls.filter((c) => c.route === "/cli/messages/send").map((c) => c.body),
-    // What reached the session: a resend under a client_id it already holds is not a second message.
-    delivered: () => calls.filter((c, i) => c.route === "/cli/messages/send" && !(c.body.client_id && calls.slice(0, i).some((p) => p.route === "/cli/messages/send" && p.body.client_id === c.body.client_id))).map((c) => c.body),
-  };
+  return { calls, sent: () => calls.filter((c) => c.route === "/cli/messages/send").map((c) => c.body) };
 }
 
-async function start(root: string, graph = graphIn(root), opts: { only?: string[]; run?: Partial<RunOptions> } = {}) {
+async function start(root: string) {
+  const graph = graphIn(root);
   const runDir = lineRunDir(root, runSlug(graph, { task_id: "ct-9" }, "run"));
-  const change = await freezeSessionChange(root, CONV, { branch: "codecast/change-ct-9", worktree: "change-ct-9", title: "Make a.txt good", only: opts.only });
+  const change = await freezeSessionChange(root, CONV, { branch: "codecast/change-ct-9", worktree: "change-ct-9", title: "Make a.txt good" });
   writeFrozenChange(runDir, change);
   const t0 = Date.now();
   console.log = process.env.SHOW_RUN ? (...a: unknown[]) => origLog(`${Date.now() - t0}ms`, ...a) : () => {};
   try {
-    const outcome = await runWorkflow(graph, { cwd: root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, ...opts.run });
+    const outcome = await runWorkflow(graph, { cwd: root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 });
     return { outcome, runDir };
   } finally {
     console.log = origLog;
@@ -196,9 +145,6 @@ describe("the session is the run's subject", () => {
     expect(brief.body).toContain("Check failed on ct-9");
     expect(brief.body).toContain("error: a.txt says bad, expected good");
     expect(answer.body).toMatch(/^Decide: Ship\./);
-    // The gate's answer is news: quiet, so a subject out of sight stays there.
-    expect(answer.quiet).toBe(true);
-    expect(end.quiet).toBeUndefined();
     expect(end.body).toContain("The Change run on ct-9 is over: Done.");
     expect(s.sent()).toHaveLength(3);
 
@@ -221,88 +167,10 @@ describe("the session is the run's subject", () => {
 
   test("a session that pins dormant naming the run as its wake has answered: the run goes on (ct-85419)", async () => {
     const { root, edit } = world("bad\n");
-    const s = server(() => edit("good\n"), { dormant: true });
+    const s = server(() => edit("good\n"), true);
     const { outcome } = await start(root);
     expect(outcome).toBe("completed");
     expect(s.sent().at(-1)!.body).toContain("is over: Done.");
-  }, 60_000);
-
-  test("a dormant pin from before the brief is not its answer: the run waits for the turn the brief started to end (ct-98624)", async () => {
-    const { root, edit } = world("bad\n");
-    // Its row reads dormant throughout (the pin it left last turn). After the brief it works a while, between tool
-    // calls too (an idle status while the transcript grows), fixes a.txt at the end of the turn and goes quiet.
-    let reads = 0;
-    const s = server(() => {}, {
-      dormant: true,
-      pinnedAt: Date.now() - 3_600_000,
-      row: (briefed) => {
-        if (!briefed) return {};
-        reads++;
-        if (reads < 12) return { agent_status: reads % 4 ? "working" : "idle", message_count: 20 + reads };
-        if (reads === 12) edit("good\n");
-        return { agent_status: "idle", message_count: 40 };
-      },
-    });
-    const { outcome } = await start(root);
-    expect(outcome).toBe("completed");
-    expect(reads).toBeGreaterThanOrEqual(14);
-    // One brief: the run froze the change only once the turn had ended, so Check passed on the fix.
-    expect(s.sent().filter((m) => /^Check failed/.test(m.body))).toHaveLength(1);
-    expect(git(root, "show", "codecast/change-ct-9:a.txt")).toBe("good");
-  }, 60_000);
-
-  test("a subject whose dormant pin predates its brief and that never answers is given up at its quiet window, not its cap", async () => {
-    // It pinned dormant naming the run, then wedged on resume: its row still reads dormant on that old claim, and its
-    // transcript never moves. Each read after the brief is 45 minutes on, on an idle machine.
-    const { root } = world("bad\n");
-    const realAwake = performance.now.bind(performance);
-    let shift = 0;
-    const awake = spyOn(performance, "now").mockImplementation(() => realAwake() + shift);
-    const load = spyOn(nodeOs, "loadavg").mockReturnValue([0, 0, 0]);
-    try {
-      const s = server(() => {}, {
-        dormant: true,
-        pinnedAt: Date.now() - 3_600_000,
-        lag: 1e9,
-        row: (briefed) => {
-          if (briefed) shift += 45 * 60_000;
-          return {};
-        },
-      });
-      const { outcome } = await start(root);
-      expect(outcome).toBe("failed");
-      const reasons = s.calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.fail_reason).map((c) => String(c.body.fail_reason));
-      expect(reasons.at(-1)).toContain("(it showed no work for 30m)");
-    } finally {
-      awake.mockRestore();
-      load.mockRestore();
-    }
-  }, 60_000);
-
-  test("a turn that ends before the brief reaches it is no answer: the run waits for the brief's delivery (a detached run's caller)", async () => {
-    const { root, edit } = world("bad\n");
-    // The caller is mid-turn when the check fails: its turn ends (the transcript grows, it reads done) while the brief
-    // waits in its queue. The brief lands on the fourth read of its status, and the session fixes a.txt then.
-    const s = server(() => {});
-    const serve = globalThis.fetch;
-    let statusReads = 0;
-    let deliveredAt = 0;
-    globalThis.fetch = (async (url: any, init: any) => {
-      if (!String(url).endsWith("/cli/messages/status")) return serve(url, init);
-      s.calls.push({ route: "/cli/messages/status", body: JSON.parse(init?.body || "{}") });
-      if (++statusReads === 4) {
-        edit("good\n");
-        deliveredAt = Date.now();
-      }
-      const send = deliveredAt ? { created_at: deliveredAt - 1000, status: "delivered", delivered_at: deliveredAt } : { created_at: Date.now(), status: "pending" };
-      return new Response(JSON.stringify({ sends: [send] }), { status: 200 });
-    }) as typeof fetch;
-    const { outcome } = await start(root);
-    expect(outcome).toBe("completed");
-    expect(statusReads).toBeGreaterThanOrEqual(4);
-    // One brief: the turn that ended before it landed was not taken for the fix.
-    expect(s.sent().filter((m) => /^Check failed/.test(m.body))).toHaveLength(1);
-    expect(git(root, "show", "codecast/change-ct-9:a.txt")).toBe("good");
   }, 60_000);
 
   test("a session that never fixes it is sent back three times, then the run stops and says why", async () => {
@@ -313,416 +181,6 @@ describe("the session is the run's subject", () => {
     const sent = s.sent();
     expect(sent.filter((m) => /^Check failed/.test(m.body))).toHaveLength(3);
     expect(sent.at(-1)!.body).toContain("stopped at Fix check: Check sent the change back 3 times and it still does not pass.");
-  }, 60_000);
-});
-
-describe("the subject between its turns: restarted, parked, retired", () => {
-  const routes = (s: ReturnType<typeof server>, route: string) => s.calls.filter((c) => c.route === route).map((c) => c.body);
-  const indexOf = (s: ReturnType<typeof server>, match: (c: { route: string; body: any }) => boolean) => s.calls.findIndex(match);
-
-  test("a killed subject is sent the brief like any other, which restarts it, and the run completes", async () => {
-    const { root, edit } = world("bad\n");
-    const s = server(() => edit("good\n"), { row: (briefed) => (briefed ? {} : { is_killed: true, is_live: false, work_state: "idle" }) });
-    const { outcome } = await start(root);
-    expect(outcome).toBe("completed");
-    expect(s.sent()[0].body).toContain("Check failed on ct-9");
-    expect(git(root, "show", "codecast/change-ct-9:a.txt")).toBe("good");
-  }, 60_000);
-
-  test("a settled subject is stashed out of sight and asked to park while Check runs, never during its own station; its brief is quiet", async () => {
-    const { root, edit } = world("bad\n");
-    const s = server(() => edit("good\n"), { lag: 30 });
-    const { outcome } = await start(root, graphIn(root), { run: { subjectParkMs: 1 } });
-    expect(outcome).toBe("completed");
-    const [brief] = s.sent();
-    expect(brief.quiet).toBe(true);
-    expect(routes(s, "/cli/sessions/dismiss")[0]).toEqual({ api_token: "tok", session: CONV, hidden: true });
-    expect(routes(s, "/cli/sessions/hibernate")[0]).toEqual({ api_token: "tok", session: CONV });
-    // Each settle is stashed once: the one before the first Check, and the one after the session fixed it.
-    expect(routes(s, "/cli/sessions/dismiss")).toHaveLength(2);
-    // Hibernate is asked again no sooner than five minutes later.
-    expect(routes(s, "/cli/sessions/hibernate")).toHaveLength(1);
-    // Nothing parks the session between its brief and its settle, though it read settled through the whole lag.
-    const sentAt = indexOf(s, (c) => c.route === "/cli/messages/send" && /^Check failed/.test(c.body.body));
-    const settledAt = indexOf(s, (c) => c.route === "/cli/workflow-runs/progress" && c.body.waiting_on_session === null);
-    const parkedDuring = s.calls.slice(sentAt, settledAt).filter((c) => c.route === "/cli/sessions/dismiss" || c.route === "/cli/sessions/hibernate");
-    expect(settledAt - sentAt).toBeGreaterThan(30);
-    expect(parkedDuring).toEqual([]);
-    // The quiet brief's run sends the end message as usual: the change did not land.
-    expect(s.sent().at(-1)!.body).toContain("is over: Done.");
-  }, 60_000);
-
-  test("a working subject is left alone", async () => {
-    const { root } = world("good\n");
-    const s = server(() => {}, { row: () => ({ work_state: "working" }) });
-    expect((await start(root, graphIn(root), { run: { subjectParkMs: 1 } })).outcome).toBe("completed");
-    expect(routes(s, "/cli/sessions/dismiss")).toEqual([]);
-    expect(routes(s, "/cli/sessions/hibernate")).toEqual([]);
-  }, 60_000);
-
-  test("a subject that settles in the middle of a long station is parked then, not only between stations", async () => {
-    const { root } = world("good\n");
-    // It works until a moment after Wait has started, then settles.
-    let settleAt = Infinity;
-    const waitRunning = (c: { route: string; body: any }) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "wait" && c.body.node_status === "running";
-    const s: ReturnType<typeof server> = server(() => {}, {
-      row: () => {
-        if (settleAt === Infinity && s.calls.some(waitRunning)) settleAt = Date.now() + 200;
-        return Date.now() < settleAt ? { work_state: "working" } : {};
-      },
-    });
-    const graph = parseWorkflowSource(`digraph slow {
-      graph [label="Slow"]
-      start [shape=Mdiamond]
-      wait [label="Wait", shape=parallelogram, script="sleep 1"]
-      exit [shape=Msquare, label="Done"]
-      start -> wait -> exit
-    }`, root);
-    expect((await start(root, graph, { run: { subjectParkMs: 20 } })).outcome).toBe("completed");
-    const waitRan = indexOf(s, waitRunning);
-    const waitDone = indexOf(s, (c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "wait" && c.body.node_status === "completed");
-    const stashed = indexOf(s, (c) => c.route === "/cli/sessions/dismiss");
-    expect(stashed).toBeGreaterThan(waitRan);
-    expect(stashed).toBeLessThan(waitDone);
-  }, 60_000);
-
-  test("a subject a person brought back from the run's stash is parked no more, and the run's context remembers it", async () => {
-    const { root } = world("good\n");
-    // Once the run has stashed it, a person restores it: it files in the inbox again at the settle the run stashed.
-    const dismissed = () => s.calls.filter((c) => c.route === "/cli/sessions/dismiss").length;
-    let restoredReads = 0;
-    const s: ReturnType<typeof server> = server(() => {}, {
-      row: () => {
-        if (!dismissed()) return {};
-        // Wait ends once the run has read it back in the inbox, however slow the machine.
-        if (++restoredReads >= 1) fs.writeFileSync(`${root}.go`, "");
-        return { bucket: "done" };
-      },
-    });
-    const graph = parseWorkflowSource(`digraph slow {
-      graph [label="Slow"]
-      start [shape=Mdiamond]
-      wait [label="Wait", shape=parallelogram, script="while [ ! -f ${root}.go ]; do sleep 0.05; done"]
-      after [label="After", shape=parallelogram, script="true"]
-      exit [shape=Msquare, label="Done"]
-      start -> wait -> after -> exit
-    }`, root);
-    const { outcome, runDir } = await start(root, graph, { run: { subjectParkMs: 20 } });
-    expect(outcome).toBe("completed");
-    expect(dismissed()).toBe(1);
-    expect(readCheckpoint(runDir, "run-9")?.context.subject_kept).toBe("1");
-  }, 60_000);
-
-  test("once a person has brought the subject back, a later settle is not stashed: the parker stops", async () => {
-    let row = { id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 };
-    const calls: string[] = [];
-    const parker = startSubjectParker(async (route) => {
-      calls.push(route);
-      if (route === "/cli/sessions/dismiss") row = { ...row, bucket: "stashed" };
-      return { sessions: [row] };
-    }, { conversationId: CONV, shortId: "jx7ssss" }, 60_000, () => {});
-    const context: Record<string, string> = {};
-    parker.bind(context);
-    await parker.tick();
-    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
-    row = { ...row, bucket: "done" };
-    await parker.tick();
-    expect(context.subject_kept).toBe("1");
-    row = { ...row, message_count: 40 };
-    await parker.tick();
-    await parker.stop();
-    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
-  });
-
-  test("a subject a person restored and then typed to is theirs: its next settle is neither stashed nor parked", async () => {
-    let row = { id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 };
-    const calls: string[] = [];
-    const parker = startSubjectParker(async (route) => {
-      calls.push(route);
-      if (route === "/cli/sessions/dismiss") row = { ...row, bucket: "stashed" };
-      return { sessions: [row] };
-    }, { conversationId: CONV, shortId: "jx7ssss" }, 60_000, () => {});
-    const context: Record<string, string> = {};
-    parker.bind(context);
-    await parker.tick();
-    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
-    // Restored, and already answering the person: the run first reads it working at a new length.
-    row = { ...row, bucket: "working", work_state: "working", message_count: 9 };
-    await parker.tick();
-    expect(context.subject_kept).toBe("1");
-    row = { ...row, bucket: "done", work_state: "done", message_count: 12 };
-    await parker.tick();
-    await parker.stop();
-    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
-    expect(calls.filter((r) => r === "/cli/sessions/hibernate")).toHaveLength(1);
-  });
-
-  test("the subject's own station bringing it back is the run's doing, not a person's: it is stashed again at its next settle", async () => {
-    let row = { id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 };
-    const calls: string[] = [];
-    const parker = startSubjectParker(async (route) => {
-      calls.push(route);
-      if (route === "/cli/sessions/dismiss") row = { ...row, bucket: "stashed" };
-      return { sessions: [row] };
-    }, { conversationId: CONV, shortId: "jx7ssss" }, 60_000, () => {});
-    const context: Record<string, string> = {};
-    parker.bind(context);
-    await parker.tick();
-    // A brief sent plain (a server that refuses quiet) files it in the inbox again while the station runs.
-    await parker.pause();
-    row = { ...row, bucket: "done", message_count: 8 };
-    parker.resume();
-    await parker.tick();
-    await parker.stop();
-    expect(context.subject_kept).toBeUndefined();
-    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(2);
-  });
-
-  test("a parker does nothing until it is bound to the run's context, so a resumed runner reads subject_kept first", async () => {
-    const calls: string[] = [];
-    const read = async (route: string) => { calls.push(route); return { sessions: [{ id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 }] }; };
-    const kept = startSubjectParker(read, { conversationId: CONV, shortId: "jx7ssss" }, 1, () => {});
-    await kept.tick();
-    await new Promise((r) => setTimeout(r, 30));
-    expect(calls).toEqual([]);
-    kept.bind({ subject_kept: "1" });
-    await new Promise((r) => setTimeout(r, 30));
-    await kept.stop();
-    expect(calls).toEqual([]);
-    const fresh = startSubjectParker(read, { conversationId: CONV, shortId: "jx7ssss" }, 1, () => {});
-    fresh.bind({});
-    await new Promise((r) => setTimeout(r, 30));
-    await fresh.stop();
-    expect(calls).toContain("/cli/sessions/dismiss");
-  });
-
-  test("a parker bound to a run whose context says a person kept the subject does nothing", async () => {
-    const calls: string[] = [];
-    const parker = startSubjectParker(async (route) => { calls.push(route); return { sessions: [{ id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 }] }; }, { conversationId: CONV, shortId: "jx7ssss" }, 60_000, () => {});
-    parker.bind({ subject_kept: "1" });
-    await parker.tick();
-    await parker.stop();
-    expect(calls.filter((r) => r !== "/cli/inbox")).toEqual([]);
-  });
-
-  test("every send to the subject carries one client_id; a server that refuses quiet gets the same send plain, under the same id", async () => {
-    const { root, edit } = world("bad\n");
-    const s = server(() => edit("good\n"), { refuseQuiet: true });
-    expect((await start(root)).outcome).toBe("completed");
-    const briefs = s.sent().filter((m) => /^Check failed/.test(m.body));
-    expect(briefs.map((b) => b.quiet)).toEqual([true, undefined]);
-    expect(briefs[0].client_id).toMatch(/^run:run-9:fix_check:[0-9a-f]{8}$/);
-    expect(briefs[1].client_id).toBe(briefs[0].client_id);
-    const answers = s.sent().filter((m) => /^Decide: Ship\./.test(m.body));
-    expect(answers.map((a) => a.quiet)).toEqual([true, undefined]);
-    expect(answers[0].client_id).toMatch(/^run:run-9:decide\.answer:[0-9a-f]{8}$/);
-    expect(answers[1].client_id).toBe(answers[0].client_id);
-    expect(s.sent().at(-1)!.client_id).toMatch(/^run:run-9:end:[0-9a-f]{8}$/);
-  }, 60_000);
-
-  test("a second Revise and a second answer on the same gate each reach the subject: no send repeats another's client_id", async () => {
-    const { root } = world("good\n");
-    // A person answers Revise twice, then Wait (a look again that comes back to the card), then Ship. Each answer
-    // starts the visit counts over, so a key built on them repeated, and the server dropped the repeat.
-    const graph = parseWorkflowSource(`digraph change {
-      graph [label="Change", on_failure=stop]
-      start [shape=Mdiamond]
-      check [flow="tcheck"]
-      decide [label="Decide", shape=hexagon, prompt="Ship it?"]
-      revise [label="Revise", backend=subject, max_visits=3, prompt="Revise on $task_id: $human.message"]
-      look [label="Look", shape=parallelogram, script="true"]
-      exit [shape=Msquare, label="Done"]
-      start -> check -> decide
-      decide -> revise [label="[R] Revise :: Change it"]
-      decide -> look [label="[W] Wait :: Look again"]
-      decide -> exit [label="[S] Ship :: Land it"]
-      revise -> check
-      look -> decide
-    }`, root);
-    const s = server(() => {}, { answers: ["R", "R", "W", "S"] });
-    expect((await start(root, graph)).outcome).toBe("completed");
-    const delivered = s.delivered();
-    expect(delivered.filter((m) => /^Revise on ct-9/.test(m.body))).toHaveLength(2);
-    expect(delivered.filter((m) => /^Decide: /.test(m.body)).map((m) => m.body.split(".")[0])).toEqual(["Decide: Wait", "Decide: Ship"]);
-    const ids = s.sent().map((m) => m.client_id);
-    expect(new Set(ids).size).toBe(ids.length);
-  }, 60_000);
-
-  const PUSH = "git -C $project_path push -q origin $branch:main";
-  /** A checkout with an origin, and a flow whose Land runs `land`: PUSH puts the frozen change on origin's main, `true` lands nothing. */
-  function landWorld(land: string) {
-    const w = world("good\n");
-    // Under a github.com path, so the checkout names its repository the way a GitHub origin does.
-    const origin = path.join(sandbox, "github.com", "acme", `app-${worlds}.git`);
-    execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
-    git(w.root, "remote", "add", "origin", origin);
-    git(w.root, "push", "-q", "origin", "main");
-    git(w.root, "fetch", "-q", "origin");
-    const graph = parseWorkflowSource(`digraph change {
-      graph [label="Change", on_failure=stop]
-      start [shape=Mdiamond]
-      check [flow="tcheck"]
-      land [label="Land", shape=parallelogram, script="${land}"]
-      exit [shape=Msquare, label="Done"]
-      start -> check -> land -> exit
-    }`, w.root);
-    return { ...w, graph };
-  }
-
-  test("a subject whose change is live and that has no other work is retired: killed, not told", async () => {
-    const { root, graph } = landWorld(PUSH);
-    const s = server(() => {});
-    expect((await start(root, graph)).outcome).toBe("completed");
-    expect(git(root, "show", "origin/main:a.txt")).toBe("good");
-    // Retired through the server's guarded kill, with the transcript length the run read it settled at.
-    expect(routes(s, "/cli/sessions/retire")).toEqual([{ api_token: "tok", session: CONV, expected_message_count: 10 }]);
-    expect(routes(s, "/cli/sessions/kill")).toEqual([]);
-    expect(routes(s, "/cli/deploys/targets")[0]).toMatchObject({ repository: `acme/app-${worlds}` });
-    expect(s.sent()).toEqual([]);
-    const end = routes(s, "/cli/workflow-runs/progress").find((b) => b.run_status === "completed");
-    expect(end.result_preview).toMatch(/^Retired jx7ssss: its change is live from main at [0-9a-f]{10} and it has no other work\.$/);
-  }, 60_000);
-
-  test("a subject a person brought back from the run's stash is never retired: it hears the end instead", async () => {
-    const w = landWorld(PUSH);
-    // Land waits until the run has read the subject back in the inbox after stashing it.
-    const graph = parseWorkflowSource(`digraph change {
-      graph [label="Change", on_failure=stop]
-      start [shape=Mdiamond]
-      land [label="Land", shape=parallelogram, script="while [ ! -f ${w.root}.go ]; do sleep 0.05; done; ${PUSH}"]
-      exit [shape=Msquare, label="Done"]
-      start -> land -> exit
-    }`, w.root);
-    const s: ReturnType<typeof server> = server(() => {}, {
-      row: () => {
-        if (!routes(s, "/cli/sessions/dismiss").length) return {};
-        fs.writeFileSync(`${w.root}.go`, "");
-        return { bucket: "done" };
-      },
-    });
-    const { outcome, runDir } = await start(w.root, graph, { run: { subjectParkMs: 20 } });
-    expect(outcome).toBe("completed");
-    expect(git(w.root, "show", "origin/main:a.txt")).toBe("good");
-    expect(readCheckpoint(runDir, "run-9")?.context.subject_kept).toBe("1");
-    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
-    expect(s.sent().at(-1)!.body).toContain("is over: Done.");
-  }, 60_000);
-
-  test("a parked subject is retired too, and is not resumed to hear a gate's answer", async () => {
-    const { root } = landWorld(PUSH);
-    const graph = parseWorkflowSource(`digraph change {
-      graph [label="Change", on_failure=stop]
-      start [shape=Mdiamond]
-      decide [label="Decide", shape=hexagon, prompt="Ship it?"]
-      land [label="Land", shape=parallelogram, script="git -C $project_path push -q origin $branch:main"]
-      exit [shape=Msquare, label="Done"]
-      start -> decide
-      decide -> land [label="[S] Ship :: Land it"]
-      land -> exit
-    }`, root);
-    const s = server(() => {}, { row: () => ({ is_live: false, agent_status: "hibernated" }) });
-    expect((await start(root, graph)).outcome).toBe("completed");
-    expect(s.sent()).toEqual([]);
-    expect(routes(s, "/cli/sessions/retire")).toHaveLength(1);
-    // Nothing to park: it already is.
-    expect(routes(s, "/cli/sessions/hibernate")).toEqual([]);
-  }, 60_000);
-
-  test("merged is not live: a touched target still running a deploy from before the change keeps the subject, who hears the end", async () => {
-    const { root, graph } = landWorld(PUSH);
-    const before = git(root, "rev-parse", "main");
-    const s = server(() => {}, { targets: () => [{ name: "web", paths: ["a.txt"], live: { short_id: "dp-1", status: "live", sha: before, created_at: 1, live_at: 1 } }] });
-    expect((await start(root, graph)).outcome).toBe("completed");
-    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
-    expect(s.sent().at(-1)!.body).toContain("The Change run on ct-9 is over: Done.");
-  }, 60_000);
-
-  test("a touched target live at a deploy that holds the change retires the subject; a target the change does not touch is not waited on", async () => {
-    const { root, graph } = landWorld(PUSH);
-    const before = git(root, "rev-parse", "main");
-    const s = server(() => {}, {
-      targets: () => [
-        { name: "web", paths: ["a.txt"], live: { short_id: "dp-2", status: "live", sha: git(root, "rev-parse", "origin/main"), created_at: 2, live_at: 2 } },
-        { name: "docs", paths: ["docs/**"], live: { short_id: "dp-3", status: "live", sha: before, created_at: 1, live_at: 1 } },
-      ],
-    });
-    expect((await start(root, graph)).outcome).toBe("completed");
-    expect(routes(s, "/cli/sessions/retire")).toHaveLength(1);
-    expect(s.sent()).toEqual([]);
-  }, 60_000);
-
-  test("a target the checkout declares but the server has never listed is not live: the subject stays", async () => {
-    const { root, graph } = landWorld(PUSH);
-    fs.mkdirSync(path.join(root, ".codecast"), { recursive: true });
-    fs.writeFileSync(path.join(root, ".codecast", "deploy.toml"), `[[target]]\nname = "web"\nruns = "push"\nwhen = ["a.txt"]\nlive = "marker"\n`);
-    git(root, "add", ".codecast/deploy.toml");
-    git(root, "commit", "-qm", "declare web");
-    const s = server(() => {});
-    expect((await start(root, graph)).outcome).toBe("completed");
-    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
-    expect(s.sent().at(-1)!.body).toContain("The Change run on ct-9 is over: Done.");
-  }, 60_000);
-
-  test("a retire the server refuses (the session moved, a trigger is armed) leaves the subject, who hears the end", async () => {
-    const { root, graph } = landWorld(PUSH);
-    const s = server(() => {}, { retire: () => ({ retired: false, short_id: "jx7ssss", reason: "a trigger is armed on it" }) });
-    expect((await start(root, graph)).outcome).toBe("completed");
-    expect(routes(s, "/cli/sessions/retire")).toHaveLength(1);
-    expect(s.sent().at(-1)!.body).toContain("The Change run on ct-9 is over: Done.");
-  }, 60_000);
-
-  test("a subject whose checkout has nothing uncommitted left (it pulled the landed main) is retired", async () => {
-    const { root, graph } = landWorld(`${PUSH} && git -C $project_path reset -q --hard origin/main`);
-    const s = server(() => {});
-    expect((await start(root, graph)).outcome).toBe("completed");
-    expect(git(root, "status", "--porcelain", "--", "a.txt")).toBe("");
-    expect(routes(s, "/cli/sessions/retire")).toHaveLength(1);
-    expect(s.sent()).toEqual([]);
-  }, 60_000);
-
-  test("a run that completes says nothing to a subject already stopped: no revival to read that it is over", async () => {
-    const { root, graph } = landWorld("true");
-    const s = server(() => {}, { row: () => ({ is_killed: true, is_live: false, work_state: "idle" }) });
-    expect((await start(root, graph)).outcome).toBe("completed");
-    expect(s.sent()).toEqual([]);
-    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
-  }, 60_000);
-
-  test("a run that fails still tells a stopped subject, which revives it so the failure reaches someone", async () => {
-    const { root } = world("bad\n");
-    const graph = parseWorkflowSource(`digraph change {
-      graph [label="Change", on_failure=stop]
-      start [shape=Mdiamond]
-      check [flow="tcheck"]
-      stopped [shape=Msquare, label="Checks failed", stop="$stop_reason"]
-      exit [shape=Msquare, label="Done"]
-      start -> check -> exit
-      check -> stopped [condition="outcome = failure"]
-    }`, root);
-    const s = server(() => {}, { row: () => ({ is_killed: true, is_live: false, work_state: "idle" }) });
-    expect((await start(root, graph)).outcome).toBe("failed");
-    const told = s.sent();
-    expect(told).toHaveLength(1);
-    expect(told[0].body).toContain("stopped at Checks failed");
-    expect(told[0].quiet).toBeUndefined();
-  }, 60_000);
-
-  test("a subject with another file of its own changed stays, and hears the end", async () => {
-    const { root, edit, graph } = landWorld(PUSH);
-    edit("more work\n", "b.txt");
-    const s = server(() => {});
-    expect((await start(root, graph, { only: ["a.txt"] })).outcome).toBe("completed");
-    expect(git(root, "show", "origin/main:a.txt")).toBe("good");
-    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
-    expect(s.sent().at(-1)!.body).toContain("The Change run on ct-9 is over: Done.");
-  }, 60_000);
-
-  test("a change that did not land leaves its subject, who hears the end", async () => {
-    const { root, graph } = landWorld("true");
-    const s = server(() => {});
-    expect((await start(root, graph)).outcome).toBe("completed");
-    expect(routes(s, "/cli/sessions/retire")).toEqual([]);
-    expect(s.sent().at(-1)!.body).toContain("The Change run on ct-9 is over: Done.");
   }, 60_000);
 });
 

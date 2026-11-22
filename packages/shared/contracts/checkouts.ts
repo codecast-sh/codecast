@@ -102,91 +102,46 @@ export function checkoutHash(r: unknown): string {
 /** How long a level refuses on the same files before the session that wrote them (else the device's owner) hears of it. */
 export const LEVEL_STUCK_FILE_MS = 30 * 60_000;
 
-/** A word the shell reads as itself: quoted unless it is plain (a route like `routes/[id].tsx` stays literal). */
-export const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
-
-/**
- * The client id of a stuck level's ask to one writer: the device, the checkout, the episode (its files and start) and
- * the writer. The daemon's ask and the pipeline page's use the same one, so the server takes whichever comes first and
- * answers the other with that row: a writer hears of an episode once, whoever asks. A retry lands once too.
- */
-export function levelAskClientId(a: { device_id: string; path: string; files: string[]; since: number; conversation: string }): string {
-  return `level-told:${a.conversation}:${checkoutHash([a.device_id, a.path, [...a.files].sort(), a.since])}`;
-}
-
-/** What not to do in a shared checkout, said in every brief about one (the stuck level's ask, the raced level's). */
-export const LEVEL_FORBID = "Never run git pull, merge, rebase, stash, checkout, restore, reset or commit in this shared checkout: other sessions' uncommitted work lives in it.";
-
-/** What the daemon could write for one conflicting file: a three-way merge with markers, else why there is none. */
-export type LevelMerge =
-  | { kind: "merged"; file: string }
-  | { kind: "upstream-deleted" }
-  | { kind: "local-deleted"; file: string | null }
-  | { kind: "binary" }
-  | { kind: "none" };
-
-/**
- * What only the machine holding the checkout can add to an ask: the full list of the reader's files (`list`), each
- * file's merge under `mergeDir` (`merges`), the upstream commits that touched them, and the upstream commit `to`
- * the merges were made against. Each part is optional; a part left out leaves its line out.
- */
-export type LevelAskLocal = { list?: string; mergeDir?: string; merges?: Record<string, LevelMerge>; commits?: string[]; to?: string };
-
-/** Why a file has no ordinary merge file, in a few words; null when it has one. */
-function mergeNote(m: LevelMerge | undefined): string | null {
-  switch (m?.kind) {
-    case undefined: case "merged": return null;
-    case "upstream-deleted": return "upstream deletes it: delete your copy, or move your edit to where upstream moved that code";
-    case "local-deleted": return "deleted here and changed upstream: its merge file is upstream's version, to write back if the file should stay";
-    case "binary": return "binary or a symlink, so no merge file: take upstream's version or redo your edit on it";
-    case "none": return "no merge file could be written";
-  }
-}
+const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
 
 /**
  * The words a stuck level's ask carries to one reader (the session that last wrote `mine`, or a finding for the files
  * nobody wrote): the checkout, how many of the conflicting files are this reader's and which, that the rest are
- * others' and told apart, and the one way out: bring upstream's change into each file by hand. The daemon adds what
- * it wrote on the machine (`local`): the list file, so only LEVEL_TOLD_PATHS_MAX files are named; a merge file per
- * file; the upstream commits. An ask sent from elsewhere (the pipeline page) has none of that, so it names every file
- * and, for each, the `git show` of upstream's version, quoted for the shell. One wording for both, so a writer reads
- * the same ask whoever sends it.
+ * others' and told apart, and the two ways out over exactly its files. The daemon names a list file it wrote on the
+ * machine (`files`); an ask sent from elsewhere (the pipeline page) has none, so it names every file and the ways out
+ * spell them. One wording for both, so a writer reads the same ask whoever sends it.
  */
 export function levelAskWords(
   r: { path: string; upstream: string | null; behind: number | null },
   level: { files: string[]; since: number },
   mine: string[],
-  local: LevelAskLocal | null,
+  files: { list: string; patch: string } | null,
   opts: { host: string; whose: "session" | "nobody" },
 ): { title: string; body: string } {
   const upstream = r.upstream ?? "origin/main";
   const name = r.path.replace(/\/+$/, "").split("/").pop() || r.path;
   const n = mine.length;
-  const one = n === 1;
   const others = level.files.length - n;
   const since = new Date(level.since).toISOString().replace("T", " ").slice(0, 16);
-  const what = opts.whose === "session" ? `${n} of your files` : `${n} file${one ? "" : "s"} no session wrote`;
-  const title = `${name} on ${opts.host}: ${what} conflict${one ? "s" : ""} with ${upstream}`;
-  const shown = (local?.list ? mine.slice(0, LEVEL_TOLD_PATHS_MAX) : mine).map((f) => {
-    const note = mergeNote(local?.merges?.[f]);
-    return `  ${f}${note ? ` (${note})` : ""}`;
-  });
-  const rev = local?.to ? local.to.slice(0, 9) : upstream;
-  const show = `git -C ${shellWord(r.path)} show`;
-  const wayOut = local?.mergeDir
-    ? [`The way out, over these files only: bring upstream's change into each by hand. Its three-way merge, with conflict markers, is at ${local.mergeDir}/<file>: resolve the markers and write the result over the file, or redo your edit on upstream's version (\`${show} ${rev}:<file>\`).`]
-    : [`The way out, over these files only: bring upstream's change into each by hand, redoing your edit on upstream's version:`, ...mine.map((f) => `  \`${show} ${shellWord(`${rev}:${f}`)}\``)];
+  const what = opts.whose === "session" ? `${n} of your files` : `${n} file${n === 1 ? "" : "s"} no session wrote`;
+  const title = `${name} on ${opts.host}: ${what} conflict${n === 1 ? "s" : ""} with ${upstream}`;
+  const shown = (files ? mine.slice(0, LEVEL_TOLD_PATHS_MAX) : mine).map((f) => `  ${f}`);
+  const literal = `git --literal-pathspecs -C ${shellWord(r.path)}`;
+  const patch = files?.patch ?? `/tmp/${name}-level.patch`;
+  const named = mine.map(shellWord).join(" ");
+  const aside = files
+    ? `\`tr '\\n' '\\0' < ${shellWord(files.list)} | xargs -0 ${literal} diff -- > ${shellWord(patch)} && ${literal} checkout --pathspec-from-file=${shellWord(files.list)}\``
+    : `\`${literal} diff -- ${named} > ${shellWord(patch)} && ${literal} checkout -- ${named}\``;
   const body = [
-    `The shared checkout ${r.path} on ${opts.host} has not followed ${upstream} since ${since} UTC${r.behind ? ` (${r.behind} commit${r.behind === 1 ? "" : "s"} behind)` : ""}, so every session in it misses upstream's work. ${one ? "This uncommitted file" : `These ${n} uncommitted files`} ${opts.whose === "session" ? `${one ? "was" : "were"} last written by this session` : `${one ? "has" : "have"} no session that wrote ${one ? "it" : "them"}`} and conflict${one ? "s" : ""} with upstream:`,
+    `The daemon on ${opts.host} has not levelled ${r.path} to ${upstream} since ${since} UTC${r.behind ? ` (${r.behind} commits behind)` : ""}. ${opts.whose === "session" ? `These ${n} uncommitted file${n === 1 ? " was" : "s were"} last written by this session` : `These ${n} uncommitted file${n === 1 ? " has" : "s have"} no session that wrote ${n === 1 ? "it" : "them"}`} and conflict with ${upstream}:`,
     ...shown,
-    ...(local?.list && n > LEVEL_TOLD_PATHS_MAX ? [`  +${n - LEVEL_TOLD_PATHS_MAX} more`] : []),
-    ...(local?.list ? [`The full list: ${local.list}`] : []),
+    ...(files && n > LEVEL_TOLD_PATHS_MAX ? [`  +${n - LEVEL_TOLD_PATHS_MAX} more`] : []),
+    ...(files ? [`The full list: ${files.list}`] : []),
     ...(others > 0 ? [`The other ${others} conflicting file${others === 1 ? "" : "s"} belong${others === 1 ? "s" : ""} to other sessions, which are told separately: leave ${others === 1 ? "it" : "them"} alone.`] : []),
-    ...(local?.commits?.length ? ["", `Upstream changed ${one ? "it" : "them"} in:`, ...local.commits] : []),
     "",
-    ...wayOut,
-    `Edit only the files named here${local?.list ? " and in the list" : ""}. ${LEVEL_FORBID}`,
-    `Once ${one ? "it carries" : "they carry"} upstream's change, the next level sweep (within a minute) moves the checkout by itself.`,
+    `Either way out, over these files only, lets the next sweep level the checkout:`,
+    `1. Rebase each onto main's version: \`${literal} show ${upstream}:<file>\` is main's; make your change again on top of it.`,
+    `2. Set them aside as a patch, then restore main's: ${aside}; later \`${literal} apply --3way ${shellWord(patch)}\`.`,
   ].join("\n");
   return { title, body };
 }

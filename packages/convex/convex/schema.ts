@@ -2917,9 +2917,6 @@ export default defineSchema({
     // queue where it can be moved or merged, and released (releaseQueued)
     // when the turn ends. Ordinary sends never release these.
     queued: v.optional(v.boolean()),
-    // Work a session handed another out of sight (enqueuePendingMessage.quiet): a hidden
-    // stash survives it, and survives its risk resend too (executionBindings), which reads it here.
-    quiet: v.optional(v.boolean()),
     delivered_at: v.optional(v.number()),
     // The transcript message this row's echo produced. Stamped when the echo
     // adopts the row (content rewrite, client_id, images, from_user_id). Lets a
@@ -6255,8 +6252,6 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_workspace", ["workspace"])
     .index("by_short_id", ["short_id"])
-    // A fresh role restart moves projects off the seat it retires.
-    .index("by_default_session", ["default_session_id"])
     // Trial projects that start their own runs (lineTrial.dispatch).
     .index("by_trial_dispatch_cap", ["line_trial.dispatch.cap_usd"])
     // Trial projects (lineTrial.priceRunsTick prices their runs).

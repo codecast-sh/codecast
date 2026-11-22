@@ -500,18 +500,6 @@ describe("stepFailWords", () => {
   test("other reasons read as stopWords says them, without the run-level prefix", () => {
     expect(stepFailWords(run("max_visits=3 exceeded on build"), "build")).not.toMatch(/max_visits|^Stopped/);
   });
-  test("the runner's kill note reads in both its shapes: killed for showing no work, and at its station's limit", () => {
-    // The parenthesis follows a space after the station's id, so the id never carries it.
-    const quiet = run("hand jx70625 killed after 47m at build (it showed no work for 30m)", { _id: "c1", message_count: 4 });
-    expect(stationEnd({ id: "build", status: "failed", session: { _id: "c1", message_count: 4 } as never }, quiet)).toMatchObject({ kind: "timed_out", step: "Showed no work for 30m and was killed" });
-    expect(stepFailWords(quiet, "build")).toBe("Went quiet: stopped after 30 min with no work.");
-    expect(failCause(quiet)).toMatchObject({ key: "killed:build", step: "build", label: "No work for 30m" });
-    expect(stopWords(quiet)).toBe("Stopped: Build's session showed no work for 30 minutes.");
-    const capped = run("hand jx70625 killed after 240m at build (it ran 240m, its station's limit)", { _id: "c1", message_count: 4 });
-    expect(stationEnd({ id: "build", status: "failed", session: { _id: "c1", message_count: 4 } as never }, capped)).toMatchObject({ kind: "timed_out", step: "Ran out of time after 240m and was killed" });
-    expect(stepFailWords(capped, "build")).toBe("Ran out of time: stopped at its 240 min limit.");
-    expect(failCause(capped)).toMatchObject({ key: "killed:build", step: "build", label: "Out of time, 4h" });
-  });
 });
 
 describe("a station that never got going (ct-58818, ct-59604)", () => {

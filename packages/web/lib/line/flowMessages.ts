@@ -1,7 +1,6 @@
 // What a person's press asks a session to do with flows (docs/architecture/flows.md FL4, FL5): the words the
-// session receives, kept beside the other flow libs so the components that send them stay components. Convex's typed-send
-// counters load this file (convex/lib/userSend.ts), so it stays free of DOM, React and web-only dependencies.
-
+// session receives, kept beside the other flow libs so the components that send them stay components.
+import { isNoiseUserMessage } from "../conversationProcessor";
 
 /** What the session is asked: run its change through the flow, named after what the change does, and say how it ended. */
 export function runThroughMessage(flow: { slug: string; label: string }): string {
@@ -26,7 +25,7 @@ export function isFlowPressMessage(raw: string): boolean {
     (t.startsWith("Add the ") && t.includes("`cast flow import "));
 }
 
-export type PressMsg = { _id?: string; role?: string; content?: string; timestamp?: number; tool_calls?: unknown[]; tool_results?: unknown[] };
+export type PressMsg = { _id?: string; role?: string; content?: string; timestamp?: number; tool_results?: unknown[] };
 /** A Ship press no run has answered yet: when it was sent, its message, and the session's last words since (none yet: null). */
 export type Press = { at: number; id: string; reply: { id: string; text: string } | null };
 
@@ -47,27 +46,20 @@ export function pressSig(msgs: ReadonlyArray<PressMsg>, newestRunAt: number): st
 }
 
 function scanPress(msgs: ReadonlyArray<PressMsg>, newestRunAt: number): string {
+  let reply: PressMsg | null = null;
   // Far enough back for a session that did a long stretch of tool work after the press.
-  let at = -1;
   for (let i = msgs.length - 1; i >= 0 && i >= msgs.length - 400; i--) {
     const m = msgs[i]!;
-    if (m.role === "user" && typeof m.content === "string" && isRunThroughPress(m.content)) { at = i; break; }
+    if (!reply && m.role === "assistant" && typeof m.content === "string" && m.content.trim()) reply = m;
+    // A person's message: a tool's result or a machine notice is not one.
+    if (m.role !== "user" || m.tool_results?.length || isNoiseUserMessage(m.content)) continue;
+    if (isRunThroughPress(m.content!)) {
+      return (m.timestamp ?? 0) > newestRunAt ? [m.timestamp ?? 0, m._id ?? "", reply?._id ?? "", reply ? gist(reply.content!) : ""].join("\u0000") : "";
+    }
+    // Words after a later message answer that message: the press's reply is the session's last words before it.
+    reply = null;
   }
-  const press = at < 0 ? null : msgs[at]!;
-  if (!press || (press.timestamp ?? 0) <= newestRunAt) return "";
-  // Its reply is the session's last words in the turn the press started. The turn ends at words that call no tool; a
-  // message after that (a person's, another session's) starts the next turn, while one that lands mid-turn, between a
-  // tool call and its result, folds into this one.
-  let reply: PressMsg | null = null;
-  let ended = false;
-  for (let i = at + 1; i < msgs.length; i++) {
-    const m = msgs[i]!;
-    if (m.role === "assistant") {
-      if (typeof m.content === "string" && m.content.trim()) reply = m;
-      ended = !m.tool_calls?.length;
-    } else if (ended && m.role === "user" && !m.tool_results?.length) break;
-  }
-  return [press.timestamp ?? 0, press._id ?? "", reply?._id ?? "", reply ? gist(reply.content!) : ""].join("\u0000");
+  return "";
 }
 
 /** The press a signature from pressSig spells, or null for "". */
