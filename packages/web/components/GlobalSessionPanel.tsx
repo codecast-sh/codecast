@@ -59,6 +59,9 @@ import { standingRoleIdOf } from "../lib/sessionIdentity";
 import { isUnderRole } from "@codecast/shared/contracts";
 import { AuthErrorBadge } from "./AuthErrorBadge";
 import { toast } from "sonner";
+import type { Id } from "@codecast/convex/convex/_generated/dataModel";
+import { SwitchReview } from "./consequential/ConsequentialSwitch";
+import { dismissStaleLedger } from "./consequential/ledgers";
 import { toastWriteError } from "../lib/dispatchBinding";
 import { animatedCloseSessions, animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
 
@@ -1525,6 +1528,19 @@ const HOLD_DEST_COLORS: Partial<Record<string, string>> = {
 
 const STALE_SESSION_MS = 30 * 24 * 60 * 60 * 1000;
 const STALE_PROMPT_THRESHOLD = 10;
+// The server's cap on one bulk dismiss call (conversations.BULK_DISMISS_MAX).
+const STALE_DISMISS_CHUNK = 100;
+// One call per chunk, each after the last, so a later write (the Undo's
+// restore) chained on the result never overtakes one still in flight.
+async function sendInChunks<T>(ids: T[], send: (chunk: T[]) => Promise<unknown>): Promise<void> {
+  for (let i = 0; i < ids.length; i += STALE_DISMISS_CHUNK) {
+    try {
+      await send(ids.slice(i, i + STALE_DISMISS_CHUNK));
+    } catch {
+      // Best-effort: the local write already stands.
+    }
+  }
+}
 // "Not now" rests the prompt for this long — persisted in client UI prefs so it
 // survives reloads and follows the user across devices instead of resurfacing
 // every time the panel mounts.
@@ -2225,8 +2241,9 @@ function SessionListPanelImpl({
   // "Show them" — expands the list of sessions the sweep would dismiss, as
   // ordinary cards, so the count is never a mystery number.
   const [staleListOpen, setStaleListOpen] = useState(false);
-  const [dismissingStale, setDismissingStale] = useState(false);
+  const [staleReviewing, setStaleReviewing] = useState(false);
   const dismissStaleMutation = useMutation(api.conversations.dismissStaleInboxSessions);
+  const restoreStaleMutation = useMutation(api.conversations.restoreStaleInboxSessions);
   const showStalePrompt = staleSessions.length > STALE_PROMPT_THRESHOLD && !stalePromptSnoozed;
 
   // Sessions parked on a limit/auth/connection banner — the fleet-level revive
@@ -2284,27 +2301,38 @@ function SessionListPanelImpl({
     scrollContainerRef.current?.scrollTo({ top: 0, behavior: "smooth" });
   }, []);
 
-  const handleDismissStale = useCallback(async () => {
+  // "Dismiss all N" acts on exactly the N sessions the prompt counted, never an
+  // age sweep the server re-derives (that also took the open session and rows
+  // this window never held). It opens the shared confirm flow
+  // (components/consequential) first, and its toast offers Undo.
+  const handleDismissStale = useCallback(() => {
+    setStaleReviewing(false);
     const ids = staleSessions.map((sess) => sess._id);
     const count = ids.length;
+    // One stamp for the local clear, the server write and the Undo, so the Undo
+    // takes back this sweep's rows and nothing a later dismiss wrote.
+    const at = Date.now();
     // Instant, optimistic local dismiss (sync — no per-row dispatch storm). This
     // is the durable, user-visible clear; it persists to IDB on its own.
-    useInboxStore.getState().markSessionsDismissed(ids);
+    useInboxStore.getState().markSessionsDismissed(ids, at);
     snoozeStalePrompt();
     setStaleListOpen(false);
-    setDismissingStale(true);
-    try {
-      // Fire-once: schedules a background drainer that persists the dismissal
-      // server-side / cross-device. Cheap and unlikely to fail — and even if it
-      // does, the local clear above already stands, so we never alarm the user.
-      await dismissStaleMutation({ older_than_days: 30 });
-    } catch {
-      // ignore — local clear persists; the server drain is best-effort.
-    } finally {
-      setDismissingStale(false);
-      toast.success(`Dismissed ${count} old session${count === 1 ? "" : "s"}`, { description: "Still searchable anytime." });
-    }
-  }, [staleSessions, dismissStaleMutation, snoozeStalePrompt]);
+    // A local stub has no server row to stamp. The rest go in ordered chunks;
+    // a failed chunk leaves the local clear standing, so it never alarms anyone.
+    const serverIds = ids.filter(isConvexId) as Id<"conversations">[];
+    const sent = sendInChunks(serverIds, (chunk) => dismissStaleMutation({ ids: chunk, at }));
+    toast.success(`Dismissed ${count} old session${count === 1 ? "" : "s"}`, {
+      description: "Still searchable anytime.",
+      action: {
+        label: "Undo",
+        onClick: () => {
+          useInboxStore.getState().unmarkSessionsDismissed(ids, at);
+          // After the dismiss has landed, so a restore can never run ahead of it.
+          void sent.then(() => sendInChunks(serverIds, (chunk) => restoreStaleMutation({ ids: chunk, at })));
+        },
+      },
+    });
+  }, [staleSessions, dismissStaleMutation, restoreStaleMutation, snoozeStalePrompt]);
 
   const [expandedSubSessions, setExpandedSubSessions] = useState<Record<string, boolean>>({});
   // Cap how many rows each section renders. A section like "Needs You" can
@@ -3359,12 +3387,23 @@ function SessionListPanelImpl({
                 {staleListOpen ? "Hide them" : "Show them"}
               </button>
               <button
-                onClick={handleDismissStale}
-                disabled={dismissingStale}
-                className="rounded bg-sol-yellow/15 px-2.5 py-1 text-meta font-semibold text-sol-yellow transition-colors hover:bg-sol-yellow/25 disabled:opacity-60 modern:h-6 modern:rounded-control modern:bg-sol-yellow/10 modern:py-0 modern:font-medium modern:hover:bg-sol-yellow/15"
+                onClick={() => setStaleReviewing(true)}
+                aria-haspopup="dialog"
+                aria-expanded={staleReviewing}
+                className="rounded bg-sol-yellow/15 px-2.5 py-1 text-meta font-semibold text-sol-yellow transition-colors hover:bg-sol-yellow/25 modern:h-6 modern:rounded-control modern:bg-sol-yellow/10 modern:py-0 modern:font-medium modern:hover:bg-sol-yellow/15"
               >
-                {dismissingStale ? "Dismissing…" : `Dismiss all ${staleSessions.length}`}
+                {`Dismiss all ${staleSessions.length}`}
               </button>
+              {staleReviewing && (
+                <SwitchReview
+                  ledger={dismissStaleLedger({
+                    titles: staleSessions.map((sess) => cleanTitle(sess.title || "") || "Untitled session"),
+                    since: formatShortDate(staleCutoff),
+                  })}
+                  onClose={() => setStaleReviewing(false)}
+                  onConfirm={handleDismissStale}
+                />
+              )}
               <button
                 onClick={snoozeStalePrompt}
                 className="text-meta text-sol-text-dim transition-colors hover:text-sol-text"

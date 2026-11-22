@@ -359,6 +359,25 @@ export function killSessionsLedger(r: { total: number; working: string[]; lost?:
   };
 }
 
+/** The inbox's old-sessions sweep: exactly the sessions the prompt counted leave the inbox. */
+export function dismissStaleLedger(r: { titles: string[]; since: string }): SwitchLedger {
+  const n = r.titles.length;
+  return {
+    name: `Dismiss ${plural(n, "session")}`,
+    subject: `Idle since ${r.since}`,
+    shift: ["Inbox", "Dismissed"],
+    figures: [{ value: String(n), label: "leave the inbox", tone: "warn" }],
+    rows: [
+      { k: "Sessions", v: plural(n, "session"), list: r.titles.slice(0, 4).concat(n > 4 ? [`+${n - 4} more`] : []) },
+      { k: "Kept", v: "Pinned, snoozed, open", tone: "ok" },
+      { k: "Still", v: "Searchable, open by link" },
+      { k: "To undo", v: "Undo on the toast" },
+    ],
+    confirm: `Dismiss ${n}`,
+    keep: "Keep them",
+  };
+}
+
 /** A session's change sent through a flow of the pool (docs/architecture/flows.md FL4): the session freezes its own
  *  edits, binds them to a task, and its machine runs each step; an agent step starts a session of its own, a check runs
  *  a command that only looks, an automatic step runs one that acts (a rebase, a ship), and a person's step is a
