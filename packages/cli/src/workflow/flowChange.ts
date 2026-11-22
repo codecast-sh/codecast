@@ -279,6 +279,33 @@ export async function freezeCheckoutChange(root: string, opts: { branch: string;
   };
 }
 
+/** A branch here holds commits origin never had: moving it to origin's tip would drop them. */
+export class UnpushedCommitsError extends Error {}
+
+/**
+ * Bring origin's `branch` into the local branch of that name. A plain `fetch origin +b:b` is refused while a worktree
+ * has `b` checked out (the run's own worktree does), so the tip is fetched alone and the ref moved with update-ref.
+ * Origin's copy may be rewritten (each refreeze of a session's change force-pushes it), so the local branch may move
+ * anywhere origin has been; what it never does is drop commits that only exist here. Those are commits neither in
+ * origin's tip now nor in the tip last fetched from it (kept in refs/remotes/origin/<branch>, as originTip keeps it),
+ * and they refuse the move with UnpushedCommitsError.
+ */
+export async function fetchBranch(root: string, branch: string): Promise<string> {
+  const ref = (name: string) => git(root, ["rev-parse", "--verify", "--quiet", name]).then((s) => s.trim()).catch(() => "");
+  const within = (rev: string, of: string) => !!of && git(root, ["merge-base", "--is-ancestor", rev, of]).then(() => true, () => false);
+  // Read before the fetch: a clone's default refspec makes `fetch origin <ref>` move refs/remotes/origin/<branch> too.
+  const fetched = await ref(`refs/remotes/origin/${branch}`);
+  await git(root, ["fetch", "--quiet", "origin", `refs/heads/${branch}`]);
+  const tip = (await git(root, ["rev-parse", "FETCH_HEAD"])).trim();
+  const local = await ref(`refs/heads/${branch}`);
+  if (local && local !== tip && !(await within(local, tip)) && !(await within(local, fetched))) {
+    throw new UnpushedCommitsError(`${branch} here has commits origin does not (its tip ${local.slice(0, 10)}): moving it to origin's ${tip.slice(0, 10)} would drop them. Push them (git push origin ${branch}) or set them aside on another branch, then run this again`);
+  }
+  await git(root, ["update-ref", `refs/heads/${branch}`, tip]);
+  await git(root, ["update-ref", `refs/remotes/origin/${branch}`, tip]);
+  return tip;
+}
+
 /** Origin's tip of `branch`, fetched now; empty when origin has no such branch or cannot be reached. */
 export async function originTip(root: string, branch: string): Promise<string> {
   const remoteRef = `refs/remotes/origin/${branch}`;
@@ -448,7 +475,7 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
   // A named branch or pull request is the change: the session fixes it by committing there (a pull request's by pushing).
   const change: FrozenChange = before.source === "checkout"
     ? await refreezeCheckoutChange(root, before, opts.roster, opts.since)
-    : before.source === "session"
+    : before.source === "session" && !before.pushed
     ? await refreezeOwnChange(root, before)
     : { ...before, ...(await branchTip(root, before)) };
   const tree = (rev: string) => git(root, ["rev-parse", `${rev}^{tree}`]).then((s) => s.trim()).catch(() => rev);

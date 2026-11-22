@@ -21,6 +21,7 @@ import type { AppFlow } from "../../../lib/line/flowPool";
 import type { Pipeline } from "../../../lib/line/pipelineTypes";
 import { runHref } from "../../../lib/decisionLinks";
 import { entityRoute } from "../../../lib/entityLinks";
+import { deploysFocusHref } from "../../../lib/deploys/focus";
 
 /** The drawer's frame: closes on Esc, the close button, or a press on the page behind it. */
 export function PipelineDrawer({ label, onClose, children }: { label: string; onClose: () => void; children: ReactNode }) {
@@ -159,7 +160,7 @@ export function MainDetails({ model, teamId }: { model: PipelineModel; teamId: s
       {model.main.targets.map((t) => {
         // A failed or going target opens that deploy; otherwise the target's deploys.
         const deploy = t.going?.deploy ?? t.failed?.deploy ?? null;
-        const href = (deploy && entityRoute("deploy", deploy)) || `/deploys?${teamId ? `team=${teamId}&` : ""}target=${encodeURIComponent(t.name)}`;
+        const href = deploysFocusHref({ team: teamId, repository: model.repository, target: t.name, focus: deploy ? { kind: "deploy", id: deploy } : null });
         return (
           <Link key={t.name} href={href} className="pd-row" data-tone={t.tone}>
             <span><i className="pv-led" data-tone={t.tone} aria-hidden /> {t.name}</span><span className="pd-dim">{targetWords(t, now)}{deploy ? " · Open" : ""}</span>
