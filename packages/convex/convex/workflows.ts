@@ -254,6 +254,8 @@ export const poolForCli = query({
     return {
       // Whether the workspace has the Flows feature on: session start names the pool only then.
       flows_on: await workspaceHasFeature(ctx, { team_id: args.team_id ?? null, user_id: result.userId }, "line"),
+      // The flow the team set as its default (teams.default_flow): a nameless `cast flow run` resolves it with defaultFlowOf.
+      default_flow: args.team_id && (await isTeamMember(ctx, result.userId, args.team_id)) ? (await ctx.db.get(args.team_id))?.default_flow ?? null : null,
       flows: rows.map((r) => ({
         _id: r._id, slug: r.slug, name: r.name, source: r.source, workspace: r.workspace, updated_at: r.updated_at, runs_from: r.runs_from ?? null,
         nodes: r.nodes.map((n: any) => ({ id: n.id, ...(n.prompt ? { prompt: n.prompt } : {}), ...(n.script ? { script: n.script } : {}) })),

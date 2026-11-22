@@ -91,6 +91,7 @@
     "./contracts/linePhases": "./contracts/linePhases.ts",
     "./contracts/regretRates": "./contracts/regretRates.ts",
     "./contracts/flowPool": "./contracts/flowPool.ts",
+    "./contracts/repoFlows": "./contracts/repoFlows.ts",
     "./contracts/flowEdit": "./contracts/flowEdit.ts",
     "./contracts/pipeline": "./contracts/pipeline.ts",
     "./contracts/checkouts": "./contracts/checkouts.ts",

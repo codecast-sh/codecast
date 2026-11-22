@@ -6,7 +6,7 @@
 // flows to this machine's cache.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { foldFlow, flowPathWords, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
+import { defaultFlowOf, foldFlow, flowPathWords, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import { graphExtends, parseWorkflowSource, validateWorkflow } from "./parser.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
@@ -172,6 +172,11 @@ function graphExtendsOf(src: string): string | undefined {
 export const extendsSlug = (ext: string | null | undefined): string | null => (ext ? path.basename(ext).replace(/\.cast$/, "") : null);
 
 const titleOf = (slug: string) => slug.replace(/[-_]+/g, " ").replace(/^\w/, (c) => c.toUpperCase());
+
+/** The flow a nameless `cast flow run` sends a change through: the workspace's default (`default_flow` on its pool read)
+ *  by the web's rule (defaultFlowOf), among the flows here that parse. Null when no flow here takes a session's change. */
+export const workspaceDefaultFlow = (pool: ReadonlyArray<PoolFlow>, workspaceSlug: string | null | undefined): PoolFlow | null =>
+  defaultFlowOf(pool.filter((f) => !f.errors.length && !f.draft), workspaceSlug);
 
 /** One line for a flow: `check  segment  branch  Verify` style, for `cast flow ls`. */
 export function flowLine(f: PoolFlow): string {

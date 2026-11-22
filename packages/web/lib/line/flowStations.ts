@@ -61,7 +61,7 @@ function loadShipped(): Promise<Record<string, FlowStations>> {
   return loading;
 }
 
-type FlowLike = { slug: string; where: "shipped" | "pushed" | "team"; stationDetails?: FlowStations | null };
+type FlowLike = { slug: string; where: "shipped" | "pushed" | "team" | "repo"; stationDetails?: FlowStations | null };
 
 /** A flow's stations: at once for a pushed flow, after one load for a shipped one (undefined until then). */
 export function useFlowStations(flow: FlowLike | null, enabled = true): FlowStations | undefined {

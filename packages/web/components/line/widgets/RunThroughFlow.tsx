@@ -13,10 +13,16 @@ import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useInboxStore } from "../../../store/inboxStore";
 import { usePoolFlowRows, useSessionFlowRuns, useTeamDefaultFlowSlug } from "../../../hooks/useSyncWorkflows";
 import { useRunFlow } from "../../../hooks/useFlowObject";
-import { appPool, defaultFlowOf, linesFirst, takesSessionChange, type AppFlow } from "../../../lib/line/flowPool";
-import { asksBeforeLand, journeyOf, journeyStages, journeyWords, runIsLive, type Journey } from "../../../lib/ship/journey";
+import { repositoryOfRemote, useRepoFlows } from "../../../hooks/useRepoFlows";
+import { appPool, linesFirst, type AppFlow } from "../../../lib/line/flowPool";
+import { defaultFlowOf, takesSessionChange } from "@codecast/shared/contracts/flowPool";
+import { asksBeforeLand, journeyOf, journeyStages, journeyWords, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
+import { landedSha, reachShip, reachTargets } from "../../../lib/ship/sessionShip";
+import { useDeployReach, type DeployReachRow } from "../../../hooks/useDeployReach";
 import { shipLedgerFor } from "../../consequential/shipLedger";
-import { isFlowPressMessage, runThroughMessage } from "../../../lib/line/flowMessages";
+import { pressFromSig, pressSig, runThroughMessage, type Press, type PressMsg } from "../../../lib/line/flowMessages";
+import { sessionIdleAt } from "../../../lib/liveness";
+import { formatElapsed } from "../../../lib/taskLine";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { JourneyView } from "../../ship/Journey";
@@ -29,26 +35,30 @@ export function RunThroughFlow(props: { conversationId: string; sessionTitle: st
   return useWorkspaceFeature("line") ? <ShipButton {...props} /> : null;
 }
 
-/** The newest flow press this session was sent, when no run has started since: the run it asked for is starting. */
-function useAskedAt(conversationId: string, newestRunAt: number): number | null {
+function usePress(conversationId: string, newestRunAt: number): Press | null {
+  const sig = useInboxStore((s) => pressSig((s.messages as Record<string, PressMsg[]>)[conversationId] ?? [], newestRunAt));
+  return useMemo(() => pressFromSig(sig), [sig]);
+}
+
+/** Whether the session has settled: its turn is over, so a press it answered without a run will not start one. Unknown is not settled. */
+function useSettled(conversationId: string): boolean {
+  // Settling can come from time alone (a heartbeat that stops), so the read follows a clock as well as the row.
+  const now = useCoarseNow(15_000);
   return useInboxStore((s) => {
-    const msgs = (s.messages as Record<string, Array<{ role?: string; content?: string; timestamp?: number }>>)[conversationId] ?? [];
-    for (let i = msgs.length - 1; i >= 0 && i >= msgs.length - 40; i--) {
-      const m = msgs[i];
-      if (m.role === "user" && typeof m.content === "string" && isFlowPressMessage(m.content)) return (m.timestamp ?? 0) > newestRunAt ? m.timestamp ?? null : null;
-    }
-    return null;
+    const row = ((s as any).sessions?.[conversationId] ?? (s as any).conversations?.[conversationId]) as Parameters<typeof sessionIdleAt>[0] | undefined;
+    return row ? sessionIdleAt(row, now) : false;
   });
 }
 
-/** The chip's words and tone for where the session's change is: a press asked for a run that has not started yet reads Starting. */
-function chipOf(journey: Journey | null, asking: boolean): { words: string; tone: string } {
-  if (asking && (!journey || !runIsLiveKind(journey))) return { words: "Starting", tone: "working" };
+/** The chip's words and tone for where the session's change is. The header has little room: a stop says only that it stopped. */
+function chipOf(journey: Journey | null, reach: DeployReachRow | undefined, landed: boolean): { words: string; tone: string } {
+  // A change on main with no deploy of its own to wait on reads where the deploy records put it, as its inbox card does.
+  if (journey?.now.kind === "landed" && landed) return reach ? reachShip(reach) : { words: "Landed", tone: "ok" };
   const w = journeyWords(journey);
-  // The header has little room: a stop says only that it stopped; the panel says where.
   return w.tone === "bad" ? { words: "Stopped", tone: "bad" } : w;
 }
-const runIsLiveKind = (j: Journey) => ["working", "starting", "session", "you"].includes(j.now.kind);
+
+const openMessage = (conversationId: string, messageId: string) => useInboxStore.getState().requestNavigate(conversationId, { scrollToMessageId: messageId });
 
 function ShipButton({ conversationId, sessionTitle }: { conversationId: string; sessionTitle: string }) {
   const [open, setOpen] = useState(false);
@@ -59,15 +69,25 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   const runs = useSessionFlowRuns(conversationId);
   const run = runs?.find(runIsLive) ?? runs?.[0] ?? null;
   const { flow: runFlow } = useRunFlow(run);
-  const journey = useMemo(() => (run && runFlow ? journeyOf(runFlow, run) : null), [run, runFlow]);
-  const askedAt = useAskedAt(conversationId, run?.created_at ?? 0);
-  const chip = chipOf(journey, askedAt !== null);
+  // A change the run left on main: where the deploy records put it, on every target it touches.
+  const landed = run ? landedSha(run) : null;
+  const reach = useDeployReach(landed);
+  const targets = useMemo(() => reachTargets(reach), [reach]);
+  const journey = useMemo(() => (run && runFlow ? journeyOf(runFlow, run, targets) : null), [run, runFlow, targets]);
+  const press = usePress(conversationId, run?.created_at ?? 0);
+  const settled = useSettled(conversationId);
+  const live = runIsLive(run);
+  // A press the session answered and then settled without starting a run: it will not start one.
+  const declined = !!press?.reply && settled && !live;
+  const starting = !!press && !declined && !live;
+  const chip = starting ? { words: "Starting", tone: "working" } : declined && !run ? { words: "Not run", tone: "idle" } : chipOf(journey, reach, !!landed);
   const send = (flow: AppFlow) => {
     setReviewing(null);
     setAgain(false);
     useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow));
   };
-  const showRun = !!run && !!runFlow && !again && (runIsLive(run) || askedAt === null);
+  const showRun = !!run && !!runFlow && !again && !starting;
+  const notice = declined && press ? <PressNotice press={press} onRead={() => { setOpen(false); openMessage(conversationId, press.reply!.id); }} /> : null;
   return (
     <>
       <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setAgain(false); }}>
@@ -79,12 +99,12 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
         </PopoverTrigger>
         <PopoverContent align="end" className="w-[600px] max-w-[calc(100vw-2rem)] p-0 border-sol-border bg-sol-bg overflow-hidden" data-run-through-pool>
           {showRun ? (
-            <RunPanel run={run} flow={runFlow!} journey={journey!} onAgain={() => setAgain(true)} />
-          ) : askedAt !== null && !again ? (
-            <Starting at={askedAt} />
+            <RunPanel run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
+          ) : starting && !again ? (
+            <Starting press={press!} onOpen={() => { setOpen(false); openMessage(conversationId, press!.id); }} />
           ) : (
             // Mounted only while open: the pool's feed is read when someone looks, never by every header.
-            <PoolPicker session={sessionTitle} onRun={(flow) => { setOpen(false); setReviewing(flow); }} />
+            <>{again ? null : notice}<PoolPicker conversationId={conversationId} session={sessionTitle} onRun={(flow) => { setOpen(false); setReviewing(flow); }} /></>
           )}
         </PopoverContent>
       </Popover>
@@ -94,17 +114,33 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
 }
 
 
-function Starting({ at }: { at: number }) {
-  const now = useCoarseNow(1000);
+/** A press the session has not answered with a run yet: how long ago it went, and the message itself a press away. */
+function Starting({ press, onOpen }: { press: Press; onOpen: () => void }) {
+  const now = useCoarseNow(press.at > Date.now() - 60_000 ? 1000 : 15_000);
   return (
     <div className="shp" data-ship-starting>
-      <header className="shp-head"><b>Starting</b><span className="shp-sub">this session is starting the run · {Math.max(0, Math.round((now - at) / 1000))}s</span></header>
+      <header className="shp-head">
+        <b>Starting</b>
+        <span className="shp-sub">asked {formatElapsed(press.at, now)} ago · no run yet</span>
+        <button type="button" className="shp-link" onClick={onOpen} data-ship-press-open>Open message</button>
+      </header>
     </div>
   );
 }
 
+/** A press the session answered without starting a run: when, its answer, and the answer itself a press away. */
+function PressNotice({ press, onRead }: { press: Press; onRead: () => void }) {
+  const now = useCoarseNow(15_000);
+  return (
+    <section className="shp-declined" data-ship-declined>
+      <header><b>Not run</b><span>Ship pressed {formatElapsed(press.at, now)} ago</span><button type="button" className="shp-link" onClick={onRead} data-ship-reply-open>Read reply</button></header>
+      <blockquote>{press.reply!.text}</blockquote>
+    </section>
+  );
+}
+
 /** The session's run: its journey, who acts now, and the person's controls on it. */
-function RunPanel({ run, flow, journey, onAgain }: { run: any; flow: AppFlow; journey: Journey; onAgain: () => void }) {
+function RunPanel({ run, flow, journey, targets, notice, onAgain }: { run: any; flow: AppFlow; journey: Journey; targets?: TargetState[]; notice?: React.ReactNode; onAgain: () => void }) {
   const now = useCoarseNow(15_000);
   const live = runIsLive(run);
   return (
@@ -115,7 +151,8 @@ function RunPanel({ run, flow, journey, onAgain }: { run: any; flow: AppFlow; jo
         <span className="shp-sub">{run.task_title ?? ""}</span>
         <Link className="shp-link" href={`/workflows/runs/${run._id}`}>Open run</Link>
       </header>
-      <JourneyView journey={journey} run={run} now_ms={now} actions={
+      {notice}
+      <JourneyView journey={journey} run={run} now_ms={now} targets={targets} actions={
         live
           ? <button type="button" className="sj-btn" data-quiet onClick={() => void useInboxStore.getState().stopLineRun(run._id)} data-flow-stop={run._id}>Stop</button>
           : journey.now.kind === "stopped" && journey.now.stage === "Deploy"
@@ -127,15 +164,18 @@ function RunPanel({ run, flow, journey, onAgain }: { run: any; flow: AppFlow; jo
   );
 }
 
-function PoolPicker({ session, onRun }: { session: string; onRun: (flow: AppFlow) => void }) {
+function PoolPicker({ conversationId, session, onRun }: { conversationId: string; session: string; onRun: (flow: AppFlow) => void }) {
   const workflows = usePoolFlowRows();
   const teamSlug = useTeamDefaultFlowSlug();
+  // The session's repository's own flows come first, as `cast flow run` takes them in its checkout.
+  const remote = useInboxStore((s) => (((s as any).sessions?.[conversationId] ?? (s as any).conversations?.[conversationId]) as { git_remote_url?: string } | undefined)?.git_remote_url ?? null);
+  const repoFlows = useRepoFlows(repositoryOfRemote(remote));
   const { pool, fallback } = useMemo(() => {
     // Flows only: a segment runs one part of a change, never the change to live.
-    const all = linesFirst(appPool(workflows).filter((f) => f.kind === "line" && takesSessionChange(f)));
+    const all = linesFirst(appPool(workflows, repoFlows).filter((f) => f.kind === "line" && takesSessionChange(f)));
     const d = defaultFlowOf(all, teamSlug);
     return { pool: d ? [d, ...all.filter((f) => f !== d)] : all, fallback: d };
-  }, [workflows, teamSlug]);
+  }, [workflows, repoFlows, teamSlug]);
   const [picked, setPicked] = useState<string | null>(null);
   const flow = pool.find((f) => f.slug === picked) ?? fallback ?? pool[0];
   const journey = useMemo(() => (flow ? journeyOf(flow, null) : null), [flow]);

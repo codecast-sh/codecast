@@ -116,6 +116,7 @@ export const DATA_SCOPE = {
   liveFlows: "workspace",
   sessionFlows: "workspace",
   flowMaps: "workspace",
+  repoFlows: "viewer",
   lineTimeline: "workspace",
   sessionIndex: "viewer",
   lineTries: "entity",

@@ -41,4 +41,15 @@ export const FLOW_SYNC_COLLECTIONS = {
     sync: { isDelta: true, deepFields: ["liveFlow", "lanes", "off", "sources", "header"] },
     feeds: ["flowMap.forTeam"],
   },
+  // The viewer's repositories' own flows (convex repoFlows.mine), one row per
+  // repository as its checkouts reported them: the Ship picker puts them ahead
+  // of the shipped flows of the same slug, as `cast flow run` does there.
+  repoFlows: {
+    persistence: { kind: "collection", key: "repoFlows" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, repository",
+    // A complete snapshot of the viewer's rows each push.
+    sync: { deepFields: ["flows"] },
+    feeds: ["repoFlows.mine"],
+  },
 } as const satisfies Record<string, ClientSyncRegistryEntry>;

@@ -8457,6 +8457,29 @@ export default defineSchema({
 
   ...callTables,
 
+  // A repository's own flows (`.codecast/flows`), as the viewer's checkouts of
+  // it report them (repoFlows.ts, shared/contracts/repoFlows.ts): the flows
+  // `cast flow run` takes there ahead of the shipped and published ones. One
+  // row per person and repository; the owner alone reads it. `flows` holds
+  // each graph parsed, its nodes the parser's FlowNodeIn, which grows with
+  // the parser, so they are not pinned field by field here.
+  repo_flows: defineTable({
+    user_id: v.id("users"),
+    repository: v.string(),
+    hash: v.string(),
+    flows: v.array(v.object({
+      slug: v.string(),
+      name: v.string(),
+      kind: v.union(v.literal("line"), v.literal("segment")),
+      label: v.string(),
+      description: v.union(v.string(), v.null()),
+      takes: v.array(v.string()),
+      nodes: v.array(v.any()),
+      edges: v.array(v.object({ from: v.string(), to: v.string(), label: v.optional(v.string()), condition: v.optional(v.string()) })),
+    })),
+    updated_at: v.number(),
+  }).index("by_user_repository", ["user_id", "repository"]),
+
   workflows: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
