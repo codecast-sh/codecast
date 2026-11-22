@@ -91,6 +91,8 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("decision_passed"),
   v.literal("decision_escalated"),
   v.literal("decision_assigned"),
+  // A card waiting on the recipient: every card one session asked in one turn (lib/decisionPush.ts).
+  v.literal("decision_waiting"),
   // A comment in a decision's thread the recipient owns or takes part in.
   v.literal("decision_comment"),
   // Finding a team by work email: a request to its admins, then the approval.

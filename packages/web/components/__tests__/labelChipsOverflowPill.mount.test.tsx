@@ -69,6 +69,7 @@ async function mountRow() {
           bucketCounts={{}}
           projectCounts={[]}
           projectPathByName={{}}
+          machineCounts={[]}
           dropSessionOnLabel={() => {}}
         />
       </MemoryRouter>,

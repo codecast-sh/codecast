@@ -1306,6 +1306,7 @@ export const updateNotificationPreferences = mutation({
       live_activity: v.optional(v.boolean()),
       task_agent_comments: v.optional(agentCommentLevelValidator),
       task_status_changes: v.optional(v.boolean()),
+      machine_alerts: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
     machine_wide_presence: v.optional(v.boolean()),
