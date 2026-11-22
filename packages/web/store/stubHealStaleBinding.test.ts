@@ -1,6 +1,15 @@
-import { describe, expect, it, beforeEach, afterEach } from "bun:test";
-import { useInboxStore } from "./inboxStore";
-import { StaleDispatchBindingError } from "./mutativeMiddleware";
+import { describe, expect, it, beforeEach, afterEach, mock } from "bun:test";
+
+// Record what reaches the error-reporting service; the store imports
+// captureError at module load, so the mock goes in before the store does.
+const reported: { error: unknown; ctx: any }[] = [];
+const realAnalytics = await import("../lib/analytics");
+mock.module("../lib/analytics", () => ({
+  ...realAnalytics,
+  captureError: (error: unknown, ctx: any) => { reported.push({ error, ctx }); },
+}));
+const { useInboxStore } = await import("./inboxStore");
+const { StaleDispatchBindingError } = await import("./mutativeMiddleware");
 
 // ct-91688 — a stub heal whose re-create is fenced by a dispatch rewire
 // ("Dispatch binding changed while work was in flight") is not a failure: the
@@ -39,12 +48,11 @@ describe("healStrandedStub on a dispatch binding rewire", () => {
   const errors: unknown[][] = [];
   const realError = console.error;
 
-  beforeEach(() => {
-    errors.length = 0;
-    console.error = (...args: unknown[]) => { errors.push(args); };
-  });
   let realCreate: any;
   beforeEach(() => {
+    errors.length = 0;
+    reported.length = 0;
+    console.error = (...args: unknown[]) => { errors.push(args); };
     realCreate = useInboxStore.getState().createSessionFromStub;
   });
   afterEach(() => {
@@ -61,7 +69,6 @@ describe("healStrandedStub on a dispatch binding rewire", () => {
     seedStrandedStub();
     // The create is fenced by a binding rewire once (a cold start rewires the
     // dispatch binding under in-flight writes), then lands on the next sweep.
-    const realCreate = useInboxStore.getState().createSessionFromStub;
     let fenced = true;
     useInboxStore.setState({
       createSessionFromStub: (id: string) => {
@@ -80,6 +87,7 @@ describe("healStrandedStub on a dispatch binding rewire", () => {
       args.some((a) => /Dispatch binding changed while work was in flight/.test(a instanceof Error ? a.message : String(a))),
     );
     expect(loggedBinding).toHaveLength(0);
+    expect(reported).toHaveLength(0);
 
     // The rejected attempt must not stay cached as the in-flight create.
     expect(useInboxStore.getState().pendingSessionCreates[STUB_ID]).toBeUndefined();
@@ -92,12 +100,15 @@ describe("healStrandedStub on a dispatch binding rewire", () => {
     expect(sends[0].args[3]).toBe("client-1");
   });
 
-  it("still logs a genuine re-create failure", async () => {
+  it("still logs and reports a genuine re-create failure", async () => {
     seedStrandedStub();
     useInboxStore.setState({
       createSessionFromStub: () => Promise.reject(new Error("server exploded")),
     } as any);
     expect(await useInboxStore.getState().healStrandedStub(STUB_ID)).toBeNull();
     expect(errors.some((args) => String(args[0]).includes("[stub-heal] re-create failed"))).toBe(true);
+    expect(reported).toHaveLength(1);
+    expect((reported[0].error as Error).message).toBe("server exploded");
+    expect(reported[0].ctx).toEqual({ source: "stub-heal", stubId: STUB_ID });
   });
 });
