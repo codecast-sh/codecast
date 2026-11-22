@@ -955,8 +955,10 @@ async function waitOnStation(
       continue;
     }
     // A writer whose brief's delivery cannot be read may have only ended a turn of its own: it has answered once it
-    // has also pinned since the brief went out.
-    if (subject?.awaitDelivery && briefAt === null && !row.is_killed && !(typeof pinned?.at === "number" && pinned.at > subject.sentAt)) {
+    // has also pinned since the brief went out. `sentAt` is this machine's clock and the pin's `at` the server's, so
+    // the two are compared with a skew's grace: held strictly, a pin in the same millisecond as the send, or a server
+    // clock behind this one, never counted and the run waited on an answer it already had.
+    if (subject?.awaitDelivery && briefAt === null && !row.is_killed && !(typeof pinned?.at === "number" && pinned.at >= subject.sentAt - CLOCK_SKEW_MS)) {
       askedOnce = false;
       continue;
     }
@@ -1077,6 +1079,9 @@ async function briefDeliveredAt(options: RunOptions, subject: Subject & { sentAt
   if (send.status === "delivered" && typeof send.delivered_at === "number") return send.delivered_at;
   return send.status === "pending" || send.status === "injected" ? "pending" : null;
 }
+
+// How far the server's clock may lag this machine's when a pin's time is read against a time taken here.
+const CLOCK_SKEW_MS = 2_000;
 
 // Agent statuses of a hand inside a turn: whatever its row's work_state says, it is at work (a subject has not
 // answered yet, and no hand is quiet).
