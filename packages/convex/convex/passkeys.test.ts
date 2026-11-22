@@ -14,7 +14,7 @@ import { hashToken } from "./apiTokens";
 import { allModules } from "./testModules.testkit";
 import { softAuthenticator, type SoftAuthenticator } from "./passkeys.testkit";
 import { androidAppOrigin, originsFor } from "./passkeys";
-import { isPresenceRequired, type PresenceAction } from "@codecast/shared/contracts/secrets";
+import { approvesSecretRead, isPresenceRequired, type PresenceAction } from "@codecast/shared/contracts/secrets";
 
 setDefaultTimeout(60_000);
 
@@ -410,6 +410,20 @@ test("approving an Ask first read takes a grant for that decision; Deny takes no
   expect((await approval()).status).toBe("approved");
   expect(JSON.stringify(await t.run((ctx: any) => ctx.db.get(second)))).not.toContain(grant);
   expect((await read()).secrets[0].payload).toEqual({ value: STRIPE });
+});
+
+test("an Ask first read is an access decision whatever the asking session is called", async () => {
+  const { t, ana, acme, as } = await seed();
+  await askFirstSecret(t, as, ana, acme);
+  await t.run(async (ctx: any) => {
+    const conv = await ctx.db.query("conversations").withIndex("by_session_id", (q: any) => q.eq("session_id", "sess-ana-1")).first();
+    await ctx.db.patch(conv._id, { title: "Deploy and rebase main" });
+  });
+  await t.action(api.secrets.cliRead, { api_token: ANA_TOKEN, refs: ["stripe-live"], conversation: "jx7ana1", purpose: "get" });
+  const row = await t.run((ctx: any) => ctx.db.query("session_decisions").order("desc").first());
+  expect(row.question).toBe("Deploy and rebase main asks to use stripe-live");
+  expect(row.category).toBe("access");
+  expect(approvesSecretRead(row, 0)).toBe(true);
 });
 
 test("an Ask first decision cannot be edited by its asker, and only such a decision opens an approve challenge", async () => {
