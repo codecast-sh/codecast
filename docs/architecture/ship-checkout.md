@@ -136,50 +136,50 @@ them, and that state used to block every Convex deploy from the tree.
 A level is all or nothing: one file changed here and upstream without a
 clean three-way merge holds the whole checkout where it is, because moving
 HEAD past a file still at its old base's content is the stale copy above.
-The writer of that file is the one who can unblock it, so the sweep tells
-them (`land/levelConflicts.ts`). Each conflicting path is attributed to the
-session that wrote it last, as the ship pass attributes its groups, and that
-session gets one message naming its conflicting files, the upstream commits
-that touched each, and a three-way merge with conflict markers saved under
-`.git/codecast/level-conflicts/<path>` (upstream's version when the file was
-deleted here; none for a binary file or a symlink). The message says to edit
-only those files and never to pull, merge, rebase, stash, check out, restore,
-reset or commit in the shared checkout. Once the file carries upstream's
-change, the next sweep levels by itself.
+The writer of that file is the one who can unblock it. Once the level has
+refused on the same files for 30 minutes (`LEVEL_STUCK_FILE_MS`), the
+checkout report asks for help (`land/checkoutReport.ts`, `tellWriters`). It
+groups the conflicting files by the session that wrote each last, as the
+ship pass attributes its groups, and tells each writer once per episode
+about its own files only. The files no session wrote go to one finding on
+the repository's project. An episode is the set of files; it ends when the
+checkout levels. A level whose HEAD moved off its base asks nobody.
 
-The message is a machine wake from codecast's level sweep (origin
+Each writer's brief (`land/levelConflicts.ts`, `heldBrief`) names up to eight
+of its conflicting files and points at a list file holding all of them. It
+says the other conflicting files belong to other sessions, told separately.
+It lists the upstream commits that touched its files, and it points at a
+three-way merge with conflict markers for each file under
+`.git/codecast/level-conflicts/<path>`: upstream's version when the file was
+deleted here, none for a binary file or a symlink. The way out is one: bring
+upstream's change into each file by hand, from its merge file or `git show
+<upstream>:<path>`. The brief forbids pull, merge, rebase, stash, checkout,
+restore, reset and commit in the shared checkout, where other sessions'
+uncommitted work lives. Once the files carry upstream's change, the next
+sweep levels by itself and clears the merge files.
+
+The brief is a machine wake from codecast's level sweep (origin
 `scheduler`), so it leaves the writer's pinned state and a hidden stash
-alone, and it revives a killed writer: the checkout stays stuck until
-someone reconciles the file. Each send carries a client id derived from the
-checkout, the writer, the kind of brief, the upstream commit and upstream's
-blobs, so a retried send lands once. A send that takes over 10 seconds counts
-as failed, so one hung call cannot stall the sweep of every other checkout.
-
-`.git/codecast/level-conflicts.json` keeps, per conflicting path, upstream's
-blob of it, the blob on disk, the writer and which brief it got. On a busy
-main a standing conflict costs an `ls-tree` and a `hash-object` a sweep and
-no attribution. Upstream changing the file briefs again; the file changing on
-disk attributes again, at most every 15 minutes while its writer types on,
-and briefs only a new writer. A path no
-transcript explains, or a brief that failed, is tried again after 15
-minutes, since a transcript can reach the sync ledger after the write it
-records; the daemon's `[LEVEL]` log line names writerless paths every sweep.
-A writer the server will never deliver to is named in that line and tried
-again only when either blob or the writer changes.
+alone, and it revives a killed writer. Its client id comes from the device,
+the checkout, the episode and the writer, so a retried send lands once. A
+send that takes over 10 seconds counts as failed. A failed send is not
+recorded as told, and the next pass asks again. The episode, who it told
+(`told`, which the checkouts page shows) and who the server will never
+deliver to are kept in the daemon's `checkout-state.json`, so a restart
+neither forgets nor asks again.
 
 Known limit: a teammate's session gets no brief. The server delivers this
-machine's messages only to its own user's conversations, which is fine in
-practice because a shared checkout's writers are normally the person's own
-sessions. A machine that is signed out attributes nothing. A clean level, or a
-checkout found already level, clears the record and the merge files.
+machine's messages only to its own user's conversations, so such a writer is
+named in the daemon's `[LEVEL]` log line, left out of `told`, and not asked
+again this episode. A shared checkout's writers are normally the person's
+own sessions.
 
 A level that raced a writer (a file kept changing while it moved) leaves
-HEAD on upstream and that file without upstream's change. Its writer is told
-the file would revert upstream's change as it stands, with the merge saved
-under `.git/codecast/level-stale/<path>`, which a later level does not clear;
-the sweep prunes those files a day after they were written. A writer told
-earlier that the checkout was held still gets this brief: the record keeps
-which kind of brief each path got.
+HEAD on upstream and that file without upstream's change, which would revert
+upstream's change when shipped. The next sweep finds the checkout level, so
+the sweep briefs that writer at once (`briefRacedStale`), with the merge
+saved under `.git/codecast/level-stale/<path>`. A later level does not clear
+those files; the sweep prunes them a day after they were written.
 
 ## Fix forward
 

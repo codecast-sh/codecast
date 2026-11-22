@@ -439,8 +439,8 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
   // A checkout's change: the finding goes to the writers of the files it names; one that names none goes on to the subject.
   const checkout = checkoutChangeOf(context["run_dir"]);
-  const writers = checkout ? writersNamed(checkout, `${context["stop_reason"] ?? ""}\n${expandAgentPrompt(node.prompt ?? "", graph, context)}`, await findingRoots(cwd, context["worktree"])).writers : [];
-  if (writers.length) return briefWriters(node, graph, context, cwd, options, writers);
+  const named = checkout ? writersNamed(checkout, `${context["stop_reason"] ?? ""}\n${expandAgentPrompt(node.prompt ?? "", graph, context)}`, await findingRoots(cwd, context["worktree"])) : null;
+  if (named?.writers.length) return briefWriters(node, graph, context, cwd, options, named.writers, named.unclaimed);
   if (!subject) {
     context["last_error"] = `This run's change came from no session, so nobody can work on what the run found.${found}`;
     context["station_dead"] = node.id;
@@ -500,30 +500,71 @@ function lastSaid(state: WorkflowRunState): string | undefined {
 
 // A checkout's change names who wrote each file (flows.md FL4), so a station the subject would do goes to the writers
 // of the files the finding names: each gets the station's brief, quietly, with a line naming its own files among the
-// failing ones. The run waits until every one of them has worked and settled (the subject's wait, run for each at
-// once; one that never answers fails the station as a subject would), then freezes the checkout's change again. The
-// writers are other people's sessions in a shared checkout: nothing here parks or retires them.
-async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions, writers: Writer[]): Promise<NodeOutcome> {
+// failing ones. Files the finding names that no session wrote go to the run's subject (the session that ran the pass)
+// in the same way; with no subject, the station says nobody heard about them. Every writer's row is read before any
+// brief goes, and a send that fails partway tells the writers already briefed that the run stopped. The run waits on
+// them all at once, each wait on a copy of the run's context: the first to block or die stops the others, and only
+// its words reach the run (a block before a death, a death before success). Once all have answered it freezes the
+// checkout's change again. The writers are other people's sessions in a shared checkout: nothing here parks or
+// retires them.
+async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions, named: Writer[], unclaimed: string[]): Promise<NodeOutcome> {
   const call = (route: string, body: Record<string, unknown>) => cliCall(options, route, body);
   const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
   const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
-  const names = writers.map((w) => `${w.shortId} (${w.files.join(", ")})`).join(", ");
+  const subject = subjectOf(context);
+  // The files nobody's edit names are the subject's to fix or hand on; it may also be a writer.
+  let writers: Writer[] = named;
+  let unheard = "";
+  if (unclaimed.length && subject) {
+    const own = named.find((w) => w.conversationId === subject.conversationId);
+    writers = own ? named.map((w) => (w === own ? { ...w, unclaimed } : w)) : [...named, { ...subject, files: [], unclaimed }];
+  } else if (unclaimed.length) {
+    unheard = `No session's edit names ${unclaimed.join(", ")}, which the finding also names, and this run has no session of its own to tell, so nobody was briefed about ${unclaimed.length === 1 ? "it" : "them"}.`;
+  }
+  const names = writers.map((w) => `${w.shortId} (${[...w.files, ...(w.unclaimed ?? [])].join(", ")})`).join(", ");
   const dead = (why: string): NodeOutcome => { context["last_error"] = `${why}${found}`; context["station_dead"] = node.id; return "failure"; };
-  const waits: Array<Writer & { sentAtCount: number; sentAt: number }> = [];
+  // A writer briefed for a run that will not wait on it hears so, quietly, keyed so a retry is not a second message.
+  const callOff = (ws: Writer[], why: string) => Promise.all(ws.map((w) => sendToSubject(options, w,
+    `The ${graph.label || graph.name} run${options.taskId ? ` on ${options.taskId}` : ""} stopped at ${node.label} (${why}) and no longer waits on the brief it sent you. Nothing more is waiting on this session for it.`,
+    subjectSendKey(options, context, `${node.id}:${w.shortId}:off`), true)));
+  const rows = [];
   for (const w of writers) {
     const row = await subjectRow(call, w);
-    if (!row) return dead(`${w.shortId}, who wrote ${w.files.join(", ")}, cannot be read, so nobody can work on what the run found.`);
+    if (!row) return dead(`${w.shortId}, who wrote ${w.files.join(", ") || "none of the named files"}, cannot be read, so nobody can work on what the run found.`);
+    rows.push(row);
+  }
+  const waits: Array<Writer & { sentAtCount: number; sentAt: number; awaitDelivery: true }> = [];
+  for (const [i, w] of writers.entries()) {
     const sentAt = Date.now();
-    if (!(await sendToSubject(options, w, writerBrief(brief, w), subjectSendKey(options, context, `${node.id}:${w.shortId}`), true))) return dead(`Could not send ${node.label} to session ${w.shortId}.`);
-    waits.push({ ...w, sentAtCount: row.message_count ?? 0, sentAt });
+    if (!(await sendToSubject(options, w, writerBrief(brief, w), subjectSendKey(options, context, `${node.id}:${w.shortId}`), true))) {
+      await callOff(waits, `the brief to ${w.shortId} could not be sent`);
+      return dead(`Could not send ${node.label} to session ${w.shortId}.`);
+    }
+    waits.push({ ...w, sentAtCount: rows[i].message_count ?? 0, sentAt, awaitDelivery: true });
   }
   console.log(`  ${c.green}briefed${c.reset} ${names}`);
+  if (unheard) {
+    console.log(`  ${c.yellow}${unheard}${c.reset}`);
+    context["last_error"] = unheard;
+  }
   const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
   await waiting({ node_id: node.id, conversation_id: writers[0].conversationId, since: Date.now(), note: `${names}: ${context["stop_reason"] || brief}`.slice(0, 600) });
-  const outcomes = await Promise.all(waits.map((w) => waitOnStation(node, graph, context, cwd, options, undefined, w)));
+  const abort = { stopped: false };
+  const results = await Promise.all(waits.map(async (w) => {
+    const own = { ...context };
+    const outcome = await waitOnStation(node, graph, own, cwd, options, undefined, { ...w, abort });
+    const stopped = own["wait_aborted"] === "1";
+    if (outcome !== "success" && !stopped) abort.stopped = true;
+    return { w, own, outcome, stopped };
+  }));
   await waiting(null);
-  const failed = outcomes.find((o) => o !== "success");
-  if (failed) return failed;
+  const answered = results.filter((r) => !r.stopped);
+  const winner = answered.find((r) => r.outcome !== "success" && r.own["station_blocked"]) ?? answered.find((r) => r.outcome !== "success");
+  if (winner) {
+    for (const [k, v] of Object.entries(winner.own)) if (context[k] !== v) context[k] = v;
+    await callOff(results.filter((r) => r.stopped).map((r) => r.w), `${winner.w.shortId} ${winner.own["station_blocked"] ? "is waiting on a person" : "could not finish"}`);
+    return winner.outcome;
+  }
   try {
     const { refreezeSessionChange, inboxRosterVia } = await import("./flowChange.js");
     // Files a writer's shell made after its brief (a lockfile, codegen output) are its fix too.
@@ -534,7 +575,7 @@ async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: R
     if (change.landed) context["change_landed"] = change.landed;
     const said = `briefed ${names}; ${change.landed ? `the checkout's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
       : moved ? `froze the checkout's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
-      : "the checkout's change is as it was: the stage runs again on the same change"}`;
+      : "the checkout's change is as it was: the stage runs again on the same change"}${unheard ? `. ${unheard}` : ""}`;
     console.log(`  ${c.green}✓${c.reset} ${said}`);
     recordNodeOutput(context, node.id, said);
     context[`${node.id}.briefed`] = writers.map((w) => w.shortId).join(" ");
@@ -619,7 +660,10 @@ async function waitOnStation(
   onSpawned?: () => void,
   // The run's subject (subjectStation.ts): the session the change came from, already sent its brief, which this
   // station waits on instead of a hand of its own. It has answered once a turn of its own has ended since the brief.
-  subject?: Subject & { sentAtCount: number; sentAt: number },
+  // A checkout's writer (briefWriters) is not parked, so its brief can queue behind a turn of its own: it answers only
+  // with a turn after the brief reached it (`awaitDelivery`), and its wait ends early once `abort` says another
+  // writer's has stopped the station.
+  subject?: Subject & { sentAtCount: number; sentAt: number; awaitDelivery?: boolean; abort?: { stopped: boolean } },
 ): Promise<NodeOutcome> {
   if (!options.convexSiteUrl || !options.apiToken) {
     console.log(`  ${c.red}✗ session nodes need an authenticated CLI (cast auth)${c.reset}`);
@@ -739,6 +783,9 @@ async function waitOnStation(
   let seenMessages = -1;
   // Reads in a row that found the subject past its brief and not at work (below).
   let subjectQuiet = 0;
+  // When the subject's brief reached it: only a turn after that can answer it. A writer's is read from the brief's
+  // delivery (undefined until it lands; null when it cannot be read); a parked subject's brief reaches it at once.
+  let briefAt: number | null | undefined = subject?.awaitDelivery ? undefined : subject?.sentAt;
   // The transcript length at which the hand's park flag was last re-stamped (/cli/accounts/restamp-park).
   let restampedAt = -1;
   // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts), and
@@ -750,6 +797,10 @@ async function waitOnStation(
   while (!(over = watch.over())) {
     await new Promise(r => setTimeout(r, handPollIntervalMs(Date.now() - startMs, options.pollIntervalMs)));
     clock.beginPoll();
+    if (subject?.abort?.stopped) {
+      context["wait_aborted"] = "1";
+      return "failure";
+    }
     if (answersByHandoff && await handedOff(options)) {
       console.log(`  ${c.green}✓ handed off${c.reset}`);
       recordNodeOutput(context, node.id, "handed off");
@@ -850,6 +901,17 @@ async function waitOnStation(
     // status, or a transcript that grew since the last read) the run waits; past the brief and its reply, the turn
     // has ended once two reads in a row find it quiet, or once it pins after the brief (below).
     if (subject && !row.is_killed) {
+      // A writer mid-turn when briefed ends that turn first, pinning after the brief went out: no answer until the
+      // brief has reached it. Where its delivery cannot be read, only the transcript growing past the brief and then
+      // going quiet answers, never a pin.
+      if (briefAt === undefined) {
+        const at = await briefDeliveredAt(options, subject);
+        if (at === "pending") {
+          subjectQuiet = 0;
+          continue;
+        }
+        briefAt = at;
+      }
       if (state === "working" || grew || AGENT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) < subject.sentAtCount + 2) {
         subjectQuiet = 0;
         continue;
@@ -873,7 +935,7 @@ async function waitOnStation(
       continue;
     }
     // One quiet read is not yet the turn's end, and a pin from before the brief is the last turn's word, never this one's.
-    if (subject && !row.is_killed && subjectQuiet < 2 && !(typeof pinned?.at === "number" && pinned.at > subject.sentAt)) {
+    if (subject && !row.is_killed && subjectQuiet < 2 && !(typeof briefAt === "number" && typeof pinned?.at === "number" && pinned.at > briefAt)) {
       askedOnce = false;
       continue;
     }
@@ -975,6 +1037,25 @@ async function waitOnStation(
 
 // The most of a fanin's findings one brief carries: each failed branch's words are already an excerpt.
 const FANIN_STOP_CHARS = 12_000;
+
+/**
+ * When a writer's brief reached its session (flows.md FL4): the newest send from the run's session to it since the
+ * brief went out, once delivered. "pending" while it waits in the queue (typed in counts as waiting too: a busy
+ * agent holds it until its turn ends); null when nothing can say (no run session, a backend without the route, no
+ * such send listed, a send that failed or whose landing is unconfirmed).
+ */
+async function briefDeliveredAt(options: RunOptions, subject: Subject & { sentAt: number }): Promise<number | "pending" | null> {
+  if (!options.runSession) return null;
+  const read = await cliCall(options, "/cli/messages/status", { to: subject.conversationId, from: options.runSession });
+  if (!Array.isArray(read?.sends)) return null;
+  // Server time against this machine's: a minute's grace either way, and the newest send is the brief.
+  const send = (read.sends as Array<{ created_at: number; status: string; delivered_at?: number }>)
+    .filter((x) => x.created_at >= subject.sentAt - 60_000)
+    .sort((a, b) => b.created_at - a.created_at)[0];
+  if (!send) return null;
+  if (send.status === "delivered" && typeof send.delivered_at === "number") return send.delivered_at;
+  return send.status === "pending" || send.status === "injected" ? "pending" : null;
+}
 
 // Agent statuses of a hand inside a turn: whatever its row's work_state says, it is at work (a subject has not
 // answered yet, and no hand is quiet).
