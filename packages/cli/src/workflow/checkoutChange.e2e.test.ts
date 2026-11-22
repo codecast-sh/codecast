@@ -267,6 +267,36 @@ describe("a shared checkout's pass is one flow change", () => {
     expect(third.paths).not.toContain("scratch.log");
   }, 180_000);
 
+  /** A writer adds a dependency to a member package only, and its install rewrites the root lockfile; the refreeze's verdict on that lockfile. */
+  async function memberInstall(declare: "package.json" | "pnpm-workspace.yaml" | null) {
+    const { root, edit } = checkoutWorld();
+    // The root's own manifest is committed, so no writer changes it.
+    write(root, "package.json", declare === "package.json" ? '{ "workspaces": ["packages/*"] }\n' : '{ "name": "root" }\n');
+    if (declare === "pnpm-workspace.yaml") write(root, "pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n");
+    git(root, "add", "package.json", ...(declare === "pnpm-workspace.yaml" ? ["pnpm-workspace.yaml"] : []));
+    git(root, "commit", "-qm", "root manifest");
+    const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
+    const runDir = path.join(root, ".git", "run-pass");
+    writeFrozenChange(runDir, change);
+    const since = Date.now() + 5;
+    await new Promise((r) => setTimeout(r, 20));
+    edit(A, "packages/app/package.json", '{ "dependencies": { "x": "1" } }\n');
+    write(root, "bun.lock", "{ lockfile: 5 }\n");
+    const { change: again } = await refreezeSessionChange(root, runDir, null, { roster, since });
+    return { kept: again.paths.includes("bun.lock"), held: again.held.find((h) => h.path === "bun.lock")?.why };
+  }
+
+  test("in a workspace root, a member's manifest a writer changed explains the root lockfile", async () => {
+    expect(await memberInstall("package.json")).toEqual({ kept: true, held: undefined });
+    expect(await memberInstall("pnpm-workspace.yaml")).toEqual({ kept: true, held: undefined });
+  }, 360_000);
+
+  test("outside a workspace root, a nested manifest does not explain the root lockfile", async () => {
+    const { kept, held } = await memberInstall(null);
+    expect(kept).toBe(false);
+    expect(held).toMatch(/^changed after the brief/);
+  }, 180_000);
+
   test("a refreeze of a pass upstream already holds, the checkout levelled under it, comes back landed", async () => {
     const { root, origin } = checkoutWorld();
     const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
