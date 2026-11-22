@@ -16,7 +16,8 @@ import {
   type BucketItem,
 } from "../store/inboxStore";
 import { clickBucketChip, clickProjectChip } from "../store/chipFilterClicks";
-import { projectChipLabel, workProjectIdOfChipKey } from "../store/workProjects";
+import { projectAxisLabel, projectAxisNoun, workProjectIdOfChipKey } from "../store/workProjects";
+import { useRosterMachines } from "./DeviceBadge";
 import { useRouter } from "next/navigation";
 import { getLabelColor } from "../lib/labelColors";
 import { OWNS_MODIFIER_CLICK } from "../lib/openIntent";
@@ -63,12 +64,15 @@ export function RailFilterMenu({
   projectCounts,
   projectPathByName,
   projectActivity,
+  machineCounts,
   dropSessionOnLabel,
 }: {
   bucketCounts: Record<string, number>;
   projectCounts: Array<[string, number]>;
   projectPathByName: Record<string, string>;
   projectActivity?: Record<string, FolderActivity>;
+  /** `mc:<device>` keys on the same axis; empty when there's one machine. */
+  machineCounts: Array<[string, number]>;
   dropSessionOnLabel: (draggedId: string, bucketId: string | null) => void;
 }) {
   const s = useTrackedStore([
@@ -82,11 +86,13 @@ export function RailFilterMenu({
     st => st.activeProjectPath,
     st => st.extraProjectFilters,
   ]);
+  const machines = useRosterMachines();
   const labels = useMemo(() => sortLabels(s.buckets), [s.buckets]);
   const router = useRouter();
   // The project axis holds Codecast projects (`pj:` keys, shown by their
-  // title, store/workProjects) and folders (where a session ran).
-  const chipLabel = (name: string) => projectChipLabel(name, s.projects);
+  // title, store/workProjects), folders (where a session ran) and machines
+  // (`mc:` keys, shown by the device's name).
+  const chipLabel = (name: string) => projectAxisLabel(name, s.projects, (id) => machines.get(id));
   const workProjects = useMemo(() => projectCounts.filter(([name]) => workProjectIdOfChipKey(name)), [projectCounts]);
   const folders = useMemo(() => projectCounts.filter(([name]) => !workProjectIdOfChipKey(name)), [projectCounts]);
   const labelFilters = useMemo(
@@ -238,12 +244,12 @@ export function RailFilterMenu({
   }, []);
 
   // ── Folders ──────────────────────────────────────────────────────────────
-  const countByFolder = useMemo(() => new Map(projectCounts), [projectCounts]);
+  const countByFolder = useMemo(() => new Map([...projectCounts, ...machineCounts]), [projectCounts, machineCounts]);
   const shortFolders = useMemo(() => {
     const list = folderShortList(folders, projectActivity);
     // A folder in the filter always shows here, so it can be seen and undone
     // without a trip to "All folders…".
-    for (const t of projectFilters) if (!list.includes(t.id) && !workProjectIdOfChipKey(t.id)) list.push(t.id);
+    for (const t of projectFilters) if (!list.includes(t.id) && projectAxisNoun(t.id) === "folder") list.push(t.id);
     return list;
   }, [folders, projectActivity, projectFilters]);
   const allFolders = useMemo(() => {
@@ -264,9 +270,9 @@ export function RailFilterMenu({
   const extraCount = activeTerms.length - 1;
   const faceTitle = headName
     ? activeTerms
-        .map((t) => `${t.exclude ? "Hiding" : "Showing"} ${activeKind === "label" ? "label" : workProjectIdOfChipKey(t.id) ? "project" : "folder"} "${activeKind === "label" ? s.buckets[t.id]?.name ?? t.id : chipLabel(t.id)}"`)
+        .map((t) => `${t.exclude ? "Hiding" : "Showing"} ${activeKind === "label" ? "label" : projectAxisNoun(t.id)} "${activeKind === "label" ? s.buckets[t.id]?.name ?? t.id : chipLabel(t.id)}"`)
         .join(", ")
-    : "Filter by project, folder or label";
+    : "Filter by project, folder, machine or label";
   const clearFilter = () => {
     const store = useInboxStore.getState();
     if (labelFilters.length > 0) store.setActiveBucketFilter(null);
@@ -293,7 +299,7 @@ export function RailFilterMenu({
         {...pickFolder(name)}
         onContextMenu={(e) => openCtx(e, { kind: "project", name })}
         className={ROW}
-        title={term ? (term.exclude ? "Hidden — click to clear" : "In the filter — click to clear") : `Filter to this ${workProjectIdOfChipKey(name) ? "project" : "folder"} — ⇧-click adds, ⌥-click hides`}
+        title={term ? (term.exclude ? "Hidden — click to clear" : "In the filter — click to clear") : `Filter to this ${projectAxisNoun(name)} — ⇧-click adds, ⌥-click hides`}
       >
         {stateIcon(term)}
         <span className={`truncate ${term ? "text-sol-text" : ""}`}>{chipLabel(name)}</span>
@@ -484,6 +490,14 @@ export function RailFilterMenu({
                   <DropdownMenuSeparator />
                 </>
               )}
+              {machineCounts.length > 0 && (
+                <>
+                  {/* The machine a session runs on (owner_device_id). */}
+                  <DropdownMenuLabel className={groupLabel}>Machines</DropdownMenuLabel>
+                  {machineCounts.map(([name]) => folderItem(name))}
+                  <DropdownMenuSeparator />
+                </>
+              )}
               <DropdownMenuLabel className={groupLabel}>Labels</DropdownMenuLabel>
               {labels.map((b) => (listedLabelIds.has(b._id) || showEmpty ? labelItem(b) : null))}
               {emptyCount > 0 && (
@@ -610,7 +624,7 @@ export function RailFilterMenu({
             : {
                 id: p.name,
                 name: chipLabel(p.name),
-                noun: workProjectIdOfChipKey(p.name) ? "project" : "folder",
+                noun: projectAxisNoun(p.name),
                 filters: projectFilters,
                 set: (id: string | null, exclude?: boolean) => store.setActiveProjectFilter(id, id ? projectPathByName[p.name] || null : null, exclude),
                 toggle: (exclude: boolean) => store.toggleProjectFilterTerm(p.name, projectPathByName[p.name] || null, exclude),
