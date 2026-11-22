@@ -2,6 +2,7 @@
 // payload of org.where (convex/orgWhere.ts) and its one rendering, printed by
 // `cast org where` and injected at session start beside the stable context.
 import { roleCardLines, type RoleCard } from "./machineMessages";
+import type { ProjectContext } from "./projectContext";
 
 /** How the session came to sit under its role: it is the role's standing
  *  session, a person filed it under the role, the role owns the work it is
@@ -21,6 +22,8 @@ export type OrgWhere = {
   chain: string[];
   roles: Array<{ handle: string; name: string; reports_to: string; scope: string[]; whole_workspace: boolean; seat: boolean }>;
   people: Array<{ name: string; handle?: string; role: string; is_me: boolean }>;
+  /** The session's project (session-projects.md SP6), rendered by projectContextBlock. */
+  project_context?: ProjectContext | null;
 };
 
 export const ORG_WHERE_ROLES_MAX = 20;
@@ -56,7 +59,7 @@ export function orgWhereLines(w: OrgWhere): string[] {
   }
   if (w.card) out.push(...roleCardLines(w.card).map((l) => `  ${l}`));
 
-  out.push("", "Roles:");
+  if (w.roles.length) out.push("", "Roles:");
   for (const r of w.roles.slice(0, ORG_WHERE_ROLES_MAX)) {
     const scope = r.scope.length
       ? `looks after ${r.scope.slice(0, SCOPE_TITLES_MAX).join(", ")}${r.scope.length > SCOPE_TITLES_MAX ? ` +${r.scope.length - SCOPE_TITLES_MAX} more` : ""}`
@@ -75,7 +78,7 @@ Information goes to whoever owns it, in the cheapest form that reaches them in t
 
 As a lead, read your whole area each time you run, connect what one session found to the sessions it affects, and send each only what changes its next action.
 
-cast role wake @handle reaches a role; cast send <id> a session; cast chat dm @handle "<text>" a person; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue; cast org where shows this picture as it stands now.`;
+cast role wake @handle reaches a role; cast send <id> a session; cast chat dm @handle "<text>" a person; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue, and cast decide "<what Yes does>?" --run "cast …" (--on laptop from a cloud host) is how a step only your person may take reaches them: a Yes card that runs it as theirs, never a command for them to type; cast org where shows this picture as it stands now.`;
 
 /** The block injected at session start. */
 export function orgContextBlock(w: OrgWhere): string {

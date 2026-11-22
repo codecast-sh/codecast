@@ -10,6 +10,7 @@ import type { LineProject } from "./lineData";
 import { ProjectGlyph } from "./lineAtoms";
 import { projectFacts, projectSays } from "./lineFacts";
 import { LineBody, ObjectLine, type LineGhost, type ObjectLineProps } from "./ObjectLine";
+import { ProjectPinButton } from "../../projects/ProjectPinButton";
 
 export { ProjectGlyph, ProjectLead, ProjectState, ProjectWork } from "./lineAtoms";
 export type { LineProject } from "./lineData";
@@ -55,6 +56,7 @@ export function ProjectLine({ project, now, editable = true, ghost, opens = !gho
         depth={depth}
         expanded={expanded}
         onToggle={onToggle}
+        action={!ghost && opens ? <ProjectPinButton projectId={project.id} title={project.title} className="w-5 h-5" /> : undefined}
         data-line-ref={project.short_id || undefined}
         {...rest}
       />
