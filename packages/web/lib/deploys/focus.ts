@@ -109,6 +109,22 @@ export function focusSettled(targets: ReadonlyArray<DeployTargetRow>, f: DeployF
   return !!reach || targets.some((t) => t.queue.groups.some((g) => g.commits.some((c) => commitMatches(c, f))));
 }
 
+/**
+ * The target a page opens: by id (a rail press, a pinned link), else by `owner/repo#name` (a link that names its
+ * repository, so two repositories' same-named targets stay apart), else by bare name, else the first.
+ */
+export function pickTarget<T extends Pick<DeployTargetRow, "_id" | "name" | "repository">>(ordered: ReadonlyArray<T>, want: string | null): T | null {
+  if (want) {
+    const hit = ordered.find((t) => t._id === want) ?? ordered.find((t) => `${t.repository}#${t.name}` === want) ?? ordered.find((t) => t.name === want);
+    if (hit) return hit;
+  }
+  return ordered[0] ?? null;
+}
+
+/** How an address names its target: with its repository when it names one. */
+export const targetKey = (target: string | null | undefined, repository: string | null | undefined): string | null =>
+  target ? (repository ? `${repository}#${target}` : target) : null;
+
 /** A reach ref (`owner/repo#N`, `owner/repo@sha`) read back as the repository and the thing a Deploys link points at. */
 export function focusOfRef(ref: string): { repository: string; focus: DeployFocus } | null {
   const pr = /^([^#@\s]+\/[^#@\s]+)#(\d+)$/.exec(ref);

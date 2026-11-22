@@ -156,3 +156,20 @@ describe("one list of link kinds, and when a link's target is settled", () => {
     expect(focusSettled([none], null, r)).toBe(false);
   });
 });
+
+describe("the target a link opens, when two repositories both have one of that name", () => {
+  const { pickTarget, targetKey } = require("../focus");
+  const a = { _id: "ta", name: "production", repository: "org/a" };
+  const b = { _id: "tb", name: "production", repository: "org/b" };
+  test("?repo=org/b&target=production opens org/b's, not the first one listed", () => {
+    expect(pickTarget([a, b], targetKey("production", "org/b"))?._id).toBe("tb");
+    expect(pickTarget([a, b], targetKey("production", "org/a"))?._id).toBe("ta");
+  });
+  test("a bare name opens the first of that name, an id opens exactly that one, nothing opens the first", () => {
+    expect(pickTarget([a, b], targetKey("production", null))?._id).toBe("ta");
+    expect(pickTarget([a, b], "tb")?._id).toBe("tb");
+    expect(pickTarget([a, b], null)?._id).toBe("ta");
+    expect(pickTarget([a, b], "staging")?._id).toBe("ta");
+    expect(targetKey(null, "org/b")).toBeNull();
+  });
+});

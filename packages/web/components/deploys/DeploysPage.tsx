@@ -18,7 +18,7 @@ import type { Press } from "./DeployPress";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { rollBackHere } from "../../lib/deploys/press";
 import { ageShort } from "../../lib/lineFlow";
-import { DEPLOY_LABELS, FOCUS_PARAMS, commitMatches, deployMatches, focusRef, focusRepository, focusSettled, focusTarget, focusWord, reachAnyDeploy, reachDeployOn, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
+import { DEPLOY_LABELS, FOCUS_PARAMS, commitMatches, deployMatches, focusRef, focusRepository, focusSettled, focusTarget, focusWord, pickTarget, reachAnyDeploy, reachDeployOn, targetKey, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
 import { useDeployReach } from "../../hooks/useDeployReach";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -92,7 +92,8 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
     setFocus(null);
     rewriteAddress(Object.fromEntries([...FOCUS_PARAMS, "repo"].map((k) => [k, null])));
   };
-  const [pickedId, setPicked] = useState<string | null>(initialTarget ?? null);
+  // A target named in the address is held as `owner/repo#name` when the address names its repository too.
+  const [pickedId, setPicked] = useState<string | null>(targetKey(initialTarget, initialRepo));
   // A PR or commit's own reach says where it went out, so a deploy that listed only its newest commits still finds it.
   const inferredReach = useDeployReach(initialRepo ? null : focusRef(focus, focusRepository(null, allTargets))) ?? null;
   const reach = focus ? (initialRepo ? namedReach : inferredReach) : null;
@@ -106,13 +107,8 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
     rewriteAddress({ target: focusAt.name, ...(new Set(allTargets.map((t) => t.repository)).size > 1 ? { repo: focusAt.repository } : {}) });
   }, [settled]); // eslint-disable-line react-hooks/exhaustive-deps -- pins once, the first time it settles
   // A deploy link opens at that deploy's target; a change's link opens where its reach says (focusAt), not at the deploy that found the team.
-  const want = pickedId ?? (initialDeploy && where ? (where.repository ? `${where.repository}#${where.target}` : where.target) : null) ?? focusAt?._id ?? null;
-  // A target is named alone (`target=production`); the repository the link names, when it names one, tells apart two
-  // repositories' targets of the same name.
-  const wantRepo = pickedId ? null : initialRepo ?? null;
-  const picked = ordered.find((t) => t._id === want)
-    ?? ordered.find((t) => (t.name === want || `${t.repository}#${t.name}` === want) && (!wantRepo || t.repository === wantRepo))
-    ?? ordered[0] ?? null;
+  const want = pickedId ?? (initialDeploy && where ? targetKey(where.target, where.repository) : null) ?? focusAt?._id ?? null;
+  const picked = pickTarget(ordered, want);
   const press = useDeployPress(teamId, deploys);
   const modern = useIsModernStyle();
   const repos = new Set(allTargets.map((t) => t.repository).filter(Boolean));
