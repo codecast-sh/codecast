@@ -25,5 +25,5 @@ export function usePrDeploy(pr: any, repository: string, authed: boolean) {
   const shipsTo = useMemo(() => (open ? prShipsTo(targets, deploys, repository, files, now) : null), [open, targets, deploys, repository, files, now]);
   const declares = targets.some((t) => t.repository.toLowerCase() === repository.toLowerCase() && !t.record_only);
   const press = useDeployPress(teamId, deploys);
-  return { merged, open, teamId, rows, dormant, shipsTo, declares, headline: prReachHeadline(reach?.state, rows), press, now, mergedAt: (pr.merged_at as number | undefined) ?? null };
+  return { merged, open, teamId, repository, number: pr.number as number, rows, dormant, shipsTo, declares, headline: prReachHeadline(reach?.state, rows), press, now, mergedAt: (pr.merged_at as number | undefined) ?? null };
 }

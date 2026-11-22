@@ -19,7 +19,7 @@ import { verifyApiToken } from "./apiTokens";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineRouteFor } from "./workflows";
 import { seatPlace } from "./lib/seatPlace";
-import { deviceWorking, holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, slotRuns, takeSlot, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
+import { deviceWorking, holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, slotRuns, takeSlot, visitUntil, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
 import { allRolesInBoundary, projectLeadRole, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownerOf, projectLeadOf } from "@codecast/shared/contracts/orgLead";
@@ -205,30 +205,29 @@ async function seatOf(ctx: Ctx, role: any): Promise<{ runner: string; project_pa
 // org_role_id), minus those waiting on a blocking decision and
 // those on a pool machine, which its slots count, and those that run on
 // another account's machine (the team's pool). Every role counts, paused and
-// retired ones too: their runs still use the machine.
+// retired ones too: their runs still use the machine. Counted up to the cap,
+// as deviceWorking counts a pool machine: past it the machine is full.
 export async function runnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promise<RunnerLoad> {
   const all: any[] = roles ?? await ctx.db.query("org_roles").collect();
   const waiting = await runsWaitingOnAPerson(ctx, runner);
   const pooled = await poolDeviceIds(ctx, runner);
   const working = new Set<string>();
+  const full = () => working.size >= LINE_RUNS_PER_RUNNER;
   for (const role of all) {
+    if (full()) break;
     const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
     const standing = anchor?.conversation_id ?? null;
     if (String(seatPlace(role, standing ? await ctx.db.get(standing) : null).runner_user_id) !== runner) continue;
     for (const status of WORKING_RUN_STATUSES) {
-      const runs: any[] = await ctx.db
-        .query("workflow_runs")
-        .withIndex("by_org_role_status", (q: any) => q.eq("org_role_id", role._id).eq("status", status))
-        .collect();
-      if (standing) {
-        runs.push(...await ctx.db
-          .query("workflow_runs")
-          .withIndex("by_spawner_status", (q: any) => q.eq("spawner_conversation_id", standing).eq("status", status))
-          .collect());
-      }
-      for (const run of runs) {
-        if (String(run.user_id) !== runner || pooled.has(String(run.runner_device ?? ""))) continue;
-        if (await holdsSlot(ctx, run, waiting)) working.add(String(run._id));
+      const reads = [(n: number) => ctx.db.query("workflow_runs").withIndex("by_org_role_status", (q: any) => q.eq("org_role_id", role._id).eq("status", status)).take(n)];
+      if (standing) reads.push((n: number) => ctx.db.query("workflow_runs").withIndex("by_spawner_status", (q: any) => q.eq("spawner_conversation_id", standing).eq("status", status)).take(n));
+      for (const read of reads) {
+        if (full()) break;
+        await visitUntil(read, LINE_RUNS_PER_RUNNER - working.size, async (run) => {
+          if (String(run.user_id) !== runner || pooled.has(String(run.runner_device ?? ""))) return false;
+          if (await holdsSlot(ctx, run, waiting)) working.add(String(run._id));
+          return full();
+        });
       }
     }
   }
@@ -587,7 +586,8 @@ async function slotStillFree(ctx: Ctx, role: any, place: RunPlace): Promise<bool
   const device = await ctx.db.query("devices").withIndex("by_user_device", (q: any) => q.eq("user_id", user).eq("device_id", place.device)).first();
   const slot = (device?.line_slots ?? []).find((s: any) => place.project_path === s.root || place.project_path.startsWith(`${s.root.replace(/\/+$/, "")}/`));
   if (!slot) return false;
-  return (await deviceWorking(ctx, place.device, await runsWaitingOnAPerson(ctx, user))) < slotRuns(device, slot);
+  const runs = slotRuns(device, slot);
+  return (await deviceWorking(ctx, place.device, await runsWaitingOnAPerson(ctx, user), runs)) < runs;
 }
 
 /** The pass in one transaction, as the tests drive it; `dry` plans only (orgLine.explain). */
