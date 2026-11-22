@@ -168,21 +168,48 @@ async function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
 }
 
 /**
- * The persistent index keeps every file it once took: `add -A` never drops a
- * staged entry because .gitignore or .git/info/exclude named it later. So a
- * scratch file staged before anyone excluded it rode every snapshot after,
- * and every ship froze it as a change (Nov 14-15: 23 scratch files in two
- * ships). Drop the entries the ignore rules now cover, unless HEAD tracks
- * them: a tracked file matching an ignore pattern is still content.
+ * Entries the persistent index must not carry into the next pass, unless HEAD
+ * tracks them (a tracked file matching an ignore pattern is still content, a
+ * real submodule is still a submodule):
+ *
+ * - Entries the ignore rules now cover. `add -A` never drops a staged entry
+ *   because .gitignore or .git/info/exclude named it later, so a scratch file
+ *   staged before anyone excluded it rode every snapshot after, and every ship
+ *   froze it as a change (Nov 14-15: 23 scratch files in two ships).
+ * - Gitlinks. `add -A` records a directory holding a `.git` (a worktree or
+ *   clone nested under an untracked dir) as an embedded repo, and from then on
+ *   every `add -A` runs a dirty check inside that checkout: a status of its
+ *   whole tree. On a checkout with 61 worktrees under an untracked
+ *   `worktrees/` (Nov 21) one pass took 6.9 s real and 40 s of system CPU, and
+ *   ignoring the dir changed nothing while the gitlinks stayed. With no
+ *   gitlink in the index, `add -A` meets the nested checkout fresh, which costs
+ *   one HEAD lookup, and this drops it again before the tree is written.
+ *
+ * Runs before the add, so an entry that became ignored or a gitlink an older
+ * daemon left stops costing on the very next pass, and after it, so no newly
+ * met nested checkout reaches the tree or the next pass. `top` is the
+ * checkout's root, so a caller inside a subdirectory still cleans the whole
+ * index and every path is root-relative.
  */
-async function dropNewlyIgnored(cwd: string, head: string, env: NodeJS.ProcessEnv): Promise<void> {
-  const listed = await gitTry(cwd, ["ls-files", "-z", "--cached", "--ignored", "--exclude-standard"], env);
-  const ignored = (listed ?? "").split("\0").filter(Boolean);
-  if (!ignored.length) return;
-  const tracked = await gitTry(cwd, ["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", head, "--", ...ignored]);
+async function dropUnwanted(top: string, head: string, env: NodeJS.ProcessEnv, opts: { ignored: boolean }): Promise<void> {
+  const candidates = new Set<string>();
+  if (opts.ignored) {
+    const listed = await gitTry(top, ["ls-files", "-z", "--cached", "--ignored", "--exclude-standard"], env);
+    for (const p of (listed ?? "").split("\0")) if (p) candidates.add(p);
+  }
+  // `ls-files -s -z`: "<mode> <sha> <stage>\t<path>\0"; 160000 is a gitlink.
+  const staged = await gitTry(top, ["ls-files", "-s", "-z"], env);
+  for (const entry of (staged ?? "").split("\0")) {
+    if (!entry.startsWith("160000 ")) continue;
+    const tab = entry.indexOf("\t");
+    if (tab > 0) candidates.add(entry.slice(tab + 1));
+  }
+  if (!candidates.size) return;
+  const list = [...candidates];
+  const tracked = await gitTry(top, ["--literal-pathspecs", "ls-tree", "-r", "-z", "--name-only", head, "--", ...list]);
   const inHead = new Set((tracked ?? "").split("\0").filter(Boolean));
-  const drop = ignored.filter((p) => !inHead.has(p));
-  if (drop.length) await git(cwd, ["--literal-pathspecs", "rm", "--cached", "-q", "--ignore-unmatch", "--", ...drop], env);
+  const drop = list.filter((p) => !inHead.has(p));
+  if (drop.length) await git(top, ["--literal-pathspecs", "rm", "--cached", "-q", "--ignore-unmatch", "--", ...drop], env);
 }
 
 /**
@@ -207,6 +234,8 @@ export async function createTurnSnapshot(
     const idx = await ensureIndex(cwd, stateDir);
     const env = { ...process.env, GIT_INDEX_FILE: idx };
     const excludes = (opts.exclude ?? []).map((p) => `:(exclude)${p}`);
+    const top = (await gitTry(cwd, ["rev-parse", "--show-toplevel"])) || cwd;
+    await dropUnwanted(top, head, env, { ignored: true });
     if (opts.paths?.length) {
       // `add -A` on a pathspec stages adds, edits and deletions of just those
       // paths, but it refuses the whole call for a path that matches nothing
@@ -219,7 +248,7 @@ export async function createTurnSnapshot(
     } else {
       await git(cwd, ["add", "-A", "--", ".", ...excludes], env);
     }
-    await dropNewlyIgnored(cwd, head, env);
+    await dropUnwanted(top, head, env, { ignored: false });
     const tree = await git(cwd, ["write-tree"], env);
     const branch = (await gitTry(cwd, ["rev-parse", "--abbrev-ref", "HEAD"])) ?? "HEAD";
     const headTree = await git(cwd, ["rev-parse", `${head}^{tree}`]);

@@ -126,6 +126,67 @@ describe("createTurnSnapshot", () => {
     expect(names).toContain("tracked.txt");
   });
 
+  test("a worktree nested under an untracked dir is never a gitlink, and a pass runs no status inside it", async () => {
+    const { cwd } = repo();
+    fs.mkdirSync(path.join(cwd, "worktrees"));
+    for (const n of [1, 2, 3]) git(cwd, ["worktree", "add", "-q", "-b", `w${n}`, path.join(cwd, "worktrees", `w${n}`)]);
+    fs.writeFileSync(path.join(cwd, "worktrees", "notes.txt"), "real content\n");
+    const idx = path.join((await snapshotStateDir(cwd))!, "wip.index");
+    const gitlinks = () =>
+      execFileSync("git", ["-C", cwd, "ls-files", "-s"], { encoding: "utf-8", env: { ...process.env, GIT_INDEX_FILE: idx } })
+        .split("\n").filter((l) => l.startsWith("160000 "));
+
+    const first = (await createTurnSnapshot(cwd))!;
+    const names = git(cwd, ["ls-tree", "-r", "--name-only", first.tree]).split("\n");
+    expect(names).toContain("worktrees/notes.txt");
+    expect(names.filter((n) => /^worktrees\/w\d$/.test(n))).toEqual([]);
+    expect(gitlinks()).toEqual([]);
+
+    // An older daemon left the gitlinks in the persistent index: the next pass
+    // drops them before the add, so git never runs a status inside a nested checkout.
+    execFileSync("git", ["-C", cwd, "add", "-A", "--", "."], { env: { ...process.env, GIT_INDEX_FILE: idx }, stdio: "ignore" });
+    expect(gitlinks().length).toBe(3);
+    const trace = path.join(tmpdir("trace"), "t2.json");
+    process.env.GIT_TRACE2_EVENT = trace;
+    try {
+      fs.writeFileSync(path.join(cwd, "worktrees", "notes.txt"), "edited\n");
+      const second = (await createTurnSnapshot(cwd))!;
+      expect(second.changedPaths).toEqual(["worktrees/notes.txt"]);
+      await createTurnSnapshot(cwd);
+    } finally {
+      delete process.env.GIT_TRACE2_EVENT;
+    }
+    const statusRuns = fs.readFileSync(trace, "utf8").split("\n").filter((l) => l.includes('"event":"child_start"') && l.includes('"status"'));
+    expect(statusRuns).toEqual([]);
+    expect(gitlinks()).toEqual([]);
+  });
+
+  test("a submodule HEAD tracks keeps its gitlink", async () => {
+    const { cwd } = repo();
+    const sub = tmpdir("sub");
+    git(sub, ["init", "-q", "-b", "main"]);
+    git(sub, ["-c", "user.email=t@t.t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "s"]);
+    git(cwd, ["-c", "protocol.file.allow=always", "submodule", "add", "-q", sub, "vendor/sub"]);
+    git(cwd, ["commit", "-qm", "add submodule"]);
+    fs.writeFileSync(path.join(cwd, "a.txt"), "1\n");
+    const snap = (await createTurnSnapshot(cwd))!;
+    expect(git(cwd, ["ls-tree", snap.tree, "vendor/sub"])).toMatch(/^160000 commit /);
+  });
+
+  test("a dir that becomes ignored after a snapshot leaves the index on the next pass", async () => {
+    const { cwd } = repo();
+    fs.mkdirSync(path.join(cwd, "cache"));
+    for (let i = 0; i < 20; i++) fs.writeFileSync(path.join(cwd, "cache", `f${i}`), `${i}\n`);
+    const first = (await createTurnSnapshot(cwd))!;
+    expect(git(cwd, ["ls-tree", "-r", "--name-only", first.tree]).split("\n").filter((n) => n.startsWith("cache/")).length).toBe(20);
+    fs.appendFileSync(path.join(cwd, ".gitignore"), "/cache/\n");
+    const second = (await createTurnSnapshot(cwd))!;
+    expect(git(cwd, ["ls-tree", "-r", "--name-only", second.tree]).split("\n").filter((n) => n.startsWith("cache/"))).toEqual([]);
+    const idx = path.join((await snapshotStateDir(cwd))!, "wip.index");
+    const staged = execFileSync("git", ["-C", cwd, "ls-files"], { encoding: "utf-8", env: { ...process.env, GIT_INDEX_FILE: idx } });
+    expect(staged).not.toContain("cache/");
+  });
+
   test("an unchanged tree writes nothing new and names the existing snapshot", async () => {
     const { cwd } = repo();
     fs.writeFileSync(path.join(cwd, "a.txt"), "1\n");
