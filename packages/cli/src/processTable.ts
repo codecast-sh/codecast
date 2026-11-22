@@ -198,6 +198,40 @@ export function descendantRows(procs: ProcRow[], root: number): ProcRow[] {
   return out;
 }
 
+/**
+ * Everything process group `group` started: its members, every descendant of
+ * one, and every member of a group such a descendant moved into. A group is no
+ * fence: a script that turns on job control (`set -m`) or calls setsid puts its
+ * children in groups of their own, and a signal to the first group misses them.
+ * Read while the tree is still linked; an orphan loses its link once its parent
+ * dies. Never `self`, its own group, or init.
+ */
+export function processGroupTree(procs: ProcRow[], group: number, self = process.pid): ProcRow[] {
+  const children = new Map<number, ProcRow[]>();
+  const members = new Map<number, ProcRow[]>();
+  let selfGroup: number | undefined;
+  for (const p of procs) {
+    children.set(p.ppid, [...(children.get(p.ppid) ?? []), p]);
+    if (p.pgid !== undefined) members.set(p.pgid, [...(members.get(p.pgid) ?? []), p]);
+    if (p.pid === self) selfGroup = p.pgid;
+  }
+  if (group === selfGroup) return [];
+  const found = new Map<number, ProcRow>();
+  const groups = new Set([group]);
+  const queue = [...(members.get(group) ?? [])];
+  while (queue.length) {
+    const p = queue.pop()!;
+    if (found.has(p.pid) || p.pid === self || p.pid <= 1) continue;
+    found.set(p.pid, p);
+    queue.push(...(children.get(p.pid) ?? []));
+    if (p.pgid !== undefined && p.pgid !== selfGroup && !groups.has(p.pgid)) {
+      groups.add(p.pgid);
+      queue.push(...(members.get(p.pgid) ?? []));
+    }
+  }
+  return [...found.values()];
+}
+
 /** One process as the ancestry walk reads it: its parent, `ps` comm and full command line. */
 export type AncestryRow = { ppid: number; comm: string; args: string };
 

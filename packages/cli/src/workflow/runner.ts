@@ -12,7 +12,7 @@ import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
 import { evalCondition } from "./condition";
 import { keepEnds } from "./keepEnds";
-import { executeCommand, expandScriptVars, recordNodeOutput } from "./commandStation";
+import { executeCommand, expandScriptVars, recordNodeOutput, type StationWatch } from "./commandStation";
 import { planReadiness } from "../planReadiness.js";
 import { readGateCard } from "../cardFile.js";
 import { agentResultPreview, resultPreview } from "./chainWorkflow.js";
@@ -1265,7 +1265,7 @@ async function executeFanout(
     const ctx = { ...state.context };
     let outcome: NodeOutcome;
     if (options.dryRun) outcome = "success";
-    else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd);
+    else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd, stationWatch(options));
     else if (branch.type === "call") outcome = await executeCallNode(branch, graph, ctx, cwd, options);
     // A hand is checkpointed when it starts, so a resumed fanout waits on it rather than starting a second (runResume.ts).
     else if ((branch.type === "agent" || branch.type === "prompt") && branch.backend === "session") outcome = await executeSessionNode(branch, graph, ctx, cwd, options, () => {
@@ -1583,6 +1583,22 @@ function stopIfEnded(options: RunOptions): void {
   if (options.endedOnServer) throw new RunEndedOnServer(options.endedOnServer);
 }
 
+/**
+ * What a command station watches while its script runs: whether a person stopped the run. A cancel from the web
+ * reaches no runner inside a station, so the station's processes ran on to its timeout (25 hours for a parked wait).
+ * Asked through poll-gate, which reads the run's status alone, not the whole row with its graph.
+ */
+function stationWatch(options: RunOptions): StationWatch {
+  if (!options.runId || !options.convexSiteUrl || !options.apiToken) return {};
+  return {
+    ended: async () => {
+      const status = (await cliCall(options, "/cli/workflow-runs/poll-gate", { run_id: options.runId }))?.status;
+      if (status !== "completed" && status !== "failed") return false;
+      options.endedOnServer ??= `the run is ${status}`;
+      return true;
+    },
+  };
+}
 
 /** A run's pinned flow versions as one comparable string. */
 export function flowVersionsKey(versions: ReadonlyArray<{ version_id?: unknown }> | null | undefined): string {
@@ -2462,7 +2478,7 @@ async function runNodeLoop(
     } else if (current.type === "start") {
       outcome = "success";
     } else if (current.type === "command") {
-      outcome = await executeCommand(current, state.context, cwd);
+      outcome = await executeCommand(current, state.context, cwd, stationWatch(options));
     } else if (current.type === "call") {
       outcome = await executeCallNode(current, graph, state.context, cwd, options);
     } else if (current.type === "human" && options.runId) {

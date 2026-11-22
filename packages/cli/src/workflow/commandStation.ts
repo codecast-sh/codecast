@@ -7,6 +7,7 @@ import { c } from "../colors.js";
 import { extractJsonOutput, lookupContextVar } from "./condition";
 import { keepEnds } from "./keepEnds";
 import { outputSummary } from "./runFailure";
+import { STATION_KILL_GRACE_MS, endGroupLeftovers, endStation, endStationsOnExit, reapDeadRunnerStations, recordStations } from "./stationProcs";
 import type { NodeOutcome, WorkflowNode } from "./types";
 
 // One $name as both expanders read it. `$human_message` is the gate note,
@@ -114,64 +115,121 @@ export function stationExitCode(result: { status: number | null; signal?: NodeJS
   return 128 + ((result.signal && osConstants.signals[result.signal]) || 0);
 }
 
-// The process groups of the stations running now. A station's script runs in
-// a group of its own, which nothing ends when the runner does: a daemon
-// restart stopped the runners on Union's line-1 and left their Queue station's
-// poller running under init for hours, beside the one each resumed run started
-// (Nov 15). A resumed run runs its station again, so a script still running
-// when its runner exits ends with it. SIGTERM, so a script's trap can clean up.
-const runningGroups = new Set<number>();
+// The process groups of the stations running now, with when each started. A
+// station's script runs in a group of its own, which nothing ends when the
+// runner does: a daemon restart stopped the runners on Union's line-1 and left
+// their Queue station's poller running under init for hours, beside the one
+// each resumed run started (Nov 15). A resumed run runs its station again, so
+// a station still running when its runner exits ends with it (TERM first, so a
+// trap can clean up), and a runner that dies by SIGKILL leaves the groups on
+// disk for the next station to end (stationProcs.ts).
+const runningGroups = new Map<number, { at: number; graceMs: number }>();
+const recordRunning = () => recordStations([...runningGroups].map(([pgid, { at }]) => ({ pgid, at })));
 let endsWithRunner = false;
-function endWithRunner(pid: number): void {
-  runningGroups.add(pid);
+function endWithRunner(group: number, graceMs: number): void {
+  runningGroups.set(group, { at: Date.now(), graceMs });
+  recordRunning();
   if (endsWithRunner) return;
   endsWithRunner = true;
   process.on("exit", () => {
-    for (const group of runningGroups) {
-      try { process.kill(process.platform === "win32" ? group : -group, "SIGTERM"); } catch {}
-    }
+    if (!runningGroups.size) return;
+    if (process.platform === "win32") {
+      for (const group of runningGroups.keys()) try { process.kill(group, "SIGTERM"); } catch {}
+    } else endStationsOnExit(runningGroups.keys(), Math.max(...[...runningGroups.values()].map((g) => g.graceMs)));
+    runningGroups.clear();
+    recordRunning();
   });
 }
+function stationEnded(group: number): void {
+  if (runningGroups.delete(group)) recordRunning();
+}
+
+/**
+ * What a station watches while its script runs: `ended` says whether its run
+ * ended elsewhere (a person cancelled it on the web), looked at every
+ * `everyMs`. `graceMs` is how long its processes get between TERM and KILL
+ * when it is cut off (tests shorten it).
+ */
+export type StationWatch = { ended?: () => Promise<boolean>; everyMs?: number; graceMs?: number };
+
+/**
+ * How long a station whose script exited waits for its output pipes to close.
+ * A process that left the station's group (setsid) can hold them for good, and
+ * waiting on `close` alone hung the station with it.
+ */
+const PIPE_CLOSE_GRACE_MS = 2000;
 
 export async function executeCommand(
   node: WorkflowNode,
   context: Record<string, string>,
-  cwd: string
+  cwd: string,
+  watch: StationWatch = {},
 ): Promise<NodeOutcome> {
   const script = expandScriptVars(node.script!, context);
   console.log(`${c.dim}  $ ${script.split('\n')[0]}${script.includes('\n') ? '...' : ''}${c.reset}`);
+  const graceMs = watch.graceMs ?? STATION_KILL_GRACE_MS;
+  void reapDeadRunnerStations(undefined, graceMs).catch(() => {});
 
   try {
     // A repo's check command (the line's verify station) outruns the old two
     // minute cap on most repos; a timeout read as a failed check and burned an
     // implement visit. Per node, in seconds.
     const timeoutMs = (node.timeout ?? 120) * 1000;
-    const result = await new Promise<{ status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean }>((resolve, reject) => {
+    type Result = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean; stopped: boolean };
+    const result = await new Promise<Result>((resolve, reject) => {
       const child = spawn("bash", ["-c", script], {
         cwd,
         // A project's line command (line-profile.md LP2) names run values
         // ($run_dir, $task_id, ...) that its own shell expands.
         env: { ...process.env, ...lineCommandEnv(context) },
         stdio: ["ignore", "pipe", "pipe"],
-        // Its own process group, so the timeout takes the script's children
-        // with it. spawnSync's timeout sent one SIGTERM to bash alone, and on
-        // CI the script sometimes ran to its end and passed anyway.
+        // Its own process group, so ending the station takes the script's
+        // children with it. spawnSync's timeout sent one SIGTERM to bash
+        // alone, and on CI the script sometimes ran to its end and passed anyway.
         detached: process.platform !== "win32",
       });
-      let stdout = "", stderr = "", timedOut = false;
-      if (child.pid) endWithRunner(child.pid);
-      const timer = setTimeout(() => {
-        timedOut = true;
-        try { process.kill(-child.pid!, "SIGKILL"); } catch { child.kill("SIGKILL"); }
-      }, timeoutMs);
-      const settled = () => { clearTimeout(timer); runningGroups.delete(child.pid!); };
+      const group = process.platform === "win32" ? undefined : child.pid;
+      let stdout = "", stderr = "", timedOut = false, stopped = false, closed = false, done = false;
+      let looking = false;
+      let ending: Promise<void> | null = null;
+      // Every process of the station, the ones that left its group included (stationProcs.ts).
+      const end = () => {
+        ending ??= group ? endStation(group, graceMs) : Promise.resolve(void child.kill("SIGKILL"));
+      };
+      if (child.pid) endWithRunner(child.pid, graceMs);
+      const timer = setTimeout(() => { timedOut = true; end(); }, timeoutMs);
+      const tick = setInterval(() => {
+        if (watch.ended && !looking && !ending) {
+          looking = true;
+          watch.ended().then((ended) => { if (ended && !done) { stopped = true; end(); } }, () => {}).finally(() => { looking = false; });
+        }
+      }, watch.everyMs ?? 30_000);
       child.stdout!.on("data", (d) => { stdout += d; });
       child.stderr!.on("data", (d) => { stderr += d; });
-      child.on("error", (err) => { settled(); reject(err); });
-      child.on("close", (status, signal) => { settled(); resolve({ status, signal, stdout, stderr, timedOut }); });
+      let onClose: (() => void) | null = null;
+      child.on("close", () => { closed = true; onClose?.(); });
+      const settle = () => { clearTimeout(timer); clearInterval(tick); if (child.pid) stationEnded(child.pid); };
+      child.on("error", (err) => { done = true; settle(); reject(err); });
+      child.on("exit", (status, signal) => {
+        clearTimeout(timer);
+        clearInterval(tick);
+        // A script that ended on its own takes what it left in its group; one cut off takes everything it started.
+        const cleanup = ending ?? (group ? endGroupLeftovers(group, graceMs) : Promise.resolve());
+        void cleanup
+          .then(() => new Promise<void>((r) => { if (closed) return r(); onClose = r; setTimeout(r, PIPE_CLOSE_GRACE_MS); }))
+          .then(() => {
+            done = true;
+            settle();
+            child.stdout!.destroy();
+            child.stderr!.destroy();
+            resolve({ status, signal, stdout, stderr, timedOut, stopped });
+          });
+      });
     });
 
-    const output = result.stdout + result.stderr + (result.timedOut ? `\ntimed out after ${timeoutMs / 1000}s` : "");
+    const output = result.stdout + result.stderr
+      + (result.timedOut ? `\ntimed out after ${timeoutMs / 1000}s` : "")
+      + (result.stopped ? "\nstopped: the run ended" : "");
     if (output.trim()) {
       console.log(c.dim + keepEnds(output, 2000) + c.reset);
     }
@@ -180,7 +238,7 @@ export async function executeCommand(
     // shown above and never its result. A hold's wait narration ("line Evals are paused, so the run stays parked")
     // stayed in Eval wallet's output after the pause lifted, and the card the run wrote next said the tests were
     // paused (sd-2511, Nov 5). A failure keeps both, since a script says why it failed on either stream.
-    const ok = result.status === 0 && !result.timedOut;
+    const ok = result.status === 0 && !result.timedOut && !result.stopped;
     recordNodeOutput(context, node.id, ok ? result.stdout.trim() || result.stderr.trim() : output.trim(), result.stdout);
     context[`${node.id}.exit_code`] = String(stationExitCode(result));
 
@@ -188,7 +246,7 @@ export async function executeCommand(
       console.log(`  ${c.green}✓ success${c.reset}`);
       return "success";
     } else {
-      console.log(`  ${c.red}✗ failed (${result.timedOut ? "timed out" : `exit ${result.status}`})${c.reset}`);
+      console.log(`  ${c.red}✗ failed (${result.timedOut ? "timed out" : result.stopped ? "the run ended" : `exit ${result.status}`})${c.reset}`);
       context["last_error"] = keepEnds(output.trim(), 2000);
       return "failure";
     }

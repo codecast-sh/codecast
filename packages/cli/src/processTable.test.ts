@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { agentAncestor, descendantRows, findOtherDaemonPids, findStaleTmuxServers, isAgentCommand, isDaemonCommand, liveTmuxServerPid, parseProcessTable, snapshotProcessTableAsync, staleTmuxServerKillPlan, tmuxServerRows } from "./processTable.js";
+import { agentAncestor, descendantRows, findOtherDaemonPids, findStaleTmuxServers, isAgentCommand, isDaemonCommand, liveTmuxServerPid, parseProcessTable, processGroupTree, snapshotProcessTableAsync, staleTmuxServerKillPlan, tmuxServerRows } from "./processTable.js";
 import { hasTmux } from "./tmux.js";
 
 const table = parseProcessTable(`
@@ -28,6 +28,21 @@ describe("processTable", () => {
   test("descendantRows walks the whole subtree, root excluded", () => {
     expect(descendantRows(table, 90449).map((p) => p.pid).sort()).toEqual([92000, 92001, 92002, 92003, 92004].sort());
     expect(descendantRows(table, 92003)).toEqual([]);
+  });
+
+  test("processGroupTree: the group, every descendant, and every group a descendant left for", () => {
+    // 100 is the group; 103 left it with setsid, 104 is 103's child; 105 sits in 100 under init; 200 is
+    // unrelated; 50 is the caller, whose own group 50 holds 106, a child of 101 that joined it.
+    const at = "Tue Aug 25 05:04:18 2026";
+    const procs = parseProcessTable([
+      "    50     1    50 501 ?? " + at + " runner", "   100    50   100 501 ?? " + at + " bash -c check",
+      "   101   100   100 501 ?? " + at + " bash", "   102   101   100 501 ?? " + at + " sleep 600",
+      "   103   101   103 501 ?? " + at + " perl", "   104   103   103 501 ?? " + at + " sleep 600",
+      "   105     1   100 501 ?? " + at + " sleep 600", "   106   101    50 501 ?? " + at + " sleep 600",
+      "   200     1   200 501 ?? " + at + " other",
+    ].join("\n"));
+    expect(processGroupTree(procs, 100, 50).map((p) => p.pid).sort()).toEqual([100, 101, 102, 103, 104, 105, 106]);
+    expect(processGroupTree(procs, 50, 50)).toEqual([]);
   });
 
   test("tmuxServerRows: daemonized tmux on the default socket only", () => {
