@@ -17,7 +17,7 @@ import type { Report, Workload } from "./harness";
 const only = process.argv[2] as Workload | undefined;
 if (!only) {
   let failed = 0;
-  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
+  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff", "inbox-return"]) {
     const child = Bun.spawnSync(["bun", import.meta.path, workload], { stdout: "inherit", stderr: "inherit" });
     if (child.exitCode !== 0) failed++;
   }
@@ -171,6 +171,46 @@ await test("diff", "opening a long diff draws its first 150 rows in 2 commits an
       reads: ["getBoundingClientRect x23", "scrollHeight x4", "getComputedStyle x3", "offsetHeight x2"],
     });
   }
+});
+
+// ct-97296: going back to the inbox from Threads froze the page for seconds. A
+// route change writes the tab and the recents rail and nothing else, so the
+// session rail beside the inbox has nothing new to draw.
+const renders = (r: Report, name: string) => Number(r.detail.rendered.find((x) => x.startsWith(`${name} x`))?.split(" x")[1] ?? 0);
+await test("inbox-return", "going back to the inbox from Threads re-renders none of the session rail's 50 cards, and clicking Inbox again on the inbox changes nothing", async () => {
+  await setup("inbox-return");
+  for (const r of await twice()) {
+    expect({
+      ...pick(r, ["cards", "storeWrites", "domMutations", "layoutReads", "convexSubscribes", "convexQueries"]),
+      storeKeys: [...r.detail.storeKeys].sort(),
+      SessionCard: renders(r, "SessionCard"), SessionCardView: renders(r, "SessionCardView"),
+      // The route change and the inbox's own redraw; a third lands when a
+      // shell timer ticks inside the run (wall time), so this is a ceiling.
+      commitsAtMost3: r.counts.commits <= 3,
+    }).toEqual({
+      // The rail stays open beside the inbox, drawing its bounded list.
+      cards: 50,
+      // tabNavigate moves the tab's path; the visit recorder notes the visit.
+      storeWrites: 2, storeKeys: ["recentVisits", "tabs"],
+      // The page swap inside the shell; nothing in the rail moves.
+      domMutations: 4, layoutReads: 0,
+      // The inbox reads the store the rail already fed.
+      convexSubscribes: 0, convexQueries: 0,
+      // No session row changed, so no card has anything new to draw. On the
+      // base every card re-rendered twice (x100), because useOpenSession
+      // handed the rail a new onSelect whenever the route flipped.
+      SessionCard: 0, SessionCardView: 0,
+      commitsAtMost3: true,
+    });
+  }
+  // A rage click: the link again while the inbox is already on screen. The
+  // page is neither remounted (no DOM change) nor re-rendered.
+  await run();
+  const again = await run();
+  expect({
+    ...pick(again, ["storeWrites", "domMutations", "layoutReads"]),
+    redrawn: again.detail.rendered.filter((x) => /^(QueuePage|QueuePageClient|SessionCard|SessionCardView) x/.test(x)),
+  }).toEqual({ storeWrites: 0, domMutations: 0, layoutReads: 0, redrawn: [] });
 });
 
 process.exit(failures.length ? 1 : 0);

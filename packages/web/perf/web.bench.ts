@@ -36,6 +36,9 @@ const WORKLOAD: Record<string, string> = {
   "heartbeat in an inbox of 5000 sessions": "inbox-heartbeat",
   // A 1,560-line diff shown whole, highlighted, in a warm app.
   "open a long diff": "diff",
+  // The dashboard shell over 5,000 sessions, rail open: back to the inbox
+  // from Threads the way a sidebar link goes.
+  "back to the inbox from Threads": "inbox-return",
 };
 
 export default bench({
@@ -53,5 +56,6 @@ export default bench({
     "load an inbox of 5000 sessions": harnessCase(["cards"]),
     "heartbeat in an inbox of 5000 sessions": harnessCase(),
     "open a long diff": harnessCase(["diffLines"]),
+    "back to the inbox from Threads": harnessCase(["cards"]),
   },
 });

@@ -15,6 +15,7 @@ Both drive `harness.tsx`: the real components mounted in jsdom over a synthetic 
 | heartbeat in an inbox of 5000 sessions | A liveness overlay payload (`applyMineLivenessPayload`) shaped like the server's: the viewer's 600 newest sessions, each with its facts and placement stamps, plus the projection envelope, all freshly decoded; only one drawn session's heartbeat moved | 0 commits, 0 DOM mutations, 0 layout reads |
 | the same two, Modern style (`inbox-load-modern`, `inbox-heartbeat-modern`; budgets only) | The panel under the Modern theme context, drawing `ModernSessionCardView` and its section header | the same counts: 51 cards, 2 subscriptions; 0 commits, 0 DOM mutations, 0 layout reads |
 | open a long diff | A 1,560-line TypeScript file with 52 changed lines, shown whole and highlighted, in a warm app, mounted at the top of a scroller a viewport (800px) tall | 2 commits, 18 DOM mutation records, 32 layout reads, 0 store writes, 150 of 1,612 rows drawn |
+| back to the inbox from Threads (`inbox-return`) | The real dashboard shell with tabs over 5,000 sessions, the session rail open; the tab moves /threads → /inbox through `tabNavigate`, as a sidebar link does | 50 cards, 2 store writes (`tabs`, `recentVisits`), 4 DOM mutations, 0 layout reads, 0 SessionCard renders, at most 3 commits; clicking Inbox again on the inbox: 0 store writes, 0 DOM mutations, no page or card re-render |
 
 The budgets also check that a rename arriving through the feed reaches its card.
 

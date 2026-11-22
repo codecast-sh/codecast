@@ -1,4 +1,5 @@
-// ct-97296: going back to the inbox from Threads. A fragment of perf/harness.tsx,
+// ct-97296: going back to the inbox from Threads. A copy of the harness's own
+// "inbox-return" setup (perf/harness.tsx), for trees whose harness predates it. A fragment,
 // not a module: perf/inboxReturn.budget.ts appends it to the harness source at
 // run time, so it reads the harness's own world (seedStore, measure, cards,
 // settle, until, the fake Convex client) and registers one more workload.

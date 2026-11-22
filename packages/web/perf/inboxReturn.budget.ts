@@ -1,16 +1,21 @@
 // ct-97296: going back to the inbox from Threads re-renders none of the session
-// rail's 50 cards. Run with plain `bun perf/inboxReturn.budget.ts` (like
-// perf/budgets.ts, not `bun test`: the test preload stands in for modules the
-// shell draws).
+// rail's 50 cards. The check itself is the "inbox-return" budget in
+// perf/budgets.ts (run by scripts/perf-budgets.sh); this file is the flow's
+// repro entry, kept so it still runs on a tree whose harness predates that
+// workload.
 //
-// The workload lives in perf/inboxReturn.workload.tsx, a fragment appended to
-// perf/harness.tsx here at run time, so this check runs against whatever
-// harness and app code the tree holds without editing the harness itself.
+// When perf/harness.tsx registers "inbox-return", this runs that budget. On an
+// older harness it appends perf/inboxReturn.workload.tsx (the same setup, as a
+// fragment) to the harness at run time and checks the card renders alone.
 import { deepStrictEqual } from "node:assert/strict";
 import { readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const dir = import.meta.dir;
+if (readFileSync(join(dir, "harness.tsx"), "utf8").includes('"inbox-return": setupInboxReturn')) {
+  const child = Bun.spawnSync(["bun", join(dir, "budgets.ts"), "inbox-return"], { stdout: "inherit", stderr: "inherit" });
+  process.exit(child.exitCode ?? 1);
+}
 const generated = join(dir, `.inbox-return-harness-${process.pid}.tsx`);
 writeFileSync(generated, `${readFileSync(join(dir, "harness.tsx"), "utf8")}\n${readFileSync(join(dir, "inboxReturn.workload.tsx"), "utf8")}`);
 let failed = false;
