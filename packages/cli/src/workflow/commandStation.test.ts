@@ -211,10 +211,15 @@ describe("a station that ends on its own", () => {
     expect(told).toHaveLength(1);
   }, 30_000);
 
+  test("a climb station that streams its runs keeps the default bound", () => {
+    const climb = parseWorkflowSource(fs.readFileSync(path.join(import.meta.dir, "templates", "climb.cast"), "utf-8"));
+    for (const id of ["gauge", "screen"]) expect([id, silentBoundMs(climb.nodes.get(id)!)]).toEqual([id, 1_800_000]);
+  });
+
   test("the shipped stations quiet by design (waits, holds, gates) are never flagged", () => {
     const templates = path.join(import.meta.dir, "templates");
     const station = (file: string, id: string) => parseWorkflowSource(fs.readFileSync(path.join(templates, file), "utf-8")).nodes.get(id)!;
-    for (const [file, id] of [["deploy.cast", "wait"], ["climb.cast", "hold"], ["climb.cast", "guard"], ["line.cast", "ship"], ["ship.cast", "ship"]]) {
+    for (const [file, id] of [["deploy.cast", "wait"], ["climb.cast", "hold"], ["climb.cast", "guard"], ["climb.cast", "confirm"], ["line.cast", "ship"], ["ship.cast", "ship"]]) {
       expect([file, id, silentBoundMs(station(file, id))]).toEqual([file, id, 0]);
     }
   });

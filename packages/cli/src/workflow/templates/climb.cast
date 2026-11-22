@@ -67,7 +67,8 @@ digraph climb {
   screen [label="Screen", shape=parallelogram, timeout=43200,
     script="cast climb screen --dir \"$run_dir/climb\""]
 
-  confirm [label="Confirm", shape=parallelogram, timeout=21600,
+  // Quiet by design: its held-split runs go through `cast env run --split held`, whose output is read and printed at the end (climbCommand.ts heldRun); its timeout bounds a hang.
+  confirm [label="Confirm", shape=parallelogram, timeout=21600, silent=0,
     script="cast climb confirm --dir \"$run_dir/climb\""]
 
   // The product's eval gate (the line profile's eval command, as committed at the base) on each survivor, as the line's Eval runs it.
