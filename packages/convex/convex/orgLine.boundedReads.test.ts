@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { claimSlot, freeSlots, LINE_RUNS_PER_RUNNER, lineLoadFor, type LineLoads } from "./orgLine";
+import { claimSlot, freeSlots, LINE_RUNS_PER_RUNNER, lineLoadFor, loadWorking, type LineLoads } from "./orgLine";
 import { normalizeGitOrigin } from "@codecast/shared/contracts";
 import { HOST, NOW, ROLE, fixtures } from "./orgLine.testkit";
 
@@ -56,7 +56,7 @@ describe("a pass reads each machine once", () => {
     const ops = await lineLoadFor(ctx, roles[1], NOW, loads, roles);
     expect(growth.pool!.subpath).toBe("growth");
     expect(ops.pool!.subpath).toBe("ops");
-    expect([growth.working, ops.working]).toEqual([1, 1]);
+    expect([loadWorking(growth), loadWorking(ops)]).toEqual([1, 1]);
     // The agents a flow needs make a pool of their own, on the same machine.
     await lineLoadFor(ctx, roles[0], NOW, loads, roles, ["claude"]);
     expect(read.runs).toBe(PARKED);
@@ -65,6 +65,8 @@ describe("a pass reads each machine once", () => {
     claimSlot(growth);
     claimSlot(growth);
     expect(freeSlots(ops)).toBe(0);
+    // Each says the same of the machine: the waiting text reads this count.
+    expect([loadWorking(growth), loadWorking(ops)]).toEqual([3, 3]);
   });
 
   test("roles with no pool on one runner share the runner's own machine: its runs read once, a run claimed through one counts for the other", async () => {
