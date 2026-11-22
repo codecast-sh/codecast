@@ -3,7 +3,7 @@
 // instead of failing with "This run's change came from no session". From a plain
 // shell, the session that owns the task is.
 import { describe, expect, test } from "bun:test";
-import { callingSubject } from "./flowCommand";
+import { callingSubject, landedOutput } from "./flowCommand";
 import { changeReturnWords } from "./workflow/flowChangeFile";
 
 const FULL = "jx756fbmcg1nk6fckmvf4xvhsh8hj4bw";
@@ -47,5 +47,13 @@ describe("changeReturnWords", () => {
     expect(changeReturnWords({ source: "session" })).toBe("When you end your turn the run freezes this session's edits again");
     expect(changeReturnWords({ source: "branch", branch: "feat" })).toBe("Commit the fix to branch feat and push it (with --force-with-lease if you rebased it), since the run may be on another machine and read the branch from origin; when you end your turn the run reads that branch again");
     expect(changeReturnWords({ source: "pr", branch: "feat" })).toContain("Push the fix to the pull request's branch feat");
+  });
+});
+
+describe("landedOutput", () => {
+  test("a change upstream already holds is JSON under --json, a sentence otherwise", () => {
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    expect(JSON.parse(landedOutput(true, "Session jx7aaaa's change", "origin/main", sha))).toEqual({ landed: sha, upstream: "origin/main" });
+    expect(landedOutput(false, "Session jx7aaaa's change", "origin/main", sha)).toBe("Session jx7aaaa's change is already on origin/main at 0123456789: nothing to run.");
   });
 });
