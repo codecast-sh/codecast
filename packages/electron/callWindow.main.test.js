@@ -49,13 +49,34 @@ test("the stage is an ordinary window: no float, no click-through, resizable", (
   assert.equal(win.did("showInactive").length, 0);
 });
 
+test("the stage stays above Codecast's own windows while the app is in front, and only then", async () => {
+  const rig = loadShell();
+  const { win } = openCallWindow(rig);
+  rig.focus.window = rig.mainWindow;
+  rig.listeners.get("browser-window-focus")(null, rig.mainWindow);
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "floating"]);
+  rig.focus.window = null;
+  rig.listeners.get("browser-window-blur")(null, rig.mainWindow);
+  await new Promise((r) => setTimeout(r, 0));
+  assert.deepEqual(win.last("setAlwaysOnTop"), [false, "floating"]);
+});
+
+test("app focus never touches the float's own level", () => {
+  const rig = loadShell();
+  const { win, sender } = openCallWindow(rig);
+  rig.handlers.get("set-call-window-size")(sender, "float");
+  rig.focus.window = rig.mainWindow;
+  rig.listeners.get("browser-window-focus")(null, rig.mainWindow);
+  assert.deepEqual(win.last("setAlwaysOnTop"), [true, "status"]);
+});
+
 test("the float sits over the work, lets the mouse through and cannot be dragged by an edge", () => {
   const rig = loadShell();
   const { win, sender } = openCallWindow(rig);
   rig.handlers.get("set-call-window-size")(sender, "float");
   assert.deepEqual(win.last("setAlwaysOnTop"), [true, "status"]);
   assert.deepEqual(win.last("setIgnoreMouseEvents"), [true, { forward: true }]);
-  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: false, skipTransformProcessType: true }]);
+  assert.deepEqual(win.last("setVisibleOnAllWorkspaces"), [true, { visibleOnFullScreen: true, skipTransformProcessType: true }]);
   assert.equal(win.isResizable(), false);
 });
 
@@ -679,4 +700,11 @@ test("the float asked for again while visible stays where it is and takes no foc
   rig.handlers.get("set-call-window-size")(sender, "float");
   assert.equal(win.did("showInactive").length + win.did("show").length, before);
   assert.equal(win.did("focus").length, focused);
+});
+
+test("floats join a full-screen Codecast window, and only through the helper that keeps the dock", () => {
+  const src = require("node:fs").readFileSync(require("node:path").join(__dirname, "main.js"), "utf8");
+  const calls = src.match(/\.setVisibleOnAllWorkspaces\(/g) || [];
+  assert.equal(calls.length, 1);
+  assert.match(src, /function followPerson\(win, on\) \{\n  win\.setVisibleOnAllWorkspaces\(on, \{ visibleOnFullScreen: on, skipTransformProcessType: true \}\);/);
 });

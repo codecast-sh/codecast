@@ -89,7 +89,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, answerChangeable, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -1534,6 +1534,10 @@ export type SessionDecisionItem = {
   grant_id?: string;
   scope_keys?: string[];
   reopened_from?: { grant_id: string; answer_index?: number; at: number };
+  // Each change bumps it; the dispatch guard takes a change only as the next revision.
+  answer_revision?: number;
+  // Answers a person replaced, oldest first (convex recordChangedAnswer).
+  answer_history?: Array<{ status: string; answer_index?: number; answer_text?: string; answer_json?: unknown; answered_by?: DecisionParty; resolved_at?: number; replaced_at: number; replaced_by: string }>;
   created_at: number;
   // conversation.message_count at ask time; live count minus this is
   // "messages since the ask", correct beyond the loaded window.
@@ -15659,9 +15663,12 @@ function adoptDecisionDraft(draft: Draft, decisionId: string): void {
 
 function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionAnswerInput): void {
   const row = draft.sessionDecisions[decisionId];
-  // Pending, or an advisory answer a person is changing (advisoryAnswerOpen):
-  // the agent went ahead on its default, so a new pick is one more message.
-  if (!row || (row.status !== "pending" && ("dismiss" in answer || !advisoryAnswerOpen(row)))) return;
+  // Pending, or a settled answer a person is changing (answerChangeable): the
+  // agent is already on the old course, so the new pick is one more message
+  // that names the answer it replaces.
+  if (!row || (row.status !== "pending" && ("dismiss" in answer || !answerChangeable(row)))) return;
+  const replaced = row.status === "answered" ? decisionAnswerLabel(row, row) : row.status === "dismissed" ? "dismissed" : null;
+  if (row.status !== "pending") row.answer_revision = (row.answer_revision ?? 0) + 1;
   // A typed answer still waiting for its pause must not write the draft back.
   cancelDraftWrite(decisionDraftKey(decisionId));
   dropDraft(draft, decisionDraftKey(decisionId));
@@ -15690,7 +15697,8 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
   // against its ask and link back to the `cast decide` call.
   // A silent card (a staffing proposal's pointer, org-staffing.md S4) is
   // cleared by the answer and delivers nothing: the author is not woken.
-  const content = answerText && !row.silent ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText }) : undefined;
+  const detail = replaced ? `This changes the earlier answer (${replaced}). Redo anything that depended on it.` : undefined;
+  const content = answerText && !row.silent ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText, detail }) : undefined;
   const convId = row.conversation_id;
   // A Run on a `cast decide --run` card (commandRun.ts) is the server's to
   // deliver, with the command's output, once the machine has run it.

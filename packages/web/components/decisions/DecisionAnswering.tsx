@@ -8,9 +8,9 @@ import Link from "next/link";
 import { useMutation } from "convex/react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
-import { AlertTriangle, ShieldCheck, Undo2 } from "lucide-react";
+import { AlertTriangle, PencilLine, ShieldCheck, Undo2 } from "lucide-react";
 import { autonomyOn } from "@codecast/shared/contracts/roleAutonomy";
-import { advisoryAnswerOpen } from "@codecast/shared/contracts";
+import { answerChangeable } from "@codecast/shared/contracts";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
 import { answersForOthers, mayAnswerFromDocument, useInboxStore, useTrackedStore, type SessionDecisionItem, type DecisionDetailItem, type DecisionAnswerInput } from "../../store/inboxStore";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
@@ -21,6 +21,7 @@ import { approvalScope, closedDecisionWords, type ReportRun } from "../../lib/li
 import { lineRefHref } from "../../lib/line/lineWorkspaceUrl";
 import { causeDoubt } from "../../lib/line/lineTrace";
 import { chosenOptions, ladderRecommendation } from "../../lib/decisionLinks";
+import { answerTimeline, inputLabel, sameAnswer, type AnswerEntry } from "../../lib/decisions/decisionHistory";
 import { EntityIdPill } from "../EntityIdPill";
 import { Button } from "../ui/button";
 import { AskAgain } from "../line/AskAgain";
@@ -96,9 +97,11 @@ export function useDecisionAnswering(decision: SessionDecisionItem, detail: Deci
   const rec = ladderRecommendation(decision);
   // Single, multi and rank answer on the option rows themselves; a form answers on its fields in the footer.
   const answerInOptions = pending && answerable && (decision.kind ?? "single") !== "form";
-  // An advisory card's answer stays open (advisoryAnswerOpen): the agent went
-  // ahead on its default, so the bar stays up under the outcome to change course.
-  const changeCourse = answerable && advisoryAnswerOpen(decision);
+  // A settled answer that only steered the agent stays open (answerChangeable):
+  // an advisory card keeps its bar up under the outcome to change course, any
+  // other decision offers Change answer under the answer on record.
+  const changeCourse = answerable && answerChangeable(decision);
+  const canChange = changeCourse && !decision.card && !detail.superseded;
   const verdictBar = (answerInOptions || changeCourse) && !!cardAnswerIndexes(decision);
   const chosen = new Set<number>(chosenOptions(decision));
 
@@ -171,11 +174,11 @@ export function useDecisionAnswering(decision: SessionDecisionItem, detail: Deci
   ) : null;
 
   // The answer section shows unless the answer already sits on the options or the card's outcome line says it all.
-  const answerSection = (!pending || !answerInOptions) && (!outcome || canReopen || !!detail.grant_offer) && !(closed && !canReopen && !detail.grant_offer);
+  const answerSection = (!pending || !answerInOptions) && (!outcome || canReopen || !!detail.grant_offer) && !(closed && !canReopen && !canChange && !detail.grant_offer);
 
   return {
     meId, now, run, cardTask, doubt, pending, rec, answerInOptions, verdictBar, chosen, onAnswer, onDismiss, onReopen,
-    holderLine, heldNote, answeredByLine, scope, outcome, canReopen, closed, closedWords, banner, answerSection,
+    holderLine, heldNote, answeredByLine, scope, outcome, canReopen, canChange, closed, closedWords, banner, answerSection,
   };
 }
 
@@ -203,6 +206,8 @@ export function DecisionAnswerPanel({ decision, detail, answerable, a, keys = tr
           {a.answeredByLine && <div className="mt-2 text-[12px] text-sol-text-dim">{a.answeredByLine}</div>}
         </>
       )}
+      {a.canChange && <ChangeAnswer decision={decision} a={a} keyScope={keyScope} />}
+      <EarlierAnswers decision={decision} detail={detail} meId={a.meId} now={a.now} />
       {a.canReopen && (
         <Button variant="outline" size="xs" onClick={a.onReopen} className="mt-3">
           <Undo2 />Disagree and reopen
@@ -212,6 +217,67 @@ export function DecisionAnswerPanel({ decision, detail, answerable, a, keys = tr
         <GrantOffer offer={detail.grant_offer} decisionId={decision._id} ladder={detail.ladder} grant={grant} />
       )}
     </>
+  );
+}
+
+// Change a settled answer: pick again on the same controls, then confirm the
+// change, which reaches the asking session as one more message naming the
+// answer it replaces.
+function ChangeAnswer({ decision, a, keyScope }: { decision: SessionDecisionItem; a: DecisionAnswering; keyScope?: RefObject<HTMLElement | null> }) {
+  const [open, setOpen] = useState(false);
+  const [proposed, setProposed] = useState<DecisionAnswerInput | null>(null);
+  const was = decision.status === "dismissed" ? "Dismissed" : answerTimeline(decision)[0]?.label;
+  const close = () => { setOpen(false); setProposed(null); };
+  if (!open) {
+    return (
+      <Button variant="outline" size="xs" onClick={() => setOpen(true)} className="mt-3" data-decision-change>
+        <PencilLine />{decision.status === "dismissed" ? "Answer it now" : "Change answer"}
+      </Button>
+    );
+  }
+  if (proposed) {
+    return (
+      <div className="mt-4 rounded-lg border border-sol-border/60 bg-sol-bg-alt/40 p-3" data-decision-change-confirm>
+        <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-[13px]">
+          <span className="text-sol-text-dim">From</span><span className="text-sol-text-muted line-through decoration-sol-text-dim/60">{was}</span>
+          <span className="text-sol-text-dim">To</span><span className="text-sol-text font-medium">{inputLabel(decision, proposed)}</span>
+          <span className="text-sol-text-dim">Tells</span><span className="text-sol-text-muted">{decision.session_title || "the asking session"}</span>
+        </div>
+        <div className="mt-3 flex gap-2">
+          <Button size="xs" onClick={() => { a.onAnswer(proposed); toast.success("Answer changed"); close(); }}>Change answer</Button>
+          <Button variant="ghost" size="xs" onClick={() => setProposed(null)}>Pick again</Button>
+          <Button variant="ghost" size="xs" onClick={close}>Cancel</Button>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="mt-4" data-decision-change-pick>
+      <h2 className="decision-kicker mb-3">New answer</h2>
+      <DecisionAnswerControls decision={decision} onAnswer={(input) => { if (!("dismiss" in input) && !sameAnswer(decision, input)) setProposed(input); }} keys keyScope={keyScope} />
+      <Button variant="ghost" size="xs" onClick={close} className="mt-2">Cancel</Button>
+    </div>
+  );
+}
+
+// The answers a decision had before the one on record, newest first, each with who gave it and who replaced it.
+function EarlierAnswers({ decision, detail, meId, now }: { decision: SessionDecisionItem; detail: DecisionDetailItem; meId: string; now: number }) {
+  const earlier = answerTimeline(decision).slice(1);
+  if (!earlier.length) return null;
+  const name = (id?: string) => (!id ? "someone" : id === meId ? "you" : detail.asked_users.find((u) => u._id === id)?.name ?? "a teammate");
+  const by = (e: AnswerEntry) => (!e.by ? null : e.by.kind === "user" ? name(e.by.id) : e.by.kind === "role" ? "a role" : "a stack default");
+  return (
+    <div className="mt-4" data-decision-earlier>
+      <h3 className="decision-kicker mb-1.5">Earlier answers</h3>
+      <ol className="space-y-1">
+        {earlier.map((e, i) => (
+          <li key={i} className="text-[12.5px] text-sol-text-muted">
+            <span className="line-through decoration-sol-text-dim/60">{e.label}</span>
+            <span className="text-sol-text-dim">{by(e) ? ` · ${by(e)}` : ""} · replaced by {name(e.replacedBy)} {settledAgo(e.replacedAt!, now)}</span>
+          </li>
+        ))}
+      </ol>
+    </div>
   );
 }
 

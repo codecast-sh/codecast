@@ -20,7 +20,7 @@ import type { SecretMeta } from "@codecast/shared/contracts/secrets";
 import type { PublishDeps } from "../src/castApi.ts";
 import type { ReadSecret } from "../src/secrets/inject.ts";
 import { openSessionTab } from "../src/browser/sessionTab.ts";
-import { cdpSecretPage, typeSecret, type SecretTypeField } from "../src/browser/secretType.ts";
+import { cdpSecretPage, findSelector, typeSecret, type SecretTypeField } from "../src/browser/secretType.ts";
 import { pageForRef } from "../src/browser/oopif.ts";
 
 const A = process.env.CAST_RIG_FIXTURES;
@@ -128,6 +128,27 @@ for (const [kind, top] of [["out-of-process", A.replace("127.0.0.1", "localhost"
   check(`${kind} frame: typed when the secret names the frame's site`, typed.ok && typed.value === PASSWORD && typed.message.includes(B), typed.ok ? `${typed.message}, field holds the value: ${typed.value === PASSWORD}` : typed.message);
   const top_ = await inFrame([hostA]);
   check(`${kind} frame: refused when the secret names only the top page's site`, !top_.ok && /not a site of/.test(top_.message), top_.message);
+}
+// A CSS selector for a field inside a frame (a payment card box): looked up in every document of the tab.
+for (const [kind, top] of [["out-of-process", A.replace("127.0.0.1", "localhost")], ["in-process", A]] as const) {
+  const hostB = new URL(B).host;
+  const card = async (sites: string[]) => {
+    const r = await attempt(`${top}/card.html`, 'input[name="cardnumber"]', "password", sites);
+    if (!r.ok) return r;
+    const tab = await openSessionTab({}, deps);
+    try {
+      const { hits } = await findSelector(tab.conn, tab.sessionId, 'input[name="cardnumber"]');
+      const { object } = await tab.conn.send<any>("DOM.resolveNode", { nodeId: hits[0].nodeId }, hits[0].sessionId);
+      const { result } = await tab.conn.send<any>("Runtime.callFunctionOn", { objectId: object.objectId, functionDeclaration: "function() { return this.value }", returnByValue: true }, hits[0].sessionId);
+      return { ...r, value: result.value as string };
+    } finally {
+      tab.conn.close();
+    }
+  };
+  const typed = await card([hostB]);
+  check(`${kind} frame by selector: typed when the secret names the frame's site`, typed.ok && typed.value === PASSWORD && typed.message.includes(B), typed.ok ? `${typed.message}, field holds the value: ${typed.value === PASSWORD}` : typed.message);
+  const refused = await card([hostA]);
+  check(`${kind} frame by selector: refused when the secret names only the top page's site`, !refused.ok && /not a site of/.test(refused.message), refused.message);
 }
 {
   // The field sends the page to the other origin the moment it takes focus.
