@@ -1008,6 +1008,17 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["change", "release"] },
     feeds: ["pipelines.forTeam"],
   },
+  // Every device's checkouts of a team's repositories (ct-98780,
+  // contracts/checkouts.ts): ahead/behind, uncommitted work by session, the
+  // level sweep's state. One row per device and path; the feed returns a
+  // team's whole set.
+  checkouts: {
+    persistence: { kind: "collection", key: "checkouts" },
+    hydration: { phase: "deferred" },
+    indexes: "_id, workspace",
+    sync: { isDelta: true, deepFields: ["uncommitted", "level"] },
+    feeds: ["checkouts.forTeam"],
+  },
   // How far a merged pull request or a main commit has gone toward production
   // (deploys.md DP16), keyed by its `owner/repo#N` or `owner/repo@sha`. Each
   // pill that names one feeds its own row, so delta.
@@ -2215,6 +2226,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   lineDeploys: "shared",
   deployTargets: "shared",
   pipelines: "shared",
+  checkouts: "shared",
   teamDeploys: "shared",
   deployReach: "local",
   liveFlows: "shared",
