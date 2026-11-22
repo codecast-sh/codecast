@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 import { parseWorkflowFile, parseWorkflowSource, resolveFlowSource, type ResolveFlow } from "./parser.js";
 import { resolveWorkflowSource } from "./templates.js";
 import type { WorkflowGraph } from "./types.js";

@@ -5,7 +5,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile } from "../proc.js";
 import { promisify } from "node:util";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import type { RepoFlow, RepoFlowsReport } from "@codecast/shared/contracts/repoFlows";
