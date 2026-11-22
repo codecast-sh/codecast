@@ -43,8 +43,8 @@ pushed last, from anywhere. Every push saves a version, numbered in the row's
 history (`seq`), with its graph kept once per row (`workflow_version_graphs`; a
 library version holds its own). A run pins the version it started on
 (`workflow_runs.graph_version_id`: the one its own push left; a run created
-without one, such as the sweep's, pins the row's newest, which is what it
-resolved; a library run's `flow_versions`), and its card, its resumed runner,
+without one, such as the sweep's or the web's Run, pins the version the row
+stands at, `workflows.version_id`; a library run's `flow_versions`), and its card, its resumed runner,
 the agents a machine needs for it and its station reads all read that version
 (`convex/lib/runGraph.ts`). What it resumes with decides what supersedes it:
 a pin from a file resumes from that checkout's file, so a later version pushed
@@ -54,6 +54,14 @@ CLI built-in, a web or session save) resumes with its own pinned graph, so
 nothing supersedes it. Another repository's or team's push is never on its
 line. A run from before pins, or pinned to a version from before ct-98653,
 reads the row as the rules above say.
+
+**The row stands at the version its runs would read.** A push from a file, a
+library save, a restore and `cast flow pin` move `workflows.version_id`: a pin
+to the library stands at its current version, a pin to the repo at its file's
+newest push. A write from no file (a web settings edit) records a version but
+leaves a row that stands at a file's version where it is, so a settings edit
+never detaches a flow's later runs from its checkout. A library flow's run
+reads its current version, never `version_id`.
 
 A card or run carries the root reason, not a wrapper: a card whose run waits
 at a removed gate reads "station removed", one whose problem lost every

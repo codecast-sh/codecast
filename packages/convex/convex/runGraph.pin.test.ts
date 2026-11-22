@@ -341,3 +341,68 @@ describe("the version list, the card's label and a restore number versions alike
     expect(listed.versions.map((x: any) => x.n)).toEqual([4, 3, 2, 1]);
   });
 });
+
+// A run started with no version named reads the checkout's file only while the row stands at a version from a file.
+describe("the row stands at the version its runs would read", () => {
+  const runNamingNoVersion = async (t: any, owner: any, id: string) => t.run(async (ctx: any) => {
+    const { createRunCore } = await import("./workflow_runs");
+    return (await createRunCore(ctx, owner, { workflow_name: "change", workflow_id: id as any, project_path: "/code/codecast" })).run_id;
+  });
+
+  test("a flow pinned to the library and back to its repo runs from its checkout's file again", async () => {
+    const { t, owner, push, daemon } = await setup();
+    const { id } = await push(codecastPush);
+    await t.mutation(api.flowVersions.fromCli, { api_token: TOKEN, op: "pin", flow: "change", to: "library" });
+    // A save while in the library: a version of its own, from no file, which the row stands at.
+    const { origin: _o, ...saved } = { ...codecastPush, goal: "saved in the library" };
+    await push({ ...saved, save: true });
+    await t.mutation(api.flowVersions.fromCli, { api_token: TOKEN, op: "pin", flow: "change", to: "repo" });
+    const got = await daemon(await runNamingNoVersion(t, owner, id));
+    expect(got.workflow.origin?.root).toBe("/code/codecast");
+    expect(ids(got.workflow.nodes)).toEqual(ids(CODECAST.nodes));
+  });
+
+  test("a web settings edit of a flow pushed from a file leaves its later runs on the file", async () => {
+    const { t, owner, push, daemon } = await setup();
+    const { id } = await push(codecastPush);
+    const { origin: _o, ...edit } = { ...codecastPush, goal: "edited in line settings" };
+    await t.withIdentity({ subject: `${owner}|s` }).mutation(api.workflows.webUpsert, edit);
+    const got = await daemon(await runNamingNoVersion(t, owner, id));
+    expect(got.workflow.origin?.root).toBe("/code/codecast");
+    expect(got.workflow.origin?.file).toBe("packages/cli/src/workflow/templates/change.cast");
+  });
+
+  test("a library flow's run starts on its current version, whatever version the row stands at", async () => {
+    const { t, push } = await setup();
+    const { id } = await push(codecastPush);
+    // A library flow from before the row recorded where it stands: version_id names its file version.
+    const libraryId = await t.run(async (ctx) => {
+      const by = (await ctx.db.query("users").first())!._id;
+      await ctx.db.patch(id as any, { runs_from: "library" });
+      const { name, slug, label, source, nodes, edges } = UNION;
+      return await ctx.db.insert("workflow_versions", { workflow_id: id as any, graph_hash: "lib", nodes: [], changed: [], by, at: Date.now() + 1000, line: "library", seq: 2, snapshot: { name, slug, label, source, nodes, edges, file: "change.cast", files: [] } } as any);
+    });
+    const pinned = await t.run(async (ctx) => {
+      const { versionToPin } = await import("./lib/runGraph");
+      return (await versionToPin(ctx as any, id as any))?._id;
+    });
+    expect(pinned).toBe(libraryId);
+  });
+});
+
+describe("removing a flow removes the graphs it kept, a batch at a time", () => {
+  test("twenty kept graphs all go", async () => {
+    const { t, owner, push } = await setup();
+    for (let i = 0; i < 20; i++) await push({ ...codecastPush, goal: `goal ${i}`, origin: { ...codecastPush.origin, graph_hash: `h${i}` } });
+    const graphs = () => t.run(async (ctx) => (await ctx.db.query("workflow_version_graphs").collect()).length);
+    expect(await graphs()).toBe(20);
+    await t.withIdentity({ subject: `${owner}|s` }).mutation(api.workflows.webRemove, { slug: "change" });
+    // The first batch goes with the row; each later one is its own scheduled mutation (real timers: let each fire).
+    expect(await graphs()).toBe(12);
+    for (let i = 0; i < 10 && (await graphs()) > 0; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+      await t.finishAllScheduledFunctions(() => {});
+    }
+    expect(await graphs()).toBe(0);
+  });
+});

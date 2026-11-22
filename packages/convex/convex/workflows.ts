@@ -1,4 +1,5 @@
 import { internalMutation, mutation, query } from "./functions";
+import { internal } from "./_generated/api";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { ConvexError, v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
@@ -318,11 +319,27 @@ export const webRemove = mutation({
     if (!userId) throw new Error("Not signed in");
     const row = await workflowBySlug(ctx, userId, args.slug);
     if (row) {
-      // The graphs its versions kept go with it.
-      for (const g of await ctx.db.query("workflow_version_graphs").withIndex("by_workflow_key", (q) => q.eq("workflow_id", row._id)).collect()) await ctx.db.delete(g._id);
       await ctx.db.delete(row._id);
+      // The graphs its versions kept go with it.
+      await removeKeptGraphsCore(ctx, row._id);
     }
     return { removed: !!row };
+  },
+});
+
+// A kept graph is up to SNAPSHOT_MAX_BYTES, so a heavily edited flow's graphs go a few at a time, each batch its own
+// mutation, until none is left.
+const KEPT_GRAPH_BATCH = 8;
+async function removeKeptGraphsCore(ctx: any, workflowId: Id<"workflows">) {
+  const batch = await ctx.db.query("workflow_version_graphs").withIndex("by_workflow_key", (q: any) => q.eq("workflow_id", workflowId)).take(KEPT_GRAPH_BATCH + 1);
+  for (const g of batch.slice(0, KEPT_GRAPH_BATCH)) await ctx.db.delete(g._id);
+  if (batch.length > KEPT_GRAPH_BATCH) await ctx.scheduler.runAfter(0, internal.workflows.removeKeptGraphs, { workflow_id: workflowId });
+}
+
+export const removeKeptGraphs = internalMutation({
+  args: { workflow_id: v.id("workflows") },
+  handler: async (ctx, args) => {
+    await removeKeptGraphsCore(ctx, args.workflow_id);
   },
 });
 

@@ -720,7 +720,7 @@ export async function createRunCore(
     // the problem's earlier branch aside and starts it again from origin/main
     // (cli lineTrialBranch.ts). Its fix stays on the set-aside branch, prior art.
     fresh_branch?: boolean;
-    // The version of workflow_id the run starts on (lib/runGraph.ts versionToPin); the row's newest when not given.
+    // The version of workflow_id the run starts on (lib/runGraph.ts versionToPin); the version the row stands at when not given.
     graph_version_id?: Id<"workflow_versions">;
     now?: number;
   },

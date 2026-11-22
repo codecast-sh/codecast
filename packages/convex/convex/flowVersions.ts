@@ -22,7 +22,7 @@ import { verifyApiToken } from "./apiTokens";
 import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
 import { workspaceGrantsAccess } from "./lib/access";
 import { recordGraphVersion } from "./workflows";
-import { LIBRARY_LINE, nextSeq, placeLine } from "./lib/runGraph";
+import { LIBRARY_LINE, libraryVersionOf, newestOfLine, nextSeq, placeLine } from "./lib/runGraph";
 import { extendsFile, isExtendsPath } from "./lib/flowRoute";
 
 type Snapshot = NonNullable<Doc<"workflow_versions">["snapshot"]>;
@@ -82,11 +82,21 @@ export async function recordWorkflowVersion(ctx: any, workflowId: Id<"workflows"
     const snapshot: Snapshot = { ...snapshotOfRow(row), file: origin?.file || `${row.slug}.cast`, files: origin?.files ?? [], ...(row.model_stylesheet ? { model_stylesheet: row.model_stylesheet } : {}) };
     const pushed_from = origin?.device_id && origin.root ? { device_id: origin.device_id, root: origin.root } : undefined;
     const graph = JSON.stringify(snapshot).length <= SNAPSHOT_MAX_BYTES ? () => keptGraph(ctx, workflowId, snapshot) : undefined;
-    return await standAt(ctx, row, await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, undefined, { ...(pushed_from ? { line: placeLine(pushed_from), pushed_from } : {}), graph }));
+    const recorded = await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, undefined, { ...(pushed_from ? { line: placeLine(pushed_from), pushed_from } : {}), graph });
+    // A write from no file (a web settings edit) never detaches a flow from its file: the row keeps standing at the
+    // file's version, which carries the checkout its runs read.
+    if (!pushed_from && (await standsOnFile(ctx, row))) return recorded;
+    return await standAt(ctx, row, recorded);
   }
   const snapshot = snapshotOfRow(row);
   if (JSON.stringify(snapshot).length > SNAPSHOT_MAX_BYTES) throw new ConvexError(`${row.slug} is too big to keep as a library version (over ${SNAPSHOT_MAX_BYTES} bytes)`);
   return await standAt(ctx, row, await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, snapshot, { line: LIBRARY_LINE }));
+}
+
+/** Whether the row stands at a version pushed from a file. */
+async function standsOnFile(ctx: any, row: Doc<"workflows">): Promise<boolean> {
+  const at: Doc<"workflow_versions"> | null = row.version_id ? await ctx.db.get(row.version_id) : null;
+  return !!at?.pushed_from;
 }
 
 /** The row now stands at this version (workflows.version_id): a run started with no version named pins it. */
@@ -95,13 +105,21 @@ async function standAt<T extends { id: Id<"workflow_versions"> }>(ctx: any, row:
   return version;
 }
 
-/** The newest version that holds its content: the one a run starting now reads. */
-async function currentVersion(ctx: any, workflowId: Id<"workflows">): Promise<Doc<"workflow_versions"> | null> {
-  for await (const ver of ctx.db.query("workflow_versions").withIndex("by_workflow_at", (q: any) => q.eq("workflow_id", workflowId)).order("desc")) {
-    if (ver.snapshot) return ver;
-  }
-  return null;
+const currentVersion = libraryVersionOf;
+
+/**
+ * The version a flow pinned to its repo stands at: its file's newest push from
+ * the place the row last named, else its newest push from any file. Null when
+ * no version came from a file.
+ */
+async function fileVersionOf(ctx: any, row: Doc<"workflows">): Promise<Doc<"workflow_versions"> | null> {
+  const o = row.origin;
+  const own = o?.device_id && o.root ? await newestOfLine(ctx, row._id, placeLine({ device_id: o.device_id, root: o.root })) : null;
+  if (own) return own;
+  const recent: Doc<"workflow_versions">[] = await ctx.db.query("workflow_versions").withIndex("by_workflow_at", (q: any) => q.eq("workflow_id", row._id)).order("desc").take(FILE_VERSION_WINDOW);
+  return recent.find((v) => v.pushed_from) ?? null;
 }
+const FILE_VERSION_WINDOW = 200;
 
 /** The base flow a library flow extends: the owner's flow whose file the `extends` path names, from the same checkout when two match. */
 async function baseOf(ctx: any, row: Doc<"workflows">): Promise<Doc<"workflows"> | null> {
@@ -279,7 +297,10 @@ async function restoreCore(ctx: any, userId: Id<"users">, ref: string, version: 
 async function pinCore(ctx: any, userId: Id<"users">, ref: string, to: "library" | "repo", now = Date.now()) {
   const row = await flowFor(ctx, userId, ref);
   await ctx.db.patch(row._id, { runs_from: to, updated_at: now });
-  if (to === "library" && !(await currentVersion(ctx, row._id))) await recordWorkflowVersion(ctx, row._id, userId, row.origin ? { graph_hash: row.origin.graph_hash, nodes: row.origin.nodes } : undefined, now);
+  // The row stands where its runs now read: the library's current version, or its file's newest push.
+  const standing = to === "library" ? await currentVersion(ctx, row._id) : await fileVersionOf(ctx, row);
+  if (standing) await standAt(ctx, row, { id: standing._id });
+  else if (to === "library") await recordWorkflowVersion(ctx, row._id, userId, row.origin ? { graph_hash: row.origin.graph_hash, nodes: row.origin.nodes } : undefined, now);
   return { slug: row.slug, runs_from: to };
 }
 
