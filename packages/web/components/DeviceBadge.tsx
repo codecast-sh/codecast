@@ -165,6 +165,25 @@ export function useDevices() {
   }, [devices]);
 }
 
+/** The roster fields a machine's name and icon read, as one string. */
+function rosterNamesSig(roster: Device[]): string {
+  return roster.map((d) => `${d.device_id}:${deviceDisplayName(d)}:${d.platform}:${d.is_remote ? 1 : 0}:${d.icon ?? ""}:${d.icon_color ?? ""}`).join("|");
+}
+
+/**
+ * The viewer's machines by id, for naming and drawing them. Wakes only when a
+ * name or icon changes: the roster's ref also moves on every last_seen bump,
+ * which an always-mounted list must not re-render on.
+ */
+export function useRosterMachines(): ReadonlyMap<string, Device> {
+  const sig = useInboxStore((s) => rosterNamesSig(s.machineRoster as Device[]));
+  return useMemo(
+    () => new Map((useInboxStore.getState().machineRoster as Device[]).map((d) => [d.device_id, d])),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- sig is the wake; the body reads the roster it digests
+    [sig],
+  );
+}
+
 /**
  * Resolve a session's owner device when it isn't one of the viewer's own — a
  * session can run on a teammate's or a shared bot machine (its daemon

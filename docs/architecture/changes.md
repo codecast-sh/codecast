@@ -74,8 +74,8 @@ the writer sessions, and links to the pull request, run and deploys.
   production, so it draws them once its deploy reach is read.
 - **Branches page**: the lifecycle grid (`ChangeBoard`): a row per change,
   the five stages as columns with one track across them, each cell's two
-  words under its slice, grouped by who acts next: Needs you (red, blue, and a
-  rollback), Moving (yellow, orange), Waiting, Live, then Parked and Closed
+  words under its slice, grouped by who acts next: Needs attention (red, blue,
+  and a rollback), Moving (yellow, orange), Waiting, Live, then Parked and Closed
   folded. A change is parked when nothing is moving it: committed and never
   shipped, pushed and never checked, or untouched for three days (a session's
   write, a push, a commit). A landed change, a failure and a person's turn are
@@ -83,6 +83,13 @@ the writer sessions, and links to the pull request, run and deploys.
 - **Deploys page**: "On its way" in each target's pane: the same grid,
   without Live and Closed, for every change of that repository not yet on
   main. What has landed and waits to go out is "Waiting on main", below it.
+  One filter row sits over both: Mine keeps the viewer's own changes and
+  commits, and a group's name (Needs attention, Moving, Waiting) narrows the
+  grid to that group. Both ride the address (`mine=1`, `group=you`); a row a
+  link points at is drawn whatever the filters say. With Mine on, Needs
+  attention reads Needs you. A change's owner is the strongest fact it joins:
+  its pull request's author, else the people whose sessions wrote it, else
+  the devices its checkouts sit on, else its commit's author.
 - **Phone**: the same rule, drawn as text so it wraps with its line: a pull
   request or commit pill gets the track and word after its name, and a branch
   named in a message draws whole (glyph, name, track, word) from the session's

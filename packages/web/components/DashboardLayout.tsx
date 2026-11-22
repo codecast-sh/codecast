@@ -81,7 +81,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
-import { useInboxStore, useTrackedStore, getProjectName, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, projectAxisKeys, projectOfFromState, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectToast";
 import { pathOnMyMachines, savedDefaultProject } from "../lib/machinePicker";
@@ -937,7 +937,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     if (
       selected?.project_path &&
       seedable(selected.project_path) &&
-      (!activeProjectFilter || getProjectName(selected.git_root, selected.project_path) === activeProjectFilter)
+      // Any key the session answers to on the chip axis: its folder, project or machine.
+      (!activeProjectFilter || projectAxisKeys(selected, projectOfFromState(store)).includes(activeProjectFilter))
     ) {
       return {
         path: selected.project_path,
