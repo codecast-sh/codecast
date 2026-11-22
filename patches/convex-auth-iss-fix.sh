@@ -6,6 +6,7 @@
 #   1. iss-fix  — OAuth callback "unexpected iss response parameter" (RFC 9207)
 #   2. reuse-window — widen refresh-token reuse window 10s -> 30 days
 #   3. ios-oauth — Chrome iOS GitHub sign-in (see convex-auth-ios-oauth.mjs)
+#   4. refresh-keep — a failed refresh keeps the refresh token (see convex-auth-refresh-keep.mjs)
 #
 # ---------------------------------------------------------------------------
 # Patch 1: OAuth callback "unexpected iss (issuer) response parameter value"
@@ -119,3 +120,13 @@ done
 # The rewrite lives in convex-auth-ios-oauth.mjs (multi-line, idempotent).
 
 bun "$(dirname "$0")/convex-auth-ios-oauth.mjs"
+
+# ---------------------------------------------------------------------------
+# Patch 4: a refresh that fails in transit keeps the refresh token.
+#
+# The client removed the stored refresh token before calling auth:signIn, so a
+# Convex ExpiredInQueue overload (2026-11-10, ct-91563) deleted it in every
+# window and the next expiry signed people out. The rewrite lives in
+# convex-auth-refresh-keep.mjs (multi-line, idempotent).
+
+bun "$(dirname "$0")/convex-auth-refresh-keep.mjs"
