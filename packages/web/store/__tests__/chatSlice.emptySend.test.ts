@@ -55,6 +55,9 @@ describe("chat store slice: a blank line never reaches chat.sendMessage", () => 
     useInboxStore.getState().editChatMessage(clientId, "  ");
     await settle();
     expect(sends().slice(before).filter((c) => !String(c.args[1] ?? "").trim())).toHaveLength(0);
+    const row = useInboxStore.getState().chatMessages[clientId] as any;
+    expect(row._failedAt).toBeTruthy();
+    expect(row._failReason).toBe("A message needs text or an attachment");
   });
 
   it("retrying an unsent image-only line whose uploads failed dispatches nothing", async () => {
@@ -72,6 +75,13 @@ describe("chat store slice: a blank line never reaches chat.sendMessage", () => 
     useInboxStore.getState().retryChatSend(clientId);
     await settle();
     expect(sends()).toHaveLength(0);
+    expect((useInboxStore.getState().chatMessages[clientId] as any)._failReason).toBe("A message needs text or an attachment");
+  });
+
+  it("sending only spaces leaves no row behind", async () => {
+    const clientId = useInboxStore.getState().sendChatMessage(CHANNEL, "  ");
+    await settle();
+    expect(useInboxStore.getState().chatMessages[clientId]).toBeUndefined();
   });
 
   it("still sends a line with text", async () => {
