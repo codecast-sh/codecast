@@ -8,7 +8,7 @@
 import { memo, useMemo, useState } from "react";
 import Link from "next/link";
 import { Check, CornerDownLeft, Loader2, X } from "lucide-react";
-import { WHO_WORDS, targetsFromLine, type Journey as JourneyModel, type JourneyStage, type JourneyNow } from "../../lib/ship/journey";
+import { WHO_WORDS, targetsFromLine, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type TargetState } from "../../lib/ship/journey";
 import { ageShort } from "../../lib/lineFlow";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
@@ -165,7 +165,8 @@ export function JourneyNowBar({ now, run, now_ms, children }: { now: JourneyNow;
   }
 }
 
-export function JourneyView({ journey, run, now_ms, compact, actions }: { journey: JourneyModel; run?: any; now_ms: number; compact?: boolean; actions?: React.ReactNode }) {
+/** `targets`, when the caller knows them from the landed commit's deploy reach, are where the change is: never guessed from the session's commits. */
+export function JourneyView({ journey, run, now_ms, compact, actions, targets }: { journey: JourneyModel; run?: any; now_ms: number; compact?: boolean; actions?: React.ReactNode; targets?: ReadonlyArray<TargetState> }) {
   const [open, setOpen] = useState<string | null>(null);
   const opened = open ? journey.stages.find((s) => s.id === open) ?? null : null;
   const landed = journey.now.kind === "landed" || journey.now.kind === "deploying" || journey.now.kind === "live";
@@ -175,17 +176,19 @@ export function JourneyView({ journey, run, now_ms, compact, actions }: { journe
       <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={run ? setOpen : undefined} />
       {opened ? <StageDetail stage={opened} now_ms={now_ms} /> : null}
       {run ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms}>{actions}</JourneyNowBar> : null}
-      {run && landed && team && run.spawner_conversation_id ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} /> : null}
+      {run && landed && team && run.spawner_conversation_id ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} /> : null}
     </div>
   );
 }
 
 /** Where the session's landed change is on each target, each a step from its place on the Deploys page, with the press
  *  that sends it where it waits on a person. */
-export function SessionTargets({ teamId, conversationId, line }: { teamId: string; conversationId: string; line?: string | null }) {
+export function SessionTargets({ teamId, conversationId, line, known: reached }: { teamId: string; conversationId: string; line?: string | null; known?: ReadonlyArray<TargetState> }) {
   const { targets, deploys } = useDeployTargets(teamId);
   // What the store knows about the session's commits, then whatever else the Deploy stage's own line names.
   const mine = useMemo(() => {
+    // The landed commit's own reach is the answer: an open deploy is not proof it carries the change.
+    if (reached) return [...reached];
     const known = sessionTargets(conversationId, targets, deploys);
     const all = [...known, ...targetsFromLine(line).filter((t) => !known.some((k) => k.name === t.name))];
     // A deploy going out sends main's head, which holds the landed change whatever its commits link to.
@@ -194,7 +197,7 @@ export function SessionTargets({ teamId, conversationId, line }: { teamId: strin
       const open = t.state === "waiting" && row ? targetNow(row, deploys).open : null;
       return open ? { ...t, state: "deploying" as const, deploy: open.short_id || null, at: open.created_at } : t;
     });
-  }, [conversationId, targets, deploys, line]);
+  }, [conversationId, targets, deploys, line, reached]);
   const press = useDeployPress(teamId, deploys);
   if (!mine.length) return null;
   return (

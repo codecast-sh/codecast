@@ -7,18 +7,14 @@ import { v } from "convex/values";
 import { query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canReadRun, enrichRun, withAgentSessions } from "./workflow_runs";
-import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
+import { sourceTakesSessionChange } from "@codecast/shared/contracts/flowPool";
 import { workspaceGrantsAccess } from "./lib/access";
 
-/** A run of a flow a session's change goes through (its graph takes a branch: the session's edits frozen onto one), not a deploy or a line run it also started. */
+/** A run of a flow a session's change goes through (its graph takes a branch: the session's edits frozen onto one), a flow the session wrote for it included, not a deploy or a line run it also started. */
 async function takesSessionChange(ctx: any, run: any, cache: Map<string, boolean>): Promise<boolean> {
   if (!run.workflow_id) return false;
   const key = String(run.workflow_id);
-  if (!cache.has(key)) {
-    const wf = await ctx.db.get(run.workflow_id);
-    const takes = flowGraphAttr(wf?.source, "takes") ?? "";
-    cache.set(key, flowGraphAttr(wf?.source, "kind") === "line" && /\bbranch\b/.test(takes));
-  }
+  if (!cache.has(key)) cache.set(key, sourceTakesSessionChange((await ctx.db.get(run.workflow_id))?.source));
   return cache.get(key)!;
 }
 

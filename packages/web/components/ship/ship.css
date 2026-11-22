@@ -79,6 +79,7 @@
 .shp-chip[data-tone="you"] { --shp-c: var(--sol-yellow); color: var(--sol-text); border-color: color-mix(in srgb, var(--sol-yellow) 55%, transparent); background: color-mix(in srgb, var(--sol-yellow) 12%, transparent); }
 .shp-chip[data-tone="ok"] { --shp-c: var(--sol-green); }
 .shp-chip[data-tone="bad"] { --shp-c: var(--sol-red); }
+.shp-chip[data-tone="wait"] { --shp-c: var(--sol-yellow); }
 .shp-chip-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--shp-c); flex: none; }
 .shp-chip[data-tone="working"] .shp-chip-dot, .shp-chip[data-tone="agent"] .shp-chip-dot { animation: sj-pulse 1.6s ease-in-out infinite; }
 
@@ -129,6 +130,13 @@
 .sj-detail-mark[data-status="running"] { background: var(--sol-blue); animation: sj-pulse 1.6s ease-in-out infinite; }
 .sj-detail-session { color: var(--sol-blue); text-decoration: none; }
 .sj-detail-session:hover { text-decoration: underline; }
+/* A Ship press the session answered without a run: its answer, quoted. */
+.shp-declined { padding: 9px 14px 10px; border-bottom: 1px solid var(--sj-rule-2); background: var(--sj-sunk); }
+.shp-declined header { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.shp-declined header b { font-size: 12.5px; font-weight: 600; flex: none; }
+.shp-declined header span { font-size: 12px; color: var(--sol-text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shp-declined blockquote { margin: 6px 0 0; padding-left: 9px; border-left: 2px solid var(--sj-rule); font-size: 12.5px; line-height: 1.45; color: var(--sol-text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+button.shp-link { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; font-size: var(--fs-meta); }
 .shp-session { font-size: 13px; color: var(--sol-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sj-target-item { display: inline-flex; align-items: center; gap: 4px; }
 .shp-asks { display: inline-block; margin-right: 10px; padding: 0 7px; border-radius: 999px; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text-dim) 12%, transparent); }

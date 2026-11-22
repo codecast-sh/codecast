@@ -74,6 +74,7 @@ import { featurePageRedirect, useWorkspaceFeature } from "../lib/teamFeatures";
 import { useSyncSettings } from "../hooks/useSyncSettings";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useSessionCommandResults } from "../hooks/useSessionCommands";
+import { useSyncLandedReach } from "../hooks/useSessionShipState";
 import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
@@ -586,6 +587,7 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
         change while the document lives, but the rule stays visible. */}
     {windowEffects ? <WindowOnlyEffects /> : null}
     <SessionCommandResultsFeeder />
+    <LandedReachFeeder />
     <InboxWarmLoop />
     <LocalDeviceProbe />
     {isSyncHost ? <HostFeeders /> : null}
@@ -599,6 +601,15 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
  *  request re-renders only this. */
 function SessionCommandResultsFeeder() {
   useSessionCommandResults();
+  return null;
+}
+
+/** How far each session's landed change has gone toward production, for the
+ *  inbox cards. deployReach is per-window, so every window feeds its own from
+ *  the runs replication gives it: never host-gated. Its own component, so a
+ *  new answer re-renders only this. */
+function LandedReachFeeder() {
+  useSyncLandedReach();
   return null;
 }
 

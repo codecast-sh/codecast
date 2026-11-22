@@ -27,6 +27,8 @@ export type TargetReach = {
   deploy: ReachDeployRef | null;
   /** rolled_back: the live deploy that does not hold it. */
   now: ReachDeployRef | null;
+  /** Shipped nothing in a week and nothing going out: it keeps its row but does not speak for the change's state. */
+  dormant?: true;
 };
 
 export type DeployReach = {
@@ -105,8 +107,8 @@ function dormant(deploys: ReadonlyArray<ReachDeploy>, now: number): boolean {
  */
 export function deployReach(c: ReachChange, targets: ReadonlyArray<{ target: string; deploys: ReadonlyArray<ReachDeploy> }>, now: number): DeployReach | null {
   if (!targets.length) return null;
-  const each = targets.map((t) => targetReach(t.target, t.deploys, c));
-  const active = each.filter((_, i) => !dormant(targets[i]!.deploys, now));
+  const each = targets.map((t) => (dormant(t.deploys, now) ? { ...targetReach(t.target, t.deploys, c), dormant: true as const } : targetReach(t.target, t.deploys, c)));
+  const active = each.filter((t) => !t.dormant);
   const state = (active.length ? active : each).reduce<ReachState>((worst, t) => (ATTENTION[t.state] < ATTENTION[worst] ? t.state : worst), "live");
   return { state, sha: c.sha, targets: each };
 }
