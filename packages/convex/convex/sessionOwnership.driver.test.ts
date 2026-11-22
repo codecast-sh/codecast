@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performCreateRole, performReparentSession } from "./orgRoles";
-import { performApplyOwnersChange, performListOwners, performSetSessionDriver } from "./sessionOwnership";
+import { performApplyOwnersChange, performListOwners, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners, withLeaveRules } from "./sessionOwnership";
 
 // A role is an owner beside the people, and exactly one owner drives
 // (schema.ts conversations.driver_user_id): the filed role while no person
@@ -209,6 +209,58 @@ describe("leaving a session", () => {
     const db = leaveFixtures({ user_id: MATE, owner_device_id: "mini" }, [{ _id: "so1", conversation_id: CONV, user_id: MATE, added_by: MATE, added_at: 1 }, { _id: "so2", conversation_id: CONV, user_id: ME, added_by: MATE, added_at: 2 }]);
     await performApplyOwnersChange(ctxS(db), ME as any, { session_id: "sess1", change: { leave: {} } });
     expect(db._tables.session_owners.map((r: any) => r.user_id)).toEqual([MATE]);
+  });
+});
+
+// `cast disown`, `cast disown --all`, an owners set and the chart's reparent
+// mutation take the caller out by the same leave rules as the menu.
+describe("every way out is a leave", () => {
+  function doorFixtures(conv: Record<string, any>, rows: string[]) {
+    const db = fixtures();
+    db._tables.conversations[0] = { ...db._tables.conversations[0], owner_user_id: undefined, ...conv };
+    db._tables.session_owners = rows.map((user_id, i) => ({ _id: `so${i}`, conversation_id: CONV, user_id, added_by: ME, added_at: i + 1 }));
+    db._tables.users.push({ _id: "users_bot", name: "Bot", is_bot: true });
+    return db;
+  }
+  const ctxS = (db: any) => ({ db, scheduler: { runAfter: async () => {} } }) as any;
+  const rowsOf = (db: any) => db._tables.session_owners.map((r: any) => r.user_id);
+
+  test("cast disown on a session that runs on your account is refused", async () => {
+    const db = doorFixtures({}, [ME, MATE]);
+    await expect(performRemoveSessionOwner(ctxS(db), ME as any, { session_id: "sess1", owner: "me" })).rejects.toThrow(/runs on your account/);
+  });
+
+  test("cast disown as the only owner of an agent box's session is refused", async () => {
+    const db = doorFixtures({ user_id: "users_bot" }, [ME]);
+    await expect(performRemoveSessionOwner(ctxS(db), ME as any, { session_id: "sess1", owner: "me" })).rejects.toThrow(/Nobody would own/);
+  });
+
+  test("cast disown by the starter of a session a teammate now runs leaves it to them", async () => {
+    // No rows: I own it only as its author, so there is no row to remove.
+    const db = doorFixtures({ user_id: MATE, author_user_id: ME, is_private: false }, []);
+    await performRemoveSessionOwner(ctxS(db), ME as any, { session_id: "sess1", owner: "me" });
+    expect(rowsOf(db)).toEqual([MATE]);
+    expect((await performListOwners(ctxS(db), MATE as any, "sess1"))!.owner_ids).toEqual([MATE]);
+  });
+
+  test("cast disown of someone else is a plain removal", async () => {
+    const db = doorFixtures({}, [ME, MATE]);
+    await performRemoveSessionOwner(ctxS(db), ME as any, { session_id: "sess1", owner: "mate@x.ai" });
+    expect(rowsOf(db)).toEqual([ME]);
+  });
+
+  test("an owners set that leaves you out keeps the leave rules", async () => {
+    await expect(performSetSessionOwners(ctxS(doorFixtures({}, [ME, MATE])), ME as any, { session_id: "sess1", owners: ["mate@x.ai"] })).rejects.toThrow(/runs on your account/);
+    await expect(performSetSessionOwners(ctxS(doorFixtures({ user_id: "users_bot" }, [ME])), ME as any, { session_id: "sess1", owners: [] })).rejects.toThrow(/Nobody would own/);
+    const db = doorFixtures({ user_id: MATE, driver_user_id: ME }, [ME, MATE]);
+    await performSetSessionOwners(ctxS(db), ME as any, { session_id: "sess1", owners: ["mate@x.ai"] });
+    expect(rowsOf(db)).toEqual([MATE]);
+    expect(row(db).driver_user_id).toBeUndefined();
+  });
+
+  test("the chart's reparent mutation keeps the leave rules too", async () => {
+    const db = doorFixtures({}, [ME, MATE]);
+    await expect(withLeaveRules(ctxS(db), ME as any, "sess1", () => performReparentSession(ctxS(db), ME as any, { session_id: "sess1", target: { kind: "user", owners: [ME], mode: "remove" } }))).rejects.toThrow(/runs on your account/);
   });
 });
 

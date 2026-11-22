@@ -373,7 +373,8 @@ describe("multi-owner session ownership", () => {
     await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
     const conv = db._tables.conversations.find((c: any) => c._id === "jx1abcd_convex_id");
     conv.inbox_stashed_at = 222;
-    await performRemoveSessionOwner({ db }, JASON as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+    // The account that runs it takes Jason off (his own removal is a leave).
+    await performRemoveSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
     expect(conv.inbox_stashed_at).toBe(222);
   });
 

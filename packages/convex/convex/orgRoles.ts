@@ -19,7 +19,7 @@ import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { nextShortId } from "./counters";
 import { HEAD_OF_PEOPLE_HANDLE, isHeadOfPeopleRole, headOfPeopleIn, liveRolesByHandle, requireRole, resolveRoleRef, rolesInBoundary, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
-import { performRehomeSessions, performReparentSession, personName, roleMayHoldSession } from "./sessionOwnership";
+import { performRehomeSessions, performReparentSession, personName, roleMayHoldSession, withLeaveRules } from "./sessionOwnership";
 import { sessionsOwnedBy } from "./lib/orgOwnership";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
@@ -1115,7 +1115,8 @@ export const reparentSession = mutation({
   },
   handler: async (ctx, { api_token, conversation_id, ...args }) => {
     const authUserId = await requireCaller(ctx, api_token);
-    const result = await performReparentSession(ctx, authUserId, { session_id: conversation_id, ...args });
+    const reparent = () => performReparentSession(ctx, authUserId, { session_id: conversation_id, ...args });
+    const result = args.target.kind === "user" ? await withLeaveRules(ctx, authUserId, conversation_id, reparent) : await reparent();
     // The ownership menu now reaches the core through here (org-staffing.md
     // S11), so this path must notify the assignee exactly as addSessionOwner
     // did: the "assigned to you" push and inbox row, and the ownership-changed

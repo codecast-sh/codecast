@@ -644,14 +644,15 @@ async function rehomeSessions(
 // Thin names over the core, kept so the mutations, `cast own`/`cast disown`
 // and the tests read as the gesture they perform.
 
-// Replace the owner set wholesale (empty list = disown everyone). Backs the web
-// multi-select, where the UI holds the full desired set.
+// Replace the owner set wholesale (empty list = disown everyone): `cast
+// disown --all` and scripts. A set that leaves the caller out is their leave.
 export async function performSetSessionOwners(
   ctx: { db: any },
   authUserId: Id<"users">,
   args: { session_id: string; owners: string[]; note?: string; from_session?: string },
 ): Promise<ReparentSessionResult> {
-  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: args.owners, mode: "set" }, handoff: args.note, from_session: args.from_session });
+  return withLeaveRules(ctx, authUserId, args.session_id, () =>
+    performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: args.owners, mode: "set" }, handoff: args.note, from_session: args.from_session }));
 }
 
 // Add ONE owner without disturbing the others (`cast own`).
@@ -664,11 +665,17 @@ export async function performAddSessionOwner(
 }
 
 // Remove ONE owner, leaving the rest (`cast disown`; defaults to self).
+// Removing yourself is a leave.
 export async function performRemoveSessionOwner(
   ctx: { db: any },
   authUserId: Id<"users">,
   args: { session_id: string; owner: string; from_session?: string },
 ): Promise<ReparentSessionResult> {
+  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+  const owner = await resolveOwnerRef(ctx, authUserId, conversation, args.owner.trim());
+  if (String(owner?._id) === String(authUserId)) {
+    return performLeaveSession(ctx, authUserId, { session_id: String(conversation._id), from_session: args.from_session });
+  }
   return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: [args.owner], mode: "remove" }, from_session: args.from_session });
 }
 
@@ -791,17 +798,40 @@ export async function performLeaveSession(
     if (!moved.cross_user) throw new Error("That machine runs on your account: pick a teammate's or a team machine to leave it");
   }
   const result = await performReparentSession(ctx, authUserId, { session_id: String(conversation._id), target: { kind: "user", owners: [me], mode: "remove" }, from_session: args.from_session });
-  let left = await ctx.db.get(conversation._id);
-  if (String(left.driver_user_id ?? "") === me) await ctx.db.patch(conversation._id, { driver_user_id: undefined });
-  const facts = await ownersFactsOf(ctx, left);
+  await settleLeave(ctx, authUserId, await ctx.db.get(conversation._id));
+  return result;
+}
+
+// What a leave leaves behind, checked after the caller's row is gone: it no
+// longer runs on their account, they no longer drive, and someone still owns
+// it (the person whose account runs it takes a row when nobody else does).
+async function settleLeave(ctx: { db: any }, authUserId: Id<"users">, conversation: any): Promise<void> {
+  const me = String(authUserId);
+  if (String(conversation.user_id) === me) throw new Error("It runs on your account: move it to a teammate's or a team machine to leave it");
+  if (String(conversation.driver_user_id ?? "") === me) await ctx.db.patch(conversation._id, { driver_user_id: undefined });
+  const facts = await ownersFactsOf(ctx, conversation);
   const runner = humanRunnerOf(facts);
   if (facts.rows.length === 0 && runner && runner !== me) {
     await addSessionOwnerRow(ctx, conversation._id, runner as Id<"users">, authUserId);
     await syncPrimaryOwnerCache(ctx, conversation._id);
   }
-  left = await ctx.db.get(conversation._id);
-  if (!leaveLeavesAnOwner(await ownersFactsOf(ctx, left), me)) throw new Error("Nobody would own it after you leave: add a teammate first");
-  return result;
+  if (!leaveLeavesAnOwner(await ownersFactsOf(ctx, await ctx.db.get(conversation._id)), me)) throw new Error("Nobody would own it after you leave: add a teammate first");
+}
+
+// An owners edit that takes the caller out of the owners is their leave,
+// whichever door it came by (an owners set, the chart's reparent mutation),
+// so it keeps the leave rules. The org log's undo replays owner sets through
+// the core directly: putting back an earlier set is not a leave.
+export async function withLeaveRules<T>(ctx: { db: any }, authUserId: Id<"users">, sessionId: string, edit: () => Promise<T>): Promise<T> {
+  const before = await resolveOwnableConversation(ctx, authUserId, sessionId);
+  const me = String(authUserId);
+  const owned = (await ownerIdsOrStarter(ctx, before)).includes(me);
+  const out = await edit();
+  if (owned) {
+    const after = await ctx.db.get(before._id);
+    if (!(await ownerIdsOrStarter(ctx, after)).includes(me)) await settleLeave(ctx, authUserId, after);
+  }
+  return out;
 }
 
 // One Save of the owners menu: people added and removed, the role set,
