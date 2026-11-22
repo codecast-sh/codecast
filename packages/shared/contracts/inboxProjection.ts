@@ -827,6 +827,15 @@ export function roleDrives(row: { org_role_id?: unknown; driver_user_id?: unknow
   return !!row.org_role_id && !row.driver_user_id;
 }
 
+// The role itself acts through this session: its standing session, or a
+// session the role started and still drives. What such a session starts is
+// the role's start (role_started); what a person's session starts stays the
+// person's, even when a task binding filed that session under a role. ONE
+// rule for a new spawn (spawn.ts) and the backfill (migrations.ts).
+export function actsForRole(row: { standing_role_id?: unknown; role_started?: boolean | null; org_role_id?: unknown; driver_user_id?: unknown }): boolean {
+  return !!row.standing_role_id || (!!row.role_started && roleDrives(row));
+}
+
 // The state a person reads for a placed row: its work state, except a session
 // its role drives that files under working. Its work state still says what it
 // waits on (an agent watching it reads that), but to a person it is the

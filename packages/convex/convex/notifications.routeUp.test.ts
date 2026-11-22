@@ -220,6 +220,20 @@ describe("the route up", () => {
     }
   });
 
+  test("a role's run on a pool machine that its role cannot hear rings the person its line ends at, never the pool's account", async () => {
+    const world = settledIdleWorld({
+      conv: { user_id: "u_pool", org_role_id: "role_sub", role_started: true, short_id: "jx7pool", thread_state_status: "blocked", thread_state: "Which price band?", thread_state_at: now - 30_000 },
+      session: { user_id: "u_pool" },
+      users: [{ _id: "u1", notifications_enabled: true, push_token: "tok-u1" }, { _id: "u_pool", notifications_enabled: true, push_token: "tok-pool" }],
+      extra: { ...org(), agent_tasks: [] },
+    });
+    world.tables.conversations.push(standing("standing_top", "role_top"), standing("standing_sub", "role_sub"));
+    world.tables.org_roles[1].anchor_id = undefined; // no standing session: the role cannot be told
+    const res = await performNeedsInputCheck(world.ctx as any, { conversation_id: "conv1" });
+    expect(res.notified).toBe(true);
+    expect(world.tables.notifications.map((n: Rec) => n.recipient_user_id)).toEqual(["u1"]);
+  });
+
   test("a role seated in a session an earlier role stood in gets its own trigger: the earlier role's cancelled one is not its", async () => {
     const { ctx, tables } = blockedHand();
     // The earlier role's trigger, cancelled when that role retired.

@@ -5,7 +5,7 @@
 // notices) does not import the needs-input check, which reaches agentTasks
 // and the whole function graph behind it (ct-92329).
 import { internal } from "../_generated/api";
-import { IDLE_DIGEST_WINDOW_MS } from "@codecast/shared/contracts";
+import { IDLE_DIGEST_WINDOW_MS, startedByRole } from "@codecast/shared/contracts";
 import { enqueuePush } from "../pushRouter";
 import { listSessionOwnerIds } from "../sessionOwners";
 
@@ -152,7 +152,7 @@ export async function deliverSessionNotification(
 // hear about it, not just the one cached in owner_user_id.
 export async function deliverSessionNotificationToParties(
   ctx: any,
-  conversation: { _id: any; user_id: any; owner_user_id?: any },
+  conversation: { _id: any; user_id: any; owner_user_id?: any; org_role_id?: any; role_started?: boolean; standing_role_id?: any },
   type: SessionNotifType,
   title: string,
   message: string,
@@ -166,15 +166,19 @@ export async function deliverSessionNotificationToParties(
   if (conversation.owner_user_id) recipients.push(conversation.owner_user_id);
 
   // The runner always hears about its session, as it always keeps it in its
-  // inbox. A session a role holds with no person owner is the role's, but a
-  // settle the role hears never reaches here (notifications' route up stops
-  // it), so what does reach here is the wait no role could take: the runner is
-  // the person left to hear it.
+  // inbox. A session a role started and holds with no person owner is the
+  // role's, and a settle the role hears never reaches here (notifications'
+  // route up stops it): what does is the wait no role could take. Its runner
+  // may be a pool machine's account, so the person the role's line ends at
+  // hears it instead, and the wait is never swallowed.
+  const runner = recipients.length === 0 && startedByRole(conversation)
+    ? (await lineEndPerson(ctx, conversation.org_role_id)) ?? conversation.user_id
+    : conversation.user_id;
   let delivered = await deliverSessionNotification(
-    ctx, conversation.user_id, conversation._id, type, title, message,
+    ctx, runner, conversation._id, type, title, message,
   );
 
-  const seen = new Set<string>([conversation.user_id.toString()]); // runner: done above
+  const seen = new Set<string>([runner.toString()]); // done above
   for (const ownerId of recipients) {
     const key = ownerId.toString();
     if (seen.has(key)) continue;
@@ -184,4 +188,16 @@ export async function deliverSessionNotificationToParties(
     }
   }
   return delivered;
+}
+
+// The person a role's reporting line ends at: up its reports_to chain to the
+// first person (a role reporting to a role reports through it).
+async function lineEndPerson(ctx: { db: any }, roleId: any): Promise<any | null> {
+  let role = roleId ? await ctx.db.get(roleId) : null;
+  for (let depth = 0; role && depth < 10; depth++) {
+    const to = role.reports_to;
+    if (to?.kind === "user") return to.user_id ?? null;
+    role = to?.kind === "role" && to.role_id ? await ctx.db.get(to.role_id) : null;
+  }
+  return null;
 }

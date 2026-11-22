@@ -1,6 +1,6 @@
 import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { deriveSessionActivity, classifyWorkState, trustedAgentStatus, userRestOf, isSettleVerdictCurrent, HEARTBEAT_ALIVE_MS, type WorkState } from "./inboxFilters";
-import { openTasksVouchForWaiting } from "@codecast/shared/contracts";
+import { openTasksVouchForWaiting, personWorkState, roleDrives } from "@codecast/shared/contracts";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 
 // The one work-state classifier for every CLI surface that lists sessions
@@ -114,7 +114,11 @@ export function cliSessionClassifier(ctx: any, now: number) {
       pendingApiError: conv.pending_api_error === true,
       sessionError: !!conv.session_error,
     });
-    const result = { work_state: ws, agent_status: agentStatus };
+    // What a person reads (shared personWorkState): a session its role drives
+    // that waits files as working, as the inbox places it, so `cast feed` and
+    // `cast sessions --team` never send a reader after the role's ask.
+    const bucket = ws === "needs_input" && roleDrives(conv) && !userRestOf(conv) ? "working" : ws;
+    const result = { work_state: personWorkState(conv, { bucket, work_state: ws }), agent_status: agentStatus };
     classified.set(conv._id.toString(), result);
     return result;
   };

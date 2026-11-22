@@ -301,9 +301,12 @@ export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<
   // The join table is canonical. A stale owner_user_id cache (the runner
   // after the seat was assigned away) must not keep questions on that person.
   const ids: Id<"users">[] = [...owners];
-  // A session a role started has no implicit person: the account that runs it
-  // (a pool machine's) did not start it, so its line's person is asked.
-  if (ids.length === 0 && !conversation.role_started) {
+  // A session a role started, while a role still holds it, has no implicit
+  // person: the account that runs it (a pool machine's) did not start it, so
+  // its line's person is asked. Released by a retire or a visibility drop, it
+  // is its runner's again. (A standing session keeps its runner: a sub-lead's
+  // ladder starts at its parent role and names no person.)
+  if (ids.length === 0 && !(conversation.role_started && conversation.org_role_id)) {
     const implicit = conversation.owner_user_id ?? (await humanStarterUser(ctx, conversation))?._id;
     if (implicit) ids.push(implicit);
   }

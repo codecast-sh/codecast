@@ -13,6 +13,7 @@ import { sessionWork } from "./lib/orgOwnership";
 import { ownsWork } from "@codecast/shared/contracts/orgLead";
 import { roleSubject, withOrgChange } from "./lib/orgChangeLog";
 import { isHandBriefing } from "./spawn";
+import { actsForRole } from "@codecast/shared/contracts";
 import { isOrphanOrSubagent } from "./inboxFilters";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
@@ -567,49 +568,71 @@ export async function releaseFolderHeld(ctx: { db: any; scheduler?: any }, args:
 
 // One-time backfill: stamp `role_started` on sessions a role started before
 // spawn.recordHandStart wrote it, so the membership rule (shared
-// isHeldByRoleAlone) keeps them out of the runner's inbox. Provenance, in the
-// order read: a line run the role's standing session spawned (the run's
-// `org_role_id`, and its spawner is a standing session); a spawner or parent
-// chain that reaches a role's standing session within 8 links; a first
-// message that is the hand briefing. A session filed under a role by a person
-// matches none of them and stays the person's. Dry by default; `role` (a
-// handle) narrows it.
+// isHeldByRoleAlone) keeps them out of the runner's inbox. A session is the
+// role's start when the session that started it acts for the role (shared
+// actsForRole, the rule a new spawn reads): the role's standing session, or a
+// session the role started and still drives. The starter is the row's
+// `spawned_by_conversation_id`, or for a run's own session the run's spawner;
+// a starter is judged by the same rule, up to 8 links. A session a task
+// binding filed (`org_role_hold` "bound") is a person's and never stamped. It
+// misses a hand whose starter pointer is absent (rows from before
+// spawned_by) or whose starter was deleted: those stay in their runner's
+// inbox. Dry by default; one role's page per transaction, continued by the
+// scheduler on a real run. `role` (a handle) narrows it.
 //   packages/convex/run.sh migrations:backfillRoleStarted '{"dryRun":true}'
 export const backfillRoleStarted = internalMutation({
-  args: { dryRun: v.optional(v.boolean()), role: v.optional(v.string()) },
-  handler: async (ctx, args) => backfillRoleStartedRun(ctx, args),
+  args: {
+    dryRun: v.optional(v.boolean()),
+    role: v.optional(v.string()),
+    roleIndex: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const res = await backfillRoleStartedPage(ctx, args);
+    if (!res.dryRun && res.next) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillRoleStarted, { dryRun: false, role: args.role, numItems: args.numItems, ...res.next });
+    }
+    return res;
+  },
 });
 
-export async function backfillRoleStartedRun(ctx: { db: any }, args: { dryRun?: boolean; role?: string }) {
+export async function backfillRoleStartedPage(
+  ctx: { db: any },
+  args: { dryRun?: boolean; role?: string; roleIndex?: number; cursor?: string; numItems?: number },
+) {
   const dryRun = args.dryRun ?? true;
-  let roles: any[] = await ctx.db.query("org_roles").collect();
+  let roles: any[] = (await ctx.db.query("org_roles").collect()).sort((x: any, y: any) => String(x._id).localeCompare(String(y._id)));
   if (args.role) roles = roles.filter((r) => r.handle === args.role!.replace(/^@/, "").toLowerCase());
-  const isStanding = async (id: any) => !!id && !!(await ctx.db.get(id))?.standing_role_id;
-  const rows: Array<{ role: string; session: string; why: string }> = [];
-  for (const role of roles) {
-    const held: any[] = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id)).collect();
-    for (const c of held) {
-      if (c.role_started || c.standing_role_id || c.anchor_id) continue;
-      let why: string | null = null;
-      const run = c.workflow_run_id ? await ctx.db.get(c.workflow_run_id) : null;
-      if (run?.org_role_id && await isStanding(run.spawner_conversation_id)) why = "a line run of the role";
-      let cur = c;
-      for (let depth = 0; !why && depth < 8; depth++) {
-        const up = cur.spawned_by_conversation_id ?? cur.parent_conversation_id;
-        cur = up ? await ctx.db.get(up) : null;
-        if (!cur) break;
-        if (cur.standing_role_id) why = "spawned from a role's standing session";
-      }
-      if (!why) {
-        const first: any = await ctx.db.query("messages").withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", c._id)).order("asc").first();
-        if (isHandBriefing(first?.content)) why = "briefed as a hand";
-      }
-      if (!why) continue;
-      rows.push({ role: role.handle, session: c.short_id ?? String(c._id).slice(0, 7), why });
-      if (!dryRun) await ctx.db.patch(c._id, { role_started: true });
-    }
+  const roleIndex = args.roleIndex ?? 0;
+  const role = roles[roleIndex];
+  if (!role) return { dryRun, stamped: 0, rows: [], next: null };
+  const page = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id))
+    .paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 100 });
+  const started = new Map<string, boolean>();
+  const startedOf = async (c: any, depth: number): Promise<boolean> => {
+    if (c.role_started) return true;
+    if (!c.org_role_id || c.standing_role_id || c.anchor_id || c.org_role_hold === "bound" || depth > 8) return false;
+    const key = String(c._id);
+    if (started.has(key)) return started.get(key)!;
+    started.set(key, false); // a cycle starts nothing
+    const run = !c.spawned_by_conversation_id && c.is_workflow_primary && c.workflow_run_id ? await ctx.db.get(c.workflow_run_id) : null;
+    const starterId = c.spawned_by_conversation_id ?? run?.spawner_conversation_id;
+    const starter = starterId ? await ctx.db.get(starterId) : null;
+    const yes = !!starter && actsForRole({ ...starter, role_started: await startedOf(starter, depth + 1) });
+    started.set(key, yes);
+    return yes;
+  };
+  const rows: Array<{ role: string; session: string }> = [];
+  for (const c of page.page as any[]) {
+    if (c.role_started || !(await startedOf(c, 0))) continue;
+    rows.push({ role: role.handle, session: c.short_id ?? String(c._id).slice(0, 7) });
+    if (!dryRun) await ctx.db.patch(c._id, { role_started: true });
   }
-  return { dryRun, stamped: rows.length, rows };
+  const next = !page.isDone
+    ? { roleIndex, cursor: page.continueCursor as string }
+    : roleIndex + 1 < roles.length ? { roleIndex: roleIndex + 1, cursor: undefined } : null;
+  return { dryRun, stamped: rows.length, rows, next };
 }
 
 // One-time backfill: stamp first_linked_conversation (the indexed copy of a

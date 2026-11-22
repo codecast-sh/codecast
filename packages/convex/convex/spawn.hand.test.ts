@@ -5,6 +5,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { createSessionFromCli } from "./spawn";
+import { heldByRoleAlone } from "./conversations";
 
 const OWNER = "users_owner";
 const ROLE = "org_roles_r";
@@ -21,6 +22,11 @@ function fixture() {
       { _id: "conversations_lead", user_id: OWNER, session_id: "lead-uuid", status: "active", org_role_id: ROLE, active_task_id: "tasks_lead" },
       { _id: "conversations_run", user_id: OWNER, session_id: "wf-run", status: "active", workflow_run_id: "workflow_runs_1", is_workflow_primary: true },
       { _id: "conversations_plain", user_id: OWNER, session_id: "plain-uuid", status: "active" },
+      { _id: "conversations_standing", user_id: OWNER, session_id: "standing-uuid", status: "active", standing_role_id: ROLE, anchor_id: "anchors_r" },
+      // A person's own session a task binding filed under the role (cast task start in its area).
+      { _id: "conversations_bound", user_id: OWNER, session_id: "bound-uuid", status: "active", org_role_id: ROLE, org_role_hold: "bound" },
+      // A hand the role started that a person took over.
+      { _id: "conversations_taken", user_id: OWNER, session_id: "taken-uuid", status: "active", org_role_id: ROLE, role_started: true, driver_user_id: OWNER },
     ],
     workflow_runs: [{ _id: "workflow_runs_1", user_id: OWNER, task_id: "tasks_run", primary_conversation_id: "conversations_run" }],
     managed_sessions: [],
@@ -31,7 +37,8 @@ function fixture() {
 }
 
 const firstTurn = (tables: Record<string, any[]>): string => tables.pending_messages[0].content;
-const hand = (tables: Record<string, any[]>) => tables.conversations.find((c) => c.session_id !== "lead-uuid" && c.session_id !== "wf-run" && c.session_id !== "plain-uuid");
+const SEEDED = new Set(["lead-uuid", "wf-run", "plain-uuid", "standing-uuid", "bound-uuid", "taken-uuid"]);
+const hand = (tables: Record<string, any[]>) => tables.conversations.find((c) => !SEEDED.has(c.session_id));
 
 describe("a role's hand", () => {
   test("nests under the role session that started it, on the brief as written", async () => {
@@ -53,4 +60,25 @@ describe("a role's hand", () => {
     await (createSessionFromCli as any)._handler(ctx, { agent_type: "claude_code", spawner_session: "plain-uuid", prompt: "Do it" });
     expect(hand(tables)?.parent_conversation_id).toBeUndefined();
   });
+
+  // Who started it decides whose it is (shared actsForRole): the role acts
+  // through its standing session and through a session it started and still
+  // drives. A person's session filed under the role starts the person's work.
+  test("a hand the role's standing session starts is the role's start: no person owner, out of the runner's inbox", async () => {
+    const { ctx, tables } = fixture();
+    await (createSessionFromCli as any)._handler(ctx, { agent_type: "claude_code", spawner_session: "standing-uuid", prompt: "Do it" });
+    expect(hand(tables)).toMatchObject({ org_role_id: ROLE, role_started: true });
+    expect((tables.session_owners ?? []).filter((o) => o.conversation_id === hand(tables)._id)).toEqual([]);
+    expect(await heldByRoleAlone(ctx, hand(tables))).toBe(true);
+  });
+
+  for (const [name, spawner] of [["a person's session a task binding filed under the role", "bound-uuid"], ["a hand a person took over", "taken-uuid"]] as const) {
+    test(`a worker that ${name} spawns stays the person's`, async () => {
+      const { ctx, tables } = fixture();
+      await (createSessionFromCli as any)._handler(ctx, { agent_type: "claude_code", spawner_session: spawner, prompt: "Investigate" });
+      expect(hand(tables)).toMatchObject({ org_role_id: ROLE });
+      expect(hand(tables).role_started).toBeUndefined();
+      expect(await heldByRoleAlone(ctx, hand(tables))).toBe(false);
+    });
+  }
 });
