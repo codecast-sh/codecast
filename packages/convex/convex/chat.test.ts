@@ -1989,7 +1989,7 @@ describe("thread rollups in the channel page", () => {
     });
     await call(deleteMessage, as(ctx, BOB), { message_id: reply.message_id });
     const page = await call(listMessages, ctx, { channel_id: CHANNEL });
-    expect(page.threads.length).toBe(0);
+    expect(page.threads).toEqual([expect.objectContaining({ root_id: root.message_id, reply_count: 0, reply_faces: [] })]);
   });
 });
 
@@ -4271,6 +4271,15 @@ describe("session thinking rows", () => {
     // The channel row says the thread is being worked on.
     const page = await call(listMessages, ctx, { channel_id: CHANNEL });
     expect(page.threads.find((t: any) => t.root_id === sent.message_id)?.agent_status).toBe("thinking");
+
+    // The session reads it and passes: the summary must say so, not go missing,
+    // or a client holding the thinking summary keeps it.
+    deliver(ctx, "conv-bob");
+    await closeSessionRepliesAfterTurn(ctx, "conv-bob" as any);
+    const after = await call(listMessages, ctx, { channel_id: CHANNEL });
+    const summary = after.threads.find((t: any) => t.root_id === sent.message_id);
+    expect(summary).toMatchObject({ reply_count: 0, reply_faces: [], last_reply_at: row.created_at });
+    expect(summary.agent_status).toBeUndefined();
   });
 
   test("an @role mention shows the role thinking, written as the role", async () => {
