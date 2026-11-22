@@ -70,6 +70,10 @@
 .ol-sub:has([data-sub-long]) { flex: 0 1 auto; min-width: 8ch; }
 /* The owner's face after the name: only where the owner column is gone. */
 .ol-face { display: inline-flex; flex: 0 0 auto; align-items: center; }
+/* Takes no room until the line is pointed at or focused; where nothing hovers it always shows. */
+.ol-act { display: none; flex: 0 0 auto; align-items: center; }
+.ol-line:hover .ol-act, .ol-line:focus-within .ol-act, .ol-act:has([aria-pressed="true"]) { display: inline-flex; }
+@media (hover: none) { .ol-act { display: inline-flex; } }
 .ol-owner, .ol-state, .ol-measure { display: flex; align-items: center; gap: 6px; min-width: 0; overflow: hidden; white-space: nowrap; }
 .ol-owner { grid-area: owner; display: none; }
 .ol-owner > *, .ol-state > * { min-width: 0; max-width: 100%; }

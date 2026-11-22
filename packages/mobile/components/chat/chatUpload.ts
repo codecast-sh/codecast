@@ -47,32 +47,38 @@ export type ChatAttachmentArg = {
   height?: number;
 };
 
-export type ImageSource = 'camera' | 'library';
+export type ImageSource = 'camera' | 'camera-burst' | 'library';
+
+/** The most images one pick attaches, from the library or a run of camera shots. */
+const PICK_LIMIT = 6;
 
 /** Ask where an attachment comes from: a new photo or the library. Null when dismissed. */
 export function chooseImageSource(): Promise<ImageSource | null> {
   return new Promise((resolve) => {
     showActionSheet(undefined, [
       { label: 'Take photo', icon: 'camera', onPress: () => resolve('camera') },
+      { label: 'Take several photos', icon: 'copy', onPress: () => resolve('camera-burst') },
       { label: 'Photo library', icon: 'image', onPress: () => resolve('library') },
     ], { onCancel: () => resolve(null) });
   });
 }
 
-/** Take a photo or pick from the library. Returns the images (several from
- *  the library) or [] when cancelled. Quality 0.8 keeps a phone photo near
- *  ~1MB. A library photo comes back as JPEG: iPhone photos are HEIC, which
- *  the picker otherwise hands over untouched (whatever the quality), and
- *  which a browser and an agent's image reader cannot open. The library is
- *  the system picker, which needs no permission; the camera asks once. */
+/** Take a photo (or a run of them) or pick from the library. Returns the
+ *  images or [] when cancelled. Quality 0.8 keeps a phone photo near ~1MB. A
+ *  library photo comes back as JPEG: iPhone photos are HEIC, which the picker
+ *  otherwise hands over untouched (whatever the quality), and which a browser
+ *  and an agent's image reader cannot open. The library is the system picker,
+ *  which needs no permission; the camera asks once. 'camera-burst' reopens
+ *  the camera after each shot until the person cancels it or hits the limit. */
 export async function pickImages(source: ImageSource = 'library'): Promise<PickedImage[]> {
   if (!ImagePicker) {
     appAlert('Not available', 'Image uploads need a build with expo-image-picker.');
     return [];
   }
-  let result: Awaited<ReturnType<typeof ImagePicker.launchImageLibraryAsync>>;
+  const camera = source !== 'library';
+  const picked: PickedImage[] = [];
   try {
-    if (source === 'camera') {
+    if (camera) {
       const { granted } = await ImagePicker.requestCameraPermissionsAsync();
       if (!granted) {
         appAlert('Camera access is off', 'Turn on camera access for Codecast in Settings to take a photo.', [
@@ -81,28 +87,31 @@ export async function pickImages(source: ImageSource = 'library'): Promise<Picke
         ]);
         return [];
       }
-      result = await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8 });
-    } else {
-      result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
-        allowsMultipleSelection: true,
-        selectionLimit: 6,
-        quality: 0.8,
-        preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
-      });
     }
+    do {
+      const result = camera
+        ? await ImagePicker.launchCameraAsync({ mediaTypes: ['images'], quality: 0.8 })
+        : await ImagePicker.launchImageLibraryAsync({
+          mediaTypes: ['images'],
+          allowsMultipleSelection: true,
+          selectionLimit: PICK_LIMIT,
+          quality: 0.8,
+          preferredAssetRepresentationMode: ImagePicker.UIImagePickerPreferredAssetRepresentationMode.Compatible,
+        });
+      if (result.canceled) break;
+      picked.push(...result.assets.map((a) => ({
+        uri: a.uri,
+        width: a.width,
+        height: a.height,
+        mime: a.mimeType ?? 'image/jpeg',
+      })));
+    } while (source === 'camera-burst' && picked.length < PICK_LIMIT);
   } catch (err) {
-    // The simulator has no camera, and a picker can fail to present.
-    appAlert(source === 'camera' ? 'Camera unavailable' : 'Photo library unavailable', err instanceof Error ? err.message : String(err));
-    return [];
+    // The simulator has no camera, and a picker can fail to present. Shots
+    // already taken in a burst still attach.
+    appAlert(camera ? 'Camera unavailable' : 'Photo library unavailable', err instanceof Error ? err.message : String(err));
   }
-  if (result.canceled) return [];
-  return result.assets.map((a) => ({
-    uri: a.uri,
-    width: a.width,
-    height: a.height,
-    mime: a.mimeType ?? 'image/jpeg',
-  }));
+  return picked;
 }
 
 /** The + button's whole flow: choose a source, then take or pick. */
