@@ -108,7 +108,8 @@ export const markDeploy = mutation({
     machine: v.optional(v.string()),
     // Which push path sent it.
     via: v.optional(v.union(v.literal("deploy.sh"), v.literal("dev watcher"))),
-    // Names the push put on the surface and took off it (`fn:`, `http:`, `index:`, `table:`); deploys.ts caps them.
+    // Names the push put on the surface and took off it (`fn:`, `http:`, `index:`, `table:`); deploys.ts caps them. Both
+    // are sent, possibly empty, exactly when the push's diff ran, and both left out when it did not.
     adds: v.optional(v.array(v.string())),
     drops: v.optional(v.array(v.string())),
   },
@@ -171,8 +172,9 @@ export const markDeploy = mutation({
       ...(args.deploy ? { deploy: args.deploy } : {}),
       ...(args.machine?.trim() ? { machine: args.machine.trim() } : {}),
       ...(args.via ? { pushed_via: args.via } : {}),
-      ...(args.adds?.length ? { adds: args.adds } : {}),
-      ...(args.drops?.length ? { drops: args.drops } : {}),
+      // Sent exactly when the push's diff ran, empty or not: a deploy whose diff ran is evidence of what its tree held.
+      ...(args.adds ? { adds: args.adds } : {}),
+      ...(args.drops ? { drops: args.drops } : {}),
       started_by: { kind: "person", name: user?.name ?? user?.github_username ?? "someone", user_id: userId },
       at: now,
     });
@@ -181,8 +183,8 @@ export const markDeploy = mutation({
 });
 
 /**
- * The latest deploy that put a name on a surface. `committed_in` names the first clean deploy.sh push after it that
- * kept the name: by then the name was in a commit, whoever's push first put it there.
+ * The latest deploy that put a name on a surface. `committed_in` names the first clean deploy after it, other than a
+ * watcher's, whose diff ran and kept the name: by then the name was in a commit, whoever's push first put it there.
  */
 export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number; committed_in?: string };
 

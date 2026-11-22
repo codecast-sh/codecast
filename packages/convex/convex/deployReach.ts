@@ -12,6 +12,7 @@ import { normalizeRepository } from "./lib/gitRefs";
 import { commitBySha, targetDeploys } from "./deployTargetsState";
 import { accessibleCommits } from "./commits";
 import { commitTouchesTarget } from "@codecast/shared/contracts/deployTargets";
+import { liveDeployOf } from "@codecast/shared/contracts/deploys";
 import { deployReach, type DeployReach, type ReachChange, type ReachDeploy } from "@codecast/shared/contracts/deployReach";
 
 const REACH_DEPLOYS = 20;
@@ -39,8 +40,10 @@ async function reachOf(ctx: any, userId: any, repository: string, change: ReachC
     if (!access.has(t.workspace)) access.set(t.workspace, await workspaceGrantsAccess(ctx, userId, t.workspace));
     if (!access.get(t.workspace) || !commitTouchesTarget(t.paths, files)) continue;
     // Reach reads back to the first live deploy that held the change; an older one only names which deploy took it out.
-    const deploys = (await targetDeploys(ctx, t.workspace, t.name, REACH_DEPLOYS)).filter((d) => !d.repository || d.repository === repository);
-    const live = deploys.find((d) => d.status === "live");
+    // A watcher's push is nobody's deploy: it takes no change on main live, and reach reads from the real deploy that
+    // went live last.
+    const deploys = (await targetDeploys(ctx, t.workspace, t.name, REACH_DEPLOYS)).filter((d) => (!d.repository || d.repository === repository) && d.pushed_via !== "dev watcher");
+    const live = liveDeployOf(deploys);
     const out: ReachDeploy[] = [];
     for (const d of deploys) {
       // A deploy is stamped with its place on main once live; the live one stamped before main ordered its sha, and

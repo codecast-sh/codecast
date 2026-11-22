@@ -6,7 +6,7 @@
 import { useInboxStore } from "../../store/inboxStore";
 import { deployTargetLedger } from "../../components/consequential/ledgers";
 import type { SwitchLedger } from "../../components/consequential/ConsequentialSwitch";
-import { rollbackTarget, targetNow, type DeployTargetRow, type TeamDeployRow } from "./targets";
+import { isWatcherPush, rollbackTarget, targetNow, type DeployTargetRow, type TeamDeployRow } from "./targets";
 
 export type Press = { target: DeployTargetRow; action: "deploy" | "redeploy" | "rollback"; of: TeamDeployRow | null };
 
@@ -48,9 +48,10 @@ export function sendPress(p: Press, teamId: string, deploys: ReadonlyArray<TeamD
 }
 
 /** The way back a superseded deploy offers ("Roll back here"): only for one that went live on another sha, on a
- *  target that can go back, while nothing else is going out there. */
+ *  target that can go back, while nothing else is going out there. A dev watcher's push ran uncommitted files no
+ *  sha holds, so it is never a way back. */
 export function rollBackHere(d: TeamDeployRow, target: DeployTargetRow | undefined, deploys: ReadonlyArray<TeamDeployRow>): Press | null {
-  if (!target || d.status !== "live" || !d.sha) return null;
+  if (!target || d.status !== "live" || !d.sha || isWatcherPush(d)) return null;
   const n = targetNow(target, deploys);
   if (n.open || d._id === n.live?._id || d.sha === n.live?.sha) return null;
   if (!target.can_redeploy_sha && !target.can_rollback) return null;

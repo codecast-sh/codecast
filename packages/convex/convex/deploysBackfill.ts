@@ -181,7 +181,8 @@ export const closeSupersededDeploys = internalMutation({
   handler: async (ctx, args) => {
     const PAGE = 2000;
     const page: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_creation_time", (q: any) => q.gt("_creationTime", args.since ?? 0)).order("asc").take(PAGE);
-    const lives = page.filter((d) => d.status === "live");
+    // A watcher's push supersedes nothing (closeSuperseded), so the newest real deploy is the one that closes.
+    const lives = page.filter((d) => d.status === "live" && d.pushed_via !== "dev watcher");
     const seen = new Set<string>();
     const closed: Array<{ short_id: string; workspace: string; repository: string | null; target: string; status: string; created_at: number; superseded_by: string }> = [];
     // The newest live of each target closes everything open before it, so one per target is enough.

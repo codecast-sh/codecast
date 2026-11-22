@@ -28,4 +28,9 @@ describe("a ship's deploy step", () => {
     const r = await runDeployStep(async (env) => { fs.writeFileSync(env.CAST_PUSH_CHANGES_FILE!, "{not json"); return { code: 0, output: "" }; });
     expect(r.changes).toEqual({});
   });
+
+  test("a diff that found nothing still says it ran", async () => {
+    const r = await runDeployStep(async (env) => { fs.writeFileSync(env.CAST_PUSH_CHANGES_FILE!, JSON.stringify({ adds: [], drops: [] })); return { code: 0, output: "" }; });
+    expect(r.changes).toEqual({ machine: os.hostname(), via: "deploy.sh", adds: [], drops: [] });
+  });
 });

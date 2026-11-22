@@ -50,6 +50,8 @@ import {
   DAY,
   DEPLOY_SHORT_ID_PREFIX,
   DEPLOY_SHORT_ID_RE,
+  liveDeployOf,
+  liveDeploys,
   normalizeDeployTarget,
   waitingMerges,
   type DeployMerge,
@@ -89,25 +91,18 @@ export function capNames(...lists: Array<ReadonlyArray<string> | undefined>): st
 }
 
 /**
- * The target's current live deploy among `recent` (newest first), of the repository when both name one: the one
- * that went live last. A watcher's row goes live again on every save, so creation order is not what runs.
+ * The target's current live deploy among `recent`, of the repository when both name one: the one that went live last
+ * (liveDeployOf). `real` leaves out the dev watcher's pushes.
  */
-export function liveOf(recent: ReadonlyArray<Doc<"deploys">>, target: string, repository: string | undefined): Doc<"deploys"> | undefined {
-  let best: Doc<"deploys"> | undefined;
-  for (const d of recent) {
-    if (d.target !== target || d.status !== "live" || (d.repository && repository && d.repository !== repository)) continue;
-    const at = d.live_at ?? d.created_at, bestAt = best ? best.live_at ?? best.created_at : 0;
-    // A tie goes to the row written later.
-    if (!best || at > bestAt || (at === bestAt && d._creationTime > best._creationTime)) best = d;
-  }
-  return best;
+export function liveOf(recent: ReadonlyArray<Doc<"deploys">>, target: string, repository: string | undefined, opts: { real?: boolean } = {}): Doc<"deploys"> | undefined {
+  return liveDeployOf(recent, { target, repository, real: opts.real });
 }
 
-/** The target's latest live deploy, as a marker for it would find it. */
-export async function latestLiveDeploy(ctx: any, workspace: string, target: string, repository?: string): Promise<Doc<"deploys"> | null> {
+/** The target's latest live deploy, as a marker for it would find it; `real` leaves out the dev watcher's pushes. */
+export async function latestLiveDeploy(ctx: any, workspace: string, target: string, repository?: string, opts: { real?: boolean } = {}): Promise<Doc<"deploys"> | null> {
   const t = normalizeDeployTarget(target);
   if (!t) return null;
-  return liveOf(await workspaceDeploys(ctx, workspace, 100), t, repository ? normalizeRepository(repository) : undefined) ?? null;
+  return liveOf(await workspaceDeploys(ctx, workspace, 100), t, repository ? normalizeRepository(repository) : undefined, opts) ?? null;
 }
 
 /**
@@ -136,23 +131,29 @@ export async function ownWatcherRowFor(ctx: any, workspace: string, target: stri
   return ownWatcherRow(await workspaceDeploys(ctx, workspace, 100), t, m) ?? null;
 }
 
+/** When a deploy row last did something: a watcher's row goes live again on every save. */
+const activeAt = (d: Doc<"deploys">) => d.live_at ?? d.created_at;
+
 /**
- * Who put `name` on a target: the newest of `rows` (one target and repository, newest first) whose adds hold it.
- * `committed_in` is the earliest clean live deploy after it, other than a watcher's, that kept the name (did not drop
- * it): that tree held the name, so by then it was in a commit. A live push that dropped it first ends the search. Such
- * a deploy is deploy.sh, a ship or a line deploy; an older cast's deploy.sh records no path, and its watcher records
- * nothing.
+ * Who put `name` on a target: of `rows` (one target and repository), the one active last whose adds hold it.
+ * `committed_in` is the earliest clean live deploy active after it, other than a watcher's, whose diff ran (it
+ * recorded `drops`, even empty) and kept the name: that tree held the name, so by then it was in a commit. A live
+ * push active after the add that dropped it first ends the search. Rows are read by when they were last active, so a
+ * watcher row's add counts from its latest save, and a drop made before the name was put back never ends the search.
  */
 export function adderOf(rows: ReadonlyArray<Doc<"deploys">>, name: string): { adder: Doc<"deploys">; committed_in: Doc<"deploys"> | null } | null {
-  const i = rows.findIndex((x) => x.adds?.includes(name));
+  const byActivity = [...rows].sort((a, b) => activeAt(b) - activeAt(a) || b._creationTime - a._creationTime);
+  const i = byActivity.findIndex((x) => x.adds?.includes(name));
   if (i < 0) return null;
+  const adder = byActivity[i];
   for (let j = i - 1; j >= 0; j--) {
-    const d = rows[j];
+    const d = byActivity[j];
     if (d.status !== "live") continue;
     if (d.drops?.includes(name)) break;
-    if (!d.dirty && d.pushed_via !== "dev watcher") return { adder: rows[i], committed_in: d };
+    // A deploy whose diff did not run (an older cast, prod unreadable) says nothing of what its tree held.
+    if (!d.dirty && d.pushed_via !== "dev watcher" && Array.isArray(d.drops)) return { adder, committed_in: d };
   }
-  return { adder: rows[i], committed_in: null };
+  return { adder, committed_in: null };
 }
 
 /** The names of `next` that `before` did not hold: what a write newly recorded. */
@@ -174,7 +175,8 @@ export const supersededNote = (by: string) => `superseded by ${by}, never report
  * asked. Closed as cancelled, naming the deploy that superseded them (unless `dry`); returned either way.
  */
 export async function closeSuperseded(ctx: any, live: Doc<"deploys">, opts: { dry?: boolean; now?: number } = {}): Promise<Doc<"deploys">[]> {
-  if (live.status !== "live") return [];
+  // A watcher's push is nobody's deploy: it supersedes nothing.
+  if (live.status !== "live" || live.pushed_via === "dev watcher") return [];
   const before: Doc<"deploys">[] = await ctx.db
     .query("deploys")
     .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", live.workspace).eq("target", live.target).lt("created_at", live.created_at))
@@ -284,9 +286,10 @@ export type DeployMarker = {
  * its machine's latest watcher row of the same repository and sha while no
  * other path's deploy went live since (ownWatcherRow), going live again there,
  * and is a deploy of its own otherwise. Any other marker
- * never lands on a watcher's row, and lands on a live deploy of its sha only
- * when both are dirty or both are clean, and (unless it names its deploy or
- * run) only when that deploy is what the target runs now.
+ * never lands on a watcher's row. Unless it names its deploy or run, it
+ * lands on a live deploy of its sha only when it is clean and changed nothing
+ * (a retry), that deploy is clean, and it is what the target runs now; a push
+ * that is dirty or added or dropped names is a deploy of its own.
  *
  * Names the write newly drops are told to whoever's uncommitted push put them
  * there (noticeDroppedWork).
@@ -298,8 +301,11 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   const status = m.status ?? "live";
   const repository = m.repository ? normalizeRepository(m.repository) : undefined;
   const recent = await workspaceDeploys(ctx, m.workspace, 100);
-  const adds = capNames(m.adds);
-  const drops = capNames(m.drops);
+  // The push's diff ran exactly when it reports adds and drops (each possibly empty); an older cast, or a prod the diff
+  // could not read, reports neither, and its row records neither.
+  const diffRan = Array.isArray(m.adds) || Array.isArray(m.drops);
+  const adds = diffRan ? capNames(m.adds) : undefined;
+  const drops = diffRan ? capNames(m.drops) : undefined;
   const machine = m.machine?.slice(0, NAME_MAX);
 
   if (m.pushed_via === "dev watcher") {
@@ -307,19 +313,18 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     if (own) {
       // Another push went live since this row's last save: everything this save drops is dropped again.
       const wasLive = liveOf(recent, target, repository) === own;
-      const nextAdds = capNames(own.adds, adds);
-      const nextDrops = capNames(own.drops, drops);
-      const patch: Partial<Doc<"deploys">> = {
-        dirty: m.dirty || undefined,
-        adds: nextAdds.length ? nextAdds : undefined,
-        drops: nextDrops.length ? nextDrops : undefined,
-        live_at: m.at,
-        updated_at: now,
-      };
+      const patch: Partial<Doc<"deploys">> = { dirty: m.dirty || undefined, live_at: m.at, updated_at: now };
+      if (adds && drops) {
+        // The row holds the net change of its saves: a name this save put back is no longer dropped, and one it took
+        // off is no longer added.
+        const added = new Set(adds), dropped = new Set(drops);
+        patch.adds = capNames([...(own.adds ?? []), ...adds].filter((n) => !dropped.has(n)));
+        patch.drops = capNames([...(own.drops ?? []), ...drops].filter((n) => !added.has(n)));
+      }
       if (m.event_id && !own.event_ids.some((e) => String(e) === String(m.event_id))) patch.event_ids = [...own.event_ids, m.event_id];
       await ctx.db.patch(own._id, patch);
       await stampEvent(ctx, m.event_id, own.short_id);
-      await noticeDroppedWork(ctx, { ...own, ...patch }, wasLive ? newNames(nextDrops, own.drops) : drops, m.started_by);
+      await noticeDroppedWork(ctx, { ...own, ...patch }, wasLive ? newNames(patch.drops ?? [], own.drops) : drops ?? [], m.started_by);
       return own.short_id;
     }
   }
@@ -333,20 +338,24 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   // A run that went live may be the target's live deploy another path already recorded; a run still going, failed,
   // or shipping the sha of a superseded deploy (a rollback) is a deploy of its own.
   // A watcher's push is a working tree, never what a run shipped.
-  const currentLive = m.workflow_run ? liveOf(recent.filter((d) => d.pushed_via !== "dev watcher"), target, repository) : undefined;
+  const currentLive = m.workflow_run ? liveOf(recent, target, repository, { real: true }) : undefined;
   // Any other marker speaks for the target as it runs now: it lands only on the target's current live deploy (or the
   // deploy that already holds its event, a report of it again). An older live deploy of the sha was replaced since,
   // so the sha going live again is a deploy of its own.
   const runningNow = liveOf(recent, target, repository);
+  // A push that changed what runs (uncommitted files, names it added or dropped) is a deploy of its own: two people's
+  // dirty trees of one HEAD are two deploys, and folding one into the other hides what it dropped. Only a clean push
+  // that changed nothing is the clean live deploy of its sha again (a retry). It may still finish an open deploy or
+  // the one it names.
+  const changes = !!m.dirty || !!adds?.length || !!drops?.length;
   const liveMatch = (d: Doc<"deploys">) => d.status === "live" && (m.workflow_run
-    ? status === "live" && d === currentLive
-    : d === runningNow || (!!m.event_id && d.event_ids.some((e) => String(e) === String(m.event_id))));
+    // A dirty push of a sha is not the run's clean deploy of it.
+    ? status === "live" && d === currentLive && !!d.dirty === !!m.dirty
+    : (!changes && !d.dirty && d === runningNow) || (!!m.event_id && d.event_ids.some((e) => String(e) === String(m.event_id))));
 
   const same = watcher ? undefined : ownNamed || ownRun || recent.find((d) =>
     d.target === target && (liveMatch(d) || OPEN.has(d.status)) && runFree(d) && d.pushed_via !== "dev watcher"
     && (!d.repository || !repository || d.repository === repository)
-    // A dirty push of a sha is not the clean deploy of it, nor the other way round. An open deploy has not gone out yet.
-    && (OPEN.has(d.status) || !!d.dirty === !!m.dirty)
     && ((m.sha && sameSha(d.sha, m.sha)) || (!m.sha && m.version && d.version === m.version)),
   );
   const open = watcher ? undefined : same ?? recent.find((d) =>
@@ -393,8 +402,8 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     if (m.source_id && !open.source_id) patch.source_id = m.source_id;
     if (machine && !open.machine) patch.machine = machine;
     if (m.pushed_via && !open.pushed_via) patch.pushed_via = m.pushed_via;
-    if (adds.length) patch.adds = capNames(open.adds, adds);
-    if (drops.length) patch.drops = capNames(open.drops, drops);
+    if (adds) patch.adds = capNames(open.adds, adds);
+    if (drops) patch.drops = capNames(open.drops, drops);
     await ctx.db.patch(open._id, patch);
     await stampEvent(ctx, m.event_id, open.short_id);
     if (patch.status && patch.status !== open.status) await onDeployStatus(ctx, open._id);
@@ -427,8 +436,8 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     ...(m.ship_pass_id ? { ship_pass_id: m.ship_pass_id } : {}),
     ...(machine ? { machine } : {}),
     ...(m.pushed_via ? { pushed_via: m.pushed_via } : {}),
-    ...(adds.length ? { adds } : {}),
-    ...(drops.length ? { drops } : {}),
+    ...(adds ? { adds } : {}),
+    ...(drops ? { drops } : {}),
     carries: [],
     created_at: Math.min(m.started_at ?? m.at, m.at),
     ...(status === "live" ? { live_at: m.at } : {}),
@@ -444,7 +453,7 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   }
   await stampEvent(ctx, m.event_id, shortId);
   await onDeployStatus(ctx, id);
-  if (status === "live") await noticeDroppedWork(ctx, row, drops, m.started_by);
+  if (status === "live") await noticeDroppedWork(ctx, row, drops ?? [], m.started_by);
   return shortId;
 }
 
@@ -908,8 +917,12 @@ export const get = query({
       if (row) events.push({ _id: String(row._id), title: row.title, url: row.url ?? null, at: row.created_at, source: row.data?.source_name ?? row.source });
     }
     const project = d.project_id ? await ctx.db.get(d.project_id) : null;
-    // A live deploy that is no longer what runs: the live deploy after it on its target.
-    const replacer = d.status === "live" ? around.filter((x) => x.status === "live" && x.created_at > d.created_at).sort((a, b) => a.created_at - b.created_at)[0] : undefined;
+    // A live deploy that is no longer what runs: the real deploy that went live after it on its target (a watcher's
+    // push replaces nothing: it is nobody's deploy).
+    const wentLive = d.live_at ?? d.created_at;
+    const replacer = d.status === "live"
+      ? liveDeploys(around, { repository: d.repository, real: true }).filter((x) => (x.live_at ?? x.created_at) > wentLive || ((x.live_at ?? x.created_at) === wentLive && x._creationTime > d._creationTime)).at(-1)
+      : undefined;
     return {
       ...(await shapeView(ctx, d)),
       after: after.get(String(d._id)) ?? null,

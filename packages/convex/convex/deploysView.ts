@@ -96,7 +96,9 @@ export async function afterFor(ctx: any, workspace: string, deploys: Doc<"deploy
   for (let i = 0; i < live.length; i++) {
     const d = live[i];
     const from = d.live_at ?? d.created_at;
-    const next = live.slice(i + 1).find((n) => n.target === d.target);
+    // A deploy's window runs to the next real deploy of its target: a watcher's push is nobody's deploy, so it ends no
+    // window (its own runs to the next real deploy too).
+    const next = live.slice(i + 1).find((n) => n.target === d.target && n.pushed_via !== "dev watcher");
     const to = next ? next.live_at ?? next.created_at : Math.min(now, from + AFTER_MAX_MS);
     const problems: DeployAfterProblem[] = [];
     for (const c of d.carries) {

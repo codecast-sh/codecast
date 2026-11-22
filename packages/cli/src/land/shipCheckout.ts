@@ -362,7 +362,8 @@ export async function runDeployStep(
       const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
       const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
       const adds = names(raw?.adds), drops = names(raw?.drops);
-      changes = { machine: os.hostname(), via: "deploy.sh", ...(adds.length ? { adds } : {}), ...(drops.length ? { drops } : {}) };
+      // Both lists, empty or not: their presence says the step's diff ran.
+      changes = { machine: os.hostname(), via: "deploy.sh", adds, drops };
     } catch { /* the step wrote nothing */ }
     return { ...r, changes };
   } finally {

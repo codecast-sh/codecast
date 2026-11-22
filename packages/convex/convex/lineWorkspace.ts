@@ -461,8 +461,8 @@ export async function causeHistoryForTask(ctx: any, task: any, exceptRunId?: str
     .map((d: any) => shapeCard(d, String(task.project_id ?? "")));
   const project = task.project_id ? await ctx.db.get(task.project_id) : null;
   const named = runs.map((r) => parsePrRef(r.merge?.pr_url)?.repository).filter((x): x is string => !!x);
-  // Only a deploy that went live carried anything.
-  const deploys = project ? (await projectDeploys(ctx, project, named)).filter((d) => d.status === "live") : [];
+  // Only a deploy that went live carried anything, and a watcher's push carries nothing.
+  const deploys = project ? (await projectDeploys(ctx, project, named)).filter((d) => d.status === "live" && d.pushed_via !== "dev watcher") : [];
   const saidById = new Map(runs.map((r) => [String(r._id), runSaid(r)]));
   const endedId = String(rows.find((r: any) => !isLiveRunStatus(r.status))?._id ?? "");
   const { quotes, ...occurrences } = await causeOccurrences(ctx, task);

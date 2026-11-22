@@ -136,7 +136,7 @@ export function shipPassBody(plan: ShipPlan, r: ShipOutcome, repository: string,
     deploys: r.deploys.map((d) => ({
       name: d.name, stage: d.stage, ok: d.ok, ...(d.target ? { target: d.target } : {}), ...(d.dirty ? { dirty: d.dirty } : {}),
       // What the push did to its target (machine, path, names added and dropped), when the step said.
-      ...(d.machine ? { machine: d.machine } : {}), ...(d.via ? { via: d.via } : {}), ...(d.adds?.length ? { adds: d.adds } : {}), ...(d.drops?.length ? { drops: d.drops } : {}),
+      ...(d.machine ? { machine: d.machine } : {}), ...(d.via ? { via: d.via } : {}), ...(d.adds && d.drops ? { adds: d.adds, drops: d.drops } : {}),
       ...(d.output ? { output: d.output.slice(-3000) } : {}),
     })),
     started_at: startedAt,

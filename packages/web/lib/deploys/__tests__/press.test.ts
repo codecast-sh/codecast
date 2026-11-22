@@ -26,6 +26,10 @@ describe("roll back here", () => {
     expect(rollBackHere(d[0], target(), [...d, dp("dp-3", "running", 3)])).toBeNull();
     expect(rollBackHere(d[0], undefined, d)).toBeNull();
   });
+  test("never for a dev watcher's push: it ran files no sha holds", () => {
+    const watcher = dp("dp-1", "live", 1, { pushed_via: "dev watcher", dirty: 2 });
+    expect(rollBackHere(watcher, target(), [watcher, d[1]])).toBeNull();
+  });
   test("its ledger says what goes back live and from what", () => {
     const l = pressLedger(rollBackHere(d[0], target(), d)!, d);
     expect(l.shift).toEqual(["2000000", "1000000"]);
