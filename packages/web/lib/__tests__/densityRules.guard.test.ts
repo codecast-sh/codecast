@@ -87,3 +87,42 @@ describe("a reference in prose sits in the text line", () => {
     expect(shared).not.toMatch(/[\s"](py|pt|pb|h|min-h|leading|whitespace)-[\w[\]./]+/);
   });
 });
+
+// A transcript's tool, `cast` and system rows (Modern, the default style) are
+// one 20px line with 2px above and below: 24px, the smallest target a stacked
+// row can be (WCAG 2.5.8). The 12px parts sit on the 13px verb's baseline in
+// an 18px box, so mixing sizes never stretches the line to 21px.
+describe("a transcript row is one line", () => {
+  const ROW = ".modern-style [data-sv-feed] [data-cc-row-head]";
+  test("its head is the 20px line and 2px above and below", () => {
+    const r = ruleBody(ROW);
+    expect(r["line-height"]).toBe("20px");
+    expect(r.padding).toBe("2px 8px");
+    expect(r["min-height"]).toBe("24px");
+    for (const k of Object.keys(r)) if (VERTICAL.test(k)) expect(["line-height", "padding", "min-height"]).toContain(k);
+  });
+
+  test("its smaller parts stay inside that line", () => {
+    for (const part of ["object", "meta", "tag"]) expect(ruleBody(`${ROW} [data-cc-row-${part}]`)["line-height"]).toBe("18px");
+  });
+
+  test("a row's own button is the row's height, not clipped by it", () => {
+    // A 28px button with -2px above and below lays out 24px tall: its row is 28px.
+    expect(ruleBody(`${ROW} [data-cc-row-actions]`).margin).toBe("-2px 0");
+  });
+});
+
+// The phone draws a reference as a run of the prose's own Text (nested Text is
+// laid out as a span on the paragraph's lines), so it wraps with the words and
+// never sets a line height of its own.
+describe("a reference on the phone sits in the text line", () => {
+  const src = read("../mobile/components/EntityPill.tsx");
+  const pill = src.match(/\n  pill: \{([^}]*)\}/)?.[1] ?? "";
+  test("the pill is Text, never a box", () => {
+    expect(src).toMatch(/return \(\n    <RNText\n      style=\{\[styles\.pill/);
+  });
+  test("its style sets no line height or height", () => {
+    expect(pill).toContain("fontSize: 11");
+    expect(pill).not.toMatch(/\b(lineHeight|height|minHeight|marginVertical)\b/);
+  });
+});
