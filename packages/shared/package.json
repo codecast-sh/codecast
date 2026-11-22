@@ -67,6 +67,7 @@
     "./contracts/lineWords": "./contracts/lineWords.ts",
     "./contracts/modelCall": "./contracts/modelCall.ts",
     "./contracts/sessionGoal": "./contracts/sessionGoal.ts",
+    "./contracts/sessionOwners": "./contracts/sessionOwners.ts",
     "./contracts/pageData": "./contracts/pageData.ts",
     "./contracts/replay": "./contracts/replay.ts",
     "./contracts/replayPlayer": "./contracts/replayPlayer.ts",

@@ -8895,6 +8895,8 @@ async function enrichInboxSessionRow(
     // author/owner display names are stamped by computeInboxSessions, which
     // caches the user docs across rows.
     owner_user_id: (conv as any).owner_user_id?.toString() ?? null,
+    // The person who took the wheel (schema: who drives).
+    driver_user_id: conv.driver_user_id?.toString() ?? null,
     user_id: conv.user_id,
     acting_user_id: (conv as any).acting_user_id ?? null,
     is_anchor: !!(conv as any).anchor_id,

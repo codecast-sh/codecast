@@ -12,7 +12,10 @@ import {
   listSessionOwnerIds,
   syncPrimaryOwnerCache,
   humanStarterUser,
+  ownerRowsOf,
+  type OwnerRowSnapshot,
 } from "./sessionOwners";
+import { driverOf as sharedDriverOf, listedOwnerIds, humanRunnerOf, isLeave, leaveLeavesAnOwner, pinnedDriverAfterAdd, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { routeUpWaitingSession } from "./agentTasks";
 import { requireRole, userCanAdminRole } from "./lib/orgAccess";
@@ -60,6 +63,8 @@ type OwnerInfo = {
   // viewer whose roster lacks the assigner (another team) still sees them.
   image?: string | null;
   added_by_image?: string | null;
+  // The starter, listed while the session has no owner rows.
+  implicit?: boolean;
 };
 
 const avatarOf = (u: any): string | null => u?.image ?? u?.github_avatar_url ?? null;
@@ -424,7 +429,7 @@ async function reparentSessionCore(
     const dropRole = args.target.drop_role ?? !!args.target.user_id;
     // Who drives before the change: an owners-list change never moves the
     // wheel to the person it adds, even though the primary owner follows them.
-    const driverBefore = dropRole ? null : driverOf(conversation, await ownerIdsOrStarter(ctx, conversation));
+    const factsBefore = dropRole ? null : await ownersFactsOf(ctx, conversation);
     const refs = args.target.owners ?? (args.target.user_id ? [args.target.user_id.toString()] : []);
     const desiredKeys = new Set<string>();
     const desired: any[] = [];
@@ -474,12 +479,9 @@ async function reparentSessionCore(
     const preferred = mode === "remove" ? undefined : desired[desired.length - 1]?._id;
     await syncPrimaryOwnerCache(ctx, conversation._id, preferred);
     await clearDriverIfRemoved();
-    if (driverBefore?.kind === "user" && !conversation.driver_user_id && mode !== "remove") {
-      const ids = (await listSessionOwnerIds(ctx, conversation._id)).map(String);
-      const now = driverOf((await ctx.db.get(conversation._id)) ?? conversation, ids);
-      if (ids.includes(String(driverBefore.user_id)) && !(now?.kind === "user" && String(now.user_id) === String(driverBefore.user_id))) {
-        await ctx.db.patch(conversation._id, { driver_user_id: driverBefore.user_id });
-      }
+    if (factsBefore && mode !== "remove") {
+      const pin = pinnedDriverAfterAdd(factsBefore, await ownersFactsOf(ctx, (await ctx.db.get(conversation._id)) ?? conversation));
+      if (pin && String(conversation.driver_user_id ?? "") !== pin) await ctx.db.patch(conversation._id, { driver_user_id: pin as Id<"users"> });
     }
     // A re-homing under a person (the chart's drop, a release) takes the role
     // off; adding owners from the menu keeps it, since a role is an owner too.
@@ -690,12 +692,31 @@ export async function performSetSessionOwner(
 // query and the tests read the same rule.
 export type SessionDriver = { kind: "role"; role_id: Id<"org_roles"> } | { kind: "user"; user_id: Id<"users"> };
 
+// The rule itself is shared with the web store (shared/contracts/sessionOwners).
 export function driverOf(conversation: { org_role_id?: Id<"org_roles">; driver_user_id?: Id<"users">; owner_user_id?: Id<"users"> }, ownerIds: string[]): SessionDriver | null {
-  const named = conversation.driver_user_id && ownerIds.includes(String(conversation.driver_user_id)) ? conversation.driver_user_id : undefined;
-  if (named) return { kind: "user", user_id: named };
-  if (conversation.org_role_id) return { kind: "role", role_id: conversation.org_role_id };
-  const primary = conversation.owner_user_id && ownerIds.includes(String(conversation.owner_user_id)) ? conversation.owner_user_id : ownerIds[0];
-  return primary ? { kind: "user", user_id: primary as Id<"users"> } : null;
+  return sharedDriverOf({
+    role_id: conversation.org_role_id ? String(conversation.org_role_id) : null,
+    driver_user_id: conversation.driver_user_id ? String(conversation.driver_user_id) : null,
+    primary_id: conversation.owner_user_id ? String(conversation.owner_user_id) : null,
+  }, ownerIds) as SessionDriver | null;
+}
+
+// A conversation's owner facts as the shared model reads them.
+export async function ownersFactsOf(ctx: { db: any }, conversation: any): Promise<OwnersFacts> {
+  const rows = (await ownerRowsOf(ctx, conversation._id)).map((r) => ({ user_id: r.user_id, added_at: r.added_at }));
+  const bots: string[] = [];
+  for (const id of [conversation.author_user_id, conversation.user_id]) {
+    if (id && (await ctx.db.get(id))?.is_bot) bots.push(String(id));
+  }
+  return {
+    rows,
+    author_id: conversation.author_user_id ? String(conversation.author_user_id) : null,
+    runner_id: String(conversation.user_id),
+    bots,
+    role_id: conversation.org_role_id ? String(conversation.org_role_id) : null,
+    driver_user_id: conversation.driver_user_id ? String(conversation.driver_user_id) : null,
+    primary_id: conversation.owner_user_id ? String(conversation.owner_user_id) : null,
+  };
 }
 
 // The owner set as the session shows it: its owner rows, else the human who
@@ -751,9 +772,11 @@ export async function performSetSessionDriver(
 // Leave a session: take yourself out of its owners. A session that runs on
 // your account moves first, to a machine another account runs (a teammate's
 // shared machine or an agent box), in the same transaction, so nobody is left
-// owning a session that still bills to someone who left. Refused when it
-// would leave the session with no person to own it. The leaver's author pin
-// comes off, so the starter fallback cannot bring them back.
+// owning a session that still bills to someone who left. When nobody else
+// owns it, the person whose account now runs it takes a row, so the starter
+// rule cannot hand it back to a leaver who started it; refused when there is
+// no such person. shared/contracts/sessionOwners applyOwnersChangeTo is the
+// same rule, run by the web store before this lands.
 export async function performLeaveSession(
   ctx: { db: any; scheduler?: any },
   authUserId: Id<"users">,
@@ -761,24 +784,25 @@ export async function performLeaveSession(
 ): Promise<ReparentSessionResult> {
   const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   const me = String(authUserId);
-  const owners = await ownerIdsOrStarter(ctx, conversation);
-  if (!owners.includes(me)) throw new Error("You are not one of its owners");
-  const runsOnMine = String(conversation.user_id) === me;
-  if (runsOnMine && !args.move_to_device_id) {
+  if (!(await ownerIdsOrStarter(ctx, conversation)).includes(me)) throw new Error("You are not one of its owners");
+  if (String(conversation.user_id) === me && !args.move_to_device_id) {
     throw new Error("It runs on your account: move it to a teammate's or a team machine to leave it");
-  }
-  if (!args.move_to_device_id && owners.length === 1) {
-    throw new Error("You are its only owner: add someone before you leave");
   }
   if (args.move_to_device_id) {
     const moved = await performReparentSessionToDevice(ctx, authUserId, { session_id: String(conversation._id), device_id: args.move_to_device_id });
     if (!moved.cross_user) throw new Error("That machine runs on your account: pick a teammate's or a team machine to leave it");
   }
-  const after = await ctx.db.get(conversation._id);
-  if (String(after.author_user_id ?? "") === me) await ctx.db.patch(conversation._id, { author_user_id: undefined });
   const result = await performReparentSession(ctx, authUserId, { session_id: String(conversation._id), target: { kind: "user", owners: [me], mode: "remove" }, from_session: args.from_session });
-  const left = await ctx.db.get(conversation._id);
-  if ((await ownerIdsOrStarter(ctx, left)).length === 0) throw new Error("Nobody would own it after you leave: add a teammate first");
+  let left = await ctx.db.get(conversation._id);
+  if (String(left.driver_user_id ?? "") === me) await ctx.db.patch(conversation._id, { driver_user_id: undefined });
+  const facts = await ownersFactsOf(ctx, left);
+  const runner = humanRunnerOf(facts);
+  if (facts.rows.length === 0 && runner && runner !== me) {
+    await addSessionOwnerRow(ctx, conversation._id, runner as Id<"users">, authUserId);
+    await syncPrimaryOwnerCache(ctx, conversation._id);
+  }
+  left = await ctx.db.get(conversation._id);
+  if (!leaveLeavesAnOwner(await ownersFactsOf(ctx, left), me)) throw new Error("Nobody would own it after you leave: add a teammate first");
   return result;
 }
 
@@ -791,6 +815,9 @@ export async function performLeaveSession(
 export type OwnersChange = {
   add?: string[];
   remove?: string[];
+  // Rows put back as they were (an undo of a remove): their order returns,
+  // and nobody is told of a handoff again.
+  restore?: OwnerRowSnapshot[];
   role?: string | null;
   driver?: DriverTarget;
   // Leave last: after the rest of the change lands.
@@ -806,23 +833,40 @@ export async function performApplyOwnersChange(
   const { change } = args;
   const results: ReparentSessionResult[] = [];
   // A teammate who can see the session may still claim it for themselves.
-  const selfClaim = change.add?.length === 1 && change.add[0] === String(authUserId) && !change.remove?.length && change.role === undefined && !change.driver && !change.leave;
+  const selfClaim = change.add?.length === 1 && change.add[0] === String(authUserId) && !change.remove?.length && !change.restore?.length && change.role === undefined && !change.driver && !change.leave;
   const start = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   if (!selfClaim && !(await mayEditOwners(ctx, authUserId, start))) {
     throw new Error("Only an owner of the session, or the account that runs it, can change its owners");
   }
   const run = (target: ReparentSessionTarget) => performReparentSession(ctx, authUserId, { session_id: args.session_id, target, handoff: change.note, from_session: args.from_session });
   if (change.add?.length) results.push(await run({ kind: "user", owners: change.add, mode: "add" }));
+  if (change.restore?.length) await restoreOwnerRows(ctx, start._id, change.restore);
   if (change.role !== undefined) {
     const before = await resolveOwnableConversation(ctx, authUserId, args.session_id);
     if (String(before.org_role_id ?? "") !== String(change.role ?? "")) results.push(await run({ kind: "role", role_id: change.role }));
   }
-  if (change.remove?.length) results.push(await run({ kind: "user", owners: change.remove, mode: "remove" }));
+  // Taking yourself out is a leave, whichever way the change says it.
+  const others = (change.remove ?? []).filter((id) => id !== String(authUserId));
+  if (others.length) results.push(await run({ kind: "user", owners: others, mode: "remove" }));
   if (change.driver) await performSetSessionDriver(ctx, authUserId, { session_id: args.session_id, driver: change.driver });
-  if (change.leave) results.push(await performLeaveSession(ctx, authUserId, { session_id: args.session_id, move_to_device_id: change.leave.move_to_device_id, from_session: args.from_session }));
+  if (isLeave(change, String(authUserId))) results.push(await performLeaveSession(ctx, authUserId, { session_id: args.session_id, move_to_device_id: change.leave?.move_to_device_id, from_session: args.from_session }));
   // Read by id: after a leave the caller may no longer see it.
   const conversation = await ctx.db.get(start._id);
   return { results, driver: driverOf(conversation, await ownerIdsOrStarter(ctx, conversation)) };
+}
+
+// Put removed rows back exactly as they were: who added them, when, the
+// note and the ack. A row already present stays as it is.
+async function restoreOwnerRows(ctx: { db: any }, conversationId: Id<"conversations">, rows: OwnerRowSnapshot[]): Promise<void> {
+  const present = new Set((await listSessionOwnerIds(ctx, conversationId)).map(String));
+  let changed = false;
+  for (const r of rows) {
+    if (present.has(r.user_id)) continue;
+    await ctx.db.insert("session_owners", { conversation_id: conversationId, user_id: r.user_id as Id<"users">, added_by: r.added_by as Id<"users">, added_at: r.added_at, ...(r.seen_at ? { seen_at: r.seen_at } : {}), ...(r.note ? { note: r.note } : {}) });
+    present.add(r.user_id);
+    changed = true;
+  }
+  if (changed) await syncPrimaryOwnerCache(ctx, conversationId);
 }
 
 // ── Public mutations ─────────────────────────────────────────────────────────
@@ -957,6 +1001,7 @@ export const applyOwnersChange = mutation({
     change: v.object({
       add: v.optional(v.array(v.string())),
       remove: v.optional(v.array(v.string())),
+      restore: v.optional(v.array(v.object({ user_id: v.string(), added_by: v.string(), added_at: v.number(), seen_at: v.optional(v.number()), note: v.optional(v.string()) }))),
       role: v.optional(v.union(v.string(), v.null())),
       driver: v.optional(DRIVER_TARGET),
       leave: v.optional(v.object({ move_to_device_id: v.optional(v.string()) })),
@@ -1063,10 +1108,13 @@ export async function performListOwners(
   driver: SessionDriver | null;
   driver_user_id: string | null;
   runner: OwnerRunner | null;
+  author_id: string | null;
+  bots: string[];
   can_edit: boolean;
 } | null> {
   const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) return null;
+  const facts = await ownersFactsOf(ctx, conversation);
   const owners = await listOwnerInfos(ctx, conversation._id);
   if (owners.length === 0) {
     const starter = await humanStarterUser(ctx, conversation);
@@ -1080,6 +1128,8 @@ export async function performListOwners(
         seen_at: startedAt,
         image: avatarOf(starter),
         added_by_image: avatarOf(starter),
+        // No row: the starter owns it by the starter rule, not by a row.
+        implicit: true,
       });
     }
   }
@@ -1102,12 +1152,14 @@ export async function performListOwners(
     short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
     conversation_id: conversation._id,
     owners,
-    owner_ids: owners.map((o) => o.user_id),
+    owner_ids: listedOwnerIds(facts),
     role,
     role_id: role ? String(role.role_id) : null,
     driver: driverOf(roleDoc ? conversation : { ...conversation, org_role_id: undefined }, owners.map((o) => o.user_id)),
     driver_user_id: conversation.driver_user_id ? String(conversation.driver_user_id) : null,
     runner,
+    author_id: facts.author_id,
+    bots: facts.bots,
     can_edit: String(conversation.user_id) === String(authUserId) || owners.some((o) => o.user_id === String(authUserId)),
   };
 }

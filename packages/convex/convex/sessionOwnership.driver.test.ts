@@ -132,10 +132,10 @@ describe("role owner and driver", () => {
     expect(out.driver).toEqual({ kind: "user", user_id: MATE });
     expect(row(db).org_role_id).toBe(role._id);
     expect(owners(db)).toEqual([ME, MATE].sort());
-    // Leave, and give the wheel back to the role.
-    const left = await performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { remove: [ME], driver: { kind: "role" } } });
-    expect(left.driver).toEqual({ kind: "role", role_id: role._id });
-    expect(owners(db)).toEqual([MATE]);
+    // Take Mate off and give the wheel back to the role.
+    const back = await performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { remove: [MATE], driver: { kind: "role" } } });
+    expect(back.driver).toEqual({ kind: "role", role_id: role._id });
+    expect(owners(db)).toEqual([ME]);
   });
 
   test("the owners read names the role, the driver and the account that runs it", async () => {
@@ -177,8 +177,10 @@ describe("leaving a session", () => {
     const db = leaveFixtures();
     await performApplyOwnersChange(ctxS(db), ME as any, { session_id: "sess1", change: { leave: { move_to_device_id: "mini" } } });
     expect(row(db).user_id).toBe(MATE);
-    expect(row(db).author_user_id).toBeUndefined();
-    expect(db._tables.session_owners.map((r: any) => r.user_id)).toEqual([]);
+    // Who started it stays recorded; the new runner owns it by a row, so the
+    // starter rule cannot hand it back to me.
+    expect(row(db).author_user_id).toBe(ME);
+    expect(db._tables.session_owners.map((r: any) => r.user_id)).toEqual([MATE]);
     const read = (await performListOwners(ctxS(db), MATE as any, "sess1"))!;
     expect(read.owner_ids).toEqual([MATE]);
     expect(read.driver).toEqual({ kind: "user", user_id: MATE });
@@ -193,7 +195,14 @@ describe("leaving a session", () => {
   test("the only owner of a session someone else runs cannot simply leave", async () => {
     const db = leaveFixtures({ user_id: "users_bot" }, [{ _id: "so1", conversation_id: CONV, user_id: ME, added_by: ME, added_at: 1 }]);
     db._tables.users.push({ _id: "users_bot", name: "Bot", is_bot: true });
-    await expect(performApplyOwnersChange(ctxS(db), ME as any, { session_id: "sess1", change: { leave: {} } })).rejects.toThrow(/only owner/);
+    await expect(performApplyOwnersChange(ctxS(db), ME as any, { session_id: "sess1", change: { leave: {} } })).rejects.toThrow(/Nobody would own/);
+  });
+
+  test("the only owner of a session a teammate runs leaves it to them", async () => {
+    const db = leaveFixtures({ user_id: MATE, author_user_id: ME, owner_device_id: "mini" }, [{ _id: "so1", conversation_id: CONV, user_id: ME, added_by: ME, added_at: 1 }]);
+    await performApplyOwnersChange(ctxS(db), ME as any, { session_id: "sess1", change: { remove: [ME] } });
+    expect(db._tables.session_owners.map((r: any) => r.user_id)).toEqual([MATE]);
+    expect(row(db).author_user_id).toBe(ME);
   });
 
   test("an owner of a teammate's session leaves and the rest stay", async () => {

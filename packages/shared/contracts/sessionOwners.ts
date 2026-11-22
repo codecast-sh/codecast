@@ -1,0 +1,163 @@
+// A session's owners and who drives, as one pure model. The convex owner
+// mutations and the web store's applySessionOwners both run these rules, so
+// what the store paints before the server answers is what the server answers:
+// the store holds those fields until the answer matches, and a guess that
+// never matches would hold them forever.
+//
+// The facts are the conversation's, as stored: its owner rows, the author and
+// runner (whose human is the owner while there are no rows), the role it is
+// filed under, the person who took the wheel, and the primary-owner cache.
+
+export type OwnerRowFact = { user_id: string; added_at: number; added_by?: string; seen_at?: number; note?: string };
+
+export type OwnersFacts = {
+  rows: OwnerRowFact[];
+  author_id: string | null;
+  runner_id: string;
+  /** Which of the people named here are agent accounts (never owners). */
+  bots: string[];
+  role_id: string | null;
+  driver_user_id: string | null;
+  /** conversations.owner_user_id: the primary owner cache. */
+  primary_id: string | null;
+};
+
+export type SessionDriverFact = { kind: "role"; role_id: string } | { kind: "user"; user_id: string };
+export type DriverChange = { kind: "role" } | { kind: "user"; user_id: string } | { kind: "none" };
+
+export type OwnersChangeInput = {
+  add?: string[];
+  remove?: string[];
+  /** Rows put back as they were (an undo of a remove): their order returns. */
+  restore?: OwnerRowFact[];
+  role?: string | null;
+  driver?: DriverChange;
+  /** The actor leaves; `move_to` names the account the session moves to first. */
+  leave?: { move_to?: { runner_id: string; runner_is_bot: boolean } };
+};
+
+/** Rows in the order they were added (stable for equal stamps). */
+export function sortedRows(rows: OwnerRowFact[]): OwnerRowFact[] {
+  return rows.map((r, i) => ({ r, i })).sort((a, b) => a.r.added_at - b.r.added_at || a.i - b.i).map(({ r }) => r);
+}
+
+/** The person who started it: the author, else the runner, never an agent. */
+export function starterOf(f: Pick<OwnersFacts, "author_id" | "runner_id" | "bots">): string | null {
+  for (const id of [f.author_id, f.runner_id]) if (id && !f.bots.includes(id)) return id;
+  return null;
+}
+
+/** The owners as the session shows them: its rows in the order added, else
+ *  its starter, who owns it before any row exists. */
+export function listedOwnerIds(f: OwnersFacts): string[] {
+  if (f.rows.length) return sortedRows(f.rows).map((r) => r.user_id);
+  const starter = starterOf(f);
+  return starter ? [starter] : [];
+}
+
+/** Who drives: the person who took the wheel while they still own it, else
+ *  the filed role, else the primary owner, else the first owner. */
+export function driverOf(f: Pick<OwnersFacts, "role_id" | "driver_user_id" | "primary_id">, ownerIds: string[]): SessionDriverFact | null {
+  if (f.driver_user_id && ownerIds.includes(f.driver_user_id)) return { kind: "user", user_id: f.driver_user_id };
+  if (f.role_id) return { kind: "role", role_id: f.role_id };
+  const primary = f.primary_id && ownerIds.includes(f.primary_id) ? f.primary_id : ownerIds[0];
+  return primary ? { kind: "user", user_id: primary } : null;
+}
+
+/** The primary owner cache after rows change: the preferred person when they
+ *  own it, else the first added (syncPrimaryOwnerCache). */
+export function primaryAfter(rows: OwnerRowFact[], preferred?: string | null): string | null {
+  const ids = sortedRows(rows).map((r) => r.user_id);
+  return (preferred && ids.includes(preferred) ? preferred : ids[0]) ?? null;
+}
+
+/** Adding people never moves the wheel to them, though the primary follows
+ *  the person added: a driver nobody chose is pinned to whoever drove. */
+export function pinnedDriverAfterAdd(before: OwnersFacts, after: OwnersFacts): string | null {
+  if (after.driver_user_id) return after.driver_user_id;
+  const was = driverOf(before, listedOwnerIds(before));
+  if (was?.kind !== "user") return null;
+  const ids = listedOwnerIds(after);
+  const now = driverOf(after, ids);
+  return ids.includes(was.user_id) && !(now?.kind === "user" && now.user_id === was.user_id) ? was.user_id : null;
+}
+
+/** Owner rows with `removed` taken out, the driver handed back when it was one of them. */
+function withoutPeople(f: OwnersFacts, removed: string[]): OwnersFacts {
+  const rows = f.rows.filter((r) => !removed.includes(r.user_id));
+  if (rows.length === f.rows.length) return f;
+  return {
+    ...f,
+    rows,
+    driver_user_id: f.driver_user_id && removed.includes(f.driver_user_id) ? null : f.driver_user_id,
+    primary_id: primaryAfter(rows),
+  };
+}
+
+/** The account that runs it, when it is a person: who owns a session nobody else does. */
+export function humanRunnerOf(f: Pick<OwnersFacts, "runner_id" | "bots">): string | null {
+  return f.bots.includes(f.runner_id) ? null : f.runner_id;
+}
+
+/** Taking yourself out is a leave, whichever way the change says it. */
+export function isLeave(change: { leave?: unknown; remove?: string[] }, actor: string): boolean {
+  return !!change.leave || (change.remove ?? []).includes(actor);
+}
+
+/** Whether a leave leaves someone other than the leaver owning the session. */
+export function leaveLeavesAnOwner(after: OwnersFacts, actor: string): boolean {
+  return listedOwnerIds(after).some((id) => id !== actor);
+}
+
+/**
+ * The facts after one Save, in the order the server applies it: adds, then
+ * restored rows, then the role, then removes, then the driver, then a leave.
+ * `now` stamps new rows; their exact value only orders them after the rest.
+ */
+export function applyOwnersChangeTo(f: OwnersFacts, change: OwnersChangeInput, ctx: { actor: string; now: number }): OwnersFacts {
+  let next = f;
+  const add = (change.add ?? []).filter((id, i, all) => all.indexOf(id) === i);
+  if (add.length) {
+    const before = next;
+    let rows = next.rows;
+    // The starter owns a session before any row exists: an add writes their row first.
+    const starter = starterOf(next);
+    if (rows.length === 0 && starter && !add.includes(starter)) rows = [{ user_id: starter, added_at: ctx.now, added_by: starter }];
+    const fresh = add.filter((id) => !rows.some((r) => r.user_id === id));
+    rows = [...rows, ...fresh.map((id) => ({ user_id: id, added_at: ctx.now, added_by: ctx.actor }))];
+    next = { ...next, rows, primary_id: primaryAfter(rows, add[add.length - 1]) };
+    next = { ...next, driver_user_id: pinnedDriverAfterAdd(before, next) };
+  }
+  const restore = (change.restore ?? []).filter((r) => !next.rows.some((x) => x.user_id === r.user_id));
+  if (restore.length) {
+    const rows = [...next.rows, ...restore];
+    next = { ...next, rows, primary_id: primaryAfter(rows) };
+  }
+  if (change.role !== undefined && change.role !== next.role_id) {
+    next = { ...next, role_id: change.role, driver_user_id: change.role ? null : next.driver_user_id };
+  }
+  const remove = (change.remove ?? []).filter((id) => id !== ctx.actor);
+  if (remove.length) next = withoutPeople(next, remove);
+  if (change.driver) {
+    next = { ...next, driver_user_id: change.driver.kind === "user" ? change.driver.user_id : null };
+  }
+  if (isLeave(change, ctx.actor)) {
+    if (change.leave?.move_to) {
+      const to = change.leave.move_to;
+      if (to.runner_id !== next.runner_id) {
+        // The move pins the author to the account it leaves, the first time it changes hands.
+        next = { ...next, author_id: next.author_id ?? next.runner_id, runner_id: to.runner_id, bots: to.runner_is_bot ? [...next.bots, to.runner_id] : next.bots };
+      }
+    }
+    next = withoutPeople(next, [ctx.actor]);
+    if (next.driver_user_id === ctx.actor) next = { ...next, driver_user_id: null };
+    // Nobody left: the person whose account runs it takes a row, so the
+    // starter rule cannot hand the session back to the leaver who started it.
+    const runner = humanRunnerOf(next);
+    if (next.rows.length === 0 && runner && runner !== ctx.actor) {
+      const rows = [{ user_id: runner, added_at: ctx.now, added_by: ctx.actor }];
+      next = { ...next, rows, primary_id: runner };
+    }
+  }
+  return next;
+}
