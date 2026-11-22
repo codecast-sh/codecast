@@ -22797,11 +22797,12 @@ workflow
   .description("For a flow's script station only (shape=parallelogram, script=...): the run's own graph cleared the change to land with no card (a founder-intent read that passed). A run no role is behind then merges under the person who started it. Refused from any agent or session station, fix stations included, and from any station but the one the run stands at; a resume, reask or land-again drops it. <run> is the run id ($run_id in the station's script)")
   .requiredOption("--why <text>", stdinText("What cleared it, recorded with the merge"))
   .option("--cite <session:line>", "The line where the person who started the run said to ship (the intent segment): the server clears only when that line is their own typed word on the change's chain and holds --quote")
-  .option("--quote <text>", "The words on the cited line that authorize shipping")
-  .option("--record <file>", "With --cite: on success, write {starter_id, starter_name, cite, quote, head} there")
+  .option("--cite-card <sd-N>", "In place of --cite: the decision card whose answer by the person who started the run said to ship; the server clears only when they answered it, it was asked on the change's chain or task, and its answer holds --quote")
+  .option("--quote <text>", "The words on the cited line, or in the card's answer, that authorize shipping")
+  .option("--record <file>", "With --cite or --cite-card: on success, write {starter_id, starter_name, cite, quote, head} there")
   .option("--head <sha>", "With --record: the commit the read was given, recorded as head")
   .option("--json", "Machine-readable output")
-  .action(async (run: string, options: { why: string; cite?: string; quote?: string; record?: string; head?: string; json?: boolean }) => {
+  .action(async (run: string, options: { why: string; cite?: string; citeCard?: string; quote?: string; record?: string; head?: string; json?: boolean }) => {
     await (await import("./workflow/runsCli.js")).clearRun({ getCliEndpoint, detectCurrentSessionId }, run, options);
   });
 

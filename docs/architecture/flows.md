@@ -347,7 +347,9 @@ Between Review and Decide the `change` flow runs Intent (`templates/intent.cast`
 which lands the change with no card when the person who started the run
 already told this work to ship. Asker reads, in the order they were said, the
 words people typed into the sessions the change came through and their
-answers on the task's Ship cards, and the run's starter (`cast flow asker
+answers to the decision cards those sessions and the task asked (an answer a
+person gave on a card counts like a line they typed; an agent's or a policy's
+does not), and the run's starter (`cast flow asker
 $change_conversation --task --run`: the chain walk and provenance of
 `originator.ts`). Only a message's typed part counts (`typedPart`): what a
 composer send handed over as typed (`pending_messages.typed_text`, never the
@@ -366,10 +368,14 @@ relay, an agent's "approved", an echo whose words a queue row of the session
 holds, and a session another one handed its work to. Change records the
 commit it diffs (`$run_dir/intent-head`) and reads the diff as the judge does,
 and Read, a model call (`intent/asker.md`), answers `{ship, session, line,
-quote, in_scope, why}`: an explicit ship word, an accepted plan that ships or
+card, quote, in_scope, why}`: an explicit ship word, an accepted plan that ships or
 a /drive request, from the starter, not taken back later, and a change inside
 what they asked for. Clear then sends `cast workflow clear --cite
-<session>:<line> --quote`, and the server is the gate (`verifyCitation`): the
+<session>:<line> --quote` (Clear card, for a card answer, `--cite-card sd-N
+--quote`: the card was asked on the chain or the task, its person answered it
+and started the run, its answer holds the quote, and no person's later
+non-Ship verdict stands, its time being when it was answered;
+`verifyCardCitation`), and the server is the gate (`verifyCitation`): the
 cited session is on the run's change chain (walked from the run's spawner and
 the session that filed its task, as the run's starter may read them; task
 comments name no anchor), the line is typed, its person is `run.user_id` and
@@ -378,7 +384,8 @@ answered other than Ship on the task's cards after it. The check guards
 against honest misreads, not a token holder forging a session's links, who
 could push main anyway. Only then is `merge_cleared` stamped, with the cite,
 the quote and when the line was typed, and the task says `<name> said to ship:
-"<quote>" (<session>:<line>), checked against the record.` Land weighs that
+"<quote>" (<session>:<line>), checked against the record.` (`card:sd-N` for a
+card answer, as intent.json's `cite` names it too) Land weighs that
 word against the person's card verdicts and the newest wins (orgLineMerge
 `personAuthorized`). Every other ending is Ask and Decide posts its card: no
 session behind the change, a branch that does not resolve, a failed script or

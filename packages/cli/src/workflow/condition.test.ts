@@ -8,6 +8,7 @@ import { recordNodeOutput, expandScriptVars, expandPromptVars } from "./runner.j
 describe("evalCondition: every condition the shipped workflows use", () => {
   const INTENT_CLEAR = "outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.session and read.json.quote and read.json.line > 0";
   const INTENT_DECLINED = "outcome = success and read.json.why and (read.json.ship != true or read.json.in_scope != true)";
+  const INTENT_CLEAR_CARD = "outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.card and read.json.quote";
   // Each row: a condition string found in templates/, packages/cli/workflows
   // or the repo's workflows/, a context, and what the old evaluator returned.
   const cases: Array<[string, Record<string, string>, boolean]> = [
@@ -225,6 +226,19 @@ describe("evalCondition: every condition the shipped workflows use", () => {
         [cond, answer({}), false],
         [cond, answer({ ship: false, why: "" }), false],
         [cond, { outcome: "success" }, false],
+      ];
+    }),
+    // intent.cast: an answer citing a card goes to Clear card; one with no card does not.
+    ...[INTENT_CLEAR_CARD, INTENT_CLEAR_CARD.replace(/read\./g, "intent__read.")].flatMap((cond): Array<[string, Record<string, string>, boolean]> => {
+      const read = cond.includes("intent__") ? "intent__read.json" : "read.json";
+      const answer = (over: Record<string, unknown>) => ({ outcome: "success", [read]: JSON.stringify({ ship: true, in_scope: true, session: "", line: 0, card: "sd-4235", quote: "Ship both together", ...over }) });
+      return [
+        [cond, answer({}), true],
+        [cond, answer({ card: "" }), false],
+        [cond, answer({ card: undefined }), false],
+        [cond, answer({ quote: "" }), false],
+        [cond, answer({ ship: false }), false],
+        [cond, answer({ in_scope: false }), false],
       ];
     }),
     ["intent__cleared.json.exit = cleared", { "intent__cleared.json": '{"exit": "cleared"}' }, true],

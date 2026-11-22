@@ -3,13 +3,15 @@
 // Decide would post only costs them a look, and the change lands on their word.
 //
 // Asker reads every line a person typed into the sessions the change came
-// through (`cast flow asker`: briefs, relays and agent text never appear) and
+// through (`cast flow asker`: briefs, relays and agent text never appear), each
+// person's answers to the decision cards those sessions or the task asked, and
 // who started the run, from the run itself. Change is the diff, as the judge
-// reads it. Read is a model that answers whether a line of the starter's tells
-// this work to ship, and whether the change stays inside what they asked for,
-// citing the line and quoting it. Clear hands the citation to the server, which
-// clears the run to land only when that line is the starter's own typed word on
-// the change's chain and holds the quote; code, not the model, is the gate.
+// reads it. Read is a model that answers whether a line or card answer of the
+// starter's tells this work to ship, and whether the change stays inside what
+// they asked for, citing the line (or the card) and quoting it. Clear (or
+// Clear card) hands the citation to the server, which clears the run to land
+// only when it is the starter's own word on the change's chain or task and
+// holds the quote; code, not the model, is the gate.
 //
 // Every other ending is Ask, so the flow asks as it would without this
 // segment: no session behind the change, a failed script or model call, an
@@ -36,12 +38,14 @@ digraph intent {
   read [label="Read", shape=note, model="claude-opus-5-5", max_tokens=2000, prompt="@intent/asker.md"]
   clear [label="Clear", shape=parallelogram, timeout=120,
     script="_head=\"$(cat $run_dir/intent-head)\" && cast workflow clear $run_id --cite $read.json.session:$read.json.line --quote $read.json.quote --why $read.json.why --record $run_dir/intent.json --head \"$_head\""]
+  clear_card [label="Clear card", shape=parallelogram, timeout=120,
+    script="_head=\"$(cat $run_dir/intent-head)\" && cast workflow clear $run_id --cite-card $read.json.card --quote $read.json.quote --why $read.json.why --record $run_dir/intent.json --head \"$_head\""]
   declined   [label="Not said", shape=parallelogram, timeout=60,
     script="_task=$task_id; [ -z \"$_task\" ] || cast task comment \"$_task\" \"Intent asked at Decide: $read.json.why\" -t progress > /dev/null || true"]
   unreadable [label="No citation", shape=parallelogram, timeout=60,
     script="_task=$task_id; [ -z \"$_task\" ] || cast task comment \"$_task\" \"Intent asked at Decide: the intent read failed: the model's answer held no usable citation\" -t progress > /dev/null || true"]
   refused    [label="Refused", shape=parallelogram, timeout=60,
-    script="_task=$task_id; [ -z \"$_task\" ] || cast task comment \"$_task\" \"Intent asked at Decide: the server did not clear the cited line: $clear.output\" -t progress > /dev/null || true"]
+    script="_task=$task_id; [ -z \"$_task\" ] || cast task comment \"$_task\" \"Intent asked at Decide: the server did not clear the citation: $last_error\" -t progress > /dev/null || true"]
   failed     [label="Read failed", shape=parallelogram, timeout=60,
     script="_task=$task_id; [ -z \"$_task\" ] || cast task comment \"$_task\" \"Intent asked at Decide: the intent read failed: $last_error\" -t progress > /dev/null || true"]
   cleared [shape=Msquare, label="Cleared"]
@@ -52,11 +56,14 @@ digraph intent {
   change -> read [condition="outcome = success"]
   change -> failed
   read -> clear [condition="outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.session and read.json.quote and read.json.line > 0"]
+  read -> clear_card [condition="outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.card and read.json.quote"]
   read -> declined [condition="outcome = success and read.json.why and (read.json.ship != true or read.json.in_scope != true)"]
   read -> unreadable [condition="outcome = success"]
   read -> failed
   clear -> cleared [condition="outcome = success"]
   clear -> refused
+  clear_card -> cleared [condition="outcome = success"]
+  clear_card -> refused
   declined -> ask
   unreadable -> ask
   refused -> ask

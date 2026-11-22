@@ -18,19 +18,24 @@ describe("fitAskerRecord", () => {
         line("jxwork", 2, "don't ship yet", "2026-11-22T11:30:00.000Z"),
         line("jxlead", 9, "ship it", "2026-11-22T10:00:00.000Z"),
       ],
-      task: { short_id: "ct-7", chain: [], verdicts: [{ card: "sd-4", user_id: "u1", user_name: "Ana", answer: "Revise", note: "the chip is wrong", created_at: "2026-11-22T10:45:00.000Z" }] },
+      task: { short_id: "ct-7", chain: [] },
+      cards: [
+        { card: "sd-4", on_task: true, question: "Ship the chip?", user_id: "u1", user_name: "Ana", answer: "Revise", note: "the chip is wrong", created_at: "2026-11-22T10:45:00.000Z" },
+        { card: "sd-2", session_short_id: "jxlead", question: "Ship both together, or the links first?", user_id: "u1", user_name: "Ana", answer: "Ship both together", created_at: "2026-11-21T12:00:00.000Z" },
+      ],
     };
     const fit: any = fitAskerRecord(read);
     expect(fit.text).toBe([
       "[jxlead:7] 2026-11-21 09:00Z Ana (typed_local): fix all of it\nthen ship",
+      '[card sd-2 in jxlead, 2026-11-21 12:00Z] Ana answered "Ship both together" to "Ship both together, or the links first?"',
       "[jxlead:9] 2026-11-22 10:00Z Ana (typed_local): ship it",
-      "[sd-4] 2026-11-22 10:45Z Ana answered Revise on this task's Ship card: the chip is wrong",
+      '[card sd-4 on this task, 2026-11-22 10:45Z] Ana answered "Revise" to "Ship the chip?": the chip is wrong',
       "[jxwork:2] 2026-11-22 11:30Z Ana (typed_local): don't ship yet",
     ].join("\n"));
     // The coordinates are in the text; the per-line records stay out of the station's record.
     expect(fit.typed).toBeUndefined();
     expect(fit).toMatchObject({ starter_id: "u1", starter_name: "Ana", task: { short_id: "ct-7", chain: [] } });
-    expect(fit.task.verdicts).toBeUndefined();
+    expect(fit.cards).toBeUndefined();
   });
 
   for (const count of [300, 1_000]) {

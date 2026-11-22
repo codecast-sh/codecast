@@ -94,7 +94,7 @@ if (verb === "workflow clear") {
   // A commit lands on the branch between the read and the clear.
   if (process.env.FAKE_MOVE_BRANCH) require("child_process").spawnSync("sh", ["-c", "cd " + ${JSON.stringify(repo)} + " && git update-ref refs/heads/fix-deploys $(git -c user.name=t -c user.email=t@t commit-tree -m late -p fix-deploys 'fix-deploys^{tree}')"]);
   const opts = {};
-  for (let i = 3; i < args.length; i += 2) opts[args[i].replace(/^--/, "")] = args[i + 1];
+  for (let i = 3; i < args.length; i += 2) opts[args[i].replace(/^--/, "").replace(/-([a-z])/g, (_, c) => c.toUpperCase())] = args[i + 1];
   const { clearRun } = await import(${JSON.stringify(path.join(import.meta.dir, "runsCli.ts"))});
   await clearRun({ getCliEndpoint: () => ({ siteUrl: ${JSON.stringify(server.url.origin)}, apiToken: "tok" }), detectCurrentSessionId: () => null }, args[2], opts);
   process.exit(0);
@@ -171,6 +171,26 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
     expect(JSON.parse(fs.readFileSync(intentFile(), "utf-8")).head).toBe(diffed);
   });
 
+  test("an answer citing a card clears through the server's card check, and intent.json names the card", async () => {
+    const said = { ship: true, session: "", line: 0, card: "sd-4235", quote: "Ship both together", in_scope: true, why: "Ana chose to ship both on the card." };
+    model = { ...model, json: said };
+    clearAnswer = { ...clearAnswer, cite: "card:sd-4235", quote: said.quote };
+    const diffed = head();
+    expect(await run()).toBe("landed");
+    expect(clears().map((c) => c.body)).toEqual([{ api_token: "tok", run_id: "run_1", why: said.why, cite_card: "sd-4235", quote: said.quote }]);
+    expect(JSON.parse(fs.readFileSync(intentFile(), "utf-8"))).toEqual({ starter_id: "u_ana", starter_name: "Ana", cite: "card:sd-4235", quote: said.quote, head: diffed });
+  });
+
+  test("a card citation the server refuses asks, and says why on the task", async () => {
+    model = { ...model, json: { ...SHIP, session: "", line: 0, card: "sd-4235", quote: "Ship both together" } };
+    clearAnswer = { error: "Not cleared: sd-4235 was answered by someone other than Ana who started the run" };
+    expect(await run()).toBe("asked");
+    expect(fs.existsSync(intentFile())).toBe(false);
+    expect(casts().filter((a) => a[0] === "task" && a[1] === "comment").map((a) => a[3])).toEqual([
+      "Intent asked at Decide: the server did not clear the citation: Error: Not cleared: sd-4235 was answered by someone other than Ana who started the run",
+    ]);
+  });
+
   test("a quote with quotes, a dollar sign and an apostrophe reaches the server as written", async () => {
     const quote = `ship it, it's "done" -- $HOME and \`ls\``;
     model = { ...model, json: { ...SHIP, quote } };
@@ -197,7 +217,7 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
     ["the asker failing", () => { process.env.FAKE_ASKER_FAIL = "1"; }, "conv_lead",
       "Intent asked at Decide: the intent read failed: Error: no /cli/sessions/originator route"],
     ["the server refusing the citation", () => { clearAnswer = { error: "Not cleared: jx7lead:115 is not a line a person typed" }; }, "conv_lead",
-      "Intent asked at Decide: the server did not clear the cited line: Error: Not cleared: jx7lead:115 is not a line a person typed"],
+      "Intent asked at Decide: the server did not clear the citation: Error: Not cleared: jx7lead:115 is not a line a person typed"],
   ];
   const taskComments = () => casts().filter((a) => a[0] === "task" && a[1] === "comment");
   for (const [name, arrange, conversation, said] of asks) {
