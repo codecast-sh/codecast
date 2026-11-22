@@ -3,10 +3,11 @@
 // never answers is a skip too rather than a stalled trigger.
 
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runTriggerPrecheck } from "./precheckRunner.js";
+import { pollUntil } from "./test-helpers/pollUntil.js";
 import { triggerPrecheckPassed, describeTriggerPrecheckFailure } from "@codecast/shared/contracts";
 
 function withCwd(run: (cwd: string) => Promise<void>): () => Promise<void> {
@@ -92,6 +93,27 @@ describe("runTriggerPrecheck", () => {
       // It returns on the timeout, not when the sleep would have finished.
       expect(Date.now() - started).toBeLessThan(10_000);
     }),
+  );
+
+  test(
+    "a command that times out leaves nothing it started running, a setsid child that ignores TERM included",
+    withCwd(async (cwd) => {
+      const pidFile = join(cwd, "child.pid");
+      const result = await runTriggerPrecheck({
+        command: `perl -MPOSIX -e 'POSIX::setsid(); $SIG{TERM}="IGNORE"; sleep 600' >/dev/null 2>&1 & echo $! > ${pidFile}; wait`,
+        cwd,
+        timeoutMs: 300,
+      });
+      const child = Number(readFileSync(pidFile, "utf8"));
+      const alive = () => { try { process.kill(child, 0); return true; } catch { return false; } };
+      try {
+        expect(result.timedOut).toBe(true);
+        await pollUntil(() => !alive(), "the setsid child to end", { ms: 5000 });
+      } finally {
+        try { process.kill(child, "SIGKILL"); } catch {}
+      }
+    }),
+    30_000,
   );
 
   test(

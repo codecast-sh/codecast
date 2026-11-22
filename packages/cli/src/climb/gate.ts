@@ -2,12 +2,15 @@
 // A gate can hang with nothing left to wait for: Union's proof-tree.sh runs
 // the eval over ssh on another machine, and on ct-97276's sixth run the
 // remote process was gone while the local ssh waited three hours. A gate past
-// its limit is stopped with its whole process group and reads as void (Hold
-// checks again; it never passes), naming the command and its last output.
+// its limit is stopped with everything it started, as a flow station is
+// (stationProcs.ts: its setsid and `set -m` children too, TERM first, then an
+// identity-checked KILL), and reads as void (Hold checks again; it never
+// passes), naming the command and its last output.
 import fs from "node:fs";
 import path from "node:path";
 import { spawn } from "../proc.js";
 import { tryGit } from "./protect.js";
+import { endStation } from "../workflow/stationProcs.js";
 
 /** The limit when nothing declares one and no gate has run in this climb: twice the longest gate Union has needed (about an hour). */
 export const GATE_LIMIT_DEFAULT_S = 2 * 60 * 60;
@@ -31,19 +34,24 @@ export function gateLimitS(root: string, base: string, recentMs: readonly number
 
 export type GateRun = { code: number | null; timedOut: boolean; ms: number; tail: string };
 
-/** Run the gate's command in its own process group, its output kept in `log` (and passed through); past `limitS` the whole group is stopped. */
-export function runGate(command: string, opts: { cwd: string; env: NodeJS.ProcessEnv; limitS: number; log: string }): Promise<GateRun> {
+/**
+ * Run the gate's command in its own process group, its output kept in `log` (and passed through); past `limitS`
+ * everything it started is ended (`graceMs` between TERM and KILL), and the run returns once it has been.
+ */
+export function runGate(command: string, opts: { cwd: string; env: NodeJS.ProcessEnv; limitS: number; log: string; graceMs?: number }): Promise<GateRun> {
   const started = Date.now();
   const out = fs.openSync(opts.log, "a");
   return new Promise((resolve) => {
     const child = spawn("bash", ["-c", command], { cwd: opts.cwd, env: opts.env, detached: true, stdio: ["ignore", out, out] });
     let timedOut = false;
+    let ending: Promise<void> = Promise.resolve();
     const timer = setTimeout(() => {
       timedOut = true;
-      try { process.kill(-child.pid!, "SIGKILL"); } catch {}
+      ending = child.pid ? endStation(child.pid, opts.graceMs) : Promise.resolve();
     }, opts.limitS * 1000);
-    const done = (code: number | null) => {
+    const done = async (code: number | null) => {
       clearTimeout(timer);
+      await ending;
       try { fs.closeSync(out); } catch {}
       let text = "";
       try { text = fs.readFileSync(opts.log, "utf8"); } catch {}

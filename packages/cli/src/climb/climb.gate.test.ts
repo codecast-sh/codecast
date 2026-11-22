@@ -26,6 +26,20 @@ test("a gate past its limit is stopped with its whole process group, and says wh
   await pollUntil(gone, "the gate's child to exit", { ms: 2000 });
 });
 
+test("a gate past its limit leaves nothing it started running, a setsid child that ignores TERM included", async () => {
+  const pidFile = path.join(tmp, "child.pid");
+  const run = await runGate(`perl -MPOSIX -e 'POSIX::setsid(); $SIG{TERM}="IGNORE"; sleep 600' >/dev/null 2>&1 & echo $! > ${pidFile}; wait`, { cwd: tmp, env: process.env, limitS: 1, log: path.join(tmp, "gate.log"), graceMs: 500 });
+  const child = Number(fs.readFileSync(pidFile, "utf8"));
+  const alive = () => { try { process.kill(child, 0); return true; } catch { return false; } };
+  try {
+    expect(run.timedOut).toBe(true);
+    // runGate returns once the KILL has gone out; the kernel may take a moment to reap.
+    await pollUntil(() => !alive(), "the setsid child to end", { ms: 5000 });
+  } finally {
+    try { process.kill(child, "SIGKILL"); } catch {}
+  }
+}, 30_000);
+
 test("a gate within its limit finishes with its own exit code", async () => {
   const run = await runGate("echo ok; exit 3", { cwd: tmp, env: process.env, limitS: 30, log: path.join(tmp, "gate.log") });
   expect([run.timedOut, run.code, run.tail]).toEqual([false, 3, "ok"]);
