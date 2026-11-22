@@ -304,7 +304,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       {/* header: one row. The face, the name, its state line, who it reports
           to; the rare controls (pause, retire) sit behind the menu, and the
           board is an icon. The composer below is Talk. */}
-      <header ref={titlebarRef} data-scope-head className={cn("scope-head-cq shrink-0 border-b", phone ? "px-2.5 py-1.5" : "px-4 py-1.5")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
+      <header ref={titlebarRef} data-scope-head className={cn("object-head-row scope-head-cq shrink-0 border-b", phone ? "px-2.5" : "px-4")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
         <div className="flex items-center gap-2 min-w-0">
           {session?.onBack ? (
             <button type="button" onClick={session.onBack} className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the inbox" data-scope-back="inbox">
