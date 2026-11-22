@@ -20,7 +20,7 @@
 // goal outline the map's Goals lens draws, assembled by useCompanyDoc, which
 // a goal's sheet reads too.
 import { Fragment, useMemo, type ReactNode } from "react";
-import { CornerDownRight } from "lucide-react";
+import { ChevronRight, CornerDownRight } from "lucide-react";
 import type { InitiativeRow } from "@codecast/shared/contracts/initiative";
 import { objectHref } from "@codecast/shared/entities";
 import { useInboxStore } from "../../store/inboxStore";
@@ -401,7 +401,10 @@ function ProjectsByGoal({ doc, ctx, delay }: { doc: CompanyDoc; ctx: Ctx; delay:
             <span className="inline-flex w-5 shrink-0 justify-center"><GoalGlyph /></span>
             <a href={objectHref("initiative", goal.row!.short_id || goal.row!._id)} onClick={onLinkClick({ kind: "initiative", ref: goal.row!.short_id || goal.row!._id })} className="truncate no-underline hover:underline underline-offset-[3px]" style={{ color: "inherit" }}>{goal.title}</a>
           </h3>
-          {projects.map((p) => <ProjectRow key={p.id} project={p} openKey={placedKey(goal.id, p.id)} sub={alsoUnder(goal.id, p.id)} depth={0} ctx={ctx} />)}
+          {projects.filter((p) => p.status !== "done").map((p) => <ProjectRow key={p.id} project={p} openKey={placedKey(goal.id, p.id)} sub={alsoUnder(goal.id, p.id)} depth={0} ctx={ctx} />)}
+          <DoneProjects foldKey={`done:${goal.id}`} projects={projects.filter((p) => p.status === "done")} ctx={ctx}>
+            {(p) => <ProjectRow key={p.id} project={p} openKey={placedKey(goal.id, p.id)} sub={alsoUnder(goal.id, p.id)} depth={0} ctx={ctx} />}
+          </DoneProjects>
         </div>
       ))}
       {doc.unfiled.length > 0 && (
@@ -411,6 +414,29 @@ function ProjectsByGoal({ doc, ctx, delay }: { doc: CompanyDoc; ctx: Ctx; delay:
         </div>
       )}
     </div>
+  );
+}
+
+/** A group's done projects, folded into one line under its active ones. */
+function DoneProjects({ foldKey, projects, ctx, children }: { foldKey: string; projects: DocProject[]; ctx: Ctx; children: (p: DocProject) => ReactNode }) {
+  if (projects.length === 0) return null;
+  const open = ctx.x.isOpen(foldKey) || projects.some((p) => isSelected(ctx, p.id, p.short_id));
+  return (
+    <>
+      <button
+        type="button"
+        role="treeitem"
+        aria-expanded={open}
+        onClick={() => ctx.x.toggle(foldKey)}
+        className="flex w-full items-center gap-2 py-1.5 pl-[28px] pr-1.5 text-meta hover:text-sol-text"
+        style={{ color: DIM }}
+        data-company-done-fold={open ? "open" : "closed"}
+      >
+        <span className="inline-flex w-5 shrink-0 justify-center"><ChevronRight className={cn("h-3 w-3 transition-transform", open && "rotate-90")} /></span>
+        <span className="font-mono tabular-nums">{projects.length}</span> done
+      </button>
+      {open && projects.map(children)}
+    </>
   );
 }
 

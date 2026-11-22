@@ -14,7 +14,8 @@ import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import { ArrowRight, Check, Sparkles, X } from "lucide-react";
-import type { SnippetDescriptor } from "@codecast/shared/contracts";
+import { isAgentSetupTool, type SnippetDescriptor } from "@codecast/shared/contracts";
+import { agentFeatureHref } from "../lib/agentFeatureHref";
 import { useInboxStore } from "../store/inboxStore";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { deviceDisplayName, useDevices } from "./DeviceBadge";
@@ -93,6 +94,7 @@ export function NewSnippetsBanner() {
       await turnOnFeature(onlineDevices, s);
       setEnabledNow((p) => new Set(p).add(s.slug));
       updateDismissed(snippetIntroKey(s.slug), Date.now());
+      if (isAgentSetupTool(s.slug)) router.push(agentFeatureHref(s.slug));
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Couldn't turn that on");
     } finally {

@@ -23,7 +23,7 @@ import { journeyOf, WHO_WORDS, type JourneyNow, type StageState } from '@codecas
 type FeatherName = React.ComponentProps<typeof Feather>['name'];
 type RunRow = Parameters<typeof stepStates>[1] & { _id: string; status: string; task_short_id?: string | null; fail_reason?: string | null; workflow_slug?: string; workflow_name?: string };
 
-const WHO: Record<DiagramStep['kind'], { icon: FeatherName; word: string }> = {
+export const WHO: Record<DiagramStep['kind'], { icon: FeatherName; word: string }> = {
   agent: { icon: 'cpu', word: 'agent' },
   script: { icon: 'terminal', word: 'command' },
   person: { icon: 'user', word: 'you' },
