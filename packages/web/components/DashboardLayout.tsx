@@ -6,7 +6,7 @@ import { useSessionCardBuckets, useSyncSessionCardBucket } from "../hooks/useSyn
 import { useSyncOpsSources } from "../hooks/useSyncOps";
 import { useSyncSessionIndex } from "../hooks/useSyncSessionIndex";
 import { HuddleStartHost } from "./calls/HuddleStartHost";
-import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, lazy, Suspense } from "react";
+import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -129,22 +129,13 @@ import { useLocalAuth } from "../lib/localAuth";
 import { ModRuntimes } from "./mods/ModRuntimes";
 import { useSyncMods } from "../lib/mods/useMods";
 import { resolveCommentsEnabled } from "../lib/uiPrefDefaults";
+import { lazyNamed } from "../lib/lazyNamed";
 
-const SettingsModal = lazy(() =>
-  import("./settings/SettingsModal").then((module) => ({ default: module.SettingsModal })),
-);
-const CallSyncEffects = lazy(() =>
-  import("./calls/CallSyncEffects").then((module) => ({ default: module.CallSyncEffects })),
-);
-const CallDock = lazy(() =>
-  import("./calls/CallDock").then((module) => ({ default: module.CallDock })),
-);
-const RecordingPill = lazy(() =>
-  import("./calls/RecordingPill").then((module) => ({ default: module.RecordingPill })),
-);
-const ElsewhereCallPill = lazy(() =>
-  import("./calls/ElsewhereCallPill").then((module) => ({ default: module.ElsewhereCallPill })),
-);
+const SettingsModal = lazyNamed(() => import("./settings/SettingsModal"), "SettingsModal");
+const CallSyncEffects = lazyNamed(() => import("./calls/CallSyncEffects"), "CallSyncEffects");
+const CallDock = lazyNamed(() => import("./calls/CallDock"), "CallDock");
+const RecordingPill = lazyNamed(() => import("./calls/RecordingPill"), "RecordingPill");
+const ElsewhereCallPill = lazyNamed(() => import("./calls/ElsewhereCallPill"), "ElsewhereCallPill");
 
 interface DashboardLayoutProps {
   children: ReactNode;

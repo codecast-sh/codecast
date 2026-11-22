@@ -1,11 +1,12 @@
-import { useState, useRef, useMemo, lazy, Suspense } from "react";
+import { useState, useRef, useMemo, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { Panel, Group, Separator } from "react-resizable-panels";
 import { ConversationView } from "./ConversationView";
-const CommentDock = lazy(() => import("./comments/CommentDock").then((m) => ({ default: m.CommentDock })));
+import { lazyNamed } from "../lib/lazyNamed";
+const CommentDock = lazyNamed(() => import("./comments/CommentDock"), "CommentDock");
 import type { ConversationData, ConversationViewHandle, ConversationViewProps } from "./conversation/types";
 import { useDiffViewerStore } from "../store/diffViewerStore";
 import { extractFileChanges, mergeFileChanges } from "../lib/fileChangeExtractor";

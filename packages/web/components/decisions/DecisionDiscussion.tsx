@@ -7,7 +7,7 @@
 // flow card, its presenter) hears the thread when someone asks it, and its
 // answer fills a placeholder here. The same block sits on the decision page,
 // the queue card, the change card and the Threads page.
-import { lazy, Suspense, useMemo, useRef, useState, type ComponentType } from "react";
+import { Suspense, useMemo, useRef, useState, type ComponentType } from "react";
 import { MessageSquare } from "lucide-react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useInboxStore } from "../../store/inboxStore";
@@ -19,6 +19,7 @@ import { cn } from "../../lib/utils";
 import { toast } from "sonner";
 import { modernButton } from "../ui/modernLook";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { lazyNamed } from "../../lib/lazyNamed";
 
 const refusedToast = (why: string | null) => { if (why) toast.error(why); };
 
@@ -28,8 +29,9 @@ const refusedToast = (why: string | null) => { if (why) toast.error(why); };
 // is held once loaded, so only the very first paint can wait on it.
 type ThreadComponent = typeof import("../comments/CommentThread").CommentThread;
 let LoadedThread: ThreadComponent | null = null;
-const threadModule = import("../comments/CommentThread").then((m) => { LoadedThread = m.CommentThread; return m; });
-const LazyThread = lazy(() => threadModule.then((m) => ({ default: m.CommentThread as ComponentType<any> })));
+// Vite resolves a cancelled stale-chunk preload with undefined (lib/lazyNamed.ts).
+const threadModule = import("../comments/CommentThread").then((m) => { LoadedThread = m?.CommentThread ?? null; return m; });
+const LazyThread = lazyNamed(() => threadModule as Promise<{ CommentThread: ComponentType<any> }>, "CommentThread");
 
 /** `open`/`onOpenChange` let a page own the trigger (the decision page's
  *  button by its status); `bare` then drops the block's own trigger.

@@ -1,5 +1,6 @@
 import { lazy } from "react";
 import type { LazyExoticComponent, ComponentType } from "react";
+import { lazyNamed } from "../lib/lazyNamed";
 
 /**
  * routes.manifest.ts — PROPOSED single source of truth for web routing (Wave 1 seed).
@@ -245,7 +246,7 @@ const ShareDecision = lazy(() => import("@/app/share/decision/[token]/page"));
 const ShareStack = lazy(() => import("@/app/share/stack/[token]/page"));
 const ShareTrigger = lazy(() => import("@/app/share/trigger/[token]/page"));
 const ShareRun = lazy(() => import("@/app/share/run/[token]/page"));
-const ReloadOutsideApp = lazy(() => import("@/components/ReloadOutsideApp").then((m) => ({ default: m.ReloadOutsideApp })));
+const ReloadOutsideApp = lazyNamed(() => import("@/components/ReloadOutsideApp"), "ReloadOutsideApp");
 
 // Browsing a repository
 const RepoIndex = lazy(() => import("@/app/repo/page"));

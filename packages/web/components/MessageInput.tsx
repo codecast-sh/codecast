@@ -4,7 +4,7 @@ import { hostedComposerWords, hostedLastExchange, type HostedLast } from "../lib
 import { HostedStatusLine } from "./conversation/HostedStatusLine";
 import { useIsHostedConversation } from "../hooks/useConversationAgentType";
 import { useAllowanceOut } from "./simple/usePlanFigures";
-import { useContext, useLayoutEffect, useRef, useState, useMemo, useCallback, memo, lazy, Suspense, type ReactElement } from "react";
+import { useContext, useLayoutEffect, useRef, useState, useMemo, useCallback, memo, Suspense, type ReactElement } from "react";
 import { RevealInBandCtx } from "../lib/revealHost";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -87,9 +87,10 @@ import { ComposerCatch } from "./secrets/ComposerCatch";
 import { runningSubagents } from "../lib/runningSubagents";
 import { StopConfirm, type StopRequest } from "./conversation/StopConfirm";
 import { stopNeedsConfirm } from "../lib/stopNeedsConfirm";
+import { lazyNamed } from "../lib/lazyNamed";
 
 const api = _typedApi as any;
-const ComposeEditor = lazy(() => import("./editor/ComposeEditor").then((m) => ({ default: m.ComposeEditor })));
+const ComposeEditor = lazyNamed(() => import("./editor/ComposeEditor"), "ComposeEditor");
 
 // An @-mention query may contain spaces so multi-word titles are searchable: a
 // first token (possibly empty, so a bare "@" still opens recents) plus up to 4

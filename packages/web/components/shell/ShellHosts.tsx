@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { Suspense } from "react";
 import { AppAddressBarHost } from "../AppAddressBar";
 import { useRouter } from "next/navigation";
 import { ErrorBoundary } from "../ErrorBoundary";
@@ -7,25 +7,14 @@ import { useCurrentUser } from "../../hooks/useCurrentUser";
 import { useCallsAvailable, useTeamFeature } from "../../lib/teamFeatures";
 import { useInboxStore, type CreateModalKind } from "../../store/inboxStore";
 import { teamMembersOf } from "../../lib/activeTeam";
+import { lazyNamed } from "../../lib/lazyNamed";
 
-const CommandPalette = lazy(() =>
-  import("../CommandPalette").then((module) => ({ default: module.CommandPalette })),
-);
-const PeopleWallModal = lazy(() =>
-  import("../people/PeopleWallModal").then((module) => ({ default: module.PeopleWallModal })),
-);
-const CreateTaskModal = lazy(() =>
-  import("../CreateTaskModal").then((module) => ({ default: module.CreateTaskModal })),
-);
-const CreateDocModal = lazy(() =>
-  import("../CreateDocModal").then((module) => ({ default: module.CreateDocModal })),
-);
-const CreateChannelModal = lazy(() =>
-  import("../CreateChannelModal").then((module) => ({ default: module.CreateChannelModal })),
-);
-const NewMessageModal = lazy(() =>
-  import("../chat/NewMessageModal").then((module) => ({ default: module.NewMessageModal })),
-);
+const CommandPalette = lazyNamed(() => import("../CommandPalette"), "CommandPalette");
+const PeopleWallModal = lazyNamed(() => import("../people/PeopleWallModal"), "PeopleWallModal");
+const CreateTaskModal = lazyNamed(() => import("../CreateTaskModal"), "CreateTaskModal");
+const CreateDocModal = lazyNamed(() => import("../CreateDocModal"), "CreateDocModal");
+const CreateChannelModal = lazyNamed(() => import("../CreateChannelModal"), "CreateChannelModal");
+const NewMessageModal = lazyNamed(() => import("../chat/NewMessageModal"), "NewMessageModal");
 
 // The create dialogs (New → Task, Doc, Plan, Channel, Huddle; the palette's
 // Create group; the board's "+"). One host for the window, mounted at every

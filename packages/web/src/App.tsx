@@ -10,8 +10,9 @@ import { SettingsLayout } from "./layouts/SettingsLayout";
 import DashboardShell from "./layouts/DashboardShell";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useMentionLinkNavigation } from "@/hooks/useMentionLinkNavigation";
+import { lazyNamed } from "../lib/lazyNamed";
 
-const MarketingLayout = lazy(() => import("./layouts/MarketingLayout").then((m) => ({ default: m.MarketingLayout })));
+const MarketingLayout = lazyNamed(() => import("./layouts/MarketingLayout"), "MarketingLayout");
 const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
 const Features = lazy(() => import("@/app/(marketing)/features/page"));

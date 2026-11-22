@@ -5,13 +5,12 @@
 // opening the dock shows a shell that is already connected and live terminals
 // survive close/reopen.
 
-import { Suspense, lazy, useState } from "react";
+import { Suspense, useState } from "react";
 import { useInboxStore } from "../../store/inboxStore";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
+import { lazyNamed } from "../../lib/lazyNamed";
 
-const TerminalPanel = lazy(() =>
-  import("./TerminalPanel").then((m) => ({ default: m.TerminalPanel })),
-);
+const TerminalPanel = lazyNamed(() => import("./TerminalPanel"), "TerminalPanel");
 
 export function TerminalDock() {
   const open = useInboxStore((s) => s.workspace.dock.pane != null);
