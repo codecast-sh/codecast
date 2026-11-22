@@ -1,8 +1,7 @@
 import type { AppTab } from "../store/inboxStore";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 import { conversationTitle, pendingAsk } from "./conversationTitle";
-import { promptTitle } from "@codecast/shared/contracts/assistant";
-import { cleanTitle } from "./conversationProcessor";
+import { untitledSessionName } from "./sessionCard";
 import { pathLabel, inboxTabSessionId } from "./pathLabel";
 import { staleNavTitle } from "./navRegistry";
 import { isModernStyle } from "./visualStyle";
@@ -106,11 +105,10 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
     // A hosted conversation is named by what the person asked until its
     // title arrives, never by an id.
     if (isHostedAgentType(s.agent_type)) return conversationTitle(s);
-    // Untitled: what the person wrote in its first send while that is still
-    // on its way, else the 7-char short handle (what every cast link and
-    // command uses), never a slice of the agent's UUID.
-    const ask = pendingAsk(records?.pendingMessages?.[sid]);
-    return s.title || (ask && promptTitle(cleanTitle(ask))) || (isConvexId(sid) ? sid.slice(0, 7) : "Session");
+    // Untitled: the name its card shows (the person's first message, sent or
+    // still on its way), else the 7-char short handle (what every cast link
+    // and command uses), never a slice of the agent's UUID.
+    return s.title || untitledSessionName(s, pendingAsk(records?.pendingMessages?.[sid])) || (isConvexId(sid) ? sid.slice(0, 7) : "Session");
   }
   const chat = chatTabTitle(tab.path, channels, members, viewerId);
   if (chat) return chat;

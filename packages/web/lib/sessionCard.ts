@@ -3,6 +3,7 @@ import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import type { InboxSession } from "../store/inboxStore";
 import { cleanTitle } from "./conversationProcessor";
 import { conversationTitle } from "./conversationTitle";
+import { promptTitle } from "@codecast/shared/contracts/assistant";
 
 // Small pure pieces of the inbox session card (components/inbox), shared with
 // its container.
@@ -12,8 +13,17 @@ import { conversationTitle } from "./conversationTitle";
  *  assistant names it). */
 export function sessionCardTitle(session: { title?: string | null; agent_type?: string | null; last_user_message?: string | null; first_prompt?: string | null }, pendingFirstAsk?: string): string {
   if (isHostedAgentType(session.agent_type)) return conversationTitle(session);
-  // Untitled until the agent receives the first send: named by that send.
-  return cleanTitle(sessionTitleText(session) || pendingFirstAsk || "");
+  if (session.title) return cleanTitle(session.title);
+  return untitledSessionName(session, pendingFirstAsk) || cleanTitle("");
+}
+
+/** What an untitled session is called on its card and its tab alike: the
+ *  person's first message, sent (first_prompt) or still on its way (the
+ *  store's pendingMessages), cut by the shared promptTitle rule. Empty when
+ *  the person has written nothing, so each surface keeps its own fallback. */
+export function untitledSessionName(session: { first_prompt?: string | null }, pendingFirstAsk?: string): string {
+  const ask = session.first_prompt || pendingFirstAsk;
+  return ask ? promptTitle(cleanTitle(ask)) : "";
 }
 
 /** Whether a card draws as a nested child row: a trigger's run, a Task
