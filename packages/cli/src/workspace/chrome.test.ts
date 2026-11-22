@@ -10,7 +10,8 @@ import {
   keychainArgs,
   launchChrome,
   stopChrome,
-  workspaceChromeBinary,
+  automationChromeBinary,
+  chromeForTestingDir,
   type ChromeInstance,
 } from "./chrome.js";
 import { isPortFree } from "./ports.js";
@@ -106,39 +107,52 @@ describe("findChromeBinary / probes", () => {
   });
 });
 
-describe("workspaceChromeBinary", () => {
-  const cft = "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
-  const plant = (rel: string) => {
-    const p = path.join(tmpDir, rel);
+describe("automationChromeBinary", () => {
+  const platformName = process.arch === "arm64" ? "mac-arm64" : "mac-x64";
+  const install = (version: string) => {
+    const p = path.join(chromeForTestingDir(tmpDir), version, `chrome-${platformName}`, "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
     fs.mkdirSync(path.dirname(p), { recursive: true });
     fs.writeFileSync(p, "");
     return p;
   };
+  const run = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform = "darwin") => {
+    const installs: string[] = [];
+    const binary = automationChromeBinary({ env, platform, install: (dir) => installs.push(dir) });
+    return { binary, installs };
+  };
 
-  test("macOS picks the newest cached Chrome for Testing, never the human's Chrome", () => {
-    plant(`.cache/puppeteer/chrome/mac_arm-99.0.1/chrome-mac-arm64/${cft}`);
-    const newest = plant(`.cache/puppeteer/chrome/mac_arm-148.0.7778.167/chrome-mac-arm64/${cft}`);
-    plant(`Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/${cft}`);
-    expect(workspaceChromeBinary({ HOME: tmpDir }, "darwin")).toBe(newest);
+  test("macOS runs codecast's newest Chrome for Testing, never the human's Chrome", () => {
+    install("998.0.1.0");
+    const newest = install("999.0.2.0");
+    expect(run({ HOME: tmpDir })).toEqual({ binary: newest, installs: [] });
   });
 
-  test("macOS uses Playwright's Chrome for Testing when Puppeteer has none", () => {
-    plant(`Library/Caches/ms-playwright/chromium-1100/chrome-mac-arm64/${cft}`);
-    const newest = plant(`Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/${cft}`);
-    expect(workspaceChromeBinary({ HOME: tmpDir }, "darwin")).toBe(newest);
+  test("a copy a major version behind the human's Chrome still runs, and a newer one downloads", () => {
+    if (humanChromeMajor() < 2) return;
+    const old = install("1.0.0.0");
+    expect(run({ HOME: tmpDir })).toEqual({ binary: old, installs: [chromeForTestingDir(tmpDir)] });
   });
 
-  test("macOS without Chrome for Testing falls back to the system Chrome", () => {
-    if (fs.existsSync(`/Applications/${cft}`)) return;
-    expect(workspaceChromeBinary({ HOME: tmpDir }, "darwin")).toBe(findChromeBinary());
+  test("with none installed it downloads one and runs the human's Chrome meanwhile", () => {
+    expect(run({ HOME: tmpDir })).toEqual({ binary: findChromeBinary(), installs: [chromeForTestingDir(tmpDir)] });
   });
 
-  test("an explicit binary override and other platforms keep the system probe", () => {
-    plant(`.cache/puppeteer/chrome/mac_arm-148.0.7778.167/chrome-mac-arm64/${cft}`);
-    expect(workspaceChromeBinary({ HOME: tmpDir, CHROME_PATH: "/x" }, "darwin")).toBe(findChromeBinary());
-    expect(workspaceChromeBinary({ HOME: tmpDir }, "linux")).toBe(findChromeBinary());
+  test("an explicit binary override and other platforms keep the system probe and download nothing", () => {
+    install("999.0.2.0");
+    expect(run({ HOME: tmpDir, CHROME_PATH: "/x" })).toEqual({ binary: findChromeBinary(), installs: [] });
+    expect(run({ HOME: tmpDir }, "linux")).toEqual({ binary: findChromeBinary(), installs: [] });
   });
 });
+
+/** The installed Google Chrome's major version, 0 without one. */
+function humanChromeMajor(): number {
+  try {
+    const plist = fs.readFileSync("/Applications/Google Chrome.app/Contents/Info.plist", "utf-8");
+    return Number(plist.match(/<key>CFBundleShortVersionString<\/key>\s*<string>(\d+)/)?.[1]) || 0;
+  } catch {
+    return 0;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // isPidAlive (cheap helper, no Chrome needed)
