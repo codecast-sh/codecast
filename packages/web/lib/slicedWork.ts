@@ -33,6 +33,18 @@ const later = (fn: () => void) => {
   channel.port2.postMessage(0);
 };
 
+/**
+ * Resolves on a later task, so input, paint and other timers get a turn first: an
+ * async loop awaits it between chunks. A timer task, not a channel message, because
+ * a run of channel messages can keep timers waiting behind it. In a hidden tab it
+ * resolves at once: nobody is waiting on paint there, and a hidden tab's timers are
+ * throttled to about one a second, which would stretch a long loop to minutes.
+ */
+export function nextTask(): Promise<void> {
+  if (typeof document !== "undefined" && document.hidden) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 /** A sliced computation in progress; `cancel` stops it at its next slice. */
 export type SlicedRun = { cancel: () => void };
 
