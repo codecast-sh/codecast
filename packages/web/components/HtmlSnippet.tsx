@@ -1,4 +1,4 @@
-import { useRef, useState, useMemo, type ReactNode } from "react";
+import { useRef, useState, useMemo } from "react";
 import { sanitizeCanvasHtml } from "../lib/canvasSanitize";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { CodeBlock } from "./CodeBlock";
@@ -148,52 +148,10 @@ export function ShadowCanvas({ html, className = "", onEvent }: { html: string; 
   return <div className={className} style={{ contain: "layout paint", isolation: "isolate", position: "relative" }}><div ref={hostRef} /></div>;
 }
 
-// The fence language the canvas claims. Owned here so every markdown dispatcher
-// (MarkdownRenderer + ConversationView's renderMarkdownPre) stays in sync without
-// duplicating the conditional.
-export const CANVAS_FENCE = "cast-canvas";
-
-/** Whether a markdown body holds a canvas fence. A plain-text preview of such
- *  a body shows the canvas's raw HTML, so previews render it instead. */
-export function hasCanvasFence(markdown: string): boolean {
-  return markdown.includes("```" + CANVAS_FENCE);
-}
-
-/** Returns a rendered canvas for a cast-canvas fence, else null (caller falls back to CodeBlock). */
-export function tryRenderCanvas(language: string | undefined, code: string): ReactNode {
-  if (language === CANVAS_FENCE && code) return <HtmlSnippet code={code} />;
-  return null;
-}
-
-// Codecast's own structured envelopes (teammate sends, skill blocks, …) start
-// with a tag too, but have dedicated renderers upstream — never treat them as
-// an HTML document. Hyphenated custom tags (session-message, system-reminder,
-// command-name) are already rejected by the tag regex below.
-const NON_HTML_ENVELOPES = /^<(skill|context|image)\b/i;
-
-/**
- * A message whose ENTIRE body is raw HTML (an agent or user emitted a
- * document/fragment without the cast-canvas fence). The markdown pipeline
- * escapes raw tags, so these read as garbled source unless rendered.
- */
-export function looksLikeHtml(content: string): boolean {
-  const t = content.trim();
-  if (t.length < 12 || t[0] !== "<" || !t.endsWith(">")) return false;
-  if (NON_HTML_ENVELOPES.test(t)) return false;
-  // Opening doctype or a plain (non-hyphenated) tag name.
-  if (!/^<(!doctype\s|[a-z][a-z0-9]*[\s/>])/i.test(t)) return false;
-  if (typeof DOMParser === "undefined") return false;
-  try {
-    const doc = new DOMParser().parseFromString(t, "text/html");
-    return (doc.body?.children.length ?? 0) > 0;
-  } catch {
-    return false;
-  }
-}
-
-/** Renders an all-HTML message body as a sanitized canvas, else null (caller falls back to markdown/plain text). */
-export function tryRenderHtmlMessage(content: string): ReactNode {
-  return looksLikeHtml(content) ? <HtmlSnippet code={content} /> : null;
+/** A mod's own HTML, sanitized here so the sanitizer loads with the canvas. */
+export function SanitizedCanvas({ html, onEvent }: { html: string; onEvent?: (e: CanvasEvent) => void }) {
+  const clean = useMemo(() => sanitizeCanvasHtml(html), [html]);
+  return <ShadowCanvas html={clean} onEvent={onEvent} />;
 }
 
 export function HtmlSnippet({ code }: { code: string }) {

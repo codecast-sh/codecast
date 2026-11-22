@@ -9333,6 +9333,24 @@ async function executeRemoteCommand(
         }
         break;
       }
+      case "read_file": {
+        const { path: wanted } = commandArgs ? JSON.parse(commandArgs) : {};
+        if (!wanted || typeof wanted !== "string") {
+          error = "Missing path";
+          break;
+        }
+        const { readFileForWeb } = await import("./remoteFileRead.js");
+        let read = readFileForWeb(wanted, computeLocalProjectRoots());
+        if ("error" in read && read.error === "Path not allowed") {
+          invalidateLocalProjectRoots();
+          await refreshLocalProjectRoots();
+          read = readFileForWeb(wanted, computeLocalProjectRoots());
+        }
+        if ("error" in read) error = read.error;
+        else result = JSON.stringify(read.result);
+        log(`[REMOTE] read_file ${wanted}: ${"error" in read ? read.error : read.result.exists ? "sent" : "missing"}`);
+        break;
+      }
       case "config_write": {
         const { file_path: writePath, content: writeContent } = commandArgs ? JSON.parse(commandArgs) : {};
         if (!writePath || typeof writePath !== "string" || typeof writeContent !== "string") {
