@@ -1,0 +1,46 @@
+// A segment (flows.md FL4): the person who started the run may already have
+// said, in their own typed words, that this work should ship. Then the card
+// Decide would post only costs them a look, and the change lands on their word.
+//
+// Asker reads every line a person typed into the sessions the change came
+// through (`cast flow asker`: briefs, relays and agent text never appear) and
+// who started the run, from the run itself. Change is the diff, as the judge
+// reads it. Read is a model that answers whether a line of the starter's tells
+// this work to ship, and whether the change stays inside what they asked for,
+// citing the line and quoting it. Clear hands the citation to the server, which
+// clears the run to land only when that line is the starter's own typed word on
+// the change's chain and holds the quote; code, not the model, is the gate.
+//
+// Every other ending is Ask, so the flow asks as it would without this
+// segment: no session behind the change, a failed script or model call, an
+// answer that is not JSON, ship false, out of scope, or a citation the server
+// refuses. Asker removes $run_dir/intent.json first and only a clear writes it,
+// with the starter the server checked, the cited line, the quote and the
+// checkout's HEAD at that moment, so a flow that composes this segment reads a
+// leftover file as nothing.
+//
+//   intent [flow="intent"]
+//   intent -> ship   [condition="intent.exit = cleared"]
+//   intent -> decide
+digraph intent {
+  graph [kind="segment", label="Intent", description="Lands the change with no card when the person who started it already said to ship it, in their own typed words", takes="task,branch"]
+  start [shape=Mdiamond]
+  asker [label="Asker", shape=parallelogram, timeout=120,
+    script="rm -f $run_dir/intent.json; _conv=$change_conversation; _task=$task_id; [ -n \"$_conv\" ] || { echo 'no session started this change'; exit 1; }; cast flow asker \"$_conv\" ${_task:+--task \"$_task\"} --run $run_id"]
+  change [label="Change", shape=parallelogram, timeout=120,
+    script="_base=$diff_base; cast flow blind diff --base \"${_base:-origin/$default_branch}\" --head $branch --redact $branch $worktree $change_session $change_conversation"]
+  read [label="Read", shape=note, model="claude-opus-5-5", max_tokens=2000, prompt="@intent/asker.md"]
+  clear [label="Clear", shape=parallelogram, timeout=120,
+    script="mkdir -p $run_dir && _wt=\"$(cast ws path $worktree)\" && [ -n \"$_wt\" ] && cd \"$_wt\" && cast workflow clear $run_id --cite $read.json.session:$read.json.line --quote $read.json.quote --why $read.json.why --record $run_dir/intent.json"]
+  cleared [shape=Msquare, label="Cleared"]
+  ask     [shape=Msquare, label="Ask"]
+  start -> asker
+  asker -> change [condition="outcome = success"]
+  asker -> ask
+  change -> read [condition="outcome = success"]
+  change -> ask
+  read -> clear [condition="outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.session and read.json.quote and read.json.line > 0"]
+  read -> ask
+  clear -> cleared [condition="outcome = success"]
+  clear -> ask
+}

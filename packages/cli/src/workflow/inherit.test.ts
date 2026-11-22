@@ -262,7 +262,7 @@ describe("variant edits on the shipped change flow", () => {
       s = s.replace(/  revise_gone \[[^\]]*\]\n/, "");
       s = swap(s, `  dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]\n`, "");
       s = swap(s, "  check -> review\n", "  check -> lint\n");
-      s = swap(s, "  review -> decide\n", "  review -> ship\n");
+      s = swap(s, "  intent -> decide\n", "  intent -> ship\n");
       s = s.replace(/  decide -> .*\n/g, "");
       s = swap(s, "  revise -> check\n", "");
       s = swap(s, "  fix_conflict -> check\n", `  fix_conflict -> check

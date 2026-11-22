@@ -34,6 +34,8 @@ import changeCast from "./templates/change.cast" with { type: "text" };
 import quickChangeCast from "./templates/quick-change.cast" with { type: "text" };
 import judgeCast from "./templates/judge.cast" with { type: "text" };
 import judgeRisk from "./templates/judge/risk.md" with { type: "text" };
+import intentCast from "./templates/intent.cast" with { type: "text" };
+import intentAsker from "./templates/intent/asker.md" with { type: "text" };
 import climbCast from "./templates/climb.cast" with { type: "text" };
 import climbFrame from "./templates/climb/frame.md" with { type: "text" };
 import climbPropose from "./templates/climb/propose.md" with { type: "text" };
@@ -85,6 +87,8 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "change/fix_conflict.md": changeFixConflict,
   // What the blind risk judge reads (judge.cast).
   "judge/risk.md": judgeRisk,
+  // What the intent segment's model reads (intent.cast).
+  "intent/asker.md": intentAsker,
   // The climb's stations (climb.cast, flows.md FL10).
   "climb/frame.md": climbFrame,
   "climb/propose.md": climbPropose,
@@ -113,6 +117,7 @@ export const BUILTIN_WORKFLOW_TEMPLATES: Readonly<Record<string, string>> = {
   check: inlineTemplateFiles(checkCast, LINE_TEMPLATE_FILES),
   review: inlineTemplateFiles(reviewCast, LINE_TEMPLATE_FILES),
   judge: inlineTemplateFiles(judgeCast, LINE_TEMPLATE_FILES),
+  intent: inlineTemplateFiles(intentCast, LINE_TEMPLATE_FILES),
   eval: inlineTemplateFiles(evalCast, LINE_TEMPLATE_FILES),
   decide: decideCast,
   ship: inlineTemplateFiles(shipCast, LINE_TEMPLATE_FILES),

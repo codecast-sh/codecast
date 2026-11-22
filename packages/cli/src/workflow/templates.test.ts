@@ -62,13 +62,13 @@ describe("line.cast template", () => {
     for (const [ref, text] of Object.entries(LINE_TEMPLATE_FILES)) {
       expect(fs.readFileSync(path.join(TEMPLATE_DIR, ref), "utf-8")).toBe(text);
     }
-    // Every file under line/, change/, judge/ and climb/ is shipped, and every shipped file is used.
-    for (const dir of ["line", "change", "judge", "climb"]) {
+    // Every file under line/, change/, judge/, intent/ and climb/ is shipped, and every shipped file is used.
+    for (const dir of ["line", "change", "judge", "intent", "climb"]) {
       expect(fs.readdirSync(path.join(TEMPLATE_DIR, dir)).sort()).toEqual(Object.keys(LINE_TEMPLATE_FILES).filter((r) => r.startsWith(`${dir}/`)).map((r) => r.slice(dir.length + 1)).sort());
     }
     // The line's own files, the diagnosis graph it runs beside its causes (LL11), the change flows' briefs (flows.md FL4)
-    // the blind judge's prompt, read as the judge segment run alone writes it, and the climb's stations (FL10).
-    const shipped = [graph, ...[JUDGE_REVIEW_GRAPH, "change", "quick-change", "judge", "climb"].map((t) => parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[t]))];
+    // the blind judge's and the intent read's prompts, read as each segment run alone writes them, and the climb's stations (FL10).
+    const shipped = [graph, ...[JUDGE_REVIEW_GRAPH, "change", "quick-change", "judge", "intent", "climb"].map((t) => parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[t]))];
     const used = new Set(shipped.flatMap((g) => [...g.nodes.values()].flatMap((n) => [n.prompt, n.script])));
     for (const text of Object.values(LINE_TEMPLATE_FILES)) expect(used.has(text)).toBe(true);
   });

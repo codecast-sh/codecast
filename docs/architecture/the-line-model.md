@@ -74,6 +74,14 @@ order, within its caps, so the work flows without anyone pressing start. The
 card goes to the person who answers for the project (the role's person, or the
 project owner), capped per person across every line they answer for.
 
+A person's earlier typed word counts as their answer. When the person who
+started a run already told the work to ship, in a line they typed into a
+session the change came through, and the change stays inside what they asked
+for, the run lands on that word and no card is posted (flows.md FL4, Intent).
+A program's words never count: a brief, a relayed "approved" or an agent's
+message is not the person's, and code checks the cited line before the run
+may land.
+
 ## LM5. Grounding: goals rank, expectations detect
 
 Two kinds of context, used at two different moments.

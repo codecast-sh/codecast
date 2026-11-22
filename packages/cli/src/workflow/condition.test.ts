@@ -6,6 +6,7 @@ import { parseWorkflowFile } from "./parser.js";
 import { recordNodeOutput, expandScriptVars, expandPromptVars } from "./runner.js";
 
 describe("evalCondition: every condition the shipped workflows use", () => {
+  const INTENT_CLEAR = "outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.session and read.json.quote and read.json.line > 0";
   // Each row: a condition string found in templates/, packages/cli/workflows
   // or the repo's workflows/, a context, and what the old evaluator returned.
   const cases: Array<[string, Record<string, string>, boolean]> = [
@@ -197,6 +198,26 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and check__failed.json.exit = unjudged", { outcome: "failure", "check__failed.json.exit": "failed" }, false],
     ["outcome = failure and check__unjudged.json.exit != unjudged", { outcome: "failure", "check__unjudged.json.exit": "unjudged" }, false],
     ["outcome = failure and check__unjudged.json.exit = unjudged", { outcome: "failure", "check__unjudged.json.exit": "unjudged" }, true],
+    // intent.cast (flows.md FL4): only a read that ships, in scope, citing a session, a line and a quote, goes on to Clear.
+    ...[INTENT_CLEAR, INTENT_CLEAR.replace(/read\./g, "intent__read.")].flatMap((cond): Array<[string, Record<string, string>, boolean]> => {
+      const read = cond.includes("intent__") ? "intent__read.json" : "read.json";
+      const answer = (over: Record<string, unknown>) => ({ outcome: "success", [read]: JSON.stringify({ ship: true, in_scope: true, session: "jx7b0m0", line: 115, quote: "ship it", ...over }) });
+      return [
+        [cond, answer({}), true],
+        [cond, answer({ ship: false }), false],
+        [cond, answer({ in_scope: false }), false],
+        [cond, answer({ quote: "" }), false],
+        [cond, answer({ quote: undefined }), false],
+        [cond, answer({ session: "" }), false],
+        [cond, answer({ line: 0 }), false],
+        [cond, { outcome: "success" }, false],
+        [cond, { ...answer({}), outcome: "failure" }, false],
+      ];
+    }),
+    ["intent__cleared.json.exit = cleared", { "intent__cleared.json": '{"exit": "cleared"}' }, true],
+    ["intent__cleared.json.exit = cleared", { "intent__ask.json": '{"exit": "ask"}' }, false],
+    // Each exit step leaves by the composing node's edges, so Ask carries the Land edge too and never takes it.
+    ["intent__ask.json.exit = cleared", { "intent__ask.json": '{"exit": "ask"}' }, false],
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {

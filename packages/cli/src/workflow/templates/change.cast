@@ -2,6 +2,9 @@
 // independent session, decided by the person who answers for it, landed, then
 // deployed: the repository's release targets the change touches are sent
 // (deploys.md DP15), and the run waits until it is live on every target it touches.
+// Intent comes before Decide: when the person who started the run already told
+// this work to ship in their own typed words, and the change stays inside what
+// they asked for, it lands on that word with no card; otherwise Decide asks.
 // Each station is a segment from the pool, so a fix to one reaches every flow
 // that uses it. Check is a slot: a flow that extends this one may prove its
 // change with steps of its own (subgraph check { ... }); the project's checks
@@ -31,6 +34,7 @@ digraph change {
   start [shape=Mdiamond]
   check  [flow="check", slot="Prove the change does what it should"]
   review [flow="review"]
+  intent [flow="intent"]
   decide [flow="decide", answerer="review__review"]
   ship   [flow="ship", label="Land"]
   deploy [flow="deploy", send="release"]
@@ -54,9 +58,11 @@ digraph change {
   check -> review
   check -> fix_check [condition="outcome = failure and check.exit != unjudged", label="check failed"]
   check -> unchecked [condition="outcome = failure and check.exit = unjudged", label="not checked here"]
-  review -> decide
+  review -> intent
   review -> fix_review [condition="outcome = failure and review.exit = changes", label="changes asked"]
   review -> rejected   [condition="outcome = failure and review.exit = rejected", label="rejected"]
+  intent -> decide
+  intent -> ship [condition="intent.exit = cleared", label="already said ship"]
   decide -> ship
   decide -> revise  [condition="outcome = failure and decide.exit = revise", label="revise"]
   decide -> dropped [condition="outcome = failure and decide.exit = dropped", label="dropped"]
