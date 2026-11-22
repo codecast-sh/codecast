@@ -165,7 +165,9 @@ describe("a session's change runs through a flow", () => {
     git(root, "commit", "-qm", "base");
     write(root, "a.txt", "b\n");
     transcript("sess-c", "jx7ccccccccccccccccccccccccccccc", [tool(root, "Edit", { file_path: path.join(root, "a.txt"), old_string: "a", new_string: "b" }, 10_000)]);
-    await expect(freezeSessionChange(root, "jx7zzzz", { branch: "codecast/x", worktree: "x" })).rejects.toThrow(/No uncommitted change/);
+    const refused = freezeSessionChange(root, "jx7zzzz", { branch: "codecast/x", worktree: "x" });
+    await expect(refused).rejects.toThrow(/No uncommitted change/);
+    await expect(refused).rejects.toBeInstanceOf(NoSessionChange);
   });
 });
 
