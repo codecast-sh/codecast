@@ -1,4 +1,5 @@
-import { useConvex, useConvexConnectionState } from "convex/react";
+import { useConvex } from "convex/react";
+import { useWsConnected } from "./useWsConnected";
 import { useWatchEffect } from "./useWatchEffect";
 import { useInboxStore } from "../store/inboxStore";
 import { installBrowserFocusHold, isElectron } from "../lib/desktop";
@@ -11,7 +12,7 @@ import {
 export function useNotificationDelivery(ready: boolean) {
   useWatchEffect(() => installBrowserFocusHold(), []);
   const convex = useConvex();
-  const { isWebSocketConnected } = useConvexConnectionState();
+  const isWebSocketConnected = useWsConnected();
   const viewer = useInboxStore((s) => s.currentUser?._id);
   const team = useInboxStore((s) => s.clientState.ui?.active_team_id);
   useWatchEffect(() => {
