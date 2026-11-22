@@ -19,7 +19,8 @@ import type { Press } from "./DeployPress";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { rollBackHere } from "../../lib/deploys/press";
 import { ageShort } from "../../lib/lineFlow";
-import { DEPLOY_LABELS, FOCUS_PARAMS, commitMatches, deployMatches, focusRef, focusRepository, focusSettled, focusTarget, focusWord, pickTarget, reachAnyDeploy, reachDeployOn, targetKey, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
+import { DEPLOY_LABELS, FOCUS_PARAMS, commitMatches, deployMatches, filterParams, focusRef, focusRepository, focusSettled, focusTarget, focusWord, pickTarget, reachAnyDeploy, reachDeployOn, targetKey, type DeployFilters, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
+import type { ChangeGroupId, ChangeViewer } from "../../lib/changes/rows";
 import { useDeployReach } from "../../hooks/useDeployReach";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -63,7 +64,16 @@ function rewriteAddress(set: Record<string, string | null>) {
 }
 
 
-export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initialFocus, initialLabels, initialRepo }: { initialTarget?: string | null; initialTeam?: string | null; initialDeploy?: string | null; initialFocus?: DeployFocus | null; initialLabels?: DeployLabel[]; initialRepo?: string | null }) {
+/** The viewer as "Mine" reads them: their account, their GitHub login and name, and the devices they own. */
+function useViewer(): ChangeViewer {
+  const userId = useInboxStore((s) => (s.currentUser as { _id?: string } | null)?._id ?? null);
+  const login = useInboxStore((s) => (s.currentUser as { github_username?: string } | null)?.github_username ?? null);
+  const name = useInboxStore((s) => (s.currentUser as { name?: string } | null)?.name ?? null);
+  const deviceIds = useInboxStore((s) => ((s.machineRoster ?? []) as Array<{ device_id: string }>).map((d) => d.device_id).sort().join(","));
+  return useMemo(() => ({ userId: userId ? String(userId) : null, login, name, devices: new Set(deviceIds ? deviceIds.split(",") : []) }), [userId, login, name, deviceIds]);
+}
+
+export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initialFocus, initialLabels, initialFilters, initialRepo }: { initialTarget?: string | null; initialTeam?: string | null; initialDeploy?: string | null; initialFocus?: DeployFocus | null; initialLabels?: DeployLabel[]; initialFilters?: DeployFilters; initialRepo?: string | null }) {
   // A PR or commit named with its repository (a pill's link) knows its reach before the team is known.
   const namedReach = useDeployReach(initialRepo ? focusRef(initialFocus ?? null, initialRepo) : null) ?? null;
   // A deploy named in the address (a dp-N pill), or one the named change's reach names, opens on its own team, wherever the viewer was.
@@ -90,6 +100,14 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   useEffect(() => {
     if (labels !== firstLabels.current) rewriteAddress({ show: labels.join(",") });
   }, [labels]);
+  // Both columns share one set of filters, kept in the address the same way.
+  const [filters, setFilters] = useState<DeployFilters>(initialFilters ?? { mine: false, group: null });
+  const firstFilters = useRef(filters);
+  // eslint-disable-next-line no-restricted-syntax -- keeps the address bar in step with the chosen filters
+  useEffect(() => {
+    if (filters !== firstFilters.current) rewriteAddress(filterParams(filters));
+  }, [filters]);
+  const me = useViewer();
   const clearFocus = () => {
     // The target the link opened stays open once the highlight goes.
     setPicked((was) => was ?? picked?._id ?? null);
@@ -156,7 +174,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
           })}
         </ul>
       </nav>
-      {picked ? <TargetPane key={picked._id} target={picked} deploys={deploys} now={now} onPress={press.open} openDeploy={initialDeploy ?? null} focus={focus} reach={reach} onClearFocus={clearFocus} labels={labels} onToggleLabel={toggleLabel} /> : null}
+      {picked ? <TargetPane key={picked._id} target={picked} deploys={deploys} now={now} onPress={press.open} openDeploy={initialDeploy ?? null} focus={focus} reach={reach} onClearFocus={clearFocus} labels={labels} onToggleLabel={toggleLabel} filters={filters} onFilters={setFilters} me={me} /> : null}
       {press.review}
     </div>
     </div>
@@ -193,7 +211,7 @@ function HeadCi({ ci, url }: { ci: CommitCiState; url: string | null }) {
   return url ? <a className="dpp-headci" data-ci={ci} href={url} target="_blank" rel="noreferrer" data-deploy-ci>{body}</a> : <span className="dpp-headci" data-ci={ci} data-deploy-ci>{ci === "none" ? word : body}</span>;
 }
 
-function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach, onClearFocus, labels, onToggleLabel }: { target: DeployTargetRow; deploys: ReadonlyArray<TeamDeployRow>; now: number; onPress: (p: Press) => void; openDeploy: string | null; focus: DeployFocus | null; reach: DeployReach | null; onClearFocus: () => void; labels: DeployLabel[]; onToggleLabel: (l: DeployLabel) => void }) {
+function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach, onClearFocus, labels, onToggleLabel, filters, onFilters, me }: { target: DeployTargetRow; deploys: ReadonlyArray<TeamDeployRow>; now: number; onPress: (p: Press) => void; openDeploy: string | null; focus: DeployFocus | null; reach: DeployReach | null; onClearFocus: () => void; labels: DeployLabel[]; onToggleLabel: (l: DeployLabel) => void; filters: DeployFilters; onFilters: (f: DeployFilters) => void; me: ChangeViewer }) {
   const n = targetNow(t, deploys);
   // Where the linked thing is here: waiting in the queue, or on the deploys that took it out (newest first).
   const focusWaiting = !!focus && t.queue.groups.some((g) => g.commits.some((c) => commitMatches(c, focus)));

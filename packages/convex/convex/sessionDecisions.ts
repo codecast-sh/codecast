@@ -35,6 +35,7 @@ import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { gateMirror, gateResponseOf, optionMoves } from "./lib/gateChoices";
 import { categoryFor, isHumanOnlyCategory, isProtectedCategory } from "./lib/decisionCategory";
 import { syncDecisionInbox } from "./lib/decisionInbox";
+import { settleDecisionWaiting } from "./lib/decisionRing";
 import { answerLabel, normalizeVerdict, verdictOfRow, type Verdict } from "./lib/decisionVerdict";
 import { noticeAreaOwner, routeByArea } from "./decisionRouting";
 import { settleAreasCard } from "./decisionAreas";
@@ -827,8 +828,10 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await closeStackIfDone(ctx, row.stack_id, row._id, now);
   // An answered card gate is recorded and learned from (LE12); a trial's answer only records what the person would have done.
   if (!row.trial) await learnFromCardGate(ctx, row, verdict, by.user_id);
-  // Its "card waiting" notice stops claiming a card waits (LE16).
+  // Its "card waiting" notice stops claiming a card waits (LE16), and so does its phone notice (lib/decisionPush.ts).
   await settleCardWaiting(ctx, row);
+  const holderId = row.holder?.kind === "user" ? row.holder.id : null;
+  await settleDecisionWaiting(ctx, row.conversation_id, [...(row.asked_user_ids ?? []), row.user_id, ...(holderId ? [holderId] : [])]);
   // A trial card reads its decision's answer; its row only learns the run is past it.
   if (row.trial) await settleTrialCard(ctx, row._id, verdict.status, now);
   await noticeAnsweredForPeople(ctx, row, verdict, by);
@@ -1333,7 +1336,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   // A role whose recommendation carried over from the card this one replaces has said its piece: the people see it now.
   const carried = !!hears && hops.some((h) => String(h.role_id) === String(hears._id) && h.recommendation !== undefined);
   const woken = carried ? [] : await tellHearingRole(ctx, hears, { _id: id, short_id, question: args.question, conversation_id: conversation._id }, now);
-  await syncDecisionInbox(ctx, id, people, now, woken.length === 0 && routed.trial !== "owner");
+  // A card shared out by area rings through noticeAreaOwner just below, which never tells the asker's own person.
+  await syncDecisionInbox(ctx, id, people, now, woken.length === 0 && routed.trial !== "owner", { announce: !areaOwner || String(areaOwner) === String(conversation.user_id) });
   if (areaOwner && woken.length === 0) await noticeAreaOwner(ctx, areaOwner, { question: args.question, short_id, conversation_id: conversation._id }, conversation.user_id);
   if (stack) await joinStack(ctx, stack, { _id: id, stack_id: stack._id, scope_keys: scopeKeys }, now);
   if (!args.workflow_run_id) await followStationCard(ctx, conversation, id, now);
