@@ -3,7 +3,7 @@ import { stampCacheOwner } from "./fixtures/signedInPrincipal";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { describe, expect, it } from "bun:test";
 import Dexie from "dexie";
-import { _reopenForTests, _resetPersistedShadow, setHydrating, writePatchesToIDB } from "../idbCache";
+import { _reopenForTests, _resetPersistedShadow, flushLivenessWrites, setHydrating, writePatchesToIDB } from "../idbCache";
 import { noteSnapshotSync } from "../idbCollectionDiff";
 
 await _reopenForTests({ indexedDB, IDBKeyRange });
@@ -65,5 +65,55 @@ describe("incremental persistence", () => {
     expect(puts).toBe(1);
     expect((await db().meta.get("wallet")).value).toEqual({ n: 49 });
     db().meta.put = put;
+  });
+
+  // A working agent's session row changes on every message and model call.
+  // Rewriting it each time kept the desktop app's browser process compacting
+  // IndexedDB at a core; those ticks now wait for the liveness flush, and the
+  // sync cursors wait with them so they never reach disk ahead of the rows.
+  it("holds liveness-only session changes and syncMeta for the liveness flush, rows first", async () => {
+    _resetPersistedShadow();
+    const S = (n: number) => `jx7sess${String(n).padStart(25, "a")}`;
+    const base = { _id: S(1), title: "t", agent_status: "working", message_count: 1, updated_at: 1 };
+    let sessions: Record<string, any> = { [S(1)]: base, [S(2)]: { ...base, _id: S(2) } };
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: sessions } as any], { sessions, pending: {} });
+    await settle();
+    expect((await db().sessions.get(S(1))).message_count).toBe(1);
+
+    const writes: string[] = [];
+    const sessionsPut = db().sessions.bulkPut.bind(db().sessions);
+    db().sessions.bulkPut = (rows: any[]) => { writes.push(...rows.map((r) => `row:${r._id}:${r.message_count}`)); return sessionsPut(rows); };
+    const metaPut = db().meta.put.bind(db().meta);
+    db().meta.put = (row: any) => { if (row.key === "syncMeta") writes.push(`syncMeta:${row.value.s.cursor}`); return metaPut(row); };
+
+    for (let i = 2; i <= 20; i++) {
+      sessions = { ...sessions, [S(1)]: { ...sessions[S(1)], message_count: i, updated_at: i } };
+      const syncMeta = { s: { cursor: i } };
+      writePatchesToIDB(
+        [
+          { op: "replace", path: ["sessions", S(1), "message_count"], value: i } as any,
+          { op: "replace", path: ["syncMeta", "s"], value: syncMeta.s } as any,
+        ],
+        { sessions, syncMeta, pending: {} },
+      );
+    }
+    await Bun.sleep(300);
+    expect(writes).toEqual([]);
+    expect((await db().sessions.get(S(1))).message_count).toBe(1);
+
+    // Any other field goes to disk at once, liveness fields and all.
+    sessions = { ...sessions, [S(2)]: { ...sessions[S(2)], agent_status: "idle", message_count: 9 } };
+    writePatchesToIDB([{ op: "replace", path: ["sessions", S(2), "agent_status"], value: "idle" } as any], { sessions, syncMeta: { s: { cursor: 20 } }, pending: {} });
+    await settle();
+    expect(writes).toEqual([`row:${S(2)}:9`]);
+
+    flushLivenessWrites();
+    await settle();
+    expect(writes).toEqual([`row:${S(2)}:9`, `row:${S(1)}:20`, "syncMeta:20"]);
+    expect((await db().sessions.get(S(1))).message_count).toBe(20);
+    expect((await db().meta.get("syncMeta")).value).toEqual({ s: { cursor: 20 } });
+
+    db().sessions.bulkPut = sessionsPut;
+    db().meta.put = metaPut;
   });
 });

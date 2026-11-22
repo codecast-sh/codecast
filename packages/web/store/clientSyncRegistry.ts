@@ -46,6 +46,11 @@ export type ClientSyncRegistryEntry = {
     kind: PersistenceKind;
     key: string;
     perWindow?: boolean;
+    // A collection's liveness fields: server-derived counters and clocks
+    // that move on every message, model call or heartbeat. A row whose
+    // change touches only these reaches disk on the slow liveness flush
+    // (idbCache), not once per change.
+    liveFields?: readonly string[];
   };
   // How the collection syncs (see RegistrySyncOpts). Omit for meta keys.
   sync?: RegistrySyncOpts;
@@ -137,7 +142,18 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   sessions: {
     writtenBy: ["conversations"],
-    persistence: { kind: "collection", key: "sessions" },
+    persistence: {
+      kind: "collection",
+      key: "sessions",
+      // Measured on a desktop app with ~60 working agents: 9 of every 10
+      // session-row writes changed only these fields, each rewriting the
+      // whole 3.4 KB row, and the browser process spent a core compacting
+      // the IndexedDB they landed in.
+      liveFields: [
+        "updated_at", "message_count", "last_role_is_user", "context_tokens", "last_model_call_at",
+        "activity", "daemon_alive_until", "producing_until", "last_heartbeat", "last_turn_origin",
+      ],
+    },
     localFirst: true,
     // Inbox triage gestures (dismiss/stash/pin) write the session row itself,
     // but the server-side row is the conversation. Without this mapping the
@@ -1979,6 +1995,13 @@ export const COLLECTION_STORE_KEYS = registryEntries
 export const META_STORE_KEYS = registryEntries
   .filter(([, entry]) => entry.persistence?.kind === "meta")
   .map(([key]) => key) as ClientSyncMetaStoreKey[];
+
+/** Each persisted collection's liveness fields (`persistence.liveFields`). */
+export const COLLECTION_LIVE_FIELDS: Record<string, ReadonlySet<string>> = Object.fromEntries(
+  registryEntries
+    .filter(([, entry]) => entry.persistence?.kind === "collection" && entry.persistence.liveFields?.length)
+    .map(([key, entry]) => [key, new Set(entry.persistence!.liveFields)])
+);
 
 
 // Boot-hydration apply lists, derived so a persisted key can never silently

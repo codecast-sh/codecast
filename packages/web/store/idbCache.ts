@@ -5,6 +5,7 @@ import { captureException } from "@sentry/react";
 import type { Patch } from "mutative";
 import {
   COLLECTION_INDEXES,
+  COLLECTION_LIVE_FIELDS,
   COLLECTION_STORE_KEYS,
   META_STORE_KEYS,
   collectionRowValidator,
@@ -283,9 +284,76 @@ const { persistenceOwned, writeOwnerStamp } = ownershipApi;
 export const { ensureCacheOwnership, _cacheOwnerForTests } = ownershipApi;
 
 const metaWriter = createCoalescedWriter((key, value) => { db.meta.put({ key, value }).catch(() => {}); }, 250);
+
+// The liveness lane. A row whose change since it last reached disk touches
+// only its collection's liveFields waits here, and so does syncMeta. With
+// ~60 working agents, nine in ten session-row writes were liveness ticks;
+// each rewrote the whole row, and the desktop app's browser process spent a
+// core compacting the 700 MB IndexedDB they landed in (2026-11-21). One flush
+// writes the waiting rows and syncMeta in one transaction, so the persisted
+// sync cursors never pass a row change that is not on disk: a page killed
+// before the flush replays the sync log from the older cursor and loses
+// nothing. Rows with any other change still go to disk at once.
+export const LIVENESS_FLUSH_MS = 60_000;
+const livenessRows = new Map<string, Set<string>>();
+let livenessSyncMeta = false;
+let livenessState: any = null;
+let livenessTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleLivenessFlush(state: any) {
+  livenessState = state;
+  if (!livenessTimer) livenessTimer = setTimeout(flushLivenessWrites, LIVENESS_FLUSH_MS);
+}
+
+/** Whether `next` differs from the row on disk only in `live` fields. */
+function onlyLiveFieldsChanged(onDisk: any, next: any, live: ReadonlySet<string>): boolean {
+  if (!onDisk || !next || onDisk === next) return false;
+  for (const field in next) if (next[field] !== onDisk[field] && !live.has(field)) return false;
+  for (const field in onDisk) if (!(field in next) && !live.has(field)) return false;
+  return true;
+}
+
+/** Write what waits in the liveness lane now (page hide, and tests). */
+export function flushLivenessWrites() {
+  if (livenessTimer) clearTimeout(livenessTimer);
+  livenessTimer = null;
+  const state = livenessState;
+  livenessState = null;
+  const writeSyncMeta = livenessSyncMeta && state?.syncMeta !== undefined;
+  livenessSyncMeta = false;
+  const waiting = [...livenessRows];
+  livenessRows.clear();
+  if (!state || _hydrating || !persistenceOwned()) return;
+  const writes: Array<{ table: Dexie.Table<any, string>; puts: any[] }> = [];
+  for (const [key, ids] of waiting) {
+    const table = COLLECTION_TABLES[key];
+    const shadow = lastPersisted.get(key);
+    const data = state[key];
+    if (!table || !shadow || !data) continue;
+    const puts: any[] = [];
+    for (const id of ids) {
+      const row = Object.prototype.hasOwnProperty.call(data, id) ? data[id] : undefined;
+      // Gone since (its delete was written), or already written by a later change.
+      if (row === undefined || shadow.get(id) === row) continue;
+      puts.push(row);
+      shadow.set(id, row);
+    }
+    if (puts.length) writes.push({ table, puts });
+  }
+  if (!writes.length && !writeSyncMeta) return;
+  db.transaction("rw", [...writes.map((w) => w.table), db.meta], async () => {
+    for (const { table, puts } of writes) await table.bulkPut(puts);
+    if (writeSyncMeta) await db.meta.put({ key: "syncMeta", value: state.syncMeta });
+  }).catch(() => {});
+}
+
 if (typeof window !== "undefined") {
-  window.addEventListener("pagehide", () => metaWriter.flush());
-  window.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") metaWriter.flush(); });
+  window.addEventListener("pagehide", () => { metaWriter.flush(); flushLivenessWrites(); });
+  window.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "hidden") return;
+    metaWriter.flush();
+    flushLivenessWrites();
+  });
 }
 
 // A boot retention pass can shed most of a table at once: the first boot with
@@ -332,7 +400,22 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
         // The patches name the rows this write touched, so only those are compared: a write
         // of a few rows into a big collection costs the rows. A whole-collection replace,
         // or snapshot drops only a full diff can find, take the full diff.
-        const ids = prevShadow && !hasSnapshotDrops(key) ? patchedIds(patches, key) : null;
+        let ids = prevShadow && !hasSnapshotDrops(key) ? patchedIds(patches, key) : null;
+        const live = COLLECTION_LIVE_FIELDS[key];
+        if (prevShadow && ids && live) {
+          const now = new Set<string>();
+          for (const id of ids) {
+            if (onlyLiveFieldsChanged(prevShadow.get(id), data[id], live)) {
+              let waiting = livenessRows.get(key);
+              if (!waiting) livenessRows.set(key, (waiting = new Set()));
+              waiting.add(id);
+              scheduleLivenessFlush(state);
+            } else {
+              now.add(id);
+            }
+          }
+          ids = now;
+        }
         let puts: any[];
         let deletes: string[];
         if (prevShadow && ids) {
@@ -358,6 +441,10 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
       // waited for a quiet spell was lost with a page killed in between, and the reload showed a stale push
       // over its own parked write. (A big write plants a few hundred locks, never one per field it touches.)
       db.meta.put({ key, value: state[key] }).catch(() => {});
+    } else if (key === "syncMeta") {
+      // The sync cursors trail the liveness lane's rows to disk (see flushLivenessWrites).
+      livenessSyncMeta = true;
+      scheduleLivenessFlush(state);
     } else if (META_KEYS.has(key)) {
       // Any other meta blob: its latest value once per quiet spell, never once per action. Page hide flushes it.
       metaWriter.write(key, state[key]);
@@ -861,6 +948,9 @@ async function purgeLocalCacheSteps(keepPendingInputFor: string | null): Promise
   _pendingMsgWrites.clear();
   // A meta value still waiting to be written belongs to the cache being purged.
   metaWriter.drop();
+  livenessRows.clear();
+  livenessSyncMeta = false;
+  livenessState = null;
   lastPersisted.clear();
   // A cache purged from under a signed-in principal (someone else's rows were
   // on disk) keeps that principal's own pending input: keyed by owner, it was
