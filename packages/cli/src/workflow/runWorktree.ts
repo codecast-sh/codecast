@@ -66,9 +66,10 @@ export async function releaseEndedRunTree(cwd: string, context: Record<string, s
     const { readState } = await import("../workspace/contract.js");
     const tree = readState(repoRoot, name)?.path ?? path.join(repoRoot, ".codecast", "worktrees", name);
     if (!fs.existsSync(tree)) return;
-    const { processCwds } = await import("../land/scan.js");
-    if ((await processCwds()).some((p) => p === tree || p.startsWith(`${tree}/`))) {
-      console.log(`${c.dim}Kept worktree ${name}: a running process sits in it${c.reset}`);
+    const { readProcessCwds } = await import("../land/scan.js");
+    const cwds = await readProcessCwds();
+    if (!cwds || cwds.some((p) => p === tree || p.startsWith(`${tree}/`))) {
+      console.log(`${c.dim}Kept worktree ${name}: ${cwds ? "a running process sits in it" : "could not read which processes sit in it"}${c.reset}`);
       return;
     }
     const { contentKeepReason, releaseTree } = await import("../worktreeGc.js");

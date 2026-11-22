@@ -387,7 +387,7 @@ export async function releaseSessionMadeWorktrees(
   sessionId: string,
   cwd: string,
   log: (m: string) => void = () => {},
-  deps: { claudeProjects?: string; processCwds?: () => Promise<string[]> } = {},
+  deps: { claudeProjects?: string; processCwds?: () => Promise<string[] | null> } = {},
 ): Promise<GcVerdict[]> {
   let repoRoot: string;
   try {
@@ -412,11 +412,13 @@ export async function releaseSessionMadeWorktrees(
     }
   }
   if (candidates.size === 0) return kept;
-  const cwds = await (deps.processCwds ?? (async () => (await import("./land/scan.js")).processCwds()))();
+  const cwds = await (deps.processCwds ?? (async () => (await import("./land/scan.js")).readProcessCwds()))();
   const out: GcVerdict[] = [...kept];
   for (const tree of candidates) {
     const name = path.basename(tree);
-    const reason = cwds.some((c) => c === tree || c.startsWith(`${tree}/`)) ? "a running process sits in it" : await contentKeepReason(tree, repoRoot);
+    const reason = !cwds
+      ? "could not read which processes sit in it"
+      : cwds.some((c) => c === tree || c.startsWith(`${tree}/`)) ? "a running process sits in it" : await contentKeepReason(tree, repoRoot);
     if (reason) {
       out.push({ action: "kept", name, path: tree, reason });
       continue;

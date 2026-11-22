@@ -424,6 +424,17 @@ describe("releaseSessionMadeWorktrees", () => {
     expect([unlanded, shared, busy].every((p) => fs.existsSync(p))).toBe(true);
   }, 60_000);
 
+  test("kept when the process table could not be read", async () => {
+    const { repo } = makeRepo();
+    const ws = (await acquireWorkspace(repo, "unread", { branch: "feat/unread", skipPool: true, skipSetup: true, skipHooks: true, noPorts: true })).workspace;
+    recordWorkspaceSession(repo, "unread", SID);
+    commit(ws.path, "fix", { "fix.txt": "fixed\n" });
+    land(repo, ws.path);
+    const out = await releaseSessionMadeWorktrees(SID, repo, () => {}, { claudeProjects: path.join(repo, "none"), processCwds: async () => null });
+    expect(out).toMatchObject([{ action: "kept", reason: "could not read which processes sit in it" }]);
+    expect(fs.existsSync(ws.path)).toBe(true);
+  }, 60_000);
+
   test("its Claude Code agent trees go, a dead agent's lock with them, so the branch checks out again", async () => {
     const repo = fs.realpathSync(makeRepo().repo); // git lists worktrees by real path
     const projects = path.join(path.dirname(repo), "projects");

@@ -436,13 +436,25 @@ export async function scanTree(entry: WorktreeEntry, ctx: ScanContext): Promise<
 
 /** Every process's working directory, from one lsof call; empty when lsof is unavailable. */
 export async function processCwds(): Promise<string[]> {
+  return (await readProcessCwds()) ?? [];
+}
+
+/**
+ * The cwds for a path that deletes a tree: null when lsof timed out, was killed
+ * or printed nothing, so the caller keeps the tree rather than read "nobody is
+ * in it" from a failed read.
+ */
+export async function readProcessCwds(): Promise<string[] | null> {
+  const parse = (out: string) => out.split("\n").filter((l) => l.startsWith("n/")).map((l) => l.slice(1));
   try {
     const { stdout } = await execFileAsync("lsof", ["-a", "-d", "cwd", "-Fn"], { encoding: "utf-8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
-    return String(stdout).split("\n").filter((l) => l.startsWith("n/")).map((l) => l.slice(1));
+    const cwds = parse(String(stdout));
+    return cwds.length ? cwds : null;
   } catch (err: any) {
     // lsof exits 1 when some processes cannot be read, with the rest on stdout.
-    const out = String(err?.stdout ?? "");
-    return out.split("\n").filter((l) => l.startsWith("n/")).map((l) => l.slice(1));
+    if (err?.killed || err?.signal) return null;
+    const cwds = parse(String(err?.stdout ?? ""));
+    return cwds.length ? cwds : null;
   }
 }
 
