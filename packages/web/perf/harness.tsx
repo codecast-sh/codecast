@@ -148,13 +148,16 @@ let rendered = new Map<string, number>();
 const fiberName = (f: any) => { const t = f.elementType ?? f.type; return typeof t === "string" ? null : t?.displayName || t?.name || t?.type?.displayName || t?.type?.name || null; };
 (globalThis as any).__REACT_DEVTOOLS_GLOBAL_HOOK__ = {
   supportsFiber: true, renderers: new Map(), inject: () => 1, checkDCE() {}, onScheduleFiberRoot() {}, onCommitFiberUnmount() {}, onPostCommitFiberRoot() {},
+  // Walks only where this commit worked: a subtree React skipped keeps the
+  // child it had (and its fibers their old PerformedWork flag), so descending
+  // into it would count renders from earlier commits.
   onCommitFiberRoot(_id: number, fiberRoot: any) {
-    const stack = [fiberRoot.current];
+    const stack = [fiberRoot.current.child];
     while (stack.length) {
-      const f = stack.pop();
-      if (f.alternate && f.flags & 1) { const name = fiberName(f); if (name) rendered.set(name, (rendered.get(name) ?? 0) + 1); }
-      if (f.child) stack.push(f.child);
-      if (f.sibling) stack.push(f.sibling);
+      for (let f = stack.pop(); f; f = f.sibling) {
+        if (f.alternate && f.flags & 1) { const name = fiberName(f); if (name) rendered.set(name, (rendered.get(name) ?? 0) + 1); }
+        if (f.child && (!f.alternate || f.child !== f.alternate.child)) stack.push(f.child);
+      }
     }
   },
 };

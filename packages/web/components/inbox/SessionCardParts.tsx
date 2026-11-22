@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, memo } from "react";
 import { useLabelColor } from "../../lib/labelColors";
 import { Tag, UserCheck, CheckSquare, Square } from "lucide-react";
 import { formatRelative, formatDateFull } from "../../lib/utils";
@@ -554,7 +554,7 @@ export function SessionProjectChip({ project, label, directory, className = "", 
  *  card (the Sub-agents and workers view option lists them), so this line is
  *  what keeps them in sight. Quiet ink; only "needs you" takes the accent, and
  *  it opens the first worker waiting. */
-export function CardWorkersLine({
+export const CardWorkersLine = memo(function CardWorkersLine({
   count,
   needsYou,
   onOpen,
@@ -586,4 +586,4 @@ export function CardWorkersLine({
       )}
     </div>
   );
-}
+});

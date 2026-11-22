@@ -20,11 +20,11 @@ export const REVEAL_IDLE_MS = 45_000;
  * A login's 2FA seed stays for the component's life, so its code keeps ticking
  * while the panel is open; `seed` is undefined until fetched, null when the
  * login has none. Each fetch records a reveal on the server before the value
- * leaves it. An Ask first secret (`askFirst`) confirms with Touch ID before
+ * leaves it. A Touch ID secret (`touchId`) confirms with Touch ID before
  * each fetch (lib/passkeyPresence); cancelled, the fetch answers null. A
  * sample Vault's value comes from the sample, with no server call or Touch ID.
  */
-export function useReveal(id: string, version?: number, askFirst?: boolean) {
+export function useReveal(id: string, version?: number, touchId?: boolean) {
   const reveal = useAction(api.secrets.reveal);
   const confirm = usePresence();
   const sample = useSampleVault();
@@ -69,7 +69,7 @@ export function useReveal(id: string, version?: number, askFirst?: boolean) {
     };
     setLoading(true);
     setError(null);
-    inflight.current = (sample ? Promise.resolve(sample.reveal(id)) : withPresence(() => confirm("reveal", id), fetchValue, !!askFirst))
+    inflight.current = (sample ? Promise.resolve(sample.reveal(id)) : withPresence(() => confirm("reveal", id), fetchValue, !!touchId))
       .then((res: any) => {
         if (res === NOT_CONFIRMED) return null;
         if (res?.error) {
@@ -94,6 +94,6 @@ export function useReveal(id: string, version?: number, askFirst?: boolean) {
         if (gen === generation.current) inflight.current = null;
       });
     return inflight.current;
-  }, [id, shown, payload, reveal, touch, confirm, askFirst, sample]);
+  }, [id, shown, payload, reveal, touch, confirm, touchId, sample]);
   return { payload, seed, error, loading, load, drop };
 }
