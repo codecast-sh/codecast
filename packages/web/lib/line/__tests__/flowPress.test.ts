@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { pressFromSig, pressSig, runThroughMessage, addToFlowsMessage } from "../flowMessages";
+import { formatDecisionAnswer } from "@codecast/shared/contracts";
 
 // A Ship press is a message to the session; whether its run started, is still to come, or will not come is read from
 // the session's messages after it (RunThroughFlow's chip and panel).
@@ -27,11 +28,17 @@ describe("a Ship press", () => {
     const result = { _id: "tr", role: "user", content: "", tool_results: [{ tool_use_id: "x" }], timestamp: 12 };
     const msgs = [press(10), said("a1", "I didn't run Change: nothing to take.", 11), result, later, said("a2", "Renamed the button to Save.", 14)];
     expect(read(msgs)?.reply).toEqual({ id: "a1", text: "I didn't run Change: nothing to take." });
-    // Asked something before it answered the press: no reply to the press yet.
-    expect(read([press(10), later, said("a2", "Renamed the button to Save.", 14)])?.reply).toBeNull();
   });
 
-  test("what reaches the session on its own between the press and its answer does not take the answer away", () => {
+  test("a person who speaks after the session answered starts the next exchange, however their words arrived", () => {
+    const answered = [press(10), said("a1", "I didn't run Change: nothing to take.", 11)];
+    const next = (content: string) => read([...answered, { _id: "u", role: "user", content, timestamp: 12 }, said("a2", "Renamed it.", 13)])?.reply?.id;
+    expect(next("Rename the button")).toBe("a1");
+    expect(next('<user-message from="Jason Benn">\nRename the button\n</user-message>')).toBe("a1");
+    expect(next(formatDecisionAnswer({ id: "sd-1", question: "Keep the name?", answer: "Rename it" }))).toBe("a1");
+  });
+
+  test("what reaches the session before it first answers folds into the turn that answers the press", () => {
     // jx7dhj9, Nov 21: a task comment and another session's report arrived while it checked, then it answered the press.
     const comment = { _id: "c", role: "user", content: '<task-comment task="ct-1" from="Ana">\nAbout ct-1\n</task-comment>', timestamp: 12 };
     const report = { _id: "s", role: "user", content: '<session-message from="jx7005k">\nThe Built change passed.\n</session-message>', timestamp: 13 };

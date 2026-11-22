@@ -1,7 +1,8 @@
 // What a person's press asks a session to do with flows (docs/architecture/flows.md FL4, FL5): the words the
-// session receives, kept beside the other flow libs so the components that send them stay components.
-import { classifyUserMessage } from "../../components/conversation/classify";
-import type { Message } from "../../components/conversation/types";
+// session receives, kept beside the other flow libs so the components that send them stay components. Convex's typed-send
+// counters load this file (convex/lib/userSend.ts), so it stays free of DOM, React and web-only dependencies.
+import { parseDecisionAnswer } from "@codecast/shared/contracts";
+import { isStickyEligible } from "../stickyPrompt";
 
 /** What the session is asked: run its change through the flow, named after what the change does, and say how it ended. */
 export function runThroughMessage(flow: { slug: string; label: string }): string {
@@ -46,21 +47,28 @@ export function pressSig(msgs: ReadonlyArray<PressMsg>, newestRunAt: number): st
   return sig;
 }
 
+/** A person's own words to the session: a typed or relayed ask, or a tapped decision. */
+const personSpoke = (m: PressMsg) =>
+  m.role === "user" && !m.tool_results?.length && !!m.content && (isStickyEligible(m.content) || !!parseDecisionAnswer(m.content));
+
 function scanPress(msgs: ReadonlyArray<PressMsg>, newestRunAt: number): string {
-  let reply: PressMsg | null = null;
   // Far enough back for a session that did a long stretch of tool work after the press.
+  let at = -1;
   for (let i = msgs.length - 1; i >= 0 && i >= msgs.length - 400; i--) {
     const m = msgs[i]!;
-    if (!reply && m.role === "assistant" && typeof m.content === "string" && m.content.trim()) reply = m;
-    if (m.role !== "user" || typeof m.content !== "string" || !m.content.trim()) continue;
-    if (isRunThroughPress(m.content)) {
-      return (m.timestamp ?? 0) > newestRunAt ? [m.timestamp ?? 0, m._id ?? "", reply?._id ?? "", reply ? gist(reply.content!) : ""].join("\u0000") : "";
-    }
-    // Words after something the person typed later answer that; the press's reply is the session's last words before it.
-    // What reaches the session on its own (a tool's result, another session's message, a task comment) does not.
-    if (classifyUserMessage(m as Message).kind === "normal") reply = null;
+    if (m.role === "user" && typeof m.content === "string" && isRunThroughPress(m.content)) { at = i; break; }
   }
-  return "";
+  const press = at < 0 ? null : msgs[at]!;
+  if (!press || (press.timestamp ?? 0) <= newestRunAt) return "";
+  // Its reply is the session's last words in the turn the press started. What reaches the session before it first
+  // answers (a comment, another session's report) folds into that turn; a person speaking after it answered starts the next.
+  let reply: PressMsg | null = null;
+  for (let i = at + 1; i < msgs.length; i++) {
+    const m = msgs[i]!;
+    if (m.role === "assistant" && typeof m.content === "string" && m.content.trim()) reply = m;
+    else if (reply && personSpoke(m)) break;
+  }
+  return [press.timestamp ?? 0, press._id ?? "", reply?._id ?? "", reply ? gist(reply.content!) : ""].join("\u0000");
 }
 
 /** The press a signature from pressSig spells, or null for "". */
