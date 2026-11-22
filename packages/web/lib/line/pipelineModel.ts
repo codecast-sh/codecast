@@ -93,9 +93,14 @@ const LIVE = new Set(["running", "pending", "paused"]);
 export const repoName = (repository: string) => repository.split("/").pop() ?? repository;
 
 /** Whether a run ran in this repo's checkout (a worktree of it included). */
-export function runInRepo(run: Pick<PipelineRun, "project_path">, repository: string): boolean {
+/** Whether a run or session ran in this repo: its git remote names it, its folder sits under a known checkout of it
+ *  (the published pipeline's `root`), or its folder is named after the repo (a checkout or a worktree of one). */
+export function runInRepo(run: Pick<PipelineRun, "project_path"> & { repository?: string | null }, repository: string, roots: ReadonlyArray<string | null | undefined> = []): boolean {
+  if (run.repository && run.repository.toLowerCase() === repository.toLowerCase()) return true;
+  const path = (run.project_path ?? "").replace(/\/+$/, "");
+  if (roots.some((r) => !!r && (path === r.replace(/\/+$/, "") || path.startsWith(`${r.replace(/\/+$/, "")}/`)))) return true;
   const name = repoName(repository).toLowerCase();
-  return (run.project_path ?? "").toLowerCase().split("/").includes(name);
+  return path.toLowerCase().split("/").includes(name);
 }
 
 /** A pipeline flow in the drawing's terms. */
@@ -256,7 +261,7 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
     return open > (d.steps?.length ? STUCK_REPORTING_MS : STUCK_SILENT_MS) ? open : null;
   };
   const repo = p.repository.toLowerCase();
-  const changeRuns = runs.filter((r) => (r.workflow_slug ?? r.workflow_name) === p.change.slug && runInRepo(r, repo));
+  const changeRuns = runs.filter((r) => (r.workflow_slug ?? r.workflow_name) === p.change.slug && runInRepo(r, repo, [p.root]));
   const change = lane(p.change, changesHere(p.change, changeRuns), false, pending);
   const live = changeRuns.filter((r) => LIVE.has(r.status));
 
@@ -367,12 +372,13 @@ export const pipelineHref = (repository: string) => `/flows/pipeline?repo=${enco
  *  commands (editSessionMessage). A session ended without shipping them stops proposing. */
 export function pendingEdits(
   repository: string,
-  sessions: ReadonlyArray<{ id: string; title: string | null | undefined; project_path?: string | null; ended?: boolean }>,
+  sessions: ReadonlyArray<{ id: string; title: string | null | undefined; project_path?: string | null; repository?: string | null; ended?: boolean }>,
   firstMessage: (id: string) => string | null | undefined,
+  roots: ReadonlyArray<string | null | undefined> = [],
 ): PendingEdit[] {
   const out: PendingEdit[] = [];
   for (const s of sessions) {
-    if (s.ended || !runInRepo({ project_path: s.project_path }, repository)) continue;
+    if (s.ended || !runInRepo({ project_path: s.project_path, repository: s.repository }, repository, roots)) continue;
     for (const x of editsOfMessage(firstMessage(s.id))) out.push({ ...x, session: { id: s.id, title: s.title?.trim() || "a new session" } });
   }
   return out;

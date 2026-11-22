@@ -14,9 +14,8 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { usePoolFlowRows, useSessionFlowRuns, useTeamDefaultFlowSlug } from "../../../hooks/useSyncWorkflows";
 import { useRunFlow } from "../../../hooks/useFlowObject";
 import { appPool, defaultFlowOf, linesFirst, takesSessionChange, type AppFlow } from "../../../lib/line/flowPool";
-import { flowAsks, flowDiagram } from "../../../lib/line/flowDiagram";
 import { asksBeforeLand, journeyOf, journeyStages, journeyWords, runIsLive, type Journey } from "../../../lib/ship/journey";
-import { flowRunLedger } from "../../consequential/ledgers";
+import { shipLedgerFor } from "../../consequential/shipLedger";
 import { isFlowPressMessage, runThroughMessage } from "../../../lib/line/flowMessages";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
@@ -89,17 +88,11 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
           )}
         </PopoverContent>
       </Popover>
-      {reviewing ? <SwitchReview ledger={ledgerFor(reviewing, sessionTitle)} onClose={() => setReviewing(null)} onConfirm={() => send(reviewing)} /> : null}
+      {reviewing ? <SwitchReview ledger={shipLedgerFor(reviewing, sessionTitle)} onClose={() => setReviewing(null)} onConfirm={() => send(reviewing)} /> : null}
     </>
   );
 }
 
-function ledgerFor(flow: AppFlow, session: string) {
-  const d = flowDiagram(flow);
-  const stops = d.steps.flatMap((s) => [...s.side, ...s.inner.flatMap((i) => i.side)]).filter((r) => r.tone === "stop").map((r) => r.outcome);
-  const stages = journeyStages(flow).filter((s) => s.id !== "live");
-  return flowRunLedger({ flow: flow.label, session, stages, asks: flowAsks(flow), ends: [...new Set(stops)] });
-}
 
 function Starting({ at }: { at: number }) {
   const now = useCoarseNow(1000);

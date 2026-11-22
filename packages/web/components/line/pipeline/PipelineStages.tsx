@@ -13,6 +13,7 @@ import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { pipelineHref, type PipelineModel } from "../../../lib/line/pipelineModel";
 import { PipelineDiagram } from "./PipelineDiagram";
+import { CheckoutsSection } from "./CheckoutsSection";
 
 const teamOf = (workspace: string | null) => (workspace?.startsWith("team:") ? workspace.slice(5) : null);
 
@@ -77,6 +78,7 @@ export const RepoPipelineStage = memo(function RepoPipelineStage({ workspace, re
         <ShareControl label="pipeline" path={pipelineHref(model.repository)} className="ml-auto" />
       </header>
       <PipelineDiagram model={model} pipeline={pipelines[i]} teamId={teamOf(workspace)} />
+      <CheckoutsSection pipeline={pipelines[i]} teamId={teamOf(workspace)} />
     </div>
   );
 });

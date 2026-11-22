@@ -102,6 +102,17 @@ describe("a proposed edit drawn as a ghost until it is live", () => {
     expect(pipelineModel(live, [], [], [], 0, pending).change.marks.lint.proposed).toBeUndefined();
   });
 
+  test("a session in a clone named anything counts by its remote or by the published checkout it sits in", () => {
+    const msg = editCommand("change", EDITS[2]);
+    const clone = [{ id: "s", title: "Guide review", project_path: "/Users/x/src/union-pipeline" }];
+    expect(pendingEdits("codecast-sh/codecast", clone, () => msg)).toHaveLength(0);
+    expect(pendingEdits("codecast-sh/codecast", clone, () => msg, ["/Users/x/src/union-pipeline"])).toHaveLength(1);
+    expect(pendingEdits("codecast-sh/codecast", [{ ...clone[0], repository: "codecast-sh/codecast" }], () => msg)).toHaveLength(1);
+    // A guidance proposal draws its station as a ghost.
+    const m = pipelineModel({ ...codecast, root: "/Users/x/src/union-pipeline" }, [], [], [], 0, pendingEdits("codecast-sh/codecast", clone, () => msg, ["/Users/x/src/union-pipeline"]));
+    expect(m.change.marks.review.proposed).toBe("proposed · Guide review");
+  });
+
   test("a proposed skip marks the step skipped", () => {
     const msg = editCommand("change", { op: "skip", station: "decide" });
     const m = pipelineModel(codecast, [], [], [], 0, pendingEdits("codecast-sh/codecast", [{ id: "s", title: "Skip it", project_path: "/w/codecast" }], () => msg));

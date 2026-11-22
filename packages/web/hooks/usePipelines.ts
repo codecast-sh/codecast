@@ -31,16 +31,16 @@ export function usePipelineModels(workspace: string | null | undefined): { model
   const models = useMemo(() => {
     const rows = JSON.parse(proposalSig) as ProposalRow[];
     const first = new Map(rows.map((r) => [r.id, r.first]));
-    return pipelines.map((p) => pipelineModel(p, runs, targets, deploys, now, pendingEdits(p.repository, rows, (id) => first.get(id))));
+    return pipelines.map((p) => pipelineModel(p, runs, targets, deploys, now, pendingEdits(p.repository, rows, (id) => first.get(id), [p.root])));
   }, [pipelines, runs, targets, deploys, now, proposalSig]);
   const failed = refused ? "not allowed in this workspace" : error ? "could not be read" : null;
   return { models, pipelines, ready: ready || !teamId, failed };
 }
 
-type ProposalRow = { id: string; title: string | null; project_path: string | null; ended: boolean; first: string };
+type ProposalRow = { id: string; title: string | null; project_path: string | null; repository: string | null; ended: boolean; first: string };
 type State = ReturnType<typeof useInboxStore.getState>;
 type MessageRow = { role?: string; content?: string | null };
-type SessionRow = { title?: string | null; project_path?: string | null; git_root?: string | null; inbox_killed_at?: number | null };
+type SessionRow = { title?: string | null; project_path?: string | null; git_root?: string | null; git_remote_url?: string | null; inbox_killed_at?: number | null };
 
 /** The sessions whose first message opens with a `cast flow edit` command, as a string so a store push that changes
  *  none of them re-renders nothing. */
@@ -51,7 +51,7 @@ function proposalsSig(s: State): string {
     const first = messages[id]?.find((m) => m.role === "user")?.content;
     if (!first?.startsWith("cast flow edit ")) continue;
     const row = ((s.sessions as Record<string, SessionRow>)[id] ?? (s.conversations as Record<string, SessionRow>)[id]) as SessionRow | undefined;
-    rows.push({ id, title: row?.title ?? null, project_path: row?.project_path ?? row?.git_root ?? null, ended: !!row?.inbox_killed_at, first });
+    rows.push({ id, title: row?.title ?? null, project_path: row?.project_path ?? row?.git_root ?? null, repository: repositoryKeyOfRemote(row?.git_remote_url) ?? null, ended: !!row?.inbox_killed_at, first });
   }
   return JSON.stringify(rows);
 }
