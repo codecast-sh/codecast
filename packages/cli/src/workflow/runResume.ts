@@ -263,8 +263,8 @@ export interface ResumePoint {
   context: Record<string, string>;
   /** The gate the run stood at: its answer when one arrived while nothing drove it; `open` when it still waits on a decision that was asked (a gate whose ask failed is asked again). */
   gate: { node_id: string; response: string | null; open: boolean } | null;
-  /** The hand a session node had running when its runner died, to wait on again rather than start anew. */
-  hand: string | null;
+  /** The hands session stations had running when the runner died, by station (a fanout's session branches each have one), to wait on again rather than start anew. */
+  hands: Record<string, string>;
   from: "checkpoint" | "row";
 }
 
@@ -304,7 +304,11 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
   // the earlier attempt used count no more (max_visits stops a loop within
   // one attempt). A checkpoint written since the resume is this attempt's own.
   const newAttempt = !!row.visits_reset_at && !(checkpoint && checkpoint.at > row.visits_reset_at);
-  const rowNode = row.current_node_id || checkpoint?.node_id;
+  // A fanout's branch runs only inside its fanout: resumed on its own it skips its siblings and passes the fanin
+  // without their output (Union's review resumed alone, its CI never run, 2026-11-21). A row a branch moved onto
+  // its own id stands at the fanout.
+  const reported = row.current_node_id || checkpoint?.node_id;
+  const rowNode = reported ? fanoutOf(graph, reported) ?? reported : reported;
   const routedOn = !newAttempt && !!checkpoint && !checkpoint.started && checkpoint.completed[checkpoint.completed.length - 1] === rowNode;
   const nodeId = routedOn ? checkpoint!.node_id : rowNode;
   if (!nodeId || !graph.nodes.has(nodeId)) return null;
@@ -348,12 +352,22 @@ export function resumePoint(graph: WorkflowGraph, row: ResumeRow, checkpoint: Ru
   // run passed there (a lost card picked up on the graph file as it is now):
   // the run first makes what the gate now reads, from the earliest such station.
   const unmade = node.type === "human" && !asked ? unmadeBefore(graph, nodeId, completed) : null;
-  if (unmade) return { node_id: unmade, visit_counts, completed, node_outcomes, context, gate: null, hand: null, from: atCheckpoint ? "checkpoint" : "row" };
+  if (unmade) return { node_id: unmade, visit_counts, completed, node_outcomes, context, gate: null, hands: {}, from: atCheckpoint ? "checkpoint" : "row" };
   const gate = node.type === "human"
     ? { node_id: nodeId, response: asked && row.gate_response ? withOptionWords(row.gate_response, row.gate_answer) : null, open: asked && row.status === "paused" && (!!row.gate_decision_id || !!row.gate_card) }
     : null;
-  const hand = node.backend === "session" && atCheckpoint ? atCheckpoint.context[`${nodeId}.conversation_id`] ?? null : null;
-  return { node_id: nodeId, visit_counts, completed, node_outcomes, context, gate, hand, from: atCheckpoint ? "checkpoint" : "row" };
+  const stations = node.type === "parallel_fanout" ? graph.edges.filter((e) => e.from === nodeId).map((e) => e.to) : [nodeId];
+  const hands: Record<string, string> = {};
+  for (const id of stations) {
+    const hand = atCheckpoint?.context[`${id}.conversation_id`];
+    if (hand && graph.nodes.get(id)?.backend === "session") hands[id] = hand;
+  }
+  return { node_id: nodeId, visit_counts, completed, node_outcomes, context, gate, hands, from: atCheckpoint ? "checkpoint" : "row" };
+}
+
+/** The fanout `nodeId` is a branch of, or null. */
+export function fanoutOf(graph: WorkflowGraph, nodeId: string): string | null {
+  return graph.edges.find((e) => e.to === nodeId && graph.nodes.get(e.from)?.type === "parallel_fanout")?.from ?? null;
 }
 
 /**

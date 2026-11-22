@@ -9,7 +9,8 @@
 // moves and a snapshot did not; regenerate with
 //
 //   bun packages/cli/scripts/gen-shipped-flows.ts
-import { describeFlow, joinsPool } from "./flowPool";
+import * as path from "node:path";
+import { describeFlow, joinsPool, type PoolWhere } from "./flowPool";
 import { parseWorkflowSource } from "./parser";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 
@@ -17,14 +18,18 @@ export const SHIPPED_FLOWS_SNAPSHOT_PATH = "packages/web/lib/line/shippedFlows.g
 
 const NODE_FIELDS = ["id", "label", "shape", "type", "backend", "agent", "segment", "segment_label", "segment_flow", "segment_entry", "segment_exit", "slot", "segment_generated", "stop", "max_visits"] as const;
 
+/** One flow as the web reads it with no parser: what the pool lists, and its graph with segments and `extends` expanded.
+ *  A repo's flow names its file, so its `extends` and `@file` stations resolve beside it. */
+export function flowSnapshot(slug: string, src: string, where: PoolWhere, file: string | null) {
+  const { where: _where, file: _file, errors: _errors, draft: _draft, ...flow } = describeFlow(slug, src, where, file);
+  const graph = parseWorkflowSource(src, file ? path.dirname(file) : undefined, {}, file ?? undefined);
+  const nodes = [...graph.nodes.values()].map((n) => Object.fromEntries(NODE_FIELDS.filter((k) => n[k] !== undefined).map((k) => [k, n[k]])));
+  const edges = graph.edges.map((e) => ({ from: e.from, to: e.to, ...(e.label ? { label: e.label } : {}), ...(e.condition ? { condition: e.condition } : {}) }));
+  return { ...flow, name: graph.name, nodes, edges };
+}
+
 export function shippedFlowsSnapshot() {
-  return Object.entries(BUILTIN_WORKFLOW_TEMPLATES).filter(([slug, src]) => joinsPool(slug, src)).map(([slug, src]) => {
-    const { where: _where, file: _file, errors: _errors, draft: _draft, ...flow } = describeFlow(slug, src, "shipped", null);
-    const graph = parseWorkflowSource(src);
-    const nodes = [...graph.nodes.values()].map((n) => Object.fromEntries(NODE_FIELDS.filter((k) => n[k] !== undefined).map((k) => [k, n[k]])));
-    const edges = graph.edges.map((e) => ({ from: e.from, to: e.to, ...(e.label ? { label: e.label } : {}), ...(e.condition ? { condition: e.condition } : {}) }));
-    return { ...flow, name: graph.name, nodes, edges };
-  });
+  return Object.entries(BUILTIN_WORKFLOW_TEMPLATES).filter(([slug, src]) => joinsPool(slug, src)).map(([slug, src]) => flowSnapshot(slug, src, "shipped", null));
 }
 
 export const SHIPPED_FLOW_STATIONS_SNAPSHOT_PATH = "packages/web/lib/line/shippedFlowStations.generated.ts";
