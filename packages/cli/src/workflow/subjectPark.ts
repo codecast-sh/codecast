@@ -148,9 +148,13 @@ export async function notLiveYet(cwd: string, landed: { sha: string; files: stri
 export async function subjectOtherWork(root: string, subject: Subject, landed: string, upstream: string): Promise<string | null> {
   const { previewSessionChange, NoSessionChange } = await import("./flowChange.js");
   let files: string[];
+  let frozen: Map<string, string>;
   try {
     const preview = await previewSessionChange(root, subject.conversationId);
     files = [...preview.paths, ...preview.held.map((h) => h.path)];
+    // What the subject's change holds of each file: a file cut to its own lines (ownLines.ts) is that cut, not the
+    // checkout's copy, which still holds another session's lines beside them.
+    frozen = new Map(preview.frozen.changes.map((c) => [c.path, c.blob ?? ""]));
   } catch (err) {
     if (err instanceof NoSessionChange) return null;
     return `its changes could not be read: ${err instanceof Error ? err.message : String(err)}`;
@@ -158,7 +162,7 @@ export async function subjectOtherWork(root: string, subject: Subject, landed: s
   const blob = (rev: string, f: string) => gitTry(root, ["rev-parse", "-q", "--verify", `${rev}:${f}`]).then((s) => s?.trim() ?? "");
   const differs: string[] = [];
   for (const f of files) {
-    const here = fs.existsSync(path.join(root, f)) ? (await git(root, ["hash-object", "--", f])).trim() : "";
+    const here = frozen.get(f) ?? (fs.existsSync(path.join(root, f)) ? (await git(root, ["hash-object", "--", f])).trim() : "");
     if (here !== (await blob(landed, f)) && here !== (await blob(upstream, f))) differs.push(f);
   }
   return differs.length ? `it has other changes: ${differs.join(", ")}` : null;

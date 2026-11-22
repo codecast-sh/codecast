@@ -6,11 +6,13 @@
 // the base its frozen content grew from, then replayed onto the freshly
 // fetched upstream, so every stage tests the change on what it would land on.
 //
-// Every file the session wrote goes in, including one another session also
-// wrote after it (attribution is per file, so that file carries the other
-// session's lines too, and the change says so). Dropping a file the session
-// wrote would run the flow on part of its change, which is worse than carrying
-// a neighbour's edit the change names.
+// Every file the session wrote goes in. A file another session also changed
+// goes in with only this session's lines when every writer's edits replay onto
+// the committed file and together account for it (ownLines.ts); otherwise it
+// goes in whole, carrying the other session's lines too, and the change names
+// it as shared with why. Dropping a file the session wrote would run the flow
+// on part of its change, which is worse than carrying a neighbour's edit the
+// change names.
 //
 // A checkout's change (`cast flow run --checkout`) is the whole shared tree's
 // uncommitted pass, cut the way `cast ship checkout` plans one: a commit per
@@ -22,11 +24,13 @@ import { isAncestor, replayOnto } from "../land/replay.js";
 import { defaultMessage, freezeAndAttribute, makePlan, trailerFor, upstreamRef, type FrozenAttribution } from "../land/shipCheckout.js";
 import type { SessionEdits } from "../land/attribute.js";
 import type { RosterRow } from "../land/scan.js";
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileAsync } from "../proc.js";
 import { git, gitTry } from "../wipSnapshot.js";
 import type { FrozenChange } from "./flowChangeFile.js";
+import { ownVersion, sessionTranscripts, type Writer } from "./ownLines.js";
 export { frozenChangeContext, writeFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 
 /** Whether `ref` (a codecast id, its 7-character short id, or the agent's own session id) names this session. */
@@ -142,12 +146,47 @@ export async function previewSessionChange(root: string, session: string, only?:
   const globs = (only ?? []).map((g) => new Bun.Glob(g));
   const wrote = frozen.changes.map((c) => c.path).filter((p) => inDiff(mine, p) && (!globs.length || globs.some((g) => g.match(p))));
   const held = wrote.filter((p) => heldWhy(p)).map((p) => ({ path: p, why: heldWhy(p)! }));
-  const paths = wrote.filter((p) => !heldWhy(p)).sort();
-  const shared = paths
-    .map((p) => ({ path: p, also: attribution.sessions.filter((s) => s !== mine && inDiff(s, p)).map(idOf) }))
-    .filter((s) => s.also.length);
-  const landed = await landedOn(root, frozen, upstream, paths);
-  return { frozen, upstream, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held, landed };
+  const kept = wrote.filter((p) => !heldWhy(p)).sort();
+  // A file another session also changed goes in with only this session's lines when every writer's replayed edits
+  // account for it (ownLines.ts); one the session left as committed drops out. The rest go in whole, named as shared
+  // with why.
+  const transcriptsOf = new Map<SessionEdits, string[]>();
+  const writer = (s: SessionEdits, p: string): Writer => {
+    if (!transcriptsOf.has(s)) transcriptsOf.set(s, sessionTranscripts(s));
+    return { id: idOf(s), transcripts: transcriptsOf.get(s)!, lastWrite: s.edits.get(p) ?? 0, client: s.client };
+  };
+  const cuts = new Map<string, string>();
+  const unchanged = new Set<string>();
+  const shared: FrozenChange["shared"] = [];
+  for (const p of kept) {
+    const others = attribution.sessions.filter((s) => s !== mine && inDiff(s, p));
+    if (!others.length) continue;
+    const change = frozen.changes.find((c) => c.path === p);
+    const base = gitText(root, `${frozen.base}:${p}`);
+    const now = change?.blob ? gitText(root, change.blob) : null;
+    const own = base === undefined || now === undefined
+      ? { ok: false as const, why: "it is not UTF-8 text" }
+      : ownVersion({ root, rel: p, base, frozen: now, since: committedAt.get(p) ?? 0, mine: writer(mine, p), others: others.map((s) => writer(s, p)) });
+    const blob = own.ok && own.content !== base ? spawnSync("git", ["-C", root, "hash-object", "-w", "--stdin"], { input: own.content, encoding: "utf-8" }) : null;
+    if (!own.ok) shared.push({ path: p, also: others.map(idOf), why: own.why });
+    else if (!blob) unchanged.add(p);
+    else if (blob.status !== 0) shared.push({ path: p, also: others.map(idOf), why: `its cut could not be stored: ${blob.stderr.trim()}` });
+    else cuts.set(p, blob.stdout.trim());
+  }
+  const paths = kept.filter((p) => !unchanged.has(p));
+  const cut = cuts.size ? { ...frozen, changes: frozen.changes.map((c) => (cuts.has(c.path) ? { ...c, blob: cuts.get(c.path)! } : c)) } : frozen;
+  const landed = await landedOn(root, cut, upstream, paths);
+  return { frozen: cut, upstream, session: idOf(mine), conversation: mine.conversationId ?? null, agentSession: mine.sessionId, paths, shared, held, landed };
+}
+
+/**
+ * A blob's text (`<rev>:<path>` or a blob id): null when there is none, undefined when it is not UTF-8, since a
+ * lossy decode would write different bytes back on the lines nobody touched.
+ */
+function gitText(root: string, spec: string): string | null | undefined {
+  const r = spawnSync("git", ["-C", root, "cat-file", "blob", spec], { maxBuffer: 64 * 1024 * 1024 });
+  if (r.status !== 0) return null;
+  try { return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(r.stdout); } catch { return undefined; }
 }
 
 /**
@@ -268,14 +307,18 @@ async function branchTip(root: string, change: FrozenChange): Promise<{ tip: str
  * held too), so a change with nothing left uncommitted (another pass shipped it, or the level sweep pulled it in) has
  * landed; else null.
  */
-async function pathsLandedOn(root: string, paths: string[]): Promise<string | null> {
+async function pathsLandedOn(root: string, paths: string[], tip: string): Promise<string | null> {
   const upstream = await upstreamRef(root).catch(() => "HEAD");
   const sha = upstream === "HEAD" ? null : await gitTry(root, ["rev-parse", `${upstream}^{commit}`]);
   if (!sha || !paths.length) return null;
   const theirs = await blobsAt(root, sha, paths);
+  // A file cut to the session's own lines landed as the change's tip has it, while the checkout still holds another
+  // session's lines beside them (ownLines.ts).
+  const pushed = await blobsAt(root, tip, paths);
   for (const p of paths) {
     const ours = fs.existsSync(path.join(root, p)) ? await git(root, ["hash-object", "--", p]) : null;
-    if (ours !== (theirs.get(p) ?? null)) return null;
+    const upstreamHas = theirs.get(p) ?? null;
+    if (ours !== upstreamHas && (pushed.get(p) ?? null) !== upstreamHas) return null;
   }
   return sha;
 }
@@ -374,7 +417,7 @@ async function refreezeCheckoutChange(root: string, before: FrozenChange, roster
     });
     return { ...change, ...subject };
   } catch (err) {
-    const landed = err instanceof NoCheckoutChange ? await pathsLandedOn(root, before.paths) : null;
+    const landed = err instanceof NoCheckoutChange ? await pathsLandedOn(root, before.paths, before.tip) : null;
     if (!landed) throw err;
     return { ...before, landed };
   }
@@ -385,7 +428,7 @@ async function refreezeOwnChange(root: string, before: FrozenChange): Promise<Fr
   try {
     return await freezeSessionChange(root, before.conversation ?? before.session!, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null });
   } catch (err) {
-    const landed = err instanceof NoSessionChange ? await pathsLandedOn(root, before.paths) : null;
+    const landed = err instanceof NoSessionChange ? await pathsLandedOn(root, before.paths, before.tip) : null;
     if (!landed) throw err;
     return { ...before, landed };
   }

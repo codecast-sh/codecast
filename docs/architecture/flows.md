@@ -192,10 +192,15 @@ upstream, or with none, keeps the commit on HEAD. A change whose every file
 upstream already holds at its frozen content is `landed`: `cast flow run`
 says so and starts nothing (under `--json`, `{landed, upstream}`), and a
 refreeze records it and the run ends done there.
-Attribution is per file, so a file another session also wrote carries
-that session's lines too; the run includes it and names the other session
-rather than leave out part of the change. Credential files stay out. The
-worktree is the one the run's isolated stations would make (`cast ws acquire`,
+Attribution is per file, so a file another session also wrote holds both
+sessions' lines. The freeze takes only this session's lines from it when the
+file is fully accounted for: each writer's Edit and MultiEdit calls since the
+file's last commit replay onto the committed file (no Write or shell command
+of it), and those versions merged reproduce the frozen file exactly
+(`workflow/ownLines.ts`). A line no replay explains, such as the session's own
+from before a commit that left it out, or a formatter's, fails that. Otherwise
+the run includes the whole file and names the other session and why, rather
+than leave out part of the change. Credential files stay out. The worktree is the one the run's isolated stations would make (`cast ws acquire`,
 same name), and `$run_dir/change.json` records the change; the runner reads it
 before the first station (`frozenChangeContext`), so `$branch` and `$worktree`
 are set from the start, for a detached daemon run too. A rerun on the same

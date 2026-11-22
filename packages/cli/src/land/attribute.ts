@@ -64,7 +64,7 @@ export interface Attribution {
 }
 
 const EDIT_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-const SHELL_TOOLS = new Set(["Bash", "shell", "exec_command", "local_shell", "container.exec"]);
+export const SHELL_TOOLS = new Set(["Bash", "shell", "exec_command", "local_shell", "container.exec"]);
 const MID_TURN = new Set(["working", "thinking", "compacting", "permission_blocked"]);
 /** A mid-turn hook status this old says nothing about now. */
 const STATUS_TRUST_MS = 15 * 60_000;
@@ -79,7 +79,7 @@ export const CACHE_VERSION = 4;
  * The hash of the code that decides what a cached line credits (attributeCacheRules.test.ts). A change that moves it
  * bumps CACHE_VERSION, or, when it cannot change a credit, only this pin.
  */
-export const CACHE_RULES_HASH = "d82fb90a0f7a95f8";
+export const CACHE_RULES_HASH = "7a75b9e76ba50a8c";
 
 export function isMidTurn(s: Pick<SessionEdits, "status">): boolean {
   return !!s.status && MID_TURN.has(s.status);
@@ -172,7 +172,7 @@ function nearRoot(root: string, p: string, cwd?: string): boolean {
 }
 
 /** The repo-relative path of `p`, as written or through the symlinks either side names (git reports a checkout by its real path; a transcript records the path the agent typed). */
-function relIn(root: string, p: string, cwd?: string): string | null {
+export function relIn(root: string, p: string, cwd?: string): string | null {
   const direct = relDirect(root, p);
   if (direct !== null || !nearRoot(root, p, cwd)) return direct;
   return relDirect(namesOf(root).real, realOf(p));
