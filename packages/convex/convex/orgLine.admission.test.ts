@@ -401,7 +401,7 @@ describe("orgLine admission (LE6)", () => {
 
     // cast flow run --device (ct-98920): a machine named outright takes the whole run, in its checkout, past the pool.
     test("a run placed on a named machine goes there with its change, never to the pool; an offline one is refused", async () => {
-      const { tables, ctx } = await handStart([laptop, host("h1", 1), host("box", 0, { cli_version: "1.1.254", git_plane: [{ root: "/home/me/growth", origin: "https://github.com/acme/growth", origin_ok: true }], line_slots: [] })]);
+      const { tables, ctx } = await handStart([laptop, host("h1", 1), host("box", 0, { cli_version: "1.1.255", git_plane: [{ root: "/home/me/growth", origin: "https://github.com/acme/growth", origin_ok: true }], line_slots: [] })]);
       const { createFromCli } = await import("./workflow_runs");
       const change = { source: "session", branch: "codecast/line-ct-c0", worktree: "line-ct-c0", tip: "abc", base: "abc", paths: ["a.ts"], shared: [], held: [], pushed: true };
       const placed = (device: string) => (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-c0", project_path: "/Users/me/growth", detach: true, run_on_device: "dev-laptop", place_device: device, place_origin: "git@github.com:Acme/Growth.git", placed_change: change });

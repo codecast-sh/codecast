@@ -12,7 +12,7 @@ import { isDeviceOnline } from "../ccAccountsShared";
 
 /** The first cast whose `workflow run-daemon` fetches a placed run's change (cli workflow/placedChange.ts). An older
  *  daemon would run the placed run in its plain checkout, without the change, so it takes none. */
-export const PLACED_RUN_MIN_CLI = "1.1.254";
+export const PLACED_RUN_MIN_CLI = "1.1.255";
 
 type PlaceDevice = {
   device_id: string;
