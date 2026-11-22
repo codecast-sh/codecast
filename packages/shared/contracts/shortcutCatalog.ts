@@ -383,8 +383,10 @@ export const SHORTCUTS: ShortcutDef[] = [
   // The desktop app has no browser chrome, so Cmd+L opens the app's own bar.
   // A focused browser pane claims the key first for its page's address.
   { key: 'ctrl+alt+l', mac: 'meta+l', action: 'ui.addressBar', when: 'desktop', skipInputCheck: true, description: 'Address bar' },
-  { key: 'alt+arrowleft', mac: 'meta+[', action: 'nav.back', when: 'desktop', skipInputCheck: true, description: 'Back' },
-  { key: 'alt+arrowright', mac: 'meta+]', action: 'nav.forward', when: 'desktop', skipInputCheck: true, description: 'Forward' },
+  // noRepeat: a chord held past the key-repeat delay is one step, not a walk
+  // down the trail to a conversation the person never asked for (ct-98092).
+  { key: 'alt+arrowleft', mac: 'meta+[', action: 'nav.back', when: 'desktop', noRepeat: true, skipInputCheck: true, description: 'Back' },
+  { key: 'alt+arrowright', mac: 'meta+]', action: 'nav.forward', when: 'desktop', noRepeat: true, skipInputCheck: true, description: 'Forward' },
 
   { key: 'd', action: 'conv.toggleDiff', when: 'conversation', description: 'Toggle diff panel' },
   { key: 't', action: 'conv.toggleTree', when: 'conversation', description: 'Toggle branch map' },
