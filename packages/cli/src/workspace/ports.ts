@@ -16,7 +16,7 @@
  *     collision-avoidance bumped it)
  */
 
-import { createServer, type Server } from "node:net";
+import { connect, createServer, type Server } from "node:net";
 import type { WorkspaceManifest } from "./types.js";
 
 export interface PortAllocation {
@@ -132,11 +132,29 @@ async function findConflicts(
 }
 
 /**
- * Probe a port by trying to bind it briefly on 127.0.0.1.
- * Free = bind succeeds; we then close immediately. Result is racy under heavy
- * concurrency (TOCTOU), but that's acceptable for workspace setup.
+ * Free = nothing accepts a connection on 127.0.0.1 or ::1, and a brief bind
+ * on 127.0.0.1 succeeds. The bind alone is not enough: on macOS it succeeds
+ * while another server (vite on `localhost`) holds the port on ::1 or the
+ * wildcard address, and that server then answers on "our" port. Racy under
+ * heavy concurrency (TOCTOU), which is acceptable for workspace setup.
  */
-export function isPortFree(port: number): Promise<boolean> {
+export async function isPortFree(port: number): Promise<boolean> {
+  const taken = await Promise.all(["127.0.0.1", "::1"].map((host) => accepts(host, port)));
+  if (taken.includes(true)) return false;
+  return bindsOnLoopback(port);
+}
+
+function accepts(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = connect({ host, port });
+    const done = (yes: boolean) => { socket.destroy(); resolve(yes); };
+    socket.setTimeout(500, () => done(false));
+    socket.once("connect", () => done(true));
+    socket.once("error", () => done(false));
+  });
+}
+
+function bindsOnLoopback(port: number): Promise<boolean> {
   return new Promise((resolve) => {
     const server: Server = createServer();
     let resolved = false;

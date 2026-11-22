@@ -2957,7 +2957,12 @@ function groupDeps(): GroupDeps {
       cliPost, callingSession, realCwd: getRealCwd,
       // Where a flow command reads (the team named, else the one this shell reads) and where a switch writes.
       readWorkspace, writeWorkspace: (team?: string) => writeWorkspace(team, { teamRequired: true }),
-      requireFlows: async (team?: string) => requireWorkspaceFeature(await readWorkspace(team), "line"),
+      directoryTeam: async () => {
+        const { teamForDirectory } = await import("./directoryTeam.js");
+        const mapped = await cliPost("/cli/teams/projects", { limit: 30 }, { throwOnError: true });
+        return teamForDirectory(mapped?.projects ?? [], getRealCwd());
+      },
+      requireFlows: (ws) => requireWorkspaceFeature(ws, "line"),
     },
   };
 }
