@@ -31,7 +31,7 @@
 // key comes from CONVEX_SELF_HOSTED_ADMIN_KEY, else from packages/convex/.env.local
 // (only that key and CONVEX_SELF_HOSTED_URL are read from it), and is never printed.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 
@@ -149,14 +149,15 @@ export function diffNames(tree: Iterable<string>, prod: Iterable<string>): { add
 export const SUMMARY_ADDS_SHOWN = 10;
 
 /** The recorded push that put a name on prod (`cast ship added-by`). */
-export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number };
+export type AddedBy = { name: string; deploy: string; by: string | null; machine: string | null; via: string | null; at: number; dirty: number; committed_in?: string };
 
 /** Who put a dropped name there, in words: "dp-2372, uncommitted push by Ashot on MBP, 11/21 9:21 PM". */
 export function describeAdder(a: AddedBy | undefined): string {
   if (!a) return "no recorded push added it";
   const how = a.via === "dev watcher" ? "dev watcher" : a.dirty > 0 ? `uncommitted push (${a.dirty} file${a.dirty === 1 ? "" : "s"})` : "push of a commit";
   const who = [a.by, a.machine ? `on ${a.machine}` : null].filter(Boolean).join(" ");
-  return `${a.deploy}, ${how}${who ? ` by ${who}` : ""}, ${new Date(a.at).toLocaleString()}`;
+  const since = a.committed_in ? `; committed since (${a.committed_in} carried it)` : "";
+  return `${a.deploy}, ${how}${who ? ` by ${who}` : ""}, ${new Date(a.at).toLocaleString()}${since}`;
 }
 
 export function formatSummary(diff: { adds: string[]; drops: string[] }, ms?: { tree_ms: number; prod_ms: number }, addedBy?: AddedBy[]): string {
@@ -180,11 +181,13 @@ export function formatSummary(diff: { adds: string[]; drops: string[] }, ms?: { 
  *  added-by`. Undefined when cast is missing, older than that command,
  *  logged out or offline: the summary then lists drops without attribution. */
 function addersOf(drops: string[]): AddedBy[] | undefined {
-  const file = join(mkdtempSync(join(tmpdir(), "prod-diff-")), "drops.json");
+  const dir = mkdtempSync(join(tmpdir(), "prod-diff-"));
+  const file = join(dir, "drops.json");
   writeFileSync(file, JSON.stringify({ drops }));
   const r = spawnSync("cast", ["ship", "added-by", "--surface", "backend", "--names", file, "--json"], {
     cwd: join(import.meta.dir, ".."), encoding: "utf-8", timeout: 15_000, env: { ...process.env, CAST_HTTP_TIMEOUT_MS: "10000" },
   });
+  rmSync(dir, { recursive: true, force: true });
   if (r.status !== 0) return undefined;
   try {
     const found = JSON.parse(r.stdout)?.found;

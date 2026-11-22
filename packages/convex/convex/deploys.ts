@@ -67,17 +67,62 @@ const NAMES_MAX = 500;
 const NAME_MAX = 200;
 /** How far back through a target's deploys a dropped name's adder is looked for. */
 const ADDERS_SCAN = 200;
+/** A person told a deploy dropped their work is not told again for this long. */
+const DROPPED_WORK_QUIET_MS = 6 * 60 * 60 * 1000;
 
-/** Names as a deploy keeps them: each cut to NAME_MAX, no repeats, the first NAMES_MAX of the lists in order. */
+/** The classes of name a cut keeps first: a dropped table or index is the loss that matters most. */
+const NAME_CLASSES = ["table:", "index:", "http:", "fn:"];
+const nameClass = (name: string) => {
+  const i = NAME_CLASSES.findIndex((p) => name.startsWith(p));
+  return i < 0 ? NAME_CLASSES.length : i;
+};
+
+/**
+ * Names as a deploy keeps them: each cut to NAME_MAX, no repeats, in the lists' order. Past NAMES_MAX the tables
+ * are kept first, then indexes, routes and functions, each class sorted, and the rest cut.
+ */
 export function capNames(...lists: Array<ReadonlyArray<string> | undefined>): string[] {
-  const out = new Set<string>();
-  for (const list of lists) {
-    for (const name of list ?? []) {
-      if (out.size >= NAMES_MAX) return [...out];
-      out.add(name.slice(0, NAME_MAX));
-    }
+  const all = new Set<string>();
+  for (const list of lists) for (const name of list ?? []) all.add(name.slice(0, NAME_MAX));
+  if (all.size <= NAMES_MAX) return [...all];
+  return [...all].sort((a, b) => nameClass(a) - nameClass(b) || (a < b ? -1 : a > b ? 1 : 0)).slice(0, NAMES_MAX);
+}
+
+/** The target's latest live deploy among `recent` (newest first), of the repository when both name one. */
+export function liveOf(recent: ReadonlyArray<Doc<"deploys">>, target: string, repository: string | undefined): Doc<"deploys"> | undefined {
+  return recent.find((d) => d.target === target && d.status === "live" && (!d.repository || !repository || d.repository === repository));
+}
+
+/** The target's latest live deploy, as a marker for it would find it. */
+export async function latestLiveDeploy(ctx: any, workspace: string, target: string, repository?: string): Promise<Doc<"deploys"> | null> {
+  const t = normalizeDeployTarget(target);
+  if (!t) return null;
+  return liveOf(await workspaceDeploys(ctx, workspace, 100), t, repository ? normalizeRepository(repository) : undefined) ?? null;
+}
+
+/** A watcher push lands on the target's live deploy only when that is its own last push: same machine, repository and sha. */
+export function isOwnWatcherPush(live: Doc<"deploys"> | null | undefined, m: { machine?: string; repository?: string; sha?: string }): live is Doc<"deploys"> {
+  const machine = m.machine?.trim().slice(0, NAME_MAX);
+  const repository = m.repository ? normalizeRepository(m.repository) : undefined;
+  return !!live && live.pushed_via === "dev watcher" && !!machine && live.machine === machine
+    && (live.repository ?? null) === (repository ?? null) && !!m.sha && sameSha(live.sha, m.sha);
+}
+
+/**
+ * Who put `name` on a target: the newest of `rows` (one target and repository, newest first) whose adds hold it.
+ * `committed_in` is the earliest live deploy.sh push of a clean tree after it that kept the name (did not drop it):
+ * that tree held the name, so by then it was in a commit. A live push that dropped it first ends the search.
+ */
+export function adderOf(rows: ReadonlyArray<Doc<"deploys">>, name: string): { adder: Doc<"deploys">; committed_in: Doc<"deploys"> | null } | null {
+  const i = rows.findIndex((x) => x.adds?.includes(name));
+  if (i < 0) return null;
+  for (let j = i - 1; j >= 0; j--) {
+    const d = rows[j];
+    if (d.status !== "live") continue;
+    if (d.drops?.includes(name)) break;
+    if (!d.dirty && d.pushed_via === "deploy.sh") return { adder: rows[i], committed_in: d };
   }
-  return [...out];
+  return { adder: rows[i], committed_in: null };
 }
 
 /** The names of `next` that `before` did not hold: what a write newly recorded. */
@@ -225,10 +270,8 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   const machine = m.machine?.slice(0, NAME_MAX);
 
   if (m.pushed_via === "dev watcher") {
-    const live = recent.find((d) => d.target === target && d.status === "live" && (!d.repository || !repository || d.repository === repository));
-    const own = live && live.pushed_via === "dev watcher" && !!machine && live.machine === machine
-      && (live.repository ?? null) === (repository ?? null) && !!m.sha && sameSha(live.sha, m.sha) ? live : null;
-    if (own) {
+    const own = liveOf(recent, target, repository);
+    if (isOwnWatcherPush(own, m)) {
       const nextAdds = capNames(own.adds, adds);
       const nextDrops = capNames(own.drops, drops);
       const patch: Partial<Doc<"deploys">> = {
@@ -254,7 +297,8 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   const runFree = (d: Doc<"deploys">) => !m.workflow_run || !d.workflow_run;
   // A run that went live may be the target's live deploy another path already recorded; a run still going, failed,
   // or shipping the sha of a superseded deploy (a rollback) is a deploy of its own.
-  const currentLive = m.workflow_run ? recent.find((d) => d.target === target && d.status === "live" && (!d.repository || !repository || d.repository === repository)) : undefined;
+  // A watcher's push is a working tree, never what a run shipped.
+  const currentLive = m.workflow_run ? liveOf(recent.filter((d) => d.pushed_via !== "dev watcher"), target, repository) : undefined;
   const liveMatch = (d: Doc<"deploys">) => d.status === "live" && (!m.workflow_run || (status === "live" && d === currentLive));
 
   const same = watcher ? undefined : ownNamed || ownRun || recent.find((d) =>
@@ -363,11 +407,14 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
 
 /**
  * A deploy took names off its target: each person whose uncommitted push put
- * one there hears it, once for this deploy. A name's adder is the latest other
- * deploy of the target (and repository) whose adds hold it, counted only when
- * that push was dirty or the dev watcher's: what a clean commit added and a
- * later deploy took off was the commits' decision, not lost work. The person
- * who started this deploy is not told about their own.
+ * one there hears it. A name's adder is the latest other deploy of the target
+ * (and repository) whose adds hold it (adderOf), counted only when that push
+ * was dirty or the dev watcher's and no clean deploy.sh push after it kept the
+ * name: what a commit holds and a later deploy took off was the commits'
+ * decision, not lost work. The person who started this deploy is not told
+ * about their own, and a person told in the last DROPPED_WORK_QUIET_MS is not
+ * told again: two watchers on different trees drop each other's work on every
+ * save.
  */
 export async function noticeDroppedWork(ctx: any, d: Doc<"deploys">, names: ReadonlyArray<string>): Promise<void> {
   if (!names.length) return;
@@ -376,23 +423,35 @@ export async function noticeDroppedWork(ctx: any, d: Doc<"deploys">, names: Read
     .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", d.workspace).eq("target", d.target))
     .order("desc")
     .take(ADDERS_SCAN);
-  const adders = rows.filter((x) => String(x._id) !== String(d._id) && (x.repository ?? null) === (d.repository ?? null) && x.adds?.length);
+  const others = rows.filter((x) => String(x._id) !== String(d._id) && (x.repository ?? null) === (d.repository ?? null));
   const self = d.started_by?.user_id ? String(d.started_by.user_id) : null;
-  const people = new Map<string, { user_id: Id<"users">; pushes: Set<string>; names: string[] }>();
+  const people = new Map<string, { user_id: Id<"users">; pushes: Map<string, boolean>; names: string[] }>();
   for (const name of names) {
-    const adder = adders.find((x) => x.adds!.includes(name));
-    if (!adder || !((adder.dirty ?? 0) > 0 || adder.pushed_via === "dev watcher")) continue;
+    const found = adderOf(others, name);
+    if (!found || found.committed_in) continue;
+    const { adder } = found;
+    const watcher = adder.pushed_via === "dev watcher";
+    if (!watcher && !((adder.dirty ?? 0) > 0)) continue;
     const userId = adder.started_by?.user_id;
     if (!userId || String(userId) === self) continue;
-    const entry = people.get(String(userId)) ?? { user_id: userId, pushes: new Set<string>(), names: [] };
-    entry.pushes.add(adder.short_id);
+    const entry = people.get(String(userId)) ?? { user_id: userId, pushes: new Map<string, boolean>(), names: [] };
+    entry.pushes.set(adder.short_id, watcher);
     entry.names.push(name);
     people.set(String(userId), entry);
   }
+  const since = Date.now() - DROPPED_WORK_QUIET_MS;
   for (const p of people.values()) {
+    const told = await ctx.db
+      .query("notifications")
+      .withIndex("by_recipient_created", (q: any) => q.eq("recipient_user_id", p.user_id).gte("created_at", since))
+      .filter((q: any) => q.eq(q.field("type"), "deploy_dropped_work"))
+      .first();
+    if (told) continue;
     const n = p.names.length;
     const shown = p.names.slice(0, 5).join(", ") + (n > 5 ? ` and ${n - 5} more` : "");
-    const pushes = [...p.pushes];
+    const pushes = [...p.pushes.keys()];
+    const kinds = new Set(p.pushes.values());
+    const kind = kinds.size > 1 ? "watcher and uncommitted" : kinds.has(true) ? "watcher" : "uncommitted";
     await emitNotification(ctx, {
       event_type: "deploy_dropped_work",
       ...(d.started_by?.user_id ? { actor_user_id: d.started_by.user_id } : {}),
@@ -400,7 +459,7 @@ export async function noticeDroppedWork(ctx: any, d: Doc<"deploys">, names: Read
       entity_type: "deploy",
       entity_id: d.short_id,
       link: `/deploys?deploy=${d.short_id}`,
-      message: `${d.short_id} dropped ${n} thing${n === 1 ? "" : "s"} your uncommitted push${pushes.length === 1 ? "" : "es"} ${pushes.join(", ")} put on ${d.target}: ${shown}`,
+      message: `${d.short_id} dropped ${n} thing${n === 1 ? "" : "s"} your ${kind} push${pushes.length === 1 ? "" : "es"} ${pushes.join(", ")} put on ${d.target}: ${shown}`,
       recipient_ids: [p.user_id],
     });
   }

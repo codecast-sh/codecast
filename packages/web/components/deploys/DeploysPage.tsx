@@ -23,6 +23,7 @@ import { DEPLOY_LABELS, FOCUS_PARAMS, commitMatches, deployMatches, focusRef, fo
 import { useDeployReach } from "../../hooks/useDeployReach";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { changeGroups, hasChangeNames, originWords, shownNames, type ChangeGroup } from "./deployRecord";
 import type { CommitCiState, QueueGroup } from "@codecast/shared/contracts/deployTargets";
 import { entityRoute } from "@codecast/shared/entities";
 import { ShareControl } from "../ShareControl";
@@ -307,11 +308,16 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
 /** One deploy whole: every session it carried, its steps, who sent it, and its own log. */
 function DeployDetail({ d, now }: { d: TeamDeployRow; now: number }) {
   const ss = sessionsOf(d);
+  // The row counts what a push added and dropped; the names come with the deploy itself.
+  const view = useQueryNoThrow(api.deploys.get, d.short_id && hasChangeNames(d) ? { ref: d.short_id } : "skip").data;
+  const origin = originWords(d, view);
   return (
     <div className="dpp-detail" data-deploy-detail={d.short_id}>
       <dl>
         <dt>Sent</dt><dd><code>{short(d.previous_sha)}</code> → <code>{short(d.sha)}</code>{d.version && !(d.sha ?? "").startsWith(d.version.slice(0, 7)) ? <span className="dpp-ver"> {d.version}</span> : null}</dd>
         <dt>By</dt><dd>{d.started_by ?? sourceWord(d)} · {new Date(d.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}{d.live_at && d.live_at - d.created_at >= 60_000 ? ` · live after ${ageShort(d.live_at - d.created_at)}` : ""}</dd>
+        {origin ? <><dt>From</dt><dd data-deploy-origin>{origin}</dd></> : null}
+        {changeGroups(d, view).map((g) => <DeployNames key={g.kind} g={g} />)}
         {d.note ? <><dt>Note</dt><dd>{d.note}</dd></> : null}
         {d.steps?.length ? <><dt>Steps</dt><dd><ol className="dpp-steps">{d.steps.map((s) => <li key={s.id} data-status={s.status}>{s.id}</li>)}</ol></dd></> : null}
         {d.tasks?.some((x) => x.short_id) ? <><dt>Tasks</dt><dd><ul className="dpp-detail-sessions">{d.tasks.filter((x) => x.short_id).map((x) => <li key={x.short_id!}><Link className="dpp-detail-task" href={`/tasks/${x.short_id}`}>{x.short_id}<span>{x.title}</span></Link></li>)}</ul></dd></> : null}
@@ -323,6 +329,21 @@ function DeployDetail({ d, now }: { d: TeamDeployRow; now: number }) {
       {d.short_id ? <ShareControl label="deploy" path={entityRoute("deploy", d.short_id)!} /> : null}
       <span className="dpp-age">{ago(now, d.created_at)}</span>
     </div>
+  );
+}
+
+/** The names a push took off its target or put on it, the first few with the rest a press away. */
+function DeployNames({ g }: { g: ChangeGroup }) {
+  const [all, setAll] = useState(false);
+  const { shown, more } = shownNames(g.names, all);
+  return (
+    <>
+      <dt className="dpp-names-k" data-kind={g.kind}>{g.label}</dt>
+      <dd>
+        <ul className="dpp-names" data-deploy-names={g.kind}>{shown.map((x) => <li key={x}><code>{x}</code></li>)}</ul>
+        {more ? <button type="button" className="dpp-names-more" onClick={() => setAll(true)} data-deploy-names-more={g.kind}>+{more} more</button> : null}
+      </dd>
+    </>
   );
 }
 

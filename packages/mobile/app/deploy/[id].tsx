@@ -3,7 +3,7 @@
 // sent it and when, its steps and its own log, and the deploys either side of
 // it on the same target. The web draws the same row inside /deploys; the data
 // and its rules are lib/deploys/targets, fed by the Deploys page's feeders.
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, TouchableOpacity, useWindowDimensions, View as RNView } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
@@ -16,6 +16,7 @@ import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { deploysOf, rebuiltOnly, sessionWords, sessionsOf, sourceWord, targetNow, teamRowOfView, type TeamDeployRow } from '@codecast/web/lib/deploys/targets';
 import { fmtClock, fmtDuration } from '@codecast/web/components/triggerCadence';
 import { compactAge } from '@codecast/web/lib/threadState';
+import { changeGroups, hasChangeNames, originWords, shownNames, type ChangeGroup } from '@codecast/web/components/deploys/deployRecord';
 import { Text as RNText } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme, type Palette } from '@/constants/Theme';
 import { codeFont } from '@/constants/fonts';
@@ -69,8 +70,9 @@ export default function DeployScreen() {
   const { targets, deploys, ready } = useDeployTargets(teamId);
   const me = useInboxStore((s) => (s.currentUser as { name?: string } | null)?.name ?? 'You');
   const listed = deploys.find((x) => x.short_id === id) ?? cached;
-  // The team's feed holds its newest deploys; an older one is read alone.
-  const alone = useQueryNoThrow(api.deploys.get, id && teamId && ready && !listed ? { ref: id } : 'skip');
+  // The team's feed holds its newest deploys; an older one is read alone, as is one whose push names what it
+  // added and dropped (the feed's row only counts them).
+  const alone = useQueryNoThrow(api.deploys.get, id && teamId && ready && (!listed || hasChangeNames(listed)) ? { ref: id } : 'skip');
   const d = useMemo(
     () => listed ?? (alone.data && teamId ? teamRowOfView(alone.data, `team:${teamId}`) : undefined),
     [listed, alone.data, teamId],
@@ -100,6 +102,7 @@ export default function DeployScreen() {
       { text: l.confirm, style: 'destructive', onPress: () => sendPress(back, teamId, deploys, me) },
     ]);
   };
+  const origin = originWords(listed, alone.data);
   const sessions = sessionsOf(d);
   const titles = new Map(sessions.map((x) => [x.conversation_id, sessionWords(x)]));
   const groups = new Map<string, NonNullable<TeamDeployRow['commit_rows']>>();
@@ -171,6 +174,7 @@ export default function DeployScreen() {
             </RNView>
           </FactRow>
           <FactRow label="By">{by || '—'}</FactRow>
+          {origin ? <FactRow label="From" testID="deploy-origin">{origin}</FactRow> : null}
           <FactRow label="When">
             <RNText style={styles.factValue}>
               {fmtClock(d.created_at, now)}
@@ -185,6 +189,8 @@ export default function DeployScreen() {
           ) : null}
           {d.note && d.status !== 'failed' ? <FactRow label="Note">{d.note}</FactRow> : null}
         </Facts>
+
+        {changeGroups(listed, alone.data).map((g) => <DeployNames key={g.kind} g={g} />)}
 
         {back ? (
           <RNView style={objectStyles.verbs}>
@@ -311,6 +317,26 @@ export default function DeployScreen() {
   );
 }
 
+/** The names a push took off its target or put on it, the first few with the rest a press away. */
+function DeployNames({ g }: { g: ChangeGroup }) {
+  const Theme = useTheme();
+  const [all, setAll] = useState(false);
+  const { shown, more } = shownNames(g.names, all);
+  return (
+    <RNView style={objectStyles.section} testID={`deploy-${g.kind}`}>
+      <SectionLabel><RNText style={{ color: g.kind === 'dropped' ? Theme.red : Theme.green }}>{g.label}</RNText></SectionLabel>
+      <RNView style={objectStyles.list}>
+        {shown.map((x) => <RNText key={x} style={styles.name}>{x}</RNText>)}
+        {more ? (
+          <TouchableOpacity style={styles.nameMore} onPress={() => setAll(true)} activeOpacity={0.6} testID={`deploy-${g.kind}-more`}>
+            <RNText style={styles.nameMoreText}>{`+${more} more`}</RNText>
+          </TouchableOpacity>
+        ) : null}
+      </RNView>
+    </RNView>
+  );
+}
+
 const styles = themedStyles((Theme) => StyleSheet.create({
   repo: { ...codeFont, fontSize: 12, color: Theme.textMuted, marginBottom: 6 },
   banner: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, borderWidth: 1, borderRadius: 8, padding: Spacing.md, marginBottom: Spacing.lg },
@@ -339,5 +365,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   histId: { ...codeFont, fontSize: 12.5, color: Theme.textMuted, minWidth: 64, flexShrink: 0 },
   histSha: { ...codeFont, fontSize: 12, color: Theme.textMuted0, flexShrink: 0 },
   histBy: { flex: 1, fontSize: 12.5, color: Theme.textMuted },
+  name: { ...codeFont, fontSize: 12.5, color: Theme.text, paddingHorizontal: Spacing.md, paddingVertical: 6, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: Theme.bgHighlight },
+  nameMore: { paddingHorizontal: Spacing.md, paddingVertical: 10 },
+  nameMoreText: { fontSize: 13, color: Theme.blue },
   histAge: { fontSize: 12, color: Theme.textMuted0, fontVariant: ['tabular-nums'], flexShrink: 0 },
 }));

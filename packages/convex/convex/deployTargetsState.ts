@@ -8,6 +8,7 @@ import { afterFor, deployStepsOf } from "./deploysView";
 import { ciOf } from "./deployTargetsCi";
 import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
+import type { DeployPushSummary } from "@codecast/shared/contracts/deploys";
 
 const DAY = 86_400_000;
 /** Commits on main read for one target's queue. */
@@ -144,6 +145,10 @@ export async function deployCommitsOf(ctx: any, rows: Doc<"commits">[]) {
   return out;
 }
 
+function pushSummary(d: Doc<"deploys">): DeployPushSummary {
+  return { dirty: d.dirty ?? null, machine: d.machine ?? null, pushed_via: d.pushed_via ?? null, adds_count: d.adds?.length ?? 0, drops_count: d.drops?.length ?? 0 };
+}
+
 type DeployAfterCounts = { new_errors: number; regressions: number; reopened: number; quiet: boolean; open: boolean };
 
 /**
@@ -179,11 +184,8 @@ export async function deployLine(ctx: any, d: Doc<"deploys">, caches: { conv: Ma
     source: d.source,
     started_by: d.started_by?.name ?? null,
     note: d.note ?? null,
-    dirty: d.dirty ?? null,
-    machine: d.machine ?? null,
-    pushed_via: d.pushed_via ?? null,
-    adds: d.adds ?? [],
-    drops: d.drops ?? [],
+    // A list row counts the names; the deploy itself (deploysView.shapeView) lists them.
+    ...pushSummary(d),
     commits: d.commits?.length ?? 0,
     sessions,
     tasks,

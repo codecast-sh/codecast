@@ -133,7 +133,12 @@ export function shipPassBody(plan: ShipPlan, r: ShipOutcome, repository: string,
       return { sha: c.sha, message: c.message, files: c.files, ...(s?.id ? { session_id: s.id } : {}), ...(s?.conversation_id ? { conversation_id: s.conversation_id } : {}) };
     }),
     held: r.held.map((h) => ({ group: h.group, paths: h.paths.length, ...(h.note ? { note: h.note } : {}) })),
-    deploys: r.deploys.map((d) => ({ name: d.name, stage: d.stage, ok: d.ok, ...(d.target ? { target: d.target } : {}), ...(d.dirty ? { dirty: d.dirty } : {}), ...(d.output ? { output: d.output.slice(-3000) } : {}) })),
+    deploys: r.deploys.map((d) => ({
+      name: d.name, stage: d.stage, ok: d.ok, ...(d.target ? { target: d.target } : {}), ...(d.dirty ? { dirty: d.dirty } : {}),
+      // What the push did to its target (machine, path, names added and dropped), when the step said.
+      ...(d.machine ? { machine: d.machine } : {}), ...(d.via ? { via: d.via } : {}), ...(d.adds?.length ? { adds: d.adds } : {}), ...(d.drops?.length ? { drops: d.drops } : {}),
+      ...(d.output ? { output: d.output.slice(-3000) } : {}),
+    })),
     started_at: startedAt,
   };
 }
