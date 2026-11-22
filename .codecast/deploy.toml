@@ -44,6 +44,7 @@ when = ["packages/cli/**", "packages/shared/**", "platform/**"]
 run = "scripts/cut-cli-release.sh"
 live = "json:https://dl.codecast.sh/latest.json#sourceCommit,version"
 policy = "release"
+after = ["backend"]                   # a released CLI calls backend routes with the args it adds
 ci = "cast line deploy ci --workflow ci.yml"
 finish = "cast force-update $version"
 

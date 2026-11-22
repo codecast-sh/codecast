@@ -9,7 +9,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { freezeSessionChange, frozenChangeContext, writeFrozenChange } from "./flowChange";
+import { freezeSessionChange, frozenChangeContext, refreezeSessionChange, writeFrozenChange } from "./flowChange";
 import { parseWorkflowSource } from "./parser";
 import { lineRunDir, runSlug, runWorkflow } from "./runner";
 
@@ -161,5 +161,45 @@ describe("a session's change runs through a flow", () => {
     write(root, "a.txt", "b\n");
     transcript("sess-c", "jx7ccccccccccccccccccccccccccccc", [tool(root, "Edit", { file_path: path.join(root, "a.txt"), old_string: "a", new_string: "b" }, 10_000)]);
     await expect(freezeSessionChange(root, "jx7zzzz", { branch: "codecast/x", worktree: "x" })).rejects.toThrow(/No uncommitted change/);
+  });
+});
+
+describe("a named branch's fix comes back to the run", () => {
+  // A run started over ssh on another machine (ct-98831): the session fixes the branch there and pushes it.
+  test("a fix pushed from another machine moves the run's change; one committed here does too", async () => {
+    const origin = path.join(sandbox, "origin.git");
+    const here = path.join(sandbox, "here");
+    const there = path.join(sandbox, "there");
+    execFileSync("git", ["init", "--quiet", "--bare", "-b", "main", origin]);
+    execFileSync("git", ["clone", "--quiet", origin, here], { env: { ...process.env, ...ENV } });
+    write(here, "a.txt", "a\n");
+    git(here, "add", "a.txt");
+    git(here, "commit", "--quiet", "-m", "base");
+    git(here, "push", "--quiet", "origin", "HEAD:main", "HEAD:refs/heads/feat");
+    git(here, "fetch", "--quiet", "origin");
+    git(here, "branch", "feat", "origin/feat");
+    const worktree = path.join(sandbox, "run-wt");
+    git(here, "worktree", "add", "--quiet", worktree, "feat");
+    const base = git(here, "rev-parse", "feat");
+    const runDir = path.join(sandbox, "run-dir");
+    fs.mkdirSync(runDir, { recursive: true });
+    writeFrozenChange(runDir, { source: "branch", session: "jx7aaaa", base, tip: base, branch: "feat", worktree: "run-wt", paths: [], shared: [], held: [] } as any);
+
+    execFileSync("git", ["clone", "--quiet", "--branch", "feat", origin, there], { env: { ...process.env, ...ENV } });
+    write(there, "a.txt", "fixed there\n");
+    git(there, "commit", "--quiet", "-am", "fix there");
+    git(there, "push", "--quiet", "origin", "feat");
+    const pushed = git(there, "rev-parse", "HEAD");
+
+    const away = await refreezeSessionChange(here, runDir, worktree);
+    expect(away.moved).toBe(true);
+    expect(away.change.tip).toBe(pushed);
+    expect(git(worktree, "rev-parse", "HEAD")).toBe(pushed);
+
+    write(worktree, "a.txt", "fixed here\n");
+    git(worktree, "commit", "--quiet", "-am", "fix here");
+    const local = git(worktree, "rev-parse", "HEAD");
+    const home = await refreezeSessionChange(here, runDir, worktree);
+    expect(home.change.tip).toBe(local);
   });
 });
