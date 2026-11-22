@@ -549,6 +549,7 @@ export async function enqueuePendingMessage(
     origin: fields.origin,
     human: fields.human,
     createdAt: Date.now(),
+    quiet: fields.quiet,
     delivery: fenced ?? undefined,
   });
 
