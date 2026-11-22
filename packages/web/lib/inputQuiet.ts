@@ -43,6 +43,18 @@ export function whenInputQuiet(fn: () => void, maxDeferMs: number): () => void {
   return () => { if (timer !== null) clearTimeout(timer); timer = null; };
 }
 
+/**
+ * Resolves on a later task, so input, paint and timers get a turn first: a
+ * long async loop (cache hydration) awaits it between chunks. A timer, not a
+ * channel message, because a run of channel messages can hold timers back.
+ * In a hidden tab it resolves at once: nobody waits on paint there, and a
+ * hidden tab's timers are throttled to about one a second.
+ */
+export function nextTask(): Promise<void> {
+  if (typeof document !== "undefined" && document.hidden) return Promise.resolve();
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 /** For tests: record an input at this moment. */
 export function noteInputForTests(): void {
   lastInputAt = clock();
