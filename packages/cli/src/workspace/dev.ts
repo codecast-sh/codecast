@@ -206,10 +206,18 @@ function procListeners(): Listener[] | null {
   return found;
 }
 
-/** Every TCP listener this user can see; null when they cannot be read. */
-export function tcpListeners(): Listener[] | null {
-  if (process.platform === "linux") return procListeners();
-  const out = lsof(["-nP", "-iTCP", "-sTCP:LISTEN", "-Fpgn"]);
+/**
+ * The TCP listeners of one process group, or on one port; null when they cannot
+ * be read. Only the process group scope is cheap on macOS: lsof then reads
+ * just that group's processes (0.07s at load 150). A port scope, like no scope,
+ * walks every process on the machine (0.7 to 0.8s there, and over 15s at worse
+ * load), so callers keep it off the common path.
+ */
+export function tcpListeners(scope: { pgid: number } | { port: number }): Listener[] | null {
+  const wanted = (l: Listener) => ("pgid" in scope ? l.pgid === scope.pgid : l.port === scope.port);
+  if (process.platform === "linux") return procListeners()?.filter(wanted) ?? null;
+  const select = "pgid" in scope ? ["-a", "-g", String(scope.pgid), "-iTCP", "-sTCP:LISTEN"] : [`-iTCP:${scope.port}`, "-sTCP:LISTEN"];
+  const out = lsof(["-nP", ...select, "-Fpgn"]);
   if (out === null) return null;
   const found: Listener[] = [];
   let pid = 0;
@@ -255,9 +263,9 @@ export type PortOwner =
   | { owner: "unknown"; why: string };
 
 /** Whose server listens on `port`, judged by the listener's working directory. */
-export function portOwner(port: number, checkout: string, listeners = tcpListeners()): PortOwner {
-  if (!listeners) return { owner: "unknown", why: "the listening sockets could not be read" };
-  const on = listeners.filter((l) => l.port === port);
+export function portOwner(port: number, checkout: string): PortOwner {
+  const on = tcpListeners({ port });
+  if (!on) return { owner: "unknown", why: "the listening sockets could not be read" };
   if (on.length === 0) return { owner: "none" };
   const root = realPath(checkout);
   let verdict: PortOwner | undefined;
@@ -282,17 +290,30 @@ function heldReason(port: number, owner: Exclude<PortOwner, { owner: "ours" | "o
  * Where a server this checkout started answers, or why that cannot be said.
  * It may not hold the port it was given: vite moves to the next free port when
  * that one is taken, and then another checkout's server answers on the
- * recorded one. The server's own process group says where it went. A group
- * listening nowhere (not up yet, or a server run by another process, such as a
- * container) keeps the recorded port only when its listener is provably not
- * another checkout's.
+ * recorded one. The server's own process group says where it went, which
+ * answers the common case. Only a group listening nowhere (not up yet, or a
+ * server run by another process, such as a container) asks who holds the
+ * recorded port, and keeps it only when that listener is provably not another
+ * checkout's. That question walks every process on the machine, so it is asked
+ * only once something accepts on the port and the group still listens nowhere
+ * after that: a server that binds between the first look and the connect is
+ * found by the second look, not by the walk.
  */
-export function ownPort(record: DevRecord, checkout: string): { port: number } | { refused: string } {
-  const listeners = tcpListeners();
-  const ports = [...new Set((listeners ?? []).filter((l) => l.pgid === record.pid).map((l) => l.port))].sort((a, b) => a - b);
-  if (ports.includes(record.port)) return { port: record.port };
-  if (ports.length) return { port: ports.find((p) => p > record.port) ?? ports[0] };
-  const owner = portOwner(record.port, checkout, listeners);
+export async function ownPort(record: DevRecord, checkout: string): Promise<{ port: number } | { refused: string }> {
+  const fromGroup = (): { port: number } | { refused: string } | null => {
+    const group = tcpListeners({ pgid: record.pid });
+    if (!group) return { refused: heldReason(record.port, { owner: "unknown", why: "the listening sockets could not be read" }) };
+    const ports = [...new Set(group.map((l) => l.port))].sort((a, b) => a - b);
+    if (ports.includes(record.port)) return { port: record.port };
+    if (ports.length) return { port: ports.find((p) => p > record.port) ?? ports[0] };
+    return null;
+  };
+  const first = fromGroup();
+  if (first) return first;
+  if (!(await probeOnce({ kind: "tcp", port: record.port, path: "/" }, 2_000))) return { refused: heldReason(record.port, { owner: "none" }) };
+  const second = fromGroup();
+  if (second) return second;
+  const owner = portOwner(record.port, checkout);
   return owner.owner === "ours" || owner.owner === "outside" ? { port: record.port } : { refused: heldReason(record.port, owner) };
 }
 
@@ -412,7 +433,7 @@ async function waitReady(svc: DevService, record: DevRecord, probeAt: ProbeAt, o
       clearRecord(opts.checkout, svc.name);
       return { name: svc.name, state: "failed", reason: "the server exited", record, logTail: tailFile(record.log, 30) };
     }
-    const where = ownPort(record, opts.checkout);
+    const where = await ownPort(record, opts.checkout);
     if ("port" in where) {
       held = undefined;
       record = movedTo(record, where.port, opts.checkout);
@@ -437,7 +458,7 @@ export async function serviceStatus(svc: DevService, checkout: string, manifest:
   if (svc.spec.mode === "shared") return { name: svc.name, state: "shared", url: expandVars(svc.spec.url ?? "", env) };
   const found = readRecord(checkout, svc.name);
   if (found && isAlive(found.pid)) {
-    const where = ownPort(found, checkout);
+    const where = await ownPort(found, checkout);
     if (!("port" in where)) return { name: svc.name, state: "failed", reason: `running, but ${where.refused}`, record: found };
     const record = movedTo(found, where.port, checkout);
     const ok = await probeOnce(readyProbe(svc.spec, record.port, { ...env, [`PORT_${svc.portName.toUpperCase()}`]: String(record.port) }));

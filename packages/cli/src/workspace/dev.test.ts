@@ -239,6 +239,27 @@ describe("cast dev never calls another checkout's server its own", () => {
     expect((await ensure(web(base + 1, { PORT_WEB: String(base + 1) }), checkout, 10)).state).toBe("external");
   }, 60_000);
 
+  test.skipIf(process.platform === "linux")("an ordinary start and reuse ask lsof only about the server's own process group", async () => {
+    const real = execSync("command -v lsof", { encoding: "utf-8" }).trim();
+    const bin = fs.mkdtempSync(path.join(tmp, "bin-"));
+    const calls = path.join(bin, "calls.log");
+    fs.writeFileSync(path.join(bin, "lsof"), `#!/bin/sh\necho "$*" >> "${calls}"\nexec "${real}" "$@"\n`, { mode: 0o755 });
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${bin}:${savedPath}`;
+    try {
+      const base = await freePorts(1);
+      const checkout = gitRepo();
+      expect((await ensure(web(base), checkout, 30)).state).toBe("started");
+      expect((await ensure(web(base), checkout, 30)).state).toBe("running");
+      const asked = fs.readFileSync(calls, "utf-8").trim().split("\n");
+      expect(asked.length).toBeGreaterThan(0);
+      // A query that walks every process on the machine took over 15s at a busy laptop's load.
+      expect(asked.filter((args) => !args.includes(" -g "))).toEqual([]);
+    } finally {
+      process.env.PATH = savedPath;
+    }
+  }, 60_000);
+
   test.skipIf(process.platform === "linux")("when lsof cannot answer, no path calls the server on the port ours", async () => {
     const base = await freePorts(2);
     const other = gitRepo();
