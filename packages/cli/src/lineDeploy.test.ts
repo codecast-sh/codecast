@@ -6,7 +6,7 @@ import { parseWorkflowSource, validateWorkflow } from "./workflow/parser";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates";
 import { spawnSync } from "node:child_process";
 import { deployEnv, deployFailureSignal, expandDeployCommand, failedStep, followJobs, jobsVerdict, pinnedSha, returnDeploy, runDeployStep, waitForCi, watchDeploy } from "./lineDeploy";
-import { releaseRequest } from "./deployCommand";
+import { askUntilRead, releaseRequest, requestShaFor } from "./deployCommand";
 
 // The line's deploy stage (deploys.md DP2, DP8, DP9): each step runs a
 // profile command with no model keys, judges one sha, and a failed one comes
@@ -238,5 +238,34 @@ describe("a deploy pinned to a commit", () => {
     expect(pinnedSha(root, a.slice(0, 9), "main")).toEqual({ sha: a });
     expect(pinnedSha(root, b.slice(0, 9), "main")).toEqual({ error: `${b.slice(0, 10)} is not on origin/main: a deploy makes a commit of the default branch live, so land it there first` });
     expect(pinnedSha(root, "0123456789", "main")).toEqual({ error: "0123456789 is not a commit in this checkout: fetch it, or name it by a longer sha" });
+  });
+});
+
+describe("a release with no --sha", () => {
+  test("pins the head it was planned at for a target whose command takes $sha, and nothing else", () => {
+    const planned = "b".repeat(40);
+    expect(requestShaFor({ command: "./deploy.sh --sha $sha" }, { pinned: null, planned, carrying: false })).toBe(planned);
+    // Sends the tree it runs in: it ships what it holds, so pinning would only refuse it.
+    expect(requestShaFor({ command: "scripts/cut-cli-release.sh" }, { pinned: null, planned, carrying: false })).toBeNull();
+    // A change flow's Deploy: main's head, whatever it carries.
+    expect(requestShaFor({ command: "./deploy.sh --sha $sha" }, { pinned: null, planned, carrying: true })).toBeNull();
+    // --sha names the commit for every target; the server refuses a tree-sending one it cannot send.
+    expect(requestShaFor({ command: "scripts/cut-cli-release.sh" }, { pinned: "c".repeat(40), planned, carrying: false })).toBe("c".repeat(40));
+  });
+
+  test("a head codecast has not read yet is asked for again, up to the wait; any other refusal is not", async () => {
+    let t = 0;
+    let calls = 0;
+    const log: string[] = [];
+    const notYet = new Error("bbbb is not a commit on acme/app's default branch as codecast has read it: push it ...");
+    const ask = async () => { calls++; if (calls < 3) throw notYet; return { short_id: "dp-9" }; };
+    expect(await askUntilRead(ask, { sleep: async (ms) => { t += ms; }, now: () => t, log: (l) => log.push(l) })).toEqual({ short_id: "dp-9" });
+    expect([calls, t, log.length]).toEqual([3, 20_000, 1]);
+    t = 0;
+    await expect(askUntilRead(async () => { throw notYet; }, { sleep: async (ms) => { t += ms; }, now: () => t })).rejects.toThrow("as codecast has read it");
+    expect(t).toBe(120_000);
+    let other = 0;
+    await expect(askUntilRead(async () => { other++; throw new Error("dp-8 is already going out to cli"); }, { sleep: async () => {}, now: () => 0 })).rejects.toThrow("already going out");
+    expect(other).toBe(1);
   });
 });

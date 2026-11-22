@@ -465,6 +465,9 @@ cast deploy cli mobile      those targets, whatever their policy
 cast deploy --dry-run       what it would send, wait for and leave alone, and why
 cast deploy --files "<paths>" --carrying <sha> [--except <targets>]   only what one landed change touches, sending main's head
 cast deploy --sha <sha>     every deploy of the release makes exactly that commit live (request sha), not main's head
+cast deploy                 pins origin's head as the release plans it for each target whose command takes $sha,
+                            so a push after planning never rides along; a commit codecast has not read from
+                            GitHub yet is asked for again for up to two minutes
 ```
 
 `deployRelease.ts planRelease` reads the checkout's targets (the file is the
