@@ -402,6 +402,12 @@ export async function notifyTaskStatus(
   });
 }
 
+/** The task's bound run, while it is still going, whatever its graph. */
+async function liveRun(ctx: any, task: any): Promise<any | null> {
+  const run = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
+  return run && (run.status === "pending" || run.status === "running" || run.status === "paused") ? run : null;
+}
+
 /**
  * The task's bound run, when it is a line run still going: the line's own
  * graph (it started at ground), or whatever graph a trial project runs (a
@@ -409,8 +415,8 @@ export async function notifyTaskStatus(
  * with their runs left waiting at a gate nobody could answer).
  */
 async function liveLineRun(ctx: any, task: any): Promise<any | null> {
-  const run = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
-  if (!run || !(run.status === "pending" || run.status === "running" || run.status === "paused")) return null;
+  const run = await liveRun(ctx, task);
+  if (!run) return null;
   if (isLineRun(run)) return run;
   const project = task.project_id ? await ctx.db.get(task.project_id) : null;
   return project?.line_trial ? run : null;
@@ -2162,9 +2168,11 @@ export const update = mutation({
       statusWrite.status = undefined;
       statusWrite.statusId = { set: false };
     }
-    // A review approve inside a live line run is one station, not the end:
-    // the run decides when the cause is done (LE16), so it stays in review.
-    if (args.review_verdict === "approve" && statusWrite.status === "done" && (await liveLineRun(ctx, task))) {
+    // A review approve inside a live run is one station, not the end: the
+    // run decides when the task is done (LE16, runEndStatus), so it stays in
+    // review. An approve that closed the task left it done after Land then
+    // stopped the run at Not shipped (ct-98836).
+    if (args.review_verdict === "approve" && statusWrite.status === "done" && (await liveRun(ctx, task))) {
       statusWrite.status = "in_review";
     }
     const nextStatus = statusWrite.status;

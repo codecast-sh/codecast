@@ -10,7 +10,7 @@ import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve,
 import { adoptedCategory } from "./lib/decisionCategory";
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
-import { CARD_GATE_NODE_ID, costParts, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
+import { CARD_GATE_NODE_ID, costParts, isLineRun, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { tookPastStart } from "@codecast/shared/contracts/runStart";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessTask, canAccessPlan, computeWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
@@ -81,16 +81,24 @@ export async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promi
  * completed run hands work it was still doing to a person (in_progress
  * becomes in_review) and leaves every other status, such as a review
  * reject's open, where its station put it. Null leaves it.
+ *
+ * Any other graph (quick-change, change, a review segment) that completes
+ * after its own reviewer approved makes the task done: the approve held the
+ * task in review while the run went on (tasks.update), and only the run's
+ * own end says the stations after it (Land, Deploy) passed. A run that stops
+ * at a stop end (Not shipped, Rejected) fails, so it never gets here.
  */
 export function runEndStatus(
   taskStatus: string,
   runStatus: "completed" | "failed" | "running",
-  run: Parameters<typeof lineRunOutcome>[0],
+  run: Parameters<typeof lineRunOutcome>[0] & { created_at?: number },
+  verdict?: { verdict: string; at: number } | null,
 ): "done" | "open" | "in_review" | null {
   if (runStatus !== "completed" || isTerminalTaskStatus(taskStatus)) return null;
   const end = lineRunOutcome(run)?.kind;
   if (end === "shipped" && !mergeLeft(run ?? {})) return "done";
   if (end === "parked") return taskStatus === "in_progress" ? "open" : null;
+  if (!isLineRun(run) && verdict?.verdict === "approve" && verdict.at >= (run?.created_at ?? 0)) return "done";
   return taskStatus === "in_progress" ? "in_review" : null;
 }
 
@@ -104,7 +112,7 @@ async function settleRunTask(ctx: Ctx & { runMutation?: any }, run: any, runStat
     await patchTask(ctx, task, { execution_status: "blocked", ...(failReason ? { execution_concerns: failReason } : {}), updated_at: now });
     return;
   }
-  const next = runEndStatus(task.status, runStatus, run);
+  const next = runEndStatus(task.status, runStatus, run, task.review_verdict);
   // An approved fix whose merge was left to a person is not live, so the watch its graph's watch station started has
   // nothing to watch: a quiet one would close the problem as resolved, and a new report would reopen it.
   const unwatch = runStatus === "completed" && mergeLeft(run) && task.watch_until !== undefined ? { watch_from: undefined, watch_until: undefined } : null;
