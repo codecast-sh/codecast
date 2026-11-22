@@ -46,12 +46,17 @@ function world(): Record<string, any[]> {
       { _id: "k_done", short_id: "ct-4", title: "Finished blocker", user_id: VIEWER, team_id: TEAM, workspace: `team:${TEAM}`, ...taskDefaults, status: "done", updated_at: 15 },
       { _id: "k_foreign", short_id: "ct-5", title: "Mate's own", user_id: MATE, workspace: `user:${MATE}`, ...taskDefaults, updated_at: 5 },
       { _id: "k_personal", short_id: "ct-3", title: "Personal", user_id: VIEWER, workspace: `user:${VIEWER}`, ...taskDefaults, updated_at: 10 },
+      { _id: "k_problem", short_id: "ct-6", title: "A problem", user_id: VIEWER, team_id: TEAM, workspace: `team:${TEAM}`, ...taskDefaults, source: "signal", cause: { fingerprints: ["f1"] }, updated_at: 25 },
     ],
     task_comments: [
       { _id: "tc_1", task_id: "k_team", author: "Viewer", text: "from my session", comment_type: "note", conversation_id: "c_mine", created_at: 5 },
       { _id: "tc_2", task_id: "k_team", author: "Mate", text: "from a hidden session", comment_type: "progress", conversation_id: "c_hidden", created_at: 6 },
       { _id: "tc_3", task_id: "k_team", author: "Mate", text: "plain", comment_type: "note", author_user_id: MATE, created_at: 7 },
       { _id: "tc_4", task_id: "k_personal", author: "Viewer", text: "same session again", comment_type: "note", conversation_id: "c_mine", created_at: 8 },
+      { _id: "tp_1", task_id: "k_problem", author: "line", text: "oldest", comment_type: "note", created_at: 1 },
+      { _id: "tp_2", task_id: "k_problem", author: "line", text: "Refine refused: 2 of 3 findings reject the cause.\nThe rest of a long note.", comment_type: "note", created_at: 4 },
+      { _id: "tp_3", task_id: "k_problem", author: "line", text: "third", comment_type: "note", created_at: 3 },
+      { _id: "tp_4", task_id: "k_problem", author: "Viewer", text: "newest", comment_type: "note", created_at: 9 },
     ],
     plans: [],
   };
@@ -80,15 +85,22 @@ describe("tasks: one row, every channel", () => {
     });
   }
 
-  test("every channel carries comments, oldest first, with session_info only where the viewer can read the session", async () => {
+  test("a list row carries its comment count, never the thread", async () => {
     const { list } = await channels({ workspace: "team", team_id: TEAM });
-    expect(list.k_quiet.comments).toEqual([]);
-    const comments = list.k_team.comments;
-    expect(comments.map((c: any) => c._id)).toEqual(["tc_1", "tc_2", "tc_3"]);
-    expect(comments[0].session_info?.session_id).toBe("sess-mine");
-    expect(comments[1].session_info).toBeNull();
-    expect(comments[1].conversation_id).toBeUndefined();
-    expect(comments[2].session_info).toBeNull();
+    expect(list.k_quiet.comment_count).toBe(0);
+    expect(list.k_team.comment_count).toBe(3);
+    for (const row of Object.values(list) as any[]) expect(row.comments).toBeUndefined();
+    expect(list.k_team.recent_comments).toBeUndefined();
+  });
+
+  test("a problem row carries its newest comments' first lines, oldest first", async () => {
+    const { list } = await channels({ workspace: "team", team_id: TEAM });
+    expect(list.k_problem.comment_count).toBe(4);
+    expect(list.k_problem.recent_comments.map((c: any) => [c._id, c.text])).toEqual([
+      ["tp_3", "third"],
+      ["tp_2", "Refine refused: 2 of 3 findings reject the cause."],
+      ["tp_4", "newest"],
+    ]);
   });
 
   test("a row carries its blockers' and parent's state, read past the page, never across a workspace", async () => {

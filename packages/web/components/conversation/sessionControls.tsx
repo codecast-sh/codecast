@@ -192,7 +192,9 @@ export function ProjectSwitcher({ conversation, handleRef, machineSlot, headline
   // Machine picker rests as a single pill showing where the session will run;
   // clicking it unfolds the full chip row for an explicit pick.
   const [machinesOpen, setMachinesOpen] = useState(false);
-  const currentConvContext = useInboxStore((s) => s.currentConversation);
+  // The two fields read below: the whole context object is replaced on every
+  // session switch, which re-rendered this always-mounted switcher.
+  const currentConvContext = useInboxStore(useShallow((s) => ({ projectPath: s.currentConversation?.projectPath, gitRoot: s.currentConversation?.gitRoot })));
   // The context fallback can point at a TEAMMATE's session (team inbox) whose
   // checkout no machine of ours has — never present that as the current project.
   // Gate on the LIVE roster only: a persisted roster draws the chips at boot,
