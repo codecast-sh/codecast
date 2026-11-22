@@ -163,6 +163,13 @@ describe("a change placed on another machine", () => {
     expect(git(origin, "rev-parse", branch)).toBe(git(laptop, "rev-parse", branch));
   });
 
+  test("a worktree the run's machine cannot make fails the run with why", async () => {
+    const box = path.join(sandbox, "box");
+    const change: FrozenChange = { source: "branch", base: "x", tip: "x", branch: "main", worktree: "no-room", paths: [], shared: [], held: [], pushed: true };
+    const refuse: CastRun = async (args) => (args[1] === "acquire" ? { code: 1, out: "", err: "disk full\n" } : { code: 0, out: "", err: "" });
+    await expect(preparePlacedChange(box, path.join(sandbox, "rd2"), change, refuse)).rejects.toThrow(/Could not make the worktree for the change: disk full/);
+  });
+
   test("a branch origin does not have, and a checkout not on this machine, fail with why", async () => {
     const box = path.join(sandbox, "box");
     const change: FrozenChange = { source: "branch", base: "x", tip: "x", branch: "nowhere", worktree: "w", paths: [], shared: [], held: [], pushed: true };

@@ -95,7 +95,7 @@ export async function preparePlacedChange(projectPath: string, runDir: string, p
 
 async function loadHelpers() {
   const { writeFrozenChange } = await import("./flowChangeFile.js");
-  const { acquireFailureLine } = await import("../flowCommand.js");
+  const { acquireFailureLine } = await import("../flowAcquire.js");
   return { writeFrozenChange, acquireFailureWords: acquireFailureLine };
 }
 
