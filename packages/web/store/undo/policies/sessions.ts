@@ -222,6 +222,15 @@ export const SESSIONS_UNDO_POLICY: UndoPolicy = {
       ...CLOSE,
     },
   },
+  // "Dismiss all N" old sessions. The server stamps only the caller's own rows
+  // (no inbox_hides record), so one applyUndoPatches pass of the captured cells
+  // takes the whole sweep back.
+  markSessionsDismissed: {
+    spec: {
+      label: (ctx) => `Dismissed ${counted(((ctx.args[0] ?? []) as string[]).length, "old session")} (still searchable)`,
+      restoreView: true,
+    },
+  },
   // assignSessionToBucket and switchProject are classified in work.ts, beside
   // the bucketAssignments writer and the other conversation inverses.
   reopenDecision: {

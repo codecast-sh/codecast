@@ -371,7 +371,7 @@ export function dismissStaleLedger(r: { titles: string[]; since: string }): Swit
       { k: "Sessions", v: plural(n, "session"), list: r.titles.slice(0, 4).concat(n > 4 ? [`+${n - 4} more`] : []) },
       { k: "Kept", v: "Pinned, snoozed, open", tone: "ok" },
       { k: "Still", v: "Searchable, open by link" },
-      { k: "To undo", v: "Undo on the toast" },
+      { k: "To undo", v: "Undo · toast or history" },
     ],
     confirm: `Dismiss ${n}`,
     keep: "Keep them",

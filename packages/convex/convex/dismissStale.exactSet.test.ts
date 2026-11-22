@@ -12,54 +12,116 @@ import { allModules } from "./testModules.testkit";
 setDefaultTimeout(120_000);
 
 const DAY = 24 * 60 * 60 * 1000;
+const old = Date.now() - 60 * DAY;
+
+async function seed(t: ReturnType<typeof convexTest>) {
+  return await t.run(async (ctx) => {
+    const owner = await ctx.db.insert("users", { name: "Ann", email: "ann@x.dev" } as any);
+    const other = await ctx.db.insert("users", { name: "Bo", email: "bo@x.dev" } as any);
+    const conv = (user: any, n: number, extra: object = {}) =>
+      ctx.db.insert("conversations", {
+        user_id: user, agent_type: "claude_code", session_id: crypto.randomUUID(),
+        started_at: old - n, updated_at: old - n, message_count: 1, is_private: true, status: "completed", ...extra,
+      } as any);
+    return {
+      owner,
+      // a, b: the two the prompt counted.
+      a: await conv(owner, 1),
+      b: await conv(owner, 2),
+      // open: just as old, but on screen, so the list left it out.
+      open: await conv(owner, 3),
+      // In the list all the same: someone else's row, and one pinned since.
+      foreign: await conv(other, 4),
+      pinned: await conv(owner, 5, { inbox_pinned_at: old }),
+      // Dismissed long ago by something else.
+      earlier: await conv(owner, 6, { inbox_dismissed_at: old }),
+    };
+  });
+}
+
+async function stamps(t: ReturnType<typeof convexTest>, ids: Record<string, any>) {
+  return await t.run(async (ctx) => {
+    const out: Record<string, number | undefined> = {};
+    for (const [k, id] of Object.entries(ids)) if (k !== "owner") out[k] = ((await ctx.db.get(id)) as any)?.inbox_dismissed_at;
+    return out;
+  });
+}
 
 describe("dismissStaleInboxSessions", () => {
   test("dismisses exactly the sessions the prompt counted, and nothing else", async () => {
     vi.useFakeTimers();
     const t = convexTest(schema, allModules);
-    const old = Date.now() - 60 * DAY;
-    const ids = await t.run(async (ctx) => {
-      const owner = await ctx.db.insert("users", { name: "Ann", email: "ann@x.dev" } as any);
-      const conv = (n: number) =>
-        ctx.db.insert("conversations", {
-          user_id: owner, agent_type: "claude_code", session_id: crypto.randomUUID(),
-          started_at: old - n, updated_at: old - n, message_count: 1, is_private: true, status: "completed",
-        } as any);
-      // a, b: the two the prompt counted ("Dismiss all 2").
-      // open: just as old, but it is the session on screen, so the list left it out.
-      return { owner, a: await conv(1), b: await conv(2), open: await conv(3) };
-    });
-    const as = t.withIdentity({ subject: `${ids.owner}|session` });
-
-    await as.mutation(api.conversations.dismissStaleInboxSessions, { ids: [ids.a, ids.b] } as any);
-    await t.finishAllScheduledFunctions(vi.runAllTimers);
-
-    const rows = await t.run(async (ctx) => ({
-      a: await ctx.db.get(ids.a), b: await ctx.db.get(ids.b), open: await ctx.db.get(ids.open),
-    }));
-    expect(rows.a?.inbox_dismissed_at).toBeNumber();
-    expect(rows.b?.inbox_dismissed_at).toBeNumber();
-    expect(rows.open?.inbox_dismissed_at).toBeUndefined();
-    vi.useRealTimers();
-  });
-  test("Undo restores exactly that sweep's rows, not one dismissed by something else", async () => {
-    const t = convexTest(schema, allModules);
-    const old = Date.now() - 60 * DAY;
-    const ids = await t.run(async (ctx) => {
-      const owner = await ctx.db.insert("users", { name: "Ann", email: "ann@x.dev" } as any);
-      const conv = (n: number, extra: object = {}) =>
-        ctx.db.insert("conversations", {
-          user_id: owner, agent_type: "claude_code", session_id: crypto.randomUUID(),
-          started_at: old - n, updated_at: old - n, message_count: 1, is_private: true, status: "completed", ...extra,
-        } as any);
-      return { owner, a: await conv(1), earlier: await conv(2, { inbox_dismissed_at: old }) };
-    });
+    const ids = await seed(t);
     const as = t.withIdentity({ subject: `${ids.owner}|session` });
     const at = Date.now();
-    await as.mutation(api.conversations.dismissStaleInboxSessions, { ids: [ids.a, ids.earlier], at });
-    await as.mutation(api.conversations.restoreStaleInboxSessions, { ids: [ids.a, ids.earlier], at });
-    const rows = await t.run(async (ctx) => ({ a: await ctx.db.get(ids.a), earlier: await ctx.db.get(ids.earlier) }));
-    expect(rows.a?.inbox_dismissed_at).toBeUndefined();
-    expect(rows.earlier?.inbox_dismissed_at).toBe(old);
+
+    await as.mutation(api.conversations.dismissStaleInboxSessions, { ids: [ids.a, ids.b, ids.foreign, ids.pinned], at });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await stamps(t, ids)).toEqual({ a: at, b: at, open: undefined, foreign: undefined, pinned: undefined, earlier: old });
+    vi.useRealTimers();
+  });
+});
+
+describe("the web's markSessionsDismissed dispatch", () => {
+  test("stamps only the listed rows the caller owns and has not pinned, whatever patches ride along", async () => {
+    vi.useFakeTimers();
+    const t = convexTest(schema, allModules);
+    const ids = await seed(t);
+    const as = t.withIdentity({ subject: `${ids.owner}|session` });
+    const at = Date.now();
+    const list = [ids.a, ids.b, ids.foreign, ids.pinned];
+    // The draft's patches name every listed row; the side effect is the write.
+    const patches = { conversations: Object.fromEntries(list.map((id) => [id, { inbox_dismissed_at: at }])) };
+
+    await as.mutation(api.dispatch.dispatch, { action: "markSessionsDismissed", args: [list], patches, result: at });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await stamps(t, ids)).toEqual({ a: at, b: at, open: undefined, foreign: undefined, pinned: undefined, earlier: old });
+    vi.useRealTimers();
+  });
+
+  test("a sweep of several hundred is one call, and every row lands", async () => {
+    vi.useFakeTimers();
+    const t = convexTest(schema, allModules);
+    const { owner, many } = await t.run(async (ctx) => {
+      const owner = await ctx.db.insert("users", { name: "Ann", email: "ann@x.dev" } as any);
+      const many = [];
+      for (let n = 0; n < 350; n++) {
+        many.push(await ctx.db.insert("conversations", {
+          user_id: owner, agent_type: "claude_code", session_id: `s-${n}`,
+          started_at: old - n, updated_at: old - n, message_count: 1, is_private: true, status: "completed",
+        } as any));
+      }
+      return { owner, many };
+    });
+    const at = Date.now();
+    await t.withIdentity({ subject: `${owner}|session` }).mutation(api.dispatch.dispatch, { action: "markSessionsDismissed", args: [many], result: at });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const left = await t.run(async (ctx) => {
+      let n = 0;
+      for (const id of many) if (((await ctx.db.get(id)) as any)?.inbox_dismissed_at !== at) n++;
+      return n;
+    });
+    expect(left).toBe(0);
+    vi.useRealTimers();
+  });
+
+  test("the undo the web sends back clears exactly the sweep's rows and changes no other", async () => {
+    vi.useFakeTimers();
+    const t = convexTest(schema, allModules);
+    const ids = await seed(t);
+    const as = t.withIdentity({ subject: `${ids.owner}|session` });
+    const at = Date.now();
+    await as.mutation(api.dispatch.dispatch, { action: "markSessionsDismissed", args: [[ids.a, ids.b]], result: at });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    // The patches web lib/__tests__/dismissStale.guard.test.ts shows the undo sending.
+    const undo = { conversations: { [ids.a]: { inbox_dismissed_at: null }, [ids.b]: { inbox_dismissed_at: null } } };
+    await as.mutation(api.dispatch.dispatch, { action: "applyUndoPatches", args: [], patches: undo });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+
+    expect(await stamps(t, ids)).toEqual({ a: undefined, b: undefined, open: undefined, foreign: undefined, pinned: undefined, earlier: old });
+    vi.useRealTimers();
   });
 });

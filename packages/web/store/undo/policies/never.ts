@@ -202,9 +202,6 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   removeOpsSource: DELETE,
   removeOpsWatch: DELETE,
   removeMachines: DELETE,
-  markSessionsDismissed: never(
-    "bulk dismiss: the server half dismisses every session older than 30 days by age, not the ids shown, and has no restore verb (follow-up)",
-  ),
   unlinkChatSlack: DELETE,
   removeLineWorkflow: DELETE,
 

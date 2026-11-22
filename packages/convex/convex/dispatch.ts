@@ -56,7 +56,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
 import { applyHideTransition, closeAdoptionHolds, GROUP_SCAN_COST, hideBudgetLeft, noteGestureRows, spendHideBudget } from "./cleanup";
 import { closeSetsAsideOnServer } from "./lib/closeAside";
 import { isClosePatch } from "@codecast/shared/contracts";
-import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
+import { dismissSessionsExactly, stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
 import { performCancelPeerTransfer, performDismissPeerTransfer } from "./peerTransfers";
 import { writeObjectShareLink } from "./publicShare";
 import { setWeeklyCardEnabledFor, setWeeklyCardOptionsFor } from "./weeklyCards";
@@ -243,6 +243,7 @@ export const dispatch = mutation({
     if (
       patches &&
       typeof patches === "object" &&
+      !SIDE_EFFECT_OWNS_WRITE.has(action) &&
       !(hasReceiptCommandId(result) && RECEIPT_OWNS_SERVER_WRITE.has(action))
     ) {
       const close = EXPLICIT_CLOSE_ACTIONS.has(action);
@@ -341,6 +342,12 @@ function isAdoptionOnly(fields: Record<string, unknown>): boolean {
   const keys = Object.keys(fields ?? {});
   return keys.length > 0 && keys.every((k) => k === "inbox_adopted_at");
 }
+
+// Actions whose side effect is the whole server write, so their draft's
+// patches are not applied as well. The bulk dismiss of old sessions stamps only
+// the caller's own rows that are not pinned or snoozed, and a plain stamp:
+// through the patch rail every row would run the hide teardown a kill does.
+const SIDE_EFFECT_OWNS_WRITE = new Set(["markSessionsDismissed"]);
 
 // Rows one applyPatches transaction applies before it schedules the rest.
 const PATCH_ROWS_INLINE = 25;
@@ -1662,6 +1669,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   closeSessions: async (ctx, userId, [convIds]: [string[]], result?: { aside?: string[] }) => {
     for (const convId of convIds ?? []) await hideForViewerByClientId(ctx, userId, convId, result?.aside?.includes(convId) ? "stash" : "dismiss");
+  },
+  // "Dismiss all N" old sessions: exactly the ids the prompt counted, stamped
+  // with the value the web wrote (the action's result).
+  markSessionsDismissed: async (ctx, userId, [convIds]: [string[]], result) => {
+    await dismissSessionsExactly(ctx as any, userId, convIds ?? [], typeof result === "number" ? result : Date.now());
   },
   deleteSession: async (ctx, userId, [convId]: [string]) => {
     const id = ctx.db.normalizeId("conversations", convId);
