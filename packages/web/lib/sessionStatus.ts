@@ -196,9 +196,13 @@ export function statusFailure(row: StatusRow, now: number, live: StatusLive = {}
   // The rail re-derives unresponsiveness from the row's facts (deriveLiveAt);
   // the shipped flag says the same once the server has settled it.
   if (row.is_unresponsive || deriveLiveAt(liveFactsOf(row), now).is_unresponsive) return { label: "Unresponsive" };
+  // An exit after the agent parked itself as dormant ended a turn, not the
+  // work: the claim with no wake behind it is the person's move (Needs you,
+  // with the inbox's unverified-wake line), not a failure to clear.
   const status = agentStatusAt(row, now);
   if (
     status && DEAD_AGENT_STATUSES.has(status) && (row.message_count ?? 0) > 0 &&
+    !(row.thread_state_status === "dormant" && !row.has_pending) &&
     !isExitAfterDone({ agentStatus: status, declaredStatus: row.thread_state_status ?? null, hasPending: !!row.has_pending, isUnresponsive: !!row.is_unresponsive })
   ) return { label: "Agent stopped" };
   return null;

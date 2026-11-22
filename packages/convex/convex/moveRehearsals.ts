@@ -10,13 +10,11 @@ import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { mutation, query } from "./functions";
 import type { Id } from "./_generated/dataModel";
-import { REHEARSAL_TTL_MS, type MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
+import { REHEARSAL_RUNNER_DEADLINE_MS, REHEARSAL_TTL_MS, type MoveRehearsal } from "@codecast/shared/contracts/moveRehearsal";
 import { getAuthenticatedUserId } from "./sessionMigrations";
 
 /** How far back the review's feed reads. */
 const LISTED_MS = REHEARSAL_TTL_MS;
-/** A pending row whose runner never reported is shown as failed after this long. */
-const RUNNER_DEADLINE_MS = 5 * 60_000;
 
 export const request = mutation({
   args: {
@@ -98,7 +96,7 @@ export const report = mutation({
 export type RehearsalRow = { _id: string; request_id: string; session_id: string; destination_id: string; status: "pending" | "done" | "failed"; result: MoveRehearsal | null; error: string | null; created_at: number };
 
 function toRow(r: any, now: number): RehearsalRow {
-  const stale = r.status === "pending" && now - r.created_at > RUNNER_DEADLINE_MS;
+  const stale = r.status === "pending" && now - r.created_at > REHEARSAL_RUNNER_DEADLINE_MS;
   let result: MoveRehearsal | null = null;
   try { result = r.result ? JSON.parse(r.result) : null; } catch { /* unreadable: shown as failed */ }
   return {
