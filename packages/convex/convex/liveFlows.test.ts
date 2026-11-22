@@ -299,6 +299,56 @@ describe("liveFlows (one live flow per team)", () => {
     // Back at Eval they take their slots again, and nothing new starts for Deals.
     expect((await sweepCore(setup("eval").ctx, NOW)).started).toEqual([]);
   });
+
+  // eg-4782: forTeam hit convex's 100MB read limit in runnerLoad, which read every
+  // team's org_roles and their anchors and sessions. A team's view reads its own.
+  test("a team's view reads the same documents however many roles other teams have", async () => {
+    const counted = (db: any) => {
+      const tally = { n: 0 };
+      const wrap = (q: any): any => new Proxy(q, {
+        get(t, k) {
+          const f = t[k];
+          if (typeof f !== "function") return f;
+          return (...a: any[]) => {
+            const r = f.apply(t, a);
+            if (k === "collect" || k === "take") return r.then((xs: any[]) => { tally.n += xs.length; return xs; });
+            if (k === "first" || k === "unique") return r.then((x: any) => { if (x) tally.n++; return x; });
+            return r && typeof r === "object" && typeof r.then !== "function" ? wrap(r) : r;
+          };
+        },
+      });
+      const proxied = new Proxy(db, {
+        get(t, k) {
+          if (k === "query") return (table: string) => wrap(t.query(table));
+          if (k === "get") return async (id: any) => { const x = await t.get(id); if (x) tally.n++; return x; };
+          const f = t[k];
+          return typeof f === "function" ? f.bind(t) : f;
+        },
+      });
+      return { proxied, tally };
+    };
+    const readsWith = async (others: number) => {
+      const strangers = Array.from({ length: others }, (_, n) => lead(`other${n}`, `${"u".repeat(28)}o${String(n).padStart(3, "0")}`));
+      for (const s of strangers) {
+        const team = `teams_other${s.role.handle}`;
+        Object.assign(s.role, { team_id: team });
+        Object.assign(s.anchor, { team_id: team });
+        Object.assign(s.conversation, { team_id: team });
+      }
+      const { ctx, tables } = fixtures({
+        tasks: [problem("d90", "deals", 90), problem("g20", "growth", 20)],
+        extra: {
+          org_roles: [growth.role, deals.role, ...strangers.map((s) => s.role)],
+          anchors: [growth.anchor, deals.anchor, ...strangers.map((s) => s.anchor)],
+          conversations: [growth.conversation, deals.conversation, ...strangers.map((s) => s.conversation)],
+        },
+      });
+      const { proxied, tally } = counted(ctx.db);
+      await liveFlowView({ db: proxied } as any, tables.live_flows[0], NOW);
+      return tally.n;
+    };
+    expect(await readsWith(300)).toBe(await readsWith(0));
+  });
 });
 
 // Which graph a live flow's run takes (lib/flowRoute, workflows.lineRouteFor):
