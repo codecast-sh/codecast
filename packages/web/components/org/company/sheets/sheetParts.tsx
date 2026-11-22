@@ -20,14 +20,18 @@ export function NotHere({ what }: { what: string }) {
 /** A role's line in a Now. `onOpen` names the role (its face and name open
  *  its sheet), for a sheet that is not the role's own. Its own state line
  *  carries its age quietly. Nothing when the role has nothing live and wrote
- *  no line. The words name the work, so when a session is on it they open
- *  that session. */
+ *  no line. The words name the work and open the session they describe: the
+ *  standing session when they are its state line, else the working or
+ *  waiting session they summarise; plain text when neither exists. */
 export function RoleNowLine({ role, onOpen }: { role: OrgRole; onOpen?: () => void }) {
   const now = roleNow(role);
   const clock = useCoarseNow(60_000);
   const openLinked = useOpenLinkedSession();
   if (!now) return null;
-  const current = now.current;
+  const standingId = role.standing?.conversation_id;
+  const target = role.standing?.state_line?.trim() && standingId
+    ? { _id: standingId, short_id: role.standing?.short_id, title: roleWords(role).title }
+    : now.current;
   return (
     <NowLine data={{ "data-role-now": role.short_id }}>
       <NowBar sessions={role.sessions} />
@@ -38,8 +42,8 @@ export function RoleNowLine({ role, onOpen }: { role: OrgRole; onOpen?: () => vo
         </button>
       )}
       {onOpen && <span aria-hidden className="-mx-1" style={{ color: "var(--sol-text-dim)" }}>·</span>}
-      {current ? (
-        <button type="button" onClick={() => openLinked(current)} className="min-w-0 truncate text-left hover:underline underline-offset-2" title={now.words} data-role-now-words>{now.words}</button>
+      {target ? (
+        <button type="button" onClick={() => openLinked(target)} className="min-w-0 truncate text-left hover:underline underline-offset-2" title={now.words} data-role-now-words>{now.words}</button>
       ) : (
         <span className="min-w-0 truncate" title={now.words} data-role-now-words>{now.words}</span>
       )}
