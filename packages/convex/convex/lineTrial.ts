@@ -525,25 +525,29 @@ export async function supersedeMerged(cards: Supersedable[], getTask: (id: Id<"t
   }
 }
 
-/** Every trial card in the workspace, newest first: the review page's list (web store key `trialCards`) and `cast line trial`. */
-/** The waiting cards one read lists beyond the recent window. */
-const WAITING_CARDS_CAP = 1000;
+/**
+ * The cards one read builds, newest first: the review page's list (web store key `trialCards`) and `cast line trial`.
+ * Each card costs about 9 database calls and 18 documents, and Convex gives a query 3s, so one read builds at
+ * most CARDS_CAP cards (ct-73205: 1,300 cards timed out). Waiting cards come first, since each is a decision the
+ * team still owes, then the newest of the rest; past the cap the oldest waiting cards are left out.
+ */
+export const CARDS_CAP = 350;
 
 export const cards = query({
   args: { ...scopeArgs, project: v.optional(v.string()), limit: v.optional(v.number()) },
   handler: async (ctx, args): Promise<TrialCardView[]> => {
     const { userId, workspaceKey } = await scopeOf(ctx, args);
-    const limit = Math.min(Math.max(1, args.limit ?? 300), 500);
+    const limit = Math.min(Math.max(1, args.limit ?? 300), CARDS_CAP);
     const project = args.project ? await resolveWorkspaceProject(ctx, workspaceKey, args.project) : null;
     if (args.project && !project) throw new Error(`No project "${args.project}" in this workspace`);
+    const waiting: Doc<"trial_cards">[] = (await ctx.db.query("trial_cards")
+      .withIndex("by_workspace_status_created", (q: any) => q.eq("workspace", workspaceKey).eq("status", "waiting")).order("desc").take(CARDS_CAP))
+      .filter((r) => !project || String(r.project_id) === String(project._id));
     const recent: Doc<"trial_cards">[] = project
       ? await ctx.db.query("trial_cards").withIndex("by_project_created", (q: any) => q.eq("project_id", project._id)).order("desc").take(limit)
       : await ctx.db.query("trial_cards").withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspaceKey)).order("desc").take(limit);
-    // Every waiting card, past the window of recent ones too: each is a decision the team still owes.
-    const waiting: Doc<"trial_cards">[] = await ctx.db.query("trial_cards")
-      .withIndex("by_workspace_status_created", (q: any) => q.eq("workspace", workspaceKey).eq("status", "waiting")).order("desc").take(WAITING_CARDS_CAP);
-    const seenCard = new Set(recent.map((r) => String(r._id)));
-    const rows = [...recent, ...waiting.filter((r) => !seenCard.has(String(r._id)) && (!project || String(r.project_id) === String(project._id)))];
+    const seenCard = new Set(waiting.map((r) => String(r._id)));
+    const rows = [...waiting, ...recent.filter((r) => !seenCard.has(String(r._id)))].slice(0, CARDS_CAP).sort((a, b) => b.created_at - a.created_at);
     const out: TrialCardView[] = [];
     const allowed = new Map<string, boolean>();
     const rulesByProject = new Map<string, Map<string, CardRule>>();
@@ -563,7 +567,9 @@ export const cards = query({
         const p = await ctx.db.get(row.project_id);
         allowed.set(key, !!p && (await canAccessProject(ctx, userId, p)));
       }
-      if (allowed.get(key)) out.push(await cardView(ctx, row, rulesOf, memo));
+      if (!allowed.get(key)) continue;
+      // One card whose rows are malformed is left out, never the whole list.
+      try { out.push(await cardView(ctx, row, rulesOf, memo)); } catch (e) { console.error(`lineTrial.cards: left out ${row.short_id}:`, e); }
     }
     // Where each problem's fix lives, from its newest proposal (a change card's own proposal was answered before it).
     const whereByTask = new Map<string, string[]>();
