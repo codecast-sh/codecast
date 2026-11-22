@@ -962,8 +962,9 @@ async function waitOnStation(
   }
 
   console.log(`  ${c.red}timeout${c.reset}: ${shortId} ${over} — killing it`);
-  // The words before the colon are the engine's stop line the web reads (runReport.ts TIMED_OUT).
-  context["last_error"] = `hand ${shortId} killed after ${Math.round(clock.elapsed() / 60_000)}m at ${node.id}: it ${over}`;
+  // The engine's stop line the web reads (lineWords.ts HAND_KILLED): the station's id ends at a space, and the
+  // parenthesis says whether the hand went quiet or ran to its limit.
+  context["last_error"] = `hand ${shortId} killed after ${Math.round(clock.elapsed() / 60_000)}m at ${node.id} (it ${over})`;
   context["killed_hand"] = shortId;
   context["station_dead"] = node.id;
   return "failure";
