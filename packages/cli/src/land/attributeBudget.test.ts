@@ -33,11 +33,18 @@ describe("attribution under a budget", () => {
     // 9 MB of turns before the edit: more than one chunk, so a short budget stops inside the file.
     transcript("long", [...Array.from({ length: 9 }, () => filler(1024 * 1024)), edit("a.ts", now - 1000)], "conv_long");
     transcript("short", [edit("b.ts", now - 2000)], "conv_short");
-    const first = attributeEdits(root, ["a.ts", "b.ts"], { since: 0, now, budgetMs: 1 });
+    // A clock that moves 10 ms each time it is read: a 15 ms budget runs out after one chunk, under any load.
+    let t = 0;
+    const clock = () => (t += 10);
+    const first = attributeEdits(root, ["a.ts", "b.ts"], { since: 0, now, budgetMs: 15, clock });
     expect(first.partial).toBe(true);
     expect(first.owners.get("a.ts")).toBeUndefined();
     let last = first;
-    for (let i = 0; i < 10 && last.partial; i++) last = attributeEdits(root, ["a.ts", "b.ts"], { since: 0, now, budgetMs: 1 });
+    let calls = 1;
+    for (; calls < 20 && last.partial; calls++) last = attributeEdits(root, ["a.ts", "b.ts"], { since: 0, now, budgetMs: 15, clock });
+    // More than one call to read 9 MB in 8 MB chunks, and few: each goes on from where the last stopped.
+    expect(calls).toBeGreaterThan(1);
+    expect(calls).toBeLessThan(6);
     expect(last.partial).toBeUndefined();
     expect(last.owners.get("a.ts")?.conversationId).toBe("conv_long");
     expect(last.owners.get("b.ts")?.conversationId).toBe("conv_short");
@@ -67,6 +74,7 @@ describe("paths on other volumes are never touched on disk", () => {
   test("a checkout written through macOS's /tmp link is still the checkout", async () => {
     const { shellWrites } = await import("./attribute");
     if (!root.startsWith("/private/tmp/") && !root.startsWith("/private/var/")) return;
+    fs.mkdirSync(path.join(root, ".git"));
     fs.writeFileSync(path.join(root, "f.ts"), "x");
     const typed = root.replace(/^\/private/, "");
     expect(shellWrites(`echo y > ${typed}/f.ts`, typed, root)).toEqual(["f.ts"]);
@@ -84,14 +92,15 @@ describe("a relative path is read from where the command stands when it names it
     return dir;
   };
 
-  test("a command that starts in one checkout and cds into another credits the other's files, never the first's", async () => {
+  test("a command that starts in one checkout and cds into another credits what it wrote in the other, never the first's files", async () => {
     const { shellWrites } = await import("./attribute");
     const main = checkout("main");
     const wt = checkout("wt");
     // The shape that told the wrong session: a python write in the worktree, then running the CLI from its root.
     const command = `cd ${wt}/packages/cli && python3 - <<'EOF'\np='src/pipeline.ts'\nopen(p,'w').write('y')\nEOF\ncd ${wt} && bun packages/cli/src/index.ts flow pipeline`;
     expect(shellWrites(command, main, main)).toEqual([]);
-    expect(shellWrites(command, main, wt).sort()).toEqual(["packages/cli/src/index.ts", "packages/cli/src/pipeline.ts"]);
+    // It wrote pipeline.ts; index.ts it only ran.
+    expect(shellWrites(command, main, wt)).toEqual(["packages/cli/src/pipeline.ts"]);
   });
 
   test("where it did not cd, a relative path is the starting directory's; in a subdirectory, the checkout's root is tried too", async () => {
@@ -100,6 +109,9 @@ describe("a relative path is read from where the command stands when it names it
     expect(shellWrites("echo y > README.md", main, main)).toEqual(["README.md"]);
     expect(shellWrites("cd packages/cli && sed -i '' s/x/y/ src/index.ts", main, main)).toEqual(["packages/cli/src/index.ts"]);
     expect(shellWrites("cd packages/cli && sed -i '' s/x/y/ README.md", main, main)).toEqual(["README.md"]);
+    // Running the CLI with its output in /tmp writes nothing in the checkout (jx71h73's dry run).
+    expect(shellWrites(`bun ${main}/packages/cli/src/index.ts ship checkout --dry-run > /tmp/x.log`, main, main)).toEqual([]);
+    expect(shellWrites("bun packages/cli/src/index.ts flow pipeline > /tmp/p.txt 2>&1", main, main)).toEqual([]);
     // A path through a file names nothing, and says so without throwing.
     expect(shellWrites("echo y > README.md/bun.lock", main, main)).toEqual([]);
   });

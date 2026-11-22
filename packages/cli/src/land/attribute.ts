@@ -9,19 +9,20 @@
  * from three kinds of tool call:
  *
  *   Edit, Write, MultiEdit, NotebookEdit  the path the call names
- *   a shell command that writes           every path it names that resolves
- *                                         inside the checkout (sed -i, a
- *                                         python heredoc, a redirect, mv, ...)
+ *   a shell command                       the paths it writes (shellWrites.ts):
+ *                                         a redirect's target, sed -i, mv/cp
+ *                                         destinations, rm, open(p, "w") in a
+ *                                         python heredoc; never one it only
+ *                                         reads or runs
  *   a Codex patch                         its *** Update/Add/Delete headers
  *
  * A `cast` command that writes files itself (`cast flow edit`) names none of
  * them in its call, so it records what it wrote in the session write ledger
  * (writeLedger.ts), read here beside the transcripts.
  *
- * A shell command is matched by what it says, not what it did, so a command
- * that both reads one file and writes another credits both; the latest write
- * still decides, and a person or formatter's edit leaves no call at all, so
- * such files come back unattributed for the caller to place.
+ * A shell command is read for what it says it writes, not what it did; the
+ * latest write decides, and a person or formatter's edit leaves no call at
+ * all, so such files come back unattributed for the caller to place.
  *
  * Transcripts only grow, so each one is read once: the scan keeps the offset
  * and the writes found so far (cache/land-attribution.json) and reads only
@@ -34,6 +35,7 @@ import { defaultConfigDir } from "../config/configDir.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { getAllSyncRecords } from "../syncLedger.js";
 import { readLocalConversationMap } from "../localConversationMap.js";
+import { shellWritePaths } from "./shellWrites.js";
 import { readSessionWrites } from "./writeLedger.js";
 
 export interface SessionEdits {
@@ -168,26 +170,8 @@ function relIn(root: string, p: string, cwd?: string): string | null {
 
 // ── shell commands ───────────────────────────────────────────────────────────
 
-/** Redirections that write nothing worth crediting. */
-const NULL_REDIRECTS = /\d?>&\d|&>\s*\/dev\/null|\d?>>?\s*\/dev\/null/g;
-const WRITES = /\bsed\s+(?:-[a-zA-Z]*\s+)*-i|\bperl\s+-[a-z]*i|open\([^)]*['"](?:w|a|wb|w\+)['"]|write_text|write_bytes|writeFileSync|\.write\(|>>?\s*['"]?[\w./~$-]|\btee\b|\bmv\s|\bcp\s|\brm\s|\bgit\s+(?:apply|checkout|restore|mv|rm)\b|\bpatch\s|\bunlink\b|\btouch\s|\bln\s/;
-/** Tokens that look like a path: a slash or a file extension. */
-const PATH_TOKEN = /[\w@~.+-]*(?:\/[\w@.+-]+)+\/?|[\w@+-][\w@.+-]*\.[A-Za-z][\w]{0,9}/g;
-
-/** Directories a command `cd`s into, in order, resolved from `cwd`, each with where in the command it takes effect. */
-function cdTargets(command: string, cwd: string): Array<{ from: number; dir: string }> {
-  const dirs: Array<{ from: number; dir: string }> = [];
-  let at = cwd;
-  for (const m of command.matchAll(/(?:^|[;&|(\n]\s*)cd\s+(['"]?)([^'";&|\n)]+)\1/g)) {
-    const dir = m[2].trim().replace(/^~(?=\/|$)/, process.env.HOME ?? "~");
-    at = path.resolve(at, dir);
-    dirs.push({ from: (m.index ?? 0) + m[0].length, dir: at });
-  }
-  return dirs;
-}
-
 const checkouts = new Map<string, string | null>();
-/** The checkout a directory is in: the nearest one up holding `.git` (a repository's directory, or a worktree's file). */
+/** The checkout a directory is in: its nearest ancestor holding a .git (a nested worktree's own, not the one around it). */
 function checkoutOf(dir: string): string | null {
   const start = realOf(path.join(dir, "."));
   if (checkouts.has(start)) return checkouts.get(start)!;
@@ -200,50 +184,47 @@ function checkoutOf(dir: string): string | null {
   return found;
 }
 
-/**
- * Repo-relative paths a writing shell command names. A relative path is read from where the command ran (its cwd,
- * then each directory it `cd`s into), and from the checkout's root only when it ran inside that checkout: a command
- * in another repository, or in a worktree nested under this one (`.conductor/<name>`), that writes
- * `.codecast/flows/change.cast` wrote its own copy, not this checkout's.
- */
 /** A path's stats, or undefined when nothing is there (missing, or under a file: `package.json/bun.lock`). */
 function statOf(p: string): fs.Stats | undefined {
   try { return fs.statSync(p); } catch { return undefined; }
 }
 
+/**
+ * Repo-relative paths a shell command writes (shellWrites.ts names only writes: a path it reads or runs is never
+ * one), each read from the directory the command stood in when it named it, and only when that can be this
+ * checkout (nearRoot). A path that does not exist (a file it deleted, or will create) still counts; a directory
+ * does not.
+ */
 export function shellWrites(command: string, cwd: string, root: string): string[] {
-  if (!WRITES.test(command.replace(NULL_REDIRECTS, " "))) return [];
-  const cds = cdTargets(command, cwd);
-  const here = realOf(path.join(root, "."));
-  // A relative path is read from where the command stands when it names it: after the last `cd` before it. Read from
-  // where the command started, `cd <another checkout> && bun packages/cli/src/index.ts` credited this checkout's file.
-  const dirAt = (i: number) => cds.filter((c) => c.from <= i).pop()?.dir ?? cwd;
-  // Only a directory that can be inside the checkout is looked at on disk (nearRoot); inside it, the root is tried too.
-  const inHere = new Map<string, boolean>();
-  const basesAt = (i: number) => {
-    const dir = dirAt(i);
-    if (!inHere.has(dir)) inHere.set(dir, nearRoot(root, dir, cwd) && checkoutOf(dir) === here);
-    return inHere.get(dir) ? [...new Set([dir, root])] : [dir];
-  };
   const found = new Set<string>();
-  for (const m of command.matchAll(PATH_TOKEN)) {
-    const token = m[0].replace(/^\.\//, "");
-    if (token.length < 3 || token.includes("://")) continue;
-    for (const base of token.startsWith("/") ? [""] : basesAt(m.index ?? 0)) {
-      const abs = base ? path.resolve(base, token) : token;
-      if (!nearRoot(root, abs, cwd)) continue;
-      const rel = relIn(root, abs, cwd);
-      const st = rel ? statOf(abs) : undefined;
-      // A directory (the `cd` it named) is not a file the command wrote.
-      if (st?.isDirectory()) break;
-      if (st) { found.add(rel!); break; }
-      if (rel && !base) found.add(rel);
+  const here = realOf(path.join(root, "."));
+  for (const w of shellWritePaths(command, cwd)) {
+    let abs = path.isAbsolute(w.path) ? path.normalize(w.path) : path.resolve(w.dir, w.path);
+    if (!nearRoot(root, abs, cwd)) continue;
+    // A root-relative path written from a directory inside the checkout (the session's cwd is often a package):
+    // the checkout's own file when only that one is there.
+    if (!path.isAbsolute(w.path) && !statOf(abs) && nearRoot(root, w.dir, cwd) && checkoutOf(w.dir) === here) {
+      const fromRoot = path.resolve(root, w.path);
+      if (statOf(fromRoot)) abs = fromRoot;
     }
+    // A path inside a worktree nested under the checkout (.conductor/<name>) is that worktree's file.
+    if (checkoutOf(path.dirname(abs)) !== here) continue;
+    const rel = relIn(root, abs, cwd);
+    if (!rel || statOf(abs)?.isDirectory() || underAFile(abs)) continue;
+    found.add(rel);
   }
   return [...found];
 }
 
-// ── transcripts ──────────────────────────────────────────────────────────────
+/** Whether a path that is not there runs through a file (`README.md/bun.lock`): it names nothing anyone could write. */
+function underAFile(p: string): boolean {
+  if (statOf(p)) return false;
+  for (let d = path.dirname(p); d !== path.dirname(d); d = path.dirname(d)) {
+    const st = statOf(d);
+    if (st) return !st.isDirectory();
+  }
+  return false;
+}
 
 const PATCH_HEADER = /\*\*\* (?:Update|Add|Delete) File: ([^\n\\]+)|\*\*\* Move to: ([^\n\\]+)/g;
 
@@ -332,7 +313,7 @@ const CHUNK_BYTES = 8 * 1024 * 1024;
  * Read what `file` appended since the cached offset, a chunk at a time, until it is read or `deadline` passes; a
  * file left part read keeps `size` at what it has read, so the next call goes on from its offset.
  */
-function scanIncremental(file: string, size: number, root: string, prior: CacheEntry | undefined, deadline = Infinity): CacheEntry {
+function scanIncremental(file: string, size: number, root: string, prior: CacheEntry | undefined, deadline = Infinity, clock: () => number = Date.now): CacheEntry {
   const state: CacheEntry = prior && prior.size <= size && prior.offset <= size
     ? { ...prior, writes: { ...prior.writes } }
     : { offset: 0, size: 0, cwd: null, writes: {} };
@@ -354,10 +335,10 @@ function scanIncremental(file: string, size: number, root: string, prior: CacheE
       if (lastNewline < 0) break;
       scanChunk(text.subarray(0, lastNewline).toString("utf-8"), root, state);
       state.offset += lastNewline + 1;
-      if (Date.now() >= deadline) break;
+      if (clock() >= deadline) break;
     }
     // Read to the last whole line: the entry stands for the file at `size`, or, cut short, at the offset reached.
-    const done = state.offset >= size || size - state.offset < CHUNK_BYTES && Date.now() < deadline;
+    const done = state.offset >= size || size - state.offset < CHUNK_BYTES && clock() < deadline;
     return { ...state, size: done ? size : state.offset };
   } finally {
     fs.closeSync(fd);
@@ -437,8 +418,10 @@ function subagentTranscripts(root: string, since: number): Array<{ file: string;
  * transcripts written since `since` are read: a write older than the oldest
  * dirty file cannot be the one that left it dirty.
  */
-export function attributeEdits(root: string, paths: Iterable<string>, opts: { since: number; now?: number; ledger?: string; budgetMs?: number }): Attribution {
-  const started = Date.now();
+export function attributeEdits(root: string, paths: Iterable<string>, opts: { since: number; now?: number; ledger?: string; budgetMs?: number; clock?: () => number }): Attribution {
+  // The budget's clock (tests drive it, so a budget means the same under any load).
+  const clock = opts.clock ?? Date.now;
+  const started = clock();
   // A caller on a shared loop (the daemon's checkout report) reads for at most this long, and goes on next call.
   const deadline = opts.budgetMs === undefined ? Infinity : started + opts.budgetMs;
   let partial = false;
@@ -467,8 +450,9 @@ export function attributeEdits(root: string, paths: Iterable<string>, opts: { si
     seenFiles.add(src.file);
     if (st.mtimeMs < opts.since) continue;
     const prior = byFile[src.file];
-    if (Date.now() >= deadline && prior?.size !== st.size) { partial = true; continue; }
-    const entry = scanIncremental(src.file, st.size, root, prior, deadline);
+    // Only a file with something left to read spends the budget.
+    if (prior?.size !== st.size && clock() >= deadline) { partial = true; continue; }
+    const entry = scanIncremental(src.file, st.size, root, prior, deadline, clock);
     if (entry.size < st.size) partial = true;
     if (entry.offset !== byFile[src.file]?.offset) scanned++;
     byFile[src.file] = entry;
@@ -514,5 +498,5 @@ export function attributeEdits(root: string, paths: Iterable<string>, opts: { si
       if (!cur || (cur.edits.get(p) ?? 0) < at) owners.set(p, s);
     }
   }
-  return { owners, sessions: [...sessions.values()], scanned, tookMs: Date.now() - started, ...(partial ? { partial: true as const } : {}) };
+  return { owners, sessions: [...sessions.values()], scanned, tookMs: clock() - started, ...(partial ? { partial: true as const } : {}) };
 }
