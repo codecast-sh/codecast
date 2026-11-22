@@ -2,16 +2,19 @@ import { create } from 'zustand';
 
 // The new session sheet is one per app (ComposeHost in
 // components/session/NewSessionSheet, at the root), so any screen opens it:
-// the inbox header, a session's header, a starter. `seed` is words to start
-// the box with; `opens` counts openings, so the host can start each one fresh.
-type ComposeState = { open: boolean; seed: string | null; opens: number };
+// the inbox header, a session's header, a starter, an image shared to the app
+// (lib/shareInbox). `seed` is words to start the box with and `images` local
+// files to start it with attached; `opens` counts openings, so the host can
+// start each one fresh.
+export type ComposeImage = { uri: string; mime: string };
+type ComposeState = { open: boolean; seed: string | null; images: ComposeImage[]; opens: number };
 
-export const useCompose = create<ComposeState>(() => ({ open: false, seed: null, opens: 0 }));
+export const useCompose = create<ComposeState>(() => ({ open: false, seed: null, images: [], opens: 0 }));
 
 let landingFloor: ReturnType<typeof setTimeout> | null = null;
 
-export function openCompose(seed: string | null = null) {
-  useCompose.setState((s) => ({ open: true, seed, opens: s.opens + 1 }));
+export function openCompose(seed: string | null = null, images: ComposeImage[] = []) {
+  useCompose.setState((s) => ({ open: true, seed, images, opens: s.opens + 1 }));
 }
 
 export function closeCompose() {

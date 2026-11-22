@@ -7,7 +7,7 @@
 // the default is wrong.
 import { StyleSheet, TouchableOpacity, View as RNView, Modal, ScrollView, KeyboardAvoidingView, Platform } from 'react-native';
 import { TextInput, Text as RNText } from '@/components/Themed';
-import { Component, useState, useRef, useMemo, type ReactNode } from 'react';
+import { Component, useEffect, useState, useRef, useMemo, type ReactNode } from 'react';
 import { router as appRouter, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
@@ -34,7 +34,7 @@ import { labelHexColor } from '@/lib/labelColors';
 import { type Device, deviceDisplayName } from '@/components/DevicesSection';
 import { AgentGlyph } from '@/components/AgentLogo';
 import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/durableCreatePolicy';
-import { awaitSessionLanding, closeCompose, useCompose } from '@/lib/compose';
+import { awaitSessionLanding, closeCompose, useCompose, type ComposeImage } from '@/lib/compose';
 
 // A sheet that throws closes itself rather than taking the app down with it
 // (it sits at the root); the next opening mounts a fresh one.
@@ -55,6 +55,7 @@ class SheetBoundary extends Component<{ children: ReactNode }, { failed: boolean
 export function ComposeHost() {
   const open = useCompose((s) => s.open);
   const seed = useCompose((s) => s.seed);
+  const sharedImages = useCompose((s) => s.images);
   const opens = useCompose((s) => s.opens);
   const router = useRouter();
   return (
@@ -62,6 +63,7 @@ export function ComposeHost() {
       <NewSessionSheet
         visible={open}
         seed={seed}
+        sharedImages={sharedImages}
         onClose={closeCompose}
         onSessionCreated={(conversationId, focus) => {
           // reveal=1: no push animation (app/_layout). focus=1: an empty start
@@ -153,7 +155,7 @@ function SettingRow({ label, value, dot, onPress, code }: {
   );
 }
 
-function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible: boolean; seed?: string | null; onClose: () => void; onSessionCreated: (conversationId: string, focus: boolean) => void }) {
+function NewSessionSheet({ visible, seed, sharedImages, onClose, onSessionCreated }: { visible: boolean; seed?: string | null; sharedImages: ComposeImage[]; onClose: () => void; onSessionCreated: (conversationId: string, focus: boolean) => void }) {
   const Theme = useTheme();
   // The agent is the viewer's default (lib/defaultAgent: the hosted assistant
   // with no machine) until they pick one here. Where only
@@ -205,6 +207,9 @@ function NewSessionSheet({ visible, seed, onClose, onSessionCreated }: { visible
   // the seed is the box's starting text.
   const field = useComposerField(seed ?? '');
   const images = useComposerImages(field.setValue);
+  // Images the opening came with (shared to the app) start attached; the
+  // sheet remounts on every opening, so this runs once for each.
+  useEffect(() => { if (sharedImages.length) images.attachImages(sharedImages); }, []);
   // Machine picker. `deviceId` holds an EXPLICIT pick only: left null, routing
   // picks the machine (deviceRouting) and the folder list stays the union across
   // online devices — the behaviour before this row existed.
