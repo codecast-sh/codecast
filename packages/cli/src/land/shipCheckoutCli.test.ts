@@ -66,6 +66,13 @@ describe("[ship] flow: a pass runs through a flow", () => {
     expect(() => parseManifestText(`[ship]\nflow = 3\n`)).toThrow("'ship.flow' must name a flow");
   });
 
+  test("a [ship] key a newer cast reads is ignored and named, so an older cast still reads the manifest", () => {
+    const ship = parseManifestText(`[ship]\nmode = "direct"\nfuture_key = 1\nother = "x"\n`).ship;
+    expect(ship?.mode).toBe("direct");
+    expect(ship?.ignored).toEqual(["future_key", "other"]);
+    expect(parseManifestText(`[ship]\nmode = "direct"\n`).ship?.ignored).toBeUndefined();
+  });
+
   test("set, the pass is the named flow's checkout change; a dry run only plans; steering flags and --no-fetch are refused", () => {
     expect(checkoutFlowArgs(undefined, {})).toBeNull();
     expect(checkoutFlowArgs("change", {})).toEqual(["flow", "run", "change", "--checkout"]);

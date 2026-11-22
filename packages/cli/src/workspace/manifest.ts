@@ -166,10 +166,10 @@ function validateSync(raw: unknown, file?: string): SyncSpec | undefined {
 function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) throw new ManifestError("'ship' must be a table", file, "ship");
+  // A key a newer cast reads is ignored and named, not refused: refusing it broke `cast ws acquire` and every
+  // station on each machine still running an older cast, so a repo could not use a new key until the whole fleet updated.
   const known = new Set(["mode", "check", "tests", "level", "deploy", "flow"]);
-  for (const key of Object.keys(raw)) {
-    if (!known.has(key)) throw new ManifestError(`unknown key in [ship]: '${key}'`, file, `ship.${key}`);
-  }
+  const ignored = Object.keys(raw).filter((key) => !known.has(key));
   const mode = raw["mode"] ?? "pr";
   if (mode !== "pr" && mode !== "direct") throw new ManifestError("'ship.mode' must be \"pr\" or \"direct\"", file, "ship.mode");
   const check = raw["check"] ?? "cast check";
@@ -197,7 +197,7 @@ function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
     const when = typeof step["when"] === "string" ? [step["when"]] : validateStringArray(step["when"], `${at}.when`, file);
     return { name, when, run, stage };
   });
-  return { mode, check, tests: (raw["tests"] as boolean | undefined) ?? true, level: (raw["level"] as boolean | undefined) ?? false, deploy, ...(flow !== undefined ? { flow: (flow as string).trim() } : {}) };
+  return { mode, check, tests: (raw["tests"] as boolean | undefined) ?? true, level: (raw["level"] as boolean | undefined) ?? false, deploy, ...(flow !== undefined ? { flow: (flow as string).trim() } : {}), ...(ignored.length ? { ignored } : {}) };
 }
 
 /** A repo-relative path or glob: no absolute paths, no `..`, nothing under .git. */

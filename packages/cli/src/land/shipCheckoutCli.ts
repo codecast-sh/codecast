@@ -190,7 +190,9 @@ async function runCast(args: string[], cwd: string): Promise<number> {
 export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: Record<string, unknown>) => Promise<any>, runFlow: (args: string[], cwd: string) => Promise<number> = runCast, post?: LeasePost): Promise<void> {
   const startedAt = Date.now();
   const root = (await git(process.cwd(), ["rev-parse", "--show-toplevel"]));
-  const flow = shipSpec(root).flow;
+  const spec = shipSpec(root);
+  if (spec.ignored) log(`! [ship] ${spec.ignored.map((k) => `'${k}'`).join(", ")}: not known to this cast, so ignored; update cast to use ${spec.ignored.length > 1 ? "them" : "it"}`);
+  const flow = spec.flow;
   const flowArgs = checkoutFlowArgs(flow, opts);
   if (flowArgs) {
     log(`[ship] flow = "${flow}": running the pass through it (cast ${flowArgs.join(" ")})`);

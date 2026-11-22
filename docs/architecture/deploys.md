@@ -321,11 +321,14 @@ them: where a deploy of a `here` target runs. A target the checkout stops
 declaring is retired, not deleted. Every reader (the CLI, the server, the
 Deploys page) parses through `contracts/deployTargets`.
 
-The targets have their own file because every released CLI validates
-workspace.toml strictly (an unknown key in `[[ship.deploy]]`, `[ship]` or at
-the top level refuses the whole manifest, and with it `cast ship` and
-workspace acquire). Keep workspace.toml to the keys the oldest CLI in use
-reads. deploy.toml is read past that: a target key this CLI does not know is
+The targets have their own file because released CLIs validate
+workspace.toml strictly (an unknown key in `[[ship.deploy]]` or at the top
+level refuses the whole manifest, and with it `cast ship` and workspace
+acquire). Keep workspace.toml to the keys the oldest CLI in use reads. An
+unknown key in `[ship]` is read past and named by `cast ship checkout`, but
+CLIs released before that rule refuse it like the rest, so a repository
+writes a new `[ship]` key only once `min_cli_version` is at or past a release
+that reads it or reads past it. deploy.toml is read past that: a target key this CLI does not know is
 ignored and named (`cast line deploy targets` prints it), so a file written
 for a newer CLI still deploys. CLIs before 1.1.249 refuse an unknown target
 key instead, and a pressed deploy of that repository fails on them: raise
