@@ -175,5 +175,33 @@ test("Save sends the whole staged change once, and the faces follow at once", as
   expect(dispatched[0][1]).toEqual({ add: ["me"] });
   expect(dispatched[0][2]).toEqual({ remove: ["me"], driver: { kind: "user", user_id: "jason" } });
   expect(ownersSeg()!.title).toBe("Owners: Jason (driver), Ashot");
+  // The server echoes the Save: the pending view settles and goes.
+  replies.set("sessionOwnership:listOwners", {
+    conversation_id: id,
+    owners: [{ user_id: "jason", name: "Jason" }, { user_id: "me", name: "Ashot" }],
+    role: null,
+    driver: { kind: "user", user_id: "jason" },
+  });
+  await render(true, false, false);
+  useInboxStore.setState({ applySessionOwners: real });
+});
+
+test("Select all teammates stages every non-owner, then hides itself", async () => {
+  const dispatched: any[] = [];
+  const real = useInboxStore.getState().applySessionOwners;
+  useInboxStore.setState({ applySessionOwners: (async (...args: any[]) => { dispatched.push(args); return undefined; }) as any });
+  replies.set("sessionOwnership:listOwners", {
+    conversation_id: id,
+    owners: [{ user_id: "jason", name: "Jason" }],
+    role: null,
+    driver: { kind: "user", user_id: "jason" },
+    runner: { user_id: "jason", name: "Jason", email: null, is_bot: false },
+  });
+  await render(true);
+  await openOwnersMenu();
+  await click(document.querySelector("[data-select-all-teammates]"));
+  expect(document.querySelector("[data-select-all-teammates]")).toBeNull();
+  await click(document.querySelector("[data-owners-save]"));
+  expect(dispatched[0][1]).toEqual({ add: ["me"] });
   useInboxStore.setState({ applySessionOwners: real });
 });

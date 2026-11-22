@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addPerson, addRole, diffOwners, leave, removePerson, removeRole, type OwnersDraft } from "../ownersDraft";
+import { addPeople, addPerson, addRole, diffOwners, leave, removePerson, removeRole, type OwnersDraft } from "../ownersDraft";
 
 const EVALS = { role_id: "r1", short_id: "or-1", handle: "evals", name: "Eval Suite lead", avatar: null };
 const GROWTH = { role_id: "r2", short_id: "or-2", handle: "growth", name: "Growth", avatar: null };
@@ -49,5 +49,20 @@ describe("the owners menu's staged change", () => {
     expect(d.moveTo?.device_id).toBe("mini");
     expect(change).toEqual({ remove: ["me"] });
     expect(undo).toEqual({ add: ["me"], driver: { kind: "user", user_id: "ashot" } });
+  });
+});
+
+describe("Select all teammates", () => {
+  test("adds every teammate not yet an owner as a pending owner, never the driver or the role", () => {
+    const start: OwnersDraft = { ownerIds: ["me", "ashot"], role: EVALS, driver: { kind: "role", role_id: "r1" }, moveTo: null };
+    const d = addPeople(start, ["ashot", "sam", "cam", "sam"]);
+    expect(d.ownerIds).toEqual(["me", "ashot", "sam", "cam"]);
+    expect(d.driver).toEqual(start.driver);
+    expect(d.role).toBe(EVALS);
+    expect(diffOwners(start, d).change).toEqual({ add: ["sam", "cam"] });
+  });
+
+  test("everyone already an owner changes nothing", () => {
+    expect(addPeople(justMe, ["me"])).toBe(justMe);
   });
 });

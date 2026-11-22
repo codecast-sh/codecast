@@ -18,7 +18,7 @@ import { useState, type KeyboardEvent, type ReactNode } from "react";
 import { Plus, Search, UserCheck, X, ChevronRight, BadgePlus } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwnerCandidates, pickRoster, type OwnersApi, type OwnerRole, type SessionDriver } from "../hooks/useOwners";
-import { addPerson, addRole, diffOwners, driverKey, leave, removePerson, removeRole, type OwnersDraft } from "../lib/ownersDraft";
+import { addPeople, addPerson, addRole, diffOwners, driverKey, leave, removePerson, removeRole, type OwnersDraft } from "../lib/ownersDraft";
 import { useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
 import { useMoveTargets } from "../hooks/useBulkMoveSessions";
@@ -144,7 +144,9 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
   const suggested = (fits.length ? fits : offerRoles).slice(0, SUGGESTED_ROLES);
   const restRoles = offerRoles.filter((r) => !suggested.includes(r));
   const shownRoles = q || moreRoles ? [...suggested, ...restRoles] : suggested;
-  const teammates = people.filter((m) => !draft.ownerIds.includes(m._id) && matches(memberName(m), m.email));
+  // Everyone on the session's team not yet an owner or pending, whatever the search shows.
+  const unselected = people.filter((m) => !draft.ownerIds.includes(m._id));
+  const teammates = unselected.filter((m) => matches(memberName(m), m.email));
   const candidates: Candidate[] = [
     ...shownRoles.map((r) => ({ key: `r:${r._id}`, kind: "role" as const, role: r })),
     ...teammates.map((m) => ({ key: `p:${m._id}`, kind: "person" as const, person: personOf(m._id) })),
@@ -189,7 +191,8 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
   const drivesTag = (key: string) => (driverChanged && isDriver(draft.driver, key) ? " · driver" : "");
   const driverOnNew = !!draft.driver && driverChanged && (draft.driver.kind === "role" ? roleChanged : added.includes(draft.driver.user_id));
   const chips: string[] = [
-    ...added.map((id) => `+ ${personOf(id).name}${drivesTag(`p:${id}`)}`),
+    // A long multi-select reads as one count, not a wall of chips.
+    ...(added.length > 3 ? [`+ ${added.length} people`] : added.map((id) => `+ ${personOf(id).name}${drivesTag(`p:${id}`)}`)),
     ...(roleChanged && draft.role ? [`+ ${draft.role.name}${drivesTag(`r:${draft.role.role_id}`)}`] : []),
     ...removed.map((id) => (id === meId ? "You leave" : `− ${personOf(id).name}`)),
     ...(roleChanged && initial.role ? [`− ${initial.role.name}`] : []),
@@ -273,6 +276,12 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
                     </button>
                   )}
                   <div className={LABEL}>Teammates</div>
+                  {unselected.length > 0 && (
+                    <button type="button" data-select-all-teammates className={`${ROW} w-full text-sol-text-muted`} onClick={() => setDraft((d) => addPeople(d, unselected.map((m) => m._id)))}>
+                      <Plus className="w-3.5 h-3.5" /> Select all teammates
+                      <span className="ml-auto text-meta tabular-nums text-sol-text-dim">{unselected.length}</span>
+                    </button>
+                  )}
                 </>
               )}
               <div

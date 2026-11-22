@@ -43,6 +43,13 @@ export function addPerson(d: OwnersDraft, id: string, drive = false): OwnersDraf
   return { ...d, ownerIds: [...d.ownerIds, id], driver: drive ? { kind: "user", user_id: id } : d.driver };
 }
 
+/** "Select all teammates": every given person not yet an owner becomes a
+ *  pending owner, as a + on each would. Never sets a driver or the role. */
+export function addPeople(d: OwnersDraft, ids: string[]): OwnersDraft {
+  const fresh = ids.filter((id, i) => !d.ownerIds.includes(id) && ids.indexOf(id) === i);
+  return fresh.length ? { ...d, ownerIds: [...d.ownerIds, ...fresh] } : d;
+}
+
 export function leave(d: OwnersDraft, meId: string, moveTo: OwnersDraft["moveTo"]): OwnersDraft {
   return { ...removePerson(d, meId), moveTo };
 }
