@@ -5,7 +5,9 @@
 // attached `send`), once; with text in the composer it only saves.
 //
 // The composer's text is stated the way the store holds it: the conversation's
-// draft (`drafts[id].draft_message`), absent for an empty composer.
+// draft (`drafts[id].draft_message`, and `draft_image_storage_ids` for pasted
+// images), absent for an empty composer. The note's primary button says what
+// Enter will do: "Send" when it sends, "Save" when it only saves.
 import { afterAll, expect, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
@@ -35,10 +37,15 @@ afterAll(() => {
 
 const CONV = "conv_ct97962";
 
-async function pressEnterInNote(composerText: string | null) {
+type Composer = { text?: string; images?: number };
+
+async function pressInNote(composer: Composer | null, how: "enter" | "click" = "enter") {
   const s = useInboxStore.getState();
   s.clearReviewComments(CONV);
-  if (composerText) s.setDraft(CONV, { draft_message: composerText });
+  if (composer) s.setDraft(CONV, {
+    draft_message: composer.text ?? null,
+    draft_image_storage_ids: composer.images ? Array.from({ length: composer.images }, (_, i) => ({ storageId: `st_${i}`, previewUrl: `blob:${i}` })) : null,
+  });
   else s.clearDraftFinal(CONV);
   const id = createReviewComment(CONV, "msg_1", 0, "The quoted paragraph.");
   const comment = useInboxStore.getState().getReviewComments(CONV).find((c) => c.id === id)!;
@@ -69,9 +76,13 @@ async function pressEnterInNote(composerText: string | null) {
       setter.call(ta, "my note");
       ta.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
     });
-    await act(() => { ta.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    const primary = container.querySelector(".cc-comment-btn-primary") as HTMLButtonElement;
+    const label = primary.firstChild?.textContent;
+    if (how === "enter") await act(() => { ta.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })); });
+    else await act(() => { primary.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); });
     const saved = useInboxStore.getState().getReviewComments(CONV).find((c) => c.id === id)?.body;
-    return { sends, saved, draft: useInboxStore.getState().drafts[CONV]?.draft_message };
+    const d = useInboxStore.getState().drafts[CONV];
+    return { sends, saved, label, draft: d?.draft_message, images: d?.draft_image_storage_ids?.length ?? 0 };
   } finally {
     await act(() => root.unmount());
     container.remove();
@@ -81,13 +92,28 @@ async function pressEnterInNote(composerText: string | null) {
 }
 
 test("empty composer: Enter in the note saves the note and sends once, with the note in the batch", async () => {
-  const { sends } = await pressEnterInNote(null);
+  const { sends, label } = await pressInNote(null);
+  expect(label).toBe("Send");
+  expect(sends).toEqual([{ body: "my note" }]);
+});
+
+test("empty composer: the Send button does what Enter does", async () => {
+  const { sends } = await pressInNote(null, "click");
   expect(sends).toEqual([{ body: "my note" }]);
 });
 
 test("composer has typed text: Enter in the note only saves, and sends nothing", async () => {
-  const { sends, saved, draft } = await pressEnterInNote("half a reply");
+  const { sends, saved, draft, label } = await pressInNote({ text: "half a reply" });
+  expect(label).toBe("Save");
   expect(saved).toBe("my note");
   expect(sends).toEqual([]);
   expect(draft).toBe("half a reply");
+});
+
+test("composer holds only an image: Enter in the note only saves, and the image stays", async () => {
+  const { sends, saved, images, label } = await pressInNote({ images: 1 });
+  expect(label).toBe("Save");
+  expect(saved).toBe("my note");
+  expect(sends).toEqual([]);
+  expect(images).toBe(1);
 });
