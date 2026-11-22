@@ -408,6 +408,50 @@ describe("the subject between its turns: restarted, parked, retired", () => {
     expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
   });
 
+  test("a subject a person restored and then typed to is theirs: its next settle is neither stashed nor parked", async () => {
+    let row = { id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 };
+    const calls: string[] = [];
+    const parker = startSubjectParker(async (route) => {
+      calls.push(route);
+      if (route === "/cli/sessions/dismiss") row = { ...row, bucket: "stashed" };
+      return { sessions: [row] };
+    }, { conversationId: CONV, shortId: "jx7ssss" }, 60_000, () => {});
+    const context: Record<string, string> = {};
+    parker.bind(context);
+    await parker.tick();
+    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
+    // Restored, and already answering the person: the run first reads it working at a new length.
+    row = { ...row, bucket: "working", work_state: "working", message_count: 9 };
+    await parker.tick();
+    expect(context.subject_kept).toBe("1");
+    row = { ...row, bucket: "done", work_state: "done", message_count: 12 };
+    await parker.tick();
+    await parker.stop();
+    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(1);
+    expect(calls.filter((r) => r === "/cli/sessions/hibernate")).toHaveLength(1);
+  });
+
+  test("the subject's own station bringing it back is the run's doing, not a person's: it is stashed again at its next settle", async () => {
+    let row = { id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 };
+    const calls: string[] = [];
+    const parker = startSubjectParker(async (route) => {
+      calls.push(route);
+      if (route === "/cli/sessions/dismiss") row = { ...row, bucket: "stashed" };
+      return { sessions: [row] };
+    }, { conversationId: CONV, shortId: "jx7ssss" }, 60_000, () => {});
+    const context: Record<string, string> = {};
+    parker.bind(context);
+    await parker.tick();
+    // A brief sent plain (a server that refuses quiet) files it in the inbox again while the station runs.
+    await parker.pause();
+    row = { ...row, bucket: "done", message_count: 8 };
+    parker.resume();
+    await parker.tick();
+    await parker.stop();
+    expect(context.subject_kept).toBeUndefined();
+    expect(calls.filter((r) => r === "/cli/sessions/dismiss")).toHaveLength(2);
+  });
+
   test("a parker does nothing until it is bound to the run's context, so a resumed runner reads subject_kept first", async () => {
     const calls: string[] = [];
     const read = async (route: string) => { calls.push(route); return { sessions: [{ id: CONV, work_state: "done", bucket: "done", is_live: true, message_count: 3 }] }; };
