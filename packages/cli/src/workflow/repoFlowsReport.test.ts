@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { repoFlowsReport, reportRepoFlows } from "./repoFlowsReport";
+import { RESEND_MS, repoFlowsReport, reportRepoFlows } from "./repoFlowsReport";
 
 const BASE = `digraph change {
   graph [kind="line", label="Change", description="PR, CI and review side by side", takes="task,branch"]
@@ -55,15 +55,16 @@ describe("a checkout's own flows", () => {
     expect(repoFlowsReport(root, null)).toBeNull();
   });
 
-  test("a report goes up again only when the flows changed", async () => {
+  test("a report goes up again when the flows changed or a day passed", async () => {
     const cache = path.join(root, "cache");
     const sent: string[] = [];
-    // The checkout's origin is read from git, so give it one.
-    Bun.spawnSync(["git", "init", "-q", root]);
-    Bun.spawnSync(["git", "-C", root, "remote", "add", "origin", REMOTE]);
+    gitInit(root);
     const post = async (r: { hash: string }) => { sent.push(r.hash); return true; };
     expect(await reportRepoFlows(root, post, cache)).toBe("sent");
     expect(await reportRepoFlows(root, post, cache)).toBe("unchanged");
+    // An unchanged checkout still reports once a day, so the server keeps its row.
+    expect(await reportRepoFlows(root, post, cache, Date.now() + RESEND_MS + 1)).toBe("sent");
+    sent.pop();
     fs.writeFileSync(path.join(root, "line", "change.cast"), BASE.replace('label="PR"', 'label="Pull request"'));
     expect(await reportRepoFlows(root, post, cache)).toBe("sent");
     expect(sent.length).toBe(2);
@@ -73,4 +74,29 @@ describe("a checkout's own flows", () => {
     expect(await reportRepoFlows(root, async () => false, cache)).toBe("skipped");
     expect(await reportRepoFlows(root, post, cache)).toBe("sent");
   });
+
+  test("two checkouts of one repository report apart, each under its own root", async () => {
+    const other = fs.mkdtempSync(path.join(os.tmpdir(), "repo-flows-other-"));
+    try {
+      gitInit(root);
+      gitInit(other);
+      const cache = path.join(root, "cache");
+      const sent: Array<{ root: string; flows: unknown[] }> = [];
+      const post = async (r: { root: string; flows: unknown[] }) => { sent.push(r); return true; };
+      expect(await reportRepoFlows(root, post, cache)).toBe("sent");
+      // A worktree with no flows of its own is its own report, not a repeat of the first checkout's.
+      expect(await reportRepoFlows(other, post, cache)).toBe("sent");
+      expect(sent.map((r) => [path.basename(r.root), r.flows.length])).toEqual([[path.basename(root), 1], [path.basename(other), 0]]);
+    } finally {
+      fs.rmSync(other, { recursive: true, force: true });
+    }
+  });
 });
+
+/** A git checkout with Union's origin. Git's own env from a calling hook (GIT_DIR, say) is dropped, or `git init`
+ *  reinitialises that repository instead of this directory. */
+function gitInit(dir: string) {
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("GIT_"))) as Record<string, string>;
+  Bun.spawnSync(["git", "init", "-q", dir], { env });
+  Bun.spawnSync(["git", "-C", dir, "remote", "add", "origin", REMOTE], { env });
+}

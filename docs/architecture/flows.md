@@ -91,14 +91,18 @@ and runs that file.
 The web holds no parser and reads no checkout, so each checkout reports its
 repo's own flows: the session-start refresh (`stableContext.ts`,
 `workflow/repoFlowsReport.ts`) sends every non-draft `.codecast/flows/*.cast` graph,
-parsed with its `extends` expanded, under the repository its origin remote
-names, whenever they changed since this machine last sent that repository's
-(`repo_flows`: one row per person and repository, read only by that person).
-The Ship picker reads the row for the session's repository and builds the pool
-in the CLI's order: those flows, then each shipped flow they do not name, then
-the published ones, so it draws the flow a press runs. A checkout with no
-origin reports nothing, and a teammate's picker on someone else's session
-lacks the repo's flows until their own checkout of it has reported. A team
+parsed with its `extends` expanded, under the checkout's git top level and the
+repository its origin remote names, whenever they changed since this machine
+last sent that checkout's and at least once a day (`checkout_flows`: one row per
+person and checkout, read only by that person; a checkout silent for two weeks
+is dropped). A repository's worktrees sit on different branches with different
+flows, which is why the key is the checkout. The Ship picker reads the row for
+the session's own checkout (its `git_root`), else its repository's newest, and
+builds the pool in the CLI's order: those flows, then each shipped flow they do
+not name, then the published ones, so it draws the flow a press runs. A
+checkout with no origin reports nothing, and a teammate's picker on someone
+else's session lacks the repo's flows until their own checkout of it has
+reported. A team
 flow never overrides a shipped one of the same slug: a directory that is not
 mapped reads the active team's pool, so an override would follow the person
 into every other repository they open.

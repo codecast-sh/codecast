@@ -8474,11 +8474,13 @@ export default defineSchema({
   // A repository's own flows (`.codecast/flows`), as the viewer's checkouts of
   // it report them (repoFlows.ts, shared/contracts/repoFlows.ts): the flows
   // `cast flow run` takes there ahead of the shipped and published ones. One
-  // row per person and repository; the owner alone reads it. `flows` holds
+  // row per person and checkout (`root`, its git top level): a repository's
+  // worktrees hold different flows. The owner alone reads it. `flows` holds
   // each graph parsed, its nodes the parser's FlowNodeIn, which grows with
   // the parser, so they are not pinned field by field here.
-  repo_flows: defineTable({
+  checkout_flows: defineTable({
     user_id: v.id("users"),
+    root: v.string(),
     repository: v.string(),
     hash: v.string(),
     flows: v.array(v.object({
@@ -8492,7 +8494,10 @@ export default defineSchema({
       edges: v.array(v.object({ from: v.string(), to: v.string(), label: v.optional(v.string()), condition: v.optional(v.string()) })),
     })),
     updated_at: v.number(),
-  }).index("by_user_repository", ["user_id", "repository"]),
+  })
+    .index("by_user_root", ["user_id", "root"])
+    // A session in a checkout that never reported reads its repository's newest report.
+    .index("by_user_repository_updated", ["user_id", "repository", "updated_at"]),
 
   workflows: defineTable({
     user_id: v.id("users"),
