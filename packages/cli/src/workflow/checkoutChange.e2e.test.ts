@@ -237,6 +237,36 @@ describe("a shared checkout's pass is one flow change", () => {
     expect(third.paths).toContain("src/_generated/api.ts");
   }, 180_000);
 
+  test("at the root a late file is a writer's only as the root manifest's lockfile or a build's own file", async () => {
+    const { root, edit } = checkoutWorld();
+    const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
+    const runDir = path.join(root, ".git", "run-pass");
+    writeFrozenChange(runDir, change);
+    const since = Date.now() + 5;
+    await new Promise((r) => setTimeout(r, 20));
+    // A touches a root file and a nested package's manifest, never the root manifest.
+    edit(A, "README.md", "a readme\n");
+    edit(A, "pkg/package.json", "{ \"name\": \"pkg\" }\n");
+    write(root, "bun.lock", "{ lockfile: 3 }\n");
+    write(root, "scratch.log", "another session's output\n");
+    write(root, "tsconfig.tsbuildinfo", "{}\n");
+    write(root, "pkg/bun.lock", "{ lockfile: 4 }\n");
+
+    const { change: again } = await refreezeSessionChange(root, runDir, null, { roster, since });
+    expect(again.paths).toContain("tsconfig.tsbuildinfo");
+    expect(again.paths).toContain("pkg/bun.lock");
+    const held = Object.fromEntries(again.held.map((h) => [h.path, h.why]));
+    expect(held["bun.lock"]).toMatch(/^changed after the brief/);
+    expect(held["scratch.log"]).toMatch(/^changed after the brief/);
+
+    // Once A changes the root manifest, the root lockfile is its install's.
+    edit(A, "package.json", "{ \"dependencies\": { \"x\": \"1\" } }\n");
+    writeFrozenChange(runDir, change);
+    const { change: third } = await refreezeSessionChange(root, runDir, null, { roster, since });
+    expect(third.paths).toContain("bun.lock");
+    expect(third.paths).not.toContain("scratch.log");
+  }, 180_000);
+
   test("a refreeze of a pass upstream already holds, the checkout levelled under it, comes back landed", async () => {
     const { root, origin } = checkoutWorld();
     const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });

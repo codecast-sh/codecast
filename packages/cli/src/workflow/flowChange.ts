@@ -288,19 +288,23 @@ const LOCKFILES: Record<string, string[]> = {
 };
 // Directories a generator writes beside the sources it reads from their parent.
 const GENERATED_DIRS = new Set(["_generated", "__generated__", "generated", "__snapshots__"]);
+// Files a build writes at a repository's root.
+const ROOT_GENERATED = new Set(["next-env.d.ts", "tsconfig.tsbuildinfo", ".pnp.cjs", ".pnp.loader.mjs", "worker-configuration.d.ts"]);
 
 /**
  * Whether a file no session's edit names, changed after a brief, is one a writer's shell made from what the writers
- * changed (`theirs`): a lockfile whose manifest a writer changed in its directory or below, or a file beside a
- * writer's changed source (the same directory, or a generator's directory whose parent holds one). Another
- * session's `bun install` or codegen is neither.
+ * changed (`theirs`): a lockfile whose manifest a writer changed in its directory or below (at the root, the root's
+ * own manifest), a file beside a writer's changed source (the same directory, or a generator's directory whose
+ * parent holds one), or a file a build writes at the root. Every session's work meets at the root, so a root file
+ * is never made by a writer only because it sits beside one. Another session's `bun install` or codegen is neither.
  */
 function madeByWriter(p: string, theirs: string[]): boolean {
   const dir = (f: string) => f.includes("/") ? f.slice(0, f.lastIndexOf("/")) : "";
   const base = (f: string) => f.slice(f.lastIndexOf("/") + 1);
-  const under = (d: string, f: string) => d === "" || f.startsWith(`${d}/`);
+  const under = (d: string, f: string) => d === "" ? dir(f) === "" : f.startsWith(`${d}/`);
   const manifests = LOCKFILES[base(p)];
   if (manifests) return theirs.some((t) => manifests.includes(base(t)) && under(dir(p), t));
+  if (dir(p) === "") return ROOT_GENERATED.has(p) && theirs.length > 0;
   if (theirs.some((t) => dir(t) === dir(p))) return true;
   const segs = dir(p).split("/");
   return segs.some((seg, k) => GENERATED_DIRS.has(seg) && theirs.some((t) => under(segs.slice(0, k).join("/"), t)));
