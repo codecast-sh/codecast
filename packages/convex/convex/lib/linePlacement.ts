@@ -123,7 +123,7 @@ async function teamMemberIds(ctx: Ctx, teamId: string): Promise<string[]> {
  * and the run stays on the runner's own machine. A machine that cannot start one of the agents the run's flow needs
  * (`needs`: flowAgents) is no slot of it, so a runner whose own machines all lack one takes the team's pool.
  */
-export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string | undefined, now: number, teamId?: string | null, needs?: readonly string[]): Promise<LinePool | null> {
+export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string | undefined, now: number, teamId?: string | null, needs?: readonly string[], known?: Map<string, LineSlot>): Promise<LinePool | null> {
   if (!projectPath) return null;
   const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", runner)).collect();
   let checkout: { root: string; origin: string } | null = null;
@@ -136,7 +136,7 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
   const origin = checkout && normalizeGitOrigin(checkout.origin);
   if (!checkout || !origin) return null;
   const subpath = projectPath.slice(checkout.root.length).replace(/^\/+/, "");
-  const own = await slotsFor(ctx, devices, origin, now, needs);
+  const own = await slotsFor(ctx, devices, origin, now, needs, known);
   const offline = (ds: any[]) => ds.filter((d) => (d.line_slots ?? []).some((s: any) => s.origin === origin) && (!isDeviceOnline(d, now) || missingAgentOn(d, needs))).length;
   if (own.length) return { origin, subpath, slots: own, offline: offline(devices) };
   if (!teamId) return null;
@@ -145,15 +145,18 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
     if (member === runner) continue;
     team.push(...await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", member)).collect());
   }
-  const shared = await slotsFor(ctx, team, origin, now, needs);
+  const shared = await slotsFor(ctx, team, origin, now, needs, known);
   return shared.length ? { origin, subpath, slots: shared, offline: offline(devices) + offline(team) } : null;
 }
 
-async function slotsFor(ctx: Ctx, devices: any[], origin: string, now: number, needs?: readonly string[]): Promise<LineSlot[]> {
+/** `known`: the machines a pass already read (orgLine passSlots), by device and origin; a slot taken through one pool is taken in all. */
+async function slotsFor(ctx: Ctx, devices: any[], origin: string, now: number, needs?: readonly string[], known?: Map<string, LineSlot>): Promise<LineSlot[]> {
   const waiting = new Map<string, Set<string>>();
   const slots: LineSlot[] = [];
   for (const d of devices) {
     if (!isDeviceOnline(d, now) || missingAgentOn(d, needs)) continue;
+    const seen = known?.get(`${d.device_id}|${origin}`);
+    if (seen) { slots.push(seen); continue; }
     // A slot with no runs (a spent account, a full disk, an operator's hold) keeps its machine in the pool with no room,
     // so the run waits for a slot instead of falling back to the runner's own machine (Oct 24: 7 of 10 runs landed on
     // the laptop).
@@ -162,7 +165,9 @@ async function slotsFor(ctx: Ctx, devices: any[], origin: string, now: number, n
     const user = String(d.user_id);
     // A run's decisions are asked by its sessions, which run as the machine's account.
     if (!waiting.has(user)) waiting.set(user, await runsWaitingOnAPerson(ctx, user));
-    slots.push({ device: String(d.device_id), user, root: slot.root, runs: slotRuns(d, slot), working: await deviceWorking(ctx, String(d.device_id), waiting.get(user)!) });
+    const read: LineSlot = { device: String(d.device_id), user, root: slot.root, runs: slotRuns(d, slot), working: await deviceWorking(ctx, String(d.device_id), waiting.get(user)!) };
+    known?.set(`${d.device_id}|${origin}`, read);
+    slots.push(read);
   }
   return slots;
 }
