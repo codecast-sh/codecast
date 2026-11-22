@@ -2,8 +2,11 @@
 // flow change (`cast flow run --checkout`). Two sessions wrote files in one
 // checkout beside a credential and a stale copy; the freeze makes a commit per
 // writer, as `cast ship checkout` plans a pass, cut onto freshly fetched
-// upstream, and records who wrote each file. Real git with a bare origin, real
-// transcripts and sync ledger in an isolated CODECAST_DIR and HOME.
+// upstream, and records who wrote each file. A stage's finding then goes to the
+// writers of the files it names, each told its own, and the run waits for all
+// of them before it freezes the pass again. Real git with a bare origin, real
+// transcripts and sync ledger in an isolated CODECAST_DIR and HOME; the server
+// is a fake that plays the sessions.
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
@@ -11,12 +14,18 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { freezeCheckoutChange, NoCheckoutChange, previewCheckoutChange, refreezeSessionChange, writeFrozenChange } from "./flowChange";
 import { readFrozenChange } from "./flowChangeFile";
+import { parseWorkflowSource } from "./parser";
+import { lineRunDir, runSlug, runWorkflow } from "./runner";
 
 const ENV = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
 const saved: Record<string, string | undefined> = {};
 let sandbox = "";
+let origFetch: typeof fetch;
+let origLog: typeof console.log;
 
 beforeAll(() => {
+  origFetch = globalThis.fetch;
+  origLog = console.log;
   sandbox = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "cast-checkout-e2e-")));
   for (const [k, v] of Object.entries({ ...ENV, HOME: sandbox, CODECAST_DIR: path.join(sandbox, ".codecast") })) {
     saved[k] = process.env[k];
@@ -24,6 +33,8 @@ beforeAll(() => {
   }
 });
 afterAll(() => {
+  globalThis.fetch = origFetch;
+  console.log = origLog;
   for (const [k, v] of Object.entries(saved)) v === undefined ? delete process.env[k] : (process.env[k] = v);
   fs.rmSync(sandbox, { recursive: true, force: true });
 });
@@ -161,4 +172,127 @@ describe("a shared checkout's pass is one flow change", () => {
     await expect(refused).rejects.toBeInstanceOf(NoCheckoutChange);
     await expect(refused).rejects.toThrow(/can ship \(held: .*\.env\.local/);
   }, 180_000);
+});
+
+// The session that ran `cast flow run --checkout`: the run's subject, which hears findings that name no file of the change.
+const CALLER = "jx7cccccccccccccccccccccccccccc3";
+
+/** The change flow with a check that reads the frozen branch and prints `$1` for each file that is not good yet. */
+function changeFlow(check: string) {
+  const dir = fs.mkdtempSync(path.join(sandbox, "flows-"));
+  fs.writeFileSync(path.join(dir, "tcheck.cast"), `digraph tcheck {
+    graph [kind="segment", label="Check"]
+    start [shape=Mdiamond]
+    verify [label="Verify", shape=parallelogram, script="${check.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"]
+    passed [shape=Msquare, label="Passed"]
+    failed [shape=Msquare, label="Checks failed", stop="The project's check failed on the change: $verify.output"]
+    start -> verify
+    verify -> passed [condition="outcome = success"]
+    verify -> failed [condition="outcome = failure"]
+  }`);
+  return parseWorkflowSource(`digraph change {
+    graph [label="Change", on_failure=stop]
+    start [shape=Mdiamond]
+    check [flow="tcheck"]
+    fix_check [label="Fix check", backend=subject, max_visits=3, prompt="Check failed on $task_id.\\n\\n$stop_reason"]
+    exit [shape=Msquare, label="Done"]
+    start -> check
+    check -> exit
+    check -> fix_check [condition="outcome = failure"]
+    fix_check -> check
+  }`, dir);
+}
+// Each file of the change whose content on the frozen branch does not say good is an error naming it.
+const GOOD_CHECK = `bad=0; for f in src/a.ts src/b.ts; do git -C $project_path show $branch:$f | grep -q good || { echo error: $f is not good; bad=1; }; done; exit $bad`;
+
+/** The server, playing every session: `fixes[conversation]` is what that session does when a brief reaches it; it reads working until that is done. */
+function sessions(fixes: Record<string, () => void | Promise<void>>) {
+  const calls: Array<{ route: string; body: any }> = [];
+  const messages: Record<string, number> = { [A]: 10, [B]: 10, [CALLER]: 10 };
+  const busy = new Set<string>();
+  globalThis.fetch = (async (url: any, init: any) => {
+    const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+    const body = JSON.parse(init?.body || "{}");
+    calls.push({ route, body: structuredClone(body) });
+    const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
+    if (route === "/cli/inbox") return reply({ sessions: (body.session_ids ?? []).filter((id: string) => id in messages).map((id: string) => ({ id, work_state: busy.has(id) ? "working" : "done", is_live: true, is_killed: false, message_count: messages[id] })) });
+    if (route === "/cli/messages/send") {
+      const to: string = body.to;
+      const fixing = /^Check failed/.test(body.body) ? fixes[to]?.() : undefined;
+      if (fixing) {
+        busy.add(to);
+        void fixing.then(() => { messages[to] += 3; busy.delete(to); });
+      } else messages[to] = (messages[to] ?? 0) + 3;
+      return reply({ ok: true });
+    }
+    return reply({ ok: true });
+  }) as typeof fetch;
+  const briefs = () => calls.filter((c) => c.route === "/cli/messages/send" && /^Check failed/.test(c.body.body)).map((c) => c.body);
+  return { calls, briefs };
+}
+
+async function runOnCheckout(root: string, graph: ReturnType<typeof changeFlow>) {
+  const runDir = lineRunDir(root, runSlug(graph, { task_id: "ct-9" }, "run"));
+  const change = await freezeCheckoutChange(root, { branch: "codecast/change-ct-9", worktree: "change-ct-9", roster });
+  writeFrozenChange(runDir, { ...change, session: CALLER.slice(0, 7), conversation: CALLER });
+  console.log = process.env.SHOW_RUN ? origLog : () => {};
+  try {
+    const outcome = await runWorkflow(graph, { cwd: root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, subjectParkMs: 1 });
+    return { outcome, runDir };
+  } finally {
+    console.log = origLog;
+  }
+}
+
+describe("a finding goes to the writers of the files it names", () => {
+  const parked = (s: ReturnType<typeof sessions>) => s.calls.filter((c) => ["/cli/sessions/dismiss", "/cli/sessions/hibernate", "/cli/sessions/retire", "/cli/sessions/kill"].includes(c.route));
+
+  test("a check naming one writer's file briefs only that writer, quietly; its fix is frozen in and Check passes", async () => {
+    const { root, edit } = checkoutWorld();
+    edit(B, "src/b.ts", "export const b = 'good';\n");
+    const s = sessions({ [A]: () => edit(A, "src/a.ts", "export const a = 'good';\n") });
+    const { outcome, runDir } = await runOnCheckout(root, changeFlow(GOOD_CHECK));
+    expect(outcome).toBe("completed");
+    const briefs = s.briefs();
+    expect(briefs).toHaveLength(1);
+    expect(briefs[0]).toMatchObject({ to: A, from: "conv_run", quiet: true });
+    expect(briefs[0].body).toContain("error: src/a.ts is not good");
+    expect(briefs[0].body).toContain("Your files among the failing ones: src/a.ts.");
+    expect(git(root, "show", "codecast/change-ct-9:src/a.ts")).toBe("export const a = 'good';");
+    expect(readFrozenChange(runDir)?.tip).toBe(git(root, "rev-parse", "codecast/change-ct-9"));
+    // The station says who it briefed; nobody is parked or retired.
+    const fixed = s.calls.find((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "fix_check" && c.body.node_status === "completed");
+    expect(fixed?.body.result_preview ?? "").toContain("briefed jx7aaaa (src/a.ts)");
+    expect(parked(s)).toEqual([]);
+  }, 1_200_000);
+
+  test("a check naming both writers' files briefs both, each with its own file, and waits for both", async () => {
+    const { root, edit } = checkoutWorld();
+    const s = sessions({
+      [A]: () => edit(A, "src/a.ts", "export const a = 'good';\n"),
+      // B works a while longer: the run must not freeze the pass before B has settled.
+      [B]: () => new Promise<void>((done) => setTimeout(() => { edit(B, "src/b.ts", "export const b = 'good';\n"); done(); }, 1500)),
+    });
+    const { outcome } = await runOnCheckout(root, changeFlow(GOOD_CHECK));
+    expect(outcome).toBe("completed");
+    const briefs = s.briefs();
+    // One brief each: a freeze before B settled would fail Check again and brief B twice.
+    expect(briefs.map((b) => b.to).sort()).toEqual([A, B]);
+    expect(briefs.find((b) => b.to === A)!.body).toContain("Your files among the failing ones: src/a.ts.");
+    expect(briefs.find((b) => b.to === B)!.body).toContain("Your files among the failing ones: src/b.ts.");
+    expect(git(root, "show", "codecast/change-ct-9:src/b.ts")).toBe("export const b = 'good';");
+    expect(parked(s)).toEqual([]);
+  }, 1_200_000);
+
+  test("a finding that names no file of the change goes to the session that ran the run", async () => {
+    const { root } = checkoutWorld();
+    const s = sessions({ [CALLER]: () => write(root, "notes.txt", "fixed\n") });
+    const { outcome } = await runOnCheckout(root, changeFlow(`[ "$(git -C $project_path show $branch:notes.txt)" = fixed ] || { echo error: the lint config is broken; exit 1; }`));
+    expect(outcome).toBe("completed");
+    const briefs = s.briefs();
+    expect(briefs.map((b) => b.to)).toEqual([CALLER]);
+    expect(briefs[0].body).not.toContain("Your files among the failing ones");
+    expect(git(root, "show", "codecast/change-ct-9:notes.txt")).toBe("fixed");
+    expect(parked(s)).toEqual([]);
+  }, 1_200_000);
 });
