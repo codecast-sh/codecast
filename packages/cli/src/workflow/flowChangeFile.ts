@@ -18,6 +18,9 @@ export type FrozenChange = {
   title?: string;
   base: string;
   tip: string;
+  /** Origin's tip of the branch when the change was last frozen, if origin has it: origin holds a fix only once it
+   *  moves off this, so a copy pushed before a local rebase never replaces the change. */
+  remote_tip?: string;
   branch: string;
   worktree: string;
   paths: string[];
