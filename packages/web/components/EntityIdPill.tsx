@@ -1281,6 +1281,11 @@ export function EntityIdPill({
   // A deploy's state is part of its name for a reader who cannot see the color.
   // A pill with a caret keeps it on its line: the caret never starts one.
   const KeepWithCaret = canReveal ? "span" : React.Fragment;
+  // A plain reference (no state segment, not a full-width row) flows as
+  // words do: its title wraps at the column edge like the prose around it,
+  // instead of a box that jumps to a line of its own or stacks two lines
+  // tall inside the sentence (ct-87448). `.entity-ref--flow` in globals.css.
+  const flows = !wide && !saysState && !deployV;
   const linkTitle = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : wide || saysState || fullLabel !== pillLabel ? fullLabel : undefined;
   return (
     <>
@@ -1296,11 +1301,11 @@ export function EntityIdPill({
           onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
           data-reveal-open={revealOpen ? "" : undefined}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} whitespace-normal inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : saysState ? (canReveal ? " max-w-[calc(100%-1.3em)]" : " max-w-full") : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""}${flows ? " entity-ref--flow" : " inline-flex items-center gap-[0.2em] leading-none"} whitespace-normal px-[0.2em] rounded-[0.2em] text-[1em] font-medium ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : saysState ? (canReveal ? " max-w-[calc(100%-1.3em)]" : " max-w-full") : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
           title={linkTitle}
           aria-label={deployV ? linkTitle : undefined}
         >
-          <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
+          <span className="entity-ref__icon relative flex-shrink-0 opacity-80 inline-flex items-center">
             {persona && entity ? (
               <SessionFace row={entity} size="1em" />
             ) : type === "role" && entity?.handle ? (
@@ -1319,7 +1324,7 @@ export function EntityIdPill({
           {/* The label, not the icon, gives the pill its baseline, so the
               text sits on the line with the words around it. */}
           {/* A pill that carries its state cuts its title, so the state stays on the line with it. */}
-          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : saysState ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : "self-baseline"}>{pillLabel}</span>
+          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : saysState ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : flows ? undefined : "self-baseline"}>{pillLabel}</span>
           {deployV && <DeployPillSuffix deploy={entity} />}
           {reachRef && <PillReach refId={reachRef} pr={isPr} />}
           {prState && <PrStateSegment state={prState} />}
