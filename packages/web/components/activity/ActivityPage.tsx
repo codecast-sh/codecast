@@ -10,7 +10,6 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useViewerIdentity } from "../../hooks/useTeamRoster";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import { useTeamFeed, inboxSessionToConv } from "../../hooks/useTeamFeed";
-import { settingsDataKey } from "../../lib/settingsData";
 import type { Conversation } from "../../lib/conversationRow";
 import { ErrorBoundary } from "../ErrorBoundary";
 import { MessageFeed } from "../MessageFeed";
@@ -23,6 +22,7 @@ import { ActivityHeader } from "./ActivityHeader";
 import { ActivityDays, ActivityLoadOlder, ActivityNeedsGroup } from "./ActivityList";
 import { ActivityNowStrip, ActivitySummaryRow } from "./ActivityNow";
 import { useActivityItems } from "./useActivityItems";
+import { teamMembersOf } from "../../lib/activeTeam";
 import { useActivityView, type ActivityViewState } from "./useActivityView";
 import { activityViewHref, type ActivityTab } from "./activityView";
 import { filterItems, filterLoose, groupActivity, needsList, nowStrip, peopleFacets, projectFacets, summarize } from "./activityModel";
@@ -83,10 +83,8 @@ function MessagesScreen({ state, hasTeam }: { state: ActivityViewState; hasTeam:
  *  (hooks/useTeamFeed), with the viewer's own private rows merged in. */
 function TeamActivity({ state, fallbackTeamId }: { state: ActivityViewState; fallbackTeamId: string }) {
   const viewer = useViewerIdentity();
-  const activeTeamIdForRoster = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const rosterKey = settingsDataKey("teamMembers", viewer?._id, activeTeamIdForRoster);
-  const roster = useInboxStore((s) => (rosterKey ? s.settingsData[rosterKey]?.value : undefined));
-  const members = Array.isArray(roster) ? roster : undefined;
+  const roster = useInboxStore(teamMembersOf);
+  const members = roster.length ? roster : undefined;
   const feed = useTeamFeed({ directoryFilter: state.view.dir, members });
   const teamId = feed.activeTeamId ? String(feed.activeTeamId) : fallbackTeamId;
   const teamName = useInboxStore((s) => (s.teams || []).find((t: any) => String(t._id) === teamId)?.name) as string | undefined;

@@ -38,24 +38,22 @@ const { useInboxStore } = await import("../../store/inboxStore");
 await hydration;
 hydrationSpy.mockRestore();
 const { ActivityFeed } = await import("../ActivityFeed");
-const { settingsDataKey } = await import("../../lib/settingsData");
 
 const TEAM = "k97b3xkt3wvhmc3p03dgwxtfr583m6bg";
 const ME = "kd75bs3q5x39xnc7bsjv6wz8wd7z9zy7";
-const ROSTER = settingsDataKey("teamMembers", ME, TEAM)!;
 const NOW = Date.now();
 const row = (_id: string, user_id: string, author_name: string, extra = {}) => ({
   _id, user_id, author_name, title: `${author_name} session`, updated_at: NOW, started_at: NOW - 60_000,
   duration_ms: 60_000, message_count: 2, is_active: false, is_own: user_id === ME, ...extra,
 });
-const roster = (ids: string[]) => ({ [ROSTER]: { _id: ROSTER, value: ids.map((_id) => ({ _id })) } });
+const roster = (ids: string[]) => ids.map((_id) => ({ _id, roster_team: TEAM }));
 
 test("current membership and org settings govern old cached feed cards, people and totals", async () => {
   const cached = [row("mine", ME, "Alexander"), row("gone", "jonathan", "Jonathan"), row("head", ME, "Chief", { acting_user_id: "head" })];
   useInboxStore.setState({
     currentUser: { _id: ME, name: "Alexander" }, clientStateInitialized: true,
     clientState: { ui: { active_team_id: TEAM } }, teams: [{ _id: TEAM, features: { org: true } }],
-    settingsData: roster([ME, "jonathan", "head"]), sessions: {}, externalEvents: {},
+    teamMembers: roster([ME, "jonathan", "head"]), sessions: {}, externalEvents: {},
     feedConversations: { [`${TEAM}|`]: cached }, feedHasMore: { [`${TEAM}|`]: false }, feedCursors: { [`${TEAM}|`]: null },
     pendingInput: { untouched: { text: "keep my draft" } },
   } as any);
@@ -73,7 +71,7 @@ test("current membership and org settings govern old cached feed cards, people a
     };
     await selectPerson("Jonathan");
 
-    await act(async () => useInboxStore.setState({ settingsData: roster([ME, "head"]) } as any));
+    await act(async () => useInboxStore.setState({ teamMembers: roster([ME, "head"]) } as any));
     expect(el.textContent).not.toContain("Jonathan");
     expect(el.textContent).toContain("Chief session");
     expect(el.textContent).toMatch(/2\s*people/);
@@ -88,7 +86,7 @@ test("current membership and org settings govern old cached feed cards, people a
     expect(useInboxStore.getState().pendingInput.untouched).toEqual({ text: "keep my draft" });
 
     await act(async () => useInboxStore.setState({
-      teams: [{ _id: TEAM, features: { org: true } }], settingsData: roster([ME, "head"]),
+      teams: [{ _id: TEAM, features: { org: true } }], teamMembers: roster([ME, "head"]),
       sessions: { ownRole: { ...row("ownRole", ME, "Own role"), team_id: TEAM, acting_user_id: "head", is_private: true } },
     } as any));
     expect(el.textContent).toContain("Own role session");
@@ -106,7 +104,7 @@ test("a role seat the viewer hosts gets its bot's pill, never a second one of th
   useInboxStore.setState({
     currentUser: { _id: ME, name: "Alexander" }, clientStateInitialized: true,
     clientState: { ui: { active_team_id: TEAM } }, teams: [{ _id: TEAM, features: { org: true } }],
-    settingsData: { [ROSTER]: { _id: ROSTER, value: [{ _id: ME, name: "Alexander" }, { _id: "deals", name: "Deals lead" }] } },
+    teamMembers: [{ _id: ME, name: "Alexander", roster_team: TEAM }, { _id: "deals", name: "Deals lead", roster_team: TEAM }],
     externalEvents: {},
     feedConversations: { [`${TEAM}|`]: [row("mine", ME, "Alexander")] }, feedHasMore: { [`${TEAM}|`]: false }, feedCursors: { [`${TEAM}|`]: null },
     sessions: { seat: { ...row("seat", ME, "Deals lead"), team_id: TEAM, acting_user_id: "deals", is_private: true } },

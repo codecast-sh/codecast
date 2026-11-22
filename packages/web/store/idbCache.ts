@@ -1,10 +1,12 @@
-import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, type PendingMessages } from "./pendingMessageJournal";
+import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, retireStalePendingRecords, type PendingMessages } from "./pendingMessageJournal";
 import { clearPendingMessageJournal, readPendingMessageJournal, writePendingMessageJournal } from "./pendingMessageJournal";
 import Dexie from "dexie";
 import { captureException } from "@sentry/react";
 import type { Patch } from "mutative";
 import {
   COLLECTION_INDEXES,
+  COLLECTION_LIVE_FIELDS,
+  META_LIVE_FIELDS,
   COLLECTION_STORE_KEYS,
   META_STORE_KEYS,
   collectionRowValidator,
@@ -49,9 +51,9 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined" && !DOCS_SHOT
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 107;
+export const CACHE_SCHEMA_VERSION = 108;
 export const CACHE_SCHEMA_SIGNATURE =
-  "accountPool:_id|agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|callDetails:_id|callList:_id|capabilityBindings:_id|capabilityState:_id|changeEditions:_id, team_id, repository, scope, date|changeLive:_id, team_id, repository, surface|changeStories:_id, team_id, repository, date, area|changeStorySessions:_id, team_id, story_id|changeWorks:_id, team_id, kind|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|checkouts:_id, workspace|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|composerSuggestions:_id|conversationPages:_id|dataResults:_id, doc_id|decisionComments:_id, decision_id, created_at|decisionDetails:_id|decisionStacks:_id|decisionThreads:_id|deployReach:_id|deployTargets:_id, workspace|docDetails:_id|docs:_id|envStandings:_id|expectationsOverview:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|flowMaps:_id|foreignTriggers:_id|guestSuggestions:_id, conversation_id|handledDecisions:_id|harnessChanges:_id|initiativeUpdates:_id, initiative_id|initiatives:_id, short_id|issueSyncSources:_id, project_id|lineCards:_id, project_id|lineDeploys:_id, project_id|lineDispatch:_id|lineGraphEditability:_id|lineGraphVersions:_id, workflow_id|lineLabels:_id, run_id|lineOccurrences:_id, project_id|lineReviews:_id|lineStages:_id|lineTimeline:_id, at|lineTries:_id, project_id|liveElements:_id, doc_id|liveFlows:_id, team_id|liveHeads:_id|liveVersions:_id, doc_id|machineResources:_id|managedSessions:_id|meetingBotSettings:_id|meetingBots:_id|meetingCalendarEvents:_id|messageFeed:_id, timestamp|modObjects:_id|modState:_id|mods:_id|mySends:_id, timestamp|notifications:_id|opsAppCalls:_id, source_id|opsApps:_id|opsCiRuns:_id|opsEvents:_id|opsGroups:_id, source_id|opsReplayTallies:_id|opsReplayTimelines:_id|opsReplays:_id|opsSamples:_id, group_id|opsSources:_id|opsWatchSeries:_id|opsWatches:_id|orgLog:_id|orgLogRows:_id, batch|orgProposalChanges:_id, proposal_id|orgProposals:_id|orgTemplateInstances:_id|pageEmbeds:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|permissionRules:_id|pipelines:_id, workspace|plans:_id|prGuides:_id|projectExpectations:_id|projectOutputs:_id|projectTeammateSources:_id|projectUpdates:_id, project_id|projects:_id|pullRequestDetails:_id|pullRequestSessions:_id, conversation_id|pullRequests:_id|quoteDrafts:_id, conversation_id, client_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|secretHistory:_id|secrets:_id, name|sessionCommands:_id|sessionDecisions:_id|sessionFlows:_id, graph_hash|sessionGoals:_id|sessionIndex:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|shipTargets:_id|sideAnswers:_id, conversation_id|signals:_id|stationInputs:_id|taskComments:_id|taskEvidence:_id|tasks:_id|teamDeploys:_id, workspace|teamKitItems:_id|teamPrompts:_id, team_id, date|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|trialCards:_id, project_id|trialProjects:_id|trialRuns:_id, project_id|trialSpend:_id|viewerRoles:_id|weeklyCards:_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "accountPool:_id|agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|callDetails:_id|callList:_id|capabilityBindings:_id|capabilityState:_id|changeEditions:_id, team_id, repository, scope, date|changeLive:_id, team_id, repository, surface|changeStories:_id, team_id, repository, date, area|changeStorySessions:_id, team_id, story_id|changeWorks:_id, team_id, kind|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|checkouts:_id, workspace|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|composerSuggestions:_id|conversationPages:_id|dataResults:_id, doc_id|decisionComments:_id, decision_id, created_at|decisionDetails:_id|decisionStacks:_id|decisionThreads:_id|deployReach:_id|deployTargets:_id, workspace|docDetails:_id|docs:_id|envStandings:_id|expectationsOverview:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|flowMaps:_id|foreignTriggers:_id|guestSuggestions:_id, conversation_id|handledDecisions:_id|harnessChanges:_id|initiativeUpdates:_id, initiative_id|initiatives:_id, short_id|issueSyncSources:_id, project_id|lineCards:_id, project_id|lineDeploys:_id, project_id|lineDispatch:_id|lineGraphEditability:_id|lineGraphVersions:_id, workflow_id|lineLabels:_id, run_id|lineOccurrences:_id, project_id|lineReviews:_id|lineStages:_id|lineTimeline:_id, at|lineTries:_id, project_id|liveElements:_id, doc_id|liveFlows:_id, team_id|liveHeads:_id|liveVersions:_id, doc_id|machineResources:_id|managedSessions:_id|meetingBotSettings:_id|meetingBots:_id|meetingCalendarEvents:_id|messageFeed:_id, timestamp|modObjects:_id|modState:_id|mods:_id|mySends:_id, timestamp|notifications:_id|opsAppCalls:_id, source_id|opsApps:_id|opsCiRuns:_id|opsEvents:_id|opsGroups:_id, source_id|opsReplayTallies:_id|opsReplayTimelines:_id|opsReplays:_id|opsSamples:_id, group_id|opsSources:_id|opsWatchSeries:_id|opsWatches:_id|orgLog:_id|orgLogRows:_id, batch|orgProposalChanges:_id, proposal_id|orgProposals:_id|orgTemplateInstances:_id|pageEmbeds:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|permissionRules:_id|pipelines:_id, workspace|plans:_id|prGuides:_id|projectExpectations:_id|projectOutputs:_id|projectTeammateSources:_id|projectUpdates:_id, project_id|projects:_id|pullRequestDetails:_id|pullRequestSessions:_id, conversation_id|pullRequests:_id|quoteDrafts:_id, conversation_id, client_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|repoFlows:_id, repository|savedViews:_id|secretHistory:_id|secrets:_id, name|sessionCommands:_id|sessionDecisions:_id|sessionFlows:_id, graph_hash|sessionGoals:_id|sessionIndex:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|shipTargets:_id|sideAnswers:_id, conversation_id|signals:_id|stationInputs:_id|taskComments:_id|taskEvidence:_id|tasks:_id|teamDeploys:_id, workspace|teamKitItems:_id|teamPrompts:_id, team_id, date|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|trialCards:_id, project_id|trialProjects:_id|trialRuns:_id, project_id|trialSpend:_id|viewerRoles:_id|weeklyCards:_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
@@ -171,6 +173,13 @@ if (MISSING_COLLECTION_TABLES.length > 0) {
 
 const META_KEYS = new Set<string>(META_STORE_KEYS);
 
+// Meta keys the registry no longer names. Nothing reads them and nothing
+// deleted them: the desktop app still held a 12 MB `messages` blob from
+// before conversationMessages (2026-11-21). Dropped at boot; a key leaving
+// the registry joins this list.
+export const RETIRED_META_KEYS = ["messages", "pagination", "sidePanelOpen", "sidePanelUserClosed", "teamUnreadCount"];
+let retiredMetaSwept = false;
+
 let _hydrating = false;
 
 // What each collection table currently holds on disk, by id → row reference.
@@ -268,7 +277,9 @@ async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
       await db.meta.delete("queuedMessages");
     }
     const rows = await db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${ownerId}:`).toArray();
-    return pendingMessagesFromRecords(rows.map(row => row.value));
+    const { kept, retired } = retireStalePendingRecords(rows.map(row => row.value), Date.now());
+    for (const row of retired) await db.meta.put({ key: pendingInputKey(ownerId, row.id), value: row });
+    return pendingMessagesFromRecords(kept);
   });
 }
 
@@ -283,9 +294,173 @@ const { persistenceOwned, writeOwnerStamp } = ownershipApi;
 export const { ensureCacheOwnership, _cacheOwnerForTests } = ownershipApi;
 
 const metaWriter = createCoalescedWriter((key, value) => { db.meta.put({ key, value }).catch(() => {}); }, 250);
+
+// The liveness lane. A row whose change since it last reached disk touches
+// only its collection's liveFields waits here, and so does syncMeta. With
+// ~60 working agents, nine in ten session-row writes were liveness ticks;
+// each rewrote the whole row, and the desktop app's browser process spent a
+// core compacting the 700 MB IndexedDB they landed in (2026-11-21). One flush
+// writes the waiting rows and syncMeta in one transaction, so the persisted
+// sync cursors never pass a row change that is not on disk: a page killed
+// before the flush replays the sync log from the older cursor and loses
+// nothing. Rows with any other change still go to disk at once.
+export const LIVENESS_FLUSH_MS = 60_000;
+const livenessRows = new Map<string, Set<string>>();
+let livenessSyncMeta = false;
+let livenessState: any = null;
+let livenessTimer: ReturnType<typeof setTimeout> | null = null;
+// Meta keys with liveFields: what each last handed to disk, and which wait.
+const lastPersistedMeta = new Map<string, any>();
+const livenessMeta = new Set<string>();
+
+function scheduleLivenessFlush(state: any) {
+  livenessState = state;
+  if (!livenessTimer) livenessTimer = setTimeout(flushLivenessWrites, LIVENESS_FLUSH_MS);
+}
+
+/** Content equality for synced values. A push hands back fresh nested objects
+ *  even where nothing in them changed, so a reference compare is not enough. */
+function sameValue(a: any, b: any): boolean {
+  if (a === b) return true;
+  if (!a || !b || typeof a !== "object" || typeof b !== "object" || Array.isArray(a) !== Array.isArray(b)) return false;
+  if (Array.isArray(a)) {
+    if (a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameValue(a[i], b[i])) return false;
+    return true;
+  }
+  const keys = Object.keys(a);
+  if (keys.length !== Object.keys(b).length) return false;
+  for (const key of keys) if (!Object.prototype.hasOwnProperty.call(b, key) || !sameValue(a[key], b[key])) return false;
+  return true;
+}
+
+/** Whether `next` differs from the row on disk only in `live` fields. */
+function onlyLiveFieldsChanged(onDisk: any, next: any, live: ReadonlySet<string>): boolean {
+  if (!onDisk || !next || onDisk === next) return false;
+  for (const field in next) if (next[field] !== onDisk[field] && !live.has(field) && !sameValue(next[field], onDisk[field])) return false;
+  for (const field in onDisk) if (!(field in next) && !live.has(field)) return false;
+  return true;
+}
+
+// A meta key's live paths as a tree: `null` marks a live field, a nested
+// tree the live fields inside it ("people.counts" → people → counts).
+type LiveTree = Map<string, LiveTree | null>;
+const META_LIVE: Record<string, { tree: LiveTree; rowKey: string }> = Object.fromEntries(
+  Object.entries(META_LIVE_FIELDS).map(([key, { fields, rowKey }]) => {
+    const tree: LiveTree = new Map();
+    for (const path of fields) {
+      const parts = path.split(".");
+      let node = tree;
+      parts.forEach((part, i) => {
+        if (i === parts.length - 1) { node.set(part, null); return; }
+        let next = node.get(part);
+        if (!next) node.set(part, (next = new Map()));
+        node = next;
+      });
+    }
+    return [key, { tree, rowKey }];
+  })
+);
+
+/**
+ * How a meta value moved from what is on disk: "same", "live" (only live
+ * paths changed, list rows matched by `rowKey` in any order), or "durable".
+ */
+function liveChange(onDisk: any, next: any, tree: LiveTree, rowKey: string): "same" | "live" | "durable" {
+  if (onDisk === next) return "same";
+  if (Array.isArray(onDisk) && Array.isArray(next)) {
+    if (onDisk.length !== next.length) return "durable";
+    const idOf = (row: any) => (row && typeof row === "object" ? row[rowKey] ?? row._id : undefined);
+    const byId = new Map<unknown, any>();
+    for (const row of onDisk) {
+      const id = idOf(row);
+      if (id === undefined || byId.has(id)) return "durable";
+      byId.set(id, row);
+    }
+    let moved: "same" | "live" = "same";
+    for (let i = 0; i < next.length; i++) {
+      const id = idOf(next[i]);
+      if (id === undefined || !byId.has(id)) return "durable";
+      const row = liveChange(byId.get(id), next[i], tree, rowKey);
+      if (row === "durable") return "durable";
+      if (row === "live" || onDisk[i] !== next[i]) moved = "live";
+    }
+    return moved;
+  }
+  if (!onDisk || !next || typeof onDisk !== "object" || typeof next !== "object" || Array.isArray(onDisk) || Array.isArray(next)) {
+    return "durable";
+  }
+  let moved: "same" | "live" = "same";
+  for (const field of new Set([...Object.keys(onDisk), ...Object.keys(next)])) {
+    if (onDisk[field] === next[field]) continue;
+    if (!tree.has(field)) {
+      if (sameValue(onDisk[field], next[field])) continue;
+      return "durable";
+    }
+    const inner = tree.get(field);
+    if (inner) {
+      const sub = liveChange(onDisk[field], next[field], inner, rowKey);
+      if (sub === "durable") return "durable";
+      if (sub === "same") continue;
+    }
+    moved = "live";
+  }
+  return moved;
+}
+
+/** Write what waits in the liveness lane now (page hide, and tests). */
+export function flushLivenessWrites() {
+  if (livenessTimer) clearTimeout(livenessTimer);
+  livenessTimer = null;
+  const state = livenessState;
+  livenessState = null;
+  const writeSyncMeta = livenessSyncMeta && state?.syncMeta !== undefined;
+  livenessSyncMeta = false;
+  const waiting = [...livenessRows];
+  livenessRows.clear();
+  const waitingMeta = [...livenessMeta];
+  livenessMeta.clear();
+  if (!state || _hydrating || !persistenceOwned()) return;
+  // A durable meta write still in its quiet spell goes first, so it can never land over a newer liveness value.
+  metaWriter.flush();
+  const metaPuts: Array<{ key: string; value: any }> = [];
+  for (const key of waitingMeta) {
+    const value = state[key];
+    if (value === undefined || lastPersistedMeta.get(key) === value) continue;
+    metaPuts.push({ key, value });
+    lastPersistedMeta.set(key, value);
+  }
+  const writes: Array<{ table: Dexie.Table<any, string>; puts: any[] }> = [];
+  for (const [key, ids] of waiting) {
+    const table = COLLECTION_TABLES[key];
+    const shadow = lastPersisted.get(key);
+    const data = state[key];
+    if (!table || !shadow || !data) continue;
+    const puts: any[] = [];
+    for (const id of ids) {
+      const row = Object.prototype.hasOwnProperty.call(data, id) ? data[id] : undefined;
+      // Gone since (its delete was written), or already written by a later change.
+      if (row === undefined || shadow.get(id) === row) continue;
+      puts.push(row);
+      shadow.set(id, row);
+    }
+    if (puts.length) writes.push({ table, puts });
+  }
+  if (!writes.length && !metaPuts.length && !writeSyncMeta) return;
+  db.transaction("rw", [...writes.map((w) => w.table), db.meta], async () => {
+    for (const { table, puts } of writes) await table.bulkPut(puts);
+    for (const row of metaPuts) await db.meta.put(row);
+    if (writeSyncMeta) await db.meta.put({ key: "syncMeta", value: state.syncMeta });
+  }).catch(() => {});
+}
+
 if (typeof window !== "undefined") {
-  window.addEventListener("pagehide", () => metaWriter.flush());
-  window.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") metaWriter.flush(); });
+  window.addEventListener("pagehide", () => { metaWriter.flush(); flushLivenessWrites(); });
+  window.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "hidden") return;
+    metaWriter.flush();
+    flushLivenessWrites();
+  });
 }
 
 // A boot retention pass can shed most of a table at once: the first boot with
@@ -332,7 +507,22 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
         // The patches name the rows this write touched, so only those are compared: a write
         // of a few rows into a big collection costs the rows. A whole-collection replace,
         // or snapshot drops only a full diff can find, take the full diff.
-        const ids = prevShadow && !hasSnapshotDrops(key) ? patchedIds(patches, key) : null;
+        let ids = prevShadow && !hasSnapshotDrops(key) ? patchedIds(patches, key) : null;
+        const live = COLLECTION_LIVE_FIELDS[key];
+        if (prevShadow && ids && live) {
+          const now = new Set<string>();
+          for (const id of ids) {
+            if (onlyLiveFieldsChanged(prevShadow.get(id), data[id], live)) {
+              let waiting = livenessRows.get(key);
+              if (!waiting) livenessRows.set(key, (waiting = new Set()));
+              waiting.add(id);
+              scheduleLivenessFlush(state);
+            } else {
+              now.add(id);
+            }
+          }
+          ids = now;
+        }
         let puts: any[];
         let deletes: string[];
         if (prevShadow && ids) {
@@ -358,7 +548,22 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
       // waited for a quiet spell was lost with a page killed in between, and the reload showed a stale push
       // over its own parked write. (A big write plants a few hundred locks, never one per field it touches.)
       db.meta.put({ key, value: state[key] }).catch(() => {});
+    } else if (key === "syncMeta") {
+      // The sync cursors trail the liveness lane's rows to disk (see flushLivenessWrites).
+      livenessSyncMeta = true;
+      scheduleLivenessFlush(state);
     } else if (META_KEYS.has(key)) {
+      const live = META_LIVE[key];
+      if (live) {
+        // A change in liveness fields only waits for the liveness flush; any other change takes this value now.
+        if (lastPersistedMeta.has(key) && liveChange(lastPersistedMeta.get(key), state[key], live.tree, live.rowKey) === "live") {
+          livenessMeta.add(key);
+          scheduleLivenessFlush(state);
+          continue;
+        }
+        lastPersistedMeta.set(key, state[key]);
+        livenessMeta.delete(key);
+      }
       // Any other meta blob: its latest value once per quiet spell, never once per action. Page hide flushes it.
       metaWriter.write(key, state[key]);
     }
@@ -415,6 +620,10 @@ export async function loadCache(
       Promise.all(collectionEntries.map(([, table]) => table.toArray())),
       db.meta.bulkGet(metaKeys),
     ]);
+    if (!retiredMetaSwept) {
+      retiredMetaSwept = true;
+      void db.meta.bulkDelete(RETIRED_META_KEYS).catch(() => {});
+    }
 
     // Meta lookup first — the sessions retention pass below needs
     // liveInboxIdList and lastFocusedConversationId from the same snapshot.
@@ -861,6 +1070,11 @@ async function purgeLocalCacheSteps(keepPendingInputFor: string | null): Promise
   _pendingMsgWrites.clear();
   // A meta value still waiting to be written belongs to the cache being purged.
   metaWriter.drop();
+  livenessRows.clear();
+  livenessSyncMeta = false;
+  livenessState = null;
+  livenessMeta.clear();
+  lastPersistedMeta.clear();
   lastPersisted.clear();
   // A cache purged from under a signed-in principal (someone else's rows were
   // on disk) keeps that principal's own pending input: keyed by owner, it was

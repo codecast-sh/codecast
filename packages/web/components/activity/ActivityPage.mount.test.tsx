@@ -53,7 +53,6 @@ const { useInboxStore } = await import("../../store/inboxStore");
 await hydration;
 hydrationSpy.mockRestore();
 const { ThemeContext } = await import("../ThemeProvider");
-const { settingsDataKey } = await import("../../lib/settingsData");
 const { default: TeamActivityPage } = await import("../../app/team/activity/page");
 const { ActivityPage } = await import("./ActivityPage");
 
@@ -61,7 +60,6 @@ const TEAM = "k97b3xkt3wvhmc3p03dgwxtfr583m6bg";
 const ME = "kd75bs3q5x39xnc7bsjv6wz8wd7z9zy7";
 const SAM = "kd75bs3q5x39xnc7bsjv6wz8wd7zsam1";
 const ANA = "kd75bs3q5x39xnc7bsjv6wz8wd7zana1";
-const ROSTER = settingsDataKey("teamMembers", ME, TEAM)!;
 const NOW = Date.now();
 const startOfToday = new Date(NOW); startOfToday.setHours(0, 0, 0, 0);
 const today = (minutesAgo: number) => Math.max(startOfToday.getTime() + 60_000, NOW - minutesAgo * 60_000);
@@ -114,7 +112,7 @@ function seed() {
   useInboxStore.setState({
     currentUser: { _id: ME, name: "Alex Green" }, clientStateInitialized: true,
     clientState: { ui: { active_team_id: TEAM } }, teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
-    settingsData: { [ROSTER]: { _id: ROSTER, value: [{ _id: ME }, { _id: SAM }, { _id: ANA }] } },
+    teamMembers: [ME, SAM, ANA].map((_id) => ({ _id, roster_team: TEAM })),
     feedConversations: { [`${TEAM}|`]: FEED }, feedHasMore: { [`${TEAM}|`]: false }, feedCursors: { [`${TEAM}|`]: null },
     sessions: SESSIONS, externalEvents: EVENTS, tasks: TASKS, sessionDecisions: DECISIONS, tabs: [], activeTabId: null,
   } as any);

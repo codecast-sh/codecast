@@ -450,3 +450,39 @@ test("a host never mirrored still answers --verify with its receiver's capabilit
   expect(answer.hash).toBe("");
   expect(answer.complete).toBe(false);
 });
+
+test("union-mobile's tracked outreach/.agents -> .claude link: placement mirrors untracked agent config once, at its real path, and never a tracked file", async () => {
+  const local = temp();
+  const remote = temp();
+  const sourceRoot = path.join(local, "code", "union-mobile");
+  const targetRoot = path.join(remote, "work", "union-mobile");
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, stdio: "ignore" });
+  // The same commit on both machines: the host's checkout recreates the tracked link.
+  for (const root of [sourceRoot, targetRoot]) {
+    write(root, "outreach/CLAUDE.md", "outreach rules\n");
+    write(root, "outreach/.claude/agents/arc.md", "tracked agent\n");
+    write(root, "outreach/.gitignore", ".claude/settings.local.json\n");
+    fs.symlinkSync(".claude", path.join(root, "outreach/.agents"));
+    git(root, "init", "-q");
+    git(root, "add", ".");
+    git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+  }
+  // The laptop moves on: an edit to a tracked agent file, an untracked skill, a gitignored settings file.
+  write(sourceRoot, "outreach/.claude/agents/arc.md", "tracked agent, edited on the laptop\n");
+  write(sourceRoot, "outreach/.claude/skills/flags/SKILL.md", "untracked skill\n");
+  write(sourceRoot, "outreach/.claude/settings.local.json", JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+  const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects: [{ host: "u@h", sourceRoot, targetRoot }], narrowProjects: true, gitEnv: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  const parsed = await parseMirrorBundle(built.bytes);
+  expect(parsed.files.map((f) => f.path).filter((p) => p.startsWith("work/union-mobile/")).sort()).toEqual([
+    "work/union-mobile/outreach/.claude/settings.local.json",
+    "work/union-mobile/outreach/.claude/skills/flags/SKILL.md",
+  ]);
+  const result = await applyMirrorBundle(parsed, { home: remote, configUserId: "u", previousStamp: null, refresh: () => {} });
+  expect(result.errors).toEqual([]);
+  expect(result.host_edited).toEqual([]);
+  expect(fs.readlinkSync(path.join(targetRoot, "outreach/.agents"))).toBe(".claude");
+  expect(read(targetRoot, "outreach/.agents/skills/flags/SKILL.md")).toBe("untracked skill\n");
+  expect(JSON.parse(read(targetRoot, "outreach/.agents/settings.local.json")).permissions.allow).toEqual(["Bash(ls)"]);
+  expect(read(targetRoot, "outreach/.claude/agents/arc.md")).toBe("tracked agent\n");
+  expect(verifyMirrorStamp(remote)?.complete).toBe(true);
+}, 60_000);
