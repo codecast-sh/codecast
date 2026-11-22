@@ -211,20 +211,44 @@ on HEAD and replayed onto the fetched upstream the same way (`cutChange` in
 `flowChange.ts`). `change.json` records `writers`, the session that wrote each
 file; the session that ran the command, when there is one, is the run's
 subject. A refreeze rebuilds it from the checkout as it is now, for the
-change's files and any file one of its writers now holds (a fix may add a
-test), still a commit per writer on the same branch.
+change's files, any file one of its writers now holds (a fix may add a test),
+and any changed file no session's edit names that was written or moved after
+the brief went out (a writer's shell makes those: a lockfile, codegen output,
+a `git mv` target with its source), still a commit per writer on the same
+branch. A pass whose files the checkout no longer changes because upstream
+already holds them has landed, and the run ends done, as a session's change
+found on upstream does. One checkout runs one such pass at a time
+(ship-checkout.md).
 
 A station the subject would do (below) goes to the writers instead: the
-change's files that `$stop_reason` or the expanded brief names (by path, or by
-a basename no other file of the change shares) are grouped by the session
-that wrote them, and each writer gets the station's brief as a quiet send with
-a line naming its own failing files (`writersNamed`, `briefWriters`). The run
-waits on every briefed writer at once with the subject's wait, then freezes
-the pass again and goes on; the station's output names who was briefed. A
-finding that names no file of the change goes to the subject, and a run with
-none stops with it, as any run with no subject does. The writers are other
-people's sessions in a shared checkout, so nothing parks or retires them, nor
-the subject of a checkout's change.
+change's files that `$stop_reason` or the expanded brief names are grouped by
+the session that wrote them, and each writer gets the station's brief as a
+quiet send with a line naming its own failing files (`writersNamed`,
+`briefWriters`). A file is named by its path, never as the tail of a longer
+one, or by a basename no other file of the change shares, standing alone or
+as a location (`a.ts:12`, `a.ts(12,5)`), never inside another path. Lines that
+say something failed, and those beside them, are read first; git's
+`Auto-merging` lines and a test runner's header for a file whose tests passed
+are never read. Named files no session wrote go to the subject, in the same
+send when it is also a writer; with no subject, the station's output and
+`last_error` say nobody heard about them.
+
+Every writer's row is read before any brief goes, and a send that fails
+partway tells the writers already briefed, quietly, that the run no longer
+waits on them. The run waits on every briefed writer at once with the
+subject's wait, each on its own copy of the run's context. A writer is not
+parked, so its brief can queue behind a turn of its own: it has answered only
+when a turn after the brief reached it has ended (a pin after the brief's
+delivery, read from `/cli/messages/status`, or quiet reads after it; where
+delivery cannot be read, the transcript growing past the brief and then going
+quiet). The first writer to block or die stops the other waits, which hear
+the run no longer waits on them, and only its words reach the run: a block
+before a death, a death before success. Once every writer has answered the run
+freezes the pass again and goes on; the station's output names who was
+briefed. A finding that names no file of the change goes to the subject, and
+a run with none stops with it, as any run with no subject does. The writers
+are other people's sessions in a shared checkout, so nothing parks or retires
+them, nor the subject of a checkout's change.
 
 Every run binds to a task because the run's evidence, its gate decisions and
 its status already key on one (the-line.md L3, L6). The task is the record of

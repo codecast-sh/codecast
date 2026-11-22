@@ -348,3 +348,144 @@ describe("a finding goes to the writers of the files it names", () => {
     expect(parked(s)).toEqual([]);
   }, 1_200_000);
 });
+
+type Row = { work_state: string; message_count: number; pin?: { status: string; state: string; at: number } };
+type Ctl = { row: (id: string) => Row; deliver: (id: string) => void; settle: (id: string, pin?: { status: string; state: string }, grow?: number) => void };
+
+/**
+ * A server whose sessions each play a script when a brief reaches them, with the brief's delivery read the way
+ * /cli/messages/status reports it. `briefed[conversation]` runs on its brief; `unreadable` sessions are missing from
+ * every read; a send to `refuse` fails.
+ */
+function scripted(briefed: Record<string, (ctl: Ctl) => void>, opts: { busy?: string[]; unreadable?: string[]; refuse?: string[] } = {}) {
+  const calls: Array<{ route: string; body: any }> = [];
+  const rows: Record<string, Row> = Object.fromEntries([A, B, CALLER].map((id) => [id, { work_state: opts.busy?.includes(id) ? "working" : "done", message_count: 10 }]));
+  const sends: Record<string, Array<{ created_at: number; status: string; delivered_at?: number }>> = {};
+  const ctl: Ctl = {
+    row: (id) => rows[id],
+    deliver: (id) => { const s = sends[id]?.at(-1); if (s) Object.assign(s, { status: "delivered", delivered_at: Date.now() }); rows[id].message_count += 1; },
+    settle: (id, pin, grow = 2) => { rows[id].message_count += grow; rows[id].work_state = "done"; if (pin) rows[id].pin = { ...pin, at: Date.now() }; },
+  };
+  globalThis.fetch = (async (url: any, init: any) => {
+    const route = String(url).replace(/^https?:\/\/[^/]+/, "");
+    const body = JSON.parse(init?.body || "{}");
+    calls.push({ route, body: structuredClone(body) });
+    const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
+    if (route === "/cli/inbox") return reply({ sessions: (body.session_ids ?? []).filter((id: string) => id in rows && !opts.unreadable?.includes(id)).map((id: string) => ({ id, is_live: true, is_killed: false, ...rows[id] })) });
+    if (route === "/cli/sessions/state/get") return reply(rows[body.session]?.pin ?? {});
+    if (route === "/cli/messages/status") return reply({ to_short_id: String(body.to).slice(0, 7), sends: [...(sends[body.to] ?? [])].reverse() });
+    if (route === "/cli/messages/send") {
+      if (opts.refuse?.includes(body.to)) return reply({ error: "refused" });
+      (sends[body.to] ??= []).push({ created_at: Date.now(), status: "pending" });
+      if (/^Check failed/.test(body.body)) briefed[body.to]?.(ctl);
+      return reply({ ok: true, message_id: `m${calls.length}` });
+    }
+    return reply({ ok: true });
+  }) as typeof fetch;
+  const sent = (to?: string) => calls.filter((c) => c.route === "/cli/messages/send" && (!to || c.body.to === to)).map((c) => c.body);
+  const briefs = (to?: string) => sent(to).filter((b) => /^Check failed/.test(b.body));
+  return { calls, sent, briefs };
+}
+
+/** A writer that takes its brief at once, works, makes `fix` and settles. */
+const fixes = (id: string, fix: () => void) => (ctl: Ctl) => {
+  ctl.deliver(id);
+  ctl.row(id).work_state = "working";
+  setTimeout(() => { fix(); ctl.settle(id, { status: "done", state: "fixed" }); }, 50);
+};
+
+async function runOn(root: string, graph: ReturnType<typeof changeFlow>, caller = true) {
+  const runDir = lineRunDir(root, runSlug(graph, { task_id: "ct-9" }, "run"));
+  const change = await freezeCheckoutChange(root, { branch: "codecast/change-ct-9", worktree: "change-ct-9", roster });
+  writeFrozenChange(runDir, caller ? { ...change, session: CALLER.slice(0, 7), conversation: CALLER } : change);
+  console.log = process.env.SHOW_RUN ? origLog : () => {};
+  try {
+    return await runWorkflow(graph, { cwd: root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, subjectParkMs: 1 });
+  } finally {
+    console.log = origLog;
+  }
+}
+const progressSaid = (s: ReturnType<typeof scripted>) => s.calls.filter((c) => c.route === "/cli/workflow-runs/progress").map((c) => `${c.body.result_preview ?? ""} ${c.body.fail_reason ?? ""}`).join("\n");
+
+describe("writers answer for themselves", () => {
+  test("a writer mid-turn when briefed answers only with a turn after the brief reached it", async () => {
+    const { root, edit } = checkoutWorld();
+    edit(B, "src/b.ts", "export const b = 'good';\n");
+    const s = scripted({
+      [A]: (ctl) => {
+        // Its own turn ends first, pinning after the brief went out; the brief lands only then, and A fixes a.ts.
+        setTimeout(() => ctl.settle(A, { status: "done", state: "finished my own thing" }), 300);
+        setTimeout(() => { ctl.deliver(A); ctl.row(A).work_state = "working"; }, 900);
+        setTimeout(() => { edit(A, "src/a.ts", "export const a = 'good';\n"); ctl.settle(A, { status: "done", state: "fixed a.ts" }); }, 1200);
+      },
+    }, { busy: [A] });
+    expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("completed");
+    // A freeze at the end of A's own turn would fail Check again and brief A a second time.
+    expect(s.briefs(A)).toHaveLength(1);
+    expect(git(root, "show", "codecast/change-ct-9:src/a.ts")).toBe("export const a = 'good';");
+  }, 1_200_000);
+
+  test("a writer that blocks stops the run with its ask, without waiting out a writer that never answers", async () => {
+    const { root } = checkoutWorld();
+    const ask = "Which config should src/a.ts read, the old one or the new one?";
+    const s = scripted({
+      [A]: (ctl) => { ctl.deliver(A); ctl.row(A).work_state = "working"; setTimeout(() => ctl.settle(A, { status: "blocked", state: ask }), 200); },
+      // B takes its brief and works on, never answering.
+      [B]: (ctl) => { ctl.deliver(B); ctl.row(B).work_state = "working"; },
+    });
+    expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("failed");
+    expect(progressSaid(s)).toContain("fix_check is waiting on a person");
+    expect(JSON.stringify(s.calls)).toContain(ask);
+    expect(progressSaid(s)).not.toContain("killed after");
+    // B hears the run no longer waits on it; A, who asked, is not told so.
+    expect(s.sent(B).filter((m) => /no longer waits on the brief/.test(m.body))).toHaveLength(1);
+    expect(s.sent(A).filter((m) => /no longer waits on the brief/.test(m.body))).toHaveLength(0);
+  }, 1_200_000);
+
+  test("files no session wrote go to the session that ran the pass, beside the writer's own", async () => {
+    const { root, edit } = checkoutWorld();
+    edit(B, "src/b.ts", "export const b = 'good';\n");
+    const check = `${GOOD_CHECK.replace(/; exit \$bad$/, "")}; [ "$(git -C $project_path show $branch:notes.txt)" = fixed ] || { echo error: notes.txt is not fixed; bad=1; }; exit $bad`;
+    const s = scripted({
+      [A]: fixes(A, () => edit(A, "src/a.ts", "export const a = 'good';\n")),
+      [CALLER]: fixes(CALLER, () => write(root, "notes.txt", "fixed\n")),
+    });
+    expect(await runOn(root, changeFlow(check))).toBe("completed");
+    expect(s.briefs(A)).toHaveLength(1);
+    expect(s.briefs(A)[0].body).toContain("Your files among the failing ones: src/a.ts.");
+    expect(s.briefs(A)[0].body).not.toContain("notes.txt is yours");
+    expect(s.briefs(CALLER)).toHaveLength(1);
+    expect(s.briefs(CALLER)[0].body).toContain("yours to fix or hand to whoever wrote them: notes.txt.");
+    expect(s.briefs(CALLER)[0].body).not.toContain("Your files among the failing ones");
+    expect(git(root, "show", "codecast/change-ct-9:notes.txt")).toBe("fixed");
+  }, 1_200_000);
+
+  test("with nobody to tell about them, the station says the unclaimed files went unheard", async () => {
+    const { root, edit } = checkoutWorld();
+    edit(B, "src/b.ts", "export const b = 'good';\n");
+    const check = `${GOOD_CHECK.replace(/; exit \$bad$/, "")}; [ "$(git -C $project_path show $branch:notes.txt)" = fixed ] || { echo error: notes.txt is not fixed; bad=1; }; exit $bad`;
+    const s = scripted({ [A]: fixes(A, () => edit(A, "src/a.ts", "export const a = 'good';\n")) });
+    expect(await runOn(root, changeFlow(check), false)).toBe("failed");
+    expect(s.briefs(A)).toHaveLength(1);
+    expect(progressSaid(s)).toContain("No session's edit names notes.txt, which the finding also names, and this run has no session of its own to tell");
+  }, 1_200_000);
+
+  test("every writer's row is read before any brief goes", async () => {
+    const { root } = checkoutWorld();
+    const s = scripted({}, { unreadable: [B] });
+    expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("failed");
+    expect(s.briefs()).toHaveLength(0);
+    expect(progressSaid(s)).toContain("jx7bbbb, who wrote src/b.ts, cannot be read");
+  }, 1_200_000);
+
+  test("a brief that cannot be sent partway tells the writers already briefed that the run stopped", async () => {
+    const { root } = checkoutWorld();
+    const s = scripted({ [A]: (ctl) => { ctl.deliver(A); ctl.row(A).work_state = "working"; } }, { refuse: [B] });
+    expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("failed");
+    expect(s.briefs(A)).toHaveLength(1);
+    const off = s.sent(A).filter((m) => /no longer waits on the brief/.test(m.body));
+    expect(off).toHaveLength(1);
+    expect(off[0]).toMatchObject({ quiet: true, client_id: expect.stringMatching(/^run:run-9:fix_check:jx7aaaa:off:/) });
+    expect(off[0].body).toContain("the brief to jx7bbbb could not be sent");
+  }, 1_200_000);
+});
