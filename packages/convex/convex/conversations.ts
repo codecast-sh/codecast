@@ -7389,6 +7389,8 @@ export const feedForCLI = query({
       is_live?: boolean;
       agent_status?: string;
       work_state?: WorkState;
+      // The role a waiting session's role-driven wait belongs to (rowFields).
+      with_role?: string;
       is_killed?: boolean;
       is_completed?: boolean;
       recency_rank?: RecencyRank;

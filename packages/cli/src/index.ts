@@ -7414,7 +7414,7 @@ program
       const sessions = (feed.conversations || []).map((c: any) => ({
         id: c.id, session_id: c.session_id, title: c.title, project_path: c.project_path,
         updated_at: c.updated_at, message_count: c.message_count, agent_type: c.agent_type,
-        agent_status: c.agent_status, work_state: c.work_state || "idle", is_pinned: !!c.is_pinned,
+        agent_status: c.agent_status, work_state: c.work_state || "idle", with_role: c.with_role ?? null, is_pinned: !!c.is_pinned,
         bucket: c.bucket ?? null, below_fold: !!c.below_fold,
         is_killed: !!c.is_killed,
         is_live: !!c.is_live, is_unresponsive: false, awaiting_input: false,
@@ -7424,7 +7424,10 @@ program
       // reports fold rows as their own figure, mirroring inboxForCLI's counts.
       const counts: any = { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0, pinned: 0, live: 0, below_fold: 0, total: 0 };
       for (const s of sessions) {
-        counts.total++; counts[s.work_state] = (counts[s.work_state] || 0) + 1;
+        // A session its role drives waits on the role: a person counts it as
+        // working, as inboxForCLI's tally does (with_role).
+        const shown = s.with_role ? "working" : s.work_state;
+        counts.total++; counts[shown] = (counts[shown] || 0) + 1;
         if (s.is_pinned) counts.pinned++; if (s.is_live) counts.live++;
         if (s.below_fold) counts.below_fold++;
       }

@@ -1,6 +1,6 @@
 import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { deriveSessionActivity, classifyWorkState, trustedAgentStatus, userRestOf, isSettleVerdictCurrent, HEARTBEAT_ALIVE_MS, type WorkState } from "./inboxFilters";
-import { openTasksVouchForWaiting, personWorkState, roleDrives } from "@codecast/shared/contracts";
+import { openTasksVouchForWaiting, roleDrives } from "@codecast/shared/contracts";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 
 // The one work-state classifier for every CLI surface that lists sessions
@@ -31,7 +31,7 @@ export function recencyRankOf(conv: any, now: number): RecencyRank {
 
 export function cliSessionClassifier(ctx: any, now: number) {
   const managedCache = new Map<string, any>();
-  const classified = new Map<string, { work_state: WorkState; agent_status?: string }>();
+  const classified = new Map<string, { work_state: WorkState; agent_status?: string; waits_on_role: boolean }>();
   const armedHomesFor = armedTriggerHomeLoader(ctx);
 
   const managedFor = async (conv: any): Promise<any> => {
@@ -49,7 +49,7 @@ export function cliSessionClassifier(ctx: any, now: number) {
   const isLiveManaged = (managed: any): boolean =>
     !!managed && managed.agent_status !== "hibernated" && (now - managed.last_heartbeat) < MANAGED_STALE_MS;
 
-  const classify = async (conv: any): Promise<{ work_state: WorkState; agent_status?: string }> => {
+  const classify = async (conv: any): Promise<{ work_state: WorkState; agent_status?: string; waits_on_role: boolean }> => {
     const cached = classified.get(conv._id.toString());
     if (cached) return cached;
     const managed = await managedFor(conv);
@@ -114,11 +114,11 @@ export function cliSessionClassifier(ctx: any, now: number) {
       pendingApiError: conv.pending_api_error === true,
       sessionError: !!conv.session_error,
     });
-    // What a person reads (shared personWorkState): a session its role drives
-    // that waits files as working, as the inbox places it, so `cast feed` and
-    // `cast sessions --team` never send a reader after the role's ask.
-    const bucket = ws === "needs_input" && roleDrives(conv) && !userRestOf(conv) ? "working" : ws;
-    const result = { work_state: personWorkState(conv, { bucket, work_state: ws }), agent_status: agentStatus };
+    // The raw work state stays (a watcher of a role's wait must see it wait);
+    // `waits_on_role` says the inbox files it as working, the role's to answer
+    // (shared placeInboxRow), so a person's view reads it as working.
+    const waits_on_role = ws === "needs_input" && roleDrives(conv) && !userRestOf(conv);
+    const result = { work_state: ws, agent_status: agentStatus, waits_on_role };
     classified.set(conv._id.toString(), result);
     return result;
   };
@@ -129,10 +129,13 @@ export function cliSessionClassifier(ctx: any, now: number) {
   // watched set rather than a work-state transition.
   const rowFields = async (conv: any) => {
     const managed = await managedFor(conv);
-    const { work_state, agent_status } = await classify(conv);
+    const { work_state, agent_status, waits_on_role } = await classify(conv);
+    const role = waits_on_role ? await ctx.db.get(conv.org_role_id) : null;
     return {
       ...(isLiveManaged(managed) ? { is_live: true as const, agent_status: agent_status || undefined } : {}),
       work_state,
+      // The role it waits on (inboxForCLI's with_role): the CLI lists it as working, "with @handle".
+      ...(waits_on_role ? { with_role: (role?.handle as string | undefined) ?? "role" } : {}),
       ...(conv.inbox_killed_at ? { is_killed: true as const } : {}),
       ...(conv.status === "completed" ? { is_completed: true as const } : {}),
       recency_rank: recencyRankOf(conv, now),

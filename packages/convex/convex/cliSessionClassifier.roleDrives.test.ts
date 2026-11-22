@@ -2,9 +2,10 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { cliSessionClassifier } from "./cliSessionClassifier";
 
-// The CLI feed (`cast feed`, `cast sessions --team`) reads what a person reads
-// (shared personWorkState): a session its role drives that waits is working,
-// as the inbox files it; a paused role's session waits on its person.
+// The CLI feed (`cast feed`, `cast sessions --team`) keeps the RAW work state,
+// so a watcher (`--until`, `-w`, `--state needs_input`) sees a role's wait as
+// waiting, and names the role it waits on (with_role, as inboxForCLI does): the
+// person's view lists it as working. A paused role's session names no role.
 
 const NOW = 1_800_000_000_000;
 const settled = (over: Record<string, any> = {}) => ({
@@ -13,11 +14,19 @@ const settled = (over: Record<string, any> = {}) => ({
 });
 
 describe("the CLI feed classifier and a role that drives", () => {
-  const classify = (conv: any) => cliSessionClassifier({ db: makeFakeDb({ managed_sessions: [], messages: [], agent_tasks: [], conversations: [conv] }) }, NOW).classify(conv);
+  const rowFields = (conv: any) => cliSessionClassifier({
+    db: makeFakeDb({ managed_sessions: [], messages: [], agent_tasks: [], conversations: [conv], org_roles: [{ _id: "org_roles_r", handle: "growth", name: "Growth lead" }] }),
+  }, NOW).rowFields(conv);
 
-  test("a waiting session its role drives reads as working; a paused role's or a plain one reads needs input", async () => {
-    expect((await classify(settled({ org_role_id: "org_roles_r" }))).work_state).toBe("working");
-    expect((await classify(settled({ org_role_id: "org_roles_r", driver_user_id: "users_me" }))).work_state).toBe("needs_input");
-    expect((await classify(settled())).work_state).toBe("needs_input");
+  test("a waiting session its role drives stays needs_input and names its role", async () => {
+    expect(await rowFields(settled({ org_role_id: "org_roles_r" }))).toMatchObject({ work_state: "needs_input", with_role: "growth" });
+  });
+
+  test("a paused role's session and a plain one name no role", async () => {
+    for (const conv of [settled({ org_role_id: "org_roles_r", driver_user_id: "users_me" }), settled()]) {
+      const row = await rowFields(conv);
+      expect(row.work_state).toBe("needs_input");
+      expect("with_role" in row).toBe(false);
+    }
   });
 });
