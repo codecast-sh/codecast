@@ -12,7 +12,7 @@ describe("a change's now", () => {
     expect(got).toEqual({
       editing: "work: editing (yellow)",
       "edits-shared": "work: between turns (muted)",
-      "ready-to-ship": "work: not shipped (muted)",
+      "not-shipped": "work: not shipped (muted)",
       pass: "work: not shipped (muted)",
       checking: "check: checking (yellow)",
       fixing: "check: fixing · round 2 (orange)",

@@ -13,11 +13,19 @@ export type ChangesStore = {
   find: (ref: string) => RepoChange | null;
   /** The repository's changes have been read at least once: a name they lack is not one of them. */
   loaded: () => boolean;
+  /**
+   * Whether `name` may be looked up on its own: only when GitHub's branch list was cut short (otherwise a name it
+   * lacks is no branch), never the repository's own name, and for at most UNLISTED_MAX names a conversation.
+   */
+  mayLookUp: (name: string) => boolean;
 };
 
 export const ChangesContext = createContext<ChangesStore | null>(null);
 
 const NEVER = () => () => {};
+
+/** Branch names a conversation looks up one by one, at most: each is a GitHub compare. */
+export const UNLISTED_MAX = 8;
 
 /**
  * Text an agent writes for a branch: segments of letters, digits, `.`, `_`, `-` joined by `/`, the last not a file
@@ -48,7 +56,7 @@ export function useMentionedChange(text: string, known: boolean): RepoChange | "
     const change = store!.find(text);
     if (change) return change;
     // A worktree's branch keeps its worktree pill; only a name nothing here holds is looked up on its own.
-    return !known && store!.loaded() ? "unlisted" : null;
+    return !known && store!.loaded() && store!.mayLookUp(text) ? "unlisted" : null;
   };
   return useSyncExternalStore(asks ? store!.subscribe : NEVER, snapshot, () => null);
 }

@@ -5,16 +5,18 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useRepoChanges, type RepoChange } from "../../hooks/useRepoChanges";
 import { useRepoBranchDetails } from "../../hooks/useRepoBrowse";
-import { ChangesContext, type ChangesStore } from "../../hooks/useMentionedChange";
+import { ChangesContext, UNLISTED_MAX, type ChangesStore } from "../../hooks/useMentionedChange";
 import { findChange } from "../../lib/changes/assemble";
 
 /** What a reader sees of a change: re-render a span only when this moves. */
 const sigOf = (c: RepoChange | null) =>
   c ? `${c.key}|${c.lifecycle.now.stage}|${c.lifecycle.now.state}|${c.lifecycle.now.word}|${c.lifecycle.now.detail}|${c.lifecycle.now.since}|${c.lifecycle.stages.map((s) => s.state + s.short).join(",")}|${c.writers.length}` : "";
 
-function makeStore(repository: string, onWant: () => void): ChangesStore & { set: (changes: RepoChange[], read: boolean) => void } {
+function makeStore(repository: string, onWant: () => void): ChangesStore & { set: (changes: RepoChange[], read: boolean, listCut: boolean) => void } {
   let changes: RepoChange[] = [];
   let loaded = false;
+  let listCut = false;
+  const lookups = new Set<string>();
   const listeners = new Set<() => void>();
   const cache = new Map<string, { sig: string; change: RepoChange | null }>();
   return {
@@ -33,21 +35,30 @@ function makeStore(repository: string, onWant: () => void): ChangesStore & { set
       return change;
     },
     loaded: () => loaded,
-    set: (next, read) => {
+    mayLookUp: (name) => {
+      if (!listCut || name.toLowerCase() === repository.toLowerCase()) return false;
+      if (lookups.has(name)) return true;
+      if (lookups.size >= UNLISTED_MAX) return false;
+      lookups.add(name);
+      return true;
+    },
+    set: (next, read, cut) => {
       changes = next;
       loaded = read;
+      listCut = cut;
       for (const fn of listeners) fn();
     },
   };
 }
 
 /** Reads the changes once wanted and hands them to the store. */
-function ChangesFeed({ repository, onChanges }: { repository: string; onChanges: (c: RepoChange[], read: boolean) => void }) {
+function ChangesFeed({ repository, onChanges }: { repository: string; onChanges: (c: RepoChange[], read: boolean, listCut: boolean) => void }) {
   // GitHub's branch list too: a pushed branch with no pull request and no checkout here is still a change a message names.
   const branchRead = useRepoBranchDetails(repository);
   const { ready, changes } = useRepoChanges(repository, undefined, { branches: branchRead.data ?? null });
   const read = ready && (branchRead.ready || !!branchRead.error);
-  useEffect(() => onChanges(changes, read), [changes, read, onChanges]);
+  const listCut = !!branchRead.data?.truncated;
+  useEffect(() => onChanges(changes, read, listCut), [changes, read, listCut, onChanges]);
   return null;
 }
 

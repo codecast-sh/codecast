@@ -605,8 +605,8 @@ export function EntityAwareCode({ children, className, ...allProps }: any) {
     return <EntityIdPill shortId={text} mention={mentionInfo} fallback={<code className={className} {...props}>{children}</code>} />;
   }
   const code = <code className={className} {...props}>{children}</code>;
-  if (change === "unlisted") return <UnlistedBranch repository={changesRepo!} name={text}>{code}</UnlistedBranch>;
-  if (change) return <MentionedChange change={change} label={text} />;
+  if (change === "unlisted" && !worktree) return <UnlistedBranch repository={changesRepo!} name={text}>{code}</UnlistedBranch>;
+  if (change && change !== "unlisted") return <MentionedChange change={change} label={text} />;
   if (worktree) return <WorktreePill repository={worktrees!.repository} path={worktree.worktree.path}>{text}</WorktreePill>;
   // `lib/foo.ts:38` in backticks — the commonest way an agent names a file.
   // The code span keeps its look; the link wraps it.

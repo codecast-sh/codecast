@@ -64,19 +64,21 @@ the writer sessions, and links to the pull request, run and deploys.
 - **Messages**: a branch name in inline code draws the chip when the
   repository knows it: a checkout reports it, a pull request heads from it,
   or GitHub lists it. GitHub lists a repository's newest hundred branches
-  only, so a branch-shaped name none of these hold is compared with the
-  default branch on its own, and draws as a pushed branch when it has commits
-  main lacks. Pull request and commit references keep their own pills, which
+  only, so when the list was cut short a branch-shaped name none of these hold
+  is compared with the default branch on its own (at most eight names a
+  conversation), and draws as a pushed branch when it has commits main lacks. Pull request and commit references keep their own pills, which
   carry deploy reach (deploys.md DP16).
 - **Branches page**: the lifecycle grid (`ChangeBoard`): a row per change,
   the five stages as columns with one track across them, each cell's two
   words under its slice, grouped by who acts next: Needs you (red, blue, and a
   rollback), Moving (yellow, orange), Waiting, Live, then Quiet and Closed
   folded. A change goes quiet when nobody's work has touched it for three days
-  (a session's write, a push, a commit); a landed change never does. Below
+  (a session's write, a push, a commit); a landed change, a failure and a
+  person's turn never do. Below
   the grid, every branch GitHub lists, each with its chip.
 - **Deploys page**: "On its way" in each target's pane: the same grid,
-  without Live and Closed, for every change of that repository not yet live.
+  without Live and Closed, for every change of that repository not yet on
+  main. What has landed and waits to go out is "Waiting on main", below it.
 
 ## CH5. The rule and its facts
 

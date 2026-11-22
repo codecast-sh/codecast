@@ -31,9 +31,9 @@ export function changeExamples(now: number): ChangeExample[] {
       facts: { vehicle: { kind: "edits", title: "Deploy pill words", files: 4 }, work: { uncommitted: 4, ahead: 0, pushed: false, writers: [writer("Deploy pill words", "idle")], since: ago(8) } },
     },
     {
-      id: "ready-to-ship",
-      caption: "Its session finished; nothing ships it yet",
-      facts: { vehicle: { kind: "branch", name: "evals/entry-prune", worktree: "~/code/union-mobile/worktrees/entry-prune" }, work: { uncommitted: 0, ahead: 3, pushed: false, writers: [writer("Per-entry cut", "finished")] } },
+      id: "not-shipped",
+      caption: "Committed in a worktree; nothing ships it yet",
+      facts: { vehicle: { kind: "branch", name: "evals/entry-prune", worktree: "~/code/union-mobile/worktrees/entry-prune" }, work: { uncommitted: 0, ahead: 3, pushed: false, writers: [] } },
     },
     {
       id: "pass",

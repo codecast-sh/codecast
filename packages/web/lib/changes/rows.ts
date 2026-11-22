@@ -74,13 +74,14 @@ const TONE_RANK: Record<ChangeTone, number> = { red: 0, blue: 1, orange: 2, yell
 export const groupTone = (l: Lifecycle): ChangeTone => (l.now.stage === "live" && l.now.state === "back" ? "red" : l.now.tone);
 
 /**
- * Whether a change has gone quiet at `now`: not yet on main, not in motion, and nobody's work touched it in
+ * Whether a change has gone quiet at `now`: not yet on main, not in motion, nobody's turn, and nobody's work touched it in
  * QUIET_AFTER_MS (or ever, as far as anything reports). A landed change never goes quiet: where it stands in
  * production always matters.
  */
 export function isQuiet(r: ChangeRow, now: number): boolean {
   const n = r.lifecycle.now;
-  if (r.reach_ref || n.state === "active" || n.state === "stopped") return false;
+  // A person's turn and a failure wait on someone: their age is the reason to look, never a reason to fold them away.
+  if (r.reach_ref || n.state === "active" || n.state === "stopped" || n.tone === "blue" || n.tone === "red") return false;
   return !r.updated_at || now - r.updated_at > QUIET_AFTER_MS;
 }
 

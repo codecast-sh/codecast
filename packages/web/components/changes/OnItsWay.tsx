@@ -5,14 +5,15 @@
 import { useMemo } from "react";
 import { useRepoChanges } from "../../hooks/useRepoChanges";
 import { ChangeBoard } from "./ChangeBoard";
-import { boardRows, changeRowOf, isQuiet } from "../../lib/changes/rows";
+import { changeRowOf, isQuiet } from "../../lib/changes/rows";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 
 const HIDE = ["live", "closed"] as const;
 
 export function OnItsWay({ repository }: { repository: string }) {
   const { ready, changes } = useRepoChanges(repository);
-  const rows = useMemo(() => boardRows(changes.map(changeRowOf)), [changes]);
+  // What has landed waits on main, listed just below by session: this grid is what has yet to get there.
+  const rows = useMemo(() => changes.map(changeRowOf).filter((r) => !r.reach_ref), [changes]);
   const now = useCoarseNow(600_000);
   // What is really on its way: not live, not closed, and not gone quiet.
   const coming = rows.filter((r) => r.lifecycle.now.tone !== "green" && r.lifecycle.now.tone !== "dim" && !isQuiet(r, now)).length;

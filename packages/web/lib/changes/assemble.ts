@@ -113,8 +113,12 @@ const subjectPr = (subject: string) => {
   return m ? Number(m[1]) : null;
 };
 
-/** The newest write any session made in these checkouts; 0 when none holds uncommitted work (the report time is the daemon's, not anyone's work). */
-const lastWrite = (rows: ReadonlyArray<CheckoutRow>) => Math.max(0, ...rows.flatMap((r) => r.uncommitted.sessions.map((s) => s.last_activity)));
+/**
+ * The newest work in these checkouts: a session's last write, else (no session holds edits: they are committed, or
+ * nobody's they can attribute) the report, which moves only when the checkout's work does (its hash holds the head).
+ */
+const lastWrite = (rows: ReadonlyArray<CheckoutRow>) =>
+  Math.max(0, ...rows.flatMap((r) => r.uncommitted.sessions.map((s) => s.last_activity))) || Math.max(0, ...rows.map((r) => r.reported_at));
 
 function checkoutWriters(rows: ReadonlyArray<CheckoutRow>, titleOf: RepoChangeRows["titleOf"]): ChangeWriterLink[] {
   const seen = new Map<string, ChangeWriterLink>();
@@ -298,8 +302,6 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
   const coveredBranches = new Set(out.map((c) => c.refs.branch).filter(Boolean));
   for (const b of rows.branches?.branches ?? []) {
     if (b.name === rows.branches?.default_branch || !b.ahead_by || coveredBranches.has(b.name)) continue;
-    // A pushed branch nobody has committed to in a week is not on its way anywhere.
-    if (!b.open_pr && now - b.committed_at > RECENT_FINISHED_MS) continue;
     if (b.open_pr && usedPrs.has(b.open_pr.number)) continue;
     out.push(base(`branch:${b.name}`, {
       vehicle: { kind: "branch", name: b.name, worktree: null, pr: b.open_pr?.number ?? null },

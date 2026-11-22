@@ -9,6 +9,7 @@ import type { QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import { assemble, findChange, withReach, type AssembledChange, type ChangePullRequest, type ChangeTarget } from "../assemble";
 import { changeLifecycle } from "../lifecycle";
+import { isQuiet } from "../rows";
 
 const now = 1_790_000_000_000;
 const MIN = 60_000;
@@ -193,6 +194,24 @@ describe("assemble, a branch after its pull request merged", () => {
     const got = assemble({ repository: repo, now, pullRequests: [open(81, { draft: true }), open(82, { auto_merge: { method: "squash" }, review_decision: "APPROVED" }), open(83, { review_decision: "REVIEW_REQUIRED" })] });
     const word = (n: number) => changeLifecycle(got.find((c) => c.refs.pr === n)!.facts, now).now.word;
     expect([word(81), word(82), word(83)]).toEqual(["draft", "landing", "needs review"]);
+  });
+});
+
+describe("assemble and the grid, for work nobody's session still holds", () => {
+  test("a worktree branch committed but never pushed dates from its checkout's report, so it is not quiet the moment it is made", () => {
+    const wt = checkout({ path: "/w/done", branch: "feat/done", device_id: "d1", head_sha: "eeeeeee5555", ahead: 2, reported_at: now - 10 * MIN });
+    const c = assemble({ repository: repo, now, checkouts: [wt] }).find((x) => x.key === "branch:feat/done")!;
+    expect(c.updated_at).toBe(now - 10 * MIN);
+    const row = { key: c.key, lifecycle: changeLifecycle(c.facts, now), updated_at: c.updated_at };
+    expect(row.lifecycle.now.word).toBe("not shipped");
+    expect(isQuiet(row, now)).toBe(false);
+    expect(isQuiet(row, now + 4 * DAY)).toBe(true);
+  });
+  test("a person's turn and a failure never go quiet, however old", () => {
+    const old = (number: number, over: Partial<ChangePullRequest>) => pr({ number, state: "open", head_ref: `x/${number}`, created_at: now - 9 * DAY, files_synced_at: now - 9 * DAY, ...over });
+    const got = assemble({ repository: repo, now, pullRequests: [old(91, { checks_state: "success", review_decision: "REVIEW_REQUIRED" }), old(92, { checks_state: "failure" }), old(93, { draft: true, checks_state: "success" })] });
+    const quiet = (n: number) => { const c = got.find((x) => x.refs.pr === n)!; return isQuiet({ key: c.key, lifecycle: changeLifecycle(c.facts, now), updated_at: c.updated_at }, now); };
+    expect([quiet(91), quiet(92), quiet(93)]).toEqual([false, false, true]);
   });
 });
 
