@@ -33,8 +33,11 @@ const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
 const SIGNAL_WORDS = String.raw`\b(error|errors|fail|failed|failing|failure|✗|×|expected|received|panic|exception|traceback|cannot|could not|not found|TS\d{4})\b`;
 const SIGNAL = new RegExp(SIGNAL_WORDS, "i");
 
-/** A session that wrote files of a checkout's change, with the ones a finding names (flows.md FL4). */
-export type Writer = Subject & { files: string[] };
+/**
+ * A session that wrote files of a checkout's change, with the ones a finding names (flows.md FL4). The run's subject
+ * also carries the named files no session wrote (`unclaimed`), which are its to fix or hand on.
+ */
+export type Writer = Subject & { files: string[]; unclaimed?: string[] };
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -104,9 +107,13 @@ export function writersNamed(
   return { writers: [...byWriter.values()], unclaimed };
 }
 
-/** A writer's brief: the station's, and which of the failing files are its own. */
+/** A writer's brief: the station's, which of the failing files are its own, and which no session's edit names. */
 export function writerBrief(brief: string, writer: Writer): string {
-  return `${brief}\n\nYour files among the failing ones: ${writer.files.join(", ")}.`;
+  const own = writer.files.length ? `\n\nYour files among the failing ones: ${writer.files.join(", ")}.` : "";
+  const nobody = writer.unclaimed?.length
+    ? `\n\nNo session's edit names these failing files, and you ran this pass, so they are yours to fix or hand to whoever wrote them: ${writer.unclaimed.join(", ")}.`
+    : "";
+  return `${brief}${own}${nobody}`;
 }
 
 /**
