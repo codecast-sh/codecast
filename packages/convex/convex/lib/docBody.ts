@@ -252,3 +252,21 @@ export function markdownToDoc(text: string): DocNode {
   if (content.length === 0) content.push({ type: "paragraph" });
   return { type: "doc", content };
 }
+
+// A whole-body write refuses while a person's editor holds steps it has not
+// saved yet (writeDocBody). The editor saves a second after
+// its last step reaches the server, which on a live rig measured about five
+// seconds after the last keystroke, so wait that out before answering.
+// wait_ms bounds the wait.
+export async function waitingOutLiveEdits<T>(body: any, run: (args: any) => Promise<T>): Promise<T> {
+  const { wait_ms, ...args } = body;
+  const deadline = Date.now() + (typeof wait_ms === "number" ? Math.min(Math.max(wait_ms, 0), 15_000) : 10_000);
+  for (;;) {
+    try {
+      return await run(args);
+    } catch (e: any) {
+      if (e?.data?.reason !== "live_edit" || Date.now() >= deadline) throw e;
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  }
+}

@@ -36,6 +36,7 @@ import { RECALL_REALTIME_PATH, RECALL_STATUS_PATH } from "./lib/recall";
 import { claimFrontier } from "./lib/claimFrontier";
 import { vendorRefusalFor } from "./lib/vendorGuard";
 import { heartbeatTailnetArg } from "./lib/heartbeatTailnet";
+import { waitingOutLiveEdits } from "./lib/docBody";
 import {
   serve as repoPublicServe,
   preflight as repoPublicPreflight,
@@ -4145,23 +4146,6 @@ cliRoute("/cli/progress/latest", async (ctx, body) => {
 cliRoute("/cli/docs/create", async (ctx, body) => await ctx.runMutation(api.docs.create, body));
 cliRoute("/cli/docs/list", async (ctx, body) => await ctx.runQuery(api.docs.list, body));
 cliRoute("/cli/docs/get", async (ctx, body) => await ctx.runQuery(api.docs.get, body));
-// A whole-body write refuses while a person's editor holds steps it has not
-// saved yet (lib/docBody.ts writeDocBody). The editor saves a second after
-// its last step reaches the server, which on a live rig measured about five
-// seconds after the last keystroke, so wait that out before answering.
-// wait_ms bounds the wait.
-async function waitingOutLiveEdits<T>(body: any, run: (args: any) => Promise<T>): Promise<T> {
-  const { wait_ms, ...args } = body;
-  const deadline = Date.now() + (typeof wait_ms === "number" ? Math.min(Math.max(wait_ms, 0), 15_000) : 10_000);
-  for (;;) {
-    try {
-      return await run(args);
-    } catch (e: any) {
-      if (e?.data?.reason !== "live_edit" || Date.now() >= deadline) throw e;
-      await new Promise((r) => setTimeout(r, 400));
-    }
-  }
-}
 // Both write the collab snapshot themselves, in the same transaction.
 cliRoute("/cli/docs/update", async (ctx, body) => waitingOutLiveEdits(body, (args) => ctx.runMutation(api.docs.update, args)));
 // Live artifacts: `cast board|sheet|data` (liveArtifacts.ts). Each acts as
