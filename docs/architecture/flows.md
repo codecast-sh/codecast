@@ -383,7 +383,7 @@ word against the person's card verdicts and the newest wins (orgLineMerge
 `personAuthorized`). Every other ending is Ask and Decide posts its card: no
 session behind the change, a branch that does not resolve, a failed script or
 call, an answer that is not JSON, ship false, out of scope, or a refused
-citation. A clear writes `$run_dir/intent.json` (`{starter_id, starter_name,
+citation; each says why on the task in one comment (`Intent asked at Decide: ...`: the model's why, the server's refusal, or the failure). A clear writes `$run_dir/intent.json` (`{starter_id, starter_name,
 cite, quote, head}`, the starter the server checked and the commit Change
 diffed) for flows that compose the segment; Asker removes any earlier copy
 first.

@@ -99,6 +99,7 @@ if (verb === "workflow clear") {
   await clearRun({ getCliEndpoint: () => ({ siteUrl: ${JSON.stringify(server.url.origin)}, apiToken: "tok" }), detectCurrentSessionId: () => null }, args[2], opts);
   process.exit(0);
 }
+if (verb === "task comment") process.exit(0);
 console.error("fake cast: unplanned " + verb); process.exit(9);
 `, { mode: 0o755 });
     process.env.PATH = `${bin}:${original.path}`;
@@ -177,19 +178,30 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
     expect(clears()[0].body.quote).toBe(quote);
   });
 
-  const asks: Array<[string, () => void, string | null]> = [
-    ["ship false", () => { model = { ...model, json: { ...SHIP, ship: false, session: "", line: 0, quote: "" } }; }, "conv_lead"],
-    ["out of scope", () => { model = { ...model, json: { ...SHIP, in_scope: false } }; }, "conv_lead"],
-    ["an answer that is not JSON", () => { model = { ok: true, text: "I think they wanted it shipped.", cost_usd: 0.01 }; }, "conv_lead"],
-    ["a failed model call", () => { model = { ok: false, reason: "budget", error: "no room", cost_usd: 0 }; }, "conv_lead"],
-    ["no line cited", () => { model = { ...model, json: { ...SHIP, line: 0 } }; }, "conv_lead"],
-    ["no session behind the change", () => {}, null],
-    ["a branch that does not resolve", () => {}, "conv_lead|no-such-branch"],
-    ["the asker failing", () => { process.env.FAKE_ASKER_FAIL = "1"; }, "conv_lead"],
-    ["the server refusing the citation", () => { clearAnswer = { error: "Not cleared: jx7lead:115 is not a line a person typed" }; }, "conv_lead"],
+  // Each ask, and the one line it leaves on the task saying why.
+  const asks: Array<[string, () => void, string | null, string]> = [
+    ["ship false", () => { model = { ...model, json: { ...SHIP, ship: false, session: "", line: 0, quote: "", why: "Ana asked for the fix, not to ship it." } }; }, "conv_lead",
+      "Intent asked at Decide: Ana asked for the fix, not to ship it."],
+    ["out of scope", () => { model = { ...model, json: { ...SHIP, in_scope: false, why: "The change also rewrites contact records, which Ana never asked for." } }; }, "conv_lead",
+      "Intent asked at Decide: The change also rewrites contact records, which Ana never asked for."],
+    ["an answer that is not JSON", () => { model = { ok: true, text: "I think they wanted it shipped.", cost_usd: 0.01 }; }, "conv_lead",
+      "Intent asked at Decide: the intent read failed: the model's answer held no usable citation"],
+    ["no line cited", () => { model = { ...model, json: { ...SHIP, line: 0 } }; }, "conv_lead",
+      "Intent asked at Decide: the intent read failed: the model's answer held no usable citation"],
+    ["a failed model call", () => { model = { ok: false, reason: "budget", error: "no room", cost_usd: 0 }; }, "conv_lead",
+      "Intent asked at Decide: the intent read failed: no room"],
+    ["no session behind the change", () => {}, null,
+      "Intent asked at Decide: the intent read failed: no session started this change"],
+    ["a branch that does not resolve", () => {}, "conv_lead|no-such-branch",
+      "Intent asked at Decide: the intent read failed: the branch no-such-branch does not resolve to a commit here"],
+    ["the asker failing", () => { process.env.FAKE_ASKER_FAIL = "1"; }, "conv_lead",
+      "Intent asked at Decide: the intent read failed: Error: no /cli/sessions/originator route"],
+    ["the server refusing the citation", () => { clearAnswer = { error: "Not cleared: jx7lead:115 is not a line a person typed" }; }, "conv_lead",
+      "Intent asked at Decide: the server did not clear the cited line: Error: Not cleared: jx7lead:115 is not a line a person typed"],
   ];
-  for (const [name, arrange, conversation] of asks) {
-    test(`${name} asks, and leaves no intent.json`, async () => {
+  const taskComments = () => casts().filter((a) => a[0] === "task" && a[1] === "comment");
+  for (const [name, arrange, conversation, said] of asks) {
+    test(`${name} asks, says why on the task, and leaves no intent.json`, async () => {
       fs.mkdirSync(runDir(), { recursive: true });
       // A stale clear from an earlier run never reads as this one's.
       fs.writeFileSync(intentFile(), '{"starter_id": "u_old"}');
@@ -198,8 +210,14 @@ console.error("fake cast: unplanned " + verb); process.exit(9);
       expect(await run(conv, branch)).toBe("asked");
       expect(fs.existsSync(intentFile())).toBe(false);
       if (name !== "the server refusing the citation") expect(clears()).toEqual([]);
+      expect(taskComments()).toEqual([["task", "comment", "ct-7", said, "-t", "progress"]]);
     });
   }
+
+  test("a clear leaves no comment of the segment's own: the server says what cleared it", async () => {
+    expect(await run()).toBe("landed");
+    expect(taskComments()).toEqual([]);
+  });
 
   test("the clear script quotes every value the model wrote", () => {
     const clear = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.intent).nodes.get("clear")!.script!;
