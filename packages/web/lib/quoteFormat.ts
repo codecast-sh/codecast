@@ -125,6 +125,25 @@ export function splitQuoteRuns(text: string): QuoteRun[] {
     .filter((r) => r.text.trim());
 }
 
+// The inverse of a batch send (formatPendingComments, then the typed reply):
+// a sent message that opens with a quote reads back as its quotes, each with
+// the words between it and the next quote as its note, and the words after the
+// last quote as the reply. Formatting the result again gives the same text, so
+// the reply can be rebuilt as it was before the send (a fork carries it over).
+// Null when the message does not open with a quote: nothing to rebuild.
+export function parseSentQuotes(text: string): { quotes: { quote: string; body: string }[]; reply: string } | null {
+  const runs = splitQuoteRuns(text);
+  if (!runs[0]?.quote) return null;
+  const quotes: { quote: string; body: string }[] = [];
+  let reply = "";
+  runs.forEach((run, i) => {
+    if (run.quote) return void quotes.push({ quote: run.text, body: "" });
+    if (runs[i + 1]?.quote) quotes[quotes.length - 1].body = run.text;
+    else reply = run.text;
+  });
+  return { quotes, reply };
+}
+
 // One quote + optional verdict + optional reply body.
 export function formatQuotedReply(quote: string, body?: string, verdict?: ReviewVerdict): string {
   const bq = toBlockquote(quote);

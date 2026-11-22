@@ -7,6 +7,8 @@
 // chord in the app.
 /** "Queue for later": the chord, and the queue control's tooltip beside the send button. */
 export const QUEUE_CHORD = "ctrl+enter";
+/** "Fork and send": the chord, and the keys drawn beside the fork button while quotes wait. */
+export const FORK_SEND_CHORD = "meta+shift+enter";
 
 export const SEND_CHORDS: ReadonlyArray<{ accel: string; label: string }> = [
   { accel: "enter", label: "Send" },
@@ -14,7 +16,7 @@ export const SEND_CHORDS: ReadonlyArray<{ accel: string; label: string }> = [
   { accel: QUEUE_CHORD, label: "Queue for later" },
   { accel: "alt+enter", label: "Send and advance" },
   { accel: "alt+shift+enter", label: "Send and stash" },
-  { accel: "meta+shift+enter", label: "Fork and send" },
+  { accel: FORK_SEND_CHORD, label: "Fork and send" },
   { accel: "shift+escape", label: "Stop and send" },
   { accel: "meta+alt+enter", label: "Send together with others' drafts" },
   { accel: "meta+shift+e", label: "Rich editor" },

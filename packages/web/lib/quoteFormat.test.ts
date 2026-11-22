@@ -6,6 +6,7 @@ import {
   formatPendingComments,
   appendToDraft,
   sortPendingComments,
+  parseSentQuotes,
   type PendingComment,
 } from "./quoteFormat";
 
@@ -108,5 +109,28 @@ describe("splitQuoteRuns", () => {
   });
   test("text without quotes is one plain run", () => {
     expect(splitQuoteRuns("a > b\nc")).toEqual([{ quote: false, text: "a > b\nc" }]);
+  });
+});
+
+describe("parseSentQuotes", () => {
+  const quotes = [
+    { quote: "first line\n\nstill first", body: "" },
+    { quote: "second", body: "a note\n\nin two paragraphs" },
+    { quote: "third", body: "" },
+  ];
+  test("reads a batch send back into its quotes, notes and reply", () => {
+    const sent = `${formatPendingComments(quotes)}\n\nthe reply`;
+    expect(parseSentQuotes(sent)).toEqual({ quotes, reply: "the reply" });
+  });
+  test("formatting what it read gives the same text", () => {
+    const sent = `${formatPendingComments(quotes)}\n\nthe reply`;
+    const parsed = parseSentQuotes(sent)!;
+    expect(`${formatPendingComments(parsed.quotes)}\n\n${parsed.reply}`).toBe(sent);
+  });
+  test("a quote-only send has no reply", () => {
+    expect(parseSentQuotes(formatPendingComments(quotes.slice(0, 1)))).toEqual({ quotes: quotes.slice(0, 1), reply: "" });
+  });
+  test("a message that does not open with a quote is not a batch", () => {
+    expect(parseSentQuotes("plain words\n\n> a quote later")).toBeNull();
   });
 });
