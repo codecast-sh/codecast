@@ -18,8 +18,8 @@
  * and the worktree is released (the workspace release drops the seed ref and
  * the branch). `releaseWorkspace` does the removal (teardown hooks,
  * Chrome, `git worktree remove`, state file) when the workspace module
- * tracks the worktree; a legacy worktree with no state gets a plain
- * `git worktree remove`.
+ * tracks the worktree; any other worktree is renamed into a trash sibling
+ * (releaseTree), so a removal never leaves a half-deleted checkout.
  *
  * "Not already on origin" is a question about content, not about commits.
  * Counting commits ahead of the base reads a squash merged branch as ahead
@@ -48,8 +48,10 @@ import {
   isUnsupportedMergeTreeWriteTreeError,
   type GitCapabilityStore,
 } from "./gitCapability.js";
-import { execFileAsync } from "./proc.js";
+import { execFileAsync, spawn } from "./proc.js";
 import { locateWorktree } from "./worktreeEnv.js";
+import { moveToTrash } from "./workspace/trash.js";
+import { treeGitDir } from "./land/hold.js";
 import { runSide, type SnapshotResult } from "./cloud/syncSide.js";
 import { MERGED_REF_PREFIX, worktreeMatchesMergedBack } from "./mergeBack.js";
 import { runTreeNames, runTreesOf } from "./workflow/runDirs.js";
@@ -89,7 +91,9 @@ async function git(cwd: string, args: string[], timeoutMs = 30_000): Promise<str
     timeout: timeoutMs,
     // A credential prompt on a fetch would sit on an open stdin until the
     // timeout; a GC has no one to answer it.
-    env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+    // GIT_OPTIONAL_LOCKS=0: judging a checkout never writes to it; a `git status`
+    // would otherwise refresh the index of a tree a session may still be using.
+    env: { ...process.env, GIT_TERMINAL_PROMPT: "0", GIT_OPTIONAL_LOCKS: "0" },
   });
   return stdout.trim();
 }
@@ -196,11 +200,11 @@ async function contentAlreadyInBase(
  */
 export async function probeWorktree(
   worktreePath: string,
-  opts: { capabilities?: GitCapabilityStore; repoKey?: string; startPoint?: string; seedBase?: string } | null = {},
+  opts: { capabilities?: GitCapabilityStore; repoKey?: string; startPoint?: string; seedBase?: string; fetch?: boolean } | null = {},
 ): Promise<WorktreeProbe> {
   opts ??= {};
   const dirty = (await git(worktreePath, ["status", "--porcelain"])).length > 0;
-  await fetchPrune(worktreePath, opts.repoKey ?? worktreePath);
+  if (opts.fetch !== false) await fetchPrune(worktreePath, opts.repoKey ?? worktreePath);
   let aheadOfOrigin: number | null = null;
   let contentInBase = false;
   try {
@@ -270,20 +274,7 @@ export async function releaseSessionWorktree(
     }
     return removeWorktree(wt.repoRoot, wt.name, worktreePath, log, { keepBranch: true });
   }
-  let probe: WorktreeProbe;
-  try {
-    // The repo root keys the fetch: releasing ten worktrees of one repo in a
-    // reaper pass fetches once, not ten times. A seeded workspace's state
-    // carries the seed the verdict is judged against.
-    const ws = await import("./workspace/index.js");
-    const state = ws.readState(wt.repoRoot, wt.name);
-    probe = await probeWorktree(worktreePath, { repoKey: wt.repoRoot, startPoint: state?.startPoint, seedBase: state?.seedBase });
-  } catch (err) {
-    return { action: "kept", name: wt.name, path: worktreePath, reason: `git probe failed: ${(err as Error).message.split("\n")[0]}` };
-  }
-  // A worker whose every change is already in its parent's checkout
-  // (mergeBack.ts) holds nothing the parent lacks, pushed or not.
-  const reason = (await worktreeMatchesMergedBack(worktreePath).catch(() => false)) ? null : keepReason(probe);
+  const reason = await contentKeepReason(worktreePath, wt.repoRoot);
   if (reason) {
     log(`[WORKTREE-GC] kept ${wt.name}: ${reason}`);
     return { action: "kept", name: wt.name, path: worktreePath, reason };
@@ -291,16 +282,85 @@ export async function releaseSessionWorktree(
   return removeWorktree(wt.repoRoot, wt.name, worktreePath, log, { keepBranch: false });
 }
 
-/** Remove a worktree: the workspace release when the workspace module tracks it, else a plain `git worktree remove`. */
+/**
+ * Why a worktree's content must keep it, or null when main (or, for a
+ * worker, its parent's checkout) already holds all of it: the content rule
+ * every release goes through, from a session's kill, a run's end or the
+ * daemon's sweep (land/sweep.ts). `repoRoot` keys the fetch, so releasing
+ * ten worktrees of one repo fetches once.
+ */
+export async function contentKeepReason(worktreePath: string, repoRoot: string, opts: { fetch?: boolean } = {}): Promise<string | null> {
+  let probe: WorktreeProbe;
+  try {
+    // A seeded workspace's state carries the seed the verdict is judged against.
+    const ws = await import("./workspace/index.js");
+    const wt = locateWorktree(worktreePath);
+    const state = wt ? ws.readState(wt.repoRoot, wt.name) : null;
+    probe = await probeWorktree(worktreePath, { repoKey: repoRoot, startPoint: state?.startPoint, seedBase: state?.seedBase, fetch: opts.fetch });
+  } catch (err) {
+    return `git probe failed: ${(err as Error).message.split("\n")[0]}`;
+  }
+  // A worker whose every change is already in its parent's checkout
+  // (mergeBack.ts) holds nothing the parent lacks, pushed or not.
+  return (await worktreeMatchesMergedBack(worktreePath).catch(() => false)) ? null : keepReason(probe);
+}
+
+/**
+ * Take a worktree's checkout away, its branch left alone: the workspace
+ * release when the workspace module tracks it, else a rename into a trash
+ * sibling and `git worktree prune`. A rename is one directory entry, so the
+ * checkout goes whole or not at all; `git worktree remove --force` unlinks
+ * file by file and, failing halfway, left a checkout another session was
+ * using with 116 tracked files gone (ct-52977). The bytes are deleted in the
+ * background.
+ */
+export async function releaseTree(repoRoot: string, worktreePath: string): Promise<void> {
+  // `git worktree prune` never drops a locked entry: a tree trashed while locked stays listed,
+  // and its branch stays checked out by a ghost no `git worktree add` can get past. Claude Code
+  // locks its agent worktrees with the agent's pid.
+  const gitDir = treeGitDir(worktreePath);
+  const lock = gitDir ? (() => { try { return fs.readFileSync(path.join(gitDir, "locked"), "utf-8").trim(); } catch { return null; } })() : null;
+  if (lock !== null) {
+    if (lockHolds(lock)) throw new Error(`locked${lock ? `: ${lock}` : ""}`);
+    await git(repoRoot, ["worktree", "unlock", worktreePath]);
+  }
+  const ws = await import("./workspace/index.js");
+  const wt = locateWorktree(worktreePath);
+  const state = wt ? ws.readState(wt.repoRoot, wt.name) : null;
+  if (wt && state && path.resolve(state.path) === path.resolve(worktreePath)) {
+    await ws.releaseWorkspace(wt.repoRoot, wt.name);
+    return;
+  }
+  const trash = moveToTrash(worktreePath);
+  await git(repoRoot, ["worktree", "prune"]);
+  deleteInBackground(trash);
+}
+
+/** A worktree lock holds while the pid it names is alive; a lock that names none was a person's, and holds. */
+export function lockHolds(reason: string | undefined, isAlive: (pid: number) => boolean = pidAlive): boolean {
+  const pid = /\bpid[\s:=]*(\d+)/i.exec(reason ?? "")?.[1];
+  return pid ? isAlive(Number(pid)) : true;
+}
+
+function pidAlive(pid: number): boolean {
+  try { process.kill(pid, 0); return true; } catch (err) { return (err as NodeJS.ErrnoException).code === "EPERM"; }
+}
+
+/** Unlink a trashed tree off this process's loop; the workspace trash sweep catches what this misses. */
+export function deleteInBackground(dir: string): void {
+  try {
+    spawn("rm", ["-rf", dir], { detached: true, stdio: "ignore" }).unref();
+  } catch {
+    /* swept later */
+  }
+}
+
+/** Remove a session's worktree (releaseTree), then its branch unless asked to keep it. */
 async function removeWorktree(repoRoot: string, name: string, worktreePath: string, log: (m: string) => void, opts: { keepBranch: boolean }): Promise<GcVerdict> {
   try {
-    const ws = await import("./workspace/index.js");
-    if (ws.readState(repoRoot, name)) {
-      await ws.releaseWorkspace(repoRoot, name);
-    } else {
-      await git(repoRoot, ["worktree", "remove", "--force", worktreePath]);
-      if (!opts.keepBranch) try { await git(repoRoot, ["branch", "-D", `codecast/${name}`]); } catch { /* branch may be named otherwise */ }
-    }
+    const tracked = !!(await import("./workspace/index.js")).readState(repoRoot, name);
+    await releaseTree(repoRoot, worktreePath);
+    if (!tracked && !opts.keepBranch) try { await git(repoRoot, ["branch", "-D", `codecast/${name}`]); } catch { /* branch may be named otherwise */ }
     try { await git(repoRoot, ["update-ref", "-d", `${MERGED_REF_PREFIX}${name}`]); } catch { /* never merged back */ }
     log(`[WORKTREE-GC] released ${name} (${worktreePath})`);
     return { action: "released", name, path: worktreePath };
@@ -309,4 +369,81 @@ async function removeWorktree(repoRoot: string, name: string, worktreePath: stri
     log(`[WORKTREE-GC] kept ${name}: ${reason}`);
     return { action: "kept", name, path: worktreePath, reason };
   }
+}
+
+/**
+ * The worktrees a session made that its own cwd never shows, released when it
+ * ends. A session started in the main checkout that runs `cast ws acquire`
+ * and works there through its shell keeps its pane in the main checkout, so
+ * releaseSessionWorktree never saw the workspace; the workspace's state
+ * records the session instead (recordWorkspaceSession). A Claude Code
+ * subagent with worktree isolation leaves `.claude/worktrees/agent-<id>`,
+ * which Claude Code removes only when the agent changed nothing; the
+ * session's transcript directory names each one
+ * (`<session>/subagents/agent-<id>.jsonl`). Each goes under the content rule,
+ * when no process sits in it and no other session acquired it. Its branch stays.
+ */
+export async function releaseSessionMadeWorktrees(
+  sessionId: string,
+  cwd: string,
+  log: (m: string) => void = () => {},
+  deps: { claudeProjects?: string; processCwds?: () => Promise<string[]> } = {},
+): Promise<GcVerdict[]> {
+  let repoRoot: string;
+  try {
+    repoRoot = path.dirname(await git(cwd, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
+  } catch {
+    return [];
+  }
+  const { listStates } = await import("./workspace/contract.js");
+  const kept: GcVerdict[] = [];
+  const candidates = new Set<string>();
+  for (const s of listStates(repoRoot)) {
+    if (!s.sessions?.includes(sessionId) || path.resolve(s.path) === path.resolve(repoRoot) || !fs.existsSync(s.path)) continue;
+    if (s.sessions.some((other) => other !== sessionId)) kept.push({ action: "kept", name: s.name, path: s.path, reason: "another session acquired it too" });
+    else candidates.add(s.path);
+  }
+  const agents = subagentIds(deps.claudeProjects ?? path.join(process.env.HOME || "", ".claude", "projects"), sessionId);
+  if (agents.size > 0) {
+    const { parseWorktreeList } = await import("./land/scan.js");
+    for (const e of parseWorktreeList(await git(repoRoot, ["worktree", "list", "--porcelain"]))) {
+      const id = /\/\.claude\/worktrees\/agent-([0-9a-z]+)$/.exec(e.path)?.[1];
+      if (id && agents.has(id)) candidates.add(e.path);
+    }
+  }
+  if (candidates.size === 0) return kept;
+  const cwds = await (deps.processCwds ?? (async () => (await import("./land/scan.js")).processCwds()))();
+  const out: GcVerdict[] = [...kept];
+  for (const tree of candidates) {
+    const name = path.basename(tree);
+    const reason = cwds.some((c) => c === tree || c.startsWith(`${tree}/`)) ? "a running process sits in it" : await contentKeepReason(tree, repoRoot);
+    if (reason) {
+      out.push({ action: "kept", name, path: tree, reason });
+      continue;
+    }
+    try {
+      await releaseTree(repoRoot, tree);
+      out.push({ action: "released", name, path: tree });
+    } catch (err) {
+      out.push({ action: "kept", name, path: tree, reason: `remove failed: ${(err as Error).message.split("\n")[0]}` });
+    }
+  }
+  for (const v of out) if (v.action !== "skipped") log(`[WORKTREE-GC] ${v.action} ${v.name}${v.action === "kept" ? `: ${v.reason}` : ` (${v.path})`}`);
+  return out;
+}
+
+/** The ids of the subagents a Claude Code session ran, from `<projects>/<any>/<session>/subagents/agent-<id>.jsonl`. */
+function subagentIds(projects: string, sessionId: string): Set<string> {
+  const ids = new Set<string>();
+  let dirs: string[] = [];
+  try { dirs = fs.readdirSync(projects); } catch { return ids; }
+  for (const d of dirs) {
+    let files: string[] = [];
+    try { files = fs.readdirSync(path.join(projects, d, sessionId, "subagents")); } catch { continue; }
+    for (const f of files) {
+      const m = /^agent-([0-9a-z]+)\.jsonl$/.exec(f);
+      if (m) ids.add(m[1]);
+    }
+  }
+  return ids;
 }

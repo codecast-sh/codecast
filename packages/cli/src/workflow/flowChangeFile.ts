@@ -24,8 +24,8 @@ export type FrozenChange = {
   branch: string;
   worktree: string;
   paths: string[];
-  /** Files another session also wrote: they carry that session's edits too. */
-  shared: Array<{ path: string; also: string[] }>;
+  /** Files another session also wrote that go in whole, carrying its edits too, with why they could not be cut to this session's own lines (ownLines.ts). */
+  shared: Array<{ path: string; also: string[]; why?: string }>;
   /** Files the session wrote that stay out: credentials, with why. */
   held: Array<{ path: string; why: string }>;
 };
