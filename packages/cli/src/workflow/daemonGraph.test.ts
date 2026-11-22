@@ -87,6 +87,45 @@ describe("graphForDaemonRun", () => {
     fs.rmSync(cache, { recursive: true, force: true });
   });
 
+  test("a row pushed from another repo's checkout on this machine never answers a run in this one", () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const { spawnSync } = require("node:child_process");
+    const { BUILTIN_WORKFLOW_TEMPLATES } = require("./templates");
+    const checkout = (flow?: string) => {
+      const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "daemongraph-team-")));
+      spawnSync("git", ["init", "-q", root]);
+      if (flow) {
+        fs.mkdirSync(path.join(root, ".codecast/flows"), { recursive: true });
+        fs.writeFileSync(path.join(root, ".codecast/flows/change.cast"), flow);
+      }
+      return root;
+    };
+    // Team A's checkout names its own `change`; team B's has none, so the shipped one is B's.
+    const teamA = checkout(`digraph change { start [shape=Mdiamond]; pr [script="bun outreach/backend/scripts/line.ts pr"]; review [prompt="A's review"]; exit [shape=Msquare]; start -> pr -> review -> exit }`);
+    const teamB = checkout();
+    const aRow = { origin: { device_id: "dev-a", root: teamA, file: ".codecast/flows/change.cast" } };
+    const run = { workflow_name: "change", project_path: teamB, goal_override: "B's change" };
+    const stations = (wf: any, r: any = run, cwd = teamB, resume = false) => [...daemonRunGraph(r, wf, cwd, "dev-a", resume).graph!.nodes.keys()];
+    // B pushed the shipped graph over the row A had pushed from its file: the row still says where A's file is.
+    const shippedOverA = { ...aRow, name: "change", slug: "change", source: BUILTIN_WORKFLOW_TEMPLATES.change, nodes: [], edges: [] };
+    expect(stations(shippedOverA)).toContain("check");
+    expect(stations(shippedOverA)).not.toContain("pr");
+    // A pushed last: B's run, started or resumed at a station both flows have, still runs B's flow.
+    const aOverB = { ...aRow, name: "change", slug: "change", source: fs.readFileSync(path.join(teamA, ".codecast/flows/change.cast"), "utf-8"), nodes: [{ id: "start", type: "start" }, { id: "pr" }, { id: "review" }, { id: "exit", type: "exit" }], edges: [] };
+    expect(stations(aOverB)).not.toContain("pr");
+    expect(stations(aOverB, { ...run, current_node_id: "review" }, teamB, true)).not.toContain("pr");
+    expect(daemonRunGraph(run, aOverB, teamB, "dev-a").graph!.goal).toBe("B's change");
+    // B's checkout names its own `change`: that one answers.
+    fs.mkdirSync(path.join(teamB, ".codecast/flows"), { recursive: true });
+    fs.writeFileSync(path.join(teamB, ".codecast/flows/change.cast"), `digraph change { start [shape=Mdiamond]; b_only; exit [shape=Msquare]; start -> b_only -> exit }`);
+    expect(stations(aOverB)).toEqual(["start", "b_only", "exit"]);
+    // A's own runs keep reading A's file.
+    expect(stations(aOverB, { ...run, project_path: teamA, current_node_id: "review" }, teamA, true)).toContain("pr");
+    for (const root of [teamA, teamB]) fs.rmSync(root, { recursive: true, force: true });
+  });
+
   test("null when the run has no nodes and its name is not a shipped template", () => {
     expect(graphForDaemonRun({ workflow_name: "not-a-template", project_path: "/nonexistent/path" }, EMPTY)).toBeNull();
     expect(graphForDaemonRun({ workflow_name: undefined, project_path: "/nonexistent/path" }, EMPTY)).toBeNull();
