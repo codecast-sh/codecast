@@ -62,6 +62,12 @@ export function useStoreOwnersEnv(
         notify(opts.toastFallback, "success");
       }
     },
+    applyOwners: async (change, undo) => {
+      const r = await useInboxStore.getState().applySessionOwners(conversationId, change, undo);
+      if (r && (r.told?.sessions || r.told?.deferred) && r.reports_to) {
+        notify(reparentToastLine(r.short_id ?? "The session", r.reports_to.name, "session", r.told), "success");
+      }
+    },
   };
 }
 

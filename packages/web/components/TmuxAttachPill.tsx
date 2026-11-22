@@ -9,9 +9,9 @@ import { useAttachCopy } from "../hooks/useAttachCopy";
  * dot while connected, dimmed colors when not, a gentle entrance when the pane
  * comes up, and a one-shot glow when the name changes.
  *
- * Click opens a live read-only terminal view of the pane, split into THIS
- * conversation (ConversationTerminalSplit) — the copy-attach-command escape
- * hatch is the small secondary button.
+ * Click opens a live terminal view of the pane, split into THIS conversation
+ * (ConversationTerminalSplit); its title bar copies the attach command. Where
+ * there is no split to open, the click copies (or says why it can't).
  *
  * A pane exists on exactly ONE machine, and it is routinely not the machine the
  * browser is on — a session owned by a teammate's box, or by your own Linux
@@ -36,7 +36,6 @@ import { useAttachCopy } from "../hooks/useAttachCopy";
  */
 
 import { useRef, useState } from "react";
-import { Copy } from "lucide-react";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { DeviceDot, deviceDisplayName } from "./DeviceBadge";
 import {
@@ -146,21 +145,6 @@ export function TmuxAttachPill({
           {tmuxSession && <DeviceDot online={isLive} />}
         </button>
       </ShortcutTooltip>
-      {canSplit && (
-        <ShortcutTooltip label={copyLabel} side="bottom">
-          {/* aria-disabled, NOT disabled: a truly disabled button suppresses the
-              pointer events the tooltip needs, and in the foreign-machine case
-              that tooltip is the entire explanation for why nothing copies. */}
-          <button
-            onClick={copyAttach}
-            aria-disabled={!attach}
-            className={`cq-sq1 inline-flex items-center pl-1 pr-1.5 py-0.5 text-meta transition-colors border-0 border-l ${borderColor.replace("border-", "border-l-")} ${pillColors} ${attach ? "" : "cursor-default"}`}
-            aria-label="Copy tmux attach command"
-          >
-            <Copy className="w-2.5 h-2.5" />
-          </button>
-        </ShortcutTooltip>
-      )}
     </span>
   );
 }

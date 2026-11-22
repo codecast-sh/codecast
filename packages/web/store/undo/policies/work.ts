@@ -346,7 +346,7 @@ const org = (label: (ctx: UndoCtx) => string): Spec => ({ spec: { label, externa
 function reparentSessionLabel(ctx: UndoCtx): string {
   const session = sessionTitle(ctx.before, ctx.args[0] as string);
   const target = ctx.args[1] as OrgReparentSessionTarget | undefined;
-  if (target?.kind === "role") return `Filed ${session} under ${roleName(ctx.before, target.role_id)}`;
+  if (target?.kind === "role") return target.role_id ? `Filed ${session} under ${roleName(ctx.before, target.role_id)}` : `Took ${session} off its role`;
   const owners = target?.owners;
   if (target?.kind !== "user" || !owners) {
     return target?.kind === "user" && target.user_id ? `Moved ${session} under ${personName(ctx.before, target.user_id)}` : `Moved ${session} in the org`;
@@ -877,6 +877,20 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
 
   // ── Org record (display-only history items) ────────────────────────────────
   reparentOrgSession: org(reparentSessionLabel),
+  // The owners menu's Save carries the change that puts it back (args[2]),
+  // built from the owners it was opened on: undo replays that.
+  applySessionOwners: {
+    spec: {
+      label: (ctx) => `Changed the owners of ${sessionTitle(ctx.before, ctx.args[0] as string)}`,
+      inverse: (ctx) => (ctx.args[2] ? [call("applySessionOwners", ctx.args[0], ctx.args[2], ctx.args[1])] : null),
+    },
+  },
+  setSessionDriver: {
+    spec: {
+      label: (ctx) => `Changed who drives ${sessionTitle(ctx.before, ctx.args[0] as string)}`,
+      inverse: (ctx) => (ctx.args[2] ? [call("setSessionDriver", ctx.args[0], ctx.args[2], ctx.args[1])] : null),
+    },
+  },
   reparentOrgRole: org((ctx) => `Moved ${roleName(ctx.before, ctx.args[0] as string)} in the org`),
   reparentOrgPerson: {
     spec: {

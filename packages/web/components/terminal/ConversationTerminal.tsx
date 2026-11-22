@@ -56,6 +56,7 @@ import {
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTerminalIsland } from "../../hooks/useTerminalIsland";
+import { useAttachCopy } from "../../hooks/useAttachCopy";
 const MIN_HEIGHT = 90;
 // Comfortably more than the daemon's heartbeat, so a slow round-trip doesn't
 // flicker the "paused" label on and off.
@@ -66,6 +67,33 @@ export function ConversationTerminalSplit({ convKey, tmuxSession }: { convKey: s
   const split = splits.get(convKey);
   if (!split) return null;
   return <SplitBody convKey={convKey} split={split} tmuxSession={tmuxSession ?? null} />;
+}
+
+// The pane's name is the attach command's handle: clicking it copies the
+// command (or says why there is none), the way the header pill's copy button
+// used to.
+function AttachTitle({ target, convKey }: { target: string; convKey: string }) {
+  const { attach, copyAttach } = useAttachCopy(target, convKey);
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  return (
+    <button
+      type="button"
+      data-terminal-attach
+      title={attach ? `Copy ${attach}` : undefined}
+      onClick={() => {
+        copyAttach();
+        if (!attach) return;
+        setCopied(true);
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => setCopied(false), 1500);
+      }}
+      className="group/attach inline-flex min-w-0 items-center gap-1.5 text-meta font-mono text-sol-text-muted hover:text-sol-text"
+    >
+      <span className="truncate">{target}</span>
+      <span className={`shrink-0 ${copied ? "text-sol-green" : "hidden text-sol-text-dim group-hover/attach:inline"}`}>{copied ? "Copied" : "Copy attach"}</span>
+    </button>
+  );
 }
 
 function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: SplitState; tmuxSession: string | null }) {
@@ -249,7 +277,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
             status === "open" && !inst?.state.reconnecting ? "bg-sol-violet" : isConnecting || inst?.state.reconnecting ? "bg-sol-yellow animate-pulse" : "bg-sol-text-dim/40"
           }`}
         />
-        <span className="text-meta font-mono text-sol-text-muted truncate">{target}</span>
+        <AttachTitle target={target} convKey={convKey} />
         {inst && status === "open" && <TerminalSeat tab={inst.state} />}
         {isRemote && (
           <span

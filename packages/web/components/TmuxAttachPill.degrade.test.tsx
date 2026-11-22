@@ -72,11 +72,13 @@ describe("TmuxAttachPill under a backend that lacks the query", () => {
     expect(renderToStaticMarkup(<TmuxAttachPill agentType="claude" isLive />)).toBe("");
   });
 
-  test("Codex with a pane retains the terminal and copy actions", () => {
+  // The copy moved into the docked terminal's title (ConversationTerminal):
+  // the pill is one button that opens the terminal.
+  test("Codex with a pane retains the terminal action, with no copy button", () => {
     lookup = () => ({ data: undefined, error: undefined });
     const html = renderToStaticMarkup(<TmuxAttachPill agentType="codex" tmuxSession="cx-resume" isLive conversationKey="cx-tmux" />);
     expect(html).toContain("text-sol-green");
-    expect(html).toContain('aria-label="Copy tmux attach command"');
+    expect(html).not.toContain('aria-label="Copy tmux attach command"');
     expect(html).not.toContain('aria-label="No tmux terminal attached"');
   });
 
@@ -97,14 +99,11 @@ describe("TmuxAttachPill under a backend that lacks the query", () => {
     expect(render()).toContain('aria-disabled="false"');
   });
 
-  // Simple view hides anything marked data-simple-hide. The copy button is a
-  // one-click gesture the pill owns in both views, so it must not carry the
-  // marker: in simple view it is the only copy affordance left in the header.
-  test("keeps the copy button visible in simple view", () => {
+  // Simple view hides anything marked data-simple-hide; the pill is how
+  // simple view reaches the terminal, so it must not carry the marker.
+  test("stays visible in simple view", () => {
     lookup = () => ({ data: undefined, error: missingFunction });
-    const html = render();
-    expect(html).toContain('aria-label="Copy tmux attach command"');
-    expect(html).not.toContain("data-simple-hide");
+    expect(render()).not.toContain("data-simple-hide");
   });
 
   // The failure must not be mistaken for "this pane is on someone else's box",

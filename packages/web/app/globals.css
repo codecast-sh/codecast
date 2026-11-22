@@ -279,6 +279,20 @@
    only its glyph and dot. */
 [data-sv-convhead] [data-cc-runner]:has([data-runner-device]) [data-tmux-pill] .cq-sq2 { display: none; }
 
+/* The owners segment (OwnersMenu): faces in the order added, the one that
+   drives ringed, a paused role greyed. */
+[data-cc-runner] [data-owners-seg] { cursor: pointer; transition: background-color .12s; }
+[data-cc-runner] [data-owners-seg]:hover,
+[data-cc-runner] [data-owners-seg].is-open { background: color-mix(in srgb, var(--sol-text) 7%, transparent); }
+.own-stack { display: inline-flex; align-items: center; gap: 5px; }
+.own-drv { outline: 1.5px solid var(--sol-text); outline-offset: 1px; }
+.own-paused { filter: grayscale(1); opacity: .45; }
+/* "Make driver" shows on the row under the pointer or the keyboard. */
+[data-owners-menu] .own-mk { display: none; height: 24px; padding: 0 8px; font-size: var(--fs-meta); }
+[data-owners-menu] .own-row[data-highlighted] .own-mk { display: inline-flex; }
+[data-owners-menu] .own-plus:hover { background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+.own-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: 6px; background: color-mix(in srgb, var(--sol-text) 6%, transparent); font-size: var(--fs-meta); color: var(--sol-text-muted); }
+
 /* Status tabs swap a multi-pill segmented control for a single compact dropdown
    once the header is too tight to show every pill on one row alongside the
    toolbar. Measured for the Tasks header (the widest consumer: ~52 title + ~452
@@ -7794,6 +7808,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 .modern-style [data-sv-convhead] [data-cc-runner] [data-runner-device] { height: 100% !important; }
 .modern-style [data-sv-convhead] [data-cc-runner] [data-runner-device] > span { align-items: center; }
 .modern-style [data-sv-convhead] [data-cc-runner] > * + * { border-left-color: transparent; }
+.modern-style [data-sv-convhead] [data-cc-runner] [data-owners-seg] { padding: 0 7px 0 6px; gap: 5px; }
 .modern-style [data-sv-convhead] [data-cc-conv-actions] { gap: 4px; }
 /* Actions are 28px ghost buttons with a 16px glyph. */
 .modern-style [data-sv-convhead] [data-cc-conv-actions] > :is(button, a):not([data-cc-image-pill]),

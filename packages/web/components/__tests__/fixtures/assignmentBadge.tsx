@@ -47,6 +47,7 @@ const render = async (isOwner = false, compact = false, reset = true, guest = fa
   if (reset) generation++;
   await act(async () => { root.render(<ConversationAssignmentBadge key={generation} conversation={{ _id: id, user_id: runner.id, owner_device_id: "theirs", user: { name: runner.name } }} guest={guest} isOwner={isOwner} compact={compact} />); });
 };
+const ownersSeg = () => container.querySelector<HTMLButtonElement>("[data-owners-seg]");
 afterAll(async () => { await act(async () => root.unmount()); dom.window.close(); });
 
 test("a teammate sees the machine and can claim before being an owner", async () => {
@@ -55,7 +56,7 @@ test("a teammate sees the machine and can claim before being an owner", async ()
   expect(container.textContent).toContain("Jason MacBook");
   expect(container.textContent).not.toContain("Take ownership");
   expect(container.textContent).not.toContain("Assigned to you");
-  expect(container.querySelector("button")?.title).toMatch(/Owned by Jason/);
+  expect(ownersSeg()?.title).toMatch(/Owners: Jason/);
 });
 
 test("share-only viewers and failed permission reads get no assignment controls", async () => {
@@ -90,31 +91,36 @@ test("a viewer with no registered devices still sees the foreign machine", async
   expect(container.textContent).toContain("Jason MacBook");
   expect(container.textContent).not.toContain("Take ownership");
   await render(false, true);
-  expect(container.querySelector("button")?.title).toContain("Jason MacBook");
-  expect(container.querySelector("button")?.title).toMatch(/Owned by Jason/);
+  expect(container.querySelector("[data-runner-device]")?.getAttribute("title")).toContain("Jason MacBook");
+  expect(ownersSeg()?.title).toMatch(/Owners: Jason/);
   expect(container.querySelectorAll("svg").length).toBeGreaterThanOrEqual(1);
 });
 
-test("default ownership is named on hover, not on the chip", async () => {
+test("owners are faces on the chip, named on hover", async () => {
   useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: "me" } } });
   setOwners([{ user_id: "me", name: "Ashot" }]);
   await render(true);
-  const btn = container.querySelector("button")!;
-  expect(btn.title).toMatch(/Owned by Ashot/);
+  expect(ownersSeg()!.title).toMatch(/Owners: Ashot/);
+  expect(ownersSeg()!.textContent).not.toContain("Ashot");
   expect(container.textContent).not.toContain("Take ownership");
   useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: runner.id } } });
 });
 
-test("a transferred owner is named on the chip", async () => {
-  useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: runner.id } } });
-  setOwners([{ user_id: "me", name: "Ashot" }]);
+test("the driver is ringed and a paused role greyed", async () => {
+  replies.set("sessionOwnership:listOwners", {
+    conversation_id: id,
+    owners: [{ user_id: "me", name: "Ashot" }],
+    role: { role_id: "role1", short_id: "or-1", handle: "evals", name: "Eval Suite lead", avatar: null },
+    driver: { kind: "user", user_id: "me" },
+  });
   await render(true);
-  expect(container.textContent).toContain("Ashot");
-  expect(container.querySelector("button")?.title).toMatch(/Owned by Ashot/);
+  expect(ownersSeg()!.title).toBe("Owners: Ashot (driver), Eval Suite lead (paused)");
+  expect(ownersSeg()!.querySelectorAll(".own-drv").length).toBe(1);
+  expect(ownersSeg()!.querySelectorAll(".own-paused").length).toBe(1);
 });
 
 test("existing owners remain selected when another teammate claims", async () => {
   setOwners([{ user_id: "jason", name: "Jason" }]);
   await render();
-  expect(container.querySelector("button")?.title).toMatch(/Owned by Jason/);
+  expect(ownersSeg()?.title).toMatch(/Owners: Jason/);
 });

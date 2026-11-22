@@ -1,16 +1,11 @@
 "use client";
 
 /**
- * The unified assignment control for a session: ONE chip in the conversation
- * header, ONE popover, both movable ownership axes — which machine RUNS it
- * (device) and whose inboxes it lives in (owners). The axes stay independent:
- * moving the device never changes owners and vice versa; they just share a
- * surface instead of being split across two chips and an overflow-menu section.
- *
- * The trigger is a segmented pill — device lobe + owners lobe under one border,
- * each keeping its axis's accent tint. Built on the radix DropdownMenu (like
- * the pieces it unifies) so the panel portals out of the header's
- * overflow-hidden actions row.
+ * Two segments of the header's runner pill ([data-cc-runner]): the MACHINE
+ * that runs the session (its menu: whose account, run on another device, the
+ * local mirror) and its OWNERS (OwnersSegment: faces and the owners menu). The
+ * axes stay independent: moving the device never changes owners and vice
+ * versa. The terminal segment beside them is TmuxAttachPill.
  */
 
 import { useWorkspaceFeature } from "../lib/teamFeatures";
@@ -22,7 +17,6 @@ import {
 } from "./ui/dropdown-menu";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { UserCheck } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import {
   useDevices,
@@ -36,10 +30,9 @@ import {
   DeviceDot,
   RunOnDeviceItems,
 } from "./DeviceBadge";
-import { useOwnersFromStore, OwnerAvatar, OwnerMenuItems } from "./OwnersBadge";
-import { useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
+import { useOwnersFromStore, OwnerAvatar } from "./OwnersBadge";
+import { OwnersSegment, MakeRoleMenuItem } from "./OwnersMenu";
 import { SessionAccountLine } from "./conversation/SessionAccountLabel";
-import { RoleFace } from "./org/RoleFace";
 import { MakeRoleDialog } from "./org/MakeRoleDialog";
 import { MirrorMenuItems } from "./LocalMirror";
 import { cloudSeedTitle } from "@codecast/shared/contracts";
@@ -122,14 +115,7 @@ export function AssignmentBadge({
 }) {
   const { byId, loaded } = useDevices();
   const owners = useOwnersFromStore(conversationId);
-  // A role's own session under another role has no person owner: it answers to
-  // that role (S28), so the chip shows the role rather than whoever runs it.
-  const { seatRoleId, currentRole: parentRole } = useSessionRoleFacts(conversationId);
-  const seatUnderRole = !!seatRoleId && !!parentRole;
   const [makingRole, setMakingRole] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  // The hand-off step replaces the whole menu while it is open.
-  const [handingOff, setHandingOff] = useState(false);
   const orgOn = useWorkspaceFeature("org");
   // A session may run on a machine outside the viewer's own device list (a
   // teammate's, or the shared agent box whose daemon authenticates as the bot
@@ -141,39 +127,8 @@ export function AssignmentBadge({
     !!ownerDeviceId && !own,
   );
   const d = own ?? (foreign || undefined);
-  const { ownerList, displayFor, currentUser, implicitOwnerId } = owners;
-
-  // Default ownership (the person who started it, or you on your own
-  // session) stays off the chip: avatar only, named on hover. The name
-  // appears in the header only after ownership has moved to someone else
-  // or grown past one person.
-  const meId = currentUser?._id?.toString?.();
+  const meId = owners.currentUser?._id?.toString?.();
   const isRunner = runner?.id ? runner.id === meId : isOwner;
-  const starterId = implicitOwnerId ?? (isRunner ? meId : runner?.id);
-  const onlyStarter =
-    ownerList.length === 0 ||
-    (ownerList.length === 1 && (!starterId || ownerList[0] === starterId));
-  const ownershipChanged = ownerList.length > 1 || (ownerList.length === 1 && !onlyStarter);
-  const selfDisp = currentUser
-    ? {
-        name: currentUser.name || currentUser.email?.split("@")[0] || "You",
-        image: currentUser.image || currentUser.github_avatar_url,
-      }
-    : null;
-  const ownerNames = (ownerList.length ? ownerList : meId && isRunner ? [meId] : starterId ? [starterId] : [])
-    .map((id) => (id === meId ? `${selfDisp?.name ?? "You"}${selfDisp?.name ? " (you)" : ""}` : displayFor(id).name));
-  const ownerHover = seatUnderRole
-    ? `Reports to ${parentRole!.name} (@${parentRole!.handle})`
-    : ownerNames.length === 0
-      ? "No owner — click to take ownership"
-      : ownerNames.length === 1
-        ? `Owned by ${ownerNames[0]}`
-        : `Owned by ${ownerNames.join(", ")}`;
-  const ownerLabel = ownershipChanged
-    ? ownerList.length === 1
-      ? displayFor(ownerList[0]).name
-      : `${ownerList.length} owners`
-    : null;
 
   const { worktree, preparing, shared, seed } = useRunLocation(conversationId);
   // "Started from feat/x @ abc1234 + uncommitted changes on <laptop>": the
@@ -206,73 +161,42 @@ export function AssignmentBadge({
   return (
     <>
     {makingRole && <MakeRoleDialog conversationId={conversationId} onClose={() => setMakingRole(false)} />}
-    <DropdownMenu open={menuOpen} onOpenChange={(o) => { setMenuOpen(o); if (!o) setHandingOff(false); }}>
+    <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
           data-runner-device
-          title={`${deviceTitle} · ${ownerHover}`}
+          title={deviceTitle}
           className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-meta font-medium outline-none transition-colors hover:border-sol-border/80"
         >
-          {(loaded || d || owners.canManage) && (
-            <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing || shared ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
-              {d ? (
-                <>
-                  <DeviceIcon d={d} className="w-3.5 h-3.5" />
-                  {!compact && <span className="truncate cq-sq1">{deviceDisplayName(d)}</span>}
-                  {/* A worktree has its own pill beside this one (SessionWorktreePills); the main checkout has none, so it is said here. */}
-                  {!compact && shared && !worktree && (
-                    <span className="truncate max-w-[70px] font-mono text-meta opacity-70 cq-sq1">shared</span>
-                  )}
-                  {!compact && base7 && (
-                    <span className="font-mono text-meta opacity-70 whitespace-nowrap cq-sq1">@{base7}</span>
-                  )}
-                  {/* While the host is being prepared there is nothing to be
-                      online about yet — the dot would read as "offline", which is
-                      wrong. Say what is actually happening instead. */}
-                  {preparing ? (
-                    <span className="inline-flex items-center gap-1 whitespace-nowrap animate-pulse">
-                      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" />
-                      {!compact && <span className="text-meta cq-sq1">preparing cloud host</span>}
-                    </span>
-                  ) : (
-                    <DeviceDot online={d.online} />
-                  )}
-                </>
-              ) : (
-                <>
-                  <DeviceDot online={false} />
-                  {!compact && <span className="cq-sq1">{ownerDeviceId ? foreign === undefined ? "Loading machine" : "Unknown machine" : "Unassigned"}</span>}
-                </>
-              )}
-            </span>
-          )}
-          <span
-            className={`inline-flex items-center gap-1.5 py-0.5 ${compact ? "pl-1 pr-1.5" : "pl-1.5 pr-2 max-w-[150px]"} ${
-              ownershipChanged ? "bg-sol-cyan/10 text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"
-            }`}
-          >
-            {seatUnderRole ? (
+          <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing || shared ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
+            {d ? (
               <>
-                <RoleFace role={parentRole as any} size={16} />
-                {!compact && <span className="truncate cq-sq1">{parentRole!.name}</span>}
-              </>
-            ) : ownerList.length === 0 && !isRunner && !starterId ? (
-              <>
-                <UserCheck className="w-3.5 h-3.5" />
-                {!compact && <span className="truncate cq-sq1">Take ownership</span>}
+                <DeviceIcon d={d} className="w-3.5 h-3.5" />
+                {!compact && <span className="truncate cq-sq1">{deviceDisplayName(d)}</span>}
+                {/* A worktree has its own pill beside this one (SessionWorktreePills); the main checkout has none, so it is said here. */}
+                {!compact && shared && !worktree && (
+                  <span className="truncate max-w-[70px] font-mono text-meta opacity-70 cq-sq1">shared</span>
+                )}
+                {!compact && base7 && (
+                  <span className="font-mono text-meta opacity-70 whitespace-nowrap cq-sq1">@{base7}</span>
+                )}
+                {/* While the host is being prepared there is nothing to be
+                    online about yet — the dot would read as "offline", which is
+                    wrong. Say what is actually happening instead. */}
+                {preparing ? (
+                  <span className="inline-flex items-center gap-1 whitespace-nowrap animate-pulse">
+                    <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" />
+                    {!compact && <span className="text-meta cq-sq1">preparing cloud host</span>}
+                  </span>
+                ) : (
+                  <DeviceDot online={d.online} />
+                )}
               </>
             ) : (
               <>
-                <span className="flex -space-x-1.5">
-                  {(ownerList.length ? ownerList.slice(0, 3) : meId ? [meId] : starterId ? [starterId] : []).map((id) => {
-                    const disp = id === meId && selfDisp ? selfDisp : displayFor(id);
-                    return <OwnerAvatar key={id} name={disp.name} image={disp.image} />;
-                  })}
-                </span>
-                {ownershipChanged && !compact && ownerLabel && (
-                  <span className="truncate cq-sq1">{ownerLabel}</span>
-                )}
+                <DeviceDot online={false} />
+                {!compact && <span className="cq-sq1">{ownerDeviceId ? foreign === undefined ? "Loading machine" : "Unknown machine" : loaded ? "Unassigned" : "Loading machine"}</span>}
               </>
             )}
           </span>
@@ -280,33 +204,20 @@ export function AssignmentBadge({
       </DropdownMenuTrigger>
 
       <DropdownMenuContent align="end" className="min-w-[16rem] max-w-[24rem]">
-        {/* Who it belongs to leads: that is the move people come here for.
-            Where it runs follows; the hand-off step takes the whole menu. */}
-        <OwnerMenuItems
-          owners={owners}
-          conversationId={conversationId}
-          onMakeRole={orgOn ? () => setMakingRole(true) : undefined}
-          handingOff={handingOff}
-          onHandingOff={setHandingOff}
-          onDone={() => setMenuOpen(false)}
-        />
-        {!handingOff && (
+        {runner && <div className="px-2 py-1.5 text-xs text-sol-text-muted">Runs under {runner.name}’s account</div>}
+        <SessionAccountLine conversationId={conversationId} className="px-2 pb-1 pt-0" />
+        {!isRunner && <div className="px-2 pb-1.5 text-meta text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
+        <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
+        {cloudHost && isRunner && !preparing && (
           <>
             <DropdownMenuSeparator />
-            {runner && <div className="px-2 py-1.5 text-xs text-sol-text-muted">Runs under {runner.name}’s account</div>}
-            <SessionAccountLine conversationId={conversationId} className="px-2 pb-1 pt-0" />
-            {!isRunner && <div className="px-2 pb-1.5 text-meta text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
-            <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
-            {cloudHost && isRunner && !preparing && (
-              <>
-                <DropdownMenuSeparator />
-                <MirrorMenuItems conversationId={conversationId} />
-              </>
-            )}
+            <MirrorMenuItems conversationId={conversationId} />
           </>
         )}
+        {orgOn && <MakeRoleMenuItem conversationId={conversationId} onMakeRole={() => setMakingRole(true)} />}
       </DropdownMenuContent>
     </DropdownMenu>
+    <OwnersSegment conversationId={conversationId} owners={owners} compact={compact} />
     </>
   );
 }
