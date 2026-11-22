@@ -18,9 +18,18 @@ describe("the overview's tracks", () => {
     expect(t.map((x) => (x.type === "fork" ? `[${x.branches.map((b) => b.label).join("|")}]` : x.label))).toEqual(["Session", "PR", "[CI|Review]", "Merge", "Wait for release"]);
     const fork = t[2];
     expect(fork.type === "fork" && fork.branches.map((b) => b.count)).toEqual([1, 0]);
+    // A change counts once: on its branch, never again on the frame.
+    expect(fork).toMatchObject({ count: 0, names: [] });
     expect(pill(t, "Merge")).toMatchObject({ count: 1, stalled: 0, kind: "command", sub: "line.sh" });
     // The change lane deploys nothing: its last station waits, and its edge runs into main.
     expect(pill(t, "Wait for release")).toMatchObject({ kind: "wait", sub: "until it is live", intoMain: true });
+  });
+
+  test("a change between the branches counts on the frame alone", () => {
+    const group = trackOf(pipelineModel(example), "change")[2];
+    const m = pipelineModel(example, [run("a", group.id!), run("b", "review")]);
+    const fork = trackOf(m, "change", NOW)[2];
+    expect(fork.type === "fork" && [fork.count, fork.names, fork.branches.map((b) => b.count)]).toEqual([1, ["a change"], [0, 1]]);
   });
 
   test("a change standing at a station a day or more has stalled: counted apart", () => {

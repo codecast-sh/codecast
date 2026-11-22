@@ -138,8 +138,11 @@ export function trackOf(model: PipelineModel, name: "change" | "release", now = 
   for (const st of lane.diagram.steps) {
     if (st.kind === "join") continue;
     if (st.kind === "parallel" && st.inner.length) {
-      const mark = lane.marks[st.id];
-      items.push({ type: "fork", id: st.id, label: st.label, branches: st.inner.map((b) => ({ ...pillOf(b, c), off: [] })), count: Math.max(0, (mark?.here ?? 0) - (mark?.hereInside ?? 0)), names: mark?.hereNames ?? [], off: offOf(st, drawnLabels) });
+      // A change counts once: on the branch it stands at, else on the frame (between the branches). The frame's own
+      // count and names leave out what its branches show.
+      const inside = new Set(st.inner.flatMap((b) => (lane.standing[b.id] ?? []).map((x) => x.id)));
+      const between = (lane.standing[st.id] ?? []).filter((x) => !inside.has(x.id));
+      items.push({ type: "fork", id: st.id, label: st.label, branches: st.inner.map((b) => ({ ...pillOf(b, c), off: [] })), count: between.length, names: between.map((x) => x.name), off: offOf(st, drawnLabels) });
     } else items.push(pillOf(st, c));
   }
   return items;

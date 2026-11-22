@@ -165,7 +165,8 @@ button.pt-pill:hover, .pt-pill[data-picked] { border-color: var(--lw-ink-2); }
 .pt-tag { margin-left: 2px; font-size: var(--fs-mark, 11px); font-weight: 600; text-transform: uppercase; letter-spacing: .05em; color: var(--lw-warn); }
 .pt-pill[data-skipped] .pt-name { text-decoration: line-through; color: var(--lw-ink-3); }
 .pt-counts { position: absolute; bottom: calc(100% - 6px); left: calc(100% - 6px); z-index: 2; display: inline-flex; gap: 3px; }
-.pt-counts-fork { bottom: -4px; top: auto; left: auto; right: -10px; }
+/* The frame's count sits on its own top-right corner, where the right bracket starts. */
+.pt-counts-fork { bottom: auto; top: 6px; left: auto; right: -8px; }
 .pt-count { min-width: 20px; height: 20px; padding: 0 6px; border-radius: 10px; display: grid; place-items: center; background: var(--lw-person); color: #fff; font-size: 11px; font-weight: 600; font-variant-numeric: tabular-nums; box-shadow: 0 0 0 3px var(--pv-surface, var(--lw-card)); }
 .pt-count[data-stalled] { background: var(--lw-bad); }
 /* A side-by-side group: its branches stacked between two brackets. */
