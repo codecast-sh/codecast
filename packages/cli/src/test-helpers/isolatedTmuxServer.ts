@@ -44,8 +44,13 @@ import { defaultConfigDir } from "../config/configDir.js";
 // /var/folders/… path, so a temp dir there overflows the cap and every spawn
 // fails with "File name too long". Prefer the codecast dir, which is short on
 // any machine, and fall back to /tmp when a long $HOME would overflow it too.
+//
+// One server per process, named by pid alone. `bun test --parallel` reuses each
+// worker for many files and evaluates this preload again for every file, with a
+// fresh process.env and no "exit" event, so a server per evaluation leaked one
+// tmux server per test file: about 900 per full suite run on 2026-11-22.
 function begin(): { dir: string; socket: string } {
-  const run = `run-${process.pid}-${Date.now().toString(36)}`;
+  const run = `run-${process.pid}`;
   const tail = path.join(run, `tmux-${process.getuid?.() ?? 0}`, "default");
   const codecastDir = defaultConfigDir();
   const base = [path.join(codecastDir, "test-tmux"), "/tmp/codecast-test-tmux"]
@@ -62,13 +67,22 @@ function begin(): { dir: string; socket: string } {
   const socketDir = path.join(dir, `tmux-${process.getuid?.() ?? 0}`);
   fs.mkdirSync(socketDir, { recursive: true, mode: 0o700 });
   fs.chmodSync(dir, 0o700);
+  // The same worker's earlier files leave their server here for reuse. A dir
+  // written under another parent is a dead run's whose pid came round again:
+  // its server goes, so no stale pane carries into this run.
+  const socket = path.join(socketDir, "default");
+  const owner = path.join(dir, "owner");
+  let previous: string | undefined;
+  try { previous = fs.readFileSync(owner, "utf8"); } catch {}
+  if (previous !== undefined && previous !== String(process.ppid)) tmuxOnSocket(socket, ["kill-server"]);
+  fs.writeFileSync(owner, String(process.ppid));
   process.env.TMUX_TMPDIR = dir;
   // This process may itself be running inside one of the human's tmux panes, and
   // an inherited $TMUX would point new clients back at that server.
   delete process.env.TMUX;
   sweepDeadServers(base);
 
-  return { dir, socket: path.join(socketDir, "default") };
+  return { dir, socket };
 }
 
 // Under bun, mutating process.env does NOT change what a child spawned with the
@@ -108,7 +122,7 @@ function sweepDeadServers(base: string): void {
   let entries: string[];
   try { entries = fs.readdirSync(base); } catch { return; }
   for (const name of entries) {
-    const pid = Number(name.match(/^run-(\d+)-/)?.[1]);
+    const pid = Number(name.match(/^run-(\d+)(?:-|$)/)?.[1]);
     if (!pid || pid === process.pid) continue;
     try {
       process.kill(pid, 0);
