@@ -217,7 +217,12 @@ export async function snapshotTree(cwd: string, exclude: string[] = []): Promise
     await git(cwd, ["read-tree", "HEAD"], env);
     const pathspecs = [".", ...exclude.map((p) => `:(exclude)${p}`)];
     await git(cwd, ["add", "-u", "--", ...pathspecs], env);
-    const { stdout: paths } = await execFileAsync("git", ["-C", cwd, "ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspecs], { env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    const { stdout: others } = await execFileAsync("git", ["-C", cwd, "ls-files", "--others", "--exclude-standard", "-z", "--", ...pathspecs], { env, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+    // Without --directory the only entries ending in "/" are directories
+    // holding a .git (a worktree or clone nested under an untracked dir).
+    // Added, each becomes a gitlink: not content, and a restore can only
+    // make an empty dir of it.
+    const paths = others.split("\0").filter((p) => p && !p.endsWith("/")).map((p) => `${p}\0`).join("");
     if (paths) {
       const pathspec = path.join(indexDir, "paths");
       fs.writeFileSync(pathspec, paths, { mode: 0o600 });
