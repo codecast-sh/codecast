@@ -2,7 +2,7 @@
 // attributes rewritten with every other byte kept, and a flow's base read the
 // same way whether a save named it or the graph extends a file.
 import { expect, test } from "bun:test";
-import { flowBase, flowGraphAttr, flowPathWords, foldFlow, publishableFlowSource, withGraphAttrs } from "./flowPool";
+import { flowBase, flowGraphAttr, flowPathWords, foldFlow, publishableFlowSource, sourceTakesSessionChange, withGraphAttrs } from "./flowPool";
 import { flowEditWords, type FlowEditChange } from "./flowEdit";
 
 test("withGraphAttrs sets and drops graph attributes, quotes and the rest of the source kept", () => {
@@ -25,6 +25,17 @@ test("flowBase reads a save's base, else the extends file", () => {
   expect(flowBase({ source: `digraph z { graph [kind="line"] }` })).toBe(null);
 });
 
+test("a flow takes a session's change when it takes a branch and is a whole flow or lands it itself", () => {
+  // A flow a session writes for its own change: no kind, but its Land station runs the ship segment.
+  const own = `digraph land_built_change {\n  graph [label="Built change", takes="task,branch", draft="jx7dhj9"]\n  check [flow="check"]\n  land [label="Land", flow="ship"]\n}`;
+  expect(sourceTakesSessionChange(own)).toBe(true);
+  expect(sourceTakesSessionChange(`digraph x { graph [takes="branch"]; land [flow=ship]; }`)).toBe(true);
+  expect(sourceTakesSessionChange(`digraph x { graph [takes="branch"]; land [flow="ship-now"]; }`)).toBe(false);
+  expect(sourceTakesSessionChange(`digraph change {\n  graph [kind="line", takes="task,branch"]\n}`)).toBe(true);
+  // The check segment alone takes a branch but lands nothing; a task flow takes no branch.
+  expect(sourceTakesSessionChange(`digraph check {\n  graph [kind="segment", takes="branch"]\n  verify [flow="checker"]\n}`)).toBe(false);
+  expect(sourceTakesSessionChange(`digraph line {\n  graph [kind="line", takes="task"]\n  ship [flow="ship"]\n}`)).toBe(false);
+  expect(sourceTakesSessionChange(null)).toBe(false);
 // A station a variant placed after Check (parser.ts variantEdits) as the expanded graph holds it: Check's passing
 // exit leads to it, it goes on to Review on success and back to Fix check on failure.
 test("the main path runs through a station inserted after a segment, not its way back", () => {

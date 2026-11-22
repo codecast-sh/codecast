@@ -108,4 +108,12 @@ describe("the team's pool of flows", () => {
     expect(await s.pool(s.bo, s.team)).toEqual([]);
     expect(await s.t.mutation(internal.workflows.backfillWorkspace, {})).toEqual({ stamped: 0 });
   });
+
+  test("the CLI's pool read carries the team's default flow to members only, and none for the personal workspace", async () => {
+    const s = await seed();
+    await s.t.run(async (ctx) => ctx.db.patch(s.team, { default_flow: "ship-now" } as any));
+    expect((await s.t.query(api.workflows.poolForCli, { api_token: "tok-bo", team_id: s.team })).default_flow).toBe("ship-now");
+    expect((await s.t.query(api.workflows.poolForCli, { api_token: "tok-cy", team_id: s.team })).default_flow).toBeNull();
+    expect((await s.t.query(api.workflows.poolForCli, { api_token: "tok-bo" })).default_flow).toBeNull();
+  });
 });

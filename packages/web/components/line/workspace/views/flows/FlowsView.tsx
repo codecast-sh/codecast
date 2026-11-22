@@ -16,7 +16,8 @@ import { useFlowLibrary, type FlowRun as Run } from "../../../../../hooks/useFlo
 import { useOwnedFlows } from "../../../../../hooks/useOwnedFlows";
 import { useSessionFlows, type LiveFlow, type SessionFlow } from "../../../../../hooks/useLiveFlow";
 import { useInboxStore } from "../../../../../store/inboxStore";
-import { appPool, CHANGE_FLOW_SLUG, defaultFlowOf, flowBySlug, flowRowPath, pushedFlow, takesSessionChange, type AppFlow } from "../../../../../lib/line/flowPool";
+import { appPool, flowBySlug, flowRowPath, pushedFlow, type AppFlow } from "../../../../../lib/line/flowPool";
+import { CHANGE_FLOW_SLUG, defaultFlowOf, takesSessionChange } from "@codecast/shared/contracts/flowPool";
 import { changesAnything, libraryEntry, libraryFlows, type FlowLibrary, type LibraryEntry, type VariantChange } from "../../../../../lib/line/flowLibrary";
 import { liveFlowLedger, liveQueue, moveFlowLedger, startFlowLedger, type LiveQueueRow } from "../../../../../lib/line/liveFlow";
 import { scoreBand } from "../../../../../lib/line/problemScore";
