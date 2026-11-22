@@ -45,7 +45,7 @@ describe("callingSubject", () => {
 describe("changeReturnWords", () => {
   test("each kind of change says how the run takes the fix back", () => {
     expect(changeReturnWords({ source: "session" })).toBe("When you end your turn the run freezes this session's edits again");
-    expect(changeReturnWords({ source: "branch", branch: "feat" })).toBe("Commit the fix to branch feat and push it, since the run may be on another machine and read the branch from origin; when you end your turn the run reads that branch again");
+    expect(changeReturnWords({ source: "branch", branch: "feat" })).toBe("Commit the fix to branch feat and push it (with --force-with-lease if you rebased it), since the run may be on another machine and read the branch from origin; when you end your turn the run reads that branch again");
     expect(changeReturnWords({ source: "pr", branch: "feat" })).toContain("Push the fix to the pull request's branch feat");
   });
 });

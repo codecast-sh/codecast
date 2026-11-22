@@ -67,7 +67,7 @@ export function readFrozenChange(runDir: string | undefined): FrozenChange | nul
 /** How the run takes the subject's fix back, as the briefs say it ($change_return): its edits, or the branch it names. */
 export function changeReturnWords(change: Partial<FrozenChange>): string {
   if (change.source === "pr") return `Push the fix to the pull request's branch ${change.branch}; when you end your turn the run fetches that branch again`;
-  if (change.source === "branch" || change.source === "task") return `Commit the fix to branch ${change.branch} and push it, since the run may be on another machine and read the branch from origin; when you end your turn the run reads that branch again`;
+  if (change.source === "branch" || change.source === "task") return `Commit the fix to branch ${change.branch} and push it (with --force-with-lease if you rebased it), since the run may be on another machine and read the branch from origin; when you end your turn the run reads that branch again`;
   return "When you end your turn the run freezes this session's edits again";
 }
 
