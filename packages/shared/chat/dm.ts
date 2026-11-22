@@ -46,3 +46,14 @@ export function dmOtherIds(dmKey: string | undefined, viewerId: string): string[
     .filter((id) => id && id !== viewerId);
   return session ? [...others, sessionPartyId(session)] : others;
 }
+
+/** Whether the viewer watches a DM from outside it rather than taking part:
+ *  the owner of a session, or the host of a role, reading the room their
+ *  agent opened with someone else. The agent is the viewer's own side there,
+ *  so the room's one other party is the agent's, and naming it lists the
+ *  agent, not the agent and its people. */
+export function dmWatcher(dmKey: string | undefined, viewerId: string): boolean {
+  if (!dmKey) return false;
+  const [people] = dmKey.split(SESSION_DM_MARK);
+  return !people.split(":").slice(1).includes(viewerId);
+}

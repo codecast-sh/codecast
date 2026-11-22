@@ -162,6 +162,9 @@ export type ChatChannelView = {
   kind?: "public" | "private" | "dm" | "agents" | "community";
   /** The OTHER parties of a DM (viewer excluded) — the naming source. */
   dmMemberIds?: string[];
+  /** The viewer reads this DM from outside it: their session's or their role's
+   *  room with someone else (dmWatcher). Named for the agent alone. */
+  dmWatching?: boolean;
   /** Roster of a restricted room, viewer included (the members panel). */
   memberIds?: string[];
   /** Roles and sessions inside the room (any kind but a DM). */

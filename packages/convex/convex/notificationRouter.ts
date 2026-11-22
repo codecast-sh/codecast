@@ -37,6 +37,8 @@ export const PREFERENCE_MAP: Record<string, string> = {
   chat_dm: "mention",
   chat_added: "chat_activity",
   chat_post: "chat_activity",
+  // A line in the chat of a huddle you are in: chat activity, muted with it.
+  call_chat: "chat_activity",
   // A machine under load has its own switch: muting it must not also mute the
   // session errors (signed out, usage limit) a person does have to act on.
   daemon_overloaded: "machine_alerts",

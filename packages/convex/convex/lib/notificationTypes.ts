@@ -37,7 +37,10 @@ export const ENTITY_TYPE = v.union(
   // A metric watch, by its short id (metricAlerts.ts). Direct recipients only.
   v.literal("metric_watch"),
   // A deploy, by its short id (deploys.noticeDroppedWork). Direct recipients only.
-  v.literal("deploy")
+  v.literal("deploy"),
+  // A huddle, by its transcript id: a line in its call chat (callChat.ts).
+  // Direct recipients only: the people in the huddle.
+  v.literal("call")
 );
 
 export const NOTIFICATION_TYPE = v.union(
@@ -69,6 +72,9 @@ export const NOTIFICATION_TYPE = v.union(
   // level is "all" (chat.ts gates it). For everyone else plain chatter stays
   // unread state with no row and no push.
   v.literal("chat_post"),
+  // A line in a huddle's call chat, typed by a person or mirrored from an
+  // agent fed the call (callChat.ts), to everyone else in the huddle.
+  v.literal("call_chat"),
   // The daemon on one machine spent more than its budget frozen in the last hour.
   v.literal("daemon_overloaded"),
   // A laptop has been under sustained CPU or memory pressure (machineResources).

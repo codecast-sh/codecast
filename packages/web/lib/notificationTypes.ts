@@ -64,6 +64,8 @@ export const socialTypes = new Set([
   "chat_dm",
   "chat_added",
   "chat_post",
+  // A line in the chat of a huddle the person is in (convex callChat.ts).
+  "call_chat",
 ]);
 
 export const taskTypes = new Set([
@@ -111,6 +113,7 @@ export const typeLabels: Record<string, string> = {
   chat_dm: "sent you a direct message",
   chat_added: "added you to a channel",
   chat_post: "posted in a channel you follow",
+  call_chat: "wrote in the huddle chat",
   daemon_overloaded: "daemon under load",
   machine_overloaded: "machine overloaded",
   sessions_need_input: "waiting for you",
@@ -160,6 +163,7 @@ export const typeColors: Record<string, string> = {
   chat_dm: "text-sol-orange",
   chat_added: "text-sol-cyan",
   chat_post: "text-sol-cyan",
+  call_chat: "text-sol-green",
   daemon_overloaded: "text-sol-orange",
   machine_overloaded: "text-red-400",
   sessions_need_input: "text-sol-green",
@@ -284,6 +288,9 @@ export function notificationRoute(
   if (entityType === "metric_watch") return `/ops/metrics/${encodeURIComponent(entityId)}`;
   // A deploy by its short id: the Deploys page open on it.
   if (entityType === "deploy") return `/deploys?deploy=${encodeURIComponent(entityId)}`;
+  // A huddle by its transcript id: the call's page, which reads its chat
+  // beside the words.
+  if (entityType === "call") return `/calls/${encodeURIComponent(entityId)}`;
   // A role's page opens on its Scope tab, where a person who reports to it
   // reads their goals with what moved and what stalled.
   if (entityType === "org_role") return `/org/${entityId}`;

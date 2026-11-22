@@ -4917,53 +4917,29 @@ export const replyAsAnchor = mutation({
       if (landed) await queueSlackOutbound(ctx, { op: "message", message: landed });
     }
 
-    // The answer landing is a thread reply like any other, so the people in that
-    // thread hear about it — including the person who asked. An inline DM
-    // answer reaches the room's members the way any DM line does. Both are
-    // agent lines: a bell, never a phone push (C3).
+    // The answer landing is a line like any other, announced by the one
+    // fan-out every line takes (announceChatMessage): the thread's people hear
+    // a thread answer, a DM's members an inline one, anyone it names a
+    // mention, and each of them once. The actor is the row's author, the
+    // role's bot. An agent line: a bell, never a phone push (C3).
     const root = message.thread_root_id ? await ctx.db.get(message.thread_root_id) : null;
     const anchorName = oneLine(displayName(await ctx.db.get(anchor.bot_user_id)), 60);
-    if (!root && status === "done" && channel.kind === "dm") {
-      const preview = plainPreview(args.content);
-      for (const recipientId of await channelMemberIds(ctx, channel._id)) {
-        await notifyChat(ctx, {
-          eventType: "chat_dm",
-          agentLine: true,
-          actorUserId: anchor.bot_user_id,
-          actorName: anchorName,
-          channel,
-          messageId: message._id,
-          recipientId,
-          message: `${anchorName}: ${preview}`,
-          pushBody: preview,
-        });
-      }
-    }
-    if (root && status === "done") {
-      // The landed answer is thread activity like any human reply. The stamp is
-      // the row's FINAL position: a listening row was just re-stamped to the end
-      // of the channel, and the activity mark has to match what readers see.
-      await touchThreadReads(ctx, {
+    if (status === "done") {
+      await announceChatMessage(ctx, {
         channel,
         root,
-        activityAt: (patch.created_at as number | undefined) ?? message.created_at,
+        messageId: message._id,
+        authorId: anchor.bot_user_id,
+        content: args.content,
+        attachments: [],
+        mentions: resolved.users,
+        here: false,
+        // The row's FINAL position: a listening row was just re-stamped to the
+        // end of the channel, and the thread's activity mark has to match.
+        createdAt: (patch.created_at as number | undefined) ?? message.created_at,
+        agent: true,
+        agentLine: true,
       });
-      const preview = plainPreview(args.content);
-      for (const recipientId of await threadParticipants(ctx, root)) {
-        await notifyChat(ctx, {
-          eventType: "chat_reply",
-          agentLine: true,
-          actorUserId: anchor.bot_user_id,
-          actorName: anchorName,
-          channel,
-          messageId: message._id,
-          threadRootId: root._id,
-          recipientId,
-          message: `${anchorName} answered in #${channel.name}: ${preview}`,
-          pushSubtitle: `thread · #${channel.name}`,
-          pushBody: preview,
-        });
-      }
     }
     const mentionWakes = status === "done"
       ? await wakeAnchorMentions(ctx, {

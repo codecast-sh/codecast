@@ -1,7 +1,7 @@
 // Read-side selectors over the chat slice's collections: a channel's
 // timeline, a thread, reactions, read markers and the channel rail.
 import { inActiveWorkspace } from "../lib/workspaceScope";
-import { dmOtherIds, isSettledLine, isThreadMuted, plainPreview } from "@codecast/shared/chat";
+import { dmOtherIds, dmWatcher, isSettledLine, isThreadMuted, plainPreview } from "@codecast/shared/chat";
 import { mirrorState } from "@codecast/convex/convex/lib/slackMirror";
 import { isConvexId } from "../lib/entityLinks";
 import { tallyUnread } from "../lib/chatTimeline";
@@ -255,6 +255,7 @@ export function selectChatRail(
     // Who else is in the room: the dm_key names the set (works for stubs the
     // rail has never seen); the rail's roster covers private channels.
     let dmMemberIds: string[] | undefined;
+    const dmWatching = isDm && dmWatcher(channel.dm_key, viewer);
     if (isDm) {
       const fromKey = channel.dm_key ? dmOtherIds(channel.dm_key, viewer) : undefined;
       dmMemberIds = fromKey ?? rail?.member_ids?.filter((uid) => uid !== viewer);
@@ -265,6 +266,7 @@ export function selectChatRail(
       kind: channel.kind,
       isPrivate: channel.kind === "private",
       dmMemberIds,
+      ...(dmWatching ? { dmWatching } : {}),
       memberIds: rail?.member_ids,
       agents: rail?.agents,
       topic: channel.topic,

@@ -16,7 +16,7 @@ import {
 } from "../chatViews";
 import type { ChatMessageRow, ChatReactionRow } from "../../store/chatSlice";
 import { sessionPersonasFrom } from "../../hooks/useChatSync";
-import { dmOtherIds, sessionDmKeyFor } from "@codecast/shared/chat";
+import { dmKeyFor, dmOtherIds, dmWatcher, sessionDmKeyFor } from "@codecast/shared/chat";
 
 const ME: ChatMember = { _id: "u1", name: "Ashot", github_username: "Ashot", email: "ashot@codecast.sh" };
 const MAYA: ChatMember = { _id: "u2", name: "Maya", email: "maya@codecast.sh" };
@@ -415,6 +415,18 @@ describe("channelDisplayName", () => {
     expect(forMaya).toEqual(["session:conv-1"]);
     expect(channelDisplayName({ name: "Morning deal desk refresh", kind: "dm", dmMemberIds: forMaya }, [ME, MAYA]))
       .toBe("Morning deal desk refresh");
+    // Its owner sees the same one party, never "Maya, <session>" (ct-79021).
+    const forOwner = dmOtherIds(key, ME._id);
+    expect(forOwner).toEqual([MAYA._id, "session:conv-1"]);
+    expect(dmWatcher(key, ME._id)).toBe(true);
+    expect(dmWatcher(key, MAYA._id)).toBe(false);
+    expect(channelDisplayName({ name: "Morning deal desk refresh", kind: "dm", dmMemberIds: forOwner, dmWatching: true }, [ME, MAYA]))
+      .toBe("Morning deal desk refresh");
+    // A role's room read by its host names the role alone, not "Growth, Maya".
+    const BOT: ChatMember = { _id: "u-bot", name: "Growth", is_bot: true, bot_kind: "anchor" };
+    const roleKey = dmKeyFor("t1", [BOT._id, MAYA._id]);
+    expect(channelDisplayName({ name: "", kind: "dm", dmMemberIds: dmOtherIds(roleKey, ME._id), dmWatching: dmWatcher(roleKey, ME._id) }, [ME, MAYA, BOT]))
+      .toBe("Growth");
     // A people DM still reads as its people.
     expect(channelDisplayName({ name: "", kind: "dm", dmMemberIds: [MAYA._id] }, [ME, MAYA])).toBe("Maya");
   });

@@ -3976,6 +3976,42 @@ describe("agent channels: roles and sessions in chat", () => {
     expect(emits.every((e: any) => e.args.push === false)).toBe(true);
   });
 
+  test("ct-79021: a landed anchor answer notifies each person once, as the bot, in a DM and in a thread", async () => {
+    const DM = "chat_channels_dm" as any;
+    const ctx = context(BOB, seed({
+      chat_reads: [readRow(ALICE, "all"), readRow(CAROL, "all")],
+      chat_channels: [...channels(), {
+        _id: DM, team_id: TEAM, name: "", kind: "dm", dm_key: dmKeyFor(String(TEAM), [ALICE, BOT].map(String)),
+        workspace: `restricted:${DM}`, created_by: ALICE, created_at: 1_000, updated_at: 1_000,
+      }],
+      chat_channel_members: [
+        { _id: "cm-a", channel_id: DM, user_id: ALICE, added_by: ALICE, added_at: 1 },
+        { _id: "cm-b", channel_id: DM, user_id: BOT, added_by: ALICE, added_at: 1 },
+      ],
+      chat_messages: [
+        { _id: "root-1", team_id: TEAM, channel_id: CHANNEL, user_id: ALICE, content: "@anchor status?", created_at: 10, updated_at: 10 },
+        { _id: "reply-1", team_id: TEAM, channel_id: CHANNEL, user_id: CAROL, content: "watching", thread_root_id: "root-1", created_at: 11, updated_at: 11 },
+        { _id: "ph-thread", team_id: TEAM, channel_id: CHANNEL, thread_root_id: "root-1", user_id: BOT, author_kind: "agent", agent_status: "thinking", agent_anchor_id: ANCHOR, content: "", created_at: 12, updated_at: 12 },
+        { _id: "dm-1", team_id: TEAM, channel_id: DM, user_id: ALICE, content: "@anchor ping", created_at: 20, updated_at: 20 },
+        { _id: "ph-dm", team_id: TEAM, channel_id: DM, user_id: BOT, author_kind: "agent", agent_status: "thinking", agent_anchor_id: ANCHOR, content: "", created_at: 21, updated_at: 21 },
+      ],
+    }));
+    const bellsFor = (id: string) => ctx._emitted.filter((e: any) => String(e.args.chat_message_id) === id).map((e: any) => e.args);
+    // An answer naming the person it answers is one bell for them, not a
+    // mention and a DM line both.
+    await call(replyAsAnchor, ctx, { message_id: "ph-dm", content: "pong @alice" });
+    await call(replyAsAnchor, ctx, { message_id: "ph-thread", content: "green, @carol" });
+    for (const id of ["ph-dm", "ph-thread"]) {
+      const bells = bellsFor(id);
+      const recipients = bells.map((b: any) => String(b.direct_recipient_id));
+      expect(new Set(recipients).size).toBe(recipients.length);
+      expect(bells.every((b: any) => b.actor_user_id === BOT && b.actor_name === "Anchor" && b.push === false)).toBe(true);
+    }
+    expect(bellsFor("ph-dm").map((b: any) => `${b.event_type}->${b.direct_recipient_id}`)).toEqual([`chat_mention->${ALICE}`]);
+    expect(bellsFor("ph-thread").map((b: any) => `${b.event_type}->${b.direct_recipient_id}`).sort())
+      .toEqual([`chat_mention->${CAROL}`, `chat_reply->${ALICE}`].sort());
+  });
+
   test("a role's own hand naming the role is an exclusion, not a delivery failure, and spends no credit", async () => {
     const ctx = context(ALICE, seed({
       conversations: [
@@ -4480,6 +4516,8 @@ describe("session thinking rows", () => {
     // row's actor is the bot, so every client draws the role's face, never Bob's.
     const bell = ctx._emitted.find((e: any) => String(e.args.chat_message_id) === String(sent.message_id))?.args;
     expect(bell).toMatchObject({ event_type: "chat_dm", direct_recipient_id: ALICE, actor_user_id: "user-growth-bot", actor_name: "Head of Growth" });
+    // One-to-one on the phone too: no "Group message" under the role's name (ct-79021).
+    expect(bell.push_subtitle).toBeUndefined();
 
     // Bringing the host in is the role's choice: name them.
     const group = await call(openDm, ctx, { team_id: TEAM, handles: ["alice", "bob"], ...asRole });
@@ -4515,6 +4553,7 @@ describe("session thinking rows", () => {
     // Alice's bell goes to her alone; the owner is not in the room.
     const bells = ctx._emitted.filter((e: any) => String(e.args.chat_message_id) === String(sent.message_id)).map((e: any) => e.args.direct_recipient_id);
     expect(bells).toEqual([ALICE]);
+    expect(ctx._emitted.find((e: any) => String(e.args.chat_message_id) === String(sent.message_id)).args.push_subtitle).toBeUndefined();
 
     // A line Alice writes at room level reaches the session.
     const reply = await call(sendMessage, as(ctx, ALICE), { channel_id: dm.channel_id, content: "what does it cost?" });
@@ -4556,6 +4595,11 @@ describe("session thinking rows", () => {
     const sent = await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "is this the answer you want?", ...asHand });
     expect(messagesIn(ctx).find((m: any) => m._id === sent.message_id))
       .toMatchObject({ user_id: "user-growth-bot", author_kind: "agent", origin_session_id: "conv-hand" });
+    // Alice alone hears it, as the role, with no "Group message" subtitle (ct-79021).
+    const handBells = ctx._emitted.filter((e: any) => String(e.args.chat_message_id) === String(sent.message_id)).map((e: any) => e.args);
+    expect(handBells.map((b: any) => b.direct_recipient_id)).toEqual([ALICE]);
+    expect(handBells[0]).toMatchObject({ actor_user_id: "user-growth-bot" });
+    expect(handBells[0].push_subtitle).toBeUndefined();
 
     // Alice answers in its thread: the run hears it, the role is not woken too.
     const reply = await call(sendMessage, as(ctx, ALICE), { channel_id: dm.channel_id, content: "yes", thread_root_id: sent.message_id });
