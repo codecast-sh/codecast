@@ -7,7 +7,8 @@
  *   - Headless mode by default; non-headless available for visual debugging
  *
  * Design choices:
- *   - We do NOT bundle a Chromium binary. We discover the system's Chrome by
+ *   - We do NOT bundle a Chromium binary. We prefer an installed Chrome for
+ *     Testing (workspaceChromeBinary), else discover the system's Chrome by
  *     probing well-known paths and the PATH env. Users on machines without
  *     Chrome get a clear error.
  *   - The launched process is detached so it survives a daemon restart, but we
@@ -96,6 +97,37 @@ export function findChromeBinary(): string | null {
   return null;
 }
 
+/**
+ * The Chrome a workspace launches. On macOS every process started from Google
+ * Chrome.app registers with LaunchServices as com.google.Chrome, headless or
+ * not, and macOS hands a link the human clicks in another app to any running
+ * instance: with workspace Chromes up, "Open page" in the desktop app went to
+ * a headless one, which took focus with no window to show and stayed in the
+ * app switcher as a second Chrome (2026-11-21). Chrome for Testing registers
+ * under its own bundle id, so the human's links never reach it. Puppeteer's
+ * cache, then Playwright's (newest first within each), then /Applications;
+ * the human's Chrome is the fallback where none is installed
+ * (`npx @puppeteer/browsers install chrome@stable`), and an explicit
+ * CODECAST_CHROMIUM or CHROME_PATH still wins.
+ */
+export function workspaceChromeBinary(env: NodeJS.ProcessEnv = process.env, platform: NodeJS.Platform = process.platform): string | null {
+  if (platform !== "darwin" || env.CODECAST_CHROMIUM || env.CHROME_PATH) return findChromeBinary();
+  const home = env.HOME || os.homedir();
+  const cft = "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+  const candidates: string[] = [];
+  for (const dir of [path.join(home, ".cache/puppeteer/chrome"), path.join(home, "Library/Caches/ms-playwright")]) {
+    let versions: string[] = [];
+    try {
+      versions = fs.readdirSync(dir).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+    } catch {}
+    for (const v of versions) {
+      for (const arch of ["chrome-mac-arm64", "chrome-mac-x64"]) candidates.push(path.join(dir, v, arch, cft));
+    }
+  }
+  candidates.push(path.join("/Applications", cft));
+  return candidates.find((p) => fs.existsSync(p)) ?? findChromeBinary();
+}
+
 /** Probe list (in priority order). Exported for error reporting. */
 export function chromeBinaryProbes(): string[] {
   const probes: string[] = [];
@@ -166,7 +198,7 @@ function defaultArgs(opts: LaunchChromeOptions): string[] {
  * Spawn Chromium and wait until its CDP endpoint is reachable.
  */
 export async function launchChrome(opts: LaunchChromeOptions): Promise<ChromeInstance> {
-  const binaryPath = opts.binaryPath ?? findChromeBinary();
+  const binaryPath = opts.binaryPath ?? workspaceChromeBinary();
   if (!binaryPath) {
     throw new ChromeNotFoundError(chromeBinaryProbes());
   }

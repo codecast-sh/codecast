@@ -10,6 +10,7 @@ import {
   keychainArgs,
   launchChrome,
   stopChrome,
+  workspaceChromeBinary,
   type ChromeInstance,
 } from "./chrome.js";
 import { isPortFree } from "./ports.js";
@@ -102,6 +103,40 @@ describe("findChromeBinary / probes", () => {
       if (oldEnv === undefined) delete process.env.CODECAST_CHROMIUM;
       else process.env.CODECAST_CHROMIUM = oldEnv;
     }
+  });
+});
+
+describe("workspaceChromeBinary", () => {
+  const cft = "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+  const plant = (rel: string) => {
+    const p = path.join(tmpDir, rel);
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, "");
+    return p;
+  };
+
+  test("macOS picks the newest cached Chrome for Testing, never the human's Chrome", () => {
+    plant(`.cache/puppeteer/chrome/mac_arm-99.0.1/chrome-mac-arm64/${cft}`);
+    const newest = plant(`.cache/puppeteer/chrome/mac_arm-148.0.7778.167/chrome-mac-arm64/${cft}`);
+    plant(`Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/${cft}`);
+    expect(workspaceChromeBinary({ HOME: tmpDir }, "darwin")).toBe(newest);
+  });
+
+  test("macOS uses Playwright's Chrome for Testing when Puppeteer has none", () => {
+    plant(`Library/Caches/ms-playwright/chromium-1100/chrome-mac-arm64/${cft}`);
+    const newest = plant(`Library/Caches/ms-playwright/chromium-1208/chrome-mac-arm64/${cft}`);
+    expect(workspaceChromeBinary({ HOME: tmpDir }, "darwin")).toBe(newest);
+  });
+
+  test("macOS without Chrome for Testing falls back to the system Chrome", () => {
+    if (fs.existsSync(`/Applications/${cft}`)) return;
+    expect(workspaceChromeBinary({ HOME: tmpDir }, "darwin")).toBe(findChromeBinary());
+  });
+
+  test("an explicit binary override and other platforms keep the system probe", () => {
+    plant(`.cache/puppeteer/chrome/mac_arm-148.0.7778.167/chrome-mac-arm64/${cft}`);
+    expect(workspaceChromeBinary({ HOME: tmpDir, CHROME_PATH: "/x" }, "darwin")).toBe(findChromeBinary());
+    expect(workspaceChromeBinary({ HOME: tmpDir }, "linux")).toBe(findChromeBinary());
   });
 });
 
