@@ -34,15 +34,26 @@ export type CheckoutSession = {
   more: number;
 };
 
-/** Where a stuck level's ask for help went: the session that last wrote one of its files, else a finding on the repository's project. */
-export type CheckoutFiled = { at: number } & ({ to: "session"; conversation_id: string } | { to: "finding" });
+/**
+ * One ask a stuck level made: to a session about the conflicting files it last wrote, or, for the files no session
+ * wrote, a finding on the repository's project. `files`: how many of the conflicting files the ask was about.
+ */
+export type CheckoutTold = { at: number; files: number } & ({ to: "session"; conversation_id: string } | { to: "finding" });
+
+/** Who a stuck level has told, from a report of either shape: an earlier daemon reported its single ask as `filed`. */
+export function toldOf(level: { told?: CheckoutTold[]; filed?: (Omit<CheckoutTold, "files"> & { files?: number }) | null }): CheckoutTold[] {
+  return level.told ?? (level.filed ? [{ ...level.filed, files: level.filed.files ?? 0 } as CheckoutTold] : []);
+}
+
+/** At most this many paths a stuck level's ask names inline; the rest are in the list file it points to. */
+export const LEVEL_TOLD_PATHS_MAX = 8;
 
 /** The daemon's level sweep on this checkout (ship-checkout.md, land/levelSweep.ts). */
 export type CheckoutLevel =
   /** At origin's default branch: levelled then (null: never moved by the sweep since the daemon started). */
   | { state: "level"; levelled_at: number | null }
-  /** Refused, the same files each pass since `since`. `filed`: the one ask for help this episode made, and to whom; null until it goes. */
-  | { state: "stuck"; files: string[]; reason: string; since: number; filed: CheckoutFiled | null }
+  /** Refused, the same files each pass since `since`. `told`: who has been asked for help this episode, each about its own files (empty until the grace passes). */
+  | { state: "stuck"; files: string[]; reason: string; since: number; told: CheckoutTold[] }
   /** Not levelled by the sweep, and why: off for this repo, a worktree, off the default branch, holds commits main lacks, a ship running. */
   | { state: "off"; reason: string };
 

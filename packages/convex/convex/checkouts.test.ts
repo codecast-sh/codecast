@@ -29,7 +29,7 @@ const ctxFor = (tables: Record<string, any[]>) => ({ db: makeFakeDb(tables), aut
 const checkout = (over: any = {}) => ({
   repository: "Acme/App", device_id: "dev-1", path: "/work/app", branch: "main", upstream: "origin/main", head_sha: "a".repeat(40), ahead: 0, behind: 159, fetched_at: 1,
   uncommitted: { total: 2, sessions: [{ conversation_id: "conv_1", session_id: "s1", client: "claude", state: "finished", last_activity: 5, paths: ["x.ts"], more: 0 }], unattributed: ["y.md"], unattributed_more: 0 },
-  level: { state: "stuck", files: ["x.ts"], reason: "1 file(s) changed here and in abc without a clean merge", since: 10, filed: null },
+  level: { state: "stuck", files: ["x.ts"], reason: "1 file(s) changed here and in abc without a clean merge", since: 10, told: [] },
   ...over,
 });
 const send = (ctx: any, reports: any[], extra: any = {}) => (report as any)._handler(ctx, { api_token: TOKEN, device_id: "dev-1", reports, ...extra });
