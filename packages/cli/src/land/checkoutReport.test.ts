@@ -3,8 +3,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawnSync } from "node:child_process";
-import { CHECKOUT_PATHS_MAX, LEVEL_STUCK_FILE_MS, type CheckoutLevel } from "@codecast/shared/contracts/checkouts";
-import { dirtyPaths, fileStuck, groupUncommitted, nextLevel, reportCheckouts, stuckWords } from "./checkoutReport.js";
+import { CHECKOUT_PATHS_MAX, LEVEL_STUCK_FILE_MS, type CheckoutLevel, type CheckoutTold } from "@codecast/shared/contracts/checkouts";
+import { conflictGroups, dirtyPaths, groupUncommitted, nextLevel, reportCheckouts, tellWriters } from "./checkoutReport.js";
 import type { SessionEdits } from "./attribute.js";
 import type { LevelResult } from "./level.js";
 import { updateSyncRecord } from "../syncLedger.js";
@@ -28,12 +28,12 @@ const session = (id: string, over: Partial<SessionEdits> = {}): SessionEdits => 
 describe("the level sweep's state on a checkout", () => {
   test("the same files refused again keep the episode they started, though main (and the reason's sha) moved", () => {
     const a = nextLevel({}, refused("/r", ["b.ts", "a.ts"]), 1_000);
-    expect(a.level).toEqual({ state: "stuck", files: ["a.ts", "b.ts"], reason: expect.stringContaining("without a clean merge"), since: 1_000, filed: null });
-    const filed = { at: 5_000, to: "finding" as const };
-    const b = nextLevel({ ...a.state, stuck: { ...a.state.stuck!, filed } }, refused("/r", ["a.ts", "b.ts"], "c".repeat(40)), 9_000);
-    expect(b.level).toMatchObject({ state: "stuck", since: 1_000, filed });
+    expect(a.level).toEqual({ state: "stuck", files: ["a.ts", "b.ts"], reason: expect.stringContaining("without a clean merge"), since: 1_000, told: [] });
+    const told: CheckoutTold[] = [{ at: 5_000, files: 2, to: "finding" }];
+    const b = nextLevel({ ...a.state, stuck: { ...a.state.stuck!, told } }, refused("/r", ["a.ts", "b.ts"], "c".repeat(40)), 9_000);
+    expect(b.level).toMatchObject({ state: "stuck", since: 1_000, told });
     // Other files: a new episode, asked about again in its own time.
-    expect(nextLevel(b.state, refused("/r", ["c.ts"]), 10_000).level).toMatchObject({ since: 10_000, filed: null });
+    expect(nextLevel(b.state, refused("/r", ["c.ts"]), 10_000).level).toMatchObject({ since: 10_000, told: [] });
   });
 
   test("a level ends the episode and says when; a skip says why; at upstream reads level", () => {
@@ -64,28 +64,81 @@ describe("uncommitted work by the session that wrote it", () => {
   });
 });
 
-describe("a stuck level asks once, naming the conflict and the two ways out", () => {
-  const level: Extract<CheckoutLevel, { state: "stuck" }> = { state: "stuck", files: ["src/remediation.test.ts"], reason: "1 file(s) changed here and in abc123456 without a clean merge", since: Date.UTC(2026, 10, 21, 8, 0), filed: null };
-  const report = { path: "/work/app", upstream: "origin/main", behind: 159, repository: "acme/app", device_id: "dev-1" } as any;
+describe("a stuck level tells each writer about its own files, once", () => {
+  const files = Array.from({ length: 123 }, (_, i) => `pkg/f${String(i).padStart(3, "0")}.ts`);
+  const level = (told: CheckoutTold[] = []): Extract<CheckoutLevel, { state: "stuck" }> => ({ state: "stuck", files, reason: "123 file(s) changed here and in abc123456 without a clean merge", since: Date.UTC(2026, 10, 22, 4, 27), told });
+  const report = { path: "/work/app", upstream: "origin/main", behind: 828, repository: "acme/app", device_id: "dev-1" } as any;
+  // A wrote 100 of the files, B 20, and 3 have no session.
+  const a = session("a");
+  const b = session("b");
+  const owners = new Map<string, SessionEdits>([...files.slice(0, 100).map((f) => [f, a] as [string, SessionEdits]), ...files.slice(100, 120).map((f) => [f, b] as [string, SessionEdits])]);
 
-  test("the words name the checkout, the file, how far behind, and both ways out", () => {
-    const { title, body } = stuckWords(report, level, "laptop");
-    expect(title).toBe("app on laptop cannot level to origin/main: src/remediation.test.ts");
-    expect(body).toContain("since 2026-11-21 08:00 UTC (159 commits behind now)");
-    expect(body).toContain("`src/remediation.test.ts` changed here, uncommitted, and on origin/main");
-    expect(body).toContain("Rebase the edit onto main's version");
-    expect(body).toContain("git -C /work/app diff -- 'src/remediation.test.ts' > /tmp/level-aside.patch && git -C /work/app checkout -- 'src/remediation.test.ts'");
+  test("the files are grouped by the session that last wrote each; the rest have nobody", () => {
+    const g = conflictGroups(files, { owners });
+    expect([...g.writers].map(([c, f]) => [c, f.length])).toEqual([["conv_a", 100], ["conv_b", 20]]);
+    expect(g.nobody).toEqual(files.slice(120));
   });
 
-  test("to the session that last wrote the file; with none, a finding on the repo's project", async () => {
+  test("each writer hears only of its files, briefly, with ways out over a list of exactly them; the rest go to one finding", async () => {
+    const dir = tmp("level-asks-");
     const sent: Array<[string, any]> = [];
-    const post = async (p: string, b: any) => { sent.push([p, structuredClone(b)]); return {}; };
-    const writer = session("w");
-    expect(await fileStuck(post, report, level, { owners: new Map([["src/remediation.test.ts", writer]]) }, { host: "laptop", now: 7 })).toEqual({ at: 7, to: "session", conversation_id: "conv_w" });
-    expect(sent[0]).toEqual(["/cli/messages/send", { to: "conv_w", body: expect.stringContaining("cannot level"), intent: "request", wake: true }]);
-    expect(await fileStuck(post, report, level, { owners: new Map() }, { host: "laptop", now: 8 })).toEqual({ at: 8, to: "finding" });
-    expect(sent[1][0]).toBe("/cli/signal/add");
-    expect(sent[1][1]).toMatchObject({ source: "level", kind: "bug", fingerprint: "level:dev-1:/work/app:src/remediation.test.ts", project_path: "/work/app", detail_md: expect.stringContaining("Two ways out") });
+    const post = async (p: string, x: any) => { sent.push([p, structuredClone(x)]); return {}; };
+    const told = await tellWriters(post, report, level(), { owners }, { host: "laptop", now: 7, dir });
+    expect(told).toEqual([{ at: 7, files: 100, to: "session", conversation_id: "conv_a" }, { at: 7, files: 20, to: "session", conversation_id: "conv_b" }, { at: 7, files: 3, to: "finding" }]);
+    expect(sent.map(([p, x]) => [p, x.to ?? null])).toEqual([["/cli/messages/send", "conv_a"], ["/cli/messages/send", "conv_b"], ["/cli/signal/add", null]]);
+    const toA: string = sent[0][1].body;
+    expect(toA.split("\n")[0]).toBe("app on laptop: 100 of your files conflict with origin/main");
+    expect(toA).toContain("+92 more");
+    expect(toA).toContain("The other 23 conflicting files belong to other sessions, which are told separately: leave them alone.");
+    // Short: eight paths inline, never one of B's or the unwritten ones, never the whole list.
+    expect(toA.length).toBeLessThan(2_000);
+    expect(files.filter((f) => toA.includes(f))).toEqual(files.slice(0, 8));
+    const list = toA.match(/The full list: (\S+)/)![1];
+    expect(fs.readFileSync(list, "utf-8").trim().split("\n")).toEqual(files.slice(0, 100));
+    expect(toA).toContain(`checkout --pathspec-from-file=${list}`);
+    expect(sent[1][1].body).toContain("20 of your files");
+    expect(sent[2][1]).toMatchObject({ source: "level", project_path: "/work/app", title: "app on laptop: 3 files no session wrote conflict with origin/main" });
+  });
+
+  test("once per episode per writer: a writer already told, by this daemon or an earlier one, hears nothing again", async () => {
+    const dir = tmp("level-asks-");
+    const sent: string[] = [];
+    const post = async (_p: string, x: any) => { sent.push(x.to ?? "finding"); return {}; };
+    expect(await tellWriters(post, report, level([{ at: 1, files: 100, to: "session", conversation_id: "conv_a" }]), { owners }, { dir })).toHaveLength(2);
+    expect(sent).toEqual(["conv_b", "finding"]);
+    sent.length = 0;
+    const all: CheckoutTold[] = [{ at: 1, files: 100, to: "session", conversation_id: "conv_a" }, { at: 1, files: 20, to: "session", conversation_id: "conv_b" }, { at: 1, files: 3, to: "finding" }];
+    expect(await tellWriters(post, report, level(all), { owners }, { dir })).toEqual([]);
+    expect(sent).toEqual([]);
+    // An earlier daemon's single ask (`filed`) counts as that writer told.
+    const legacy = nextLevel({ stuck: { key: [...files].sort().join("\n"), files, reason: "r", since: 1, filed: { at: 1, to: "session", conversation_id: "conv_a" } } as any }, refused("/r", files), 2);
+    expect(legacy.level).toMatchObject({ state: "stuck", since: 1, told: [{ to: "session", conversation_id: "conv_a", files: 0 }] });
+  });
+
+  test("the set-aside command in the ask sets aside exactly that writer's files, and leaves the others' edits", async () => {
+    const origin = tmp("level-origin-");
+    spawnSync("git", ["init", "-q", "--bare", "-b", "main"], { cwd: origin });
+    const root = fs.realpathSync(tmp("level-repo-"));
+    const git = (...args: string[]) => spawnSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", ...args], { cwd: root, encoding: "utf-8" });
+    git("init", "-q", "-b", "main");
+    // Brackets as in a route file: a pathspec would read them as a glob.
+    const names = ["mine/[id].tsx", "mine/b.ts", "theirs/c.ts"];
+    for (const f of names) { fs.mkdirSync(path.join(root, path.dirname(f)), { recursive: true }); fs.writeFileSync(path.join(root, f), "base\n"); }
+    git("add", ".");
+    git("commit", "-q", "-m", "base");
+    for (const f of names) fs.writeFileSync(path.join(root, f), "edited\n");
+    const sent: any[] = [];
+    const mineOwners = new Map<string, SessionEdits>([["mine/[id].tsx", a], ["mine/b.ts", a], ["theirs/c.ts", b]]);
+    const stuck: Extract<CheckoutLevel, { state: "stuck" }> = { state: "stuck", files: names, reason: "r", since: 0, told: [] };
+    await tellWriters(async (_p, x) => { sent.push(x); return {}; }, { ...report, path: root, upstream: "HEAD" }, stuck, { owners: mineOwners }, { dir: tmp("level-asks-") });
+    const aside = sent[0].body.match(/2\. Set them aside as a patch, then restore main's: `([^`]+)`/)![1];
+    expect(spawnSync("sh", ["-c", aside], { encoding: "utf-8" }).status).toBe(0);
+    expect(fs.readFileSync(path.join(root, "mine/[id].tsx"), "utf-8")).toBe("base\n");
+    expect(fs.readFileSync(path.join(root, "mine/b.ts"), "utf-8")).toBe("base\n");
+    expect(fs.readFileSync(path.join(root, "theirs/c.ts"), "utf-8")).toBe("edited\n");
+    const patch = fs.readFileSync(sent[0].body.match(/> (\S+\.patch)/)![1], "utf-8");
+    expect(patch).toContain("mine/[id].tsx");
+    expect(patch).not.toContain("theirs/c.ts");
   });
 });
 
@@ -115,13 +168,13 @@ describe("reporting a machine's checkouts", () => {
     fs.writeFileSync(path.join(root, "a.ts"), "edited\n");
     const posts: Array<[string, any]> = [];
     const post = async (p: string, b: any) => { posts.push([p, structuredClone(b)]); return {}; };
-    const deps = { post, deviceId: "dev-1", repositoryOf: () => "Acme/App", stateFile: path.join(configDir, "state-1.json"), host: "laptop" };
+    const deps = { post, deviceId: "dev-1", repositoryOf: () => "Acme/App", stateFile: path.join(configDir, "state-1.json"), host: "laptop", askDir: configDir };
     const t0 = 1_000_000;
     await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: t0 });
     const first = posts.filter(([p]) => p === "/cli/checkouts/report");
     expect(first).toHaveLength(1);
     const sentReport = first[0][1].reports[0];
-    expect(sentReport).toMatchObject({ repository: "acme/app", device_id: "dev-1", path: root, branch: "main", upstream: "origin/main", ahead: 0, behind: 0, level: { state: "stuck", files: ["a.ts"], since: t0, filed: null } });
+    expect(sentReport).toMatchObject({ repository: "acme/app", device_id: "dev-1", path: root, branch: "main", upstream: "origin/main", ahead: 0, behind: 0, level: { state: "stuck", files: ["a.ts"], since: t0, told: [] } });
     expect(sentReport.uncommitted).toEqual({ total: 1, sessions: [], unattributed: ["a.ts"], unattributed_more: 0 });
 
     // The same state a minute later: nothing sent, nothing filed.
@@ -131,7 +184,7 @@ describe("reporting a machine's checkouts", () => {
     // Past 30 minutes on the same file: one ask (no writer session here: a finding), and the report says it went.
     await reportCheckouts([refused(root, ["a.ts"], "b".repeat(40))], { ...deps, now: t0 + LEVEL_STUCK_FILE_MS + MIN });
     expect(posts.map(([p]) => p)).toEqual(["/cli/checkouts/report", "/cli/signal/add", "/cli/checkouts/report"]);
-    expect(posts[2][1].reports[0].level).toMatchObject({ since: t0, filed: { at: t0 + LEVEL_STUCK_FILE_MS + MIN, to: "finding" } });
+    expect(posts[2][1].reports[0].level).toMatchObject({ since: t0, told: [{ at: t0 + LEVEL_STUCK_FILE_MS + MIN, files: 1, to: "finding" }] });
     await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: t0 + 2 * LEVEL_STUCK_FILE_MS });
     expect(posts.filter(([p]) => p === "/cli/signal/add")).toHaveLength(1);
 
@@ -159,7 +212,7 @@ describe("reporting a machine's checkouts", () => {
     updateSyncRecord(transcript, { conversationId: "conv_writer" });
     const posts: Array<[string, any]> = [];
     const post = async (p: string, b: any) => { posts.push([p, structuredClone(b)]); return {}; };
-    const deps = { post, deviceId: "dev-3", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-3.json"), host: "laptop" };
+    const deps = { post, deviceId: "dev-3", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-3.json"), host: "laptop", askDir: configDir };
     const t0 = Date.now() - LEVEL_STUCK_FILE_MS - 2 * MIN;
     await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: t0, budgetMs: 0 });
     // Past the grace with no budget left this pass: the report says it is still reading, and nobody is asked.
@@ -172,7 +225,7 @@ describe("reporting a machine's checkouts", () => {
     expect(read.uncommitted.attributing).toBeUndefined();
     expect(read.uncommitted.sessions.map((x: any) => x.conversation_id)).toEqual(["conv_writer"]);
     expect(posts.filter(([p]) => p === "/cli/messages/send").map(([, b]) => b.to)).toEqual(["conv_writer"]);
-    expect(read.level.filed).toMatchObject({ to: "session", conversation_id: "conv_writer" });
+    expect(read.level.told).toEqual([expect.objectContaining({ to: "session", conversation_id: "conv_writer", files: 1 })]);
   });
 
   test("a cold attribution over a large fixture never holds the event loop more than a few hundred ms at a time", async () => {
