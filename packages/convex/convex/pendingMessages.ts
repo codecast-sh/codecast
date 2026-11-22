@@ -1454,6 +1454,9 @@ export async function mergeQueuedForUser(
   await ctx.db.patch(keep._id, {
     content: formatJointMessage(parts),
     ...(images.length ? { image_storage_ids: images, image_storage_id: undefined } : {}),
+    // The joint message carries both rows' words, so neither person's typed mark stands (lib/messageProvenance).
+    channel: undefined,
+    typed_text: undefined,
   });
   await ctx.db.patch(absorb._id, { status: "cancelled" as const, merged_into: keep._id });
   return "merged";

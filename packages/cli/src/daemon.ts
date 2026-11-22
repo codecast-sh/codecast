@@ -242,7 +242,7 @@ import {
 } from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { claudeBannerText, extractCwd, extractGrokCwd, extractMuseCwd, extractSummaryTitle, extractTeamInfo, isGrokInternalSession, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
-import { extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCodexProgramLaunch } from "./codexSessionMeta.js";
+import { codexLaunchFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCodexProgramLaunch } from "./codexSessionMeta.js";
 import { headlessRunStaysOutOfInbox, inheritedConversationOfHeadless, repairLeakedHeadlessCodexRuns } from "./headlessRuns.js";
 import {
   CodexAppServer,
@@ -13820,7 +13820,7 @@ async function processCodexSessionPass(
             isSubagent: !!nativeParentSessionId || !!parentConversationId
               || headlessRunStaysOutOfInbox({ headless: isCodexProgramLaunch(codexMetadata), triggerRun: !!agentTaskId }) || undefined,
             // The mark the claude path stamps for `claude -p`.
-            cliFlags: isCodexProgramLaunch(codexMetadata) ? "--print" : undefined,
+            cliFlags: codexLaunchFlags(codexMetadata),
             // Same stamp as the claude path: without it every codex session
             // keys on its cwd, so a linked worktree under ~/.codex/worktrees
             // never folds into its checkout and the sharing page lists one row

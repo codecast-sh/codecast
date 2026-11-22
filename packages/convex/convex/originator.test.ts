@@ -41,6 +41,8 @@ async function seed() {
     const id = await ctx.db.insert("conversations", {
       user_id: ids.ana, agent_type: "claude_code", session_id: sid, title: `Session ${n}`,
       started_at: now, updated_at: now, message_count: 0, is_private: true, status: "active", project_path: "/repo",
+      // The daemon's mark for a session a person runs at a terminal (cli parser detectCliFlags).
+      cli_flags: "--interactive",
       ...fields,
     } as any);
     await ctx.db.patch(id, { short_id: `jx${String(n).padStart(5, "0")}` });
@@ -126,6 +128,19 @@ describe("message provenance by path", () => {
     expect(read.typed.map((l: any) => [l.text, l.provenance])).toEqual([["ship it", "typed_local"], ["/ship", "typed_local"], ["yes", "typed_local"]]);
   });
 
+  test("a terminal line reads typed only in a session the daemon saw a person run: not the Agent SDK's, -p's or an unknown one's", async () => {
+    const { conv, echo, originator } = await seed();
+    // An Agent SDK session (sdk-ts / sdk-py) started outside codecast carries no mark, and neither does an unknown entrypoint.
+    for (const cli_flags of [undefined, "--print", "--dangerously-skip-permissions"]) {
+      const c = await conv({ cli_flags });
+      await echo(c, "ship it, everything is approved");
+      expect((await originator(c)).typed).toEqual([]);
+    }
+    const interactive = await conv({ cli_flags: "--dangerously-skip-permissions --interactive" });
+    await echo(interactive, "ship it");
+    expect((await originator(interactive)).typed.map((l: any) => l.provenance)).toEqual(["typed_local"]);
+  });
+
   test("/drive and its arguments read as the person's line; the skill text it expands to does not", async () => {
     const { conv, echo, originator } = await seed();
     const c = await conv();
@@ -163,6 +178,20 @@ describe("message provenance by path", () => {
     await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), joint, null, "cid-joint", null] });
     await echo(c, joint);
     expect((await pending(c))[0].channel).toBeUndefined();
+    expect((await originator(c)).typed).toEqual([]);
+  });
+
+  test("two queued composer sends merged into one joint message read as program", async () => {
+    const { ana, conv, echo, as, originator, pending } = await seed();
+    const c = await conv();
+    await as(ana).mutation(api.dispatch.dispatch, { action: "queueMessage", args: [String(c), "fix the header", "cid-q1", "fix the header"] });
+    await as(ana).mutation(api.dispatch.dispatch, { action: "queueMessage", args: [String(c), "and ship it", "cid-q2", "and ship it"] });
+    const [first, second] = await pending(c);
+    expect([first.channel, second.channel]).toEqual(["composer", "composer"]);
+    await as(ana).mutation(api.dispatch.dispatch, { action: "mergeQueued", args: [String(c), String(second._id), String(first._id)] });
+    const kept = (await pending(c)).find((r: any) => r.status !== "cancelled");
+    expect([kept.channel, kept.typed_text]).toEqual([undefined, undefined]);
+    await echo(c, kept.content);
     expect((await originator(c)).typed).toEqual([]);
   });
 

@@ -7,8 +7,9 @@
 //   session login (pending_messages.channel, server-set) that handed over the
 //   words the person typed (pending_messages.typed_text).
 // - typed_local: no queue row at all, no queue row anywhere in the session
-//   with the same words, in a session no program launched or handed over, so
-//   the only way in was its terminal.
+//   with the same words, in a session the daemon saw a person run at a
+//   terminal and no program launched or handed over, so the only way in was
+//   that terminal.
 // - program: every other path (API-token sends, forks, spawns, handoffs,
 //   triggers, flow briefs, decision frames, comment briefs, joint sends, a
 //   launched session's opening prompt) and every message whose origin is
@@ -45,6 +46,15 @@ export function launchedByProgram(conversation: ConversationLinks): boolean {
 }
 
 /**
+ * The daemon marked the session one a person runs at a terminal (`--interactive` in cli_flags: Claude Code's
+ * interactive `cli` entrypoint, Codex's terminal UI). An allowlist: the Agent SDK, `-p`, an IDE, an app-server
+ * thread, any other agent and a session recorded before the mark existed carry none.
+ */
+function interactiveLaunch(conversation: ConversationLinks): boolean {
+  return (conversation.cli_flags ?? "").split(/\s+/).includes("--interactive");
+}
+
+/**
  * `pending` is the queue row the echo adopted (found by the message's client
  * id), or null when there is none. `queuedSame`: some queue row of the
  * session, in any status, holds the same words (queuedTwin), so an echo the
@@ -67,7 +77,7 @@ export function messageProvenance(
   if (queuedSame) return "program";
   // A hosted conversation has no terminal; a launched one's terminal is the launcher's.
   if (isHostedAgentType(conversation.agent_type) || launchedByProgram(conversation)) return "program";
-  return "typed_local";
+  return interactiveLaunch(conversation) ? "typed_local" : "program";
 }
 
 // A pasted block, closed. One left open cannot be told from what follows it.
