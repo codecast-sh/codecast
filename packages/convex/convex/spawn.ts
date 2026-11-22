@@ -468,11 +468,12 @@ export const createSessionFromCli = mutation({
       : null;
     // A role's standing session, or one of its hands, starting a hand: the
     // trust stage and the daily hand cap gate it (org-roles-standing.md T4).
-    const roleGate = await gateHandStart(ctx, spawner);
-    // The role itself starts it only when the spawner acts for the role (its
-    // standing session, or a session it started and still drives). A person's
-    // own session a task binding filed under a role starts the person's work.
-    const roleActs = !!roleGate && actsForRole(spawner);
+    // Only a spawner that acts for the role (shared actsForRole: its standing
+    // session, or a session it started and still drives) starts a hand. A
+    // person's own session a task binding filed under a role starts a plain
+    // worker of that session: not filed, not counted, not held to the role's
+    // limits.
+    const roleGate = spawner && actsForRole(spawner) ? await gateHandStart(ctx, spawner) : null;
     // A hand is a worker of the session that started it: nested under it, so
     // its settle wakes that session (workerSettle.tellParent) and the session
     // reads and steers it like any worker. Its prompt is the spawner's brief,
@@ -518,7 +519,7 @@ export const createSessionFromCli = mutation({
       // never waits for a slot behind the machine's other workers.
       fleet: subagentFields && args.subagent_caps !== undefined ? { device: args.spawn_device_id ?? null, caps: normalizeSubagentCaps(args.subagent_caps) } : undefined,
       mergeBackOnDone: !!subagentFields && !!asDef.isolated && (args.merge_back ?? asDef.mergeBack ?? false),
-      roleStarted: roleActs,
+      roleStarted: !!roleGate,
     });
     // A cloud spawn (`cast spawn --cloud`) under a team policy with cloud
     // hosts off: refused after the insert, which the throw rolls back, so the
@@ -528,8 +529,8 @@ export const createSessionFromCli = mutation({
     }
     // A role's hand takes no person owner from its run: it is the role's alone
     // until a person adds themselves (org-roles-run-work.md R1).
-    if (subagentFields && !roleActs) await inheritRunOwners(ctx, subagentFields.parent_conversation_id, conversationId);
-    if (roleGate) await recordHandStart(ctx, roleGate, conversationId, roleActs);
+    if (subagentFields && !roleGate) await inheritRunOwners(ctx, subagentFields.parent_conversation_id, conversationId);
+    if (roleGate) await recordHandStart(ctx, roleGate, conversationId);
     if (roleGate || args.unattended) await ctx.db.patch(conversationId, { unattended: true });
     if (review) {
       await ctx.db.patch(conversationId, { review_of_task_id: review.task._id });
@@ -628,11 +629,10 @@ async function countHand(ctx: { db: any }, role: any): Promise<void> {
   await ctx.db.patch(role._id, { counters: { ...counters, hands: counters.hands + 1 }, updated_at: now });
 }
 
-// `roleStarted`: the role itself started it (shared actsForRole on the
-// spawner); a line run always is.
-export async function recordHandStart(ctx: { db: any }, role: any, conversationId: Id<"conversations">, roleStarted = true): Promise<void> {
+// The role itself started it: a hand whose spawner acts for the role, or a line run.
+export async function recordHandStart(ctx: { db: any }, role: any, conversationId: Id<"conversations">): Promise<void> {
   await countHand(ctx, role);
-  await ctx.db.patch(conversationId, { org_role_id: role._id, org_role_hold: "filed", ...(roleStarted ? { role_started: true } : {}) });
+  await ctx.db.patch(conversationId, { org_role_id: role._id, org_role_hold: "filed", role_started: true });
 }
 
 /** The first line of the briefing hands were started with until 2026-11-19;

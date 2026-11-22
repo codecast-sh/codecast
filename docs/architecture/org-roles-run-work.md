@@ -45,7 +45,11 @@ who wants one in their inbox adds themselves from the owners menu. Owning a
 session never takes it away from the account that runs it.
 `migrations:backfillRoleStarted` stamps sessions from before the field.
 
-**Where it sits.** Every session files by its own state. Nothing rides a
+**Where it sits.** A session a person started that a task binding filed
+under a role (`sessionOwnership.applyHoldChange`, hold `bound`) is driven by
+that person (`driver_user_id`), so it waits on them like any of their
+sessions, and a worker it spawns is a plain worker of it, not the role's
+hand. Every session files by its own state. Nothing rides a
 role's standing session, which stays hidden on its own facts until it needs a
 person (org-staffing.md S28). A session its role drives that is waiting on
 input (a settled turn, an open question or prompt) files under Working, and

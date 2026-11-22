@@ -82,6 +82,8 @@ describe("review: the takeover moves a session it should not", () => {
     const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] } });
     const took = await takeOverSessions(ctx, ME as any, role._id);
     expect(row(db, 1).org_role_id).toBe(role._id);
+    // A scope takeover is deliberate filing: the role drives (no person driver).
+    expect(row(db, 1).driver_user_id).toBeUndefined();
     expect(took?.sessions).not.toContain("jx70002");
     expect(row(db, 2).org_role_id).toBeUndefined();
   });

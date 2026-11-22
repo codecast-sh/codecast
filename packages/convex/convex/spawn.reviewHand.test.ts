@@ -16,7 +16,7 @@ function fixture(roleExtra: Record<string, any> = {}) {
     org_roles: [{ _id: ROLE, short_id: "or-1", name: "Infra", handle: "infra", status: "active", trust: "direct", host_user_id: OWNER, scope_type: "user", scope_user_id: OWNER, ...roleExtra }],
     tasks: [{ _id: "tasks_1", short_id: "ct-1", title: "Add the thing", user_id: OWNER, status: "in_review", conversation_ids: ["conversations_hand"] }],
     conversations: [
-      { _id: "conversations_hand", user_id: OWNER, session_id: "hand-uuid", status: "active", org_role_id: ROLE, active_task_id: "tasks_1" },
+      { _id: "conversations_hand", user_id: OWNER, session_id: "hand-uuid", status: "active", org_role_id: ROLE, role_started: true, active_task_id: "tasks_1" },
     ],
     managed_sessions: [],
   };

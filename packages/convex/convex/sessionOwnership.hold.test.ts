@@ -3,6 +3,7 @@ import { makeFakeDb } from "./testDb";
 import { performCreateRole } from "./orgRoles";
 import { applyHoldChange } from "./sessionOwnership";
 import { holdChangeFor } from "./lib/orgOwnership";
+import { placeProjectableRow, roleDrives } from "@codecast/shared/contracts";
 
 // The hold a binding gives or takes (org-staffing.md S35): a lead holds a
 // session only when it is bound to work the lead owns or someone filed it
@@ -58,6 +59,11 @@ describe("the hold a binding gives or takes", () => {
     expect(await applyHoldChange(ctx, "conversations_s1" as any)).toEqual({ change: "file", role: "growth" });
     expect(row(db, 1).org_role_id).toBe(growth._id);
     expect(row(db, 1).org_role_hold).toBe("bound");
+    // A binding is implicit: the person who started it keeps driving, so it
+    // waits on them (Needs You), never "With growth".
+    expect(row(db, 1).driver_user_id).toBe(ME);
+    expect(roleDrives(row(db, 1))).toBe(false);
+    expect(placeProjectableRow({ ...row(db, 1), is_idle: true, has_pending_messages: false }, false, NOW).bucket).toBe("needs_input");
     // The same binding again changes nothing.
     expect(await applyHoldChange(ctx, "conversations_s1" as any)).toEqual({ change: "keep" });
 
@@ -65,6 +71,16 @@ describe("the hold a binding gives or takes", () => {
     expect(await applyHoldChange(ctx, "conversations_s1" as any)).toEqual({ change: "release", role: "growth" });
     expect(row(db, 1).org_role_id).toBeUndefined();
     expect(row(db, 1).org_role_hold).toBeUndefined();
+    expect(row(db, 1).driver_user_id).toBeUndefined();
+  });
+
+  test("a role's own hand bound to work in the area keeps the role driving", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] } });
+    db._tables.conversations.push(conv(5, { role_started: true, active_task_id: "tasks_growth" }));
+    expect(await applyHoldChange(ctx, "conversations_s5" as any)).toEqual({ change: "file", role: "growth" });
+    expect(row(db, 5).driver_user_id).toBeUndefined();
   });
 
   test("a binding outside any lead's area, a whole-workspace role, or another person's session moves nothing", async () => {

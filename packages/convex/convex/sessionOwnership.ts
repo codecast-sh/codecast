@@ -1316,9 +1316,19 @@ export async function applyHoldChange(ctx: { db: any; scheduler?: any }, convers
   const actor = c.owner_user_id ?? c.user_id;
   if (change.kind === "release") {
     await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "user", user_id: actor, mode: "add" }, note: `Its work is no longer in @${change.from.handle ?? "the role"}'s area.` });
+    // With no role left, nobody is paused: the driver clears.
+    const after = await ctx.db.get(conversationId);
+    if (after && !after.org_role_id && after.driver_user_id) await ctx.db.patch(conversationId, { driver_user_id: undefined });
     return { change: "release", role: change.from.handle };
   }
   await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "role", role_id: String(change.role._id), hold: "bound" }, note: BOUND_NOTE });
+  // A binding is implicit: the person who started the session keeps driving
+  // it (org-roles-run-work.md R1). Deliberate filing (the owners menu, the
+  // chart, a scope takeover) never comes here, so the role drives those.
+  if (!c.role_started) {
+    const person = await humanStarterUser(ctx, c);
+    if (person) await ctx.db.patch(conversationId, { driver_user_id: person._id });
+  }
   return { change: change.kind, role: change.role.handle };
 }
 

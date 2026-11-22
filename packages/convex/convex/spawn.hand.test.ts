@@ -19,7 +19,7 @@ function fixture() {
       { _id: "tasks_run", short_id: "ct-59509", title: "Sponsorship match", user_id: OWNER, status: "in_progress" },
     ],
     conversations: [
-      { _id: "conversations_lead", user_id: OWNER, session_id: "lead-uuid", status: "active", org_role_id: ROLE, active_task_id: "tasks_lead" },
+      { _id: "conversations_lead", user_id: OWNER, session_id: "lead-uuid", status: "active", org_role_id: ROLE, role_started: true, active_task_id: "tasks_lead" },
       { _id: "conversations_run", user_id: OWNER, session_id: "wf-run", status: "active", workflow_run_id: "workflow_runs_1", is_workflow_primary: true },
       { _id: "conversations_plain", user_id: OWNER, session_id: "plain-uuid", status: "active" },
       { _id: "conversations_standing", user_id: OWNER, session_id: "standing-uuid", status: "active", standing_role_id: ROLE, anchor_id: "anchors_r" },
@@ -73,12 +73,17 @@ describe("a role's hand", () => {
   });
 
   for (const [name, spawner] of [["a person's session a task binding filed under the role", "bound-uuid"], ["a hand a person took over", "taken-uuid"]] as const) {
-    test(`a worker that ${name} spawns stays the person's`, async () => {
+    test(`a worker that ${name} spawns is a plain worker: not filed, not counted, not held to the role's limits`, async () => {
       const { ctx, tables } = fixture();
+      // A paused role refuses every hand; this is no hand of its.
+      tables.org_roles[0].status = "paused";
       await (createSessionFromCli as any)._handler(ctx, { agent_type: "claude_code", spawner_session: spawner, prompt: "Investigate" });
-      expect(hand(tables)).toMatchObject({ org_role_id: ROLE });
-      expect(hand(tables).role_started).toBeUndefined();
-      expect(await heldByRoleAlone(ctx, hand(tables))).toBe(false);
+      const worker = hand(tables);
+      expect(worker.org_role_id).toBeUndefined();
+      expect(worker.role_started).toBeUndefined();
+      expect(worker.unattended).toBeUndefined();
+      expect(tables.org_roles[0].counters).toBeUndefined();
+      expect(await heldByRoleAlone(ctx, worker)).toBe(false);
     });
   }
 });
