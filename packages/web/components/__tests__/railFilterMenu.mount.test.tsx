@@ -99,6 +99,7 @@ async function mount() {
           bucketCounts={{ [A]: 3 }}
           projectCounts={projectCounts}
           projectPathByName={projectPathByName}
+          machineCounts={[]}
           projectActivity={projectActivity}
           dropSessionOnLabel={() => {}}
         />

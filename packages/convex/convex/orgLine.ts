@@ -19,7 +19,7 @@ import { verifyApiToken } from "./apiTokens";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineRouteFor } from "./workflows";
 import { seatPlace } from "./lib/seatPlace";
-import { deviceWorking, holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, slotRuns, takeSlot, WORKING_RUN_STATUSES, type LinePool } from "./lib/linePlacement";
+import { deviceWorking, holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, slotRuns, takeSlot, WORKING_RUN_STATUSES, type LinePool, type LineSlot } from "./lib/linePlacement";
 import { allRolesInBoundary, projectLeadRole, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownerOf, projectLeadOf } from "@codecast/shared/contracts/orgLead";
@@ -235,7 +235,12 @@ export async function runnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promi
   return { runner, working: working.size, cap: LINE_RUNS_PER_RUNNER };
 }
 
-export type LineLoad = RunnerLoad & { pool: LinePool | null };
+/**
+ * A pool's working runs live only on its slots, which a pass shares among every pool on the same machines, so a pool
+ * load keeps no count of its own (loadWorking reads it); the runner's own machine keeps its count on the load.
+ */
+export type LineLoad = { runner: string; cap: number; pool: LinePool } | (RunnerLoad & { pool: null });
+export const loadWorking = (load: LineLoad): number => (load.pool ? poolWorking(load.pool) : load.working);
 /** Loads read once per pass and shared by every start in it, keyed by runner and folder. */
 export type LineLoads = Map<string, LineLoad>;
 
@@ -249,20 +254,38 @@ export async function lineLoadFor(ctx: Ctx, role: any, now: number, loads: LineL
   const key = `${seat.runner}|${seat.project_path ?? ""}|${role.team_id ?? ""}|${needs?.join(",") ?? ""}`;
   const known = loads.get(key);
   if (known) return known;
-  const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now, role.team_id ? String(role.team_id) : null, needs);
-  const load: LineLoad = pool
-    ? { runner: seat.runner, working: poolWorking(pool), cap: poolCap(pool), pool }
-    : { ...await runnerLoad(ctx, seat.runner, roles), pool: null };
+  const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now, role.team_id ? String(role.team_id) : null, needs, passSlots(loads));
+  let load: LineLoad;
+  if (pool) load = { runner: seat.runner, cap: poolCap(pool), pool };
+  else {
+    // Every role seated on this runner with no pool shares the one machine: one load, read once, claimed through any of them.
+    const own = `runner:${seat.runner}`;
+    load = loads.get(own) ?? { ...await runnerLoad(ctx, seat.runner, roles), pool: null };
+    loads.set(own, load);
+  }
   loads.set(key, load);
   return load;
+}
+
+/**
+ * A pass's pool machines, each read once and shared by every pool it is in. Roles seated in different folders of one
+ * repository each have a pool of their own, and each once read every run on every machine again: Union's ~2,500 runs
+ * parked at its merge queue, read for each of its 62 roles, went past the 100 MB a query may read (Nov 22).
+ */
+const slotsByPass = new WeakMap<LineLoads, Map<string, LineSlot>>();
+function passSlots(loads: LineLoads): Map<string, LineSlot> {
+  let slots = slotsByPass.get(loads);
+  if (!slots) slotsByPass.set(loads, (slots = new Map()));
+  return slots;
 }
 
 export const freeSlots = (load: LineLoad): number => (load.pool ? poolFree(load.pool) : load.cap - load.working);
 
 /** Takes a slot for one run: the pool machine it goes to, or none (the runner's own machine). Counts the run on the load. */
 export function claimSlot(load: LineLoad): RunPlace | undefined {
+  if (load.pool) return takeSlot(load.pool) ?? undefined;
   load.working++;
-  return load.pool ? takeSlot(load.pool) ?? undefined : undefined;
+  return undefined;
 }
 
 /**
@@ -275,7 +298,7 @@ export type Admission = { runner: string; pooled: boolean } & ({ place?: RunPlac
 export async function admitRoleRun(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), needs?: readonly string[]): Promise<Admission> {
   const load = await lineLoadFor(ctx, role, now, loads, undefined, needs);
   const at = { runner: load.runner, pooled: !!load.pool };
-  if (freeSlots(load) <= 0) return { ...at, waiting: `${load.working} run${load.working === 1 ? " is" : "s are"} working on @${role.handle}'s machine${load.pool ? "s" : ""}` };
+  if (freeSlots(load) <= 0) return { ...at, waiting: `${loadWorking(load)} run${loadWorking(load) === 1 ? " is" : "s are"} working on @${role.handle}'s machine${load.pool ? "s" : ""}` };
   return { ...at, place: claimSlot(load) };
 }
 
@@ -490,7 +513,7 @@ export async function planSweep(ctx: Ctx, now = Date.now(), o: { loads?: boolean
     if (!(await linesRunIn(ctx, role, featureOn))) continue;
     const before = loads.size;
     const load = await lineLoadFor(ctx, role, now, loads, roles);
-    if (o.loads && loads.size > before) (result.loads ??= []).push({ runner: load.runner, project_path: (await seatOf(ctx, role)).project_path ?? "", working: load.working, cap: load.cap, pool: load.pool ? load.pool.slots.map((sl) => ({ ...sl })) : null });
+    if (o.loads && loads.size > before) (result.loads ??= []).push({ runner: load.runner, project_path: (await seatOf(ctx, role)).project_path ?? "", working: loadWorking(load), cap: load.cap, pool: load.pool ? load.pool.slots.map((sl) => ({ ...sl })) : null });
     const handsCap = capsFor(role).hands_per_day;
     const handsLeft = handsCap == null ? Infinity : handsCap - countersFor(role, now).hands;
     const slots = freeSlots(load);
@@ -541,7 +564,6 @@ async function planQueuedResumes(ctx: Ctx, now: number, roles: any[], loads: Lin
     const slot = load.pool?.slots.find((s) => s.device === run.runner_device);
     if (!slot || slot.runs - slot.working <= 0) continue;
     slot.working++;
-    load.working++;
     out.push({ run_id: String(run._id), device: run.runner_device });
   }
   return out;
@@ -678,7 +700,9 @@ export async function lineAsksFor(ctx: Ctx, role: any): Promise<LineAsk[]> {
 // before its turn.
 export async function lineQueueFor(ctx: Ctx, role: any, now = Date.now()): Promise<LineQueue> {
   const ranked = await rankedCandidates(ctx, role);
-  const { working, cap: runsCap, pool } = await lineLoadFor(ctx, role, now);
+  const load = await lineLoadFor(ctx, role, now);
+  const { cap: runsCap, pool } = load;
+  const working = loadWorking(load);
   const wait = admissionWait(role, working, now, runsCap);
   const waiting = wait ? admissionWaitWords(wait, working, !!pool) : null;
   const hands = countersFor(role, now).hands;

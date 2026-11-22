@@ -20,7 +20,7 @@ import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
 import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -83,6 +83,7 @@ import { useThinkingAvailable } from "./simple/assistantPromise";
 import { useUpgradesOpen } from "./simple/billing";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { LabelChipsRow } from "./LabelChipsRow";
+import { DeviceIcon, deviceDisplayName, rosterDeviceOf, type Device } from "./DeviceBadge";
 import { RailFilterMenu } from "./RailFilterMenu";
 import { useIsModernFocused } from "../hooks/useVisualStyle";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -1529,6 +1530,7 @@ const STALE_PROMPT_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
 // Stable empty list so the favorites memo keeps a constant ref when not in the
 // favorites view (a fresh [] each render would defeat downstream memoization).
 const EMPTY_FAVORITES: InboxSession[] = [];
+const NO_MACHINE_CHIPS: Array<[string, number]> = [];
 // The Dismissed bucket only renders sessions dismissed within this window — a bulk
 // sweep can dismiss thousands, and an unbounded list is noise.
 const DISMISSED_VISIBLE_MS = 45 * 24 * 60 * 60 * 1000;
@@ -1914,7 +1916,7 @@ function SessionListPanelImpl({
   // is_favorite out, so a placed row still carries the flag from before the toggle.
   // Resolved to a scalar so each card memoizes on it.
   const cardIsFavorite = (sess: InboxSession) => isFavoriteInStore(s, sess._id);
-  const { bucketCounts, projectCounts, projectPathByName, projectActivity } = useMemo(
+  const { bucketCounts, projectCounts, projectPathByName, projectActivity, machineCounts } = useMemo(
     // Project chips resolve each session's project off the store's sessions,
     // tasks and plans (store/workProjects, memoized on their refs).
     () => computeChipCounts(activeSessions, bucketByConv, projectOfFromState(useInboxStore.getState())),
@@ -2403,6 +2405,13 @@ function SessionListPanelImpl({
     if (viewMode !== "plan") return null;
     return groupSessionsByPlan(lensRows, { plans: s.plans, placements: placed.placements, sessions: s.sessions, restingFrom: workspacePlans, now: coarseNow });
   }, [viewMode, lensRows, workspacePlans, placed, coarseNow, s.plans]);
+  // "By machine" lens: one group per machine the sessions run on; offered only
+  // once they run on more than one.
+  const machineView = useMemo(() => {
+    if (viewMode !== "machine") return null;
+    return groupSessionsByMachine(lensRows);
+  }, [viewMode, lensRows]);
+  const machineRoster = useInboxStore((st) => st.machineRoster) as Device[];
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
@@ -2451,8 +2460,8 @@ function SessionListPanelImpl({
   // The groupings offered as tabs, published so Ctrl+, cycles exactly these.
   const showViewTabs = !favoritesView;
   const viewModes = useMemo(
-    () => inboxViewModes({ hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0 }),
-    [visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length],
+    () => inboxViewModes({ hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0, hasMachines: machineCounts.length > 1 }),
+    [visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length, machineCounts.length],
   );
   const viewModesKey = showViewTabs ? viewModes.join(",") : "";
   useWatchEffect(() => {
@@ -2477,6 +2486,9 @@ function SessionListPanelImpl({
     () => (favoritesView ? computeChipCounts(allFavorites, bucketByConv, projectOfFromState(useInboxStore.getState())) : null),
     [favoritesView, allFavorites, bucketByConv],
   );
+  // Machines are a filter only once sessions run on more than one.
+  const machineChipsAll = favoritesView ? favChipCounts!.machineCounts : machineCounts;
+  const machineChips = machineChipsAll.length > 1 ? machineChipsAll : NO_MACHINE_CHIPS;
 
   // Shared drop sink for every label target — chips AND the "by label" view's
   // sections. bucketId null = remove the label (dropping onto a project group
@@ -2687,6 +2699,11 @@ function SessionListPanelImpl({
         ? [
             ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
             ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
+          ]
+        : viewMode === "machine" && machineView
+        ? [
+            ...machineView.machineGroups.map(({ deviceId, items }) => [items, `machine_${deviceId}`] as [InboxSession[], string]),
+            ...machineView.projectGroups.map(({ name, items }) => [items, `machineproj_${name}`] as [InboxSession[], string]),
           ]
         : orgLensView
         ? [
@@ -3184,6 +3201,7 @@ function SessionListPanelImpl({
             projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
             projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
             projectActivity={favoritesView ? favChipCounts!.projectActivity : projectActivity}
+            machineCounts={machineChips}
             dropSessionOnLabel={dropSessionOnLabel}
           />
         ) : (
@@ -3191,6 +3209,7 @@ function SessionListPanelImpl({
             bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
             projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
             projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
+            machineCounts={machineChips}
             dropSessionOnLabel={dropSessionOnLabel}
           />
         )}
@@ -3416,6 +3435,29 @@ function SessionListPanelImpl({
         {planView.projectGroups.map(({ name, items }) => (
           <div key={`planproj-${name}`}>
             {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `planproj_${name}` })}
+          </div>
+        ))}
+        </>
+        ) : viewMode === "machine" && machineView ? (
+        <>
+        {machineView.machineGroups.map(({ deviceId, items }) => {
+          const device = rosterDeviceOf(machineRoster, deviceId);
+          return (
+            <div key={deviceId}>
+              {renderSection(deviceDisplayName(device), items, "text-sol-text", undefined, undefined, {
+                key: `machine_${deviceId}`,
+                monoLabel: true,
+                icon: device ? <DeviceIcon d={device} className="w-3 h-3 shrink-0" /> : undefined,
+                ...groupTally(items),
+              })}
+            </div>
+          );
+        })}
+        {/* Sessions no machine owns yet group by folder, the fallback tier
+            every lens shares. */}
+        {machineView.projectGroups.map(({ name, items }) => (
+          <div key={`machineproj-${name}`}>
+            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `machineproj_${name}` })}
           </div>
         ))}
         </>
