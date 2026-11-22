@@ -31,6 +31,24 @@ const detailSig = (d: PullRequestDetailRow) => `${d.checks_state ?? ""}|${d.chec
 const reachSig = (r: DeployReachRow) => `${r.state}|${r.targets?.map((t) => `${t.target}:${t.state}:${t.deploy?.short_id ?? ""}:${t.now?.short_id ?? ""}`).join(",") ?? ""}`;
 
 type TitleRow = { title?: string | null };
+type TitleStore = { sessions: unknown; conversations: unknown };
+
+const titleOfRow = (s: TitleStore, id: string) =>
+  (((s.sessions as Record<string, TitleRow>)[id] ?? (s.conversations as Record<string, TitleRow>)[id]) as TitleRow | undefined)?.title ?? null;
+
+/** The writers' titles as one FNV-1a number: moves when any title does, and costs no allocation on a store write. */
+function titleDigest(s: TitleStore, ids: ReadonlyArray<string>): number {
+  let h = 0x811c9dc5;
+  for (const id of ids) {
+    const t = titleOfRow(s, id) ?? "";
+    for (let i = 0; i < t.length; i++) h = Math.imul(h ^ t.charCodeAt(i), 0x01000193);
+    h = Math.imul(h ^ 0x2c, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+const titlesOf = (s: TitleStore, ids: ReadonlyArray<string>): Record<string, string | null> =>
+  Object.fromEntries(ids.map((id) => [id, titleOfRow(s, id)]));
 
 /** The conversations a change names, for their titles. */
 function writerIds(checkouts: ReadonlyArray<CheckoutRow>, prs: ReadonlyArray<ChangePullRequest>): string {
@@ -68,15 +86,15 @@ export function useRepoChanges(repository: string | null | undefined, teamId?: s
   }, [prRows, details]);
 
   const ids = useMemo(() => writerIds(checkouts, prs), [checkouts, prs]);
-  const titleSig = useInboxStore((s) => JSON.stringify(Object.fromEntries((ids ? ids.split(",") : []).map((id) => {
-    const row = ((s.sessions as Record<string, TitleRow>)[id] ?? (s.conversations as Record<string, TitleRow>)[id]) as TitleRow | undefined;
-    return [id, row?.title ?? null];
-  }))));
+  // A wake signature is a digest (CLAUDE.md typing budget): every store write runs this, so it hashes the writers'
+  // titles into one number rather than building and comparing a long string; the titles are read when it moves.
+  const idList = useMemo(() => (ids ? ids.split(",") : []), [ids]);
+  const titleSig = useInboxStore((s) => titleDigest(s, idList));
 
   const now = useCoarseNow(60_000);
   const assembled = useMemo(() => {
     if (!repo) return [];
-    const titles = JSON.parse(titleSig) as Record<string, string | null>;
+    const titles = titlesOf(useInboxStore.getState(), idList);
     return assemble({
       repository: repo,
       now,
@@ -86,7 +104,7 @@ export function useRepoChanges(repository: string | null | undefined, teamId?: s
       branches: opts?.branches ?? null,
       titleOf: (id) => titles[id],
     });
-  }, [repo, now, checkouts, prs, targets, targetsReady, opts?.branches, titleSig]);
+  }, [repo, now, checkouts, prs, targets, targetsReady, opts?.branches, titleSig, idList]);
 
   // Reach rows some surface fed (useChangeReach, a pill): read, never fed, here.
   const refsKey = assembled.map((c) => c.reach_ref).filter(Boolean).join("\n");
@@ -102,7 +120,7 @@ export function useRepoChanges(repository: string | null | undefined, teamId?: s
     const read = new Set(reach.map((r) => r._id));
     return assembled.map((c) => {
       const laid = withReach(c, c.reach_ref ? byRef.get(c.reach_ref) : undefined, !c.reach_ref || read.has(c.reach_ref));
-      return { ...laid, lifecycle: changeLifecycle(laid.facts, now) };
+      return { ...laid, lifecycle: changeLifecycle(laid.facts) };
     });
   }, [assembled, reach, now]);
 

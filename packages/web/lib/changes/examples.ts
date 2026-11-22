@@ -23,12 +23,12 @@ export function changeExamples(now: number): ChangeExample[] {
     {
       id: "editing",
       caption: "A session is writing it in a worktree",
-      facts: { vehicle: { kind: "branch", name: "evals/budget-checks", worktree: "~/code/codecast/.codecast/worktrees/budget-checks" }, work: { uncommitted: 6, ahead: 2, pushed: false, writers: [writer("Regrowth checks")], since: ago(14) } },
+      facts: { vehicle: { kind: "branch", name: "evals/budget-checks", worktree: "~/code/codecast/.codecast/worktrees/budget-checks" }, work: { uncommitted: 6, ahead: 2, pushed: false, writers: [writer("Regrowth checks")] } },
     },
     {
       id: "edits-shared",
       caption: "One session's edits in the shared main checkout",
-      facts: { vehicle: { kind: "edits", title: "Deploy pill words", files: 4 }, work: { uncommitted: 4, ahead: 0, pushed: false, writers: [writer("Deploy pill words", "idle")], since: ago(8) } },
+      facts: { vehicle: { kind: "edits", title: "Deploy pill words", files: 4 }, work: { uncommitted: 4, ahead: 0, pushed: false, writers: [writer("Deploy pill words", "idle")] } },
     },
     {
       id: "not-shipped",
@@ -43,12 +43,12 @@ export function changeExamples(now: number): ChangeExample[] {
     {
       id: "checking",
       caption: "CI and review running on the pushed branch",
-      facts: { vehicle: { kind: "branch", name: "evals/family-prune" }, flow: true, work: { uncommitted: 0, ahead: 4, pushed: true, writers: [writer("Family cut", "finished")] }, check: { ci: "pending", review: "pending", since: ago(4) } },
+      facts: { vehicle: { kind: "branch", name: "evals/family-prune" }, work: { uncommitted: 0, ahead: 4, pushed: true, writers: [writer("Family cut", "finished")] }, check: { ci: "pending", review: "none" } },
     },
     {
-      id: "fixing",
-      caption: "Review sent findings back; the session is fixing",
-      facts: { vehicle: { kind: "pr", number: 4486, branch: "line/fix-readout", title: "Fix-flow ship readout" }, flow: true, work: { uncommitted: 0, ahead: 1, pushed: true, writers: [writer("Fix-flow readout", "working")] }, check: { ci: "success", passed: 14, review: "changes", back: { round: 2, max: 3, note: "Count only real merges", since: ago(6) } } },
+      id: "changes-asked",
+      caption: "Review asked for changes; back to its session",
+      facts: { vehicle: { kind: "pr", number: 4486, branch: "line/fix-readout", title: "Fix-flow ship readout" }, work: { uncommitted: 0, ahead: 1, pushed: true, writers: [writer("Fix-flow readout", "working")] }, check: { ci: "success", passed: 14, review: "changes" } },
     },
     {
       id: "checks-failed",
@@ -56,19 +56,19 @@ export function changeExamples(now: number): ChangeExample[] {
       facts: { vehicle: { kind: "branch", name: "ship/ct-98647", pr: 4490 }, work: { uncommitted: 0, ahead: 2, pushed: true, writers: [writer("Deploys queue", "finished")] }, check: { ci: "failure", failing: ["test-web (2/4)"], review: "approved" } },
     },
     {
-      id: "your-call",
-      caption: "Checks passed; a person decides whether it lands",
-      facts: { vehicle: { kind: "pr", number: 4485, branch: "evals/check-in-clause" }, flow: true, work: { uncommitted: 0, ahead: 1, pushed: true, writers: [] }, check: { ci: "success", passed: 14, review: "approved" }, land: { state: "you", since: ago(22), decision_id: "sd-4235" } },
+      id: "ready-to-land",
+      caption: "Checks and review passed; a person merges it",
+      facts: { vehicle: { kind: "pr", number: 4485, branch: "evals/check-in-clause" }, work: { uncommitted: 0, ahead: 1, pushed: true, writers: [] }, check: { ci: "success", passed: 14, review: "approved" } },
     },
     {
       id: "conflicts",
       caption: "Main moved under it and the merge conflicts",
-      facts: { vehicle: { kind: "branch", name: "pl-1074-ship-model" }, flow: true, work: { uncommitted: 0, ahead: 7, pushed: true, writers: [] }, check: { ci: "success", review: "approved" }, land: { state: "conflict", since: ago(3) } },
+      facts: { vehicle: { kind: "branch", name: "pl-1074-ship-model" }, work: { uncommitted: 0, ahead: 7, pushed: true, writers: [] }, check: { ci: "success", review: "approved" }, land: { state: "conflict" } },
     },
     {
-      id: "merging",
-      caption: "Landing the exact commit CI tested",
-      facts: { vehicle: { kind: "branch", name: "default-flow-run" }, flow: true, work: { uncommitted: 0, ahead: 1, pushed: true, writers: [] }, check: { ci: "success", passed: 12, review: "approved" }, land: { state: "merging", since: ago(1) } },
+      id: "auto-merge",
+      caption: "Green with GitHub's auto-merge on: it lands itself",
+      facts: { vehicle: { kind: "pr", number: 4490, branch: "default-flow-run" }, auto_merge: true, work: { uncommitted: 0, ahead: 1, pushed: true, writers: [] }, check: { ci: "success", passed: 12, review: "approved" } },
     },
     {
       id: "not-live",

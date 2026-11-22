@@ -6,43 +6,20 @@
 // the facts lifecycle.ts reads, plus the links and writers a chip draws.
 // Reach toward production is not computed here: a landed change names its
 // `reach_ref`, which the hook resolves (useDeployReach) and lays on with
-// `withReach`. Pure, with relative imports only: the phone reads it too.
+// `withReach`. Pure, with relative imports only.
 import type { CheckoutRow, CheckoutSession } from "@codecast/shared/contracts/checkouts";
 import type { CommitCiState, QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
-import { checkLabel, checkOutcome } from "@codecast/shared/contracts";
 import { entityRoute, parseRepoObjectId } from "@codecast/shared/entities";
 import { commitPageHref, prPageHref, repoCompareHref } from "../repoView";
 import type { ChangeFacts, ChangeWriter } from "./lifecycle";
+import { finishedAt, isMerged, prActive, pullRequestFacts, type ChangePullRequest } from "./pullRequest";
+
+export type { ChangePullRequest } from "./pullRequest";
 
 /** Merged or closed pull requests older than this are history, not changes. */
 export const RECENT_FINISHED_MS = 7 * 24 * 60 * 60_000;
 
-/** A pull request as the `pullRequests` collection holds it, with its checks when a detail row was laid on. */
-export type ChangePullRequest = {
-  number: number;
-  repository?: string;
-  title?: string;
-  state: "open" | "closed" | "merged";
-  draft?: boolean;
-  head_ref?: string;
-  head_sha?: string;
-  merge_commit_sha?: string;
-  merged_at?: number;
-  closed_at?: number;
-  /** Codecast's row time: every sync bumps it, so it says nothing about anyone's work. */
-  updated_at: number;
-  created_at?: number;
-  /** When its files were last read: on open and on every push to its head. */
-  files_synced_at?: number;
-  checks_state?: string;
-  checks?: ReadonlyArray<{ name: string; status: string; conclusion?: string | null; event?: string }>;
-  review_decision?: string;
-  mergeable_state?: string;
-  /** GitHub's auto-merge, when someone turned it on: the pull request lands itself once its requirements pass. */
-  auto_merge?: unknown;
-  linked_session_ids?: ReadonlyArray<string>;
-};
 
 /** A deploy target as the queue is read from it (lib/deploys/targets DeployTargetRow). */
 export type ChangeTarget = { name: string; repository: string; queue: { groups: ReadonlyArray<{ commits: ReadonlyArray<QueueCommit> }> } };
@@ -91,8 +68,6 @@ export type AssembledChange = {
   refs: { branch: string | null; pr: number | null; shas: string[] };
 };
 
-const CI: Record<string, NonNullable<ChangeFacts["check"]>["ci"]> = { pending: "pending", success: "success", failure: "failure", none: "none" };
-const REVIEW: Record<string, NonNullable<ChangeFacts["check"]>["review"]> = { approved: "approved", changes_requested: "changes", review_required: "required" };
 const COMMIT_CI: Record<CommitCiState, NonNullable<ChangeFacts["check"]>["ci"]> = { passed: "success", failed: "failure", running: "pending", none: "none" };
 
 const lower = (s: string | null | undefined) => (s ?? "").toLowerCase();
@@ -103,10 +78,6 @@ const sameSha = (a: string | null | undefined, b: string | null | undefined) =>
 const conversationHref = (id: string | null) => (id ? `/conversation/${id}` : null);
 /** The default branch a checkout is compared with: `origin/main` → `main`. */
 const defaultOf = (row: CheckoutRow, fallback: string) => (row.upstream ? row.upstream.replace(/^[^/]+\//, "") : fallback);
-/** The last work on a pull request: opened, pushed to, merged or closed. Never its row's sync time. */
-const prActive = (pr: ChangePullRequest) => Math.max(pr.created_at ?? 0, pr.files_synced_at ?? 0, pr.merged_at ?? 0, pr.closed_at ?? 0) || pr.updated_at;
-const isMerged = (pr: ChangePullRequest) => pr.state === "merged" || !!pr.merged_at;
-const finishedAt = (pr: ChangePullRequest) => (isMerged(pr) ? pr.merged_at : pr.closed_at) ?? pr.updated_at;
 /** A commit subject's pull request: `Fix the thing (#4465)`. */
 const subjectPr = (subject: string) => {
   const m = /\(#(\d+)\)\s*$/.exec(subject);
@@ -145,25 +116,6 @@ function linkedWriters(ids: ReadonlyArray<string> | undefined, have: ReadonlyArr
 
 const factWriters = (ws: ReadonlyArray<ChangeWriterLink>): ChangeWriter[] => ws.map((w) => ({ conversation_id: w.conversation_id, title: w.title, state: w.state }));
 
-/** A pull request's Check: CI from its folded checks state, failing names and the passed count when its checks are held. */
-function prCheck(pr: ChangePullRequest): NonNullable<ChangeFacts["check"]> {
-  const ci = CI[lower(pr.checks_state)] ?? "none";
-  const review = REVIEW[lower(pr.review_decision)] ?? "none";
-  if (!pr.checks?.length) return { ci, review };
-  const failing = pr.checks.filter((c) => checkOutcome(c) === "failed").map((c) => checkLabel(c));
-  const passed = pr.checks.filter((c) => checkOutcome(c) === "passed").length;
-  return { ci, review, ...(ci === "failure" && failing.length ? { failing } : {}), passed };
-}
-
-function prLand(pr: ChangePullRequest): ChangeFacts["land"] {
-  if (isMerged(pr)) return { state: "landed", how: "merged", sha: pr.merge_commit_sha ?? null, at: pr.merged_at ?? null };
-  if (pr.state !== "open") return null;
-  const state = lower(pr.mergeable_state);
-  if (state === "dirty") return { state: "conflict" };
-  if (state === "behind") return { state: "behind" };
-  return null;
-}
-
 /** The pull request a branch carries now: an open one, else the newest. */
 function pickPr(prs: ReadonlyArray<ChangePullRequest>): ChangePullRequest | null {
   return [...prs].sort((a, b) => Number(b.state === "open") - Number(a.state === "open") || prActive(b) - prActive(a))[0] ?? null;
@@ -196,14 +148,7 @@ export function assemble(rows: RepoChangeRows): AssembledChange[] {
     usedPrs.add(pr.number);
     const merged = isMerged(pr);
     return {
-      facts: {
-        ...facts,
-        check: prCheck(pr),
-        land: prLand(pr),
-        ...(pr.state === "open" && pr.draft ? { draft: true } : {}),
-        ...(pr.state === "open" && pr.auto_merge ? { auto_merge: true } : {}),
-        ...(pr.state === "closed" && !merged ? { closed: { at: finishedAt(pr) } } : {}),
-      } satisfies ChangeFacts,
+      facts: { ...facts, ...pullRequestFacts(pr) } satisfies ChangeFacts,
       reach_ref: merged ? `${repository}#${pr.number}` : null,
       pr: prPageHref(repository, pr.number),
     };

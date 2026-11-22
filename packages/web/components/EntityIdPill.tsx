@@ -116,8 +116,9 @@ import { replayFacts, replayTitle } from "./ops/opsModel";
 import { ModPaneEmbed } from "./mods/ModPaneEmbed";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
 import { actionsRunKey } from "@codecast/shared/contracts/deploys";
-import { DeployPillSuffix, PrStateSegment } from "./deploys/deployRefLook";
-import { DeployHoverContent, PillReach, ProductionReach } from "./deploys/DeployHoverContent";
+import { DeployPillSuffix } from "./deploys/deployRefLook";
+import { DeployHoverContent, ProductionReach } from "./deploys/DeployHoverContent";
+import { RefChangeSegment } from "./changes/RefChangeSegment";
 import { CommitHoverContent, PullRequestHoverContent, RepoObjectUnknownHoverContent } from "./RepoObjectHoverContent";
 import { deployLook } from "../lib/deploys/deployLook";
 import { deployPillSuffix, runRefKey } from "../lib/deploys/deployPill";
@@ -1349,8 +1350,8 @@ export function EntityIdPill({
           {/* A pill that carries its state cuts its title, so the state stays on the line with it. */}
           <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : saysState ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : "self-baseline"}>{pillLabel}</span>
           {deployV && <DeployPillSuffix deploy={entity} />}
-          {reachRef && <PillReach refId={reachRef} pr={isPr} />}
-          {prState && <PrStateSegment state={prState} />}
+          {/* A pull request or commit says where it stands as its change: the Branches page's track and word. */}
+          {(isPr || isCommit) && entity ? <RefChangeSegment type={isPr ? "pr" : "commit"} entity={entity} /> : null}
         </Link>
       </PopoverAnchor>
       {/* The other half of the pill: the caret opens the full page in a band

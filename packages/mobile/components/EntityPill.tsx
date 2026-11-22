@@ -9,9 +9,6 @@ import { useSyncOrgProposal } from '@codecast/web/hooks/useSyncOrgProposals';
 import { useRouter } from 'expo-router';
 import Feather from '@expo/vector-icons/Feather';
 import { Theme, useTheme, type Palette } from '@/constants/Theme';
-import { solColor } from '@/lib/solColor';
-import { accentVar } from '@codecast/web/lib/externalEvents';
-import { PR_STATE_META, prStateKey } from '@codecast/web/lib/prView';
 import { isConvexId, isEntityId, entityTypeFromId, entityReferenceLabel, parseCallRef, callRefLabelSuffix, parseProposalChangeRef, proposalChangeLabelSuffix, parseReplayRef, replayRefLabelSuffix, type EntityType } from '@codecast/shared/entities';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
 import { openLink } from '@/lib/links';
@@ -20,11 +17,11 @@ import { identityLine, identityRowOf } from '@codecast/web/lib/sessionIdentity';
 import { useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { MobileIdentityFace } from '@/components/identity';
 import { useMessageLongPress } from '@/components/MessageLongPress';
-import type { ReachState } from '@codecast/shared/contracts/deployReach';
 import { deployTitle } from '@codecast/web/lib/line/deployWords';
-import { repoObjectRefOf, repoObjectTitle } from '@codecast/web/lib/repoObjects';
-import { REACH_LOOK, deployPillState, deployPillSuffix, deployTone, isRollback, runRefKey, type DeployPillState, type DeployTone } from '@codecast/web/lib/deploys/deployPill';
-import { useDeployReach } from '@codecast/web/hooks/useDeployReach';
+import { repoObjectTitle } from '@codecast/web/lib/repoObjects';
+import { deployPillState, deployPillSuffix, deployTone, isRollback, runRefKey, type DeployPillState, type DeployTone } from '@codecast/web/lib/deploys/deployPill';
+import { useRefLifecycle } from '@codecast/web/hooks/useRefLifecycle';
+import { nowElapsed, type ChangeTone, type Lifecycle } from '@codecast/web/lib/changes/lifecycle';
 import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
 
 
@@ -225,11 +222,8 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   const deployState = type === 'deploy' && entity ? deployPillState(entity) : null;
   const ticks = deployState === 'waiting' || deployState === 'going_out';
   const now = useNowWhen((t) => (ticks ? deployPillSuffix(entity, t) : ''), 15_000);
-  // A merged pull request or a commit carries how far it has gone toward production.
-  const reachRef = entity && ((type === 'pr' && entity.state === 'merged') || type === 'commit') ? repoObjectRefOf(type, entity, 40) : null;
-  const reach = useDeployReach(reachRef);
-  // A pull request with no reach to say says its state: open, draft, closed, or merged when nothing deploys it.
-  const prState = type === 'pr' && entity && !reach ? PR_STATE_META[prStateKey(entity)] : null;
+  // A pull request or commit says where it stands as its change: the web's track and word (changes.md CH4).
+  const change = useRefLifecycle(type === 'pr' || type === 'commit' ? type : null, entity);
 
   // Unknown id shape, a Convex id resolving to no entity table, or the
   // transient state while resolveIdType is in flight.
@@ -292,16 +286,32 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
       {/* NBSP so the icon never strands on the previous line when the pill wraps */}
       {' '}{label}
       {deployState && ` · ${deployPillSuffix(entity, now)}`}
-      {prState && <RNText style={{ color: solColor(accentVar(prState.accent), Theme) }}>{' · '}{prState.label.toLowerCase()}</RNText>}
-      {reach && (
-        <RNText style={{ color: toneColor(Theme, REACH_LOOK[reach.state].tone) }}>
-          {' · '}
-          {/* A failed deploy wears a red tint of its own, as on the web. */}
-          <RNText style={{ color: toneColor(Theme, REACH_LOOK[reach.state].tone), ...(reach.state === 'failed' ? { backgroundColor: Theme.red + FAILED_TINT } : null) }}>
-            <Feather name={REACH_ICON[reach.state]} size={9} color={toneColor(Theme, REACH_LOOK[reach.state].tone)} />{' '}{REACH_LOOK[reach.state].word}
-          </RNText>
-        </RNText>
-      )}
+      {change && <ChangeWords lifecycle={change} />}
+    </RNText>
+  );
+}
+
+/** The web's change tones (lib/changes/lifecycle ChangeTone) in the phone's palette. */
+const changeColor = (t: Palette, tone: ChangeTone) =>
+  ({ yellow: t.yellow, muted: t.textMuted, blue: t.blue, orange: t.orange, red: t.red, green: t.green, dim: t.textDim })[tone];
+
+/**
+ * A change's track and word after a pull request's or commit's name, as the web draws it (components/changes): five
+ * bars, those passed solid, the now in its tone, the rest faint; then the word. Text, so it wraps with the pill.
+ */
+function ChangeWords({ lifecycle }: { lifecycle: Lifecycle }) {
+  const Theme = useTheme();
+  const n = lifecycle.now;
+  const tone = changeColor(Theme, n.tone);
+  const time = nowElapsed(n, Date.now());
+  return (
+    <RNText style={{ color: tone }}>
+      {' '}
+      {lifecycle.stages.map((s) => (
+        <RNText key={s.id} style={{ color: s.id === n.stage ? tone : n.tone === 'green' ? Theme.green : s.state === 'done' ? Theme.textMuted : Theme.textDim, opacity: s.id === n.stage || s.state === 'done' || n.tone === 'green' ? 1 : 0.4, letterSpacing: -1 }}>▬</RNText>
+      ))}
+      {' '}
+      <RNText style={{ color: tone, ...(n.tone === 'red' ? { backgroundColor: Theme.red + FAILED_TINT } : null) }}>{n.word}{time ? ` ${time}` : ''}{n.detail ? ` · ${n.detail}` : ''}</RNText>
     </RNText>
   );
 }

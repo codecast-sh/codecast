@@ -29,10 +29,10 @@ it is in there. Its tone is the same on every surface:
 
 | Tone | Means | Examples |
 |---|---|---|
-| yellow | in motion, nobody needs to act | editing, checking 4m, merging, deploying 6m |
+| yellow | in motion, nobody needs to act | editing, checking, landing (auto-merge), deploying 6m |
 | muted | waiting its turn, or on whoever ships it | queued, not live yet, not shipped, draft |
-| blue | a person must act | your call, ready to land, needs review |
-| orange | sent back to the session that wrote it | fixing · round 2, conflicts, rolled back |
+| blue | a person must act | ready to land, needs review |
+| orange | sent back to the session that wrote it | changes asked, conflicts, behind main, rolled back |
 | red | failed and stopped | checks failed, deploy failed |
 | green | live everywhere it goes | live |
 | dim | not going anywhere | closed, replaced, abandoned |
@@ -50,9 +50,8 @@ already use. One separator, `·`. Times are elapsed while in motion
   edits (one session's uncommitted work), pass (a shared checkout's bundle).
 - **Name**: the branch, `#N`, the short sha, the session's title, or
   `<folder> · N sessions`.
-- **Track**: five pips. Passed stages solid neutral, the now pip in its tone
-  (breathing while in motion), stages ahead hollow. A live change is five
-  green pips; nothing else is.
+- **Track**: five pips. Passed stages solid neutral, the now pip in its tone,
+  stages ahead faint. A live change is five green pips; nothing else is.
 - **Word**: the now (CH2), at most three words plus a time.
 
 The hover card is the whole journey: each stage with its one line (who wrote
@@ -61,13 +60,18 @@ the writer sessions, and links to the pull request, run and deploys.
 
 ## CH4. Where it draws
 
-- **Messages**: a branch name in inline code draws the chip when the
-  repository knows it: a checkout reports it, a pull request heads from it,
-  or GitHub lists it. GitHub lists a repository's newest hundred branches
-  only, so when the list was cut short a branch-shaped name none of these hold
-  is compared with the default branch on its own (at most eight names a
-  conversation), and draws as a pushed branch when it has commits main lacks. Pull request and commit references keep their own pills, which
-  carry deploy reach (deploys.md DP16).
+- **Messages**: a branch name in inline code, written with a `/`
+  (`evals/budget-checks`), draws the chip when the repository knows it: a
+  checkout reports it, a pull request heads from it, or GitHub lists it. A
+  bare word is never read as a branch: too much inline code is one. GitHub
+  lists a repository's newest hundred branches only, so when the list was cut
+  short a branch-shaped name none of these hold is compared with the default
+  branch on its own (at most eight names a conversation), and draws as a
+  pushed branch when it has commits main lacks. A pull request or commit
+  reference (`owner/repo#N`, `owner/repo@sha`, `#N`) keeps its pill and its
+  hover card, and after its name draws the same track and word the Branches
+  page gives it (`useRefLifecycle`); a commit says only where it stands in
+  production, so it draws them once its deploy reach is read.
 - **Branches page**: the lifecycle grid (`ChangeBoard`): a row per change,
   the five stages as columns with one track across them, each cell's two
   words under its slice, grouped by who acts next: Needs you (red, blue, and a
@@ -79,13 +83,20 @@ the writer sessions, and links to the pull request, run and deploys.
 - **Deploys page**: "On its way" in each target's pane: the same grid,
   without Live and Closed, for every change of that repository not yet on
   main. What has landed and waits to go out is "Waiting on main", below it.
+- **Phone**: a pull request or commit pill draws the same track and word, as
+  text after its name. A branch name in a phone message stays code: the
+  phone's transcript holds no repository's changes to find it in.
+- **Motion**: none. A chip sits in transcripts and list rows, which run no
+  infinite animation (CLAUDE.md typing budget): a change in motion wears its
+  tone, and its grid slice static stripes.
 
 ## CH5. The rule and its facts
 
 `packages/web/lib/changes/lifecycle.ts` turns a change's facts into its
-stages and its now. It is pure with relative imports, so the phone reads it as
-it reads the deploy pill's words (`lib/deploys/deployPill.ts`), and it is the
-only place a lifecycle word or tone is chosen. `lib/changes/assemble.ts`
+stages and its now. It is pure with relative imports, so the phone's pill
+reads it as the web does, and it is the only place a lifecycle word or tone is
+chosen. `lib/changes/pullRequest.ts` reads a pull request into those facts for
+the grid and both pills alike. `lib/changes/assemble.ts`
 builds those facts from what the store already holds: checkouts (pipeline.md
 PL6) for edits, worktrees and a shared checkout's pass; pull requests for
 checks, review and merge; GitHub's branch list for pushed branches; the deploy
@@ -94,7 +105,6 @@ change has landed. No server function of its own: a change is a reading of
 rows that already sync, plus the existing compare for a branch a message names
 that none of them hold.
 
-A change flow run's own states (your call at Decide, fixing after Review,
-landing at Merge) have their words here but no facts yet: a run row does not
-record its branch, so a flow's change reads by its pull request until the
-server stores the run's branch and repository.
+A change flow run's own states (a person's call at Decide, the session fixing
+what Review found) are not drawn: a run row does not record its branch, so a
+flow's change reads by its pull request.

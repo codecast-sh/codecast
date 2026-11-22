@@ -5,7 +5,7 @@
 // branch, a pull request, a commit and a checkout's pass read alike.
 import { memo, type ReactNode } from "react";
 import Link from "next/link";
-import { Ban, Check, Clock, CornerDownLeft, Loader2, Minus, UserRound, X, type LucideIcon } from "lucide-react";
+import { Ban, Check, CircleDot, Clock, CornerDownLeft, Minus, UserRound, X, type LucideIcon } from "lucide-react";
 import { MONO_VEHICLE as MONO, VEHICLE_GLYPH } from "../../lib/changes/vehicleGlyph";
 import type { ChangeLinks } from "../../lib/changes/rows";
 import { HoverCard } from "../ui/HoverCard";
@@ -37,7 +37,7 @@ function where(v: ChangeVehicle): string | null {
 
 const NODE: Record<StageState, LucideIcon | null> = {
   done: Check,
-  active: Loader2,
+  active: CircleDot,
   waiting: Clock,
   you: UserRound,
   back: CornerDownLeft,
@@ -51,7 +51,7 @@ function Stage({ s, isNow }: { s: LifecycleStage; isNow: boolean }) {
   const Icon = NODE[s.state];
   return (
     <li className="chj-stage" data-state={s.state} data-now={isNow ? "" : undefined} data-stage={s.id}>
-      <span className="chj-node" aria-hidden>{Icon ? <Icon className={s.state === "active" ? "chj-spin" : undefined} strokeWidth={s.state === "failed" ? 3 : 2.5} /> : null}</span>
+      <span className="chj-node" aria-hidden>{Icon ? <Icon strokeWidth={s.state === "failed" ? 3 : 2.5} /> : null}</span>
       <span className="chj-label">{s.label}</span>
       <span className="chj-line">{s.line ?? (s.state === "skipped" ? "Not on its path" : null)}</span>
     </li>
@@ -162,5 +162,19 @@ export const ChangeChip = memo(function ChangeChip({ lifecycle, label, links, wr
     <HoverCard card={<ChangeJourney lifecycle={lifecycle} links={links} writers={writers} at={at} />} className="w-[340px] p-0">
       {chip}
     </HoverCard>
+  );
+});
+
+/**
+ * A reference pill's state after its name (a pull request, a commit): the chip's track and word with no chrome of its
+ * own, so `#4501` in a message reads exactly as its row on the Branches page does.
+ */
+export const ChangeSegment = memo(function ChangeSegment({ lifecycle }: { lifecycle: Lifecycle }) {
+  return (
+    <span className="chg-seg" data-tone={lifecycle.now.tone} data-change-segment={lifecycle.now.stage}>
+      <ChangeTrack lifecycle={lifecycle} />
+      <span className="chg-word">{lifecycle.now.word}<NowTime lifecycle={lifecycle} at={null} className="chg-time" /></span>
+      {lifecycle.now.detail ? <span className="chg-detail">{lifecycle.now.detail}</span> : null}
+    </span>
   );
 });

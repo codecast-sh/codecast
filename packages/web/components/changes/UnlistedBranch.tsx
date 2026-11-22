@@ -16,6 +16,6 @@ export function UnlistedBranch({ repository, name, children }: { repository: str
   const now = useCoarseNow(60_000);
   const ahead = compare.data?.ahead_by ?? 0;
   if (!base || !ahead) return <>{children}</>;
-  const lifecycle = changeLifecycle({ vehicle: { kind: "branch", name, worktree: null, pr: null }, work: { uncommitted: 0, ahead, pushed: true, writers: [] } }, now);
+  const lifecycle = changeLifecycle({ vehicle: { kind: "branch", name, worktree: null, pr: null }, work: { uncommitted: 0, ahead, pushed: true, writers: [] } });
   return <ChangeChip lifecycle={lifecycle} label={name} links={{ href: repoCompareHref(repository, base, name) }} />;
 }

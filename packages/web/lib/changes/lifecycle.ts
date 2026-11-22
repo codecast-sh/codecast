@@ -4,7 +4,7 @@
 // request, a shared checkout's pass, a commit on main), and one `now`: the
 // stage that holds it, its state there, the word a reader sees and its tone.
 // This file is the only place a lifecycle word or tone is chosen. Pure, with
-// relative imports only: the web's chip and pages and the phone's pill all
+// relative imports only: the web's chip, grid and pills and the phone's pill all
 // read a change through it.
 import type { DeployReach, ReachState, TargetReach } from "@codecast/shared/contracts/deployReach";
 import { deployElapsed } from "../deploys/deployPill";
@@ -48,7 +48,6 @@ export type ChangeFacts = {
     /** On the remote (or handed to a pass): the checkout no longer holds it alone. */
     pushed: boolean;
     writers: ReadonlyArray<ChangeWriter>;
-    since?: number | null;
   } | null;
   check?: {
     ci: "none" | "pending" | "success" | "failure";
@@ -56,25 +55,17 @@ export type ChangeFacts = {
     failing?: ReadonlyArray<string>;
     /** CI passed and how many ran, for the hover line. */
     passed?: number | null;
-    /** `pending`: reviewing now (an agent's review station). `required`: a person owes a review nobody has given. */
-    review: "none" | "pending" | "required" | "approved" | "changes";
-    since?: number | null;
+    /** `required`: a person owes a review nobody has given. */
+    review: "none" | "required" | "approved" | "changes";
     /** CI that ran on main after the change landed (a direct push): Check reads it, after Land. */
     after_land?: boolean;
-    /** Findings went back to the session that wrote it, which is fixing them. */
-    back?: { round: number; max: number | null; note: string | null; since: number | null } | null;
   } | null;
   land?: {
-    state: "none" | "you" | "queued" | "merging" | "conflict" | "behind" | "landed";
+    state: "none" | "conflict" | "behind" | "landed";
     sha?: string | null;
     at?: number | null;
     how?: "merged" | "pushed" | "pass" | null;
-    since?: number | null;
-    /** `you`: the decision a person answers. */
-    decision_id?: string | null;
   } | null;
-  /** A change flow run drives it: what comes next happens on its own. */
-  flow?: boolean;
   /** A draft pull request: its author is still at it, so nobody else's turn has come. */
   draft?: boolean;
   /** GitHub's auto-merge is on: it lands itself once its requirements pass. */
@@ -95,7 +86,7 @@ export type LifecycleNow = {
   state: StageState;
   /** The words after the name, at most three. A now in motion reads its elapsed time from `since` (nowElapsed). */
   word: string;
-  /** A quieter second word the chip shows after a `·`: `1 of 2 live`, `round 2`. */
+  /** A quieter second word the chip shows after a `·`: `1 of 2 live`, a failing check's name. */
   detail: string | null;
   tone: ChangeTone;
   /** When the now began, for its elapsed time; null when settled. */
@@ -166,9 +157,8 @@ function checkLine(f: ChangeFacts): string | null {
     : c.ci === "pending" ? "CI running"
     : c.ci === "success" ? (c.passed ? `${plural(c.passed, "check")} passed` : "CI passed")
     : null;
-  const review = c.review === "approved" ? "review passed" : c.review === "changes" ? "review asked for changes" : c.review === "pending" ? "in review" : c.review === "required" ? "waiting for a reviewer" : null;
+  const review = c.review === "approved" ? "review passed" : c.review === "changes" ? "review asked for changes" : c.review === "required" ? "waiting for a reviewer" : null;
   const bits = [ci, review].filter(Boolean) as string[];
-  if (c.back) bits.push(`session fixing${c.back.round > 1 ? `, round ${c.back.round}` : ""}`);
   if (c.after_land) bits.push("after it landed");
   return bits.join(" · ") || null;
 }
@@ -180,7 +170,7 @@ function landLine(f: ChangeFacts): string | null {
     const how = l.how === "pushed" ? "Pushed to main" : l.how === "pass" ? "Shipped with the checkout" : "Merged";
     return l.sha ? `${how} as ${l.sha.slice(0, 7)}` : how;
   }
-  return ({ none: null, you: "Waiting for your call", queued: "Queued to land", merging: "Merging", conflict: "Conflicts with main", behind: "Behind main" } as const)[l.state];
+  return ({ none: null, conflict: "Conflicts with main", behind: "Behind main" } as const)[l.state];
 }
 
 /** Each stage's two words for a grid cell: what the change holds there. */
@@ -190,7 +180,7 @@ function stageShorts(f: ChangeFacts): Record<ChangeStageId, string | null> {
   const check = !c ? null
     : c.ci === "failure" ? (c.failing?.length === 1 ? c.failing[0] : "failed")
     : c.review === "changes" ? "changes asked"
-    : c.ci === "pending" || c.review === "pending" ? "running"
+    : c.ci === "pending" ? "running"
     : c.ci === "success" ? (c.passed ? `${c.passed} passed` : "passed")
     : c.review === "approved" ? "reviewed" : null;
   const land = !l ? null : l.state === "landed" ? (l.sha ? l.sha.slice(0, 7) : "on main") : l.state === "none" ? null : landLine(f)?.toLowerCase() ?? null;
@@ -201,7 +191,7 @@ function stageShorts(f: ChangeFacts): Record<ChangeStageId, string | null> {
 }
 
 /** The change's stages and its now, at `now`. */
-export function changeLifecycle(f: ChangeFacts, now: number): Lifecycle {
+export function changeLifecycle(f: ChangeFacts): Lifecycle {
   const states: Record<ChangeStageId, StageState> = { work: "idle", check: "idle", land: "idle", deploy: "idle", live: "idle" };
   const lines: Record<ChangeStageId, string | null> = { work: workLine(f), check: checkLine(f), land: landLine(f), deploy: null, live: null };
   const shorts = stageShorts(f);
@@ -276,29 +266,23 @@ export function changeLifecycle(f: ChangeFacts, now: number): Lifecycle {
   }
 
   // On its way to main.
-  if (land.state === "conflict") return result("land", "back", "conflicts", land.since ?? null);
-  if (land.state === "you") return result("land", "you", "your call", land.since ?? null);
-  if (land.state === "merging") return result("land", "active", "merging", land.since ?? null);
-  if (land.state === "queued") return result("land", "waiting", "queued to land", land.since ?? null);
-  if (land.state === "behind" && check?.ci !== "failure") return result("land", "back", "behind main", land.since ?? null);
+  if (land.state === "conflict") return result("land", "back", "conflicts");
+  if (land.state === "behind" && check?.ci !== "failure") return result("land", "back", "behind main");
 
   if (f.draft && check?.ci !== "failure") return result("check", "waiting", "draft");
-  if (check && (check.ci !== "none" || check.review !== "none" || check.back)) {
-    if (check.back) {
-      return result("check", "back", "fixing", check.back.since, "orange", check.back.round > 1 ? `round ${check.back.round}` : null);
-    }
+  if (check && (check.ci !== "none" || check.review !== "none")) {
     if (check.ci === "failure") return result("check", "failed", "checks failed", null, "red", check.failing?.length === 1 ? check.failing[0] : null);
     if (check.review === "changes") return result("check", "back", "changes asked");
-    if (check.ci === "pending" || check.review === "pending") return result("check", "active", "checking", check.since ?? null);
+    if (check.ci === "pending") return result("check", "active", "checking");
     if (check.review === "required") return result("check", "you", "needs review");
-    // Checks passed and nothing is landing it yet: a flow or auto-merge lands it on its own, else a person ships it.
-    return f.flow || f.auto_merge ? result("land", "active", "landing") : result("land", "you", "ready to land");
+    // Checks passed and nothing is landing it yet: auto-merge lands it on its own, else a person does.
+    return f.auto_merge ? result("land", "active", "landing") : result("land", "you", "ready to land");
   }
 
   if (work) {
     const working = work.writers.some((w) => w.state === "working");
-    if (working) return result("work", "active", "editing", work.since ?? null);
-    if (work.pushed && !work.uncommitted) return f.flow ? result("check", "waiting", "waiting for checks") : result("check", "idle", "not checked", null, "muted");
+    if (working) return result("work", "active", "editing");
+    if (work.pushed && !work.uncommitted) return result("check", "idle", "not checked", null, "muted");
     if (work.uncommitted || work.ahead) {
       const idle = work.writers.some((w) => w.state === "idle");
       if (idle) return result("work", "waiting", "between turns");
