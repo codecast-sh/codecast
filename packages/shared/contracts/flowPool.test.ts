@@ -36,6 +36,8 @@ test("a flow takes a session's change when it takes a branch and is a whole flow
   expect(sourceTakesSessionChange(`digraph check {\n  graph [kind="segment", takes="branch"]\n  verify [flow="checker"]\n}`)).toBe(false);
   expect(sourceTakesSessionChange(`digraph line {\n  graph [kind="line", takes="task"]\n  ship [flow="ship"]\n}`)).toBe(false);
   expect(sourceTakesSessionChange(null)).toBe(false);
+});
+
 // A station a variant placed after Check (parser.ts variantEdits) as the expanded graph holds it: Check's passing
 // exit leads to it, it goes on to Review on success and back to Fix check on failure.
 test("the main path runs through a station inserted after a segment, not its way back", () => {

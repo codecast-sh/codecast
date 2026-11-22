@@ -181,6 +181,8 @@ test("a full sha on main in two repositories reads from the one with targets", a
   w.t.commits.unshift({ ...w.t.commits.find((c: any) => c.sha === sha(4)), _id: "commit_fork", repository: "fork/app", team_id: TEAM });
   const r = await w.reach(sha(4));
   expect(r?.targets.map((x: any) => x.target)).toEqual(["web"]);
+});
+
 test("a deploy's corrected sha moves its place on main: commits after it are no longer live", async () => {
   const w = await world();
   await w.mark("web", 4, "live", NOW - 4_000);
