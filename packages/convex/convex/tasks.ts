@@ -2021,11 +2021,11 @@ export const get = query({
     const plan = task.plan_id ? await ctx.db.get(task.plan_id) : null;
     // The session the task's change came from (lib/taskOwner changeSessionOf): a flow run started from a plain
     // shell takes it as its subject (flows.md FL4).
-    const owner = await changeSessionOf(ctx, task, comments);
+    const changeSession = await changeSessionOf(ctx, task, comments);
     return {
       ...task,
-      owner: owner && (await canAccessConversation(ctx, auth.userId, owner))
-        ? { short_id: owner.short_id ?? String(owner._id).slice(0, 7), conversation_id: owner._id }
+      change_session: changeSession && (await canAccessConversation(ctx, auth.userId, changeSession))
+        ? { short_id: changeSession.short_id ?? String(changeSession._id).slice(0, 7), conversation_id: changeSession._id }
         : null,
       creator_name: assigneeNames[task.user_id],
       history: history.map((h) => ({

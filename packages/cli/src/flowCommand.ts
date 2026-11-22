@@ -75,14 +75,14 @@ async function sessionTitleOf(conversation: string, deps: Pick<FlowDeps, "cliPos
 /**
  * The run's subject when the change is named (a task, branch or pull request) from inside a session: that session
  * started the run, so it hears what each stage finds (flows.md FL4). From a plain shell (a run started over ssh on
- * another machine), the session the task names as its owner (`owner` on /cli/work/get). Undefined when there is neither.
+ * another machine), the session the task's change came from (`change_session` on /cli/work/get). Undefined when there is neither.
  */
 export async function callingSubject(deps: Pick<FlowDeps, "cliPost" | "callingSession">, task?: string): Promise<{ session: string; conversation: string } | undefined> {
   const ref = deps.callingSession();
   const row = ref ? await sessionRowOf(ref, deps) : null;
   if (row?.id) return { session: String(row.id).slice(0, 7), conversation: String(row.id) };
-  const owner = task ? (await deps.cliPost("/cli/work/get", { short_id: task }).catch(() => null))?.owner : null;
-  return owner?.conversation_id ? { session: String(owner.short_id), conversation: String(owner.conversation_id) } : undefined;
+  const made = task ? (await deps.cliPost("/cli/work/get", { short_id: task }).catch(() => null))?.change_session : null;
+  return made?.conversation_id ? { session: String(made.short_id), conversation: String(made.conversation_id) } : undefined;
 }
 
 /** The task a session is bound to (its task pulse, written by `cast task start`), while that task is still open. */
