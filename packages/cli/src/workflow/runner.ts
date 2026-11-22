@@ -1031,7 +1031,10 @@ function findFanin(node: WorkflowNode, graph: WorkflowGraph): WorkflowNode | nul
 // (shape=tripleoctagon) they converge on. Each branch's output lands under
 // `<id>.output` as usual, and the fanin's `<fanin>.output` is the branches'
 // outputs joined under headings so the next node can read them all with one
-// `$<fanin>.output`. A failed branch fails the fanout.
+// `$<fanin>.output`. A failed branch fails the fanout. With a fanin the run
+// still goes on to it, which carries the failure (runNodeLoop) so its edges
+// route on it, along with when the fanout started and what each failed branch
+// said, for the one brief that answers them all.
 async function executeFanout(
   node: WorkflowNode,
   graph: WorkflowGraph,
@@ -1045,9 +1048,13 @@ async function executeFanout(
     return "success";
   }
   const fanin = findFanin(node, graph);
+  const startedAt = Date.now();
   console.log(`${c.dim}  ${branches.length} branches: ${branches.map(b => b.label).join(", ")}${fanin ? ` → ${fanin.label}` : ""}${c.reset}`);
   const sem = countingSemaphore(4);
   const results = await Promise.all(branches.map(branch => sem.run(async () => {
+    // A branch's keys from an earlier round go first: only what it sets this round flows back below, so a key it
+    // leaves unset would otherwise keep the last round's value (a review's old json routed a looping flow, jx7389x).
+    for (const k of Object.keys(state.context)) if (k.startsWith(`${branch.id}.`)) delete state.context[k];
     const ctx = { ...state.context };
     let outcome: NodeOutcome;
     if (options.dryRun) outcome = "success";
@@ -1078,6 +1085,12 @@ async function executeFanout(
       .map(r => `## ${r.branch.label}\n\n${state.context[`${r.branch.id}.output`] ?? ""}`)
       .join("\n\n")
       .slice(0, 12000);
+    state.context[`${fanin.id}.fanout`] = node.id;
+    state.context[`${fanin.id}.fanout_outcome`] = failed.length ? "failure" : "success";
+    state.context[`${fanin.id}.fanout_started`] = String(startedAt);
+    state.context[`${fanin.id}.findings`] = failed
+      .map(r => `## ${r.branch.label}\n\n${failureExcerpt(`${state.context[`${r.branch.id}.output`] ?? ""}\n${r.error ?? ""}`.trim() || "failed")}`)
+      .join("\n\n");
   }
   if (failed.length) {
     state.context["last_error"] = failed.map(r => `${r.branch.label}: ${r.error ?? "failed"}`).join("\n").slice(0, 2000);
@@ -2233,7 +2246,8 @@ async function runNodeLoop(
     } else if (current.type === "parallel_fanout") {
       outcome = await executeFanout(current, graph, state, cwd, options);
     } else if (current.type === "parallel_fanin") {
-      outcome = "success";
+      // The fanin carries its fanout's outcome: a failed branch is what its edges route on.
+      outcome = state.context[`${current.id}.fanout_outcome`] === "failure" ? "failure" : "success";
     } else if ((current.type === "agent" || current.type === "prompt") && current.backend === "subject") {
       // The station is the subject's own: nothing parks it while it works on the brief.
       await parker?.pause();
@@ -2280,9 +2294,20 @@ async function runNodeLoop(
     stopIfEnded(options);
 
     // A hand may have moved the task (handoff, verdict); the next edge routes
-    // on the task as it is now. Verdicts older than this node read as none.
+    // on the task as it is now. Verdicts older than this node read as none; a
+    // fanin's node is its fanout's, whose branches wrote them.
     if (options.taskId && current.type !== "start" && !options.dryRun) {
-      await loadTaskContext(options, state.context, nodeStartedAt);
+      const since = current.type === "parallel_fanin" ? Number(state.context[`${current.id}.fanout_started`] || nodeStartedAt) : nodeStartedAt;
+      await loadTaskContext(options, state.context, since);
+    }
+    // At a fanin, everything its branches found is one stop: the failed branches' words and a review that asked
+    // for changes, so the station it routes to (the subject's fix) gets one brief with all of it.
+    if (current.type === "parallel_fanin") {
+      const findings = [state.context[`${current.id}.findings`], state.context["review_verdict"] === "changes" ? `## Review asked for changes\n\n${state.context["review_note"] || "(no note)"}` : ""].filter(Boolean);
+      if (findings.length) {
+        state.context["stop_reason"] = findings.join("\n\n");
+        state.context["stop_stage"] = current.label;
+      }
     }
     if (options.planId && current.type !== "start" && !options.dryRun) {
       await loadPlanContext(options, state.context);
@@ -2352,6 +2377,9 @@ async function runNodeLoop(
     // its timeout and was killed) has nothing for the next node to read: only
     // an edge that asks about the outcome routes it, never a plain one.
     const stationDead = outcome === "failure" && state.context["station_dead"] === current.id;
+    // A fanin whose fanout failed routes only on an edge that asks (an outcome, a verdict, a branch's json): a plain
+    // edge would carry a failed branch on as if it passed.
+    const faninFailed = current.type === "parallel_fanin" && outcome === "failure";
     delete state.context["station_dead"];
     // A subject's change found already on upstream when frozen again has nothing left to check or land: the run goes
     // to its exit and ends done, rather than back through stages that would read an empty change.
@@ -2364,11 +2392,14 @@ async function runNodeLoop(
         ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\boutcome\b/.test(e.condition ?? "")) }, current, state.context)
       : unanswered
         ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || (!e.label && !!e.condition)) }, current, state.context)
+      : faninFailed
+        ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || !!e.condition) }, current, state.context)
       : current.type === "parallel_fanout"
         // A fanout's own edges are its branches, which all ran: a failed one
         // follows none of them (that reran the first branch alone and went on
-        // to the fanin). It takes its retry_target, or the run stops here.
-        ? (outcome === "success" ? findFanin(current, graph) : null)
+        // to the fanin). It goes on to its fanin, which carries the failure;
+        // with none it takes its retry_target, or the run stops here.
+        ? findFanin(current, graph)
         : resolveHumanGateTarget(current, graph, state.context)
           || resolveNextNode(graph, current, state.context);
     if (stationBlocked && next) delete state.context["station_blocked"];
@@ -2386,8 +2417,9 @@ async function runNodeLoop(
 
     if (!next) {
       if (outcome === "failure") {
-        // Fabro: node failed with no matching outgoing edge → check retry_target
-        const retryNode = getRetryTarget(current.id, graph);
+        // Fabro: node failed with no matching outgoing edge → check retry_target (a fanin's, else its fanout's)
+        const fanout = faninFailed ? state.context[`${current.id}.fanout`] : undefined;
+        const retryNode = getRetryTarget(current.id, graph) ?? (fanout ? getRetryTarget(fanout, graph) : null);
         if (retryNode) {
           console.log(`${c.yellow}  no fail edge → retry_target '${retryNode.label}'${c.reset}\n`);
           current = retryNode;
@@ -2400,7 +2432,7 @@ async function runNodeLoop(
       state.failed = true;
       // A dead station says why it left no answer; a routable outcome no edge
       // takes names the fields its edges route on.
-      const saysWhy = stationDead || (current.type === "parallel_fanout" && outcome === "failure");
+      const saysWhy = stationDead || faninFailed || (current.type === "parallel_fanout" && outcome === "failure");
       state.failReason = saysWhy && state.context["last_error"] ? state.context["last_error"] : deadEndReason(graph, current.id, outcome, state.context);
       break;
     }
