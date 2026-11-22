@@ -7,6 +7,7 @@ import { CHECKOUT_PATHS_MAX, LEVEL_STUCK_FILE_MS, type CheckoutLevel } from "@co
 import { dirtyPaths, fileStuck, groupUncommitted, nextLevel, reportCheckouts, stuckWords } from "./checkoutReport.js";
 import type { SessionEdits } from "./attribute.js";
 import type { LevelResult } from "./level.js";
+import { updateSyncRecord } from "../syncLedger.js";
 
 // What a machine reports of its checkouts, and the one ask for help a stuck level makes (ct-98780). Synthetic
 // repositories and sessions only; the config dir is a temp one, so no real transcript is read.
@@ -149,6 +150,70 @@ describe("reporting a machine's checkouts", () => {
     fs.writeFileSync(path.join(root, "new.md"), "x\n");
     expect((await dirtyPaths(root)).sort()).toEqual(["a.ts", "c.ts", "new.md"]);
   });
+
+  test("while its transcripts are still being read, a checkout names no writer and asks nobody; read through, it names and asks the writer", async () => {
+    const root = repo();
+    fs.writeFileSync(path.join(root, "a.ts"), "edited\n");
+    const transcript = path.join(configDir, "writer.jsonl");
+    fs.writeFileSync(transcript, JSON.stringify({ type: "assistant", timestamp: new Date().toISOString(), cwd: root, message: { role: "assistant", content: [{ type: "tool_use", name: "Edit", input: { file_path: path.join(root, "a.ts") } }] } }) + "\n");
+    updateSyncRecord(transcript, { conversationId: "conv_writer" });
+    const posts: Array<[string, any]> = [];
+    const post = async (p: string, b: any) => { posts.push([p, structuredClone(b)]); return {}; };
+    const deps = { post, deviceId: "dev-3", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-3.json"), host: "laptop" };
+    const t0 = Date.now() - LEVEL_STUCK_FILE_MS - 2 * MIN;
+    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: t0, budgetMs: 0 });
+    // Past the grace with no budget left this pass: the report says it is still reading, and nobody is asked.
+    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: Date.now(), budgetMs: 0 });
+    const reading = posts.filter(([p]) => p === "/cli/checkouts/report").pop()![1].reports[0];
+    expect(reading.uncommitted).toMatchObject({ attributing: true, sessions: [], unattributed: ["a.ts"] });
+    expect(posts.some(([p]) => p === "/cli/messages/send" || p === "/cli/signal/add")).toBe(false);
+    await reportCheckouts([refused(root, ["a.ts"])], { ...deps, now: Date.now() });
+    const read = posts.filter(([p]) => p === "/cli/checkouts/report").pop()![1].reports[0];
+    expect(read.uncommitted.attributing).toBeUndefined();
+    expect(read.uncommitted.sessions.map((x: any) => x.conversation_id)).toEqual(["conv_writer"]);
+    expect(posts.filter(([p]) => p === "/cli/messages/send").map(([, b]) => b.to)).toEqual(["conv_writer"]);
+    expect(read.level.filed).toMatchObject({ to: "session", conversation_id: "conv_writer" });
+  });
+
+  test("a cold attribution over a large fixture never holds the event loop more than a few hundred ms at a time", async () => {
+    const root = repo();
+    fs.writeFileSync(path.join(root, "a.ts"), "edited\n");
+    const now = Date.now();
+    const turn = (n: number) => JSON.stringify({ type: "user", message: { role: "user", content: "x".repeat(n) } });
+    // Commands naming other volumes and remote hosts' paths: resolving one on disk once blocked for minutes.
+    const elsewhere = JSON.stringify({ type: "assistant", cwd: "/", message: { role: "assistant", content: [{ type: "tool_use", name: "Bash", input: { command: "cd \"/Volumes/Archive/Photos\" && find originals -type f > /private/tmp/oa.txt; cat x > /home/ubuntu/work/app/out.txt" } }] } });
+    // 120 transcripts of 2 MB each, the last of them holding the write: more than one pass reads.
+    for (let i = 0; i < 120; i++) {
+      const lines = [...Array.from({ length: 8 }, () => turn(256 * 1024)), elsewhere];
+      if (i === 119) lines.push(JSON.stringify({ type: "assistant", timestamp: new Date(now - 1000).toISOString(), cwd: root, message: { role: "assistant", content: [{ type: "tool_use", name: "Edit", input: { file_path: path.join(root, "a.ts") } }] } }));
+      const file = path.join(configDir, `big-${i}.jsonl`);
+      fs.writeFileSync(file, lines.join("\n") + "\n");
+      updateSyncRecord(file, { conversationId: `conv_big_${i}` });
+    }
+    const deps = { post: async () => ({}), deviceId: "dev-4", repositoryOf: () => "acme/app", stateFile: path.join(configDir, "state-4.json") };
+    let worst = 0;
+    let last = Date.now();
+    const timer = setInterval(() => { const t = Date.now(); worst = Math.max(worst, t - last); last = t; }, 5);
+    let report: any = null;
+    let firstPartial: boolean | null = null;
+    let passes = 0;
+    try {
+      for (; passes < 400; passes++) {
+        const posts: any[] = [];
+        await reportCheckouts([{ root, skipped: "level" }], { ...deps, post: async (p: string, b: any) => { posts.push([p, b]); return {}; }, budgetMs: 20 });
+        report = posts.find(([p]) => p === "/cli/checkouts/report")?.[1].reports[0] ?? report;
+        firstPartial ??= !!report?.uncommitted.attributing;
+        if (report && !report.uncommitted.attributing) break;
+      }
+    } finally {
+      clearInterval(timer);
+    }
+    expect(report.uncommitted.attributing).toBeUndefined();
+    expect(report.uncommitted.sessions.map((x: any) => x.conversation_id)).toEqual(["conv_big_119"]);
+    expect(firstPartial).toBe(true);
+    expect(passes).toBeGreaterThan(0);
+    expect(worst).toBeLessThan(400);
+  }, 120_000);
 
   test("a report the server did not take is sent again next pass", async () => {
     const root = repo();

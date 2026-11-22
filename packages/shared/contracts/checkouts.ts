@@ -62,8 +62,12 @@ export type CheckoutReport = {
   behind: number | null;
   /** When upstream was last fetched here (FETCH_HEAD); null when never. */
   fetched_at: number | null;
-  /** Uncommitted paths, by the session that wrote each last; the rest unattributed (a person, a formatter). */
-  uncommitted: { total: number; sessions: CheckoutSession[]; unattributed: string[]; unattributed_more: number };
+  /**
+   * Uncommitted paths, by the session that wrote each last; the rest unattributed (a person, a formatter).
+   * `attributing`: the daemon is still reading this checkout's transcripts (a little each pass), so every path is
+   * listed unattributed for now; the sessions arrive with a later report.
+   */
+  uncommitted: { total: number; sessions: CheckoutSession[]; unattributed: string[]; unattributed_more: number; attributing?: true };
   level: CheckoutLevel;
 };
 

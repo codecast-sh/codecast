@@ -27,6 +27,9 @@ import { attributionSince, upstreamRef } from "./shipCheckout.js";
 
 type Post = (urlPath: string, body: Record<string, unknown>) => Promise<any>;
 
+/** A stuck level's ask waits for the writer to be known. */
+class DeferFiling extends Error {}
+
 /** One root's sweep history: when it last levelled, and the stuck episode it is in. */
 type Episode = { key: string; files: string[]; reason: string; since: number; filed: CheckoutFiled | null };
 /** The last grouping of a root's uncommitted paths, kept while the same paths stay dirty (attribution reads every transcript). */
@@ -116,7 +119,27 @@ export function groupUncommitted(paths: string[], a: Pick<Attribution, "owners">
 }
 
 /** One checkout's report and the attribution it was read with (the filing names the writer from it). */
-export async function checkoutReport(root: string, ids: { repository: string; deviceId: string }, level: CheckoutLevel, now = Date.now(), grouped?: Grouped): Promise<{ report: CheckoutReport; attribution: Attribution | null; grouped: Grouped }> {
+/**
+ * How long one report pass may read transcripts across every checkout, and how long any one read may hold the
+ * daemon's event loop before it yields (attribution is synchronous: heartbeats and message delivery wait on it).
+ */
+export const REPORT_BUDGET_MS = 1_000;
+export const REPORT_SLICE_MS = 150;
+
+const yieldToLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/** Attribution read a slice at a time, yielding between slices, until it is whole or `budgetMs` is spent. */
+export async function attributeInSlices(root: string, paths: string[], now: number, budgetMs: number): Promise<Attribution> {
+  const ends = Date.now() + budgetMs;
+  const since = attributionSince(root, paths, now);
+  for (;;) {
+    const a = attributeEdits(root, paths, { since, now, budgetMs: Math.min(REPORT_SLICE_MS, Math.max(0, ends - Date.now())) });
+    if (!a.partial || Date.now() >= ends) return a;
+    await yieldToLoop();
+  }
+}
+
+export async function checkoutReport(root: string, ids: { repository: string; deviceId: string }, level: CheckoutLevel, now = Date.now(), grouped?: Grouped, budgetMs?: number): Promise<{ report: CheckoutReport; attribution: Attribution | null; grouped: Grouped | undefined }> {
   const branch = await gitTry(root, ["symbolic-ref", "--short", "-q", "HEAD"]);
   const head = await gitTry(root, ["rev-parse", "HEAD"]);
   let upstream: string | null = null;
@@ -129,8 +152,12 @@ export async function checkoutReport(root: string, ids: { repository: string; de
   const paths = await dirtyPaths(root);
   const sig = checkoutHash(paths);
   const reuse = grouped && grouped.sig === sig && now - grouped.at < REGROUP_MS ? grouped : null;
-  const attribution = paths.length && !reuse ? attributeEdits(root, paths, { since: attributionSince(root, paths, now), now }) : null;
-  const uncommitted = reuse?.uncommitted ?? (attribution ? groupUncommitted(paths, attribution, now) : { total: 0, sessions: [], unattributed: [], unattributed_more: 0 });
+  const attribution = paths.length && !reuse
+    ? budgetMs === undefined ? attributeEdits(root, paths, { since: attributionSince(root, paths, now), now }) : await attributeInSlices(root, paths, now, budgetMs)
+    : null;
+  // Read only in part: no owner it names can be trusted yet (a later write may sit unread), so none is named.
+  const uncommitted = reuse?.uncommitted
+    ?? (attribution?.partial ? { ...groupUncommitted(paths, { owners: new Map() }, now), attributing: true as const } : attribution ? groupUncommitted(paths, attribution, now) : { total: 0, sessions: [], unattributed: [], unattributed_more: 0 });
   return {
     report: {
       repository: ids.repository.toLowerCase(),
@@ -146,7 +173,7 @@ export async function checkoutReport(root: string, ids: { repository: string; de
       level,
     },
     attribution,
-    grouped: reuse ?? { sig, at: now, uncommitted },
+    grouped: reuse ?? (attribution?.partial ? undefined : { sig, at: now, uncommitted }),
   };
 }
 
@@ -199,8 +226,10 @@ export async function fileStuck(post: Post, report: CheckoutReport, level: Extra
  * After a sweep: each root's level state moved on, a stuck episode past LEVEL_STUCK_FILE_MS filed once, and every
  * checkout whose report changed sent (checkouts.report). Roots no longer on disk are reported gone.
  */
-export async function reportCheckouts(outcomes: LevelSweepOutcome[], deps: { post: Post; deviceId: string; repositoryOf: (root: string) => string | null; now?: number; log?: (line: string) => void; stateFile?: string; host?: string }): Promise<{ sent: number; filed: number }> {
+export async function reportCheckouts(outcomes: LevelSweepOutcome[], deps: { post: Post; deviceId: string; repositoryOf: (root: string) => string | null; now?: number; log?: (line: string) => void; stateFile?: string; host?: string; budgetMs?: number }): Promise<{ sent: number; filed: number }> {
   const now = deps.now ?? Date.now();
+  const passEnds = Date.now() + (deps.budgetMs ?? REPORT_BUDGET_MS);
+  const left = () => Math.max(0, passEnds - Date.now());
   const log = deps.log ?? (() => {});
   const state = loadCheckoutState(deps.stateFile);
   const reports: CheckoutReport[] = [];
@@ -208,22 +237,25 @@ export async function reportCheckouts(outcomes: LevelSweepOutcome[], deps: { pos
   for (const o of outcomes) {
     const repository = deps.repositoryOf(o.root);
     if (!repository) continue;
+    await yieldToLoop();
     const prev = state.roots[o.root] ?? {};
     const next = nextLevel(prev, o, now);
-    const read = await checkoutReport(o.root, { repository, deviceId: deps.deviceId }, next.level, now, prev.grouped);
+    const read = await checkoutReport(o.root, { repository, deviceId: deps.deviceId }, next.level, now, prev.grouped, left());
     let report = read.report;
     next.state.grouped = read.grouped;
     const level = report.level;
     if (level.state === "stuck" && !level.filed && now - level.since >= LEVEL_STUCK_FILE_MS) {
       try {
-        const attribution = read.attribution ?? (level.files.length ? attributeEdits(o.root, level.files, { since: attributionSince(o.root, level.files, now), now }) : null);
+        const attribution = read.attribution ?? (level.files.length ? await attributeInSlices(o.root, level.files, now, left()) : null);
+        // Who to ask is the last writer: until every transcript is read, ask nobody (a later pass will).
+        if (attribution?.partial) throw new DeferFiling();
         const done = await fileStuck(deps.post, report, level, attribution, { host: deps.host, now });
         next.state.stuck = { ...next.state.stuck!, filed: done };
         report = { ...report, level: { ...level, filed: done } };
         filed++;
         log(`[LEVEL] ${o.root}: stuck since ${new Date(level.since).toISOString()} on ${level.files.join(", ") || level.reason}; asked ${done.to === "session" ? `the session that wrote it (${done.conversation_id})` : "the project (a finding)"} for help`);
       } catch (e) {
-        log(`[LEVEL] ${o.root}: could not file the stuck level: ${(e as Error)?.message ?? e}`);
+        if (!(e instanceof DeferFiling)) log(`[LEVEL] ${o.root}: could not file the stuck level: ${(e as Error)?.message ?? e}`);
       }
     }
     const hash = checkoutHash(report);
