@@ -383,12 +383,14 @@ describe("line.cast offline run through the session path", () => {
     expect(calls.some((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")).toBe(false);
   });
 
-  test("a hand that never settles fails its node, which ends the hand, and the task returns to open", async () => {
+  // A hand that keeps working runs to its cap (handWatch.ts); one that goes quiet without settling is given up on at
+  // its quiet window, here the run's 30 ms.
+  test("a hand that goes quiet without settling fails its node, which ends the hand, and the task returns to open", async () => {
     const settle = globalThis.fetch;
     globalThis.fetch = (async (url: any, init: any) => {
       if (String(url).endsWith("/cli/inbox")) {
         calls.push({ route: "/cli/inbox", body: JSON.parse(init.body) });
-        return new Response(JSON.stringify({ sessions: [{ id: "conv_1", work_state: "working", is_live: true }] }), { status: 200 });
+        return new Response(JSON.stringify({ sessions: [{ id: "conv_1", work_state: "idle", is_live: true }] }), { status: 200 });
       }
       return settle(url, init);
     }) as typeof fetch;
@@ -396,7 +398,7 @@ describe("line.cast offline run through the session path", () => {
     expect(outcome).toBe("failed");
     expect(calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "failed" && c.body.session_id === "s1")).toBe(true);
     expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
-    expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("ran out of time");
+    expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("showed no work");
     expect(calls.filter((c) => c.route === "/cli/spawn")).toHaveLength(1);
   }, 30000);
 
@@ -408,7 +410,7 @@ describe("line.cast offline run through the session path", () => {
     globalThis.fetch = (async (url: any, init: any) => {
       if (String(url).endsWith("/cli/inbox")) {
         calls.push({ route: "/cli/inbox", body: JSON.parse(init.body) });
-        return new Response(JSON.stringify({ sessions: [{ id: "conv_1", work_state: "working", is_live: true }] }), { status: 200 });
+        return new Response(JSON.stringify({ sessions: [{ id: "conv_1", work_state: "idle", is_live: true }] }), { status: 200 });
       }
       return settle(url, init);
     }) as typeof fetch;
