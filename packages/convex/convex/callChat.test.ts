@@ -566,3 +566,53 @@ describe("a line belongs to the huddle it was said in", () => {
     expect(stage.map((r: any) => r._id)).toEqual(["a", "b"]);
   });
 });
+
+describe("ct-79021: the huddle's chat notifies the people in the huddle", () => {
+  // Two people on the call, one fed agent. A mirrored agent line reaches both
+  // people (the adder too: the line is the agent's, not theirs); a typed line
+  // reaches everyone but its author. One bell row each, opening the call.
+  const room = () => ({
+    users: [{ _id: "ua", name: "Ada Lovelace" }, { _id: "ub", name: "Bo Diddley" }],
+    call_members: [
+      { _id: "cm1", room_key: "session:conv1", user_id: "ua", team_id: "team1", last_seen: Date.now() },
+      { _id: "cm2", room_key: "session:conv1", user_id: "ub", team_id: "team1", last_seen: Date.now() },
+      // Left long ago: not in the huddle.
+      { _id: "cm3", room_key: "session:conv1", user_id: "uc", team_id: "team1", last_seen: 1 },
+    ],
+    call_rooms: [],
+    call_room_state: [],
+    call_invites: [],
+    team_members: [{ team_id: "team1", user_id: "ua" }],
+    teams: [{ _id: "team1", features: { calls: true } }],
+    conversations: [{ ...conversation, team_id: "team1" }],
+    transcripts: [transcript()],
+    call_chat_messages: [],
+    notifications: [],
+  });
+  const bells = (ctx: any) => ctx.db._tables.notifications.map((n: any) => ({
+    to: n.recipient_user_id, type: n.type, entity: `${n.entity_type}:${n.entity_id}`, actor: n.actor_user_id ?? null, name: n.actor_name,
+  }));
+
+  test("a mirrored agent line: one bell per person on the call, named for the agent, opening the call", async () => {
+    const ctx = ctxWith({
+      ...room(),
+      call_agent_feeds: [{ _id: "f1", conversation_id: "conv1", transcript_id: "t1", room_key: "session:conv1", team_id: "team1", added_by: "ua", last_mirrored_message_id: "m1" }],
+      messages: [
+        { _id: "m1", conversation_id: "conv1", role: "assistant", content: "earlier", timestamp: 1 },
+        { _id: "m2", conversation_id: "conv1", role: "assistant", content: "Deploy is green.", timestamp: 2 },
+      ],
+    });
+    await call(mirrorAgentTurn, ctx, { conversation_id: "conv1", attempt: 0 });
+    const agentName = characterOf({ _id: "conv1" }).name;
+    expect(bells(ctx).sort((a: any, b: any) => a.to.localeCompare(b.to))).toEqual([
+      { to: "ua", type: "call_chat", entity: "call:t1", actor: null, name: agentName },
+      { to: "ub", type: "call_chat", entity: "call:t1", actor: null, name: agentName },
+    ]);
+  });
+
+  test("a typed line: one bell for everyone else on the call, none for its author", async () => {
+    const ctx = ctxWith({ ...room(), call_agent_feeds: [] }, { userId: "ua" });
+    await call(post, ctx, { room_key: "session:conv1", text: "can you check the deploy?" });
+    expect(bells(ctx)).toEqual([{ to: "ub", type: "call_chat", entity: "call:t1", actor: "ua", name: "Ada Lovelace" }]);
+  });
+});

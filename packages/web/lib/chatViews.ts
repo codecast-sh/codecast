@@ -41,13 +41,21 @@ const UNKNOWN: ChatAuthor = { id: "", name: "Someone" };
  *  "Sam" alone for a 1:1, "Sam, Jason" for a group. A DM whose roster hasn't
  *  loaded yet is honestly a "Direct message", never a blank. */
 export function channelDisplayName(
-  view: { name: string; kind?: string; dmMemberIds?: string[] },
+  view: { name: string; kind?: string; dmMemberIds?: string[]; dmWatching?: boolean },
   members: ChatMember[] | undefined,
 ): string {
   if (view.kind !== "dm") return view.name;
   const ids = view.dmMemberIds ?? [];
   if (ids.length === 0) return "Direct message";
   const byId = new Map((members ?? []).map((m) => [String(m._id), m]));
+  // The owner of a session or the host of a role, reading a room their agent
+  // opened (dmWatcher): the person it wrote to sees one party, the agent, and
+  // so does the watcher, never "Alice, <agent>" as if it were a group.
+  if (view.dmWatching) {
+    if (ids.some((id) => isSessionPartyId(String(id)))) return view.name || "Session";
+    const agent = ids.map((id) => byId.get(String(id)) ?? knownAgentMember(String(id))).find((m) => m?.is_bot);
+    if (agent) return memberName(agent);
+  }
   const names = ids.map((id) => {
     // A session's own room with people carries the session's title as its
     // name; the session is the party the other side is talking to.
