@@ -19,10 +19,10 @@ beforeAll(() => { savedDir = process.env.CODECAST_DIR; configDir = tmp("checkout
 afterAll(() => { if (savedDir === undefined) delete process.env.CODECAST_DIR; else process.env.CODECAST_DIR = savedDir; });
 
 const MIN = 60_000;
-const refused = (root: string, conflicts: string[], to = "a".repeat(40)): { root: string; result: LevelResult } => ({
-  root, result: { ok: false, from: "f".repeat(40), to, written: [], deleted: [], absorbed: [], merged: [], kept: [], conflicts, reason: `${conflicts.length} file(s) changed here and in ${to.slice(0, 9)} without a clean merge` },
+const refused = (root: string, conflicts: string[], to = "a".repeat(40)): { root: string; gitDir: string; result: LevelResult } => ({
+  root, gitDir: `${root}/.git`, result: { ok: false, from: "f".repeat(40), to, written: [], deleted: [], absorbed: [], merged: [], kept: [], conflicts, reason: `${conflicts.length} file(s) changed here and in ${to.slice(0, 9)} without a clean merge` },
 });
-const levelled = (root: string): { root: string; result: LevelResult } => ({ root, result: { ...refused(root, []).result, ok: true, reason: undefined } });
+const levelled = (root: string): { root: string; gitDir: string; result: LevelResult } => ({ root, gitDir: `${root}/.git`, result: { ...refused(root, []).result, ok: true, reason: undefined } });
 const session = (id: string, over: Partial<SessionEdits> = {}): SessionEdits => ({ sessionId: id, conversationId: `conv_${id}`, client: "claude", transcript: `/t/${id}.jsonl`, edits: new Map(), lastText: null, lastActivity: 0, status: null, ...over });
 
 describe("the level sweep's state on a checkout", () => {
