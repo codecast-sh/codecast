@@ -4639,6 +4639,8 @@ cliRoute("/cli/sources/rotate-key", async (ctx, body) => ctx.runMutation(api.ing
 cliRoute("/cli/sources/remove", async (ctx, body) => ctx.runMutation(api.ingest.removeSource, body));
 // A workspace's work as major events since a cursor (workTimeline.ts): `cast timeline`.
 cliRoute("/cli/timeline", async (ctx, body) => ctx.runQuery(api.workTimeline.since, body));
+// When the token's person typed, from the per-send log (userSends.typedSince): `cast typed`.
+cliRoute("/cli/typed", async (ctx, body) => ctx.runQuery(api.userSends.typedSince, body));
 cliRoute("/cli/events/list", async (ctx, body) => ctx.runQuery(api.ingest.listEvents, body));
 cliRoute("/cli/events/groups", async (ctx, body) => ctx.runQuery(api.ingest.listGroups, body));
 cliRoute("/cli/events/group", async (ctx, body) => ctx.runQuery(api.ingest.getGroup, body));

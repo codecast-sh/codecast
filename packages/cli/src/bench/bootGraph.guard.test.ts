@@ -514,7 +514,9 @@ describe("command groups stay off the boot graph", () => {
     // antigravityTranscript.ts +8 (the parser parser.ts dispatches to, as it
     // does museTranscript.ts), its model options +2, and its launch, resume,
     // process and scan branches +3; main had shrunk by 16 since the last pin.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4840);
+    // 4841 the same day: `cast typed`'s command-group line (+1); its body
+    // loads on demand (typedCommand.ts).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4841);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

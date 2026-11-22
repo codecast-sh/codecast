@@ -590,6 +590,12 @@ host and token: cast integrations connect <provider>`,
     load: () => import("./timelineCommand.js").then((m) => m.registerTimelineCommand),
   },
   {
+    token: "typed",
+    description: "When you typed into sessions: times and lengths, no text",
+    hasOptions: true,
+    load: () => import("./typedCommand.js").then((m) => m.registerTypedCommand),
+  },
+  {
     token: "replay",
     description: `Replays: what a person did before something broke, as text, as frames of the page and as a repro
 
