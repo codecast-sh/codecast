@@ -374,6 +374,24 @@ describe("a face opens one card", () => {
     }
   });
 
+  test("a click well after the one that pinned the card closes it", async () => {
+    const realNow = Date.now;
+    let now = realNow();
+    Date.now = () => now;
+    try {
+      const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+      const circle = h.circle(ANN);
+      await h.click(circle);
+      expect(circle.getAttribute("aria-expanded")).toBe("true");
+      now += 800;
+      await h.click(circle);
+      expect(circle.getAttribute("aria-expanded")).toBe("false");
+      expect(h.q("[data-member-card]")).toBeNull();
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   test("calls off: the card names them and keeps the reply box, with no call buttons", async () => {
     const h = await mount(bar(rowOf([entry(ANN, "Ann")]), { callsEnabled: false }));
     await h.click(h.circle(ANN));
