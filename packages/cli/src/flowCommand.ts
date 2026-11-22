@@ -20,6 +20,7 @@ import type { Workspace } from "./resolveWorkspace.js";
 import { choiceOption, notFoundLine } from "./argChecks.js";
 import { staleRepoFlow } from "./workflow/staleRepoFlow.js";
 import { registerFlowEditCommand } from "./flowEditCommand.js";
+import { registerFlowAwaitDeployCommand } from "./flowAwaitDeployCommand.js";
 import { baseOf, graphOf, printVariantChanges } from "./flowBase.js";
 
 /**
@@ -56,6 +57,8 @@ export interface FlowDeps {
    *  The commands that start work call it; reading and a run already going are left alone. */
   /** Stops the command, saying why, when Flows is off in this workspace. */
   requireFlows: (ws: Workspace) => Promise<void>;
+  /** This machine's `flow` config: the default machine a flow run is placed on (workflow/placedChange.ts). */
+  flowDeviceConfig?: () => import("./workflow/placedChange.js").FlowDeviceConfig | undefined;
 }
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -326,11 +329,12 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--title <text>", "Title for the task the run binds to, when one is made")
     .option("--only <paths>", "With a session's edits: only these files belong to the change (comma-separated paths or globs)")
     .option("--foreground", "Run here and wait, rather than handing the run to this machine's daemon")
+    .option("--device <name>", "Run the whole flow on this machine of yours (id, label or hostname), in its checkout of this repository; \"here\" keeps it on this one. Default: cast config flow.device")
     .option("--dry-run", "Say what would run on what, and start nothing")
     .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
     .option("--library", "Run the library's flow of that name even though the repo's default branch has its own")
     .option("--json", "Print {run_id, task, branch, worktree, files} as JSON")
-    .action(async (named: string | undefined, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean; team?: string; library?: boolean }) => {
+    .action(async (named: string | undefined, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; device?: string; dryRun?: boolean; json?: boolean; team?: string; library?: boolean }) => {
       // Flows must be on in the workspace the run reads its pool from, not merely the active one (flows.md FL2).
       const at = poolWorkspace(deps, opts.team);
       const where = await at.catch((err: unknown) => {
@@ -358,6 +362,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       }
       const top = (spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim();
       if (!top) { console.error("cast flow run works inside a git checkout"); process.exit(1); }
+      // The machine the whole run goes to (ct-98920, workflow/placedChange.ts); null is here.
+      const placed = await (await import("./workflow/placedChange.js")).runDeviceFor(opts.device, deps.flowDeviceConfig?.(), top, opts.foreground);
 
       // Which change: a branch or PR names its own; else a session's edits, unless only a task was named.
       const sessionRef = typeof opts.session === "string" ? opts.session : opts.session === true || (!opts.task && !opts.branch && !opts.pr) ? deps.callingSession() : undefined;
@@ -393,6 +399,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (opts.dryRun) {
         console.log(`${bold(found.label)}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
         console.log(`on ${branch ? `branch ${branch}` : preview ? `session ${preview.session}'s own edits` : `task ${task}`}, bound to ${task ?? `a new task "${changeTitle}"`}`);
+        console.log(placed ? `runs on ${placed.name} (${placed.device_id.slice(0, 8)}, ${placed.from}), in its checkout of this repository: the change's branch is pushed to origin and fetched there` : "runs on this machine");
         if (preview) {
           console.log(`${preview.paths.length} file${preview.paths.length === 1 ? "" : "s"}:`);
           for (const f of preview.paths) {
@@ -424,7 +431,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // A worktree an earlier run of this change made, read before its branch moves: one holding work of its own is never reset.
       const earlierPath = (await cast(["ws", "path", worktree], top)).out.trim();
       const earlier = earlierPath && fs.existsSync(earlierPath) ? earlierPath : null;
-      if (earlier && (branch || sessionRef)) {
+      if (earlier && !placed && (branch || sessionRef)) {
         const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
         if (dirty) { console.error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`); process.exit(1); }
       }
@@ -450,7 +457,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
           process.exit(1);
         });
       }
-      if (change) {
+      // A placed run's machine makes the worktree in its own checkout: the change goes there by origin.
+      const changeFile = change && placed ? (await import("./workflow/placedChange.js")).handOffPlacedChange(top, runDir, change) : null;
+      if (change && !placed) {
         // The workspace's setup (its install) runs here, before the run starts: it can take minutes.
         if (!opts.json) console.error(dim(`  making worktree ${worktree} on ${change.branch} (its setup can take a few minutes)`));
         const ws = await cast(["ws", "acquire", worktree, "--branch", change.branch, "--skip-pool", "--json"], top);
@@ -462,6 +471,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
 
       const runArgs = ["workflow", "run", found.file ?? found.slug, "--task", task!];
       if (!opts.foreground) runArgs.push("--detach", "--json");
+      if (placed) runArgs.push("--device", placed.device_id, ...(changeFile ? ["--change", changeFile] : []));
       if (opts.foreground) {
         const { resolveCastInvocation } = await import("./castInvocation.js");
         const { cmd, prefixArgs } = resolveCastInvocation();
@@ -471,9 +481,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const started = await cast(runArgs, top);
       const runId = started.out.match(/"run_id"\s*:\s*"([^"]+)"/)?.[1];
       if (started.code !== 0 || !runId) { console.error((started.err || started.out).trim()); process.exit(1); }
-      const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [] };
+      const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [], ...(placed ? { device: placed.device_id } : {}) };
       if (opts.json) { console.log(JSON.stringify(result)); return; }
-      console.log(`${bold(found.label)} started on ${task}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
+      console.log(`${bold(found.label)} started on ${task}${placed ? ` on ${placed.name}` : ""}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
       if (change?.source === "session") {
         console.log(`  ${change.paths.length} file${change.paths.length === 1 ? "" : "s"} from session ${change.session} on ${change.branch}`);
         for (const s of change.shared) console.log(`  ${s.path} also holds edits from ${s.also.join(", ")}`);
@@ -482,67 +492,10 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       console.log(dim(`  run ${runId} · cast workflow runs --task ${task}`));
     });
 
-  // The Deploy stage's wait (workflow/awaitDeploy.ts, flows.md FL4): run by the
-  // deploy segment's parked station in the change's worktree.
-  flow
-    .command("await-deploy")
-    .description("Wait until a change's branch has landed on the default branch and the deploy carrying it is live on every target its files touch; exits 1 when that deploy failed")
-    .requiredOption("--branch <name>", "The change's branch")
-    .option("--base <name>", "The default branch it lands on", "main")
-    .option("--interval <seconds>", "How often to look again", "60")
-    .option("--once", "Look once and say where it stands: exit 0 live (or nothing to deploy), 1 failed, 3 still waiting")
-    .option("--run <id>", "The run whose station this is: each new line goes on the station while it waits")
-    .option("--node <id>", "That station's id in the run")
-    .option("--files <paths>", "The change's files, space-separated (the run's $change_files); else read from git")
-    .option("--except <targets>", "Targets the change does not wait for, space- or comma-separated")
-    .option("--send <policy>", "Once the change lands, send the targets it touches whose policy this names (release) with cast deploy, then wait")
-    .action(async (opts: { branch: string; base: string; interval: string; once?: boolean; run?: string; node?: string; files?: string; except?: string; send?: string }) => {
-      const { landedCommit, targetTouches, targetState, deployWords, holds } = await import("./workflow/awaitDeploy.js");
-      const cwd = deps.realCwd();
-      const every = Math.max(5, Number(opts.interval) || 60) * 1000;
-      let said = "";
-      let sent = false;
-      // Inside a run the waiting lines go to the station on the card, and only the verdict is the station's output,
-      // which is what a stop and the session's end message quote. At a terminal every line prints.
-      const say = (line: string, verdict = false) => {
-        if (line === said) return;
-        if (verdict || !opts.run) console.log(line);
-        said = line;
-        // What the card shows on the station while the run waits there.
-        if (opts.run && opts.node) void deps.cliPost("/cli/workflow-runs/progress", { run_id: opts.run, current_node_id: opts.node, node_id: opts.node, node_status: "running", result_preview: line }).catch(() => {});
-      };
-      for (;;) {
-        const known = (opts.files ?? "").split(/\s+/).filter(Boolean);
-        const landed = await landedCommit(cwd, opts.branch, opts.base, known).catch((err) => { say(`Cannot read ${opts.branch} here: ${err instanceof Error ? err.message : String(err)}`); return null; });
-        if (landed) {
-          const read = await cast(["line", "deploy", "targets", "--json"], cwd);
-          let targets: import("./workflow/awaitDeploy.js").DeployTargetRow[] | null = null;
-          try { targets = JSON.parse(read.out).targets ?? []; } catch { say(`Waiting to read the deploy targets: ${(read.err || read.out).trim().split("\n").pop()}`); }
-          // The flow sends what the repository says goes out with a release (deploys.md DP15), once, then waits like any change.
-          if (targets && opts.send === "release" && !sent && !opts.once) {
-            sent = true;
-            say(`${landed.sha.slice(0, 10)} landed; sending the release targets it touches.`);
-            const release = await cast(["deploy", "--carrying", landed.sha, "--files", landed.files.join(" "), ...(opts.except ? ["--except", opts.except] : [])], cwd);
-            const last = (release.out + release.err).trim().split("\n").filter(Boolean);
-            if (release.code !== 0) say(`cast deploy stopped: ${last.slice(-3).join(" | ")}`);
-            const reread = await cast(["line", "deploy", "targets", "--json"], cwd);
-            try { targets = JSON.parse(reread.out).targets ?? targets; } catch { /* keep the first read */ }
-          }
-          if (targets) {
-            const skipped = new Set((opts.except ?? "").split(/[\s,]+/).filter(Boolean));
-            const touched = targets.filter((t) => !skipped.has(t.name) && targetTouches(t.paths, landed.files));
-            const states = await Promise.all(touched.map((t) => targetState(t, (sha) => holds(cwd, landed.sha, sha))));
-            const failed = states.some((s) => s.state === "failed");
-            const live = states.every((s) => s.state === "live");
-            say(deployWords(landed.sha, states), failed || live);
-            if (failed) process.exit(1);
-            if (live) return;
-          }
-        } else say(`Waiting for ${opts.branch} to land on ${opts.base}.`);
-        if (opts.once) { if (opts.run) console.log(said); process.exit(3); }
-        await new Promise((r) => setTimeout(r, every));
-      }
-    });
+  flow.command("refreeze <run>").description("For a run placed on another machine (cast flow run --device): freeze this session's edits again onto the run's branch, without touching this tree, and push it for that machine to fetch")
+    .action(async (runId: string) => (await import("./workflow/placedChange.js")).refreezeRunCommand(runId, deps.realCwd(), deps.cliPost));
+
+  registerFlowAwaitDeployCommand(flow, deps, cast);
 
   // What the judge segment's call reads (workflow/blindChange.ts): a change's
   // diff or the guidelines it answers to, with every sign of its author removed.
