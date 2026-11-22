@@ -205,12 +205,12 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
 /** A flow's main path in words: its passing stations joined by arrows, and how many sit on side routes. */
 export function flowPathWords(f: Pick<FoldedFlow, "stations">): { path: string; side: number } {
   const main = f.stations.filter((s) => s.main && s.kind !== "join");
-  // Branches of a fan-out read as one step, joined by "+".
+  // A fan-out reads as one step: its own name when the graph gives it one, else its branches joined by "+".
   const branchOf = new Set(f.stations.filter((s) => s.kind === "parallel").flatMap((s) => s.next.map((n) => n.toId)));
   const words: string[] = [];
   for (const s of main) {
     if (branchOf.has(s.id)) continue;
-    words.push(s.kind === "parallel" ? s.next.map((n) => n.to).join(" + ") : s.label);
+    words.push(s.kind === "parallel" && (!s.label || s.label === s.id) ? s.next.map((n) => n.to).join(" + ") : s.label);
   }
   const counted = f.stations.filter((s) => s.kind !== "join");
   return { path: words.join(" → "), side: counted.length - main.length };

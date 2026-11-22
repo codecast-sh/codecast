@@ -58,7 +58,10 @@ digraph change {
 - `after="<station>"` (or `before=`) puts a new station on the passing path
   next to an existing one. It takes the passing route out of that station, and
   on failure it uses the same way back that station uses, so a new check fails
-  the way Check fails without a word about edges.
+  the way Check fails without a word about edges. Where that station has no
+  way back, the backbone's `graph [fix="<station>"]` names one (a change flow
+  sends a failed added check to Brief, which tells the session); `fix=` on the
+  new station overrides both.
 - `guide=` appends text to the inherited prompt, so the project's house rules
   sit on top of the team's prompt and improvements to the team's prompt still
   arrive. `prompt=` still replaces it, for when a project needs its own.

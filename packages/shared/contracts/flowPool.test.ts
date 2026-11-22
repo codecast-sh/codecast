@@ -2,7 +2,7 @@
 // attributes rewritten with every other byte kept, and a flow's base read the
 // same way whether a save named it or the graph extends a file.
 import { expect, test } from "bun:test";
-import { flowBase, flowGraphAttr, foldFlow, publishableFlowSource, withGraphAttrs } from "./flowPool";
+import { flowBase, flowGraphAttr, flowPathWords, foldFlow, publishableFlowSource, withGraphAttrs } from "./flowPool";
 import { flowEditWords, type FlowEditChange } from "./flowEdit";
 
 test("withGraphAttrs sets and drops graph attributes, quotes and the rest of the source kept", () => {
@@ -76,4 +76,12 @@ test("a variant's edits read as one line each", () => {
     "E2E runs when landing/**",
     "E2E always runs",
   ]);
+});
+
+test("a fan-out reads as its own name when the graph gives it one, else as its branches joined", () => {
+  const n = (id: string, type: string, label = id) => ({ id, label, shape: "box", type });
+  const edges = [{ from: "start", to: "checks" }, { from: "checks", to: "ci" }, { from: "checks", to: "review" }, { from: "ci", to: "read" }, { from: "review", to: "read" }, { from: "read", to: "exit" }];
+  const nodes = (fanLabel: string) => [n("start", "start"), n("checks", "parallel_fanout", fanLabel), n("ci", "command", "CI"), n("review", "agent", "Review"), n("read", "parallel_fanin", "Read"), n("exit", "exit", "Live")] as unknown as Parameters<typeof foldFlow>[0];
+  expect(flowPathWords(foldFlow(nodes("CI and review"), edges)).path).toBe("CI and review");
+  expect(flowPathWords(foldFlow(nodes("checks"), edges)).path).toBe("CI + Review");
 });

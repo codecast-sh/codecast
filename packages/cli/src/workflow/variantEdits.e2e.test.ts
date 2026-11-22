@@ -235,3 +235,44 @@ describe("when= on a branch run", () => {
     expect("change_files" in frozenChangeContext(runDir)).toBe(false);
   });
 });
+
+describe("the backbone's default way back (graph [fix=])", () => {
+  const PR = () => `digraph base {
+  graph [takes="task,branch", fix="brief"]
+  start [shape=Mdiamond]
+  pr [shape=parallelogram, script="echo pr >> ${log}", max_visits=3]
+  ${step("ci")}
+  brief [shape=parallelogram, script="echo brief >> ${log}", max_visits=2]
+  exit [shape=Msquare]
+  unpushed [shape=Msquare, stop="no pull request"]
+  start -> pr
+  pr -> ci [condition="outcome = success"]
+  pr -> unpushed
+  ci -> exit
+  brief -> pr
+}`;
+
+  test("a station placed where its anchor has no way back fails to the station the backbone names, and the words say so", async () => {
+    const flag = path.join(dir, "linted-once");
+    const g = flow(PR(), `lint [after="pr", label="Lint", shape=parallelogram, script="echo lint >> ${log}; [ -f ${flag} ] || { touch ${flag}; exit 1; }"]`)();
+    expect(validateWorkflow(g)).toEqual([]);
+    expect(g.edges.filter((e) => e.from === "lint")).toEqual([
+      { from: "lint", to: "ci", condition: "outcome = success" },
+      { from: "lint", to: "brief", condition: "outcome = failure", label: "lint failed" },
+    ]);
+    expect(g.edits).toEqual([{ op: "add", station: "lint", label: "Lint", after: "pr", fix: "brief" }]);
+    const { flowEditWords } = await import("@codecast/shared/contracts/flowEdit");
+    expect(flowEditWords(g.edits![0], (id) => ({ pr: "PR", brief: "Brief" })[id] ?? id)).toBe("+ Lint after PR; a failure goes to Brief");
+    expect(await runWorkflow(g, { cwd: dir })).toBe("completed");
+    expect(ran()).toEqual(["pr", "lint", "brief", "pr", "lint", "ci"]);
+  });
+
+  test("the station's own fix= and the anchor's own way back still come first; a default naming no station is refused", () => {
+    const own = flow(PR(), `lint [after="pr", fix="ci", shape=parallelogram, script="true"]`)();
+    expect(own.edges.find((e) => e.from === "lint" && e.condition === "outcome = failure")?.to).toBe("ci");
+    const withBack = PR().replace("pr -> unpushed", "pr -> unpushed\n  ci -> pr [condition=\"outcome = failure\"]");
+    const g = flow(withBack, `late [after="ci", shape=parallelogram, script="true"]`)();
+    expect(g.edges.find((e) => e.from === "late" && e.condition === "outcome = failure")?.to).toBe("pr");
+    expect(flow(PR().replace('fix="brief"', 'fix="nowhere"'), `lint [after="pr", shape=parallelogram, script="true"]`)).toThrow('pr has no way back, and the flow\'s graph [fix="nowhere"] names no station to send lint\'s failure to');
+  });
+});

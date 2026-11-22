@@ -165,8 +165,10 @@ export function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr
     if (shapeOf(nodes.get(anchor) ?? {}) === "Mdiamond" && anchorKey === "before") throw new Error(`${what}: nothing comes before the start; place ${id} after="${anchor}"`);
     if (isExit(nodes.get(anchor)) && anchorKey === "after") throw new Error(`${what}: ${anchor} ends the flow; place ${id} before="${anchor}"`);
     if (anchorKey === "before" || !isShape(anchor, "tripleoctagon")) notInFan(anchor, what, `placing ${id} ${anchorKey} it`);
-    // The way back a failure takes: fix=, else the anchor's own (to a station, not an end).
+    // The way back a failure takes: fix=, else the anchor's own (to a station, not an end), else the one the backbone
+    // names for a station placed where its anchor has none (graph [fix="brief"]).
     let fix: string | null = null;
+    let flowFix = false;
     if (a.fix !== undefined) {
       fix = String(a.fix);
       if (!nodes.has(fix) && !edges.some((e) => e.from === fix || e.to === fix)) throw new Error(`${say(id, "fix", fix)}: there is no station ${fix} to send a failure to; its stations: ${stations()}`);
@@ -176,6 +178,12 @@ export function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr
       if (back.length > 1 && !ways.some(mentionsFailure)) throw new Error(`${what}: ${anchor} routes on its exit codes or output (to ${back.join(", ")}), not on a failure, so none of them is ${id}'s way back; name where a failure of ${id} goes with fix="<station>"`);
       if (back.length > 1) throw new Error(`${what}: ${anchor} fails back to ${back.join(" or ")}, so it is not clear where ${id}'s failure goes; name one with fix="${back[0]}"`);
       fix = back[0] ?? null;
+      const named = raw.attrs.fix;
+      if (!fix && typeof named === "string" && named) {
+        if (!nodes.has(named) || isExit(nodes.get(named))) throw new Error(`${what}: ${anchor} has no way back, and the flow's graph [fix="${named}"] names no station to send ${id}'s failure to; its stations: ${stations()}`);
+        fix = named;
+        flowFix = true;
+      }
     }
     let on: string;
     if (anchorKey === "after") {
@@ -196,7 +204,7 @@ export function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr
     else edges.push({ from: id, to: on, condition: "outcome = success" });
     if (fix && gate) edges.push({ from: id, to: fix, label: `[N] Send back :: ${labelOf(fix)}` });
     else if (fix) edges.push({ from: id, to: fix, condition: "outcome = failure", label: `${name.toLowerCase()} failed` });
-    edits.push({ op: "add", station: id, label: name, [anchorKey]: anchor, ...(a.fix !== undefined ? { fix: String(a.fix) } : {}), ...(!fix ? { ends_on_failure: true as const } : {}) });
+    edits.push({ op: "add", station: id, label: name, [anchorKey]: anchor, ...(fix && (a.fix !== undefined || flowFix) ? { fix } : {}), ...(!fix ? { ends_on_failure: true as const } : {}) });
   }
 
   // Path conditions last, around the station where it now stands.

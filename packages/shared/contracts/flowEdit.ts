@@ -20,7 +20,7 @@ export type FlowEditChange = {
   after?: string;
   /** add: the station it comes before. */
   before?: string;
-  /** add: where a failure goes, when not the anchor's own way back. */
+  /** add: where a failure goes, when not the anchor's own way back: fix= on the station, or the backbone's graph [fix=]. */
   fix?: string;
   /** add: nothing leads back from a failure of the station before it, so a failure of this one ends the run. */
   ends_on_failure?: true;
@@ -79,7 +79,7 @@ export function whenPaths(spec: string): string[] {
 export function flowEditWords(c: FlowEditChange, labelOf: (id: string) => string = (id) => id): string {
   const name = c.label ?? labelOf(c.station);
   switch (c.op) {
-    case "add": return `+ ${name} ${c.before ? `before ${labelOf(c.before)}` : `after ${labelOf(c.after ?? "")}`}${c.fix ? `, failing to ${labelOf(c.fix)}` : c.ends_on_failure ? "; a failure ends the run" : ""}`;
+    case "add": return `+ ${name} ${c.before ? `before ${labelOf(c.before)}` : `after ${labelOf(c.after ?? "")}`}${c.fix ? `; a failure goes to ${labelOf(c.fix)}` : c.ends_on_failure ? "; a failure ends the run" : ""}`;
     case "guide": return `~ ${name}: guidance added`;
     case "prompt": return `~ ${name}: prompt replaced`;
     case "run": return `~ ${name}: runs a new command${c.replaces ? `, replacing ${c.replaces}` : ""}`;
