@@ -138,4 +138,27 @@ describe("lineTrial.cards (ct-73205: the line page's feeder timed out at 3s)", (
     expect((byId.get("tc-2") as any)?.run_status).toBe("gone");
     expect(byId.has("tc-3")).toBe(false);
   });
+  test(`a quiet project's waiting card older than the workspace's ${CARDS_CAP} newest waiting ones still answers a lookup by that project`, async () => {
+    const t = convexTest(schema, allModules);
+    const { owner, team, quiet } = await t.run(async (ctx) => {
+      const owner = await ctx.db.insert("users", { name: "Ada", email: "ada@x.dev" } as any);
+      const team = await ctx.db.insert("teams", { name: "Acme", invite_code: "ACME1234", created_at: 1 } as any);
+      await ctx.db.insert("team_memberships", { user_id: owner, team_id: team, role: "admin", joined_at: 1 } as any);
+      const workspace = `team:${team}`;
+      const project = (title: string) => ctx.db.insert("projects", { title, user_id: owner, team_id: team, workspace, status: "active", line_trial: { since: 1, by: owner }, created_at: 1, updated_at: 1 } as any);
+      const busy = await project("Busy");
+      const quiet = await project("Quiet");
+      const workflow = await ctx.db.insert("workflows", { user_id: owner, name: "codecast_fix", nodes: [{ id: "card" }], edges: [], created_at: 1, updated_at: 1 } as any);
+      const card = async (project_id: any, i: number) => {
+        const task = await ctx.db.insert("tasks", { short_id: `ct-${i}`, user_id: owner, team_id: team, workspace, project_id, title: `Problem ${i}`, status: "in_progress", task_type: "bug", priority: "medium", created_at: i, updated_at: i } as any);
+        const run = await ctx.db.insert("workflow_runs", { user_id: owner, task_id: task, workflow_id: workflow, status: "paused", gate_node_id: "card", project_path: "/repo", workspace, team_id: team, node_statuses: [], created_at: i, updated_at: i } as any);
+        await ctx.db.insert("trial_cards", { workspace, team_id: team, project_id, task_id: task, run_id: run, short_id: `tc-${i}`, node_id: "card", kind: "card", status: "waiting", question: "Ship?", options: [], created_at: i, updated_at: i } as any);
+      };
+      await card(quiet, 0);
+      for (let i = 1; i <= CARDS_CAP + 10; i++) await card(busy, i);
+      return { owner, team, quiet };
+    });
+    const out = await t.run((ctx) => (cards as any)._handler(ctx, { user_id: owner, workspace: "team", team_id: team, project: String(quiet) }));
+    expect(out.map((c: any) => c.short_id)).toEqual(["tc-0"]);
+  });
 });
