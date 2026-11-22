@@ -124,3 +124,56 @@ test("existing owners remain selected when another teammate claims", async () =>
   await render();
   expect(ownersSeg()?.title).toMatch(/Owners: Jason/);
 });
+
+const openOwnersMenu = async () => {
+  await act(async () => { ownersSeg()!.dispatchEvent(new dom.window.MouseEvent("pointerdown", { bubbles: true, button: 0 })); ownersSeg()!.click(); });
+  return document.querySelector<HTMLElement>("[data-owners-menu]");
+};
+const click = async (el: Element | null | undefined) => { await act(async () => { (el as HTMLElement).click(); }); };
+
+test("leaving a session that runs on your account asks where to move it first", async () => {
+  useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: "me" } } });
+  replies.set("sessionOwnership:listOwners", {
+    conversation_id: id,
+    owners: [{ user_id: "me", name: "Ashot" }, { user_id: "jason", name: "Jason" }],
+    role: null,
+    driver: { kind: "user", user_id: "me" },
+    runner: { user_id: "me", name: "Ashot", email: null, is_bot: false },
+  });
+  await render(true);
+  const menu = await openOwnersMenu();
+  expect(menu).not.toBeNull();
+  expect(menu!.querySelector("[data-leave-box]")).toBeNull();
+  await click(menu!.querySelector('[aria-label="Leave"]'));
+  const box = document.querySelector("[data-leave-box]");
+  expect(box?.textContent).toContain("Runs on your account");
+  // No team machine in this roster: it says so rather than offering nothing.
+  expect(box?.textContent).toContain("No team machine to move it to");
+  // Still an owner until a machine is picked: nothing staged.
+  expect(document.querySelector("[data-owners-save]")?.hasAttribute("disabled")).toBe(true);
+  await act(async () => root.render(<></>));
+});
+
+test("Save sends the whole staged change once, and the faces follow at once", async () => {
+  const dispatched: any[] = [];
+  const real = useInboxStore.getState().applySessionOwners;
+  useInboxStore.setState({ applySessionOwners: (async (...args: any[]) => { dispatched.push(args); return undefined; }) as any });
+  useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: runner.id } } });
+  replies.set("sessionOwnership:listOwners", {
+    conversation_id: id,
+    owners: [{ user_id: "jason", name: "Jason" }],
+    role: null,
+    driver: { kind: "user", user_id: "jason" },
+    runner: { user_id: "jason", name: "Jason", email: null, is_bot: false },
+  });
+  await render(true);
+  await openOwnersMenu();
+  await click(document.querySelector('[aria-label="Add Ashot"]'));
+  expect([...document.querySelectorAll(".own-chip")].map((c) => c.textContent)).toEqual(["+ Ashot"]);
+  await click(document.querySelector("[data-owners-save]"));
+  expect(dispatched).toHaveLength(1);
+  expect(dispatched[0][1]).toEqual({ add: ["me"] });
+  expect(dispatched[0][2]).toEqual({ remove: ["me"], driver: { kind: "user", user_id: "jason" } });
+  expect(ownersSeg()!.title).toBe("Owners: Jason (driver), Ashot");
+  useInboxStore.setState({ applySessionOwners: real });
+});

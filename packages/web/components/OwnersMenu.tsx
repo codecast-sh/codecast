@@ -188,12 +188,17 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
     }
   };
 
+  // One chip per change; who drives rides the chip of the owner it names
+  // when that owner is new.
+  const driverName = (d: SessionDriver) => (d.kind === "role" ? draft.role?.name ?? "Role" : d.user_id === meId ? "You" : personOf(d.user_id).name);
+  const drivesTag = (key: string) => (driverChanged && isDriver(draft.driver, key) ? " · driver" : "");
+  const driverOnNew = !!draft.driver && driverChanged && (draft.driver.kind === "role" ? roleChanged : added.includes(draft.driver.user_id));
   const chips: string[] = [
-    ...added.map((id) => `+ ${personOf(id).name}`),
-    ...(roleChanged && draft.role ? [`+ ${draft.role.name}`] : []),
+    ...added.map((id) => `+ ${personOf(id).name}${drivesTag(`p:${id}`)}`),
+    ...(roleChanged && draft.role ? [`+ ${draft.role.name}${drivesTag(`r:${draft.role.role_id}`)}`] : []),
     ...removed.map((id) => (id === meId ? "You leave" : `− ${personOf(id).name}`)),
     ...(roleChanged && initial.role ? [`− ${initial.role.name}`] : []),
-    ...(driverChanged && draft.driver ? [`${draft.driver.kind === "role" ? draft.role?.name ?? "Role" : draft.driver.user_id === meId ? "You" : personOf(draft.driver.user_id).name} · driver`] : []),
+    ...(driverChanged && draft.driver && !driverOnNew ? [`${driverName(draft.driver)} · driver`] : []),
     ...(draft.moveTo ? [`Move to ${draft.moveTo.label}`] : []),
   ];
 
