@@ -8,6 +8,7 @@
 // (isSessionUnread's localViewedAt) instead of throwing into an ErrorBoundary.
 // Unread ENRICHES the inbox; it is never what the inbox is for.
 import { api as _api } from "@codecast/convex/convex/_generated/api";
+import { useInboxAnswered } from "../lib/bootPhase";
 import { useSyncCollection } from "./useSyncCollection";
 
 const api = _api as any;
@@ -15,5 +16,5 @@ const api = _api as any;
 const NO_ARGS = {};
 
 export function useSyncSessionReads() {
-  return useSyncCollection("sessionReads", api.sessionReads.listMine, NO_ARGS);
+  return useSyncCollection("sessionReads", api.sessionReads.listMine, useInboxAnswered() ? NO_ARGS : "skip");
 }
