@@ -8,8 +8,7 @@ import { resolvePaletteTarget } from "../lib/paletteTarget";
 
 import { useCallback } from "react";
 import { useOpenSession } from "../hooks/useOpenSession";
-import { goBackInTrail } from "../hooks/useNavTrail";
-import { isModernStyle } from "../lib/visualStyle";
+import { navBack } from "../hooks/useNavTrail";
 import { usePathname, useRouter } from "next/navigation";
 import { useInboxStore, selectCommentRailOpen, selectNavCollapsed, type InboxWalk } from "../store/inboxStore";
 import { useInboxSelection } from "../lib/inboxSelection";
@@ -277,7 +276,7 @@ export function useGlobalShortcutActions() {
   useShortcutAction('nav.ops', useCallback(() => { router.push("/ops"); }, [router]));
   useShortcutAction('ui.addressBar', useCallback(() => { toggleAppAddressBar(); }, []));
   // Modern's Back walks the tab's trail, as the back control in every header does.
-  useShortcutAction('nav.back', useCallback(() => { if (isModernStyle()) goBackInTrail((p) => router.push(p)); else window.history.back(); }, [router]));
+  useShortcutAction('nav.back', useCallback(() => navBack((p) => router.push(p)), [router]));
   useShortcutAction('nav.forward', useCallback(() => { window.history.forward(); }, []));
 
   useShortcutAction('compose.focus', useCallback(() => { focusComposer(); }, []));
