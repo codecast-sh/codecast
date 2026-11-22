@@ -9,12 +9,13 @@ import type { DeployReach, ReachState } from "@codecast/shared/contracts/deployR
 import { prNumberOf } from "@codecast/shared/changes";
 import { deploysOf, type DeployTargetRow, type TeamDeployRow } from "./targets";
 
-export type DeployLabel = "pr" | "sha" | "task" | "session";
+export type DeployLabel = "pr" | "sha" | "task" | "session" | "branch";
 export const DEPLOY_LABELS: ReadonlyArray<{ id: DeployLabel; word: string }> = [
   { id: "pr", word: "PR" },
   { id: "sha", word: "SHA" },
   { id: "task", word: "Task" },
   { id: "session", word: "Session" },
+  { id: "branch", word: "Branch" },
 ];
 const DEFAULT_LABELS: DeployLabel[] = ["pr", "sha"];
 
@@ -23,6 +24,7 @@ export type DeployFocus =
   | { kind: "sha"; sha: string }
   | { kind: "task"; id: string }
   | { kind: "session"; id: string }
+  | { kind: "branch"; name: string }
   | { kind: "deploy"; id: string };
 
 type Params = { get(name: string): string | null };
@@ -39,6 +41,8 @@ export function focusOf(p: Params): DeployFocus | null {
   if (task) return { kind: "task", id: task };
   const session = p.get("session")?.trim();
   if (session) return { kind: "session", id: session };
+  const branch = p.get("branch")?.trim();
+  if (branch) return { kind: "branch", name: branch };
   return null;
 }
 
@@ -57,13 +61,14 @@ const sameSession = (s: { conversation_id: string; short_id?: string | null } | 
   !!s && (s.conversation_id === id || (!!s.short_id && s.short_id === id));
 
 /** Whether a waiting commit is the thing the link names. */
-export function commitMatches(c: Pick<QueueCommit, "sha" | "subject" | "tasks" | "session">, f: DeployFocus | null): boolean {
+export function commitMatches(c: Pick<QueueCommit, "sha" | "subject" | "tasks" | "session" | "branch">, f: DeployFocus | null): boolean {
   if (!f) return false;
   switch (f.kind) {
     case "pr": return prNumberOf(c.subject) === f.pr;
     case "sha": return c.sha.toLowerCase().startsWith(f.sha);
     case "task": return c.tasks.some((t) => t.short_id === f.id || t.task_id === f.id);
     case "session": return sameSession(c.session, f.id);
+    case "branch": return c.branch === f.name;
     case "deploy": return false;
   }
 }
@@ -78,6 +83,8 @@ export function deployMatches(d: Pick<TeamDeployRow, "short_id" | "sha" | "commi
     case "sha": return (d.sha ?? "").toLowerCase().startsWith(f.sha) || rows.some((c) => c.sha.toLowerCase().startsWith(f.sha));
     case "task": return (d.tasks ?? []).some((t) => t.short_id === f.id) || rows.some((c) => c.tasks?.includes(f.id));
     case "session": return d.sessions.some((s) => sameSession(s, f.id)) || rows.some((c) => c.conversation_id === f.id);
+    // A deploy's record does not keep the branches its commits came from.
+    case "branch": return false;
   }
 }
 
@@ -145,6 +152,7 @@ export function focusWord(f: DeployFocus): string {
   switch (f.kind) {
     case "pr": return `#${f.pr}`;
     case "sha": return f.sha.slice(0, 7);
+    case "branch": return f.name;
     default: return f.id;
   }
 }
@@ -156,7 +164,7 @@ export function deploysFocusHref(o: { team?: string | null; repository?: string 
   if (o.repository) q.set("repo", o.repository);
   if (o.target) q.set("target", o.target);
   const f = o.focus;
-  if (f) q.set(f.kind, f.kind === "pr" ? String(f.pr) : f.kind === "sha" ? f.sha : f.id);
+  if (f) q.set(f.kind, f.kind === "pr" ? String(f.pr) : f.kind === "sha" ? f.sha : f.kind === "branch" ? f.name : f.id);
   if (o.show) q.set("show", o.show.join(","));
   const s = q.toString();
   return `/deploys${s ? `?${s}` : ""}`;

@@ -18,7 +18,6 @@ import type { Press } from "./DeployPress";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { rollBackHere } from "../../lib/deploys/press";
 import { ageShort } from "../../lib/lineFlow";
-import { prPageHref } from "../../lib/repoView";
 import { DEPLOY_LABELS, commitMatches, deployMatches, focusRef, focusRepository, focusTarget, focusWord, reachAnyDeploy, reachDeployOn, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
 import { useDeployReach } from "../../hooks/useDeployReach";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
@@ -26,6 +25,7 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import type { CommitCiState, QueueGroup } from "@codecast/shared/contracts/deployTargets";
 import { entityRoute } from "@codecast/shared/entities";
 import { ShareControl } from "../ShareControl";
+import { EntityIdPill } from "../EntityIdPill";
 import { PageHeader } from "../ui/page-header";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import "./deploys.css";
@@ -222,6 +222,8 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
   // With none of yours left waiting the toggle goes away, so the filter must too, or the list strands empty.
   const mineShown = mineOn && mineCount > 0;
   const groups = mineShown ? mineOnly(t.queue.groups, me) : t.queue.groups;
+  // A column no waiting commit fills takes no room (branches arrive only where a PR or session names one).
+  const shownLabels = labels.filter((l) => l !== "branch" || t.queue.groups.some((g) => g.commits.some((c) => c.branch)));
   const back = rollbackTarget(n.history, n.live);
   const waiting = t.queue.commits;
   const sessions = t.queue.groups.filter((g) => g.session).length;
@@ -266,7 +268,7 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
         {!t.queue.known ? <p className="dpp-none" data-deploy-queue-unknown>Live <code>{short(n.live?.sha)}</code> is not on main, so what waits here can't be counted.</p>
         : waiting === 0 ? <p className="dpp-none">Everything on main is live here.</p> : (
           <ul className="dpp-groups">
-            {groups.map((g) => <SessionGroup key={g.key} g={g} now={now} repository={t.repository} me={me} labels={labels} focus={focus} />)}
+            {groups.map((g) => <SessionGroup key={g.key} g={g} now={now} repository={t.repository} me={me} labels={shownLabels} focus={focus} />)}
             {!mineShown && t.queue.commits > t.queue.shown ? <li className="dpp-more">{t.queue.commits - t.queue.shown} older commits</li> : null}
           </ul>
         )}
@@ -396,7 +398,6 @@ const GROUP_SHOWN = 5;
 function SessionGroup({ g, now, repository, me, labels, focus }: { g: QueueGroup; now: number; repository: string; me: { login: string | null; name: string | null }; labels: DeployLabel[]; focus: DeployFocus | null }) {
   // A linked commit past the first few opens the group, so the highlight is on screen.
   const [all, setAll] = useState(() => g.commits.slice(GROUP_SHOWN).some((c) => commitMatches(c, focus)));
-  const tasks = [...new Map(g.commits.flatMap((c) => c.tasks).map((t) => [t.task_id, t])).values()];
   const authors = [...new Set(g.commits.map((c) => c.author).filter(Boolean))] as string[];
   const shown = all ? g.commits : g.commits.slice(0, GROUP_SHOWN);
   return (
@@ -406,7 +407,6 @@ function SessionGroup({ g, now, repository, me, labels, focus }: { g: QueueGroup
         {g.session
           ? <><Link className="dpp-session" href={`/conversation/${g.session.conversation_id}`}>{sessionWords(g.session)}</Link>{(g.session as { via?: string }).via === "task" ? <span className="dpp-via" title="These commits name a task, not a session; this is the task's newest session">by its task</span> : null}</>
           : <span className="dpp-session dpp-dim" title="Commits with no Codecast-Session trailer">Not from a session{authors.length ? <span className="dpp-authors"> · {authors.slice(0, 3).join(", ")}{authors.length > 3 ? ` +${authors.length - 3}` : ""}</span> : null}</span>}
-        {tasks.map((t) => <Link key={t.task_id} className="dpp-task" href={`/tasks/${t.short_id ?? t.task_id}`} title={t.title ?? undefined}>{t.short_id}</Link>)}
         <span className="dpp-group-n">{g.commits.length} {g.commits.length === 1 ? "commit" : "commits"}</span>
       </div>
       <ul className="dpp-commits">
@@ -461,16 +461,19 @@ function Failed({ d }: { d: TeamDeployRow }) {
   );
 }
 
-/** One of a waiting commit's IDs, in a fixed-width cell so every row's IDs line up; a commit without one leaves the cell empty. */
+/**
+ * One of a waiting commit's IDs, in a fixed-width cell so every row's IDs line up; a commit without one leaves the cell
+ * empty. Each is the pill a conversation draws, hover card and all, bare of the state the queue already says.
+ */
 function CommitId({ kind, c, pr, repository }: { kind: DeployLabel; c: QueueGroup["commits"][number]; pr: number | null; repository: string }) {
-  if (kind === "pr") return pr ? <Link className="dpp-id dpp-pr" data-kind="pr" href={prPageHref(repository, pr)} data-deploy-pr={pr}>#{pr}</Link> : <span className="dpp-id" data-kind="pr" />;
-  if (kind === "sha") return <code className="dpp-id" data-kind="sha">{short(c.sha)}</code>;
-  if (kind === "task") {
-    const t = c.tasks.find((x) => x.short_id);
-    return t ? <Link className="dpp-id dpp-task" data-kind="task" href={`/tasks/${t.short_id}`} title={c.tasks.map((x) => x.short_id ?? "").filter(Boolean).join(", ")}>{t.short_id}</Link> : <span className="dpp-id" data-kind="task" />;
-  }
-  const s = c.session;
-  return s ? <Link className="dpp-id dpp-sid" data-kind="session" href={`/conversation/${s.conversation_id}`} title={s.title ?? undefined}>{s.short_id ?? s.conversation_id.slice(0, 7)}</Link> : <span className="dpp-id" data-kind="session" />;
+  const t = kind === "task" ? c.tasks.find((x) => x.short_id) : null;
+  const pill =
+    kind === "pr" ? (pr ? <EntityIdPill type="pr" id={`${repository}#${pr}`} idLabel={`#${pr}`} certain compact bare /> : null)
+    : kind === "sha" ? <EntityIdPill type="commit" id={`${repository}@${c.sha.slice(0, 10)}`} idLabel={short(c.sha)} certain compact bare />
+    : kind === "task" ? (t ? <EntityIdPill type="task" id={t.short_id!} idLabel={t.short_id!} compact /> : null)
+    : kind === "session" ? (c.session ? <EntityIdPill type="session" id={c.session.conversation_id} idLabel={c.session.short_id ?? c.session.conversation_id.slice(0, 7)} compact /> : null)
+    : c.branch ? <code title={c.branch}>{c.branch}</code> : null;
+  return <span className="dpp-id" data-kind={kind} data-deploy-pr={kind === "pr" && pr ? pr : undefined}>{pill}</span>;
 }
 
 /** Which IDs each waiting commit shows; any mix, kept in the address. */

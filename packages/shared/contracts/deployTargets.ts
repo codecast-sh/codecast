@@ -303,6 +303,8 @@ export type QueueCommit = {
   /** The session that wrote it: its Codecast-Session trailer, or (`via: "task"`) the newest session on the task it names. */
   session: { conversation_id: string; short_id: string | null; title: string | null; via?: "task" } | null;
   tasks: Array<{ task_id: string; short_id: string | null; title: string | null }>;
+  /** The branch the change came from: its pull request's head, else the branch its session worked on (never the default branch). */
+  branch?: string | null;
   ci: CommitCiState;
   ci_url: string | null;
 };

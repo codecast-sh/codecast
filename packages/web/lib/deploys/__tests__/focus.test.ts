@@ -127,3 +127,13 @@ test("a pill's reach ref reads back as a Deploys link, and its reach names a dep
   expect(reachAnyDeploy({ state: "waiting", sha: null, targets: [{ target: "a", state: "waiting", deploy: null, now: null }] })).toBeNull();
   expect(reachAnyDeploy(null)).toBeNull();
 });
+
+test("a branch link finds the waiting commit that came from it, and opens with the Branch column on", () => {
+  expect(focusOf(params("branch=jb/x"))).toEqual({ kind: "branch", name: "jb/x" });
+  expect(labelsOf(params("branch=jb/x"), focusOf(params("branch=jb/x")))).toEqual(["pr", "sha", "branch"]);
+  const c = { ...commit("abc", "y"), branch: "jb/x" };
+  expect(commitMatches(c, { kind: "branch", name: "jb/x" })).toBe(true);
+  expect(commitMatches(c, { kind: "branch", name: "jb/y" })).toBe(false);
+  expect(focusTarget([target("web", []), target("api", [c])], [], { kind: "branch", name: "jb/x" })?.name).toBe("api");
+  expect(deploysFocusHref({ focus: { kind: "branch", name: "jb/x" } })).toBe("/deploys?branch=jb%2Fx");
+});

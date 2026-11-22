@@ -1039,6 +1039,8 @@ export function EntityIdPill({
   label: labelProp,
   to,
   wide = false,
+  bare = false,
+  idLabel,
 }: {
   shortId?: string;
   type?: EntityType;
@@ -1063,6 +1065,11 @@ export function EntityIdPill({
    *  object (a pull request's file view, a line in it) rather than the
    *  object itself. */
   to?: string;
+  /** The pill without the state it says on the line ("not live yet"): a surface whose row already says where the
+   *  object stands (a Deploys queue). Its hover card still says it. */
+  bare?: boolean;
+  /** Read as this ID whatever the object is titled or whoever the session is (a column of IDs); the hover card says the rest. */
+  idLabel?: string;
 }) {
   // All resolution — type sniffing/server resolve, webGet queries, the
   // local-first store seed, label and route — is the shared hook.
@@ -1115,9 +1122,11 @@ export function EntityIdPill({
   // A deploy wears its state: glyph and chrome say live, going out or failed before a word is read.
   const deployV = type === "deploy" && entity ? deployLook(entity, Date.now()) : null;
   // A merged pull request or a commit carries how far it has gone toward production.
-  const reachRef = entity && ((isPr && entity.state === "merged") || isCommit) ? repoObjectRefOf(type!, entity, 40) : null;
-  // Every other pull request says its state: open, draft or closed.
-  const prState = isPr && entity && !reachRef ? prStateKey(entity) : null;
+  const cardReach = entity && ((isPr && entity.state === "merged") || isCommit) ? repoObjectRefOf(type!, entity, 40) : null;
+  // A bare pill keeps its reach for the hover card only.
+  const reachRef = bare ? null : cardReach;
+  // Every other pull request says its state: open, draft or closed (a bare pill says none).
+  const prState = !bare && isPr && entity && !reachRef ? prStateKey(entity) : null;
   const saysState = !!reachRef || !!prState;
 
   // Who a session IS (session-characters.md S3): once a session wears a
@@ -1128,7 +1137,7 @@ export function EntityIdPill({
   const prefs = useIdentityPrefs();
   const identity = isSession && entity ? sessionIdentity(entity, prefs) : null;
   const persona = identity && identity.kind !== "plain" ? identity : null;
-  const pillLabel = persona ? persona.name : wide ? fullLabel : refLabel;
+  const pillLabel = idLabel ?? (persona ? persona.name : wide ? fullLabel : refLabel);
   const Icon = isSession
     ? MessageSquare
     : isPlan
@@ -1342,7 +1351,7 @@ export function EntityIdPill({
       )}
       </KeepWithCaret>
       <PopoverContent
-        className={`${type === "doc" || reachRef ? "w-96" : "w-80"} max-w-[calc(100vw-16px)] bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
+        className={`${type === "doc" || cardReach ? "w-96" : "w-80"} max-w-[calc(100vw-16px)] bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
         side="top"
         align="start"
         sideOffset={6}
@@ -1362,8 +1371,8 @@ export function EntityIdPill({
           // Its production rows are links of their own, so the card is links around them rather than inside one.
           <div className="p-3">
             {isPr
-              ? <PullRequestHoverContent pr={entity} href={href} onOpen={handleOpen} production={reachRef ? <ProductionReach refId={reachRef} /> : null} showOpen={!canReveal} />
-              : <CommitHoverContent commit={entity} href={href} onOpen={handleOpen} production={reachRef ? <ProductionReach refId={reachRef} /> : null} showOpen={!canReveal} />}
+              ? <PullRequestHoverContent pr={entity} href={href} onOpen={handleOpen} production={cardReach ? <ProductionReach refId={cardReach} /> : null} showOpen={!canReveal} />
+              : <CommitHoverContent commit={entity} href={href} onOpen={handleOpen} production={cardReach ? <ProductionReach refId={cardReach} /> : null} showOpen={!canReveal} />}
           </div>
         ) : type === "person" && entity ? <PersonHoverContent person={{ userId: entity._id ? String(entity._id) : null, handle: entity.github_username || entity.username || null, name: entity.name, image: entity.image ?? entity.github_avatar_url }} onOpen={handleOpen} /> : type === "initiative" && entity ? <GoalHoverContent goal={entity} onOpen={handleOpen} /> : <Link
           href={href}

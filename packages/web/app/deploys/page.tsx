@@ -11,7 +11,7 @@ export default function DeploysRoute() {
   const params = useSearchParams();
   const focus = focusOf(params);
   // A new link while the page is open (another chip clicked) opens it afresh at that thing.
-  const linkKey = ["team", "repo", "target", "deploy", "pr", "sha", "task", "session"].map((k) => params.get(k) ?? "").join("|");
+  const linkKey = ["team", "repo", "target", "deploy", "pr", "sha", "task", "session", "branch"].map((k) => params.get(k) ?? "").join("|");
   return (
     <AuthGuard>
       <DashboardLayout>
