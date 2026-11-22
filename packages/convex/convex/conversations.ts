@@ -11807,6 +11807,8 @@ const RETIRE_BUSY_STATUSES = new Set(["working", "thinking", "compacting", "star
  */
 export async function retireRefusal(ctx: { db: any }, conv: any, expectedMessageCount: number, now: number): Promise<string | null> {
   if (conv.inbox_killed_at) return "it is already stopped";
+  // A pin is a person keeping it in their inbox: theirs to end, not the run's.
+  if (conv.inbox_pinned_at) return "a person pinned it";
   if ((conv.message_count ?? 0) !== expectedMessageCount) return `it has moved since the run read it (${expectedMessageCount} messages then, ${conv.message_count ?? 0} now)`;
   const liveAgent = async (id: Id<"conversations">) => (await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", id)).collect())
     .filter((m: any) => now - (m.last_heartbeat ?? 0) < HEARTBEAT_ALIVE_MS);

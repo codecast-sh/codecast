@@ -640,6 +640,8 @@ async function retireSubject(options: RunOptions, context: Record<string, string
   // A checkout's subject is the session that ran it, whose own work is no part of the change: it stays.
   if (checkoutChangeOf(context["run_dir"])) return null;
   const keep = (why: string) => { console.log(`${c.dim}  ${subject.shortId} stays: ${why}${c.reset}`); return null; };
+  // A person who brought it back from the run's stash took it over (subjectPark.ts): it is theirs to end.
+  if (context["subject_kept"] === "1") return keep("a person brought it back to the inbox");
   const { landedCommit } = await import("./awaitDeploy.js");
   const landed = await landedCommit(cwd, branch, base, (context["change_files"] || "").split(" ").filter(Boolean)).catch(() => null);
   if (!landed) return keep(`its change is not on ${base}`);
