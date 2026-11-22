@@ -5,7 +5,7 @@ import { AuthGuard } from "../../components/AuthGuard";
 import { DashboardLayout } from "../../components/DashboardLayout";
 import { ErrorBoundary } from "../../components/ErrorBoundary";
 import { DeploysPage } from "../../components/deploys/DeploysPage";
-import { FOCUS_PARAMS, focusOf, labelsOf } from "../../lib/deploys/focus";
+import { FOCUS_PARAMS, filtersOf, focusOf, labelsOf } from "../../lib/deploys/focus";
 
 export default function DeploysRoute() {
   const params = useSearchParams();
@@ -16,7 +16,7 @@ export default function DeploysRoute() {
     <AuthGuard>
       <DashboardLayout>
         <ErrorBoundary name="Deploys">
-          <DeploysPage key={linkKey} initialTarget={params.get("target")} initialTeam={params.get("team")} initialDeploy={params.get("deploy")} initialFocus={focus} initialLabels={labelsOf(params, focus)} initialRepo={params.get("repo")} />
+          <DeploysPage key={linkKey} initialTarget={params.get("target")} initialTeam={params.get("team")} initialDeploy={params.get("deploy")} initialFocus={focus} initialLabels={labelsOf(params, focus)} initialFilters={filtersOf(params)} initialRepo={params.get("repo")} />
         </ErrorBoundary>
       </DashboardLayout>
     </AuthGuard>
