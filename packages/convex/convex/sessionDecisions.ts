@@ -1333,7 +1333,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   // A role whose recommendation carried over from the card this one replaces has said its piece: the people see it now.
   const carried = !!hears && hops.some((h) => String(h.role_id) === String(hears._id) && h.recommendation !== undefined);
   const woken = carried ? [] : await tellHearingRole(ctx, hears, { _id: id, short_id, question: args.question, conversation_id: conversation._id }, now);
-  await syncDecisionInbox(ctx, id, people, now, woken.length === 0 && routed.trial !== "owner");
+  // A card shared out by area rings through noticeAreaOwner just below, which never tells the asker's own person.
+  await syncDecisionInbox(ctx, id, people, now, woken.length === 0 && routed.trial !== "owner", { announce: !areaOwner || String(areaOwner) === String(conversation.user_id) });
   if (areaOwner && woken.length === 0) await noticeAreaOwner(ctx, areaOwner, { question: args.question, short_id, conversation_id: conversation._id }, conversation.user_id);
   if (stack) await joinStack(ctx, stack, { _id: id, stack_id: stack._id, scope_keys: scopeKeys }, now);
   if (!args.workflow_run_id) await followStationCard(ctx, conversation, id, now);

@@ -12,6 +12,7 @@ import { REACH_LOOK, deployAgo } from "../../lib/deploys/deployPill";
 import { FAILED_ICON, REACH_ICON, TONE_ACCENT, TONE_TEXT } from "../../lib/deploys/deployLook";
 import { CI_WORDS, deployLabel, prRowParts, type PrDeployRow } from "../../lib/deploys/prDeploy";
 import type { DeployTargetRow } from "../../lib/deploys/targets";
+import { deploysFocusHref } from "../../lib/deploys/focus";
 import type { ExternalEventAccent } from "../../lib/externalEvents";
 import type { ReachState } from "@codecast/shared/contracts/deployReach";
 
@@ -50,7 +51,7 @@ export function PRShipsTo({ model }: { model: PrDeployModel }) {
           {xs.map((x, i) => (
             <span key={x.target._id}>
               {i > 0 && <span className="text-sol-text-dim">, </span>}
-              <Link href={deploysHrefOf(model.teamId, x.target.name)} className="text-sol-text no-underline hover:underline">{x.target.name}</Link>
+              <Link href={deploysHrefOf(model, x.target.name)} className="text-sol-text no-underline hover:underline">{x.target.name}</Link>
             </span>
           ))}
           <span className="ml-1 text-sol-text-dim">{how}</span>
@@ -60,8 +61,9 @@ export function PRShipsTo({ model }: { model: PrDeployModel }) {
   );
 }
 
-const deploysHrefOf = (teamId: string | null, target: string) =>
-  `/deploys?${teamId ? `team=${teamId}&` : ""}target=${encodeURIComponent(target)}`;
+/** A target on the Deploys page, a merged pull request highlighted there (an open one is on no target yet). */
+const deploysHrefOf = (model: Pick<PrDeployModel, "teamId" | "repository" | "number" | "merged">, target: string) =>
+  deploysFocusHref({ team: model.teamId, repository: model.repository, target, focus: model.merged ? { kind: "pr", pr: model.number } : null });
 
 function CiWord({ ci, url }: { ci: keyof typeof CI_WORDS; url: string | null }) {
   const word = CI_WORDS[ci];
@@ -118,7 +120,7 @@ function StateWord({ state }: { state: ReachState }) {
 
 /** A merged pull request's production band: one row per target, the one that needs the reader first. */
 export function PRDeployBand({ model }: { model: PrDeployModel }) {
-  const { rows, dormant, now, teamId, press } = model;
+  const { rows, dormant, now, press } = model;
   if (!model.merged || (!rows.length && !dormant.length)) return null;
   return (
     <section className="pr-rise pr-deploy mt-3" style={{ ["--d" as string]: "240ms" }} data-pr-deploy aria-label="Production">
@@ -126,7 +128,7 @@ export function PRDeployBand({ model }: { model: PrDeployModel }) {
       <ul className="pr-deploy-rows">
         {rows.map((row, i) => (
           <li key={`${row.target}#${i}`} className="pr-deploy-row" data-pr-deploy-target={row.target} data-state={row.state}>
-            <Link href={deploysHrefOf(teamId, row.target)} className="pr-deploy-name" title={`Open ${row.target} on the Deploys page`}>
+            <Link href={deploysHrefOf(model, row.target)} className="pr-deploy-name" title={`Open ${row.target} on the Deploys page`}>
               {row.target}
             </Link>
             <StateWord state={row.state} />
@@ -140,7 +142,7 @@ export function PRDeployBand({ model }: { model: PrDeployModel }) {
               ) : row.blocked ? (
                 <span className="text-sol-text-dim" data-pr-deploy-blocked>{row.blocked}</span>
               ) : null}
-              <Link href={deploysHrefOf(teamId, row.target)} className="pr-deploy-open" aria-label={`Open ${row.target} on the Deploys page`} title="Open on the Deploys page">
+              <Link href={deploysHrefOf(model, row.target)} className="pr-deploy-open" aria-label={`Open ${row.target} on the Deploys page`} title="Open on the Deploys page">
                 <ArrowUpRight className="w-3.5 h-3.5" />
               </Link>
             </span>
@@ -148,7 +150,7 @@ export function PRDeployBand({ model }: { model: PrDeployModel }) {
         ))}
         {dormant.map((t, i) => (
           <li key={`${t.target}#idle${i}`} className="pr-deploy-row pr-deploy-row--idle" data-pr-deploy-target={t.target} data-state="idle" title="Shipped nothing this week: it does not hold the change back from live">
-            <Link href={deploysHrefOf(teamId, t.target)} className="pr-deploy-name">{t.target}</Link>
+            <Link href={deploysHrefOf(model, t.target)} className="pr-deploy-name">{t.target}</Link>
             <span className="pr-deploy-state text-sol-text-dim"><CircleDashed aria-hidden className="w-3.5 h-3.5 shrink-0" />idle</span>
             <span className="pr-deploy-detail text-sol-text-dim">{t.at ? `last deploy ${deployAgo(t.at, now)}` : "no deploy known"}</span>
             <span />
