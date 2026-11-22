@@ -247,8 +247,10 @@ run stashed was brought back by a person: the run stashes and parks it no more,
 and notes it in the run's context (`subject_kept`), so a resumed runner keeps
 to that. A dry run and a run with no subject park nothing.
 
-Everything the run sends its subject carries a `client_id` (the run, the
-station, its visit), so a send retried after a lost answer lands once. Briefs
+Everything the run sends its subject carries a `client_id` of its own (the
+run, what it sends, and a nonce), never one built from visit counts, which
+start over after a person's answer and on a resume: a second Revise brief
+keyed on them was taken for the first and dropped. Briefs
 and a gate's answer go out as quiet sends (`sendSessionMessage` `quiet`): like
 a trigger's wake, a quiet send from a session leaves a hidden stash and a
 snooze in place, while a killed or dismissed session still revives. So a
@@ -256,14 +258,16 @@ session working on a failed check stays out of the inbox, and surfaces on its
 own only when it pins blocked. A run with no session of its own sends no
 quiet briefs, and its log says so. A hibernated subject is not resumed to hear
 a gate's answer. A server older than `quiet` refuses the send, and the runner
-sends it again plain under the same `client_id`.
+sends it again plain under the same `client_id`, so a first send that did land
+is kept once.
 
 A run that completes retires its subject once the change is live. The change
 is on the default branch (`landedCommit`, fetched and decided with git), and
 every deploy target its files touch runs a deploy that holds it, read once
 from `/cli/deploys/targets` the way `cast flow await-deploy --once` reads it
 (a change no target ships is live when it lands; targets that cannot be read
-are not live). Merged is not live: a flow that ends at its merge leaves the
+are not live, and neither is one `.codecast/deploy.toml` declares that the
+server has never listed). Merged is not live: a flow that ends at its merge leaves the
 subject to hear the end, which carries the deploy's reach. The subject has
 settled (parked counts), and nothing it wrote differs from what landed (every
 file `previewSessionChange` attributes to it reads as the landed commit or the
@@ -274,7 +278,8 @@ attribution that fails keeps it). Then the runner asks the server to retire it
 cancels the session's triggers, drops its queued messages and tears down its
 nested sessions. It refuses when the transcript moved since the read, a
 message is queued, a trigger is armed on it, it is working or waiting on
-background work, or a nested session of its own is live. A retired subject is
+background work, or a nested session of its own is live or has a message
+queued or a trigger armed (the kill takes those down too). A retired subject is
 not told the run is over, which would only resume it to read "done"; the exit
 station's `result_preview` says it ("Retired jx7...: its change is live from
 main at ..."). A subject already killed when a run completes (someone retired
