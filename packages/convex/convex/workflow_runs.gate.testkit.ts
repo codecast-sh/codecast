@@ -51,6 +51,7 @@ export async function seed(extra: Record<string, any[]> = {}) {
     }],
     messages: [],
     session_decisions: [],
+    task_comments: [],
     decision_inbox: [],
     decision_grants: [],
     decision_stacks: [],

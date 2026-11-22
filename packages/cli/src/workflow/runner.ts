@@ -1071,8 +1071,6 @@ export function gatePayload(node: WorkflowNode, graph: WorkflowGraph, context: R
     // The presenting station the gate names, and its session when it ran: such a gate asks only the card it posted.
     ...(node.asker ? { asker: node.asker } : {}),
     ...(node.asker && context[`${node.asker}.session_id`] ? { asker_session_id: context[`${node.asker}.session_id`] } : {}),
-    // The session the change came from (flows.md FL4): a run nobody's session started asks from it, not its own log.
-    ...(context["change_conversation"] ? { subject_conversation_id: context["change_conversation"] } : {}),
   };
 }
 
