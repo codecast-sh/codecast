@@ -22085,6 +22085,7 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
   }
   if (!roots.size) return;
   const { sweepOne } = await import("./land/levelSweep.js");
+  const { classifySendError } = await import("./land/levelConflicts.js");
   // A conflict that holds a checkout back is briefed to the session that wrote
   // the file, as a machine wake: a person's message would clear its pinned
   // state and pull it into the inbox.
@@ -22094,8 +22095,7 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
       try {
         return (await svc.sendMessageToSession(to, body, "scheduler", clientId)) ? "sent" as const : "failed" as const;
       } catch (e) {
-        // A teammate's session: this token may only message its own user's conversations, for good.
-        return /can only send messages to your own conversations/.test(String((e as Error)?.message ?? e)) ? "unreachable" as const : "failed" as const;
+        return classifySendError(e);
       }
     }
     : undefined;
