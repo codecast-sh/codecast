@@ -52,6 +52,8 @@ const { createRoot } = await import("react-dom/client");
 const { useInboxStore } = await import("../../store/inboxStore");
 const { OrgChart } = await import("./OrgChart");
 const { MemoryRouter } = await import("react-router");
+const { TabParamsCtx, parseTabLocation } = await import("../../lib/tabParams");
+const { recordTrail, _resetTrailForTests } = await import("../../lib/navTrail");
 
 const q = (sel: string, root: ParentNode = document) => root.querySelector(sel) as HTMLElement | null;
 const uiWrites: any[] = [];
@@ -68,11 +70,17 @@ function seedStore() {
     },
   } as any);
 }
-async function mount() {
+/** Mount the chart, as app tab t1's own page showing `tabPath` when given (so Close can read the tab's trail). */
+async function mount(tabPath?: string) {
   const el = document.createElement("div");
   document.body.appendChild(el);
   const root = createRoot(el);
-  await act(async () => { root.render(h(MemoryRouter, null, h(OrgChart))); });
+  let page: any = h(OrgChart);
+  if (tabPath) {
+    useInboxStore.setState({ tabs: [{ id: "t1", path: tabPath, title: "", createdAt: 0 }], activeTabId: "t1" } as any);
+    page = h(TabParamsCtx.Provider, { value: { tabId: "t1", ...parseTabLocation(tabPath), params: {}, isActive: true, isVisible: true } as any }, page);
+  }
+  await act(async () => { root.render(h(MemoryRouter, null, page)); });
   return { el, done: async () => { await act(async () => { root.unmount(); }); el.remove(); } };
 }
 
@@ -100,5 +108,49 @@ test("closing a proposal opened from the Head of People's thread returns to that
   m = await mount();
   expect(q("[data-org-panel='home']", m.el)).not.toBeNull();
   expect(q("[data-org-panel-open]", m.el)).toBeNull();
+  await m.done();
+});
+
+const SESSION = "jx7head0fpeople000000000000000s1";
+
+test("Close on a proposal opened from the Head of People's conversation goes back to that conversation in one press, draft intact, never via bare /org", async () => {
+  seedStore();
+  _resetTrailForTests();
+  const opened: string[] = [];
+  useInboxStore.setState({
+    drafts: { [SESSION]: { draft_message: "Thanks, one question before I approve" } },
+    navigateToSession: (id: string) => { opened.push(id); },
+  } as any);
+  // The tab showed the conversation, then its proposal chip opened /org?proposal=op-7 in the same tab.
+  recordTrail("t1", `/conversation/${SESSION}`, "push");
+  recordTrail("t1", "/org?proposal=op-7", "push");
+  search = "proposal=op-7";
+  nav.length = 0;
+  const m = await mount("/org?proposal=op-7");
+  await act(async () => { q("[data-line-drawer-close]", m.el)!.click(); });
+  await m.done();
+
+  expect(opened).toEqual([SESSION]);
+  expect(nav).toEqual([`push /inbox?s=${SESSION}`]);
+  expect(nav).not.toContain("push /org");
+  expect((useInboxStore.getState() as any).drafts[SESSION]?.draft_message).toBe("Thanks, one question before I approve");
+  expect(uiWrites.filter((w) => w.org_panel === "closed")).toEqual([]);
+});
+
+test("Close on a proposal reached by a pasted link, with nothing to go back to, lands on /org with the drawer open", async () => {
+  seedStore();
+  _resetTrailForTests();
+  uiWrites.length = 0;
+  search = "proposal=op-7";
+  nav.length = 0;
+  let m = await mount("/org?proposal=op-7");
+  await act(async () => { q("[data-line-drawer-close]", m.el)!.click(); });
+  await m.done();
+
+  expect(nav).toEqual(["push /org"]);
+  expect(uiWrites.filter((w) => w.org_panel === "closed")).toEqual([]);
+  search = "";
+  m = await mount("/org");
+  expect(q("[data-org-panel='home']", m.el)).not.toBeNull();
   await m.done();
 });
