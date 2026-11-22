@@ -11,7 +11,6 @@ import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
 import { flowAdmits, flowHands, liveFlowFor, planLiveFlow } from "./liveFlows";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { recordHandStart } from "./spawn";
-import { retainSessionCreator } from "./sessionLaunch";
 import { insertTaskComment, moveTaskStatus } from "./tasks";
 import { createRunCore, isLiveRunStatus, queueRunOnDaemon } from "./workflow_runs";
 import { resumeQueuedRun } from "./failedRunResume";
@@ -381,7 +380,7 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
   const place = seatPlace(role, standing);
   const seatId: Id<"users"> = place.runner_user_id;
   // A run placed on a machine of the team's pool runs as that machine's account (its daemon drives it, its sessions
-  // bill there); the seat's person owns it, so its cards and its hands' filing stay theirs.
+  // bill there). The role started it, so no person owns it: it is the role's alone (org-roles-run-work.md R1).
   const hostId: Id<"users"> = (o.place?.user as Id<"users"> | undefined) ?? seatId;
   // A line run on a problem takes its live flow's family member, else the version that serves its scenario (workflows.lineRouteFor).
   const route = isLineRunSlug(slug) ? await lineRouteFor(ctx, seatId, task) : null;
@@ -408,7 +407,6 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
     now,
   });
 
-  await retainSessionCreator(ctx, primaryConvId, seatId, hostId);
   // A placed run names its machine from the start, so the pool counts it
   // there before a runner claims it.
   if (o.place) await ctx.db.patch(runId, { runner_device: o.place.device });

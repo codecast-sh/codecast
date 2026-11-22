@@ -27,6 +27,8 @@ import {
   selectWorkingSet,
   shouldShowInInbox,
   isHeldByRoleAlone,
+  startedByRole,
+  personWorkState,
   roleDrives,
   type InboxBucket,
   type InboxPlacementInput,
@@ -266,6 +268,8 @@ describe("placeInboxRow — bucket precedence", () => {
     expect(placeInboxRow(input({ roleDrives: true, agentStatus: "done" })).bucket).toBe("done");
     expect(placeInboxRow(input({ roleDrives: true, agentStatus: "dormant" })).bucket).toBe("dormant");
     expect(placeInboxRow(input({ roleDrives: true, pinned: true })).bucket).toBe("pinned");
+    // The person's pin wins over the role's ask.
+    expect(placeInboxRow(input({ roleDrives: true, pinned: true, asking: true, awaitingInput: true })).bucket).toBe("pinned");
     expect(placeInboxRow(input({ roleDrives: true, stashed: true })).bucket).toBe("stashed");
     expect(placeInboxRow(input({ roleDrives: true, messageCount: 0 })).bucket).toBe("new");
     // The person's own filing stands.
@@ -407,19 +411,31 @@ function row(id: string, overrides: Record<string, any> = {}): WorkingSetRow & R
   };
 }
 
-describe("the membership rule: a session a role holds with no person owner is the role's alone", () => {
-  test("a role-held session with no person owner leaves the runner", () => {
-    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra" })).toBe(true);
-    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", owner_user_id: null })).toBe(true);
-    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", owner_user_id: "" })).toBe(true);
+describe("the membership rule: a session a role started and holds with no person owner is the role's alone", () => {
+  test("a role started it, a role still holds it, and no person owns it: the role's alone", () => {
+    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", role_started: true }, false)).toBe(true);
+    // A sub-lead's standing session under a role is that role's start.
+    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", standing_role_id: "org_roles_sub" }, false)).toBe(true);
   });
 
-  test("a person owner, or no role, keeps it with the runner and its owners", () => {
-    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", owner_user_id: "users_them" })).toBe(false);
-    // Convex ids arrive as objects with toString, not as strings.
-    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", owner_user_id: { toString: () => "users_them" } })).toBe(false);
-    expect(isHeldByRoleAlone({ owner_user_id: "users_them" })).toBe(false);
-    expect(isHeldByRoleAlone({})).toBe(false);
+  test("a person owner, a person's own start, or no role keeps it with the runner and its owners", () => {
+    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra", role_started: true }, true)).toBe(false);
+    // Filed under a role by a person (cast task start in its area): no owner rows, still theirs.
+    expect(isHeldByRoleAlone({ org_role_id: "org_roles_infra" }, false)).toBe(false);
+    expect(isHeldByRoleAlone({ role_started: true }, false)).toBe(false);
+    expect(startedByRole({ org_role_id: "org_roles_infra", role_started: true })).toBe(true);
+    expect(startedByRole({ org_role_id: "org_roles_infra" })).toBe(false);
+  });
+});
+
+describe("personWorkState — what a person reads for a placed row", () => {
+  test("a session its role drives that files under working reads as working; every other row reads its work state", () => {
+    const driven = { org_role_id: "org_roles_infra" };
+    expect(personWorkState(driven, { bucket: "working", work_state: "needs_input" })).toBe("working");
+    expect(personWorkState(driven, { bucket: "done", work_state: "done" })).toBe("done");
+    expect(personWorkState({ ...driven, driver_user_id: "users_me" }, { bucket: "working", work_state: "needs_input" })).toBe("needs_input");
+    // A teammate riding a working lead keeps its own work state.
+    expect(personWorkState({}, { bucket: "working", work_state: "done" })).toBe("done");
   });
 });
 

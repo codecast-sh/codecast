@@ -463,12 +463,13 @@ export function placeInboxRow(input: InboxPlacementInput): InboxPlacement {
   // ask notwithstanding — they saw the ask and triaged past it (the same
   // standing snooze has above). The next activity expires the verdict and
   // the ask surfaces again.
-  // A session its role drives waits on the role, not the person: its ask and
-  // its settled turn file as working, where the card says "With <role>".
-  else if (input.asking && !input.killed && !input.userRest) bucket = input.roleDrives ? "working" : "questions";
+  else if (input.asking && !input.killed && !input.userRest && !input.roleDrives) bucket = "questions";
   else if (input.pinned) bucket = "pinned";
   else if (input.messageCount === 0) bucket = "new";
-  else if (input.roleDrives && work_state === "needs_input" && !input.userRest) bucket = "working";
+  // A session its role drives waits on the role, not the person: its ask and
+  // its settled turn file as working, where the card says "With <role>". The
+  // person's pin and their own filing still come first.
+  else if (input.roleDrives && ((input.asking && !input.killed) || work_state === "needs_input") && !input.userRest) bucket = "working";
   else bucket = work_state;
   return { bucket, work_state };
 }
@@ -799,17 +800,23 @@ export function commandsSession(
 }
 
 // THE MEMBERSHIP RULE, in one place: a session is in the inbox of each of its
-// owners and of the account that runs it, except a session a role holds with
-// no person owner (a role started it on its own). That one belongs to the
-// role: it leaves the runner's inbox, takes its open questions with it, and
-// stops ringing them. A role is one of a session's owners (org_role_id); the
-// people are session_owners, whose primary the owner_user_id cache names, so
-// the row alone answers. Paths that hold the owner SET pass its first id.
-export function isHeldByRoleAlone(row: {
-  org_role_id?: unknown;
-  owner_user_id?: string | { toString(): string } | null;
-}): boolean {
-  return !!row.org_role_id && (row.owner_user_id == null || row.owner_user_id.toString() === "");
+// owners and of the account that runs it, except a session a role started on
+// its own that is still filed under a role and has no person owner. That one
+// belongs to the role: it leaves the runner's inbox and takes its open
+// questions with it. "Started by a role" is provenance, never an absent owner:
+// a person's own session filed under a role has no owner rows either, and it
+// stays theirs. A role's standing session under another role counts as the
+// parent role's start (org-staffing.md S28). The person owners are the
+// session_owners rows themselves, which the caller reads (hasPersonOwner).
+export function startedByRole(row: { org_role_id?: unknown; role_started?: boolean | null; standing_role_id?: unknown }): boolean {
+  return !!row.org_role_id && (!!row.role_started || !!row.standing_role_id);
+}
+
+export function isHeldByRoleAlone(
+  row: { org_role_id?: unknown; role_started?: boolean | null; standing_role_id?: unknown },
+  hasPersonOwner: boolean,
+): boolean {
+  return startedByRole(row) && !hasPersonOwner;
 }
 
 // The role drives the session: it is filed under a role and no person took
@@ -818,6 +825,18 @@ export function isHeldByRoleAlone(row: {
 // questions. A person driving (the role paused) files it like any session.
 export function roleDrives(row: { org_role_id?: unknown; driver_user_id?: unknown }): boolean {
   return !!row.org_role_id && !row.driver_user_id;
+}
+
+// The state a person reads for a placed row: its work state, except a session
+// its role drives that files under working. Its work state still says what it
+// waits on (an agent watching it reads that), but to a person it is the
+// role's work: plan groups, the CLI's sections and counts, and the sort read
+// this, never the raw work state.
+export function personWorkState(
+  row: { org_role_id?: unknown; driver_user_id?: unknown },
+  placement: { bucket: InboxBucket; work_state: WorkState },
+): WorkState {
+  return placement.bucket === "working" && roleDrives(row) ? "working" : placement.work_state;
 }
 
 // `inbox_dismissed_at` is an absolute flag: a truthy value means dismissed until

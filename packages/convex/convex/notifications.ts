@@ -756,9 +756,10 @@ export async function performNeedsInputCheck(
   // needs-input trigger, fired once per ask (agentTasks.routeUpWaitingSession).
   // A role that cannot be told (its trigger paused or cancelled, no standing
   // session, the org off, its machine away) is no reader at all: `unheard` sends the settle on
-  // to the person's own notify below, so the wait is never swallowed.
+  // to the person's own notify below, so the wait is never swallowed. A paused
+  // role (a person drives, roleDrives false) is not told: the person reads it.
   let unheard = false;
-  if ((conv.org_role_id || conv.standing_role_id) && state === "needs_input") {
+  if ((roleDrives(conv) || conv.standing_role_id) && state === "needs_input") {
     const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
     const declared = conv.thread_state_status === "blocked";
     const stuck = awaitingInput || kind === "permission_blocked" || kind === "stopped" || kind === "unresponsive";

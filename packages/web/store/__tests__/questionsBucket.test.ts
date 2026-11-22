@@ -279,7 +279,7 @@ describe("the questions bucket", () => {
     const driven = row("r1", { user_id: ME, owner_user_id: ME, owned_by_me: true, org_role_id: "org_roles_infra", awaiting_input: true });
     const paused = row("r2", { user_id: ME, owner_user_id: ME, owned_by_me: true, org_role_id: "org_roles_infra", driver_user_id: ME, awaiting_input: true });
     // A role started it on its own: not in the runner's inbox at all.
-    const alone = row("r3", { user_id: ME, org_role_id: "org_roles_infra", awaiting_input: true });
+    const alone = row("r3", { user_id: ME, org_role_id: "org_roles_infra", role_alone: true, awaiting_input: true });
     const mine = placeSections(
       Object.fromEntries([driven, paused, alone].map((s) => [s._id, s])),
       new Set(),
@@ -288,6 +288,8 @@ describe("the questions bucket", () => {
     );
     expect(ids(mine.questions)).toEqual(["r2"]);
     expect(ids(mine.working)).toEqual(["r1"]);
+    // A person reads it as working everywhere: the sort, the plan groups, the walks.
+    expect(mine.placements.get("r1")?.work_state).toBe("working");
     expect(ids(mine.sorted)).not.toContain("r3");
   });
 

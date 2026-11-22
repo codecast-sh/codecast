@@ -45,6 +45,16 @@ describe("the route up", () => {
     return world;
   };
 
+  test("a paused role (a person drives) is not told: the person driving hears the wait", async () => {
+    const { ctx, tables } = blockedHand();
+    tables.conversations[0].driver_user_id = "u1";
+    const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });
+    expect(res.reason).not.toBe("under_role");
+    expect(res.notified).toBe(true);
+    expect(told(tables, "standing_sub")).toEqual([]);
+    expect(triggerOn(tables, "standing_sub")).toBeUndefined();
+  });
+
   test("a hand that declares itself blocked fires its role's trigger once, naming the session and the first line of its state", async () => {
     const { ctx, tables } = blockedHand();
     const res = await performNeedsInputCheck(ctx as any, { conversation_id: "conv1" });

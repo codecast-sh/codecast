@@ -123,7 +123,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "open_comment_threads", "open_tasks", "open_tasks_at", "org_role_id", "owned_by_me", "owner_device_id",
       "owner_user_id", "parent_conversation_id", "parent_message_uuid", "pending_api_error",
       "pending_api_error_at", "pending_api_error_kind", "permission_mode", "pr_status", "producing_until",
-      "project_id", "project_path", "rewind_staged", "role", "session_error", "session_id", "settle_verdict", "spawned_by_conversation_id",
+      "project_id", "project_path", "rewind_staged", "role", "role_alone", "session_error", "session_id", "settle_verdict", "spawned_by_conversation_id",
       "standing_role_id", "started_at", "status", "subagent_caps", "subagent_slot", "subagent_slot_at", "subagent_slot_device", "subtitle", "team_id", "team_visibility", "thread_state", "thread_state_at",
       "thread_state_msg_count", "thread_state_status", "title", "tmux_session",
       "transcript_revision", "turn_completed_at", "updated_at", "user_id", "user_rest", "workflow_run_activity",
@@ -280,7 +280,9 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
         conv("waiting", { updated_at: EPOCH - 2 * MIN, org_role_id: "org_roles_infra", owner_user_id: ME }),
         conv("blocked_hand", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", owner_user_id: ME, thread_state_status: "blocked", thread_state: "needs a key" }),
         conv("paused", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", owner_user_id: ME, driver_user_id: ME }),
-        conv("role_alone", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra" }),
+        conv("role_alone", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", role_started: true }),
+        // A person's own session filed under the role: no owner rows either, but no role started it.
+        conv("person_filed", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra" }),
         conv("mine", { updated_at: EPOCH - 4 * MIN }),
         conv("quiet", { updated_at: EPOCH - MIN, anchor_id: "anchors_quiet", standing_role_id: "org_roles_quiet" }),
       ],
@@ -297,13 +299,15 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     expect(bucketOf("blocked_hand")).toBe("working");
     expect(bucketOf("paused")).toBe("needs_input");
     expect((liveness as any).conversations_role_alone).toBeUndefined();
+    expect(bucketOf("person_filed")).toBe("working");
     expect(bucketOf("quiet")).toBe("hidden");
     expect(projection.tally.shown.needs_input).toBe(3);
-    expect(projection.tally.shown.working).toBe(2);
+    expect(projection.tally.shown.working).toBe(3);
 
     const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, { projection: true });
     const byId = (id: string) => sessions.find((s: any) => s._id === `conversations_${id}`);
     expect(byId("role_alone")).toBeUndefined();
+    expect(byId("person_filed").role_alone).toBe(false);
     expect(byId("waiting").bucket).toBe("working");
     expect(byId("waiting").driver_user_id).toBeNull();
     expect(byId("paused").driver_user_id).toBe(ME);

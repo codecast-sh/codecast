@@ -507,7 +507,7 @@ describe("orgLine admission (LE6)", () => {
       const scheduler = { runAfter: async () => null, runAt: async () => null };
       const as = (db: any, user: string) => ({ db, scheduler, auth: { getUserIdentity: async () => ({ subject: `${user}|session` }) } }) as any;
 
-      test("takes free slots in the team's pool, runs as the host's account, and the seat's person owns the run", async () => {
+      test("takes free slots in the team's pool and runs as the host's account; the role started it, so nobody owns it", async () => {
         const { ctx, tables } = seated([seatLaptop, host("h1", 2)]);
         const res = await sweepCore(ctx, NOW);
         expect(res.started.map((s) => s.place)).toEqual([
@@ -517,8 +517,10 @@ describe("orgLine admission (LE6)", () => {
         expect(res.skipped_busy).toEqual([ROLE]);
         for (const run of tables.workflow_runs) {
           expect(run).toMatchObject({ user_id: HOST, runner_device: "h1", org_role_id: ROLE, spawner_conversation_id: STANDING });
-          expect(ownersOf(tables, run.primary_conversation_id)).toEqual([MATE]);
+          expect(ownersOf(tables, run.primary_conversation_id)).toEqual([]);
+          expect(tables.conversations.find((c) => c._id === run.primary_conversation_id)).toMatchObject({ org_role_id: ROLE, role_started: true });
         }
+
         // The host's daemon takes the commands: they are queued for its account and machine.
         expect(tables.daemon_commands.map((c) => [c.user_id, c.target_device_id])).toEqual([[HOST, "h1"], [HOST, "h1"]]);
         expect(await lineQueueFor(ctx, tables.org_roles[0], NOW)).toMatchObject({ working: 2, runs_cap: 2, waiting: "2 runs working on its machines" });
@@ -559,7 +561,9 @@ describe("orgLine admission (LE6)", () => {
           expect(run.user_id).toBe(runner);
           const spawned = await (createSessionFromCli as any)._handler(as(db, runner), { agent_type: "claude_code", parent_session: run.primary_conversation_id, spawner_session: STANDING, prompt: "build", ...(device ? { device } : {}) });
           const station = await db.get(spawned.conversation_id);
-          expect(station).toMatchObject({ user_id: runner, org_role_id: ROLE });
+          expect(station).toMatchObject({ user_id: runner, org_role_id: ROLE, role_started: true });
+          // The role's hand: no person owner, whichever machine runs it.
+          expect(ownersOf(tables, station._id)).toEqual([]);
           const routed = await routeFor({ db } as any, station, NOW);
           const options = [{ label: "Reopen" }, { label: "Drop" }];
           const fromStation = await askCore({ db, scheduler } as any, { userId: runner as any }, { session_id: station.session_id, question: "Ship it?", options, blocking: true, workflow_run_id: run._id });

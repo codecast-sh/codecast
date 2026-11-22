@@ -61,10 +61,12 @@ describe("filterInboxScope — mine", () => {
   it("keeps a session I run that is assigned to someone else; drops one a role holds alone", () => {
     const handed = mk(cid(10), { user_id: ME, owner_user_id: THEM, owned_by_me: false });
     const stillMine = mk(cid(11), { user_id: ME, owner_user_id: ME });
-    const roleAlone = mk(cid(12), { user_id: ME, org_role_id: "org_roles_infra", owner_user_id: null });
+    const roleAlone = mk(cid(12), { user_id: ME, org_role_id: "org_roles_infra", owner_user_id: null, role_alone: true });
     const roleAndMe = mk(cid(13), { user_id: ME, org_role_id: "org_roles_infra", owner_user_id: ME, owned_by_me: true });
-    const out = filterInboxScope(byId([handed, stillMine, roleAlone, roleAndMe]), "mine", ME);
-    expect(ids(out)).toEqual([cid(10), cid(11), cid(13)].sort());
+    // My own session filed under a role: no owner rows, but no role started it.
+    const personFiled = mk(cid(14), { user_id: ME, org_role_id: "org_roles_infra", owner_user_id: null, role_alone: false });
+    const out = filterInboxScope(byId([handed, stillMine, roleAlone, roleAndMe, personFiled]), "mine", ME);
+    expect(ids(out)).toEqual([cid(10), cid(11), cid(13), cid(14)].sort());
   });
 
   it("keeps optimistic stubs and thin rows with no known author", () => {

@@ -196,11 +196,25 @@ test("a paused role (a person drives) files its session like any other", async (
   await m.unmount();
 });
 
-test("a session a role started on its own is not in the runner's inbox", async () => {
-  seed([hand(WAITING, "Pricing page copy", { owned_by_me: false, owner_user_id: null }), row(MINE, { title: "My own session" })]);
+test("a session a role started on its own is not in the runner's inbox; one a person filed under the role is", async () => {
+  seed([
+    hand(WAITING, "Pricing page copy", { owned_by_me: false, owner_user_id: null, role_alone: true }),
+    // `cast task start` in the role's area filed my own session under it: no owner rows, but a person started it.
+    hand(SETTLED, "My session, filed", { owned_by_me: false, owner_user_id: null, role_alone: false }),
+    row(MINE, { title: "My own session" }),
+  ]);
   const m = await mountInbox();
   expect(cardOf(m.host, WAITING)).toBeNull();
+  expect(sectionOf(m.host, SETTLED)).toBe("working");
   expect(cardOf(m.host, MINE)).not.toBeNull();
+  await m.unmount();
+});
+
+test("the classic card says With <role> too", async () => {
+  seed([standing(), hand(WAITING, "Pricing page copy")]);
+  const m = await mountInbox(null, "classic");
+  expect(sectionOf(m.host, WAITING)).toBe("working");
+  expect(cardOf(m.host, WAITING)!.querySelector("[data-sv-with-role]")?.textContent).toBe("With Growth lead");
   await m.unmount();
 });
 

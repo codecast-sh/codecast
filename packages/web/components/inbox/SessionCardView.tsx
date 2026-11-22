@@ -77,6 +77,7 @@ export function SessionCardView({
   sectionStatus,
   forkColorKey,
   subRow,
+  withRole = null,
   now,
   chrome,
   liveness,
@@ -720,6 +721,12 @@ export function SessionCardView({
             <CommentThreadsChip session={session} viewerId={viewerId} onOpenComments={onOpenComments} />
             <FoldedSubagentsMark count={hiddenRunningSubagents} onOpen={foldedSubagentId && onOpenParent ? () => onOpenParent(foldedSubagentId) : undefined} />
             <CardPinMark session={session} onPin={onPin} />
+            {/* Its role drives it and it waits on the role (shared placeInboxRow). */}
+            {withRole && isWorking && !isPendingSend && (
+              <span data-sv-with-role className="flex-shrink-0 truncate max-w-[140px] text-meta font-medium text-sol-green" title={`Waiting on ${withRole}, which drives this session`}>
+                With {withRole}
+              </span>
+            )}
             <CardStatusSignals
               session={session}
               showBlockedBadge={showBlockedBadge}

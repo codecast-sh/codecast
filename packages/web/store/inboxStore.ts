@@ -112,8 +112,8 @@ import {
   emptyInboxTally,
   isOrphanOrSubagent,
   isNestedIdentity,
-  isHeldByRoleAlone,
   roleDrives,
+  personWorkState,
   commandsSession,
   rollupParentIdOf,
   rideLeadPlacements,
@@ -1018,6 +1018,10 @@ export type InboxSession = {
   // The person driving in the role's place (conversations.driver_user_id);
   // unset under a role means the role drives (shared roleDrives).
   driver_user_id?: string | null;
+  // A role started it and holds it with no person owner (the server's
+  // heldByRoleAlone over the shared isHeldByRoleAlone): the role's alone, so
+  // it is not in the runner's inbox.
+  role_alone?: boolean | null;
   // Unacknowledged handoff: a teammate assigned this session to the current user
   // and they haven't acked it yet (session_owners.seen_at unset). Stamped by
   // computeInboxSessions; cleared by ackSessionAssignment (server) and
@@ -2615,8 +2619,9 @@ export function partitionWorkingSet(
 
 // Is this cached row outside the caller's personal inbox? Two ways in: it is a
 // teammate's session that only entered the shared cache via team mode, a
-// deep-link or search — or it is a session the caller RUNS that a role holds
-// with no person owner (isHeldByRoleAlone), which is the role's alone (the
+// deep-link or search — or it is a session the caller RUNS that a role started
+// and holds with no person owner (role_alone, stamped by the server's
+// heldByRoleAlone), which is the role's alone (the
 // server scan drops it from the payload; this is the same rule over the
 // never-pruned client cache, which would otherwise keep rendering the last
 // copy it saw). A row is "mine" if I run it, if I am one of its owners, if it
@@ -2634,7 +2639,7 @@ export function isForeignRow(s: InboxSession, meId: string | null | undefined): 
 }
 function isForeignRowUncached(s: InboxSession, meId: string): boolean {
   if (!isConvexId(s._id)) return false; // optimistic stub — always mine
-  if (isHeldByRoleAlone(s) && !s.owned_by_me) return true;
+  if (s.role_alone && !s.owned_by_me) return true;
   if (!s.user_id) return false; // thin/legacy row with no author → keep
   return isForeignSession(s, undefined, meId);
 }
@@ -3435,13 +3440,14 @@ export function sessionStructuralSig(s: InboxSession): string {
     // Presence of an unacked assignment flips the row's prominent treatment.
     // Changes only on assign/ack, never on heartbeats.
     s.assigned_ping ? 1 : 0,
-    // WHO OWNS IT decides whose inbox it is in (isForeignRow →
-    // isHeldByRoleAlone): a session a role holds with no person owner leaves
-    // the runner's scope entirely. Written by an ownership change alone, never
+    // WHO OWNS IT decides whose inbox it is in (isForeignRow → role_alone): a
+    // session a role started and holds with no person owner leaves the
+    // runner's scope entirely. Written by an ownership change alone, never
     // by a heartbeat — and without it here the placement memo would keep
     // serving the previous answer until some other row happened to move.
     s.owner_user_id || "",
     s.owned_by_me ? 1 : 0,
+    s.role_alone ? 1 : 0,
     // WHO DRIVES IT decides where a waiting session files (roleDrives): one its
     // role drives waits on the role, as working. Written by a reparent or a
     // take-over alone, never by a heartbeat.
@@ -4195,7 +4201,9 @@ export function placeInboxRows(
   const placeRowWithOverlays = (s: InboxSession): InboxRowPlacement => {
     const base = sharedPlacementOf(s, deriveLiveAt(liveFactsOf(s), now), askingOf(s), epoch);
     let bucket = base.bucket;
-    let work_state = base.work_state;
+    // What the person reads: a session its role drives that files under
+    // working is working here too (the sort, plan groups, the walks).
+    let work_state = personWorkState(s, base);
     if ((bucket === "needs_input" || bucket === "done" || bucket === "dormant") && !s.inbox_snoozed_until && inFlight(s._id)) {
       bucket = "working";
       work_state = "working";
@@ -5152,7 +5160,7 @@ export function groupSessionsByPlan(
   const memberOf = (sess: InboxSession): PlanMember => {
     const placed = opts.placements?.get(sess._id);
     // An open `cast decide` files the row under questions: that waits on a person too.
-    let work_state: WorkState = placed?.bucket === "questions" ? "needs_input" : placed?.work_state ?? sessionWorkState(sess, now);
+    let work_state: WorkState = placed?.bucket === "questions" ? "needs_input" : placed?.work_state ?? personWorkState(sess, sessionPlacement(sess, now));
     const quiet = placed ? QUIET_BUCKETS.has(placed.bucket) : !!(sess.inbox_stashed_at || sess.is_anchor || sess.standing_role_id);
     if (work_state === "needs_input" && quiet) work_state = "done";
     return { id: sess._id, work_state, at: inboxSortTimeOfRow(sess, work_state, inboxEpoch(now)).at };

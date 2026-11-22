@@ -4,7 +4,7 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
-import { withSafetyBlock, isHostedAgentType } from "@codecast/shared/contracts";
+import { withSafetyBlock, isHostedAgentType, roleDrives } from "@codecast/shared/contracts";
 import { hostedStopOf } from "../../lib/hostedNotice";
 import { imageBytes } from "../../lib/imageByteCache";
 import { compressImage } from "../../lib/compressImage";
@@ -76,6 +76,16 @@ function liveCardTitle(s: Parameters<typeof hostedRowTitle>[0], cardId: string, 
 function modernPlacementSig(session: InboxSession, t: number): string {
   const p = railRowPlacement(session, t);
   return `${p.state}|${p.bucket}`;
+}
+
+// The role a session waits on (shared roleDrives): its role drives it and its
+// own state is not working, so placement files it under Working. The role
+// snapshot on the row names it only when it is the driving role (a standing
+// session's snapshot is its own role).
+function withRoleOf(session: InboxSession, t: number): string | null {
+  const role = session.role;
+  if (!roleDrives(session) || !role || String(role._id) !== String(session.org_role_id)) return null;
+  return railRowPlacement(session, t).state !== "working" ? role.name : null;
 }
 
 // Store actions the card reaches, the same for every card.
@@ -206,7 +216,8 @@ export const SessionCard = memo(function SessionCard({
       `${threadStateView(session, session.message_count, t)?.cardLine ?? ""}|` +
       `${restartPending(restartRowRef.current, t) ? 1 : 0}` +
       // Modern reads the row's placement where no section decides its word.
-      (modern ? `|${modernPlacementSig(session, t)}` : ""),
+      (modern ? `|${modernPlacementSig(session, t)}` : "") +
+      `|${withRoleOf(session, t) ?? ""}`,
     30_000,
   );
   // The machine behind a worktree, read straight off the persisted roster —
@@ -336,6 +347,7 @@ export const SessionCard = memo(function SessionCard({
       session={session}
       workProject={workProjectSig(st as any, cardId)}
       liveTitle={draftTitle || liveTitle || undefined}
+      withRole={withRoleOf(session, coarseNow)}
       now={coarseNow}
       chrome={chrome}
       liveness={{

@@ -1409,6 +1409,11 @@ export default defineSchema({
     // means the primary owner. Written by sessionOwnership (setSessionDriver,
     // the reparent core: a role target clears it, removing the person clears it).
     driver_user_id: v.optional(v.id("users")),
+    // A role started it on its own (spawn.recordHandStart: a hand, a line run's
+    // sessions). With the role still filed and no person owner row, it is the
+    // role's alone and in no person's inbox (shared isHeldByRoleAlone).
+    // `migrations:backfillRoleStarted` stamps sessions from before the field.
+    role_started: v.optional(v.boolean()),
     // RETIRED (org-staffing.md S28): the escalation stamp `cast escalate` wrote.
     // Nothing reads or writes it. It stays in the schema only until
     // `migrations:clearEscalationStamps` has run in prod (rows still carry it,

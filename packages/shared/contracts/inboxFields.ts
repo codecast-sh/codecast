@@ -84,7 +84,7 @@ export const INBOX_ROW_FIELDS = [
   "workflow_run_activity", "workflow_run_agents_done", "workflow_run_agents_total",
   // An adopted flow station's flow (enrichInboxSessionRow).
   "flow_name", "flow_run_id",
-  "anchor_id", "is_anchor", "last_turn_origin", "org_role_id", "driver_user_id", "standing_role_id", "role", "acting_user_id",
+  "anchor_id", "is_anchor", "last_turn_origin", "org_role_id", "driver_user_id", "role_alone", "standing_role_id", "role", "acting_user_id",
   "character_avatar", "character_name", "drawn_icon", "icon", "icon_color", "image_preview_url", "browser_pane_offer",
   "owner_device_id", "owner_user_id", "author_avatar", "local_mirror", "migration_batch_id",
   "cloud_placement", "cloud_seed", "cloud_workspace", "cloud_context_too_large", "cloud_placement_progress",

@@ -86,6 +86,10 @@ export type SessionCardViewProps = {
   // under its spawner's card in Modern (inboxStore.nestsWorkers). On its own
   // row it stays a full card.
   subRow?: "trigger" | "worker";
+  /** The role this session waits on: its role drives it and its own state is
+   *  not working (shared placeInboxRow files it under Working). Drawn as
+   *  "With <role>" where the card says its state; null otherwise. */
+  withRole?: string | null;
   /** The card's clock: relative ages, thread-state freshness, the blocked chip's TTL. */
   now: number;
   chrome: SessionCardChrome;

@@ -374,9 +374,10 @@ function colorForState(ws: string): string {
 // affects sort order, not grouping, so a pinned killed row is still collapsed in
 // the default view. formatter.test.ts pins this rather than the docs alone.
 function formatStateBadge(s: SessionPresence): string {
-  const ws = s.work_state || "idle";
+  // A session its role drives waits on the role: it reads as working, with the role named.
+  const ws = s.with_role ? "working" : s.work_state || "idle";
   const liveGlyph = LIVENESS_GLYPH[sessionLivenessVerdict(s)];
-  const label = WORK_STATE_LABEL[ws] ?? ws;
+  const label = s.with_role ? `with @${s.with_role}` : WORK_STATE_LABEL[ws] ?? ws;
   const detail = s.is_live && s.agent_status && s.agent_status !== ws && WORK_STATE_LABEL[s.agent_status] === undefined
     ? `${c.dim}:${s.agent_status}${c.reset}`
     : "";
@@ -398,6 +399,8 @@ export interface SessionPresence {
   is_completed?: boolean;
   is_pinned?: boolean;
   agent_status?: string;
+  /** The role it waits on (inboxForCLI): its role drives it and it files under working. */
+  with_role?: string | null;
   /** Server sort key below relevance: 0 prompt cache warm, 1 cache expired,
    * 2 killed or completed (recencyRankOf in convex/conversations.ts). */
   recency_rank?: 0 | 1 | 2;
@@ -918,6 +921,8 @@ interface MonitorSession {
   agent_type?: string;
   agent_status?: string;
   work_state: string;
+  /** The role it waits on: its role drives it and it files under working. */
+  with_role?: string | null;
   /** Retired (inbox_killed_at). Shipped by inboxForCLI; the watch stream reads
    * it to emit a kill as a departure, and the snapshot badges it. */
   is_killed?: boolean;
@@ -1141,7 +1146,8 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
     if (options.all) groups.push(["idle", `${c.gray}IDLE${c.reset}`]);
 
     for (const [ws, label] of groups) {
-      const group = result.sessions.filter((s) => s.work_state === ws);
+      // A session its role drives waits on the role: a person reads it as working.
+      const group = result.sessions.filter((s) => (s.with_role ? "working" : s.work_state) === ws);
       if (group.length === 0) continue;
       lines.push(`${c.bold}${label}${c.reset} ${c.dim}(${group.length})${c.reset}`);
       lines.push("");

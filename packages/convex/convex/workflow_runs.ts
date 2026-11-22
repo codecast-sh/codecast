@@ -400,7 +400,12 @@ export async function answerGateCore(ctx: Ctx, run: any, response: string, by: A
  */
 export async function ownsRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {
   if (String(run.user_id) === String(userId)) return true;
-  return !!run.primary_conversation_id && (await isSessionOwner(ctx, run.primary_conversation_id, userId));
+  if (run.primary_conversation_id && (await isSessionOwner(ctx, run.primary_conversation_id, userId))) return true;
+  // A role's run on another account's machine: the seat's person, who runs the
+  // role's standing session, answers for it too (it has no person owner).
+  if (!run.org_role_id || !run.spawner_conversation_id) return false;
+  const seat = await ctx.db.get(run.spawner_conversation_id);
+  return !!seat?.standing_role_id && String(seat.user_id) === String(userId);
 }
 
 async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<boolean> {

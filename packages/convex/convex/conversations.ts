@@ -55,6 +55,8 @@ import {
   INBOX_WINDOW_CAPS,
   isSessionActivityFresh,
   isHeldByRoleAlone,
+  startedByRole,
+  personWorkState,
   isStackedAsk,
   type InboxBucket,
   type InboxPlacement,
@@ -8897,6 +8899,9 @@ async function enrichInboxSessionRow(
     owner_user_id: (conv as any).owner_user_id?.toString() ?? null,
     // The person driving: with a role filed, unset means the role drives.
     driver_user_id: conv.driver_user_id?.toString() ?? null,
+    // A role started it and still holds it with no person owner: the role's
+    // alone, so a replica drops it from the runner's inbox (isForeignRow).
+    role_alone: await heldByRoleAlone(ctx, conv),
     user_id: conv.user_id,
     acting_user_id: (conv as any).acting_user_id ?? null,
     is_anchor: !!(conv as any).anchor_id,
@@ -9438,12 +9443,12 @@ export async function scanInboxConversations(
     extraBudget--;
   }
   // Every candidate's owner row before anything reads ownedByMeIds (the
-  // fold, the working set): a no-op while the owner
+  // role-alone drop, the fold, the working set): a no-op while the owner
   // window is complete.
   if (truncated.has("owned")) await Promise.all([...byId.values(), ...recentSubagents].map(ownerRowFor));
 
-  // A session a role holds with no person owner is the role's alone
-  // (isHeldByRoleAlone): the windows above are keyed on the runner
+  // A session a role started and still holds with no person owner is the
+  // role's alone (heldByRoleAlone): the windows above are keyed on the runner
   // (`user_id`), so without this drop it would sit in the runner's inbox. Every
   // other session the caller runs stays theirs whoever else owns it.
   //
@@ -9452,11 +9457,9 @@ export async function scanInboxConversations(
   // team, and an explicitly requested id was named by the caller — neither is
   // mine to hide.
   const uidForRole = userId.toString();
-  for (const [idStr, conv] of [...byId.entries()]) {
-    if (conv.user_id?.toString() !== uidForRole) continue;
-    if (extraIds.has(idStr)) continue;
-    if (isHeldByRoleAlone(conv)) byId.delete(idStr);
-  }
+  const roleAlone = await Promise.all([...byId.entries()].map(async ([idStr, conv]) =>
+    conv.user_id?.toString() === uidForRole && !extraIds.has(idStr) && await heldByRoleAlone(ctx, conv, ownedByMeIds.has(idStr)) ? idStr : null));
+  for (const idStr of roleAlone) if (idStr) byId.delete(idStr);
 
   const conversations = Array.from(byId.values());
 
@@ -9518,6 +9521,15 @@ export async function scanInboxConversations(
     conversations, maps, deliberateIds, clusterCutoff, selectionIds: new Set(selection.members.keys()), belowFold,
     ownedByMeIds, myOwnerRowById, ownerRowFor, truncated, pinnedOverflowIds, recentSubagents, poolChildren,
   };
+}
+
+// The membership rule's server half (shared isHeldByRoleAlone): whether a
+// person owns the session is read off session_owners itself, never the
+// owner_user_id cache. Only a session a role started pays the read.
+export async function heldByRoleAlone(ctx: { db: any }, conv: any, ownedByViewer = false): Promise<boolean> {
+  if (ownedByViewer || !startedByRole(conv)) return false;
+  const owner = await ctx.db.query("session_owners").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conv._id)).first();
+  return isHeldByRoleAlone(conv, !!owner);
 }
 
 // Would one of the windows above have read this row? The named path asks it
@@ -10824,6 +10836,8 @@ export function tallyInboxRows(
     // The projection placement (shared placeInboxRow) and the fold flag, next
     // to the verdict the CLI has always tallied.
     bucket: InboxBucket;
+    // The handle of the role it waits on (personWorkState), else null.
+    with_role: string | null;
     below_fold: boolean;
     is_killed: boolean;
     is_pinned: boolean;
@@ -10904,8 +10918,12 @@ export function tallyInboxRows(
     }
     const is_live = !!s.is_connected && s.agent_status !== "hibernated";
 
+    // A person's figures: a session its role drives that files under working
+    // counts as working (personWorkState); the row keeps its work_state for
+    // whoever watches it.
+    const shownState = personWorkState(s, { bucket, work_state });
     counts.total++;
-    counts[work_state]++;
+    counts[shownState]++;
     if (s.is_pinned) counts.pinned++;
     if (is_live) counts.live++;
     if (s.below_fold) counts.below_fold++;
@@ -10930,6 +10948,9 @@ export function tallyInboxRows(
       hibernated_at: s.hibernated_at ?? null,
       work_state,
       bucket,
+      // The role it waits on, when its role drives it and it files under
+      // working: the CLI lists it there, "with @handle".
+      with_role: shownState !== work_state ? (s.role?.handle ?? "role") : null,
       below_fold: !!s.below_fold,
       // A retired row (still listed while pinned, or under --all). The watch
       // stream reads it to emit a kill as a departure, not a transition.

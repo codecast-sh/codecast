@@ -565,6 +565,53 @@ export async function releaseFolderHeld(ctx: { db: any; scheduler?: any }, args:
   }
 }
 
+// One-time backfill: stamp `role_started` on sessions a role started before
+// spawn.recordHandStart wrote it, so the membership rule (shared
+// isHeldByRoleAlone) keeps them out of the runner's inbox. Provenance, in the
+// order read: a line run the role's standing session spawned (the run's
+// `org_role_id`, and its spawner is a standing session); a spawner or parent
+// chain that reaches a role's standing session within 8 links; a first
+// message that is the hand briefing. A session filed under a role by a person
+// matches none of them and stays the person's. Dry by default; `role` (a
+// handle) narrows it.
+//   packages/convex/run.sh migrations:backfillRoleStarted '{"dryRun":true}'
+export const backfillRoleStarted = internalMutation({
+  args: { dryRun: v.optional(v.boolean()), role: v.optional(v.string()) },
+  handler: async (ctx, args) => backfillRoleStartedRun(ctx, args),
+});
+
+export async function backfillRoleStartedRun(ctx: { db: any }, args: { dryRun?: boolean; role?: string }) {
+  const dryRun = args.dryRun ?? true;
+  let roles: any[] = await ctx.db.query("org_roles").collect();
+  if (args.role) roles = roles.filter((r) => r.handle === args.role!.replace(/^@/, "").toLowerCase());
+  const isStanding = async (id: any) => !!id && !!(await ctx.db.get(id))?.standing_role_id;
+  const rows: Array<{ role: string; session: string; why: string }> = [];
+  for (const role of roles) {
+    const held: any[] = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id)).collect();
+    for (const c of held) {
+      if (c.role_started || c.standing_role_id || c.anchor_id) continue;
+      let why: string | null = null;
+      const run = c.workflow_run_id ? await ctx.db.get(c.workflow_run_id) : null;
+      if (run?.org_role_id && await isStanding(run.spawner_conversation_id)) why = "a line run of the role";
+      let cur = c;
+      for (let depth = 0; !why && depth < 8; depth++) {
+        const up = cur.spawned_by_conversation_id ?? cur.parent_conversation_id;
+        cur = up ? await ctx.db.get(up) : null;
+        if (!cur) break;
+        if (cur.standing_role_id) why = "spawned from a role's standing session";
+      }
+      if (!why) {
+        const first: any = await ctx.db.query("messages").withIndex("by_conversation_timestamp", (q: any) => q.eq("conversation_id", c._id)).order("asc").first();
+        if (isHandBriefing(first?.content)) why = "briefed as a hand";
+      }
+      if (!why) continue;
+      rows.push({ role: role.handle, session: c.short_id ?? String(c._id).slice(0, 7), why });
+      if (!dryRun) await ctx.db.patch(c._id, { role_started: true });
+    }
+  }
+  return { dryRun, stamped: rows.length, rows };
+}
+
 // One-time backfill: stamp first_linked_conversation (the indexed copy of a
 // task's conversation_ids[0] / a doc's related_conversation_ids[0]) on rows
 // written before the change-feed interceptor stamped it, so a visibility change

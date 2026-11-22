@@ -1,5 +1,6 @@
 import { internalMutation, internalAction, internalQuery } from "./functions";
 import { routeUpWaitingSession } from "./agentTasks";
+import { roleDrives } from "@codecast/shared/contracts";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { isLowSignalPrompt } from "./titleGeneration";
@@ -109,12 +110,13 @@ export async function performSetIdleSummary(ctx: any, args: { conversation_id: a
       patch.settle_verdict_at = Date.now();
     }
     if (Object.keys(patch).length) await ctx.db.patch(args.conversation_id, patch);
-    // A session under a role that ended a turn asking something in prose tells
-    // its role now that the verdict says so (org-staffing.md S28); stalls and
-    // declared blocks were routed at settle time (notifications).
+    // A session its role drives that ended a turn asking something in prose
+    // tells its role now that the verdict says so (org-staffing.md S28); stalls
+    // and declared blocks were routed at settle time (notifications). A paused
+    // role is not told: the person driving reads it.
     if (args.settle_verdict === "needs_input") {
       const conv = await ctx.db.get(args.conversation_id);
-      if (conv && (conv.org_role_id || conv.standing_role_id) && conv.thread_state_status !== "blocked") {
+      if (conv && (roleDrives(conv) || conv.standing_role_id) && conv.thread_state_status !== "blocked") {
         await routeUpWaitingSession(ctx, conv, { why: "waiting", since: conv.updated_at ?? Date.now() });
       }
     }

@@ -674,3 +674,14 @@ describe("formatReadResult with a shared short id", () => {
     expect(out).toContain("   jx78gqjj | ");
   });
 });
+
+// A session its role drives waits on the role (shared personWorkState): the
+// person's view lists it under WORKING, "with @handle", not under NEEDS YOU.
+describe("formatMonitor lists a role-driven waiting session as the role's work", () => {
+  test("it sits under WORKING with the role named, and NEEDS YOU stays empty", () => {
+    const out = strip(formatMonitor(result([session({ work_state: "needs_input", with_role: "growth" })], { working: 1, idle: 0 })));
+    expect(out).toContain("WORKING");
+    expect(out).not.toContain("NEEDS YOU");
+    expect(out).toContain("with @growth");
+  });
+});

@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { Star, Rocket } from "lucide-react";
-import { withSafetyBlock, isStashHidden, isHostedAgentType, roleDrives } from "@codecast/shared/contracts";
+import { withSafetyBlock, isStashHidden, isHostedAgentType } from "@codecast/shared/contracts";
 import { entityRoute } from "@codecast/shared/entities";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
@@ -81,6 +81,7 @@ export function ModernSessionCardView({
   sectionStatus,
   forkColorKey,
   subRow,
+  withRole: withRoleName = null,
   now,
   chrome,
   liveness,
@@ -147,9 +148,8 @@ export function ModernSessionCardView({
   // A session its role drives files as working while it waits on the role
   // (shared placeInboxRow): the word names who it waits on instead of
   // claiming the agent runs.
-  const drivingRole = roleDrives(session) && session.role && String(session.role._id) === String(session.org_role_id) ? session.role : null;
-  const withRole = !!drivingRole && status === "working" && !isPendingSend && railRowPlacement(session, now).state !== "working";
-  const word = withRole ? `With ${drivingRole!.name}` : meta.word;
+  const withRole = !!withRoleName && status === "working" && !isPendingSend;
+  const word = withRole ? `With ${withRoleName}` : meta.word;
   const line = sessionCardLine({
     row: session,
     status,
@@ -334,7 +334,7 @@ export function ModernSessionCardView({
         <div data-mc-line2 className={`mt-0.5 flex min-w-0 items-start gap-2 ${hasThumb ? "pr-11" : ""}`}>
           <span className="flex h-[18px] w-5 shrink-0 items-center justify-center"><SessionStatusMark status={status} /></span>
           <p title={lineTitle} className={`min-w-0 flex-1 ${nested ? "text-meta" : "text-ui"} ${expanded ? "line-clamp-2" : "truncate"}`}>
-            <SessionStatusWord status={status} word={word} title={withRole ? `Waiting on ${drivingRole!.name}, which drives this session` : meta.meaning} className="font-medium" />
+            <SessionStatusWord status={status} word={word} title={withRole ? `Waiting on ${withRoleName}, which drives this session` : meta.meaning} className="font-medium" />
             {line.reason && <span className={meta.text}><span aria-hidden className="text-sol-text-dim"> · </span>{line.reason}</span>}
             {line.text && (
               <span className="text-sol-text-muted">
