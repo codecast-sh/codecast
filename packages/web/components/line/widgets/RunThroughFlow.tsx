@@ -13,7 +13,7 @@ import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useInboxStore } from "../../../store/inboxStore";
 import { usePoolFlowRows, useSessionFlowRuns, useTeamDefaultFlowSlug } from "../../../hooks/useSyncWorkflows";
 import { useRunFlow } from "../../../hooks/useFlowObject";
-import { repositoryOfRemote, useRepoFlows } from "../../../hooks/useRepoFlows";
+import { repositoryOfRemote, sessionRemoteOf, useRepoFlows } from "../../../hooks/useRepoFlows";
 import { appPool, linesFirst, type AppFlow } from "../../../lib/line/flowPool";
 import { defaultFlowOf, takesSessionChange } from "@codecast/shared/contracts/flowPool";
 import { asksBeforeLand, journeyOf, journeyStages, journeyWords, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
@@ -168,7 +168,7 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
   const workflows = usePoolFlowRows();
   const teamSlug = useTeamDefaultFlowSlug();
   // The session's repository's own flows come first, as `cast flow run` takes them in its checkout.
-  const remote = useInboxStore((s) => (((s as any).sessions?.[conversationId] ?? (s as any).conversations?.[conversationId]) as { git_remote_url?: string } | undefined)?.git_remote_url ?? null);
+  const remote = useInboxStore((s) => sessionRemoteOf(s as any, conversationId));
   const repoFlows = useRepoFlows(repositoryOfRemote(remote));
   const { pool, fallback } = useMemo(() => {
     // Flows only: a segment runs one part of a change, never the change to live.
