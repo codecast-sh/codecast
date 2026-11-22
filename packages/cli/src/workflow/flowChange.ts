@@ -75,9 +75,23 @@ export async function freezeSessionChange(root: string, session: string, opts: {
   };
 }
 
+/**
+ * Bring origin's `branch` into the local branch of that name. A plain `fetch origin +b:b` is refused while a worktree
+ * has `b` checked out (the run's own worktree does), so the tip is fetched alone and the ref moved with update-ref.
+ */
+export async function fetchBranch(root: string, branch: string): Promise<string> {
+  await git(root, ["fetch", "--quiet", "origin", `refs/heads/${branch}`]);
+  const tip = (await git(root, ["rev-parse", "FETCH_HEAD"])).trim();
+  await git(root, ["update-ref", `refs/heads/${branch}`, tip]);
+  return tip;
+}
+
 /** Where a named branch stands now; a pull request's is fetched first, since its session pushes rather than commits here. */
 async function branchTip(root: string, change: FrozenChange): Promise<string> {
-  if (change.source === "pr") await git(root, ["fetch", "--quiet", "origin", `+${change.branch}:${change.branch}`]).catch(() => "");
+  // A pull request's fetch that fails reads the tip already here, as it always has; a placed change has no other copy
+  // of the subject's fix, so its failed fetch fails the refreeze.
+  if (change.source === "pr") await fetchBranch(root, change.branch).catch(() => "");
+  else if (change.pushed) await fetchBranch(root, change.branch);
   return (await git(root, ["rev-parse", `refs/heads/${change.branch}`])).trim();
 }
 
@@ -92,7 +106,7 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
   const before = readFrozenChange(runDir);
   if (!before?.session) throw new Error("The run's change did not come from a session, so there is no session's change to freeze again");
   // A named branch or pull request is the change: the session fixes it by committing there (a pull request's by pushing).
-  const change: FrozenChange = before.source === "session"
+  const change: FrozenChange = before.source === "session" && !before.pushed
     ? await freezeSessionChange(root, before.conversation ?? before.session, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null })
     : { ...before, tip: await branchTip(root, before) };
   const tree = (rev: string) => git(root, ["rev-parse", `${rev}^{tree}`]).then((s) => s.trim()).catch(() => rev);
