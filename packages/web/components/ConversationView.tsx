@@ -227,6 +227,7 @@ import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
 import type { MountedRows } from "../lib/virtualList/coverage";
 import { createScrollSync, type ScrollSync } from "../lib/virtualList/scrollSync";
 import { lazyNamed } from "../lib/lazyNamed";
+import { landOnLiveEnd } from "../lib/landOnLiveEnd";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
 /** Agent states in which the session is waiting on its human, not working. */
@@ -508,6 +509,23 @@ const ConversationViewInner = (
   const pageAnchorRef = useRef<{ id: string; relTop: number; scrollHeight: number; scrollTop: number; dir: 'older' | 'newer'; until: number; loading?: boolean } | null>(null);
   const paginationPropsRef = useRef({ hasMoreAbove: false, hasMoreBelow: false, isLoadingOlder: false, isLoadingNewer: false, onLoadOlder: undefined as (() => void) | undefined, onLoadNewer: undefined as (() => void) | undefined });
   paginationPropsRef.current = { hasMoreAbove: !!hasMoreAbove, hasMoreBelow: !!hasMoreBelow, isLoadingOlder: !!isLoadingOlder, isLoadingNewer: !!isLoadingNewer, onLoadOlder, onLoadNewer };
+  // The reader's own send or Escape lands on the end they can see it at: the
+  // live end when newer pages are unloaded, the loaded end otherwise
+  // (lib/landOnLiveEnd). Scrolls the reader did not cause (a pane re-shown)
+  // keep scrollToBottomFnRef, which stays inside the loaded window.
+  const goToLiveEnd = useCallback(() => {
+    landOnLiveEnd({
+      hasMoreBelow: paginationPropsRef.current.hasMoreBelow,
+      jumpingToEnd: jumpPendingRef.current === 'end',
+      jumpToLiveEnd: onJumpToEnd && (() => {
+        jumpDirectionRef.current = 'end';
+        setJumpPending('end');
+        onJumpToEnd();
+      }),
+      scrollToLoadedEnd: () => requestAnimationFrame(() => scrollToBottomFnRef.current()),
+      resumeFollow: () => setUserScrolled(false),
+    });
+  }, [onJumpToEnd, setJumpPending, setUserScrolled]);
   const scrollCtxRef = useRef({ messageCount: 0, messagesLen: 0, timelineLen: 0, loadedStartIndex: 0 });
   const knownItemIdsRef = useRef<Set<string>>(new Set());
   const newItemIdsRef = useRef<Set<string>>(new Set());
@@ -731,10 +749,9 @@ const ConversationViewInner = (
   const handleSendInlineMessage = useCallback(async (content: string) => {
     if (!conversation || !effectiveConversationId) return;
     const clientId = addOptimisticMsg(effectiveConversationId, content);
-    setUserScrolled(false);
-    requestAnimationFrame(() => scrollToBottomFnRef.current());
+    goToLiveEnd();
     sendInlineMessage(effectiveConversationId, content, undefined, clientId);
-  }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, setUserScrolled]);
+  }, [conversation, effectiveConversationId, sendInlineMessage, addOptimisticMsg, goToLiveEnd]);
   // Narrow subscription: this monolith only reads agent_status, permission_mode,
   // session_id, is_connected, tmux_session and team_id from the session row — but
   // the row's identity churns every ~1s heartbeat (updated_at / last_heartbeat /
@@ -1309,27 +1326,16 @@ const ConversationViewInner = (
   const sendEscape = useSessionEscape(convexConvId, { active: conversation?.status === "active", isOwner: effectiveIsOwner });
   const handleSendEscape = useCallback(() => {
     if (!sendEscape()) return;
-    setUserScrolled(false);
-    requestAnimationFrame(() => scrollToBottomFnRef.current());
-  }, [sendEscape, setUserScrolled]);
+    goToLiveEnd();
+  }, [sendEscape, goToLiveEnd]);
 
   const sentRouter = useRouter();
   const handleMessageSent = useCallback(() => {
     // A send that starts a new project opens the project's page.
     const projectKey = conversation?._id ? newProjectStartedBy(conversation._id) : null;
     if (projectKey) sentRouter.push(newProjectHref(projectKey));
-    setUserScrolled(false);
-    // A paged window (a deep link or a search hit) has not loaded the newest
-    // rows, the sent message among them, so scrolling to the loaded end leaves
-    // it out of view. Jump to the live end the way "Scroll to bottom" does.
-    if (paginationPropsRef.current.hasMoreBelow && onJumpToEnd) {
-      jumpDirectionRef.current = 'end';
-      setJumpPending('end');
-      onJumpToEnd();
-      return;
-    }
-    requestAnimationFrame(() => scrollToBottomFnRef.current());
-  }, [setUserScrolled, conversation?._id, sentRouter, onJumpToEnd, setJumpPending]);
+    goToLiveEnd();
+  }, [goToLiveEnd, conversation?._id, sentRouter]);
 
   // Double-Esc opens the unified branch map drilled straight into the current
   // branch's messages (the old standalone navigator is retired into the map).
