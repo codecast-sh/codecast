@@ -1950,17 +1950,18 @@ async function pageWorkspace(
 export type VisiblePage = { row: Doc<"artifacts">; workspace: WorkspaceKey; author: { name: string | null; image: string | null }; mine: boolean };
 
 /** The pages a viewer's gallery holds: their own, and teammates' pages whose
- *  workspace is a team they share, each owner's newest first. The one
- *  enumeration behind the app's Pages view and the MCP list_pages tool.
- *  `perOwner` caps how many of each owner's pages are read: every page costs
- *  reads to place in a workspace, and one account holds thousands. */
+ *  workspace is a team they share, newest first. The one enumeration behind
+ *  the app's Pages view and the MCP list_pages tool. Every page costs reads to
+ *  place in a workspace, and one account holds thousands, so `perOwner` caps how
+ *  many of each owner's pages are listed, and `limit` and `readBudget` stop
+ *  placing pages once that many are kept or that many docs have been read for
+ *  placement. Pages are placed newest first across all owners, so what the
+ *  caps cut is always the oldest, however large the team. */
 export async function pagesVisibleTo(
   ctx: { db: QueryCtx["db"] },
   userId: Id<"users">,
-  opts: { perOwner?: number } = {},
+  opts: { perOwner?: number; limit?: number; readBudget?: number } = {},
 ): Promise<VisiblePage[]> {
-  const seen = new Map<string, any>();
-  const rows: VisiblePage[] = [];
   const newestOf = (uid: Id<"users">) => {
     const q = ctx.db
       .query("artifacts")
@@ -1969,35 +1970,46 @@ export async function pagesVisibleTo(
     return opts.perOwner === undefined ? q.collect() : q.take(opts.perOwner);
   };
 
-  const viewer = await ctx.db.get(userId);
-  const me = { name: viewer?.name ?? null, image: viewer?.image ?? null };
-  for (const row of await newestOf(userId)) {
-    rows.push({ row, workspace: await pageWorkspace(ctx, row, seen), author: me, mine: true });
-  }
-
   // Teammates' artifacts: visible in the gallery, but WITHOUT the secrets —
   // manage/edit keys belong to the owner alone. Team edit rights flow
   // through editForWeb (authed), not through key possession.
-  for (const [uid, teams] of await visibleOwnersFor(ctx, userId)) {
-    const theirs = await newestOf(uid);
-    if (!theirs.length) continue;
-    const user = await ctx.db.get(uid);
-    const author = { name: user?.name ?? null, image: user?.image ?? null };
-    for (const row of theirs) {
-      const workspace = await pageWorkspace(ctx, row, seen);
-      if (teams.has(workspace)) rows.push({ row, workspace, author, mine: false });
+  const owners = new Map<string, Set<string> | null>([[userId.toString(), null]]);
+  for (const [uid, teams] of await visibleOwnersFor(ctx, userId)) owners.set(uid.toString(), teams);
+  const candidates: Doc<"artifacts">[] = [];
+  for (const uid of owners.keys()) candidates.push(...(await newestOf(uid as Id<"users">)));
+  candidates.sort((a, b) => b.updated_at - a.updated_at);
+
+  const seen = new Map<string, any>();
+  const authors = new Map<string, VisiblePage["author"]>();
+  const authorOf = async (uid: Id<"users">) => {
+    if (!authors.has(uid)) {
+      const user = await ctx.db.get(uid);
+      authors.set(uid, { name: user?.name ?? null, image: user?.image ?? null });
+    }
+    return authors.get(uid)!;
+  };
+  const rows: VisiblePage[] = [];
+  for (const row of candidates) {
+    if (rows.length >= (opts.limit ?? Infinity) || seen.size >= (opts.readBudget ?? Infinity)) break;
+    const mine = row.user_id === userId;
+    const workspace = await pageWorkspace(ctx, row, seen);
+    if (mine || owners.get(row.user_id.toString())?.has(workspace)) {
+      rows.push({ row, workspace, author: await authorOf(row.user_id), mine });
     }
   }
   return rows;
 }
 
-// The gallery's read budget. Convex refuses a query past 4,096 reads, and an
-// account with 1,759 pages crossed it: every page costs a workspace read and
-// two enrichment reads (stats, comments). The gallery reads each owner's
-// newest GALLERY_SCAN_PER_OWNER pages and enriches the newest
-// GALLERY_LIMIT of those; older pages stay reachable by link and `cast publish ls`.
+// The gallery's read budget. Convex refuses a query past 4,096 reads. Each
+// owner's newest GALLERY_SCAN_PER_OWNER pages are listed (one read per owner),
+// placed in workspaces newest first until GALLERY_LIMIT are kept or
+// GALLERY_PLACE_READS docs were read to place them, and each kept page costs
+// two enrichment reads (stats, comments). That totals about 2,000 + 3 per
+// teammate, whatever the team's size; older pages stay reachable by link and
+// `cast publish ls`.
 export const GALLERY_SCAN_PER_OWNER = 300;
 export const GALLERY_LIMIT = 500;
+export const GALLERY_PLACE_READS = 1000;
 
 export const listForWeb = query({
   args: {},
@@ -2005,9 +2017,11 @@ export const listForWeb = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return { artifacts: [] };
 
-    const rows = (await pagesVisibleTo(ctx, userId, { perOwner: GALLERY_SCAN_PER_OWNER }))
-      .sort((a, b) => b.row.updated_at - a.row.updated_at)
-      .slice(0, GALLERY_LIMIT);
+    const rows = await pagesVisibleTo(ctx, userId, {
+      perOwner: GALLERY_SCAN_PER_OWNER,
+      limit: GALLERY_LIMIT,
+      readBudget: GALLERY_PLACE_READS,
+    });
     const out = [];
     for (const { row, workspace, author, mine: isMine } of rows) {
       const stats = await ctx.db
