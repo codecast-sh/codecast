@@ -66,6 +66,7 @@ import { startHostedConversationFor } from "./assistant/entry";
 import { castMachinesEnabledFor, startOnCastMachine } from "./castMachines";
 import { parseQuoteDrafts, quotesWaiting, removeQuotes, saveQuotes, stampQuotesSent } from "./quoteDrafts";
 import { canSendProductMessage, enqueuePendingMessage, retryPendingMessageForUser, cancelPendingMessageForUser, reorderQueuedForUser, mergeQueuedForUser, releaseQueuedForUser } from "./pendingMessages";
+import { composerChannel } from "./pendingMessageWrites";
 import { enqueueCloudSpawn, performCloudHostAction, performSetCloudAutoscale, performSetLocalMirror } from "./cloud";
 import type { CloudHostAction, LocalMirrorMode, MirrorResolve } from "@codecast/shared/contracts";
 import { effectiveStartFrom, parkOnCloudHost, resolveCloudDevice } from "./cloudPlacement";
@@ -1291,11 +1292,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   mergeQueued: async (ctx, userId, [convId, messageId, intoId]: [string, string, string]) =>
     mergeQueuedForUser(ctx, userId, convId as Id<"conversations">, { messageId, intoId }),
   // The composer's "Queue for later": a row held for the end of the turn.
-  queueMessage: async (ctx, userId, [convId, content, clientId]: [string, string, string]) => {
+  queueMessage: async (ctx, userId, [convId, content, clientId, typed]: [string, string, string, boolean | undefined]) => {
     const conversation = await ctx.db.get(convId as Id<"conversations">);
     if (!conversation) throw new Error("conversation_deleted");
     if (!(await canSendProductMessage(ctx, userId, conversation))) throw new Error("Unauthorized");
-    return await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true, channel: "composer", queue: true });
+    return await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true, ...composerChannel(typed), queue: true });
   },
   releaseQueued: async (ctx, userId, [convId]: [string]) =>
     releaseQueuedForUser(ctx, userId, convId as Id<"conversations">),
@@ -1305,7 +1306,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     userId,
     // quoteIds: the composer quotes the message carries (quoteDrafts.ts), sent
     // only by builds with the quote record on. Older builds send four args.
-    [convId, content, imageIds, clientId, quoteIds]: [string, string, string[] | undefined, string | undefined, string[] | undefined],
+    // typed: true only from the composer's own submit (composerChannel).
+    [convId, content, imageIds, clientId, quoteIds, typed]: [string, string, string[] | undefined, string | undefined, string[] | undefined, boolean | undefined],
     result,
   ) => {
     const quoteClientIds = Array.isArray(quoteIds) && quoteIds.length ? quoteIds : undefined;
@@ -1318,6 +1320,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         content,
         ...(imageIds?.length ? { image_storage_ids: imageIds as Id<"_storage">[] } : {}),
         ...(quoteClientIds ? { quote_client_ids: quoteClientIds } : {}),
+        ...(typed === true ? { typed: true } : {}),
       });
     }
     const conversation = await ctx.db.get(convId as Id<"conversations">);
@@ -1342,8 +1345,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       image_storage_ids: imageIds?.length ? (imageIds as any) : undefined,
       client_id: clientId,
       human: true,
-      // dispatch runs on a session login (getAuthUserId), never an API token.
-      channel: "composer",
+      ...composerChannel(typed),
     });
     if (stampQuotes) await stampQuotesSent(ctx, userId, conversation._id, clientId!, stampQuotes, waiting);
     return queued;

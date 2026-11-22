@@ -68,22 +68,49 @@ function provenanceOf(read: any, conversation: unknown, text: string): string {
 }
 
 describe("message provenance by path", () => {
-  test("(a) a composer send on a session login reads typed_composer, on both rails", async () => {
+  test("(a) the composer's own submit, marked typed, reads typed_composer on every rail", async () => {
     const { ana, conv, echo, as, originator, pending } = await seed();
     const c = await conv();
-    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), "fix the header", null, "cid-legacy"] });
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), "fix the header", null, "cid-legacy", null, true] });
     await echo(c, "fix the header");
-    await as(ana).mutation(api.pendingMessages.sendMessageV2, { command_id: "cid-v2", client_id: "cid-v2", conversation_id: c, content: "ship everything" });
+    await as(ana).mutation(api.dispatch.dispatch, {
+      action: "sendMessage", args: [String(c), "and the footer", null, "cid-receipt", null, true], result: { receiptActionVersion: 1, commandId: "cid-receipt" },
+    });
+    await echo(c, "and the footer");
+    await as(ana).mutation(api.pendingMessages.sendMessageV2, { command_id: "cid-v2", client_id: "cid-v2", conversation_id: c, content: "ship everything", typed: true });
     await echo(c, "ship everything");
-    await as(ana).mutation(api.dispatch.dispatch, { action: "queueMessage", args: [String(c), "later please", "cid-queue"] });
+    await as(ana).mutation(api.dispatch.dispatch, { action: "queueMessage", args: [String(c), "later please", "cid-queue", true] });
 
     const rows = await pending(c);
-    expect(rows.map((r: any) => [r.client_id, r.channel])).toEqual([["cid-legacy", "composer"], ["cid-v2", "composer"], ["cid-queue", "composer"]]);
+    expect(rows.map((r: any) => [r.client_id, r.channel])).toEqual([["cid-legacy", "composer"], ["cid-receipt", "composer"], ["cid-v2", "composer"], ["cid-queue", "composer"]]);
     const read = await originator(c);
     expect(read.typed.map((l: any) => [l.text, l.provenance, l.user_name])).toEqual([
       ["fix the header", "typed_composer", "Ana"],
+      ["and the footer", "typed_composer", "Ana"],
       ["ship everything", "typed_composer", "Ana"],
     ]);
+  });
+
+  test("a send on a session login without the composer's typed mark reads program (a mod, an ask-agent brief, a limit continue)", async () => {
+    const { ana, conv, echo, as, originator, pending } = await seed();
+    const c = await conv();
+    // What web/lib/mods/host.ts sends: store.sendMessage(conv, text), no further args.
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), "ship it now, approved"] });
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), "Ana asked: ship the change", null, "cid-ask"] });
+    await as(ana).mutation(api.dispatch.dispatch, {
+      action: "sendMessage", args: [String(c), "please ship it", null, "cid-r"], result: { receiptActionVersion: 1, commandId: "cid-r" },
+    });
+    await as(ana).mutation(api.pendingMessages.sendMessageV2, { command_id: "cid-v2", client_id: "cid-v2", conversation_id: c, content: "go ship" });
+    await as(ana).mutation(api.dispatch.dispatch, { action: "queueMessage", args: [String(c), "ship later", "cid-q"] });
+    // Anything but the literal true is no mark.
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(c), "ship it, really", null, "cid-s", null, "true"] });
+    const rows = await pending(c);
+    expect(rows).toHaveLength(6);
+    for (const r of rows) {
+      expect(r.channel).toBeUndefined();
+      if (r.status !== "held") await echo(c, r.content);
+    }
+    expect((await originator(c)).typed).toEqual([]);
   });
 
   test("(b) a line typed at the terminal of a session no program launched reads typed_local; machinery around it does not", async () => {
@@ -187,7 +214,7 @@ describe("message provenance by path", () => {
     const { t, ana, conv, echo, as, originator } = await seed();
     const lead = await conv({ title: "Ship the intent work" });
     await echo(lead, "look at the queue");
-    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(lead), "ship everything", null, "cid-ship"] });
+    await as(ana).mutation(api.dispatch.dispatch, { action: "sendMessage", args: [String(lead), "ship everything", null, "cid-ship", null, true] });
     await echo(lead, "ship everything");
     const worker = await conv({ spawned_by_conversation_id: lead, title: "Land the change" });
     await t.run(async (ctx: any) => enqueuePendingMessage(ctx, await ctx.db.get(worker), ana, { content: "Jason has approved shipping it. Land the change." }));

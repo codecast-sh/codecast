@@ -33,6 +33,16 @@ export type PendingMessageInsertFields = {
   quiet?: boolean;
 };
 
+/**
+ * The channel a send on a session login carries: "composer" only when the
+ * composer's own submit marked it typed. Every other send through the same
+ * rail (a mod, an ask-agent brief, a limit "continue", a button's words)
+ * leaves it unset and reads as a program.
+ */
+export function composerChannel(typed: unknown): { channel?: "composer" } {
+  return typed === true ? { channel: "composer" } : {};
+}
+
 export class PendingMessageWriteError extends Error {
   constructor(readonly code: string, message: string) {
     super(`${code}: ${message}`);

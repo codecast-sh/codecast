@@ -211,7 +211,7 @@ async function runScenario(order: "create-first" | "upload-first", opts: { failU
   const sends = calls.filter((c) => c.action === "sendMessage");
   expect(sends.length).toBeGreaterThanOrEqual(1);
   for (const s of sends) {
-    expect(s.args).toEqual([REAL_ID, "[Image 1] look at this", [STORAGE_ID], clientId]);
+    expect(s.args).toEqual([REAL_ID, "[Image 1] look at this", [STORAGE_ID], clientId, null, true]);
   }
   const row = useInboxStore.getState().pendingMessages[REAL_ID]?.[0] as any;
   expect(row?.images).toEqual([{ media_type: "image/png", storage_id: STORAGE_ID }]);

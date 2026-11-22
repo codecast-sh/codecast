@@ -368,7 +368,7 @@ function NewSessionSheet({ visible, seed, sharedImages, onClose, onSessionCreate
       return;
     }
     const empty = !text && firstImages.length === 0;
-    if (!empty) dispatchComposerSend(stubId, text || IMAGE_ONLY_CONTENT, firstImages);
+    if (!empty) dispatchComposerSend(stubId, text || IMAGE_ONLY_CONTENT, firstImages, true);
     finishSessionCreate(stubId, empty);
   };
 

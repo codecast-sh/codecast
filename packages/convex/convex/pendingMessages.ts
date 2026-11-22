@@ -20,7 +20,7 @@ import { hasGrantedSendAccess } from "./collab";
 import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
-import { insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
+import { composerChannel, insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
 import { answeredThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage, sendArrival, sessionMessageIntentOf, trustedAgentStatus, restoreFrameTags, SESSION_MESSAGE_OPEN_TAG, type SendArrival, type SessionMessageIntent } from "@codecast/shared/contracts";
 import { autoRecoveryEnabled, listOnlineDevices } from "./ccAccountsShared";
 import { resolveOwnerDeviceView } from "./lib/ownerDevice";
@@ -418,9 +418,10 @@ export async function enqueuePendingMessage(
     // commands) that leave `origin` unset.
     human?: boolean;
     // Sent from a signed-in person's web or phone composer, never through an
-    // API token (schema pending_messages.channel). Only the composer's own
-    // server paths set it; every other producer leaves it unset, which reads
-    // as a program (lib/messageProvenance.ts).
+    // API token (schema pending_messages.channel). Set only through
+    // composerChannel, when the composer's own submit marked the send typed;
+    // every other producer leaves it unset, which reads as a program
+    // (lib/messageProvenance.ts).
     channel?: "composer";
     // A note the session reads on its NEXT turn, never a turn of its own: the
     // row is parked as "held" (the daemon and the retry cron read "pending"
@@ -733,6 +734,9 @@ export const sendMessageV2 = mutation({
     // The composer quotes this message carries (quoteDrafts.ts): stamped sent
     // here, in the transaction that queues it.
     quote_client_ids: v.optional(v.array(v.string())),
+    // Sent by the composer's own submit (composerChannel). Left out of the
+    // command fingerprint, so a redrive that lacks it still matches its receipt.
+    typed: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -827,13 +831,13 @@ export const sendMessageV2 = mutation({
 
       const waiting = await quotesWaiting(ctx, conversation._id, quoteClientIds);
       if (!existing) {
-        // Session login only (requireUser): the composer's receipt rail.
+        // Session login only (requireUser).
         await enqueuePendingMessage(ctx, conversation, userId, {
           content: args.content,
           image_storage_ids: imageStorageIds,
           client_id: args.client_id,
           human: true,
-          channel: "composer",
+          ...composerChannel(args.typed),
         });
       }
       const quotes = quoteClientIds

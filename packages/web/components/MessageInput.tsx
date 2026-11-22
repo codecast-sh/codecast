@@ -1962,8 +1962,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             useInboxStore.getState().stampPendingDispatchContent(resolvedId, clientId, expandedContent);
           }
         }
-        if (quoteIds.length > 0) sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId, quoteIds);
-        else sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId);
+        // typed: the person's own words from this composer (server composerChannel).
+        sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId, quoteIds.length > 0 ? quoteIds : undefined, true);
         // Hand the resolved id + the send's clientId to the popup so it can paint
         // this same message optimistically in the MAIN window (send & open) without
         // a second send — same clientId means it dedupes against the server echo.
@@ -2058,7 +2058,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             useInboxStore.getState().stampPendingDispatchContent(resolvedId, clientId, expanded);
           }
         }
-        sendMessage(resolvedId, expanded, undefined, clientId);
+        sendMessage(resolvedId, expanded, undefined, clientId, undefined, true);
         setSentAt(Date.now());
         sentContentRef.current = next;
         setShowStuckBanner(false);
@@ -2178,7 +2178,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       if (stop) {
         void useInboxStore.getState().stopAndSend(conversationId, text, clientId).catch((err) => toast.error(err instanceof Error ? err.message : "Could not stop and send"));
         onMessageSent?.();
-      } else if (canQueryServer && !hostedConversation) useInboxStore.getState().queueMessage(conversationId, text, clientId);
+      } else if (canQueryServer && !hostedConversation) useInboxStore.getState().queueMessage(conversationId, text, clientId, true);
       else setQueuedMessages(prev => [...prev, text]);
     } catch (error) {
       captureException(error);

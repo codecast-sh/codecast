@@ -23,7 +23,7 @@ describe("durable dispatch call-site guards", () => {
     // resolves the stub through awaitConvexId before it sends.
     expect(source).toContain("sendMessageWhenReady(sid, fullMessage, undefined, clientId)");
     const store = await Bun.file(new URL("../inboxStore.ts", import.meta.url)).text();
-    const whenReady = store.slice(store.indexOf("clientId?: string) => {", store.indexOf("  sendMessageWhenReady: (convId")));
+    const whenReady = store.slice(store.indexOf("typed?: true) => {", store.indexOf("  sendMessageWhenReady: (convId")));
     expect(whenReady.slice(0, whenReady.indexOf("\n  },\n"))).toContain("awaitConvexId(convId)");
   });
 
