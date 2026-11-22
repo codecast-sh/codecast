@@ -79,7 +79,10 @@ describe("folder trust", () => {
 });
 
 describe("conversation_summaries.db", () => {
-  test("the fixture reproduces the live state: a read-only open is refused", () => {
+  // macOS's SQLite refuses a read-only open of a WAL database with no -shm
+  // (measured beside a running agy); Linux's allows it, so there the readers
+  // take the direct path and the tests below cover that instead.
+  test.if(process.platform === "darwin")("the fixture reproduces the live state on macOS: a read-only open is refused", () => {
     const dataDir = agyDataDir([{ id: randomUUID(), workspace: "/w" }]);
     const file = path.join(dataDir, "conversation_summaries.db");
     expect(() => {
