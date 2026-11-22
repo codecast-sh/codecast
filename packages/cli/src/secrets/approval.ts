@@ -20,7 +20,7 @@ export function isNeedsApproval(res: unknown): res is SecretNeedsApproval {
  */
 export function approvalLines(res: SecretNeedsApproval, why?: string): string[] {
   const held = res.approvals?.length ? res.approvals : [res.needs_approval];
-  const ids = held.map((a) => a.decision).join(", ");
+  const ids = [...new Set(held.map((a) => a.decision))].join(", ");
   const names = held.map((a) => a.secret).join(", ");
   return [
     `Ask first: ${names} ${held.length > 1 ? "wait" : "waits"} on a person's approval for this session (${ids}). Nothing was read.`,
