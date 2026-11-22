@@ -12312,86 +12312,60 @@ export async function stampBrowserPaneOfferHandled(
   return { changed: true };
 }
 
-// Bulk-dismiss the caller's sessions whose last activity (updated_at) is older
-// than `older_than_days` (default 30). Clears the accumulated working set without
-// deleting anything — dismissed rows stay searchable and accessible. FIRE-ONCE:
-// the heavy work is handed to a self-draining background job, NOT looped from the
-// client. A client-side loop of dozens of write-mutations is fragile on a
-// saturation-prone deployment (one flaky call surfaced a scary error toast); a
-// single scheduled drainer can't fail the user's click and drains durably on the
-// server's own clock. The client has already dismissed locally (optimistic), so
-// this only needs to make it stick server-side / cross-device.
+// The most rows one bulk call may touch. The web sends a big sweep as ordered
+// chunks of this size, so no single mutation reads past its limits.
+export const BULK_DISMISS_MAX = 100;
+
+// "Dismiss all N" from the inbox's old-sessions prompt: dismisses exactly the
+// sessions the prompt counted and listed, never a set re-derived by age here. An
+// age sweep also took the session the person had open and any old row the
+// window did not hold, so the number on the button stopped matching what was
+// acted on (ct-98161). Only the caller's own rows, and never one pinned,
+// snoozed or already dismissed in the meantime. `at` is the client's clock, the
+// value the web wrote optimistically, so the Undo can clear exactly this
+// sweep's stamps and nothing a later dismiss wrote.
 export const dismissStaleInboxSessions = mutation({
   args: {
-    older_than_days: v.optional(v.number()),
+    ids: v.array(v.id("conversations")),
+    at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
-    const cutoff = Date.now() - (args.older_than_days ?? 30) * 24 * 60 * 60 * 1000;
-    await ctx.scheduler.runAfter(0, internal.conversations.drainStaleDismiss, {
-      userId,
-      cutoff,
-      cursor: null,
-      attempt: 0,
-    });
-    return { scheduled: true };
+    if (args.ids.length > BULK_DISMISS_MAX) throw new Error(`At most ${BULK_DISMISS_MAX} sessions per call`);
+    const at = args.at ?? Date.now();
+    let dismissed = 0;
+    for (const id of args.ids) {
+      const conv = await ctx.db.get(id);
+      if (!conv || conv.user_id !== userId) continue;
+      if (conv.inbox_dismissed_at || conv.inbox_pinned_at || conv.inbox_snoozed_until) continue;
+      await ctx.db.patch(id, { inbox_dismissed_at: at });
+      dismissed++;
+    }
+    return { at, dismissed };
   },
 });
 
-// Self-draining background dismiss. Dismisses one bounded page of the caller's
-// >cutoff-old sessions (skipping pinned + already-dismissed) and reschedules
-// itself with the next cursor until the whole backlog is cleared. Range-scans
-// only the OLD region (by_user_updated, lt cutoff). EVERYTHING stale but pinned
-// is dismissed — including subagents/orphans, because a dismissed parent promotes
-// its old subagent children to the top level and they'd refill the inbox. A
-// thrown page (transient backend hiccup) rolls back untouched and retries the
-// SAME cursor with backoff up to a cap; work is idempotent (dismissed rows are
-// skipped), so retries never double-count and a give-up only loses cross-device
-// completeness, never the local clear the user already saw.
-export const drainStaleDismiss = internalMutation({
+// The Undo on that sweep's toast: clears the dismiss stamp from the rows that
+// still carry this sweep's `at`. A row dismissed again since (another stamp),
+// or brought back already, is left as it is.
+export const restoreStaleInboxSessions = mutation({
   args: {
-    userId: v.id("users"),
-    cutoff: v.number(),
-    cursor: v.union(v.string(), v.null()),
-    attempt: v.number(),
+    ids: v.array(v.id("conversations")),
+    at: v.number(),
   },
   handler: async (ctx, args) => {
-    noteWriteCause(ctx, "cron:drainStaleDismiss");
-    const now = Date.now();
-    try {
-      const result = await ctx.db
-        .query("conversations")
-        .withIndex("by_user_updated", (q) =>
-          q.eq("user_id", args.userId).lt("updated_at", args.cutoff)
-        )
-        .paginate({ cursor: args.cursor, numItems: 100 });
-
-      for (const conv of result.page) {
-        if (conv.inbox_dismissed_at) continue;
-        if (conv.inbox_pinned_at || conv.inbox_snoozed_until) continue;
-        await ctx.db.patch(conv._id, { inbox_dismissed_at: now });
-      }
-
-      if (!result.isDone) {
-        await ctx.scheduler.runAfter(150, internal.conversations.drainStaleDismiss, {
-          userId: args.userId,
-          cutoff: args.cutoff,
-          cursor: result.continueCursor,
-          attempt: 0,
-        });
-      }
-    } catch {
-      const attempt = args.attempt + 1;
-      if (attempt <= 6) {
-        await ctx.scheduler.runAfter(2000 * attempt, internal.conversations.drainStaleDismiss, {
-          userId: args.userId,
-          cutoff: args.cutoff,
-          cursor: args.cursor,
-          attempt,
-        });
-      }
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    if (args.ids.length > BULK_DISMISS_MAX) throw new Error(`At most ${BULK_DISMISS_MAX} sessions per call`);
+    let restored = 0;
+    for (const id of args.ids) {
+      const conv = await ctx.db.get(id);
+      if (!conv || conv.user_id !== userId || conv.inbox_dismissed_at !== args.at) continue;
+      await ctx.db.patch(id, { inbox_dismissed_at: undefined });
+      restored++;
     }
+    return { restored };
   },
 });
 

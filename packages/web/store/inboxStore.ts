@@ -6406,7 +6406,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   killSession: (id: string) => void;
   deleteSession: (id: string) => void;
   killSessions: (ids: string[]) => void;
-  markSessionsDismissed: (ids: string[]) => void;
+  markSessionsDismissed: (ids: string[], at?: number) => void;
+  unmarkSessionsDismissed: (ids: string[], at: number) => void;
   markBlockedAcknowledged: (ids: string[]) => void;
   markBlockedReviveRequested: (ids: string[]) => void;
   clearBlockedReviveRequested: (ids: string[]) => void;
@@ -11109,9 +11110,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // per mutated conversation, so dismissing thousands would be a dispatch storm.
   // The caller persists authoritatively with ONE paginated server mutation
   // (conversations.dismissStaleInboxSessions) instead. Skips already-dismissed
-  // rows. Used by the "dismiss old sessions" inbox prompt.
-  markSessionsDismissed: sync(function (this: Draft, ids: string[]) {
-    const now = Date.now();
+  // rows. Used by the "dismiss old sessions" inbox prompt. `at` is the one stamp
+  // the caller also sends the server, so the Undo (unmarkSessionsDismissed)
+  // clears exactly this sweep's rows.
+  markSessionsDismissed: sync(function (this: Draft, ids: string[], at?: number) {
+    const now = at ?? Date.now();
     const stamped: string[] = [];
     for (const id of ids) {
       const sess = this.sessions[id];
@@ -11135,6 +11138,26 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (stamped.length) {
       broadcastGesture({ kind: "hide", mode: "kill", ids: stamped, ts: now }, bridgeUserId(this));
     }
+  }),
+
+  // The Undo on the bulk sweep's toast: clears the dismiss from the rows that
+  // still carry that sweep's stamp `at` (a row dismissed again since keeps its
+  // newer one). Same shape as markSessionsDismissed: local sync() for the instant
+  // UI, the caller persists with conversations.restoreStaleInboxSessions.
+  unmarkSessionsDismissed: sync(function (this: Draft, ids: string[], at: number) {
+    const cleared: string[] = [];
+    for (const id of ids) {
+      const sess = this.sessions[id];
+      if (sess && sess.inbox_dismissed_at === at) {
+        sess.inbox_dismissed_at = null;
+        cleared.push(id);
+      }
+      const conv = this.conversations[id] as any;
+      if (conv && conv.inbox_dismissed_at === at) conv.inbox_dismissed_at = null;
+    }
+    // The sweep only took rows that were not hidden, so the sibling's restore
+    // (which clears every hide flag) lands them where they were.
+    if (cleared.length) broadcastGesture({ kind: "restore", ids: cleared, ts: Date.now() }, bridgeUserId(this));
   }),
 
   // Optimistic clear of the API-error banner flag — the blocked-sessions
