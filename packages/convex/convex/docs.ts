@@ -410,6 +410,8 @@ export const create = mutation({
     project_id: v.optional(v.string()),
     conversation_id: v.optional(v.string()),
     labels: v.optional(v.array(v.string())),
+    // Pinned from birth: a project's memory is its pinned docs (`cast project remember`).
+    pinned: v.optional(v.boolean()),
     // The CLI's --personal / --team: an explicit choice wins over the session's team and the directory mapping.
     workspace: v.optional(v.union(v.literal("personal"), v.literal("team"))),
     team_id: v.optional(v.id("teams")),
@@ -480,6 +482,7 @@ export const create = mutation({
       project_id,
       conversation_id,
       labels: args.labels,
+      ...(args.pinned ? { pinned: true } : {}),
       created_at: now,
       updated_at: now,
     });
