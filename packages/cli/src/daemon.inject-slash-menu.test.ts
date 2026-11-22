@@ -39,8 +39,27 @@ describe("Claude Code's slash-command menu is not the composer", () => {
     expect(tmuxPromptStillHasInput(slashMenuPane(""), "/drive")).toBe(false);
   });
 
-  test("an indented glyph with no closed composer above it is still read", () => {
-    const pane = ["│ ❯ boxed draft │", "  ❯ hello"].join("\n");
-    expect(composerTextStart(pane)).toBe(pane.lastIndexOf("❯") + 1);
+  // A permission dialog drawn under a lone rule, right after a delivered
+  // message: its ❯ is the dialog's, and the transcript turn above the rule
+  // must never read as a draft still waiting for Enter (an Enter here picks
+  // "1. Yes").
+  const dialogPane = (between: string[]) => [
+    "❯ please run ls in the repo",
+    "",
+    "⏺ Bash(ls)",
+    "",
+    RULE,
+    ...between,
+    " ❯ 1. Yes",
+    "   2. No",
+    " Esc to cancel · Tab to amend",
+  ].join("\n");
+
+  test("a permission dialog under a lone rule keeps its own ❯", () => {
+    for (const pane of [dialogPane([" Do you want to proceed?"]), dialogPane([])]) {
+      expect(composerTextStart(pane)).toBe(pane.lastIndexOf("❯") + 1);
+      expect(tmuxComposerHoldsPayload(pane, "please run ls in the repo")).toBe(false);
+      expect(tmuxPromptStillHasInput(pane, "please run ls in the repo")).toBe(false);
+    }
   });
 });

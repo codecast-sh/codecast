@@ -285,20 +285,25 @@ export const CLAUDE_COMPOSER_SCROLLED_BELOW = /^\s*[─━]{2,}\s+↓\s*\d+\s+mo
 // …"). Read as the last glyph, the menu became the composer, and a skill whose
 // description names its own command read as the payload twice, so every
 // /drive sent from the app was held and given up on (2026-11-22). Such a row
-// gives way to the glyph above the rule.
+// gives way to the composer's ❯ only in the menu's exact shape: the row sits
+// directly under a bottom rule, and above that rule is a closed box whose ❯
+// starts its line directly under the top rule. A dialog's ❯ ("Do you want to
+// proceed?" / " ❯ 1. Yes") is never skipped, so the transcript's last user
+// turn above it can never read as an unsent draft and draw an Enter.
+const COMPOSER_RULE = /^[─━═]{3,}\s*$/;
+function lineEndingAt(pane: string, newlineAt: number): string {
+  return pane.slice(pane.lastIndexOf("\n", newlineAt - 1) + 1, newlineAt);
+}
 function skipSuggestionMenu(pane: string, glyphAt: number): number {
   if (glyphAt === -1) return -1;
   const rowStart = pane.lastIndexOf("\n", glyphAt) + 1;
-  if (!/^[ \t]+$/.test(pane.slice(rowStart, glyphAt))) return glyphAt;
-  const above = pane.slice(0, rowStart).split("\n");
-  let offset = rowStart;
-  for (let i = above.length - 1; i >= 0; i--) {
-    offset -= above[i].length + (i < above.length - 1 ? 1 : 0);
-    if (!/^[─═]{3,}\s*$/.test(above[i])) continue;
-    const composerGlyph = Math.max(pane.lastIndexOf("❯", offset), pane.lastIndexOf("›", offset));
-    return composerGlyph === -1 ? glyphAt : composerGlyph;
-  }
-  return glyphAt;
+  if (rowStart === 0 || !/^[ \t]+$/.test(pane.slice(rowStart, glyphAt))) return glyphAt;
+  if (!COMPOSER_RULE.test(lineEndingAt(pane, rowStart - 1))) return glyphAt;
+  const bottomRuleStart = pane.lastIndexOf("\n", rowStart - 2) + 1;
+  const composerGlyph = Math.max(pane.lastIndexOf("❯", bottomRuleStart), pane.lastIndexOf("›", bottomRuleStart));
+  if (composerGlyph <= 0 || pane[composerGlyph - 1] !== "\n") return glyphAt;
+  const topRule = lineEndingAt(pane, composerGlyph - 1);
+  return COMPOSER_RULE.test(topRule) || CLAUDE_OVERPAINTED_RULE.test(topRule) ? composerGlyph : glyphAt;
 }
 
 // Where the composer's text starts: after its last ❯/› glyph, or under the top
