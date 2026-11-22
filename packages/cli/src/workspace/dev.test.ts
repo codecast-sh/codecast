@@ -112,7 +112,7 @@ describe("dev server detection", () => {
   test("no dev script, no service", () => {
     const root = repo({ "bun.lock": "", "vite.config.ts": "", "package.json": JSON.stringify({ scripts: { build: "vite build" } }) });
     expect(detectProject(root).services).toEqual({});
-    expect(detectProject(root).browser.enabled).toBe(true);
+    expect(detectProject(root).browser.enabled).toBe(false);
   });
 });
 
