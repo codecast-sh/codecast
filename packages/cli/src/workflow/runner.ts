@@ -6,6 +6,7 @@ import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
 import { NO_CAUSE_HISTORY } from "@codecast/shared/contracts/causeHistory";
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { ParkedClock, taskWaiting } from "./parkedClock.js";
+import { HandWatch, handTimeouts } from "./handWatch.js";
 import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
@@ -31,7 +32,7 @@ import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { behindWords, frozenChangeContext } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
-import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
+import { checkoutChangeOf, failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
 import { restoreRunTree } from "./runWorktree.js";
@@ -281,11 +282,14 @@ async function executeCliAgent(
     });
   }
 
-  const timeout = handTimeoutMs(node, options);
   const startMs = Date.now();
   const pollInterval = 10_000;
+  // Its wait leaves out sleep and ends on quiet, as a session hand's does (handWatch.ts); its output is its work.
+  const watch = new HandWatch(new ParkedClock(startMs), handTimeouts(node, options));
+  let lastTail = "";
+  let over: string | null = null;
 
-  while (Date.now() - startMs < timeout) {
+  while (!(over = watch.over())) {
     await new Promise(r => setTimeout(r, pollInterval));
 
     if (!runtime.isAlive(handle)) {
@@ -323,13 +327,16 @@ async function executeCliAgent(
       return "success";
     }
 
+    const tail = runtime.getOutput(handle, 20).text;
+    if (tail !== lastTail) watch.active();
+    lastTail = tail;
     const elapsed = Math.round((Date.now() - startMs) / 60_000);
     if (elapsed > 0 && elapsed % 5 === 0) {
       console.log(`${c.dim}  ... ${elapsed}m elapsed${c.reset}`);
     }
   }
 
-  console.log(`  ${c.red}timeout${c.reset} after ${Math.round(timeout / 60_000)}m`);
+  console.log(`  ${c.red}timeout${c.reset}: the agent ${over}`);
   runtime.kill(handle);
   return "failure";
 }
@@ -430,6 +437,10 @@ async function executeSessionNode(
 async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions): Promise<NodeOutcome> {
   const subject = subjectOf(context);
   const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
+  // A checkout's change: the finding goes to the writers of the files it names; one that names none goes on to the subject.
+  const checkout = checkoutChangeOf(context["run_dir"]);
+  const writers = checkout ? writersNamed(checkout, `${context["stop_reason"] ?? ""}\n${expandAgentPrompt(node.prompt ?? "", graph, context)}`) : [];
+  if (writers.length) return briefWriters(node, graph, context, cwd, options, writers);
   if (!subject) {
     context["last_error"] = `This run's change came from no session, so nobody can work on what the run found.${found}`;
     context["station_dead"] = node.id;
@@ -487,6 +498,48 @@ function lastSaid(state: WorkflowRunState): string | undefined {
   return undefined;
 }
 
+// A checkout's change names who wrote each file (flows.md FL4), so a station the subject would do goes to the writers
+// of the files the finding names: each gets the station's brief, quietly, with a line naming its own files among the
+// failing ones. The run waits until every one of them has worked and settled (the subject's wait, run for each at
+// once; one that never answers fails the station as a subject would), then freezes the checkout's change again. The
+// writers are other people's sessions in a shared checkout: nothing here parks or retires them.
+async function briefWriters(node: WorkflowNode, graph: WorkflowGraph, context: Record<string, string>, cwd: string, options: RunOptions, writers: Writer[]): Promise<NodeOutcome> {
+  const call = (route: string, body: Record<string, unknown>) => cliCall(options, route, body);
+  const found = context["stop_reason"] ? ` ${context["stop_stage"] || "The stage"} said: ${context["stop_reason"]}` : "";
+  const brief = expandAgentPrompt(node.prompt ?? "", graph, context).trim();
+  const names = writers.map((w) => `${w.shortId} (${w.files.join(", ")})`).join(", ");
+  const dead = (why: string): NodeOutcome => { context["last_error"] = `${why}${found}`; context["station_dead"] = node.id; return "failure"; };
+  const waits: Array<Writer & { sentAtCount: number; sentAt: number }> = [];
+  for (const w of writers) {
+    const row = await subjectRow(call, w);
+    if (!row) return dead(`${w.shortId}, who wrote ${w.files.join(", ")}, cannot be read, so nobody can work on what the run found.`);
+    const sentAt = Date.now();
+    if (!(await sendToSubject(options, w, writerBrief(brief, w), subjectSendKey(options, context, `${node.id}:${w.shortId}`), true))) return dead(`Could not send ${node.label} to session ${w.shortId}.`);
+    waits.push({ ...w, sentAtCount: row.message_count ?? 0, sentAt });
+  }
+  console.log(`  ${c.green}briefed${c.reset} ${names}`);
+  const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
+  await waiting({ node_id: node.id, conversation_id: writers[0].conversationId, since: Date.now(), note: `${names}: ${context["stop_reason"] || brief}`.slice(0, 600) });
+  const outcomes = await Promise.all(waits.map((w) => waitOnStation(node, graph, context, cwd, options, undefined, w)));
+  await waiting(null);
+  const failed = outcomes.find((o) => o !== "success");
+  if (failed) return failed;
+  try {
+    const { refreezeSessionChange, inboxRosterVia } = await import("./flowChange.js");
+    const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]), { roster: inboxRosterVia(call) });
+    Object.assign(context, frozenChangeContext(context["run_dir"]));
+    const said = `briefed ${names}; ${moved
+      ? `froze the checkout's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
+      : "the checkout's change is as it was: the stage runs again on the same change"}`;
+    console.log(`  ${c.green}✓${c.reset} ${said}`);
+    recordNodeOutput(context, node.id, said);
+    context[`${node.id}.briefed`] = writers.map((w) => w.shortId).join(" ");
+  } catch (err) {
+    return dead(`Could not freeze the checkout's change again: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  return "success";
+}
+
 /** What a send of the run to its subject is, as the start of its client_id: the run, and what is sent (a station, an answer, the end). */
 function subjectSendKey(options: RunOptions, context: Record<string, string>, what: string): string {
   return `run:${options.runId || path.basename(context["run_dir"] || "local")}:${what}`;
@@ -531,6 +584,8 @@ async function retireSubject(options: RunOptions, context: Record<string, string
   const branch = context["branch"];
   const base = context["default_branch"] || "main";
   if (!subject || options.dryRun || !branch) return null;
+  // A checkout's subject is the session that ran it, whose own work is no part of the change: it stays.
+  if (checkoutChangeOf(context["run_dir"])) return null;
   const keep = (why: string) => { console.log(`${c.dim}  ${subject.shortId} stays: ${why}${c.reset}`); return null; };
   const { landedCommit } = await import("./awaitDeploy.js");
   const landed = await landedCommit(cwd, branch, base, (context["change_files"] || "").split(" ").filter(Boolean)).catch(() => null);
@@ -650,7 +705,6 @@ async function waitOnStation(
     await reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", session_id: shortId });
   }
 
-  const timeout = handTimeoutMs(node, options);
   const startMs = Date.now();
   // The runner it took over from was waiting on a live hand, so a reattached
   // hand that reads not live has gone dark (below), not answered.
@@ -683,9 +737,13 @@ async function waitOnStation(
   let subjectQuiet = 0;
   // The transcript length at which the hand's park flag was last re-stamped (/cli/accounts/restamp-park).
   let restampedAt = -1;
-  // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts).
+  // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts), and
+  // the wait ends when the hand shows no work for a while, not when it has worked long (handWatch.ts).
   const clock = new ParkedClock(startMs);
-  while (clock.elapsed() < timeout) {
+  const watch = new HandWatch(clock, handTimeouts(node, options));
+  let lastCount = -1;
+  let over: string | null = null;
+  while (!(over = watch.over())) {
     await new Promise(r => setTimeout(r, handPollIntervalMs(Date.now() - startMs, options.pollIntervalMs)));
     clock.beginPoll();
     if (answersByHandoff && await handedOff(options)) {
@@ -706,6 +764,9 @@ async function waitOnStation(
     }
     const state: string = row.work_state || "idle";
     if (row.is_live) wasLive = true;
+    // A transcript that moved, or a working status, is work: the hand's quiet window starts again.
+    if (state === "working" || AGENT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) !== lastCount) watch.active();
+    lastCount = row.message_count ?? 0;
     // A hand whose start failed (its machine refused it, or a cloud host's
     // preparation failed) reads idle, never live and never killed: nothing
     // would settle it before the node's timeout, three hours at prove. Once
@@ -778,7 +839,7 @@ async function waitOnStation(
     // status, or a transcript that grew since the last read) the run waits; past the brief and its reply, the turn
     // has ended once two reads in a row find it quiet, or once it pins after the brief (below).
     if (subject && !row.is_killed) {
-      if (state === "working" || grew || SUBJECT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) < subject.sentAtCount + 2) {
+      if (state === "working" || grew || AGENT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) < subject.sentAtCount + 2) {
         subjectQuiet = 0;
         continue;
       }
@@ -891,15 +952,16 @@ async function waitOnStation(
     return "success";
   }
 
-  console.log(`  ${c.red}timeout${c.reset} after ${Math.round(timeout / 60_000)}m — killing ${shortId}`);
-  context["last_error"] = `hand ${shortId} killed after ${Math.round(timeout / 60_000)}m at ${node.id}`;
+  console.log(`  ${c.red}timeout${c.reset}: ${shortId} ${over} — killing it`);
+  context["last_error"] = `hand ${shortId} killed at ${node.id}: it ${over}`;
   context["killed_hand"] = shortId;
   context["station_dead"] = node.id;
   return "failure";
 }
 
-// Agent statuses of a subject inside a turn: whatever its row's work_state says, it has not answered yet.
-const SUBJECT_AT_WORK = new Set(["working", "thinking", "compacting"]);
+// Agent statuses of a hand inside a turn: whatever its row's work_state says, it is at work (a subject has not
+// answered yet, and no hand is quiet).
+const AGENT_AT_WORK = new Set(["working", "thinking", "compacting"]);
 
 // How long a hand asked for its missing handoff has to start answering before
 // a finished reading counts again: the message lands at its next turn.
@@ -1546,14 +1608,6 @@ export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: 
   return subject ? `${label} · ${subject.slice(0, 80)}` : label;
 }
 
-// How long a hand may run before the runner kills it: the node's own
-// `timeout` (seconds) when the graph sets one, since a station that replays
-// evals under load needs more than one that writes criteria, else the run's
-// --agent-timeout, else 30 minutes.
-export function handTimeoutMs(node: Pick<WorkflowNode, "timeout">, options: Pick<RunOptions, "agentTimeout">): number {
-  return node.timeout ? node.timeout * 1000 : options.agentTimeout || 1800_000;
-}
-
 // The failure path for a bound task (the-line.md L4). A hand that handed off
 // blocked or needs_context already parked the task in review: keep it there.
 // Retries exhausted parks it in review as blocked. Anything else (a killed
@@ -1910,7 +1964,8 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     return "invalid";
   }
   // The session the change came from is parked while the run goes on without it (subjectPark.ts).
-  const subject = options.dryRun ? null : subjectOf(initialContext);
+  // A checkout's change parks nobody: its subject is the session that ran it, and its writers are others' sessions.
+  const subject = options.dryRun || checkoutChangeOf(initialContext["run_dir"]) ? null : subjectOf(initialContext);
   const parker = subject
     ? startSubjectParker((route, body) => cliCall(options, route, body), subject, options.subjectParkMs ?? SUBJECT_PARK_MS, (line) => console.log(`${c.dim}  ${line}${c.reset}`))
     : undefined;
