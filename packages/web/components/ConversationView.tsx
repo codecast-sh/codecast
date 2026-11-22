@@ -31,6 +31,7 @@ import { isRemoteImageSrc } from "../lib/trustedImageOrigins";
 import { getShareTokenScope, shareTokenArg } from "../lib/shareTokenScope";
 import { useRecordConversationOpen } from "../lib/accessLogOpen";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
+import { SessionCanvasToggle } from "./conversation/SessionCanvasToggle";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
 import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
@@ -83,6 +84,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel,
 import { ConversationHeaderBar, ConversationHeaderTitle } from "./conversation/ConversationHeaderBar";
 import { HEADER_CHIP } from "../lib/headerChip";
 import { SessionStatusSlot } from "./conversation/SessionStatusSlot";
+import { DormantWakeChip } from "./conversation/DormantWakeChip";
 import { RewindStagedChip } from "./conversation/RewindToHere";
 import { sessionDisconnected } from "./conversation/agentStatusPill";
 import { useMutation, useConvex } from "convex/react";
@@ -99,7 +101,7 @@ import { PermissionStack, PERMISSION_SKIP_TOOLS } from "./PermissionCard";
 import { SessionDecisionCard } from "./SessionDecisionCard";
 import { PreloadPublishedPage } from "./PublishedPageEmbed";
 import { HostedApprovalCard, HostedApprovalPending, HostedApprovalSettled } from "./conversation/HostedApprovalCard";
-import { PermissionAnswer, PermissionAskCard, PermissionRecordLine } from "./conversation/PermissionAsk";
+import { PermissionAnswer, PermissionAskCard, RunningPermissionLine } from "./conversation/PermissionAsk";
 import { useRunningPermission } from "../hooks/useRunningPermission";
 import { DecisionStepperContext, usePendingDecisionItems } from "../hooks/useDecisionQueue";
 import { copyToClipboard, shareOrigin, inferHomeDir } from "../lib/utils";
@@ -180,6 +182,7 @@ import { formatMessagePartsForCopy, formatRelativeTime } from "../lib/conversati
 import { PeerTransferStrip } from "./conversation/PeerTransferStrip";
 import { ConversationAgeMenuItems, ConversationMetadata, ConversationTaskProgress, ConversationTaskStatsMenuItem, DensityMenuOptions, DeviceMoveStatusStrip, EdgeMessagesIndicator, HandoffMarker, MessagesUnavailableState, RestartStatusStrip, SessionGalleryButton, ThreadTailLoader, TimelineRule } from "./conversation/sessionChrome";
 import { HeaderModelControl } from "./SessionControlMenu";
+import { SessionNotifyIndicator, SessionNotifySubmenu } from "./SessionNotifyMenu";
 import { DENSITY_BY_CONVERSATION, DENSITY_OPTIONS, FEED_DENSITY_CYCLE, defaultDensity } from "../lib/conversationDensity";
 import { followRestoredConversation } from "../lib/followRestoredConversation";
 import { NewSessionFoot, NewSessionView, NonOwnerMessageInput } from "./conversation/sessionControls";
@@ -3265,7 +3268,7 @@ const ConversationViewInner = (
   const hostedTailCard = !conversation || onSendOverride ? null
     : inlineApproval ? (runAsk ? <PermissionAskCard key={decisionItem!.key} item={decisionItem!} /> : <HostedApprovalCard key={decisionItem!.key} item={decisionItem!} keys />)
     // A Yes still running: one line holds the card's place until the result lands.
-    : runningPermission ? <PermissionRecordLine question={runningPermission.question} outcome="running" className="pt-4" />
+    : runningPermission ? <RunningPermissionLine id={runningPermission.id} question={runningPermission.question} />
     // The turn parked on an approval before its decision row arrived: hold
     // the card's place in one quiet line.
     : !decisionItem && hostedSettledAnswer ? <HostedApprovalSettled label={hostedSettledAnswer} />
@@ -4171,7 +4174,7 @@ const ConversationViewInner = (
 
         // A hosted conversation says its state once, in the composer's status
         // line (HostedStatusLine) or its approval card, never as a header pill.
-        status={isHostedAgentType(conversation?.agent_type) ? null : <><SessionStatusSlot conversationId={conversation?._id} agentStatus={managedSession?.agent_status} disconnected={isSessionDisconnected} live={isConversationLive} onRestart={handleRestartSession} /><RewindStagedChip conversationId={conversation?._id} forkedFrom={conversation?.forked_from} /></>}
+        status={isHostedAgentType(conversation?.agent_type) ? null : <><SessionStatusSlot conversationId={conversation?._id} agentStatus={managedSession?.agent_status} disconnected={isSessionDisconnected} live={isConversationLive} onRestart={handleRestartSession} /><DormantWakeChip conversationId={conversation?._id} /><RewindStagedChip conversationId={conversation?._id} forkedFrom={conversation?.forked_from} /></>}
 
         // The facts strip: what this session is (agent and model), where
         // its code sits, and what it is for (task, plan, workflow run),
@@ -4400,6 +4403,7 @@ const ConversationViewInner = (
                 )}
 
                 {sessionGalleryItems.length > 0 && <SessionGalleryButton items={sessionGalleryItems} />}
+                {!guest && conversation?._id && <SessionCanvasToggle conversationId={String(conversation._id)} />}
 
 
                 {/* Copy link, send to chat, search, a huddle, density and the
@@ -4407,6 +4411,8 @@ const ConversationViewInner = (
                     in the menu below, not as bare icons: share and the menu are
                     the row's only plain actions. */}
                 {headerExtra}
+
+                {!guest && <SessionNotifyIndicator conversation={conversation as any} />}
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
@@ -4484,6 +4490,7 @@ const ConversationViewInner = (
                     )}
                     {/* A phone hides the header's facts strip, so the cloud agent's link and actions live here too. */}
                     {!guest && <CloudAgentMenuItems actions={cloudAgentActions} />}
+                    {!guest && <SessionNotifySubmenu conversation={conversation as any} />}
                     <DropdownMenuSeparator />
                     <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">View</DropdownMenuLabel>
                     <DropdownMenuItem onSelect={() => setTimeout(() => { if (propHighlightQuery) propClearHighlight?.(); setIsLocalSearchOpen(true); setLocalSearchQuery(""); setTimeout(() => localSearchInputRef.current?.focus(), 0); })}>
