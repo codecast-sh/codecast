@@ -2888,6 +2888,11 @@ export default defineSchema({
     // the echo can tell a person's message from one a program queued in
     // their name (a spawn brief, an account-switch "continue").
     human: v.optional(v.boolean()),
+    // "composer": a signed-in person sent this from the web or phone composer
+    // (a session login, never an API token). Server-set at those sends only;
+    // absent reads as a program (lib/messageProvenance.ts). Unlike `human`,
+    // no caller can declare it.
+    channel: v.optional(v.literal("composer")),
     status: v.union(
       v.literal("pending"),
       v.literal("injected"),

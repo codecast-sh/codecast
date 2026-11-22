@@ -417,6 +417,11 @@ export async function enqueuePendingMessage(
     // (account-switch "continue", undeliverable receipts, model/effort slash
     // commands) that leave `origin` unset.
     human?: boolean;
+    // Sent from a signed-in person's web or phone composer, never through an
+    // API token (schema pending_messages.channel). Only the composer's own
+    // server paths set it; every other producer leaves it unset, which reads
+    // as a program (lib/messageProvenance.ts).
+    channel?: "composer";
     // A note the session reads on its NEXT turn, never a turn of its own: the
     // row is parked as "held" (the daemon and the retry cron read "pending"
     // only) and nothing about the conversation moves, so a session whose
@@ -501,6 +506,7 @@ export async function enqueuePendingMessage(
       content: fields.content,
       clientId: fields.client_id,
       human: fields.human,
+      channel: fields.channel,
       createdAt: Date.now(),
       queued: true,
     });
@@ -518,6 +524,7 @@ export async function enqueuePendingMessage(
       content: fields.content,
       clientId: fields.client_id,
       human: fields.human,
+      channel: fields.channel,
       createdAt: Date.now(),
       held: true,
     });
@@ -548,6 +555,7 @@ export async function enqueuePendingMessage(
     clientId: fields.client_id,
     origin: fields.origin,
     human: fields.human,
+    channel: fields.channel,
     createdAt: Date.now(),
     quiet: fields.quiet,
     delivery: fenced ?? undefined,
@@ -819,11 +827,13 @@ export const sendMessageV2 = mutation({
 
       const waiting = await quotesWaiting(ctx, conversation._id, quoteClientIds);
       if (!existing) {
+        // Session login only (requireUser): the composer's receipt rail.
         await enqueuePendingMessage(ctx, conversation, userId, {
           content: args.content,
           image_storage_ids: imageStorageIds,
           client_id: args.client_id,
           human: true,
+          channel: "composer",
         });
       }
       const quotes = quoteClientIds

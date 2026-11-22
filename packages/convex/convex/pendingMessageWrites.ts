@@ -21,6 +21,8 @@ export type PendingMessageInsertFields = {
   origin?: "scheduler";
   // A person wrote this (see enqueuePendingMessage.human).
   human?: boolean;
+  // Sent from a signed-in composer (schema pending_messages.channel).
+  channel?: "composer";
   createdAt: number;
   // Park the row as "held" (a standing session's turn, released by the wake
   // rail's flush) instead of "pending".
@@ -112,6 +114,7 @@ async function insertPendingMessageRow(
     client_id: fields.clientId,
     origin: fields.origin,
     human: fields.human || undefined,
+    ...(fields.channel ? { channel: fields.channel } : {}),
     status: fields.held || fields.queued ? ("held" as const) : ("pending" as const),
     ...(fields.queued ? { queued: true } : {}),
     ...(fields.quiet ? { quiet: true } : {}),

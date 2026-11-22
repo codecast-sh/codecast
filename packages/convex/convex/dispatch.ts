@@ -1295,7 +1295,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const conversation = await ctx.db.get(convId as Id<"conversations">);
     if (!conversation) throw new Error("conversation_deleted");
     if (!(await canSendProductMessage(ctx, userId, conversation))) throw new Error("Unauthorized");
-    return await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true, queue: true });
+    return await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true, channel: "composer", queue: true });
   },
   releaseQueued: async (ctx, userId, [convId]: [string]) =>
     releaseQueuedForUser(ctx, userId, convId as Id<"conversations">),
@@ -1342,6 +1342,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       image_storage_ids: imageIds?.length ? (imageIds as any) : undefined,
       client_id: clientId,
       human: true,
+      // dispatch runs on a session login (getAuthUserId), never an API token.
+      channel: "composer",
     });
     if (stampQuotes) await stampQuotesSent(ctx, userId, conversation._id, clientId!, stampQuotes, waiting);
     return queued;
