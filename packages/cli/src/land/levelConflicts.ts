@@ -26,7 +26,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatSessionMessage } from "@codecast/shared/contracts";
-import { LEVEL_TOLD_PATHS_MAX } from "@codecast/shared/contracts/checkouts";
+import { LEVEL_FORBID, levelAskWords, type LevelMerge } from "@codecast/shared/contracts/checkouts";
 import { execFileAsync } from "../proc.js";
 import { gitTry } from "../wipSnapshot.js";
 import { attributeEdits, type Attribution } from "./attribute.js";
@@ -114,20 +114,13 @@ async function blobAt(root: string, rev: string, rel: string): Promise<Buffer | 
 
 const isBinary = (b: Buffer) => b.subarray(0, 8000).includes(0);
 
-export type Merge =
-  | { kind: "merged"; file: string }
-  | { kind: "upstream-deleted" }
-  | { kind: "local-deleted"; file: string | null }
-  | { kind: "binary" }
-  | { kind: "none" };
-
 /**
  * What to hand the writer for one path: `git merge-file` of the old HEAD's
  * blob (base), the working file and upstream's blob, written under `dir`.
  * Never throws: a merge file that cannot be written (a long path, a full disk,
  * a directory in the way) is "none", and the brief still goes out.
  */
-async function writeMerge(root: string, dir: string, rel: string, from: string, to: string, upMode: string): Promise<Merge> {
+async function writeMerge(root: string, dir: string, rel: string, from: string, to: string, upMode: string): Promise<LevelMerge> {
   try {
     const out = path.resolve(dir, rel);
     if (!out.startsWith(dir + path.sep)) return { kind: "none" };
@@ -162,9 +155,9 @@ async function writeMerge(root: string, dir: string, rel: string, from: string, 
 }
 
 /** A three-way merge of each path under `dir`, from the level's base `from` and upstream `to`. Never throws. */
-export async function writeMerges(root: string, dir: string, paths: string[], from: string, to: string): Promise<Map<string, Merge>> {
+export async function writeMerges(root: string, dir: string, paths: string[], from: string, to: string): Promise<Map<string, LevelMerge>> {
   const modes = await upstreamModes(root, to, paths).catch(() => new Map<string, string>());
-  const merges = new Map<string, Merge>();
+  const merges = new Map<string, LevelMerge>();
   for (const p of paths) merges.set(p, await writeMerge(root, dir, p, from, to, modes.get(p) ?? ""));
   return merges;
 }
@@ -177,56 +170,21 @@ async function upstreamCommits(root: string, from: string, to: string, paths: st
   return lines.length > COMMITS_MAX ? [...lines.slice(0, COMMITS_MAX), `- +${lines.length - COMMITS_MAX} more`] : lines;
 }
 
-/** What to do with one path whose merge is not an ordinary merge file; null for one that is. */
-function exception(m: Merge): string | null {
-  switch (m.kind) {
-    case "merged": return null;
-    case "upstream-deleted": return "upstream deletes it: delete your copy, or move your edit to where upstream moved that code";
-    case "local-deleted": return "deleted here and changed upstream: its merge file is upstream's version, to write back if the file should stay";
-    case "binary": return "binary or a symlink, so no merge file: take upstream's version or redo your edit on it";
-    case "none": return "no merge file could be written";
-  }
-}
-
-const FORBID = "Never run git pull, merge, rebase, stash, checkout, restore, reset or commit in this shared checkout: other sessions' uncommitted work lives in it.";
-
 /**
  * The brief for a checkout held behind upstream, to one writer (or, `whose:
- * "nobody"`, the finding for files no session wrote): its conflicting files
- * (up to LEVEL_TOLD_PATHS_MAX named, all of them in `list`), that the others
- * are other sessions', the upstream commits touching its files, where the
- * merge files are, and the one way out.
+ * "nobody"`, the finding for files no session wrote): writes a three-way merge
+ * of each of its files under `.git/codecast/level-conflicts/`, reads the
+ * upstream commits that touched them, and says it in levelAskWords' words,
+ * which the pipeline page's ask shares.
  */
 export async function heldBrief(c: {
-  root: string; host: string; upstream: string; from: string; to: string; behind: number | null; since: number;
-  total: number; mine: string[]; list: string; dir: string; merges: Map<string, Merge>; whose: "session" | "nobody";
+  root: string; gitDir: string; upstream: string | null; behind: number | null; level: { files: string[]; since: number };
+  mine: string[]; from: string; to: string; list: string; host: string; whose: "session" | "nobody";
 }): Promise<{ title: string; body: string }> {
-  const n = c.mine.length;
-  const s = n === 1 ? "" : "s";
-  const others = c.total - n;
-  const since = new Date(c.since).toISOString().replace("T", " ").slice(0, 16);
-  const what = c.whose === "session" ? `${n} of your files` : `${n} file${s} no session wrote`;
-  const title = `${path.basename(c.root)} on ${c.host}: ${what} conflict${n === 1 ? "s" : ""} with ${c.upstream}`;
-  const shown = c.mine.slice(0, LEVEL_TOLD_PATHS_MAX).map((p) => {
-    const note = exception(c.merges.get(p) ?? { kind: "none" });
-    return `  ${p}${note ? ` (${note})` : ""}`;
-  });
-  const to = c.to.slice(0, 9);
-  const body = [
-    `The shared checkout ${c.root} on ${c.host} cannot follow ${c.upstream}: it has stayed at ${c.from.slice(0, 9)} since ${since} UTC while upstream is at ${to}${c.behind ? ` (${c.behind} commit${c.behind === 1 ? "" : "s"} behind)` : ""}, so every session in it misses upstream's work. ${n === 1 ? "This uncommitted file" : `These ${n} uncommitted files`} ${c.whose === "session" ? `${n === 1 ? "was" : "were"} last written by this session` : `${n === 1 ? "has" : "have"} no session that wrote ${n === 1 ? "it" : "them"}`} and conflict${n === 1 ? "s" : ""} with upstream:`,
-    ...shown,
-    ...(n > LEVEL_TOLD_PATHS_MAX ? [`  +${n - LEVEL_TOLD_PATHS_MAX} more`] : []),
-    `The full list: ${c.list}`,
-    ...(others > 0 ? [`The other ${others} conflicting file${others === 1 ? "" : "s"} belong${others === 1 ? "s" : ""} to other sessions, which are told separately: leave ${others === 1 ? "it" : "them"} alone.`] : []),
-    "",
-    `Upstream changed ${n === 1 ? "it" : "them"} in:`,
-    ...(await upstreamCommits(c.root, c.from, c.to, c.mine)),
-    "",
-    `The way out, over these files only: bring upstream's change into each by hand. Its three-way merge, with conflict markers, is at ${c.dir}/<file>: resolve the markers and write the result over the file, or redo your edit on upstream's version (\`git show ${to}:<file>\`).`,
-    `Edit only the files named here and in the list. ${FORBID}`,
-    "Once they carry upstream's change, the next level sweep (within a minute) moves the checkout by itself.",
-  ].join("\n");
-  return { title, body };
+  const dir = mergeDir(c.gitDir);
+  const merges = await writeMerges(c.root, dir, c.mine, c.from, c.to);
+  const commits = await upstreamCommits(c.root, c.from, c.to, c.mine);
+  return levelAskWords({ path: c.root, upstream: c.upstream, behind: c.behind }, c.level, c.mine, { list: c.list, mergeDir: dir, merges: Object.fromEntries(merges), commits, to: c.to }, { host: c.host, whose: c.whose });
 }
 
 function oldestMtime(root: string, paths: string[], now: number): number {
@@ -237,7 +195,7 @@ function oldestMtime(root: string, paths: string[], now: number): number {
   return oldest;
 }
 
-function action(p: string, m: Merge, to: string): string {
+function action(p: string, m: LevelMerge, to: string): string {
   const show = `git show ${to.slice(0, 9)}:${p}`;
   switch (m.kind) {
     case "merged": return `Three-way merge with conflict markers: ${m.file}. Resolve the markers there and write the result over ${p}, or redo your edit on upstream's version (${show}).`;
@@ -248,13 +206,13 @@ function action(p: string, m: Merge, to: string): string {
   }
 }
 
-async function racedBrief(root: string, r: LevelResult, paths: string[], merges: Map<string, Merge>): Promise<string> {
+async function racedBrief(root: string, r: LevelResult, paths: string[], merges: Map<string, LevelMerge>): Promise<string> {
   const one = paths.length === 1;
   const lines = [`The shared checkout ${root} moved to upstream ${r.to.slice(0, 9)}, but your ${paths.join(", ")} changed while it moved and still ${one ? "lacks" : "lack"} upstream's change: as ${one ? "it stands" : "they stand"}, ${one ? "it" : "they"} would revert that change when shipped.`];
   for (const p of paths) {
     lines.push("", `${p} changed upstream in:`, ...(await upstreamCommits(root, r.from, r.to, [p])), action(p, merges.get(p) ?? { kind: "none" }, r.to));
   }
-  lines.push("", `Edit only the ${one ? "file" : "files"} named here. ${FORBID}`, "Once your file carries upstream's change, nothing else is needed.");
+  lines.push("", `Edit only the ${one ? "file" : "files"} named here. ${LEVEL_FORBID}`, "Once your file carries upstream's change, nothing else is needed.");
   return formatSessionMessage("codecast", lines.join("\n"), { name: "level sweep" });
 }
 
