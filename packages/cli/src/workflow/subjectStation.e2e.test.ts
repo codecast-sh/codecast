@@ -4,10 +4,11 @@
 // The session hears Decide's answer and how the run ended. Real git and real
 // transcripts in an isolated CODECAST_DIR and HOME; the server is a fake that
 // plays the session.
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
+import nodeOs from "node:os";
 import * as path from "node:path";
 import { freezeSessionChange, writeFrozenChange } from "./flowChange";
 import { readFrozenChange } from "./flowChangeFile";
@@ -248,6 +249,34 @@ describe("the session is the run's subject", () => {
     // One brief: the run froze the change only once the turn had ended, so Check passed on the fix.
     expect(s.sent().filter((m) => /^Check failed/.test(m.body))).toHaveLength(1);
     expect(git(root, "show", "codecast/change-ct-9:a.txt")).toBe("good");
+  }, 60_000);
+
+  test("a subject whose dormant pin predates its brief and that never answers is given up at its quiet window, not its cap", async () => {
+    // It pinned dormant naming the run, then wedged on resume: its row still reads dormant on that old claim, and its
+    // transcript never moves. Each read after the brief is 45 minutes on, on an idle machine.
+    const { root } = world("bad\n");
+    const realAwake = performance.now.bind(performance);
+    let shift = 0;
+    const awake = spyOn(performance, "now").mockImplementation(() => realAwake() + shift);
+    const load = spyOn(nodeOs, "loadavg").mockReturnValue([0, 0, 0]);
+    try {
+      const s = server(() => {}, {
+        dormant: true,
+        pinnedAt: Date.now() - 3_600_000,
+        lag: 1e9,
+        row: (briefed) => {
+          if (briefed) shift += 45 * 60_000;
+          return {};
+        },
+      });
+      const { outcome } = await start(root);
+      expect(outcome).toBe("failed");
+      const reasons = s.calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.fail_reason).map((c) => String(c.body.fail_reason));
+      expect(reasons.at(-1)).toContain("(it showed no work for 30m)");
+    } finally {
+      awake.mockRestore();
+      load.mockRestore();
+    }
   }, 60_000);
 
   test("a session that never fixes it is sent back three times, then the run stops and says why", async () => {
