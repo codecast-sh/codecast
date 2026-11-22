@@ -183,14 +183,15 @@ built on HEAD, the base its frozen content grew from, then replayed with the
 checkout's own unlanded commits onto that upstream in the object store
 (`replayOnto`), so Check and Review test the change on what it would land on,
 and every reviewer's diff starts there (`$diff_base`, the change's `base`,
-else the default branch). When the replay fails, the branch stays on the
+else the remote's default branch). When the replay fails, the branch stays on the
 HEAD-based commit and `change.json` records `behind`: a `conflict` (with its
 paths), which Ship's rebase meets again and routes to the session, or an
 `unreplayable` history (a merge commit in the checkout's own), with the
 reason; `cast flow run` prints it in one line. A checkout already holding
 upstream, or with none, keeps the commit on HEAD. A change whose every file
 upstream already holds at its frozen content is `landed`: `cast flow run`
-says so and starts nothing, and a refreeze records it and the run says so.
+says so and starts nothing (under `--json`, `{landed, upstream}`), and a
+refreeze records it and the run ends done there.
 Attribution is per file, so a file another session also wrote carries
 that session's lines too; the run includes it and names the other session
 rather than leave out part of the change. Credential files stay out. The

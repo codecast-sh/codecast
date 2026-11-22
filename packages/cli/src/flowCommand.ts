@@ -76,6 +76,11 @@ async function sessionTitleOf(conversation: string, deps: Pick<FlowDeps, "cliPos
   return t && t !== "New Session" ? t.slice(0, 120) : null;
 }
 
+/** What `cast flow run` prints for a change upstream already holds: JSON for a caller that parses it (`--json`), else a sentence. */
+export function landedOutput(json: boolean, what: string, upstream: string, landed: string): string {
+  return json ? JSON.stringify({ landed, upstream }) : `${what} is already on ${upstream} at ${landed.slice(0, 10)}: nothing to run.`;
+}
+
 /**
  * The run's subject when the change is named (a task, branch or pull request) from inside a session: that session
  * started the run, so it hears what each stage finds (flows.md FL4). From a plain shell (a run started over ssh on
@@ -415,7 +420,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // A change upstream already holds has nothing to land: nothing is made for it.
       const landed = preview?.landed ?? pass?.landed;
       if (landed) {
-        console.log(`${preview ? `Session ${preview.session}'s change` : "The shared checkout's change"} is already on ${(preview ?? pass)!.upstream} at ${landed.slice(0, 10)}: nothing to run.`);
+        console.log(landedOutput(!!opts.json, preview ? `Session ${preview.session}'s change` : "The shared checkout's change", (preview ?? pass)!.upstream, landed));
         return;
       }
       // A session's change runs on the session's own task (flows.md FL4): the one it is bound to, else one made and
