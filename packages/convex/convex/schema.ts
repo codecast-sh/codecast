@@ -336,6 +336,11 @@ export default defineSchema({
     ...cloudSessionSyncFields,
     team_share_paths: v.optional(v.array(v.string())),
     muted_members: v.optional(v.array(v.id("users"))),
+    // Projects and folders (a session's git_root, else project_path) whose
+    // sessions ring nobody here unless a session's own setting says otherwise
+    // (lib/sessionWatch.ts).
+    muted_projects: v.optional(v.array(v.id("projects"))),
+    muted_folders: v.optional(v.array(v.string())),
     team_conversations_last_seen: v.optional(v.number()),
     cli_version: v.optional(v.string()),
     cli_platform: v.optional(v.string()),
@@ -969,6 +974,14 @@ export default defineSchema({
     // Mirrors the web idle-sound's notified-keys map so one episode pushes
     // once but each new turn can push again.
     needs_input_notified_key: v.optional(v.string()),
+    // The waiting episode last announced to the session's subscribers
+    // (sessionWatch.notifyNeedsInputWatchers), same shape as the key above.
+    watch_notified_key: v.optional(v.string()),
+    // "Every message" subscribers hear a session in coalesced batches
+    // (sessionWatch.flushWatchedActivity): the open batch's flush time, and the
+    // last message time a flush covered.
+    watch_flush_due_at: v.optional(v.number()),
+    watch_flushed_at: v.optional(v.number()),
     // The settle episode that last woke whoever this session reports to: a
     // hand's role (org-roles-standing.md T3), or a spawned worker's parent
     // (workerSettle.ts), so one settle tells once, not once per check.
@@ -4810,6 +4823,8 @@ export default defineSchema({
       // waiting inside the window. Names no conversation on purpose — it
       // points at the inbox, not at one session out of several.
       v.literal("sessions_need_input"),
+      // New messages in a session the recipient subscribed to every message of.
+      v.literal("session_activity"),
       // A teammate opened one of their machines to a team you are on, so you
       // can now start sessions there (devices.performSetDeviceShares).
       v.literal("device_shared"),
@@ -5178,6 +5193,8 @@ export default defineSchema({
         items: v.array(v.object({ label: v.string(), lines: v.array(v.string()), note: v.optional(v.string()) })),
       })),
     })),
+    // An Ask first read of a secret with Touch ID on (secrets.ts askFirstGate): its Approve confirms with a passkey.
+    touch_id: v.optional(v.boolean()),
     // true = the agent ended its turn and is parked on this answer.
     // false = advisory: the agent proceeded with default_option and the
     // human's answer can override it later.
@@ -5265,6 +5282,22 @@ export default defineSchema({
     ),
     // Set when a role answered under a grant.
     grant_id: v.optional(v.id("decision_grants")),
+    // Every answer a person replaced (answerChangeable), oldest first: what it
+    // was, who gave it, and who replaced it when.
+    // Bumped by each change (answer_history's length): a client's change
+    // names the revision it makes, so a stale answer racing a settled row is
+    // dropped instead of read as a change (guardClientResolution).
+    answer_revision: v.optional(v.number()),
+    answer_history: v.optional(v.array(v.object({
+      status: v.string(),
+      answer_index: v.optional(v.number()),
+      answer_text: v.optional(v.string()),
+      answer_json: v.optional(v.any()),
+      answered_by: v.optional(v.object({ kind: v.string(), id: v.string(), via: v.optional(v.id("conversations")) })),
+      resolved_at: v.optional(v.number()),
+      replaced_at: v.number(),
+      replaced_by: v.id("users"),
+    }))),
     // The scope keys a grant may match for this row (the asker's role, its
     // projects and plans, the task's project and plan, the stack). Stored so
     // agreement history and grant matching read one field.
@@ -5803,6 +5836,17 @@ export default defineSchema({
     role_id: v.optional(v.id("org_roles")),
     // The role whose pause paused this trigger; its resume brings back only these (org-staffing.md S25).
     paused_by_role_id: v.optional(v.id("org_roles")),
+    // The project this trigger feeds (project sources): pausing the project
+    // pauses it, and unless project_spawn each run is a turn in the project's
+    // main session, resolved at the firing (projectSources.fireProjectTrigger),
+    // so it never stores originating_conversation_id.
+    project_id: v.optional(v.id("projects")),
+    // `--spawn` on a project trigger: runs start fresh sessions as any spawn trigger does.
+    project_spawn: v.optional(v.boolean()),
+    // The project whose pause paused this trigger; its resume brings back only these.
+    paused_by_project_id: v.optional(v.id("projects")),
+    // The key a web add painted its stub under; this row supersedes it (agentTasks collection altKey).
+    client_key: v.optional(v.string()),
 
     status: v.union(
       v.literal("scheduled"),
@@ -5881,7 +5925,8 @@ export default defineSchema({
     // a trigger armed from a session is findable from that session even when a
     // different account (a remote daemon's bot login) owns the trigger row.
     .index("by_created_by_conversation", ["created_by_conversation_id"])
-    .index("by_originating_conversation", ["originating_conversation_id"]),
+    .index("by_originating_conversation", ["originating_conversation_id"])
+    .index("by_project", ["project_id"]),
 
   // Version history + audit log for trigger edits. One row per edit — both
   // `cast trigger update` and the web edit dialog write through
@@ -5950,6 +5995,9 @@ export default defineSchema({
     short_id: v.optional(v.string()),
     title: v.string(),
     description: v.optional(v.string()),
+    // Standing instructions every session in the project starts with
+    // (session-projects.md SP6), verbatim. Capped by PROJECT_INSTRUCTIONS_MAX.
+    instructions: v.optional(v.string()),
     status: v.union(
       v.literal("planning"),
       v.literal("active"),
@@ -6367,6 +6415,8 @@ export default defineSchema({
     has_otp: v.optional(v.boolean()),
     // Ask first: an agent's read needs a person's approval per session (secret_approvals).
     ask_first: v.optional(v.boolean()),
+    // Touch ID: revealing it, approving an Ask first read of it and turning a guard off take a passkey.
+    touch_id: v.optional(v.boolean()),
     // How many previous values secret_versions holds for it, kept by every write that moves one.
     version_count: v.optional(v.number()),
   })
@@ -8652,6 +8702,12 @@ export default defineSchema({
     // retroactive sweep. Membership rules (thread inbox) read this; identity
     // alone never implies attention.
     via: v.optional(v.union(v.literal("human"), v.literal("agent"))),
+    // A conversation only: how loudly this person hears the session
+    // (lib/sessionWatch.ts). Separate from `muted`, which is thread following.
+    notify: v.optional(v.union(v.literal("all"), v.literal("needs_input"), v.literal("muted"))),
+    notify_at: v.optional(v.number()),
+    // The row exists only for the setting, so clearing it deletes the row.
+    notify_created: v.optional(v.boolean()),
     muted: v.boolean(),
     created_at: v.number(),
   })
