@@ -276,6 +276,28 @@ describe("a deploy.sh push", () => {
     expect((await deploys()).find((d) => d.short_id === "dp-980")).toMatchObject({ status: "live", dirty: 4, adds: ["fn:a:two"] });
   });
 
+  test("an uncommitted push never finishes a deploy someone else asked for; its work stays its pusher's", async () => {
+    const { t, ids, ws, ship, deploys, notes, addedBy } = await setup();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("deploys", {
+        short_id: "dp-960", workspace: ws, team_id: ids.team, target: "backend", status: "requested", trigger: "person",
+        started_by: { kind: "person", name: "Ben", user_id: ids.ben }, repository: REPO,
+        source: "line", event_ids: [], carries: [], created_at: Date.now() - 60_000, updated_at: Date.now() - 60_000,
+      } as any);
+    });
+    // Ana pushes her branch with uncommitted files while Ben's deploy waits.
+    const anas = await ship("ana", { sha: shaN(2), dirty: 3, adds: ["table:ana_new"] });
+    expect(anas.deploy).not.toBe("dp-960");
+    // Ben's deploy never took Ana's work: it is superseded by her live push, as by any newer deploy, never finished by it.
+    const bens = (await deploys()).find((d) => d.short_id === "dp-960")!;
+    expect(bens.status).not.toBe("live");
+    expect(bens.adds).toBeUndefined();
+    // A clean push of main drops Ana's table: Ana is told, not Ben.
+    await ship("cy", { sha: shaN(3), drops: ["table:ana_new"] });
+    expect((await notes()).map((n) => n.recipient_user_id)).toEqual([ids.ana]);
+    expect((await addedBy(["table:ana_new"]))[0]).toMatchObject({ deploy: anas.deploy, by: "Ana" });
+  });
+
   test("a push that changed what runs is recorded even at the sha already live; a clean retry is not", async () => {
     const { mark, ship, deploys } = await setup();
     await ship("ana");

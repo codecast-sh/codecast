@@ -81,7 +81,9 @@ export const readAge = (readAt: number, now: number = Date.now()): number => Mat
 /** `--changes <file>`: the JSON prod-diff writes, `{ adds, drops, read_at }`. */
 export function readChanges(path: string | undefined): PushChanges {
   if (!path) return {};
-  const raw = JSON.parse(readFileSync(path, "utf-8"));
+  // An unreadable file loses the lists, never the mark: the push went out and is still recorded.
+  let raw: any;
+  try { raw = JSON.parse(readFileSync(path, "utf-8")); } catch { return {}; }
   const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined);
   const adds = names(raw?.adds), drops = names(raw?.drops);
   const readAt = typeof raw?.read_at === "number" && Number.isFinite(raw.read_at) ? raw.read_at : undefined;
