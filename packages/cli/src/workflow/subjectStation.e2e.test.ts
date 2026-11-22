@@ -173,7 +173,7 @@ async function start(root: string, graph = graphIn(root), opts: { only?: string[
   const change = await freezeSessionChange(root, CONV, { branch: "codecast/change-ct-9", worktree: "change-ct-9", title: "Make a.txt good", only: opts.only });
   writeFrozenChange(runDir, change);
   const t0 = Date.now();
-  console.log = process.env.SHOW_RUN ? (...a: unknown[]) => origLog(`${Date.now() - t0}ms`, ...a) : () => {};
+  console.log = process.env.SHOW_RUN ? (...a: unknown[]) => require("node:fs").appendFileSync(process.env.SHOW_RUN!, `${Date.now() - t0}ms ${a.join(" ")}\n`) : () => {};
   try {
     const outcome = await runWorkflow(graph, { cwd: root, taskId: "ct-9", runId: "run-9", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, ...opts.run });
     return { outcome, runDir };
