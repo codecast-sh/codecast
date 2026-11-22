@@ -9694,7 +9694,7 @@ export async function computeInboxSessions(
     }
     // Decisions FIRST: a parent already asking through a pending `cast decide`
     // never spends child message probes (see buildAskingParents).
-    const pendingDecisionIds = await loadPendingDecisionConvIds(ctx, userId);
+    const pendingDecisionIds = await loadPendingDecisionConvIds(ctx, userId, truncated);
     const { asking: askingParents } = await buildAskingParents(ctx, childrenByParent, maps, now, pendingDecisionIds);
     for (const r of enrichedRows) {
       const cid = r.conv._id.toString();
@@ -10068,12 +10068,19 @@ export function deriveProducingParents(
 // conversation (a producing child parks its settled parent), and every row
 // holding a pending `cast decide` (a spawned worker's decision lifts its
 // parent whether or not the worker is still live).
-async function hydrateLivePool(ctx: any, conversations: any[], maps: InboxSessionMaps, extraIds: Iterable<string> = []): Promise<any[]> {
+//
+// One get per missing row, so the hydration is capped (eg-2780: a heavy
+// account timed out on "too many system operations"): pending-decide rows
+// first, then live rows by newest heartbeat. Overflow is flagged, not hidden.
+const LIVE_POOL_HYDRATE_BUDGET = 100;
+async function hydrateLivePool(ctx: any, conversations: any[], maps: InboxSessionMaps, extraIds: Iterable<string> = [], truncated?: Set<InboxTruncation>): Promise<any[]> {
   const seen = new Set<string>(conversations.map((c: any) => c._id.toString()));
   const pool = [...conversations];
-  const missingLiveIds = [...new Set([...maps.liveConvIds, ...extraIds])].filter((cid) => !seen.has(cid));
+  const byHeartbeat = [...maps.liveConvIds].sort((a, b) => (maps.lastHeartbeatMap.get(b) ?? 0) - (maps.lastHeartbeatMap.get(a) ?? 0));
+  const missingLiveIds = [...new Set([...extraIds, ...byHeartbeat])].filter((cid) => !seen.has(cid));
+  if (missingLiveIds.length > LIVE_POOL_HYDRATE_BUDGET) truncated?.add("live_pool");
   const hydratedLive = await Promise.all(
-    missingLiveIds.map((cid) => Promise.resolve(ctx.db.get(cid as Id<"conversations">)).catch(() => null))
+    missingLiveIds.slice(0, LIVE_POOL_HYDRATE_BUDGET).map((cid) => Promise.resolve(ctx.db.get(cid as Id<"conversations">)).catch(() => null))
   );
   for (const c of hydratedLive) if (c) pool.push(c);
   return pool;
@@ -10102,15 +10109,22 @@ function isOpenAskUserQuestion(msg: any): boolean {
 // for rows minted before asked_user_ids existed. session_decisions.user_id
 // is the RUNNER — using it here kept a hosted session's questions on the
 // host's stack after the seat was assigned away.
-export async function loadPendingDecisionConvIds(ctx: any, userId: Id<"users">): Promise<Set<string>> {
+//
+// The newest PENDING_DECISION_BUDGET assignments only, their decisions read
+// concurrently: one get per pending row grew with the account (eg-2780).
+// Overflow is flagged, not hidden.
+const PENDING_DECISION_BUDGET = 200;
+export async function loadPendingDecisionConvIds(ctx: any, userId: Id<"users">, truncated?: Set<InboxTruncation>): Promise<Set<string>> {
   const ids = new Set<string>();
   const uid = userId.toString();
   const inbox = await ctx.db
     .query("decision_inbox")
     .withIndex("by_user_status", (q: any) => q.eq("user_id", userId).eq("status", "pending"))
-    .collect();
-  for (const r of inbox) {
-    const d = await ctx.db.get(r.decision_id);
+    .order("desc")
+    .take(PENDING_DECISION_BUDGET + 1);
+  if (inbox.length > PENDING_DECISION_BUDGET) truncated?.add("pending_decisions");
+  const decisions = await Promise.all(inbox.slice(0, PENDING_DECISION_BUDGET).map((r: any) => ctx.db.get(r.decision_id)));
+  for (const d of decisions) {
     if (!d || !isStackedAsk(d)) continue;
     if (d.asked_user_ids !== undefined && !d.asked_user_ids.some((id: any) => String(id) === uid)) continue;
     ids.add(d.conversation_id.toString());
@@ -10603,8 +10617,8 @@ export async function computeSessionsLiveness(
   // Decisions FIRST: a parent already asking through a pending `cast decide`
   // never spends child message probes (see buildAskingParents), and a child
   // holding one joins the pool so its parent is lifted.
-  const pendingDecisionIds = await loadPendingDecisionConvIds(ctx, userId);
-  const pool = await hydrateLivePool(ctx, conversations, maps, pendingDecisionIds);
+  const pendingDecisionIds = await loadPendingDecisionConvIds(ctx, userId, truncated);
+  const pool = await hydrateLivePool(ctx, conversations, maps, pendingDecisionIds, truncated);
   const childrenByParent = groupPoolChildren(pool);
   const scannedIds = new Set(conversations.map((c: any) => c._id.toString()));
   const pooledAt = (cid: string, t: number) => scannedIds.has(cid) || pendingDecisionIds.has(cid) || isLiveAt(maps, cid, t);

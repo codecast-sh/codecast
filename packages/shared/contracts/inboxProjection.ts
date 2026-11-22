@@ -59,6 +59,8 @@ export const INBOX_TRUNCATION_KINDS = [
   "members",
   "member_rows",
   "foreign_scan",
+  "live_pool",
+  "pending_decisions",
 ] as const;
 
 export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
