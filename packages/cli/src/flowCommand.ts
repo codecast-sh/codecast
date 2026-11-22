@@ -56,6 +56,8 @@ export interface FlowDeps {
    *  The commands that start work call it; reading and a run already going are left alone. */
   /** Stops the command, saying why, when Flows is off in this workspace. */
   requireFlows: (ws: Workspace) => Promise<void>;
+  /** This machine's `flow` config: the default machine a flow run is placed on (workflow/placedChange.ts). */
+  flowDeviceConfig?: () => import("./workflow/placedChange.js").FlowDeviceConfig | undefined;
 }
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -326,11 +328,12 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--title <text>", "Title for the task the run binds to, when one is made")
     .option("--only <paths>", "With a session's edits: only these files belong to the change (comma-separated paths or globs)")
     .option("--foreground", "Run here and wait, rather than handing the run to this machine's daemon")
+    .option("--device <name>", "Run the whole flow on this machine of yours (id, label or hostname), in its checkout of this repository; \"here\" keeps it on this one. Default: cast config flow.device")
     .option("--dry-run", "Say what would run on what, and start nothing")
     .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
     .option("--library", "Run the library's flow of that name even though the repo's default branch has its own")
     .option("--json", "Print {run_id, task, branch, worktree, files} as JSON")
-    .action(async (named: string | undefined, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean; team?: string; library?: boolean }) => {
+    .action(async (named: string | undefined, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; device?: string; dryRun?: boolean; json?: boolean; team?: string; library?: boolean }) => {
       // Flows must be on in the workspace the run reads its pool from, not merely the active one (flows.md FL2).
       const at = poolWorkspace(deps, opts.team);
       const where = await at.catch((err: unknown) => {
@@ -358,6 +361,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       }
       const top = (spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim();
       if (!top) { console.error("cast flow run works inside a git checkout"); process.exit(1); }
+      // The machine the whole run goes to (ct-98920, workflow/placedChange.ts); null is here.
+      const placed = await (await import("./workflow/placedChange.js")).runDeviceFor(opts.device, deps.flowDeviceConfig?.(), top, opts.foreground);
 
       // Which change: a branch or PR names its own; else a session's edits, unless only a task was named.
       const sessionRef = typeof opts.session === "string" ? opts.session : opts.session === true || (!opts.task && !opts.branch && !opts.pr) ? deps.callingSession() : undefined;
@@ -393,6 +398,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (opts.dryRun) {
         console.log(`${bold(found.label)}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
         console.log(`on ${branch ? `branch ${branch}` : preview ? `session ${preview.session}'s own edits` : `task ${task}`}, bound to ${task ?? `a new task "${changeTitle}"`}`);
+        console.log(placed ? `runs on ${placed.name} (${placed.device_id.slice(0, 8)}, ${placed.from}), in its checkout of this repository: the change's branch is pushed to origin and fetched there` : "runs on this machine");
         if (preview) {
           console.log(`${preview.paths.length} file${preview.paths.length === 1 ? "" : "s"}:`);
           for (const f of preview.paths) {
@@ -424,7 +430,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // A worktree an earlier run of this change made, read before its branch moves: one holding work of its own is never reset.
       const earlierPath = (await cast(["ws", "path", worktree], top)).out.trim();
       const earlier = earlierPath && fs.existsSync(earlierPath) ? earlierPath : null;
-      if (earlier && (branch || sessionRef)) {
+      if (earlier && !placed && (branch || sessionRef)) {
         const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
         if (dirty) { console.error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`); process.exit(1); }
       }
@@ -450,7 +456,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
           process.exit(1);
         });
       }
-      if (change) {
+      // A placed run's machine makes the worktree in its own checkout: the change goes there by origin.
+      const changeFile = change && placed ? (await import("./workflow/placedChange.js")).handOffPlacedChange(top, runDir, change) : null;
+      if (change && !placed) {
         // The workspace's setup (its install) runs here, before the run starts: it can take minutes.
         if (!opts.json) console.error(dim(`  making worktree ${worktree} on ${change.branch} (its setup can take a few minutes)`));
         const ws = await cast(["ws", "acquire", worktree, "--branch", change.branch, "--skip-pool", "--json"], top);
@@ -462,6 +470,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
 
       const runArgs = ["workflow", "run", found.file ?? found.slug, "--task", task!];
       if (!opts.foreground) runArgs.push("--detach", "--json");
+      if (placed) runArgs.push("--device", placed.device_id, ...(changeFile ? ["--change", changeFile] : []));
       if (opts.foreground) {
         const { resolveCastInvocation } = await import("./castInvocation.js");
         const { cmd, prefixArgs } = resolveCastInvocation();
@@ -471,9 +480,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const started = await cast(runArgs, top);
       const runId = started.out.match(/"run_id"\s*:\s*"([^"]+)"/)?.[1];
       if (started.code !== 0 || !runId) { console.error((started.err || started.out).trim()); process.exit(1); }
-      const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [] };
+      const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [], ...(placed ? { device: placed.device_id } : {}) };
       if (opts.json) { console.log(JSON.stringify(result)); return; }
-      console.log(`${bold(found.label)} started on ${task}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
+      console.log(`${bold(found.label)} started on ${task}${placed ? ` on ${placed.name}` : ""}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
       if (change?.source === "session") {
         console.log(`  ${change.paths.length} file${change.paths.length === 1 ? "" : "s"} from session ${change.session} on ${change.branch}`);
         for (const s of change.shared) console.log(`  ${s.path} also holds edits from ${s.also.join(", ")}`);
@@ -481,6 +490,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       } else if (change) console.log(`  on ${change.branch}`);
       console.log(dim(`  run ${runId} · cast workflow runs --task ${task}`));
     });
+
+  flow.command("refreeze <run>").description("For a run placed on another machine (cast flow run --device): freeze this session's edits again onto the run's branch, without touching this tree, and push it for that machine to fetch")
+    .action(async (runId: string) => (await import("./workflow/placedChange.js")).refreezeRunCommand(runId, deps.realCwd(), deps.cliPost));
 
   // The Deploy stage's wait (workflow/awaitDeploy.ts, flows.md FL4): run by the
   // deploy segment's parked station in the change's worktree.

@@ -45,7 +45,7 @@ export interface PersistedWorkspaceState {
   updatedAt: string;
   /** Last contract result, if available. */
   contract?: ContractResult;
-  /** Chrome process bound to this workspace, when browser.enabled. */
+  /** Chrome process bound to this workspace while one started on demand runs. */
   chrome?: ChromeBinding;
   /** The ref/commit the worktree branch was created at (a cloud seed's hidden ref). */
   startPoint?: string;
