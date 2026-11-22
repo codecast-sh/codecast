@@ -19,6 +19,20 @@ export function workProjectIdOfChipKey(key: string | null | undefined): string |
   return key?.startsWith(WORK_PROJECT_CHIP_PREFIX) ? key.slice(WORK_PROJECT_CHIP_PREFIX.length) : null;
 }
 
+// Machines share the axis too (`mc:<device_id>`, the session's owner_device_id):
+// "only what runs on this laptop" or "everything but the laptop" is the same
+// include/exclude gesture as a folder.
+export const MACHINE_CHIP_PREFIX = "mc:";
+export const machineChipKey = (deviceId: string): string => `${MACHINE_CHIP_PREFIX}${deviceId}`;
+export function machineIdOfChipKey(key: string | null | undefined): string | null {
+  return key?.startsWith(MACHINE_CHIP_PREFIX) ? key.slice(MACHINE_CHIP_PREFIX.length) : null;
+}
+
+/** What a chip-axis key names, for copy ("Hide this machine"). */
+export function projectAxisNoun(key: string): "project" | "machine" | "folder" {
+  return workProjectIdOfChipKey(key) ? "project" : machineIdOfChipKey(key) ? "machine" : "folder";
+}
+
 type SessionLike = {
   _id: string;
   project_id?: string | null;

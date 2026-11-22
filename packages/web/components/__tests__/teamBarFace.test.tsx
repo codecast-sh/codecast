@@ -66,7 +66,7 @@ mock.module("../../lib/teamFeatures", () => ({ ...realTeamFeatures, useCallsAvai
 
 // The feeder would open a Convex subscription; the bar paints the store.
 const realSyncCollection = await import("../../hooks/useSyncCollection");
-mock.module("../../hooks/useSyncCollection", () => ({ ...realSyncCollection, useSyncCollection: () => {} }));
+mock.module("../../hooks/useSyncCollection", () => ({ ...realSyncCollection, useSyncCollection: () => ({}) }));
 
 // The door's chat count would subscribe to the room's thread; tests set it.
 let threadUnread = 0;
