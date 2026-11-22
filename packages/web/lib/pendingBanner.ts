@@ -54,6 +54,13 @@ export const isBootingAgentStatus = (s?: LiveAgentStatus): boolean =>
 export const isAliveIdleStatus = (s?: LiveAgentStatus): boolean =>
   s === "waiting" || s === "dormant" || s === "done";
 
+// "waiting": the agent is parked on its own open background tasks. The daemon
+// holds a message until that wait ends, which can be many minutes, and the
+// agent takes it then. No budget measured from the send says anything about
+// delivery here, so the message stays queued for as long as the wait lasts.
+// If the session dies, its status leaves "waiting" and the other branches judge it.
+export const isParkedOnBackgroundTasks = (s?: LiveAgentStatus): boolean => s === "waiting";
+
 export type PendingBannerState = "none" | "queued" | "stuck";
 
 export function pendingMessageCanRetry(content: string): boolean {
@@ -262,7 +269,9 @@ export function pendingBannerState(
   // the pending message and flips to "working" once the pane is ready. Only a session
   // still not processing well past a generous boot budget is genuinely stuck.
   if (isBootingAgentStatus(agentStatus)) return opts.bootGraceElapsed ? "stuck" : "queued";
-  // Alive-but-parked (dormant/waiting/done): the pane heartbeats, delivery is a
+  // Parked on its own background tasks: delivered when the wait ends, however long.
+  if (isParkedOnBackgroundTasks(agentStatus)) return "queued";
+  // Alive-but-parked (dormant/done): the pane heartbeats, delivery is a
   // normal daemon pass away. Reassure, and only alarm past the boot budget.
   if (isAliveIdleStatus(agentStatus)) return opts.bootGraceElapsed ? "stuck" : "queued";
   // Idle, or no live status at all (disconnected session, non-"active" conversation,

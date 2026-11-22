@@ -66,7 +66,7 @@ import type { ComposeEditorHandle } from "./editor/ComposeEditor";
 import { useMentionQuery, useMentionServerSearch, sessionMentionTeamId, SERVER_MENTION_TYPES, matchScore, filterMentionItems, channelMentionItems } from "../hooks/useMentionQuery";
 import { mentionContextFor } from "../lib/mentionContext";
 import { parseChatDraftKey } from "../lib/chatDraftKey";
-import { inFlightPending, isAliveIdleStatus, pendingRowHoldReason, type LiveAgentStatus } from "../lib/pendingBanner";
+import { inFlightPending, isAliveIdleStatus, isParkedOnBackgroundTasks, pendingRowHoldReason, type LiveAgentStatus } from "../lib/pendingBanner";
 import { expandEntityMentions } from "../lib/mentionExpansion";
 import { identityLine } from "../lib/sessionIdentity";
 import { identityPrefsNow } from "../hooks/useIdentityPrefs";
@@ -704,6 +704,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // auto-resume) while a delivery was already in flight, which is exactly what
   // made slow deliveries look like lost messages.
   const isAgentAliveIdle = isAliveIdleStatus(agentStatus as LiveAgentStatus | undefined);
+  // Parked on its own background tasks: the message goes in when the wait ends,
+  // so no time budget makes it stuck, and a resume would break the wait (ct-98179).
+  const isAgentParked = isParkedOnBackgroundTasks(agentStatus as LiveAgentStatus | undefined);
   // The floor (no agent status reported at all) is 30s: a slow inject or a
   // heartbeat that has not propagated yet routinely takes 15-20s, and reading
   // that as "Disconnected" was the most common false alarm in the composer.
@@ -744,7 +747,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // "Message not reaching session." Treat injected as delivered for the banner; the benign
     // "Working/Processing" line covers it, and a genuinely dead session is still caught by the
     // heartbeat-driven resume/restart guards below.
-    if (existingPending.status === "injected") {
+    if (existingPending.status === "injected" || isAgentParked) {
       setShowStuckBanner(false);
       return;
     }
@@ -754,7 +757,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       const timer = setTimeout(() => setShowStuckBanner(true), stuckThresholdMs - age);
       return () => clearTimeout(timer);
     }
-  }, [existingPending, pendingMessageId, isWaitingForResponse, stuckThresholdMs, isExistingMessageDead]);
+  }, [existingPending, pendingMessageId, isWaitingForResponse, stuckThresholdMs, isExistingMessageDead, isAgentParked]);
 
   // Agent actively working — or durable proof the message was injected/delivered — proves it
   // reached the session, so clear any stale stuck banner. messageReachedSession is the same
@@ -779,13 +782,14 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       setShowStuckBanner(false);
       return;
     }
+    if (isAgentParked) return;
     const timer = setTimeout(() => {
       if (messageStatus?.status === "pending") {
         setShowStuckBanner(true);
       }
     }, stuckThresholdMs);
     return () => clearTimeout(timer);
-  }, [sentAt, pendingMessageId, messageStatus?.status, conversationId, markAsQueued, stuckThresholdMs]);
+  }, [sentAt, pendingMessageId, messageStatus?.status, conversationId, markAsQueued, stuckThresholdMs, isAgentParked]);
 
   // Removed: generic 60s timeout was showing "not responding" even when no message was sent.
   // The banner should only show when we sent a message and it wasn't delivered (handled by the effects above).

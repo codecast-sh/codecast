@@ -750,7 +750,9 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
               (or one the daemon has claimed: "connected") is just being delivered to. */}
           <span>{agentStatus === "starting" || agentStatus === "resuming"
             ? "Starting up — your message will send once the session is ready"
-            : "Queued — delivering your message to the agent"}</span>
+            : agentStatus === "waiting"
+              ? "Queued — the agent takes it when its background task finishes"
+              : "Queued — delivering your message to the agent"}</span>
           <CancelPendingButton onClick={handleCancelPending} disabled={cancelState !== "idle"} />
         </div>
       )}
