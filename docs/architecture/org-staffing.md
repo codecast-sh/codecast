@@ -975,7 +975,7 @@ Hands, wakes and tokens per day stay as the bound that keeps a runaway role from
 
 ### S23.3 A role is one of a session's owners
 
-A role owns a session beside the people who own it (org-roles-run-work.md R1). Each session is its own card, filed by its own state; nothing nests under the role's standing session and the role's card carries no count. A session its role drives that waits on input files under Working with **With <role>** on its card, because the role reads it first; the role's page lists all its sessions (F4). What reaches the person from a role is what the role raises in its own thread (S28). A session a role started on its own, with no person owner, is in no person's inbox.
+A role owns a session beside the people who own it (org-roles-run-work.md R1). Each session is its own card, filed by its own state; nothing nests under the role's standing session and the role's card carries no count. A session its role drives that waits on input files under Working with **With <role>** on its card, because the role reads it first; the role's page lists all its sessions (F4). What reaches the person from a role is what the role raises in its own thread (S28). A session a role started on its own (`role_started`), with no person owner, is in no person's inbox; a person's own session filed under a role stays in theirs.
 
 ### S23.4 The line a person reads names who did it
 

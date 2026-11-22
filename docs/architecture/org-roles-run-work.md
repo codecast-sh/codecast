@@ -27,11 +27,19 @@ the one who messages the agent: with the role filed and
 set that person drives and the role is paused.
 
 **Whose inbox it is in.** A session is in the inbox of each person who owns
-it and of the account that runs it (`user_id`), except a session a role holds
-with no person owner: the role started it on its own, and it is the role's
-alone (`isHeldByRoleAlone` in the shared inbox projection, read by the server
-scan and the web scope filter). Owning a session never takes it away from the
-account that runs it.
+it and of the account that runs it (`user_id`), except a session a role
+started on its own that a role still holds and no person owns: it is the
+role's alone (`isHeldByRoleAlone` in the shared inbox projection; the server
+reads the owner rows themselves and stamps `role_alone` on the row, which the
+web scope filter reads). "Started by a role" is provenance,
+`conversations.role_started`, written by `spawn.recordHandStart` for a hand
+and a line run's sessions (a role's standing session under another role
+counts too); a person's own session filed under a role (`cast task start` in
+its area, a drag on the chart) has no owner rows either and stays theirs. A
+role's hand and line run take no person owner, on a pool machine too: a person
+who wants one in their inbox adds themselves from the owners menu. Owning a
+session never takes it away from the account that runs it.
+`migrations:backfillRoleStarted` stamps sessions from before the field.
 
 **Where it sits.** Every session files by its own state. Nothing rides a
 role's standing session, which stays hidden on its own facts until it needs a

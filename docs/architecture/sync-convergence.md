@@ -276,8 +276,9 @@ owned window is likewise dropped; under the cap, ordering does not matter.
 
 **Owners and the runner decide whose inbox a session is in.** A session is in
 the inbox of each of its owners and of the account that runs it, except one a
-role holds with no person owner, which is the role's alone: the server scan
-drops it from the runner's candidate set and the replica drops it from "mine"
+role started and still holds with no person owner, which is the role's alone:
+the server scan drops it from the runner's candidate set and stamps
+`role_alone` on the row, and the replica drops it from "mine" on that stamp
 (`isHeldByRoleAlone`, `isForeignRow`), so it cannot sit in one of them and not
 the other. Two exceptions, both deliberate: a row the caller named by id is
 hydrated because they asked for it, and a teammate's row on the team board is
