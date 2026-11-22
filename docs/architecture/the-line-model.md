@@ -78,9 +78,11 @@ A person's earlier typed word counts as their answer. When the person who
 started a run already told the work to ship, in a line they typed into a
 session the change came through, and the change stays inside what they asked
 for, the run lands on that word and no card is posted (flows.md FL4, Intent).
-A program's words never count: a brief, a relayed "approved", an agent's
-message or text the person quoted or pasted is not their word, and code checks
-the cited line before the run may land. Between a typed word and an answer on
+A program's words never count: a brief, a relayed "approved" or an agent's
+message is not the person's word, nor is a line the composer quoted, a paste
+the terminal wrapped as pasted content, or a send that folded in others'
+drafts. A short paste the terminal took as typing cannot be told from typing,
+and reads as the person's. Code checks the cited line before the run may land. Between a typed word and an answer on
 a card, the newer one stands: a Revise after "ship it" takes it back, and
 "ship it" after a Revise outranks it.
 

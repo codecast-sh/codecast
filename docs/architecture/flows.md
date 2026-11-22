@@ -352,10 +352,15 @@ $change_conversation --task --run`: the chain walk and provenance of
 `originator.ts`). Only a message's typed part counts (`typedPart`): what a
 composer send handed over as typed (`pending_messages.typed_text`, never the
 quotes, mention context or attachments folded around it; a joint send hands
-over none), or a terminal line with its pasted blocks and mention context
-taken out, a slash command as `/name args`. A brief, a relay, an agent's
-"approved", an echo whose words a queue row of the session holds, and a
-session another one handed its work to read as program. Change records the
+over none, and merging two queued rows clears the mark), or a terminal line
+with its `<pasted_content>` blocks and mention context taken out, a slash
+command as `/name args`. A short paste the terminal took as typing, or text
+pasted into the composer box, cannot be told from typing and counts. A
+terminal line counts only in a session the daemon marked `--interactive`
+(Claude Code's `cli` entrypoint, Codex's terminal UI); the Agent SDK, `-p`, an
+IDE, any other agent and an unmarked session read as program, as do a brief, a
+relay, an agent's "approved", an echo whose words a queue row of the session
+holds, and a session another one handed its work to. Change records the
 commit it diffs (`$run_dir/intent-head`) and reads the diff as the judge does,
 and Read, a model call (`intent/asker.md`), answers `{ship, session, line,
 quote, in_scope, why}`: an explicit ship word, an accepted plan that ships or

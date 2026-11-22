@@ -12,13 +12,17 @@
 // `[<short_id>:<line>] <time> <name> (<provenance>): <words>` and a card answer
 // as `[<card>] <time> <name> answered <option> on this task's Ship card: <note>`,
 // so a later "don't ship yet" or Revise reads after the "ship it" it takes
-// back. `typed` keeps each line's coordinates without its words. When it does
-// not fit, the longest texts lose their middles first.
+// back. The coordinates live in each line's prefix, so the per-line records are
+// left out (the server re-reads any line a clear cites). When the list does not
+// fit, the newest lines stay whole, since the newest word decides, and the
+// oldest are left out, with a first line saying how many.
 
 /** The JSON size a station records (commandStation NODE_JSON_CAP is 64,000), with room to spare. */
 const RECORD_CAP = 63_000;
+/** The most of one line's words the list carries, both ends kept. */
+const LINE_CAP = 8_000;
 
-type Typed = { short_id: string; line: number; user_name: string | null; provenance: string; text: string; created_at: string } & Record<string, unknown>;
+type Typed = { short_id: string; line: number; user_name: string | null; provenance: string; text: string; created_at: string };
 type Verdict = { card: string; user_name: string | null; answer: string; note?: string; created_at: string };
 export type AskerRead = { typed: Typed[]; task?: { verdicts?: Verdict[] } & Record<string, unknown> } & Record<string, unknown>;
 
@@ -32,29 +36,31 @@ function keepEnds(text: string, cap: number): string {
 /** A moment to the minute, in UTC: 2026-11-22 10:04Z. */
 const minute = (iso: string) => `${iso.slice(0, 10)} ${iso.slice(11, 16)}Z`;
 
-/** The record with each text cut to at most `cap` characters. */
-function render(read: AskerRead, cap: number): Record<string, unknown> {
-  const typed = [...read.typed].sort((a, b) => a.created_at.localeCompare(b.created_at) || a.line - b.line);
-  const entries = [
-    ...typed.map((t) => ({ at: t.created_at, words: `[${t.short_id}:${t.line}] ${minute(t.created_at)} ${t.user_name ?? "someone"} (${t.provenance}): ${keepEnds(t.text, cap)}` })),
+/** Every typed line and card answer as the model reads it, oldest first. */
+function rendered(read: AskerRead): string[] {
+  return [
+    ...read.typed.map((t) => ({ at: t.created_at, line: t.line, words: `[${t.short_id}:${t.line}] ${minute(t.created_at)} ${t.user_name ?? "someone"} (${t.provenance}): ${keepEnds(t.text, LINE_CAP)}` })),
     ...(read.task?.verdicts ?? []).map((v) => ({
       at: v.created_at,
-      words: `[${v.card}] ${minute(v.created_at)} ${v.user_name ?? "someone"} answered ${v.answer} on this task's Ship card${v.note ? `: ${keepEnds(v.note, cap)}` : ""}`,
+      line: 0,
+      words: `[${v.card}] ${minute(v.created_at)} ${v.user_name ?? "someone"} answered ${v.answer} on this task's Ship card${v.note ? `: ${keepEnds(v.note, LINE_CAP)}` : ""}`,
     })),
-  ].sort((a, b) => a.at.localeCompare(b.at));
-  return { ...read, typed: typed.map(({ text: _words, ...coordinates }) => coordinates), text: entries.map((e) => e.words).join("\n") };
+  ].sort((a, b) => a.at.localeCompare(b.at) || a.line - b.line).map((e) => e.words);
 }
 
-/** The record whose JSON fits `record`: the largest per-text cap that fits, so short lines stay whole. */
+/** The record, its JSON within `record`: the newest lines whole, the oldest left out first. */
 export function fitAskerRecord(read: AskerRead, record = RECORD_CAP): Record<string, unknown> {
-  const whole = Math.max(0, ...read.typed.map((t) => t.text.length), ...(read.task?.verdicts ?? []).map((v) => v.note?.length ?? 0));
-  if (JSON.stringify(render(read, whole)).length <= record) return render(read, whole);
-  let lo = 0;
-  let hi = whole;
-  while (lo < hi) {
-    const mid = Math.ceil((lo + hi) / 2);
-    if (JSON.stringify(render(read, mid)).length <= record) lo = mid;
-    else hi = mid - 1;
-  }
-  return render(read, lo);
+  const { typed: _typed, ...rest } = read;
+  const task = read.task ? (({ verdicts: _verdicts, ...t }) => t)(read.task) : undefined;
+  const base = { ...rest, ...(task ? { task } : {}) };
+  const lines = rendered(read);
+  // A line's escaped length, and the newline before it ("\n" in JSON).
+  const cost = (s: string) => JSON.stringify(s).length - 2 + 2;
+  // Room for `text` once everything else is in, and for the line that says how many were left out.
+  let room = record - JSON.stringify({ ...base, text: "" }).length - 80;
+  let kept = 0;
+  for (let i = lines.length - 1; i >= 0 && cost(lines[i]) <= room; i--, kept++) room -= cost(lines[i]);
+  const shown = lines.slice(lines.length - kept);
+  const left = lines.length - kept;
+  return { ...base, text: [...(left ? [`[... ${left} earlier ${left === 1 ? "line" : "lines"} left out ...]`] : []), ...shown].join("\n") };
 }
