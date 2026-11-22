@@ -1,0 +1,40 @@
+Accessing workspace:
+
+/Users/me/scratch-agy-probe/trust4
+
+Do you trust the contents of this project?
+
+Antigravity CLI requires permission to read, edit, and execute files here.
+
+> Yes, I trust this folder
+  No, exit
+
+  ↑/↓ Navigate · enter Confirm
+                                                                                            auto · Gemini 4 Argon · high
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

@@ -204,6 +204,7 @@ export const agentNames: Record<string, string> = {
   pi: "pi",
   grok: "grok",
   muse: "muse",
+  antigravity: "antigravity",
 };
 
 /** How a conversation with the hosted assistant words the events a machine

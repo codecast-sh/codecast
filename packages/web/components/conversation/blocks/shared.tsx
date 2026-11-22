@@ -142,6 +142,7 @@ export function AssistantIcon({ agentType }: { agentType?: string }) {
   if (agentType === "pi") return <PiIcon />;
   if (agentType === "grok") return <GrokIcon />;
   if (agentType === "muse") return <AgentTypeIcon agentType="muse" className="w-6 h-6" />;
+  if (agentType === "antigravity") return <AgentTypeIcon agentType="antigravity" className="w-6 h-6" />;
   if (agentType && isHostedAgentType(agentType)) return <AgentTypeIcon agentType={agentType} className="w-6 h-6" />;
   return <ClaudeIcon />;
 }

@@ -52,11 +52,11 @@ describe("getSnippetTargets over the registry", () => {
     expect(fs.existsSync(path.join(home, ".cursor", "rules"))).toBe(false);
   });
 
-  test("no gemini or pi target appears even when those directories exist", async () => {
+  test("~/.gemini yields Antigravity's GEMINI.md, verified loaded by agy; pi and cursor stay absent", async () => {
     withHome([".claude", ".gemini", ".pi", ".cursor"]);
     const labels = (await targets()).map((t) => t.label);
+    expect(labels).toEqual(["~/.claude/CLAUDE.md", "~/.gemini/GEMINI.md"]);
     for (const label of labels) {
-      expect(label.includes("gemini")).toBe(false);
       expect(label.includes("pi/")).toBe(false);
       // Cursor declares no USER instruction file — its user-level .mdc was
       // never loaded by Cursor, so it no longer appears either.

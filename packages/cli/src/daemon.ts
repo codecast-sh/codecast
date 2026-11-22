@@ -297,6 +297,7 @@ import { BUILD_ID_RE, BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBu
 import { decideEscape, turnLooksActive } from "./escapeInterrupt.js";
 import { markSynced, markExamined, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
 import { ensureGrokFolderTrusted } from "./grokFolderTrust.js";
+import { antigravitySessionCwd, ensureAntigravityFolderTrusted } from "./antigravityLocal.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { subagentPromptParent } from "./agentPromptOrigin.js";
 import { declaredSpawnParent } from "./spawnParents.js";
@@ -1565,6 +1566,12 @@ export function buildBlankLaunchArgs(
     // pins an approval mode, so concatenating can't double up. The flags
     // carry `--yolo` unless the stored mode is explicitly "default".
     const flags = [getAgentArgs(config, "muse") || "", permFlags || ""].filter(Boolean).join(" ");
+    return flags ? flags.split(/\s+/).filter(Boolean) : [];
+  }
+  if (agentType === "antigravity") {
+    // Same codex shape: getPermissionFlags returns null when agent_args pins
+    // --dangerously-skip-permissions or a --mode, so they can't double up.
+    const flags = [getAgentArgs(config, "antigravity") || "", permFlags || ""].filter(Boolean).join(" ");
     return flags ? flags.split(/\s+/).filter(Boolean) : [];
   }
   // cursor/gemini/pi: no configured args or permission flags yet.
@@ -7695,6 +7702,11 @@ async function executeRemoteCommand(
         // identity), not codecast/bun (see disclaim.ts). The wrapper execs
         // plain argv, which works here because envPrefix starts with `env`.
         let cmdText = `${accountPrefix}${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        if (agentType === "antigravity" && cwd && ensureAntigravityFolderTrusted(cwd)) {
+          // Same reason as grok below: agy's first-launch trust dialog comes
+          // before any transcript, so the session could never bind behind it.
+          log(`antigravity folder trust granted for ${cwd}`);
+        }
         if (agentType === "grok") {
           // Pre-trust the cwd so grok does not park on the first-launch folder
           // dialog. The pane classifier still answers `y` if the dialog appears.
@@ -10459,6 +10471,8 @@ export { generateTitleFromMessage } from "./workers/ingestMetadata.js";
 // unlike the older pi/grok classifiers, which predate that seam and exist in
 // both places) and is wired into the daemon's classifier map below.
 import { classifyCursorTranscriptTail, classifyGrokTranscriptTail, classifyMuseTranscriptTail, classifyOpencodeTranscriptTail, classifyPiTranscriptTail } from "./workers/ingestMetadata.js";
+import { classifyAntigravityTranscriptTail } from "./antigravityTranscript.js";
+import { antigravitySessionIdFromPath } from "./antigravityPaths.js";
 export { classifyGrokTranscriptTail, classifyOpencodeTranscriptTail, classifyPiTranscriptTail };
 
 // Every watcher event, the command poll and the sweeps read the state file
@@ -14601,7 +14615,7 @@ export async function processTranscriptDeltaSession(...args: Parameters<typeof p
 type CloudMirrorSource = { mirror: Exclude<Extract<AgentClientId, IngestJob["client"]>, "claude"> };
 
 async function processTranscriptDeltaSessionPass(
-  source: Extract<AgentClientId, "pi" | "grok" | "muse" | "cursor"> | CloudMirrorSource,
+  source: Extract<AgentClientId, "pi" | "grok" | "muse" | "cursor" | "antigravity"> | CloudMirrorSource,
   filePath: string,
   sessionId: string,
   syncService: SyncService,
@@ -14619,7 +14633,9 @@ async function processTranscriptDeltaSessionPass(
     // parent's transcript; ingesting them here would mint a top-level codecast
     // conversation per subagent.
     const ingest = await readTranscriptIngest({client,file:filePath,sessionId,offset:0,...(mirror ? {mirror} : {})});
-    if (client === "grok" && ingest.metadata.internal) return;
+    // An Antigravity conversation another conversation started (a subagent,
+    // conversation_summaries.db names its parent) is skipped the same way.
+    if ((client === "grok" || client === "antigravity") && ingest.metadata.internal) return;
     const allMessages = ingest.messages;
     // A transient empty/corrupt parse must be a no-op, never a signal to delete the
     // synced conversation (orphan detection below would treat every synced uuid as
@@ -14631,11 +14647,12 @@ async function processTranscriptDeltaSessionPass(
     // grok's long-path hash dirs don't decode at all).
     const projectPath = client === "pi" && !mirror
       ? ingest.metadata.cwd ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
-      : mirror || client === "muse" || client === "cursor"
+      : mirror || client === "muse" || client === "cursor" || client === "antigravity"
         // muse's date-sharded dirs carry no cwd — only the log's own
         // route_facts record (ingest metadata) can place the session.
         // cursor's projects/<slug> dir is lossy; its chat meta.json is not,
-        // and neither is a cloud mirror's.
+        // and neither is a cloud mirror's. agy's brain/<uuid>/ dirs carry no
+        // cwd either; conversation_summaries.db does (ingest metadata).
         ? ingest.metadata.cwd ?? undefined
       : ingest.metadata.cwd ?? decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(filePath)))) ?? undefined;
     // Cursor's transcripts and cloud mirrors are judged at their watcher's
@@ -14856,6 +14873,7 @@ async function transcriptHeldStill(filePath: string, sizeAtRead: number, settleM
 const processPiSession = processTranscriptDeltaSession.bind(null, "pi");
 const processGrokSession = processTranscriptDeltaSession.bind(null, "grok");
 const processMuseSession = processTranscriptDeltaSession.bind(null, "muse");
+const processAntigravitySession = processTranscriptDeltaSession.bind(null, "antigravity");
 
 interface ActiveSession {
   sessionId: string;
@@ -15122,7 +15140,9 @@ export function sessionProcessGrepToken(agentType: AgentClientId, claudePattern:
   // grok is a compiled Rust binary whose ps comm/argv is its registry binary name
   // (verified live on v1.0.5) — same rule as codex/gemini. Falling through to the
   // claude pattern would grep for claude processes and never find a grok session.
-  if (agentType === "codex" || agentType === "gemini" || agentType === "grok") return AGENT_CLIENTS[agentType].binary;
+  // agy is a single native binary run as itself (~/.local/bin/agy, ps comm
+  // "agy"), the same rule.
+  if (agentType === "codex" || agentType === "gemini" || agentType === "grok" || agentType === "antigravity") return AGENT_CLIENTS[agentType].binary;
   // muse launches through a bash launcher shim that execs `muse-bin-<version>`,
   // so the registry binary "muse" never appears in ps — match the real binary
   // (same reason pi matches "pi-coding-agent" instead of "pi").
@@ -17187,6 +17207,7 @@ const CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT: Partial<
   grok: classifyGrokTranscriptTail,
   muse: classifyMuseTranscriptTail,
   cursor: classifyCursorTranscriptTail,
+  antigravity: classifyAntigravityTranscriptTail,
 };
 
 export function classifyTranscriptTailFor(
@@ -20256,6 +20277,22 @@ function sessionFileIndexStores(home: string): IndexStore[] {
         },
       },
       idOf: (f) => segs(f.rel)[3] ?? null,
+    },
+    // antigravity: ~/.gemini/antigravity-cli/brain/<sessionId>/.system_generated/
+    // logs/transcript_full.jsonl — the conversation DIRECTORY is named by the id.
+    {
+      root: path.join(home, ".gemini", "antigravity-cli", "brain"),
+      agentType: "antigravity",
+      walk: {
+        policy: { dirs: "antigravityWatch", files: "antigravityWatch" },
+        maxDepth: 4,
+        dirFilter: (rel) => {
+          const d = segs(rel);
+          return CLAUDE_UUID_RE.test(d[0]) && (d.length === 1 || (d[1] === ".system_generated" && (d.length === 2 || (d.length === 3 && d[2] === "logs"))));
+        },
+        fileFilter: (rel) => antigravitySessionIdFromPath(path.join(home, ".gemini", "antigravity-cli", "brain", rel)) !== null,
+      },
+      idOf: (f) => antigravitySessionIdFromPath(f.path),
     },
   ];
 }
@@ -26551,6 +26588,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       // muse's date-sharded dirs carry no cwd — the log's own route_facts
       // record (extractMuseCwd) is authoritative.
       : agentType === "muse" ? (extractMuseCwd(jsonlContent) || undefined)
+      // agy's transcript carries no cwd; conversation_summaries.db does.
+      : agentType === "antigravity" ? antigravitySessionCwd(jsonlPath, sessionId)
       : (extractCwd(jsonlContent) || undefined);
     const resolvedCwd = await resolveResumeCwdOrRefuse({ recordedCwd, cwdOverride, conversationId });
     if (resolvedCwd) {
@@ -26574,6 +26613,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // The account this resume actually runs on, for the OAuth refresh gate.
   let resumeAccount: string | undefined;
   let stableRulesFile: string | undefined;
+  if (agentType === "antigravity" && cwd && ensureAntigravityFolderTrusted(cwd)) {
+    log(`antigravity folder trust granted on resume for ${cwd}`);
+  }
   if (agentType === "grok") {
     if (cwd && ensureGrokFolderTrusted(cwd)) {
       log(`grok folder trust granted on resume for ${cwd}`);
@@ -34083,6 +34125,22 @@ async function main(): Promise<void> {
     new TranscriptDirWatcher(transcriptDirWatcherConfig("muse")),
     "muse",
     (event) => processMuseSession(
+      event.filePath,
+      event.sessionId,
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      updateState
+    ),
+  );
+
+  registerJsonlDirWatcher(
+    new TranscriptDirWatcher(transcriptDirWatcherConfig("antigravity")),
+    "antigravity",
+    (event) => processAntigravitySession(
       event.filePath,
       event.sessionId,
       syncService,

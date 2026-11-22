@@ -57,6 +57,8 @@ export function isValidResumeSessionId(agentType: AgentClientId, sessionId: stri
   if (agentType === "opencode") return OPENCODE_SESSION_ID_RE.test(sessionId);
   if (agentType === "grok") return CLAUDE_UUID_RE.test(sessionId);
   if (agentType === "muse") return CLAUDE_UUID_RE.test(sessionId);
+  // agy conversation ids are UUIDs (the brain/<uuid> directory name).
+  if (agentType === "antigravity") return CLAUDE_UUID_RE.test(sessionId);
   if (agentType === "gemini") return true;
   return SHELL_SAFE_SESSION_ID_RE.test(sessionId);
 }
@@ -231,7 +233,7 @@ export function combineClaudeResumeFlags(
  * (AGENT_CLIENTS[agentType].resumeCmd); this function only layers the
  * codex/grok/muse config flags on top and gates claude out.
  */
-const RESUME_CARRIES_LAUNCH_FLAGS: ReadonlySet<AgentClientId> = new Set(["codex", "grok", "muse", "cursor"]);
+const RESUME_CARRIES_LAUNCH_FLAGS: ReadonlySet<AgentClientId> = new Set(["codex", "grok", "muse", "cursor", "antigravity"]);
 
 export function buildNonClaudeResumeCommand(
   agentType: AgentClientId,
@@ -312,7 +314,7 @@ export function resolveResumeAgentType(
   agentTypeHint: AgentClientId | undefined,
   sessionFileAgentType: AgentClientId | undefined,
 ): AgentClientId {
-  if (agentTypeHint === "cursor" || agentTypeHint === "opencode" || agentTypeHint === "pi" || agentTypeHint === "grok" || agentTypeHint === "muse") return agentTypeHint;
+  if (agentTypeHint === "cursor" || agentTypeHint === "opencode" || agentTypeHint === "pi" || agentTypeHint === "grok" || agentTypeHint === "muse" || agentTypeHint === "antigravity") return agentTypeHint;
   return sessionFileAgentType ?? "claude";
 }
 

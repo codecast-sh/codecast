@@ -9,6 +9,7 @@ import { EventEmitter } from "events";
 import * as path from "path";
 import * as fs from "fs";
 import { RecursiveWatcher } from "./recursiveWatcher.js";
+import { antigravitySessionIdFromPath } from "./antigravityPaths.js";
 import { dirFilterByDepth, type WalkFile } from "./fsWalk.js";
 import { CLAUDE_UUID_RE } from "./resumeCommand.js";
 import { AGENT_CLIENTS, type AgentClientId } from "@codecast/shared/contracts";
@@ -203,10 +204,35 @@ export function decodeGrokCwdSlug(slug: string): string | null {
  * sessionWatcher and cursor a SQLite watcher (different watcherKinds).
  */
 export function transcriptDirWatcherConfig(
-  clientId: Extract<AgentClientId, "codex" | "gemini" | "pi" | "grok" | "muse">,
+  clientId: Extract<AgentClientId, "codex" | "gemini" | "pi" | "grok" | "muse" | "antigravity">,
   basePathOverride?: string,
 ): TranscriptDirWatcherConfig {
   const basePath = basePathOverride ?? expandTranscriptRoot(AGENT_CLIENTS[clientId].transcriptRoots[0]);
+
+  if (clientId === "antigravity") {
+    // agy keeps one directory per conversation under brain/:
+    // brain/<conversation-uuid>/.system_generated/logs/transcript_full.jsonl.
+    // Watch that one file. Its siblings churn during a turn and are never the
+    // transcript: transcript.jsonl (the same rows with long fields cut),
+    // logs/chunks/ (paged copies), .system_generated/steps/<n>/ (tool outputs),
+    // scratch/ and .user_uploaded/. The conversation id is the uuid directory,
+    // checked by antigravitySessionIdFromPath with the whole shape, because
+    // agentSessionFromTranscriptPath consults this without the dirFilter.
+    return {
+      basePath,
+      scanPolicy: { dirs: "antigravityWatch", files: "antigravityWatch" },
+      watchFilter: (rel) => antigravitySessionIdFromPath(path.join(basePath, rel)) !== null,
+      scanMatch: (dir, name) => name === "transcript_full.jsonl" && path.basename(dir) === "logs",
+      extractSessionId: (filePath) => antigravitySessionIdFromPath(filePath),
+      dirFilter: dirFilterByDepth(
+        (seg) => CLAUDE_UUID_RE.test(seg),
+        (seg) => seg === ".system_generated",
+        (seg) => seg === "logs",
+      ),
+      maxDepth: 4,
+      debounceMs: 100,
+    };
+  }
 
   if (clientId === "muse") {
     // muse sessions sit four directories deep:
@@ -352,7 +378,7 @@ export function transcriptDirWatcherConfig(
  *  handle on that store says "an agent", never "which session". For grok the
  *  per-session identity is the uuid DIRECTORY holding updates.jsonl, which its
  *  extractSessionId already returns from the file path. */
-const FILE_PER_SESSION_CLIENTS = ["claude", "codex", "gemini", "pi", "grok", "muse"] as const;
+const FILE_PER_SESSION_CLIENTS = ["claude", "codex", "gemini", "pi", "grok", "muse", "antigravity"] as const;
 
 /**
  * Which agent session (if any) a transcript path belongs to — the registry-driven

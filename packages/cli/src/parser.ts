@@ -5,6 +5,8 @@ import { extractSentFiles, type SyncFile } from "./userFiles.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { parseMuseSessionFile } from "./museTranscript.js";
 export { parseMuseSessionFile, extractMuseCwd } from "./museTranscript.js";
+import { parseAntigravityTranscript } from "./antigravityTranscript.js";
+export { parseAntigravityTranscript } from "./antigravityTranscript.js";
 import type { CodexTurnError } from "@codecast/shared/contracts";
 import { CLIENT_ERROR_BANNER_PREFIX, claudeAutoContinueBanner, isAgentContextMessage, isModelSwitchLimitBanner, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
 
@@ -2061,6 +2063,8 @@ export function parseTranscriptFor(clientId: AgentClientId, content: string, onE
       return parseGrokSessionFile(content);
     case "muse":
       return parseMuseSessionFile(content);
+    case "antigravity":
+      return parseAntigravityTranscript(content);
     default:
       return parseSessionFile(content, onEmit);
   }

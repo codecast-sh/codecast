@@ -12,6 +12,8 @@ import { readCodexModelBeforeOffset } from '../codexTranscriptModel.js';
 import { isCursorRoleHeaderLine, parseCursorTranscriptFile, parseMirrorTranscriptFile, parseTranscriptFor, parseCodexSessionFile, parseSessionFile, extractSlug, extractParentUuid, extractSidechain, extractCwd, extractSummaryTitle, extractTeamInfo, detectCliFlags, extractPiCwd, extractGrokCwd, isGrokInternalSession, extractMuseCwd } from '../parser.js';
 import { extractCodexCwd, extractCodexSessionMetadata, extractCodexForkRoot, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild } from '../codexSessionMeta.js';
 import { recoverImagesFromBackup, classifyOpencodeTranscriptTail, classifyPiTranscriptTail, classifyGrokTranscriptTail, classifyMuseTranscriptTail, classifyCursorTranscriptTail } from './ingestMetadata.js';
+import { classifyAntigravityTranscriptTail } from '../antigravityTranscript.js';
+import { antigravityDataDirFromTranscript } from '../antigravityPaths.js';
 import { INGEST_WINDOW_ROWS, INGEST_MAX_BYTES, hasClockFreeReceipts, isWindowedIngest, type IngestJob, type IngestIdentity, type IngestResult } from './ingestTypes.js';
 import { validateIngestResult } from './ingestValidation.js';
 import { findCursorCliChat } from './cursorObservation.js';
@@ -288,6 +290,25 @@ export async function readIngestJob(job: IngestJob, checkpoint: () => void = () 
     }
     if (job.client === 'pi') { meta.cwd = extractPiCwd(content); meta.turn = classifyPiTranscriptTail(content); }
     if (job.client === 'muse') { meta.cwd = extractMuseCwd(content); meta.turn = classifyMuseTranscriptTail(content); }
+    if (job.client === 'antigravity') {
+      // The working directory is not in agy's transcript; it is the
+      // conversation's row in conversation_summaries.db beside brain/. A
+      // conversation another one started (a subagent) carries its parent's id
+      // and is skipped like grok's internal sessions.
+      // Any failure to read it (agy mid-write, a schema it changed) costs the
+      // cwd, never the transcript.
+      const dataDir = antigravityDataDirFromTranscript(job.file);
+      let summary: Awaited<ReturnType<typeof import('./ingestDatabase.js').readAntigravitySummary>>;
+      if (dataDir) {
+        try {
+          const {readAntigravitySummary} = await import('./ingestDatabase.js');
+          summary = await readAntigravitySummary(path.join(dataDir,'conversation_summaries.db'),job.sessionId);
+        } catch (error) { meta.warnings.push(`antigravity summary: ${error instanceof Error ? error.message : String(error)}`); }
+      }
+      if (summary?.cwd) meta.cwd = summary.cwd;
+      if (summary?.parentConversationId || (summary?.nestingDepth ?? 0) > 0) meta.internal = true;
+      meta.turn = classifyAntigravityTranscriptTail(content);
+    }
     if (job.client === 'grok') {
       const summary = await optional(() => whole(path.join(path.dirname(job.file),'summary.json')),meta.warnings,'grok summary');
       if (summary !== undefined) { meta.cwd = extractGrokCwd(summary); meta.internal = isGrokInternalSession(summary); }

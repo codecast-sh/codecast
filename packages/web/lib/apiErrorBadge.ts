@@ -11,6 +11,7 @@ function authTitle(agentType?: string | null): string {
   if (agentType === "opencode") return "Provider not authenticated — run `opencode auth login` in a terminal, then retry";
   if (agentType === "grok") return "Signed out — run `grok login` in a terminal (browser OAuth), then retry";
   if (agentType === "muse") return "Signed out — run `muse login` in a terminal (device flow), then retry";
+  if (agentType === "antigravity") return "Signed out — run `agy` in a terminal and sign in with Google, then retry";
   return "Signed out — run /login in the terminal to re-authenticate";
 }
 

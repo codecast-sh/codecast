@@ -601,6 +601,7 @@ jobs:
         # uses it.
         run: >-
           bun test --isolate --timeout=60000
+          src/antigravityLocal.test.ts
           src/browser/appIdentity.native.test.ts
           src/browser/bridge/host.test.ts
           src/ccAccounts.background.test.ts

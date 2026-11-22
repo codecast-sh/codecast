@@ -159,7 +159,7 @@ export type ProvisionStandingAgentOpts = {
   persona?: string;
   project_path?: string;
   model?: string;
-  agent_type?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
+  agent_type?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse" | "antigravity";
   // The machine a new standing session starts on (a fresh restart keeps the old seat's).
   target_device_id?: string;
   bootstrap?: boolean;

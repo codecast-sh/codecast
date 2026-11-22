@@ -759,6 +759,7 @@ export default defineSchema({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
       // The hosted assistant (plan pl-840): Convex actions run its turns and
       // no device ever claims the row (convex/assistant).
       v.literal("codecast"),
@@ -3028,6 +3029,7 @@ export default defineSchema({
         v.literal("pi"),
         v.literal("grok"),
         v.literal("muse"),
+        v.literal("antigravity"),
       ),
       transport: v.union(v.literal("tmux"), v.literal("app-server"), v.literal("external")),
       project_path: v.string(),
@@ -3118,6 +3120,7 @@ export default defineSchema({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     ),
     transport: v.union(v.literal("tmux"), v.literal("app-server"), v.literal("external")),
     project_path: v.string(),
@@ -3165,6 +3168,7 @@ export default defineSchema({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     )),
     runtime_id: v.optional(v.string()),
     handle: v.optional(v.string()),

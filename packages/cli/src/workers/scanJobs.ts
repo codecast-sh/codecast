@@ -94,6 +94,11 @@ export async function recentScan(job: Extract<ScanJob,{name:'recent'}>): Promise
       for (const dd of await freshDirs(mm,job.since)) {
         const p=path.join(dd,job.sessionId,'session.jsonl'); if(await exists(p)) return found(p,'muse');
       }
+  // agy names the conversation directory by its id, so the path is direct.
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(job.sessionId)) {
+    const p=path.join(job.home,'.gemini','antigravity-cli','brain',job.sessionId,'.system_generated','logs','transcript_full.jsonl');
+    if (await exists(p)) return found(p,'antigravity');
+  }
   return [];
 }
 export async function* scanJobRows(job: ScanJob): AsyncGenerator<ScanRow> {

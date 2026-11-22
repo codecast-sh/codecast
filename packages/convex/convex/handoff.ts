@@ -266,7 +266,7 @@ async function askForBrief(gate: VendorGate, input: HandoffBriefInput): Promise<
   return reply?.text ?? null;
 }
 
-const AGENT_TYPES = ["claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse"] as const;
+const AGENT_TYPES = ["claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse", "antigravity"] as const;
 
 // handoff.start — the whole handoff. Callable from the web as a signed-in
 // action (conversation_id + agent_type/model/effort/direction) and from the

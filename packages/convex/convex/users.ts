@@ -3635,7 +3635,8 @@ export const startSession = mutation({
       v.literal("opencode"),
       v.literal("pi"),
       v.literal("grok"),
-      v.literal("muse")
+      v.literal("muse"),
+      v.literal("antigravity")
     ),
     project_path: v.optional(v.string()),
     prompt: v.optional(v.string()),

@@ -186,7 +186,7 @@ function isAuthError(error: any): boolean {
   );
 }
 
-export type AgentType = "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
+export type AgentType = "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse" | "antigravity";
 
 export interface SyncConfig {
   convexUrl: string;
