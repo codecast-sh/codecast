@@ -1,6 +1,7 @@
 import { describe, expect, it, test } from "bun:test";
 import {
   channelDisplayName,
+  dmRoomName,
   railRowTip,
   authorFor,
   seatAuthorFor,
@@ -16,6 +17,7 @@ import {
 } from "../chatViews";
 import type { ChatMessageRow, ChatReactionRow } from "../../store/chatSlice";
 import { sessionPersonasFrom } from "../../hooks/useChatSync";
+import { chatTabTitle } from "../tabTitle";
 import { dmKeyFor, dmOtherIds, dmWatcher, sessionDmKeyFor } from "@codecast/shared/chat";
 
 const ME: ChatMember = { _id: "u1", name: "Ashot", github_username: "Ashot", email: "ashot@codecast.sh" };
@@ -429,5 +431,23 @@ describe("channelDisplayName", () => {
       .toBe("Growth");
     // A people DM still reads as its people.
     expect(channelDisplayName({ name: "", kind: "dm", dmMemberIds: [MAYA._id] }, [ME, MAYA])).toBe("Maya");
+  });
+
+  test("dmRoomName names a raw row one way for its people and its watcher, as the header and tab title read it (ct-79021)", () => {
+    const BOT: ChatMember = { _id: "u-bot", name: "Growth", is_bot: true, bot_kind: "anchor" };
+    const roster = [ME, MAYA, BOT];
+    const session = { name: "Morning deal desk refresh", kind: "dm", dm_key: sessionDmKeyFor("t1", [MAYA._id], "conv-1") };
+    const role = { name: "", kind: "dm", dm_key: dmKeyFor("t1", [BOT._id, MAYA._id]) };
+    const people = { name: "", kind: "dm", dm_key: dmKeyFor("t1", [ME._id, MAYA._id]) };
+    for (const viewer of [ME._id, MAYA._id]) {
+      expect(dmRoomName(session, viewer, roster)).toBe("Morning deal desk refresh");
+      expect(dmRoomName(role, viewer, roster)).toBe("Growth");
+      // The browser tab reads the same rule off the store's channel rows.
+      expect(chatTabTitle("/chat/c-s", { "c-s": session }, roster, viewer)).toBe("Morning deal desk refresh");
+      expect(chatTabTitle("/chat/c-r", { "c-r": role }, roster, viewer)).toBe("Growth");
+    }
+    expect(dmRoomName(people, ME._id, roster)).toBe("Maya");
+    // No viewer yet (signed-in user still loading) never reads as a watcher.
+    expect(dmWatcher(people.dm_key, "")).toBe(false);
   });
 });

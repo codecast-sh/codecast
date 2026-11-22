@@ -9,9 +9,8 @@ import { isBrowserRoutePath } from "./browserPane";
 import { isConvexId, orgObjectOfRef } from "./entityLinks";
 import { findEntityInStore } from "./liveEntities";
 import { vaultNoteTitle } from "./vault/noteTitle";
-import { channelDisplayName } from "./chatViews";
+import { dmRoomName } from "./chatViews";
 import { filterByWorkspace, inWorkspace, type WorkspaceKey } from "./workspaceScope";
-import { dmOtherIds } from "@codecast/shared/chat";
 import { currentPagePath } from "./renamedPages";
 import { orgRefOfPath } from "../components/org/company/sheetStack";
 import { modernRecordTitle } from "./modernRecordTitle";
@@ -35,10 +34,7 @@ export function chatTabTitle(
   const channel = m ? channels?.[m[1]] : undefined;
   if (!channel) return null;
   if (channel.kind === "dm") {
-    return channelDisplayName(
-      { name: "", kind: "dm", dmMemberIds: dmOtherIds(channel.dm_key, viewerId ?? "") },
-      members,
-    );
+    return dmRoomName(channel, viewerId ?? "", members);
   }
   return channel.name || null;
 }

@@ -53,7 +53,7 @@ export function dmOtherIds(dmKey: string | undefined, viewerId: string): string[
  *  so the room's one other party is the agent's, and naming it lists the
  *  agent, not the agent and its people. */
 export function dmWatcher(dmKey: string | undefined, viewerId: string): boolean {
-  if (!dmKey) return false;
+  if (!dmKey || !viewerId) return false;
   const [people] = dmKey.split(SESSION_DM_MARK);
   return !people.split(":").slice(1).includes(viewerId);
 }

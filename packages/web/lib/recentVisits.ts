@@ -8,8 +8,7 @@ import { pathLabel } from "./pathLabel";
 import { staleNavTitle } from "./navRegistry";
 import { isModernStyle } from "./visualStyle";
 import { placeTitle } from "./placeTitle";
-import { channelDisplayName } from "./chatViews";
-import { dmOtherIds } from "@codecast/shared/chat";
+import { dmRoomName } from "./chatViews";
 import { cleanTitle } from "./conversationProcessor";
 import { sessionCardTitle } from "./sessionCard";
 import { isHostedAgentType, workspaceFeatureEnabled } from "@codecast/shared/contracts";
@@ -59,10 +58,7 @@ function resolvePageObject(state: any, path: string): { objectType: VisitObjectT
       return {
         objectType: "channel",
         entity: channel,
-        title: channelDisplayName(
-          { name: "", kind: "dm", dmMemberIds: dmOtherIds(channel.dm_key, String(state.currentUser?._id ?? "")) },
-          teamMembersOf(state),
-        ),
+        title: dmRoomName(channel, String(state.currentUser?._id ?? ""), teamMembersOf(state)),
       };
     }
     return { objectType: "channel", entity: channel, title: channel.name || undefined };

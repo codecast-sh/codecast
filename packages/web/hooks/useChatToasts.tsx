@@ -15,8 +15,8 @@ import { isChatContextOnScreen } from "../lib/chatFocus";
 import { isChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
 import { knownAgentMember, memberName, sessionAuthorFor, slackAuthorFor, mentionsViewer as rowMentionsViewer, type ChatMember } from "../lib/chatViews";
 import { soundChatMessage } from "../lib/sounds";
-import { channelDisplayName } from "../lib/chatViews";
-import { dmOtherIds, isAgentTurnInFlight } from "@codecast/shared/chat";
+import { dmRoomName } from "../lib/chatViews";
+import { isAgentTurnInFlight } from "@codecast/shared/chat";
 
 import { useWatchEffect } from "./useWatchEffect";
 import { notificationActor } from "../lib/notificationTypes";
@@ -267,10 +267,7 @@ export function useChatToasts(): void {
         messageId,
         channelId,
         channelName: isDm
-          ? channelDisplayName(
-              { name: "", kind: "dm", dmMemberIds: dmOtherIds(channelRow?.dm_key, viewerId) },
-              members,
-            )
+          ? dmRoomName(channelRow, viewerId, members)
           : channelRow?.name ?? "channel",
         isDm,
         authorName: isCall ? "Huddle" : slackAuthor?.name ?? sessionAuthor?.name ?? memberName(author),

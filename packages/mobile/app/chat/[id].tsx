@@ -14,12 +14,12 @@ import { useChannelMessages, useChannelMessagesSync, useChatRail, useSupersededC
 import { useOpenThreadPrefetch, useThreadPrefetch } from '@codecast/web/hooks/useThreadPrefetch';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
-import { lineGroupKey, buildChatTimeline, dmOtherIds, dmWatcher, memberHandle, plainPreview } from '@codecast/shared/chat';
+import { lineGroupKey, buildChatTimeline, dmOtherIds, memberHandle, plainPreview } from '@codecast/shared/chat';
 import { channelHuddleMemberIds, chatRoomKey } from '@codecast/shared/contracts';
 import { HuddleButton } from '@/components/calls/SessionHuddleButton';
 import { MessageRow, DayDivider, NewDivider, ChatAvatar, fromChatView, type MobileChatMessage } from '@/components/chat/MessageRow';
 import { threadRootOf } from '@codecast/web/components/chat/chatTypes';
-import { channelDisplayName } from '@codecast/web/lib/chatViews';
+import { dmRoomName } from '@codecast/web/lib/chatViews';
 import { type MentionCandidate } from '@/components/chat/MentionStrip';
 import { useSessionIdentityLookup } from '@/components/identity';
 import { ChatComposerBar } from '@/components/chat/ChatComposerBar';
@@ -367,7 +367,7 @@ export default function ChatChannelScreen() {
   );
   const counterpart = dmOthers.length === 1 ? memberById.get(dmOthers[0]) : undefined;
   const roomName = isDm
-    ? channelDisplayName({ name: channel?.name ?? '', kind: 'dm', dmMemberIds: dmOthers, dmWatching: dmWatcher(channel?.dm_key, viewerId) }, teamMembers)
+    ? dmRoomName(channel, viewerId, teamMembers)
     : channel?.name ?? 'channel';
   const presence = counterpart?.presence_state as string | undefined;
   const presenceColor =

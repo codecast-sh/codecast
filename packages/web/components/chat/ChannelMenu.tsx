@@ -16,8 +16,7 @@ import {
 import type { ChannelMenuPayload } from "../../hooks/useChannelMenu";
 import { useInboxStore } from "../../store/inboxStore";
 import type { ChatNotifyLevel } from "../../store/chatSlice";
-import { channelDisplayName } from "../../lib/chatViews";
-import { dmOtherIds } from "@codecast/shared/chat";
+import { dmRoomName } from "../../lib/chatViews";
 import { readPins, isThreadsPin, togglePin } from "../../lib/sidebarPins";
 import { supersededChannelId } from "../../hooks/useChatSync";
 import "./chat.css";
@@ -72,10 +71,7 @@ export function ChannelContextMenu({ state }: { state: ContextMenuState<ChannelM
           // where the name is explained.
           const slackLink = slackLinkForChannel(s.chatSlackLinks as any, p.channelId);
           const title = isDm
-            ? channelDisplayName(
-                { name: "", kind: "dm", dmMemberIds: dmOtherIds(channel.dm_key, (s as any).currentUser?._id ?? "") },
-                teamMembersOf(s),
-              )
+            ? dmRoomName(channel, String((s as any).currentUser?._id ?? ""), teamMembersOf(s))
             : `#${channel.name}`;
           return (
             <>

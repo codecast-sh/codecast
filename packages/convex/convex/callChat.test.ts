@@ -576,6 +576,8 @@ describe("ct-79021: the huddle's chat notifies the people in the huddle", () => 
     call_members: [
       { _id: "cm1", room_key: "session:conv1", user_id: "ua", team_id: "team1", last_seen: Date.now() },
       { _id: "cm2", room_key: "session:conv1", user_id: "ub", team_id: "team1", last_seen: Date.now() },
+      // Bo rejoined from a second device: two live seats, still one bell.
+      { _id: "cm2b", room_key: "session:conv1", user_id: "ub", team_id: "team1", last_seen: Date.now() },
       // Left long ago: not in the huddle.
       { _id: "cm3", room_key: "session:conv1", user_id: "uc", team_id: "team1", last_seen: 1 },
     ],

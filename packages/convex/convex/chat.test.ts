@@ -4684,6 +4684,45 @@ describe("session thinking rows", () => {
     expect(reply.session_relay.skipped).toBe("no_access");
     expect(thinking(ctx).length).toBe(0);
   });
+  test("ct-79021: every kind of line rings each person once, under the row's own author, in a DM and in a channel thread", async () => {
+    const ctx = context(BOB, seed({ chat_reads: [readRow(ALICE, "all"), readRow(BOB, "all"), readRow(CAROL, "all")] }));
+    const asSession = { origin: "agent" as const, origin_session_id: "sess-bob" };
+    // Each line: who hears it, at most once each, never its own author, and
+    // the bell's actor is the account the row is written under.
+    const check = (id: string) => {
+      const bells = ctx._emitted.filter((e: any) => String(e.args.chat_message_id) === String(id)).map((e: any) => e.args);
+      const line = messagesIn(ctx).find((m: any) => String(m._id) === String(id));
+      const to = bells.map((b: any) => String(b.direct_recipient_id));
+      expect(new Set(to).size).toBe(to.length);
+      expect(to).not.toContain(String(line.user_id));
+      for (const b of bells) expect(String(b.actor_user_id)).toBe(String(line.user_id));
+      return to.sort();
+    };
+
+    // A person's line in a DM that also names the other side: one bell.
+    const dm = await call(openDm, as(ctx, ALICE), { team_id: TEAM, member_ids: [BOB] });
+    const personDm = await call(sendMessage, as(ctx, ALICE), { channel_id: dm.channel_id, content: "@bob the numbers?" });
+    expect(check(personDm.message_id)).toEqual([String(BOB)]);
+
+    // A person's reply in a channel thread both others are in, naming them both.
+    const root = await call(sendMessage, as(ctx, CAROL), { channel_id: CHANNEL, content: "release plan" });
+    await call(sendMessage, ctx, { channel_id: CHANNEL, content: "on it", thread_root_id: root.message_id });
+    const personThread = await call(sendMessage, as(ctx, ALICE), {
+      channel_id: CHANNEL, content: "@bob @carol staging is green", thread_root_id: root.message_id,
+    });
+    expect(check(personThread.message_id)).toEqual([String(BOB), String(CAROL)].sort());
+
+    // A session's `cast chat dm` line in its own room with Alice, naming her.
+    const sessionRoom = await call(openDm, ctx, { team_id: TEAM, handles: ["alice"], ...asSession });
+    const sessionDm = await call(sendMessage, ctx, { channel_id: sessionRoom.channel_id, content: "@alice deal desk is up", ...asSession });
+    expect(check(sessionDm.message_id)).toEqual([String(ALICE)]);
+
+    // The same session answering in the channel thread, naming Alice.
+    const sessionThread = await call(sendMessage, ctx, {
+      channel_id: CHANNEL, content: "@alice done", thread_root_id: root.message_id, ...asSession,
+    });
+    expect(check(sessionThread.message_id)).toEqual([String(ALICE), String(CAROL)].sort());
+  });
 });
 
 describe("ct-79021: a muted thread inside a DM", () => {

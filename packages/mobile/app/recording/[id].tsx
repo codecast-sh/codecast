@@ -160,6 +160,15 @@ export default function RecordingDetailScreen() {
   const state = call ? recordingState(call as any) : null;
   const waiting = state && state !== 'ready' && !(live && huddle) ? WAITING_COPY[state] : null;
   const segments = call?.segments ?? [];
+  // A huddle's chat: what people typed and what its agents answered, the
+  // lines a huddle-chat bell rang for (ct-79021). The same read the web call
+  // page makes (callChat.list over this call), shown above the words so the
+  // tap lands on the line. A recording has no room and no chat.
+  const chatRows = (useQueryNoThrow(
+    api.callChat.list,
+    call?.room_key && huddle ? { room_key: call.room_key, transcript_id: call._id } : 'skip',
+  ).data ?? []) as { _id: string; user_name: string; text: string; at: number; event: string | null }[];
+  const chatLines = chatRows.filter((r) => !r.event && r.text);
 
   // The line the link named, marked until the person plays or taps.
   const focusIndex = (() => {
@@ -327,6 +336,23 @@ export default function RecordingDetailScreen() {
                 </RNView>
               ) : null}
 
+              {chatLines.length ? (
+                <RNView style={styles.block}>
+                  <RNText style={styles.blockLabel}>CHAT</RNText>
+                  {chatLines.map((r) => (
+                    <RNView key={r._id} style={styles.chatRow}>
+                      <RNText style={styles.chatAuthor}>
+                        {r.user_name}
+                        <RNText style={styles.chatTime}>
+                          {'  '}{new Date(r.at).toLocaleTimeString(undefined, { timeStyle: 'short' })}
+                        </RNText>
+                      </RNText>
+                      <RNText style={styles.action}>{r.text}</RNText>
+                    </RNView>
+                  ))}
+                </RNView>
+              ) : null}
+
               {call.summary ? (
                 <RNView style={styles.block}>
                   <RNText style={styles.blockLabel}>SUMMARY</RNText>
@@ -464,6 +490,9 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   transcriptLabel: { paddingTop: Spacing.sm },
   summary: { fontSize: FontSize.md, color: Theme.text, lineHeight: 22 },
   actionRow: { flexDirection: 'row', gap: Spacing.sm },
+  chatRow: { gap: 2 },
+  chatAuthor: { fontSize: FontSize.sm, fontWeight: '600', color: Theme.text },
+  chatTime: { fontSize: FontSize.xs, fontWeight: '400', color: Theme.textMuted0 },
   actionBullet: { fontSize: FontSize.md, color: Theme.accentAmber },
   action: { flex: 1, fontSize: FontSize.md, color: Theme.text, lineHeight: 22 },
 
