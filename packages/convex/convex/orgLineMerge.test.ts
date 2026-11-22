@@ -169,7 +169,7 @@ describe("a merge no role is behind", () => {
     const cited = { cite: { conversation_short_id: "jx7b0m0", line: 115 }, quote: "Yes, ship this", name: "Host" };
     await clearForMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", why: "they said ship", cited }, NOW + 1);
     expect(run().merge_cleared).toMatchObject({ node_id: "intent_gate", cite: cited.cite, quote: "Yes, ship this", attempt: NOW });
-    expect(tables.task_comments.at(-1).text).toBe(`Landed on Host's word: "Yes, ship this" (jx7b0m0:115), no card.`);
+    expect(tables.task_comments.at(-1).text).toBe(`Cleared to land on Host's word: "Yes, ship this" (jx7b0m0:115), no card.`);
     expect(await check(ctx)).toMatchObject({ allowed: true, authorized: { user_id: HOST, why: `Host's own word "Yes, ship this" (jx7b0m0:115), checked at intent_gate` } });
   });
 

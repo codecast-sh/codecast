@@ -226,7 +226,7 @@ export async function clearForMergeCore(
     const { cite, quote, name } = args.cited;
     await insertTaskComment(ctx, run.task_id, {
       author: "line",
-      text: `Landed on ${name}'s word: "${quote}" (${cite.conversation_short_id}:${cite.line}), no card.`,
+      text: `Cleared to land on ${name}'s word: "${quote}" (${cite.conversation_short_id}:${cite.line}), no card.`,
       comment_type: "progress",
       conversation_id: run.primary_conversation_id ?? undefined,
     });

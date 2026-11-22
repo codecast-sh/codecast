@@ -357,7 +357,7 @@ describe("a clear resting on a typed line", () => {
     expect(r).toMatchObject({ node_id: "intent__clear", starter_id: String(ana), starter_name: "Ana", cite: `${at}:3` });
     expect(await stamp()).toMatchObject({ node_id: "intent__clear", cite: { conversation_short_id: at, line: 3 }, quote: "Yes, ship this and shepherd it into production. All of your fixes" });
     expect((await comments()).map((c: any) => c.text)).toEqual([
-      `Landed on Ana's word: "Yes, ship this and shepherd it into production. All of your fixes" (${at}:3), no card.`,
+      `Cleared to land on Ana's word: "Yes, ship this and shepherd it into production. All of your fixes" (${at}:3), no card.`,
     ]);
   });
 
