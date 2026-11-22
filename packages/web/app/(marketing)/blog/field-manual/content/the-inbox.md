@@ -90,7 +90,6 @@ Two filing verbs remove nothing: **Pin** (top of the list) and **Label** (one of
 | Label | Triage bar "more", right-click | `Ctrl+L` | Long-press, "Label…" | Files under a personal label |
 | Mark unread | Right-click | `Ctrl+Shift+U` | Long-press | Card keeps its dot until you next open it |
 | Rename | Right-click | `Ctrl+Shift+E` | | New title on the card |
-| Hand off | From an open conversation | `Alt+Shift+H` | | Picks a teammate; the session moves into their inbox |
 | Jump to most urgent | | `Ctrl+I` | | Opens the top Needs You card |
 | Cycle the view | | `Ctrl+,` | | Grouped by state, by time, or by label |
 | Everything else | Command palette | `Cmd+K` | | Search plus every verb on the selected session |

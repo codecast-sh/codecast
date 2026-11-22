@@ -18,5 +18,4 @@ export const SEND_CHORDS: ReadonlyArray<{ accel: string; label: string }> = [
   { accel: "shift+escape", label: "Stop and send" },
   { accel: "meta+alt+enter", label: "Send together with others' drafts" },
   { accel: "meta+shift+e", label: "Rich editor" },
-  { accel: "alt+shift+h", label: "Hand off to a teammate" },
 ];
