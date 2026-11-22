@@ -196,9 +196,11 @@ file; the session that ran the command, when there is one, is the run's
 subject. A refreeze rebuilds it from the checkout as it is now, for the
 change's files, any file one of its writers now holds (a fix may add a test),
 and any changed file no session's edit names that was written or moved after
-the brief went out (a writer's shell makes those: a lockfile, codegen output,
-a `git mv` target with its source), still a commit per writer on the same
-branch. A pass whose files the checkout no longer changes because upstream
+the brief went out when the writers' changes explain it (a writer's shell
+makes those: the lockfile of a manifest a writer changed, codegen beside a
+writer's source or in a generator directory above it, a `git mv` target with
+its source). Any other late file is another session's install or codegen and
+is held out with why. Still a commit per writer on the same branch. A pass whose files the checkout no longer changes because upstream
 already holds them has landed, and the run ends done, as a session's change
 found on upstream does. One checkout runs one such pass at a time
 (ship-checkout.md).

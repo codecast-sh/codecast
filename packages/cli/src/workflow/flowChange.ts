@@ -166,6 +166,9 @@ export function inboxRosterVia(call: (route: string, body: Record<string, unknow
   };
 }
 
+/** Whether a changed file belongs to a refrozen pass: yes, no, or held out for the reason given. */
+type Keep = (path: string, conversation: string | null, changed: Array<{ path: string; conversation: string | null }>) => boolean | string;
+
 /** Nothing uncommitted in the checkout can ship: no change at all, or only held files. */
 export class NoCheckoutChange extends Error {
   constructor(root: string, held: FrozenChange["held"]) {
@@ -178,22 +181,28 @@ export class NoCheckoutChange extends Error {
  * plans a pass (makePlan): the shipping groups, one per session that wrote
  * files and one for files no session's edit names, each with its message, and
  * the files held out with why. `keep` narrows it to the files of a change
- * already frozen (a refreeze), given each file and the session that wrote it.
- * A pass needs an upstream to ship to, so a checkout without one is refused.
+ * already frozen (a refreeze), given each file, the session that wrote it and
+ * every changed file with its writer; a reason it returns holds the file out
+ * with that reason. A pass needs an upstream to ship to, so a checkout without
+ * one is refused.
  */
-export async function previewCheckoutChange(root: string, opts: { roster?: Roster; keep?: (path: string, conversation: string | null) => boolean; fetch?: boolean } = {}) {
+export async function previewCheckoutChange(root: string, opts: { roster?: Roster; keep?: Keep; fetch?: boolean } = {}) {
   const upstream = await upstreamRef(root);
   if (opts.fetch !== false) await fetchUpstream(root, upstream);
   const fa = await freezeAndAttribute(root, upstream);
   const plan = await makePlan(root, { roster: opts.roster, fetch: false, frozen: fa });
-  const keep = opts.keep ?? (() => true);
   const writerOf = (p: string) => fa.attribution.owners.get(p)?.conversationId ?? null;
+  const changed = plan.groups.flatMap((g) => g.paths).map((p) => ({ path: p, conversation: writerOf(p) }));
+  const verdict = (p: string) => opts.keep ? opts.keep(p, writerOf(p), changed) : true;
   const groups = plan.groups
     .filter((g) => g.ship)
-    .map((g) => ({ ...g, paths: g.paths.filter((p) => keep(p, writerOf(p))) }))
+    .map((g) => ({ ...g, paths: g.paths.filter((p) => verdict(p) === true) }))
     .filter((g) => g.paths.length);
   const heldWhy = heldReason(fa);
-  const held = plan.groups.filter((g) => !g.ship).flatMap((g) => g.paths).filter((p) => keep(p, writerOf(p))).map((p) => ({ path: p, why: heldWhy(p) ?? "held" }));
+  const held = [
+    ...plan.groups.filter((g) => !g.ship).flatMap((g) => g.paths).filter((p) => verdict(p) !== false).map((p) => ({ path: p, why: heldWhy(p) ?? "held" })),
+    ...plan.groups.filter((g) => g.ship).flatMap((g) => g.paths).flatMap((p) => { const v = verdict(p); return typeof v === "string" ? [{ path: p, why: v }] : []; }),
+  ];
   const landed = await landedOn(root, fa.frozen, upstream, groups.flatMap((g) => g.paths));
   return { frozen: fa.frozen, upstream, groups, held, landed };
 }
@@ -205,7 +214,7 @@ export async function previewCheckoutChange(root: string, opts: { roster?: Roste
  * the session that wrote it; a file no session's edit names has no entry.
  * Throws NoCheckoutChange when nothing can ship.
  */
-export async function freezeCheckoutChange(root: string, opts: { branch: string; worktree: string; title?: string | null; roster?: Roster; keep?: (path: string, conversation: string | null) => boolean; fetched?: boolean }): Promise<FrozenChange> {
+export async function freezeCheckoutChange(root: string, opts: { branch: string; worktree: string; title?: string | null; roster?: Roster; keep?: Keep; fetched?: boolean }): Promise<FrozenChange> {
   const { frozen, upstream, groups, held, landed } = await previewCheckoutChange(root, { ...opts, fetch: !opts.fetched });
   if (!groups.length) throw new NoCheckoutChange(root, held);
   const cut = await cutChange(root, frozen, upstream, groups.map((g) => ({ message: g.message.trim() + trailerFor(g), paths: g.paths })), opts.branch);
@@ -262,12 +271,39 @@ async function passLandedOn(root: string, paths: string[]): Promise<string | nul
   return sha;
 }
 
+// A lockfile and the manifests whose change rewrites it.
+const LOCKFILES: Record<string, string[]> = {
+  "bun.lock": ["package.json"], "bun.lockb": ["package.json"], "package-lock.json": ["package.json"], "yarn.lock": ["package.json"],
+  "pnpm-lock.yaml": ["package.json"], "Cargo.lock": ["Cargo.toml"], "Gemfile.lock": ["Gemfile"], "poetry.lock": ["pyproject.toml"],
+  "uv.lock": ["pyproject.toml"], "go.sum": ["go.mod"],
+};
+// Directories a generator writes beside the sources it reads from their parent.
+const GENERATED_DIRS = new Set(["_generated", "__generated__", "generated", "__snapshots__"]);
+
+/**
+ * Whether a file no session's edit names, changed after a brief, is one a writer's shell made from what the writers
+ * changed (`theirs`): a lockfile whose manifest a writer changed in its directory or below, or a file beside a
+ * writer's changed source (the same directory, or a generator's directory whose parent holds one). Another
+ * session's `bun install` or codegen is neither.
+ */
+function madeByWriter(p: string, theirs: string[]): boolean {
+  const dir = (f: string) => f.includes("/") ? f.slice(0, f.lastIndexOf("/")) : "";
+  const base = (f: string) => f.slice(f.lastIndexOf("/") + 1);
+  const under = (d: string, f: string) => d === "" || f.startsWith(`${d}/`);
+  const manifests = LOCKFILES[base(p)];
+  if (manifests) return theirs.some((t) => manifests.includes(base(t)) && under(dir(p), t));
+  if (theirs.some((t) => dir(t) === dir(p))) return true;
+  const segs = dir(p).split("/");
+  return segs.some((seg, k) => GENERATED_DIRS.has(seg) && theirs.some((t) => under(segs.slice(0, k).join("/"), t)));
+}
+
 /**
  * A checkout's change frozen again: its files, any file one of its writers now holds (a fix may add a test), and,
  * when `since` is given (the brief went out then), any changed file no session's edit names that was written or
- * moved after it, since a writer's shell makes those (a lockfile, codegen output, a `git mv` target); cut per writer
- * as before. A pass whose files the checkout no longer changes because upstream already holds them has landed: the
- * change comes back as it was, with `landed` set.
+ * moved after it and that a writer's shell made from the writers' changes (madeByWriter: a lockfile, codegen output,
+ * a `git mv` target with its source). A late file nothing of the writers' explains is held out with why, since it is
+ * another session's `bun install` or codegen. Cut per writer as before. A pass whose files the checkout no longer
+ * changes because upstream already holds them has landed: the change comes back as it was, with `landed` set.
  */
 async function refreezeCheckoutChange(root: string, before: FrozenChange, roster?: Roster, since?: number): Promise<FrozenChange> {
   const paths = new Set(before.paths);
@@ -275,22 +311,30 @@ async function refreezeCheckoutChange(root: string, before: FrozenChange, roster
   // A rename keeps a file's mtime and moves its ctime.
   const touched = (p: string) => { try { const st = fs.lstatSync(path.join(root, p)); return Math.max(st.mtimeMs, st.ctimeMs); } catch { return 0; } };
   const lateShellWrite = (p: string) => since !== undefined && touched(p) > since;
-  // A `git mv` source is gone, so nothing dates it: it goes with the target written after the brief.
-  const movedAway = new Set<string>();
+  // A `git mv` source is gone, so nothing dates it: it goes with its target when the target goes.
+  const movedTo = new Map<string, string>();
   if (since !== undefined) {
     const entries = ((await gitTry(root, ["status", "--porcelain=v1", "-z", "--untracked-files=no"])) ?? "").split("\0");
     for (let i = 0; i < entries.length; i++) {
       if (!/^R|^.R/.test(entries[i])) continue;
-      if (lateShellWrite(entries[i].slice(3))) movedAway.add(entries[i + 1]);
+      movedTo.set(entries[i + 1], entries[i].slice(3));
       i++;
     }
   }
+  const keep: Keep = (p, conversation, changed) => {
+    if (paths.has(p) || (!!conversation && writers.has(conversation))) return true;
+    if (conversation) return false;
+    if (movedTo.has(p)) return keep(movedTo.get(p)!, null, changed) === true;
+    if (!lateShellWrite(p)) return false;
+    const theirs = changed.filter((c) => !!c.conversation && writers.has(c.conversation)).map((c) => c.path);
+    return madeByWriter(p, theirs) || "changed after the brief, and no writer's change makes it (not its manifest's lockfile, nor generated beside its source)";
+  };
   // The session the run was started from stays its subject: it hears findings that name none of the change's files.
   const subject = { ...(before.session ? { session: before.session } : {}), ...(before.conversation ? { conversation: before.conversation } : {}) };
   try {
     const change = await freezeCheckoutChange(root, {
       branch: before.branch, worktree: before.worktree, title: before.title ?? null, roster,
-      keep: (p, conversation) => paths.has(p) || (!!conversation && writers.has(conversation)) || (!conversation && (lateShellWrite(p) || movedAway.has(p))),
+      keep,
     });
     return { ...change, ...subject };
   } catch (err) {

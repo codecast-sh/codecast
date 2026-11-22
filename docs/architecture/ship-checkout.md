@@ -142,8 +142,11 @@ checkout report asks for help (`land/checkoutReport.ts`, `tellWriters`). It
 groups the conflicting files by the session that wrote each last, as the
 ship pass attributes its groups, and tells each writer once per episode
 about its own files only. The files no session wrote go to one finding on
-the repository's project. An episode is the set of files; it ends when the
-checkout levels. A level whose HEAD moved off its base asks nobody.
+the repository's project. An episode is the set of files. It ends when the
+checkout levels or the sweep stops levelling it for good (the repo turns it
+off, a worktree, off the branch, commits upstream lacks). A ship, a rebase or
+an unreadable HEAD only pauses it: the checkout shows off meanwhile, and the
+episode carries on after. A level whose HEAD moved off its base asks nobody.
 
 Each writer's brief (`heldBrief` in `land/levelConflicts.ts`) names up to eight
 of its conflicting files and points at a list file holding all of them. It
@@ -163,16 +166,22 @@ and the `git show` of upstream's version of each.
 
 The brief is a machine wake from codecast's level sweep (origin
 `scheduler`), so it leaves the writer's pinned state and a hidden stash
-alone, and it revives a killed writer. Its client id comes from the device,
-the checkout, the episode and the writer, so a retried send lands once. A
-send that takes over 10 seconds counts as failed. A failed send is not
-recorded as told, and the next pass asks again. The episode, who it told
-(`told`, which the checkouts page shows) and who the server will never
-deliver to are kept in the daemon's `checkout-state.json`, so a restart
-neither forgets nor asks again.
+alone, and it revives a killed writer. Its client id (`levelAskClientId`)
+comes from the device, the checkout, the episode and the writer. A retried
+send lands once, and a writer already told from the pipeline page, whose ask
+carries the same id, is answered with that ask rather than a second. A send
+that takes over 10 seconds counts as failed. A failed send is not recorded as
+told, and the next pass asks again; the daemon logs the first failure, and
+after five it gives that writer up for the episode. The episode, who it told
+(`told`, which the checkouts page shows), the failed tries and who the server
+will never deliver to are kept in the daemon's `checkout-state.json`, so a
+restart neither forgets nor asks again. Merge files already made against the
+same upstream commit are left as they are, since the writer may be resolving
+one.
 
 Known limit: a teammate's session gets no brief. The server delivers this
-machine's messages only to its own user's conversations, so such a writer is
+machine's messages only to its own user's conversations, so such a writer
+(like one whose conversation is gone, or a hosted one) is
 named in the daemon's `[LEVEL]` log line, left out of `told`, and not asked
 again this episode. A shared checkout's writers are normally the person's
 own sessions.
