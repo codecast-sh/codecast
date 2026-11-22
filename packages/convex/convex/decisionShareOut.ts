@@ -124,7 +124,7 @@ export async function shareOutCore(ctx: Ctx, userId: Id<"users">, teamId: Id<"te
     if (!row || fresh.get(String(s.decision_id)) !== String(s.to)) continue;
     const to = s.to as Id<"users">;
     await ctx.db.patch(row._id, { holder: { kind: "user", id: String(to) }, holder_key: `user:${to}`, asked_user_ids: [to], updated_at: now });
-    await syncDecisionInbox(ctx, row._id, [to], now);
+    await syncDecisionInbox(ctx, row._id, [to], now, true, { announce: false });
     given.set(String(to), [...(given.get(String(to)) ?? []), row]);
     moved++;
   }
