@@ -242,6 +242,7 @@ export function resolveLineProfile(values: LineProfileValues, opts: { root?: str
     sources[key] = value === undefined ? "default" : "file";
     return value === undefined ? fallback : value;
   };
+  const cards = pick<number | undefined>("caps.cards", values.caps?.cards, undefined);
   const profile: LineProfile = {
     team: pick("team", values.team, d.team),
     project: pick("project", values.project, d.project),
@@ -256,7 +257,7 @@ export function resolveLineProfile(values: LineProfileValues, opts: { root?: str
       ship: pick("commands.ship", values.commands?.ship, d.commands.ship),
     },
     caps: {
-      cards: pick("caps.cards", values.caps?.cards, d.caps.cards),
+      ...(cards !== undefined ? { cards } : {}),
       // One source per station, keyed as its row prints (caps.stations.<id>).
       ...(values.caps?.stations ? { stations: Object.fromEntries(Object.entries(values.caps.stations).map(([id, n]) => [id, pick(`caps.stations.${id}`, n, n)])) } : {}),
     },
@@ -347,8 +348,8 @@ export function lineProfileVars(profile: LineProfile): Record<string, string> {
     "line.prompting": profile.prompting,
     "line.size_budget": String(profile.size_budget),
     "line.watch_days": String(profile.watch_days),
-    "line.caps.cards": String(profile.caps.cards),
   };
+  if (profile.caps.cards !== undefined) vars["line.caps.cards"] = String(profile.caps.cards);
   for (const [id, n] of Object.entries(profile.caps.stations ?? {})) vars[`line.caps.stations.${id}`] = String(n);
   for (const k of COMMAND_KEYS) vars[`line.commands.${k}`] = profile.commands[k] ?? "";
   return vars;
@@ -365,7 +366,7 @@ export function formatLineProfile(r: ResolvedLineProfile): string {
     ["size_budget", String(p.size_budget)],
     ["watch_days", String(p.watch_days)],
     ...COMMAND_KEYS.map((k): [string, string] => [`commands.${k}`, p.commands[k] ?? "(none)"]),
-    ["caps.cards", String(p.caps.cards)],
+    ...(p.caps.cards !== undefined ? [["caps.cards", String(p.caps.cards)] as [string, string]] : []),
     ...Object.entries(p.caps.stations ?? {}).map(([id, n]): [string, string] => [`caps.stations.${id}`, `${n} at once`]),
     ["merge.auto", String(p.merge?.auto ?? false)],
     ["merge.method", p.merge?.method ?? "squash"],
@@ -414,9 +415,6 @@ export function starterLineProfile(opts: { project: string; team?: string | null
     `# prove = "..."                    # exits 0 only when the miss is shown; writes $run_dir/proven.json`,
     `# eval = "..."                     # writes $run_dir/reps.json`,
     `# ship = "..."                     # lands the change and prints what is true now`,
-    ``,
-    `[line.caps]`,
-    `cards = ${d.caps.cards}                          # open cards per person, across their lines`,
     ``,
     `[line.merge]                       # what Ship does once a pull request is green`,
     `auto = ${d.merge!.auto}                       # true: Ship on a task or session merges too; false: only Ship on the PR page merges`,

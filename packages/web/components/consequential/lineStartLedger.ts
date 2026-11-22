@@ -55,9 +55,9 @@ export type LineStartFacts = {
   dayCap?: number | null;
 };
 
-/** The daily caps the Turn on review offers a role that has none. */
+/** The daily caps the Turn on review offers a role that has none; it starts at No limit (CC-agents-6). */
 export const DAY_CAP_OPTIONS = ["5", "10", "20", "No limit"] as const;
-export const DEFAULT_DAY_CAP = 10;
+export const DEFAULT_DAY_CAP: number | null = null;
 export const dayCapOf = (option: string): number | null => (Number.isFinite(Number(option)) ? Number(option) : null);
 
 /** The review of a line's start switch, as data. */

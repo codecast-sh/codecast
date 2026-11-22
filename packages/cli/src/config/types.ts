@@ -320,8 +320,8 @@ export interface Config extends CloudSessionSyncSettings {
   session_trailer?: boolean;
 
   // --- Queue limits (cast queue lists every queue) ---
-  // How many `cast spawn --subagent` workers one session (default 10) and this
-  // machine (default 24) run at once; a spawn past either waits in a queue
+  // How many `cast spawn --subagent` workers one session and this
+  // machine (default 0 for both: no limit) run at once; a spawn past either waits in a queue
   // (shared/contracts/subagentFleet.ts). Also the default `--max` of
   // `cast plan orchestrate` and `autopilot`.
   subagents?: { per_session?: number; per_machine?: number };

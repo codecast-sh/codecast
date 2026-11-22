@@ -42,7 +42,7 @@ const factFields = {
   size_budget: v.number(),
   watch_days: v.number(),
   commands: v.object({ check: v.string(), prove: nullableString, eval: nullableString, ship: nullableString }),
-  caps: v.object({ cards: v.number(), stations: v.optional(v.record(v.string(), v.number())) }),
+  caps: v.object({ cards: v.optional(v.number()), stations: v.optional(v.record(v.string(), v.number())) }),
   merge: v.optional(v.object({ auto: v.boolean(), method: v.union(v.literal("squash"), v.literal("merge"), v.literal("rebase")) })),
   deploy: v.optional(v.object({
     command: nullableString,

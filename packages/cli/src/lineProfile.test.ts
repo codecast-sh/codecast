@@ -90,7 +90,7 @@ describe("line profile (LP2)", () => {
       size_budget: 400,
       watch_days: 7,
       commands: { check: "cast ws check", prove: null, eval: null, ship: null },
-      caps: { cards: 5 },
+      caps: {},
       merge: { auto: false, method: "squash" },
       deploy: { command: null, target: null, trigger: "person" },
       finders: [],

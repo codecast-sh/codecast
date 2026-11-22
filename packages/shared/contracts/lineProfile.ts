@@ -45,7 +45,8 @@ export interface LineProfile {
   watch_days: number;
   commands: { check: string; prove: string | null; eval: string | null; ship: string | null };
   caps: {
-    cards: number;
+    /** A role-era count the file may still carry; it limits nothing and has no default (CC-agents-6). */
+    cards?: number;
     /**
      * The most of the team's running runs a station takes at once, by station
      * id (`[line.caps.stations]`). A run past it waits outside the station
@@ -135,7 +136,7 @@ export const LINE_PROFILE_DEFAULTS: LineProfile = {
   size_budget: 400,
   watch_days: 7,
   commands: { check: "cast ws check", prove: null, eval: null, ship: null },
-  caps: { cards: 5 },
+  caps: {},
   merge: { auto: false, method: "squash" },
   deploy: LINE_DEPLOY_DEFAULTS,
   finders: [],
