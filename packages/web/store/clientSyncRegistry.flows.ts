@@ -50,7 +50,8 @@ export const FLOW_SYNC_COLLECTIONS = {
     hydration: { phase: "deferred" },
     indexes: "_id, root, repository",
     // Each picker feeds the one row of its session's checkout, so delta; its
-    // feeder drops that checkout's row when the answer lacks it (dropAbsent).
+    // feeder prunes that checkout's row, from disk too, when the answer lacks
+    // it (pruneAbsentScope).
     sync: { isDelta: true, deepFields: ["flows"] },
     feeds: ["repoFlows.forCheckout"],
   },
