@@ -4,7 +4,7 @@ import { isVaultAssetPath, isVaultMarkdownPath } from "@codecast/shared/contract
 import { useWatchEffect } from "./useWatchEffect";
 import { useVaultStore } from "../store/vaultStore";
 import { locateVault, VaultRequestError } from "../lib/vault/client";
-import { filesHref, resolveVaultTarget, sameNamedCheckoutPaths } from "../lib/vault/vaultHref";
+import { filesHref, mirroredTarget, resolveVaultTarget, sameNamedCheckoutPaths } from "../lib/vault/vaultHref";
 import { ancestorDirs } from "../lib/vault/explorerModel";
 import { inferHomeDir, resolveCustomPath } from "../lib/utils";
 
@@ -30,6 +30,20 @@ export function useVaultLocalPath(
     if (!needsLocate || !abs || !endpoint) return;
     let cancelled = false;
     useVaultStore.getState().clearOpError();
+    // Not on this machine, but another machine mirrors the folder: show that
+    // copy read-only rather than an error.
+    const openMirror = async (): Promise<boolean> => {
+      const mirror = mirroredTarget(abs, useVaultStore.getState().remoteVaults);
+      if (!mirror) return false;
+      await useVaultStore.getState().openRemoteVault(mirror.vaultId);
+      if (!cancelled) router.replace(filesHref({ path: mirror.rel || null, line: targetLine }));
+      return true;
+    };
+    // Nowhere to open it: offer the file switcher, prefilled with its name.
+    const notFound = (message: string) => {
+      useVaultStore.setState({ opError: message });
+      useVaultStore.getState().openQuickSwitch(abs.slice(abs.lastIndexOf("/") + 1));
+    };
     void (async () => {
       const located = await locateVault(endpoint, abs);
       if (cancelled) return;
@@ -45,15 +59,20 @@ export function useVaultLocalPath(
         if (cancelled) return;
         if (found) return router.replace(filesHref({ localPath: candidate, line: targetLine }));
       }
+      if (await openMirror() || cancelled) return;
       if (candidates.length) return router.replace(filesHref({ localPath: candidates[0], line: targetLine }));
-      useVaultStore.setState({ opError: `${abs} does not exist on this machine.` });
-    })().catch((error: unknown) => {
+      notFound(`${abs} does not exist on this machine.`);
+    })().catch(async (error: unknown) => {
       if (cancelled) return;
+      // An older daemon answers every unknown path with a bare 404; a mirror
+      // can still hold the file.
+      const tooOld = error instanceof VaultRequestError && error.status === 404;
+      if (tooOld && (await openMirror() || cancelled)) return;
       captureException(error);
-      const detail = error instanceof VaultRequestError && error.status === 404
+      const detail = tooOld
         ? "Update Codecast on this machine to open files outside known folders."
         : `${error instanceof Error ? error.message : String(error)}. Reload to retry.`;
-      useVaultStore.setState({ opError: `Could not open ${abs}: ${detail}` });
+      notFound(`Could not open ${abs}: ${detail}`);
     });
     return () => { cancelled = true; };
   }, [needsLocate, abs, endpoint]);
