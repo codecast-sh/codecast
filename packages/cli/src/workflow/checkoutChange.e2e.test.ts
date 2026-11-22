@@ -267,6 +267,28 @@ describe("a shared checkout's pass is one flow change", () => {
     expect(third.paths).not.toContain("scratch.log");
   }, 180_000);
 
+  test("in a workspace root, a member's manifest a writer changed explains the root lockfile; outside one it does not", async () => {
+    for (const [workspace, kept] of [["package.json", true], ["pnpm-workspace.yaml", true], [null, false]] as const) {
+      const { root, edit } = checkoutWorld();
+      // The root's own manifest is committed, so no writer changes it.
+      write(root, "package.json", workspace === "package.json" ? '{ "workspaces": ["packages/*"] }\n' : '{ "name": "root" }\n');
+      if (workspace === "pnpm-workspace.yaml") write(root, "pnpm-workspace.yaml", "packages:\n  - 'packages/*'\n");
+      git(root, "add", "-A", "package.json", ...(workspace === "pnpm-workspace.yaml" ? ["pnpm-workspace.yaml"] : []));
+      git(root, "commit", "-qm", "root manifest");
+      const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
+      const runDir = path.join(root, ".git", "run-pass");
+      writeFrozenChange(runDir, change);
+      const since = Date.now() + 5;
+      await new Promise((r) => setTimeout(r, 20));
+      // A adds a dependency to a member package only; its install rewrites the root lockfile.
+      edit(A, "packages/app/package.json", '{ "dependencies": { "x": "1" } }\n');
+      write(root, "bun.lock", "{ lockfile: 5 }\n");
+      const { change: again } = await refreezeSessionChange(root, runDir, null, { roster, since });
+      if (kept) expect(again.paths).toContain("bun.lock");
+      else expect(again.held.find((h) => h.path === "bun.lock")?.why).toMatch(/^changed after the brief/);
+    }
+  }, 540_000);
+
   test("a refreeze of a pass upstream already holds, the checkout levelled under it, comes back landed", async () => {
     const { root, origin } = checkoutWorld();
     const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
