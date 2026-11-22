@@ -971,7 +971,8 @@ export type InboxSession = {
   // Org pointers and, when one is set, a snapshot of that role so the row can
   // wear the role's face and name without the org tree loaded.
   org_role_id?: string | null;
-  // The person who took the wheel from the role (schema: who drives).
+  // The person driving in the role's place (conversations.driver_user_id);
+  // unset under a role means the role drives (shared roleDrives).
   driver_user_id?: string | null;
   standing_role_id?: string | null;
   role?: SessionRoleSnapshot | null;
@@ -1015,9 +1016,6 @@ export type InboxSession = {
   // conversation fields, so acting on a teammate's card would hide it from them.
   owner_user_id?: string | null;
   owned_by_me?: boolean;
-  // The person driving in the role's place (conversations.driver_user_id);
-  // unset under a role means the role drives (shared roleDrives).
-  driver_user_id?: string | null;
   // A role started it and holds it with no person owner (the server's
   // heldByRoleAlone over the shared isHeldByRoleAlone): the role's alone, so
   // it is not in the runner's inbox.
