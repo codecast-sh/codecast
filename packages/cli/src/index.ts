@@ -2963,6 +2963,7 @@ function groupDeps(): GroupDeps {
         return teamForDirectory(mapped?.projects ?? [], getRealCwd());
       },
       requireFlows: (ws) => requireWorkspaceFeature(ws, "line"),
+      flowDeviceConfig: () => readConfig()?.flow,
     },
   };
 }
@@ -5915,7 +5916,7 @@ registerSyncVerbs(syncCommand);
 // ones with their own setter below. The help and the unknown-key error both
 // read this list, so they cannot disagree.
 const CONFIG_SETTABLE_KEYS = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"] as const;
-const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "check.reserve_gb", "interactive_jobs.per_machine", "agent"];
+const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "check.reserve_gb", "interactive_jobs.per_machine", "flow.device", "agent"];
 
 program
   .command("config")
@@ -5929,7 +5930,9 @@ program
     "  cast config set subagents.per_machine 30  # workers this machine runs at once (default 24)\n" +
     "  cast config set check.reserve_gb 24       # memory typecheck watchers leave for everything else (default 8 GB or 20% of RAM, whichever is more)\n" +
     "  cast config set check.per_machine 8       # at most this many typecheck watchers (default 16; fewer when memory is short)\n" +
-    "  cast config set interactive_jobs.per_machine 4  # commands run as Interactive jobs at once (default 8)"
+    "  cast config set interactive_jobs.per_machine 4  # commands run as Interactive jobs at once (default 8)\n" +
+    "  cast config set flow.device <machine>     # cast flow run places runs on this machine of yours (\"here\" keeps them local)\n" +
+    "  cast config set flow.device.<owner>/<repo> <machine>  # the same for one repository"
   )
   .argument("[key]", `Configuration key (${CONFIG_ALL_KEYS.join(", ")}); "set" or "get" before it is optional`)
   .argument("[value]", "Value to set for the key")
@@ -6122,6 +6125,31 @@ program
       next[group] = { ...(next[group] ?? {}), [field]: n };
       writeConfig(next);
       console.log(`Updated ${key}: ${n}`);
+      return;
+    }
+
+    // Where cast flow run places its runs (workflow/placedChange.ts): flow.device for every repository,
+    // flow.device.<owner>/<name> for one. "none" clears it; "here" keeps runs on the machine that starts them.
+    if (key === "flow.device" || key?.startsWith("flow.device.")) {
+      const repo = key === "flow.device" ? null : key.slice("flow.device.".length);
+      const flowCfg = config?.flow ?? {};
+      const current = repo ? flowCfg.devices?.[repo] : flowCfg.device;
+      if (value === undefined) {
+        console.log(`${key}: ${current ?? "(not set: runs stay on the machine that starts them)"}`);
+        if (!repo) for (const [r, d] of Object.entries(flowCfg.devices ?? {})) console.log(`flow.device.${r}: ${d}`);
+        return;
+      }
+      const clear = value === "none" || value === "";
+      if (!clear && !["here", "local", "this"].includes(value.toLowerCase())) {
+        const { resolveOwnDevice } = await import("./workflow/placedChange.js");
+        await resolveOwnDevice(value, key);
+      }
+      const next: Config = config || {};
+      const devices = { ...(next.flow?.devices ?? {}) };
+      if (repo) { if (clear) delete devices[repo]; else devices[repo] = value; }
+      next.flow = { ...(next.flow ?? {}), ...(repo ? { devices } : { device: clear ? undefined : value }) };
+      writeConfig(next);
+      console.log(clear ? `Cleared ${key}` : `Updated ${key}: ${value}`);
       return;
     }
 
@@ -22369,6 +22397,8 @@ workflow
   .option("--force", "Start even though the task already has a live run (one problem holds one run)")
   .option("--detach", "Hand the run to a daemon and return at once with its id: this machine's, or for a problem whose role's line has a pool of machines, the one with the most free slots (with none free, the problem waits in the line's queue)")
   .option("--json", "With --detach: print {run_id, task} as JSON")
+  .option("--device <name>", "With --detach: hand the whole run to this machine of yours (id, label or hostname), in its checkout of this repository; refused when it is offline")
+  .addOption(new Option("--change <file>", "With --device: the frozen change (JSON) that machine fetches and freezes before the run starts (cast flow run writes it)").hideHelp())
   .action(async (fileArg: string | undefined, options: any) => {
     const { parseWorkflowSource } = await import("./workflow/parser.js");
     const { resolveWorkflowSource } = await import("./workflow/templates.js");
@@ -22437,6 +22467,21 @@ workflow
 
     const { siteUrl, apiToken } = getCliEndpoint();
     const projectPath = process.cwd();
+    // A run placed on another machine (ct-98920): the server maps this folder to that machine's checkout of its origin.
+    let placeOn: { device_id: string; name: string } | null = null;
+    // The same words as `cast flow run --device`: "here" keeps the run on this machine.
+    const { flowDeviceChoice } = await import("./workflow/placedChange.js");
+    const named = options.device ? flowDeviceChoice(String(options.device), undefined, null) : null;
+    if (named) {
+      if (!options.detach) { console.error("--device hands the run to that machine's daemon: pass --detach too"); process.exit(1); }
+      const { resolveOwnDevice } = await import("./workflow/placedChange.js");
+      const target = await resolveOwnDevice(named.name);
+      if (target.device_id !== deviceId()) {
+        if (!target.online) { console.error(`${target.name} is offline, so the run cannot start there: bring its daemon back, or run with --device here`); process.exit(1); }
+        placeOn = target;
+      }
+    }
+    const placedChange = placeOn && options.change ? JSON.parse(fs.readFileSync(options.change, "utf-8")) : undefined;
 
     const runOpts: any = {
       goalOverride: options.goal,
@@ -22504,6 +22549,7 @@ workflow
           spawner_session: runOpts.spawnerSession,
           ...(options.force ? { force: true } : {}),
           ...(options.detach ? { detach: true, run_on_device: deviceId() } : {}),
+          ...(placeOn ? { place_device: placeOn.device_id, place_origin: (await import("./workflow/placedChange.js")).originOf(projectPath) ?? undefined, ...(placedChange ? { placed_change: placedChange } : {}) } : {}),
         });
         if (createResult?.queued) { // the role's machines are full: nothing starts here, and the problem waits in the line's queue
           console.log(options.json ? JSON.stringify({ run_id: null, task: runOpts.taskId ?? null, queued: createResult.queued }) : createResult.queued);
@@ -22513,6 +22559,8 @@ workflow
           runOpts.runId = createResult.run_id;
           runOpts.runSession = createResult.primary_conversation_id;
           runOpts.runnerDevice = createResult.runner_device;
+          runOpts.runnerDeviceName = createResult.runner_device_name;
+          runOpts.runnerPath = createResult.project_path;
           runOpts.spawnerSession ??= createResult.spawner_conversation_id || undefined;
         }
       } catch (err: any) {
@@ -22527,8 +22575,8 @@ workflow
     if (options.detach) {
       // The daemon executes it (`cast workflow run-daemon`); nothing runs here.
       if (!runOpts.runId) { console.error("--detach needs a registered run: sign in, and leave out --dry-run"); process.exit(1); }
-      if (options.json) console.log(JSON.stringify({ run_id: runOpts.runId, task: runOpts.taskId ?? null }));
-      else console.log(`Run ${runOpts.runId} handed to ${runOpts.runnerDevice ? `the line's machine ${runOpts.runnerDevice}` : "this machine's daemon"}${runOpts.taskId ? ` for ${runOpts.taskId}` : ""}`);
+      if (options.json) console.log(JSON.stringify({ run_id: runOpts.runId, task: runOpts.taskId ?? null, ...(runOpts.runnerDevice ? { runner_device: runOpts.runnerDevice } : {}), ...(placeOn && runOpts.runnerPath ? { project_path: runOpts.runnerPath } : {}) }));
+      else console.log(`Run ${runOpts.runId} handed to ${placeOn ? `${runOpts.runnerDeviceName ?? placeOn.name}, in ${runOpts.runnerPath ?? "its checkout"}` : runOpts.runnerDevice ? `the line's machine ${runOpts.runnerDevice}` : "this machine's daemon"}${runOpts.taskId ? ` for ${runOpts.taskId}` : ""}`);
       return;
     }
 
@@ -22584,6 +22632,27 @@ workflow
     if (!resume && run.status !== "pending") {
       console.error(`Run ${runId} is ${run.status}: nothing to run.`);
       process.exit(1);
+    }
+    // A run placed here from another machine (cast flow run --device, workflow/placedChange.ts): its change comes by
+    // origin, and its worktree and change.json are made in this machine's checkout before the runner reads them.
+    if (!resume && run.placed_change) {
+      const { preparePlacedChange } = await import("./workflow/placedChange.js");
+      const { lineRunDir } = await import("./workflow/runner.js");
+      const castRun = async (args: string[], cwd: string) => {
+        const { resolveCastInvocation } = await import("./castInvocation.js");
+        const { cmd, prefixArgs } = resolveCastInvocation();
+        const r = spawnSync(cmd, [...prefixArgs, ...args], { cwd, encoding: "utf-8", env: process.env });
+        return { code: r.status ?? 1, out: r.stdout ?? "", err: r.stderr ?? "" };
+      };
+      try {
+        const change = await preparePlacedChange(projectPath, lineRunDir(projectPath, run.placed_change.worktree), run.placed_change, castRun, runId);
+        console.log(`On ${change.branch} at ${change.tip.slice(0, 10)}, fetched from origin into worktree ${change.worktree}`);
+      } catch (err) {
+        const why = err instanceof Error ? err.message : String(err);
+        console.error(why);
+        await cliPost("/cli/workflow-runs/progress", { run_id: runId, current_node_id: "start", node_id: "start", node_status: "failed", run_status: "failed", fail_reason: why.slice(0, 1500) }).catch(() => {});
+        process.exit(1);
+      }
     }
     // A rerun asked from the trial page proves against unfixed code (lineTrialBranch.ts).
     if (!resume && run.fresh_branch && run.task_short_id) {
