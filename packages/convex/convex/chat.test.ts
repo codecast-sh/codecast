@@ -4641,3 +4641,28 @@ describe("session thinking rows", () => {
     expect(thinking(ctx).length).toBe(0);
   });
 });
+
+describe("ct-79021: a muted thread inside a DM", () => {
+  // The mute button exists on DM threads, but a DM member who never spoke in
+  // the thread is reached by the room-wide chat_dm fan-out, which carries the
+  // thread root and skips the thread mute check (lib/chatNotify.ts applies it
+  // to chat_reply only). The muted thread keeps ringing.
+  test("a reply in a DM thread the member muted does not notify them", async () => {
+    const ctx = context(ALICE);
+    const dm = await call(openDm, ctx, { team_id: TEAM, member_ids: [BOB] });
+    const root = await call(sendMessage, ctx, { channel_id: dm.channel_id, content: "root" });
+    await call(setThreadMuted, as(ctx, BOB), { root_id: root.message_id, muted: true });
+
+    ctx._emitted.length = 0;
+    await call(sendMessage, ctx, {
+      channel_id: dm.channel_id, content: "a plain reply", thread_root_id: root.message_id,
+    });
+    expect(ctx._emitted.map((e: any) => `${e.args.event_type}->${e.args.direct_recipient_id}`)).toEqual([]);
+
+    // A mention still lands in a muted thread.
+    await call(sendMessage, ctx, {
+      channel_id: dm.channel_id, content: "@bob look", thread_root_id: root.message_id,
+    });
+    expect(ctx._emitted.map((e: any) => e.args.event_type)).toEqual(["chat_mention"]);
+  });
+});
