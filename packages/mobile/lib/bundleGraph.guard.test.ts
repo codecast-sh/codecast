@@ -79,6 +79,17 @@ for (const platform of ["ios", "android"] as const) {
       expect(hit).toEqual([]);
     });
 
+    test("no file in the native bundle reads import.meta, which Hermes cannot parse", () => {
+      const offenders: string[] = [];
+      for (const file of graph.nodes.keys()) {
+        if (!file.includes("/packages/") || file.includes("/node_modules/")) continue;
+        const code = fs.readFileSync(file, "utf8").replace(/\/\*[\s\S]*?\*\/|^\s*\/\/.*$/gm, "")
+          .replace(/`[^`]*`|"(?:[^"\\\n]|\\.)*"|'(?:[^'\\\n]|\\.)*'/g, '""');
+        if (/\bimport\.meta\b/.test(code)) offenders.push(chainTo(file) || rel(file));
+      }
+      expect(offenders).toEqual([]);
+    });
+
     test("a shared web file never uses the @/ alias, which Metro points at mobile", () => {
       const offenders: string[] = [];
       for (const file of graph.nodes.keys()) {
