@@ -65,6 +65,10 @@ describe("cliRetireSession", () => {
     await refuses(await setup(), /moved since the run read it \(11 messages then, 12 now\)/, 11);
   });
 
+  test("refuses a session a person pinned", async () => {
+    await refuses(await setup({ inbox_pinned_at: Date.now() - 1000 }), /a person pinned it/);
+  });
+
   test("refuses while a message is queued for it", async () => {
     const s = await setup();
     await s.t.run(async (ctx) => {

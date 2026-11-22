@@ -92,10 +92,13 @@ export async function callingSubject(deps: Pick<FlowDeps, "cliPost" | "callingSe
 
 /**
  * What a run on a task named alone works on: the branch an earlier run of the task left in `top` (named for the run's
- * worktree, or a line's), else the calling session's own edits, else nothing it can run on.
+ * worktree, or a line's), else the calling session's own edits, else nothing it can run on. A branch an earlier run
+ * froze from the calling session's edits is that session's change as it was: while the session still holds edits of
+ * its own here (`hasOwnEdits`), those are frozen onto it again, so the edits it made since are not left out.
  */
-export function taskChange(top: string, worktree: string, task: string, callingSession: string | undefined): { branch: string } | { session: string } | null {
+export async function taskChange(top: string, worktree: string, task: string, callingSession: string | undefined, hasOwnEdits: (session: string) => Promise<boolean>): Promise<{ branch: string } | { session: string } | null> {
   const known = [`codecast/${worktree}`, `line-${task}`, `codecast/line-${task}`].find((b) => spawnSync("git", ["-C", top, "rev-parse", "--verify", "--quiet", b]).status === 0);
+  if (known === `codecast/${worktree}` && callingSession && (await hasOwnEdits(callingSession))) return { session: callingSession };
   return known ? { branch: known } : callingSession ? { session: callingSession } : null;
 }
 
@@ -386,7 +389,11 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // A task named alone, when the flow works on a change: the branch an earlier run of it left, else the calling
       // session's own edits, bound to that task rather than a new one, so its description and requester stay the run's.
       if (task && !branch && !sessionRef && !opts.checkout && found.takes.includes("branch")) {
-        const taken = taskChange(top, runSlug(graph, { task_id: task }, "run"), task, deps.callingSession());
+        const ownEdits = async (session: string) => {
+          const { previewSessionChange } = await import("./workflow/flowChange.js");
+          return previewSessionChange(top, session, only, { fetch: false }).then((p) => p.paths.length > 0, () => false);
+        };
+        const taken = await taskChange(top, runSlug(graph, { task_id: task }, "run"), task, deps.callingSession(), ownEdits);
         if (!taken) {
           console.error(`${found.label} works on a change, and ${task} has no branch here yet: run it from inside the session that made the change (its own edits), or name the change with --branch or --pr`);
           process.exit(1);

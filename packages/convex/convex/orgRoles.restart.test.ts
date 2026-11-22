@@ -3,6 +3,9 @@ import { makeFakeDb } from "./testDb";
 import { performCreateRole, performPauseRole, performProvisionRole, performRestartRole, standingConversationOf } from "./orgRoles";
 import { performUndo } from "./orgChanges";
 import { isBootstrapPrompt } from "@codecast/shared/contracts";
+import { HEAD_OF_PEOPLE_HANDLE } from "@codecast/shared/contracts/orgLead";
+import { HEAD_INBOX_TITLE, ROLE_AGENDA_TITLE } from "./lib/orgRoutine";
+import { queueOrder } from "./lib/sessionQueue";
 
 // `cast role restart` (org-roles-standing.md T4): plain restarts the standing
 // session in place; `--fresh` starts a new one seeded like a first standing
@@ -245,6 +248,93 @@ describe("cast role restart --fresh", () => {
     expect(second.already_fresh).toBe(true);
     expect(String(tables.org_roles[0].previous_standing_conversation_id)).toBe("mine");
     expect(tables.anchors.filter((a) => a.status !== "decommissioned")).toHaveLength(1);
+  });
+
+  test("the old seat's triggers and a person's queued messages move to the new seat, live", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    const base = { user_id: ME, prompt: "p", mode: "apply", created_at: 1, updated_at: 1 };
+    tables.agent_tasks.push(
+      // Armed by the session on itself: runs are turns in the seat.
+      { ...base, _id: "agent_tasks_pr", title: "Answer review comments", originating_conversation_id: "mine", created_by_conversation_id: "mine", schedule_type: "event", event_filter: { event_type: "pr_comment" }, status: "scheduled" },
+      // A --spawn monitor: its runs report to the seat that armed it.
+      { ...base, _id: "agent_tasks_mon", title: "Watch CI", created_by_conversation_id: "mine", target_conversation_id: "mine", schedule_type: "recurring", interval_ms: 3_600_000, run_at: NOW, status: "scheduled" },
+      // Finished: history of the old thread.
+      { ...base, _id: "agent_tasks_done", title: "One shot", originating_conversation_id: "mine", schedule_type: "once", run_at: 1, status: "completed" },
+    );
+    const msg = { from_user_id: ME, owner_user_id: ME, retry_count: 0, kill_generation: 0 };
+    tables.pending_messages.push(
+      { ...msg, _id: "pm_parked", conversation_id: "mine", content: "look at the deploy when you are done", status: "held", queued: true, human: true, created_at: 10 },
+      { ...msg, _id: "pm_sent", conversation_id: "mine", content: "and the flaky test", status: "pending", human: true, created_at: 20 },
+      // Already typed into the old pane: the old process's own.
+      { ...msg, _id: "pm_typed", conversation_id: "mine", content: "mid turn", status: "injected", created_at: 5 },
+    );
+
+    await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+    const standing = await standingConversationOf(ctx, tables.org_roles[0]);
+    const task = (id: string) => tables.agent_tasks.find((t) => t._id === id)!;
+    expect(task("agent_tasks_pr")).toMatchObject({ status: "scheduled", originating_conversation_id: standing._id, created_by_conversation_id: standing._id });
+    expect(task("agent_tasks_mon")).toMatchObject({ status: "scheduled", created_by_conversation_id: standing._id, target_conversation_id: standing._id });
+    expect(task("agent_tasks_done")).toMatchObject({ status: "completed", originating_conversation_id: "mine" });
+
+    const row = (id: string) => tables.pending_messages.find((p) => p._id === id)!;
+    expect(row("pm_parked")).toMatchObject({ conversation_id: standing._id, status: "held", queued: true });
+    expect(row("pm_sent")).toMatchObject({ conversation_id: standing._id, status: "pending" });
+    expect(row("pm_typed")).toMatchObject({ conversation_id: "mine", status: "cancelled" });
+    // They wait behind the new seat's opening, in the order they were sent.
+    const opening = tables.pending_messages.find((p) => String(p.conversation_id) === String(standing._id) && isBootstrapPrompt(String(p.content)))!;
+    expect(queueOrder(row("pm_parked"))).toBeGreaterThan(queueOrder(opening));
+    expect(queueOrder(row("pm_sent"))).toBeGreaterThan(queueOrder(row("pm_parked")));
+    expect(standing.has_pending_messages).toBe(true);
+  });
+
+  test("a queued message on the fenced delivery path refuses the restart, named with its count", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    const anchorId = tables.org_roles[0].anchor_id;
+    tables.pending_messages.push({ _id: "pm_fenced", conversation_id: "mine", from_user_id: ME, owner_user_id: ME, content: "x", status: "pending", created_at: 1, retry_count: 0, delivery_protocol_version: 1, delivery_id: "d1", conversation_sequence: 1, execution_epoch: 1 });
+    await expect(performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true })).rejects.toThrow("1 queued message that cannot move");
+    expect(tables.anchors.find((a) => a._id === anchorId)!.status).not.toBe("decommissioned");
+    expect(tables.pending_messages.find((p) => p._id === "pm_fenced")!.conversation_id).toBe("mine");
+  });
+
+  for (const [state, expected] of [["cancelled", "completed"], ["paused", "paused"]] as const) {
+    test(`an agenda and inbox look the person ${state} stay ${state} on the new seat`, async () => {
+      const { ctx, tables } = world();
+      const role = await lead(ctx);
+      // A head of people with someone reporting to it would arm both afresh.
+      Object.assign(tables.org_roles[0], { handle: HEAD_OF_PEOPLE_HANDLE, reports_user_ids: [RUNNER] });
+      const base = { user_id: ME, prompt: "p", mode: "apply", originating_conversation_id: "mine", schedule_type: "recurring", interval_ms: 86_400_000, run_at: NOW, role_id: role._id, status: expected, created_at: 1, updated_at: 1 };
+      tables.agent_tasks.push({ ...base, _id: "agent_tasks_agenda", title: ROLE_AGENDA_TITLE }, { ...base, _id: "agent_tasks_inbox", title: HEAD_INBOX_TITLE, precheck: "true" });
+      await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+      const standing = await standingConversationOf(ctx, tables.org_roles[0]);
+      for (const title of [ROLE_AGENDA_TITLE, HEAD_INBOX_TITLE]) {
+        const onNew = tables.agent_tasks.filter((t) => String(t.originating_conversation_id) === String(standing._id) && t.title === title);
+        expect(onNew.map((t) => t.status)).toEqual([expected]);
+      }
+    });
+  }
+
+  test("a fresh seat whose start failed is restarted again for real", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    const first = await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+    const start = tables.daemon_commands.find((c) => c.command === "start_session" && JSON.parse(c.args).conversation_id === String(first.conversation_id))!;
+    Object.assign(start, { executed_at: Date.now(), error: "checkout not found" });
+    const second = await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+    expect(second.already_fresh).toBeUndefined();
+    expect(String(second.conversation_id)).not.toBe(String(first.conversation_id));
+    expect(String(tables.org_roles[0].previous_standing_conversation_id)).toBe(String(first.conversation_id));
+  });
+
+  test("a fresh seat that never spoke in its first two minutes is restarted again for real", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    const first = await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+    tables.conversations.find((c) => String(c._id) === String(first.conversation_id))!.started_at = Date.now() - 3 * 60_000;
+    const second = await performRestartRole(ctx, ME as any, { role_id: String(role._id), fresh: true });
+    expect(second.already_fresh).toBeUndefined();
+    expect(String(second.conversation_id)).not.toBe(String(first.conversation_id));
   });
 
   test("an old previous seat never makes a quiet new seat look like a second press", async () => {
