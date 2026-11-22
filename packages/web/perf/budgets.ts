@@ -17,7 +17,7 @@ import type { Report, Workload } from "./harness";
 const only = process.argv[2] as Workload | undefined;
 if (!only) {
   let failed = 0;
-  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
+  for (const workload of ["switch", "append", "org-nav", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
     const child = Bun.spawnSync(["bun", import.meta.path, workload], { stdout: "inherit", stderr: "inherit" });
     if (child.exitCode !== 0) failed++;
   }
@@ -76,6 +76,26 @@ await test("append", "a message arriving in an open conversation writes the stor
       // The transcript already holds its window: a new row opens no query
       // and fetches no history.
       convexQueries: 0, convexActions: 0, convexMutations: 0, convexSubscribes: 0, asked: [],
+    });
+  }
+});
+
+await test("org-nav", "a click between the org chart and a conversation commits once and renders no page inside the click", async () => {
+  await setup("org-nav");
+  for (const r of await twice()) {
+    const stage = r.detail.renderedInClick.filter((name) => ["StageSplitView", "StageCell", "RoutePane"].includes(name));
+    expect({ ...pick(r, ["commitsInClick", "domMutationsInClick"]), stage }).toEqual({
+      // One commit per click (a run is a click each way): the tab bar, the
+      // URL and what reads the tab list take the move at once. The pane swap
+      // renders in a later, interruptible pass (TabContent defers tabs and
+      // activeTabId, ct-97544). Before that, the click's own task rendered
+      // the destination route and everything it set off, 7 commits a round
+      // trip: the `DIV#root.onclick` long frames of 250-900 ms.
+      commitsInClick: 2,
+      domMutationsInClick: 0,
+      // Nothing under the tab's stage renders in the click: no route is
+      // matched and no page is drawn until the deferred pass.
+      stage: [],
     });
   }
 });

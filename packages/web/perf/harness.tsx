@@ -14,7 +14,7 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
 // The -modern workloads are the same inbox with the Modern style on (its
 // session card, ModernSessionCardView, and section header): the same budgets.
-export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
+export type Workload = "switch" | "append" | "org-nav" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -165,6 +165,21 @@ const fiberName = (f: any) => { const t = f.elementType ?? f.type; return typeof
 // base ref without the helper runs as written.
 if (process.env.REACT_COMPILER === "1") await import("../test-helpers/reactCompiler").catch(() => {});
 
+// The vite alias the app builds with (vite.shared.ts): the doc editor's sync
+// library imports `@tiptap/pm/collab`, a subpath tiptap 3 dropped, which is
+// prosemirror-collab. Without it any page that reaches the editor (the org
+// page's panels do) fails to load here.
+Bun.plugin({
+  name: "perf-vite-aliases",
+  setup(build) {
+    const collab = Bun.resolveSync("prosemirror-collab", import.meta.dir);
+    build.onLoad({ filter: /prosemirror-sync\/dist\/tiptap\/index\.js$/ }, async ({ path }) => ({
+      contents: (await Bun.file(path).text()).replaceAll('"@tiptap/pm/collab"', JSON.stringify(collab)),
+      loader: "js",
+    }));
+  },
+});
+
 // --- App modules (loaded after the DOM exists: react-dom decides at load) ----
 
 const React = await import("react");
@@ -277,7 +292,7 @@ let host: HTMLElement;
 let root: ReturnType<typeof createRoot>;
 let render: (node: React.ReactNode) => Promise<void>;
 
-function mount() {
+function mount(entry = "/") {
   host = w.document.createElement("div");
   w.document.body.appendChild(host);
   root = createRoot(host);
@@ -285,7 +300,7 @@ function mount() {
     await act(async () => {
       root.render(
         <ConvexProviderWithAuth client={convex} useAuth={useAuth}>
-          <MemoryRouter>
+          <MemoryRouter initialEntries={[entry]}>
             <Profiler id="perf" onRender={(_id, _phase, actualDuration) => { commits++; renderMs += actualDuration; }}>{node}</Profiler>
           </MemoryRouter>
         </ConvexProviderWithAuth>,
@@ -413,6 +428,76 @@ async function setupAppend(): Promise<Bench> {
       await until(() => host.textContent!.includes(`Streamed answer ${i} has arrived.`), "the new message to paint");
       await settle();
     }),
+    reset: async () => { await settle(); },
+  };
+}
+
+// A move between the org chart and a conversation, the way a person makes it
+// with tabs on (the default): a click on an in-app link (the compat Link)
+// moves the active tab through tabNavigate's store write, and TabContent swaps
+// the pane. The real shell, store and Link over 2,000 cached sessions, the
+// conversation's 200 messages cached and both pages visited once. A run is one
+// click each way. What it asserts is what React did inside the click's own
+// task (the click dispatched outside act, only microtasks drained): in a
+// browser that is the one uninterruptible script behind the `DIV#root.onclick`
+// long frames (ct-97544). Everything the swap costs after that lands in later,
+// interruptible work and is left to the A/B comparison.
+async function setupOrgNav(): Promise<Bench> {
+  const { TabContent } = await import("../components/TabContent");
+  const { default: Link } = await import("../src/compat/next-link");
+  const { AUTH_JWT_STORAGE_KEY } = await import("../lib/localAuth");
+  // A stored token naming the viewer, so the pages' local-first auth gate
+  // renders them (the harness's Convex client never confirms auth).
+  const b64 = (o: object) => btoa(JSON.stringify(o)).replace(/=+$/, "");
+  w.localStorage.setItem(AUTH_JWT_STORAGE_KEY, `${b64({ alg: "RS256" })}.${b64({ aud: "convex", iss: "perf", sub: `${ME}|perf` })}.sig`);
+  seedStore(2000);
+  const conv = convId(1);
+  useInboxStore.getState().setMessages(conv, messages(conv, 200), { hasMoreAbove: true, initialized: true });
+  useInboxStore.setState({ tabs: [{ id: "tab_perf", path: "/org", title: "Org" }], activeTabId: "tab_perf" } as any);
+  w.history.replaceState(null, "", "/org");
+  mount("/org");
+  await render(
+    <>
+      <nav>
+        <Link href={`/conversation/${conv}`} data-perf-to="conversation">Open the full conversation</Link>
+        <Link href="/org" data-perf-to="org">Org</Link>
+      </nav>
+      <TabContent />
+    </>,
+  );
+  const tabPath = () => useInboxStore.getState().tabs[0]?.path ?? "";
+  const atConversation = () => tabPath().includes(conv);
+  const pane = () => host.querySelector("[data-tab-id]");
+  let inClick = { commits: 0, domMutations: 0, rendered: [] as string[] };
+  const go = async (to: "conversation" | "org") => {
+    const before = commits;
+    const renderedBefore = rendered;
+    rendered = new Map();
+    let records = 0;
+    const mo = new w.MutationObserver((rs: MutationRecord[]) => { records += rs.length; });
+    mo.observe(host, { subtree: true, childList: true, attributes: true, characterData: true });
+    host.querySelector(`[data-perf-to="${to}"]`)!.dispatchEvent(new w.MouseEvent("click", { bubbles: true, cancelable: true, button: 0 }));
+    for (let i = 0; i < 20; i++) await Promise.resolve();
+    inClick.domMutations += records + mo.takeRecords().length;
+    mo.disconnect();
+    inClick.commits += commits - before;
+    inClick.rendered.push(...[...rendered.keys()]);
+    for (const [k, n] of rendered) renderedBefore.set(k, (renderedBefore.get(k) ?? 0) + n);
+    rendered = renderedBefore;
+    await until(() => (to === "conversation" ? atConversation() : tabPath() === "/org") && !!pane(), `the ${to} tab (tab at ${tabPath()})`);
+    await settle();
+  };
+  await go("conversation");
+  await go("org");
+  return {
+    run: async () => {
+      inClick = { commits: 0, domMutations: 0, rendered: [] };
+      const r = await measure(async () => { await go("conversation"); await go("org"); });
+      r.counts.commitsInClick = inClick.commits;
+      r.counts.domMutationsInClick = inClick.domMutations;
+      r.detail.renderedInClick = [...new Set(inClick.rendered)].sort();
+      return r;
+    },
     reset: async () => { await settle(); },
   };
 }
@@ -565,6 +650,7 @@ async function setupDiff(): Promise<Bench> {
 const setups: Record<Workload, () => Promise<Bench>> = {
   switch: setupSwitch,
   append: setupAppend,
+  "org-nav": setupOrgNav,
   "inbox-load": () => setupInboxLoad(),
   "inbox-heartbeat": () => setupInboxHeartbeat(),
   "inbox-load-modern": () => setupInboxLoad(true),
