@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
-import { applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, readPendingMessageJournal, writePendingMessageJournal, type PendingMessageRecord, type PendingMessageWrite, type PendingMessages } from "../pendingMessageJournal";
+import { formatDecisionAnswer } from "@codecast/shared/contracts";
+import { applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, readPendingMessageJournal, retireStalePendingRecords, writePendingMessageJournal, type PendingMessageRecord, type PendingMessageWrite, type PendingMessages } from "../pendingMessageJournal";
 
 const message = (id: string) => ({ _id: id, _clientId: id, content: `message ${id}`, role: "user", timestamp: 1, _isOptimistic: true });
 const apply = (writes: PendingMessageWrite[], initial: PendingMessageRecord[] = []) => {
@@ -99,4 +100,62 @@ test("unchanged state writes nothing and clearing one window does not remove ano
   expect(pendingMessageWrites(a, a)).toEqual([]);
   const rows = apply([...pendingMessageWrites({}, a), ...pendingMessageWrites({}, { c: [message("b")] }), ...pendingMessageWrites(a, {})]);
   expect(pendingMessagesFromRecords(rows)).toEqual({ c: [message("b")] });
+});
+
+// Every window journaled a copy of each failed send whenever any pending row
+// changed: the copy is a fresh object (replication clones it), so the row was
+// rewritten with a new conversationId stamp and nothing else.
+test("a fresh copy of an unchanged message journals nothing", () => {
+  const sent = { ...message("a"), _isFailed: true, images: [{ storage_id: "image-1" }] };
+  const copy = structuredClone(sent);
+  expect(pendingMessageWrites({ c: [sent] }, { c: [copy] })).toEqual([]);
+  expect(pendingMessageWrites({ c: [sent] }, { c: [copy, message("b")] }).map((w) => w.id)).toEqual(["b"]);
+  expect(pendingMessageWrites({ c: [sent] }, { c: [{ ...copy, images: [] }] })[0].fields).toEqual({ images: [] });
+});
+
+// A failed send is kept for its retry, and only an echo retires a pending
+// row, so failed sends nobody typed (a revive's "continue", an interrupt
+// marker) sat on the desktop app's disk for weeks.
+test("a failed machine send an hour old retires at load; a person's own failed message stays", () => {
+  const now = 10 * 3_600_000;
+  const old = now - 2 * 3_600_000;
+  const row = (id: string, content: string, extra: Record<string, unknown> = {}) =>
+    apply(pendingMessageWrites({}, { c: [{ _id: id, _clientId: id, role: "user", content, timestamp: old, _isOptimistic: true, _isFailed: true, ...extra }] }))[0];
+  const records = [
+    row("acct-revive-abc-jx7conv", "continue"),
+    row("continue-blocked-jx7conv-29781734", "continue"),
+    row("optimistic_1_interrupt", "[Request interrupted by user]"),
+    row("optimistic_2_typed", "please fix the build"),
+    row("acct-revive-new-jx7conv", "continue", { timestamp: now - 60_000 }),
+    row("revive-jx7conv-1", "continue", { _isFailed: undefined }),
+  ];
+  const { kept, retired } = retireStalePendingRecords(records, now);
+  expect(retired.map((r) => r.id)).toEqual(["acct-revive-abc-jx7conv", "continue-blocked-jx7conv-29781734", "optimistic_1_interrupt"]);
+  expect(retired.every((r) => r.removed)).toBe(true);
+  expect(kept.map((r) => r.id)).toEqual(["optimistic_2_typed", "acct-revive-new-jx7conv", "revive-jx7conv-1"]);
+  // A tombstone holds: a stale window's later copy cannot bring the row back.
+  expect(applyPendingMessageWrite(retired[0], pendingMessageWrites({}, { c: [records[0].message] })[0]).removed).toBe(true);
+});
+
+// A settled send retires only on its echo or a later row, read while its
+// conversation is open, so the desktop app kept settled interrupts, /model
+// lines, poll answers and typed messages from September in a conversation
+// nobody reopened.
+test("a settled send a day old retires at load; a hosted approval's answer stays", () => {
+  const now = 100 * 3_600_000;
+  const old = now - 25 * 3_600_000;
+  const row = (id: string, content: string, extra: Record<string, unknown> = {}) =>
+    apply(pendingMessageWrites({}, { c: [{ _id: id, _clientId: id, role: "user", content, timestamp: old, _isSettled: true, ...extra }] }))[0];
+  const answer = formatDecisionAnswer({ id: "k97decision", question: "Ship?", answer: "Yes" });
+  const records = [
+    row("optimistic_1_poll", '{"__cc_poll":true,"keys":["1"]}'),
+    row("optimistic_2_legacy", "[Request interrupted by user]", { _isSettled: undefined, _isSettledControl: true }),
+    row("optimistic_3_typed", "Okay, done."),
+    row("optimistic_4_answer", answer),
+    row("optimistic_5_recent", "status?", { timestamp: now - 3_600_000 }),
+    row("optimistic_6_unsettled", "still sending", { _isSettled: undefined, _isOptimistic: true }),
+  ];
+  const { kept, retired } = retireStalePendingRecords(records, now);
+  expect(retired.map((r) => r.id)).toEqual(["optimistic_1_poll", "optimistic_2_legacy", "optimistic_3_typed"]);
+  expect(kept.map((r) => r.id)).toEqual(["optimistic_4_answer", "optimistic_5_recent", "optimistic_6_unsettled"]);
 });
