@@ -49,8 +49,9 @@ const OUT_OF_SIGHT = ["stashed", "dismissed", "hidden"];
  * the daemon is asked to hibernate it at most every five minutes while it
  * stays live; a refusal (attached, mid turn, just resumed) is the daemon's
  * call, and the next ask may land. A person who brings it back from a stash
- * the run made keeps it: the run parks it no more (`bind` gives the context
- * that remembers this across a resume).
+ * the run made keeps it: the run parks it no more. Nothing runs until `bind`
+ * gives it the run's context, which remembers that across a resume: a resumed
+ * runner that checked before reading it would stash a session a person kept.
  */
 export function startSubjectParker(call: Call, subject: Subject, intervalMs: number, log: (line: string) => void): SubjectParker {
   let paused = false;
@@ -58,15 +59,16 @@ export function startSubjectParker(call: Call, subject: Subject, intervalMs: num
   let inFlight: Promise<void> | null = null;
   let stashedAt = -1;
   let askedAt = 0;
-  let context: Record<string, string> = {};
-  const idle = () => paused || stopped || context[KEPT] === "1";
+  let context: Record<string, string> | null = null;
+  let timer: ReturnType<typeof setInterval> | null = null;
+  const idle = () => paused || stopped || !context || context[KEPT] === "1";
   const check = async () => {
     const row = await subjectRow(call, subject);
     if (idle() || !row) return;
     const settle = row.message_count ?? 0;
     // The run stashed it at this very settle and it is back in the inbox: a person put it there.
     if (stashedAt === settle && !OUT_OF_SIGHT.includes(row.bucket)) {
-      context[KEPT] = "1";
+      context![KEPT] = "1";
       log(`${subject.shortId} was brought back to the inbox: the run leaves it there and parks it no more`);
       return;
     }
@@ -85,19 +87,22 @@ export function startSubjectParker(call: Call, subject: Subject, intervalMs: num
     }
   };
   const tick = (): Promise<void> => {
-    if (paused || stopped) return Promise.resolve();
+    if (idle()) return Promise.resolve();
     inFlight ??= check().catch(() => {}).finally(() => { inFlight = null; });
     return inFlight;
   };
-  const timer = setInterval(() => void tick(), intervalMs);
-  timer.unref?.();
   return {
     tick,
     // A station of the subject's own sends it work: no stash or park may land on top of the brief.
     pause: async () => { paused = true; await inFlight; },
     resume: () => { paused = false; },
-    stop: async () => { stopped = true; clearInterval(timer); await inFlight; },
-    bind: (ctx) => { context = ctx; },
+    stop: async () => { stopped = true; if (timer) clearInterval(timer); await inFlight; },
+    bind: (ctx) => {
+      context = ctx;
+      if (timer || stopped) return;
+      timer = setInterval(() => void tick(), intervalMs);
+      timer.unref?.();
+    },
   };
 }
 
@@ -105,7 +110,9 @@ export function startSubjectParker(call: Call, subject: Subject, intervalMs: num
  * Why the landed change is not live yet, or null once every deploy target its
  * files touch runs a deploy that holds it (a change no target ships is live
  * when it lands). Read once, the way `cast flow await-deploy --once` reads it;
- * targets that cannot be read count as not live.
+ * targets that cannot be read count as not live, and so does a target the
+ * checkout declares (.codecast/deploy.toml) that the server has never listed:
+ * nothing has deployed it, so nothing holds the change there.
  */
 export async function notLiveYet(cwd: string, landed: { sha: string; files: string[] }, call: Call): Promise<string | null> {
   const { readLocalGitContext } = await import("../prCommand.js");
@@ -114,7 +121,10 @@ export async function notLiveYet(cwd: string, landed: { sha: string; files: stri
   if (!repository) return "its deploy targets cannot be read (no GitHub origin)";
   const view = await call("/cli/deploys/targets", { repository });
   if (!Array.isArray(view?.targets)) return "its deploy targets cannot be read";
-  const touched = (view.targets as DeployTargetRow[]).filter((t) => targetTouches(t.paths, landed.files));
+  const listed = view.targets as DeployTargetRow[];
+  const { checkoutTargets } = await import("../lineDeploy.js");
+  const unlisted = (await checkoutTargets(cwd).catch(() => [])).filter((d) => !listed.some((t) => t.name === d.name)).map((d) => ({ name: d.name, paths: d.paths }));
+  const touched = [...listed, ...unlisted].filter((t) => targetTouches(t.paths, landed.files));
   const states = await Promise.all(touched.map((t) => targetState(t, (sha) => holds(cwd, landed.sha, sha))));
   const waiting = states.filter((s) => s.state !== "live").map((s) => s.target);
   return waiting.length ? `its change is not live yet on ${waiting.join(", ")}` : null;
