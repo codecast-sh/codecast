@@ -144,10 +144,14 @@ export function deploysOf(t: Pick<DeployTargetRow, "name" | "repository">, deplo
 }
 
 /** What a target runs now, what is going out to it, and its history. */
+/** Whether a newer deploy of the target went live after this one was asked for. */
+export const supersededBy = (d: Pick<TeamDeployRow, "created_at">, live: Pick<TeamDeployRow, "created_at"> | null): boolean => !!live && live.created_at > d.created_at;
+
 export function targetNow(t: Pick<DeployTargetRow, "name" | "repository">, deploys: ReadonlyArray<TeamDeployRow>) {
   const mine = deploysOf(t, deploys);
   const live = mine.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at))[0] ?? null;
-  const open = mine.find(isOpen) ?? null;
+  // A deploy asked for before the live one never went out as asked (the server closes it as superseded): not going out.
+  const open = mine.find((d) => isOpen(d) && !supersededBy(d, live)) ?? null;
   const failed = mine[0]?.status === "failed" ? mine[0] : null;
   return { live, open, failed, history: mine };
 }

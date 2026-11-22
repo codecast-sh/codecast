@@ -130,6 +130,18 @@ describe("what is on the pipeline now", () => {
     expect(spanWords(45 * 60_000)).toBe("45m");
   });
 
+  test("an open deploy older than the live one is superseded: neither going out nor stuck", () => {
+    const H = 3600_000;
+    const old = deploy({ _id: "o", short_id: "dp-1969", status: "requested", live_at: null, created_at: 0 });
+    const newer = deploy({ _id: "n", short_id: "dp-2299", status: "live", created_at: 30 * H, live_at: 30 * H });
+    const m = pipelineModel(example, [], [targetRow({})], [old, newer], 44 * H);
+    expect(m.main.targets[0].going).toBeNull();
+    expect(m.main.targets[0].tone).not.toBe("stuck");
+    expect(m.main.targets[0].live?.deploy).toBe("dp-2299");
+    expect(m.release.stuck).toBeNull();
+    expect(m.release.outside).toBeNull();
+  });
+
   test("a deploy sent outside codecast says so instead of drawing passed steps", () => {
     const gh = deploy({ _id: "g", short_id: "dp-9", status: "running", live_at: null, created_at: 20, source: "github:deploy.yml" });
     const m = pipelineModel(example, [], [targetRow({})], [gh]);

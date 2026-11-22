@@ -11,7 +11,7 @@ import { LINE_DEPLOY_STEP_LABELS, type LineDeployStep } from "@codecast/shared/c
 import type { QueueGroup } from "@codecast/shared/contracts/deployTargets";
 import { flowDiagram, type DiagramStep, type FlowDiagramModel, type SideRoute, type StepMark } from "./flowDiagram";
 import type { ShippedFlow } from "./flowPool";
-import { isOpen, sourceWord, targetNow, targetTone, type DeployTargetRow, type TargetTone, type TeamDeployRow } from "../deploys/targets";
+import { sourceWord, targetNow, targetTone, type DeployTargetRow, type TargetTone, type TeamDeployRow } from "../deploys/targets";
 import type { Pipeline, PipelineFlow, PipelineStation, PipelineTarget } from "./pipelineTypes";
 import { applyEdit, editLive, editsOfMessage, editStation, type PipelineEdit } from "./pipelineEdit";
 import { recentFiles } from "@codecast/shared/contracts/pipeline";
@@ -235,14 +235,13 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
   });
 
   // The release lane draws the deploy going out now, step by step, when codecast sent it.
-  const open = deploys.filter((d) => isOpen(d) && (!d.repository || d.repository.toLowerCase() === repo) && p.release.targets.some((t) => t.name === d.target)).sort((a, b) => b.created_at - a.created_at)[0] ?? null;
+  const open = mainTargets.map((t) => (t.going ? deploys.find((d) => d.short_id === t.going!.deploy) ?? null : null)).filter((d): d is TeamDeployRow => !!d).sort((a, b) => b.created_at - a.created_at)[0] ?? null;
   const steps = open?.steps ?? [];
   const run = open && steps.length
     ? { status: "running", current_node_id: steps.find((s) => s.status === "running")?.id ?? null, node_statuses: steps.filter((s) => s.status !== "pending").map((s) => ({ node_id: s.id, status: s.status })) }
     : null;
-  // A stuck deploy is what the lane says, whichever deploy opened last.
-  const stuckOpen = deploys.filter((d) => isOpen(d) && (!d.repository || d.repository.toLowerCase() === repo) && p.release.targets.some((t) => t.name === d.target) && stuckFor(d))
-    .map((d) => ({ deploy: d.short_id, for: stuckFor(d)!, outside: !d.steps?.length }))[0] ?? null;
+  // A stuck deploy is what the lane says: one a target is still going out on (newer than its live deploy) that sat too long.
+  const stuckOpen = mainTargets.map((t) => (t.going?.stuck ? { deploy: t.going.deploy, for: t.going.stuck, outside: t.going.outside } : null)).find(Boolean) ?? null;
   const here = new Map<string, string[]>();
   if (run?.current_node_id) here.set(run.current_node_id, [open!.short_id]);
   const release = lane(p.release, here, true, pending);

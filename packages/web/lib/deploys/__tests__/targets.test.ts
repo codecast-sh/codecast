@@ -22,6 +22,12 @@ describe("targetNow", () => {
     expect(n.open).toBeNull();
     expect(n.history.map((x) => x._id)).toEqual(["dp-3", "dp-2", "dp-1"]);
   });
+  test("a deploy asked for before the live one is not going out: a newer deploy superseded it", () => {
+    const d = [dp("dp-1969", "web", "requested", 1), dp("dp-2299", "web", "live", 5)];
+    expect(targetNow(target("web"), d).open).toBeNull();
+    const after = [...d, dp("dp-2400", "web", "running", 9)];
+    expect(targetNow(target("web"), after).open?._id).toBe("dp-2400");
+  });
   test("roll back goes to the newest earlier live deploy on another sha", () => {
     const d = [dp("dp-1", "web", "live", 1), dp("dp-2", "web", "live", 2, { sha: "sha-dp-1" }), dp("dp-3", "web", "live", 3)];
     const n = targetNow(target("web"), d);
