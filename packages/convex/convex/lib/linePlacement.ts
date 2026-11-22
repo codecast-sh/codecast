@@ -98,17 +98,34 @@ export async function poolDeviceIds(ctx: Ctx, runner: string): Promise<Set<strin
   return new Set(devices.filter((d) => d.line_slots?.length).map((d) => String(d.device_id)));
 }
 
-/** The slots the runs on a machine use now: a run waiting on a person, parked, or with no role or task uses none. */
-export async function deviceWorking(ctx: Ctx, device: string, waiting: Set<string>): Promise<number> {
+/**
+ * The slots the runs on a machine use now, counted up to `cap` (its slot's runs): a run waiting on a person, parked,
+ * or with no role or task uses none. The count stops at a full machine, since one more run changes nothing a slot
+ * decides: a machine holding thousands of runs that never ended read past the 100 MB a query may read (Union, Nov 22).
+ */
+export async function deviceWorking(ctx: Ctx, device: string, waiting: Set<string>, cap: number): Promise<number> {
   let working = 0;
   for (const status of WORKING_RUN_STATUSES) {
-    const runs: any[] = await ctx.db
-      .query("workflow_runs")
-      .withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", device).eq("status", status))
-      .collect();
-    for (const r of runs) if (await holdsSlot(ctx, r, waiting)) working++;
+    if (working >= cap) break;
+    const runs = (n: number) => ctx.db.query("workflow_runs").withIndex("by_runner_device_status", (q: any) => q.eq("runner_device", device).eq("status", status)).take(n);
+    await visitUntil(runs, cap - working, async (r) => (await holdsSlot(ctx, r, waiting)) && ++working >= cap);
   }
   return working;
+}
+
+/**
+ * Visits a range's rows in order until `visit` says stop, reading them in growing takes from `first`. Neither a
+ * collect nor a `for await` stops there: a `for await` prefetches whole pages, and every row it fetched counts
+ * against the read limit.
+ */
+export async function visitUntil(take: (n: number) => Promise<any[]>, first: number, visit: (row: any) => Promise<boolean>): Promise<void> {
+  let seen = 0;
+  for (let n = Math.max(first, 1); ; n *= 2) {
+    const rows = await take(n);
+    for (const row of rows.slice(seen)) if (await visit(row)) return;
+    if (rows.length < n) return;
+    seen = rows.length;
+  }
 }
 
 /** The members of a team, the people whose machines make up its line pool. */
@@ -162,7 +179,8 @@ async function slotsFor(ctx: Ctx, devices: any[], origin: string, now: number, n
     const user = String(d.user_id);
     // A run's decisions are asked by its sessions, which run as the machine's account.
     if (!waiting.has(user)) waiting.set(user, await runsWaitingOnAPerson(ctx, user));
-    slots.push({ device: String(d.device_id), user, root: slot.root, runs: slotRuns(d, slot), working: await deviceWorking(ctx, String(d.device_id), waiting.get(user)!) });
+    const runs = slotRuns(d, slot);
+    slots.push({ device: String(d.device_id), user, root: slot.root, runs, working: await deviceWorking(ctx, String(d.device_id), waiting.get(user)!, runs) });
   }
   return slots;
 }

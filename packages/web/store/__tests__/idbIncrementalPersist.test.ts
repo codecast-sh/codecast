@@ -3,7 +3,7 @@ import { stampCacheOwner } from "./fixtures/signedInPrincipal";
 import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 import { describe, expect, it } from "bun:test";
 import Dexie from "dexie";
-import { _reopenForTests, _resetPersistedShadow, setHydrating, writePatchesToIDB } from "../idbCache";
+import { _reopenForTests, _resetPersistedShadow, flushLivenessWrites, setHydrating, writePatchesToIDB } from "../idbCache";
 import { noteSnapshotSync } from "../idbCollectionDiff";
 
 await _reopenForTests({ indexedDB, IDBKeyRange });
@@ -19,6 +19,7 @@ setHydrating(false);
 const db = () => Dexie.connections.find((d) => d.name === "codecast-store") as any;
 const ID = (n: number) => `k17row${String(n).padStart(26, "a")}`;
 const settle = () => Bun.sleep(30);
+const write = (key: string, value: any) => writePatchesToIDB([{ op: "replace", path: [key], value } as any], { [key]: value, pending: {} });
 
 describe("incremental persistence", () => {
   it("writes the patched rows, keeps unpatched ones, and still honors a whole-collection replace and snapshot drops", async () => {
@@ -65,5 +66,180 @@ describe("incremental persistence", () => {
     expect(puts).toBe(1);
     expect((await db().meta.get("wallet")).value).toEqual({ n: 49 });
     db().meta.put = put;
+  });
+
+  // A working agent's session row changes on every message and model call.
+  // Rewriting it each time kept the desktop app's browser process compacting
+  // IndexedDB at a core; those ticks now wait for the liveness flush, and the
+  // sync cursors wait with them so they never reach disk ahead of the rows.
+  it("holds liveness-only session changes and syncMeta for the liveness flush, rows first", async () => {
+    _resetPersistedShadow();
+    const S = (n: number) => `jx7sess${String(n).padStart(25, "a")}`;
+    const base = { _id: S(1), title: "t", agent_status: "working", message_count: 1, updated_at: 1, open_tasks: [{ short_id: "ct-1" }] };
+    let sessions: Record<string, any> = { [S(1)]: base, [S(2)]: { ...base, _id: S(2) } };
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: sessions } as any], { sessions, pending: {} });
+    await settle();
+    expect((await db().sessions.get(S(1))).message_count).toBe(1);
+
+    const writes: string[] = [];
+    const sessionsPut = db().sessions.bulkPut.bind(db().sessions);
+    db().sessions.bulkPut = (rows: any[]) => { writes.push(...rows.map((r) => `row:${r._id}:${r.message_count}`)); return sessionsPut(rows); };
+    const metaPut = db().meta.put.bind(db().meta);
+    db().meta.put = (row: any) => { if (row.key === "syncMeta") writes.push(`syncMeta:${row.value.s.cursor}`); return metaPut(row); };
+
+    for (let i = 2; i <= 20; i++) {
+      // A push brings fresh nested objects even where nothing in them changed.
+      sessions = { ...sessions, [S(1)]: { ...sessions[S(1)], message_count: i, updated_at: i, open_tasks: [{ short_id: "ct-1" }] } };
+      const syncMeta = { s: { cursor: i } };
+      writePatchesToIDB(
+        [
+          { op: "replace", path: ["sessions", S(1), "message_count"], value: i } as any,
+          { op: "replace", path: ["syncMeta", "s"], value: syncMeta.s } as any,
+        ],
+        { sessions, syncMeta, pending: {} },
+      );
+    }
+    await Bun.sleep(300);
+    expect(writes).toEqual([]);
+    expect((await db().sessions.get(S(1))).message_count).toBe(1);
+
+    // Any other field goes to disk at once, liveness fields and all.
+    sessions = { ...sessions, [S(2)]: { ...sessions[S(2)], agent_status: "idle", message_count: 9 } };
+    writePatchesToIDB([{ op: "replace", path: ["sessions", S(2), "agent_status"], value: "idle" } as any], { sessions, syncMeta: { s: { cursor: 20 } }, pending: {} });
+    await settle();
+    expect(writes).toEqual([`row:${S(2)}:9`]);
+
+    flushLivenessWrites();
+    await settle();
+    expect(writes).toEqual([`row:${S(2)}:9`, `row:${S(1)}:20`, "syncMeta:20"]);
+    expect((await db().sessions.get(S(1))).message_count).toBe(20);
+    expect((await db().meta.get("syncMeta")).value).toEqual({ s: { cursor: 20 } });
+
+    db().sessions.bulkPut = sessionsPut;
+    db().meta.put = metaPut;
+  });
+
+  // A row held for a liveness tick and then written durably by a local action
+  // must not be overwritten at the flush by the held, older value: the disk
+  // kept dismissed: false while the cursor moved past the echo, so a reload
+  // never repaired it.
+  it("never flushes a held row over a later durable write of it", async () => {
+    _resetPersistedShadow();
+    const S = `jx7sess${"b".repeat(25)}`;
+    let sessions: Record<string, any> = { [S]: { _id: S, title: "t", dismissed: false, message_count: 1, updated_at: 1 } };
+    writePatchesToIDB([{ op: "replace", path: ["sessions"], value: sessions } as any], { sessions, pending: {} });
+    await settle();
+
+    sessions = { [S]: { ...sessions[S], message_count: 2, updated_at: 2 } };
+    writePatchesToIDB([
+      { op: "replace", path: ["sessions", S, "message_count"], value: 2 } as any,
+      { op: "replace", path: ["syncMeta", "s"], value: { cursor: 2 } } as any,
+    ], { sessions, syncMeta: { s: { cursor: 2 } }, pending: {} });
+    sessions = { [S]: { ...sessions[S], dismissed: true } };
+    writePatchesToIDB([{ op: "replace", path: ["sessions", S, "dismissed"], value: true } as any], { sessions, syncMeta: { s: { cursor: 2 } }, pending: {} });
+    await settle();
+    expect((await db().sessions.get(S)).dismissed).toBe(true);
+
+    flushLivenessWrites();
+    await settle();
+    expect(await db().sessions.get(S)).toEqual({ _id: S, title: "t", dismissed: true, message_count: 2, updated_at: 2 });
+    expect((await db().meta.get("syncMeta")).value).toEqual({ s: { cursor: 2 } });
+  });
+
+  it("never flushes a held meta value over a later durable write of it", async () => {
+    const member = (extra = {}) => ({ _id: "m", name: "m", role: "member", daemon_last_seen: 0, ...extra });
+    write("teamMembers", [member()]);
+    await Bun.sleep(400);
+    write("teamMembers", [member({ daemon_last_seen: 1 })]);
+    write("teamMembers", [member({ daemon_last_seen: 1, role: "admin" })]);
+    await Bun.sleep(400);
+    flushLivenessWrites();
+    await settle();
+    expect((await db().meta.get("teamMembers")).value).toEqual([member({ daemon_last_seen: 1, role: "admin" })]);
+  });
+
+  // The roster is one 17 KB blob, and every teammate's heartbeat or
+  // conversation switch changed it; it reached disk about once a second.
+  it("holds a roster whose rows changed only in presence for the liveness flush", async () => {
+    const member = (id: string, extra = {}) => ({ _id: id, name: id, role: "member", daemon_last_seen: 0, viewing_conversation_id: null, focus_project_ids: ["p"], ...extra });
+    let roster = [member("a"), member("b")];
+    const writes: string[] = [];
+    const metaPut = db().meta.put.bind(db().meta);
+    db().meta.put = (row: any) => { if (row.key === "teamMembers") writes.push(JSON.stringify(row.value.map((m: any) => [m.role, m.daemon_last_seen]))); return metaPut(row); };
+
+    writePatchesToIDB([{ op: "replace", path: ["teamMembers"], value: roster } as any], { teamMembers: roster, pending: {} });
+    await Bun.sleep(400);
+    expect(writes).toHaveLength(1);
+
+    for (let i = 1; i <= 10; i++) {
+      // A list push is a fresh roster: new rows and nested arrays, in any order.
+      roster = [member("b"), member("a", { daemon_last_seen: i * 60_000, viewing_conversation_id: `c${i}` })];
+      writePatchesToIDB([{ op: "replace", path: ["teamMembers", 0, "daemon_last_seen"], value: i } as any], { teamMembers: roster, pending: {} });
+    }
+    await Bun.sleep(400);
+    expect(writes).toHaveLength(1);
+
+    // A role change goes at once, carrying the presence it has.
+    roster = [member("b", { role: "admin" }), roster[1]];
+    writePatchesToIDB([{ op: "replace", path: ["teamMembers", 0, "role"], value: "admin" } as any], { teamMembers: roster, pending: {} });
+    await Bun.sleep(400);
+    expect(writes.at(-1)).toBe(JSON.stringify([["admin", 0], ["member", 600_000]]));
+
+    roster = [roster[0], member("a", { daemon_last_seen: 660_000 })];
+    writePatchesToIDB([{ op: "replace", path: ["teamMembers", 0, "daemon_last_seen"], value: 11 } as any], { teamMembers: roster, pending: {} });
+    await Bun.sleep(400);
+    expect(writes).toHaveLength(2);
+    flushLivenessWrites();
+    await settle();
+    expect(writes).toHaveLength(3);
+    expect((await db().meta.get("teamMembers")).value[1].daemon_last_seen).toBe(660_000);
+    db().meta.put = metaPut;
+  });
+
+  it("holds a reordered machine roster and the org tree's tallies the same way, by row key and nested path", async () => {
+    const writes: string[] = [];
+    const metaPut = db().meta.put.bind(db().meta);
+    db().meta.put = (row: any) => { if (row.key === "machineRoster" || row.key === "orgTree") writes.push(row.key); return metaPut(row); };
+    const device = (id: string, last_seen: number, extra = {}) => ({ device_id: id, label: id, last_seen, sync_no_progress_ms: last_seen, settings: { a: 1 }, ...extra });
+    // Each push is a fresh tree: sessions reorder by updated_at, their states
+    // and the roles' day counters and standing lines move with every turn.
+    const session = (_id: string, tick: number) => ({ _id, title: _id, updated_at: tick, state: tick % 2 ? "working" : "idle" });
+    const person = (id: string, working: number, sessions: string[], tick: number) =>
+      ({ user_id: id, name: id, counts: { working, idle: 0 }, total: working, sessions: (tick % 2 ? [...sessions].reverse() : sessions).map((sid) => session(sid, tick)) });
+    // Anchors carry their standing session's state too, keyed by anchor_id.
+    const anchor = (id: string, tick: number, name = id) =>
+      ({ anchor_id: id, name, org_role_id: "r1", status: "active", state: tick % 2 ? "working" : "idle", state_line: `turn ${tick}`, state_status: null, state_at: tick });
+    const tree = (working: number, sessions = ["s1", "s2"], tick = 0, anchorName = "a1") => ({
+      people: [person("u1", working, sessions, tick)],
+      roles: [{ _id: "r1", name: "Lead", counts: { working: 0 }, total: 0, counters: { day: "d", wakes: tick }, standing: { conversation_id: "c1", state_line: `turn ${tick}` }, sessions: [session("s9", tick)] }],
+      anchors: tick % 2 ? [anchor("a2", tick), anchor("a1", tick, anchorName)] : [anchor("a1", tick, anchorName), anchor("a2", tick)],
+      workspace: "team",
+    });
+
+    write("machineRoster", [device("mac", 1), device("box", 0)]);
+    write("orgTree", tree(1));
+    await Bun.sleep(400);
+    expect(writes.sort()).toEqual(["machineRoster", "orgTree"]);
+
+    write("machineRoster", [device("box", 2), device("mac", 1)]);
+    write("orgTree", tree(5, undefined, 1));
+    await Bun.sleep(400);
+    expect(writes).toHaveLength(2);
+
+    // A session joining a parent's list is durable.
+    write("machineRoster", [device("box", 2, { label: "renamed" }), device("mac", 1)]);
+    write("orgTree", tree(5, ["s1", "s2", "s3"], 1));
+    await Bun.sleep(400);
+    expect(writes).toHaveLength(4);
+    expect((await db().meta.get("machineRoster")).value[0].label).toBe("renamed");
+
+    // An anchor's name is durable; its state is not.
+    write("orgTree", tree(5, ["s1", "s2", "s3"], 2));
+    await Bun.sleep(400);
+    expect(writes).toHaveLength(4);
+    write("orgTree", tree(5, ["s1", "s2", "s3"], 2, "renamed"));
+    await Bun.sleep(400);
+    expect(writes).toHaveLength(5);
+    db().meta.put = metaPut;
   });
 });
