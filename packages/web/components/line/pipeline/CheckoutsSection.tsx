@@ -18,6 +18,7 @@ import { runThroughMessage } from "../../../lib/line/flowMessages";
 import { agoWords, drawnFlow } from "../../../lib/line/pipelineModel";
 import { checkoutsPage, checkoutsSummary, type CheckoutSessionView, type CheckoutView } from "../../../lib/line/checkoutsModel";
 import type { Pipeline } from "../../../lib/line/pipelineTypes";
+import { toldOf } from "@codecast/shared/contracts/checkouts";
 import { PipelineDrawer } from "./PipelineDrawer";
 
 type TitleRow = { title?: string | null };
@@ -32,7 +33,7 @@ export const CheckoutsSection = memo(function CheckoutsSection({ pipeline, teamI
   const rows = useCheckouts(teamId, pipeline.repository);
   const now = useCoarseNow(60_000);
   // Sessions by their titles in this viewer's store: a team row never carries a private session's title.
-  const ids = useMemo(() => [...new Set(rows.flatMap((r) => [...r.uncommitted.sessions.map((s) => s.conversation_id), r.level.state === "stuck" && r.level.filed?.to === "session" ? r.level.filed.conversation_id : null]).filter((x): x is string => !!x))].sort().join(","), [rows]);
+  const ids = useMemo(() => [...new Set(rows.flatMap((r) => [...r.uncommitted.sessions.map((s) => s.conversation_id), ...(r.level.state === "stuck" ? toldOf(r.level).map((t) => (t.to === "session" ? t.conversation_id : null)) : [])]).filter((x): x is string => !!x))].sort().join(","), [rows]);
   const titleSig = useInboxStore((s) => JSON.stringify(Object.fromEntries((ids ? ids.split(",") : []).map((id) => {
     const row = ((s.sessions as Record<string, TitleRow>)[id] ?? (s.conversations as Record<string, TitleRow>)[id]) as TitleRow | undefined;
     return [id, row?.title ?? null];

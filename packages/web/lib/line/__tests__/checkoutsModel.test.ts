@@ -27,7 +27,8 @@ const stuck = row({
     ],
     unattributed: ["README.md"], unattributed_more: 54,
   },
-  level: { state: "stuck", files: ["outreach/backend/tests/unit/ct94516Remediation.test.ts"], reason: "changed here and on main without a clean merge", since: NOW - 21 * H, filed: { at: NOW - 20 * H, to: "session", conversation_id: "c-done" } },
+  // Reported by an earlier daemon, which told one writer as `filed`.
+  level: { state: "stuck", files: ["outreach/backend/tests/unit/ct94516Remediation.test.ts"], reason: "changed here and on main without a clean merge", since: NOW - 21 * H, filed: { at: NOW - 20 * H, to: "session", conversation_id: "c-done" } } as any,
 });
 const clean = row({ _id: "clean" });
 const second = row({ _id: "second", device_id: "mini", device_label: "Second Mac", path: "/Users/ashot/src/union-mobile", ahead: 8, behind: 1002, level: { state: "off", reason: "holds commits main lacks" } });
@@ -71,9 +72,12 @@ describe("every machine's checkouts of a repository", () => {
       toldBrief: "told its writer",
     });
     // Nobody is owed word before the daemon's 30 minutes are up.
-    expect(levelWords({ state: "stuck", files: ["a"], reason: "r", since: NOW - 10 * 60_000, filed: null }, NOW, titleOf).told).toBe("will tell its writer at 30m");
-    expect(levelWords({ state: "stuck", files: ["a", "b"], reason: "r", since: NOW - H, filed: null }, NOW, titleOf).told).toBe("nobody told yet");
-    expect(levelWords({ state: "stuck", files: ["a"], reason: "r", since: NOW - H, filed: { at: NOW, to: "finding" } }, NOW, titleOf).told).toBe("filed as a finding");
+    expect(levelWords({ state: "stuck", files: ["a"], reason: "r", since: NOW - 10 * 60_000, told: [] }, NOW, titleOf).told).toBe("will tell its writers at 30m");
+    expect(levelWords({ state: "stuck", files: ["a", "b"], reason: "r", since: NOW - H, told: [] }, NOW, titleOf).told).toBe("nobody told yet");
+    expect(levelWords({ state: "stuck", files: ["a"], reason: "r", since: NOW - H, told: [{ at: NOW, files: 1, to: "finding" }] }, NOW, titleOf).told).toBe("filed a finding");
+    // Each writer about its own files: two sessions and a finding for the files nobody wrote.
+    const many = levelWords({ state: "stuck", files: ["a", "b", "c"], reason: "r", since: NOW - H, told: [{ at: NOW, files: 1, to: "session", conversation_id: "c-done" }, { at: NOW, files: 1, to: "session", conversation_id: "c-live" }, { at: NOW, files: 1, to: "finding" }] }, NOW, titleOf);
+    expect(many).toMatchObject({ told: "told 2 writers, filed a finding", toldBrief: "told 2 writers" });
     expect(levelWords({ state: "level", levelled_at: NOW - 2 * H }, NOW, titleOf).words).toBe("level with main, levelled 2h ago");
     expect(levelWords({ state: "off", reason: "a worktree" }, NOW, titleOf)).toMatchObject({ tone: "off", words: "not kept level: a worktree" });
   });

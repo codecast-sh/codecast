@@ -5,7 +5,7 @@
 // keeps it current, and when it cannot, on which file, since when, and who
 // was told. Sessions are named by their titles in the viewer's own store,
 // never by an id. Pure: no store, no React.
-import { LEVEL_STUCK_FILE_MS, type CheckoutLevel, type CheckoutRow, type CheckoutSession, type CheckoutSessionState } from "@codecast/shared/contracts/checkouts";
+import { LEVEL_STUCK_FILE_MS, toldOf, type CheckoutLevel, type CheckoutRow, type CheckoutSession, type CheckoutSessionState, type CheckoutTold } from "@codecast/shared/contracts/checkouts";
 import { spanWords } from "./pipelineModel";
 
 export type CheckoutSessionView = {
@@ -85,11 +85,18 @@ export function levelWords(level: CheckoutLevel, now: number, titleOf: (conversa
   if (level.state === "level") return { tone: "ok", words: level.levelled_at ? `level with main, levelled ${spanWords(now - level.levelled_at)} ago` : "level with main", reason: null, files: [], since: null, told: null, toldBrief: null };
   if (level.state === "off") return { tone: "off", words: `not kept level: ${level.reason}`, reason: level.reason, files: [], since: null, told: null, toldBrief: null };
   // The daemon tells the writer once the same files have refused for LEVEL_STUCK_FILE_MS; before that nobody is owed word.
-  const told = level.filed
-    ? level.filed.to === "session" ? `told ${titleOf(level.filed.conversation_id)?.trim() || "the session that wrote it"}` : "filed as a finding"
-    : now - level.since >= LEVEL_STUCK_FILE_MS ? "nobody told yet" : `will tell its writer at ${Math.round(LEVEL_STUCK_FILE_MS / 60_000)}m`;
+  // Each writer hears of its own files; the files nobody wrote become one finding.
+  const asked = toldOf(level);
+  const sessions = asked.filter((t): t is Extract<CheckoutTold, { to: "session" }> => t.to === "session");
+  const finding = asked.some((t) => t.to === "finding");
+  const told = asked.length
+    ? [
+        ...(sessions.length === 1 ? [`told ${titleOf(sessions[0].conversation_id)?.trim() || "the session that wrote them"}`] : sessions.length ? [`told ${sessions.length} writers`] : []),
+        ...(finding ? ["filed a finding"] : []),
+      ].join(", ")
+    : now - level.since >= LEVEL_STUCK_FILE_MS ? "nobody told yet" : `will tell its writers at ${Math.round(LEVEL_STUCK_FILE_MS / 60_000)}m`;
   const more = level.files.length > 1 ? ` +${level.files.length - 1}` : "";
-  const toldBrief = level.filed?.to === "session" ? "told its writer" : told;
+  const toldBrief = sessions.length ? (sessions.length === 1 ? "told its writer" : `told ${sessions.length} writers`) : told;
   return { tone: "stuck", words: `stuck ${spanWords(now - level.since)} on ${fileName(level.files[0] ?? "a file")}${more} · ${shortReason(level.reason)}`, reason: level.reason, files: level.files, since: level.since, told, toldBrief };
 }
 
