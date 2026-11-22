@@ -13,12 +13,12 @@ import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useChangeReach } from "../../hooks/useRepoChanges";
 import { ChangeChip, ChangeJourney } from "./ChangeChip";
 import { VEHICLE_GLYPH } from "../../lib/changes/vehicleGlyph";
-import { attentionTone, groupChanges, type ChangeRow } from "../../lib/changes/rows";
+import { PICKABLE_GROUPS, attentionTone, groupChanges, groupLabel, type ChangeGroupId, type ChangeRow } from "../../lib/changes/rows";
 import "./changes.css";
 
 const MONO = new Set(["branch", "pr", "commit"]);
 
-const Row = memo(function Row({ row, at }: { row: ChangeRow; at: number }) {
+const Row = memo(function Row({ row, at, focused }: { row: ChangeRow; at: number; focused: boolean }) {
   const l = row.lifecycle;
   const v = l.vehicle;
   const Glyph = VEHICLE_GLYPH[v.kind];
@@ -59,9 +59,10 @@ const Row = memo(function Row({ row, at }: { row: ChangeRow; at: number }) {
   );
   const aria = `${vehicleName(v)}: ${l.now.word}`;
   const attn = attentionTone(row);
+  const focus = focused ? "" : undefined;
   return row.links?.href
-    ? <Link href={row.links.href} className="chb-row" data-tone={l.now.tone} data-attn={attn} aria-label={aria} data-change-row={row.key}>{body}</Link>
-    : <div className="chb-row" data-tone={l.now.tone} data-attn={attn} aria-label={aria} data-change-row={row.key}>{body}</div>;
+    ? <Link href={row.links.href} className="chb-row" data-tone={l.now.tone} data-attn={attn} data-focus={focus} aria-label={aria} data-change-row={row.key}>{body}</Link>
+    : <div className="chb-row" data-tone={l.now.tone} data-attn={attn} data-focus={focus} aria-label={aria} data-change-row={row.key}>{body}</div>;
 });
 
 /** Feeds one landed change's reach, whether or not its row is drawn: a hidden group still needs to know where it stands. */
@@ -71,18 +72,26 @@ function ReachFeed({ refId }: { refId: string }) {
 }
 
 /** The grid. `at` freezes its clock (a preview); otherwise it ticks each half minute. */
-export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups = [] }: {
+export function ChangeBoard({ rows, at, empty = "Nothing on its way", hideGroups = [], mine = false, pick, focused }: {
   rows: ReadonlyArray<ChangeRow>;
   at?: number;
   empty?: string;
   /** Groups left out by id (`closed`, `live`), for a surface that shows only what is on its way. */
   hideGroups?: ReadonlyArray<string>;
+  /** The rows are only the viewer's own: the failures and turns read "Needs you". */
+  mine?: boolean;
+  /** A surface that narrows the grid to one group: each pickable group's name presses it, and again clears it. */
+  pick?: { group: ChangeGroupId | null; onPick: (g: ChangeGroupId | null) => void };
+  /** The row a link points at, highlighted. */
+  focused?: (r: ChangeRow) => boolean;
 }) {
   const tick = useCoarseNow(30_000);
   const now = at ?? tick;
   // Grouping turns on days, not seconds: regroup on a ten-minute clock so a ticking grid keeps its rows still.
   const groupClock = Math.floor(now / 600_000) * 600_000;
-  const groups = useMemo(() => groupChanges(rows, groupClock).filter((g) => !hideGroups.includes(g.id)), [rows, hideGroups, groupClock]);
+  const picked = pick?.group ?? null;
+  // The picked group keeps its name on screen with nothing in it, so the press that clears it is still there.
+  const groups = useMemo(() => groupChanges(rows, groupClock, picked).filter((g) => !hideGroups.includes(g.id)), [rows, hideGroups, groupClock, picked]);
   const [unfolded, setUnfolded] = useState<ReadonlySet<string>>(() => new Set());
   return (
     <div className="chb-scope">
