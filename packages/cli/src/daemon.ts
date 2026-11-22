@@ -22125,7 +22125,7 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
       let timer: ReturnType<typeof setTimeout> | undefined;
       const timeout = new Promise<"failed">((resolve) => { timer = setTimeout(() => resolve("failed"), 10_000); });
       const sending = svc.sendMessageToSession(to, body, "scheduler", clientId)
-        .then((id) => (id ? "sent" as const : "failed" as const), classifySendError);
+        .then((id) => (id ? "sent" as const : getAuthToken() ? "failed" as const : "unreachable" as const), classifySendError);
       try {
         return await Promise.race([sending, timeout]);
       } finally {
