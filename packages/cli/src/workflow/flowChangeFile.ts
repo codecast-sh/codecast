@@ -25,6 +25,11 @@ export type FrozenChange = {
   shared: Array<{ path: string; also: string[] }>;
   /** Files the session wrote that stay out: credentials, with why. */
   held: Array<{ path: string; why: string }>;
+  /** The run works on another machine (`cast flow run --device`): the branch is on origin, and the run fetches it again
+   *  after each fix rather than reading the subject's checkout, which is not on that machine. */
+  pushed?: boolean;
+  /** The run a placed change belongs to (set on the run's machine), which `cast flow refreeze <run>` names. */
+  run?: string;
 };
 
 const CHANGE_FILE = "change.json";
@@ -66,6 +71,10 @@ export function readFrozenChange(runDir: string | undefined): FrozenChange | nul
 
 /** How the run takes the subject's fix back, as the briefs say it ($change_return): its edits, or the branch it names. */
 export function changeReturnWords(change: Partial<FrozenChange>): string {
+  // A placed run (cast flow run --device) cannot read the subject's checkout: the subject freezes its edits again itself,
+  // onto the run's branch without touching the shared tree, its index or HEAD, and pushes it for the run to fetch.
+  if (change.pushed && change.source === "session") return `This run works on another machine, so it cannot read your edits: when the fix is in place, run \`cast flow refreeze ${change.run ?? "<run id>"}\` in this checkout (it commits your edits to the run's branch ${change.branch} without switching or touching this tree, and pushes it), then end your turn; the run fetches the branch again`;
+  if (change.pushed && change.source !== "pr") return `This run works on another machine: commit the fix to branch ${change.branch} in a checkout where that branch is checked out (its own worktree, never by switching a shared tree) and push it (git push origin ${change.branch}); when you end your turn the run fetches that branch again`;
   if (change.source === "pr") return `Push the fix to the pull request's branch ${change.branch}; when you end your turn the run fetches that branch again`;
   if (change.source === "branch" || change.source === "task") return `Commit the fix to branch ${change.branch}; when you end your turn the run reads that branch again`;
   return "When you end your turn the run freezes this session's edits again";
