@@ -279,6 +279,32 @@ describe("the session is the run's subject", () => {
     }
   }, 60_000);
 
+  test("a turn that ends before the brief reaches it is no answer: the run waits for the brief's delivery (a detached run's caller)", async () => {
+    const { root, edit } = world("bad\n");
+    // The caller is mid-turn when the check fails: its turn ends (the transcript grows, it reads done) while the brief
+    // waits in its queue. The brief lands on the fourth read of its status, and the session fixes a.txt then.
+    const s = server(() => {});
+    const serve = globalThis.fetch;
+    let statusReads = 0;
+    let deliveredAt = 0;
+    globalThis.fetch = (async (url: any, init: any) => {
+      if (!String(url).endsWith("/cli/messages/status")) return serve(url, init);
+      s.calls.push({ route: "/cli/messages/status", body: JSON.parse(init?.body || "{}") });
+      if (++statusReads === 4) {
+        edit("good\n");
+        deliveredAt = Date.now();
+      }
+      const send = deliveredAt ? { created_at: deliveredAt - 1000, status: "delivered", delivered_at: deliveredAt } : { created_at: Date.now(), status: "pending" };
+      return new Response(JSON.stringify({ sends: [send] }), { status: 200 });
+    }) as typeof fetch;
+    const { outcome } = await start(root);
+    expect(outcome).toBe("completed");
+    expect(statusReads).toBeGreaterThanOrEqual(4);
+    // One brief: the turn that ended before it landed was not taken for the fix.
+    expect(s.sent().filter((m) => /^Check failed/.test(m.body))).toHaveLength(1);
+    expect(git(root, "show", "codecast/change-ct-9:a.txt")).toBe("good");
+  }, 60_000);
+
   test("a session that never fixes it is sent back three times, then the run stops and says why", async () => {
     const { root } = world("bad\n");
     const s = server(() => {});

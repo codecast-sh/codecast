@@ -467,7 +467,9 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
   }
   const waiting = (on: Record<string, any> | null) => options.runId ? reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", waiting_on_session: on }) : Promise.resolve();
   await waiting({ node_id: node.id, conversation_id: subject.conversationId, since: Date.now(), note: (context["stop_reason"] || brief).slice(0, 600) });
-  const outcome = await waitOnStation(node, graph, context, cwd, options, undefined, { ...subject, sentAtCount: row.message_count ?? 0, sentAt });
+  // It answers only with a turn after the brief reached it: a detached run's caller can still be mid-turn when a fast
+  // check fails, and that turn's end is no answer. Where the delivery cannot be read, the send is when it arrived.
+  const outcome = await waitOnStation(node, graph, context, cwd, options, undefined, { ...subject, sentAtCount: row.message_count ?? 0, sentAt, awaitDelivery: true, unreadDeliveryAt: sentAt - CLOCK_SKEW_MS });
   await waiting(null);
   if (outcome !== "success") return outcome;
   try {
@@ -666,10 +668,11 @@ async function waitOnStation(
   onSpawned?: () => void,
   // The run's subject (subjectStation.ts): the session the change came from, already sent its brief, which this
   // station waits on instead of a hand of its own. It has answered once a turn of its own has ended since the brief.
-  // A checkout's writer (briefWriters) is not parked, so its brief can queue behind a turn of its own: it answers only
-  // with a turn after the brief reached it (`awaitDelivery`), and its wait ends early once `abort` says another
-  // writer's has stopped the station.
-  subject?: Subject & { sentAtCount: number; sentAt: number; awaitDelivery?: boolean; abort?: { stopped: boolean } },
+  // Its brief can queue behind a turn of its own, so it answers only with a turn after the brief reached it
+  // (`awaitDelivery`); where that cannot be read, the subject's brief counts as arriving at `unreadDeliveryAt`, and a
+  // checkout's writer's as never read (below). A writer's wait ends early once `abort` says another writer's has
+  // stopped the station.
+  subject?: Subject & { sentAtCount: number; sentAt: number; awaitDelivery?: boolean; unreadDeliveryAt?: number; abort?: { stopped: boolean } },
 ): Promise<NodeOutcome> {
   if (!options.convexSiteUrl || !options.apiToken) {
     console.log(`  ${c.red}✗ session nodes need an authenticated CLI (cast auth)${c.reset}`);
@@ -790,8 +793,8 @@ async function waitOnStation(
   let seenMessages = -1;
   // Reads in a row that found the subject past its brief and not at work (below).
   let subjectQuiet = 0;
-  // When the subject's brief reached it: only a turn after that can answer it. A writer's is read from the brief's
-  // delivery (undefined until it lands; null when it cannot be read); a parked subject's brief reaches it at once.
+  // When the subject's brief reached it: only a turn after that can answer it. Read from the brief's delivery
+  // (undefined until it lands; when it cannot be read, `unreadDeliveryAt`, else null).
   let briefAt: number | null | undefined = subject?.awaitDelivery ? undefined : subject?.sentAt;
   // The transcript length at which the hand's park flag was last re-stamped (/cli/accounts/restamp-park).
   let restampedAt = -1;
@@ -910,16 +913,16 @@ async function waitOnStation(
     // status, or a transcript that grew since the last read) the run waits; past the brief and its reply, the turn
     // has ended once two reads in a row find it quiet, or once it pins after the brief (below).
     if (subject && !row.is_killed) {
-      // A writer mid-turn when briefed ends that turn first, pinning after the brief went out: no answer until the
-      // brief has reached it. Where its delivery cannot be read, only the transcript growing past the brief and then
-      // going quiet answers, never a pin.
+      // A session mid-turn when briefed (a writer, or the caller of a detached run whose check failed fast) ends that
+      // turn first, pinning after the brief went out: no answer until the brief has reached it. Where a writer's
+      // delivery cannot be read, only the transcript growing past the brief and then going quiet answers, never a pin.
       if (briefAt === undefined) {
         const at = await briefDeliveredAt(options, subject);
         if (at === "pending") {
           subjectQuiet = 0;
           continue;
         }
-        briefAt = at;
+        briefAt = at ?? subject.unreadDeliveryAt ?? null;
       }
       if (state === "working" || grew || AGENT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) < subject.sentAtCount + 2) {
         subjectQuiet = 0;
