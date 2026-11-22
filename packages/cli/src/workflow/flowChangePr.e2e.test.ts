@@ -129,6 +129,15 @@ describe("a pull request's change is frozen again from what its session pushed",
     expect(git(root, "rev-parse", "fix")).toBe(pushed);
   }, 180_000);
 
+  test("a branch no worktree holds, with commits the pushed branch lacks, is never moved, and the commits are named", async () => {
+    const { root, runDir, push } = prWorld(false);
+    push();
+    const local = git(root, "commit-tree", `${git(root, "rev-parse", "fix")}^{tree}`, "-p", "fix", "-m", "unpushed local work");
+    git(root, "update-ref", "refs/heads/fix", local);
+    await expect(refreezeSessionChange(root, runDir, null)).rejects.toThrow(/branch fix has commits here the pushed branch lacks \(\w+ unpushed local work\)/);
+    expect(git(root, "rev-parse", "fix")).toBe(local);
+  }, 180_000);
+
   test("a worktree holding uncommitted work on the branch stops the refreeze and is named", async () => {
     const { root, worktree, runDir, first, push } = prWorld();
     push();
