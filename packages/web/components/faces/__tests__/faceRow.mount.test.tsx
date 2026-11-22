@@ -358,6 +358,22 @@ describe("a face opens one card", () => {
     expect(h.q("[data-member-card]")).toBeNull();
   });
 
+  // ct-91259 (rage click on a face, rp-6849): two or three quick clicks on
+  // the same face are one ask to open it, never open-close-open.
+  test("rapid repeat clicks on a face leave its card open and pinned", async () => {
+    for (const clicks of [2, 3]) {
+      const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+      const circle = h.circle(ANN);
+      for (let i = 0; i < clicks; i++) await h.click(circle);
+      expect({ clicks, expanded: circle.getAttribute("aria-expanded") }).toEqual({ clicks, expanded: "true" });
+      expect(h.q("[data-member-card]")).not.toBeNull();
+      await act(async () => root?.unmount());
+      root = null;
+      host?.remove();
+      host = null;
+    }
+  });
+
   test("calls off: the card names them and keeps the reply box, with no call buttons", async () => {
     const h = await mount(bar(rowOf([entry(ANN, "Ann")]), { callsEnabled: false }));
     await h.click(h.circle(ANN));
