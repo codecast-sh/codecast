@@ -4,6 +4,8 @@ import { memo } from "react";
 import { ArrowDown, ArrowUp, Combine, X, Zap } from "lucide-react";
 import { jointAuthors } from "@codecast/shared/contracts/jointMessage";
 import { useInboxStore } from "../../store/inboxStore";
+import { toast } from "sonner";
+import { cancelPendingSend } from "../../lib/cancelPendingSend";
 import { heldQueueRowsOf, partsOf, type QueueRow } from "../../lib/sharedQueue";
 import { PresenceAvatar } from "../PresenceFacepile";
 
@@ -78,7 +80,7 @@ export const SharedQueue = memo(function SharedQueue({ conversationId, canSteerQ
                       <Combine className="w-3 h-3" /><span className="ml-1">Merge</span>
                     </QueueButton>
                     {(row.from_user_id === me || st.conversations[conversationId]?.user_id === me) && (
-                      <QueueButton label="Take it out of the queue" disabled={false} onClick={() => st.cancelPendingMessage(conversationId, { messageId: row.message_id })}><X className="w-3 h-3" /></QueueButton>
+                      <QueueButton label="Take it out of the queue" disabled={false} onClick={() => { cancelPendingSend(conversationId, { messageId: row.message_id }, null).catch((err) => toast.error(err instanceof Error ? err.message : "Failed to cancel message")); }}><X className="w-3 h-3" /></QueueButton>
                     )}
                   </span>
                 )}

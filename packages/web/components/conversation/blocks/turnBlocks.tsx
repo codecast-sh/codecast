@@ -446,10 +446,7 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
     if (!conversationId || cancelState !== "idle") return;
     setCancelState("inflight");
     try {
-      const status = await cancelPendingSend(conversationId, pendingCancelRef(messageId, conversationPending), content);
-      if (status === "delivered" || status === "injected") {
-        toast.info("This message has already reached the session");
-      }
+      await cancelPendingSend(conversationId, pendingCancelRef(messageId, conversationPending), content);
     } catch (err) {
       captureException(err);
       toast.error(err instanceof Error ? err.message : "Failed to cancel message");

@@ -1372,6 +1372,15 @@ export async function cancelPendingMessageForUser(
     await clearHasPendingIfQuiet(ctx, message.conversation_id);
     return "cancelled";
   }
+  // Pasted into the session: the agent may already hold the text, so the row
+  // is left for its echo and the caller is told it was not taken back.
+  if (message.status === "injected") return "injected";
+  // Accepted with no echo: stop it from moving again, but never report it as
+  // withdrawn, because the agent may have read it.
+  if (isUnconfirmedRow(message)) {
+    await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
+    return "unconfirmed";
+  }
   const updated = await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
   return updated ? "cancelled" : message.status;
 }
