@@ -1,4 +1,4 @@
-import { useSettingsData } from "../../../hooks/useSyncSettings";
+import { teamMembersOf } from "../../../lib/activeTeam";
 import { useCurrentUser } from "../../../hooks/useCurrentUser";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useCallback } from "react";
@@ -83,7 +83,7 @@ const DEFAULT_PREFS = {
 
 export default function NotificationsSettingsPage() {
   const { user } = useCurrentUser();
-  const { data: teamMembers } = useSettingsData("teamMembers");
+  const teamMembers = useInboxStore(teamMembersOf);
 
   const prefs = user?.notification_preferences;
   const enabled = user?.notifications_enabled ?? false;
