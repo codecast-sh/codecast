@@ -3,7 +3,7 @@ import { landedShas, reachShip, reachTargets, runShip, sessionShips } from "../s
 
 const SHA = "a0de449540f0a6545c78d050748211d78013c039";
 const target = (name: string, state: string, over: Record<string, unknown> = {}) => ({ target: name, state, deploy: null, now: null, ...over }) as any;
-const run = (id: string, conv: string, over: Record<string, unknown>) => ({ _id: id, spawner_conversation_id: conv, status: "running", created_at: 1, ...over }) as any;
+const run = (id: string, conv: string, over: Record<string, unknown>) => ({ _id: id, spawner_conversation_id: conv, takes_change: true, status: "running", created_at: 1, ...over }) as any;
 const dp = (id: string, status: string, sessions: string[], at: number, target = "backend") => ({ _id: id, short_id: id, status, target, sessions: sessions.map((c) => ({ conversation_id: c })), created_at: at, live_at: status === "live" ? at : null }) as any;
 
 describe("runShip", () => {
@@ -78,4 +78,11 @@ describe("a landed run is never relabeled by an older deploy", () => {
     expect(sessionShips([ended], [dp("dp-1", "live", ["s"], 5, "production")]).get("s")).toMatchObject({ words: "Landed" });
     expect(sessionShips([ended], [dp("dp-2", "live", ["s"], 20, "production")]).get("s")).toMatchObject({ words: "Live · production", deploy: "dp-2" });
   });
+});
+
+test("a session's run of a flow that carries no change (an eval, a deploy) is not its ship", () => {
+  const change = run("r1", "s", { status: "completed", created_at: 1, merge: { sha: "a".repeat(40) } });
+  const evalRun = run("r2", "s", { status: "running", created_at: 2, takes_change: false, current_node_id: "judge" });
+  expect(sessionShips([change, evalRun], []).get("s")).toMatchObject({ words: "Landed", run: "r1" });
+  expect(landedShas([change, evalRun])).toEqual(["a".repeat(40)]);
 });

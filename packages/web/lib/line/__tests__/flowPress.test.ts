@@ -22,6 +22,15 @@ describe("a Ship press", () => {
     expect(read([{ _id: "x", role: "user", content: addToFlowsMessage("land", "run_1"), timestamp: 10 }])).toBeNull();
   });
 
+  test("its reply is the session's last words before the person's next message, not what it said to that message", () => {
+    const later = { _id: "u2", role: "user", content: "Rename the button to Save", timestamp: 13 };
+    const result = { _id: "tr", role: "user", content: "", tool_results: [{ tool_use_id: "x" }], timestamp: 12 };
+    const msgs = [press(10), said("a1", "I didn't run Change: nothing to take.", 11), result, later, said("a2", "Renamed the button to Save.", 14)];
+    expect(read(msgs)?.reply).toEqual({ id: "a1", text: "I didn't run Change: nothing to take." });
+    // Asked something before it answered the press: no reply to the press yet.
+    expect(read([press(10), later, said("a2", "Renamed the button to Save.", 14)])?.reply).toBeNull();
+  });
+
   test("a long stretch of tool work after it does not lose it", () => {
     const tools = Array.from({ length: 150 }, (_, i) => ({ _id: `t${i}`, role: "assistant", content: "", timestamp: 11 + i }));
     expect(read([press(10), ...tools])?.id).toBe("p10");

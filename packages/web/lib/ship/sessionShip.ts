@@ -15,6 +15,8 @@ export type SessionShip = { words: string; tone: ShipTone; deploy?: string | nul
 type Run = {
   _id: string;
   spawner_conversation_id?: string | null;
+  /** Stamped by the server: the run's flow takes a session's change and lands it. A session's other runs (a deploy, an eval) are not its ship. */
+  takes_change?: boolean;
   status: string;
   current_node_id?: string | null;
   waiting_on_session?: { node_id: string } | null;
@@ -91,14 +93,19 @@ export function runShip(run: Run): SessionShip | null {
 /** How many landed commits one reach subscription asks about: the server answers the same many (deployReach.many). */
 export const LANDED_REACH_MAX = 25;
 
-/** The commits the sessions' newest runs landed and left for a deploy, whose reach their cards read: the newest few, sorted. */
-export function landedShas(runs: ReadonlyArray<Run>): string[] {
+/** Each session's newest change run, by the session that started it. */
+function newestChangeRuns(runs: ReadonlyArray<Run>): Map<string, Run> {
   const newest = new Map<string, Run>();
   for (const r of runs) {
     const id = r.spawner_conversation_id ? String(r.spawner_conversation_id) : null;
-    if (id && (r.created_at ?? 0) > (newest.get(id)?.created_at ?? -1)) newest.set(id, r);
+    if (id && r.takes_change && (r.created_at ?? 0) > (newest.get(id)?.created_at ?? -1)) newest.set(id, r);
   }
-  const landed = [...newest.values()].filter((r) => landedSha(r)).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
+  return newest;
+}
+
+/** The commits the sessions' newest runs landed and left for a deploy, whose reach their cards read: the newest few, sorted. */
+export function landedShas(runs: ReadonlyArray<Run>): string[] {
+  const landed = [...newestChangeRuns(runs).values()].filter((r) => landedSha(r)).sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0));
   return [...new Set(landed.map((r) => landedSha(r)!))].slice(0, LANDED_REACH_MAX).sort();
 }
 
@@ -109,13 +116,7 @@ export function landedShas(runs: ReadonlyArray<Run>): string[] {
  */
 export function sessionShips(runs: ReadonlyArray<Run>, deploys: ReadonlyArray<TeamDeployRow>, reach: Readonly<Record<string, Pick<DeployReach, "state" | "targets">>> = {}): Map<string, SessionShip> {
   const out = new Map<string, SessionShip>();
-  const newestRun = new Map<string, Run>();
-  for (const r of runs) {
-    const id = r.spawner_conversation_id ? String(r.spawner_conversation_id) : null;
-    if (!id) continue;
-    const prev = newestRun.get(id);
-    if (!prev || (r.created_at ?? 0) > (prev.created_at ?? 0)) newestRun.set(id, r);
-  }
+  const newestRun = newestChangeRuns(runs);
   // Each session's newest live deploy and its newest failed one, from the records.
   const live = new Map<string, TeamDeployRow>();
   const failed = new Map<string, TeamDeployRow>();

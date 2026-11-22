@@ -1,6 +1,7 @@
 import { expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { forConversation, forTeam } from "./sessionFlowRuns";
+import { enrichRun } from "./workflow_runs";
 
 // A session's change runs (flows.md FL4): the flows of the pool that take a branch, and a flow the session wrote for
 // its own change, which names no kind but lands the branch through the ship segment. Synthetic data only.
@@ -35,8 +36,15 @@ function world() {
 test("a session's own landing flow counts as its change run beside the pool's; a segment run alone does not", async () => {
   const ctx = world();
   const runs = await (forConversation as any)._handler(ctx, { conversation_id: CONV });
-  expect(runs.map((r: any) => r._id)).toEqual(["run_own", "run_pool"]);
+  expect(runs.map((r: any) => [r._id, r.takes_change])).toEqual([["run_own", true], ["run_pool", true]]);
   // The inbox card reads each session's newest change run: the one its own flow made.
   const team = await (forTeam as any)._handler(ctx, { team_id: TEAM });
   expect(team.map((r: any) => r._id)).toEqual(["run_own"]);
+});
+
+test("every run row says whether it carries a change, whichever feed brought it", async () => {
+  const ctx = world();
+  // The team's run lists feed the same collection as the session's: a segment run there reads as no change.
+  expect((await enrichRun(ctx, await ctx.db.get("run_seg"))).takes_change).toBe(false);
+  expect((await enrichRun(ctx, await ctx.db.get("run_own"))).takes_change).toBe(true);
 });

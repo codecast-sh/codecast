@@ -12,6 +12,7 @@ import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, costParts, isLineRun, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 import { tookPastStart } from "@codecast/shared/contracts/runStart";
+import { sourceTakesSessionChange } from "@codecast/shared/contracts/flowPool";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { canAccessConversation, canAccessTask, canAccessPlan, computeWorkspaceKey, requireAccessiblePlan, requireAccessibleTask, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { patchTask } from "./lib/taskWrite";
@@ -933,7 +934,8 @@ export const listForWorkflow = query({
     // overlays all feeds on one collection, so a plain row from here would
     // strip the sessions the detail query attached. Newest runs first.
     const budget = { reads: 200 };
-    return await Promise.all(runs.map((r) => withAgentSessions(ctx, r, budget)));
+    const takes_change = sourceTakesSessionChange(workflow.source);
+    return await Promise.all(runs.map(async (r) => ({ ...(await withAgentSessions(ctx, r, budget)), takes_change })));
   },
 });
 
@@ -1879,6 +1881,9 @@ export async function enrichRun(ctx: Ctx, run: any, workflows: Map<string, any> 
     plan_short_id: plan?.short_id,
     workflow_name: run.workflow_name ?? workflow?.name,
     workflow_slug: workflow?.slug,
+    // Whether the run carries a session's change (its flow takes a branch and lands it), whichever feed brought the
+    // row: the session's Ship control reads its change runs by this.
+    takes_change: sourceTakesSessionChange(workflow?.source),
     // What a person reads as the flow's name, read from its workflow row; `workflow_name` stays the key.
     workflow_label: workflow?.label,
     current_node_label: node?.label ?? run.node_statuses?.find((n: any) => n.node_id === run.current_node_id)?.label ?? run.current_node_id,

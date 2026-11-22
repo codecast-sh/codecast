@@ -10,10 +10,6 @@ import { stableRefId } from "../store/wakeSig";
 import { isViewersWorkflow } from "../store/lineWorkflowSlice";
 import { useFeederWorkspace } from "./useWorkspaceArgs";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
-import { appPool } from "../lib/line/flowPool";
-import { sourceTakesSessionChange, takesSessionChange } from "@codecast/shared/contracts/flowPool";
-
-const graphTakesBranch = (w: { source?: string | null }) => sourceTakesSessionChange(w?.source);
 
 const api = _api as any;
 
@@ -190,10 +186,6 @@ export function useWorkflow(id: string | null | undefined): any | null | undefin
   return row ?? (ready ? null : undefined);
 }
 
-/** The shipped flows a session's change goes through. A session also starts runs of other flows (a deploy, a line run),
- *  which other feeds bring into the same collection; those are not its Ship. */
-const SHIPPED_SESSION_FLOWS = new Set(appPool().filter((f) => f.kind === "line" && takesSessionChange(f)).flatMap((f) => [f.slug, f.name]));
-
 /** Feeder: the runs a session started for its change (convex sessionFlowRuns), live ones first. */
 export function useSyncSessionFlowRuns(conversationId: string | null | undefined) {
   // entityIdArgs: a session not yet created on the server is a local stub id,
@@ -204,24 +196,12 @@ export function useSyncSessionFlowRuns(conversationId: string | null | undefined
 /** Reader: a session's own flow runs, newest first (undefined while cold and empty). */
 export function useSessionFlowRuns(conversationId: string | null | undefined): any[] | undefined {
   const { ready } = useSyncSessionFlowRuns(conversationId);
-  // A team's own flow counts when its graph in the store says it takes a branch:
-  // the viewer's own flows and those published to the workspace.
-  const { workflows: own } = useWorkflows();
-  const published = useWorkspaceCollection<any>("workflows", workflowSig);
-  const [teamFlows, otherFlows] = useMemo(() => {
-    const takes: string[] = [];
-    const not: string[] = [];
-    for (const w of [...own, ...published]) (graphTakesBranch(w) ? takes : not).push(w.slug, w.name);
-    return [takes.sort().join("|"), not.sort().join("|")];
-  }, [own, published]);
-  const where = useMemo(() => {
-    const ok = new Set([...SHIPPED_SESSION_FLOWS, ...teamFlows.split("|").filter(Boolean)]);
-    // A flow this window holds no graph of (a teammate's session wrote it) is judged by the server, which fed the run
-    // only because its graph takes the change; a flow known not to take it (a segment, a deploy, the line) never is.
-    const known = new Set([...ok, ...appPool().flatMap((f) => [f.slug, f.name]), ...otherFlows.split("|").filter(Boolean)]);
-    const takes = (name: string) => ok.has(name) || (!!name && !known.has(name));
-    return (r: any) => !!conversationId && String(r.spawner_conversation_id ?? "") === conversationId && r.run_kind !== "workflow" && (takes(r.workflow_slug ?? "") || ok.has(r.workflow_name ?? ""));
-  }, [conversationId, teamFlows, otherFlows]);
+  // A session also starts runs of other flows (a deploy, a line run, an eval), which other feeds bring into the same
+  // collection: only a run the server stamped as carrying a change (its flow takes a branch and lands it) is its Ship.
+  const where = useMemo(
+    () => (r: any) => !!conversationId && String(r.spawner_conversation_id ?? "") === conversationId && r.takes_change === true,
+    [conversationId],
+  );
   const rows = useWorkflowRuns(where);
   return rows.length || ready ? rows.slice().sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)) : undefined;
 }
