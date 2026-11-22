@@ -4,6 +4,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { applyFlowEdit, planFlowEdit, type FlowEditRequest } from "./flowEdit.js";
+import { isolateCodecastDirEachTest } from "./test-helpers/codecastDir.js";
+isolateCodecastDirEachTest("cast-flow-edit-");
 import { graphHash, parseWorkflowFile } from "./workflow/parser.js";
 
 const tmp: string[] = [];

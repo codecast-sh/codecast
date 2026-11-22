@@ -14,6 +14,10 @@
  *                                         python heredoc, a redirect, mv, ...)
  *   a Codex patch                         its *** Update/Add/Delete headers
  *
+ * A `cast` command that writes files itself (`cast flow edit`) names none of
+ * them in its call, so it records what it wrote in the session write ledger
+ * (writeLedger.ts), read here beside the transcripts.
+ *
  * A shell command is matched by what it says, not what it did, so a command
  * that both reads one file and writes another credits both; the latest write
  * still decides, and a person or formatter's edit leaves no call at all, so
@@ -30,6 +34,7 @@ import { defaultConfigDir } from "../config/configDir.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
 import { getAllSyncRecords } from "../syncLedger.js";
 import { readLocalConversationMap } from "../localConversationMap.js";
+import { readSessionWrites } from "./writeLedger.js";
 
 export interface SessionEdits {
   sessionId: string;
@@ -302,7 +307,7 @@ function subagentTranscripts(root: string, since: number): Array<{ file: string;
  * transcripts written since `since` are read: a write older than the oldest
  * dirty file cannot be the one that left it dirty.
  */
-export function attributeEdits(root: string, paths: Iterable<string>, opts: { since: number; now?: number }): Attribution {
+export function attributeEdits(root: string, paths: Iterable<string>, opts: { since: number; now?: number; ledger?: string }): Attribution {
   const started = Date.now();
   const now = opts.now ?? started;
   const wanted = new Set(paths);
@@ -346,6 +351,22 @@ export function attributeEdits(root: string, paths: Iterable<string>, opts: { si
       s.transcript = src.file;
       s.lastText = lastAssistantText(src.file, st.size);
     }
+  }
+  // What a cast command wrote for a session (writeLedger.ts), credited like a write its transcript shows.
+  for (const w of readSessionWrites(root, opts.since, opts.ledger)) {
+    if (!wanted.has(w.path)) continue;
+    const conversationId = w.conversation ?? conversationBySession[w.session] ?? null;
+    const key = conversationId ?? w.session;
+    let s = sessions.get(key);
+    if (!s) {
+      const own = sources.find((src) => src.sessionId === w.session && !src.file.includes(`${path.sep}subagents${path.sep}`));
+      let size = 0;
+      try { size = own ? fs.statSync(own.file).size : 0; } catch {}
+      s = { sessionId: w.session, conversationId, client: own?.client ?? "claude", transcript: own?.file ?? "", edits: new Map(), lastText: own && size ? lastAssistantText(own.file, size) : null, lastActivity: w.at, status: readStatus(w.session, now) };
+      sessions.set(key, s);
+    }
+    if ((s.edits.get(w.path) ?? 0) < w.at) s.edits.set(w.path, w.at);
+    if (w.at > s.lastActivity) s.lastActivity = w.at;
   }
   for (const f of Object.keys(byFile)) if (!seenFiles.has(f)) delete byFile[f];
   try { saveCache(cache); } catch {}

@@ -17,6 +17,7 @@ import { graphExtends, graphHash, parseWorkflowFile, resolveFlowSource, validate
 import type { WorkflowGraph } from "./workflow/types.js";
 import { drawnGraphIn } from "./workflow/flowGraphIn.js";
 import { dotQuote } from "./lineGraphEdit.js";
+import { recordSessionWrites } from "./land/writeLedger.js";
 import { dropNodeStmt, findNodeStmt, nodeAttrRaw, nodeStmtIds, upsertNodeAttrs } from "./repoLine.js";
 
 export class FlowEditError extends Error {}
@@ -43,6 +44,8 @@ export interface FlowEditPlan {
   created: boolean;
   /** The edit took the project's flow back to nothing, so the file went (the library's flow runs again). */
   removed: boolean;
+  /** The checkout the edit writes in. */
+  root: string;
 }
 
 const readDisk: ReadFile = (abs) => (fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf8") : null);
@@ -259,11 +262,16 @@ export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, r
     path: flowPathWords(foldFlow([...after.nodes.values()], after.edges)).path,
     created: existing === null && writes.some((w) => w.file === file),
     removed: existing !== null && writes.some((w) => w.file === file && w.content === null),
+    root,
   };
 }
 
-/** Writes a plan's files (a null content deletes the file, and the directories that leaves empty up to `.codecast`). */
-export function applyFlowEdit(plan: FlowEditPlan): void {
+/**
+ * Writes a plan's files (a null content deletes the file, and the directories that leaves empty up to `.codecast`),
+ * and records them as the calling session's writes (land/writeLedger.ts), so `cast flow run` right after takes them
+ * as that session's change.
+ */
+export function applyFlowEdit(plan: FlowEditPlan, opts: { session?: string | null; env?: NodeJS.ProcessEnv; ledger?: string } = {}): void {
   for (const w of plan.writes) {
     if (w.content === null) {
       if (fs.existsSync(w.file)) fs.rmSync(w.file);
@@ -278,4 +286,5 @@ export function applyFlowEdit(plan: FlowEditPlan): void {
     fs.writeFileSync(tmp, w.content);
     fs.renameSync(tmp, w.file);
   }
+  recordSessionWrites(plan.root, plan.writes.map((w) => w.file), { session: opts.session, env: opts.env, file: opts.ledger });
 }

@@ -75,7 +75,7 @@ export function registerFlowEditCommand(flow: Command, deps: FlowDeps): void {
         // The repository names the pipeline the card draws the edit against; a checkout with no GitHub origin has none.
         const repository = (await import("./prCommand.js")).readLocalGitContext(root).repository?.toLowerCase();
         if (repository) plan.edit.repository = repository;
-        if (!opts.dryRun) applyFlowEdit(plan);
+        if (!opts.dryRun) applyFlowEdit(plan, { session: deps.callingSession() });
         if (opts.json) { console.log(JSON.stringify({ ...plan.edit, changed: plan.changed, dry_run: !!opts.dryRun, path: plan.path, diff: plan.diff }, null, 2)); return; }
         if (!plan.changed) { console.log(op === "undo" ? `${plan.edit.file} makes no edit to ${station}; nothing to undo` : `${plan.edit.file} already says this; nothing to change`); return; }
         for (const w of plan.words) console.log(w);
