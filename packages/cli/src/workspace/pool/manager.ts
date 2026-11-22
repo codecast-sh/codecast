@@ -28,10 +28,9 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-  attachBrowserToWorkspace,
   acquireWorkspace,
 } from "../lifecycle.js";
-import { deleteState, readState, writeState } from "../contract.js";
+import { deleteState, readState, stateToWorkspace, writeState } from "../contract.js";
 import {
   POOL_MAX_AGE_MS,
   initPool,
@@ -249,9 +248,10 @@ export async function claimFromPool(
         transitionSlot(s2, ready.slotId, "empty");
         writePoolState(repoRoot, s2);
       }
-      // Attach browser if manifest enables it.
-      const finalWs = await attachBrowserToWorkspace(repoRoot, desiredName);
-      return { workspace: finalWs, fromPool: true, slotId: ready.slotId };
+      // No browser starts on a claim (startWorkspaceBrowser starts one on demand).
+      const claimed = readState(repoRoot, desiredName);
+      if (!claimed) throw new Error(`workspace '${desiredName}' vanished after its pool rename`);
+      return { workspace: stateToWorkspace(claimed), fromPool: true, slotId: ready.slotId };
     } catch (err) {
       // Rename failed — restore slot to stale so it's recycled, and rethrow.
       const s2 = readPoolState(repoRoot);
@@ -274,13 +274,11 @@ export async function claimFromPool(
 // --------------------------------------------------------------------------
 
 /**
- * Pre-warm a single slot. Uses acquireWorkspace with skipBrowser=true so the
- * worktree+setup work happens but Chrome doesn't launch in the pool worktree.
+ * Pre-warm a single slot: the worktree and its setup, without hooks.
  */
 async function warmSlot(repoRoot: string, slotId: string): Promise<void> {
   const slotName = slotId; // we use the slotId as the workspace name
   const result = await acquireWorkspace(repoRoot, slotName, {
-    skipBrowser: true,
     skipHooks: true, // hooks fire on real claim, not on pool pre-warm
     skipPool: true, // avoid infinite recursion: pool warming MUST be fresh
   });
