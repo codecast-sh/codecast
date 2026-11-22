@@ -532,30 +532,53 @@ async function longestSlice(action: () => Promise<void>): Promise<{ longest: num
   return { longest, longTasks };
 }
 
-// A live update of the inbox list (ct-98162): one listInboxSessions payload,
-// the size of the viewer's live set (600 sessions, full rows, freshly decoded
-// as the WebSocket hands it over), through the feeder's own applier into the
-// 5,000-session inbox with the list drawn. Only one drawn row changed.
+// A live update of the inbox list (ct-98162): one listInboxSessions push, the
+// size of the viewer's live set (600 sessions, full rows, freshly decoded as
+// the WebSocket hands it over), through the feeder's own path into the
+// 5,000-session inbox with the list drawn. Only one drawn row changed. The
+// push arrives in the split wire form the subscription sends, to a feeder
+// whose cache cannot vouch for its cold rows, so settleSplitPush downloads the
+// whole list (answered in a task of its own, as the socket delivers it) and
+// rebuilds before the applier runs: the path that froze the page.
 async function setupInboxUpdate(): Promise<Bench> {
   const { applyInboxListPayload } = await import("../hooks/useLiveInboxSessions");
+  const { settleSplitPush } = await import("../hooks/useSplitQuery");
+  const { splitRows } = await import("@codecast/shared/contracts/inboxSplit");
+  const { makeFunctionReference } = await import("convex/server");
   const { show } = await inboxPanel();
   await show();
   const target = host.querySelector("[data-session-id]")!.getAttribute("data-session-id")!;
   const ids = Object.keys(useInboxStore.getState().sessions).slice(0, LIVE_SET);
   if (!ids.includes(target)) ids.push(target);
-  // The live set the store already knows, so a payload moves only rows.
-  await act(async () => { applyInboxListPayload(structuredClone(ids.map((id) => useInboxStore.getState().sessions[id]))); });
+  // A server row carries far more than the drawn fields: the 3.5 MB list of
+  // 2026-10-08 was about 6 kB a row. Each row gets that weight here, once, so
+  // the store knows the live set and a payload moves only the renamed row.
+  const weigh = (row: any) => {
+    const extra: Record<string, unknown> = {};
+    for (let k = 0; k < 150; k++) extra[`server_${k}`] = k % 3 ? `${k}:${row._id}` : { k, at: row.updated_at, tags: ["a", "b", { c: k }] };
+    return { ...row, ...extra };
+  };
+  await act(async () => { applyInboxListPayload(structuredClone(ids.map((id) => weigh(useInboxStore.getState().sessions[id])))); });
   await settle();
   let n = 0;
   return {
     run: async () => {
       n++;
       const rows = useInboxStore.getState().sessions as Record<string, any>;
-      const payload = structuredClone(ids.map((id) => id === target ? { ...rows[id], title: `Renamed ${n}` } : rows[id]));
+      const payload = ids.map((id) => id === target ? { ...rows[id], title: `Renamed ${n}` } : rows[id]);
+      // Split an hour on, when every row's stamps are cold, as most of a real
+      // list is: the cold rows are what the rebuild must hash.
+      const split = splitRows(payload.map((r) => [r._id, r] as [string, any]), now + 60 * 60_000);
+      const push = structuredClone({ split: true, ids: split.ids, hot: split.hot.map(([, r]) => r), cold_hash: split.cold_hash, hidden_count: 0, truncated: false });
+      const whole = structuredClone({ sessions: payload, hidden_count: 0, truncated: false });
+      const download = { query: () => new Promise<any>((resolve) => setTimeout(() => resolve(whole), 0)) };
+      // A query name of its own per run: the feeder's cache starts empty.
+      const query = makeFunctionReference<"query">(`perf:inboxUpdate${n}`);
       let slice = { longest: 0, longTasks: 0 };
       const report = await measure(async () => {
         slice = await longestSlice(async () => {
-          await act(async () => { applyInboxListPayload(payload); });
+          const settled = await settleSplitPush(download, query, {}, "list", push, () => false);
+          await act(async () => { applyInboxListPayload(settled); });
         });
         await settle();
       });
@@ -608,11 +631,22 @@ async function setupHydrate(): Promise<Bench> {
     return Object.keys(s.tasks ?? {}).length >= HYDRATE.tasks && Object.keys(s.docs ?? {}).length >= HYDRATE.docs && Object.keys(s.sessions).length > 0;
   };
   // One hydration before anything is measured, as the window's boot ran
-  // over an empty disk.
+  // over an empty disk. The inbox is drawn behind the dashboard's boot gate
+  // for it, the component that drew the recording's "Loading" status: the
+  // status shows until the cache lands, then the session cards replace it.
+  const { DashboardBootGate } = await import("../components/DashboardLayout");
+  const { SessionListPanel } = await import("../components/GlobalSessionPanel");
+  const loaders = () => host.querySelectorAll('[role="status"][aria-label="Loading"]').length;
   mount();
   clearProtectedInboxMemory();
+  await render(<DashboardBootGate><SessionListPanel activeSessionId={convId(3)} onSessionSelect={() => {}} /></DashboardBootGate>);
+  const bootGate = { loaderBeforeHydration: loaders(), loaderAfterHydration: 0, cardsAfterHydration: 0 };
   rebootPersistence();
   await until(hydrated, "the first hydration");
+  await until(() => cards() > 0, "the inbox to draw over the hydrated cache");
+  bootGate.loaderAfterHydration = loaders();
+  bootGate.cardsAfterHydration = cards();
+  await act(async () => { root.render(null); });
   await new Promise((r) => setTimeout(r, 50));
   return {
     run: async () => {
@@ -633,6 +667,7 @@ async function setupHydrate(): Promise<Bench> {
       report.counts.sessions = Object.keys(s.sessions).length;
       report.counts.tasks = Object.keys(s.tasks).length;
       report.counts.docs = Object.keys(s.docs).length;
+      Object.assign(report.counts, bootGate);
       report.detail.longestSliceMs = [slice.longest.toFixed(1)];
       return report;
     },

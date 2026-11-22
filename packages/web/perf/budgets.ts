@@ -150,7 +150,9 @@ await test("inbox-heartbeat-modern", "in the Modern style a rename that arrives 
 
 // ct-98162. A long task is a stretch over 50 ms with no break for input or
 // paint. The hydration's longest stretch is ~22 ms here and 75-116 ms before
-// it read a page at a time; the list update's is ~5 ms.
+// it read a page at a time. The list update arrives split, and its whole-list
+// download is settled by the feeder: ~30 ms here, 107-145 ms (one long task
+// per run) before the cold rows were hashed a slice at a time.
 await test("inbox-update", "a live update of 600 sessions writes the store once and never blocks the page for a long task", async () => {
   await setup("inbox-update");
   for (const r of await twice()) {
@@ -158,14 +160,17 @@ await test("inbox-update", "a live update of 600 sessions writes the store once 
   }
 });
 
-await test("hydrate", "booting from a cache of 5,000 sessions, 54,000 tasks and 27,000 docs hydrates every row with no long task", async () => {
+await test("hydrate", "booting from a cache of 5,000 sessions, 54,000 tasks and 27,000 docs hydrates every row with no long task, and the inbox replaces the Loading status", async () => {
   await setup("hydrate");
   for (const r of await twice()) {
-    expect(pick(r, ["sessions", "tasks", "docs", "longTasks", "convexQueries"])).toEqual({
+    expect(pick(r, ["sessions", "tasks", "docs", "longTasks", "convexQueries", "loaderBeforeHydration", "loaderAfterHydration", "cardsAfterHydration"])).toEqual({
       // The boot retention pass keeps the live set and the recent sessions
       // (partitionSessionRetention): 1,800 of the 5,000.
       sessions: 1800, tasks: 54_000, docs: 27_000,
       longTasks: 0, convexQueries: 0,
+      // DashboardBootGate's "Loading" status, then the inbox's first window
+      // of cards once the cache is in.
+      loaderBeforeHydration: 1, loaderAfterHydration: 0, cardsAfterHydration: 51,
     });
   }
 });
