@@ -6,6 +6,7 @@ import { CHEAP_MODEL } from "@codecast/shared/contracts/modelOptions";
 import { NO_CAUSE_HISTORY } from "@codecast/shared/contracts/causeHistory";
 import { gateDoc } from "@codecast/shared/contracts/changeCard";
 import { ParkedClock, taskWaiting } from "./parkedClock.js";
+import { HandWatch, handTimeouts } from "./handWatch.js";
 import { diskFullFailReason, requeueAfterDiskFull } from "../diskFull.js";
 import { countingSemaphore } from "../semaphore.js";
 import { WorkflowEdge, WorkflowGraph, WorkflowNode, WorkflowRunState, NodeOutcome } from "./types";
@@ -281,11 +282,14 @@ async function executeCliAgent(
     });
   }
 
-  const timeout = handTimeoutMs(node, options);
   const startMs = Date.now();
   const pollInterval = 10_000;
+  // Its wait leaves out sleep and ends on quiet, as a session hand's does (handWatch.ts); its output is its work.
+  const watch = new HandWatch(new ParkedClock(startMs), handTimeouts(node, options));
+  let lastTail = "";
+  let over: string | null = null;
 
-  while (Date.now() - startMs < timeout) {
+  while (!(over = watch.over())) {
     await new Promise(r => setTimeout(r, pollInterval));
 
     if (!runtime.isAlive(handle)) {
@@ -323,13 +327,16 @@ async function executeCliAgent(
       return "success";
     }
 
+    const tail = runtime.getOutput(handle, 20).text;
+    if (tail !== lastTail) watch.active();
+    lastTail = tail;
     const elapsed = Math.round((Date.now() - startMs) / 60_000);
     if (elapsed > 0 && elapsed % 5 === 0) {
       console.log(`${c.dim}  ... ${elapsed}m elapsed${c.reset}`);
     }
   }
 
-  console.log(`  ${c.red}timeout${c.reset} after ${Math.round(timeout / 60_000)}m`);
+  console.log(`  ${c.red}timeout${c.reset}: the agent ${over}`);
   runtime.kill(handle);
   return "failure";
 }
@@ -650,7 +657,6 @@ async function waitOnStation(
     await reportProgress(options, { current_node_id: node.id, node_id: node.id, node_status: "running", session_id: shortId });
   }
 
-  const timeout = handTimeoutMs(node, options);
   const startMs = Date.now();
   // The runner it took over from was waiting on a live hand, so a reattached
   // hand that reads not live has gone dark (below), not answered.
@@ -683,9 +689,13 @@ async function waitOnStation(
   let subjectQuiet = 0;
   // The transcript length at which the hand's park flag was last re-stamped (/cli/accounts/restamp-park).
   let restampedAt = -1;
-  // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts).
+  // The node's clock leaves out time the hand spends parked on its task's wait or a usage limit (parkedClock.ts), and
+  // the wait ends when the hand shows no work for a while, not when it has worked long (handWatch.ts).
   const clock = new ParkedClock(startMs);
-  while (clock.elapsed() < timeout) {
+  const watch = new HandWatch(clock, handTimeouts(node, options));
+  let lastCount = -1;
+  let over: string | null = null;
+  while (!(over = watch.over())) {
     await new Promise(r => setTimeout(r, handPollIntervalMs(Date.now() - startMs, options.pollIntervalMs)));
     clock.beginPoll();
     if (answersByHandoff && await handedOff(options)) {
@@ -706,6 +716,9 @@ async function waitOnStation(
     }
     const state: string = row.work_state || "idle";
     if (row.is_live) wasLive = true;
+    // A transcript that moved, or a working status, is work: the hand's quiet window starts again.
+    if (state === "working" || AGENT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) !== lastCount) watch.active();
+    lastCount = row.message_count ?? 0;
     // A hand whose start failed (its machine refused it, or a cloud host's
     // preparation failed) reads idle, never live and never killed: nothing
     // would settle it before the node's timeout, three hours at prove. Once
@@ -778,7 +791,7 @@ async function waitOnStation(
     // status, or a transcript that grew since the last read) the run waits; past the brief and its reply, the turn
     // has ended once two reads in a row find it quiet, or once it pins after the brief (below).
     if (subject && !row.is_killed) {
-      if (state === "working" || grew || SUBJECT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) < subject.sentAtCount + 2) {
+      if (state === "working" || grew || AGENT_AT_WORK.has(row.agent_status ?? "") || (row.message_count ?? 0) < subject.sentAtCount + 2) {
         subjectQuiet = 0;
         continue;
       }
@@ -891,15 +904,17 @@ async function waitOnStation(
     return "success";
   }
 
-  console.log(`  ${c.red}timeout${c.reset} after ${Math.round(timeout / 60_000)}m — killing ${shortId}`);
-  context["last_error"] = `hand ${shortId} killed after ${Math.round(timeout / 60_000)}m at ${node.id}`;
+  console.log(`  ${c.red}timeout${c.reset}: ${shortId} ${over} — killing it`);
+  // The words before the colon are the engine's stop line the web reads (runReport.ts TIMED_OUT).
+  context["last_error"] = `hand ${shortId} killed after ${Math.round(clock.elapsed() / 60_000)}m at ${node.id}: it ${over}`;
   context["killed_hand"] = shortId;
   context["station_dead"] = node.id;
   return "failure";
 }
 
-// Agent statuses of a subject inside a turn: whatever its row's work_state says, it has not answered yet.
-const SUBJECT_AT_WORK = new Set(["working", "thinking", "compacting"]);
+// Agent statuses of a hand inside a turn: whatever its row's work_state says, it is at work (a subject has not
+// answered yet, and no hand is quiet).
+const AGENT_AT_WORK = new Set(["working", "thinking", "compacting"]);
 
 // How long a hand asked for its missing handoff has to start answering before
 // a finished reading counts again: the message lands at its next turn.
@@ -1544,14 +1559,6 @@ export function stationTitle(node: Pick<WorkflowNode, "id" | "label">, context: 
   const subject = context["task_id"] || context["plan_id"] || context["goal"];
   const label = node.label || node.id;
   return subject ? `${label} · ${subject.slice(0, 80)}` : label;
-}
-
-// How long a hand may run before the runner kills it: the node's own
-// `timeout` (seconds) when the graph sets one, since a station that replays
-// evals under load needs more than one that writes criteria, else the run's
-// --agent-timeout, else 30 minutes.
-export function handTimeoutMs(node: Pick<WorkflowNode, "timeout">, options: Pick<RunOptions, "agentTimeout">): number {
-  return node.timeout ? node.timeout * 1000 : options.agentTimeout || 1800_000;
 }
 
 // The failure path for a bound task (the-line.md L4). A hand that handed off
