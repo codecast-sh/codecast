@@ -1,5 +1,6 @@
 import '@/lib/polyfills';
 import { ComposeHost } from '@/components/session/NewSessionSheet';
+import { useShareInbox } from '@/lib/shareInbox';
 import { UndoBarHost } from '@/components/UndoBar';
 import { PopupHost } from '@/components/PopupHost';
 import { SelectTextHost } from '@/components/SelectTextSheet';
@@ -390,6 +391,7 @@ function RealAuthGate({ children }: { children: React.ReactNode }) {
 
   usePushNotifications();
   useLiveActivity();
+  useShareInbox(isAuthenticated);
 
   // The PushKit token often arrives before sign-in on a cold start; publish
   // it once auth is up so invites route through APNs VoIP.

@@ -76,6 +76,16 @@ export function flowGraphAttr(source: string | null | undefined, key: string): s
   return m ? (m[1] ?? m[2] ?? null) : null;
 }
 
+/**
+ * Whether a flow's source takes a session's change, for a reader holding no parser: it takes a branch and is either a
+ * whole flow (`kind="line"`) or lands the branch itself (a station runs the ship segment), as a flow a session writes
+ * for its own change does.
+ */
+export function sourceTakesSessionChange(source: string | null | undefined): boolean {
+  if (!/\bbranch\b/.test(flowGraphAttr(source, "takes") ?? "")) return false;
+  return flowGraphAttr(source, "kind") === "line" || /\bflow\s*=\s*"?ship(?:"|[\s,;\]])/.test(source ?? "");
+}
+
 /** The nodes a source fills with steps it writes in place (`subgraph <node> { ... }`), for a reader holding no parser. */
 export function flowFills(source: string | null | undefined): string[] {
   return [...new Set([...(source ?? "").matchAll(/(?:^|[\s{;])subgraph\s+(?:"([^"]+)"|([\w-]+))\s*\{/g)].map((m) => m[1] ?? m[2]))];
@@ -214,6 +224,22 @@ export function flowPathWords(f: Pick<FoldedFlow, "stations">): { path: string; 
   }
   const counted = f.stations.filter((s) => s.kind !== "join");
   return { path: words.join(" → "), side: counted.length - main.length };
+}
+
+/** The flow a workspace's sessions ship through when it has set none. */
+export const CHANGE_FLOW_SLUG = "change";
+
+/** Can a session's own change run through it? A flow that takes a branch can (the run freezes the session's edits onto one). */
+export const takesSessionChange = (flow: { takes: ReadonlyArray<string> }) => flow.takes.includes("branch");
+
+/** The workspace's default flow out of a pool (flows.md FL4): the slug it set when that flow is in the pool and takes a
+ *  session's change, else Change, else the first that does. The web's pickers and a nameless `cast flow run` both read it. */
+export function defaultFlowOf<F extends { slug: string; takes: ReadonlyArray<string> }>(pool: ReadonlyArray<F>, workspaceSlug: string | null | undefined): F | null {
+  const ok = (slug: string | null | undefined) => {
+    const f = slug ? pool.find((p) => p.slug === slug) : undefined;
+    return f && takesSessionChange(f) ? f : null;
+  };
+  return ok(workspaceSlug) ?? ok(CHANGE_FLOW_SLUG) ?? pool.find(takesSessionChange) ?? null;
 }
 
 /**

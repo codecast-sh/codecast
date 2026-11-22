@@ -10,8 +10,9 @@ export const WORKFLOW_SNIPPET = `
 Workflows are DOT graphs with loops, conditions and approval gates, bound to a task or plan (\`cast workflow run flow.cast --task ct-N\`). Flows are the team's library of them: whole flows that take a change to done, and segments (check, review, eval, decide, ship). Run a library flow that fits; extend one and fill its slots when a step needs this change's own work; write a whole flow only when nothing fits.
 
 \`\`\`bash
-cast flow ls                        # the library
-cast flow run change                # this session's own edits through a library flow
+cast flow ls                        # the library, the workspace's default flow marked
+cast flow run                       # this session's own edits through the default flow
+cast flow run change                # or through a library flow by name
 cast flow run - <<'EOF' … EOF       # a flow written here (extends a backbone, or whole)
 \`\`\`
 
@@ -58,7 +59,7 @@ A node with \`flow="<slug>"\` runs that segment in place: its steps join the gra
 \`\`\`bash
 cast flow show <flow>               # its steps, who does each, where each sends the work, and its slots
 cast flow validate <flow|file|->    # read it with its segments and slots expanded and name what is missing
-cast flow run <flow> --task ct-N    # a task's change (or --branch, --pr); default: this session's own edits
+cast flow run [flow] --task ct-N    # a task's change (or --branch, --pr); no flow: the workspace's default; no change: this session's own edits
 cast flow import <wf_id>            # a Workflow-tool run becomes a flow: your draft until you make it general, then cast flow publish
 cast flow publish <flow>            # a repo flow into the team's pool, on the Line page's Flows view
 \`\`\`

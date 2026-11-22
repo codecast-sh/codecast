@@ -17,7 +17,7 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { type AppFlow } from '@codecast/web/lib/line/flowPool';
 import { flowDiagram, routeTail, runReached, stepStates, type DiagramStep, type SideRoute, type StepState } from '@codecast/web/lib/line/flowDiagram';
 import { flowRunState, type FlowRunTone } from '@codecast/web/lib/line/flowFence';
-import { takesSessionChange } from '@codecast/web/lib/line/flowPool';
+import { takesSessionChange } from '@codecast/shared/contracts/flowPool';
 import { journeyOf, WHO_WORDS, type JourneyNow, type StageState } from '@codecast/web/lib/ship/journey';
 import type { FlowEdit } from '@codecast/shared/contracts/flowEdit';
 import { asGitDiff, editDrawing, editLines, editRun, liveDeploy, type EditMark } from '@codecast/web/lib/line/flowEditCard';
