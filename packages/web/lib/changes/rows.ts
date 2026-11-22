@@ -2,6 +2,8 @@
 // each change's row, the one action a person can take on it, and the groups by who acts next.
 import type { ChangeTone, Lifecycle } from "./lifecycle";
 import type { RepoChange } from "../../hooks/useRepoChanges";
+import type { ChangeOwner } from "./assemble";
+import { isMineCommit } from "../deploys/targets";
 
 /** Where a chip and its journey lead, and the one thing a person can do now. */
 export type ChangeLinks = {
@@ -22,7 +24,25 @@ export type ChangeRow = {
   updated_at?: number | null;
   /** A landed change's `owner/repo#N` or `owner/repo@sha`: its row feeds the reach the grid reads back. */
   reach_ref?: string | null;
+  /** What a link can name it by: a branch, a pull request, its commits. */
+  refs?: { branch: string | null; pr: number | null; shas: ReadonlyArray<string> };
+  owner?: ChangeOwner | null;
 };
+
+/** The person reading: who "mine" means. */
+export type ChangeViewer = { userId: string | null; login: string | null; name: string | null; devices: ReadonlySet<string> };
+
+/** Whether a change is the viewer's, by the one fact that names its owner (assemble's ChangeOwner). */
+export function isMineChange(r: Pick<ChangeRow, "owner">, me: ChangeViewer): boolean {
+  const o = r.owner;
+  if (!o) return false;
+  switch (o.by) {
+    case "pr": return !!me.login && o.login.toLowerCase() === me.login.toLowerCase();
+    case "session": return !!me.userId && o.users.includes(me.userId);
+    case "device": return o.devices.some((d) => me.devices.has(d));
+    case "commit": return isMineCommit(o.author, me);
+  }
+}
 
 /** The one thing a person can do about a change now, as a link to where it is done. */
 export function changeAction(c: RepoChange): ChangeLinks["action"] {
@@ -53,12 +73,17 @@ export function changeRowOf(c: RepoChange): ChangeRow {
     where: c.where,
     updated_at: c.updated_at,
     reach_ref: c.reach_ref,
+    refs: c.refs,
+    owner: c.owner,
   };
 }
 
+export type ChangeGroupId = "you" | "moving" | "waiting" | "live" | "parked" | "closed";
+
 /** Who acts next, in the order a reader should look. Quiet and Closed start folded. */
-const GROUPS: ReadonlyArray<{ id: string; label: string; tone: ChangeTone; tones: ReadonlyArray<ChangeTone>; folded?: true }> = [
-  { id: "you", label: "Needs you", tone: "blue", tones: ["red", "blue"] },
+const GROUPS: ReadonlyArray<{ id: ChangeGroupId; label: string; tone: ChangeTone; tones: ReadonlyArray<ChangeTone>; folded?: true }> = [
+  // Anyone's failure or turn; it is the viewer's own only once the grid shows only theirs (groupLabel).
+  { id: "you", label: "Needs attention", tone: "blue", tones: ["red", "blue"] },
   { id: "moving", label: "Moving", tone: "yellow", tones: ["yellow", "orange"] },
   { id: "waiting", label: "Waiting", tone: "muted", tones: ["muted"] },
   { id: "live", label: "Live", tone: "green", tones: ["green"] },
@@ -96,6 +121,28 @@ export function isParked(r: ChangeRow, now: number): boolean {
   // A person's turn and a failure wait on someone: their age is the reason to look, never a reason to fold them away.
   if (r.reach_ref || n.state === "active" || n.state === "stopped" || n.tone === "blue" || n.tone === "red") return false;
   return !!n.parked || !r.updated_at || now - r.updated_at > PARKED_AFTER_MS;
+}
+
+/** A group's name: the failures and turns read "Needs you" once the grid holds only the viewer's changes. */
+export const groupLabel = (g: { id: ChangeGroupId; label: string }, mine: boolean) => (g.id === "you" && mine ? "Needs you" : g.label);
+
+/** The groups a reader can narrow the grid to, by clicking the group's name. */
+export const PICKABLE_GROUPS: ReadonlyArray<ChangeGroupId> = ["you", "moving", "waiting"];
+
+/** The group a change falls in at `now` (groupChanges' rule for one row). */
+export function groupOf(r: ChangeRow, now: number): ChangeGroupId | null {
+  if (isParked(r, now)) return "parked";
+  const tone = groupTone(r.lifecycle);
+  return GROUPS.find((g) => g.id !== "parked" && g.tones.includes(tone))?.id ?? null;
+}
+
+/**
+ * The rows a filtered grid draws: the viewer's own (`mine`), in one group (`group`). A row `keep` names (the one a link
+ * points at) is drawn whatever the filter says, so a link never opens on a row the filter hid.
+ */
+export function filterChanges(rows: ReadonlyArray<ChangeRow>, f: { mine: boolean; group: ChangeGroupId | null }, me: ChangeViewer, now: number, keep?: (r: ChangeRow) => boolean): ChangeRow[] {
+  if (!f.mine && !f.group) return [...rows];
+  return rows.filter((r) => keep?.(r) || ((!f.mine || isMineChange(r, me)) && (!f.group || groupOf(r, now) === f.group)));
 }
 
 export function groupChanges(rows: ReadonlyArray<ChangeRow>, now: number) {
