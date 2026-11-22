@@ -33,7 +33,7 @@ import { frozenChangeContext } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { failureExcerpt, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, type Subject } from "./subjectStation.js";
 import { lineRunsRoot } from "./runDirs.js";
-import { restoreRunTree } from "./runWorktree.js";
+import { restoreRunTree, stopRunBrowser } from "./runWorktree.js";
 
 function resolveNextNode(
   graph: WorkflowGraph,
@@ -1822,6 +1822,8 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
     console.log(`\n${c.bold}${c.yellow}━━━ The run is over on the server (${err.message}): this runner stops ━━━${c.reset}`);
     return "failed";
   } finally {
+    // A run that ended mid-station (on the server, or by a throw) leaves no browser behind either.
+    if (!options.dryRun) await stopRunBrowser(cwd, initialContext);
     claim?.release();
   }
 }
@@ -2146,6 +2148,8 @@ async function runNodeLoop(
     } else {
       outcome = "success";
     }
+    // A browser the station started ends with it, so a run waiting at a gate, on CI or at Go live holds none (ct-98941).
+    if (!options.dryRun) await stopRunBrowser(cwd, state.context);
     // A person's answer is the next attempt: a Revise sent back to a build that spent its visits is carried out (Oct 26).
     if (current.type === "human" && outcome !== "failure" && !options.dryRun && !state.context["human.gate.no_card"]) clearVisits(state.visitCounts, state.context);
     // "No decision of yours stands" is news for the one visit the gate sent back. Left set, every later visit (a card
