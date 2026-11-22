@@ -5928,7 +5928,7 @@ program
     "  cast config set subagents.per_session 6   # workers one session runs at once (default 0: no limit)\n" +
     "  cast config set subagents.per_machine 30  # workers this machine runs at once (default 24)\n" +
     "  cast config set check.reserve_gb 24       # memory typecheck watchers leave for everything else (default 8 GB or 20% of RAM, whichever is more)\n" +
-    "  cast config set check.per_machine 8       # at most this many typecheck watchers (default 16; one per 12 GB always run)\n" +
+    "  cast config set check.per_machine 8       # at most this many typecheck watchers (default 16; fewer when memory is short)\n" +
     "  cast config set interactive_jobs.per_machine 4  # commands run as Interactive jobs at once (default 8)"
   )
   .argument("[key]", `Configuration key (${CONFIG_ALL_KEYS.join(", ")}); "set" or "get" before it is optional`)

@@ -175,9 +175,14 @@ A session's own edits in a shared checkout are frozen the way `cast ship
 checkout` freezes them (ship-checkout.md, `freezeAndAttribute`): every changed
 file the session wrote since that file's last commit becomes one commit on
 `codecast/<flow>-<task>`, and nothing in the shared tree, its index or HEAD
-moves. Attribution is per file, so a file another session also wrote carries
-that session's lines too; the run includes it and names the other session
-rather than leave out part of the change. Credential files stay out. The
+moves. Attribution is per file, so a file another session also wrote holds
+both sessions' lines. The freeze takes only this session's lines from it when
+they can be cut out: replaying the session's Edit and MultiEdit calls onto the
+committed file gives a version whose change the frozen file holds whole, and
+nothing else (a Write, a shell command) wrote the file for the session
+(`workflow/ownLines.ts`). Otherwise the run includes the whole file and names
+the other session rather than leave out part of the change. Credential files
+stay out. The
 worktree is the one the run's isolated stations would make (`cast ws acquire`,
 same name), and `$run_dir/change.json` records the change; the runner reads it
 before the first station (`frozenChangeContext`), so `$branch` and `$worktree`

@@ -11902,7 +11902,7 @@
         "config"
       ],
       "aliases": [],
-      "summary": "View or modify configuration settings\n\nExamples:\n  cast config                    # View all configuration\n  cast config excluded_paths     # View specific setting\n  cast config excluded_paths \"**/node_modules/**\"  # Set value\n  cast config set subagents.per_session 6   # workers one session runs at once (default 0: no limit)\n  cast config set subagents.per_machine 30  # workers this machine runs at once (default 24)\n  cast config set check.per_machine 8       # typecheck watchers this machine keeps (default: one per 12 GB of RAM)\n  cast config set interactive_jobs.per_machine 4  # commands run as Interactive jobs at once (default 8)",
+      "summary": "View or modify configuration settings\n\nExamples:\n  cast config                    # View all configuration\n  cast config excluded_paths     # View specific setting\n  cast config excluded_paths \"**/node_modules/**\"  # Set value\n  cast config set subagents.per_session 6   # workers one session runs at once (default 0: no limit)\n  cast config set subagents.per_machine 30  # workers this machine runs at once (default 24)\n  cast config set check.per_machine 8       # at most this many typecheck watchers (default 16; fewer when memory is short)\n  cast config set interactive_jobs.per_machine 4  # commands run as Interactive jobs at once (default 8)",
       "usage": "cast config [options] [key] [value]",
       "flags": [
         {
