@@ -20,6 +20,7 @@ import { recordCacheEvent } from "./cacheEvents";
 import { createCacheOwnership } from "./cacheOwnership";
 import { deleteDatabaseWithTimeout, readV2LegacyOutbox } from "./idbV2Salvage";
 import { connectLivenessLane, flushLivenessWrites, holdLiveMeta, holdLivenessRows, holdLivenessSyncMeta, resetLivenessLane } from "./idbLivenessLane";
+import { retryOutboxPut } from "./outboxPutRetry";
 export { flushLivenessWrites, LIVENESS_FLUSH_MS } from "./idbLivenessLane";
 
 export type OutboxEntry = {
@@ -767,29 +768,7 @@ export function enqueueDispatch(entry: OutboxEntry): Promise<void> {
   if (!persistenceOwned() || DOCS_SHOTS) return Promise.resolve();
   // The engine hands over the args as the caller passed them; a tab address in them is stored in its safe form (lib/tabSafePath).
   const row = { ...entry, args: storableActionArgs(entry.action, entry.args) };
-  return putOutboxRow(row, OUTBOX_TIMEOUT_RETRIES);
-}
-
-// Chrome aborts a write with "TimeoutError: Transaction timed out due to
-// inactivity" when the page stalls; the same put succeeds a moment later
-// (ct-75824). Retry only that error, a bounded number of times, so a wedged
-// IndexedDB still rejects and the middleware's watchdog still sees it.
-const OUTBOX_TIMEOUT_RETRIES = 2;
-const OUTBOX_RETRY_DELAY_MS = 50;
-
-function isTransientIdbTimeout(e: unknown): boolean {
-  const err = e as { name?: string; inner?: { name?: string } } | null;
-  return err?.name === "TimeoutError" || err?.inner?.name === "TimeoutError";
-}
-
-function putOutboxRow(row: OutboxEntry, retriesLeft: number): Promise<void> {
-  return db.dispatchOutbox.put(row).then(
-    () => {},
-    (e) => {
-      if (retriesLeft <= 0 || !isTransientIdbTimeout(e)) throw e;
-      return new Promise<void>((r) => setTimeout(r, OUTBOX_RETRY_DELAY_MS)).then(() => putOutboxRow(row, retriesLeft - 1));
-    },
-  );
+  return retryOutboxPut(() => db.dispatchOutbox.put(row));
 }
 
 export function removeDispatch(id: string): Promise<void> {

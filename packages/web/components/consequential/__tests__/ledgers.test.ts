@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "bun:test";
 import * as L from "../ledgers";
+import { prMergeLedger } from "../prLedgers";
 import { ledgerLines, roleOnlineLedger } from "../roleOnline";
 import { assertGlance } from "./glance";
 
@@ -19,7 +20,7 @@ test("every ledger reads at a glance: no sentence, no long value", () => {
     L.shareInFullLedger({ team: "Union", others: 4, sees: "summaries" }),
     L.startAgainLedger({ problem: "Cold sends", project: "Broker Outreach", branch: true, cost, about: "20 min" }),
     L.startTheseAgainLedger({ cause: "Tests time out", count: 3, projects: ["A"], cost }),
-    L.prMergeLedger({ title: "Fix login", number: 52, base: "main", head: "fix", method: "Squash and merge", deleteBranch: true, files: 5, additions: 143, deletions: 6, checks: "failure" }),
+    prMergeLedger({ title: "Fix login", number: 52, base: "main", head: "fix", method: "Squash and merge", deleteBranch: true, files: 5, additions: 143, deletions: 6, checks: "failure" }),
     L.agentFullAccessLedger({ agent: "Codex", label: "Full access", from: "Default", sandbox: false }),
     L.featuresAllLedger({ group: "Browser", machine: "MacBook", names: ["Browser", "Computer"] }),
     L.routineActivateLedger({ title: "Ads daily", every: "1d", applies: true, cost }),
@@ -31,10 +32,10 @@ test("every ledger reads at a glance: no sentence, no long value", () => {
 });
 
 test("failing checks are the loudest thing on a merge, and the button says it merges anyway", () => {
-  const l = L.prMergeLedger({ title: "Fix login", number: 52, base: "main", method: "Squash and merge", deleteBranch: true, checks: "failure" });
+  const l = prMergeLedger({ title: "Fix login", number: 52, base: "main", method: "Squash and merge", deleteBranch: true, checks: "failure" });
   assert.equal(l.alert, "Checks failing");
   assert.equal(l.confirm, "Merge anyway");
-  assert.equal(L.prMergeLedger({ title: "x", number: 1, base: "main", method: "m", deleteBranch: false, checks: "success" }).alert, undefined);
+  assert.equal(prMergeLedger({ title: "x", number: 1, base: "main", method: "m", deleteBranch: false, checks: "success" }).alert, undefined);
 });
 
 test("a role's review splits what it decides from what stays with you", () => {

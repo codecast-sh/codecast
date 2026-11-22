@@ -27,7 +27,7 @@ import { useSyncCollection } from "./useSyncCollection";
 import { isConvexId } from "../lib/entityLinks";
 import { commentsFromReviewOn } from "../lib/commentSource";
 import { ingestTaskDetail } from "./useSyncTasks";
-import { withPageCommentStubs } from "../store/chatSlice";
+import { withPageCommentStubs } from "../store/pageCommentStubs";
 import { questionCards } from "../lib/threadCards";
 import { GLOBAL_THREAD_KEY, fileThreadKey, parseCommentThreadRootKey, webThreadKeyFromAnchor, type Comment } from "../lib/commentThread";
 import { useChatMembers, useChatRail, useMessageViews } from "./useChatSync";

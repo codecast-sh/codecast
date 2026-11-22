@@ -26,7 +26,7 @@ import { pageShareUrl } from '@codecast/shared/entities';
 import { pageEmbedUrl, pageServingOrigin } from '@codecast/shared/contracts';
 import { mobileRelativeTime } from '@codecast/shared/render/mobileSessionStyle';
 import { useInboxStore, useTrackedStore } from '@codecast/web/store/inboxStore';
-import { newPageCommentClientId, withPageCommentStubs } from '@codecast/web/store/chatSlice';
+import { newPageCommentClientId, withPageCommentStubs } from '@codecast/web/store/pageCommentStubs';
 import type { PageCommentRow, PageThreadRow } from '@codecast/web/store/threadTypes';
 import { pageGateKeys, usePageEmbedQuery, type PageInfo } from '@codecast/web/hooks/pageEmbedQuery';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';

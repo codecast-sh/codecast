@@ -1554,27 +1554,6 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
 /** Spread into SYNC_REGISTRY. Every collection is a delta overlay so one
  *  channel's page never prunes another's, and the two collections with an
  *  optimistic create carry the altKey that supersedes their stub. */
-/** Client id for an optimistic page comment (the server dedupes on it). */
-/** A push of pageThreads rows with this window's unsent reply stubs carried
- *  forward: a push racing the server's write would otherwise clobber the reply
- *  for a beat. A stub retires when the echoed row carries its client_id, or
- *  after a minute (the send failed or the outbox is retrying). */
-export function withPageCommentStubs(pages: PageThreadRow[], local: Record<string, PageThreadRow | undefined>): PageThreadRow[] {
-  return pages.map((p) => {
-    const prev = local[String(p._id)];
-    if (!prev) return p;
-    const echoed = new Set((p.comments ?? []).map((c) => c.client_id).filter(Boolean));
-    const stubs = (prev.comments ?? []).filter(
-      (c) => c._id.startsWith("pagecmtstub-") && !echoed.has(c.client_id) && c.created_at > Date.now() - 60_000,
-    );
-    return stubs.length ? { ...p, comments: [...(p.comments ?? []), ...stubs] } : p;
-  });
-}
-
-export function newPageCommentClientId(): string {
-  return `pagecmt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 /** A delta table's exclude tombstone never clears on its own (absence is not
  *  deletion there), so a room retired locally (retireChannelRows) would stay
  *  hidden even after the server sends it again. Here the server's word wins: a

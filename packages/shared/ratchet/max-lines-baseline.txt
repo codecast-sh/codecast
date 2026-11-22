@@ -217,7 +217,7 @@ packages/web/components/conversation/sessionChrome.tsx 950
 packages/web/components/conversation/sessionControls.tsx
 packages/web/components/decisions/ChangeCardView.tsx 1250
 packages/web/components/faces/FaceRow.tsx 1050
-packages/web/components/faces/__tests__/faceRow.mount.test.tsx 1050
+packages/web/components/faces/__tests__/faceRow.mount.test.tsx 900
 packages/web/components/org/OrgGraph.tsx 850
 packages/web/components/org/OrgNodeCards.tsx 850
 packages/web/components/org/orgLayout.ts 850

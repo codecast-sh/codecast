@@ -117,9 +117,9 @@ describe("a transcript row is one line", () => {
 // never sets a line height of its own.
 describe("a reference on the phone sits in the text line", () => {
   const src = read("../mobile/components/EntityPill.tsx");
-  const pill = src.match(/\n  pill: \{([^}]*)\}/)?.[1] ?? "";
+  const pill = src.match(/\n {2}pill: \{([^}]*)\}/)?.[1] ?? "";
   test("the pill is Text, never a box", () => {
-    expect(src).toMatch(/return \(\n    <RNText\n      style=\{\[styles\.pill/);
+    expect(src).toMatch(/return \(\n {4}<RNText\n {6}style=\{\[styles\.pill/);
   });
   test("its style sets no line height or height", () => {
     expect(pill).toContain("fontSize: 11");

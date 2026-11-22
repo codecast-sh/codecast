@@ -1,7 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { CornerDownRight, ExternalLink } from "lucide-react";
 import { useInboxStore } from "../../../store/inboxStore";
-import { newPageCommentClientId } from "../../../store/chatSlice";
+import { newPageCommentClientId } from "../../../store/pageCommentStubs";
 import type { PageCommentRow } from "../../../store/threadTypes";
 import { relTimeShort } from "../../../lib/utils";
 import type { ThreadCardModel } from "../../../lib/threadCards";

@@ -33,7 +33,7 @@ import { KeyCap, MenuKeyCaps } from "../KeyboardShortcutsHelp";
 import { formatAcceleratorParts, withShortcut } from "../../shortcuts";
 import { ConfirmButton } from "../integrations/parts";
 import { SwitchReview } from "../consequential/ConsequentialSwitch";
-import { prAutoMergeLedger, prMergeLedger, prUpdateBranchLedger } from "../consequential/ledgers";
+import { prAutoMergeLedger, prMergeLedger, prUpdateBranchLedger } from "../consequential/prLedgers";
 import { CodeMenuItem, CodeShareItems } from "../menus/CodeShareItems";
 import { copyText } from "../../lib/copyText";
 import { sharePageUrl } from "../../lib/utils";
