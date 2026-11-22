@@ -119,8 +119,8 @@ function bundleMajor(binary: string): number {
 }
 
 /**
- * The Chrome codecast launches for itself without a window (a workspace's, a
- * publish thumbnail's, a headless `cast browser`). On macOS every process
+ * The Chrome codecast launches for itself without a window and with a fresh
+ * profile (a workspace's, a publish thumbnail's). On macOS every process
  * started from Google Chrome.app registers with LaunchServices as
  * com.google.Chrome, headless or not, and macOS hands a link the human clicks
  * in another app to any running instance: with workspace Chromes up, "Open
@@ -131,16 +131,18 @@ function bundleMajor(binary: string): number {
  * background download of the current stable one whenever none is installed or
  * it is a major version behind the human's Chrome; until the first download
  * lands, the human's Chrome is used and stderr says so. An explicit
- * CODECAST_CHROMIUM or CHROME_PATH still wins.
+ * CODECAST_CHROMIUM or CHROME_PATH still wins. Not for a headless `cast
+ * browser`: its profile is cloned from the human's Chrome, whose cookies are
+ * sealed with Google Chrome's keychain key, which Chrome for Testing cannot
+ * open, and it empties the cookie store on its first start.
  */
 export function automationChromeBinary(opts: {
-  env?: NodeJS.ProcessEnv;
+  home?: string;
   platform?: NodeJS.Platform;
   install?: (dir: string, platformName: string) => void;
 } = {}): string | null {
-  const env = opts.env ?? process.env;
-  if ((opts.platform ?? process.platform) !== "darwin" || env.CODECAST_CHROMIUM || env.CHROME_PATH) return findChromeBinary();
-  const dir = chromeForTestingDir(env.HOME || os.homedir());
+  if ((opts.platform ?? process.platform) !== "darwin" || process.env.CODECAST_CHROMIUM || process.env.CHROME_PATH) return findChromeBinary();
+  const dir = chromeForTestingDir(opts.home);
   const platformName = process.arch === "arm64" ? "mac-arm64" : "mac-x64";
   let versions: string[] = [];
   try {
@@ -152,14 +154,16 @@ export function automationChromeBinary(opts: {
   const human = findChromeBinary();
   if (!installed || (human && installed.major < bundleMajor(human))) (opts.install ?? installChromeForTesting)(dir, platformName);
   if (installed) return installed.binary;
-  process.stderr.write(`Chrome for Testing is downloading to ${dir}; until it lands, this headless Chrome runs as Google Chrome and can catch links you open.\n`);
+  process.stderr.write(`Until Chrome for Testing is in ${dir}, this headless Chrome runs as Google Chrome and can catch links you open.\n`);
   return human;
 }
 
 /**
  * Download the current stable Chrome for Testing into `dir/<version>` in a
- * detached shell, at most once per CFT_RETRY_MS. The newest two versions are
- * kept, so a Chrome still running from the previous one keeps its files.
+ * detached shell, at most once per CFT_RETRY_MS, and say so on stderr. The
+ * build is unsigned, so HTTPS from Google's own bucket is its only check (as
+ * for `npx @puppeteer/browsers`). The newest two versions are kept, so a
+ * Chrome still running from the previous one keeps its files.
  */
 export function installChromeForTesting(dir: string, platformName: string): void {
   const stamp = path.join(dir, ".attempted");
@@ -187,6 +191,7 @@ ls | grep '^[0-9]' | sort -t. -k1,1nr -k2,2nr -k3,3nr -k4,4nr | tail -n +3 | whi
     const child = spawn("/bin/sh", ["-c", script, "chrome-for-testing", dir, platformName], { stdio: "ignore", detached: true });
     child.on("error", () => {});
     child.unref();
+    process.stderr.write(`Downloading the current Chrome for Testing (about 150 MB) to ${dir} in the background.\n`);
   } catch {}
 }
 
