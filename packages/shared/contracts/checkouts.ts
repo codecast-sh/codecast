@@ -102,7 +102,17 @@ export function checkoutHash(r: unknown): string {
 /** How long a level refuses on the same files before the session that wrote them (else the device's owner) hears of it. */
 export const LEVEL_STUCK_FILE_MS = 30 * 60_000;
 
-const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
+/** A word the shell reads as itself: quoted unless it is plain (a route like `routes/[id].tsx` stays literal). */
+export const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
+
+/**
+ * The client id of a stuck level's ask to one writer: the device, the checkout, the episode (its files and start) and
+ * the writer. The daemon's ask and the pipeline page's use the same one, so the server takes whichever comes first and
+ * answers the other with that row: a writer hears of an episode once, whoever asks. A retry lands once too.
+ */
+export function levelAskClientId(a: { device_id: string; path: string; files: string[]; since: number; conversation: string }): string {
+  return `level-told:${a.conversation}:${checkoutHash([a.device_id, a.path, [...a.files].sort(), a.since])}`;
+}
 
 /** What not to do in a shared checkout, said in every brief about one (the stuck level's ask, the raced level's). */
 export const LEVEL_FORBID = "Never run git pull, merge, rebase, stash, checkout, restore, reset or commit in this shared checkout: other sessions' uncommitted work lives in it.";

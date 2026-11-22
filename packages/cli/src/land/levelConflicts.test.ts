@@ -104,9 +104,14 @@ describe("merge files", () => {
     expect(merged).toContain("mine");
     expect(merged).toContain("theirs");
     expect(merges.get("b.txt")).toEqual({ kind: "upstream-deleted" });
+    // Made against the same upstream already: left as it is, since its writer may be resolving it.
+    fs.writeFileSync(path.join(dir, "a.txt"), "half resolved\n");
+    expect((await writeMerges(shared, dir, ["a.txt"], from, to)).get("a.txt")).toEqual({ kind: "merged", file: path.join(dir, "a.txt") });
+    expect(fs.readFileSync(path.join(dir, "a.txt"), "utf-8")).toBe("half resolved\n");
     fs.rmSync(path.join(shared, "a.txt"));
-    expect(await writeMerges(shared, dir, ["a.txt"], from, to)).toEqual(new Map([["a.txt", { kind: "local-deleted", file: path.join(dir, "a.txt") }]]));
-    expect(fs.readFileSync(path.join(dir, "a.txt"), "utf-8")).toBe(A.replace("one", "theirs"));
+    const elsewhere = path.join(gitDir, "codecast", "deleted-here");
+    expect(await writeMerges(shared, elsewhere, ["a.txt"], from, to)).toEqual(new Map([["a.txt", { kind: "local-deleted", file: path.join(elsewhere, "a.txt") }]]));
+    expect(fs.readFileSync(path.join(elsewhere, "a.txt"), "utf-8")).toBe(A.replace("one", "theirs"));
   }, 300_000);
 
   test("never throws: a path escaping the directory, a directory in the way, a binary file or a symlink each get no merge file", async () => {
@@ -128,6 +133,9 @@ describe("merge files", () => {
 
   test("the ownership refusal is told apart from a transient failure", () => {
     expect(classifySendError(new Error("[Request ID: 1a2b] Server Error\nUncaught Error: Unauthorized: can only send messages to your own conversations\n    at handler"))).toBe("unreachable");
+    for (const permanent of ["Uncaught Error: Conversation not found", "Only the owner can send to a hosted conversation", "Only the server sends machine input to a hosted conversation", "ArgumentValidationError: Value does not match validator."]) {
+      expect(classifySendError(new Error(permanent))).toBe("unreachable");
+    }
     for (const transient of [new Error("fetch failed"), Object.assign(new Error("The operation timed out."), { name: "TimeoutError" }), new Error("[Request ID: 3c4d] Server Error"), new Error("502 Bad Gateway"), "ECONNRESET"]) {
       expect(classifySendError(transient)).toBe("failed");
     }
@@ -159,13 +167,17 @@ describe("a level that raced a writer", () => {
     expect(body).toContain("would revert that change");
     expect(body).toContain(sh(shared, "log", "-1", "--format=%h %s", "origin/main"));
     expect(body).toContain(stale);
+    expect(body).toContain(`git -C ${shared} show ${to.slice(0, 9)}:a.txt`);
     expect(body).toContain("Never run git pull, merge, rebase, stash, checkout, restore, reset or commit in this shared checkout");
     expect(fs.readFileSync(stale, "utf-8")).toContain("<<<<<<< yours");
 
     // The next sweep finds the checkout level and clears the held merges, not the stale copy's.
     fs.mkdirSync(mergeDir(gitDir), { recursive: true });
+    // An earlier daemon's per-path record goes with them.
+    fs.writeFileSync(path.join(gitDir, "codecast", "level-conflicts.json"), "{}");
     await sweepOne(shared, deps(T + 120_000));
     expect(fs.existsSync(mergeDir(gitDir))).toBe(false);
+    expect(fs.existsSync(path.join(gitDir, "codecast", "level-conflicts.json"))).toBe(false);
     expect(fs.existsSync(stale)).toBe(true);
     expect(sent).toHaveLength(1);
     // A day on, the sweep prunes it.

@@ -7,7 +7,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
 import { workspaceGrantsAccess } from "./lib/accessKeys";
 import { performSessionSend } from "./pendingMessages";
-import { checkoutHash, levelAskWords, levelWriters, type CheckoutPageAsk, type CheckoutReport } from "@codecast/shared/contracts/checkouts";
+import { checkoutHash, levelAskClientId, levelAskWords, levelWriters, type CheckoutPageAsk, type CheckoutReport } from "@codecast/shared/contracts/checkouts";
 
 /**
  * A person's ask on a stuck checkout from the pipeline page (dispatch askCheckout): `who` is a session that last wrote
@@ -45,7 +45,9 @@ export async function askCheckoutCore(ctx: any, userId: Id<"users">, checkoutId:
       ...(row.team_id ? { team_id: row.team_id } : {}),
     });
   } else {
-    await performSessionSend(ctx, userId, { to: who, body: `${title}\n\n${body}`, intent: "request", wake: true });
+    // The daemon's ask carries the same client id, so the writer hears this episode once, whichever asks first.
+    const client_id = levelAskClientId({ device_id: row.device_id, path: row.path, files: level.files, since: level.since, conversation: who });
+    await performSessionSend(ctx, userId, { to: who, body: `${title}\n\n${body}`, intent: "request", wake: true, client_id });
   }
   const ask: CheckoutPageAsk = who === "finding"
     ? { at: now, since: level.since, files: mine.length, to: "finding" }

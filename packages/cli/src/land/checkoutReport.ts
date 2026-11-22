@@ -14,20 +14,19 @@
  * forgets nor asks again.
  */
 
-import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { formatSessionMessage } from "@codecast/shared/contracts";
 import {
-  CHECKOUT_IDLE_MS, CHECKOUT_PATHS_MAX, CHECKOUT_SESSIONS_MAX, checkoutHash, LEVEL_STUCK_FILE_MS,
+  CHECKOUT_IDLE_MS, CHECKOUT_PATHS_MAX, CHECKOUT_SESSIONS_MAX, checkoutHash, levelAskClientId, LEVEL_STUCK_FILE_MS,
   toldOf, type CheckoutLevel, type CheckoutReport, type CheckoutSession, type CheckoutTold,
 } from "@codecast/shared/contracts/checkouts";
 import { defaultConfigDir } from "../config/configDir.js";
 import { gitTry } from "../wipSnapshot.js";
 import { attributeEdits, isMidTurn, type Attribution } from "./attribute.js";
 import { heldBrief, type SendBrief } from "./levelConflicts.js";
-import type { LevelSweepOutcome } from "./levelSweep.js";
+import { isTransientSkip, type LevelSweepOutcome } from "./levelSweep.js";
 import { attributionSince, upstreamRef } from "./shipCheckout.js";
 
 type Post = (urlPath: string, body: Record<string, unknown>) => Promise<any>;
@@ -37,9 +36,10 @@ class DeferFiling extends Error {}
 
 /**
  * One root's stuck episode: the files, why, since when, who has been told (`filed`: an earlier daemon's single ask,
- * read as told), and the writers the server will never deliver to (`unreachable`: not told, and not asked again).
+ * read as told), the writers the server will never deliver to (`unreachable`: not told, and not asked again), and how
+ * many sends to each have failed (`attempts`, by conversation; "" for the finding).
  */
-type Episode = { key: string; files: string[]; reason: string; since: number; told?: CheckoutTold[]; unreachable?: string[]; filed?: { at: number; to: "session"; conversation_id: string } | { at: number; to: "finding" } | null };
+type Episode = { key: string; files: string[]; reason: string; since: number; told?: CheckoutTold[]; unreachable?: string[]; attempts?: Record<string, number>; filed?: { at: number; to: "session"; conversation_id: string } | { at: number; to: "finding" } | null };
 
 /** The last grouping of a root's uncommitted paths, kept while the same paths stay dirty (attribution reads every transcript). */
 type Grouped = { sig: string; at: number; uncommitted: CheckoutReport["uncommitted"] };
@@ -66,11 +66,15 @@ export function saveCheckoutState(state: StateFile, file = stateFile()): void {
   fs.renameSync(tmp, file);
 }
 
-/** The level state a sweep outcome leaves a root in; the same files refused again keep the episode they started. */
+/**
+ * The level state a sweep outcome leaves a root in; the same files refused again keep the episode they started. A skip
+ * that passes on its own (a ship, a rebase, an unreadable HEAD) shows the checkout off but keeps the episode; a level,
+ * or a skip that lasts (not enabled, a worktree, off the branch, holding commits), ends it.
+ */
 export function nextLevel(prev: RootState, o: LevelSweepOutcome, now: number): { level: CheckoutLevel; state: RootState } {
   if ("skipped" in o) {
     if (o.skipped === "level") return { level: { state: "level", levelled_at: prev.levelled_at ?? null }, state: { ...prev, stuck: undefined } };
-    return { level: { state: "off", reason: o.skipped }, state: { ...prev, stuck: undefined } };
+    return { level: { state: "off", reason: o.skipped }, state: { ...prev, stuck: isTransientSkip(o.skipped) ? prev.stuck : undefined } };
   }
   const r = o.result;
   if (r.ok) return { level: { state: "level", levelled_at: now }, state: { ...prev, levelled_at: now, stuck: undefined } };
@@ -205,11 +209,8 @@ export function listFile(r: Pick<CheckoutReport, "device_id" | "path">, who: str
   return path.join(dir, `${path.basename(r.path)}-${checkoutHash([r.device_id, r.path])}-${who.replace(/[^\w-]/g, "")}.txt`);
 }
 
-/** The same ask retried lands once: keyed by the device, the checkout, the episode (its files and start) and the writer. */
-export function tellClientId(r: Pick<CheckoutReport, "device_id" | "path">, level: Pick<Extract<CheckoutLevel, { state: "stuck" }>, "files" | "since">, conversation: string): string {
-  const h = createHash("sha256").update([r.device_id, r.path, level.files.join("\n"), String(level.since), conversation].join("\n")).digest("hex");
-  return `level-told:${h.slice(0, 24)}`;
-}
+/** How many failed sends to one writer (or of the finding) an episode tries before it gives that reader up. */
+export const LEVEL_SEND_ATTEMPTS_MAX = 5;
 
 /** What the checkout is held at: the level's base (HEAD) and the upstream commit it could not reach. */
 export type Held = { gitDir: string; from: string; to: string };
@@ -217,18 +218,20 @@ export type Held = { gitDir: string; from: string; to: string };
 /**
  * Ask everyone a stuck level has not asked yet this episode: each session about the conflicting files it last wrote,
  * as a machine wake, and one finding for the files no session wrote. Each ask's full list is written to a file it
- * names, and each file's three-way merge under the checkout's merge directory. A send that failed is not counted
- * told, so a later pass asks again (with the same client id); a writer the server will never deliver to (a
- * teammate's session) comes back in `unreachable`, to be skipped for the rest of the episode.
+ * names, and each file's three-way merge under the checkout's merge directory. Each ask carries levelAskClientId,
+ * which the pipeline page's ask shares, so a writer the page told already is answered with that ask, not a second.
+ * A send that failed comes back in `failed` (by conversation, "" for the finding) and is asked again on a later
+ * pass with the same client id; a writer the server will never deliver to (a teammate's session) comes back in
+ * `unreachable`, to be skipped for the rest of the episode.
  */
-export async function tellWriters(deps: { post: Post; sendBrief: SendBrief }, report: CheckoutReport, level: Extract<CheckoutLevel, { state: "stuck" }>, attribution: Pick<Attribution, "owners"> | null, held: Held, opts: { teamId?: string | null; host?: string; now?: number; dir?: string; unreachable?: string[] } = {}): Promise<{ told: CheckoutTold[]; unreachable: string[]; notes: string[] }> {
+export async function tellWriters(deps: { post: Post; sendBrief: SendBrief }, report: CheckoutReport, level: Extract<CheckoutLevel, { state: "stuck" }>, attribution: Pick<Attribution, "owners"> | null, held: Held, opts: { teamId?: string | null; host?: string; now?: number; dir?: string; unreachable?: string[] } = {}): Promise<{ told: CheckoutTold[]; unreachable: string[]; failed: Array<{ who: string; why: string }> }> {
   const at = opts.now ?? Date.now();
   const host = opts.host ?? os.hostname();
   const { writers, nobody } = conflictGroups(level.files, attribution);
   const skip = new Set([...level.told.map((t) => (t.to === "session" ? t.conversation_id : "")), ...(opts.unreachable ?? [])]);
   const told: CheckoutTold[] = [];
   const unreachable: string[] = [];
-  const notes: string[] = [];
+  const failed: Array<{ who: string; why: string }> = [];
   const brief = async (who: string, mine: string[], whose: "session" | "nobody") => {
     const list = listFile(report, who, opts.dir);
     fs.mkdirSync(path.dirname(list), { recursive: true });
@@ -239,10 +242,11 @@ export async function tellWriters(deps: { post: Post; sendBrief: SendBrief }, re
     if (skip.has(conversation)) continue;
     const { title, body } = await brief(conversation, mine, "session");
     const message = formatSessionMessage("codecast", `${title}\n\n${body}`, { name: "level sweep" });
-    const outcome = await deps.sendBrief(conversation, message, tellClientId(report, level, conversation)).catch(() => "failed" as const);
+    const clientId = levelAskClientId({ device_id: report.device_id, path: report.path, files: level.files, since: level.since, conversation });
+    const outcome = await deps.sendBrief(conversation, message, clientId).catch(() => "failed" as const);
     if (outcome === "sent") told.push({ at, files: mine.length, to: "session", conversation_id: conversation });
     else if (outcome === "unreachable") unreachable.push(conversation);
-    else notes.push(`could not reach ${conversation}; asking again next pass`);
+    else failed.push({ who: conversation, why: "the send failed" });
   }
   if (nobody.length && !skip.has("")) {
     const { title, body } = await brief("nobody", nobody, "nobody");
@@ -259,10 +263,10 @@ export async function tellWriters(deps: { post: Post; sendBrief: SendBrief }, re
       });
       told.push({ at, files: nobody.length, to: "finding" });
     } catch (e) {
-      notes.push(`could not file the finding (${(e as Error)?.message ?? e}); filing again next pass`);
+      failed.push({ who: "", why: String((e as Error)?.message ?? e) });
     }
   }
-  return { told, unreachable, notes };
+  return { told, unreachable, failed };
 }
 
 /**
@@ -294,15 +298,26 @@ export async function reportCheckouts(outcomes: LevelSweepOutcome[], deps: { pos
         // Who to ask is each file's last writer: until every transcript is read, ask nobody (a later pass will).
         if (attribution.partial) throw new DeferFiling();
         const episode = next.state.stuck!;
-        const { told, unreachable, notes } = await tellWriters(deps, report, level, attribution, { gitDir: o.gitDir, from: o.result.from, to: o.result.to }, { host: deps.host, now, dir: deps.askDir, unreachable: episode.unreachable });
+        const { told, unreachable, failed } = await tellWriters(deps, report, level, attribution, { gitDir: o.gitDir, from: o.result.from, to: o.result.to }, { host: deps.host, now, dir: deps.askDir, unreachable: episode.unreachable });
+        // A failure is said once an episode, not every pass; past LEVEL_SEND_ATTEMPTS_MAX the reader is given up.
+        const attempts = { ...(episode.attempts ?? {}) };
+        const firstFailures: typeof failed = [];
+        const gaveUp: string[] = [];
+        for (const f of failed) {
+          attempts[f.who] = (attempts[f.who] ?? 0) + 1;
+          if (attempts[f.who] === 1) firstFailures.push(f);
+          if (attempts[f.who] >= LEVEL_SEND_ATTEMPTS_MAX) gaveUp.push(f.who);
+        }
         const all = [...level.told, ...told];
-        next.state.stuck = { ...episode, told: all, filed: undefined, unreachable: [...(episode.unreachable ?? []), ...unreachable] };
+        next.state.stuck = { ...episode, told: all, filed: undefined, attempts, unreachable: [...(episode.unreachable ?? []), ...unreachable, ...gaveUp] };
         report = { ...report, level: { ...level, told: all } };
         filed += told.length;
+        const who = (c: string) => c || "the finding";
         const said = [
           ...(told.length ? [`asked ${told.map((t) => (t.to === "session" ? `${t.conversation_id} about ${t.files}` : `a finding about ${t.files}`)).join(", ")}`] : []),
           ...unreachable.map((c) => `${c} is a teammate's session, not told`),
-          ...notes,
+          ...firstFailures.map((f) => `could not reach ${who(f.who)} (${f.why}); trying each pass, up to ${LEVEL_SEND_ATTEMPTS_MAX} times`),
+          ...gaveUp.map((c) => `gave up on ${who(c)} after ${LEVEL_SEND_ATTEMPTS_MAX} failed tries this episode`),
         ];
         if (said.length) log(`[LEVEL] ${o.root}: stuck since ${new Date(level.since).toISOString()} on ${level.files.length} file(s); ${said.join("; ")}`);
       } catch (e) {
