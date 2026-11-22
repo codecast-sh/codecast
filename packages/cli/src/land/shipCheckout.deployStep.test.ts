@@ -34,3 +34,10 @@ describe("a ship's deploy step", () => {
     expect(r.changes).toEqual({ machine: os.hostname(), via: "deploy.sh", adds: [], drops: [] });
   });
 });
+
+describe("a ship's deploy step whose diff failed", () => {
+  test("still says where the push came from, and sends no lists", async () => {
+    const r = await runDeployStep(async (env) => { fs.writeFileSync(env.CAST_PUSH_CHANGES_FILE!, "{}"); return { code: 0, output: "" }; });
+    expect(r.changes).toEqual({ machine: os.hostname(), via: "deploy.sh" });
+  });
+});

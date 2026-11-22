@@ -48,6 +48,7 @@ export async function requestTargetDeployCore(
       ? deploys.find((d) => d.short_id === args.of!.toLowerCase())
       : lives.find((d) => d._id !== live?._id && d.sha && d.sha !== live?.sha);
     if (!of?.sha) throw new Error(args.of ? `No deploy ${args.of} of ${name} with a sha` : `No earlier live deploy of ${name} to go back to`);
+    if (of.pushed_via === "dev watcher") throw new Error(`${of.short_id} is a dev watcher's push of uncommitted files; it is not a deploy to go back to`);
     if (action === "redeploy" && !canRedeploySha(t)) throw new Error(`${name}'s command sends the tree it runs in, not a sha: it cannot redeploy ${of.short_id}${t.rollback ? "; use its rollback" : ""}`);
     if (action === "rollback" && !t.rollback) throw new Error(`${name} names no rollback command`);
     sha = of.sha;

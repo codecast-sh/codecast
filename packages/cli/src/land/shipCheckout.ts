@@ -360,10 +360,15 @@ export async function runDeployStep(
     let changes: PushChanges = {};
     try {
       const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
-      const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : []);
-      const adds = names(raw?.adds), drops = names(raw?.drops);
-      // Both lists, empty or not: their presence says the step's diff ran.
-      changes = { machine: os.hostname(), via: "deploy.sh", adds, drops };
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        // Any object says the step is a push that reports itself: where it came from, always.
+        changes = { machine: os.hostname(), via: "deploy.sh" };
+        // Both lists, empty or not, only when its diff ran: their presence says so.
+        if (Array.isArray(raw.adds) && Array.isArray(raw.drops)) {
+          const names = (v: unknown[]) => v.filter((x): x is string => typeof x === "string");
+          changes = { ...changes, adds: names(raw.adds), drops: names(raw.drops) };
+        }
+      }
     } catch { /* the step wrote nothing */ }
     return { ...r, changes };
   } finally {

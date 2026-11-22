@@ -53,7 +53,9 @@ export function sendPress(p: Press, teamId: string, deploys: ReadonlyArray<TeamD
 export function rollBackHere(d: TeamDeployRow, target: DeployTargetRow | undefined, deploys: ReadonlyArray<TeamDeployRow>): Press | null {
   if (!target || d.status !== "live" || !d.sha || isWatcherPush(d)) return null;
   const n = targetNow(target, deploys);
-  if (n.open || d._id === n.live?._id || d.sha === n.live?.sha) return null;
+  // Over a dev watcher's push, a real deploy of the same sha is a way back: it puts the committed tree back.
+  const sameAsLive = d._id === n.live?._id || (d.sha === n.live?.sha && !(n.live && isWatcherPush(n.live)));
+  if (n.open || sameAsLive) return null;
   if (!target.can_redeploy_sha && !target.can_rollback) return null;
   return { target, action: target.can_redeploy_sha ? "redeploy" : "rollback", of: d };
 }

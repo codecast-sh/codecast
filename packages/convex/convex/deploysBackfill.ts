@@ -127,7 +127,8 @@ export const recarry = internalMutation({
     const deploys = [];
     const shown: Array<{ deploy: string; carries: string[] }> = [];
     for (const row of rows) {
-      if (row.trigger !== "outside" || row.status !== "live") continue;
+      // A watcher's push carries no fix (deploys.recordDeployMarker): it is uncommitted work, never a deploy of a merge.
+      if (row.trigger !== "outside" || row.status !== "live" || row.pushed_via === "dev watcher") continue;
       if ((row.live_at ?? row.created_at) < window.from || row.carries.some((c) => (c.merged_at ?? now) < window.from)) { skipped++; continue; }
       // Its sha's place on main first (cut_at), which the rule holds merges against; oldest first, so every earlier
       // deploy is already placed when this one's carries are read.

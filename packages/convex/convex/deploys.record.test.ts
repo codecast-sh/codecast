@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
-import { api } from "./_generated/api";
+import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { latestLiveDeploy, projectDeployViews, recordDeployMarker } from "./deploys";
 import { deployLine } from "./deployTargetsState";
@@ -614,14 +614,15 @@ describe("round-three fixes", () => {
     await pause();
     const row = await mark("ana", { via: "dev watcher", machine: "ana-mac", dirty: 1, adds: ["fn:a:x"], drops: ["fn:b:z"] });
     expect(await notes()).toHaveLength(1);
+    // Ben's name is back as prod had it, and Ana's never existed before her row: the row changed nothing.
     await mark("ana", { via: "dev watcher", machine: "ana-mac", dirty: 1, adds: ["fn:b:z"], drops: ["fn:a:x"] });
-    expect((await deploys()).find((d) => d.short_id === row.deploy)).toMatchObject({ adds: ["fn:b:z"], drops: ["fn:a:x"] });
+    expect((await deploys()).find((d) => d.short_id === row.deploy)).toMatchObject({ adds: [], drops: [] });
     // Past the quiet window, dropping it again is news to Ben.
     await t.run(async (ctx) => {
       for (const n of await ctx.db.query("notifications").collect()) await ctx.db.patch(n._id, { created_at: n.created_at - 7 * 60 * 60 * 1000 });
     });
     await mark("ana", { via: "dev watcher", machine: "ana-mac", dirty: 1, adds: [], drops: ["fn:b:z"] });
-    expect((await deploys()).find((d) => d.short_id === row.deploy)).toMatchObject({ adds: [], drops: ["fn:a:x", "fn:b:z"] });
+    expect((await deploys()).find((d) => d.short_id === row.deploy)).toMatchObject({ adds: [], drops: ["fn:b:z"] });
     const told = await notes();
     expect(told).toHaveLength(2);
     expect(told.every((n) => String(n.recipient_user_id) === String(ids.ben))).toBe(true);
@@ -639,5 +640,146 @@ describe("round-three fixes", () => {
     expect(await matches()).toBe(0);
     await mark("ana", { via: "deploy.sh", machine: "ana-mac", sha: SHA2, adds: [], drops: [] });
     expect(await matches()).toBe(1);
+  });
+});
+
+describe("round-four fixes", () => {
+  // Pushes minutes apart in life; a few milliseconds here so no two go live in the same one.
+  const pause = () => new Promise((r) => setTimeout(r, 5));
+
+  test("two people whose machines share a hostname keep a watcher row each, and one's drop of the other's work is told", async () => {
+    const { ids, mark, deploys, notes } = await setup();
+    const anas = await mark("ana", { via: "dev watcher", machine: "MacBook-Pro.local", dirty: 1, adds: ["table:anas"], drops: [] });
+    await pause();
+    const bens = await mark("ben", { via: "dev watcher", machine: "MacBook-Pro.local", dirty: 1, adds: ["fn:b:x"], drops: ["table:anas"] });
+    expect(bens.deploy).not.toBe(anas.deploy);
+    expect(bens.event_id).not.toBe(anas.event_id);
+    const rows = await deploys();
+    expect(rows.find((d) => d.short_id === anas.deploy)).toMatchObject({ started_by: { name: "Ana" }, adds: ["table:anas"], drops: [] });
+    expect(rows.find((d) => d.short_id === bens.deploy)).toMatchObject({ started_by: { name: "Ben" }, adds: ["fn:b:x"], drops: ["table:anas"] });
+    const told = await notes();
+    expect(told).toHaveLength(1);
+    expect(told[0]).toMatchObject({ recipient_user_id: ids.ana, actor_user_id: ids.ben, entity_id: bens.deploy });
+    // Each one's next save goes back to their own row.
+    expect((await mark("ana", { via: "dev watcher", machine: "MacBook-Pro.local", dirty: 1 })).deploy).toBe(anas.deploy);
+  });
+
+  test("a watcher that drops another's name and puts it back takes no credit for it, and a name it added then removed is no drop", async () => {
+    const { t, ids, tokens, mark, deploys, notes } = await setup();
+    const bens = await mark("ben", { via: "dev watcher", machine: "ben-mac", sha: SHA2, dirty: 1, adds: ["fn:b:z"], drops: [] });
+    await pause();
+    const anas = await mark("ana", { via: "dev watcher", machine: "ana-mac", dirty: 1, adds: ["fn:a:tmp"], drops: ["fn:b:z"] });
+    await pause();
+    await mark("ana", { via: "dev watcher", machine: "ana-mac", dirty: 1, adds: ["fn:b:z"], drops: ["fn:a:tmp"] });
+    expect((await deploys()).find((d) => d.short_id === anas.deploy)).toMatchObject({ adds: [], drops: [] });
+    const { found } = await t.query(api.changesDeploy.addedBy, { api_token: tokens.ben, repository: REPO, surface: "backend", team_id: ids.team, names: ["fn:b:z", "fn:a:tmp"] });
+    expect(found.map((f) => [f.name, f.deploy])).toEqual([["fn:b:z", bens.deploy]]);
+    const before = (await notes()).length;
+    await pause();
+    // Ben's own deploy later drops his uncommitted name: nobody is told, Ana least of all.
+    await mark("ben", { via: "deploy.sh", machine: "ben-mac", sha: "ccccccc3333333", adds: [], drops: ["fn:b:z"] });
+    expect(await notes()).toHaveLength(before);
+  });
+
+  test("a status re-sent for an earlier deploy's sha lands on that deploy, and fires no trigger again", async () => {
+    const { t, ids, deploys } = await setup();
+    const ws = `team:${ids.team}`;
+    const base = Date.now() - 100_000;
+    await t.run(async (ctx) => {
+      await ctx.db.insert("agent_tasks", { user_id: ids.ana, title: "After a deploy", prompt: "x", schedule_type: "event", status: "scheduled", run_count: 0, event_filter: { event_type: "deploy_live" }, created_at: 0, updated_at: 0 } as any);
+    });
+    const matches = () => t.run(async (ctx) => (await ctx.db.system.query("_scheduled_functions").collect())
+      .filter((f: any) => f.name.includes("matchTaskTriggers") && f.args[0]?.event_type === "deploy_live").length);
+    const gh = (sha: string, at: number) => t.run(async (ctx) =>
+      recordDeployMarker(ctx, { workspace: ws, team_id: ids.team, target: "web", sha, repository: REPO, source: "github: railway", status: "live", at }));
+    const a = await gh(SHA, base);
+    const b = await gh(SHA2, base + 10_000);
+    expect(await matches()).toBe(2);
+    expect(await gh(SHA, base + 1_000)).toBe(a);
+    expect(await deploys()).toHaveLength(2);
+    expect(await matches()).toBe(2);
+    expect((await t.run(async (ctx) => latestLiveDeploy(ctx, ws, "web", REPO)))?.short_id).toBe(b);
+  });
+
+  test("recarry gives a watcher's push no fix, even one placed on main past a commit naming the fix", async () => {
+    const { t, ids, deploys } = await setup();
+    const ws = `team:${ids.team}`;
+    const now = Date.now();
+    const sha = (n: number) => String(n).repeat(40);
+    const task = await t.run(async (ctx) => {
+      await ctx.db.insert("projects", {
+        user_id: ids.ana, team_id: ids.team, workspace: ws, title: "App", status: "active", created_at: now, updated_at: now,
+        line_profile: { finders: [], changed_at: 1, root: "/repo", deploy: { command: "./deploy.sh", target: "backend", trigger: "person" } },
+      } as any);
+      const task = await ctx.db.insert("tasks", {
+        user_id: ids.ana, team_id: ids.team, workspace: ws, short_id: "ct-1", title: "Totals round wrong",
+        task_type: "task", priority: "medium", source: "human", status: "done", created_at: now, updated_at: now,
+      } as any);
+      for (const n of [1, 2]) {
+        await ctx.db.insert("commits", {
+          sha: sha(n), message: n === 2 ? "Round totals (ct-1)" : "change 1", author_name: "Ana", author_email: "a@x", timestamp: now - 60_000,
+          files_changed: 1, insertions: 1, deletions: 0, repository: REPO, team_id: ids.team, branch: "main", main_at: now - 60_000 + n * 1000,
+          ...(n === 2 ? { task_ids: [task] } : {}),
+        } as any);
+      }
+      return task;
+    });
+    const push = (n: number, over: Record<string, any> = {}) => t.run(async (ctx) =>
+      recordDeployMarker(ctx, { workspace: ws, team_id: ids.team, target: "backend", sha: sha(n), repository: REPO, source: "test", pushed_via: "deploy.sh", machine: "ana-mac", at: Date.now(), ...over }));
+    await push(1);
+    await pause();
+    const watcher = await push(2, { pushed_via: "dev watcher", dirty: 1 });
+    await t.mutation(internal.deploysBackfill.recarry, { workspace: ws });
+    expect((await deploys()).find((d) => d.short_id === watcher)!.carries).toEqual([]);
+    // The next real deploy carries it.
+    await pause();
+    const real = await push(2);
+    expect((await deploys()).find((d) => d.short_id === real)!.carries.map((c) => String(c.task_id))).toEqual([String(task)]);
+  });
+
+  test("a watcher's push is no deploy to redeploy or roll back to", async () => {
+    const { t, ids, tokens } = await setup();
+    const ws = `team:${ids.team}`;
+    await t.mutation(api.deployTargets.publish, {
+      api_token: tokens.ana, team_id: ids.team, repository: REPO, root: "/repo",
+      targets: [{ name: "backend", command: "./deploy.sh $sha", rollback: "./rollback.sh $sha", runs: "here", live: { kind: "marker" }, policy: "press", paths: ["convex/**"] }],
+    });
+    const push = (sha: string, over: Record<string, any> = {}) => t.run(async (ctx) =>
+      recordDeployMarker(ctx, { workspace: ws, team_id: ids.team, target: "backend", sha, repository: REPO, source: "test", pushed_via: "deploy.sh", machine: "ana-mac", at: Date.now(), ...over }));
+    await push(SHA);
+    await pause();
+    const watcher = await push(SHA2, { pushed_via: "dev watcher", dirty: 2 });
+    for (const action of ["redeploy", "rollback"] as const) {
+      await expect(t.mutation(api.deployTargets.request, { api_token: tokens.ana, team_id: ids.team, target: "backend", action, of: watcher!, here: true }))
+        .rejects.toThrow(`${watcher} is a dev watcher's push of uncommitted files; it is not a deploy to go back to`);
+    }
+  });
+
+  test("a clean deploy.sh of the last marked sha after a workflow run rolled the target back is recorded, and runs", async () => {
+    const { t, ids, mark, deploys } = await setup();
+    const ws = `team:${ids.team}`;
+    const first = await mark("ana", { via: "deploy.sh", machine: "ana-mac", adds: [], drops: [] });
+    await pause();
+    const rollback = await t.run(async (ctx) =>
+      recordDeployMarker(ctx, { workspace: ws, team_id: ids.team, target: "backend", sha: SHA2, repository: REPO, source: "github", workflow_run: "777", status: "live", at: Date.now() }));
+    expect(rollback).not.toBe(first.deploy);
+    await pause();
+    const again = await mark("ana", { via: "deploy.sh", machine: "ana-mac" });
+    expect(again.deploy).toBeTruthy();
+    expect([first.deploy, rollback]).not.toContain(again.deploy);
+    expect(await deploys()).toHaveLength(3);
+    expect((await t.run(async (ctx) => latestLiveDeploy(ctx, ws, "backend", REPO)))?.short_id).toBe(again.deploy);
+  });
+
+  test("someone who left the team is not told a push dropped their work", async () => {
+    const { t, ids, mark, notes } = await setup();
+    await mark("ben", { via: "dev watcher", machine: "ben-mac", sha: SHA2, dirty: 1, adds: ["table:bens"], drops: [] });
+    await t.run(async (ctx) => {
+      const m = await ctx.db.query("team_memberships").filter((q) => q.eq(q.field("user_id"), ids.ben)).first();
+      await ctx.db.delete(m!._id);
+    });
+    await pause();
+    await mark("ana", { via: "deploy.sh", machine: "ana-mac", adds: [], drops: ["table:bens"] });
+    expect(await notes()).toHaveLength(0);
   });
 });
