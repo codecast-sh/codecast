@@ -16872,7 +16872,7 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
     // message JSON on the JS thread right after first paint, and load hundreds
     // of conversations into memory for the eviction cap to fight back out.
     const focusId = useInboxStore.getState().currentSessionId;
-    if (focusId) await ensureHydrated(focusId);
+    if (process.env.PERF_DEBUG) console.log("FOCUS", focusId); if (focusId) await ensureHydrated(focusId); if (process.env.PERF_DEBUG) console.log("FOCUS done", superseded());
     if (superseded()) return false;
 
     if (!useInboxStore.getState().clientStateInitialized) {

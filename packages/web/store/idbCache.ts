@@ -563,7 +563,7 @@ export async function loadCache(
     }
 
     return hasData ? result : null;
-  } catch {
+  } catch (e) { if (process.env.PERF_DEBUG) console.log("LOADCACHE ERR", e);
     return null;
   }
 }
