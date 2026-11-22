@@ -71,8 +71,11 @@ export async function notifyChat(
   // No row means the member has never opened this channel, which reads as
   // "mentions only" — the same default the rail shows.
   if (!notifyLevelAllows(read?.notify_level ?? "mentions", opts.eventType)) return;
-  // A thread the member muted keeps its replies quiet; a mention still lands.
-  if (opts.eventType === "chat_reply" && isThreadMuted(read?.muted_threads, opts.threadRootId)) return;
+  // A thread the member muted keeps its replies quiet, whichever event carries
+  // the reply: a DM room reaches a member who never spoke in the thread as
+  // chat_dm, not chat_reply. A mention (or @here) still lands.
+  const threadLine = opts.eventType === "chat_reply" || opts.eventType === "chat_dm";
+  if (threadLine && isThreadMuted(read?.muted_threads, opts.threadRootId)) return;
   await ctx.runMutation(internal.notificationRouter.emit, {
     event_type: opts.eventType,
     actor_user_id: opts.actorUserId,
