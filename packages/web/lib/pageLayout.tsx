@@ -54,6 +54,8 @@ const FULL_WIDTH_PATTERNS: RegExp[] = [
   /^\/org(\/|$)/,
   // The daily edition sets its own 1180px column and scrolls itself.
   /^\/changes$/,
+  // Deploys: targets across the top, then one column or two, each its own scroll.
+  /^\/deploys$/,
   // Prompts: a column per person, each its own scroll region.
   /^\/prompts$/,
   /^\/goals(\/|$)/,

@@ -26,6 +26,11 @@ describe("isFullWidthRoute", () => {
     expect(isFullWidthRoute("/pages")).toBe(false);
   });
 
+  test("/deploys owns its canvas, so the shell never caps it at a reading column", () => {
+    expect(isFullWidthRoute("/deploys")).toBe(true);
+    expect(isFullWidthRoute("/deploys?pr=4570&target=production")).toBe(true);
+  });
+
   test("query and hash are stripped before matching", () => {
     expect(isFullWidthRoute("/files?path=x#y")).toBe(true);
   });
