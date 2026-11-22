@@ -9,6 +9,7 @@ import type { SdkLaunchSpec } from "./claudeSdk/options.js";
 import type { SdkPermissionAnswer } from "./claudeSdk/protocol.js";
 import { DeliveryEchoLedger, deliveryEchoLedger, deliveryRecordUuid, echoCandidatesOf, transcriptRecordsSend } from "./deliveryEchoLedger.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
+import { ProcessCwdCache } from "./processCwdCache.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { handoffParentSessionId, linkPlanHandoffChild, planHandoffTarget } from "./planHandoff.js";
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
@@ -12265,6 +12266,49 @@ export function subagentParentSessionFromPath(filePath: string): string | undefi
   return idx >= 1 ? parts[idx - 1] : undefined;
 }
 
+// A Claude subagent transcript by its place on disk (either layout above). The
+// subagent runs inside its parent's process, in the parent's cwd, so it has no
+// process of its own: a process lookup for it can only find the PARENT. Holding
+// that pid as the subagent's kept a finished subagent heartbeating for as long
+// as its parent lived, put the parent's tmux on the subagent's row, and made a
+// kill of the subagent's card reap the parent's pane.
+export function isSubagentTranscriptPath(filePath: string | null | undefined): boolean {
+  return !!filePath && filePath.split(path.sep).includes("subagents");
+}
+
+/** A registry file the daemon wrote (not the SessionStart hook) for a subagent: it can only name the parent's pid. */
+export function isDaemonGuessForSubagent(reg: unknown, jsonlPath: string | null | undefined): boolean {
+  return !isHookRegistration(reg) && isSubagentTranscriptPath(jsonlPath);
+}
+
+/**
+ * Strategy C's guess: the agent processes (from `ps aux` lines) whose cwd is the
+ * session's project or below it, and those no other session has claimed. A
+ * subagent gets none, and its lookup spawns nothing: the only process in its
+ * cwd that could match is its parent's.
+ */
+export async function cwdMatchCandidates(
+  jsonlPath: string,
+  projectCwd: string,
+  read: { psLines: () => Promise<string[]>; cwds: (pids: number[]) => Promise<Map<number, string | null>>; claimedElsewhere: (pid: number) => boolean },
+): Promise<{ candidates: Array<{ pid: number; tty: string }>; unclaimed: Array<{ pid: number; tty: string }> }> {
+  if (isSubagentTranscriptPath(jsonlPath)) return { candidates: [], unclaimed: [] };
+  const agents: Array<{ pid: number; tty: string }> = [];
+  for (const line of await read.psLines()) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 7) continue;
+    const pid = parseInt(parts[1], 10);
+    const tty = parts[6];
+    if (isNaN(pid) || tty === "?" || tty === "??") continue;
+    agents.push({ pid, tty });
+  }
+  const cwds = await read.cwds(agents.map((a) => a.pid));
+  const candidates = agents
+    .filter(({ pid }) => { const cwd = cwds.get(pid); return !!cwd && (cwd === projectCwd || cwd.startsWith(projectCwd + "/")); })
+    .map(({ pid, tty }) => ({ pid, tty: normalizeTty(tty) }));
+  return { candidates, unclaimed: candidates.filter((c) => !read.claimedElsewhere(c.pid)) };
+}
+
 // When a subagent last wrote to its own transcript, keyed by the PARENT session
 // id. A headless child has no pane: it runs as a process inside the parent
 // pane's tree, so killing that pane kills the child mid-turn and nobody ever
@@ -13036,7 +13080,8 @@ async function processSessionFilePass(
     log(`Synced ${messages.length} messages for session ${sessionId} [SYNC-TIMING] pass_started=${new Date(passStartedAt).toISOString()} pass=${Date.now() - passStartedAt}ms`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
-    tryRegisterSessionProcess(sessionId, "claude");
+    // A subagent has no process of its own to register (isSubagentTranscriptPath).
+    if (!subagentTranscript) tryRegisterSessionProcess(sessionId, "claude");
 
     const askTc = messages.flatMap(m => m.toolCalls || []).find((tc: any) => tc.name === "AskUserQuestion");
     if (askTc && !pendingInteractivePrompts.has(sessionId)) {
@@ -15046,6 +15091,20 @@ async function psAuxGrep(pattern: string): Promise<string[]> {
 
 const findSessionProcessInflight = new Map<string, Promise<ClaudeSessionInfo | null>>();
 
+// Strategy C's cwd reads: one lsof for every candidate pid, kept briefly (processCwdCache.ts).
+// execFile, not a shell, so a timeout kills lsof itself (see psSnapshotLines).
+const processCwdCache = new ProcessCwdCache(async (pids) => {
+  try {
+    const { stdout } = await _execFileAsync("lsof", ["-a", "-d", "cwd", "-p", pids.join(","), "-F", "pn"], { timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024, env: SAFE_ENV });
+    return String(stdout);
+  } catch (err) {
+    // lsof exits 1 when any listed pid is gone, with the rest on stdout.
+    const partial = String((err as { stdout?: unknown })?.stdout ?? "");
+    if (partial) return partial;
+    throw err;
+  }
+});
+
 /**
  * The token to grep the process table with (`ps aux | grep -E '<token>'`) when
  * locating a live session's process, per client. codex and gemini match by their
@@ -15339,9 +15398,12 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         const pid = reg.pid;
         const tty = normalizeTty(reg.tty);
         const termProgram = reg.term || undefined;
-        // Verify process is still alive and is a claude-like process
-        const { stdout: checkPs } = await execAsync(`ps -o comm= -p ${pid} 2>/dev/null`);
-        if (checkPs.trim()) {
+        if (isDaemonGuessForSubagent(reg, findSessionJsonlPath(sessionId))) {
+          // The daemon's own guess for a subagent, which could only have named
+          // its parent's pid (isSubagentTranscriptPath). Not this session's process.
+          try { fs.unlinkSync(registryFile); } catch {}
+        } else if ((await execAsync(`ps -o comm= -p ${pid} 2>/dev/null`)).stdout.trim()) {
+          // Alive and a claude-like process.
           if (agentType === "codex") {
             log(`Ignoring registry candidate for codex session ${shortId(sessionId)} (pid=${pid})`);
           } else if (await rejectsForeignProcess(sessionId, pid, "registry", typeof reg.ts === "number" ? reg.ts : undefined)) {
@@ -15538,7 +15600,8 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
       }
     } catch {}
 
-    // Strategy C: CWD-based matching for non-resumed sessions
+    // Strategy C: CWD-based matching for non-resumed sessions. Never for a
+    // subagent: the only process in its cwd that could be it is its parent.
     const jsonlPath = processLookupAllowsCwdFallback(agentType) ? findSessionJsonlPath(sessionId) : null;
     if (jsonlPath) {
       const jsonlStat = fs.statSync(jsonlPath);
@@ -15552,37 +15615,10 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         if (projectCwd) {
           try {
             const psPattern = sessionProcessGrepToken(agentType, "/claude\\b|claude-code");
-            const psOut = (await psAuxGrep(psPattern)).join("\n");
-            const candidates: Array<{ pid: number; tty: string }> = [];
-
-            for (const line of psOut.trim().split("\n")) {
-              if (!line.trim()) continue;
-              const parts = line.trim().split(/\s+/);
-              if (parts.length < 7) continue;
-              const pid = parseInt(parts[1], 10);
-              const tty = parts[6];
-              if (isNaN(pid) || tty === "?" || tty === "??") continue;
-
-              // Check CWD of this process
-              try {
-                const { stdout: lsofOut } = await execAsync(`lsof -d cwd -a -p ${pid} -F n 2>/dev/null`);
-                const cwdLine = lsofOut.split("\n").find(l => l.startsWith("n"));
-                if (cwdLine) {
-                  const processCwd = cwdLine.slice(1);
-                  // Match if CWD is the project dir or a subdirectory of it
-                  if (processCwd === projectCwd || processCwd.startsWith(projectCwd + "/")) {
-                    candidates.push({ pid, tty: normalizeTty(tty) });
-                  }
-                }
-              } catch {}
-            }
-
-            // Filter out candidates already cached for a different session
-            const unclaimed = candidates.filter(c => {
-              for (const [cachedSid, cachedInfo] of sessionProcessCache) {
-                if (cachedSid !== sessionId && cachedInfo.pid === c.pid) return false;
-              }
-              return true;
+            const { candidates, unclaimed } = await cwdMatchCandidates(jsonlPath, projectCwd, {
+              psLines: () => psAuxGrep(psPattern),
+              cwds: (pids) => processCwdCache.cwds(pids),
+              claimedElsewhere: (pid) => [...sessionProcessCache].some(([sid, info]) => sid !== sessionId && info.pid === pid),
             });
 
             if (unclaimed.length === 1) {
