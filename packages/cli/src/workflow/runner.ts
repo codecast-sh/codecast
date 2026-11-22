@@ -1628,21 +1628,25 @@ async function pinnedElsewhere(options: RunOptions): Promise<boolean> {
 // visible to the next edge. A verdict older than `freshSince` reads as "none":
 // a review round that ended without a verdict must not re-route on the last
 // round's answer.
+/**
+ * A task's title and description as node prompts read them. Why: every value here is expanded into node prompts
+ * through $vars and the `# Context` list, so it is escaped and capped as it enters the context rather than at each
+ * of those sites (ct-49593). `task_source` names where the prose came from, in the fence an agent reads it in
+ * (nodePrompt agentFacingContext): "task ct-N · imported from github acme/api#412".
+ */
+export function taskProseVars(task: any): { task_title: string; task_source: string; task_description: string } {
+  return {
+    task_title: inlineForeignText(task.title),
+    task_source: foreignTaskSource(task),
+    task_description: capForeignText(escapeForeignControlChars(task.description || ""), FOREIGN_TEXT_CAPS.descriptionChars),
+  };
+}
+
 async function loadTaskContext(options: RunOptions, context: Record<string, string>, freshSince = 0): Promise<void> {
   if (!options.taskId) return;
   const task = await cliCall(options, "/cli/work/get", { short_id: options.taskId });
   if (!task) return;
-  // Why: every value here is expanded into node prompts through $vars
-  // and the `# Context` list, so it is escaped and capped as it enters
-  // the context rather than at each of those sites (ct-49593).
-  context["task_title"] = inlineForeignText(task.title);
-  // Where the task's prose came from, named in the fence an agent reads it in
-  // (nodePrompt agentFacingContext): "task ct-N · imported from github acme/api#412".
-  context["task_source"] = foreignTaskSource(task);
-  context["task_description"] = capForeignText(
-    escapeForeignControlChars(task.description || ""),
-    FOREIGN_TEXT_CAPS.descriptionChars,
-  );
+  Object.assign(context, taskProseVars(task));
   const criteria: string[] = (task.acceptance_criteria?.length ? task.acceptance_criteria : (task.steps || []).map((s: any) => s.title))
     .map((c: string) => inlineForeignText(c));
   context["acceptance_criteria"] = criteria.join("\n- ");
