@@ -26,43 +26,18 @@ import { Spacing, themedStyles, useTheme, type Palette } from '@/constants/Theme
 import { solColor } from '@/lib/solColor';
 import { formatRelativeTime } from '@/components/SessionItem';
 import Feather from '@expo/vector-icons/Feather';
-import type { ReachState } from '@codecast/shared/contracts/deployReach';
 import { useDeployReach } from '@codecast/web/hooks/useDeployReach';
 import { useDeployTargets } from '@codecast/web/hooks/useSyncDeployTargets';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { repoObjectId } from '@codecast/web/lib/entityLinks';
-import { REACH_LOOK, deployAgo, type DeployTone } from '@codecast/web/lib/deploys/deployPill';
-import { prDeployRows, prReachHeadline, type PrDeployRow } from '@codecast/web/lib/deploys/prDeploy';
+import { REACH_LOOK, deployAgo } from '@codecast/web/lib/deploys/deployPill';
+import { prDeployRows, prReachHeadline, prRowLine, prRowParts } from '@codecast/web/lib/deploys/prDeploy';
+import { REACH_ICON, toneColor, type FeatherName } from '@/components/EntityPill';
 
 const color = (accent: ExternalEventAccent | undefined, Theme: Palette) => solColor(accentVar(accent), Theme);
 
-// The web PR page's production band (components/pr/PRDeploy), the same rows and words, read-only: the press that
-// sends a deploy lives on web's Deploys page and its confirm flow.
-type FeatherName = React.ComponentProps<typeof Feather>['name'];
-const REACH_ICON: Record<ReachState, FeatherName> = {
-  live: 'check-circle', going_out: 'upload-cloud', queued: 'clock', failed: 'x-circle', rolled_back: 'rotate-ccw', waiting: 'circle',
-};
-const toneColor = (t: Palette, tone: DeployTone) =>
-  ({ green: t.green, yellow: t.yellow, red: t.red, orange: t.orange, muted: t.textMuted, dim: t.textDim })[tone];
-
-/** One row's words after its state: the deploy and when, or how long it has waited and with how many commits. */
-function rowWords(row: PrDeployRow, now: number, mergedAt: number | null): string {
-  const d = row.deploy;
-  const sha = (r: { sha: string | null; short_id: string } | null) => (r ? (r.sha ? r.sha.slice(0, 7) : r.short_id) : '');
-  const parts: string[] = [];
-  if (row.state === 'live' && d) parts.push(`${sha(d)} went live ${deployAgo(d.at, now)}`);
-  else if (row.state === 'going_out' && d) parts.push(`${sha(d)} started ${deployAgo(d.at, now)}`);
-  else if (row.state === 'queued' && d) parts.push(`${sha(d)} asked for ${deployAgo(d.at, now)}`);
-  else if (row.state === 'failed' && d) parts.push(`${sha(d)} failed ${deployAgo(d.at, now)}`);
-  else if (row.state === 'rolled_back' && row.now) parts.push(`rolled back to ${sha(row.now)} ${deployAgo(row.now.at, now)}`);
-  else if (row.state === 'waiting' && mergedAt) parts.push(`waiting ${deployAgo(mergedAt, now).replace(/ ago$/, '')}`);
-  const o = row.queue?.others;
-  const plus = row.queue?.atLeast ? '+' : '';
-  if (row.queue) parts.push(o == null ? 'with older commits' : o === 0 && !plus ? 'the only commit waiting' : `with ${o}${plus} other ${o === 1 && !plus ? 'commit' : 'commits'}`);
-  if (row.queue && row.queue.ci !== 'none') parts.push(`CI ${row.queue.ci}`);
-  return parts.join(' · ');
-}
-
+// The web PR page's production band (components/pr/PRDeploy): the same rows and the same words (prRowParts),
+// read-only. The press that sends a deploy lives on web's Deploys page and its confirm flow.
 function useProductionRows(pr: any, repository: string) {
   const merged = pr?.state === 'merged';
   const reach = useDeployReach(merged ? repoObjectId({ type: 'pr', repository, number: pr.number }) : null);
@@ -150,7 +125,7 @@ export default function PullRequestScreen() {
                     <RNText style={styles.rowTitle} numberOfLines={1}>{row.target}</RNText>
                     <RNText style={[styles.rowMeta, { color: tint }]}>{REACH_LOOK[row.state].word}</RNText>
                   </RNView>
-                  <RNText style={styles.prodDetail} numberOfLines={2}>{rowWords(row, production.now, production.mergedAt)}</RNText>
+                  <RNText style={styles.prodDetail} numberOfLines={2}>{prRowLine(prRowParts(row, production.now, production.mergedAt))}</RNText>
                   {row.note ? <RNText style={[styles.prodDetail, { color: Theme.red }]} numberOfLines={2}>{row.note}</RNText> : null}
                 </TouchableOpacity>
               );

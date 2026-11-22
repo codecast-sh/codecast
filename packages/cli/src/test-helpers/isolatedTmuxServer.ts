@@ -44,8 +44,13 @@ import { defaultConfigDir } from "../config/configDir.js";
 // /var/folders/… path, so a temp dir there overflows the cap and every spawn
 // fails with "File name too long". Prefer the codecast dir, which is short on
 // any machine, and fall back to /tmp when a long $HOME would overflow it too.
+//
+// One server per process, named by pid alone. `bun test --parallel` reuses each
+// worker for many files and evaluates this preload again for every file, with a
+// fresh process.env and no "exit" event, so a server per evaluation leaked one
+// tmux server per test file: about 900 per full suite run on 2026-11-22.
 function begin(): { dir: string; socket: string } {
-  const run = `run-${process.pid}-${Date.now().toString(36)}`;
+  const run = `run-${process.pid}`;
   const tail = path.join(run, `tmux-${process.getuid?.() ?? 0}`, "default");
   const codecastDir = defaultConfigDir();
   const base = [path.join(codecastDir, "test-tmux"), "/tmp/codecast-test-tmux"]
