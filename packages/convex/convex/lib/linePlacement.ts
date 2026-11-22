@@ -123,7 +123,7 @@ async function teamMemberIds(ctx: Ctx, teamId: string): Promise<string[]> {
  * and the run stays on the runner's own machine. A machine that cannot start one of the agents the run's flow needs
  * (`needs`: flowAgents) is no slot of it, so a runner whose own machines all lack one takes the team's pool.
  */
-export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string | undefined, now: number, teamId?: string | null, needs?: readonly string[]): Promise<LinePool | null> {
+export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string | undefined, now: number, teamId?: string | null, needs?: readonly string[], known?: Map<string, LineSlot>): Promise<LinePool | null> {
   if (!projectPath) return null;
   const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", runner)).collect();
   let checkout: { root: string; origin: string } | null = null;
@@ -136,7 +136,7 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
   const origin = checkout && normalizeGitOrigin(checkout.origin);
   if (!checkout || !origin) return null;
   const subpath = projectPath.slice(checkout.root.length).replace(/^\/+/, "");
-  const own = await slotsFor(ctx, devices, origin, now, needs);
+  const own = await slotsFor(ctx, devices, origin, now, needs, known);
   const offline = (ds: any[]) => ds.filter((d) => (d.line_slots ?? []).some((s: any) => s.origin === origin) && (!isDeviceOnline(d, now) || missingAgentOn(d, needs))).length;
   if (own.length) return { origin, subpath, slots: own, offline: offline(devices) };
   if (!teamId) return null;
@@ -145,7 +145,7 @@ export async function linePoolFor(ctx: Ctx, runner: string, projectPath: string 
     if (member === runner) continue;
     team.push(...await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", member)).collect());
   }
-  const shared = await slotsFor(ctx, team, origin, now, needs);
+  const shared = await slotsFor(ctx, team, origin, now, needs, known);
   return shared.length ? { origin, subpath, slots: shared, offline: offline(devices) + offline(team) } : null;
 }
 
