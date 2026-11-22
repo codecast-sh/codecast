@@ -90,7 +90,7 @@ describe("a session's change runs through a flow", () => {
 
     // All five of A's files, though B wrote both.ts last; B's page and the credential stay out.
     expect(change.paths).toEqual(["docs/notes.md", "src/api.ts", "src/both.ts", "src/new-helper.ts", "src/util.ts"]);
-    expect(change.shared).toEqual([{ path: "src/both.ts", also: ["jx7bbbb"] }]);
+    expect(change.shared).toEqual([{ path: "src/both.ts", also: ["jx7bbbb"], why: "jx7bbbb's edits do not replay: an edit without a string to replace" }]);
     expect(change.paths).not.toContain(".env.local");
     expect(change.session).toBe("jx7aaaa");
 
@@ -246,5 +246,96 @@ describe("a named branch's fix comes back to the run", () => {
     expect(again.moved).toBe(false);
     expect(again.change.tip).toBe(amended);
     expect(fs.readFileSync(path.join(worktree, "a.txt"), "utf-8")).toBe("v2\n");
+  });
+});
+
+// Two sessions in one file (ct-98915): the Quick run on a fix carried another session's unfinished lines in
+// tasks.ts and workflow_runs.ts, and its reviewer sent it back for them.
+describe("a file two sessions changed", () => {
+  const BASE = "one\ntwo\nthree\nfour\n";
+  const failed = (id: string, ms: number) => ({ type: "user", timestamp: at(ms), message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, is_error: true, content: "String to replace not found" }] } });
+  function world(): string {
+    freshState();
+    const root = path.join(sandbox, `two-${worlds}`);
+    fs.mkdirSync(root);
+    git(root, "init", "-q", "-b", "main");
+    write(root, "src/shared.ts", BASE);
+    write(root, "src/other.ts", "x\n");
+    git(root, "add", "-A");
+    git(root, "commit", "-qm", "base");
+    return root;
+  }
+
+  test("each session's change holds only its own lines, and a failed edit is no part of it", async () => {
+    const root = world();
+    write(root, "src/shared.ts", "ONE\ntwo\nthree\nFOUR\n");
+    const missed = { ...tool(root, "Edit", { file_path: path.join(root, "src/shared.ts"), old_string: "nope", new_string: "x" }, 95_000), message: { role: "assistant", content: [{ type: "tool_use", id: "miss-1", name: "Edit", input: { file_path: path.join(root, "src/shared.ts"), old_string: "nope", new_string: "x" } }] } };
+    transcript("sess-a", "jx7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", [missed, failed("miss-1", 94_000), tool(root, "Edit", { file_path: path.join(root, "src/shared.ts"), old_string: "one", new_string: "ONE" }, 90_000)]);
+    transcript("sess-b", "jx7bbbbbbbbbbbbbbbbbbbbbbbbbbbbb", [tool(root, "MultiEdit", { file_path: path.join(root, "src/shared.ts"), edits: [{ old_string: "four", new_string: "FOUR" }] }, 50_000)]);
+    const statusBefore = git(root, "status", "--porcelain");
+
+    const a = await freezeSessionChange(root, "jx7aaaa", { branch: "codecast/a", worktree: "a", title: "Shout one" });
+    expect(a.paths).toEqual(["src/shared.ts"]);
+    expect(a.shared).toEqual([]);
+    expect(git(root, "show", `${a.tip}:src/shared.ts`)).toBe("ONE\ntwo\nthree\nfour");
+
+    const b = await freezeSessionChange(root, "jx7bbbb", { branch: "codecast/b", worktree: "b", title: "Shout four" });
+    expect(b.shared).toEqual([]);
+    expect(git(root, "show", `${b.tip}:src/shared.ts`)).toBe("one\ntwo\nthree\nFOUR");
+
+    expect(git(root, "status", "--porcelain")).toBe(statusBefore);
+    expect(fs.readFileSync(path.join(root, "src/shared.ts"), "utf-8")).toBe("ONE\ntwo\nthree\nFOUR\n");
+  });
+
+  test("a file the session also wrote through the shell goes in whole, named as shared", async () => {
+    const root = world();
+    write(root, "src/shared.ts", "ONE\nTWO\nthree\nFOUR\n");
+    transcript("sess-a", "jx7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", [
+      tool(root, "Edit", { file_path: path.join(root, "src/shared.ts"), old_string: "one", new_string: "ONE" }, 90_000),
+      tool(root, "Bash", { command: `sed -i 's/two/TWO/' src/shared.ts` }, 80_000),
+    ]);
+    transcript("sess-b", "jx7bbbbbbbbbbbbbbbbbbbbbbbbbbbbb", [tool(root, "Edit", { file_path: path.join(root, "src/shared.ts"), old_string: "four", new_string: "FOUR" }, 50_000)]);
+    const a = await freezeSessionChange(root, "jx7aaaa", { branch: "codecast/a", worktree: "a", title: "Shout" });
+    expect(a.shared).toEqual([{ path: "src/shared.ts", also: ["jx7bbbb"], why: "jx7aaaa's edits do not replay: a shell command wrote it" }]);
+    expect(git(root, "show", `${a.tip}:src/shared.ts`)).toBe("ONE\nTWO\nthree\nFOUR");
+  });
+
+  test("lines the other session changed again on top of this session's go in whole", async () => {
+    const root = world();
+    write(root, "src/shared.ts", "ONE!\ntwo\nthree\nfour\n");
+    transcript("sess-a", "jx7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", [tool(root, "Edit", { file_path: path.join(root, "src/shared.ts"), old_string: "one", new_string: "ONE" }, 90_000)]);
+    transcript("sess-b", "jx7bbbbbbbbbbbbbbbbbbbbbbbbbbbbb", [tool(root, "Edit", { file_path: path.join(root, "src/shared.ts"), old_string: "ONE", new_string: "ONE!" }, 50_000)]);
+    const a = await freezeSessionChange(root, "jx7aaaa", { branch: "codecast/a", worktree: "a", title: "Shout" });
+    expect(a.shared).toEqual([{ path: "src/shared.ts", also: ["jx7bbbb"], why: "jx7bbbb's edits do not replay: an edit no longer lands on one place in the committed file" }]);
+    expect(git(root, "show", `${a.tip}:src/shared.ts`)).toBe("ONE!\ntwo\nthree\nfour");
+  });
+
+  // The reviewer's case: a commit after the session's first edit changed another line of the file, so the replay
+  // from that commit leaves the first edit out, while the file on disk still holds it.
+  test("a line of the session's own that the file's last commit left out keeps the file whole", async () => {
+    const root = world();
+    const lines = (...up: number[]) => Array.from({ length: 14 }, (_, i) => (up.includes(i + 1) ? `LINE${i + 1}` : `line${i + 1}`)).join("\n") + "\n";
+    write(root, "src/shared.ts", lines());
+    git(root, "commit", "-qam", "fourteen lines");
+    write(root, "src/shared.ts", lines(14));
+    const halfHour = new Date(Date.now() - 1_800_000).toISOString();
+    execFileSync("git", ["-C", root, "commit", "-qam", "line 14 only"], { env: { ...process.env, ...ENV, GIT_AUTHOR_DATE: halfHour, GIT_COMMITTER_DATE: halfHour } });
+    write(root, "src/shared.ts", lines(1, 5, 10, 14));
+    const edit = (from: string, to: string, ms: number) => tool(root, "Edit", { file_path: path.join(root, "src/shared.ts"), old_string: from, new_string: to }, ms);
+    transcript("sess-a", "jx7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", [edit("line1\n", "LINE1\n", 2_400_000), edit("line5\n", "LINE5\n", 600_000)]);
+    transcript("sess-b", "jx7bbbbbbbbbbbbbbbbbbbbbbbbbbbbb", [edit("line10\n", "LINE10\n", 1_200_000)]);
+    const a = await freezeSessionChange(root, "jx7aaaa", { branch: "codecast/a", worktree: "a", title: "Shout" });
+    expect(a.shared).toEqual([{ path: "src/shared.ts", also: ["jx7bbbb"], why: "it holds lines no session's edits since its last commit account for" }]);
+    expect(git(root, "show", `${a.tip}:src/shared.ts`)).toContain("LINE1\n");
+  });
+
+  test("a line no session's edits explain (a formatter's) keeps the file whole", async () => {
+    const root = world();
+    write(root, "src/shared.ts", "ONE\ntwo\nthree\nFOUR\n// formatted\n");
+    transcript("sess-a", "jx7aaaaaaaaaaaaaaaaaaaaaaaaaaaaa", [tool(root, "Edit", { file_path: path.join(root, "src/shared.ts"), old_string: "one", new_string: "ONE" }, 90_000)]);
+    transcript("sess-b", "jx7bbbbbbbbbbbbbbbbbbbbbbbbbbbbb", [tool(root, "Edit", { file_path: path.join(root, "src/shared.ts"), old_string: "four", new_string: "FOUR" }, 50_000)]);
+    const a = await freezeSessionChange(root, "jx7aaaa", { branch: "codecast/a", worktree: "a", title: "Shout" });
+    expect(a.shared.map((x) => x.path)).toEqual(["src/shared.ts"]);
+    expect(git(root, "show", `${a.tip}:src/shared.ts`)).toContain("// formatted");
   });
 });
