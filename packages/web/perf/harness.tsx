@@ -14,7 +14,7 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
 // The -modern workloads are the same inbox with the Modern style on (its
 // session card, ModernSessionCardView, and section header): the same budgets.
-export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
+export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff" | "inbox-return";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -562,6 +562,65 @@ async function setupDiff(): Promise<Bench> {
   };
 }
 
+
+// Going back to the inbox from Threads through the sidebar, in the real
+// dashboard shell (src/layouts/DashboardShell: one DashboardLayout kept across
+// its routes) over 5,000 cached sessions. A run clicks the sidebar's Inbox
+// link on /threads until the inbox has drawn.
+async function setupInboxReturn(): Promise<Bench> {
+  const { Routes, Route, useNavigate } = await import("react-router");
+  const { default: DashboardShell } = await import("../src/layouts/DashboardShell");
+  const { default: InboxPage } = await import("../app/inbox/page");
+  const { default: ThreadsPage } = await import("../app/threads/page");
+  const { AUTH_JWT_STORAGE_KEY } = await import("../lib/localAuth");
+  w.localStorage.setItem(AUTH_JWT_STORAGE_KEY, "perf");
+  seedStore(INBOX_SESSIONS);
+  host = w.document.createElement("div");
+  w.document.body.appendChild(host);
+  root = createRoot(host);
+  let go: (path: string) => void = () => {};
+  const Nav = () => { go = useNavigate(); return null; };
+  await act(async () => {
+    root.render(
+      <ConvexProviderWithAuth client={convex} useAuth={useAuth}>
+        <MemoryRouter initialEntries={["/threads"]}>
+          <Profiler id="perf" onRender={(_id, _phase, actualDuration) => { commits++; renderMs += actualDuration; }}>
+            <Nav />
+            <Routes>
+              <Route element={<DashboardShell />}>
+                <Route path="inbox" element={<InboxPage />} />
+                <Route path="threads" element={<ThreadsPage />} />
+              </Route>
+            </Routes>
+          </Profiler>
+        </MemoryRouter>
+      </ConvexProviderWithAuth>,
+    );
+  });
+  await settle();
+  const onInbox = () => !!host.querySelector("[data-session-id]") || host.textContent!.includes("NEEDS YOU");
+  const toInbox = async () => { await act(async () => { go("/inbox"); }); await until(onInbox, "the inbox to draw"); await settle(); };
+  const toThreads = async () => { await act(async () => { go("/threads"); }); await settle(); };
+  if (process.env.PERF_DEBUG) {
+    const st = useInboxStore.getState() as any;
+    console.log("tabs:", JSON.stringify(st.tabs), st.activeTabId);
+    console.log("links:", [...host.querySelectorAll("a")].map((a: any) => `${a.getAttribute("href")}|${a.textContent.trim().slice(0, 20)}`).join("  "));
+    console.log("main:", host.querySelector("main")?.textContent?.slice(0, 300));
+  }
+  await toInbox();
+  await toThreads();
+  return {
+    run: async () => {
+      const t0 = performance.now();
+      const report = await measure(toInbox);
+      report.detail.wallMs = [(performance.now() - t0).toFixed(0)];
+      report.counts.cards = cards();
+      return report;
+    },
+    reset: toThreads,
+  };
+}
+
 const setups: Record<Workload, () => Promise<Bench>> = {
   switch: setupSwitch,
   append: setupAppend,
@@ -570,6 +629,7 @@ const setups: Record<Workload, () => Promise<Bench>> = {
   "inbox-load-modern": () => setupInboxLoad(true),
   "inbox-heartbeat-modern": () => setupInboxHeartbeat(true),
   diff: setupDiff,
+  "inbox-return": setupInboxReturn,
 };
 
 /** Builds the workload's world, once per process. */
