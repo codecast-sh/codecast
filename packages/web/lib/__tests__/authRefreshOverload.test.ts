@@ -44,7 +44,7 @@ const EXPIRED_IN_QUEUE = JSON.stringify({
 
 // auth:signIn goes over HTTP (ConvexHttpClient -> fetch). `answers` scripts
 // the replies in order; the last one repeats. "ok" rotates the refresh token.
-type Answer = "overloaded" | "network" | "ok" | "refused" | "invalid";
+type Answer = "overloaded" | "network" | "badGateway" | "gatewayTimeout" | "ok" | "refused" | "invalid";
 let answers: Answer[] = ["ok"];
 let signInCalls: Array<{ refreshToken?: string; answer: Answer; at: number }> = [];
 const realFetch = globalThis.fetch;
@@ -61,6 +61,11 @@ globalThis.fetch = (async (input: any, init?: any) => {
       return new Response(EXPIRED_IN_QUEUE, { status: 503, headers: { "content-type": "application/json" } });
     case "network":
       throw new TypeError("Failed to fetch");
+    // A load balancer in front of Convex, not the auth function: HTML bodies.
+    case "badGateway":
+      return new Response("<html><head><title>502 Bad Gateway</title></head><body>502 Bad Gateway</body></html>", { status: 502, headers: { "content-type": "text/html" } });
+    case "gatewayTimeout":
+      return new Response("<html><head><title>504 Gateway Time-out</title></head><body>504 Gateway Time-out</body></html>", { status: 504, headers: { "content-type": "text/html" } });
     case "refused":
       return json({ status: "success", value: { tokens: null }, logLines: [] }, 200);
     case "invalid":
@@ -181,6 +186,20 @@ describe("a token refresh during a Convex overload", () => {
     expect(signInCalls[3]).toMatchObject({ answer: "ok", refreshToken: "refresh-0" });
     expect(next).toEqual({ value: issue("s4") });
     expect(stored()).toEqual({ jwt: issue("s4"), refresh: "refresh-4" });
+  }, 15_000);
+
+  test("a gateway 502 or 504 is an outage, not a refusal: retried, the tokens kept, nothing rejects", async () => {
+    answers = ["badGateway", "gatewayTimeout", "badGateway", "ok"];
+    const out = await forceRefresh();
+
+    expect(signInCalls.map((c) => c.answer)).toEqual(["badGateway", "gatewayTimeout", "badGateway"]);
+    expect(out).toEqual({ value: t1 });
+    expect(shownToken).toBe(t1);
+    expect(stored()).toEqual({ jwt: t1, refresh: "refresh-0" });
+
+    const next = await forceRefresh();
+    expect(signInCalls[3]).toMatchObject({ answer: "ok", refreshToken: "refresh-0" });
+    expect(next).toEqual({ value: issue("s4") });
   }, 15_000);
 
   test("a refresh token the server refuses (tokens: null) still signs out, without retrying", async () => {

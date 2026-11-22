@@ -7,35 +7,52 @@
 // socket went anonymous, the next expiry signed people out, and the rejection
 // escaped as an "Uncaught" toast.
 //
-// The rewrite removes nothing up front and sorts a failed call by cause:
-// - The server refuses the refresh token (auth:signIn answers `tokens: null`,
-//   or throws its own error): both keys are cleared and the window signs out,
-//   and a thrown error still rejects, as upstream does.
-// - The call never reached a healthy server (ExpiredInQueue / Overloaded, or a
-//   fetch TypeError): it is retried up to 3 attempts, 1s then 2s apart plus up
-//   to 0.5s jitter, inside the cross-window refresh lock so windows queue
-//   instead of piling on. When the attempts run out the refresh token stays,
-//   the current access token is returned (the Convex client keeps the socket
-//   until it expires), and one console.warn records it. Nothing rejects.
+// Only two answers come from the auth function itself: `tokens: null` (the
+// refresh token is refused) and an HTTP 560 (the function threw). Everything
+// else never reached it: an overload (ExpiredInQueue), a gateway 502/504 with
+// an HTML body, any other non-560 failure, a dropped connection.
 //
-// Idempotent: skipped when the sentinel is present.
+// - dist/react/index.js: the provider's unauthenticatedCall marks an error
+//   `codecastInTransit` unless Convex answered 560.
+// - dist/react/client.js: the refresh removes nothing up front. A refusal
+//   (tokens: null, or an unmarked throw) clears both keys and signs out, and a
+//   throw still rejects, as upstream does. An in-transit failure is retried up
+//   to 3 attempts, 1s then 2s apart plus up to 0.5s jitter, inside the
+//   cross-window refresh lock so windows queue instead of piling on. When the
+//   attempts run out the refresh token stays, the current access token is
+//   returned (the Convex client keeps the socket until it expires), and one
+//   console.warn records it. Nothing rejects.
+//
+// Idempotent: a file holding the current sentinel is skipped. A file holding
+// an earlier revision of this patch is rewritten to the current one.
 
 import { existsSync, readFileSync, writeFileSync, globSync, realpathSync } from "node:fs";
 import { join } from "node:path";
 
-const SENTINEL = "codecastRefreshKeep";
-const REL = "dist/react/client.js";
+const CLIENT_SENTINEL = "codecastRefreshKeep:v3";
 
-const BEFORE = `                    setIsRefreshingToken(true);
+const CLIENT_UPSTREAM = `                    setIsRefreshingToken(true);
                     await storageRemove(REFRESH_TOKEN_STORAGE_KEY);
                     await verifyCodeAndSetToken({ refreshToken }).finally(() => {
                         setIsRefreshingToken(false);
                     });`;
 
-const AFTER = `                    setIsRefreshingToken(true);
-                    // ${SENTINEL}: keep the refresh token until Convex answers (ct-91563).
-                    const isTransient = (error) => error instanceof TypeError ||
-                        /ExpiredInQueue|Overloaded/.test(String(error?.message ?? error));
+// Earlier revisions of this patch, so a node_modules patched by them upgrades.
+const CLIENT_V1 = `                    setIsRefreshingToken(true);
+                    // codecastRefreshKeep: keep the refresh token until Convex answers; a thrown call (overload, network) is not a logout.
+                    try {
+                        await verifyCodeAndSetToken({ refreshToken });
+                    }
+                    catch (error) {
+                        logVerbose(\`refresh failed, keeping the refresh token: \${error}\`);
+                    }
+                    finally {
+                        setIsRefreshingToken(false);
+                    }`;
+
+const retryLoop = (marker, isTransient) => `                    setIsRefreshingToken(true);
+                    // ${marker}: keep the refresh token until Convex answers (ct-91563).
+                    const isTransient = (error) => ${isTransient};
                     try {
                         for (let attempt = 1;; attempt++) {
                             try {
@@ -59,6 +76,40 @@ const AFTER = `                    setIsRefreshingToken(true);
                         setIsRefreshingToken(false);
                     }`;
 
+const CLIENT_V2 = retryLoop("codecastRefreshKeep", `error instanceof TypeError ||
+                        /ExpiredInQueue|Overloaded/.test(String(error?.message ?? error))`);
+
+const CLIENT_CURRENT = retryLoop(CLIENT_SENTINEL, `error instanceof TypeError || error?.codecastInTransit === true ||
+                        /ExpiredInQueue|Overloaded/.test(String(error?.message ?? error))`);
+
+const INDEX_SENTINEL = "codecastInTransit:v3";
+
+const INDEX_UPSTREAM = `        unauthenticatedCall(action, args) {
+            return new ConvexHttpClient(client.address).action(action, args);
+        },`;
+
+const INDEX_CURRENT = `        unauthenticatedCall(action, args) {
+            // ${INDEX_SENTINEL}: only a 560 comes from the function; anything else never reached it (ct-91563).
+            let fromFunction = false;
+            const fetchMarkingStatus = async (...fetchArgs) => {
+                const response = await fetch(...fetchArgs);
+                fromFunction = response.ok || response.status === 560;
+                return response;
+            };
+            return new ConvexHttpClient(client.address, { fetch: fetchMarkingStatus })
+                .action(action, args)
+                .catch((error) => {
+                    if (!fromFunction && error && typeof error === "object")
+                        error.codecastInTransit = true;
+                    throw error;
+                });
+        },`;
+
+const EDITS = [
+  { rel: "dist/react/client.js", sentinel: CLIENT_SENTINEL, from: [CLIENT_UPSTREAM, CLIENT_V2, CLIENT_V1], to: CLIENT_CURRENT },
+  { rel: "dist/react/index.js", sentinel: INDEX_SENTINEL, from: [INDEX_UPSTREAM], to: INDEX_CURRENT },
+];
+
 const roots = [
   "node_modules/@convex-dev/auth",
   ...globSync("node_modules/.bun/@convex-dev+auth@*/node_modules/@convex-dev/auth"),
@@ -67,18 +118,21 @@ const roots = [
 ];
 const seen = new Set();
 for (const root of roots) {
-  const file = join(root, REL);
-  if (!existsSync(file)) continue;
-  const real = realpathSync(file);
-  if (seen.has(real)) continue;
-  seen.add(real);
-  const src = readFileSync(file, "utf8");
-  if (src.includes(SENTINEL)) continue;
-  if (!src.includes(BEFORE)) {
-    console.error(`[convex-auth-refresh-keep] ${file}: refresh code not found; @convex-dev/auth changed, re-check ct-91563`);
-    process.exitCode = 1;
-    continue;
+  for (const { rel, sentinel, from, to } of EDITS) {
+    const file = join(root, rel);
+    if (!existsSync(file)) continue;
+    const real = realpathSync(file);
+    if (seen.has(real)) continue;
+    seen.add(real);
+    const src = readFileSync(file, "utf8");
+    if (src.includes(sentinel)) continue;
+    const before = from.find((hunk) => src.includes(hunk));
+    if (!before) {
+      console.error(`[convex-auth-refresh-keep] ${file}: refresh code not found; @convex-dev/auth changed, re-check ct-91563`);
+      process.exitCode = 1;
+      continue;
+    }
+    writeFileSync(file, src.replace(before, to));
+    console.log(`[convex-auth-refresh-keep] Patched ${file}`);
   }
-  writeFileSync(file, src.replace(BEFORE, AFTER));
-  console.log(`[convex-auth-refresh-keep] Patched ${file}`);
 }
