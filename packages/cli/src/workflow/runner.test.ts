@@ -1348,12 +1348,6 @@ describe("gatePayload asker", () => {
     expect(gatePayload(node, g, { "card_write.session_id": "sess-card" })).toMatchObject({ asker_session_id: "sess-card" });
     expect(gatePayload(node, g, {})).not.toHaveProperty("asker_session_id");
   });
-  test("names the session the change came from, so a run nobody's session started asks from it", () => {
-    const g = parseWorkflowSource(src);
-    const node = g.nodes.get("decide")!;
-    expect(gatePayload(node, g, { change_conversation: "jx7maker" })).toMatchObject({ subject_conversation_id: "jx7maker" });
-    expect(gatePayload(node, g, {})).not.toHaveProperty("subject_conversation_id");
-  });
 });
 
 describe("refreshedOnResume (line-versions.md LV4)", () => {

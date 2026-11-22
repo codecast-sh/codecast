@@ -35,6 +35,7 @@ import { navPromptField } from "./userMessagesFilter";
 import { retainSessionCreator } from "./sessionLaunch";
 import { isSessionOwner } from "./sessionOwners";
 import { withAgentSessions } from "./lib/runAgentSessions";
+import { changeSessionOf } from "./lib/taskOwner";
 
 export { withAgentSessions };
 
@@ -170,6 +171,11 @@ async function gateStackRef(ctx: Ctx, userId: Id<"users">, run: any, stack: stri
 /** A session's newest decision still waiting and bound to no run: the one it posted for the gate to adopt. */
 /** The session of the station a gate names (`asker=`), by any ref the runner sends (its hand's short id, or a full
  *  session id): the run's own session wins a short-id collision. */
+/** A task's comments, for the handoffs changeSessionOf reads. */
+async function taskCommentsOf(ctx: Ctx, taskId: Id<"tasks">) {
+  return ctx.db.query("task_comments").withIndex("by_task_id", (q: any) => q.eq("task_id", taskId)).collect();
+}
+
 export async function stationSession(ctx: Ctx, ref: string | undefined, runId: Id<"workflow_runs">): Promise<Doc<"conversations"> | null> {
   if (!ref) return null;
   return ((await findConversationByAnyRefWhere(ctx as any, ref, (c: any) => String(c.workflow_run_id ?? "") === String(runId)))
@@ -189,7 +195,7 @@ export async function openDecisionOf(ctx: Ctx, conversationId: Id<"conversations
 export async function pauseAtGateCore(
   ctx: Ctx,
   auth: { userId: Id<"users"> },
-  args: { run_id: Id<"workflow_runs">; node_id: string; prompt: string; choices: GateChoice[]; doc_md?: string; category?: string; stack?: string; card?: ChangeCard; proposal?: unknown; judge_fix?: unknown; asker_session_id?: string; asker?: string; subject_conversation_id?: string },
+  args: { run_id: Id<"workflow_runs">; node_id: string; prompt: string; choices: GateChoice[]; doc_md?: string; category?: string; stack?: string; card?: ChangeCard; proposal?: unknown; judge_fix?: unknown; asker_session_id?: string; asker?: string },
 ) {
   const run = await ctx.db.get(args.run_id);
   if (!run || String(run.user_id) !== String(auth.userId)) return { error: "Not found" };
@@ -278,12 +284,11 @@ export async function pauseAtGateCore(
     await ctx.db.patch(args.run_id, { gate_decision_id: own._id, gate_choices: choices, ...answered });
     decision = { id: own._id, short_id: own.short_id };
   }
-  // A run no session started (a plain shell, say over ssh on another machine) asks from the session its change came
-  // from when that session works on the run's task, so the card opens where the work is, not on the run's own log.
-  // The caller must be able to read it, and a session reviewing the task never asks for it.
-  const subjectId = !run.spawner_conversation_id && args.subject_conversation_id ? ctx.db.normalizeId("conversations", args.subject_conversation_id) : null;
-  const subjectConv: any = subjectId && task && (task.conversation_ids ?? []).some((id: Id<"conversations">) => String(id) === String(subjectId)) ? await ctx.db.get(subjectId) : null;
-  const subject = subjectConv && String(subjectConv.review_of_task_id ?? "") !== String(task!._id) && (await canAccessConversation(ctx, auth.userId, subjectConv)) ? subjectConv._id : null;
+  // A run no session started (a plain shell, say over ssh on another machine) asks from the session its task's change
+  // came from (changeSessionOf, what /cli/work/get names to the CLI), so the card opens where the work is, not on the
+  // run's own log. The caller must be able to read it.
+  const made = !run.spawner_conversation_id && task ? await changeSessionOf(ctx, task, await taskCommentsOf(ctx, task._id)) : null;
+  const subject = made && (await canAccessConversation(ctx, auth.userId, made)) ? made._id : null;
   const askerId = station?._id ?? run.spawner_conversation_id ?? subject ?? run.primary_conversation_id;
   const asker = decision ? null : askerId ? await ctx.db.get(askerId) : null;
   if (!decision && !asker) return { error: "the gate could not ask anyone: the run has no session to ask from" };
@@ -1510,8 +1515,6 @@ export const pauseAtGate = mutation({
     asker_session_id: v.optional(v.string()),
     /** The station the gate names (`asker=`), sent even before it ran: a gate with a presenter never asks a question of its own. */
     asker: v.optional(v.string()),
-    /** The session the run's change came from (flows.md FL4): a run with no spawner asks from it. */
-    subject_conversation_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const auth = await verifyApiToken(ctx, args.api_token, false);
