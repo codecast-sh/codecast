@@ -41,15 +41,16 @@ export const FLOW_SYNC_COLLECTIONS = {
     sync: { isDelta: true, deepFields: ["liveFlow", "lanes", "off", "sources", "header"] },
     feeds: ["flowMap.forTeam"],
   },
-  // The viewer's repositories' own flows (convex repoFlows.mine), one row per
-  // repository as its checkouts reported them: the Ship picker puts them ahead
-  // of the shipped flows of the same slug, as `cast flow run` does there.
+  // The viewer's checkouts' own flows (convex repoFlows.forCheckout), one row
+  // per checkout as its machine reported it: the Ship picker puts a session's
+  // checkout's flows ahead of the shipped ones of the same slug, as `cast flow
+  // run` does there.
   repoFlows: {
     persistence: { kind: "collection", key: "repoFlows" },
     hydration: { phase: "deferred" },
-    indexes: "_id, repository",
-    // A complete snapshot of the viewer's rows each push.
-    sync: { deepFields: ["flows"] },
-    feeds: ["repoFlows.mine"],
+    indexes: "_id, root, repository",
+    // Each picker feeds the one row of its session's checkout, so delta.
+    sync: { isDelta: true, deepFields: ["flows"] },
+    feeds: ["repoFlows.forCheckout"],
   },
 } as const satisfies Record<string, ClientSyncRegistryEntry>;
