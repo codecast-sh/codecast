@@ -41,20 +41,30 @@ export function useSyncTeams(): any[] | undefined {
   // switch. The timer lets a just-created team's echo catch up first: right
   // after create the real id is active while the list subscription still
   // holds the old answer, and that gap must not read as a deleted team.
+  //
+  // The repoint rewrites the canonical pointer every device reads, so it never
+  // trusts getUserTeams' `[]`, which a socket the server answers as nobody also
+  // gets (a rotated token) while the client still counts itself signed in. A
+  // suspected dangle asks getUserTeamsV2, whose answer says when the caller is
+  // anonymous, and only a granted view without the team repoints.
   const switchWorkspace = useSwitchWorkspace();
+  const active = useInboxStore((s) => s.clientState.ui?.active_team_id);
+  // Stub ids (optimistic create) resolve on their own; only a real id can dangle.
+  const dangling = Array.isArray(teamsQuery) && !!active && isConvexId(String(active))
+    && !teamsQuery.some((t: any) => t?._id?.toString() === String(active));
+  const confirmed = useQueryNoThrow(api.teams.getUserTeamsV2, isSyncHost && settled && !identityLost && dangling ? {} : "skip").data as
+    | { access: string; teams?: Array<{ _id: string }> }
+    | undefined;
   useWatchEffect(() => {
-    if (!Array.isArray(teamsQuery)) return;
-    const active = useInboxStore.getState().clientState.ui?.active_team_id;
-    // Stub ids (optimistic create) resolve on their own; only a real id can dangle.
-    if (!active || !isConvexId(String(active))) return;
-    if (teamsQuery.some((t: any) => t?._id?.toString() === String(active))) return;
+    if (!dangling || confirmed?.access !== "granted" || !Array.isArray(confirmed.teams)) return;
+    if (confirmed.teams.some((t) => String(t._id) === String(active))) return;
     const timer = setTimeout(() => {
       const now = useInboxStore.getState().clientState.ui?.active_team_id;
       if (String(now) !== String(active)) return;
-      void switchWorkspace((teamsQuery[0]?._id as string | undefined) ?? null);
+      void switchWorkspace((confirmed.teams?.[0]?._id as string | undefined) ?? null);
     }, 5000);
     return () => clearTimeout(timer);
-  }, [teamsQuery, switchWorkspace]);
+  }, [dangling, confirmed, active, switchWorkspace]);
 
   return teamsQuery as any[] | undefined;
 }

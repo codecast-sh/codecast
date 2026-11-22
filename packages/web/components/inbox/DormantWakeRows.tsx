@@ -1,13 +1,16 @@
-import type React from "react";
 import type { InboxSession } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useLiveWatchRows } from "../../hooks/useLiveWatchRows";
 import { threadStateView } from "../../lib/threadState";
 import { WAKE_BADGE } from "../../lib/triggerBadges";
-import { fmtClock, fmtDuration } from "../triggerCadence";
-import { taskDisplayTitle, type TriggerRow } from "../triggerTasks";
+import type { TriggerRow } from "../triggerTasks";
 import { SchedChildArrow, SchedFireBadge } from "../TriggerRow";
-import { dormantWakeOf } from "./dormantWake";
+import { useDormantWake } from "../../hooks/useDormantWake";
+import { DORMANT_CLAIM_TITLE, type DormantWakeLabel } from "./dormantWake";
+
+export function WakeWhen({ when }: { when: DormantWakeLabel["when"] }) {
+  return typeof when === "string" ? <>{when}</> : <SchedFireBadge task={when.task} />;
+}
 
 // -- Wake rows --
 // DormantWakeRow: every card in the DORMANT section carries one line saying
@@ -28,57 +31,17 @@ export function DormantWakeRow({ session, rows, isActive, onOpen, onOpenSchedule
   onOpen: (session: InboxSession) => void;
   onOpenSchedule: (row: TriggerRow) => void;
 }) {
-  const now = useCoarseNow(30_000);
-  const watches = useLiveWatchRows(session, now);
-  const wake = dormantWakeOf(session, rows, watches, now);
-  let what: string;
-  let when: React.ReactNode;
-  let warn = false;
-  switch (wake.kind) {
-    case "trigger":
-      what = taskDisplayTitle(wake.row.task) + (wake.others > 0 ? ` +${wake.others}` : "");
-      when = <SchedFireBadge task={wake.row.task} />;
-      break;
-    case "trigger_unloaded":
-      what = "a trigger fires into it";
-      when = "armed";
-      break;
-    case "workflow":
-      what = `workflow: ${wake.name}`;
-      when = "when it finishes";
-      break;
-    case "background":
-      what = `${wake.count > 1 ? `${wake.count} background tasks` : "background task"}${wake.what ? `: ${wake.what}` : ""}`;
-      when = "when it finishes";
-      break;
-    case "workers":
-      what = "its subagents are still working";
-      when = "when they finish";
-      break;
-    case "snoozed":
-      what = "snoozed";
-      when = fmtClock(wake.at, now);
-      break;
-    case "parked":
-      what = "parked by you";
-      when = "on next activity";
-      break;
-    case "claim":
-      warn = true;
-      what = wake.what ? `nothing scheduled · ${wake.what}` : "nothing scheduled";
-      when = wake.back > now ? `yours in ${fmtDuration(wake.back - now)}` : "yours now";
-      break;
-  }
+  const { wake, label: { what, when, warn } } = useDormantWake(session, rows);
   return (
     <div data-cc-tech data-card-bar data-dormant-wake={wake.kind} className={`relative transition-colors ${isActive ? "bg-sol-cyan/[0.10]" : ""}`}>
       <button
         className="w-full flex items-center gap-1.5 text-left cursor-pointer pl-2 pr-3 py-[3px] hover:bg-sol-blue/[0.05] transition-colors"
         onClick={() => (wake.kind === "trigger" ? onOpenSchedule(wake.row) : onOpen(session))}
-        title={wake.kind === "claim" ? "The agent named a wake nothing here can see. It returns to Needs Input if nothing happens." : "Open"}
+        title={warn ? DORMANT_CLAIM_TITLE : "Open"}
       >
         <SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" />
         <span className={`text-meta truncate min-w-0 ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{what}</span>
-        <span className={`ml-auto shrink-0 whitespace-nowrap text-meta tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}>{when}</span>
+        <span className={`ml-auto shrink-0 whitespace-nowrap text-meta tabular-nums ${warn ? "text-sol-yellow/90" : "text-sol-text-dim"}`}><WakeWhen when={when} /></span>
       </button>
     </div>
   );

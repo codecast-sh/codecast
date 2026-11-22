@@ -4724,6 +4724,12 @@ describe("dismiss/kill advances in the ACTIVE view order, like j/k", () => {
     expect(useInboxStore.getState().currentSessionId).toBe(C);
   });
 
+  it("a bulk kill never advances onto a row it killed earlier in the same gesture", () => {
+    seed("grouped");
+    useInboxStore.getState().killSessions([B, A]);
+    expect(useInboxStore.getState().currentSessionId).toBe(C);
+  });
+
   it("time view: markKilling advances the same way", () => {
     seed("time");
     useInboxStore.getState().markKilling(A);
