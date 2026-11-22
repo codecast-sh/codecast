@@ -75,6 +75,7 @@ export async function freezeSessionChange(root: string, session: string, opts: {
   };
 }
 
+<<<<<<< Updated upstream
 /** Origin's tip of `branch`, fetched now; empty when origin has no such branch or cannot be reached. */
 export async function originTip(root: string, branch: string): Promise<string> {
   const remoteRef = `refs/remotes/origin/${branch}`;
@@ -96,6 +97,26 @@ async function branchTip(root: string, change: FrozenChange): Promise<{ tip: str
   const pushed = !!remote && remote !== (change.remote_tip ?? "") && remote !== change.tip;
   const tip = local && local !== change.tip ? local : pushed ? remote : local || change.tip;
   return { tip, ...(remote ? { remote_tip: remote } : {}) };
+=======
+/**
+ * Bring origin's `branch` into the local branch of that name. A plain `fetch origin +b:b` is refused while a worktree
+ * has `b` checked out (the run's own worktree does), so the tip is fetched alone and the ref moved with update-ref.
+ */
+export async function fetchBranch(root: string, branch: string): Promise<string> {
+  await git(root, ["fetch", "--quiet", "origin", `refs/heads/${branch}`]);
+  const tip = (await git(root, ["rev-parse", "FETCH_HEAD"])).trim();
+  await git(root, ["update-ref", `refs/heads/${branch}`, tip]);
+  return tip;
+}
+
+/** Where a named branch stands now; a pull request's is fetched first, since its session pushes rather than commits here. */
+async function branchTip(root: string, change: FrozenChange): Promise<string> {
+  // A pull request's fetch that fails reads the tip already here, as it always has; a placed change has no other copy
+  // of the subject's fix, so its failed fetch fails the refreeze.
+  if (change.source === "pr") await fetchBranch(root, change.branch).catch(() => "");
+  else if (change.pushed) await fetchBranch(root, change.branch);
+  return (await git(root, ["rev-parse", `refs/heads/${change.branch}`])).trim();
+>>>>>>> Stashed changes
 }
 
 /**
@@ -109,7 +130,7 @@ export async function refreezeSessionChange(root: string, runDir: string, worktr
   const before = readFrozenChange(runDir);
   if (!before?.session) throw new Error("The run's change did not come from a session, so there is no session's change to freeze again");
   // A named branch or pull request is the change: the session fixes it by committing there (a pull request's by pushing).
-  const change: FrozenChange = before.source === "session"
+  const change: FrozenChange = before.source === "session" && !before.pushed
     ? await freezeSessionChange(root, before.conversation ?? before.session, { branch: before.branch, worktree: before.worktree, title: before.title ?? null, only: before.only ?? null })
     : { ...before, ...(await branchTip(root, before)) };
   const tree = (rev: string) => git(root, ["rev-parse", `${rev}^{tree}`]).then((s) => s.trim()).catch(() => rev);
