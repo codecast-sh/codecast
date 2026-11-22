@@ -435,7 +435,7 @@ describe("writers answer for themselves", () => {
     });
     expect(await runOn(root, changeFlow(GOOD_CHECK))).toBe("failed");
     expect(progressSaid(s)).toContain("fix_check is waiting on a person");
-    expect(JSON.stringify(s.calls)).toContain(ask);
+    expect(JSON.stringify(s.calls)).toContain(`jx7aaaa (writer of src/a.ts) asks: ${ask}`);
     expect(progressSaid(s)).not.toContain("killed after");
     // B hears the run no longer waits on it; A, who asked, is not told so.
     expect(s.sent(B).filter((m) => /no longer waits on the brief/.test(m.body))).toHaveLength(1);
