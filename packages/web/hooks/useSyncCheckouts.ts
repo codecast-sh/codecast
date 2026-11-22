@@ -6,7 +6,7 @@
 // sessions the viewer holds, by conversation_id.
 import { useCallback, useMemo } from "react";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
-import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
+import { toldOf, type CheckoutRow } from "@codecast/shared/contracts/checkouts";
 import { useSyncCollection } from "./useSyncCollection";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
 
@@ -22,7 +22,8 @@ export function useSyncCheckouts(teamId: string | null | undefined): { ready: bo
   return useMemo(() => ({ ready: r.ready || !!r.error || r.refused, error: r.error ?? null, refused: r.refused }), [r.ready, r.error, r.refused]);
 }
 
-const checkoutSig = (c: CheckoutRow) => `${c._id}|${c.reported_at}`;
+// Who a stuck level has told changes without a new report (a person's ask from the page), so it is in the signature.
+const checkoutSig = (c: CheckoutRow) => `${c._id}|${c.reported_at}|${c.level.state === "stuck" ? toldOf(c.level).length : ""}`;
 
 /** Reader: a team's checkouts from the store, one repository's (`owner/name`, any case) or all, by device then path. */
 export function useCheckouts(teamId: string | null | undefined, repository?: string | null): CheckoutRow[] {

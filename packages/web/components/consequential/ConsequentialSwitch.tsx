@@ -23,7 +23,7 @@ export type SwitchFigure = { value: string; label: string; tone?: "warn" };
 
 /** One fact: a short key and a value a glance takes in (a number, a name, a state). `list` names the things it covers. */
 /** `act`: a press that opens where the fact is managed ("Machines…"); it never does the review's act. */
-export type SwitchRow = { k: string; v: string; tone?: "warn" | "ok"; list?: string[]; act?: { label: string; press: () => void } };
+export type SwitchRow = { k: string; v: string; tone?: "warn" | "ok" | "bad"; list?: string[]; act?: { label: string; press: () => void } };
 
 export type SwitchLedger = {
   /** What turns on, as the control names it: "Auto-start". */
@@ -72,7 +72,7 @@ export type ConsequentialSwitchProps = {
   onPick?: (option: string) => void;
 };
 
-const TONE = { warn: "text-sol-orange", ok: "text-sol-green" } as const;
+const TONE = { warn: "text-sol-orange", ok: "text-sol-green", bad: "text-sol-red" } as const;
 
 export function ConsequentialSwitch({ on, ledger, onTurnOn, onTurnOff, trigger, className, label = "Review", triggerProps, onPick }: ConsequentialSwitchProps) {
   const [reviewing, setReviewing] = useState(false);

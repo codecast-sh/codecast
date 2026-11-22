@@ -214,8 +214,10 @@ button.pt-pill:hover, .pt-pill[data-picked] { border-color: var(--lw-ink-2); }
 .ck-row-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 7px 8px; border: 0; background: none; font: inherit; color: inherit; text-align: left; cursor: pointer; }
 .ck-where { display: inline-flex; align-items: baseline; gap: 8px; min-width: 0; flex: 0 1 auto; overflow: hidden; }
 .ck-folder { font: 12.5px/1.3 var(--lw-mono, var(--font-mono)); color: var(--lw-ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ck-machine, .ck-branch { font-size: 12px; color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.ck-marks { margin-left: auto; display: inline-flex; align-items: baseline; justify-content: flex-end; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--lw-ink-3); min-width: 0; }
+.ck-machine, .ck-branch { font-size: 12px; color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* The folder is what a person looks for: it keeps its width, and the machine's name gives way first. */
+.ck-where .ck-folder { flex: 0 0 auto; max-width: 30ch; }
+.ck-marks { margin-left: auto; display: inline-flex; align-items: baseline; justify-content: flex-end; flex-wrap: wrap; gap: 2px 12px; font-size: 12px; color: var(--lw-ink-3); min-width: 0; flex-shrink: 0; max-width: 55%; }
 .ck-marks [data-tone="live"], .ck-marks [data-tone="live"] b { color: var(--lw-person); }
 .ck-stuck { color: var(--lw-bad); }
 .ck-told { color: var(--lw-ink-3); }
@@ -223,6 +225,41 @@ button.pt-pill:hover, .pt-pill[data-picked] { border-color: var(--lw-ink-2); }
 .ck-group[data-group="needs"] .ck-action { width: 236px; display: flex; justify-content: flex-end; }
 .ck-action { flex: none; padding-right: 4px; }
 .ck-action .pv-btn { height: 28px; font-size: 12.5px; }
+/* Ready to ship: one line, folded, with Ship all; open, the checkouts with work to ship. */
+.ck-ready > summary.ck-ready-head { display: flex; align-items: center; gap: 12px; padding: 2px 4px 2px 8px; cursor: pointer; list-style: none; }
+.ck-ready > summary::-webkit-details-marker { display: none; }
+.ck-ready > summary::before { content: "▸"; width: 10px; color: var(--lw-ink-3); font-size: 11px; }
+.ck-ready[open] > summary::before { content: "▾"; }
+.ck-ready-head .ck-group-name { margin: 0; color: var(--lw-ink); }
+.ck-ready-where { font-size: 12px; color: var(--lw-ink-3); }
+.ck-ready-head .ck-primary { margin-left: auto; }
+.ck-ready[open] > .ck-rows { margin-top: 6px; }
+.ck-primary { background: var(--lw-ink); border-color: var(--lw-ink); color: var(--lw-card); }
+.ck-primary:hover { opacity: .9; border-color: var(--lw-ink); }
+/* The drawer of a stuck checkout: the action first, then why in words, each writer with its files by folder. */
+.ck-acts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.ck-acts .pv-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ck-kv dd[data-tone="bad"] { color: var(--lw-bad); }
+.ck-heading { margin: 22px 0 4px; font-size: 14px; font-weight: 600; color: var(--lw-bad); }
+.ck-reason { margin: 0 0 8px; font-size: 12.5px; color: var(--lw-ink-2); }
+.ck-writer { padding: 10px 0; border-top: 1px solid var(--lw-rule-2, var(--lw-rule)); }
+.ck-writer:first-of-type { border-top: 0; }
+.ck-writer-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+.ck-writer-name { min-width: 0; flex: 0 1 auto; font-size: 13px; font-weight: 600; color: var(--lw-ink); text-decoration: none; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+a.ck-writer-name:hover { text-decoration: underline; text-underline-offset: 3px; }
+.ck-writer-name[data-quiet] { color: var(--lw-ink-2); font-weight: 500; }
+.ck-writer-head > :last-child { margin-left: auto; flex: none; }
+.ck-writer-told { font-size: 12px; color: var(--lw-ink-3); }
+.ck-small { height: 24px; padding: 0 10px; font-size: 12px; }
+.ck-folders { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 4px; font: 11.5px/1.5 var(--lw-mono, var(--font-mono)); }
+.ck-folders > li { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0 14px; min-width: 0; }
+.ck-folder-path { flex: 0 0 100%; min-width: 0; color: var(--lw-ink-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; direction: rtl; text-align: left; }
+.ck-file { color: var(--lw-ink); white-space: nowrap; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.ck-more { padding: 0; border: 0; background: none; font: inherit; color: var(--lw-ink-2); cursor: pointer; }
+.ck-more:hover { color: var(--lw-ink); text-decoration: underline; }
+/* The Ship confirm's lane: the change flow as the page draws it, read-only. */
+.ck-confirm-lane.lw-widget { margin: 0; max-width: none; padding: 10px 20px 4px; background: transparent; border-bottom: 1px solid color-mix(in srgb, var(--sol-border) 60%, transparent); overflow-x: auto; }
+.ck-confirm-lane .pt-track { width: max-content; }
 .ck-stale > summary { padding: 6px 8px; font-size: 12px; color: var(--lw-ink-3); cursor: pointer; list-style: none; }
 .ck-stale > summary::-webkit-details-marker { display: none; }
 .ck-stale > summary::before { content: "▸"; display: inline-block; width: 14px; color: var(--lw-ink-3); }
@@ -290,14 +327,16 @@ a.pd-row:hover .pd-run-title { text-decoration: underline; }
   .pv-lane .pt-track:not([data-small]) .pt-counts-fork { top: -8px; right: auto; left: -2px; }
   .pv-waiting { margin-left: 0; }
   .ck { padding: 12px 12px 4px; }
-  .ck-row { flex-wrap: wrap; gap: 4px; }
-  .ck-row-open { flex: 1 1 100%; flex-wrap: wrap; align-items: flex-start; row-gap: 2px; }
+  /* A checkout is two short lines with its action at the right, never a full-width button. */
+  .ck-row { flex-wrap: nowrap; align-items: flex-start; gap: 6px; }
+  .ck-row-open { flex: 1 1 auto; flex-wrap: wrap; align-items: flex-start; row-gap: 2px; padding: 6px 4px; }
   .ck-row-open > .pv-led { margin-top: 5px; }
   .ck-group[data-group="needs"] .ck-action { width: auto; }
-  .ck-where { flex-wrap: wrap; column-gap: 8px; }
-  .ck-where { flex-basis: calc(100% - 24px); }
-  .ck-marks { margin-left: 18px; justify-content: flex-start; }
-  .ck-action { padding: 0 0 6px 26px; }
+  .ck-where { flex-wrap: wrap; column-gap: 8px; flex-basis: calc(100% - 24px); }
+  .ck-marks { margin-left: 18px; justify-content: flex-start; max-width: none; flex-shrink: 1; }
+  .ck-action { padding: 4px 0 0; }
+  .ck-action .pv-btn { height: 26px; padding: 0 9px; font-size: 12px; }
+  .ck-ready-where { display: none; }
   .pd-row.ck-work { grid-template-columns: 62px minmax(0, 1fr) auto minmax(44px, auto); }
   .ck-work .pd-dim { display: none; }
   .pv-strip-row { grid-template-columns: 1fr; gap: 4px; }

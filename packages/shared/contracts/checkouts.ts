@@ -101,3 +101,83 @@ export function checkoutHash(r: unknown): string {
 
 /** How long a level refuses on the same files before the session that wrote them (else the device's owner) hears of it. */
 export const LEVEL_STUCK_FILE_MS = 30 * 60_000;
+
+const shellWord = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
+
+/**
+ * The words a stuck level's ask carries to one reader (the session that last wrote `mine`, or a finding for the files
+ * nobody wrote): the checkout, how many of the conflicting files are this reader's and which, that the rest are
+ * others' and told apart, and the two ways out over exactly its files. The daemon names a list file it wrote on the
+ * machine (`files`); an ask sent from elsewhere (the pipeline page) has none, so it names every file and the ways out
+ * spell them. One wording for both, so a writer reads the same ask whoever sends it.
+ */
+export function levelAskWords(
+  r: { path: string; upstream: string | null; behind: number | null },
+  level: { files: string[]; since: number },
+  mine: string[],
+  files: { list: string; patch: string } | null,
+  opts: { host: string; whose: "session" | "nobody" },
+): { title: string; body: string } {
+  const upstream = r.upstream ?? "origin/main";
+  const name = r.path.replace(/\/+$/, "").split("/").pop() || r.path;
+  const n = mine.length;
+  const others = level.files.length - n;
+  const since = new Date(level.since).toISOString().replace("T", " ").slice(0, 16);
+  const what = opts.whose === "session" ? `${n} of your files` : `${n} file${n === 1 ? "" : "s"} no session wrote`;
+  const title = `${name} on ${opts.host}: ${what} conflict${n === 1 ? "s" : ""} with ${upstream}`;
+  const shown = (files ? mine.slice(0, LEVEL_TOLD_PATHS_MAX) : mine).map((f) => `  ${f}`);
+  const literal = `git --literal-pathspecs -C ${shellWord(r.path)}`;
+  const patch = files?.patch ?? `/tmp/${name}-level.patch`;
+  const named = mine.map(shellWord).join(" ");
+  const aside = files
+    ? `\`tr '\\n' '\\0' < ${shellWord(files.list)} | xargs -0 ${literal} diff -- > ${shellWord(patch)} && ${literal} checkout --pathspec-from-file=${shellWord(files.list)}\``
+    : `\`${literal} diff -- ${named} > ${shellWord(patch)} && ${literal} checkout -- ${named}\``;
+  const body = [
+    `The daemon on ${opts.host} has not levelled ${r.path} to ${upstream} since ${since} UTC${r.behind ? ` (${r.behind} commits behind)` : ""}. ${opts.whose === "session" ? `These ${n} uncommitted file${n === 1 ? " was" : "s were"} last written by this session` : `These ${n} uncommitted file${n === 1 ? " has" : "s have"} no session that wrote ${n === 1 ? "it" : "them"}`} and conflict with ${upstream}:`,
+    ...shown,
+    ...(files && n > LEVEL_TOLD_PATHS_MAX ? [`  +${n - LEVEL_TOLD_PATHS_MAX} more`] : []),
+    ...(files ? [`The full list: ${files.list}`] : []),
+    ...(others > 0 ? [`The other ${others} conflicting file${others === 1 ? "" : "s"} belong${others === 1 ? "s" : ""} to other sessions, which are told separately: leave ${others === 1 ? "it" : "them"} alone.`] : []),
+    "",
+    `Either way out, over these files only, lets the next sweep level the checkout:`,
+    `1. Rebase each onto main's version: \`${literal} show ${upstream}:<file>\` is main's; make your change again on top of it.`,
+    `2. Set them aside as a patch, then restore main's: ${aside}; later \`${literal} apply --3way ${shellWord(patch)}\`.`,
+  ].join("\n");
+  return { title, body };
+}
+
+/**
+ * A stuck level's conflicting files by who should hear of them, as a checkout's report shows it: each file goes to the
+ * synced session that wrote it most recently (its newest write first), the rest to nobody (a finding). The daemon reads
+ * whole transcripts for this; a report carries each session's newest CHECKOUT_PATHS_MAX paths, so a file past that
+ * reads as nobody's here.
+ */
+export function levelWriters(r: { uncommitted: { sessions: CheckoutSession[] }; level: CheckoutLevel }): { writers: Array<{ conversation_id: string; files: string[] }>; nobody: string[] } {
+  if (r.level.state !== "stuck") return { writers: [], nobody: [] };
+  const sessions = r.uncommitted.sessions.filter((s) => !!s.conversation_id).sort((a, b) => b.last_activity - a.last_activity);
+  const by = new Map<string, string[]>();
+  const nobody: string[] = [];
+  for (const f of r.level.files) {
+    const s = sessions.find((x) => x.paths.includes(f));
+    if (!s) { nobody.push(f); continue; }
+    by.set(s.conversation_id!, [...(by.get(s.conversation_id!) ?? []), f]);
+  }
+  return { writers: [...by].map(([conversation_id, files]) => ({ conversation_id, files })), nobody };
+}
+
+/** An ask made from the pipeline page on a stuck checkout (checkouts.ask), kept on the row apart from the daemon's report:
+ *  it counts as told while the episode it was made in (`since`) lasts. */
+export type CheckoutPageAsk = CheckoutTold & { since: number };
+
+/** The level as the page reads it: the daemon's asks and the page's for this episode, one per reader. */
+export function withPageAsks(level: CheckoutLevel, asks: readonly CheckoutPageAsk[] | undefined): CheckoutLevel {
+  if (level.state !== "stuck" || !asks?.length) return level;
+  const told = [...toldOf(level)];
+  const key = (t: CheckoutTold) => (t.to === "session" ? t.conversation_id : "finding");
+  for (const a of asks) {
+    if (a.since !== level.since || told.some((t) => key(t) === key(a))) continue;
+    const { since: _s, ...t } = a;
+    told.push(t as CheckoutTold);
+  }
+  return { ...level, told };
+}

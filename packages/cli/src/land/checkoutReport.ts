@@ -18,7 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import {
   CHECKOUT_IDLE_MS, CHECKOUT_PATHS_MAX, CHECKOUT_SESSIONS_MAX, checkoutHash, LEVEL_STUCK_FILE_MS,
-  LEVEL_TOLD_PATHS_MAX, toldOf, type CheckoutLevel, type CheckoutReport, type CheckoutSession, type CheckoutTold,
+  levelAskWords, toldOf, type CheckoutLevel, type CheckoutReport, type CheckoutSession, type CheckoutTold,
 } from "@codecast/shared/contracts/checkouts";
 import { defaultConfigDir } from "../config/configDir.js";
 import { gitTry } from "../wipSnapshot.js";
@@ -199,34 +199,9 @@ export function askFiles(r: Pick<CheckoutReport, "device_id" | "path">, who: str
   return { list: path.join(dir, `${base}.txt`), patch: path.join(dir, `${base}.patch`) };
 }
 
-const sh = (s: string) => (/^[\w@%+=:,./-]+$/.test(s) ? s : `'${s.replace(/'/g, "'\\''")}'`);
-
-/**
- * The words of one ask: the checkout, how many of the conflicting files are this reader's and which, that the rest
- * are others' and told apart, and the two ways out over exactly its files (named by a list file, never inlined).
- */
+/** The words of one ask (contracts/checkouts levelAskWords), on this machine: the list file it names is written here. */
 export function conflictWords(r: Pick<CheckoutReport, "path" | "upstream" | "behind">, level: Pick<Extract<CheckoutLevel, { state: "stuck" }>, "files" | "since">, mine: string[], files: { list: string; patch: string }, opts: { host?: string; whose: "session" | "nobody" }): { title: string; body: string } {
-  const host = opts.host ?? os.hostname();
-  const upstream = r.upstream ?? "origin/main";
-  const n = mine.length;
-  const others = level.files.length - n;
-  const since = new Date(level.since).toISOString().replace("T", " ").slice(0, 16);
-  const what = opts.whose === "session" ? `${n} of your file${n === 1 ? "" : "s"}` : `${n} file${n === 1 ? "" : "s"} no session wrote`;
-  const title = `${path.basename(r.path)} on ${host}: ${what} conflict${n === 1 ? "s" : ""} with ${upstream}`;
-  const shown = mine.slice(0, LEVEL_TOLD_PATHS_MAX).map((f) => `  ${f}`);
-  const literal = `git --literal-pathspecs -C ${sh(r.path)}`;
-  const body = [
-    `The daemon on ${host} has not levelled ${r.path} to ${upstream} since ${since} UTC${r.behind ? ` (${r.behind} commits behind)` : ""}. ${opts.whose === "session" ? `These ${n} uncommitted file${n === 1 ? " was" : "s were"} last written by this session` : `These ${n} uncommitted file${n === 1 ? " has" : "s have"} no session that wrote ${n === 1 ? "it" : "them"}`} and conflict with ${upstream}:`,
-    ...shown,
-    ...(n > LEVEL_TOLD_PATHS_MAX ? [`  +${n - LEVEL_TOLD_PATHS_MAX} more`] : []),
-    `The full list: ${files.list}`,
-    ...(others > 0 ? [`The other ${others} conflicting file${others === 1 ? "" : "s"} belong${others === 1 ? "s" : ""} to other sessions, which are told separately: leave ${others === 1 ? "it" : "them"} alone.`] : []),
-    "",
-    `Either way out, over these files only, lets the next sweep level the checkout:`,
-    `1. Rebase each onto main's version: \`${literal} show ${upstream}:<file>\` is main's; make your change again on top of it.`,
-    `2. Set them aside as a patch, then restore main's: \`tr '\\n' '\\0' < ${sh(files.list)} | xargs -0 ${literal} diff -- > ${sh(files.patch)} && ${literal} checkout --pathspec-from-file=${sh(files.list)}\`; later \`${literal} apply --3way ${sh(files.patch)}\`.`,
-  ].join("\n");
-  return { title, body };
+  return levelAskWords(r, level, mine, files, { host: opts.host ?? os.hostname(), whose: opts.whose });
 }
 
 /**

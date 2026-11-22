@@ -78,7 +78,7 @@ export function runnerHold(key: string, machines: ReadonlyArray<RunnerMachine>):
 
 /** The machine rows and the hold, laid onto a Start these again review when a machine caused the failures: each
  *  machine as a fact ("Online · finished a step Oct 13, 9:10 AM"), and the start held while none of them works. */
-export function withRunners<L extends { rows: ReadonlyArray<{ k: string; v: string; tone?: "ok" | "warn"; act?: { label: string; press: () => void } }>; alert?: string; blocked?: string }>(ledger: L, key: string, machines: ReadonlyArray<RunnerMachine>, openMachines?: () => void): L {
+export function withRunners<L extends { rows: ReadonlyArray<{ k: string; v: string; tone?: "ok" | "warn" | "bad"; act?: { label: string; press: () => void } }>; alert?: string; blocked?: string }>(ledger: L, key: string, machines: ReadonlyArray<RunnerMachine>, openMachines?: () => void): L {
   if (!isRunnerCause(key) || !machines.length) return ledger;
   const rows = machines.map((m) => { const works = m.online !== false && m.workedAt != null; return {
     k: m.name ?? `Machine ${m.device.slice(0, 6)}`,

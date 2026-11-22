@@ -95,6 +95,7 @@ import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
 import { startShipCore } from "./ship";
 import { personEditCore, resolveProposalCore } from "./expectations";
 import { fileLineCauseCore, startLineCauseCore } from "./lineCause";
+import { askCheckoutCore } from "./checkoutAsk";
 import { makeProblemOfFindingCore, markAskDoneCore, mergeProblemCore, moveFindingOutCore } from "./signals";
 import { askLineAgentCore, editLineGraphCore, reaskTrialRunCore, tryLineStepCore } from "./lineActions";
 import { cancelRunByPerson, landAgainCore, resumeRunCore } from "./workflow_runs";
@@ -1827,6 +1828,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // project, category line, the person's words its first signal, written by
   // the signal door's own commit (lineCause.ts). The store painted the cause
   // under `temp_task_<clientKey>`; the row carries the key, so it supersedes.
+  // "Tell <writer>" / "File a finding" on a stuck checkout (checkoutAsk.ts): the store painted the ask on the row's told.
+  askCheckout: async (ctx, userId, [checkoutId, who, at]: [string, string, number?]) => {
+    return await askCheckoutCore(ctx, userId, checkoutId, who, at);
+  },
   fileLineCause: async (ctx, userId, [clientKey, projectId, input]: [string, string, any]) => {
     if (!isServerId(projectId)) throw new ConvexError("This project is not saved yet");
     return await fileLineCauseCore(ctx, userId, clientKey, projectId as Id<"projects">, input);

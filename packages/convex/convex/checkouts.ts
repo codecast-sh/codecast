@@ -13,7 +13,7 @@ import { normalizeRepository } from "./lib/gitRefs";
 import { findDeployTeam } from "./changesDeploy";
 import { teamKey } from "./deployTargetsCi";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
-import { checkoutHash, type CheckoutReport } from "@codecast/shared/contracts/checkouts";
+import { checkoutHash, withPageAsks, type CheckoutPageAsk, type CheckoutReport } from "@codecast/shared/contracts/checkouts";
 
 /** The most a single checkout's report may weigh (its lists are capped by the daemon). */
 export const CHECKOUT_REPORT_MAX_BYTES = 64 * 1024;
@@ -67,7 +67,8 @@ export const report = mutation({
   },
 });
 
-const rowOut = (r: Doc<"checkouts">) => ({ ...(r.report ?? {}), _id: r._id, workspace: r.workspace, repository: r.repository, device_id: r.device_id, path: r.path, reported_at: r.reported_at, device_label: r.device_label ?? null });
+// The page's asks this episode read as told, beside the daemon's (contracts/checkouts withPageAsks).
+const rowOut = (r: Doc<"checkouts">) => ({ ...(r.report ?? {}), ...(r.report?.level ? { level: withPageAsks(r.report.level, r.asks as CheckoutPageAsk[] | undefined) } : {}), _id: r._id, workspace: r.workspace, repository: r.repository, device_id: r.device_id, path: r.path, reported_at: r.reported_at, device_label: r.device_label ?? null });
 
 /** A team's checkouts, every device's, of one repository or all of them: contracts/checkouts CheckoutRow. */
 export const forTeam = query({

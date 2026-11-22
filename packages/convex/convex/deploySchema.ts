@@ -149,6 +149,15 @@ export const deployTables = {
     reporter_user_id: v.id("users"),
     reported_at: v.number(),
     updated_at: v.number(),
+    // Asks a person made from the pipeline page on a stuck checkout (checkouts.ask): contracts/checkouts CheckoutPageAsk.
+    // A report never writes them; the page reads them as told while the episode they were made in lasts.
+    asks: v.optional(v.array(v.object({
+      at: v.number(),
+      since: v.number(),
+      files: v.number(),
+      to: v.union(v.literal("session"), v.literal("finding")),
+      conversation_id: v.optional(v.string()),
+    }))),
   })
     .index("by_device_path", ["device_id", "path"])
     .index("by_workspace_repository", ["workspace", "repository"]),

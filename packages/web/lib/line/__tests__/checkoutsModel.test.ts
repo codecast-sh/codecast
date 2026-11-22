@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
-import { checkoutsPage, checkoutsSummary, folderOf, levelWords } from "../checkoutsModel";
+import { checkoutsPage, checkoutsSummary, filesByFolder, folderOf, levelWords } from "../checkoutsModel";
 
 const H = 3600_000;
 const NOW = 100 * H;
@@ -60,17 +60,21 @@ describe("every machine's checkouts of a repository", () => {
     expect(c.finished.map((s) => s.title)).toEqual(["Opt-out repair test"]);
   });
 
-  test("a stuck level says in a glance on which file, why, for how long, and who was told; git's sentence stays whole", () => {
+  test("a stuck level says in a glance why, for how long, and who was told; git's sentence stays whole", () => {
     const c = checkoutsPage([stuck], NOW, titleOf).needs[0];
     expect(c.level).toEqual({
       tone: "stuck",
-      words: "stuck 21h on ct94516Remediation.test.ts · conflicts with main",
+      words: "conflicts in 1 file · stuck 21h",
       reason: "changed here and on main without a clean merge",
       files: ["outreach/backend/tests/unit/ct94516Remediation.test.ts"],
       since: NOW - 21 * H,
       told: "told Opt-out repair test",
       toldBrief: "told its writer",
+      stuckFor: "21h",
+      heading: "Conflicts with main in 1 file",
     });
+    // The writer of the stuck file, by title, and already told by the earlier daemon.
+    expect(c.asks).toEqual({ writers: [{ conversationId: "c-done", title: "Opt-out repair test", files: ["outreach/backend/tests/unit/ct94516Remediation.test.ts"], told: true }], nobody: { files: [], told: false } });
     // Nobody is owed word before the daemon's 30 minutes are up.
     expect(levelWords({ state: "stuck", files: ["a"], reason: "r", since: NOW - 10 * 60_000, told: [] }, NOW, titleOf).told).toBe("will tell its writers at 30m");
     expect(levelWords({ state: "stuck", files: ["a", "b"], reason: "r", since: NOW - H, told: [] }, NOW, titleOf).told).toBe("nobody told yet");
@@ -80,6 +84,55 @@ describe("every machine's checkouts of a repository", () => {
     expect(many).toMatchObject({ told: "told 2 writers, filed a finding", toldBrief: "told 2 writers" });
     expect(levelWords({ state: "level", levelled_at: NOW - 2 * H }, NOW, titleOf).words).toBe("level with main, levelled 2h ago");
     expect(levelWords({ state: "off", reason: "a worktree" }, NOW, titleOf)).toMatchObject({ tone: "off", words: "not kept level: a worktree" });
+  });
+
+  test("needs you is what a person must act on; finished work waits in its own group", () => {
+    const behind = row({ _id: "behind", device_id: "mini", device_label: "Mac-mini", path: "/Users/ashot/src/union-mobile", behind: 3819, uncommitted: { total: 191, sessions: [], unattributed: ["a"], unattributed_more: 190 }, level: { state: "off", reason: "holds commits main lacks" } });
+    const done = row({ _id: "done", path: "/Users/ashot/src/union-mobile/.codecast/worktrees/w1", uncommitted: { total: 2, sessions: [{ conversation_id: "c-done", session_id: "s", client: "claude", state: "finished", last_activity: NOW - 2 * H, paths: ["a"], more: 1 }], unattributed: [], unattributed_more: 0 }, level: { state: "off", reason: "a worktree" } });
+    const page = checkoutsPage([clean, stuck, behind, done], NOW, titleOf);
+    expect(page.needs.map((c) => [c.id, c.farBehind])).toEqual([["stuck", false], ["behind", true]]);
+    expect(page.ready.map((c) => c.id)).toEqual(["done"]);
+    expect(page.machines.flatMap((m) => m.live.map((c) => c.id))).toEqual(["clean"]);
+  });
+
+  test("each conflicting file goes to the session that wrote it last; the rest to nobody; told by the daemon or the page", () => {
+    const two = row({
+      _id: "two", behind: 364,
+      uncommitted: {
+        total: 4,
+        sessions: [
+          { conversation_id: "c-done", session_id: "s1", client: "claude", state: "finished", last_activity: NOW - 3 * H, paths: ["a.ts", "b.ts"], more: 0 },
+          { conversation_id: "c-live", session_id: "s2", client: "claude", state: "idle", last_activity: NOW - H, paths: ["b.ts"], more: 0 },
+        ],
+        unattributed: ["c.ts"], unattributed_more: 0,
+      },
+      level: { state: "stuck", files: ["a.ts", "b.ts", "c.ts"], reason: "3 file(s) changed here and in 0ace94e without a clean merge", since: NOW - 2 * H, told: [{ at: NOW - H, files: 1, to: "session", conversation_id: "c-done" }] },
+    });
+    const c = checkoutsPage([two], NOW, titleOf).needs[0];
+    // The last writer first.
+    expect(c.asks).toEqual({
+      writers: [
+        { conversationId: "c-live", title: "Landing hero copy", files: ["b.ts"], told: false },
+        { conversationId: "c-done", title: "Opt-out repair test", files: ["a.ts"], told: true },
+      ],
+      nobody: { files: ["c.ts"], told: false },
+    });
+    expect(c.level.heading).toBe("Conflicts with main in 3 files");
+    // The row and the drawer say one stuck age.
+    expect(c.level.words).toBe(`conflicts in 3 files · stuck ${c.level.stuckFor}`);
+  });
+
+  test("files read under their folders, eight then how many more, names whole", () => {
+    const paths = ["outreach/backend/tests/unit/ct94516Remediation.test.ts", "outreach/backend/tests/unit/b.test.ts", "outreach/landing/a.tsx", "README.md", ...Array.from({ length: 6 }, (_, i) => `x/f${i}.ts`)];
+    expect(filesByFolder(paths)).toEqual({
+      groups: [
+        { folder: "outreach/backend/tests/unit/", names: ["ct94516Remediation.test.ts", "b.test.ts"] },
+        { folder: "outreach/landing/", names: ["a.tsx"] },
+        { folder: "", names: ["README.md"] },
+        { folder: "x/", names: ["f0.ts", "f1.ts", "f2.ts", "f3.ts"] },
+      ],
+      more: 2,
+    });
   });
 
   test("a folder reads from home", () => {

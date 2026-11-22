@@ -336,6 +336,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   editLineProfile: never("machine control: the daemon rewrites the project's line.toml on its host, and the field is set back in the same settings control"),
   fileLineCause: CREATE,
   startLineCause: never("machine control: it starts a run on a machine; cancelling the run is the way back"),
+  askCheckout: never("sends: it messages the session that wrote a stuck checkout's files, or files a finding; a sent ask cannot be unsent"),
   stopLineRun: never("machine control: it ends a run on its machine; a new run is the way back"),
   landLineRun: never("machine control: it picks a run up at Rebase on its machine and lands the fix; a revert is the way back"),
   resumeLineRun: never("machine control: it restarts a run's runner on its machine; the run itself is the way back"),

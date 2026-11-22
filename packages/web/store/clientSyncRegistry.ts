@@ -1018,6 +1018,8 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, workspace",
     sync: { isDelta: true, deepFields: ["uncommitted", "level"] },
     feeds: ["checkouts.forTeam"],
+    // A person's ask on a stuck checkout (lineSlice askCheckout) paints its told until the server's row carries it.
+    localFirst: true,
   },
   // How far a merged pull request or a main commit has gone toward production
   // (deploys.md DP16), keyed by its `owner/repo#N` or `owner/repo@sha`. Each
