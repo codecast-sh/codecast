@@ -2344,6 +2344,7 @@ function answerBubbleShape(row: Doc<"session_decisions">) {
     report_slug: row.report_slug,
     card: row.card,
     run: row.run,
+    touch_id: row.touch_id,
     doc_id: row.doc_id,
     blocking: row.blocking,
     default_option: row.default_option,

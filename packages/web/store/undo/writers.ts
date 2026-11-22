@@ -286,7 +286,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   agentDefinitions: "Written only by deletes, which are never undoable.",
   teamKitItems: "Written only by shareToKit, a publish that creates the item, and removeKitItem, which uninstalls it on every machine; both never undoable.",
   agentChains: "Written only by deletes, which are never undoable.",
-  secrets: "Written by updateSecretMeta, whose spec carries an inverse naming the prior fields; the create stub, removeSecret and setSecretAskFirst (its off direction goes through a confirm) are never undoable.",
+  secrets: "Written by updateSecretMeta, whose spec carries an inverse naming the prior fields; the create stub, removeSecret, setSecretAskFirst and setSecretTouchId (their off direction goes through a confirm) are never undoable.",
   issueSyncSources: "Integration settings (add, update, remove a source); settings are never undoable.",
   notifications: "Read state (mark read, mark all read); never undoable.",
   callRooms: "Live call controls (lock, transcription, recording) act on a call in progress; never undoable.",

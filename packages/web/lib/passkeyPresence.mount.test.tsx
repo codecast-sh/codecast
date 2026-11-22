@@ -264,18 +264,22 @@ describe("withPresence", () => {
 });
 
 describe("useApproveGate", () => {
-  test("Approve of an Ask first read confirms before it sends; Deny sends at once", async () => {
+  test("Approve of an Ask first read of a Touch ID secret confirms before it sends; Deny sends at once", async () => {
     const client = fakeClient({ "passkeys:presenceBegin": () => begun, "passkeys:presenceFinish": () => granted });
-    const decision = { _id: "d-9", category: "access", options: [{ label: APPROVE_FOR_SESSION }, { label: DENY }] };
+    const decision = { _id: "d-9", category: "access", touch_id: true, options: [{ label: APPROVE_FOR_SESSION }, { label: DENY }] };
     let gate: any;
+    let plain: any;
     function Probe() {
       gate = useApproveGate(decision);
+      plain = useApproveGate({ ...decision, touch_id: undefined });
       return null;
     }
     const container = document.createElement("div");
     const root = createRoot(container);
     await act(() => root.render(<ConvexProvider client={client as any}><Probe /></ConvexProvider>));
     expect([gate.gated(0), gate.gated(1)]).toEqual([true, false]);
+    // Ask first without Touch ID: Approve is one press.
+    expect([plain.gated(0), plain.gated(1)]).toEqual([false, false]);
 
     const sent: number[] = [];
     const presences: (string | undefined)[] = [];

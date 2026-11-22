@@ -72,6 +72,7 @@ async function confirm(t: any, as: any, auth: SoftAuthenticator, action: Presenc
 async function askFirstSecret(t: any, as: (u: string) => any, ana: string, acme: string, name = "stripe-live") {
   const made = await as(ana).action(api.secrets.create, { name, kind: "key", payload: { value: STRIPE }, team_id: acme });
   await as(ana).mutation(api.secrets.setAskFirst, { ref: name, ask_first: true });
+  await as(ana).mutation(api.secrets.setTouchId, { ref: name, touch_id: true });
   return made.id as string;
 }
 

@@ -84,9 +84,14 @@ export function approvesCommandRun(decision: { run?: unknown; options: readonly 
   return !!decision.run && decision.options[index]?.label === RUN_OPTION;
 }
 
-/** Whether pressing option `index` is an act only the person may take: it approves an Ask first read or runs a command. Such a press confirms with Touch ID, and stays held in a tab an agent drives. */
+/** Whether pressing option `index` is an act only the person may take: it approves an Ask first read or runs a command. Such a press stays held in a tab an agent drives. */
 export function approvesPersonsAct(decision: { category?: string; run?: unknown; options: readonly { label: string }[] }, index: number): boolean {
   return approvesSecretRead(decision, index) || approvesCommandRun(decision, index);
+}
+
+/** Whether pressing option `index` confirms with Touch ID first: it runs a command, or approves a read of secrets one of which has Touch ID on (`touch_id`). */
+export function approveNeedsPresence(decision: { category?: string; run?: unknown; touch_id?: boolean; options: readonly { label: string }[] }, index: number): boolean {
+  return approvesCommandRun(decision, index) || (!!decision.touch_id && approvesSecretRead(decision, index));
 }
 
 /** The tail of a run's output, at most MAX_RUN_OUTPUT characters. */

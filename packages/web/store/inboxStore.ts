@@ -1550,6 +1550,8 @@ export type SessionDecisionItem = {
   card?: import("@codecast/shared/contracts/changeCard").ChangeCard;
   /** `cast decide --run`: the command the card runs on a person's Run, and how that went. */
   run?: import("@codecast/shared/contracts/commandRun").CommandRun;
+  /** An Ask first read of a Touch ID secret: its Approve confirms with a passkey. */
+  touch_id?: boolean;
   blocking: boolean;
   default_option?: number;
   /** How much getting it answered matters, 1-5, as the asker judged it, and why (shared/contracts/decisionImpact.ts). */
@@ -7510,6 +7512,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   /** `only: "requested"` is a decline: the server keeps a row filled since (secrets.remove). */
   removeSecret: (id: string, only?: "requested") => void;
   setSecretAskFirst: (id: string, askFirst: boolean, grant?: string) => void;
+  setSecretTouchId: (id: string, touchId: boolean, grant?: string) => void;
   stageSecret: (row: SecretMeta, hold?: readonly (keyof SecretMeta)[]) => void;
   /** A secret's Activity or Previous (`events:<id>`, `versions:<id>`) as a press shows it; undefined drops it. */
   stageSecretHistory: (key: string, rows: unknown[] | undefined) => void;
@@ -14718,6 +14721,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const row = (this.secrets as any)[id];
     if (!row) return;
     row.ask_first = askFirst;
+  }),
+  setSecretTouchId: action(function (this: Draft, id: string, touchId: boolean, _grant?: string) {
+    const row = (this.secrets as any)[id];
+    if (!row) return;
+    row.touch_id = touchId;
   }),
   // A row painted before the server has it: a create's stub, keyed by a stub id
   // and given its short_id when the create answers (registry altKey), or a
