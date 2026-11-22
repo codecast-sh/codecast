@@ -10,12 +10,12 @@ import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
-import { cards } from "./lineTrial";
+import { CARDS_CAP, cards } from "./lineTrial";
 
 setDefaultTimeout(300_000);
 
 /** Wraps ctx.db so every document a read hands back is counted. */
-function countingDb(db: any, counter: { reads: number }) {
+function countingDb(db: any, counter: { reads: number; calls: number }) {
   const countResult = (r: any) => {
     if (Array.isArray(r)) counter.reads += r.length;
     else if (r && typeof r === "object" && Array.isArray(r.page)) counter.reads += r.page.length;
@@ -35,7 +35,7 @@ function countingDb(db: any, counter: { reads: number }) {
         if (typeof value !== "function") return value;
         return (...a: any[]) => {
           const out = value.apply(target, a);
-          if (out && typeof out.then === "function") return out.then(countResult);
+          if (out && typeof out.then === "function") { counter.calls += 1; return out.then(countResult); }
           return out && typeof out === "object" ? wrapQuery(out) : out;
         };
       },
@@ -43,7 +43,7 @@ function countingDb(db: any, counter: { reads: number }) {
   return new Proxy(db, {
     get(target, prop) {
       const value = target[prop];
-      if (prop === "get") return async (...a: any[]) => countResult(await value.apply(target, a));
+      if (prop === "get") return async (...a: any[]) => { counter.calls += 1; return countResult(await value.apply(target, a)); };
       if (prop === "query") return (...a: any[]) => wrapQuery(value.apply(target, a));
       return typeof value === "function" ? value.bind(target) : value;
     },
@@ -51,7 +51,8 @@ function countingDb(db: any, counter: { reads: number }) {
 }
 
 const NOW = 1_800_000_000_000;
-const WAITING = 400;
+const RECENT = 500;
+const WAITING = 1000;
 const FINDINGS_PER_PROBLEM = 12;
 /** Documents one call may read. Convex caps a query at 3s; at this backlog the page has to fit well inside it. */
 const READ_BUDGET = 8_000;
@@ -66,8 +67,10 @@ async function seedBacklog() {
     const project = await ctx.db.insert("projects", { title: "Product", user_id: owner, team_id: team, workspace, status: "active", line_trial: { since: 1, by: owner }, created_at: 1, updated_at: 1 } as any);
     const workflow = await ctx.db.insert("workflows", { user_id: owner, name: "codecast_fix", nodes: [{ id: "build" }, { id: "card" }], edges: [], created_at: 1, updated_at: 1 } as any);
     let sig = 0;
-    for (let i = 0; i < WAITING; i++) {
-      const at = NOW - (WAITING - i) * 60_000;
+    for (let i = 0; i < RECENT + WAITING; i++) {
+      // The older cards wait; the newest RECENT were answered, so the recent window holds none of the waiting ones.
+      const waiting = i < WAITING;
+      const at = NOW - (RECENT + WAITING - i) * 60_000;
       const task = await ctx.db.insert("tasks", { short_id: `ct-${i}`, user_id: owner, team_id: team, workspace, project_id: project, title: `Problem ${i}`, status: "in_progress", task_type: "bug", priority: "medium", created_at: at, updated_at: at } as any);
       const station = await ctx.db.insert("conversations", { user_id: owner, team_id: team, session_id: `sess-${i}`, short_id: `jx${i}`, project_path: `/repo/.codecast/worktrees/fix-${i}`, started_at: at, updated_at: at, message_count: 3, status: "active", agent_type: "claude_code" } as any);
       const run = await ctx.db.insert("workflow_runs", {
@@ -83,7 +86,7 @@ async function seedBacklog() {
       }
       await ctx.db.insert("trial_cards", {
         workspace, team_id: team, project_id: project, task_id: task, run_id: run, short_id: `tc-${i}`, node_id: "card", kind: "card",
-        status: "waiting", question: "Ship this fix?", options: [{ key: "S", label: "Ship" }, { key: "D", label: "Drop" }],
+        status: waiting ? "waiting" : "answered", ...(waiting ? {} : { answer: { key: "S", label: "Ship", at, by: owner } }), question: "Ship this fix?", options: [{ key: "S", label: "Ship" }, { key: "D", label: "Drop" }],
         card: { v: 1, headline: `Fix ${i}`, seen, reach: { read: true } }, created_at: at, updated_at: at,
       } as any);
     }
@@ -93,16 +96,46 @@ async function seedBacklog() {
 }
 
 describe("lineTrial.cards (ct-73205: the line page's feeder timed out at 3s)", () => {
-  test(`one call over a workspace with ${WAITING} waiting cards reads at most ${READ_BUDGET} documents`, async () => {
+  test(`one call over a workspace with ${RECENT} recent and ${WAITING} waiting cards reads at most ${READ_BUDGET} documents`, async () => {
     const { t, owner, team } = await seedBacklog();
-    const counter = { reads: 0 };
+    const counter = { reads: 0, calls: 0 };
     const out = await t.run(async (ctx) => {
       const counted = { ...ctx, db: countingDb(ctx.db, counter) };
       return (cards as any)._handler(counted, { user_id: owner, workspace: "team", team_id: team });
     });
-    // The page still lists the cards it owes.
-    expect(out.length).toBeGreaterThan(0);
-    console.log(`lineTrial.cards: ${out.length} cards, ${counter.reads} documents read (${(counter.reads / Math.max(1, out.length)).toFixed(1)} per card)`);
+    // Capped explicitly: the cards it owes come first, newest first, and the oldest waiting ones are left out.
+    expect(out.length).toBe(CARDS_CAP);
+    expect(out.every((c: any) => c.status === "waiting")).toBe(true);
+    expect(out.map((c: any) => c.short_id)).toEqual(Array.from({ length: CARDS_CAP }, (_, k) => `tc-${WAITING - 1 - k}`));
+    console.log(`lineTrial.cards: ${out.length} cards, ${counter.reads} documents read in ${counter.calls} calls (${(counter.reads / Math.max(1, out.length)).toFixed(1)} per card)`);
     expect(counter.reads).toBeLessThanOrEqual(READ_BUDGET);
+  });
+
+  test("a card whose rows were deleted or are malformed is rendered with fallbacks or left out, never fails the list", async () => {
+    const t = convexTest(schema, allModules);
+    const { owner, team } = await t.run(async (ctx) => {
+      const owner = await ctx.db.insert("users", { name: "Ada", email: "ada@x.dev" } as any);
+      const team = await ctx.db.insert("teams", { name: "Acme", invite_code: "ACME1234", created_at: 1 } as any);
+      await ctx.db.insert("team_memberships", { user_id: owner, team_id: team, role: "admin", joined_at: 1 } as any);
+      const workspace = `team:${team}`;
+      const project = await ctx.db.insert("projects", { title: "Product", user_id: owner, team_id: team, workspace, status: "active", line_trial: { since: 1, by: owner }, created_at: 1, updated_at: 1 } as any);
+      const workflow = await ctx.db.insert("workflows", { user_id: owner, name: "codecast_fix", nodes: [{ id: "card" }], edges: [], created_at: 1, updated_at: 1 } as any);
+      const card = async (i: number, extra: Record<string, unknown>, drop: { task?: boolean; run?: boolean } = {}) => {
+        const task = await ctx.db.insert("tasks", { short_id: `ct-${i}`, user_id: owner, team_id: team, workspace, project_id: project, title: `Problem ${i}`, status: "in_progress", task_type: "bug", priority: "medium", created_at: i, updated_at: i } as any);
+        const run = await ctx.db.insert("workflow_runs", { user_id: owner, task_id: task, workflow_id: workflow, status: "paused", gate_node_id: "card", project_path: "/repo", workspace, team_id: team, node_statuses: [], created_at: i, updated_at: i } as any);
+        await ctx.db.insert("trial_cards", { workspace, team_id: team, project_id: project, task_id: task, run_id: run, short_id: `tc-${i}`, node_id: "card", kind: "card", status: "waiting", question: "Ship?", options: [], created_at: i, updated_at: i, ...extra } as any);
+        if (drop.task) await ctx.db.delete(task);
+        if (drop.run) await ctx.db.delete(run);
+      };
+      await card(1, { card: { v: 1, headline: "Fine", seen: [{ signal: "sg-gone" }] } });
+      await card(2, { card: { v: 1, headline: "Orphan", seen: [] } }, { task: true, run: true });
+      await card(3, { card: { v: 1, headline: "Malformed", seen: "not a list" } });
+      return { owner, team };
+    });
+    const out = await t.run((ctx) => (cards as any)._handler(ctx, { user_id: owner, workspace: "team", team_id: team }));
+    const byId = new Map(out.map((c: any) => [c.short_id, c]));
+    expect((byId.get("tc-1") as any)?.cited).toEqual([{ signal: "sg-gone", state: "missing" }]);
+    expect((byId.get("tc-2") as any)?.run_status).toBe("gone");
+    expect(byId.has("tc-3")).toBe(false);
   });
 });
