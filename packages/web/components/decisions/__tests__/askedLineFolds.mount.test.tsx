@@ -20,6 +20,7 @@ mock.module("../../../hooks/useJumpToDecisionAsk", () => ({
 mock.module("../../PublishedPageEmbed", () => ({ PublishedPageEmbed: () => null }));
 
 import { SessionDecisionCard } from "../../SessionDecisionCard";
+import { useInboxStore } from "../../../store/inboxStore";
 import { closeDomWindow } from "../../../test-helpers/domGlobals";
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { pretendToBeVisual: true, url: "https://codecast.sh/inbox" });
@@ -61,4 +62,39 @@ test("pressing the sheet's \"asked … ago\" line folds the sheet at once, befor
   // The thread is handed back now; the scroll may follow when the server answers.
   expect(pane.firstElementChild!.classList.contains("decision-fold")).toBe(true);
   await act(() => root.unmount());
+});
+
+const isFolded = (pane: HTMLElement) => pane.firstElementChild!.classList.contains("decision-fold");
+const askedLine = (pane: HTMLElement) => [...pane.querySelectorAll("button")].find((b) => /^asked /.test(b.textContent ?? "")) as HTMLButtonElement;
+
+test("the folded sheet stays folded through what the jump sets off: a target, a new message, a remount", async () => {
+  const ask = { ...item, key: "decide:d3", decisionId: "d3" };
+  const pane = document.createElement("div");
+  document.body.appendChild(pane);
+  const root = createRoot(pane);
+  const draw = (props: any = {}) => root.render(<MemoryRouter><SessionDecisionCard item={ask} stepper={null} {...props} /></MemoryRouter>);
+  await act(() => draw());
+  expect(isFolded(pane)).toBe(false);
+  await act(async () => { askedLine(pane).click(); });
+  expect(isFolded(pane)).toBe(true);
+
+  // The scroll target arrives once the server has located the ask.
+  await act(() => draw({ targetNonce: Date.now() }));
+  expect(isFolded(pane)).toBe(true);
+  // The thread keeps moving: a new message lands in the session.
+  await act(async () => { useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, c1: { _id: "c1", message_count: 947 } } })); });
+  await act(() => draw({ targetNonce: Date.now() }));
+  expect(isFolded(pane)).toBe(true);
+  await act(() => root.unmount());
+
+  // The session opens in the inbox and draws the card anew before any target is set.
+  const pane2 = document.createElement("div");
+  document.body.appendChild(pane2);
+  const root2 = createRoot(pane2);
+  await act(() => root2.render(<MemoryRouter><SessionDecisionCard item={ask} stepper={null} /></MemoryRouter>));
+  expect(isFolded(pane2)).toBe(true);
+  // Another blocking ask still opens as the sheet.
+  await act(() => root2.render(<MemoryRouter><SessionDecisionCard key="other" item={{ ...item, key: "decide:d4", decisionId: "d4" }} stepper={null} /></MemoryRouter>));
+  expect(isFolded(pane2)).toBe(false);
+  await act(() => root2.unmount());
 });
