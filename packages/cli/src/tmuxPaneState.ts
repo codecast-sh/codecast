@@ -280,12 +280,33 @@ export function claudeTurnRunningOnPane(region: string): boolean {
 export const CLAUDE_COMPOSER_SCROLLED_ABOVE = /^\s*[─━]{2,}\s+↑\s*\d+\s+more\s+[─━]{2,}\s*$/;
 export const CLAUDE_COMPOSER_SCROLLED_BELOW = /^\s*[─━]{2,}\s+↓\s*\d+\s+more\s+[─━]{2,}\s*$/;
 
+// Claude Code's slash-command menu hangs under the composer's bottom rule and
+// marks its selected row with the same ❯, indented ("  ❯ /drive   Take an ask
+// …"). Read as the last glyph, the menu became the composer, and a skill whose
+// description names its own command read as the payload twice, so every
+// /drive sent from the app was held and given up on (2026-11-22). Such a row
+// gives way to the glyph above the rule.
+function skipSuggestionMenu(pane: string, glyphAt: number): number {
+  if (glyphAt === -1) return -1;
+  const rowStart = pane.lastIndexOf("\n", glyphAt) + 1;
+  if (!/^[ \t]+$/.test(pane.slice(rowStart, glyphAt))) return glyphAt;
+  const above = pane.slice(0, rowStart).split("\n");
+  let offset = rowStart;
+  for (let i = above.length - 1; i >= 0; i--) {
+    offset -= above[i].length + (i < above.length - 1 ? 1 : 0);
+    if (!/^[─═]{3,}\s*$/.test(above[i])) continue;
+    const composerGlyph = Math.max(pane.lastIndexOf("❯", offset), pane.lastIndexOf("›", offset));
+    return composerGlyph === -1 ? glyphAt : composerGlyph;
+  }
+  return glyphAt;
+}
+
 // Where the composer's text starts: after its last ❯/› glyph, or under the top
 // rule of a composer scrolled past its ❯ row, whichever is lower on the pane.
 // Taking the last glyph alone read the transcript's newest user turn, above the
 // box, as the draft. -1 when neither is in view.
 export function composerTextStart(pane: string): number {
-  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  const glyphAt = skipSuggestionMenu(pane, Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›")));
   let scrolledAt = -1;
   let offset = 0;
   for (const line of pane.split("\n")) {
