@@ -174,14 +174,14 @@ const WRITES = /\bsed\s+(?:-[a-zA-Z]*\s+)*-i|\bperl\s+-[a-z]*i|open\([^)]*['"](?
 /** Tokens that look like a path: a slash or a file extension. */
 const PATH_TOKEN = /[\w@~.+-]*(?:\/[\w@.+-]+)+\/?|[\w@+-][\w@.+-]*\.[A-Za-z][\w]{0,9}/g;
 
-/** Directories a command `cd`s into, in order, resolved from `cwd`. */
-function cdTargets(command: string, cwd: string): string[] {
-  const dirs: string[] = [];
+/** Directories a command `cd`s into, in order, resolved from `cwd`, each with where in the command it takes effect. */
+function cdTargets(command: string, cwd: string): Array<{ from: number; dir: string }> {
+  const dirs: Array<{ from: number; dir: string }> = [];
   let at = cwd;
   for (const m of command.matchAll(/(?:^|[;&|(\n]\s*)cd\s+(['"]?)([^'";&|\n)]+)\1/g)) {
     const dir = m[2].trim().replace(/^~(?=\/|$)/, process.env.HOME ?? "~");
     at = path.resolve(at, dir);
-    dirs.push(at);
+    dirs.push({ from: (m.index ?? 0) + m[0].length, dir: at });
   }
   return dirs;
 }
@@ -206,21 +206,37 @@ function checkoutOf(dir: string): string | null {
  * in another repository, or in a worktree nested under this one (`.conductor/<name>`), that writes
  * `.codecast/flows/change.cast` wrote its own copy, not this checkout's.
  */
+/** A path's stats, or undefined when nothing is there (missing, or under a file: `package.json/bun.lock`). */
+function statOf(p: string): fs.Stats | undefined {
+  try { return fs.statSync(p); } catch { return undefined; }
+}
+
 export function shellWrites(command: string, cwd: string, root: string): string[] {
   if (!WRITES.test(command.replace(NULL_REDIRECTS, " "))) return [];
-  const ran = [cwd, ...cdTargets(command, cwd)];
+  const cds = cdTargets(command, cwd);
   const here = realOf(path.join(root, "."));
-  // Only a directory that can be inside the checkout is looked at on disk (nearRoot).
-  const bases = [...new Set([...ran, ...(ran.some((d) => nearRoot(root, d, cwd) && checkoutOf(d) === here) ? [root] : [])])];
+  // A relative path is read from where the command stands when it names it: after the last `cd` before it. Read from
+  // where the command started, `cd <another checkout> && bun packages/cli/src/index.ts` credited this checkout's file.
+  const dirAt = (i: number) => cds.filter((c) => c.from <= i).pop()?.dir ?? cwd;
+  // Only a directory that can be inside the checkout is looked at on disk (nearRoot); inside it, the root is tried too.
+  const inHere = new Map<string, boolean>();
+  const basesAt = (i: number) => {
+    const dir = dirAt(i);
+    if (!inHere.has(dir)) inHere.set(dir, nearRoot(root, dir, cwd) && checkoutOf(dir) === here);
+    return inHere.get(dir) ? [...new Set([dir, root])] : [dir];
+  };
   const found = new Set<string>();
   for (const m of command.matchAll(PATH_TOKEN)) {
     const token = m[0].replace(/^\.\//, "");
     if (token.length < 3 || token.includes("://")) continue;
-    for (const base of token.startsWith("/") ? [""] : bases) {
+    for (const base of token.startsWith("/") ? [""] : basesAt(m.index ?? 0)) {
       const abs = base ? path.resolve(base, token) : token;
       if (!nearRoot(root, abs, cwd)) continue;
       const rel = relIn(root, abs, cwd);
-      if (rel && fs.existsSync(abs)) { found.add(rel); break; }
+      const st = rel ? statOf(abs) : undefined;
+      // A directory (the `cd` it named) is not a file the command wrote.
+      if (st?.isDirectory()) break;
+      if (st) { found.add(rel!); break; }
       if (rel && !base) found.add(rel);
     }
   }

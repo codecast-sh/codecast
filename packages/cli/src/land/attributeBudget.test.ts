@@ -72,3 +72,35 @@ describe("paths on other volumes are never touched on disk", () => {
     expect(shellWrites(`echo y > ${typed}/f.ts`, typed, root)).toEqual(["f.ts"]);
   });
 });
+
+describe("a relative path is read from where the command stands when it names it", () => {
+  const checkout = (name: string) => {
+    const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `attr-cd-${name}-`)));
+    fs.mkdirSync(path.join(dir, ".git"));
+    for (const f of ["packages/cli/src/index.ts", "packages/cli/src/pipeline.ts", "README.md"]) {
+      fs.mkdirSync(path.dirname(path.join(dir, f)), { recursive: true });
+      fs.writeFileSync(path.join(dir, f), "x");
+    }
+    return dir;
+  };
+
+  test("a command that starts in one checkout and cds into another credits the other's files, never the first's", async () => {
+    const { shellWrites } = await import("./attribute");
+    const main = checkout("main");
+    const wt = checkout("wt");
+    // The shape that told the wrong session: a python write in the worktree, then running the CLI from its root.
+    const command = `cd ${wt}/packages/cli && python3 - <<'EOF'\np='src/pipeline.ts'\nopen(p,'w').write('y')\nEOF\ncd ${wt} && bun packages/cli/src/index.ts flow pipeline`;
+    expect(shellWrites(command, main, main)).toEqual([]);
+    expect(shellWrites(command, main, wt).sort()).toEqual(["packages/cli/src/index.ts", "packages/cli/src/pipeline.ts"]);
+  });
+
+  test("where it did not cd, a relative path is the starting directory's; in a subdirectory, the checkout's root is tried too", async () => {
+    const { shellWrites } = await import("./attribute");
+    const main = checkout("main");
+    expect(shellWrites("echo y > README.md", main, main)).toEqual(["README.md"]);
+    expect(shellWrites("cd packages/cli && sed -i '' s/x/y/ src/index.ts", main, main)).toEqual(["packages/cli/src/index.ts"]);
+    expect(shellWrites("cd packages/cli && sed -i '' s/x/y/ README.md", main, main)).toEqual(["README.md"]);
+    // A path through a file names nothing, and says so without throwing.
+    expect(shellWrites("echo y > README.md/bun.lock", main, main)).toEqual([]);
+  });
+});
