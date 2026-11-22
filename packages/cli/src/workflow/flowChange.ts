@@ -24,7 +24,7 @@ import { isAncestor, replayOnto } from "../land/replay.js";
 import { defaultMessage, freezeAndAttribute, makePlan, trailerFor, upstreamRef, type FrozenAttribution } from "../land/shipCheckout.js";
 import type { SessionEdits } from "../land/attribute.js";
 import type { RosterRow } from "../land/scan.js";
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { execFileAsync } from "../proc.js";

@@ -15,7 +15,7 @@
 // landing on exactly one place, and its newest replayed edit being the newest
 // write attribution saw. Anything else keeps the whole file, as before, and
 // says why.
-import { spawnSync } from "node:child_process";
+import { spawnSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
