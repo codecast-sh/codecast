@@ -404,7 +404,11 @@ commits whole and the total, main's head and its CI.
 ## DP13. Deploying any target from codecast
 
 `deployTargets.request` (team or repository, target, `action`) asks for a
-deploy: `deploy` sends main's head, `redeploy` sends an earlier deploy's sha
+deploy: `deploy` sends main's head, or the commit `sha` names (a commit on
+the default branch after the live one; a target whose command takes no `$sha`
+sends the tree it runs in, so only main's head can be named for it), and the
+deploy row records it from the start, so every step judges and sends that
+commit; `redeploy` sends an earlier deploy's sha
 again (only a command that takes `$sha`; a command that deploys the tree it
 runs in cannot), `rollback` runs the target's rollback back to the live
 deploy before the current one, or the one named. It refuses a `push` target,
@@ -459,7 +463,8 @@ A team ships main many times a day; each push leaves some targets behind
 cast deploy                 every `release` target main moved past, and the push targets it waits on
 cast deploy cli mobile      those targets, whatever their policy
 cast deploy --dry-run       what it would send, wait for and leave alone, and why
-cast deploy --files "<paths>" --sha <sha> [--except <targets>]   only what one landed change touches
+cast deploy --files "<paths>" --carrying <sha> [--except <targets>]   only what one landed change touches, sending main's head
+cast deploy --sha <sha>     every deploy of the release makes exactly that commit live (request sha), not main's head
 ```
 
 `deployRelease.ts planRelease` reads the checkout's targets (the file is the
@@ -502,7 +507,7 @@ released, rather than a commit behind until the daemon's sweep comes round.
 A change flow's Deploy stage is the same release narrowed to one change: the
 `deploy` segment's `send` param (`deploy [flow="deploy", send="release"]`, set
 by the shipped `change` and `quick-change`) makes its wait station run
-`cast deploy --files <the change's files> --sha <its landed commit>` once the
+`cast deploy --files <the change's files> --carrying <its landed commit>` once the
 change lands, then wait as before. A flow that composes the segment without
 `send` only waits, so a team's own fix flows (Union's) keep deploying on their
 role's or person's clock.

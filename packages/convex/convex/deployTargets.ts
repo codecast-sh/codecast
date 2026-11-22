@@ -27,28 +27,23 @@ import { requireUserOrToken } from "./lib/auth";
 import { requireTeamMembership } from "./lib/access";
 import { workspaceGrantsAccess } from "./lib/accessKeys";
 import { normalizeRepository } from "./lib/gitRefs";
-import { nextShortId } from "./counters";
-import { enqueueConfigCommand } from "./users";
 import { deployTeamFor, findDeployTeam } from "./changesDeploy";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { recordDeployMarker } from "./deploys";
 import { lineDeployTargets } from "./deployCarries";
-import { parseOwnerRepo } from "@codecast/shared/contracts";
-import { DEPLOY_SHORT_ID_PREFIX } from "@codecast/shared/contracts/deploys";
 import {
   DEPLOY_TARGET_NAME_RE,
-  canRedeploySha,
   commitTouchesTarget,
   readJsonLive,
   type DeployLiveReader,
 } from "@codecast/shared/contracts/deployTargets";
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
-import { commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
+import { COMMITS_MAX, commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, repositoryArg, targetDeploys, targetRows, targetState, upsertMainCommits } from "./deployTargetsState";
+import { requestTargetDeployCore } from "./deployTargetRequest";
+export { requestTargetDeployCore };
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
 import { guardedFetch, RefusedHostError } from "./lib/guardedFetch";
 
-/** Commits kept on one deploy's record. */
-const COMMITS_MAX = 200;
 
 const liveReaderValidator = v.union(
   v.object({ kind: v.literal("marker") }),
@@ -75,20 +70,6 @@ async function teamFor(ctx: any, userId: Id<"users">, repository: string, teamId
     return teamId;
   }
   return await deployTeamFor(ctx, userId, repository);
-}
-
-function repositoryArg(raw: string): string {
-  const repository = parseOwnerRepo(raw);
-  if (!repository) throw new Error(`"${raw}" is not an owner/name repository.`);
-  return normalizeRepository(repository);
-}
-
-async function targetRows(ctx: any, workspace: string, repository?: string): Promise<Doc<"deploy_targets">[]> {
-  const rows: Doc<"deploy_targets">[] = await ctx.db
-    .query("deploy_targets")
-    .withIndex("by_workspace_repository", (q: any) => (repository ? q.eq("workspace", workspace).eq("repository", repository) : q.eq("workspace", workspace)))
-    .take(200);
-  return rows.filter((r) => !r.retired_at);
 }
 
 // ── publish ──────────────────────────────────────────────────────────────────
@@ -256,89 +237,6 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
 
 // ── deploying a target from codecast (DP13) ──────────────────────────────────
 
-/**
- * Ask for a deploy of one target: main's head (`deploy`), an earlier deploy's
- * sha again (`redeploy`, only for a command that takes `$sha`), or the
- * target's rollback command (`rollback`, back to the live deploy before the
- * current one, or the one named). The machine that published the target runs
- * it (`cast line deploy run dp-N`, the line-deploy graph), and the deploy ends
- * live or failed.
- */
-export async function requestTargetDeployCore(
-  ctx: any,
-  userId: Id<"users">,
-  args: { team_id: Id<"teams">; target: string; repository?: string; action?: "deploy" | "redeploy" | "rollback"; of?: string; here?: boolean; cli?: boolean; client_key?: string; request_id?: string },
-): Promise<{ _id: string; short_id: string; target: string; action: string; sha: string | null; commits: number }> {
-  const workspace = teamKey(args.team_id);
-  if (!(await workspaceGrantsAccess(ctx, userId, workspace))) throw new Error("Not a member of that team");
-  const name = args.target.trim().toLowerCase();
-  const candidates = (await targetRows(ctx, workspace, args.repository ? repositoryArg(args.repository) : undefined)).filter((r) => r.name === name);
-  if (!candidates.length) throw new Error(`No deploy target ${name}: declare it as a [[target]] in .codecast/deploy.toml and publish (cast line deploy targets --publish)`);
-  if (candidates.length > 1) throw new Error(`More than one repository has a target ${name}; name the repository`);
-  const t = candidates[0];
-  const action = args.action ?? "deploy";
-  if (t.runs === "push") throw new Error(`${name} deploys itself when main moves; there is nothing to send from here`);
-  if (!t.command) throw new Error(`${name} names no command`);
-  if (!args.here && (!t.device_id || !t.root)) throw new Error(`No machine publishes ${name}, so nothing can run it`);
-  const deploys = await targetDeploys(ctx, workspace, name);
-  const open = deploys.find((d) => (d.status === "requested" || d.status === "running") && (!d.repository || d.repository === t.repository));
-  if (open) throw new Error(`${open.short_id} is already going out to ${name} (${open.status}); wait for it to finish`);
-  const live = deploys.find((d) => d.status === "live");
-  let sha: string | undefined;
-  let rollbackOf: string | undefined;
-  if (action !== "deploy") {
-    const of = args.of
-      ? deploys.find((d) => d.short_id === args.of!.toLowerCase())
-      : deploys.find((d) => d.status === "live" && d._id !== live?._id && d.sha && d.sha !== live?.sha);
-    if (!of?.sha) throw new Error(args.of ? `No deploy ${args.of} of ${name} with a sha` : `No earlier live deploy of ${name} to go back to`);
-    if (action === "redeploy" && !canRedeploySha(t)) throw new Error(`${name}'s command sends the tree it runs in, not a sha: it cannot redeploy ${of.short_id}${t.rollback ? "; use its rollback" : ""}`);
-    if (action === "rollback" && !t.rollback) throw new Error(`${name} names no rollback command`);
-    sha = of.sha;
-    rollbackOf = of.short_id;
-  }
-  // What it will send: the commits on main after the live sha that touch the target (a deploy of main's head).
-  let commits: Doc<"deploys">["commits"] & {} = [];
-  if (action === "deploy") {
-    const after = await mainCommitsAfter(ctx, t.repository, live?.sha ?? null);
-    commits = await deployCommitsOf(ctx, after.commits
-      .filter((c) => commitTouchesTarget(t.paths, (c.files ?? []).map((f) => f.filename)))
-      .reverse()
-      .slice(0, COMMITS_MAX));
-  }
-  const now = Date.now();
-  const user = await ctx.db.get(userId);
-  const shortId = await nextShortId(ctx.db, DEPLOY_SHORT_ID_PREFIX);
-  const id = await ctx.db.insert("deploys", {
-    short_id: shortId,
-    ...(args.client_key ? { client_key: args.client_key } : {}),
-    workspace,
-    team_id: args.team_id,
-    target: name,
-    status: "requested",
-    trigger: "person",
-    started_by: { kind: args.cli ? "cli" : "person", name: user?.name ?? user?.github_username ?? user?.email ?? "someone", user_id: userId },
-    source: "codecast",
-    event_ids: [],
-    repository: t.repository,
-    ...(sha ? { sha } : {}),
-    ...(live?.sha ? { previous_sha: live.sha } : {}),
-    ...(commits.length ? { commits } : {}),
-    carries: [],
-    action,
-    ...(rollbackOf ? { rollback_of: rollbackOf } : {}),
-    created_at: now,
-    updated_at: now,
-  });
-  if (!args.here) {
-    try {
-      await enqueueConfigCommand(ctx, userId, "line_deploy", JSON.stringify({ deploy: shortId, root: t.root }), t.device_id, args.request_id);
-    } catch (err) {
-      throw new Error(`${name} runs on the machine that published it, which is not yours: ask its owner, or run \`cast line deploy --target ${name} --go\` there (${err instanceof Error ? err.message : String(err)})`);
-    }
-  }
-  return { _id: String(id), short_id: shortId, target: name, action, sha: sha ?? null, commits: commits.length };
-}
-
 export const request = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -347,6 +245,8 @@ export const request = mutation({
     repository: v.optional(v.string()),
     action: v.optional(v.union(v.literal("deploy"), v.literal("redeploy"), v.literal("rollback"))),
     of: v.optional(v.string()),
+    /** A deploy's commit to make live (a commit on the default branch); default main's head. */
+    sha: v.optional(v.string()),
     here: v.optional(v.boolean()),
     client_key: v.optional(v.string()),
   },

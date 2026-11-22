@@ -7,6 +7,7 @@ import { conversationFromSessionTrailer, normalizeRepository, resolveTaskLinksFr
 import { afterFor, deployStepsOf } from "./deploysView";
 import { ciOf } from "./deployTargetsCi";
 import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCommit } from "@codecast/shared/contracts/deployTargets";
+import { parseOwnerRepo } from "@codecast/shared/contracts";
 
 const DAY = 86_400_000;
 /** Commits on main read for one target's queue. */
@@ -288,3 +289,19 @@ export async function upsertMainCommits(ctx: any, args: { repository: string; te
   }
 }
 
+/** Commits kept on one deploy's record. */
+export const COMMITS_MAX = 200;
+
+export function repositoryArg(raw: string): string {
+  const repository = parseOwnerRepo(raw);
+  if (!repository) throw new Error(`"${raw}" is not an owner/name repository.`);
+  return normalizeRepository(repository);
+}
+
+export async function targetRows(ctx: any, workspace: string, repository?: string): Promise<Doc<"deploy_targets">[]> {
+  const rows: Doc<"deploy_targets">[] = await ctx.db
+    .query("deploy_targets")
+    .withIndex("by_workspace_repository", (q: any) => (repository ? q.eq("workspace", workspace).eq("repository", repository) : q.eq("workspace", workspace)))
+    .take(200);
+  return rows.filter((r) => !r.retired_at);
+}

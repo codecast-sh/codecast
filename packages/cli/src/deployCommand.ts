@@ -5,6 +5,11 @@ import type { Command } from "commander";
 import { apiPost } from "./castApi.js";
 import { commandGroup, type GroupDeps } from "./commandGroups.js";
 
+/** What a release asks the server for, per target: a deploy, of the named commit when the release pins one. */
+export function releaseRequest(repository: string, target: string, sha: string | null, here: boolean): Record<string, unknown> {
+  return { repository, target, action: "deploy", ...(sha ? { sha } : {}), ...(here ? { here: true } : {}) };
+}
+
 export function registerDeployCommand(program: Command, deps: GroupDeps): void {
   program
     .command("deploy")
@@ -12,11 +17,12 @@ export function registerDeployCommand(program: Command, deps: GroupDeps): void {
     .argument("[targets...]", "Targets to send, whatever their policy (default: every release target main moved past)")
     .option("--files <paths>", "Only the targets these files touch, space-separated (a change flow's Deploy stage)")
     .option("--except <targets>", "Targets to leave alone, space- or comma-separated")
-    .option("--sha <sha>", "The commit to make live (default: main's head on origin)")
+    .option("--sha <sha>", "The commit every deploy makes live, exactly (default: main's head on origin)")
+    .option("--carrying <sha>", "Send main's head to every target that does not hold this commit yet (a change flow's Deploy: its landed commit)")
     .option("--dry-run", "Say what the release would send and wait for, and stop")
     .option("--json", "Machine-readable output")
-    .action(async (names: string[], options: { files?: string; except?: string; sha?: string; dryRun?: boolean; json?: boolean }) => {
-      const { checkoutTargets, originHead, runDeployGraphAsync } = await import("./lineDeploy.js");
+    .action(async (names: string[], options: { files?: string; except?: string; sha?: string; carrying?: string; dryRun?: boolean; json?: boolean }) => {
+      const { checkoutTargets, originHead, runDeployGraphAsync, pinnedSha } = await import("./lineDeploy.js");
       const { planRelease, runRelease, formatPlan, formatResults, commitsSince, holds } = await import("./deployRelease.js");
       const { readLocalGitContext } = await import("./prCommand.js");
       const { deviceId } = await import("./remote/device.js");
@@ -26,7 +32,12 @@ export function registerDeployCommand(program: Command, deps: GroupDeps): void {
       const declared = await checkoutTargets(cwd);
       if (!declared.length) { console.error("This checkout declares no deploy targets. Add a [[target]] to .codecast/deploy.toml (docs: deploys.md DP10)."); process.exit(1); }
       const head = originHead(cwd);
-      const sha = options.sha ?? head.sha;
+      // --sha is the commit every deploy of the release makes live. --carrying plans the release by a commit main's
+      // head holds (which targets lack it) and sends the head: a target whose command sends its tree can do only that.
+      if (options.sha && options.carrying) { console.error("Name the commit to make live (--sha) or the one to carry (--carrying), not both"); process.exit(1); }
+      const pinned = options.sha ? pinnedSha(cwd, options.sha, head.branch) : null;
+      if (pinned && "error" in pinned) { console.error(pinned.error); process.exit(1); }
+      const sha = pinned?.sha ?? options.carrying ?? head.sha;
       if (!sha) { console.error(`Could not read origin/${head.branch} here`); process.exit(1); }
       const readTargets = async () => (await apiPost(deps, "/cli/deploys/targets", { repository }, { read: true }))?.targets ?? [];
       const carries = (deployed: string) => holds(cwd, sha, deployed);
@@ -51,7 +62,7 @@ export function registerDeployCommand(program: Command, deps: GroupDeps): void {
       }
       const here = deviceId();
       const results = await runRelease(plan, {
-        request: (target, onThisMachine) => apiPost(deps, "/cli/deploys/target/request", { repository, target, action: "deploy", ...(onThisMachine ? { here: true } : {}) }, { exitOnError: false }).then((r: any) => {
+        request: (target, onThisMachine) => apiPost(deps, "/cli/deploys/target/request", releaseRequest(repository, target, pinned?.sha ?? null, onThisMachine), { exitOnError: false }).then((r: any) => {
           if (!r?.short_id) throw new Error(r?.error ?? `could not ask for a deploy of ${target}`);
           return r;
         }),

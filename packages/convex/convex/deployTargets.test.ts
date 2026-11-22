@@ -263,6 +263,34 @@ describe("deploying a target from codecast (DP13)", () => {
     await expect((request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend" })).rejects.toThrow(/already going out/);
   });
 
+  test("a deploy names the commit it makes live: on the default branch, after the live one, and its commits stop there", async () => {
+    const { t, ctx } = await published();
+    t.deploy_targets.find((r) => r.name === "backend").command = "./deploy-api.sh --sha $sha";
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }], NOW - 30_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(1), repository: REPO, source: "m", at: NOW - 25_000 });
+    await pushMain(t, ctx, [{ n: 2, files: ["api/b.ts"], conv: "conv_api_work" }], NOW - 20_000);
+    await pushMain(t, ctx, [{ n: 3, files: ["api/c.ts"] }], NOW - 10_000);
+    const r = await (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend", sha: sha(2).slice(0, 9) });
+    expect(r).toMatchObject({ action: "deploy", sha: sha(2), commits: 1 });
+    expect(t.deploys.find((d) => d.short_id === r.short_id)).toMatchObject({ status: "requested", sha: sha(2), previous_sha: sha(1) });
+    expect(t.deploys.find((d) => d.short_id === r.short_id).commits.map((c: any) => c.sha)).toEqual([sha(2)]);
+  });
+
+  test("a named commit that is not on main, not after the live one, or that the command cannot send is refused, saying why", async () => {
+    const { t, ctx } = await published();
+    t.deploy_targets.find((r) => r.name === "backend").command = "./deploy-api.sh --sha $sha";
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts", "cli/a.ts"] }, { n: 2, files: ["api/b.ts", "cli/b.ts"] }], NOW - 30_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(2), repository: REPO, source: "m", at: NOW - 25_000 });
+    const ask = (more: Record<string, unknown>) => (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend", ...more });
+    await expect(ask({ sha: "f".repeat(40) })).rejects.toThrow(`is not a commit on ${REPO}'s default branch as codecast has read it`);
+    await expect(ask({ sha: sha(2) })).rejects.toThrow("is already live on backend");
+    await expect(ask({ sha: sha(1) })).rejects.toThrow("is older than what is live on backend");
+    await expect(ask({ sha: sha(2), action: "rollback" })).rejects.toThrow("sha names the commit of a deploy");
+    // The cli target's command sends the tree it runs in (no $sha): only main's head can be pinned.
+    await expect((request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "cli", sha: sha(1) })).rejects.toThrow(`cli's command sends the tree it runs in, not a sha, so it ships main's head (${sha(2).slice(0, 10)}), not ${sha(1).slice(0, 10)}`);
+    expect(await (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "cli", sha: sha(2) })).toMatchObject({ sha: sha(2) });
+  });
+
   test("a target that deploys on push has nothing to send; a tree-sending command cannot redeploy a sha; no rollback, no rollback", async () => {
     const { t, ctx } = await published();
     await expect((request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "web" })).rejects.toThrow(/deploys itself/);

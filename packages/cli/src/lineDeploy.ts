@@ -59,6 +59,19 @@ export function originHead(root: string): { sha: string | null; branch: string }
   return { sha: sha.status === 0 ? String(sha.stdout).trim() : null, branch };
 }
 
+/**
+ * The commit `cast deploy --sha` names, in full, when it is on origin's default branch (fetched by originHead): a
+ * deploy makes only a commit of the default branch live. An error in words otherwise.
+ */
+export function pinnedSha(root: string, named: string, branch: string): { sha: string } | { error: string } {
+  const full = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${named}^{commit}`], { cwd: root, encoding: "utf-8" });
+  const sha = full.status === 0 ? String(full.stdout).trim() : "";
+  if (!sha) return { error: `${named} is not a commit in this checkout: fetch it, or name it by a longer sha` };
+  const on = spawnSync("git", ["merge-base", "--is-ancestor", sha, `origin/${branch}`], { cwd: root, encoding: "utf-8" });
+  if (on.status !== 0) return { error: `${sha.slice(0, 10)} is not on origin/${branch}: a deploy makes a commit of the default branch live, so land it there first` };
+  return { sha };
+}
+
 /** The stage in words, for `cast line deploy`. */
 export function formatStage(s: DeployStageReply): string {
   const out: string[] = [];

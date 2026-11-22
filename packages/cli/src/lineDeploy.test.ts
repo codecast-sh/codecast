@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { parseWorkflowSource, validateWorkflow } from "./workflow/parser";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates";
-import { deployEnv, deployFailureSignal, expandDeployCommand, failedStep, followJobs, jobsVerdict, returnDeploy, runDeployStep, waitForCi, watchDeploy } from "./lineDeploy";
+import { spawnSync } from "node:child_process";
+import { deployEnv, deployFailureSignal, expandDeployCommand, failedStep, followJobs, jobsVerdict, pinnedSha, returnDeploy, runDeployStep, waitForCi, watchDeploy } from "./lineDeploy";
+import { releaseRequest } from "./deployCommand";
 
 // The line's deploy stage (deploys.md DP2, DP8, DP9): each step runs a
 // profile command with no model keys, judges one sha, and a failed one comes
@@ -197,5 +199,44 @@ describe("a deploy.toml written for a newer cast", () => {
     const entries = parseDeployTargetsText(`[[target]]\nname = "production"\nrun = "./deploy.sh"\ncanary = "x"\n`, []);
     expect(entries.map((e) => e.target.name)).toEqual(["production"]);
     expect(deployTargetWarnings(entries)).toEqual([".codecast/deploy.toml: target production: 'canary' is not a key this cast reads, so it is ignored (a newer cast's step? cast update; a typo? fix it)"]);
+  });
+});
+
+// `cast deploy --sha 3117e08fd` once made dp-2322 of main's head: the request named no sha, and the first step took
+// origin's head. A deploy that names its sha runs every step on it.
+describe("a deploy pinned to a commit", () => {
+  test("every step, CI first, runs on the deploy's own sha, not origin's head", async () => {
+    const s = fakeServer({ sha: "3117e08fd0000000000000000000000000000000", status: "requested" });
+    const ran: string[] = [];
+    const exec = async (cmd: string, env: NodeJS.ProcessEnv) => { ran.push(`${cmd} | ${env.CAST_DEPLOY_SHA}`); return 0; };
+    const head = () => ({ sha: "cd98ab98c0000000000000000000000000000000", branch: "main" });
+    for (const step of ["ci", "send"] as const) {
+      await runDeployStep({ step, deploy: "dp-3", root: tmp(), profile: { command: "./send.sh $sha", ci: "cast line deploy ci --sha $sha" }, read: s.read, post: s.post, exec, head, log: () => {} });
+    }
+    expect(ran).toEqual([
+      "cast line deploy ci --sha '3117e08fd0000000000000000000000000000000' | 3117e08fd0000000000000000000000000000000",
+      "./send.sh '3117e08fd0000000000000000000000000000000' | 3117e08fd0000000000000000000000000000000",
+    ]);
+    expect(s.posts.find(([p]) => p === "/cli/line/deploy/report")?.[1]).toMatchObject({ status: "running", sha: "3117e08fd0000000000000000000000000000000" });
+  });
+
+  test("cast deploy --sha asks for that commit; with none, the server sends main's head", () => {
+    expect(releaseRequest("acme/app", "cli", "3117e08fd0000000000000000000000000000000", false)).toEqual({ repository: "acme/app", target: "cli", action: "deploy", sha: "3117e08fd0000000000000000000000000000000" });
+    expect(releaseRequest("acme/app", "web", null, true)).toEqual({ repository: "acme/app", target: "web", action: "deploy", here: true });
+  });
+
+  test("the named commit is read in full, and refused when it is not on origin's default branch", () => {
+    const root = fs.realpathSync(tmp());
+    const git = (...a: string[]) => spawnSync("git", ["-C", root, "-c", "user.email=t@t", "-c", "user.name=t", ...a], { encoding: "utf8" }).stdout.trim();
+    git("init", "-q", "-b", "main");
+    git("commit", "-q", "--allow-empty", "-m", "a");
+    const a = git("rev-parse", "HEAD");
+    git("update-ref", "refs/remotes/origin/main", a);
+    git("checkout", "-q", "-b", "side");
+    git("commit", "-q", "--allow-empty", "-m", "b");
+    const b = git("rev-parse", "HEAD");
+    expect(pinnedSha(root, a.slice(0, 9), "main")).toEqual({ sha: a });
+    expect(pinnedSha(root, b.slice(0, 9), "main")).toEqual({ error: `${b.slice(0, 10)} is not on origin/main: a deploy makes a commit of the default branch live, so land it there first` });
+    expect(pinnedSha(root, "0123456789", "main")).toEqual({ error: "0123456789 is not a commit in this checkout: fetch it, or name it by a longer sha" });
   });
 });

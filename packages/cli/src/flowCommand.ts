@@ -502,7 +502,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
           if (targets && opts.send === "release" && !sent && !opts.once) {
             sent = true;
             say(`${landed.sha.slice(0, 10)} landed; sending the release targets it touches.`);
-            const release = await cast(["deploy", "--sha", landed.sha, "--files", landed.files.join(" "), ...(opts.except ? ["--except", opts.except] : [])], cwd);
+            const release = await cast(["deploy", "--carrying", landed.sha, "--files", landed.files.join(" "), ...(opts.except ? ["--except", opts.except] : [])], cwd);
             const last = (release.out + release.err).trim().split("\n").filter(Boolean);
             if (release.code !== 0) say(`cast deploy stopped: ${last.slice(-3).join(" | ")}`);
             const reread = await cast(["line", "deploy", "targets", "--json"], cwd);

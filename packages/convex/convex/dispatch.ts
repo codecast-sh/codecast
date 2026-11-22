@@ -1,6 +1,6 @@
 import { internalMutation, mutation, syncAckPositions, syncAckReceipts } from "./functions";
 import { requestDeployCore } from "./deploys";
-import { requestTargetDeployCore } from "./deployTargets";
+import { requestTargetDeployCore } from "./deployTargetRequest";
 import { noteWriteCause } from "./lifecycleEvents";
 import { heldKeysFor } from "./lib/accessKeys";
 import { addWaitCore, removeWaitCore, type AddWaitInput } from "./taskWaits";
