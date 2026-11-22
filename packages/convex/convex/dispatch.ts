@@ -282,7 +282,7 @@ const EXPLICIT_KILL_ACTIONS = new Set(["killSession", "killSessions"]);
 
 // Actions whose side effect is the whole server write, so their draft's
 // patches are not applied as well. The bulk dismiss of old sessions stamps only
-// the caller's own rows that are not pinned or snoozed, and a plain stamp:
+// rows the caller runs or owns that are not pinned or snoozed, and a plain stamp:
 // through the patch rail every row would run the hide teardown a kill does.
 const SIDE_EFFECT_OWNS_WRITE = new Set(["markSessionsDismissed"]);
 
@@ -1498,6 +1498,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // with the value the web wrote (the action's result).
   markSessionsDismissed: async (ctx, userId, [convIds]: [string[]], result) => {
     await dismissSessionsExactly(ctx as any, userId, convIds ?? [], typeof result === "number" ? result : Date.now());
+  },
+  // The undo of that sweep: the patches it carries clear the stamps on the
+  // caller's own rows, and this drops the hide it recorded for a teammate's.
+  restoreSessions: async (ctx, userId, [convIds]: [string[]]) => {
+    for (const convId of convIds ?? []) {
+      const id = ctx.db.normalizeId("conversations", convId);
+      if (id) await unhideConversationForViewer(ctx, userId, id);
+    }
   },
   deleteSession: async (ctx, userId, [convId]: [string]) => {
     const id = ctx.db.normalizeId("conversations", convId);
