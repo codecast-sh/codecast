@@ -3677,6 +3677,18 @@ diffs-container {
 }
 /* Scope page header: in a narrow pane the reports-to link (also on the
    Settings tab) steps aside, so the name and state line keep their width. */
+/* An object page's header is one row exactly as tall as a conversation's
+   (the same --cc-panel-head-h the session header's .cc-panel__head reads),
+   whatever its icons and facts would otherwise stretch it to (ct-87448;
+   lib/__tests__/densityRules.guard.test.ts holds this). */
+.object-head-row {
+  display: flex;
+  align-items: center;
+  height: var(--cc-panel-head-h);
+  min-height: 0;
+  padding-block: 0;
+}
+.object-head-row > * { flex: 1 1 auto; min-width: 0; }
 .scope-head-cq { container-type: inline-size; }
 @container (max-width: 560px) {
   .scope-head-cq .scope-head-wide { display: none; }
@@ -6909,6 +6921,28 @@ p:has(.object-reveal-slot[data-reveal-inline])::after, li:has(.object-reveal-slo
   max-height: 22px !important;
   padding-block: 2px !important;
   font-size: var(--fs-meta);
+}
+/* A reference in running text is a run of words, not a box: it takes the
+   line's own height, its title wraps at the column edge like the words
+   around it, and a wrapped reference keeps its tint and rounding on each
+   piece. Its icon hangs on the text's baseline at the text's size, so a
+   line holding one is exactly as tall as a line without (ct-87448;
+   lib/__tests__/densityRules.guard.test.ts holds this). */
+.entity-ref--flow {
+  display: inline;
+  /* The break between the icon and the title is the link's to allow, and it
+     never does; the title itself wraps (.entity-ref__label below). */
+  white-space: nowrap;
+  line-height: inherit;
+  padding-block: 0;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.entity-ref--flow .entity-ref__label { white-space: normal; }
+.entity-ref--flow .entity-ref__icon {
+  vertical-align: -0.125em;
+  height: 1em;
+  margin-right: 0.2em;
 }
 /* A pill that can reveal is split in two: the label is the link, and the
    caret after it is its own button that opens the full page in a band under
