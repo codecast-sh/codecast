@@ -36,6 +36,8 @@ export type DiagramStep = {
  * that its command differs by target, that it waits for a deploy and sends none, and how many changes stand on it now. A plain flow draws no marks.
  */
 export type StepMark = { own: "added" | "changed" | null; changed?: string[]; when?: string; passes?: true; varies?: true; waits?: true; here?: number; hereNames?: string[];
+  /** Of `here`, how many stand on the steps inside this frame: an open frame shows them on those steps and counts only the rest. */
+  hereInside?: number;
   /** An edit proposed and not live yet, in words ("proposed · <session>"): the step is drawn as a ghost. */
   proposed?: string;
   /** A proposed edit takes this step off the path. */

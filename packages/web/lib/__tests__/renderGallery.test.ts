@@ -18,8 +18,7 @@ import { DELIVERY_FAILED_SUBTYPE } from "@codecast/shared/contracts/deliveryFail
 import { LINE_FENCE_LANG } from "@codecast/shared/contracts/lineChat";
 import { VIEW_FENCE_LANG } from "../productViewRefs";
 import { FLOW_FENCE_LANG, readFlowFence } from "../line/flowFence";
-import { editRun } from "../line/flowEditCard";
-import { editFromOutput } from "../line/flowEditFence";
+import { editFromOutput, editRun } from "../line/flowEditCard";
 import { pipelineCommandRepo } from "../line/flowCommandOutput";
 import { CONVERSATION_FENCE_LANG } from "../conversationFence";
 import { DIFF_FENCE } from "../castDiff";

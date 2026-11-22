@@ -167,3 +167,16 @@
 .rpl-primary { height: 30px; padding: 0 14px; border-radius: 7px; border: 0; background: var(--lw-ink); color: var(--lw-paper); font: inherit; font-size: var(--lw-fs-sm); font-weight: 650; cursor: pointer; }
 .rpl-primary:disabled { opacity: .4; cursor: default; }
 @media (max-width: 640px) { .rpl-field { grid-template-columns: 1fr; gap: 4px; } }
+
+/* Round 4: what "in flight" counts, the full script folded, a station's changes here now and passed, a prompt diff. */
+.rpl-lane-flight { font-size: var(--lw-fs-xs); color: var(--lw-ink-2); }
+.rpl-lane-flight b { color: var(--lw-ink); margin-right: 3px; }
+.rpl-script summary { font-size: var(--lw-fs-xs); color: var(--lw-ink-3); cursor: pointer; }
+.rpl-script pre { margin: 6px 0 0; padding: 8px 10px; border-radius: 6px; background: var(--lw-sunk); font-family: var(--font-mono, inherit); font-size: var(--lw-fs-2xs); color: var(--lw-ink-2); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 260px; overflow: auto; }
+.rpl-runs-group { display: flex; flex-direction: column; gap: 4px; }
+.rpl-prompt-editor { font-family: var(--font-mono, inherit); font-size: var(--lw-fs-xs) !important; line-height: 1.5 !important; min-height: 240px; }
+.rpl-diff { margin: 0; padding: 8px 0; border-radius: 6px; background: var(--lw-sunk); font-family: var(--font-mono, inherit); font-size: var(--lw-fs-2xs); line-height: 1.5; max-height: 320px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.rpl-diff-line { display: block; padding: 0 10px; color: var(--lw-ink-3); }
+.rpl-diff-line[data-kind="add"] { color: var(--lw-ink); background: color-mix(in srgb, var(--lw-ok) 14%, transparent); }
+.rpl-diff-line[data-kind="del"] { color: var(--lw-ink-2); background: color-mix(in srgb, var(--lw-bad) 12%, transparent); text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--lw-bad) 50%, transparent); }
+.rpl-diff-line[data-kind="gap"] { color: var(--lw-ink-3); }

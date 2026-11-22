@@ -83,7 +83,7 @@ export const labelOf = (id: string) => id.replace(/[-_]+/g, " ").replace(/^\w/, 
 /** A station's id from the name a person gave it. */
 export const idOf = (label: string) => label.trim().toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "station";
 
-const DOES_WORDS: Record<AddDoes, string> = { run: "runs", agent: "an agent", person: "asks a person" };
+const DOES_WORDS: Record<AddDoes, string> = { run: "a command", agent: "an agent", person: "asks a person" };
 
 /** The edit in words, a station by its label. */
 export function editWords(e: PipelineEdit, label: (id: string) => string): string {
@@ -211,10 +211,59 @@ export function editsOfMessage(content: string | null | undefined): Array<{ flow
   return out;
 }
 
-/** Which edits a station takes: guidance and a prompt where it has one, a command where it runs one. */
-export function opsFor(s: Pick<PipelineStation, "prompt" | "runs" | "who"> | null | undefined): Set<EditOp> {
-  const ops = new Set<EditOp>(["add", "when", "skip"]);
+/** Which edits a station takes: guidance and a prompt where it has one, a command where it runs one. A branch of a
+ *  side-by-side group takes no skip or when (the engine refuses them inside the group), and a station is added after
+ *  the group, not beside a branch. */
+export function opsFor(s: Pick<PipelineStation, "prompt" | "runs" | "who"> | null | undefined, inGroup = false): Set<EditOp> {
+  const ops = new Set<EditOp>(inGroup ? [] : ["add", "when", "skip"]);
   if (s?.prompt) { ops.add("guide"); ops.add("prompt"); }
   if (s?.runs !== undefined || s?.who === "command") ops.add("run");
   return ops;
+}
+
+/** The fan-out (side-by-side group) each branch station sits in, by branch id: an edit placed at a branch lands on the
+ *  group ("after CI and review"). */
+export function groupsOf(flow: PipelineFlow): Map<string, string> {
+  const folded = foldFlow(flow.graph.nodes, flow.graph.edges);
+  const out = new Map<string, string>();
+  for (const s of folded.stations) if (s.kind === "parallel") for (const n of s.next) out.set(n.toId, s.id);
+  return out;
+}
+
+/** Whether an edit changes anything: a prompt, command or guidance edit whose text equals what the station has now is
+ *  no edit. */
+export function editChanges(flow: PipelineFlow, e: PipelineEdit): boolean {
+  if (e.op === "add" || e.op === "skip") return true;
+  return !editLive(flow, e);
+}
+
+/** Two texts line by line: each line kept, removed or added, in order (a small LCS; prompts are short). */
+export function lineDiff(before: string, after: string): Array<{ kind: "same" | "del" | "add"; text: string }> {
+  const a = before.split("\n"), b = after.split("\n");
+  const n = a.length, m = b.length;
+  const lcs: number[][] = Array.from({ length: n + 1 }, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) lcs[i][j] = a[i] === b[j] ? lcs[i + 1][j + 1] + 1 : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  const out: Array<{ kind: "same" | "del" | "add"; text: string }> = [];
+  let i = 0, j = 0;
+  while (i < n && j < m) {
+    if (a[i] === b[j]) { out.push({ kind: "same", text: a[i] }); i++; j++; }
+    else if (lcs[i + 1][j] >= lcs[i][j + 1]) out.push({ kind: "del", text: a[i++] });
+    else out.push({ kind: "add", text: b[j++] });
+  }
+  while (i < n) out.push({ kind: "del", text: a[i++] });
+  while (j < m) out.push({ kind: "add", text: b[j++] });
+  return out;
+}
+
+/** A station's script as a person reads it: the command that matters, the checkout boilerplate around it left out
+ *  (`wt="$(cast ws path $worktree)"; [ -n "$wt" ] && cd "$wt" && …`). The whole script when there is none. */
+export function meaningfulCommand(script: string): string {
+  const s = script.trim()
+    .replace(/^wt="\$\(cast ws path \$worktree\)";\s*/, "")
+    .replace(/^\[ -n "\$wt" \] \|\| \{[^}]*\};\s*/, "")
+    .replace(/^\[ -n "\$wt" \] && cd "\$wt"( && | \|\| exit 1;\s*)/, "")
+    .replace(/^cd "\$wt" && /, "");
+  // A script of several statements reads as the last program it runs (`…; fi; bun scripts/line.ts merge …`).
+  const last = s.match(/(?:^|;\s*|&&\s*|\|\|\s*)((?:bun|node|npx|npm|pnpm|yarn|cast|python3?|bash|\.\/)[^;&|]*)\s*$/);
+  return (last?.[1] ?? s).trim() || script.trim();
 }

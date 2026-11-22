@@ -8,7 +8,7 @@
 import { Suspense, lazy, useState } from "react";
 import { Workflow } from "lucide-react";
 import { flowCommandTarget, pipelineCommandRepo, stripAnsi } from "../../../lib/line/flowCommandOutput";
-import { editFromOutput } from "../../../lib/line/flowEditFence";
+import { editFromOutput } from "../../../lib/line/flowEditCard";
 import { useIsModernStyle } from "../../../hooks/useVisualStyle";
 import { pressable } from "../../ops/parts";
 

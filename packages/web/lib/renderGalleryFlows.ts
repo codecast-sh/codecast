@@ -2,7 +2,7 @@
 // finished run of a library flow, the session's change runs at each place a person meets one, and the run that
 // carried a pipeline edit out (pipeline.md PL5). Ids are lowercase so a run id reads as one in `cast flow run` output.
 // Pure and free of the `@/` alias: the phone's bundle and tests import it through the gallery.
-import { readEdit } from "./line/flowEditFence";
+import { readEdit } from "./line/flowEditCard";
 import { EDIT_SKIP } from "./renderGalleryPipeline.generated";
 
 // The flow object (ct-69934): their runs, graph and session-flow row are store records the gallery's loader seeds

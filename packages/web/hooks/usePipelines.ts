@@ -57,7 +57,7 @@ function proposalsSig(s: State): string {
 }
 
 type RosterRow = { device_id: string; display_name?: string | null; label?: string | null; hostname?: string | null };
-type CheckoutRow = { git_remote_url?: string | null; git_root?: string | null; project_path?: string | null; updated_at?: number };
+type CheckoutRow = { git_remote_url?: string | null; git_root?: string | null; project_path?: string | null; updated_at?: number; owner_device_id?: string | null };
 
 /**
  * Where an edit session for this pipeline starts: the checkout that publishes it, when that machine is the viewer's
@@ -75,7 +75,9 @@ export function useEditWhere(p: Pipeline | null): { root: string; device: string
       if (!row?.git_root || repositoryKeyOfRemote(row.git_remote_url) !== p.repository) continue;
       if (!best || (row.updated_at ?? 0) > (best.updated_at ?? 0)) best = row;
     }
-    return best?.git_root ? JSON.stringify({ root: best.git_root, device: null, machine: null }) : "";
+    // The checkout lives on the machine that ran that session: the edit session starts there, named.
+    const own = best?.owner_device_id && roster.some((d) => d.device_id === best!.owner_device_id) ? best.owner_device_id : null;
+    return best?.git_root ? JSON.stringify({ root: best.git_root, device: own, machine: name(own) }) : "";
   });
   return useMemo(() => (sig ? JSON.parse(sig) : null), [sig]);
 }

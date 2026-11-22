@@ -20,7 +20,7 @@ import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useEditWhere } from "../../../hooks/usePipelines";
 import { EditComposer, type ComposerStart } from "./EditComposer";
 import { pipelineCheckout } from "../../../lib/line/pipelineModel";
-import { opsFor, type EditOp } from "../../../lib/line/pipelineEdit";
+import { groupsOf, meaningfulCommand, opsFor, type EditOp } from "../../../lib/line/pipelineEdit";
 import "./pipeline.css";
 
 type LaneName = "change" | "release";
@@ -35,6 +35,21 @@ const deployHref = (teamId: string | null, deploy: string) => `/deploys?${teamId
 /** A deploy named by its dp-N, opening it on Deploys; a record named otherwise (a commit) is not shown. */
 function DeployRef({ teamId, deploy }: { teamId: string | null; deploy: string }) {
   return /^dp-\d+$/.test(deploy) ? <Link href={deployHref(teamId, deploy)} className="rpl-target-ref">{deploy}</Link> : null;
+}
+
+/** Where a lane's shared failure route goes, in plain words: the release's own "Back to the line" step reports the
+ *  failure back to the line. */
+const sharedWords = (r: { outcome: string; leadsTo: string | null; toId: string }) => (r.toId === "returned" || /back to the line/i.test(r.outcome) ? "reported back" : `sent to ${r.leadsTo ?? r.outcome}`);
+
+/** What "in flight" counts, as parts that add up to it. */
+function FlightWords({ flight, total }: { flight: PipelineModel["change"]["flight"]; total: number }) {
+  const parts = [
+    flight.working ? `${flight.working} at a station` : null,
+    flight.waiting ? `${flight.waiting} waiting for the deploy` : null,
+    flight.paused ? `${flight.paused} paused` : null,
+    flight.elsewhere ? `${flight.elsewhere} between stations` : null,
+  ].filter(Boolean);
+  return <span className="rpl-lane-flight" title="This repo's changes whose run through the flow has not ended"><b className="lw-num">{total}</b> in flight{parts.length ? ` · ${parts.join(" · ")}` : ""}</span>;
 }
 
 /** What starts a deploy to a target, in a word or two. */
@@ -61,22 +76,28 @@ export const PipelineDiagram = memo(function PipelineDiagram({ model, pipeline, 
   );
   return (
     <div className="rpl">
-      {lane("change", model.change, <LaneHead title="Every change" l={model.change} live={model.change.inFlight ? `${model.change.inFlight} in flight` : null} onEdit={() => compose({ lane: "change", op: "add", station: firstStation(model.change), at: "after" })} />)}
+      {lane("change", model.change, <LaneHead title="Every change" l={model.change} live={null} flight={model.change} onEdit={() => compose({ lane: "change", op: "add", station: firstStation(model.change), at: "after" })} />)}
       <MainRail model={model} teamId={teamId} />
       {lane("release", model.release, <LaneHead title="Every release" l={model.release} live={model.release.run ? "going out" : null} outside={model.release.outside} stuck={model.release.stuck} teamId={teamId} onEdit={() => compose({ lane: "release", op: "when", station: firstStation(model.release), at: "after" })} />, model.release.run)}
     </div>
   );
 });
 
-function LaneHead({ title, l, live, outside = null, stuck = null, onEdit, teamId = null }: { title: string; l: PipelineLane; live: string | null; outside?: string | null; stuck?: PipelineModel["release"]["stuck"]; onEdit: () => void; teamId?: string | null }) {
+/** A lane's head: what it is, how much of it is the repo's own, what it is doing now, and Edit. `flight`: the change
+ *  lane's changes in flight, said as parts that add up to the whole. */
+function LaneHead({ title, l, live, outside = null, stuck = null, onEdit, teamId = null, flight = null }: { title: string; l: PipelineLane; live: string | null; outside?: string | null; stuck?: PipelineModel["release"]["stuck"]; onEdit: () => void; teamId?: string | null; flight?: PipelineModel["change"] | null }) {
+  // A release step with no command passes: the lane says how many of its steps do something.
+  const steps = l.diagram.steps.filter((st) => st.kind !== "join");
+  const running = steps.filter((st) => !l.marks[st.id]?.passes).length;
   return (
     <header className="rpl-lane-head">
       <span className="rpl-lane-title">{title}</span>
-      <span className="rpl-lane-flow">{l.flow.label}</span>
       {l.flow.base && l.flow.base !== l.flow.slug ? <span className="rpl-lane-fact">extends {l.flow.base}</span> : null}
       <span className="rpl-lane-fact" data-tone={l.own ? "own" : undefined}>{l.flow.base === null ? "this repo's own" : l.own ? `${l.own} own · ${l.inherited} inherited` : "all inherited"}</span>
       {l.flow.removed.length ? <span className="rpl-lane-fact">skips {l.flow.removed.join(", ")}</span> : null}
-      {l.shared ? <span className="rpl-lane-fact" title={`${l.shared.outcome}: ${routeTail(l.shared)}`}>a failing step → {l.shared.leadsTo ?? l.shared.outcome}</span> : null}
+      {running < steps.length ? <span className="rpl-lane-fact">{running} of {steps.length} steps run something</span> : null}
+      {l.shared ? <span className="rpl-lane-fact" title={`${l.shared.outcome}: ${routeTail(l.shared)}`}>a failing step is {sharedWords(l.shared)}</span> : null}
+      {flight?.inFlight ? <FlightWords flight={flight.flight} total={flight.inFlight} /> : null}
       {stuck ? <span className="rpl-lane-stuck"><Link href={deployHref(teamId, stuck.deploy)}>{stuck.deploy}</Link> stuck {spanWords(stuck.for)}{stuck.outside ? " · sent outside codecast, never reported live" : ""}</span>
         : outside ? <span className="rpl-lane-outside">going out {outside} · steps not tracked</span>
         : live ? <span className="rpl-lane-live">{live}</span> : null}
@@ -150,9 +171,20 @@ function StationPanel({ lane, l, model, pipeline, pick, run, onClose, onEdit }: 
   const station = l.flow.stations.find((s) => s.id === pick.id) ?? pipelineStation(pipeline, lane, pick.id);
   const proposal = l.proposals.find((x) => (x.edit.op === "add" ? x.edit.id : x.edit.station) === station?.id) ?? null;
   const now = useCoarseNow(60_000);
-  const recent = lane === "change" && station ? stationRuns(model.change.runs, station.id) : [];
+  // "Here now" lists what the station's count counts, so a count and its list never disagree.
+  const runs = lane === "change" && station ? stationRuns(model.change.runs, station.id, l.standing[station.id] ?? []) : { now: [], passed: [] };
+  const inGroup = !!station && groupsOf(l.flow).has(station.id);
+  const full = station?.runs ?? null;
+  const short = full ? meaningfulCommand(full) : null;
+  const pushTargets = lane === "release" ? model.release.targets.filter((t) => t.runs === "push") : [];
   return (
-    <FlowStationPanel flow={flow} pick={pick} run={run} onClose={onClose} inherited={station?.own === "inherited" || !!station?.guide}>
+    // The panel names the station as the rail does; its prompt is "inherited" only where a backbone gives it.
+    <FlowStationPanel flow={flow} pick={pick} run={run} onClose={onClose} title={station?.label} inherited={station?.own === "inherited" && l.flow.base !== null}
+      after={<>
+        {full && short !== full.trim() ? <details className="rpl-script"><summary>Full script</summary><pre>{full}</pre></details> : null}
+        <StationRuns title="Here now" rows={runs.now} now={now} />
+        <StationRuns title="Passed here" rows={runs.passed} now={now} />
+      </>}>
       {station ? (
         <div className="rpl-facts">
           <span className="rpl-fact">{WHO_WORDS[station.who]}</span>
@@ -163,42 +195,52 @@ function StationPanel({ lane, l, model, pipeline, pick, run, onClose, onEdit }: 
           </span>
           <span className="rpl-fact" data-mono={station.when?.length ? "" : undefined}>{station.when?.length ? `when ${station.when.join(", ")}` : "always"}</span>
           {lane === "release" && station.runs === null ? <span className="rpl-fact" data-tone="quiet">no command · passes</span> : null}
-          {station.waits ? <span className="rpl-fact">waits for the deploy · sends none</span> : null}
+          {station.waits ? <span className="rpl-fact">waits for the deploy</span> : null}
           {proposal ? <Link href={`/conversation/${proposal.session.id}`} className="rpl-fact rpl-fact-link" data-tone="own">proposed · {sessionTitle(proposal.session.title)}</Link> : null}
-          <StationEditSlot station={station} onEdit={onEdit} />
+          <StationEditSlot station={station} inGroup={inGroup} onEdit={onEdit} />
         </div>
       ) : null}
-      {lane === "release" && station?.targets?.length ? (
-        <ul className="rpl-cmds" aria-label="Command by target">
-          {station.targets.map((t) => (
-            <li key={t.name} className="rpl-cmd"><span className="rpl-cmd-target">{t.name}</span>{t.runs ? <code className="rpl-cmd-text">{t.runs}</code> : <span className="rpl-cmd-none">no command · passes</span>}</li>
+      {lane === "release" && (station?.targets?.length || pushTargets.length) ? (
+        <ul className="rpl-cmds" aria-label="What each target runs here">
+          {(station?.targets ?? []).map((t) => (
+            <li key={t.name} className="rpl-cmd"><span className="rpl-cmd-target">{t.name}</span>{t.runs ? <code className="rpl-cmd-text">{meaningfulCommand(t.runs)}</code> : <span className="rpl-cmd-none">no command · passes</span>}</li>
           ))}
-        </ul>
-      ) : null}
-      {recent.length ? (
-        <ul className="rpl-runs" aria-label="Recent runs">
-          {recent.map((r) => (
-            <li key={r._id}>
-              <Link href={runHref(r._id)} className="rpl-run" data-status={r.status} title={r.task_short_id ?? undefined}>
-                <span className="rpl-run-state">{RUN_WORDS[r.status] ?? r.status}</span>
-                <span className="rpl-run-title">{r.task_title || "Change"}</span>
-                <span className="rpl-run-at">{agoWords(r.updated_at ?? r.created_at, now)}</span>
-              </Link>
-            </li>
-          ))}
+          {pushTargets.map((t) => <li key={t.name} className="rpl-cmd"><span className="rpl-cmd-target">{t.name}</span><span className="rpl-cmd-none">builds itself on push</span></li>)}
         </ul>
       ) : null}
     </FlowStationPanel>
   );
 }
 
-/** A station's edits from its panel (pipeline.md PL5): the one it most likely needs, and a station after it. */
-function StationEditSlot({ station, onEdit }: { station: Pick<PipelineStation, "id" | "prompt" | "runs" | "who">; onEdit: (op: EditOp, station: string) => void }) {
-  const ops = opsFor(station);
-  const first: EditOp = ops.has("guide") ? "guide" : ops.has("run") ? "run" : "when";
+/** A station's changes: here now since when, or when they passed it. */
+function StationRuns({ title, rows, now }: { title: string; rows: Array<{ run: PipelineModel["change"]["runs"][number]; at: number }>; now: number }) {
+  if (!rows.length) return null;
+  return (
+    <div className="rpl-runs-group">
+      <div className="fsp-label">{title}</div>
+      <ul className="rpl-runs" aria-label={title}>
+        {rows.map(({ run: r, at }) => (
+          <li key={r._id}>
+            <Link href={runHref(r._id)} className="rpl-run" data-status={r.status} title={r.task_short_id ?? undefined}>
+              <span className="rpl-run-state">{RUN_WORDS[r.status] ?? r.status}</span>
+              <span className="rpl-run-title">{r.task_title || "Change"}</span>
+              <span className="rpl-run-at">{agoWords(at, now)}</span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/** A station's edits from its panel (pipeline.md PL5): the one it most likely needs, and a station after it (after its
+ *  group, for a branch of one). */
+function StationEditSlot({ station, inGroup, onEdit }: { station: Pick<PipelineStation, "id" | "prompt" | "runs" | "who">; inGroup: boolean; onEdit: (op: EditOp, station: string) => void }) {
+  const ops = opsFor(station, inGroup);
+  const first: EditOp | null = ops.has("guide") ? "guide" : ops.has("run") ? "run" : ops.has("when") ? "when" : null;
   return (
     <span className="rpl-edit-slot">
-      <button type="button" className="rpl-lane-editbtn" onClick={() => onEdit(first, station.id)} data-station-edit>Edit</button>
+      {first ? <button type="button" className="rpl-lane-editbtn" onClick={() => onEdit(first, station.id)} data-station-edit>Edit</button> : null}
       <button type="button" className="rpl-lane-editbtn" onClick={() => onEdit("add", station.id)}>Add after</button>
     </span>
   );
@@ -234,8 +276,7 @@ function StripLane({ title, l, live, bad = false }: { title: string; l: Pipeline
       <ol className="rpl-strip-path">
         {steps.map((st) => {
           const mark = l.marks[st.id];
-          // A fan-out reads as its branches side by side, each by its own name.
-          const name = st.kind === "parallel" && st.inner.length ? st.inner.map((x) => x.label).join(" + ") : st.label;
+          const name = st.label;
           const here = mark?.here ?? 0;
           return (
             <li key={st.id} className="rpl-strip-step" data-passes={mark?.passes ? "" : undefined} data-here={here ? "" : undefined} title={mark?.hereNames?.join("\n")}>

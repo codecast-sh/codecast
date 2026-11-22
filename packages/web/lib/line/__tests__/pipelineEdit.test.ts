@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { PIPELINE_FIXTURES } from "./pipelines.fixture.generated";
-import { applyEdit, editCommand, editLive, editSessionMessage, editsOfMessage, editWords, parseEditCommand, shellWord, wouldRun, type PipelineEdit } from "../pipelineEdit";
+import { applyEdit, editChanges, editCommand, editLive, editSessionMessage, editsOfMessage, editWords, groupsOf, lineDiff, meaningfulCommand, opsFor, parseEditCommand, shellWord, wouldRun, type PipelineEdit } from "../pipelineEdit";
 import { drawnFlow, pendingEdits, pipelineCheckout, pipelineModel } from "../pipelineModel";
 import { flowDiagram } from "../flowDiagram";
 
@@ -63,7 +63,7 @@ describe("the flow with the edit drawn in", () => {
     const guided = applyEdit(codecast.change, EDITS[2]);
     expect(guided.stations.find((s) => s.id === "review")).toMatchObject({ own: "changed", changed: ["guide"], guide: "Also check the migrations." });
     expect(applyEdit(codecast.change, EDITS[7]).removed).toContain("Decide");
-    expect(editWords(EDITS[0], label())).toBe("Add Lint after Check (runs), only when a change touches packages/web/**, packages/shared/**");
+    expect(editWords(EDITS[0], label())).toBe("Add Lint after Check (a command), only when a change touches packages/web/**, packages/shared/**");
   });
 
   test("an edit is live once the published flow holds it", () => {
@@ -116,5 +116,35 @@ describe("the checkout an edit starts in", () => {
     expect(c.root).toBe("/w/codecast");
     expect(wouldRun("packages/web/**", c.recent!)).toEqual({ hits: 1, total: 2 });
     expect(pipelineCheckout(codecast).recent).toBeNull();
+  });
+});
+
+describe("what the composer knows", () => {
+  test("a side-by-side group's branches map to the group, and take no skip, when or add of their own", () => {
+    const groups = groupsOf(example.change);
+    expect(groups.get("ci")).toBe("checks");
+    expect(groups.get("review")).toBe("checks");
+    expect([...opsFor({ who: "command", runs: "x" }, true)]).toEqual(["run"]);
+    expect([...opsFor({ who: "agent", prompt: "p" })].sort()).toEqual(["add", "guide", "prompt", "skip", "when"]);
+  });
+
+  test("a prompt or command edit equal to what the station has is no edit", () => {
+    const review = codecast.change.stations.find((s) => s.id === "review")!;
+    expect(editChanges(codecast.change, { op: "prompt", station: "review", text: review.prompt! })).toBe(false);
+    expect(editChanges(codecast.change, { op: "prompt", station: "review", text: `${review.prompt}\nAlso X.` })).toBe(true);
+  });
+
+  test("a prompt edit reads as a line diff", () => {
+    expect(lineDiff("a\nb\nc", "a\nB\nc\nd")).toEqual([
+      { kind: "same", text: "a" }, { kind: "del", text: "b" }, { kind: "add", text: "B" }, { kind: "same", text: "c" }, { kind: "add", text: "d" },
+    ]);
+  });
+
+  test("a script reads as the command that matters, the checkout boilerplate left out", () => {
+    expect(meaningfulCommand('wt="$(cast ws path $worktree)"; [ -n "$wt" ] && cd "$wt" && bun outreach/backend/scripts/line.ts pr --task $task_id')).toBe("bun outreach/backend/scripts/line.ts pr --task $task_id");
+    expect(meaningfulCommand('wt="$(cast ws path $worktree)"; [ -n "$wt" ] && cd "$wt" || exit 1; if [ x ]; then y; fi')).toBe("if [ x ]; then y; fi");
+    // Several statements: the last program it runs.
+    expect(meaningfulCommand('wt="$(cast ws path $worktree)"; [ -n "$wt" ] && cd "$wt" || exit 1; if [ a ]; then b; fi; bun outreach/backend/scripts/line.ts merge --task $task_id')).toBe("bun outreach/backend/scripts/line.ts merge --task $task_id");
+    expect(meaningfulCommand("bun run lint")).toBe("bun run lint");
   });
 });

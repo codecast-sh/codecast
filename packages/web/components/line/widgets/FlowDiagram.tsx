@@ -8,6 +8,8 @@
 // flow's end; a loop to another station names that station. The model is
 // lib/line/flowDiagram.ts; this only draws it.
 import { createContext, memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { flowDiagram, routeTail, runReached, SESSION_WORDS, stepStates, type DiagramStep, type FlowDiagramModel, type SideRoute, type StepMark, type StepState } from "../../../lib/line/flowDiagram";
 import type { ShippedFlow } from "../../../lib/line/flowPool";
 import { WHO } from "../../../lib/line/flowWho";
@@ -105,7 +107,9 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
   const end = model.end ? (
     <li className="fd-cell">
       <div className="fd-cell-main">
-        <span className="fd-arrow" aria-hidden />
+        {onAdd && !compact && model.steps.length
+          ? <button type="button" className="fd-arrow fd-add" aria-label={`Add a station before ${model.end}`} title={`Add a station before ${model.end}`} onClick={() => onAdd(model.steps[model.steps.length - 1].id)} data-fd-add="end"><span aria-hidden>+</span></button>
+          : <span className="fd-arrow" aria-hidden />}
         <span className="fd-end" data-reached={runReached(run, model.endId) ? "" : undefined} title={run ? undefined : "Where the flow ends when every step passes"}>{model.end}</span>
       </div>
     </li>
@@ -149,7 +153,8 @@ function Segment({ step, states, compact, run, pick, parallel = false, onFold }:
       {pick.onPick
         ? <button type="button" className="fd-seg-name" aria-pressed={pick.picked === step.id} onClick={() => pick.onPick!({ id: step.id, kind: step.kind })} data-fd-pick={step.id}>{name}</button>
         : <div className="fd-seg-name">{name}</div>}
-      {mark ? <MarkRow mark={mark} /> : null}
+      {/* Open, the frame's steps show their own counts; the frame counts only what stands on none of them. */}
+      {mark ? <MarkRow mark={{ ...mark, here: (mark.here ?? 0) - (mark.hereInside ?? 0) }} /> : null}
       {onFold ? <button type="button" className="fd-seg-fold" onClick={onFold} aria-label={`Fold ${step.label}`} title={`Fold ${step.label} into one step`} data-fd-fold={step.id}>−</button> : null}
       <div className="fd-seg-steps">
         {step.inner.map((s, i) => (
@@ -184,7 +189,7 @@ function Step({ step, state, compact, run, pick, fold, markId }: { step: Diagram
         : pick.onPick
         ? <button type="button" {...attrs} aria-pressed={pick.picked === step.id} data-picked={pick.picked === step.id ? "" : undefined} onClick={() => pick.onPick!({ id: step.id, kind: step.kind })} data-fd-pick={step.id}>{body}</button>
         : <div {...attrs}>{body}</div>}
-      {mark ? <MarkRow mark={mark} compact={compact} /> : null}
+      {mark ? <MarkRow mark={mark} compact={compact} onOpen={pick.onPick ? () => pick.onPick!({ id: step.id, kind: step.kind }) : undefined} /> : null}
       {!compact && step.side.length ? <Routes routes={step.side} run={run} /> : null}
     </div>
   );
@@ -225,20 +230,24 @@ const Marks = createContext<Readonly<Record<string, StepMark>> | null>(null);
 const OWN_WORD: Record<NonNullable<StepMark["own"]>, string> = { added: "added", changed: "changed" };
 
 /** What a pipeline says under a step: how many changes stand on it now, the project's own mark, when it runs, that it passes. */
-function MarkRow({ mark, compact = false }: { mark: StepMark; compact?: boolean }) {
+function MarkRow({ mark, compact = false, onOpen }: { mark: StepMark; compact?: boolean; onOpen?: () => void }) {
   const own = mark.own ? <span className="fd-mark" data-mark="own" title={mark.changed?.join(", ") || undefined}>{OWN_WORD[mark.own]}</span> : null;
-  const here = mark.here ? <span className="fd-mark" data-mark="here" title={mark.hereNames?.join("\n") || undefined}>{mark.here} here</span> : null;
+  // The count opens the station, where its changes are listed by name.
+  const here = mark.here ? (onOpen
+    ? <button type="button" className="fd-mark" data-mark="here" title={mark.hereNames?.join("\n") || undefined} onClick={onOpen}>{mark.here} here</button>
+    : <span className="fd-mark" data-mark="here" title={mark.hereNames?.join("\n") || undefined}>{mark.here} here</span>) : null;
   const proposed = mark.proposed ? <span className="fd-mark" data-mark="proposed" title={mark.proposed}>{mark.skipped ? "skip " : ""}{mark.proposed}</span> : null;
   if (compact) return here || own || proposed ? <div className="fd-marks">{here}{proposed ?? own}</div> : null;
   if (!own && !here && !proposed && !mark.when && !mark.passes && !mark.varies && !mark.waits) return null;
   return (
     <div className="fd-marks">
       {proposed}
+      {here}
       {proposed ? null : own}
       {mark.when ? <span className="fd-mark" data-mark="when" title={`Runs only when a change touches ${mark.when}`}>{mark.when}</span> : null}
       {mark.passes ? <span className="fd-caption">no command</span> : null}
       {mark.varies ? <span className="fd-mark">varies by target</span> : null}
-      {mark.waits ? <span className="fd-mark">waits · sends none</span> : null}
+      {mark.waits ? <span className="fd-mark" data-mark="waits">waits for the deploy</span> : null}
     </div>
   );
 }
@@ -254,19 +263,68 @@ const RailTo = createContext<string>(SESSION_WORDS);
  */
 function Routes({ routes, run }: { routes: SideRoute[]; run: RunLike }) {
   const quiet = useContext(QuietRoutes);
-  const [open, setOpen] = useState(false);
+  const railTo = useContext(RailTo);
   const shown = run ? routes.filter((r) => runReached(run, r.toId)) : routes;
   if (!shown.length) return null;
-  // The path leads: a step's other ways are one quiet line that opens on hover or press. A run's taken route stays out.
+  // The path leads: a step's other ways fold into one quiet line that opens a list over the page. A way back to the
+  // session stays drawn, so the loop reads even where the rail wraps away.
   if (quiet && !run) {
+    const rail = shown.filter((r) => ridesRail(r, railTo));
+    const rest = shown.filter((r) => !ridesRail(r, railTo));
     return (
-      <div className="fd-routes-fold" data-open={open ? "" : undefined}>
-        <button type="button" className="fd-routes-more" aria-expanded={open} onClick={() => setOpen((o) => !o)}>{shown.length} other {shown.length === 1 ? "way" : "ways"}</button>
-        <RouteList routes={shown} run={run} />
-      </div>
+      <>
+        {rail.length ? <RouteList routes={rail} run={run} /> : null}
+        {rest.length ? <OtherWays routes={rest} /> : null}
+      </>
     );
   }
   return <RouteList routes={shown} run={run} />;
+}
+
+/** A step's other ways, one quiet button that opens them over the page (never clipped by the lane), each in words: what
+ *  happens, then where it goes. Esc or a press elsewhere closes it; it follows its button when the page scrolls. */
+function OtherWays({ routes }: { routes: SideRoute[] }) {
+  const [at, setAt] = useState<{ left: number; top: number } | null>(null);
+  const button = useRef<HTMLButtonElement | null>(null);
+  const list = useRef<HTMLUListElement | null>(null);
+  useWatchEffect(() => {
+    if (!at) return;
+    const close = () => setAt(null);
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); close(); } };
+    const onDown = (e: PointerEvent) => { const t = e.target as Node; if (!list.current?.contains(t) && !button.current?.contains(t)) close(); };
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("pointerdown", onDown, true);
+    // A scroll carries the list with its button; it closes once the button leaves the window.
+    const follow = () => {
+      const r = button.current?.getBoundingClientRect();
+      if (!r || r.bottom < 0 || r.top > window.innerHeight) return close();
+      const next = { left: Math.min(r.left, window.innerWidth - 300), top: r.bottom + 4 };
+      setAt((cur) => (cur && cur.top === next.top && cur.left === next.left ? cur : next));
+    };
+    window.addEventListener("scroll", follow, true);
+    return () => { window.removeEventListener("keydown", onKey, true); window.removeEventListener("pointerdown", onDown, true); window.removeEventListener("scroll", follow, true); };
+  }, [!!at]);
+  const toggle = () => {
+    if (at) return setAt(null);
+    const r = button.current?.getBoundingClientRect();
+    if (r) setAt({ left: Math.min(r.left, window.innerWidth - 300), top: r.bottom + 4 });
+  };
+  return (
+    <>
+      <button ref={button} type="button" className="fd-routes-more" aria-expanded={!!at} onClick={toggle}>{routes.length} other {routes.length === 1 ? "way" : "ways"}</button>
+      {at && typeof document !== "undefined" ? createPortal(
+        <ul ref={list} className="fd-ways lw-widget" style={{ left: at.left, top: at.top }} role="list">
+          {routes.map((r, i) => (
+            <li key={i} className="fd-way" data-tone={r.tone}>
+              <span className="fd-way-what">{r.outcome}</span>
+              <span className="fd-way-tail">{routeTail(r)}</span>
+            </li>
+          ))}
+        </ul>,
+        document.body,
+      ) : null}
+    </>
+  );
 }
 
 function RouteList({ routes: shown, run }: { routes: SideRoute[]; run: RunLike }) {

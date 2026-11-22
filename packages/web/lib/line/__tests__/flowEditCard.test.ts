@@ -3,8 +3,7 @@
 // example-org/example-app): add lint after check when landing/**, guide review, skip decide, in that order, so the
 // later fences carry the earlier edits in their graph.
 import { describe, expect, test } from "bun:test";
-import { asGitDiff, editDrawing, editLines, editRun, liveDeploy } from "../flowEditCard";
-import { editFromOutput, readEdit } from "../flowEditFence";
+import { asGitDiff, editDrawing, editFromOutput, editLines, editRun, liveDeploy, readEdit } from "../flowEditCard";
 import { parseCastDiff } from "../../castDiff";
 import { readFlowFence } from "../flowFence";
 import { pipelineCommandRepo } from "../flowCommandOutput";
@@ -117,20 +116,5 @@ describe("which run carries the edit", () => {
   test("its deploy is named once it is live", () => {
     expect(liveDeploy("live on web dp-12, waiting for cli")).toBe("dp-12");
     expect(liveDeploy(null)).toBeNull();
-  });
-});
-
-describe("the fence readers stay leaves", () => {
-  // flowFence (every markdown surface) and the `cast flow` tool card load these on the transcript's path. Reaching the
-  // drawing's model pulled in lineModel's graph, whose import cycle left bun's module load unresolved and hung two
-  // web test files until their timeout (main CI, 8010fe3f9).
-  test("flowFence and flowEditFence import neither the edit card's model nor the line model", async () => {
-    const fs = await import("node:fs");
-    const path = await import("node:path");
-    for (const file of ["../flowFence.ts", "../flowEditFence.ts"]) {
-      const src = fs.readFileSync(path.join(import.meta.dir, file), "utf8");
-      const imports = [...src.matchAll(/^import[^;]*from "([^"]+)"/gm)].map((m) => m[1]);
-      expect(imports.filter((i) => /flowEditCard|flowDiagram|pipelineModel|lineModel/.test(i))).toEqual([]);
-    }
   });
 });

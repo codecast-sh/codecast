@@ -8,6 +8,9 @@ import { memo } from "react";
 import Link from "next/link";
 import { ShareControl } from "../../ShareControl";
 import { usePipelineModels } from "../../../hooks/usePipelines";
+import { usePipeline, useSyncPipelines } from "../../../hooks/useSyncPipelines";
+import { useInboxStore } from "../../../store/inboxStore";
+import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { pipelineHref, type PipelineModel } from "../../../lib/line/pipelineModel";
 import { PipelineDiagram } from "./PipelineDiagram";
 
@@ -53,13 +56,16 @@ export const PipelinesStage = memo(function PipelinesStage({ workspace }: { work
 });
 
 /** /flows/pipeline?repo=: one pipeline, whole. */
-export const RepoPipelineStage = memo(function RepoPipelineStage({ workspace, repository }: { workspace: string | null; repository: string }) {
+/** `pickSpace`: read another workspace (the flows app's switcher), for an address whose repository lives there. */
+export const RepoPipelineStage = memo(function RepoPipelineStage({ workspace, repository, pickSpace }: { workspace: string | null; repository: string; pickSpace?: (key: string) => void }) {
   const { models, pipelines, ready, failed } = usePipelineModels(workspace);
   const i = models.findIndex((m) => m.repository === repository.toLowerCase());
   const model = models[i] ?? null;
   if (!model) {
-    if (!ready) return <div className="lw-skeleton" aria-busy><i style={{ width: "70%" }} /></div>;
-    return <div className="rpl-empty"><b>{failed ? `Pipelines ${failed}` : `No pipeline for ${repository}`}</b><Link href="/flows" className="lw-chip">Every pipeline</Link></div>;
+    // The address names the repository: when another of the viewer's teams holds its pipeline, the page reads that one.
+    const finder = pickSpace ? <PipelineFinder repository={repository} except={teamOf(workspace)} onFound={(team) => pickSpace(`team:${team}`)} /> : null;
+    if (!ready) return <>{finder}<div className="lw-skeleton" aria-busy><i style={{ width: "70%" }} /></div></>;
+    return <>{finder}<div className="rpl-empty"><b>{failed ? `Pipelines ${failed}` : `No pipeline for ${repository} in any of your teams`}</b><Link href="/flows" className="lw-chip">Every pipeline</Link></div></>;
   }
   return (
     <div className="rpl-page" data-pipeline-page={model.repository}>
@@ -74,3 +80,16 @@ export const RepoPipelineStage = memo(function RepoPipelineStage({ workspace, re
     </div>
   );
 });
+
+/** Looks for a repository's pipeline in each of the viewer's other teams, and names the first team that has it. */
+function PipelineFinder({ repository, except, onFound }: { repository: string; except: string | null; onFound: (team: string) => void }) {
+  const teams = useInboxStore((s) => (Array.isArray(s.teams) ? s.teams : Object.values((s.teams ?? {}) as Record<string, { _id?: string }>)).map((t: { _id?: string }) => t._id).filter((id): id is string => !!id && id !== except).join(","));
+  return <>{teams ? teams.split(",").map((t) => <TeamPipelineProbe key={t} team={t} repository={repository} onFound={onFound} />) : null}</>;
+}
+
+function TeamPipelineProbe({ team, repository, onFound }: { team: string; repository: string; onFound: (team: string) => void }) {
+  useSyncPipelines(team);
+  const found = !!usePipeline(team, repository);
+  useWatchEffect(() => { if (found) onFound(team); }, [found, team, onFound]);
+  return null;
+}

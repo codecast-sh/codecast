@@ -41,7 +41,7 @@ export function stationView(flow: { nodes: ReadonlyArray<FlowNodeIn>; edges: Rea
   if (d.isolated) facts.push("own worktree");
   if (d.timeout) facts.push(`${d.timeout}s limit`);
   const visits = d.max_visits ?? node.max_visits;
-  if (visits) facts.push(`at most ${visits} ${visits === 1 ? "visit" : "visits"}`);
+  if (visits) facts.push(`runs at most ${visits} ${visits === 1 ? "time" : "times"}`);
   if (d.max_retries) facts.push(`${d.max_retries} retries`);
   if (d.parks) facts.push("waits without a slot");
   if (d.output) facts.push(`answers ${d.output}`);

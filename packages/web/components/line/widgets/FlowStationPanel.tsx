@@ -34,7 +34,9 @@ const STATUS_WORD: Record<string, string> = { completed: "Done", running: "Runni
 
 /** One station open under its drawing. `children`: what a host adds about it (a pipeline's when, who and recent runs), under its header.
  *  `inherited`: the prompt is the backbone's, so its tab says so beside the project's guidance. */
-export function FlowStationPanel({ flow, pick, run, onClose, children, inherited = false }: { flow: AppFlow; pick: StepPick; run: RunLike | null; onClose: () => void; children?: ReactNode; inherited?: boolean }) {
+/** `title`: the station's name as the host draws it, when a step inside a frame would otherwise be named by its own node. */
+/** `after`: what the host adds below what the station runs (its changes, its whole script). */
+export function FlowStationPanel({ flow, pick, run, onClose, children, after, inherited = false, title }: { flow: AppFlow; pick: StepPick; run: RunLike | null; onClose: () => void; children?: ReactNode; after?: ReactNode; inherited?: boolean; title?: string }) {
   // A host that says who does the step itself (children) needs no fallback word for it in the header.
   const stations = useFlowStations(flow);
   const view = useMemo(() => stationView(flow, pick.id, pick.kind, stations), [flow, pick, stations]);
@@ -49,8 +51,8 @@ export function FlowStationPanel({ flow, pick, run, onClose, children, inherited
     <section className="fsp" data-flow-station={view.id} aria-label={`${view.label}: what this step does`}>
       <header className="fsp-head">
         <Icon className="fsp-who" aria-hidden strokeWidth={2} />
-        <span className="fsp-name">{view.label}</span>
-        {view.segment ? <span className="fsp-in">in {view.segment}</span> : null}
+        <span className="fsp-name">{title ?? view.label}</span>
+        {view.segment && !title ? <span className="fsp-in">in {view.segment}</span> : null}
         <span className="fsp-facts">
           {(view.facts.length ? view.facts : children ? [] : [WHO[view.who].word]).map((f, i) => <span key={i} className="fsp-fact">{f}</span>)}
         </span>
@@ -92,6 +94,7 @@ export function FlowStationPanel({ flow, pick, run, onClose, children, inherited
           ))}
         </ul>
       ) : null}
+      {after}
     </section>
   );
 }

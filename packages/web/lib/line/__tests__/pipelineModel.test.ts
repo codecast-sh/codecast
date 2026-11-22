@@ -84,6 +84,19 @@ describe("what is on the pipeline now", () => {
     expect(m.change.marks.review.hereNames).toHaveLength(2);
     expect(m.change.marks.check.here).toBeUndefined();
     expect(m.change.inFlight).toBe(2);
+    expect(m.change.flight).toEqual({ working: 2, waiting: 0, paused: 0, elsewhere: 0 });
+  });
+
+  test("what is in flight adds up: working, waiting for the deploy, paused, and not at a station", () => {
+    const m = pipelineModel(example, [
+      run({ _id: "a", current_node_id: "ci" }),
+      run({ _id: "b", current_node_id: "deploy__wait" }),
+      run({ _id: "c", current_node_id: "merge", status: "paused" }),
+      run({ _id: "d", current_node_id: null }),
+    ]);
+    expect(m.change.flight).toEqual({ working: 1, waiting: 1, paused: 1, elsewhere: 1 });
+    const f = m.change.flight;
+    expect(f.working + f.waiting + f.paused + f.elsewhere).toBe(m.change.inFlight);
   });
 
   test("a folded frame counts the changes on the steps inside it", () => {
@@ -98,6 +111,22 @@ describe("what is on the pipeline now", () => {
     expect(counted.length).toBeGreaterThan(0);
     expect(counted.every(([id]) => m.change.diagram.steps.some((st) => st.id === id || st.inner.some((i) => i.id === id)))).toBe(true);
     expect(m.change.inFlight).toBe(1);
+  });
+
+  test("a change behind a fan-out's join counts on the step before it, so every station count adds up", () => {
+    const m = pipelineModel(example, [run({ _id: "a", current_node_id: "read" })]);
+    const counted = Object.values(m.change.marks).reduce((n, x) => n + (x.here ?? 0), 0);
+    // Read is the join behind CI and Review: it counts on one of the branches and so on the group.
+    expect(m.change.marks.checks.here).toBe(1);
+    expect(counted).toBeGreaterThanOrEqual(1);
+  });
+
+  test("a station's Here now lists exactly what its count counts, a change off the path included", () => {
+    const runs = [run({ _id: "a", current_node_id: "brief", project_path: "/w/example-app" })];
+    const m = pipelineModel(example, runs);
+    const at = Object.entries(m.change.standing).find(([, xs]) => xs.some((x) => x.id === "a"))![0];
+    expect(m.change.marks[at].here).toBe(1);
+    expect(stationRuns(m.change.runs, at, m.change.standing[at]).now.map((x) => x.run._id)).toEqual(["a"]);
   });
 
   test("runs of other flows or other repos never count", () => {
@@ -166,7 +195,15 @@ describe("own stations", () => {
   test("a station and its recent runs by id", () => {
     expect(pipelineStation(example, "change", "review")?.prompt).toBeTruthy();
     expect(pipelineStation(example, "release", "send")?.runs).toContain("./deploy.sh");
-    const runs = [run({ _id: "a", current_node_id: "merge", updated_at: 5 }), run({ _id: "b", node_statuses: [{ node_id: "merge", status: "completed" }], updated_at: 9 }), run({ _id: "c", current_node_id: "pr" })];
-    expect(stationRuns(runs, "merge").map((r) => r._id)).toEqual(["b", "a"]);
+    const runs = [
+      run({ _id: "a", current_node_id: "merge", updated_at: 5, node_statuses: [{ node_id: "merge", status: "running", started_at: 4 }] }),
+      run({ _id: "b", status: "completed", node_statuses: [{ node_id: "merge", status: "completed", completed_at: 9 }], updated_at: 12 }),
+      run({ _id: "c", current_node_id: "pr" }),
+      // Passed Merge and now stands at Deploy: passed here, not here now.
+      run({ _id: "d", current_node_id: "deploy__wait", node_statuses: [{ node_id: "merge", status: "completed", completed_at: 7 }, { node_id: "deploy__wait", status: "running" }] }),
+    ];
+    const merge = stationRuns(runs, "merge");
+    expect(merge.now.map((x) => [x.run._id, x.at])).toEqual([["a", 4]]);
+    expect(merge.passed.map((x) => [x.run._id, x.at])).toEqual([["b", 9], ["d", 7]]);
   });
 });

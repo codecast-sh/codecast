@@ -341,7 +341,7 @@ export function LineWorkspace({ projectId: pinned = null, embedded, Frame, space
           <div className="lw-body" data-drawer-open={slideOpen && model && !settings ? "" : undefined}>
             <main className="lw-stage" ref={stageRef}>
               {/* The team's pipelines (the landing page) and one pipeline read the workspace alone, never the line's model. */}
-              {pipeline !== null ? <RepoPipelineStage workspace={space?.key ?? null} repository={pipeline} />
+              {pipeline !== null ? <RepoPipelineStage workspace={space?.key ?? null} repository={pipeline} pickSpace={space?.pick} />
               : landing ? <PipelinesStage workspace={space?.key ?? null} />
               : settings && model && !unresolved ? (
                 <LineSettingsStage projectId={projectId} line={drawnLine} lines={picks} projects={ws.projects} rollups={ws.allRollups} processOf={ws.process.project} href={settingsAt} />

@@ -15,7 +15,7 @@ import { pipelineEditLedger } from "../../consequential/pipelineEditLedger";
 import { spawnSessionWithPrompt } from "../../../lib/spawnSession";
 import { drawnFlow, pipelineModel, type PipelineLane } from "../../../lib/line/pipelineModel";
 import { flowDiagram } from "../../../lib/line/flowDiagram";
-import { editCommand, editSessionMessage, editWords, idOf, opsFor, wouldRun, type AddDoes, type EditOp, type PipelineEdit } from "../../../lib/line/pipelineEdit";
+import { editChanges, editCommand, editSessionMessage, editWords, groupsOf, idOf, lineDiff, opsFor, wouldRun, type AddDoes, type EditOp, type PipelineEdit } from "../../../lib/line/pipelineEdit";
 import type { Pipeline, PipelineStation } from "../../../lib/line/pipelineTypes";
 
 export type ComposerStart = { lane: "change" | "release"; op: EditOp; station?: string | null; at?: "after" | "before" };
@@ -41,14 +41,16 @@ export function EditComposer({ pipeline, start, where, recent, onClose }: {
   onClose: () => void;
 }) {
   const flow = start.lane === "change" ? pipeline.change : pipeline.release;
-  // The passing path's stations, a fan-out's branches left to the fan-out, the one a "+" named always among them.
-  // The steps the passing path draws, in order: where a new station can go.
+  // The steps the passing path draws, in order: where a new station can go. A branch of a side-by-side group is not
+  // one: a station added at a branch goes after its group ("after CI and review").
   const main = useMemo(() => {
     const ids = flowDiagram(drawnFlow(flow)).steps.map((st) => st.id);
     return ids.map((id) => flow.stations.find((s) => s.id === id)).filter((s): s is PipelineStation => !!s);
   }, [flow]);
+  const groups = useMemo(() => groupsOf(flow), [flow]);
+  const anchor = (id: string | null | undefined) => (id ? groups.get(id) ?? id : main[0]?.id ?? "");
   const [op, setOp] = useState<EditOp>(start.op);
-  const [station, setStation] = useState<string>(start.station ?? main[0]?.id ?? "");
+  const [station, setStation] = useState<string>(start.op === "add" ? anchor(start.station) : start.station ?? main[0]?.id ?? "");
   const s = flow.stations.find((x) => x.id === station) ?? null;
   const [at, setAt] = useState<"after" | "before">(start.at ?? "after");
   const [label, setLabel] = useState("");
@@ -57,7 +59,10 @@ export function EditComposer({ pipeline, start, where, recent, onClose }: {
   const [when, setWhen] = useState("");
   const [text, setText] = useState("");
   const [reviewing, setReviewing] = useState(false);
-  const ops = opsFor(s);
+  // A group's branches take only what they run; adding a station is always offered, after the group.
+  const ops = opsFor(s, groups.has(station));
+  ops.add("add");
+  const prompted = s?.own === "inherited" && flow.base !== null ? "Inherited" : "Current prompt";
   const label$ = (id: string) => flow.stations.find((x) => x.id === id)?.label ?? id;
 
   // The edit the form says, or null while it says too little to be one.
@@ -78,6 +83,10 @@ export function EditComposer({ pipeline, start, where, recent, onClose }: {
     const m = pipelineModel(pipeline, [], [], [], 0, [{ flow: flow.slug, edit, session: { id: "", title: "this edit" } }]);
     return start.lane === "change" ? m.change : m.release;
   }, [edit, pipeline, flow.slug, start.lane]);
+  // The edit can be reviewed only when the preview draws it: a new station on the path, or a station whose words change.
+  const drawable = !!edit && !!preview && (edit.op === "add"
+    ? preview.diagram.steps.some((st) => st.id === edit.id || st.inner.some((x) => x.id === edit.id))
+    : editChanges(flow, edit));
   const words = edit ? editWords(edit, label$) : null;
   const command = edit ? editCommand(flow.slug, edit) : null;
   const globs = op === "add" || op === "when" ? when.trim() : "";
@@ -85,6 +94,7 @@ export function EditComposer({ pipeline, start, where, recent, onClose }: {
 
   const pickOp = (next: EditOp) => {
     setOp(next);
+    if (next === "add") setStation(anchor(station));
     // A prompt or command edit starts from what the station runs now.
     if (next === "prompt") setText(s?.prompt ?? "");
     else if (next === "run") setText(s?.runs ?? "");
@@ -108,7 +118,6 @@ export function EditComposer({ pipeline, start, where, recent, onClose }: {
     <section className="rpl-compose" aria-label={`Edit ${flow.label}`} data-pipeline-composer>
       <header className="rpl-compose-head">
         <span className="rpl-compose-title">Edit {start.lane === "change" ? "every change" : "every release"}</span>
-        <span className="rpl-lane-fact">{flow.label}</span>
         <button type="button" className="fsp-close" onClick={onClose} aria-label="Close the edit"><X aria-hidden strokeWidth={2} /></button>
       </header>
 
@@ -145,11 +154,11 @@ export function EditComposer({ pipeline, start, where, recent, onClose }: {
         )}
         {op === "guide" ? (
           <>
-            <div className="rpl-field rpl-field-top"><span>Inherited</span><pre className="rpl-inherited">{s?.prompt ?? ""}</pre></div>
+            <div className="rpl-field rpl-field-top"><span>{prompted}</span><pre className="rpl-inherited">{s?.prompt ?? ""}</pre></div>
             <label className="rpl-field rpl-field-top"><span>Guidance</span><textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} placeholder="What this repo adds to the prompt" autoFocus /></label>
           </>
         ) : op === "prompt" ? (
-          <label className="rpl-field rpl-field-top"><span>Prompt</span><textarea value={text} onChange={(e) => setText(e.target.value)} rows={8} /></label>
+          <label className="rpl-field rpl-field-top"><span>Prompt</span><textarea className="rpl-prompt-editor" value={text} onChange={(e) => setText(e.target.value)} rows={Math.min(40, Math.max(12, text.split("\n").length + 2))} /></label>
         ) : op === "run" ? (
           <label className="rpl-field"><span>Command</span><input className="rpl-mono" value={text} onChange={(e) => setText(e.target.value)} /></label>
         ) : op === "when" ? (
@@ -159,7 +168,8 @@ export function EditComposer({ pipeline, start, where, recent, onClose }: {
 
       {edit && preview ? (
         <div className="rpl-compose-preview">
-          <div className="rpl-compose-words">{words}</div>
+          <div className="rpl-compose-words">{drawable ? words : edit.op === "add" ? "This place is not on the passing path" : "Nothing changes yet"}</div>
+          {edit.op === "prompt" && drawable ? <PromptDiff before={s?.prompt ?? ""} after={edit.text} /> : null}
           <div className="rpl-compose-figs">
             {hits ? <span className="rpl-fig" data-on=""><b className="lw-num">{hits.hits}</b> of the last {hits.total} changes would have run it</span>
               : globs && globs !== "always" ? <span className="rpl-fig">no recent changes known yet</span>
@@ -171,12 +181,12 @@ export function EditComposer({ pipeline, start, where, recent, onClose }: {
       ) : null}
 
       <footer className="rpl-compose-foot">
-        <button type="button" className="rpl-primary" disabled={!edit || !where} onClick={() => setReviewing(true)}>Start the edit session</button>
+        <button type="button" className="rpl-primary" disabled={!drawable || !where} onClick={() => setReviewing(true)}>Review edit</button>
         {!where ? <span className="rpl-fig" data-tone="bad">no checkout of this repo known</span> : <span className="rpl-fig" title={where.root}>in {where.root.split("/").pop()}{where.machine ? ` on ${where.machine}` : ""}</span>}
       </footer>
-      {reviewing && edit && words && command && where ? (
+      {reviewing && drawable && edit && words && command && where ? (
         <SwitchReview
-          ledger={pipelineEditLedger({ repo: pipeline.repository.split("/").pop() ?? pipeline.repository, words, command, flow: flow.label, machine: where.machine, hits })}
+          ledger={pipelineEditLedger({ repo: pipeline.repository.split("/").pop() ?? pipeline.repository, words, command, flow: pipeline.change.label, machine: where.machine, checkedBy: edit && edit.op !== "add" && start.lane === "change" ? label$(edit.station) : null, hits })}
           onClose={() => setReviewing(false)}
           onConfirm={send}
         />
@@ -190,5 +200,22 @@ function StationPick({ stations, value, onChange }: { stations: PipelineStation[
     <select value={value} onChange={(e) => onChange(e.target.value)}>
       {stations.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
     </select>
+  );
+}
+
+/** A prompt edit as the lines it removes and adds, with a line of what stays around each change. */
+function PromptDiff({ before, after }: { before: string; after: string }) {
+  const lines = lineDiff(before, after);
+  const near = new Set<number>();
+  lines.forEach((l, i) => { if (l.kind !== "same") for (const k of [i - 1, i, i + 1]) near.add(k); });
+  const rows: Array<{ kind: "same" | "del" | "add" | "gap"; text: string }> = [];
+  lines.forEach((l, i) => {
+    if (near.has(i)) rows.push(l);
+    else if (rows[rows.length - 1]?.kind !== "gap") rows.push({ kind: "gap", text: "" });
+  });
+  return (
+    <pre className="rpl-diff" aria-label="What the prompt edit changes">
+      {rows.map((r, i) => <span key={i} className="rpl-diff-line" data-kind={r.kind}>{r.kind === "gap" ? "⋯" : `${r.kind === "add" ? "+ " : r.kind === "del" ? "− " : "  "}${r.text}`}{"\n"}</span>)}
+    </pre>
   );
 }

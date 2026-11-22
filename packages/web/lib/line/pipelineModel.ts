@@ -13,7 +13,7 @@ import { flowDiagram, type DiagramStep, type FlowDiagramModel, type SideRoute, t
 import type { ShippedFlow } from "./flowPool";
 import { sourceWord, targetNow, targetTone, type DeployTargetRow, type TargetTone, type TeamDeployRow } from "../deploys/targets";
 import type { Pipeline, PipelineFlow, PipelineStation, PipelineTarget } from "./pipelineTypes";
-import { applyEdit, editLive, editsOfMessage, editStation, type PipelineEdit } from "./pipelineEdit";
+import { applyEdit, editLive, editsOfMessage, editStation, meaningfulCommand, type PipelineEdit } from "./pipelineEdit";
 import { recentFiles } from "@codecast/shared/contracts/pipeline";
 
 /** An edit a session was started to make, not live yet: drawn as a ghost on its lane. */
@@ -34,6 +34,8 @@ export type PipelineRun = {
   updated_at?: number;
 };
 
+export type Flight = { working: number; waiting: number; paused: number; elsewhere: number };
+
 export type PipelineLane = {
   flow: PipelineFlow;
   /** Where most steps go when they fail (a release's "Back to the line"): said once on the lane, not under each step. */
@@ -44,6 +46,8 @@ export type PipelineLane = {
   marks: Record<string, StepMark>;
   /** Edits proposed and not live yet, drawn in as ghosts. */
   proposals: PendingEdit[];
+  /** What each drawn station's count stands for: the changes counted on it, by station id. */
+  standing: Record<string, Standing[]>;
   own: number;
   inherited: number;
 };
@@ -68,7 +72,9 @@ export type PipelineModel = {
   repository: string;
   /** The repo's own name, as a person says it. */
   name: string;
-  change: PipelineLane & { inFlight: number; runs: PipelineRun[] };
+  /** `inFlight`: this repo's change runs not finished. `flight` splits them so the parts add up to it: working at a
+   *  station, waiting for the deploy that carries them (a station that waits), paused, and not at any station. */
+  change: PipelineLane & { inFlight: number; flight: Flight; runs: PipelineRun[] };
   main: { targets: MainTarget[]; waiting: number };
   release: PipelineLane & {
     /** The deploy going out now, as a run of the release flow; null when none is. */
@@ -103,7 +109,10 @@ export function whenWords(when: readonly string[] | undefined): string | null {
   return when.length > 1 ? `${when[0]} +${when.length - 1}` : when[0];
 }
 
-function markOf(s: PipelineStation, here: readonly string[], release: boolean): StepMark {
+/** A change standing on a station: its name, and the run (or deploy) it is. */
+export type Standing = { name: string; id: string };
+
+function markOf(s: PipelineStation, here: readonly Standing[], release: boolean): StepMark {
   return {
     own: s.own === "inherited" ? null : s.own,
     ...(s.changed?.length ? { changed: s.changed } : {}),
@@ -112,11 +121,11 @@ function markOf(s: PipelineStation, here: readonly string[], release: boolean): 
     ...(release && s.runs === null ? { passes: true } : {}),
     ...(s.varies ? { varies: true } : {}),
     ...(s.waits ? { waits: true } : {}),
-    ...(here.length ? { here: here.length, hereNames: [...here] } : {}),
+    ...(here.length ? { here: here.length, hereNames: here.map((x) => x.name) } : {}),
   };
 }
 
-function lane(published: PipelineFlow, here: Map<string, string[]>, release: boolean, pending: readonly PendingEdit[] = []): PipelineLane {
+function lane(published: PipelineFlow, here: Map<string, Standing[]>, release: boolean, pending: readonly PendingEdit[] = []): PipelineLane {
   // Proposals not live yet are drawn in, each marked as the proposal it is.
   const open = pending.filter((x) => x.flow === published.slug && !editLive(published, x.edit));
   const flow = open.reduce((f, x) => applyEdit(f, x.edit), published);
@@ -124,22 +133,23 @@ function lane(published: PipelineFlow, here: Map<string, string[]>, release: boo
   const { diagram, shared } = sharedRoutes(flowDiagram(drawn));
   // A station off the passing path (a fix, a brief) is not drawn: what stands there counts on the step whose route leads to it.
   const drawnIds = new Set(diagram.steps.flatMap((st) => [st.id, ...st.inner.map((x) => x.id)]));
-  const on = new Map<string, string[]>();
+  const on = new Map<string, Standing[]>();
   for (const [id, names] of here) {
-    const from = drawnIds.has(id) ? id : diagram.steps.flatMap((st) => [st, ...st.inner]).find((st) => st.side.some((r) => r.toId === id))?.id;
+    const from = drawnIds.has(id) ? id : diagram.steps.flatMap((st) => [st, ...st.inner]).find((st) => st.side.some((r) => r.toId === id))?.id ?? drawnBefore(flow, id, drawnIds);
     if (from) on.set(from, [...(on.get(from) ?? []), ...names]);
   }
   // A frame drawn folded counts what stands on the steps inside it.
   const counts = new Map(on);
+  const insideOf = new Map<string, number>();
   for (const st of diagram.steps) {
     const inside = st.inner.flatMap((x) => on.get(x.id) ?? []);
-    if (inside.length && !st.inner.some((x) => x.id === st.id)) counts.set(st.id, [...(on.get(st.id) ?? []), ...inside]);
+    if (inside.length && !st.inner.some((x) => x.id === st.id)) { counts.set(st.id, [...(on.get(st.id) ?? []), ...inside]); insideOf.set(st.id, inside.length); }
   }
   // A flow the repo wrote whole is all its own: the lane says so once, and no step is singled out.
   const whole = flow.base === null;
   const marks: Record<string, StepMark> = {};
   for (const s of flow.stations) {
-    const m = markOf(s, counts.get(s.id) ?? [], release);
+    const m = { ...markOf(s, counts.get(s.id) ?? [], release), ...(insideOf.get(s.id) ? { hereInside: insideOf.get(s.id) } : {}) };
     marks[s.id] = whole ? { ...m, own: null } : m;
   }
   for (const x of open) {
@@ -148,7 +158,28 @@ function lane(published: PipelineFlow, here: Map<string, string[]>, release: boo
     marks[id] = { ...marks[id], proposed: `proposed · ${x.session.title}`, ...(x.edit.op === "skip" ? { skipped: true as const } : {}) };
   }
   const own = published.stations.filter((s) => s.own !== "inherited").length;
-  return { flow, drawn, diagram, shared, marks, own, inherited: published.stations.length - own, proposals: open };
+  return { flow, drawn, diagram, shared, marks, standing: Object.fromEntries(counts), own, inherited: published.stations.length - own, proposals: open };
+}
+
+/** The nearest drawn station before one that is not drawn (a fan-out's join, a station off the path behind it), walking
+ *  the graph's edges back: what stands there counts on it. */
+function drawnBefore(flow: PipelineFlow, id: string, drawn: ReadonlySet<string>): string | undefined {
+  const into = new Map<string, string[]>();
+  for (const e of flow.graph.edges) {
+    const from = segmentTopOf(e.from), to = segmentTopOf(e.to);
+    if (from !== to) into.set(to, [...(into.get(to) ?? []), from]);
+  }
+  const seen = new Set([id]);
+  let wave = [id];
+  for (let d = 0; d < 6 && wave.length; d++) {
+    const next: string[] = [];
+    for (const x of wave) for (const p of into.get(x) ?? []) {
+      if (drawn.has(p)) return p;
+      if (!seen.has(p)) { seen.add(p); next.push(p); }
+    }
+    wave = next;
+  }
+  return undefined;
 }
 
 /** The fewest steps that must share a route before the lane says it once instead of under each. */
@@ -169,15 +200,30 @@ export function sharedRoutes(model: FlowDiagramModel): { diagram: FlowDiagramMod
 }
 
 /** The changes standing on each station of a flow now, by what each is (a segment's steps count on the segment). */
-export function changesHere(flow: PipelineFlow, runs: readonly PipelineRun[]): Map<string, string[]> {
+export function changesHere(flow: PipelineFlow, runs: readonly PipelineRun[]): Map<string, Standing[]> {
   const ids = new Set(flow.stations.map((s) => s.id));
-  const out = new Map<string, string[]>();
+  const out = new Map<string, Standing[]>();
   for (const r of runs) {
     if (!LIVE.has(r.status) || !r.current_node_id) continue;
     const at = ids.has(r.current_node_id) ? r.current_node_id : segmentTopOf(r.current_node_id);
-    if (ids.has(at)) out.set(at, [...(out.get(at) ?? []), r.task_title || r.task_short_id || "a change"]);
+    if (ids.has(at)) out.set(at, [...(out.get(at) ?? []), { name: r.task_title || "a change", id: r._id }]);
   }
   return out;
+}
+
+/** The live runs split so the parts add up to them all. */
+function flightOf(flow: PipelineFlow, live: readonly PipelineRun[]): Flight {
+  const ids = new Set(flow.stations.map((s) => s.id));
+  const waits = new Set(flow.stations.filter((s) => s.waits).map((s) => s.id));
+  const f: Flight = { working: 0, waiting: 0, paused: 0, elsewhere: 0 };
+  for (const r of live) {
+    const at = r.current_node_id ? (ids.has(r.current_node_id) ? r.current_node_id : segmentTopOf(r.current_node_id)) : null;
+    if (r.status === "paused") f.paused++;
+    else if (!at || !ids.has(at)) f.elsewhere++;
+    else if (waits.has(at)) f.waiting++;
+    else f.working++;
+  }
+  return f;
 }
 
 /** A deploy open this long with nothing reported: stuck, not going out. One with steps reporting gets the length of a
@@ -242,14 +288,14 @@ export function pipelineModel(p: Pipeline, runs: readonly PipelineRun[] = [], ta
     : null;
   // A stuck deploy is what the lane says: one a target is still going out on (newer than its live deploy) that sat too long.
   const stuckOpen = mainTargets.map((t) => (t.going?.stuck ? { deploy: t.going.deploy, for: t.going.stuck, outside: t.going.outside } : null)).find(Boolean) ?? null;
-  const here = new Map<string, string[]>();
-  if (run?.current_node_id) here.set(run.current_node_id, [open!.short_id]);
+  const here = new Map<string, Standing[]>();
+  if (run?.current_node_id) here.set(run.current_node_id, [{ name: open!.short_id, id: open!._id }]);
   const release = lane(p.release, here, true, pending);
 
   return {
     repository: p.repository,
     name: repoName(p.repository),
-    change: { ...change, inFlight: live.length, runs: changeRuns },
+    change: { ...change, inFlight: live.length, flight: flightOf(p.change, live), runs: changeRuns },
     main: { targets: mainTargets, waiting: Math.max(0, ...mainTargets.map((t) => t.waiting)) },
     release: { ...release, run, outside: open && !steps.length ? outsideWords(open) : null, stuck: stuckOpen, targets: p.release.targets },
   };
@@ -267,10 +313,24 @@ export function pipelineStation(p: Pipeline, lane: "change" | "release", id: str
   return flow.stations.find((s) => s.id === id) ?? flow.stations.find((s) => s.id === segmentTopOf(id)) ?? null;
 }
 
-/** A station's recent runs on the change lane: the runs that reached it, newest first. */
-export function stationRuns(runs: readonly PipelineRun[], id: string, limit = 5): PipelineRun[] {
-  const reached = (r: PipelineRun) => r.current_node_id === id || !!r.node_statuses?.some((n) => n.node_id === id || segmentTopOf(n.node_id) === id);
-  return runs.filter(reached).sort((a, b) => (b.updated_at ?? b.created_at) - (a.updated_at ?? a.created_at)).slice(0, limit);
+/** A station's runs on the change lane: the changes counted on it now (`standing`, the same ones its count shows), and
+ *  the ones that passed through it, each with when it was here (its visit's end, else its start), newest first. */
+export function stationRuns(runs: readonly PipelineRun[], id: string, standing: readonly Standing[] = [], limit = 5): { now: Array<{ run: PipelineRun; at: number }>; passed: Array<{ run: PipelineRun; at: number }> } {
+  const atStation = (nodeId: string | null | undefined) => !!nodeId && (nodeId === id || segmentTopOf(nodeId) === id);
+  const counted = new Set(standing.map((x) => x.id));
+  const now: Array<{ run: PipelineRun; at: number }> = [];
+  const passed: Array<{ run: PipelineRun; at: number }> = [];
+  for (const r of runs) {
+    const visits = (r.node_statuses ?? []).filter((n) => atStation(n.node_id));
+    const last = visits[visits.length - 1];
+    if (counted.has(r._id) || (LIVE.has(r.status) && atStation(r.current_node_id))) now.push({ run: r, at: last?.started_at ?? r.updated_at ?? r.created_at });
+    else if (visits.some((n) => n.status === "completed" || n.status === "failed")) {
+      const done = [...visits].reverse().find((n) => n.completed_at)?.completed_at;
+      passed.push({ run: r, at: done ?? r.updated_at ?? r.created_at });
+    }
+  }
+  const newest = (a: { at: number }, b: { at: number }) => b.at - a.at;
+  return { now: now.sort(newest), passed: passed.sort(newest).slice(0, limit) };
 }
 
 /** A lane's stations' words and settings by node id, for the station panel (stationView): its prompt and the project's
@@ -279,7 +339,7 @@ export function laneStationDetails(flow: PipelineFlow): Record<string, { prompt?
   const out: Record<string, { prompt?: string; guide?: string; script?: string; agent?: string; model?: string }> = {};
   for (const s of flow.stations) {
     // A release step with a command per target says each one in the panel's own list, never as one script.
-    const d = { ...(s.prompt ? { prompt: s.prompt } : {}), ...(s.guide ? { guide: s.guide } : {}), ...(s.runs && !s.targets?.length ? { script: s.runs } : {}), ...(s.agent ? { agent: s.agent } : {}), ...(s.model ? { model: s.model } : {}) };
+    const d = { ...(s.prompt ? { prompt: s.prompt } : {}), ...(s.guide ? { guide: s.guide } : {}), ...(s.runs && !s.targets?.length ? { script: meaningfulCommand(s.runs) } : {}), ...(s.agent ? { agent: s.agent } : {}), ...(s.model ? { model: s.model } : {}) };
     if (!Object.keys(d).length) continue;
     out[s.id] = d;
     const inner = flow.graph.nodes.filter((n) => n.id !== s.id && segmentTopOf(n.id) === s.id && n.type !== "exit" && !n.segment_exit);
@@ -289,7 +349,7 @@ export function laneStationDetails(flow: PipelineFlow): Record<string, { prompt?
 }
 
 /** A station's scope and settings in a glance: who, every change or every release, own or inherited, when. */
-export const WHO_WORDS: Record<PipelineStation["who"], string> = { agent: "Agent", command: "Command", person: "Person", rule: "Rule", eval: "Eval", deploy: "Deploy" };
+export const WHO_WORDS: Record<PipelineStation["who"], string> = { agent: "Agent", command: "Command", person: "Person", rule: "Routes the change", eval: "Graded check", deploy: "Deploy" };
 
 /** How long ago, in a glance: "now", "5m", "3h", "2d". */
 export function agoWords(ts: number, now: number): string {
