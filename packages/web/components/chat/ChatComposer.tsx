@@ -116,6 +116,7 @@ export const ChatComposer = memo(function ChatComposer({
         conversationId={draftKey}
         bareComposer
         chatMentionMode
+        sessionReplies
         mentionTeamId={teamId}
         composerPlaceholder={placeholder}
         autoFocusInput={autoFocus}
