@@ -27819,7 +27819,7 @@ async function deliverMessageIntoSession(
 ): Promise<boolean> {
   logDelivery(`deliverMessage called: conv=${conversationId.slice(0, 12)} msgId=${messageId.slice(0, 12)} content="${content.slice(0, 80)}"`);
   const deliverySteps = stepTimer();
-  const admitPending = createDeliveryAdmission(syncService, messageId, conversationId);
+  const admitPending = createDeliveryAdmission(syncService, messageId, conversationId, () => injectedMessageTs.has(messageId));
   const owner = messagesInFlight.get(messageId)?.owner;
   // Asked before every injection, so a delivery already under way when the
   // session launched with this message can never put a second copy in front

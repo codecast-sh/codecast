@@ -1230,9 +1230,13 @@ export async function sendStatusFor(
 // abandoned as ambiguous. A sender told "failed" resends, and the recipient
 // reads it twice.
 function sendStatusOf(row: any): string {
-  if (isUnconfirmedRow(row)) return "unconfirmed";
-  if (row.status === "cancelled" && !row.merged_into && (row.paste_verified_at || /ambiguous/.test(row.delivery_status ?? ""))) return "unconfirmed";
+  if (isUnconfirmedRow(row) || cancelledMayHaveReached(row)) return "unconfirmed";
   return row.status;
+}
+
+/** A cancelled row the agent may still hold: its paste was accepted (paste_verified_at, kept through the cancel), or its fenced delivery was abandoned as ambiguous. */
+function cancelledMayHaveReached(row: { status: string; merged_into?: unknown; paste_verified_at?: number; delivery_status?: string }): boolean {
+  return row.status === "cancelled" && !row.merged_into && (!!row.paste_verified_at || /ambiguous/.test(row.delivery_status ?? ""));
 }
 
 export const sendStatus = query({
@@ -1349,13 +1353,14 @@ export async function cancelPendingMessageForUser(
     : await ctx.db.query("pending_messages")
       .withIndex("by_conversation_client_id", (q: any) => q.eq("conversation_id", conversationId).eq("client_id", ref.clientId))
       .first();
-  if (!message) return "not_found";
+  if (!message) return ref.clientId ? await cancelBeforeArrival(ctx, userId, conversationId, ref.clientId) : "not_found";
   if (message.conversation_id !== conversationId) throw new Error("Message belongs to another conversation");
   if (!(await senderOrOwnerCanAct(ctx, message, userId))) {
     throw new Error("Unauthorized: can only cancel messages you sent or own");
   }
   if (message.status === "delivered") return "delivered";
-  if (message.status === "cancelled") return "cancelled";
+  // A repeat cancel reads the same truth the first one did.
+  if (message.status === "cancelled") return cancelledMayHaveReached(message) ? "unconfirmed" : "cancelled";
   if (isFencedPendingMessage(message)) {
     if (
       message.delivery_status === "delivery-started" ||
@@ -1376,13 +1381,39 @@ export async function cancelPendingMessageForUser(
   // is left for its echo and the caller is told it was not taken back.
   if (message.status === "injected") return "injected";
   // Accepted with no echo: stop it from moving again, but never report it as
-  // withdrawn, because the agent may have read it.
+  // withdrawn, because the agent may have read it. Its paste_verified_at stays
+  // on the cancelled row, so every later read still says "unconfirmed".
   if (isUnconfirmedRow(message)) {
     await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
     return "unconfirmed";
   }
   const updated = await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
   return updated ? "cancelled" : message.status;
+}
+
+// A cancel by client id that arrives before its send: the send can still be
+// in the sender's outbox (offline, retrying). A cancelled row under that
+// client id takes its place, and enqueuePendingMessage's client_id dedup
+// turns the late send into a no-op, so the agent never receives it.
+async function cancelBeforeArrival(
+  ctx: { db: any },
+  userId: Id<"users">,
+  conversationId: Id<"conversations">,
+  clientId: string,
+): Promise<string> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation || !(await canSendProductMessage(ctx, userId, conversation))) return "not_found";
+  await ctx.db.insert("pending_messages", {
+    conversation_id: conversationId,
+    from_user_id: userId,
+    owner_user_id: conversation.user_id,
+    content: "",
+    client_id: clientId,
+    status: "cancelled" as const,
+    created_at: Date.now(),
+    retry_count: 0,
+  });
+  return "cancelled";
 }
 
 /**
@@ -1562,9 +1593,14 @@ export const cancelPendingMessage = mutation({
       throw new Error("Unauthorized: can only cancel messages you sent or own");
     }
 
+    // The row stops either way (this is the daemon's give-up path), but a
+    // row the agent may hold is not reported as withdrawn.
+    const mayHaveReached = message.status === "injected" || isUnconfirmedRow(message);
     const updated = await patchPendingMessageStatus(ctx, message, { status: "cancelled" as const });
+    const status = !updated ? (message.status === "cancelled" && cancelledMayHaveReached(message) ? "unconfirmed" : message.status)
+      : mayHaveReached ? "unconfirmed" : "cancelled";
 
-    return { success: true, skipped: !updated };
+    return { success: true, skipped: !updated, status };
   },
 });
 

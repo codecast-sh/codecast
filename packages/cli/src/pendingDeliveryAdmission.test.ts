@@ -18,18 +18,31 @@ describe("createDeliveryAdmission", () => {
     };
   }
 
-  test("a successful claim stands for the whole attempt", async () => {
+  test("once the attempt marked the row injected, its claim stands for the fallback paths", async () => {
     const svc = service([{ _id: "m1" }, null]);
-    const admit = createDeliveryAdmission(svc, "m1", "conv");
+    let marked = false;
+    const admit = createDeliveryAdmission(svc, "m1", "conv", () => marked);
     await admit();
-    await admit(); // the fallback path, after this attempt's own "injected" mark
+    marked = true; // the first path's own "injected" mark, then its paste fails
+    await admit(); // the fallback path
     await admit();
     expect(svc.calls).toEqual(["m1"]);
   });
 
+  // ct-98180: the daemon fetched the row and claimed it, then a person
+  // cancelled it while the daemon resolved the pane. The injection's own
+  // admission asks again and nothing is typed into the agent.
+  test("a cancel after the claim but before the paste stops the injection", async () => {
+    const svc = service([{ _id: "m1" }, null]);
+    const admit = createDeliveryAdmission(svc, "m1", "conv", () => false);
+    await admit(); // admit_first
+    await expect(admit()).rejects.toBeInstanceOf(PendingDeliveryHeldError); // admit_live, after the cancel
+    expect(svc.calls).toEqual(["m1", "m1"]);
+  });
+
   test("a refused claim throws and is asked again next time", async () => {
     const svc = service([null, { _id: "m1" }]);
-    const admit = createDeliveryAdmission(svc, "m1", "conv");
+    const admit = createDeliveryAdmission(svc, "m1", "conv", () => false);
     await expect(admit()).rejects.toBeInstanceOf(PendingDeliveryHeldError);
     await admit();
     expect(svc.calls).toEqual(["m1", "m1"]);
@@ -37,8 +50,21 @@ describe("createDeliveryAdmission", () => {
 
   test("each attempt admits on its own", async () => {
     const svc = service([{ _id: "m1" }, { _id: "m1" }]);
-    await createDeliveryAdmission(svc, "m1", "conv")();
-    await createDeliveryAdmission(svc, "m1", "conv")();
+    await createDeliveryAdmission(svc, "m1", "conv", () => false)();
+    await createDeliveryAdmission(svc, "m1", "conv", () => false)();
     expect(svc.calls).toEqual(["m1", "m1"]);
+  });
+});
+
+describe("the daemon's delivery", () => {
+  test("re-claims before each injection until its own injected mark", async () => {
+    const fs = await import("node:fs");
+    const { functionBlock } = await import("./test-helpers/sourceRegion");
+    const deliver = functionBlock(fs.readFileSync(new URL("./daemon.ts", import.meta.url), "utf8"), "deliverMessageIntoSession").text;
+    expect(deliver).toContain("createDeliveryAdmission(syncService, messageId, conversationId, () => injectedMessageTs.has(messageId))");
+    // Every injection path admits before it marks and pastes.
+    const live = deliver.indexOf('deliveryStep(messageId, "admit_live", admit)');
+    expect(live).toBeGreaterThan(-1);
+    expect(deliver.indexOf("markInjectedBestEffort(", live)).toBeGreaterThan(live);
   });
 });

@@ -91,8 +91,11 @@ describe("explicit message cancel", () => {
 
   test("never cancels a different message in the conversation", async () => {
     const ctx = world("pending");
-    expect(await cancelPendingMessageForUser(ctx, "owner" as any, "conv" as any, { clientId: "other" })).toBe("not_found");
+    // An unknown client id is a send not arrived yet: it is cancelled ahead of
+    // its arrival (ct-98180), and the queued message is untouched.
+    expect(await cancelPendingMessageForUser(ctx, "owner" as any, "conv" as any, { clientId: "other" })).toBe("cancelled");
     expect(ctx.db._patched).toHaveLength(0);
+    expect(ctx.db._tables.pending_messages.find((r: any) => r._id === "msg").status).toBe("pending");
   });
 
   test("rejects unrelated users and mismatched conversation ids", async () => {
