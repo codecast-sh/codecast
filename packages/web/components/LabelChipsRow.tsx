@@ -17,7 +17,9 @@ import {
   type BucketItem,
 } from "../store/inboxStore";
 import { clickBucketChip, clickProjectChip } from "../store/chipFilterClicks";
-import { projectChipLabel, workProjectIdOfChipKey } from "../store/workProjects";
+import { projectAxisLabel, projectAxisNoun, workProjectIdOfChipKey } from "../store/workProjects";
+import { useRosterMachines } from "./DeviceBadge";
+import { ProjectAxisPopoverSections } from "./ProjectAxisPopoverSections";
 import { useRouter } from "next/navigation";
 import { getLabelColor } from "../lib/labelColors";
 import { OWNS_MODIFIER_CLICK } from "../lib/openIntent";
@@ -60,11 +62,14 @@ export function LabelChipsRow({
   bucketCounts,
   projectCounts,
   projectPathByName,
+  machineCounts,
   dropSessionOnLabel,
 }: {
   bucketCounts: Record<string, number>;
   projectCounts: Array<[string, number]>;
   projectPathByName: Record<string, string>;
+  /** `mc:<device>` keys on the same axis; empty when there's one machine. */
+  machineCounts: Array<[string, number]>;
   dropSessionOnLabel: (draggedId: string, bucketId: string | null) => void;
 }) {
   const s = useTrackedStore([
@@ -78,10 +83,12 @@ export function LabelChipsRow({
     st => st.activeProjectPath,
     st => st.extraProjectFilters,
   ]);
+  const machines = useRosterMachines();
   const visibleBuckets = useMemo(() => sortLabels(s.buckets), [s.buckets]);
   const router = useRouter();
-  // A project-axis chip is a project (`pj:` key, shown by its title) or a folder.
-  const chipLabel = (name: string) => projectChipLabel(name, s.projects);
+  // A project-axis chip is a project (`pj:` key, shown by its title), a machine
+  // (`mc:` key, shown by the device's name) or a folder.
+  const chipLabel = (name: string) => projectAxisLabel(name, s.projects, (id) => machines.get(id));
   const workProjects = useMemo(() => projectCounts.filter(([name]) => workProjectIdOfChipKey(name)), [projectCounts]);
   const folders = useMemo(() => projectCounts.filter(([name]) => !workProjectIdOfChipKey(name)), [projectCounts]);
   // Each filter axis as a list (head chip + shift-added terms) — every chip
@@ -93,6 +100,13 @@ export function LabelChipsRow({
   const projectFilters = useMemo(
     () => chipProjectFilters(s),
     [s.activeProjectFilter, s.activeProjectPath, s.chipFilterExclude, s.extraProjectFilters],
+  );
+  // The row's project-axis chips: folders and projects. Machines live in the
+  // popover; one joins the row only while it is in the filter, so the filter
+  // stays visible with the popover closed.
+  const axisChips = useMemo(
+    () => [...projectCounts, ...machineCounts.filter(([name]) => projectFilters.some((t) => t.id === name))],
+    [projectCounts, machineCounts, projectFilters],
   );
 
   // Modifier-click hints, rendered as real keycaps (never bare glyphs in text).
@@ -270,14 +284,14 @@ export function LabelChipsRow({
     const ordered: string[] = [];
     for (const b of visibleBuckets) if (rowBucketIds.has(b._id)) ordered.push(`label:${b._id}`);
     ordered.push("create");
-    for (const [name] of projectCounts) ordered.push(`project:${name}`);
+    for (const [name] of axisChips) ordered.push(`project:${name}`);
     const first = ordered.find((k) => hiddenKeys.has(k));
     if (!first || first === "create") return null;
     // A filter term, when hidden, is already pinned separately above — don't
     // also render it as the faded peek.
     if (labelFilters.some((t) => first === `label:${t.id}`) || projectFilters.some((t) => first === `project:${t.id}`)) return null;
     return first;
-  }, [visibleBuckets, rowBucketIds, projectCounts, hiddenKeys, labelFilters, projectFilters]);
+  }, [visibleBuckets, rowBucketIds, axisChips, hiddenKeys, labelFilters, projectFilters]);
 
   // ── Row-level reorder dragover: insertion index from chip midpoints ──────
   const rowDragOver = useCallback((e: React.DragEvent) => {
@@ -595,7 +609,7 @@ export function LabelChipsRow({
             <Plus className="w-2.5 h-2.5" />
           </button>
         )}
-        {projectCounts.map(([name, count]) => {
+        {axisChips.map(([name, count]) => {
           const label = chipLabel(name);
           const pc = getLabelColor(label);
           const term = projectFilters.find((t) => t.id === name);
@@ -618,7 +632,7 @@ export function LabelChipsRow({
                   ? `${pc.bg} ${pc.text}`
                   : "bg-sol-text-dim/10 text-sol-text-muted hover:bg-sol-text-dim/20 hover:text-sol-text modern:text-sol-text"
               }`}
-              title={active ? filterChipTitle(label, excluded, sole) : `${workProjectIdOfChipKey(name) ? "Project" : "Folder"}: ${label} — click to filter, right-click for more`}
+              title={active ? filterChipTitle(label, excluded, sole) : `${{ project: "Project", machine: "Machine", folder: "Folder" }[projectAxisNoun(name)]}: ${label} — click to filter, right-click for more`}
             >
               {/* Same exclude cues + constant-width construction as the label
                   chips above. */}
@@ -673,7 +687,7 @@ export function LabelChipsRow({
         );
       })}
       {hiddenProjectTerms.map((term) => {
-        const project = projectCounts.find(([name]) => name === term.id);
+        const project = axisChips.find(([name]) => name === term.id);
         if (!project) return null;
         const [name, count] = project;
         const label = chipLabel(name);
@@ -867,44 +881,17 @@ export function LabelChipsRow({
               className="w-full px-2 py-1 rounded-md text-meta bg-sol-bg-alt/50 border border-sol-border/40 text-sol-text placeholder:text-sol-text-dim/60 outline-none focus:border-sol-cyan/50 modern:h-control-sm modern:rounded-control modern:border-sol-border modern:bg-sol-card modern:py-0 modern:text-ui"
             />
           </div>
-          {[["Folders", folders], ["Projects", workProjects]].map(([heading, rows]) => (rows as Array<[string, number]>).length > 0 && (
-            <div key={heading as string}>
-              {/* A folder is where a session ran; projects are Codecast
-                  projects (the sessions working in them, store/workProjects). */}
-              <div className="mt-0.5 border-t border-sol-border/40 px-3 pt-2 pb-1 text-mark font-semibold uppercase tracking-widest text-sol-text-dim/70 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal modern:text-sol-text-dim">
-                {heading as string}
-              </div>
-              {(rows as Array<[string, number]>).map(([name, count]) => {
-                const label = chipLabel(name);
-                const pc = getLabelColor(label);
-                const term = projectFilters.find((t) => t.id === name);
-                const active = !!term;
-                const excluded = !!term?.exclude;
-                return (
-                  <div
-                    key={name}
-                    onClick={(e) => {
-                      clickProjectChip(name, projectPathByName[name] || null, e.altKey, e.shiftKey);
-                      if (!e.shiftKey) setPopoverOpen(false);
-                    }}
-                    onContextMenu={(e) => {
-                      ctxMenu.open(e, { kind: "project", name });
-                      setPopoverOpen(false);
-                    }}
-                    className={`flex items-center gap-2 px-3 py-1.5 text-xs cursor-pointer transition-colors modern:mx-1 modern:min-h-control-sm modern:rounded-control modern:px-2 modern:py-1 modern:text-ui ${
-                      active ? "bg-sol-cyan/10 text-sol-text" : "text-sol-text-muted hover:bg-sol-bg-alt/60"
-                    }`}
-                    title={excluded ? "Hidden — click to clear" : active ? "Filtering — click to clear" : "Click to filter — right-click for more"}
-                  >
-                    <span className="w-3" />
-                    <span className={`w-2 flex-shrink-0 ${excluded ? `h-[2px] rounded-full ${pc.dot}` : `h-2 rounded-full ${pc.dot}`}`} />
-                    <span className={`flex-1 truncate ${active ? "font-medium" : ""} ${excluded ? "opacity-75" : ""}`}>{label}</span>
-                    <span className="text-meta tabular-nums text-sol-text-dim/70">{count}</span>
-                  </div>
-                );
-              })}
-            </div>
-          ))}
+          <ProjectAxisPopoverSections
+            sections={[["Folders", folders], ["Projects", workProjects], ["Machines", machineCounts]]}
+            chipLabel={chipLabel}
+            projectFilters={projectFilters}
+            projectPathByName={projectPathByName}
+            onPick={(shift) => { if (!shift) setPopoverOpen(false); }}
+            onContextMenu={(e, name) => {
+              ctxMenu.open(e, { kind: "project", name });
+              setPopoverOpen(false);
+            }}
+          />
         </div>,
         document.body
       )}
@@ -928,7 +915,7 @@ export function LabelChipsRow({
             : {
                 id: p.name,
                 name: chipLabel(p.name),
-                noun: workProjectIdOfChipKey(p.name) ? "project" : "folder",
+                noun: projectAxisNoun(p.name),
                 filters: projectFilters,
                 set: (id: string | null, exclude?: boolean) => store.setActiveProjectFilter(id, id ? projectPathByName[p.name] || null : null, exclude),
                 toggle: (exclude: boolean) => store.toggleProjectFilterTerm(p.name, projectPathByName[p.name] || null, exclude),
