@@ -471,6 +471,13 @@ function stampModeMatches(info: Pick<StampFile, "mode" | "satisfied_alias">, act
   return info.satisfied_alias ? ((actual & 0o100) !== 0) === ((want & 0o100) !== 0) : (actual & 0o777) === want;
 }
 
+/**
+ * The receiver never writes through a symlink. Whoever wrote the host's tree
+ * (a repo tracking `notes -> ~/.ssh`, a session) controls its links, so a
+ * bundle path through one could land the laptop's bytes anywhere the link
+ * points. The laptop names a file behind an in-project link by its real path
+ * instead (discovery.ts), and the host's checkout supplies the link.
+ */
 function checkDestination(home: string, rel: string): void {
   assertSafePath(rel);
   let dir = home;

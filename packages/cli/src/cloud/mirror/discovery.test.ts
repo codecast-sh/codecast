@@ -468,3 +468,17 @@ test("a socket named by a home instruction file is skipped by the home walk, not
     expect(inv.entries.map((e) => e.path)).toEqual([".claude/CLAUDE.md"]);
   } finally { server.close(); }
 });
+
+test("a file behind an in-project linked folder is named once by its real path, even when a reference reaches it before the walk; a link leaving the project keeps its own name", async () => {
+  write("src/repo/outreach/.claude/skills/flags/SKILL.md", "untracked skill\n");
+  fs.symlinkSync(".claude", path.join(root, "outreach/.agents"));
+  // AGENTS.md sorts before outreach/, so this reference is visited first.
+  write("src/repo/AGENTS.md", "See [flags](outreach/.agents/skills/flags/SKILL.md).\n");
+  write("shared-agents/skills/team/SKILL.md", "shared skill\n");
+  fs.symlinkSync(path.join(home, "shared-agents"), path.join(root, "outreach/.codex"));
+  const sync = collectProjectContext({ root, home, includeAncestors: false });
+  expect(await collectProjectContextAsync({ root, home, includeAncestors: false })).toEqual(sync);
+  const project = sync.files.filter((f) => f.scope === "project").map((f) => f.relativePath).sort();
+  expect(project).toEqual(["AGENTS.md", "outreach/.claude/skills/flags/SKILL.md", "outreach/.codex/skills/team/SKILL.md"]);
+  expect(sync.files.find((f) => f.relativePath === "outreach/.claude/skills/flags/SKILL.md")?.sourcePath).toBe(path.join(root, "outreach/.claude/skills/flags/SKILL.md"));
+});

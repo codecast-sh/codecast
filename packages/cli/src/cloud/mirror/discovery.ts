@@ -505,6 +505,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
   const files = new Map<string, ProjectContextFile>();
   const scanned = new Set<string>();
   const scannedDirs = new Set<string>();
+  const realDirs = new Map<string, string>();
   const scannedReferences = new Set<string>();
   const credentialPaths = new Set<string>();
   const securityPaths = new Set<string>();
@@ -559,6 +560,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
       if (scannedDirs.has(logical)) return;
       if (ancestors.has(real)) { result.skipped.push({ path: logical, reason: "symlink cycle" }); return; }
       scannedDirs.add(logical);
+      realDirs.set(logical, real);
       const chain = new Set(ancestors).add(real);
       const names: string[] = yield { op: "readdir", path: real };
       // A nested checkout (a worktree or another repo inside this one) is its
@@ -568,11 +570,23 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
       for (const name of names.sort()) yield* visit(path.join(logical, name), chain, includeAll, optionalReference);
       return;
     }
-    if (!actual.isFile() || scanned.has(logical)) return;
-    const projectRel = homeRelative(logical, root);
+    // A file reached through a linked folder inside the project (union-mobile
+    // tracks `outreach/.agents -> .claude`) is the file at its real path: it
+    // is judged tracked or not there, and carried there once. The host's
+    // checkout recreates a tracked link, and its receiver never writes through one.
+    // A reference can reach the file before the walk reaches its folder.
+    let realDir = projectPath !== null ? realDirs.get(path.dirname(logical)) : undefined;
+    if (projectPath !== null && realDir === undefined) {
+      realDir = (yield { op: "realpath", path: path.dirname(logical) }) as string;
+      realDirs.set(path.dirname(logical), realDir);
+    }
+    const located = realDir && homeRelative(realDir, root) !== null ? path.join(realDir, path.basename(logical)) : logical;
+    if (!actual.isFile() || scanned.has(logical) || scanned.has(located)) return;
+    const projectRel = homeRelative(located, root);
     const scope = projectRel === null ? "home" : "project";
     const rel = projectRel ?? homeRelative(logical, home)!;
-    if (!includeAll && !isContextFile(rel)) return;
+    const reachedAs = projectPath ?? rel;
+    if (!includeAll && !isContextFile(reachedAs)) return;
     if ((!includeAll || optionalReference) && MEDIA_FILE_RE.test(rel)) { if (!skippedMedia.has(logical)) result.skipped.push({ path: logical, reason: "audio or video" }); skippedMedia.add(logical); return; }
     const prefix: Buffer = yield { op: "prefix", path: real };
     if (isNativeBinary(prefix)) { result.skipped.push({ path: logical, reason: "native binary" }); return; }
@@ -580,16 +594,16 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     // so the walk can still name what to leave out; a required one fails here.
     const droppable = !includeAll || optionalReference;
     // Only what ships counts against the cap; a file read just for its references does not.
-    const emit = scope !== "project" || ((opts.includeTracked !== false || !tracked.has(rel)) && (!inRepo || isAgentContext(rel)));
+    const emit = scope !== "project" || ((opts.includeTracked !== false || !tracked.has(rel)) && (!inRepo || isAgentContext(rel) || isAgentContext(reachedAs)));
     if (emit && actual.size + result.totalBytes + overflowBytes > cap) {
       if (!droppable) throw new Error(`project context exceeds ${cap / 1048576} MiB at ${logical}`);
-      scanned.add(logical);
+      scanned.add(logical).add(located);
       overflowBytes += actual.size;
       candidates.push({ path: homeRelative(logical, home) ?? logical, bytes: actual.size });
       return;
     }
     let bytes: Buffer = yield { op: "bytes", path: real };
-    scanned.add(logical);
+    scanned.add(logical).add(located);
     const kind = kindForPath(rel);
     const hooks = yield* portableHookSteps(bytes, logical, home, kind);
     bytes = hooks.bytes;
@@ -597,7 +611,7 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { credentialPaths.add(logical); result.skipped.push({ path: logical, reason: credential }); return; }
     if (emit) {
-      files.set(`${scope}:${rel}`, { sourcePath: logical, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes });
+      files.set(`${scope}:${rel}`, { sourcePath: located, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes });
       result.totalBytes += bytes.length;
       if (droppable) candidates.push({ path: homeRelative(logical, home) ?? logical, bytes: bytes.length });
     }
