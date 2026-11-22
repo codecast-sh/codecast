@@ -2917,6 +2917,9 @@ export default defineSchema({
     // queue where it can be moved or merged, and released (releaseQueued)
     // when the turn ends. Ordinary sends never release these.
     queued: v.optional(v.boolean()),
+    // Work a session handed another out of sight (enqueuePendingMessage.quiet): a hidden
+    // stash survives it, and survives its risk resend too (executionBindings), which reads it here.
+    quiet: v.optional(v.boolean()),
     delivered_at: v.optional(v.number()),
     // The transcript message this row's echo produced. Stamped when the echo
     // adopts the row (content rewrite, client_id, images, from_user_id). Lets a

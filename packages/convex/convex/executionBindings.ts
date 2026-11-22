@@ -2088,15 +2088,17 @@ export async function abandonAmbiguousAndResendInDb(
     origin: message.origin,
     createdAt: fence.now,
     delivery: allocation,
+    quiet: message.quiet,
     resendOfDeliveryId: fence.deliveryId,
   });
+  // The same stash rule as the send it resends (enqueuePendingMessage): a hidden stash survives a machine wake and a quiet handover.
   const machineWake = message.origin === "scheduler";
   await ctx.db.patch(fence.conversationId, {
     updated_at: fence.now,
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" as const } : {}),
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-    ...(conversation.inbox_stashed_at && !(machineWake && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
+    ...(conversation.inbox_stashed_at && !((machineWake || message.quiet) && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
   });
   return {
