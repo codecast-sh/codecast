@@ -1212,6 +1212,17 @@
   font-family: var(--font-mono);
   animation: face-card-in 140ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
+/* Pinned by a click: the card's edge takes the accent, so the click that
+   pinned it shows it took and a second one is never needed. */
+.face-row:not([data-density="float"]) .face-row-below[data-pinned] .face-card,
+.face-row:not([data-density="float"]) .face-row-below[data-pinned] .face-card::before {
+  border-color: color-mix(in srgb, var(--sol-blue) 55%, var(--sol-border));
+}
+.face-row:not([data-density="float"]) .face-row-below[data-pinned] .face-card {
+  box-shadow:
+    0 0 0 1px color-mix(in srgb, var(--sol-blue) 30%, transparent),
+    var(--card-shadow);
+}
 .face-card::before {
   content: "";
   position: absolute;

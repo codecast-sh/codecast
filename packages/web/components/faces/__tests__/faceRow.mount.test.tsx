@@ -1051,6 +1051,15 @@ describe("a burst of clicks on a face (ct-73217)", () => {
     expect(h.q("[data-member-card]")).not.toBeNull();
   });
 
+  test("a click on a face pinned for longer than the burst closes its card", async () => {
+    const h = await mount(bar(rowOf([entry(ANN, "Ann")])));
+    await h.click(h.circle(ANN));
+    expect(pinnedMark(h)).toBe("1");
+    await wait(1050);
+    await h.click(h.circle(ANN));
+    expect(h.q("[data-member-card]")).toBeNull();
+  });
+
   for (const start of ["cold", "hover-opened"] as const) {
     test(`three clicks within a second, from a ${start} row, never close the card and end pinned`, async () => {
       const h = await mount(bar(rowOf([entry(ANN, "Ann")])));

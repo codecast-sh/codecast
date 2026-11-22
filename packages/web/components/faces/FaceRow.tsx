@@ -146,6 +146,9 @@ const OTHERS_ID = "__others";
 /** The grace after the pointer leaves the others before they fold again:
  *  crossing from the circle to the first face never drops them. */
 const PEEK_CLOSE_MS = 400;
+/** How long after a click pins a card a further click on the same face
+ *  leaves it pinned: a burst of clicks never closes what its first opened. */
+const PIN_BURST_MS = 1000;
 
 function FaceSeat({
   entry,
@@ -489,9 +492,16 @@ export function FaceRow({
     if (!holdCard && openId && !pinned) close();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only the hold's edge
   }, [holdCard]);
+  // A click on the open face closes it only once the pin has settled: the
+  // clicks of one burst that pinned it never take it away again.
+  const pinnedAt = useRef(0);
   const toggle = (id: string) => {
-    if (openId === id && pinned) return close();
+    if (openId === id && pinned) {
+      if (Date.now() - pinnedAt.current < PIN_BURST_MS) return;
+      return close();
+    }
     clearTimers();
+    pinnedAt.current = Date.now();
     setOpenId(id);
     setPinned(true);
   };
@@ -762,6 +772,7 @@ export function FaceRow({
           className="face-row-below"
           data-chrome-hit
           data-flyout
+          data-pinned={openId && pinned ? "1" : undefined}
           data-notch={band?.notch != null ? "1" : undefined}
           style={
             band
