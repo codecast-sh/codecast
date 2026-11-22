@@ -8,6 +8,7 @@ import { canonicalPlacePath, placeOf, placeSessionId } from "../lib/navPlace";
 import { placeNamesOf, placeTitle } from "../lib/placeTitle";
 import { pathLabel } from "../lib/pathLabel";
 import { leafHasBeenAt, stageClose } from "../lib/stage";
+import { isModernStyle } from "../lib/visualStyle";
 
 // The Modern back control's brain: where Back goes from the page this hook
 // runs in, under what name, and the move that gets there. Closing an item
@@ -79,6 +80,13 @@ export function goBackInTrail(push: (path: string) => void): void {
   }
   noteTrailBack(target.path, target.fromTrail ? "back" : "up");
   goToPlace(target.path, push, (id) => openSessionFromBack(id, push));
+}
+
+/** The nav.back shortcut itself: Modern walks the trail, the other styles
+ *  step browser history. */
+export function navBack(push: (path: string) => void): void {
+  if (isModernStyle()) goBackInTrail(push);
+  else window.history.back();
 }
 
 /**
