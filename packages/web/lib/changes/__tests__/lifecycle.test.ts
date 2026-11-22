@@ -11,7 +11,6 @@ describe("a change's now", () => {
     const got = Object.fromEntries(Object.entries(byId).map(([id, l]) => [id, `${l.now.stage}: ${l.now.word}${l.now.detail ? ` · ${l.now.detail}` : ""} (${l.now.tone})`]));
     expect(got).toEqual({
       editing: "work: editing (yellow)",
-      "edits-shared": "work: between turns (muted)",
       "not-shipped": "work: not shipped (muted)",
       pass: "work: not shipped (muted)",
       checking: "check: checking (yellow)",

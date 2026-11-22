@@ -21,7 +21,7 @@ import { deployTitle } from '@codecast/web/lib/line/deployWords';
 import { repoObjectTitle } from '@codecast/web/lib/repoObjects';
 import { deployPillState, deployPillSuffix, deployTone, isRollback, runRefKey, type DeployPillState, type DeployTone } from '@codecast/web/lib/deploys/deployPill';
 import { useRefLifecycle } from '@codecast/web/hooks/useRefLifecycle';
-import { nowElapsed, type ChangeTone, type Lifecycle } from '@codecast/web/lib/changes/lifecycle';
+import { ChangeWords } from '@/components/ChangeText';
 import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
 
 
@@ -287,31 +287,6 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
       {' '}{label}
       {deployState && ` · ${deployPillSuffix(entity, now)}`}
       {change && <ChangeWords lifecycle={change} />}
-    </RNText>
-  );
-}
-
-/** The web's change tones (lib/changes/lifecycle ChangeTone) in the phone's palette. */
-const changeColor = (t: Palette, tone: ChangeTone) =>
-  ({ yellow: t.yellow, muted: t.textMuted, blue: t.blue, orange: t.orange, red: t.red, green: t.green, dim: t.textDim })[tone];
-
-/**
- * A change's track and word after a pull request's or commit's name, as the web draws it (components/changes): five
- * bars, those passed solid, the now in its tone, the rest faint; then the word. Text, so it wraps with the pill.
- */
-function ChangeWords({ lifecycle }: { lifecycle: Lifecycle }) {
-  const Theme = useTheme();
-  const n = lifecycle.now;
-  const tone = changeColor(Theme, n.tone);
-  const time = nowElapsed(n, Date.now());
-  return (
-    <RNText style={{ color: tone }}>
-      {' '}
-      {lifecycle.stages.map((s) => (
-        <RNText key={s.id} style={{ color: s.id === n.stage ? tone : n.tone === 'green' ? Theme.green : s.state === 'done' ? Theme.textMuted : Theme.textDim, opacity: s.id === n.stage || s.state === 'done' || n.tone === 'green' ? 1 : 0.4, letterSpacing: -1 }}>▬</RNText>
-      ))}
-      {' '}
-      <RNText style={{ color: tone, ...(n.tone === 'red' ? { backgroundColor: Theme.red + FAILED_TINT } : null) }}>{n.word}{time ? ` ${time}` : ''}{n.detail ? ` · ${n.detail}` : ''}</RNText>
     </RNText>
   );
 }

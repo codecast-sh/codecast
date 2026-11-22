@@ -9,7 +9,7 @@ import type { QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import { assemble, findChange, withReach, type AssembledChange, type ChangePullRequest, type ChangeTarget } from "../assemble";
 import { changeLifecycle } from "../lifecycle";
-import { isQuiet } from "../rows";
+import { isParked } from "../rows";
 
 const now = 1_790_000_000_000;
 const MIN = 60_000;
@@ -197,21 +197,27 @@ describe("assemble, a branch after its pull request merged", () => {
   });
 });
 
-describe("assemble and the grid, for work nobody's session still holds", () => {
-  test("a worktree branch committed but never pushed dates from its checkout's report, so it is not quiet the moment it is made", () => {
+describe("the grid's Parked group, for what nothing is moving", () => {
+  const rowOf = (c: AssembledChange) => ({ key: c.key, lifecycle: changeLifecycle(c.facts), updated_at: c.updated_at });
+  test("a worktree branch committed and never shipped is parked at once, dated by its checkout's report", () => {
     const wt = checkout({ path: "/w/done", branch: "feat/done", device_id: "d1", head_sha: "eeeeeee5555", ahead: 2, reported_at: now - 10 * MIN });
     const c = assemble({ repository: repo, now, checkouts: [wt] }).find((x) => x.key === "branch:feat/done")!;
     expect(c.updated_at).toBe(now - 10 * MIN);
-    const row = { key: c.key, lifecycle: changeLifecycle(c.facts), updated_at: c.updated_at };
-    expect(row.lifecycle.now.word).toBe("not shipped");
-    expect(isQuiet(row, now)).toBe(false);
-    expect(isQuiet(row, now + 4 * DAY)).toBe(true);
+    expect(rowOf(c).lifecycle.now).toMatchObject({ word: "not shipped", parked: true });
+    expect(isParked(rowOf(c), now)).toBe(true);
   });
-  test("a person's turn and a failure never go quiet, however old", () => {
+  test("a session at work is never parked; between turns it parks only once it has gone three days untouched", () => {
+    const working = checkout({ path: "/w/live", branch: "feat/live", device_id: "d1", ahead: 1, uncommitted: { total: 2, sessions: [session("c-chip", "idle", ["a.ts"])], unattributed: [], unattributed_more: 0 } });
+    const c = assemble({ repository: repo, now, checkouts: [working] }).find((x) => x.key === "branch:feat/live")!;
+    expect(rowOf(c).lifecycle.now.word).toBe("between turns");
+    expect(isParked(rowOf(c), now)).toBe(false);
+    expect(isParked(rowOf(c), now + 4 * DAY)).toBe(true);
+  });
+  test("a person's turn and a failure never park, however old", () => {
     const old = (number: number, over: Partial<ChangePullRequest>) => pr({ number, state: "open", head_ref: `x/${number}`, created_at: now - 9 * DAY, files_synced_at: now - 9 * DAY, ...over });
     const got = assemble({ repository: repo, now, pullRequests: [old(91, { checks_state: "success", review_decision: "REVIEW_REQUIRED" }), old(92, { checks_state: "failure" }), old(93, { draft: true, checks_state: "success" })] });
-    const quiet = (n: number) => { const c = got.find((x) => x.refs.pr === n)!; return isQuiet({ key: c.key, lifecycle: changeLifecycle(c.facts), updated_at: c.updated_at }, now); };
-    expect([quiet(91), quiet(92), quiet(93)]).toEqual([false, false, true]);
+    const parked = (n: number) => isParked(rowOf(got.find((x) => x.refs.pr === n)!), now);
+    expect([parked(91), parked(92), parked(93)]).toEqual([false, false, true]);
   });
 });
 

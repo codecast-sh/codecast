@@ -35,7 +35,7 @@ export type RepoChangeRows = {
   pullRequests?: ReadonlyArray<ChangePullRequest>;
   /** The team's deploy targets (any repository's); undefined while unread, so `deploys` stays unknown. */
   targets?: ReadonlyArray<ChangeTarget>;
-  branches?: { default_branch: string; branches: ReadonlyArray<ChangeBranchRow> } | null;
+  branches?: { default_branch: string; branches: ReadonlyArray<ChangeBranchRow>; truncated?: boolean } | null;
   /** A session's title in the viewer's own store: a team row never carries one. */
   titleOf?: (conversationId: string) => string | null | undefined;
 };

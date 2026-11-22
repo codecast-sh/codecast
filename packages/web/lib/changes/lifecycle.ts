@@ -1,6 +1,6 @@
 // A change on its way to live (docs/architecture/changes.md): five stages
 // that never change, Work, Check, Land, Deploy, Live, whatever carries the
-// change (a checkout's uncommitted edits, a branch with or without a pull
+// change (a shared checkout's uncommitted work, a branch with or without a pull
 // request, a shared checkout's pass, a commit on main), and one `now`: the
 // stage that holds it, its state there, the word a reader sees and its tone.
 // This file is the only place a lifecycle word or tone is chosen. Pure, with
@@ -29,8 +29,6 @@ export type ChangeVehicle =
   | { kind: "branch"; name: string; worktree?: string | null; pr?: number | null }
   | { kind: "pr"; number: number; branch?: string | null; title?: string | null }
   | { kind: "commit"; sha: string; branch?: string | null }
-  /** One session's uncommitted edits in a checkout. */
-  | { kind: "edits"; title: string; conversation_id?: string | null; files: number }
   /** A shared checkout's bundle: every session's uncommitted work, shipped in one pass. */
   | { kind: "pass"; folder: string; sessions: number; files: number };
 
@@ -88,6 +86,8 @@ export type LifecycleNow = {
   word: string;
   /** A quieter second word the chip shows after a `·`: `1 of 2 live`, a failing check's name. */
   detail: string | null;
+  /** Nothing is moving it: not shipped, or pushed and not checked. It waits on whoever picks it up, and folds away. */
+  parked?: true;
   tone: ChangeTone;
   /** When the now began, for its elapsed time; null when settled. */
   since: number | null;
@@ -116,7 +116,6 @@ export function vehicleName(v: ChangeVehicle): string {
     case "branch": return v.name;
     case "pr": return `#${v.number}`;
     case "commit": return v.sha.slice(0, 7);
-    case "edits": return v.title;
     case "pass": return `${v.folder.split("/").filter(Boolean).pop() ?? v.folder} checkout`;
   }
 }
@@ -172,6 +171,8 @@ function landLine(f: ChangeFacts): string | null {
   }
   return ({ none: null, conflict: "Conflicts with main", behind: "Behind main" } as const)[l.state];
 }
+
+const parked = (l: Lifecycle): Lifecycle => ({ ...l, now: { ...l.now, parked: true } });
 
 /** Each stage's two words for a grid cell: what the change holds there. */
 function stageShorts(f: ChangeFacts): Record<ChangeStageId, string | null> {
@@ -282,12 +283,12 @@ export function changeLifecycle(f: ChangeFacts): Lifecycle {
   if (work) {
     const working = work.writers.some((w) => w.state === "working");
     if (working) return result("work", "active", "editing");
-    if (work.pushed && !work.uncommitted) return result("check", "idle", "not checked", null, "muted");
+    if (work.pushed && !work.uncommitted) return parked(result("check", "idle", "not checked", null, "muted"));
     if (work.uncommitted || work.ahead) {
       const idle = work.writers.some((w) => w.state === "idle");
       if (idle) return result("work", "waiting", "between turns");
       // Nobody is at it and nothing is taking it out: it waits on whoever ships it, which is nobody's turn by itself.
-      return result("work", "waiting", "not shipped");
+      return parked(result("work", "waiting", "not shipped"));
     }
   }
   return result("work", "idle", "nothing yet", null, "dim");

@@ -60,12 +60,12 @@ const GROUPS: ReadonlyArray<{ id: string; label: string; tone: ChangeTone; tones
   { id: "moving", label: "Moving", tone: "yellow", tones: ["yellow", "orange"] },
   { id: "waiting", label: "Waiting", tone: "muted", tones: ["muted"] },
   { id: "live", label: "Live", tone: "green", tones: ["green"] },
-  { id: "quiet", label: "Quiet", tone: "dim", tones: [], folded: true },
+  { id: "parked", label: "Parked", tone: "dim", tones: [], folded: true },
   { id: "closed", label: "Closed", tone: "dim", tones: ["dim"], folded: true },
 ];
 
 /** Nobody has touched a change in this long: it is not on its way anywhere until someone does. */
-export const QUIET_AFTER_MS = 3 * 24 * 60 * 60_000;
+export const PARKED_AFTER_MS = 3 * 24 * 60 * 60_000;
 
 /** Within a group, failures before a person's turn, then the newest first. */
 const TONE_RANK: Record<ChangeTone, number> = { red: 0, blue: 1, orange: 2, yellow: 3, muted: 4, green: 5, dim: 6 };
@@ -74,22 +74,22 @@ const TONE_RANK: Record<ChangeTone, number> = { red: 0, blue: 1, orange: 2, yell
 export const groupTone = (l: Lifecycle): ChangeTone => (l.now.stage === "live" && l.now.state === "back" ? "red" : l.now.tone);
 
 /**
- * Whether a change has gone quiet at `now`: not yet on main, not in motion, nobody's turn, and nobody's work touched it in
- * QUIET_AFTER_MS (or ever, as far as anything reports). A landed change never goes quiet: where it stands in
- * production always matters.
+ * Whether a change is parked at `now`: nothing is moving it (not shipped, or pushed and not checked), or it is not yet on
+ * main, not in motion, nobody's turn, and nobody's work touched it in PARKED_AFTER_MS (or ever, as far as anything
+ * reports). A landed change is never parked: where it stands in production always matters.
  */
-export function isQuiet(r: ChangeRow, now: number): boolean {
+export function isParked(r: ChangeRow, now: number): boolean {
   const n = r.lifecycle.now;
   // A person's turn and a failure wait on someone: their age is the reason to look, never a reason to fold them away.
   if (r.reach_ref || n.state === "active" || n.state === "stopped" || n.tone === "blue" || n.tone === "red") return false;
-  return !r.updated_at || now - r.updated_at > QUIET_AFTER_MS;
+  return !!n.parked || !r.updated_at || now - r.updated_at > PARKED_AFTER_MS;
 }
 
 export function groupChanges(rows: ReadonlyArray<ChangeRow>, now: number) {
   return GROUPS.map((g) => ({
     ...g,
     rows: rows
-      .filter((r) => (g.id === "quiet" ? isQuiet(r, now) : !isQuiet(r, now) && g.tones.includes(groupTone(r.lifecycle))))
+      .filter((r) => (g.id === "parked" ? isParked(r, now) : !isParked(r, now) && g.tones.includes(groupTone(r.lifecycle))))
       .sort((a, b) => TONE_RANK[a.lifecycle.now.tone] - TONE_RANK[b.lifecycle.now.tone] || (b.updated_at ?? 0) - (a.updated_at ?? 0)),
   })).filter((g) => g.rows.length);
 }

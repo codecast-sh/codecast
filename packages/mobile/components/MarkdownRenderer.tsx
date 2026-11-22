@@ -28,6 +28,7 @@ import { FlowCard, FlowEditCard, FlowPipelineCard, FlowRunCard } from './session
 import { CONVERSATION_FENCE_LANG } from '@codecast/web/lib/conversationFence';
 import { ConversationFence } from './ConversationFence';
 import { EntityPill } from './EntityPill';
+import { MentionedCode } from './ChangeText';
 import { pushRunRefs, runOrLink } from './DeployRunRefs';
 import { ProposalCard } from './org/ProposalCard';
 import { DecisionCard } from './decisions/DecisionCard';
@@ -194,7 +195,8 @@ function renderInlineNode(node: Nodes, ctx: MdCtx, k: string): React.ReactNode {
       if (isEntityId(node.value)) {
         return <EntityPill key={k} shortId={node.value} fallback={<RNText style={style}>{node.value}</RNText>} />;
       }
-      return <RNText key={k} style={style}>{markedRuns(node.value, ctx.found, `${k}h`)}</RNText>;
+      // A branch the conversation's repository knows draws as its change, as on the web (changes.md CH4).
+      return <MentionedCode key={k} value={node.value}><RNText style={style}>{markedRuns(node.value, ctx.found, `${k}h`)}</RNText></MentionedCode>;
     }
     case 'link': {
       // A codecast object URL becomes a rich in-app pill, not an external link

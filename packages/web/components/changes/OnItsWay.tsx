@@ -5,7 +5,7 @@
 import { useMemo } from "react";
 import { useRepoChanges } from "../../hooks/useRepoChanges";
 import { ChangeBoard } from "./ChangeBoard";
-import { changeRowOf, isQuiet } from "../../lib/changes/rows";
+import { changeRowOf, isParked } from "../../lib/changes/rows";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 
 const HIDE = ["live", "closed"] as const;
@@ -15,8 +15,8 @@ export function OnItsWay({ repository }: { repository: string }) {
   // What has landed waits on main, listed just below by session: this grid is what has yet to get there.
   const rows = useMemo(() => changes.map(changeRowOf).filter((r) => !r.reach_ref), [changes]);
   const now = useCoarseNow(600_000);
-  // What is really on its way: not live, not closed, and not gone quiet.
-  const coming = rows.filter((r) => r.lifecycle.now.tone !== "green" && r.lifecycle.now.tone !== "dim" && !isQuiet(r, now)).length;
+  // What is really on its way: not live, not closed, and not parked.
+  const coming = rows.filter((r) => r.lifecycle.now.tone !== "green" && r.lifecycle.now.tone !== "dim" && !isParked(r, now)).length;
   if (ready && !coming) return null;
   return (
     <section className="dpp-sec" data-deploy-on-its-way>

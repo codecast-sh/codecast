@@ -30,7 +30,6 @@ function where(v: ChangeVehicle): string | null {
     case "branch": return v.pr ? `#${v.pr}` : v.worktree ? "worktree" : null;
     case "pr": return v.branch ?? null;
     case "commit": return v.branch ?? null;
-    case "edits": return `${v.files} ${v.files === 1 ? "file" : "files"}`;
     case "pass": return `${v.sessions} sessions · ${v.files} files`;
   }
 }

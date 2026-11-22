@@ -47,9 +47,9 @@ already use. One separator, `·`. Times are elapsed while in motion
 
 - **Vehicle glyph**: branch (whether or not a worktree holds it or a pull
   request names it), pull request (when the reference is `#N`), commit,
-  edits (one session's uncommitted work), pass (a shared checkout's bundle).
-- **Name**: the branch, `#N`, the short sha, the session's title, or
-  `<folder> · N sessions`.
+  pass (a shared checkout's uncommitted work, every session's at once).
+- **Name**: the branch, `#N`, the short sha, or `<folder> checkout` for a
+  pass.
 - **Track**: five pips. Passed stages solid neutral, the now pip in its tone,
   stages ahead faint. A live change is five green pips; nothing else is.
 - **Word**: the now (CH2), at most three words plus a time.
@@ -75,17 +75,22 @@ the writer sessions, and links to the pull request, run and deploys.
 - **Branches page**: the lifecycle grid (`ChangeBoard`): a row per change,
   the five stages as columns with one track across them, each cell's two
   words under its slice, grouped by who acts next: Needs you (red, blue, and a
-  rollback), Moving (yellow, orange), Waiting, Live, then Quiet and Closed
-  folded. A change goes quiet when nobody's work has touched it for three days
-  (a session's write, a push, a commit); a landed change, a failure and a
-  person's turn never do. Below
-  the grid, every branch GitHub lists, each with its chip.
+  rollback), Moving (yellow, orange), Waiting, Live, then Parked and Closed
+  folded. A change is parked when nothing is moving it: committed and never
+  shipped, pushed and never checked, or untouched for three days (a session's
+  write, a push, a commit). A landed change, a failure and a person's turn are
+  never parked. Below the grid, every branch GitHub lists, each with its chip.
 - **Deploys page**: "On its way" in each target's pane: the same grid,
   without Live and Closed, for every change of that repository not yet on
   main. What has landed and waits to go out is "Waiting on main", below it.
-- **Phone**: a pull request or commit pill draws the same track and word, as
-  text after its name. A branch name in a phone message stays code: the
-  phone's transcript holds no repository's changes to find it in.
+- **Phone**: the same rule, drawn as text so it wraps with its line: a pull
+  request or commit pill gets the track and word after its name, and a branch
+  named in a message draws whole (glyph, name, track, word) from the session's
+  repository (`components/ChangeText.tsx`) when a checkout, a pull request or
+  a deploy queue knows it. GitHub's branch list and the one-branch compare are
+  web-only reads, so a pushed branch nothing else names stays code on the
+  phone. A branch with a pull request opens its screen; skipped stages are
+  dashed and a waiting one hollow, as on the web.
 - **Motion**: none. A chip sits in transcripts and list rows, which run no
   infinite animation (CLAUDE.md typing budget): a change in motion wears its
   tone, and its grid slice static stripes.

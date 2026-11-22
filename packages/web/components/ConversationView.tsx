@@ -1,5 +1,6 @@
 import { HandoffLinkChip, HandoffSessionLink, SessionHandoffCard, SessionHandoffNotice } from "./conversation/SessionHandoff";
 import { ChangesProvider } from "./changes/ChangesContext";
+import { WebBranchFeed } from "./changes/WebBranchFeed";
 import { RunThroughFlow } from "./line/widgets/RunThroughFlow";
 import { RunLogEndedBar, isEndedRunLog } from "./conversation/RunLogEndedBar";
 import { CloudAgentLink, CloudAgentMenuItems } from "./cloudAgents";
@@ -4237,7 +4238,7 @@ const ConversationViewInner = (
     <ReferenceScopeContext.Provider value={referenceScope}>
     <HighlightContext.Provider value={highlightQuery}>
     <FilePathContext.Provider value={filePathCtx}>
-    <WorktreesProvider repository={codeRepository}><ChangesProvider repository={codeRepository}>
+    <WorktreesProvider repository={codeRepository}><ChangesProvider repository={codeRepository} BranchFeed={WebBranchFeed}>
     <CastBrowserRowContext.Provider value={browserRowMap}>
     <BrowserSessionContext.Provider value={browserSession}>
     <RevealAncestryCtx.Provider value={revealAncestry}>

@@ -26,11 +26,6 @@ export function changeExamples(now: number): ChangeExample[] {
       facts: { vehicle: { kind: "branch", name: "evals/budget-checks", worktree: "~/code/codecast/.codecast/worktrees/budget-checks" }, work: { uncommitted: 6, ahead: 2, pushed: false, writers: [writer("Regrowth checks")] } },
     },
     {
-      id: "edits-shared",
-      caption: "One session's edits in the shared main checkout",
-      facts: { vehicle: { kind: "edits", title: "Deploy pill words", files: 4 }, work: { uncommitted: 4, ahead: 0, pushed: false, writers: [writer("Deploy pill words", "idle")] } },
-    },
-    {
       id: "not-shipped",
       caption: "Committed in a worktree; nothing ships it yet",
       facts: { vehicle: { kind: "branch", name: "evals/entry-prune", worktree: "~/code/union-mobile/worktrees/entry-prune" }, work: { uncommitted: 0, ahead: 3, pushed: false, writers: [] } },
