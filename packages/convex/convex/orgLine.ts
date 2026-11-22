@@ -199,40 +199,41 @@ async function seatOf(ctx: Ctx, role: any): Promise<{ runner: string; project_pa
   return { runner: String(place.runner_user_id), project_path: place.project_path };
 }
 
+// Who runs the role whose standing session `conversationId` is (its anchor
+// names the conversation and the role sits on that anchor), else null.
+async function standingRunnerOf(ctx: Ctx, conversationId: any): Promise<string | null> {
+  const anchor = await ctx.db.query("anchors").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversationId)).first();
+  const role = anchor?.org_role_id ? await ctx.db.get(anchor.org_role_id) : null;
+  if (!role || String(role.anchor_id ?? "") !== String(anchor._id)) return null;
+  return String(seatPlace(role, await ctx.db.get(conversationId)).runner_user_id);
+}
+
 // LE6: the line runs working now on `runner`'s own machine: every run a role
 // run by `runner` started (a cause's, or one with no task, like a judge
 // diagnosis), plus runs with a task its standing session spawned (from before
 // org_role_id), minus those waiting on a blocking decision and
 // those on a pool machine, which its slots count, and those that run on
 // another account's machine (the team's pool). Every role counts, paused and
-// retired ones too: their runs still use the machine.
-export async function runnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promise<RunnerLoad> {
-  const all: any[] = roles ?? await ctx.db.query("org_roles").collect();
+// retired ones too: their runs still use the machine. Read from the runner's
+// own working runs, so the cost follows them, never how many roles exist.
+export async function runnerLoad(ctx: Ctx, runner: string): Promise<RunnerLoad> {
   const waiting = await runsWaitingOnAPerson(ctx, runner);
   const pooled = await poolDeviceIds(ctx, runner);
-  const working = new Set<string>();
-  for (const role of all) {
-    const anchor = role.anchor_id ? await ctx.db.get(role.anchor_id) : null;
-    const standing = anchor?.conversation_id ?? null;
-    if (String(seatPlace(role, standing ? await ctx.db.get(standing) : null).runner_user_id) !== runner) continue;
-    for (const status of WORKING_RUN_STATUSES) {
-      const runs: any[] = await ctx.db
-        .query("workflow_runs")
-        .withIndex("by_org_role_status", (q: any) => q.eq("org_role_id", role._id).eq("status", status))
-        .collect();
-      if (standing) {
-        runs.push(...await ctx.db
-          .query("workflow_runs")
-          .withIndex("by_spawner_status", (q: any) => q.eq("spawner_conversation_id", standing).eq("status", status))
-          .collect());
-      }
-      for (const run of runs) {
-        if (String(run.user_id) !== runner || pooled.has(String(run.runner_device ?? ""))) continue;
-        if (await holdsSlot(ctx, run, waiting)) working.add(String(run._id));
-      }
+  let working = 0;
+  for (const status of WORKING_RUN_STATUSES) {
+    const runs: any[] = await ctx.db
+      .query("workflow_runs")
+      .withIndex("by_user_status", (q: any) => q.eq("user_id", runner).eq("status", status))
+      .collect();
+    for (const run of runs) {
+      if (pooled.has(String(run.runner_device ?? ""))) continue;
+      const role = run.org_role_id ? await ctx.db.get(run.org_role_id) : null;
+      const byRole = !!role && (await seatOf(ctx, role)).runner === runner;
+      const bySeat = !byRole && !!run.spawner_conversation_id && (await standingRunnerOf(ctx, run.spawner_conversation_id)) === runner;
+      if ((byRole || bySeat) && await holdsSlot(ctx, run, waiting)) working++;
     }
   }
-  return { runner, working: working.size, cap: LINE_RUNS_PER_RUNNER };
+  return { runner, working, cap: LINE_RUNS_PER_RUNNER };
 }
 
 export type LineLoad = RunnerLoad & { pool: LinePool | null };
@@ -244,7 +245,7 @@ export type LineLoads = Map<string, LineLoad>;
  * checkout; else its runner's own machine. `needs`: the agents the run's flow starts (flowAgents), which every pool
  * machine must be able to start.
  */
-export async function lineLoadFor(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), roles?: any[], needs?: readonly string[]): Promise<LineLoad> {
+export async function lineLoadFor(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), needs?: readonly string[]): Promise<LineLoad> {
   const seat = await seatOf(ctx, role);
   const key = `${seat.runner}|${seat.project_path ?? ""}|${role.team_id ?? ""}|${needs?.join(",") ?? ""}`;
   const known = loads.get(key);
@@ -252,7 +253,7 @@ export async function lineLoadFor(ctx: Ctx, role: any, now: number, loads: LineL
   const pool = await linePoolFor(ctx, seat.runner, seat.project_path, now, role.team_id ? String(role.team_id) : null, needs);
   const load: LineLoad = pool
     ? { runner: seat.runner, working: poolWorking(pool), cap: poolCap(pool), pool }
-    : { ...await runnerLoad(ctx, seat.runner, roles), pool: null };
+    : { ...await runnerLoad(ctx, seat.runner), pool: null };
   loads.set(key, load);
   return load;
 }
@@ -273,7 +274,7 @@ export function claimSlot(load: LineLoad): RunPlace | undefined {
 export type Admission = { runner: string; pooled: boolean } & ({ place?: RunPlace } | { waiting: string });
 
 export async function admitRoleRun(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), needs?: readonly string[]): Promise<Admission> {
-  const load = await lineLoadFor(ctx, role, now, loads, undefined, needs);
+  const load = await lineLoadFor(ctx, role, now, loads, needs);
   const at = { runner: load.runner, pooled: !!load.pool };
   if (freeSlots(load) <= 0) return { ...at, waiting: `${load.working} run${load.working === 1 ? " is" : "s are"} working on @${role.handle}'s machine${load.pool ? "s" : ""}` };
   return { ...at, place: claimSlot(load) };
@@ -489,7 +490,7 @@ export async function planSweep(ctx: Ctx, now = Date.now(), o: { loads?: boolean
     if (role.team_id && flowTeams.has(String(role.team_id))) continue;
     if (!(await linesRunIn(ctx, role, featureOn))) continue;
     const before = loads.size;
-    const load = await lineLoadFor(ctx, role, now, loads, roles);
+    const load = await lineLoadFor(ctx, role, now, loads);
     if (o.loads && loads.size > before) (result.loads ??= []).push({ runner: load.runner, project_path: (await seatOf(ctx, role)).project_path ?? "", working: load.working, cap: load.cap, pool: load.pool ? load.pool.slots.map((sl) => ({ ...sl })) : null });
     const handsCap = capsFor(role).hands_per_day;
     const handsLeft = handsCap == null ? Infinity : handsCap - countersFor(role, now).hands;
@@ -537,7 +538,7 @@ async function planQueuedResumes(ctx: Ctx, now: number, roles: any[], loads: Lin
       if (!out.some((o) => o.device === run.runner_device) && (await slotStillFree(ctx, null, queuedPlace(run)))) out.push({ run_id: String(run._id), device: run.runner_device });
       continue;
     }
-    const load = await lineLoadFor(ctx, role, now, loads, roles);
+    const load = await lineLoadFor(ctx, role, now, loads);
     const slot = load.pool?.slots.find((s) => s.device === run.runner_device);
     if (!slot || slot.runs - slot.working <= 0) continue;
     slot.working++;

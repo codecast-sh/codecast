@@ -146,7 +146,7 @@ export async function planLiveFlow(ctx: Ctx, flow: any, roles: any[], now: numbe
     if (!waiting && starts.length >= take) waiting = "waits for the next pass";
     let load: LineLoad | null = null;
     if (!waiting) {
-      load = await lineLoadFor(ctx, c.role, now, loads, roles, needs);
+      load = await lineLoadFor(ctx, c.role, now, loads, needs);
       if (freeSlots(load) <= 0) waiting = `${load.working} run${load.working === 1 ? " is" : "s are"} working on @${c.role.handle}'s machine${load.pool ? "s" : ""}`;
     }
     if (!waiting && load) {
@@ -185,11 +185,12 @@ export type LiveFlowRow = {
 
 /** One live flow as the web and the CLI read it: its row, its machines' load, its runs and the head of its queue. */
 export async function liveFlowView(ctx: Ctx, flow: any, now = Date.now()): Promise<LiveFlowRow & { entries: Array<LiveCandidate & { waiting: string | null }> }> {
-  const roles: any[] = await ctx.db.query("org_roles").collect();
+  // The team's roles only: a role of another team never runs under this flow (flowRoles).
+  const roles: any[] = flow.team_id ? await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", flow.team_id)).collect() : [];
   const team = flowRoles(flow, roles);
   const loads: LineLoads = new Map();
   // Every machine the flow's leads run on, counted once.
-  for (const r of team) if (r.status === "active") await lineLoadFor(ctx, r, now, loads, roles);
+  for (const r of team) if (r.status === "active") await lineLoadFor(ctx, r, now, loads);
   // Leads seated in different folders of one checkout share its pool: count each pool, and each runner's own machine, once.
   const distinct = new Map([...loads.values()].map((l) => [l.pool ? l.pool.slots.map((sl) => sl.device).sort().join(",") : `runner:${l.runner}`, l]));
   const totals = [...distinct.values()].reduce((t, l) => ({ working: t.working + l.working, cap: t.cap + l.cap }), { working: 0, cap: 0 });

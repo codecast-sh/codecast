@@ -317,6 +317,7 @@ async function orgSetup() {
         caps: { hands_per_day: 10, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true, ...(cards ? { cards } : {}) },
         created_by: person, created_at: T0, updated_at: T0,
       } as any);
+      await ctx.db.patch(anchor, { org_role_id: id } as any);
       return { id, conv };
     };
     const hop = await role(HEAD_OF_PEOPLE_HANDLE, [], { kind: "user", user_id: person });
