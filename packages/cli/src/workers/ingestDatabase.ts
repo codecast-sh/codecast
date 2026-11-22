@@ -61,9 +61,24 @@ export async function readOpencodeIngest(file: string, sessionId: string) {
  * database file", measured beside a running agy, 2026-11-22). Then the
  * database (and its -wal, when one exists) is copied to a temporary directory
  * and the copy opened writable, so SQLite can build its own index and replay
- * the log. The original is never opened for writing.
+ * the log. The original is never opened for writing. A conversation's folder
+ * and parent never change, so a row found once is kept: a pass while agy runs
+ * would otherwise copy the database and its -wal again.
  */
-export async function readAntigravitySummary(file: string, conversationId: string): Promise<{cwd?: string; parentConversationId?: string; nestingDepth?: number; title?: string} | undefined> {
+type AntigravitySummary = {cwd?: string; parentConversationId?: string; nestingDepth?: number; title?: string};
+const antigravitySummaries = new Map<string, AntigravitySummary>();
+export async function readAntigravitySummary(file: string, conversationId: string): Promise<AntigravitySummary | undefined> {
+  const key = `${file}\0${conversationId}`;
+  const cached = antigravitySummaries.get(key);
+  if (cached) return cached;
+  const summary = await readAntigravitySummaryUncached(file, conversationId);
+  if (summary?.cwd) {
+    if (antigravitySummaries.size >= 512) antigravitySummaries.delete(antigravitySummaries.keys().next().value!);
+    antigravitySummaries.set(key, summary);
+  }
+  return summary;
+}
+async function readAntigravitySummaryUncached(file: string, conversationId: string): Promise<AntigravitySummary | undefined> {
   try { return await readAntigravitySummaryFrom(file, conversationId, false); }
   catch (error) { if (!/unable to open database file|SQLITE_CANTOPEN/i.test(String(error))) throw error; }
   const dir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'agy-summaries-'));
@@ -74,7 +89,7 @@ export async function readAntigravitySummary(file: string, conversationId: strin
     return await readAntigravitySummaryFrom(copy, conversationId, true);
   } finally { await fs.promises.rm(dir, { recursive: true, force: true }); }
 }
-async function readAntigravitySummaryFrom(file: string, conversationId: string, writable: boolean): Promise<{cwd?: string; parentConversationId?: string; nestingDepth?: number; title?: string} | undefined> {
+async function readAntigravitySummaryFrom(file: string, conversationId: string, writable: boolean): Promise<AntigravitySummary | undefined> {
   const db = await open(file, writable);
   try {
     const columns = new Set(db.query('PRAGMA table_info(conversation_summaries)').all().map(row=>row.name));

@@ -740,7 +740,9 @@ describe("command groups stay off the boot graph", () => {
     // parser above, antigravityPaths.ts (pure path rules the watcher and scan
     // worker share without loading the parser) and antigravityLocal.ts (folder
     // trust and the conversation's cwd from agy's own files).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(624);
+    // 623 the same day: antigravityLocal.ts loads only when an agy pane
+    // launches or resumes.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(623);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

@@ -297,7 +297,6 @@ import { BUILD_ID_RE, BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBu
 import { decideEscape, turnLooksActive } from "./escapeInterrupt.js";
 import { markSynced, markExamined, updateSyncRecord, getSyncRecord, findUnsyncedFilesAsync, type SyncRecord } from "./syncLedger.js";
 import { ensureGrokFolderTrusted } from "./grokFolderTrust.js";
-import { antigravitySessionCwd, ensureAntigravityFolderTrusted } from "./antigravityLocal.js";
 import { SyncService, AuthExpiredError, type ConversationLifecycle, type CreateConversationParams } from "./syncService.js";
 import { subagentPromptParent } from "./agentPromptOrigin.js";
 import { declaredSpawnParent } from "./spawnParents.js";
@@ -7702,7 +7701,7 @@ async function executeRemoteCommand(
         // identity), not codecast/bun (see disclaim.ts). The wrapper execs
         // plain argv, which works here because envPrefix starts with `env`.
         let cmdText = `${accountPrefix}${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
-        if (agentType === "antigravity" && cwd && ensureAntigravityFolderTrusted(cwd)) {
+        if (agentType === "antigravity" && cwd && (await import("./antigravityLocal.js")).ensureAntigravityFolderTrusted(cwd)) {
           // Same reason as grok below: agy's first-launch trust dialog comes
           // before any transcript, so the session could never bind behind it.
           log(`antigravity folder trust granted for ${cwd}`);
@@ -26589,7 +26588,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       // record (extractMuseCwd) is authoritative.
       : agentType === "muse" ? (extractMuseCwd(jsonlContent) || undefined)
       // agy's transcript carries no cwd; conversation_summaries.db does.
-      : agentType === "antigravity" ? antigravitySessionCwd(jsonlPath, sessionId)
+      : agentType === "antigravity" ? (await import("./antigravityLocal.js")).antigravitySessionCwd(jsonlPath, sessionId)
       : (extractCwd(jsonlContent) || undefined);
     const resolvedCwd = await resolveResumeCwdOrRefuse({ recordedCwd, cwdOverride, conversationId });
     if (resolvedCwd) {
@@ -26613,7 +26612,7 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // The account this resume actually runs on, for the OAuth refresh gate.
   let resumeAccount: string | undefined;
   let stableRulesFile: string | undefined;
-  if (agentType === "antigravity" && cwd && ensureAntigravityFolderTrusted(cwd)) {
+  if (agentType === "antigravity" && cwd && (await import("./antigravityLocal.js")).ensureAntigravityFolderTrusted(cwd)) {
     log(`antigravity folder trust granted on resume for ${cwd}`);
   }
   if (agentType === "grok") {

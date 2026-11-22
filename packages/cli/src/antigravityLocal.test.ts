@@ -7,6 +7,7 @@ import * as path from "path";
 import { antigravitySessionCwd, ensureAntigravityFolderTrusted, upsertAntigravityTrustedWorkspace } from "./antigravityLocal.js";
 import { readIngestJob, ingestIdentity } from "./workers/ingestJobs.js";
 import { validateIngestResult } from "./workers/ingestValidation.js";
+import { readAntigravitySummary } from "./workers/ingestDatabase.js";
 import { transcriptDirWatcherConfig, agentSessionFromTranscriptPath } from "./transcriptDirWatcher.js";
 import { scanPredicates } from "./workers/scanPolicy.js";
 import type { IngestJob } from "./workers/ingestTypes.js";
@@ -125,6 +126,17 @@ describe("conversation_summaries.db", () => {
     expect(bare.messages).toHaveLength(3);
     expect(bare.metadata.cwd).toBeUndefined();
     expect(bare.metadata.warnings.some((w) => w.startsWith("antigravity summary"))).toBe(true);
+  });
+});
+
+describe("summary reads", () => {
+  test("a conversation's row is read once: later passes skip the database and its copy", async () => {
+    const id = randomUUID();
+    const dataDir = agyDataDir([{ id, workspace: "/Users/me/once" }]);
+    const file = path.join(dataDir, "conversation_summaries.db");
+    expect((await readAntigravitySummary(file, id))?.cwd).toBe("/Users/me/once");
+    fs.rmSync(file);
+    expect((await readAntigravitySummary(file, id))?.cwd).toBe("/Users/me/once");
   });
 });
 

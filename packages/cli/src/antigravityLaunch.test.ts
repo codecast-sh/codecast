@@ -21,6 +21,8 @@ describe("launch", () => {
     expect(getPermissionFlags("antigravity", null)).toBe("--dangerously-skip-permissions");
     expect(getPermissionFlags("antigravity", { agent_args: { antigravity: "--mode plan" } } as Config)).toBeNull();
     expect(getPermissionFlags("antigravity", { agent_args: { antigravity: "--dangerously-skip-permissions" } } as Config)).toBeNull();
+    expect(getPermissionFlags("antigravity", { agent_permission_modes: { antigravity: "default" } } as Config)).toBeNull();
+    expect(getPermissionFlags("antigravity", { agent_permission_modes: { antigravity: "bypass" } } as Config)).toBe("--dangerously-skip-permissions");
   });
 
   test("cast exec's permission modes map onto agy's own", () => {

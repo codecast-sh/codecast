@@ -164,9 +164,11 @@ export function getPermissionFlags(agentType: AgentClientId, config?: Config | n
     // A managed agy pane is driven from the web, and nothing watches its pane
     // for permission prompts, so it launches with every tool request
     // auto-approved (--dangerously-skip-permissions; agy --help). A --mode or
-    // the flag itself pinned in agent_args.antigravity wins.
+    // the flag itself pinned in agent_args.antigravity wins, and a "default"
+    // mode opts back into agy's own prompts (the codex/muse/cursor rule).
     const existing = getAgentArgs(config, "antigravity") || "";
     if (/(?:^|\s)(?:--dangerously-skip-permissions|--mode)\b/.test(existing)) return null;
+    if (modes?.antigravity === "default") return null;
     return "--dangerously-skip-permissions";
   } else if (agentType === "gemini") {
     // gemini flags TBD for TUI launch; print mode adds --yolo separately.
