@@ -82,12 +82,14 @@ function searchTitle(conv: HaystackRow): string {
 
 // Per row object: a search re-reads the same rows on every keystroke, and a row
 // that changed arrives as a new object.
-const _haystackCache = new WeakMap<object, { personify: IdentityPrefs; text: string; words?: string[] }>();
-function haystackEntry(conv: HaystackRow): { personify: IdentityPrefs; text: string; words?: string[] } {
+type Named = { lower: string; words?: string[] };
+type HaystackEntry = { personify: IdentityPrefs; text: string; title: Named; name: Named | null; words?: string[] };
+const _haystackCache = new WeakMap<object, HaystackEntry>();
+function haystackEntry(conv: HaystackRow): HaystackEntry {
   const personify = identityPrefsNow();
   const hit = _haystackCache.get(conv);
   if (hit && hit.personify === personify) return hit;
-  const entry = { personify, text: buildHaystack(conv, personify) };
+  const entry = buildHaystack(conv, personify);
   _haystackCache.set(conv, entry);
   return entry;
 }
@@ -99,12 +101,13 @@ function sessionSearchWords(conv: HaystackRow): string[] {
   const entry = haystackEntry(conv);
   return (entry.words ??= textWords(entry.text));
 }
-function buildHaystack(conv: HaystackRow, personify: IdentityPrefs): string {
+function buildHaystack(conv: HaystackRow, personify: IdentityPrefs): HaystackEntry {
   const who = conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, personify) : null;
-  return [
+  const title = searchTitle(conv);
+  const text = [
     who?.name || "",
     who?.handle || "",
-    searchTitle(conv),
+    title,
     conv.first_prompt || "",
     conv.subtitle || "",
     conv.idle_summary || "",
@@ -114,6 +117,7 @@ function buildHaystack(conv: HaystackRow, personify: IdentityPrefs): string {
   ]
     .join(" ")
     .toLowerCase();
+  return { personify, text, title: { lower: title.toLowerCase() }, name: who?.name ? { lower: who.name.toLowerCase() } : null };
 }
 
 /** Substring test over that haystack — the ⌘K recents filter and the instant tier share it. */
@@ -186,12 +190,12 @@ export function standingMark(standing: SessionStanding | undefined): "needs_inpu
 
 // How well the typed words name a text: 0 it starts with them, 1 every word
 // starts some word of it, 2 every word is inside it, Infinity otherwise.
-function nameScore(text: string, q: string): number {
-  const lower = text.toLowerCase();
+function nameScore(named: Named, q: string): number {
+  const lower = named.lower;
   if (lower.startsWith(q)) return 0;
   const m = matchScore(lower, q);
   if (m === Infinity) return m;
-  const words = textWords(lower);
+  const words = (named.words ??= textWords(lower));
   return q.split(/\s+/).every((tok) => words.some((w) => w.startsWith(tok))) ? 1 : 2;
 }
 
@@ -205,10 +209,9 @@ export function sessionMatchTier(conv: HaystackRow & { title?: string }, lowerQu
   // The cached haystack holds the title and the worn name, so a typed word
   // absent from it rules out every tier. This cheap reject is what lets a
   // search scan the whole cache rather than only its most recent rows.
-  const hay = sessionSearchHaystack(conv);
-  if (!q.split(/\s+/).every((tok) => hay.includes(tok))) return null;
-  const name =conv._id ? identityLine(identityRowOf(conv as IdentityRow), null, identityPrefsNow()).name : null;
-  const best = Math.min(nameScore(searchTitle(conv), q), name ? nameScore(name, q) : Infinity);
+  const entry = haystackEntry(conv);
+  if (!q.split(/\s+/).every((tok) => entry.text.includes(tok))) return null;
+  const best = Math.min(nameScore(entry.title, q), entry.name ? nameScore(entry.name, q) : Infinity);
   if (best <= 1) return { tier: 0, exact: best };
   if (best !== Infinity) return { tier: 1, exact: 0 };
   // Every typed word is somewhere in what the session is about (the reject

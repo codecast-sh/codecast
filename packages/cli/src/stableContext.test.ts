@@ -261,12 +261,57 @@ describe("stable-context at session start", () => {
     expect(JSON.parse(recorded[0].data).items[0].title).toBe("Prior work");
   });
 
+  const projectContext = {
+    id: "k1", short_id: "pj-t1", title: "Checkout", goal: null, success_metrics: [], instructions: "Use bun.",
+    memory: [{ id: "d1", title: "Fact A", gist: "Alpha." }], memory_more: 0, main_session: { short_id: "jx7eeee", title: "Main" }, is_main: true,
+  };
+  const roleless = { ...where, roles: [], seat: { how: "none" as const, handles: [] }, project_context: projectContext };
+
+  test("a session launched in a project gets its project block, in a workspace with no roles", async () => {
+    const home = scratch();
+    const ccDir = path.join(home, ".codecast");
+    const cacheDir = path.join(ccDir, "stable-cache");
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) =>
+      String(input).endsWith("/cli/org/where") ? new Response(JSON.stringify(roleless), { status: 200 }) : serve()(input as any, init)) as typeof fetch;
+    await prepareLaunchStableContext(config, { mode: "team", global: false, cwd: "/repo", session: "jx7eeeeeeeeeeeeeeee", cacheDir });
+    const hook = path.join(home, "hook.sh");
+    fs.writeFileSync(hook, STABLE_FEED_HOOK, { mode: 0o755 });
+    const out = Bun.spawnSync(["/bin/bash", hook], { env: { HOME: home, CODECAST_DIR: ccDir, CODECAST_STABLE_MODE: "team", CODECAST_CONVERSATION_ID: "jx7eeeeeeeeeeeeeeee", PATH: "/usr/bin:/bin" } }).stdout.toString();
+    expect(out).not.toContain("<org-context");
+    expect(out).toMatch(/^<project-context-[0-9a-f]{8} project="pj-t1">/);
+    expect(out).toContain("Use bun.");
+    expect(out).toContain("d1 Fact A: Alpha.");
+    expect(out).toContain("Before building");
+    expect(out).toContain("Prior work");
+  });
+
+  test("after compaction the project block is left to the task context hook", async () => {
+    const cacheDir = scratch();
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) =>
+      String(input).endsWith("/cli/org/where") ? new Response(JSON.stringify(roleless), { status: 200 }) : serve()(input as any, init)) as typeof fetch;
+    const built = await buildStableContext(config, { mode: "team", global: false, cwd: "/repo", session: "jx7eeeeeeeeeeeeeeee", cacheDir, start: { budgetMs: 1500, source: "compact" } });
+    expect(built!.text).not.toContain("<project-context");
+  });
+
+  test("long instructions beside a big org still fit the hook budget", async () => {
+    const cacheDir = scratch();
+    const big = { ...where, roles: Array.from({ length: 20 }, (_, i) => ({ ...where.roles[0], handle: `role${i}`, name: `A long role name number ${i}`, scope: ["Area one", "Area two", "Area three"] })),
+      project_context: { ...projectContext, instructions: "Rule. ".repeat(3000) } };
+    globalThis.fetch = (async (input: unknown, init?: RequestInit) =>
+      String(input).endsWith("/cli/org/where") ? new Response(JSON.stringify(big), { status: 200 }) : serve()(input as any, init)) as typeof fetch;
+    const built = await buildStableContext(config, { mode: "team", global: false, cwd: "/repo", session: "jx7eeeeeeeeeeeeeeee", cacheDir, start: { budgetMs: 1500, source: "startup" } });
+    expect(Buffer.byteLength(built!.text)).toBeLessThanOrEqual(STABLE_CONTEXT_BUDGET);
+    expect(built!.text).toContain("The rest: cast project show pj-t1");
+    expect(built!.text).toContain("<org-context");
+  });
+
   test("the filled org keeps the workspace and drops what belonged to the other session", () => {
     const filled = whereForNewSession(where, "a1b2c3d4-0000-0000-0000-000000000000");
     expect(filled.session).toBeNull();
     expect(filled.seat).toEqual({ how: "none", handles: [] });
     expect(filled.roles[0].seat).toBe(false);
     expect(filled.people).toEqual(where.people);
+    expect(whereForNewSession({ ...where, project_context: projectContext } as any).project_context).toBeNull();
   });
 });
 

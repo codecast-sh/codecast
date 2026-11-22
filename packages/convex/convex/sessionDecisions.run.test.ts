@@ -64,6 +64,28 @@ test("the card carries the parsed command, fixed options, and is the session's p
   expect(d.addressed).toBe(true);
 });
 
+test("--on laptop from a cloud host session sends Run to the laptop that manages the host", async () => {
+  const { t, ana, as, row, commands, conv } = await seed();
+  const now = Date.now();
+  await t.run(async (ctx: any) => {
+    await ctx.db.insert("devices", { user_id: ana, device_id: "dev-host", label: "i-0b91", platform: "linux", last_seen: now, is_remote: true, cloud_host: { managed_by: "dev-mbp", state: "running", at: now } });
+    await ctx.db.insert("devices", { user_id: ana, device_id: "dev-other", label: "Old Mac", platform: "darwin", last_seen: now + 1 });
+    await ctx.db.insert("devices", { user_id: ana, device_id: "dev-mbp", label: "MacBook Pro", platform: "darwin", last_seen: now - 60_000 });
+    await ctx.db.patch(conv, { owner_device_id: "dev-host" });
+  });
+  const link = "cast browser extension link --host i-0b91";
+  const askOn = (on: string) => t.mutation(api.sessionDecisions.ask, { api_token: ANA_TOKEN, session_id: "sess-ana-1", question: "Let this cloud host use your Chrome?", options: [], run: link, run_on: on });
+  const { id } = await askOn("laptop");
+  expect((await row(id)).run).toMatchObject({ state: "waiting", device_id: "dev-mbp" });
+  expect((await row(id)).run.cwd).toBeUndefined();
+  await as(ana).mutation(api.sessionDecisions.resolve, { decision_id: id, status: "answered", answer_index: 0, grant: await seedPresence(t, ana, "approve", String(id)) });
+  expect((await commands())[0]).toMatchObject({ command: "run_cast", target_device_id: "dev-mbp" });
+
+  await t.mutation(api.sessionDecisions.cancel, { api_token: ANA_TOKEN, session_id: "sess-ana-1" }).catch(() => {});
+  expect((await askOn("nope")).error).toMatch(/none of your machines/);
+  expect((await t.mutation(api.sessionDecisions.ask, { api_token: ANA_TOKEN, session_id: "sess-ana-1", question: "x?", options: [{ label: "a" }], run_on: "laptop" })).error).toMatch(/pass --run/);
+});
+
 test("a run line that is not one cast command is refused at ask", async () => {
   const { ask } = await seed();
   expect((await ask("cast tasks ls | head")).error).toMatch(/one cast command/);
