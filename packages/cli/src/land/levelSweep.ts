@@ -14,7 +14,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { gitTry } from "../wipSnapshot.js";
 import { levelCheckout, type LevelResult } from "./level.js";
-import { briefLevelConflicts, clearLevelConflicts, pruneStale, type BriefDeps } from "./levelConflicts.js";
+import { briefRacedStale, clearMerges, pruneStale, type BriefDeps } from "./levelConflicts.js";
 import { isAncestor } from "./replay.js";
 import { shipLockHeld, shipSpec, upstreamRef } from "./shipCheckout.js";
 
@@ -61,18 +61,20 @@ export async function levelOne(root: string, now = Date.now()): Promise<LevelSwe
 }
 
 /**
- * Level one checkout and act on the outcome: a conflict briefs the session
- * that wrote each conflicting file (levelConflicts.ts), a level checkout
- * forgets those briefs. Returns the log line, or null when there is none.
+ * Level one checkout and act on the outcome: a level that raced a writer
+ * briefs that file's writer at once (levelConflicts.ts), and a level checkout
+ * drops the held conflicts' merge files. A conflict that holds the checkout
+ * is told later, by the checkout report (checkoutReport.ts). Returns the log
+ * line, or null when there is none.
  */
 export async function sweepOne(root: string, deps: BriefDeps, outcomes?: LevelSweepOutcome[]): Promise<string | null> {
   const o = await levelOne(root, deps.now);
   outcomes?.push(o);
   if (o.gitDir) pruneStale(o.gitDir);
-  if (o.gitDir && ("skipped" in o ? o.skipped === "level" : o.result.ok)) clearLevelConflicts(o.gitDir);
+  if (o.gitDir && ("skipped" in o ? o.skipped === "level" : o.result.ok)) clearMerges(o.gitDir);
   const line = describeLevel(o);
   if (!line || "skipped" in o) return line;
-  const briefs = await briefLevelConflicts(root, o.gitDir, o.result, deps).catch((e) => `briefing failed: ${(e as Error)?.message ?? e}`);
+  const briefs = await briefRacedStale(root, o.gitDir, o.result, deps).catch((e) => `briefing failed: ${(e as Error)?.message ?? e}`);
   return briefs ? `${line}; ${briefs}` : line;
 }
 
