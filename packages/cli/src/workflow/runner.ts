@@ -463,6 +463,8 @@ async function executeSubjectNode(node: WorkflowNode, graph: WorkflowGraph, cont
     const { refreezeSessionChange } = await import("./flowChange.js");
     const { change, moved } = await refreezeSessionChange(cwd, context["run_dir"], await runWorktreePath(cwd, context["worktree"]));
     Object.assign(context, frozenChangeContext(context["run_dir"]));
+    // Nothing is left to check or land: the run ends done here (runNodeLoop).
+    if (change.landed) context["change_landed"] = change.landed;
     const said = (change.landed ? `the session's change is already on upstream at ${change.landed.slice(0, 10)}: nothing is left to land`
       : moved ? `froze the session's change again at ${change.tip.slice(0, 10)} (${change.paths.length} file${change.paths.length === 1 ? "" : "s"})`
       : "the session's change is as it was: the stage runs again on the same change") + (behindWords(change) ? `; ${behindWords(change)}` : "");
@@ -1476,6 +1478,12 @@ export function lineRunDir(cwd: string, slug: string): string {
 }
 
 // The repo's default branch, for prompts that diff a hand's branch against it.
+/** `origin/<default branch>` when this checkout has that ref, else the local default branch. */
+function defaultDiffBase(cwd: string, defaultBranch: string): string {
+  const remote = `origin/${defaultBranch}`;
+  return spawnSync("git", ["-C", cwd, "rev-parse", "--verify", "--quiet", `refs/remotes/${remote}`], { stdio: "ignore" }).status === 0 ? remote : defaultBranch;
+}
+
 function detectDefaultBranch(cwd: string): string {
   try {
     const r = spawnSync("git", ["-C", cwd, "symbolic-ref", "--short", "refs/remotes/origin/HEAD"], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
@@ -1841,8 +1849,9 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   const initialContext: Record<string, string> = {};
   initialContext["project_path"] = cwd;
   initialContext["default_branch"] = detectDefaultBranch(cwd);
-  // Where a reviewer's diff starts ($diff_base...$branch): the default branch, unless the run's change says where it was cut.
-  initialContext["diff_base"] = initialContext["default_branch"];
+  // Where a reviewer's diff starts ($diff_base...$branch): the default branch as the remote has it (a local one can
+  // lag), unless the run's change says where it was cut.
+  initialContext["diff_base"] = defaultDiffBase(cwd, initialContext["default_branch"]);
   // The run's own id, for a node that reports to the server about this run
   // (the line's merge step, the-line.md L12). Empty on a run with no row.
   initialContext["run_id"] = options.runId ?? "";
@@ -2340,7 +2349,12 @@ async function runNodeLoop(
     // an edge that asks about the outcome routes it, never a plain one.
     const stationDead = outcome === "failure" && state.context["station_dead"] === current.id;
     delete state.context["station_dead"];
-    const next = stationBlocked
+    // A subject's change found already on upstream when frozen again has nothing left to check or land: the run goes
+    // to its exit and ends done, rather than back through stages that would read an empty change.
+    const landedExit = current.backend === "subject" && outcome === "success" && state.context["change_landed"]
+      ? [...graph.nodes.values()].find((n) => n.type === "exit" && !n.stop && !n.segment_exit) ?? null : null;
+    if (landedExit) console.log(`  ${c.green}✓${c.reset} the change is already on upstream at ${state.context["change_landed"].slice(0, 10)}: the run ends done`);
+    const next = landedExit ? landedExit : stationBlocked
       ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\bhandoff\b/.test(e.condition ?? "")) }, current, state.context)
       : stationDead
         ? resolveNextNode({ ...graph, edges: graph.edges.filter((e) => e.from !== current.id || /\boutcome\b/.test(e.condition ?? "")) }, current, state.context)
