@@ -3675,8 +3675,6 @@ diffs-container {
   border-radius: 4px;
   margin: 4px 0;
 }
-/* Scope page header: in a narrow pane the reports-to link (also on the
-   Settings tab) steps aside, so the name and state line keep their width. */
 /* An object page's header is one row exactly as tall as a conversation's
    (the same --cc-panel-head-h the session header's .cc-panel__head reads),
    whatever its icons and facts would otherwise stretch it to (ct-87448;
@@ -3689,6 +3687,8 @@ diffs-container {
   padding-block: 0;
 }
 .object-head-row > * { flex: 1 1 auto; min-width: 0; }
+/* Scope page header: in a narrow pane the reports-to link (also on the
+   Settings tab) steps aside, so the name and state line keep their width. */
 .scope-head-cq { container-type: inline-size; }
 @container (max-width: 560px) {
   .scope-head-cq .scope-head-wide { display: none; }
@@ -7515,7 +7515,9 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
    components/conversation/blocks/ModernRow.tsx): one line of 16px icon, a
    verb, the object in mono and a quiet result at the right, then a chevron
    when the row opens. Rows sit tight with no card around each; what opens
-   lands on a tinted panel under the words. A failed row turns red and its
+   lands on a tinted panel under the words. A row is its 20px line and 2px
+   above and below: 24px, the smallest target a stacked row can be (WCAG
+   2.5.8), and no taller (ct-87448; densityRules.guard.test.ts holds it). A failed row turns red and its
    result says what failed. */
 .modern-style [data-sv-feed] [data-cc-row] {
   margin-top: 0;
@@ -7535,9 +7537,9 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   align-items: baseline;
   gap: 8px;
   min-width: 0;
-  min-height: 28px;
+  min-height: 24px;
   margin: 0 -8px;
-  padding: 4px 8px;
+  padding: 2px 8px;
   border: 0;
   border-radius: var(--radius-control, 6px);
   background: transparent;
@@ -7645,7 +7647,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   background: transparent;
   font-family: var(--font-mono), monospace;
   font-size: var(--fs-meta);
-  line-height: 20px;
+  line-height: 18px; /* the 12px mono on the 13px verb's baseline stays inside its 20px line */
   font-weight: 400;
   font-style: normal;
   color: var(--sol-text-muted);
@@ -7675,7 +7677,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   border-radius: 0;
   background: transparent;
   font-size: var(--fs-meta);
-  line-height: 20px;
+  line-height: 18px;
   font-weight: 400;
   font-style: normal;
   letter-spacing: normal;
@@ -7693,7 +7695,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   background: transparent;
   font-family: var(--font-ui);
   font-size: var(--fs-meta);
-  line-height: 20px;
+  line-height: 18px;
   font-weight: 400;
   letter-spacing: normal;
   text-transform: none;
@@ -7950,7 +7952,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin: -4px 0;
+  margin: -2px 0;
 }
 .modern-style [data-sv-feed] [data-cc-row-head] [data-cc-path] { vertical-align: top; }
 .modern-style [data-sv-feed] :is([data-cc-block], [data-cc-session-msg], [data-cc-row="brief"], [data-cc-row="chat"], [data-cc-row="huddle"]) {
