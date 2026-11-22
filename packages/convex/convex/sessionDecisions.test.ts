@@ -9,7 +9,6 @@ import {
   listForUserCore,
   agreementHistory,
   finalizeAnswer,
-  buildLadder,
   normalizeVerdict,
   answerLabel,
   settleClientResolution,
@@ -31,6 +30,7 @@ import {
   HOP_DEADLINE_MS,
 } from "./sessionDecisions";
 import { passCore } from "./decisionHandoff";
+import { buildLadder } from "./lib/roleLadder";
 import { HOST, BOSS, OWNER2, TEAM, NOW, seed, twoOptions, askApproach, seated, linesIn } from "./testDecisions";
 import { hashToken } from "./apiTokens";
 import { isMachineDeliveredMessage } from "@codecast/shared/contracts";

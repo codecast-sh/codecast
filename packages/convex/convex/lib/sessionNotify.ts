@@ -8,6 +8,7 @@ import { internal } from "../_generated/api";
 import { IDLE_DIGEST_WINDOW_MS, startedByRole } from "@codecast/shared/contracts";
 import { enqueuePush } from "../pushRouter";
 import { listSessionOwnerIds } from "../sessionOwners";
+import { buildLadder } from "./roleLadder";
 
 export type SessionNotifType =
   | "session_idle"
@@ -170,9 +171,10 @@ export async function deliverSessionNotificationToParties(
   // role's, and a settle the role hears never reaches here (notifications'
   // route up stops it): what does is the wait no role could take. Its runner
   // may be a pool machine's account, so the person the role's line ends at
-  // hears it instead, and the wait is never swallowed.
+  // hears it instead (buildLadder, the person its decisions reach), and the
+  // wait is never swallowed.
   const runner = recipients.length === 0 && startedByRole(conversation)
-    ? (await lineEndPerson(ctx, conversation.org_role_id)) ?? conversation.user_id
+    ? (await buildLadder(ctx, await ctx.db.get(conversation.org_role_id), Date.now())).firstPersonId ?? conversation.user_id
     : conversation.user_id;
   let delivered = await deliverSessionNotification(
     ctx, runner, conversation._id, type, title, message,
@@ -188,16 +190,4 @@ export async function deliverSessionNotificationToParties(
     }
   }
   return delivered;
-}
-
-// The person a role's reporting line ends at: up its reports_to chain to the
-// first person (a role reporting to a role reports through it).
-async function lineEndPerson(ctx: { db: any }, roleId: any): Promise<any | null> {
-  let role = roleId ? await ctx.db.get(roleId) : null;
-  for (let depth = 0; role && depth < 10; depth++) {
-    const to = role.reports_to;
-    if (to?.kind === "user") return to.user_id ?? null;
-    role = to?.kind === "role" && to.role_id ? await ctx.db.get(to.role_id) : null;
-  }
-  return null;
 }
