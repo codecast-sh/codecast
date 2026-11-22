@@ -431,7 +431,9 @@ describe("owner ref resolution by user id", () => {
     const db = idDb();
     const result = await performAddSessionOwner({ db }, RUNNER as any, { session_id: "team1", owner: MATE });
     expect(result.added.map(String)).toEqual([MATE]);
-    expect(owners(db)).toEqual([MATE]);
+    // The runner started it and owned it before any row: adding a teammate
+    // writes the runner's row too, so it stays in the runner's inbox.
+    expect(owners(db)).toEqual([RUNNER, MATE]);
   });
 
   test("self-claim by user id works even on a teamless private session", async () => {

@@ -21,6 +21,7 @@ import { resolveActor } from "./lib/actor";
 import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { findOwnableConversation, personName, roleMayHoldSession, tellSession } from "./lib/sessionTell";
+import { performReparentSessionToDevice } from "./devices";
 export { personName, roleMayHoldSession };
 import { labelsOf, noteOrgChange, rememberOrgRecord, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
 
@@ -442,6 +443,13 @@ async function reparentSessionCore(
         if (await removeSessionOwnerRow(ctx, conversation._id, user._id)) removed.push(user._id);
       }
     } else {
+      // The person who started a session owns it before any row exists. An
+      // owners-list add writes that row first, so adding a teammate never
+      // takes the session out of its starter's inbox.
+      if (mode === "add" && !dropRole && (await listSessionOwnerIds(ctx, conversation._id)).length === 0) {
+        const starter = await humanStarterUser(ctx, conversation);
+        if (starter && !desiredKeys.has(String(starter._id))) await addSessionOwnerRow(ctx, conversation._id, starter._id, starter._id);
+      }
       for (const user of desired) {
         if (await addSessionOwnerRow(ctx, conversation._id, user._id, authUserId, handoff ?? note)) added.push(user._id);
       }
@@ -701,7 +709,16 @@ async function ownerIdsOrStarter(ctx: { db: any }, conversation: any): Promise<s
   return ids;
 }
 
-export type DriverTarget = { kind: "role" } | { kind: "user"; user_id: string };
+// `none` hands the wheel back to the default: the role if one is filed,
+// else the primary owner. It is how an undo puts back a driver nobody chose.
+export type DriverTarget = { kind: "role" } | { kind: "user"; user_id: string } | { kind: "none" };
+
+// Who may change the owners and the driver: an owner, or the account that
+// runs the session. A teammate who can only see it reads the menu.
+async function mayEditOwners(ctx: { db: any }, authUserId: Id<"users">, conversation: any): Promise<boolean> {
+  if (String(conversation.user_id) === String(authUserId)) return true;
+  return (await ownerIdsOrStarter(ctx, conversation)).includes(String(authUserId));
+}
 
 // Hand the wheel to the filed role or to one of the people who own it. A
 // person must already own the session (or be its human starter while nobody
@@ -710,9 +727,15 @@ export async function performSetSessionDriver(
   ctx: { db: any },
   authUserId: Id<"users">,
   args: { session_id: string; driver: DriverTarget },
-): Promise<{ ok: true; short_id: string; conversation_id: Id<"conversations">; driver: SessionDriver }> {
+): Promise<{ ok: true; short_id: string; conversation_id: Id<"conversations">; driver: SessionDriver | null }> {
   const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
+  if (!(await mayEditOwners(ctx, authUserId, conversation))) throw new Error("Only an owner of the session, or the account that runs it, can change who drives it");
+  if (args.driver.kind === "none") {
+    if (conversation.driver_user_id) await ctx.db.patch(conversation._id, { driver_user_id: undefined });
+    const driver = driverOf({ ...conversation, driver_user_id: undefined }, await ownerIdsOrStarter(ctx, conversation));
+    return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: driver! };
+  }
   if (args.driver.kind === "role") {
     if (!conversation.org_role_id) throw new Error(`Session ${shortId} is not filed under a role, so no role can drive it`);
     if (conversation.driver_user_id) await ctx.db.patch(conversation._id, { driver_user_id: undefined });
@@ -723,6 +746,40 @@ export async function performSetSessionDriver(
   if (!ownerIds.includes(userId)) throw new Error("Only an owner of the session can drive it; add them as an owner first");
   if (String(conversation.driver_user_id ?? "") !== userId) await ctx.db.patch(conversation._id, { driver_user_id: userId as Id<"users"> });
   return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "user", user_id: userId as Id<"users"> } };
+}
+
+// Leave a session: take yourself out of its owners. A session that runs on
+// your account moves first, to a machine another account runs (a teammate's
+// shared machine or an agent box), in the same transaction, so nobody is left
+// owning a session that still bills to someone who left. Refused when it
+// would leave the session with no person to own it. The leaver's author pin
+// comes off, so the starter fallback cannot bring them back.
+export async function performLeaveSession(
+  ctx: { db: any; scheduler?: any },
+  authUserId: Id<"users">,
+  args: { session_id: string; move_to_device_id?: string; from_session?: string },
+): Promise<ReparentSessionResult> {
+  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+  const me = String(authUserId);
+  const owners = await ownerIdsOrStarter(ctx, conversation);
+  if (!owners.includes(me)) throw new Error("You are not one of its owners");
+  const runsOnMine = String(conversation.user_id) === me;
+  if (runsOnMine && !args.move_to_device_id) {
+    throw new Error("It runs on your account: move it to a teammate's or a team machine to leave it");
+  }
+  if (!args.move_to_device_id && owners.length === 1) {
+    throw new Error("You are its only owner: add someone before you leave");
+  }
+  if (args.move_to_device_id) {
+    const moved = await performReparentSessionToDevice(ctx, authUserId, { session_id: String(conversation._id), device_id: args.move_to_device_id });
+    if (!moved.cross_user) throw new Error("That machine runs on your account: pick a teammate's or a team machine to leave it");
+  }
+  const after = await ctx.db.get(conversation._id);
+  if (String(after.author_user_id ?? "") === me) await ctx.db.patch(conversation._id, { author_user_id: undefined });
+  const result = await performReparentSession(ctx, authUserId, { session_id: String(conversation._id), target: { kind: "user", owners: [me], mode: "remove" }, from_session: args.from_session });
+  const left = await ctx.db.get(conversation._id);
+  if ((await ownerIdsOrStarter(ctx, left)).length === 0) throw new Error("Nobody would own it after you leave: add a teammate first");
+  return result;
 }
 
 // One Save of the owners menu: people added and removed, the role set,
@@ -736,6 +793,8 @@ export type OwnersChange = {
   remove?: string[];
   role?: string | null;
   driver?: DriverTarget;
+  // Leave last: after the rest of the change lands.
+  leave?: { move_to_device_id?: string };
   note?: string;
 };
 
@@ -746,6 +805,12 @@ export async function performApplyOwnersChange(
 ): Promise<{ results: ReparentSessionResult[]; driver: SessionDriver | null }> {
   const { change } = args;
   const results: ReparentSessionResult[] = [];
+  // A teammate who can see the session may still claim it for themselves.
+  const selfClaim = change.add?.length === 1 && change.add[0] === String(authUserId) && !change.remove?.length && change.role === undefined && !change.driver && !change.leave;
+  const start = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+  if (!selfClaim && !(await mayEditOwners(ctx, authUserId, start))) {
+    throw new Error("Only an owner of the session, or the account that runs it, can change its owners");
+  }
   const run = (target: ReparentSessionTarget) => performReparentSession(ctx, authUserId, { session_id: args.session_id, target, handoff: change.note, from_session: args.from_session });
   if (change.add?.length) results.push(await run({ kind: "user", owners: change.add, mode: "add" }));
   if (change.role !== undefined) {
@@ -754,7 +819,9 @@ export async function performApplyOwnersChange(
   }
   if (change.remove?.length) results.push(await run({ kind: "user", owners: change.remove, mode: "remove" }));
   if (change.driver) await performSetSessionDriver(ctx, authUserId, { session_id: args.session_id, driver: change.driver });
-  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+  if (change.leave) results.push(await performLeaveSession(ctx, authUserId, { session_id: args.session_id, move_to_device_id: change.leave.move_to_device_id, from_session: args.from_session }));
+  // Read by id: after a leave the caller may no longer see it.
+  const conversation = await ctx.db.get(start._id);
   return { results, driver: driverOf(conversation, await ownerIdsOrStarter(ctx, conversation)) };
 }
 
@@ -859,14 +926,28 @@ export const ackSessionAssignment = mutation({
   },
 });
 
+const DRIVER_TARGET = v.union(v.object({ kind: v.literal("role") }), v.object({ kind: v.literal("user"), user_id: v.string() }), v.object({ kind: v.literal("none") }));
+
 // Who drives: the filed role, or one of the people who own it.
 export const setSessionDriver = mutation({
   args: {
     session_id: SESSION_REF,
-    driver: v.union(v.object({ kind: v.literal("role") }), v.object({ kind: v.literal("user"), user_id: v.string() })),
+    driver: DRIVER_TARGET,
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => performSetSessionDriver(ctx, await requireAuth(ctx, args.api_token), { session_id: args.session_id, driver: args.driver }),
+});
+
+// Leave a session, moving it off your account first when it runs there.
+export const leaveSession = mutation({
+  args: { session_id: SESSION_REF, move_to_device_id: v.optional(v.string()), from_session: v.optional(v.string()), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const authUserId = await requireAuth(ctx, args.api_token);
+    const result = await withOrgChange(ctx, authUserId, { kind: "session", door: args.from_session ? "cli" : "chart", gesture: args.from_session ? "command" : "drag" }, () =>
+      performLeaveSession(ctx, authUserId, { session_id: args.session_id, move_to_device_id: args.move_to_device_id, from_session: args.from_session }));
+    await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
+    return result;
+  },
 });
 
 // The owners menu's Save: the whole change in one transaction.
@@ -877,7 +958,8 @@ export const applyOwnersChange = mutation({
       add: v.optional(v.array(v.string())),
       remove: v.optional(v.array(v.string())),
       role: v.optional(v.union(v.string(), v.null())),
-      driver: v.optional(v.union(v.object({ kind: v.literal("role") }), v.object({ kind: v.literal("user"), user_id: v.string() }))),
+      driver: v.optional(DRIVER_TARGET),
+      leave: v.optional(v.object({ move_to_device_id: v.optional(v.string()) })),
       note: v.optional(v.string()),
     }),
     from_session: v.optional(v.string()),
@@ -975,9 +1057,13 @@ export async function performListOwners(
   short_id: string;
   conversation_id: Id<"conversations">;
   owners: OwnerInfo[];
+  owner_ids: string[];
   role: OwnerRole | null;
+  role_id: string | null;
   driver: SessionDriver | null;
+  driver_user_id: string | null;
   runner: OwnerRunner | null;
+  can_edit: boolean;
 } | null> {
   const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) return null;
@@ -1016,9 +1102,13 @@ export async function performListOwners(
     short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
     conversation_id: conversation._id,
     owners,
+    owner_ids: owners.map((o) => o.user_id),
     role,
+    role_id: role ? String(role.role_id) : null,
     driver: driverOf(roleDoc ? conversation : { ...conversation, org_role_id: undefined }, owners.map((o) => o.user_id)),
+    driver_user_id: conversation.driver_user_id ? String(conversation.driver_user_id) : null,
     runner,
+    can_edit: String(conversation.user_id) === String(authUserId) || owners.some((o) => o.user_id === String(authUserId)),
   };
 }
 
