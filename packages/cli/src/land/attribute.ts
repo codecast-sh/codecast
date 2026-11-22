@@ -114,10 +114,31 @@ function cdTargets(command: string, cwd: string): string[] {
   return dirs;
 }
 
-/** Repo-relative paths a writing shell command names. */
+const checkouts = new Map<string, string | null>();
+/** The checkout a directory is in: the nearest one up holding `.git` (a repository's directory, or a worktree's file). */
+function checkoutOf(dir: string): string | null {
+  const start = realOf(path.join(dir, "."));
+  if (checkouts.has(start)) return checkouts.get(start)!;
+  let found: string | null = null;
+  for (let d = start; ; d = path.dirname(d)) {
+    if (fs.existsSync(path.join(d, ".git"))) { found = d; break; }
+    if (path.dirname(d) === d) break;
+  }
+  checkouts.set(start, found);
+  return found;
+}
+
+/**
+ * Repo-relative paths a writing shell command names. A relative path is read from where the command ran (its cwd,
+ * then each directory it `cd`s into), and from the checkout's root only when it ran inside that checkout: a command
+ * in another repository, or in a worktree nested under this one (`.conductor/<name>`), that writes
+ * `.codecast/flows/change.cast` wrote its own copy, not this checkout's.
+ */
 export function shellWrites(command: string, cwd: string, root: string): string[] {
   if (!WRITES.test(command.replace(NULL_REDIRECTS, " "))) return [];
-  const bases = [...new Set([cwd, ...cdTargets(command, cwd), root])];
+  const ran = [cwd, ...cdTargets(command, cwd)];
+  const here = realOf(path.join(root, "."));
+  const bases = [...new Set([...ran, ...(ran.some((d) => checkoutOf(d) === here) ? [root] : [])])];
   const found = new Set<string>();
   for (const m of command.matchAll(PATH_TOKEN)) {
     const token = m[0].replace(/^\.\//, "");
