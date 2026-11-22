@@ -7,11 +7,12 @@
 import { lazy, Suspense } from "react";
 import type { LucideIcon, LucideProps } from "lucide-react";
 import { modIconExportName } from "../../lib/mods/iconName";
+import { loadedModule } from "../../lib/lazyNamed";
 
 type ModIconProps = LucideProps & { name: string };
 
 const IconByName = lazy(async () => {
-  const icons = (await import("lucide-react")) as unknown as Record<string, LucideIcon | undefined>;
+  const icons = (await loadedModule(() => import("lucide-react"))) as unknown as Record<string, LucideIcon | undefined>;
   function IconByName({ name, ...props }: ModIconProps) {
     const Icon = icons[modIconExportName(name)];
     return Icon ? <Icon {...props} /> : null;
