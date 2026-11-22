@@ -144,6 +144,22 @@ describe("a shared checkout's pass is one flow change", () => {
     expect(shared()).toEqual(before);
   }, 180_000);
 
+  test("a checkout level with upstream but holding an unpushed commit: the change's base is upstream, so its diff shows that commit", async () => {
+    const { root, fresh } = checkoutWorld();
+    git(root, "checkout", "--", "src/c.ts");
+    git(root, "fetch", "-q", "origin");
+    git(root, "merge", "-q", "--ff-only", "origin/main");
+    // Another session committed here and has not pushed: the ship pushes this commit with the pass.
+    write(root, "src/f.ts", "export const f = 1;\n");
+    git(root, "add", "src/f.ts");
+    git(root, "commit", "-qm", "add f, unpushed");
+    const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
+    expect(change.base).toBe(fresh);
+    expect(change.behind).toBeUndefined();
+    expect(git(root, "log", "--format=%s", `${change.base}..${change.tip}`)).toContain("add f, unpushed");
+    expect(git(root, "diff", "--name-only", `${change.base}...${change.tip}`).split("\n")).toContain("src/f.ts");
+  }, 180_000);
+
   test("a refreeze takes a writer's fix and a file it adds, and leaves a stranger's new file out", async () => {
     const { root, edit } = checkoutWorld();
     const change = await freezeCheckoutChange(root, { branch: "codecast/pass", worktree: "pass", roster });
