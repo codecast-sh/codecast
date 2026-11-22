@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { detectProject } from "./detect.js";
+import { resolveManifest } from "./resolver.js";
 
 // ---------------------------------------------------------------------------
 // Fixture helpers
@@ -249,38 +250,32 @@ describe("detectProject — copy list", () => {
 // Empty / unrecognized
 // ---------------------------------------------------------------------------
 
-describe("detectProject — browser auto-suggestion", () => {
-  test("vite.config.ts at repo root → browser.enabled=true", () => {
-    touch("package.json", "{}");
+// A web app never turns the workspace browser on: every worktree of such a
+// repo started a Chrome at acquire that only a destroy stopped (ct-98941).
+describe("detectProject — no browser by detection", () => {
+  test("vite.config.ts at the root still detects the dev service, and leaves the browser off", () => {
+    touch("package.json", JSON.stringify({ scripts: { dev: "vite" } }));
     touch("bun.lock");
     touch("vite.config.ts", "export default {};");
     const m = detectProject(tmpDir);
-    expect(m.browser.enabled).toBe(true);
+    expect(m.services.web).toBeDefined();
+    expect(m.browser.enabled).toBe(false);
   });
 
-  test("next.config.js → browser.enabled=true", () => {
+  test("next.config.js and a nested packages/web vite config leave it off too", () => {
     touch("package.json", "{}");
     touch("bun.lock");
     touch("next.config.js", "module.exports = {};");
-    expect(detectProject(tmpDir).browser.enabled).toBe(true);
-  });
-
-  test("vite config nested under packages/web/ → also detected", () => {
-    touch("package.json", "{}");
-    touch("bun.lock");
     touch("packages/web/vite.config.ts", "");
-    expect(detectProject(tmpDir).browser.enabled).toBe(true);
-  });
-
-  test("pure Rust project → browser.enabled=false", () => {
-    touch("Cargo.toml", "[package]\nname = \"x\"\n");
     expect(detectProject(tmpDir).browser.enabled).toBe(false);
   });
 
-  test("backend-only Node project (no web config) → browser.enabled=false", () => {
+  test("a manifest that asks for one still gets it", () => {
     touch("package.json", "{}");
     touch("bun.lock");
-    expect(detectProject(tmpDir).browser.enabled).toBe(false);
+    touch("vite.config.ts", "");
+    touch(".codecast/workspace.toml", "[browser]\nenabled = true\n");
+    expect(resolveManifest(tmpDir).browser.enabled).toBe(true);
   });
 });
 

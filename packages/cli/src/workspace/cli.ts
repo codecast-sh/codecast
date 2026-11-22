@@ -1,7 +1,7 @@
 /**
  * `cast workspace` CLI subcommand wiring.
  *
- * Subcommands: init, acquire, root, path, status, heal, destroy, ls, and the
+ * Subcommands: init, acquire, root, path, status, heal, browser, destroy, ls, and the
  * `pool` group (status, warm, drain) for the warm worktree pool.
  * Registered via registerWorkspaceCommand(program) called from index.ts.
  */
@@ -9,7 +9,7 @@
 import { execSync } from "../proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import {
   acquireRootCheckout,
   acquireWorkspace,
@@ -17,6 +17,9 @@ import {
   listWorkspaces,
   readWorkspaceState,
   releaseWorkspace,
+  startWorkspaceBrowser,
+  stopAllWorkspaceBrowsers,
+  stopWorkspaceBrowser,
   validateWorkspace,
   type AcquireResult,
 } from "./lifecycle.js";
@@ -205,12 +208,14 @@ export function registerWorkspaceCommand(program: Command): void {
     .description("Prepare the main checkout as a workspace (ports, secret files, install); what a cloud session in shared mode runs in")
     .option("--input-root <path>", "Read the manifest and setup copy files from a workspace input snapshot (they overwrite the root's copies)")
     .option("--skip-setup", "Skip install/generate/migrate commands")
-    .option("--skip-browser", "Do not launch the per-workspace Chrome even when the manifest enables it")
+    // Accepted and ignored: no workspace starts a browser at acquire any more
+    // (ct-98941), and a laptop's cloud prepare still passes it to older hosts.
+    .addOption(new Option("--skip-browser").hideHelp())
     .option("--json", "Print the workspace as one JSON line (the same shape as `acquire --json`)")
-    .action(async (opts: { inputRoot?: string; skipSetup?: boolean; skipBrowser?: boolean; json?: boolean }) => {
+    .action(async (opts: { inputRoot?: string; skipSetup?: boolean; json?: boolean }) => {
       const repoRoot = findRepoRoot();
       try {
-        const r = await acquireRootCheckout(repoRoot, { inputRoot: opts.inputRoot, skipSetup: opts.skipSetup, skipBrowser: opts.skipBrowser });
+        const r = await acquireRootCheckout(repoRoot, { inputRoot: opts.inputRoot, skipSetup: opts.skipSetup });
         const ws = r.workspace;
         if (opts.json) {
           printAcquireJson(r);
@@ -316,6 +321,39 @@ export function registerWorkspaceCommand(program: Command): void {
         if (ws.state !== "ready") process.exit(2);
       } catch (err) {
         console.error(`heal failed: ${(err as Error).message}`);
+        process.exit(1);
+      }
+    });
+
+  // -----------------------------------------------------------------------
+  // cast workspace browser [name]
+  // -----------------------------------------------------------------------
+  ws.command("browser [name]")
+    .description("Start the workspace's own headless Chrome (manifest [browser] enabled) and print its CDP port; it stops when the flow station that started it ends. `cast browser` does not need it")
+    .option("--stop", "Stop it instead")
+    .option("--all", "With --stop: stop every workspace Chrome in this repo")
+    .option("--json", "Print the binding as JSON")
+    .action(async (name: string | undefined, opts: { stop?: boolean; all?: boolean; json?: boolean }) => {
+      const repoRoot = findRepoRoot();
+      try {
+        if (opts.stop && opts.all) {
+          const stopped = await stopAllWorkspaceBrowsers(repoRoot);
+          if (opts.json) console.log(JSON.stringify({ stopped }));
+          else console.log(stopped.length ? `stopped: ${stopped.join(", ")}` : "no workspace Chrome was running");
+          return;
+        }
+        if (!name) throw new Error("name a workspace (or --stop --all)");
+        if (opts.stop) {
+          const was = await stopWorkspaceBrowser(repoRoot, name);
+          if (opts.json) console.log(JSON.stringify({ stopped: was ? [name] : [] }));
+          else console.log(was ? `stopped: ${name}` : `${name}: no Chrome was running`);
+          return;
+        }
+        const chrome = await startWorkspaceBrowser(repoRoot, name);
+        if (opts.json) console.log(JSON.stringify(chrome));
+        else console.log(`CDP_PORT=${chrome.cdpPort}`);
+      } catch (err) {
+        console.error(`browser failed: ${(err as Error).message}`);
         process.exit(1);
       }
     });
