@@ -648,7 +648,8 @@ export const correctDeploySha = internalMutation({
     const d = await ctx.db.query("deploys").withIndex("by_short_id", (q) => q.eq("short_id", args.deploy.toLowerCase())).first();
     if (!d) throw new Error(`No deploy ${args.deploy}`);
     if (d.trigger !== "outside") throw new Error(`${d.short_id} was sent by codecast; its sha is what its path reported`);
-    await ctx.db.patch(d._id, { sha: args.sha.toLowerCase(), commits: undefined, previous_sha: undefined, updated_at: Date.now() });
+    // Its place on main is the corrected sha's: fillDeployRange stamps it again.
+    await ctx.db.patch(d._id, { sha: args.sha.toLowerCase(), cut_at: undefined, commits: undefined, previous_sha: undefined, updated_at: Date.now() });
     await fillDeployRange(ctx, d._id);
     return { short_id: d.short_id, sha: args.sha.toLowerCase() };
   },

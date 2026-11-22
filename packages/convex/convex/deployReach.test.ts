@@ -3,6 +3,7 @@ import { makeFakeDb } from "./testDb";
 import { hashToken } from "./apiTokens";
 import { publish } from "./deployTargets";
 import { stampMainOrder } from "./deployTargetsCi";
+import { correctDeploySha } from "./deployTargets";
 import { recordDeployMarker } from "./deploys";
 import { get } from "./deployReach";
 
@@ -156,4 +157,14 @@ describe("a commit's reach", () => {
     for (const t of w.t.deploy_targets) t.workspace = `user:${STRANGER}`;
     expect(await w.reach("acme/app#12")).toBeNull();
   });
+});
+
+test("a deploy's corrected sha moves its place on main: commits after it are no longer live", async () => {
+  const w = await world();
+  await w.mark("web", 4, "live", NOW - 4_000);
+  expect((await w.reach(`acme/app@${sha(4)}`)).state).toBe("live");
+  await (correctDeploySha as any)._handler(w.ctx, { deploy: "dp-1", sha: sha(2) });
+  expect(w.t.deploys[0].cut_at).toBe(w.t.commits.find((c: any) => c.sha === sha(2)).main_at);
+  expect((await w.reach("acme/app#12")).state).toBe("live");
+  expect((await w.reach(`acme/app@${sha(4)}`)).state).toBe("waiting");
 });
