@@ -10,9 +10,10 @@ import { conversationTitle } from "./conversationTitle";
 /** The title a card shows, and the one its drags and drops are named by. A
  *  hosted conversation is called by the hosted rule (its ask until the
  *  assistant names it). */
-export function sessionCardTitle(session: { title?: string | null; agent_type?: string | null; last_user_message?: string | null; first_prompt?: string | null }): string {
+export function sessionCardTitle(session: { title?: string | null; agent_type?: string | null; last_user_message?: string | null; first_prompt?: string | null }, pendingFirstAsk?: string): string {
   if (isHostedAgentType(session.agent_type)) return conversationTitle(session);
-  return cleanTitle(sessionTitleText(session));
+  // Untitled until the agent receives the first send: named by that send.
+  return cleanTitle(sessionTitleText(session) || pendingFirstAsk || "");
 }
 
 /** Whether a card draws as a nested child row: a trigger's run, a Task
