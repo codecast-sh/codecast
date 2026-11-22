@@ -720,7 +720,10 @@ describe("command groups stay off the boot graph", () => {
     // which saves a file attached on the web next to the agent before its prompt is delivered.
     // 616 on 2026-11-20: subagentFinish.ts (node imports only), which marks a finished
     // Task subagent completed and reopens it when its transcript grows.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(616);
+    // 618 on 2026-11-22: processCwdCache.ts, one batched lsof for the cwd match
+    // (was one shell-wrapped lsof per claude process, ~230 a minute), and
+    // workspace/trash.ts, which removes a worktree whole or not at all.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(618);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
