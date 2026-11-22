@@ -93,6 +93,26 @@ export function sameNamedCheckoutPaths(abs: string, roots: ReadonlyArray<string>
 }
 
 /**
+ * Where a path this machine cannot find sits in a vault mirrored from another
+ * machine: the mirror whose root holds it, else the mirror of a same-named
+ * checkout (the session ran in `/home/x/code/app`, the mirror is
+ * `/Users/y/code/app`). Null when no mirror covers it.
+ */
+export function mirroredTarget(
+  abs: string,
+  mirrors: ReadonlyArray<{ id: string; root?: string }>,
+): VaultTarget | null {
+  const direct = resolveVaultTarget(abs, mirrors);
+  if (direct) return direct;
+  const roots = mirrors.map((m) => m.root).filter((r): r is string => !!r);
+  for (const candidate of sameNamedCheckoutPaths(abs, roots)) {
+    const mapped = resolveVaultTarget(candidate, mirrors);
+    if (mapped) return mapped;
+  }
+  return null;
+}
+
+/**
  * Resolve a local path against the vaults this machine offers. Absolute paths
  * pick the vault whose root is their longest prefix; `~/…` expands against the
  * home directory the roots themselves reveal (the browser has no $HOME); a

@@ -241,5 +241,7 @@ test("a teammate's path with no same-named checkout here says it does not exist"
   await answer(0, { error: "no such path" }, 404);
   expect(requests).toHaveLength(1);
   expect(useVaultStore.getState().opError).toBe(`${foreign} does not exist on this machine.`);
+  expect(useVaultStore.getState().quickSwitchOpen).toBe(true);
+  expect(useVaultStore.getState().quickSwitchSeed).toBe("gone.md");
   expect(view.routes).toEqual([]);
 });
