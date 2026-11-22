@@ -22796,11 +22796,12 @@ workflow
   .command("clear <run>")
   .description("For a flow's script station only (shape=parallelogram, script=...): the run's own graph cleared the change to land with no card (a founder-intent read that passed). A run no role is behind then merges under the person who started it. Refused from any agent or session station, fix stations included, and from any station but the one the run stands at; a resume, reask or land-again drops it. <run> is the run id ($run_id in the station's script)")
   .requiredOption("--why <text>", stdinText("What cleared it, recorded with the merge"))
+  .option("--cite <session:line>", "The line where the person who started the run said to ship (the intent segment): the server clears only when that line is their own typed word on the change's chain and holds --quote")
+  .option("--quote <text>", "The words on the cited line that authorize shipping")
+  .option("--record <file>", "With --cite: on success, write {starter_id, starter_name, cite, quote, head} there, head being this checkout's HEAD when it cleared")
   .option("--json", "Machine-readable output")
-  .action(async (run: string, options: { why: string; json?: boolean }) => {
-    const r = await cliPost("/cli/workflow-runs/clear", { run_id: run, why: options.why });
-    if (options.json) { printJson(r); return; }
-    console.log(`cleared to land at ${r.node_id}`);
+  .action(async (run: string, options: { why: string; cite?: string; quote?: string; record?: string; json?: boolean }) => {
+    await (await import("./workflow/runsCli.js")).clearRun({ getCliEndpoint, detectCurrentSessionId }, run, options);
   });
 
 workflow

@@ -155,6 +155,38 @@ export async function showRun(deps: PublishDeps, ref: string, options: { session
   else if (run.status === "running" || run.status === "paused" || run.status === "pending") console.log(fmt.muted(`\n  stop it: cast workflow cancel ${ref}`));
 }
 
+/**
+ * `cast workflow clear <run>`: a script station clears its run to land with no card. With `cite` (the intent
+ * segment) the server clears only on the run starter's own typed line holding `quote`, and `record` then gets
+ * {starter_id, starter_name, cite, quote, head}: the starter the server checked, the line and words it checked, and
+ * this checkout's HEAD, read before the stamp so a checkout with no HEAD clears nothing.
+ */
+export async function clearRun(deps: PublishDeps, run: string, options: { why: string; cite?: string; quote?: string; record?: string; json?: boolean }): Promise<void> {
+  const cite = options.cite?.match(/^(.+):(\d+)$/);
+  if (options.cite !== undefined && !cite) fail("--cite is <session short id>:<line>");
+  if (!!cite !== (options.quote !== undefined)) fail("--cite and --quote go together");
+  if (options.record && !cite) fail("--record needs --cite");
+  let head = "";
+  if (options.record) {
+    const { spawnSync } = await import("node:child_process");
+    const git = spawnSync("git", ["rev-parse", "HEAD"], { encoding: "utf-8" });
+    head = git.status === 0 ? git.stdout.trim() : fail(`not cleared: no HEAD in ${process.cwd()}`);
+  }
+  const r = await apiPost(deps, "/cli/workflow-runs/clear", {
+    run_id: run, why: options.why,
+    ...(cite ? { cite: { conversation_short_id: cite[1], line: Number(cite[2]) }, quote: options.quote } : {}),
+  });
+  if (options.record) {
+    const fs = await import("node:fs");
+    fs.writeFileSync(options.record, `${JSON.stringify({ starter_id: r.starter_id, starter_name: r.starter_name, cite: r.cite, quote: r.quote, head })}\n`);
+  }
+  if (options.json) {
+    console.log(JSON.stringify(r, null, 2));
+    return;
+  }
+  console.log(cite ? `cleared to land at ${r.node_id} on ${r.starter_name}'s word (${r.cite})` : `cleared to land at ${r.node_id}`);
+}
+
 /** `cast workflow cancel <run>`. */
 export async function cancelRun(deps: PublishDeps, ref: string, options: { json?: boolean }): Promise<void> {
   const run = await runByRef(deps, ref).catch((e: Error) => fail(e.message));
