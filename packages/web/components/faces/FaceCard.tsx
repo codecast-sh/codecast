@@ -37,6 +37,7 @@ export function FaceCard({
   viewerId,
   callsEnabled,
   faceKey,
+  entry,
   anchor,
   density,
   onOpenProfile,
@@ -47,6 +48,9 @@ export function FaceCard({
   callsEnabled: boolean;
   /** The face's own key (Talk), so the card's button and the face agree. */
   faceKey: FaceKey | null;
+  /** The face's row entry: who the card is about until the roster has them,
+   *  so a click never opens onto nothing (ct-91259). */
+  entry?: { id: string; name: string; image?: string; bot?: boolean } | null;
   /** The face's centre, in the row's coordinates: where the notch points. */
   anchor: number;
   /** In the bar the card hangs from the header, centred on the face and
@@ -56,7 +60,14 @@ export function FaceCard({
   onOpenProfile?: (member: any) => void;
   onClose: () => void;
 }) {
-  const member = useInboxStore((s) => teamMembersOf(s).find((m: any) => String(m?._id) === memberId) ?? null);
+  const rosterMember = useInboxStore((s) => teamMembersOf(s).find((m: any) => String(m?._id) === memberId) ?? null);
+  // Before the roster loads (or when it lacks them) the row already knows
+  // their name and face: draw the card from that, never an empty space.
+  const fallback = useMemo(
+    () => (entry && entry.id === memberId ? { _id: memberId, name: entry.name, image: entry.image, is_bot: entry.bot } : null),
+    [entry, memberId],
+  );
+  const member = rosterMember ?? fallback;
   if (!member) return null;
   return (
     <ErrorBoundary name="member card" level="inline">

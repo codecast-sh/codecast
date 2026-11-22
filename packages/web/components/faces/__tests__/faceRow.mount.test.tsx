@@ -392,6 +392,24 @@ describe("a face opens one card", () => {
     }
   });
 
+  // ct-91259: a click shows the card at once, from what the row knows, even
+  // before the roster has the person; its door leads to their profile.
+  test("a click before the roster loads still shows their name and the way to their profile", async () => {
+    useInboxStore.setState({
+      ...withTeamRoster([], { clientState: useInboxStore.getState().clientState }),
+    } as any);
+    const opened: any[] = [];
+    const h = await mount(bar(rowOf([entry(ANN, "Ann")]), { onOpenProfile: (m: any) => opened.push(m) }));
+    await h.click(h.circle(ANN));
+    const card = h.q("[data-member-card]");
+    expect(card).not.toBeNull();
+    expect(card!.querySelector(".face-card-name")?.textContent).toContain("Ann");
+    const door = h.q("[data-door]")!;
+    expect(door).not.toBeNull();
+    await h.click(door);
+    expect(opened.map((m) => String(m._id))).toEqual([ANN]);
+  });
+
   test("calls off: the card names them and keeps the reply box, with no call buttons", async () => {
     const h = await mount(bar(rowOf([entry(ANN, "Ann")]), { callsEnabled: false }));
     await h.click(h.circle(ANN));
