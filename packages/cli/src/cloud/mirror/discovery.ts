@@ -639,7 +639,12 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     // so the walk can still name what to leave out; a required one fails here.
     const droppable = !includeAll || optionalReference;
     // Only what ships counts against the cap; a file read just for its references does not.
-    const emit = scope !== "project" || ((opts.includeTracked !== false || !tracked.has(rel)) && (!inRepo || isAgentContext(rel)));
+    const throughLink = scope === "home" && projectPath !== null ? linkAliases.find((link) => located.startsWith(`${link.real}/`)) : undefined;
+    // Behind a tracked link leaving the project, only what an agent reads by
+    // one of the project's names travels when only agent context does.
+    const emit = scope !== "project"
+      ? !throughLink || !inRepo || [reachedAs, ...agentNames(located).map((name) => homeRelative(name, root))].some((name) => name !== null && isAgentContext(name))
+      : (opts.includeTracked !== false || !tracked.has(rel)) && (!inRepo || isAgentContext(rel));
     if (emit && actual.size + result.totalBytes + overflowBytes > cap) {
       if (!droppable) throw new Error(`project context exceeds ${cap / 1048576} MiB at ${logical}`);
       scanned.add(logical).add(located);
@@ -660,7 +665,6 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
     if (credential) { credentialPaths.add(logical).add(located); result.skipped.push({ path: logical, reason: credential }); return; }
     if (emit) {
-      const throughLink = scope === "home" && projectPath !== null ? linkAliases.find((link) => located.startsWith(`${link.real}/`)) : undefined;
       files.set(`${scope}:${rel}`, { sourcePath: located, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes, ...(throughLink ? { throughLink } : {}) });
       result.totalBytes += bytes.length;
       if (droppable) candidates.push({ path: homeRelative(logical, home) ?? logical, bytes: bytes.length });

@@ -199,11 +199,16 @@ export async function buildHomeMirror(opts: BuildHomeMirrorOptions): Promise<Hom
       const dest = projectDestination(file.sourcePath, project, home, opts.hostHome);
       // The host's checkout recreates a tracked link that leaves the project;
       // its files are of use only where that link, resolved on the host, lands.
+      // Its target here may be another link (`.codex -> ../alias`), so the
+      // host's landing is compared with this machine's first hop, not the real path.
       if (file.throughLink) {
         const link = file.throughLink;
         const hostLink = path.posix.join(opts.hostHome, projectDestination(link.path, project, home, opts.hostHome));
         const lands = path.posix.resolve(path.posix.dirname(hostLink), link.target);
-        if (lands !== path.posix.join(opts.hostHome, projectDestination(link.real, project, home, opts.hostHome))) {
+        const firstHop = path.resolve(path.dirname(link.path), link.target);
+        let hostFirstHop: string | null = null;
+        try { hostFirstHop = path.posix.join(opts.hostHome, projectDestination(firstHop, project, home, opts.hostHome)); } catch { /* outside home: nowhere the host can match */ }
+        if (lands !== hostFirstHop) {
           if (!strandedLinks.has(link.path)) warnings.push(`${hostLink} -> ${link.target} resolves elsewhere on the host; the files behind it stay on this machine`);
           strandedLinks.add(link.path);
           continue;

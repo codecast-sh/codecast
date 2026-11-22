@@ -575,3 +575,17 @@ test("an index whose listing passes 64 MiB is still read", async () => {
   expect((await collectProjectContextAsync(opts)).files.map((f) => f.relativePath)).toEqual(["CLAUDE.md"]);
   expect(collectProjectContext(opts).files.map((f) => f.relativePath)).toEqual(["CLAUDE.md"]);
 }, 60_000);
+
+test("with agent context only, files behind a tracked link leaving the project travel only under an agent's name", async () => {
+  execFileSync("git", ["init", "-q", root]);
+  write("src/shared-docs/guide.md", "guide\n");
+  write("src/shared-docs/scripts/run.sh", "#!/bin/sh\n");
+  write("src/shared-agents/skills/t/SKILL.md", "shared skill\n");
+  fs.symlinkSync("../shared-docs", path.join(root, "docs"));
+  fs.symlinkSync("../shared-agents", path.join(root, ".codex"));
+  execFileSync("git", ["-C", root, "add", "docs", ".codex"]);
+  const opts = { root, home, includeAncestors: false, includeTracked: false, agentContextOnly: true };
+  const sync = collectProjectContext(opts);
+  expect(await collectProjectContextAsync(opts)).toEqual(sync);
+  expect(sync.files.map((f) => `${f.scope}:${f.relativePath}`)).toEqual(["home:src/shared-agents/skills/t/SKILL.md"]);
+});
