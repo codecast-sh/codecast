@@ -8143,6 +8143,10 @@ const TEAM_INBOX_PER_MEMBER_CAP = 60;
 // costs one row and names itself in `truncated` (sync-convergence C2). Single
 // source: the shared caps the replica's selection also applies (C4).
 const INBOX_WINDOW_CAP = INBOX_WINDOW_CAPS.recent;
+// How many of my owner rows the scan reads to answer ownership for the
+// candidates the owner window (INBOX_WINDOW_CAP) missed. One db call; owner
+// rows are small, so the bound is on documents read, well inside a query's.
+const INBOX_OWNER_LOOKUP_CAP = 2000;
 // Pinned rows are a deliberate, bounded set (INBOX_PINNED_CAP, inboxProjection.ts):
 // the window reads newest-first so the newest pins win, and the pin writers
 // refuse past the cap so the limit is enforced where the user can see it.
@@ -9266,12 +9270,22 @@ export async function scanInboxConversations(
   // Owner rows are keyed by user alone (no denormalized updated_at — that would
   // make every conversation heartbeat fan out and patch all of its owner rows),
   // so hydrate here and apply the same recency/status window as the main scan.
+  //
+  // The same range read further (INBOX_OWNER_LOOKUP_CAP) answers "is this row
+  // mine?" for every candidate the window missed, in one db call: past the
+  // window's cap, a per-row owner read for each candidate and child put a
+  // full account past Convex's limits (ct-73243). Rows past the window are
+  // never admitted on that account; they only answer the lookup.
+  let ownerLookupRows: any[] = [];
+  let ownerLookupComplete = false;
   const ownerRowsQ = noWindows ? Promise.resolve([] as any[]) : ctx.db
     .query("session_owners")
     .withIndex("by_user", (q: any) => q.eq("user_id", userId))
     .order("desc")
-    .take(INBOX_WINDOW_CAP + 1)
+    .take(INBOX_OWNER_LOOKUP_CAP + 1)
     .then((rows: any[]) => {
+      ownerLookupComplete = rows.length <= INBOX_OWNER_LOOKUP_CAP;
+      ownerLookupRows = rows.slice(0, INBOX_OWNER_LOOKUP_CAP);
       if (rows.length > INBOX_WINDOW_CAP) truncated.add("owned");
       return rows.slice(0, INBOX_WINDOW_CAP);
     });
@@ -9304,16 +9318,27 @@ export async function scanInboxConversations(
   const myOwnerRowById = new Map<string, any>(
     ownerRows.map((r: any) => [r.conversation_id.toString(), r])
   );
-  // The owner window holds my newest INBOX_WINDOW_CAP owner rows. While it
-  // is complete, absence from it is the answer; once it overflowed, absence
+  // The owner window holds my newest INBOX_WINDOW_CAP owner rows, and the
+  // lookup range my newest INBOX_OWNER_LOOKUP_CAP. While the lookup range is
+  // complete, absence from it is the answer; once it overflowed, absence
   // proves nothing, and a row it missed is read by id (the read byIds and the
   // floor make), so one row reads one owner row whichever feeder served it.
+  const ownerLookupById = new Map<string, any>(
+    ownerLookupRows.map((r: any) => [r.conversation_id.toString(), r])
+  );
   const ownerLookups = new Map<string, Promise<any | null>>();
   const ownerRowFor = (conv: any): Promise<any | null> => {
     const idStr = conv._id.toString();
     const held = myOwnerRowById.get(idStr);
-    // An empty owner window proves nothing when it was never read.
-    if (held || (!truncated.has("owned") && !opts.namedOnly)) return Promise.resolve(held ?? null);
+    if (held) return Promise.resolve(held);
+    const looked = ownerLookupById.get(idStr);
+    if (looked) {
+      ownedByMeIds.add(idStr);
+      myOwnerRowById.set(idStr, looked);
+      return Promise.resolve(looked);
+    }
+    // An empty owner range proves nothing when it was never read.
+    if (ownerLookupComplete && !opts.namedOnly) return Promise.resolve(null);
     // A conversation with no owner_user_id has no owner rows at all: the
     // cache names the primary owner whenever one exists (every owner-row
     // writer resyncs it through syncPrimaryOwnerCache). Only a row with an
