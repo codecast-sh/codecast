@@ -17,7 +17,7 @@ import type { Report, Workload } from "./harness";
 const only = process.argv[2] as Workload | undefined;
 if (!only) {
   let failed = 0;
-  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
+  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "inbox-update", "hydrate", "diff"]) {
     const child = Bun.spawnSync(["bun", import.meta.path, workload], { stdout: "inherit", stderr: "inherit" });
     if (child.exitCode !== 0) failed++;
   }
@@ -146,6 +146,28 @@ await test("inbox-heartbeat-modern", "in the Modern style a rename that arrives 
   await reset();
   expect(document.querySelector(`[data-session-id="${id}"] [data-sv-title]`)?.textContent).toBe("Renamed by the server");
   expect(document.querySelector(`[data-session-id="${id}"]`)?.getAttribute("data-mc")).toBe("card");
+});
+
+// ct-98162. A long task is a stretch over 50 ms with no break for input or
+// paint. The hydration's longest stretch is ~22 ms here and 75-116 ms before
+// it read a page at a time; the list update's is ~5 ms.
+await test("inbox-update", "a live update of 600 sessions writes the store once and never blocks the page for a long task", async () => {
+  await setup("inbox-update");
+  for (const r of await twice()) {
+    expect(pick(r, ["storeWrites", "layoutReads", "convexQueries", "convexSubscribes", "longTasks"])).toEqual({ storeWrites: 1, layoutReads: 0, convexQueries: 0, convexSubscribes: 0, longTasks: 0 });
+  }
+});
+
+await test("hydrate", "booting from a cache of 5,000 sessions, 54,000 tasks and 27,000 docs hydrates every row with no long task", async () => {
+  await setup("hydrate");
+  for (const r of await twice()) {
+    expect(pick(r, ["sessions", "tasks", "docs", "longTasks", "convexQueries"])).toEqual({
+      // The boot retention pass keeps the live set and the recent sessions
+      // (partitionSessionRetention): 1,800 of the 5,000.
+      sessions: 1800, tasks: 54_000, docs: 27_000,
+      longTasks: 0, convexQueries: 0,
+    });
+  }
 });
 
 await test("diff", "opening a long diff draws its first 150 rows in 2 commits and 18 DOM mutation records, with 32 layout reads and no store writes", async () => {

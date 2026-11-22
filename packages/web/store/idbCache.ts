@@ -17,7 +17,6 @@ import { authPrincipal } from "../lib/authPrincipal";
 import { storableActionArgs } from "../lib/tabSafePath";
 import { DOCS_SHOTS } from "../lib/docsShots/flag";
 import { recordCacheEvent } from "./cacheEvents";
-import { nextTask } from "../lib/inputQuiet";
 import { createCacheOwnership } from "./cacheOwnership";
 import { deleteDatabaseWithTimeout, readV2LegacyOutbox } from "./idbV2Salvage";
 import { connectLivenessLane, flushLivenessWrites, holdLiveMeta, holdLivenessRows, holdLivenessSyncMeta, resetLivenessLane } from "./idbLivenessLane";
@@ -413,24 +412,6 @@ export function loadPaintCacheSync(): Record<string, any> | null {
   return null;
 }
 
-// A large account's tables run to tens of thousands of rows. One getAll per
-// table handed them all back in one task, and one pass took them all in the
-// next: at boot the page froze for most of a second inside
-// IDBTransaction.oncomplete (ct-98162). A table is read a page at a time,
-// keyed past the last row read, each page is taken as it arrives, and the
-// reader waits a task between pages so input and paint get a turn.
-const READ_PAGE_ROWS = 1000;
-
-async function readTableInPages(table: Dexie.Table<any, string>, take: (page: any[]) => void): Promise<void> {
-  let page = await table.limit(READ_PAGE_ROWS).toArray();
-  for (;;) {
-    take(page);
-    if (page.length < READ_PAGE_ROWS) return;
-    await nextTask();
-    page = await table.where(":id").above(page[page.length - 1]._id).limit(READ_PAGE_ROWS).toArray();
-  }
-}
-
 export async function loadCache(
   keys?: readonly string[],
   context: Record<string, any> = {},
@@ -458,20 +439,24 @@ export async function loadCache(
     const collectionEntries = Object.entries(COLLECTION_TABLES)
       .filter(([key]) => !wanted || wanted.has(key));
     const metaKeys = (keys ?? [...META_KEYS]).filter((key) => META_KEYS.has(key));
-    // Meta first: the sessions retention pass and the row hydrators below need
-    // liveInboxIdList, lastFocusedConversationId and pending.
-    const metaRows = await db.meta.bulkGet(metaKeys);
+    const [collectionResults, metaRows] = await Promise.all([
+      Promise.all(collectionEntries.map(([, table]) => table.toArray())),
+      db.meta.bulkGet(metaKeys),
+    ]);
     if (!retiredMetaSwept) {
       retiredMetaSwept = true;
       void db.meta.bulkDelete(RETIRED_META_KEYS).catch(() => {});
     }
 
+    // Meta lookup first — the sessions retention pass below needs
+    // liveInboxIdList and lastFocusedConversationId from the same snapshot.
     const metaByKey: Record<string, any> = { ...context };
     for (const row of metaRows) {
       if (row) metaByKey[row.key] = row.value;
     }
 
-    await Promise.all(collectionEntries.map(async ([key, table]) => {
+    collectionEntries.forEach(([key, table], i) => {
+      let rows = collectionResults[i];
       // Seed the persistence shadow with what's on disk (even an empty table) so
       // the first write after hydrate diffs against reality and can prune rows
       // the server has since deleted.
@@ -488,43 +473,40 @@ export async function loadCache(
       // the registry) are excluded from hydration AND removed from disk, so the
       // cache self-heals instead of resurrecting phantoms on every load.
       const invalid: string[] = [];
-      const map: Record<string, any> = {};
-      let mapped = 0;
-      const take = (rows: any[]) => {
+      if (key === "sessions" && rows.length > 0) {
+        const { keep, drop } = partitionSessionRetention(
+          rows,
+          metaByKey.liveInboxIdList,
+          metaByKey.lastFocusedConversationId,
+          Date.now(),
+        );
+        rows = keep;
+        if (drop.length) table.bulkDelete(drop).catch(() => {});
+      }
+      // Collections that bound themselves at boot (COLLECTION_RETENTION).
+      const retain = COLLECTION_RETENTION[key];
+      if (retain && rows.length > 0) {
+        const { keep, drop } = retain(rows, Date.now());
+        rows = keep;
+        if (drop.length) void deleteInBatches(table, drop);
+      }
+      if (rows.length > 0) {
+        const map: Record<string, any> = {};
         for (const row of rows) {
           if (validRow && !validRow(row)) { invalid.push(row._id); continue; }
           const kept = hydrateRow ? hydrateRow(row, hydrateCtx) : row;
           if (kept !== row) trimmed.push(kept);
-          map[row._id] = kept; shadow.set(row._id, kept); mapped++;
+          map[row._id] = kept; shadow.set(row._id, kept);
         }
-      };
-      // A collection with a retention pass judges its rows as a whole, so it
-      // takes them once every page is in; these are sessions and the capped
-      // detail collections. Every other table takes each page as it arrives.
-      const retain = key === "sessions"
-        ? (rows: any[], now: number) => partitionSessionRetention(rows, metaByKey.liveInboxIdList, metaByKey.lastFocusedConversationId, now)
-        : COLLECTION_RETENTION[key];
-      if (retain) {
-        const all: any[] = [];
-        await readTableInPages(table, (page) => { for (const row of page) all.push(row); });
-        if (all.length > 0) {
-          const { keep, drop } = retain(all, Date.now());
-          if (drop.length) void deleteInBatches(table, drop);
-          take(keep);
+        if (Object.keys(map).length > 0) {
+          result[key] = map;
+          hasData = true;
         }
-      } else {
-        await readTableInPages(table, take);
       }
-      if (mapped > 0) {
-        result[key] = map;
-        hasData = true;
-      }
-      // In batches, as retention's drops: one bulkDelete of a whole table's
-      // ids queues every request on the main thread at once.
-      if (invalid.length) void deleteInBatches(table, invalid);
+      if (invalid.length) table.bulkDelete(invalid).catch(() => {});
       if (trimmed.length) table.bulkPut(trimmed).catch(() => {});
       lastPersisted.set(key, shadow);
-    }));
+    });
 
     for (const row of metaRows) {
       if (!row) continue;
