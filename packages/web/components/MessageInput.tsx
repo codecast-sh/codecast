@@ -46,7 +46,6 @@ import { ComposerSuggestion, ComposerSuggestionHandle } from "./ComposerSuggesti
 import { useMutation, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
-import { HandoffPicker, useOwnersFromStore } from "./OwnersBadge";
 import { usePendingMessageStatus } from "../hooks/useSyncPendingPermissions";
 import { useInboxStore, isConvexId, convHasPendingSend, viewerCommandsSession, type OptimisticImage } from "../store/inboxStore";
 import { useChangedState } from "../hooks/useChangedState";
@@ -57,7 +56,7 @@ import { soundSend } from "../lib/sounds";
 import type { MentionItem } from "./editor/MentionList";
 import { MentionMenu } from "./editor/MentionMenu";
 import { mergeMentionSuggestions, mentionViewTimes, orderMentionItems } from "../lib/mentionRanking";
-import { Maximize2, Minimize2, Split, Archive, ArrowRightLeft, MonitorPlay, Paperclip } from "lucide-react";
+import { Maximize2, Minimize2, Split, Archive, MonitorPlay, Paperclip } from "lucide-react";
 import { formatCallTime } from "@codecast/shared/contracts";
 import { isRecordingFile, useScreenRecordingAttach } from "../hooks/useScreenRecordingAttach";
 import { useFileAttach } from "../hooks/useFileAttach";
@@ -293,12 +292,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const [composeHasContent, setComposeHasContent] = useState(false);
   const composeRef = useRef<ComposeEditorHandle>(null);
   const { user: mentionUser } = useCurrentUser();
-  // Hand-off: the composed text becomes the note that travels with the
-  // assignment (OwnersBadge.HandoffPicker). Real sessions only — a comment
-  // box, a workflow gate and a chat room have nobody to hand to.
-  const [handoffOpen, setHandoffOpen] = useState(false);
-  const owners = useOwnersFromStore(conversationId);
-  const canHandoff = !bareComposer && !onGateSend && !onWorkflowLaunch && !chatMentionMode && isConvexId(conversationId) && !!owners.currentUser && owners.canManage !== false;
   // Narrowed: MessageInput only needs the session's team_id (for mention scope), which
   // never changes on a heartbeat. Subscribing to the whole row re-rendered the input
   // (and its draft textarea) ~1×/s for a live session.
@@ -1289,9 +1282,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // gets to unwind that state instead of the whole dialog closing.
   useWatchEffect(() => {
     if (escapeOwnedRef) {
-      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null || handoffOpen;
+      escapeOwnedRef.current = acTrigger !== null || selectedImageIndex !== null || selectedQueueIndex !== null || lightboxImageIndex !== null;
     }
-  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex, handoffOpen]);
+  }, [escapeOwnedRef, acTrigger, selectedImageIndex, selectedQueueIndex, lightboxImageIndex]);
   const setSessionHasQueuedMessages = useInboxStore((s) => s.setSessionHasQueuedMessages);
   useWatchEffect(() => {
     setSessionHasQueuedMessages(conversationId, queuedMessages.length > 0);
@@ -2110,31 +2103,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     return forkId && forkId !== conversationId ? forkId : null;
   };
 
-  // Hand off: the box empties the moment a teammate is picked (the marker is
-  // drawn optimistically), and the text comes back only if the server refuses.
-  const handleHandoffPick = (target: { id: string; name: string }, keepSelf: boolean) => {
-    const raw = composeMode && composeRef.current ? composeRef.current.getMarkdown() : message;
-    const text = raw.trim();
-    sendingRef.current = true;
-    cancelPendingDraft();
-    composeRef.current?.clear();
-    setMessage("");
-    messageRef.current = "";
-    useInboxStore.getState().clearDraftFinal(conversationId);
-    sendingRef.current = false;
-    textareaRef.current?.focus();
-    void owners.handoffTo(target.id, text, { keepSelf }).then((ok) => {
-      if (ok) { onMessageSent?.(); return; }
-      if (composeMode && composeRef.current) composeRef.current.setMarkdown?.(text);
-      setMessage(text);
-      messageRef.current = text;
-    });
-  };
-  const openHandoff = (open: boolean) => {
-    setHandoffOpen(open);
-    if (!open) requestAnimationFrame(() => textareaRef.current?.focus());
-  };
-
   // The image strip and the queue take keys while the caret stays in the
   // textarea, so any sign the user is back on the text (a click in it, an
   // edit) ends that selection before a key meant for words reaches it. The
@@ -2205,11 +2173,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       e.preventDefault();
       e.stopPropagation();
       cancelCaught();
-      return;
-    }
-    if (canHandoff && e.altKey && e.shiftKey && e.code === "KeyH") {
-      e.preventDefault();
-      setHandoffOpen(true);
       return;
     }
     if (acTrigger && acItems.length > 0) {
@@ -2608,20 +2571,6 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             <Archive className="w-3.5 h-3.5" />
           </button>
         </ShortcutTooltip>
-      )}
-      {canHandoff && (
-        <HandoffPicker owners={owners} conversationId={conversationId} note={composeMode && composeRef.current ? composeRef.current.getMarkdown() : message} open={handoffOpen} onOpenChange={openHandoff} onPick={handleHandoffPick}>
-          <ShortcutTooltip label="Hand off to a teammate" action="msg.handoff" hint="your message goes along as the note" side="top">
-          <button
-            type="button"
-            className={`w-7 h-7 rounded-full transition-colors flex items-center justify-center ${handoffOpen ? "text-sol-violet bg-sol-violet/15" : "text-[color-mix(in_srgb,var(--sol-text-dim)_40%,transparent)] hover:text-sol-violet hover:bg-sol-violet/10"}`}
-            aria-label="Hand off to a teammate"
-            onClick={() => openHandoff(!handoffOpen)}
-          >
-            <ArrowRightLeft className="w-3.5 h-3.5" />
-          </button>
-          </ShortcutTooltip>
-        </HandoffPicker>
       )}
       {onForkTail && !hostedConversation && canSubmit && !onGateSend && !onWorkflowLaunch && (
         <ShortcutTooltip label="Fork and send" action="msg.forkSend" side="top">
