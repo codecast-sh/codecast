@@ -141,3 +141,39 @@ row per station (who, own or inherited, when, what is on it now). Words, on
 every surface: a **station** is a step; a **target** is a place code goes
 live; a station is named by its flow's label (deploy steps by
 `LINE_DEPLOY_STEP_LABELS`); no id or hash is shown where a name exists.
+
+## PL8. Every machine's checkouts
+
+Work main does not have lives on machines: a shared checkout with sessions
+mid-edit, a worktree a session finished in, a laptop that stopped levelling.
+The pipeline shows it under the release lane, per repository: each machine's
+checkouts with the commits main lacks, how far behind main each is, its
+uncommitted work grouped by the session that wrote it (attribution as `cast
+ship checkout` reads it, plus the files a `cast` command wrote for a session,
+`land/writeLedger.ts`), and its level state in words. A finished session's work
+offers Ship, which asks that session to run its change through the flow.
+
+A daemon reports its checkouts on change only, within a time budget per pass,
+and never on the path of its own event loop; a checkout whose attribution is
+not warm yet reports its paths unattributed. A level that keeps refusing on
+the same files asks for help once per episode: the session that last wrote one
+of those files hears the conflict and the two ways out (rebase the edit onto
+main's version, or set it aside), else a finding is filed on the repository's
+project. A refusal is logged when it changes, not every pass.
+
+## PL9. What dogfooding taught the design
+
+The first real edit made from the page (Union's Review guidance, Nov 21) ran
+end to end and found what the tests had not:
+
+- **An edit is the session's change.** Files a `cast` command writes for a
+  session are attributed to it (`writeLedger`), so `cast flow run` after `cast
+  flow edit` ships them without a workaround.
+- **A release ships the commit it names.** A deploy request pins its sha, and a
+  target whose command sends the tree it runs in refuses any sha but main's
+  head instead of shipping something else.
+- **A repository is known by its remote**, not by the name of a folder, so a
+  clone under another name still finds its pipeline, runs and proposed edits.
+- **Silent stalls are product bugs.** A checkout stuck for 21 hours and a
+  release request open for two days were both visible only in logs; each now
+  has a place on the page and a person or session it reaches.
