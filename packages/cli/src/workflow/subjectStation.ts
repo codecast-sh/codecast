@@ -34,28 +34,70 @@ export type Writer = Subject & { files: string[] };
 
 const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// A line that says something broke: SIGNAL, or a merge conflict. A test runner's pass, skip or todo line never does,
+// whatever its test's name says.
+const FAILING = new RegExp(`${SIGNAL_WORDS}|\\bCONFLICT\\b`, "i");
+const QUIET_RESULT = /^\s*\((?:pass|skip|todo)\)/;
+// bun prints each test file's path alone on a line, then its results.
+const TEST_HEADER = /^\s*\S+\.(?:test|spec)\.[cm]?[jt]sx?:\s*$/;
+// How far a line may sit from a failing one and still belong to it: a stack trace or code frame under its error.
+const NEAR = 6;
+
 /**
- * The writers of a checkout change's files that a finding names, each with its
- * named files: a file is named when the text holds its path, or its basename
- * when no other file of the change shares that basename (a stack trace or a
- * test runner often prints only the name). Files no session's edit names have
- * no writer and brief nobody.
+ * The lines of a finding that can name a file: git's `Auto-merging` lines go (every file a merge touches, conflict
+ * or not), and so does a test runner's header for a file whose tests all passed. Paths under any of `roots` (the
+ * checkout, the run's worktree) read relative, as the change names them.
  */
-export function writersNamed(change: { paths: string[]; writers?: Record<string, { conversation: string; session: string }> }, text: string): Writer[] {
+function findingLines(text: string, roots: string[]): Array<{ line: string; failing: boolean }> {
+  let clean = text.replace(ANSI, "").replace(/\r/g, "");
+  for (const r of [...new Set(roots.filter(Boolean))].sort((a, b) => b.length - a.length)) clean = clean.split(`${r.replace(/\/+$/, "")}/`).join("");
+  const lines = clean.split("\n");
+  const failing = (l: string) => FAILING.test(l) && !QUIET_RESULT.test(l);
+  const passedHeader = (i: number) => {
+    if (!TEST_HEADER.test(lines[i])) return false;
+    for (let j = i + 1; j < lines.length && !TEST_HEADER.test(lines[j]); j++) if (failing(lines[j])) return false;
+    return true;
+  };
+  const kept = lines.map((line, i) => ({ line, i })).filter(({ line, i }) => !/^\s*Auto-merging\s/.test(line) && !passedHeader(i));
+  const failingAt = kept.filter(({ line }) => failing(line)).map(({ i }) => i);
+  return kept.map(({ line, i }) => ({ line, failing: failingAt.some((f) => Math.abs(f - i) <= NEAR) }));
+}
+
+/**
+ * The files of a checkout change a finding names, split by whether a session's edit wrote them: `writers` groups
+ * them by that session, `unclaimed` are the ones no session wrote. A file is named by its path, never as the tail of
+ * a longer one (`src/a.ts` inside `packages/x/src/a.ts`), or by a basename no other file of the change shares, standing
+ * alone or as a location (`a.ts:12`, `a.ts(12,5)`), never inside another path (`node_modules/x/index.ts`). Lines that
+ * say something failed, and those beside them, are read first; only a finding with no file named there is read whole.
+ */
+export function writersNamed(
+  change: { paths: string[]; writers?: Record<string, { conversation: string; session: string }> },
+  text: string,
+  roots: string[] = [],
+): { writers: Writer[]; unclaimed: string[] } {
   const base = (p: string) => p.slice(p.lastIndexOf("/") + 1);
   const sharing = new Map<string, number>();
   for (const p of change.paths) sharing.set(base(p), (sharing.get(base(p)) ?? 0) + 1);
-  // Bounded on both sides, so a.ts is not named by data.ts or a.tsx.
-  const mentions = (name: string) => new RegExp(`(?:^|[^\\w.-])${escapeRe(name)}(?![\\w-]|\\.\\w)`).test(text);
+  // Bounded on both sides, so a.ts is not named by data.ts or a.tsx, nor src/a.ts by lib/src/a.ts.
+  const byPath = (p: string) => new RegExp(`(?:^|[^\\w.\\-/\\\\@])${escapeRe(p)}(?![\\w\\-/\\\\]|\\.\\w)`);
+  const byBase = (name: string) => new RegExp(`(?:^|[^\\w.\\-/\\\\@])${escapeRe(name)}(?=:\\d|\\(\\d+,|[\\s,;'"\`)\\]]|[.:](?:\\s|$)|$)`);
+  const lines = findingLines(text, roots);
+  const namedIn = (subset: string[]) => change.paths.filter((p) => {
+    const tests = [byPath(p), ...(sharing.get(base(p)) === 1 && base(p) !== p ? [byBase(base(p))] : [])];
+    return subset.some((l) => tests.some((t) => t.test(l)));
+  });
+  const strong = namedIn(lines.filter((l) => l.failing).map((l) => l.line));
+  const named = strong.length ? strong : namedIn(lines.map((l) => l.line));
   const byWriter = new Map<string, Writer>();
-  for (const p of change.paths) {
+  const unclaimed: string[] = [];
+  for (const p of named) {
     const w = change.writers?.[p];
-    if (!w || !(mentions(p) || (sharing.get(base(p)) === 1 && mentions(base(p))))) continue;
+    if (!w) { unclaimed.push(p); continue; }
     const entry = byWriter.get(w.conversation) ?? { conversationId: w.conversation, shortId: w.session, files: [] };
     entry.files.push(p);
     byWriter.set(w.conversation, entry);
   }
-  return [...byWriter.values()];
+  return { writers: [...byWriter.values()], unclaimed };
 }
 
 /** A writer's brief: the station's, and which of the failing files are its own. */
@@ -64,7 +106,8 @@ export function writerBrief(brief: string, writer: Writer): string {
 }
 
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
-const SIGNAL = /\b(error|errors|fail|failed|failing|failure|✗|×|expected|received|panic|exception|traceback|cannot|could not|not found|TS\d{4})\b/i;
+const SIGNAL_WORDS = String.raw`\b(error|errors|fail|failed|failing|failure|✗|×|expected|received|panic|exception|traceback|cannot|could not|not found|TS\d{4})\b`;
+const SIGNAL = new RegExp(SIGNAL_WORDS, "i");
 
 /**
  * What a session needs from a long failure: the lines that say what broke, with
