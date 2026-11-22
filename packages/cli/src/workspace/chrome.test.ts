@@ -115,32 +115,41 @@ describe("automationChromeBinary", () => {
     fs.writeFileSync(p, "");
     return p;
   };
-  const run = (env: NodeJS.ProcessEnv, platform: NodeJS.Platform = "darwin") => {
+  const run = (platform: NodeJS.Platform = "darwin") => {
     const installs: string[] = [];
-    const binary = automationChromeBinary({ env, platform, install: (dir) => installs.push(dir) });
+    const binary = automationChromeBinary({ home: tmpDir, platform, install: (dir) => installs.push(dir) });
     return { binary, installs };
   };
 
   test("macOS runs codecast's newest Chrome for Testing, never the human's Chrome", () => {
     install("998.0.1.0");
     const newest = install("999.0.2.0");
-    expect(run({ HOME: tmpDir })).toEqual({ binary: newest, installs: [] });
+    expect(run()).toEqual({ binary: newest, installs: [] });
   });
 
   test("a copy a major version behind the human's Chrome still runs, and a newer one downloads", () => {
     if (humanChromeMajor() < 2) return;
     const old = install("1.0.0.0");
-    expect(run({ HOME: tmpDir })).toEqual({ binary: old, installs: [chromeForTestingDir(tmpDir)] });
+    expect(run()).toEqual({ binary: old, installs: [chromeForTestingDir(tmpDir)] });
   });
 
   test("with none installed it downloads one and runs the human's Chrome meanwhile", () => {
-    expect(run({ HOME: tmpDir })).toEqual({ binary: findChromeBinary(), installs: [chromeForTestingDir(tmpDir)] });
+    expect(run()).toEqual({ binary: findChromeBinary(), installs: [chromeForTestingDir(tmpDir)] });
   });
 
   test("an explicit binary override and other platforms keep the system probe and download nothing", () => {
     install("999.0.2.0");
-    expect(run({ HOME: tmpDir, CHROME_PATH: "/x" })).toEqual({ binary: findChromeBinary(), installs: [] });
-    expect(run({ HOME: tmpDir }, "linux")).toEqual({ binary: findChromeBinary(), installs: [] });
+    const fake = path.join(tmpDir, "fake-chrome");
+    fs.writeFileSync(fake, "");
+    const prev = process.env.CHROME_PATH;
+    process.env.CHROME_PATH = fake;
+    try {
+      expect(run()).toEqual({ binary: fake, installs: [] });
+    } finally {
+      if (prev === undefined) delete process.env.CHROME_PATH;
+      else process.env.CHROME_PATH = prev;
+    }
+    expect(run("linux")).toEqual({ binary: findChromeBinary(), installs: [] });
   });
 });
 

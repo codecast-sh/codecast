@@ -21,7 +21,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { isCdpAlive, listTargets, type CdpClient, type CdpTarget } from "./cdp.js";
 import { enablePageDomains, isReachable, TabUnresponsive, type EnablePatience } from "./recovery.js";
 import { browserHome, clonePath, chromeUserDataRoot, type ChromeChannel } from "./profile.js";
-import { automationChromeBinary, findChromeBinary, chromeBinaryProbes, isPidAlive, keychainArgs, ChromeNotFoundError } from "../workspace/chrome.js";
+import { findChromeBinary, chromeBinaryProbes, isPidAlive, keychainArgs, ChromeNotFoundError } from "../workspace/chrome.js";
 import { acquireFileLock } from "../lockFile.js";
 import { linuxDisplayPlan } from "./hostScreen.js";
 import { desktopSession } from "../computer/desktopSession.js";
@@ -254,14 +254,12 @@ export async function isLive(state: InstanceState | null, patienceMs?: number): 
   return isReachable(await probeLiveness(state, patienceMs));
 }
 
-function chromeBinaryFor(channel: ChromeChannel, headless: boolean): string {
+function chromeBinaryFor(channel: ChromeChannel): string {
   if (channel === "canary") {
     const p = "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary";
     if (fs.existsSync(p)) return p;
   }
-  // Headless, it is one the human's links can never reach (automationChromeBinary);
-  // headed, prepareBrowserApp gives it its own icon in the dock.
-  const bin = headless ? automationChromeBinary() : findChromeBinary();
+  const bin = findChromeBinary();
   if (!bin) throw new ChromeNotFoundError(chromeBinaryProbes());
   return bin;
 }
@@ -371,7 +369,7 @@ export async function launchManagedChrome(opts: LaunchOptions): Promise<number> 
   // is signed in) has no WindowServer to paint into, and a headed launch dies.
   const headless = linux ? linux.headless : !!opts.headless || (process.platform === "darwin" && desktopSession() === "none");
   opts = { ...opts, headless };
-  const prepared = prepareBrowserApp(chromeBinaryFor(channel, headless), headless);
+  const prepared = prepareBrowserApp(chromeBinaryFor(channel), headless);
   const bin = prepared.binary;
   fs.mkdirSync(opts.userDataDir, { recursive: true, mode: 0o700 });
   clearForeignProfileLock(opts.userDataDir);
