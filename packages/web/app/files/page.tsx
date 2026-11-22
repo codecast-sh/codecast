@@ -11,6 +11,7 @@ import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTabContext } from "../../lib/tabParams";
 import { useVaultLocalPath } from "../../hooks/useVaultLocalPath";
+import { VaultOpErrorStrip } from "../../components/vault/VaultOpErrorStrip";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useConvex } from "convex/react";
 import {
@@ -118,8 +119,6 @@ function VaultContent() {
   const newNote = useVaultStore((s) => s.newNote);
   const newFolder = useVaultStore((s) => s.newFolder);
   const setDirsExpanded = useVaultStore((s) => s.setDirsExpanded);
-  const opError = useVaultStore((s) => s.opError);
-  const clearOpError = useVaultStore((s) => s.clearOpError);
   const renameReport = useVaultStore((s) => s.lastRenameReport);
   const clearRenameReport = useVaultStore((s) => s.clearRenameReport);
   const showAllFiles = useVaultStore((s) => s.showAllFiles);
@@ -595,16 +594,7 @@ function VaultContent() {
           Showing cached copy — reconnecting to the local daemon…
         </div>
       )}
-      {opError && (
-        <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-red/10 text-sol-red border-b border-sol-red/30">
-          <span className="flex-1 truncate" title={opError}>
-            {opError}
-          </span>
-          <button type="button" onClick={clearOpError} title="Dismiss" aria-label="Dismiss" className="hover:opacity-70">
-            <X className="w-3 h-3" />
-          </button>
-        </div>
-      )}
+      <VaultOpErrorStrip />
       {renameReport && renameReport.linksRewritten + renameReport.skipped > 0 && (
         <div className="flex items-center gap-2 px-3 py-1 text-meta bg-sol-bg-alt text-sol-text-muted border-b border-sol-border/30">
           <span className="flex-1 truncate">

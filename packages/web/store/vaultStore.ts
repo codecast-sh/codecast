@@ -134,6 +134,11 @@ interface VaultState {
   loadRemoteBody: (path: string) => Promise<void>;
   /** Last failed file operation, for a dismissible strip in the UI. */
   opError: string | null;
+  /** What the person can do about `opError` from the strip: the file it names
+   *  (find it, copy its path) or a retry. Tied to the message it was reported
+   *  with, so a later plain `opError` write never borrows a stale action. */
+  opErrorActions: OpErrorActions | null;
+  reportOpError: (message: string, actions: Omit<OpErrorActions, "message">) => void;
   clearOpError: () => void;
   /** A vault the daemon registered on request (client.locateVault) joins the
    *  list at once, so the ?path= flow resolves against it without a second
@@ -751,6 +756,21 @@ async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void
   await fetchBodies(ep, vaultId, toFetch);
 }
 
+export interface OpErrorActions {
+  message: string;
+  /** Absolute path of the file the error is about. */
+  file?: string;
+  retry?: () => void;
+}
+
+/** A failed scan, in words a person can act on: a timeout says so. */
+function scanFailureText(name: string, e: unknown): string {
+  const reason = e instanceof Error && e.name === "TimeoutError"
+    ? "the daemon took over 60 s to answer"
+    : e instanceof Error ? e.message : String(e);
+  return `Couldn't list ${name}: ${reason}.`;
+}
+
 export const useVaultStore = create<VaultState>((set, get) => ({
   connection: "idle",
   endpoint: null,
@@ -782,9 +802,11 @@ export const useVaultStore = create<VaultState>((set, get) => ({
   bookmarks: [],
   bookmarksVaultId: null,
   opError: null,
+  opErrorActions: null,
   lastRenameReport: null,
 
-  clearOpError: () => set({ opError: null }),
+  reportOpError: (message, actions) => set({ opError: message, opErrorActions: { message, ...actions } }),
+  clearOpError: () => set({ opError: null, opErrorActions: null }),
   linkedFiles: {},
   adoptLinkedFile: (entry) =>
     set((s) => ({
@@ -1095,9 +1117,18 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     if (!ep) return;
     try {
       await syncActiveVault(ep, vaultId);
-    } catch {
+    } catch (e) {
       if (get().activeVaultId === vaultId) {
         set((s) => ({ connection: s.scannedAt ? "cached" : "no-daemon" }));
+        // With a cached list on screen the failure would otherwise pass as a
+        // reconnect: say the scan failed and offer it again. An earlier error
+        // keeps the strip (it names what the person came for). Without a
+        // cache, the no-daemon state carries its own retry.
+        const s = get();
+        if (s.scannedAt && !s.opError) {
+          const name = s.vaults.find((v) => v.id === vaultId)?.name ?? vaultId;
+          s.reportOpError(scanFailureText(name, e), { retry: () => void get().selectVault(vaultId) });
+        }
       }
       return;
     }

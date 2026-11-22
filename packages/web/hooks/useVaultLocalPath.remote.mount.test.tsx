@@ -103,3 +103,13 @@ for (const [label, error] of [["a current daemon", "no such path"], ["an older d
     expect(view.routes.some((r) => r.includes("docs%2Fplan.md") || r.includes("docs/plan.md"))).toBe(true);
   });
 }
+
+test("a mirror that does not carry the file says so and offers to find it there", async () => {
+  const view = await mount(`${mirror.root}/docs/gone.md`);
+  await answer(0, { error: "no such path" });
+  for (let i = 0; i < 5; i++) await act(async () => {});
+  expect(opened).toEqual([mirror.id]);
+  expect(view.routes).toEqual([]);
+  expect(useVaultStore.getState().opError).toBe(`${mirror.root}/docs/gone.md does not exist on this machine.`);
+  expect(useVaultStore.getState().opErrorActions?.file).toBe(`${mirror.root}/docs/gone.md`);
+});
