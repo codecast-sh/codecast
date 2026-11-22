@@ -205,13 +205,15 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
   // (useJumpToDecisionAsk, shared with the answer bubble's "the ask" link).
   const canJumpToAsk = item.source === "decide";
   const jumpToDecisionAsk = useJumpToDecisionAsk(item.conversationId, item.decisionId, item.question);
-  const jumpToAsk = useCallback(async () => {
+  const jumpToAsk = useCallback(() => {
     if (!canJumpToAsk) return;
-    if (!(await jumpToDecisionAsk())) return;
     // The card may be covering the thread (full size). Hand the pane back
-    // so the jump is visible. Do not leave the queue for the list — the
-    // jump already opened the session at the ask.
+    // now, in the press's own tick: the scroll may wait on the server's
+    // lookup of an ask older than the loaded rows (findAskMessage), and a
+    // fold that waited with it left the press doing nothing visible. Do not
+    // leave the queue for the list — the jump opens the session at the ask.
     if (!stepper) setSize("line");
+    void jumpToDecisionAsk();
   }, [canJumpToAsk, jumpToDecisionAsk, stepper]);
 
   const defaultLabel = item.defaultOption !== undefined ? options.find((o) => o.index === item.defaultOption)?.label : undefined;
@@ -427,8 +429,9 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
     <button
       onClick={jumpToAsk}
       disabled={!canJumpToAsk}
-      className={`text-meta text-sol-text-dim ${canJumpToAsk ? "hover:text-sol-text hover:underline" : "cursor-default"} transition-colors`}
+      className={`text-meta ${canJumpToAsk ? "text-sol-blue underline decoration-dotted underline-offset-2 hover:decoration-solid" : "text-sol-text-dim cursor-default"} transition-colors`}
       title={canJumpToAsk ? "Go to the ask in the conversation" : undefined}
+      aria-label={canJumpToAsk ? `Go to the ask in the conversation (${askedLabel})` : undefined}
     >
       {askedText}
     </button>
