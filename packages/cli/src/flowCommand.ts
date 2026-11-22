@@ -602,12 +602,15 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
   // provenance, so a person's own "ship it" can be told from a program's relay.
   flow
     .command("asker <conversation>", { hidden: true })
-    .description("Print a session's chain up to the one that started its work, its originator, and every line a person typed along it, as one JSON object")
+    .description("Print a session's chain up to the one that started its work, its originator, and every line a person typed along it (rendered for a model in `text`), as one JSON object")
     .option("--task <id>", "Also read the chain of the session that filed this task (ct-N)")
+    .option("--run <id>", "Also name who started this workflow run (starter_id, starter_name), read from the run itself")
     .option("--record <chars>", "The JSON size to fit (default: what a station records)")
-    .action(async (conversation: string, opts: { task?: string; record?: string }) => {
+    .action(async (conversation: string, opts: { task?: string; run?: string; record?: string }) => {
       const { fitAskerRecord } = await import("./workflow/flowAsker.js");
-      const read = await deps.cliPost("/cli/sessions/originator", { conversation_id: conversation, ...(opts.task ? { task: opts.task } : {}) });
+      const read = await deps.cliPost("/cli/sessions/originator", {
+        conversation_id: conversation, ...(opts.task ? { task: opts.task } : {}), ...(opts.run ? { run_id: opts.run } : {}),
+      });
       console.log(JSON.stringify(fitAskerRecord(read, opts.record ? Number(opts.record) : undefined)));
     });
 
