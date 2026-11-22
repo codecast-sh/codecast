@@ -147,7 +147,8 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     expect(reads).toBe(5);
     // The node's failed report is what stops its hand (workflow_runs.stopStationHands).
     expect(calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === id && c.body.node_status === "failed")).toBe(true);
-    expect(failReason()).toContain("killed after 10m");
+    expect(failReason()).toContain("ran 10m, its station's limit");
+    expect(failReason()).toMatch(/^hand jx7hand killed after \d+m at \w+: it ran 10m/);
   }, 30000);
 
   test.each(builders)("%s: a hand parked on its task's wait outlives the node's timeout and routes on its handoff after", async (id) => {
@@ -244,6 +245,7 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
       return new Response(JSON.stringify(body), { status: 200 });
     }) as typeof fetch;
     expect(await run(id)).toBe("failed");
-    expect(failReason()).toContain("killed after 10m");
+    expect(failReason()).toContain("ran 10m, its station's limit");
+    expect(failReason()).toMatch(/^hand jx7hand killed after \d+m at \w+: it ran 10m/);
   }, 30000);
 });
