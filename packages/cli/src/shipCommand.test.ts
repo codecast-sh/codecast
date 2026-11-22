@@ -17,8 +17,10 @@ describe("markBody", () => {
 
   test("a push's own record names its machine, path and what it changed; a plain mark does not", () => {
     expect(markBody({ surface: "backend", via: "dev watcher", dirty: "3" }, HERE, { adds: ["table:voiceprints"], drops: [] }, "box-1")).toEqual({
-      repository: "codecast-sh/codecast", surface: "backend", sha: SHA, dirty: 3, via: "dev watcher", machine: "box-1", adds: ["table:voiceprints"],
+      repository: "codecast-sh/codecast", surface: "backend", sha: SHA, dirty: 3, via: "dev watcher", machine: "box-1", adds: ["table:voiceprints"], drops: [],
     });
+    // A push whose diff did not run sends no lists at all, so nobody reads it as "dropped nothing".
+    expect(markBody({ surface: "backend", via: "deploy.sh" }, HERE, {}, "box-1")).not.toHaveProperty("drops");
     expect(markBody({ surface: "backend", machine: "named" }, HERE, {}, "box-1")).toMatchObject({ machine: "named" });
     expect(markBody({ surface: "backend" }, HERE, {}, "box-1")).not.toHaveProperty("machine");
   });
@@ -29,6 +31,8 @@ describe("markBody", () => {
     writeFileSync(file, JSON.stringify({ adds: ["fn:a:b", 7], drops: ["index:t.i"], tree_ms: 9 }));
     expect(readChanges(file)).toEqual({ adds: ["fn:a:b"], drops: ["index:t.i"] });
     expect(readChanges(undefined)).toEqual({});
+    writeFileSync(file, JSON.stringify({ adds: [] }));
+    expect(readChanges(file)).toEqual({});
   });
 
   test("outside a GitHub checkout it says what to pass", () => {

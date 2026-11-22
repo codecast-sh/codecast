@@ -68,8 +68,8 @@ export function markBody(options: MarkOptions, local: LocalCheckout, changes: Pu
     // A push's own record (deploy.sh, the dev watcher) names the machine it came from.
     ...(options.via ? { via: options.via } : {}),
     ...(options.via || options.machine ? { machine: options.machine ?? machine } : {}),
-    ...(changes.adds?.length ? { adds: changes.adds } : {}),
-    ...(changes.drops?.length ? { drops: changes.drops } : {}),
+    // Both lists go exactly when the diff ran, empty or not: the server reads their presence as "this push's changes are known".
+    ...(changes.adds && changes.drops ? { adds: changes.adds, drops: changes.drops } : {}),
   };
 }
 
@@ -78,7 +78,8 @@ export function readChanges(path: string | undefined): PushChanges {
   if (!path) return {};
   const raw = JSON.parse(readFileSync(path, "utf-8"));
   const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined);
-  return { adds: names(raw?.adds), drops: names(raw?.drops) };
+  const adds = names(raw?.adds), drops = names(raw?.drops);
+  return adds && drops ? { adds, drops } : {};
 }
 
 /** Each name with the push that put it there, a line each. */

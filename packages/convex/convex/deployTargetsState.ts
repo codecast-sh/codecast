@@ -8,7 +8,7 @@ import { afterFor, deployStepsOf } from "./deploysView";
 import { ciOf } from "./deployTargetsCi";
 import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCommit } from "@codecast/shared/contracts/deployTargets";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
-import type { DeployPushSummary } from "@codecast/shared/contracts/deploys";
+import { liveDeployOf, type DeployPushSummary } from "@codecast/shared/contracts/deploys";
 
 const DAY = 86_400_000;
 /** Commits on main read for one target's queue. */
@@ -209,13 +209,17 @@ export async function targetDeploys(ctx: any, workspace: string, target: string,
 export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
   const deploys = await targetDeploys(ctx, t.workspace, t.name);
   const deploysHere = deploys.filter((d) => !d.repository || d.repository === t.repository);
-  const live = deploysHere.find((d) => d.status === "live") ?? null;
+  // The queue, rollback and "already live" go on from the last real deploy; a watcher's push is nobody's deploy, so
+  // what prod runs when that is one is `running`, beside it.
+  const live = liveDeployOf(deploysHere, { real: true }) ?? null;
+  const runningRow = liveDeployOf(deploysHere) ?? null;
+  const running = runningRow && runningRow !== live ? runningRow : null;
   const open = deploysHere.find((d) => d.status === "requested" || d.status === "running") ?? null;
   const convCache = new Map<string, any>();
   const taskCache = new Map<string, any>();
   const caches = { conv: convCache, task: taskCache };
   const history = deploysHere.slice(0, HISTORY);
-  const aftermath = await afterFor(ctx, t.workspace, live && !history.includes(live) ? [...history, live] : history, Date.now());
+  const aftermath = await afterFor(ctx, t.workspace, [...history, ...[live, running].filter((d): d is Doc<"deploys"> => !!d && !history.includes(d))], Date.now());
   const countsOf = (d: Doc<"deploys">): DeployAfterCounts | null => {
     const a = aftermath.get(String(d._id));
     return a ? { new_errors: a.new_errors, regressions: a.regressions, reopened: a.reopened, quiet: a.quiet, open: a.open } : null;
@@ -243,6 +247,7 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
     device_id: t.device_id ?? null,
     publisher_user_id: String(t.publisher_user_id),
     live: live ? await deployLine(ctx, live, caches, countsOf(live)) : null,
+    running: running ? await deployLine(ctx, running, caches, countsOf(running)) : null,
     open: open ? { ...(await deployLine(ctx, open, caches)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,
     history: await Promise.all(history.map((d) => deployLine(ctx, d, caches, countsOf(d)))),
     last_read: t.last_read ?? null,

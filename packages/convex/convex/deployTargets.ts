@@ -37,6 +37,7 @@ import {
   readJsonLive,
   type DeployLiveReader,
 } from "@codecast/shared/contracts/deployTargets";
+import { liveDeployOf } from "@codecast/shared/contracts/deploys";
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
 import { COMMITS_MAX, commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, repositoryArg, targetDeploys, targetRows, targetState, upsertMainCommits } from "./deployTargetsState";
 import { requestTargetDeployCore } from "./deployTargetRequest";
@@ -218,7 +219,8 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
       .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", d.workspace).eq("target", d.target).lte("created_at", d.created_at))
       .order("desc")
       .take(30);
-    const before = earlier.find((x) => x._id !== d._id && x.status === "live" && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at));
+    // The real deploy that went live last before it: a watcher's push is nobody's deploy, so a range never starts there.
+    const before = liveDeployOf(earlier.filter((x) => x._id !== d._id && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at)), { repository: d.repository, real: true });
     if (before?.sha && before.sha !== d.sha) previous = patch.previous_sha = before.sha;
   }
   if (!d.commits?.length && previous) {
@@ -380,8 +382,9 @@ export const recordShipPass = mutation({
           ...(step.dirty ? { dirty: step.dirty } : {}),
           ...(step.machine?.trim() ? { machine: step.machine.trim() } : {}),
           ...(step.via ? { pushed_via: step.via } : {}),
-          ...(step.adds?.length ? { adds: step.adds } : {}),
-          ...(step.drops?.length ? { drops: step.drops } : {}),
+          // Sent exactly when the push's diff ran, empty or not: a deploy whose diff ran is evidence of what its tree held.
+          ...(step.adds ? { adds: step.adds } : {}),
+          ...(step.drops ? { drops: step.drops } : {}),
           ship_pass_id: passId,
           at: now,
         });
