@@ -38,6 +38,21 @@ export async function boundSessionsOf(ctx: { db: any }, task: any): Promise<any[
   return out.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
 }
 
+/** The session a change on `task` came from: the live session bound to it, else the newest live session that
+ *  handed it off, since an implementer often moves to other work once it does. `cast task handoff` writes its
+ *  "Handoff: …" review comment from that session (taskClaim.ts handoffCommentText). A session reviewing the task
+ *  is neither. */
+export async function changeSessionOf(ctx: { db: any }, task: any, comments: { conversation_id?: Id<"conversations">; comment_type: string; text: string; created_at: number }[]): Promise<any | null> {
+  const [bound] = (await boundSessionsOf(ctx, task)).filter((c) => !c.inbox_killed_at);
+  if (bound) return bound;
+  const handoffs = comments.filter((c) => c.conversation_id && c.comment_type === "review" && c.text.startsWith("Handoff:"));
+  for (const h of handoffs.sort((a, b) => b.created_at - a.created_at)) {
+    const conv = await ctx.db.get(h.conversation_id);
+    if (conv && !conv.inbox_killed_at && String(conv.review_of_task_id ?? "") !== String(task._id)) return conv;
+  }
+  return null;
+}
+
 /** Is the session still doing work: a fresh daemon heartbeat, or recent
  *  activity on a row that is neither completed nor killed. */
 export async function isSessionWorking(ctx: { db: any }, conv: any, now: number): Promise<boolean> {
