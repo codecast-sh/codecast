@@ -2,7 +2,7 @@ import { replaceGlobals } from "../../test-helpers/globals";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "bun:test";
 import { useInboxStore, type AppTab } from "../../store/inboxStore";
 import { besideLeafId, leavesOf, seedLeafId } from "../../store/stageSplit";
-import { openBeside, openBrowserPane, paneSessionId, performStageDrop, stageRenderLayout } from "../stage";
+import { openBeside, openBrowserPane, paneSessionId, performStageDrop, stageClose, stageRenderLayout } from "../stage";
 import { parseBrowserRoute } from "../browserPane";
 
 // performStageDrop is the one entry point every drag source funnels into;
@@ -323,5 +323,38 @@ describe("paneSessionId", () => {
     // "no longer available" for a session the viewer could open.
     expect(paneSessionId("/conversation/jx7etg8")).toBeNull();
     expect(paneSessionId("/conversation/3f2c9a1e-7b1d-4c55-9a0e-1c2d3e4f5a6b")).toBeNull();
+  });
+});
+
+// ct-97961 (replay rp-15795, 2:22): closing the Files pane beside an inbox on
+// a conversation took the address bar /files → /inbox?s=<id> → /conversation/<id>.
+// The bar goes straight to the conversation's own URL, in one write.
+describe("stageClose — the address bar lands on the surviving conversation", () => {
+  const SESSION = "b0000000000000000000000000000000";
+  const writes: string[] = [];
+  const loc = { pathname: "/files", search: "?path=notes" };
+  let restoreLocation: () => void;
+  beforeAll(() => {
+    const write = (kind: string) => (_s: unknown, _t: string, url: string) => {
+      writes.push(`${kind} ${url}`);
+      const [pathname, search = ""] = url.split("?");
+      loc.pathname = pathname;
+      loc.search = search ? `?${search}` : "";
+    };
+    restoreLocation = replaceGlobals({
+      window: { innerWidth: 1400, location: loc, history: { pushState: write("push"), replaceState: write("replace") } },
+    });
+  });
+  afterAll(() => restoreLocation());
+
+  it("writes /conversation/<id> once, never the /inbox?s= spelling", () => {
+    useInboxStore.setState({ tabs: [tab({ path: `/inbox?s=${SESSION}` })], activeTabId: "t1" } as any);
+    state().stageInsertLeaf("root", "right", "/files?path=notes");
+    const files = leavesOf(activeTab().layout!).find((l) => l.path.startsWith("/files"))!;
+    state().stageFocusLeaf(files.id);
+    writes.length = 0;
+    stageClose(files.id);
+    expect(activeTab().path).toBe(`/inbox?s=${SESSION}`);
+    expect(writes).toEqual([`replace /conversation/${SESSION}`]);
   });
 });

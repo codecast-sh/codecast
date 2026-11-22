@@ -257,6 +257,20 @@ export function tabNeedsUrlRestore(livePathname: string, tabPath: string): boole
   return conversationTabPath(livePathname) !== tabPath;
 }
 
+/** The address a tab path is written to the bar as. An inbox tab on a session
+ *  (`/inbox?s=<id>`, nothing else in it) reads `/conversation/<id>`, the URL
+ *  the inbox itself canonicalizes to. Restoring the tab spelling made the bar
+ *  pass through `/inbox?s=<id>` until the inbox respelled it, an extra nav on
+ *  every pane close or tab switch back onto a conversation (ct-97961). */
+export function tabAddressPath(tabPath: string): string {
+  const [page, query, ...rest] = tabPath.split("?");
+  if (page !== "/inbox" || query === undefined || rest.length || tabPath.includes("#")) return tabPath;
+  const params = new URLSearchParams(query);
+  const id = params.get("s");
+  if (!id || !isConvexId(id) || [...params.keys()].length !== 1) return tabPath;
+  return `/conversation/${id}`;
+}
+
 /** The path the active tab must take when history traverses onto an entry,
  *  or null when the tab already renders that entry's owner.
  *

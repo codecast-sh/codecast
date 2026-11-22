@@ -429,10 +429,6 @@ export function QueuePageClient() {
 
   // ID we're trying to navigate to that isn't yet in the queue
   const [pendingInjectId, setPendingInjectId] = useState<string | null>(null);
-  // The target the param effect has asked to hold but whose pendingInjectId
-  // has not committed yet. The address-bar sync runs in the same commit as
-  // that request, before the state lands, and must already treat it as held.
-  const scheduledHoldRef = useRef<string | null>(null);
   // A deep-link target the server would not hand over (deleted, or private to
   // someone else). Rendered as an honest note instead of an empty pane.
   const [unavailableId, setUnavailableId] = useState<string | null>(null);
@@ -498,11 +494,9 @@ export function QueuePageClient() {
     if (store.sessions[paramSessionId]) {
       navigateToSession(paramSessionId);
       setPendingInjectId(null);
-      scheduledHoldRef.current = null;
       paramProcessedRef.current = true;
     } else {
       setPendingInjectId(paramSessionId);
-      scheduledHoldRef.current = paramSessionId;
     }
   }, [paramSessionId, paramSessionLoaded, navigateToSession, clientStateInitialized, isActiveTab, setShowMySessions, router]);
 
@@ -729,15 +723,15 @@ export function QueuePageClient() {
     // that happened to be open before. A peek at a hidden session names the
     // session it shows too, as opening its link does, or a reload or a tab
     // switch lands on the session behind it.
-    // A hold requested in this very commit (the pane coming forward with an
-    // uncached ?s=) counts too: without it the sync sees the session the
-    // person LEFT still current and pushes it over the link (ct-97961).
-    // It lapses once the real hold commits or the target reaches the store.
+    // The pane's own ?s= naming a session the store does not hold yet is
+    // such a target too. The path moves in lockstep with every in-pane select
+    // (syncActiveInboxTabPath), so it only names an absent session when a
+    // link brought the pane forward on it; the param effect's hold for it
+    // lands a render later, and in between the session the person LEFT is
+    // still current. Writing that one pushed it over the link (ct-97961).
     const store = useInboxStore.getState();
-    const scheduled = scheduledHoldRef.current;
-    const scheduledHold = !heldTargetId && scheduled === paramSessionId && scheduled && !store.sessions[scheduled] ? scheduled : null;
-    if (!scheduledHold) scheduledHoldRef.current = null;
-    const targetId = heldTargetId ?? scheduledHold ?? viewingDismissedId ?? store.getCurrentSession()?._id;
+    const linkTarget = paramSessionId && isConvexId(paramSessionId) && !store.sessions[paramSessionId] ? paramSessionId : null;
+    const targetId = heldTargetId ?? linkTarget ?? viewingDismissedId ?? store.getCurrentSession()?._id;
     // A local stub (a blank new session not yet created on the server) never
     // reaches the address bar: a reload hands the URL to the conversation
     // route, whose resolver has never heard of it and answers Not Found, and

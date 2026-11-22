@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { conversationTabPath, deepLinkSessionId, pathLabel, inboxTabSessionId, poppedTabPath, urlSessionId, tabNeedsUrlRestore } from "../pathLabel";
+import { conversationTabPath, deepLinkSessionId, pathLabel, inboxTabSessionId, poppedTabPath, urlSessionId, tabNeedsUrlRestore, tabAddressPath } from "../pathLabel";
 
 // A tab is labeled by its ROUTE, never its query string. The regression here:
 // stampedTabPath normalizes a conversation tab to /inbox?s=<id>, and the raw
@@ -262,5 +262,19 @@ describe("pathLabel — the company's objects, under the new address and the old
     expect(pathLabel("/org/projects/pj-1")).toBe("Project");
     expect(pathLabel("/projects/pj-mf3k2a")).toBe("Project");
     expect(pathLabel("/projects/pj-mf3k2a/ct-12")).toBe("Project");
+  });
+});
+
+describe("tabAddressPath — a tab is restored to the bar in the inbox's own spelling", () => {
+  const id = "jx77e151jzzb8jnk1234567890abcdef";
+  it("an inbox tab on a session reads /conversation/<id>", () => {
+    expect(tabAddressPath(`/inbox?s=${id}`)).toBe(`/conversation/${id}`);
+  });
+  it("leaves every other path as the tab holds it", () => {
+    expect(tabAddressPath("/inbox")).toBe("/inbox");
+    expect(tabAddressPath("/files?path=notes")).toBe("/files?path=notes");
+    expect(tabAddressPath("/inbox?s=jx7etg8")).toBe("/inbox?s=jx7etg8");
+    expect(tabAddressPath(`/inbox?s=${id}&highlight=x`)).toBe(`/inbox?s=${id}&highlight=x`);
+    expect(tabAddressPath(`/inbox?s=${id}#msg-1`)).toBe(`/inbox?s=${id}#msg-1`);
   });
 });
