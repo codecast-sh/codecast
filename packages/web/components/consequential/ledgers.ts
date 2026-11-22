@@ -427,25 +427,27 @@ export function killSessionsLedger(r: { total: number; working: string[] }): Swi
  *  a command that only looks, an automatic step runs one that acts (a rebase, a ship), and a person's step is a
  *  question in their queue. */
 /** Shipping a session's change through a flow: what starts, what comes back to the session, what is asked of you, where it ends. */
-export function flowRunLedger(r: { flow: string; session: string; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; ends: ReadonlyArray<string> }): SwitchLedger {
+export function flowRunLedger(r: { flow: string; session: string; count?: number; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; ends: ReadonlyArray<string> }): SwitchLedger {
   const by = (who: string) => r.stages.filter((s) => s.who === who).map((s) => s.label);
   const agents = by("agent");
   const backs = r.stages.filter((s) => s.loops.length).map((s) => s.label);
+  const n = r.count ?? 1, agentRuns = agents.length * n, asks = r.asks.length * n; // one run per session shipped
   return {
     name: `Ship through ${r.flow}`,
     subject: r.session,
     shift: null,
     figures: [
       { value: String(r.stages.length), label: r.stages.length === 1 ? "stage" : "stages" },
-      { value: String(agents.length), label: agents.length === 1 ? "agent session starts" : "agent sessions start", ...(agents.length ? { tone: "warn" as const } : {}) },
-      { value: String(r.asks.length), label: r.asks.length === 1 ? "question for you" : "questions for you" },
+      ...(n > 1 ? [{ value: String(n), label: "runs start", tone: "warn" as const }] : []),
+      { value: String(agentRuns), label: agentRuns === 1 ? "agent session starts" : "agent sessions start", ...(agentRuns ? { tone: "warn" as const } : {}) },
+      { value: String(asks), label: asks === 1 ? "question for you" : "questions for you" },
     ],
     rows: [
-      { k: "Ships", v: "This session's change" },
+      { k: "Ships", v: n > 1 ? `Each session's change, one run apiece` : "This session's change" },
       { k: "Stages", v: r.stages.map((s) => s.label).join(" → ") },
       ...(agents.length ? [{ k: "An agent", v: agents.join(", ") }] : []),
       ...r.asks.map((q) => ({ k: "You", v: q })),
-      ...(backs.length ? [{ k: "Back to this session", v: backs.join(", ") }] : []),
+      ...(backs.length ? [{ k: "Comes back", v: `${n > 1 ? "to each session" : "to the session"} at ${backs.join(", ")}` }] : []),
       ...(r.ends.length ? [{ k: "Can stop", v: `${r.ends.length} ways`, list: [...r.ends] }] : []),
     ],
     stop: "Stop on its card",

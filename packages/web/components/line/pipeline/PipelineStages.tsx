@@ -6,14 +6,12 @@
 // panel on each station.
 import { memo } from "react";
 import Link from "next/link";
-import { ShareControl } from "../../ShareControl";
 import { usePipelineModels } from "../../../hooks/usePipelines";
 import { usePipeline, useSyncPipelines } from "../../../hooks/useSyncPipelines";
 import { useInboxStore } from "../../../store/inboxStore";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { pipelineHref, type PipelineModel } from "../../../lib/line/pipelineModel";
 import { PipelineDiagram } from "./PipelineDiagram";
-import { CheckoutsSection } from "./CheckoutsSection";
 
 const teamOf = (workspace: string | null) => (workspace?.startsWith("team:") ? workspace.slice(5) : null);
 
@@ -68,17 +66,10 @@ export const RepoPipelineStage = memo(function RepoPipelineStage({ workspace, re
     if (!ready) return <>{finder}<div className="lw-skeleton" aria-busy><i style={{ width: "70%" }} /></div></>;
     return <>{finder}<div className="rpl-empty"><b>{failed ? `Pipelines ${failed}` : `No pipeline for ${repository} in any of your teams`}</b><Link href="/flows" className="lw-chip">Every pipeline</Link></div></>;
   }
+  // The overview carries the page's header (name, Edit pipeline, Share), its lanes, its drawer and its checkouts.
   return (
     <div className="rpl-page" data-pipeline-page={model.repository}>
-      <header className="rpl-page-head">
-        <Link href="/flows" className="rpl-up">Pipelines</Link>
-        <span aria-hidden className="rpl-sep">/</span>
-        <h2 className="rpl-page-name">{model.name}</h2>
-        <Figures model={model} />
-        <ShareControl label="pipeline" path={pipelineHref(model.repository)} className="ml-auto" />
-      </header>
       <PipelineDiagram model={model} pipeline={pipelines[i]} teamId={teamOf(workspace)} />
-      <CheckoutsSection pipeline={pipelines[i]} teamId={teamOf(workspace)} />
     </div>
   );
 });

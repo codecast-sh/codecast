@@ -6,6 +6,8 @@ import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { FlowDiagram } from "../../widgets/FlowDiagram";
 import { PipelineStrip } from "../PipelineDiagram";
+import { PipelineTrack } from "../PipelineTrack";
+import { trackOf } from "../../../../lib/line/pipelineView";
 import { PIPELINE_FIXTURES } from "../../../../lib/line/__tests__/pipelines.fixture.generated";
 import { pipelineModel, type PipelineRun } from "../../../../lib/line/pipelineModel";
 
@@ -31,4 +33,17 @@ test("a step with no command is quiet, and a waiting deploy says what it waits f
   const change = renderToStaticMarkup(<FlowDiagram flow={m.change.drawn} diagram={m.change.diagram} marks={m.change.marks} quietRoutes />);
   expect(change).toContain("waits for the deploy");
   expect(change).not.toContain("sends none");
+});
+
+test("the overview's track: only the passing path, a count on the pill a change stands on, hollow steps with no command", () => {
+  const m = pipelineModel(example, [run("a", "ci")]);
+  const change = renderToStaticMarkup(<PipelineTrack items={trackOf(m.change, true)} onOpen={() => {}} />);
+  expect(change).toContain(">Session<");
+  expect(change).toMatch(/class="pt-count"[^>]*>1</);
+  // Side routes live in the drawer: none of their words reach the track.
+  expect(change).not.toMatch(/other ways|sends|loop/i);
+  const release = renderToStaticMarkup(<PipelineTrack items={trackOf(m.release, false)} />);
+  expect(release).toContain('data-kind="none"');
+  // Without onOpen (the list's card is one link) a pill is no button.
+  expect(release).not.toContain("<button");
 });

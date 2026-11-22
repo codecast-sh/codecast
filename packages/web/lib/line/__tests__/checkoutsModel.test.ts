@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { CheckoutRow } from "@codecast/shared/contracts/checkouts";
-import { checkoutsByMachine, checkoutsSummary, folderOf, levelWords } from "../checkoutsModel";
+import { checkoutsPage, checkoutsSummary, folderOf, levelWords } from "../checkoutsModel";
 
 const H = 3600_000;
 const NOW = 100 * H;
@@ -35,33 +35,43 @@ const titles: Record<string, string> = { "c-done": "Opt-out repair test", "c-liv
 const titleOf = (id: string) => titles[id];
 
 describe("every machine's checkouts of a repository", () => {
-  test("machines with stuck or held work come first, and the figures say how many", () => {
-    const machines = checkoutsByMachine([clean, second, stuck], NOW, titleOf);
-    expect(machines.map((m) => m.machine)).toEqual(["Ashot Main Mac", "Second Mac"]);
-    expect(machines[0].checkouts.map((c) => c.folder)).toEqual(["~/src/union-mobile", "~/src/union-pipeline"]);
+  test("what needs a person leads; each machine keeps its live checkouts; old worktrees fold to a count", () => {
+    const wt = (id: string, total: number, sessions: CheckoutRow["uncommitted"]["sessions"] = []) => row({ _id: id, device_id: "mini", device_label: "Second Mac", path: `/Users/ashot/src/union-mobile/.codecast/worktrees/${id}`, behind: 700, uncommitted: { total, sessions, unattributed: [], unattributed_more: 0 }, level: { state: "off", reason: "a worktree" } });
+    const busy = wt("busy", 2, [{ conversation_id: "c-live", session_id: "s", client: "claude", state: "working", last_activity: NOW, paths: ["a"], more: 1 }]);
+    const page = checkoutsPage([clean, second, stuck, wt("old1", 30), wt("old2", 7), busy], NOW, titleOf);
+    expect(page.needs.map((c) => c.id)).toEqual(["stuck"]);
+    expect(page.machines.map((m) => [m.machine, m.live.map((c) => c.id), m.stale.checkouts.length, m.stale.files])).toEqual([
+      ["Second Mac", ["second", "busy"], 2, 37],
+      ["Ashot Main Mac", ["clean"], 0, 0],
+    ]);
     expect(checkoutsSummary([clean, second, stuck])).toEqual({ checkouts: 3, machines: 2, holdingWork: 2, stuck: 1, behind: 2 });
   });
 
   test("uncommitted work reads by session title, working first; finished work with a conversation can ship; no id is shown", () => {
-    const c = checkoutsByMachine([stuck], NOW, titleOf)[0].checkouts[0];
+    const c = checkoutsPage([stuck], NOW, titleOf).needs[0];
     expect(c.holdsWork).toBe(true);
     expect(c.sessions.map((s) => [s.title, s.state, s.canShip])).toEqual([
       ["Landing hero copy", "working", false],
       ["a codex session not synced here", "idle", false],
       ["Opt-out repair test", "finished", true],
     ]);
-    expect(c.unattributed).toEqual({ paths: ["README.md"], more: 54 });
+    expect(c.unattributed).toEqual({ paths: ["README.md"], more: 54, reading: false });
+    expect(c.finished.map((s) => s.title)).toEqual(["Opt-out repair test"]);
   });
 
-  test("a stuck level says on which file, why, for how long, and who was told", () => {
-    const c = checkoutsByMachine([stuck], NOW, titleOf)[0].checkouts[0];
+  test("a stuck level says in a glance on which file, why, for how long, and who was told; git's sentence stays whole", () => {
+    const c = checkoutsPage([stuck], NOW, titleOf).needs[0];
     expect(c.level).toEqual({
       tone: "stuck",
-      words: "stuck 21h on outreach/backend/tests/unit/ct94516Remediation.test.ts: changed here and on main without a clean merge",
+      words: "stuck 21h on ct94516Remediation.test.ts · conflicts with main",
+      reason: "changed here and on main without a clean merge",
       files: ["outreach/backend/tests/unit/ct94516Remediation.test.ts"],
       since: NOW - 21 * H,
       told: "told Opt-out repair test",
+      toldBrief: "told its writer",
     });
+    // Nobody is owed word before the daemon's 30 minutes are up.
+    expect(levelWords({ state: "stuck", files: ["a"], reason: "r", since: NOW - 10 * 60_000, filed: null }, NOW, titleOf).told).toBe("will tell its writer at 30m");
     expect(levelWords({ state: "stuck", files: ["a", "b"], reason: "r", since: NOW - H, filed: null }, NOW, titleOf).told).toBe("nobody told yet");
     expect(levelWords({ state: "stuck", files: ["a"], reason: "r", since: NOW - H, filed: { at: NOW, to: "finding" } }, NOW, titleOf).told).toBe("filed as a finding");
     expect(levelWords({ state: "level", levelled_at: NOW - 2 * H }, NOW, titleOf).words).toBe("level with main, levelled 2h ago");

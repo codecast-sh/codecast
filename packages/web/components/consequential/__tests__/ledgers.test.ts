@@ -79,3 +79,14 @@ test("rotating a key says what the old key carries and when it stops, at a glanc
   // A source that sent nothing loses nothing: no alarm.
   assert.equal(L.rotateKeyLedger({ source: "quiet", events24h: 0, choice: "Ends now" }).alert, undefined);
 });
+
+test("shipping several sessions at once counts a run for each", () => {
+  const stages = [{ label: "CI", who: "command", loops: [] }, { label: "Review", who: "agent", loops: [{ label: "fix" }] }];
+  const one = L.flowRunLedger({ flow: "Change", session: "Opt-out repair", stages, asks: ["Ship it?"], ends: [] });
+  const ten = L.flowRunLedger({ flow: "Change", session: "10 finished sessions in ~/src/app", count: 10, stages, asks: ["Ship it?"], ends: [] });
+  assertGlance(one);
+  assertGlance(ten);
+  assert.deepEqual(one.figures.map((f) => f.value), ["2", "1", "1"]);
+  assert.deepEqual(ten.figures.map((f) => [f.value, f.label]), [["2", "stages"], ["10", "runs start"], ["10", "agent sessions start"], ["10", "questions for you"]]);
+  assert.equal(ten.rows.find((r) => r.k === "Comes back")?.v, "to each session at Review");
+});
