@@ -35,7 +35,7 @@ import { webBaseUrl } from "../config/readLocalConfig.js";
 import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
-import { restoreRunTree } from "./runWorktree.js";
+import { releaseEndedRunTree, restoreRunTree } from "./runWorktree.js";
 
 function resolveNextNode(
   graph: WorkflowGraph,
@@ -2111,8 +2111,10 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   const parker = subject
     ? startSubjectParker((route, body) => cliCall(options, route, body), subject, options.subjectParkMs ?? SUBJECT_PARK_MS, (line) => console.log(`${c.dim}  ${line}${c.reset}`))
     : undefined;
+  // The run's state as driveRun leaves it, so its end can release the worktree it made.
+  const ran: { state?: WorkflowRunState } = {};
   try {
-    return await driveRun(graph, options, cwd, initialContext, startNode, hash, graphNodeHashes, parker);
+    return await driveRun(graph, options, cwd, initialContext, startNode, hash, graphNodeHashes, parker, ran);
   } catch (err) {
     if (!(err instanceof RunEndedOnServer)) throw err;
     // Nothing is reported: the run's end, its task and its hands were settled when it ended.
@@ -2121,6 +2123,9 @@ export async function runWorkflow(graph: WorkflowGraph, options: RunOptions = {}
   } finally {
     await parker?.stop();
     claim?.release();
+    // Whatever ended the run (it completed, failed, or was cancelled on the server), its
+    // worktree goes once main holds all of it; its branch stays (runWorktree.ts).
+    if (ran.state && !options.dryRun) await releaseEndedRunTree(cwd, ran.state.context);
   }
 }
 
@@ -2136,6 +2141,7 @@ async function driveRun(
   hash: string,
   graphNodeHashes: (g: WorkflowGraph) => Array<{ id: string; h: string }>,
   parker?: SubjectParker,
+  ran: { state?: WorkflowRunState } = {},
 ): Promise<WorkflowRunOutcome> {
   // Where a resumed run continues: its checkpoint on this machine, else what the row holds.
   const resumeAt = options.resume && options.runId
@@ -2161,6 +2167,7 @@ async function driveRun(
     completed: [],
     failed: false,
   };
+  ran.state = state;
 
   // Per-run outcome record for goal gate checking (all completed nodes)
   const nodeOutcomes: Record<string, NodeOutcome> = {};
