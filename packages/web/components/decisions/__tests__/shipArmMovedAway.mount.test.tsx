@@ -15,12 +15,16 @@ import { CARD_DECISION_OPTIONS, type ChangeCard } from "@codecast/shared/contrac
 
 // Records every toast while still showing the real one (bun shares module mocks across files).
 const toasts: string[] = [];
-const realSonner = await import("sonner");
-const spy = Object.assign((msg: unknown, ...rest: unknown[]) => { toasts.push(String(msg)); return (realSonner.toast as any)(msg, ...rest); }, realSonner.toast, {
-  success: (msg: unknown, ...rest: unknown[]) => { toasts.push(String(msg)); return realSonner.toast.success(msg as any, ...(rest as [])); },
-  error: (msg: unknown, ...rest: unknown[]) => { toasts.push(String(msg)); return realSonner.toast.error(msg as any, ...(rest as [])); },
-  warning: (msg: unknown, ...rest: unknown[]) => { toasts.push(String(msg)); return realSonner.toast.warning(msg as any, ...(rest as [])); },
-  info: (msg: unknown, ...rest: unknown[]) => { toasts.push(String(msg)); return realSonner.toast.info(msg as any, ...(rest as [])); },
+// The namespace binds live to the mock once it is installed, so the real
+// toast is held here first; calling through realSonner.toast would call the spy.
+const realSonner = { ...(await import("sonner")) };
+const realToast = realSonner.toast;
+const { success, error, warning, info } = realToast;
+const spy = Object.assign((msg: unknown, ...rest: unknown[]) => { toasts.push(String(msg)); return (realToast as any)(msg, ...rest); }, realToast, {
+  success: (msg: unknown, ...rest: unknown[]) => { toasts.push(String(msg)); return success(msg as any, ...(rest as [])); },
+  error: (msg: unknown, ...rest: unknown[]) => { toasts.push(String(msg)); return error(msg as any, ...(rest as [])); },
+  warning: (msg: unknown, ...rest: unknown[]) => { toasts.push(String(msg)); return warning(msg as any, ...(rest as [])); },
+  info: (msg: unknown, ...rest: unknown[]) => { toasts.push(String(msg)); return info(msg as any, ...(rest as [])); },
 });
 mock.module("sonner", () => ({ ...realSonner, toast: spy }));
 

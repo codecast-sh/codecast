@@ -958,7 +958,6 @@ export function ChangeCardAnswer({
   // The line's selected answer, waiting for return. It lets go when the
   // cursor leaves the card.
   const [armed, setArmed] = useState<ChangeVerdict | "dismiss" | null>(null);
-  useWatchEffect(() => { if (!keys) setArmed(null); }, [keys]);
   const recommended = decision.card?.recommend.verdict;
   const why = decision.card?.recommend.why;
   // Any failing check (the proof counts as one, cardChecks) leaves Ship the
@@ -1010,6 +1009,15 @@ export function ChangeCardAnswer({
     else if (armed) pick(armed);
     setArmed(null);
   }, [armed, onDismiss, pick, decision.card]);
+  // An armed Ship lets go when the person moves on (focus leaves it, or the
+  // card's keys go quiet), but never in silence: one press already reads as
+  // "shipped" to someone who opens the next decision, so a toast says it did
+  // not ship and its action is the second press.
+  const letGo = useCallback(() => {
+    if (armed === "ship" && realShip) toast("Not shipped", { id: `not-shipped-${decision._id}`, description: decision.card?.cause.title, action: { label: "Ship", onClick: () => pick("ship") } });
+    setArmed(null);
+  }, [armed, realShip, pick, decision.card, decision._id]);
+  useWatchEffect(() => { if (!keys && armed) letGo(); }, [keys]);
 
   useWatchEffect(() => {
     if (!keys) return;
@@ -1074,7 +1082,7 @@ export function ChangeCardAnswer({
           <button
             key={v}
             onClick={() => (v === "ship" && realShip ? (armed === "ship" ? commit() : setArmed("ship")) : pick(v))}
-            onBlur={() => { if (armed === "ship" && v === "ship" && realShip) setArmed(null); }}
+            onBlur={() => { if (armed === "ship" && v === "ship" && realShip) letGo(); }}
             aria-pressed={v === "ship" && realShip ? armed === "ship" : undefined}
             disabled={current === v}
             data-verdict={v}
