@@ -171,6 +171,35 @@ type ScanState = { after?: ScanCursor; line: number; prev?: Row; held?: Candidat
 
 const PREV_CHARS = 2_000;
 
+// The queue rows a terminal line is checked against: those created from a day before it to an hour after (its echo
+// can lag its send, ct-52622), at most QUEUE_WINDOW_ROWS, and at most QUEUE_STEP_BYTES of their words across one
+// scan step, so a long-lived session's queue never pushes a step past Convex's per-query read limit beside the
+// messages the step streams.
+const QUEUE_BEFORE_MS = 24 * 3_600_000;
+const QUEUE_AFTER_MS = 3_600_000;
+const QUEUE_WINDOW_ROWS = 50;
+const QUEUE_STEP_BYTES = 2_000_000;
+
+/**
+ * The words of the session's queue rows around `at` (lib/messageProvenance.sameWordsKey), or null when they cannot
+ * all be read: more rows than the window holds, or the step's byte budget already spent by earlier lines.
+ */
+export async function queuedNear(db: any, conversationId: Id<"conversations">, at: number, budget: { bytes: number }): Promise<Set<string> | null> {
+  if (budget.bytes <= 0) return null;
+  const rows = await db
+    .query("pending_messages")
+    .withIndex("by_conversation_created", (q: any) => q.eq("conversation_id", conversationId).gte("created_at", at - QUEUE_BEFORE_MS).lte("created_at", at + QUEUE_AFTER_MS))
+    .take(QUEUE_WINDOW_ROWS + 1);
+  if (rows.length > QUEUE_WINDOW_ROWS) return null;
+  const keys = new Set<string>();
+  for (const row of rows) {
+    budget.bytes -= row.content.length;
+    const key = sameWordsKey(row.content);
+    if (key) keys.add(key);
+  }
+  return keys;
+}
+
 /**
  * One scan step over a conversation: the lines a person typed, numbered as
  * `cast read` numbers them (non-empty rows in creation order), and the state
@@ -210,18 +239,7 @@ export const typedStep = internalQuery({
 
     const names = new Map<string, string | null>();
     const typed: TypedLine[] = [];
-    // The words of every row this session's queue ever held, read once a line might be typed at its terminal.
-    let queuedKeys: Set<string> | null = null;
-    const queued = async () => {
-      if (!queuedKeys) {
-        queuedKeys = new Set();
-        for await (const row of ctx.db.query("pending_messages").withIndex("by_conversation_id", (q) => q.eq("conversation_id", conv._id))) {
-          const key = sameWordsKey(row.content);
-          if (key) queuedKeys.add(key);
-        }
-      }
-      return queuedKeys;
-    };
+    const budget = { bytes: QUEUE_STEP_BYTES };
     for (const c of candidates) {
       const pending = c.client_id
         ? await ctx.db
@@ -230,8 +248,13 @@ export const typedStep = internalQuery({
             .first()
         : null;
       const row = pending ? { channel: pending.channel, typed_text: pending.typed_text, echo_message_id: pending.echo_message_id ? String(pending.echo_message_id) : undefined } : null;
-      const terminal = !pending && !c.client_id && !c.from_user_id;
-      const provenance = messageProvenance(c, row, conv, terminal && queuedTwin(c.content, await queued()));
+      // A line that would read as typed at the terminal is checked against what the queue sent around it; a window
+      // too full or a step past its read budget cannot be checked, and reads as program.
+      let provenance = messageProvenance(c, row, conv);
+      if (provenance === "typed_local") {
+        const near = await queuedNear(ctx.db, conv._id, c.timestamp, budget);
+        provenance = messageProvenance(c, row, conv, !near || queuedTwin(c.content, near));
+      }
       const words = typedPart(c.content, provenance, row);
       if (provenance === "program" || !words) continue;
       const userId = String(provenance === "typed_composer" ? pending!.from_user_id : conv.user_id);

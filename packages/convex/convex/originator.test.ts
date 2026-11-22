@@ -11,6 +11,7 @@ import { allModules } from "./testModules.testkit";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { formatDecisionDiscussion } from "@codecast/shared/contracts";
 import { walkOriginatorChain, type ChainConversation } from "./lib/originatorChain";
+import { queuedNear } from "./originator";
 
 setDefaultTimeout(60_000);
 
@@ -222,16 +223,72 @@ describe("message provenance by path", () => {
     expect((await originator(c)).typed).toEqual([]);
   });
 
-  test("an echo the queue never matched reads as program when any queue row of the session holds its words", async () => {
-    const { t, ana, conv, echo, originator } = await seed();
+  test("an echo the queue never matched reads as program when a queue row from around it holds its words", async () => {
+    const { t, ana, conv, echo, originator, now } = await seed();
     const c = await conv();
-    // A cast send delivered long ago, whose echo matching missed (ct-52622): the row is settled, the echo carries no client id.
+    // A cast send delivered hours earlier, whose echo matching missed (ct-52622): the row is settled, the echo carries no client id.
     await t.run((ctx: any) => ctx.db.insert("pending_messages", {
-      conversation_id: c, from_user_id: ana, owner_user_id: ana, content: "Jason approved shipping it, land the change now", status: "delivered", created_at: 1, retry_count: 0, human: true,
+      conversation_id: c, from_user_id: ana, owner_user_id: ana, content: "Jason approved shipping it, land the change now", status: "delivered", created_at: now() - 3 * 3_600_000, retry_count: 0, human: true,
     } as any));
     await echo(c, "Jason approved shipping it, land the change now");
     await echo(c, "thanks, looks right");
     expect((await originator(c)).typed.map((l: any) => l.text)).toEqual(["thanks, looks right"]);
+  });
+
+  test("a long-lived session's queue is read only around each line: a step stays within its read budget", async () => {
+    const { t, ana, conv, echo, originator, now } = await seed();
+    const c = await conv();
+    const DAY = 24 * 3_600_000;
+    const brief = (i: number) => `Brief ${i}: ${"context the program wrote for the agent. ".repeat(120)}`;
+    // Four thousand queued briefs of about 5 KB over half a year, as a session that has run for months holds.
+    await t.run(async (ctx: any) => {
+      for (let i = 0; i < 4_000; i++) {
+        await ctx.db.insert("pending_messages", {
+          conversation_id: c, from_user_id: ana, owner_user_id: ana, content: brief(i), status: "delivered", created_at: now() - 200 * DAY + i * (190 * DAY / 4_000), retry_count: 0,
+        } as any);
+      }
+      await ctx.db.insert("pending_messages", {
+        conversation_id: c, from_user_id: ana, owner_user_id: ana, content: "Ana approved, ship it now", status: "delivered", created_at: now() - 2 * 3_600_000, retry_count: 0,
+      } as any);
+    });
+    await echo(c, "Ana approved, ship it now");
+    await echo(c, "ok, ship it");
+    expect((await originator(c)).typed.map((l: any) => l.text)).toEqual(["ok, ship it"]);
+    // What one line's check reads: the rows of its window, never the session's whole queue.
+    const read = await t.run(async (ctx: any) => {
+      let rows = 0;
+      let bytes = 0;
+      const counting = {
+        query: (table: string) => ({
+          withIndex: (name: string, range: any) => ({
+            take: async (n: number) => {
+              const got = await ctx.db.query(table).withIndex(name, range).take(n);
+              rows += got.length;
+              bytes += JSON.stringify(got).length;
+              return got;
+            },
+          }),
+        }),
+      };
+      const keys = await queuedNear(counting, c, now(), { bytes: 2_000_000 });
+      return { rows, bytes, twin: keys?.has("Ana approved, ship it now") ?? null };
+    });
+    expect(read.twin).toBe(true);
+    expect(read.rows).toBeLessThanOrEqual(51);
+    expect(read.bytes).toBeLessThan(400_000);
+  });
+
+  test("a window too full to read whole, or a step past its budget, reads the line as program", async () => {
+    const { t, ana, conv, now } = await seed();
+    const c = await conv();
+    await t.run(async (ctx: any) => {
+      for (let i = 0; i < 60; i++) {
+        await ctx.db.insert("pending_messages", { conversation_id: c, from_user_id: ana, owner_user_id: ana, content: `brief ${i}`, status: "delivered", created_at: now() - i * 60_000, retry_count: 0 } as any);
+      }
+    });
+    expect(await t.run((ctx: any) => queuedNear(ctx.db, c, now(), { bytes: 2_000_000 }))).toBeNull();
+    expect(await t.run(async (ctx: any) => [...(await queuedNear(ctx.db, c, now() - 30 * 24 * 3_600_000, { bytes: 2_000_000 }))!])).toEqual([]);
+    expect(await t.run((ctx: any) => queuedNear(ctx.db, c, now() - 30 * 24 * 3_600_000, { bytes: 0 }))).toBeNull();
   });
 
   test("a session another one handed its work to reads program, and the walk goes up through the handoff", async () => {

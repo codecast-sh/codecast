@@ -2980,6 +2980,9 @@ export default defineSchema({
     resend_of_delivery_id: v.optional(v.string()),
   })
     .index("by_conversation_id", ["conversation_id"])
+    // The rows a session's queue held around a moment (originator.queuedNear): a terminal line's words checked
+    // against what the queue sent then, without reading a long-lived session's whole queue.
+    .index("by_conversation_created", ["conversation_id", "created_at"])
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_conversation_status_kill_generation", ["conversation_id", "status", "kill_generation"])
     .index("by_user_status", ["from_user_id", "status"])
