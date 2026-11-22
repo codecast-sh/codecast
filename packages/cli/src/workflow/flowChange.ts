@@ -60,9 +60,12 @@ export class NoSessionChange extends Error {
  * slow or asking for credentials, it gives up and upstream reads as last fetched.
  */
 async function fetchUpstream(root: string, upstream: string): Promise<void> {
-  if (upstream === "HEAD") return;
-  const args = ["-C", root, "fetch", "--quiet", upstream.split("/")[0], upstream.split("/").slice(1).join("/")];
-  await execFileAsync("git", args, { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } }).catch(() => {});
+  if (upstream !== "HEAD") await fetchRef(root, upstream.split("/")[0], upstream.split("/").slice(1).join("/")).catch(() => {});
+}
+
+/** A fetch that gives up after a minute and never prompts for credentials. */
+function fetchRef(root: string, remote: string, refspec: string) {
+  return execFileAsync("git", ["-C", root, "fetch", "--quiet", remote, refspec], { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
 }
 
 /**
@@ -215,6 +218,7 @@ export async function freezeCheckoutChange(root: string, opts: { branch: string;
   };
 }
 
+<<<<<<< HEAD
 /** Origin's tip of `branch`, fetched now; empty when origin has no such branch or cannot be reached. */
 export async function originTip(root: string, branch: string): Promise<string> {
   const remoteRef = `refs/remotes/origin/${branch}`;
@@ -236,6 +240,41 @@ async function branchTip(root: string, change: FrozenChange): Promise<{ tip: str
   const pushed = !!remote && remote !== (change.remote_tip ?? "") && remote !== change.tip;
   const tip = local && local !== change.tip ? local : pushed ? remote : local || change.tip;
   return { tip, ...(remote ? { remote_tip: remote } : {}) };
+=======
+/** The worktree that has `branch` checked out, or null. */
+async function checkedOutAt(root: string, branch: string): Promise<string | null> {
+  for (const entry of (await git(root, ["worktree", "list", "--porcelain"])).split("\n\n")) {
+    const lines = entry.split("\n");
+    if (lines.includes(`branch refs/heads/${branch}`)) return lines.find((l) => l.startsWith("worktree "))?.slice("worktree ".length) ?? null;
+  }
+  return null;
+}
+
+/**
+ * Where a named branch stands now. A pull request's session pushes rather than commits here, so its branch is
+ * fetched first, into origin's remote-tracking ref: a fetch into the branch itself is refused while a worktree (the
+ * run's own, from an earlier stage) has it checked out. The local branch then follows: the worktree that has it
+ * checked out is reset to the fetched tip, or the ref moves when none does. A worktree holding uncommitted work is
+ * never reset, and a fetch that fails is never read as "nothing new": either stops the refreeze, saying why.
+ */
+async function branchTip(root: string, change: FrozenChange): Promise<string> {
+  if (change.source !== "pr") return git(root, ["rev-parse", `refs/heads/${change.branch}`]);
+  const tracking = `refs/remotes/origin/${change.branch}`;
+  await fetchRef(root, "origin", `+refs/heads/${change.branch}:${tracking}`).catch((err: { stderr?: string; message: string }) => {
+    throw new Error(`Could not fetch the pull request's branch ${change.branch} from origin: ${(err.stderr || err.message).trim()}`);
+  });
+  const tip = await git(root, ["rev-parse", tracking]);
+  const holder = await checkedOutAt(root, change.branch);
+  if (!holder) {
+    await git(root, ["update-ref", `refs/heads/${change.branch}`, tip]);
+  } else {
+    if (await git(holder, ["status", "--porcelain", "--untracked-files=no"])) {
+      throw new Error(`The pull request's branch ${change.branch} is checked out in ${holder}, which holds uncommitted work: finish or clear it there, then the run can take the branch's new commits`);
+    }
+    await git(holder, ["reset", "--quiet", "--hard", tip]);
+  }
+  return tip;
+>>>>>>> 610431e8 (Fetch a pull request's branch into its remote-tracking ref)
 }
 
 /** A checkout's change frozen again: its files and any file one of its writers now holds (a fix may add a test), cut per writer as before. */
