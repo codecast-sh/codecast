@@ -49,7 +49,7 @@ Save the edited plan to the file the dry run printed.
 
 `cast ship checkout --plan` commits each group, replays onto origin, runs the repository's check and changed tests, deploys what must precede the push, pushes, and deploys the rest, as the repository's `[ship]` table says.
 
-When the `[ship]` table names a `flow`, `cast ship checkout` (without `--plan` or steering flags) runs the whole pass through that flow instead: the flow commits it per session, checks, lands and deploys it, and sends each finding to the session that wrote the failing files. Follow the run it prints rather than pushing yourself.
+When the `[ship]` table names a `flow`, the plan file is not used: skip editing it and run `cast ship checkout` with no flags. It runs the whole pass through that flow instead: the flow freezes the checkout again, commits it per session with messages from the sessions' titles, checks, lands and deploys it, and sends each finding to the session that wrote the failing files. `--plan`, `--only`, `--hold`, `--commits-only`, `--message`, `--no-check`, `--no-push`, `--no-deploy` and `--no-fetch` are refused there; a half-done file stays out by its writer finishing or setting it aside. Follow the run it prints rather than pushing yourself.
 
 Ship through the checkout. If `cast ship checkout` cannot replay, level the checkout and run it again rather than building commits somewhere else; if you did commit from another worktree, level the checkout onto what you pushed before going on. After every push, the checkout is level with the pushed head.
 
