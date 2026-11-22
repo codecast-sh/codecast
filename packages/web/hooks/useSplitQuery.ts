@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useConvex, type ConvexReactClient } from "convex/react";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { queryWithSignal } from "../lib/queryWithSignal";
+import { nextTask } from "../lib/inputQuiet";
 import { cacheRows, heldHash, rebuildRows, type SplitCache } from "@codecast/shared/contracts/inboxSplit";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
@@ -81,12 +82,50 @@ function noteHeldChanged(name: string): void {
   }, SAVE_EVERY_MS);
 }
 
+// A row's hash is a sorted-key stringify of it, and a whole download replaces
+// every held row with a fresh object that has none. On a large account the
+// next rebuild then hashed megabytes in one task: after a download that task
+// is the WebSocket message that delivered it, and the page froze for half a
+// second on every such push (ct-98162). The cold rows a value checks are
+// hashed a slice at a time first, with a task between slices, so the rebuild
+// that follows finds every hash in hand. Hashes are memoized per held row, so
+// a row replaced between slices is hashed by the rebuild instead: the result
+// is the same, only the slicing changes.
+const HASH_SLICE_MS = 8;
+// Up to this many unhashed cold rows a push still rebuilds in its own task
+// (rows cooling off between pushes); more go through the sliced path.
+const SYNC_HASH_MAX_ROWS = 100;
+
+function unhashedColdRows(kind: SplitKind, value: any, cache: SplitCache<any>): Array<{ row: unknown; hash?: string }> {
+  if (!value?.split) return [];
+  const hot = new Set<string>(kind === "list" ? value.hot.map((r: any) => String(r._id)) : Object.keys(value.hot));
+  const out: Array<{ row: unknown; hash?: string }> = [];
+  for (const id of value.ids) {
+    if (hot.has(id)) continue;
+    const held = cache.get(id);
+    if (held && held.hash === undefined) out.push(held);
+  }
+  return out;
+}
+
+async function hashColdInSlices(kind: SplitKind, value: any, cache: SplitCache<any>): Promise<void> {
+  let start = performance.now();
+  for (const held of unhashedColdRows(kind, value, cache)) {
+    heldHash(held);
+    if (performance.now() - start < HASH_SLICE_MS) continue;
+    await nextTask();
+    start = performance.now();
+  }
+}
+
 /** Rebuild from the cache, and once more after the saved rows are restored. */
 async function rebuildHeld(kind: SplitKind, value: any, name: string): Promise<any | null> {
   const h = heldFor(name);
+  await hashColdInSlices(kind, value, h.cache);
   const rebuilt = rebuildSplitPayload(kind, value, h.cache);
   if (rebuilt || !value?.split) return rebuilt;
   await h.restored;
+  await hashColdInSlices(kind, value, h.cache);
   return rebuildSplitPayload(kind, value, h.cache);
 }
 
@@ -176,6 +215,8 @@ export async function settleSplitPush(
     seedSplitCache(kind, whole, cache);
     noteHeldChanged(name);
     if (superseded()) return null;
+    await hashColdInSlices(kind, value, cache);
+    if (superseded()) return null;
     const again = rebuildSplitPayload(kind, value, cache);
     // The fetch read a different moment than the push (a cold row changed
     // in between): try once more, then take the fetch, a whole snapshot.
@@ -208,7 +249,9 @@ export function useSplitQueryNoThrow<Q extends FunctionReference<"query">>(
     const value = sub.data;
     if (value === undefined || args === "skip") return;
     const cache = cacheFor(name);
-    const rebuilt = rebuildSplitPayload(kind, value, cache);
+    // Many cold rows without a hash (a recovery poll's download replaced them)
+    // go through settleSplitPush, whose rebuild hashes them in slices.
+    const rebuilt = unhashedColdRows(kind, value, cache).length > SYNC_HASH_MAX_ROWS ? null : rebuildSplitPayload(kind, value, cache);
     if (rebuilt) {
       setData(rebuilt);
       noteHeldChanged(name);
