@@ -9,6 +9,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { WorkflowGraph } from "./types";
+import { readFrozenChange, type FrozenChange } from "./flowChangeFile.js";
 
 export type Subject = { conversationId: string; shortId: string };
 
@@ -17,6 +18,49 @@ export function subjectOf(context: Record<string, string>): Subject | null {
   const conversationId = context["change_conversation"];
   if (!conversationId) return null;
   return { conversationId, shortId: context["change_session"] || conversationId.slice(0, 7) };
+}
+
+/**
+ * The run's change when it is a whole checkout's (flows.md FL4): a finding goes to the writers of the files it names,
+ * and nothing parks or retires anyone, since the writers are other people's sessions in a shared checkout.
+ */
+export function checkoutChangeOf(runDir: string | undefined): FrozenChange | null {
+  const change = readFrozenChange(runDir);
+  return change?.source === "checkout" ? change : null;
+}
+
+/** A session that wrote files of a checkout's change, with the ones a finding names (flows.md FL4). */
+export type Writer = Subject & { files: string[] };
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/**
+ * The writers of a checkout change's files that a finding names, each with its
+ * named files: a file is named when the text holds its path, or its basename
+ * when no other file of the change shares that basename (a stack trace or a
+ * test runner often prints only the name). Files no session's edit names have
+ * no writer and brief nobody.
+ */
+export function writersNamed(change: { paths: string[]; writers?: Record<string, { conversation: string; session: string }> }, text: string): Writer[] {
+  const base = (p: string) => p.slice(p.lastIndexOf("/") + 1);
+  const sharing = new Map<string, number>();
+  for (const p of change.paths) sharing.set(base(p), (sharing.get(base(p)) ?? 0) + 1);
+  // Bounded on both sides, so a.ts is not named by data.ts or a.tsx.
+  const mentions = (name: string) => new RegExp(`(?:^|[^\\w.-])${escapeRe(name)}(?![\\w-]|\\.\\w)`).test(text);
+  const byWriter = new Map<string, Writer>();
+  for (const p of change.paths) {
+    const w = change.writers?.[p];
+    if (!w || !(mentions(p) || (sharing.get(base(p)) === 1 && mentions(base(p))))) continue;
+    const entry = byWriter.get(w.conversation) ?? { conversationId: w.conversation, shortId: w.session, files: [] };
+    entry.files.push(p);
+    byWriter.set(w.conversation, entry);
+  }
+  return [...byWriter.values()];
+}
+
+/** A writer's brief: the station's, and which of the failing files are its own. */
+export function writerBrief(brief: string, writer: Writer): string {
+  return `${brief}\n\nYour files among the failing ones: ${writer.files.join(", ")}.`;
 }
 
 const ANSI = /\x1b\[[0-9;?]*[A-Za-z]/g;
