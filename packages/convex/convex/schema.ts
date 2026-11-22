@@ -4297,6 +4297,9 @@ export default defineSchema({
     // The line-deploy run that carries it through its steps (DP8): each
     // step's state is that run's station, read from the run, never copied here.
     run_id: v.optional(v.id("workflow_runs")),
+    // A deploy still open when a newer one of its target went live, closed as cancelled: that deploy's short id.
+    // A later report of its own (live, failed) still lands on it.
+    superseded_by: v.optional(v.string()),
     created_at: v.number(),
     live_at: v.optional(v.number()),
     finished_at: v.optional(v.number()),

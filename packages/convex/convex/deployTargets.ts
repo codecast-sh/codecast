@@ -102,6 +102,8 @@ export const publish = mutation({
     targets: v.array(targetValidator),
     device_id: v.optional(v.string()),
     root: v.optional(v.string()),
+    head_sha: v.optional(v.string()),
+    head_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
@@ -113,6 +115,11 @@ export const publish = mutation({
       .query("deploy_targets")
       .withIndex("by_workspace_repository", (q) => q.eq("workspace", workspace).eq("repository", repository))
       .take(200);
+    // The newest commit's targets stand: a publish from an older one (or one that names no commit, once one did) is refused.
+    const newest = existing.filter((r) => !r.retired_at && r.head_at !== undefined).sort((a, b) => b.head_at! - a.head_at!)[0];
+    if (newest && (args.head_at === undefined || args.head_at < newest.head_at!) && args.head_sha !== newest.head_sha) {
+      return { team_id: teamId, repository, targets: [], refused: `the published targets are from a newer commit (${String(newest.head_sha ?? "").slice(0, 10)})` };
+    }
     const declared = new Set<string>();
     const out: Array<{ name: string; changed: boolean }> = [];
     for (const t of args.targets) {
@@ -140,10 +147,10 @@ export const publish = mutation({
         const changed = JSON.stringify(Object.entries(fields).map(([k, val]) => [k, (row as any)[k]])) !== JSON.stringify(Object.entries(fields).map(([k, val]) => [k, val])) || !!row.retired_at;
         // A changed reader reads afresh.
         const readerChanged = JSON.stringify(row.live) !== JSON.stringify(t.live);
-        await ctx.db.patch(row._id, { ...fields, publisher_user_id: userId, retired_at: undefined, published_at: now, updated_at: now, ...(readerChanged ? { last_read: undefined } : {}) });
+        await ctx.db.patch(row._id, { ...fields, head_sha: args.head_sha, head_at: args.head_at, publisher_user_id: userId, retired_at: undefined, published_at: now, updated_at: now, ...(readerChanged ? { last_read: undefined } : {}) });
         out.push({ name, changed });
       } else {
-        await ctx.db.insert("deploy_targets", { workspace, team_id: teamId, repository, name, ...fields, publisher_user_id: userId, published_at: now, updated_at: now });
+        await ctx.db.insert("deploy_targets", { workspace, team_id: teamId, repository, name, ...fields, head_sha: args.head_sha, head_at: args.head_at, publisher_user_id: userId, published_at: now, updated_at: now });
         out.push({ name, changed: true });
       }
     }

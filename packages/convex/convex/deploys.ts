@@ -64,6 +64,33 @@ const COMMITS_MAX = 200;
 
 const OPEN: ReadonlySet<DeployStatus> = new Set(["requested", "running"]);
 
+/** A deploy a report or marker may still finish: an open one, or one closed only because a newer deploy went live. */
+const finishable = (d: Pick<Doc<"deploys">, "status" | "superseded_by">) => OPEN.has(d.status) || (d.status === "cancelled" && !!d.superseded_by);
+
+/** The words a superseded deploy is closed with. */
+export const supersededNote = (by: string) => `superseded by ${by}, never reported live`;
+
+/**
+ * The open deploys of a live deploy's target asked for before it: a newer deploy went live, so they never will as
+ * asked. Closed as cancelled, naming the deploy that superseded them (unless `dry`); returned either way.
+ */
+export async function closeSuperseded(ctx: any, live: Doc<"deploys">, opts: { dry?: boolean; now?: number } = {}): Promise<Doc<"deploys">[]> {
+  if (live.status !== "live") return [];
+  const before: Doc<"deploys">[] = await ctx.db
+    .query("deploys")
+    .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", live.workspace).eq("target", live.target).lt("created_at", live.created_at))
+    .order("desc")
+    .take(200);
+  const stale = before.filter((d) => OPEN.has(d.status) && (!d.repository || !live.repository || d.repository === live.repository));
+  if (!opts.dry) {
+    const now = opts.now ?? Date.now();
+    for (const d of stale) {
+      await ctx.db.patch(d._id, { status: "cancelled", superseded_by: live.short_id, finished_at: now, updated_at: now, note: [supersededNote(live.short_id), d.note].filter(Boolean).join("\n") });
+    }
+  }
+  return stale;
+}
+
 /** Whether a deploy is in a project's scope: its own project, else its repository's projects, else (a workspace-wide source) every project. */
 function inScope(d: Pick<Doc<"deploys">, "project_id" | "repository">, projectId: string | null, repositories: ReadonlySet<string> | null): boolean {
   if (d.project_id) return !projectId || String(d.project_id) === projectId;
@@ -189,9 +216,10 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   if (open) {
     const patch: Partial<Doc<"deploys">> = { updated_at: now };
     if (m.event_id && !open.event_ids.some((e) => String(e) === String(m.event_id))) patch.event_ids = [...open.event_ids, m.event_id];
-    if (OPEN.has(open.status)) {
+    if (finishable(open)) {
       if (status === "running") patch.status = "running";
       else { patch.status = status; patch.finished_at = now; if (status === "live") patch.live_at = m.at; }
+      if (open.superseded_by) patch.superseded_by = undefined;
     }
     // The deploy path that names its deploy says what actually went out; otherwise the first sha stands.
     if (m.sha && (!open.sha || (ownNamed && !sameSha(open.sha, m.sha) && (open.action ?? "deploy") === "deploy"))) patch.sha = m.sha;
@@ -257,7 +285,10 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
 async function onDeployStatus(ctx: any, id: Id<"deploys">): Promise<void> {
   const d: Doc<"deploys"> | null = await ctx.db.get(id);
   if (!d || (d.status !== "live" && d.status !== "failed")) return;
-  if (d.status === "live") await fillDeployRange(ctx, id);
+  if (d.status === "live") {
+    await fillDeployRange(ctx, id);
+    await closeSuperseded(ctx, d);
+  }
   const sha = d.sha ? ` at ${d.sha.slice(0, 7)}` : d.version ? ` ${d.version}` : "";
   const title = d.status === "live" ? `${d.short_id} live on ${d.target}${sha}` : `${d.short_id} to ${d.target}${sha} failed`;
   await scheduleTriggerMatch(ctx, {
@@ -541,13 +572,14 @@ export const report = mutation({
     const runId = args.run_id ? ctx.db.normalizeId("workflow_runs", args.run_id) : null;
     if (runId && !d.run_id) patch.run_id = runId;
     // A marker may have finished it already; a report never moves a deploy backwards.
-    if (OPEN.has(d.status)) {
+    if (finishable(d)) {
       if (args.status === "running") patch.status = "running";
       else {
         patch.status = args.status;
         patch.finished_at = now;
         if (args.status === "live") patch.live_at = now;
       }
+      if (d.superseded_by) patch.superseded_by = undefined;
     }
     await ctx.db.patch(d._id, patch);
     if (patch.status && patch.status !== d.status) await onDeployStatus(ctx, d._id);

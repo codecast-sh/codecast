@@ -95,6 +95,29 @@ describe("publishing targets (DP10)", () => {
   });
 });
 
+describe("the newest commit's targets stand (DP10, pipeline.md PL5)", () => {
+  const pub = (ctx: any, targets: any[], head?: { sha: string; at: number }, device = "ana-mac") =>
+    (publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, targets, device_id: device, root: "/repo", ...(head ? { head_sha: head.sha, head_at: head.at } : {}) });
+
+  test("a fresher checkout's set retires what it no longer declares; an older commit's set is refused and changes nothing", async () => {
+    const t = await seed();
+    const ctx = ctxFor(t);
+    // Published before any commit was named: four targets, as an old clone declares them.
+    await pub(ctx, TARGETS);
+    const fresh = await pub(ctx, TARGETS.slice(0, 2), { sha: sha(9), at: 9_000 });
+    expect(fresh.refused).toBeUndefined();
+    expect(t.deploy_targets.filter((r) => !r.retired_at).map((r) => r.name)).toEqual(["backend", "web"]);
+    expect(t.deploy_targets.find((r) => r.name === "backend")).toMatchObject({ head_sha: sha(9), head_at: 9_000 });
+    const stale = await pub(ctx, TARGETS, { sha: sha(3), at: 3_000 }, "old-mac");
+    expect(stale.refused).toContain("newer commit");
+    expect(t.deploy_targets.filter((r) => !r.retired_at).map((r) => [r.name, r.device_id])).toEqual([["backend", "ana-mac"], ["web", "ana-mac"]]);
+    expect((await pub(ctx, TARGETS)).refused).toContain("newer commit");
+    expect((await pub(ctx, TARGETS.slice(0, 2), { sha: sha(9), at: 9_000 })).refused).toBeUndefined();
+    expect((await pub(ctx, TARGETS, { sha: sha(12), at: 12_000 })).refused).toBeUndefined();
+    expect(t.deploy_targets.filter((r) => !r.retired_at).map((r) => r.name)).toEqual(["backend", "web", "cli"]);
+  });
+});
+
 describe("the waiting queue (DP12)", () => {
   test("the commits on main after the live sha that touch a target wait for it, by session, each with its CI", async () => {
     const { t, ctx } = await published();

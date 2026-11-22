@@ -38,6 +38,10 @@ export const deployTables = {
     device_id: v.optional(v.string()),
     root: v.optional(v.string()),
     publisher_user_id: v.id("users"),
+    // The commit the publishing checkout was at, and when it was made: a publish from an older commit is refused, so
+    // a stale clone or a feature worktree never puts back a target main no longer declares.
+    head_sha: v.optional(v.string()),
+    head_at: v.optional(v.number()),
     // What a json reader last read, so a poll records a deploy only when it changes.
     last_read: v.optional(v.object({ sha: v.optional(v.string()), version: v.optional(v.string()), at: v.number(), error: v.optional(v.string()) })),
     // A target the checkout no longer declares keeps its row (its deploys still name it) and stops showing.

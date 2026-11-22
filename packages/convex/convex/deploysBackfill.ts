@@ -7,7 +7,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { internalMutation, internalQuery } from "./functions";
 import { normalizeRepository } from "./lib/gitRefs";
 import { normalizeDeployTarget } from "@codecast/shared/contracts/deploys";
-import { recordDeployMarker, urlFields, type DeployMarker } from "./deploys";
+import { closeSuperseded, recordDeployMarker, supersededNote, urlFields, type DeployMarker } from "./deploys";
 import { carriesForMarker, lineDeployTargets, workspaceMergeWindow } from "./deployCarries";
 import { fillDeployRange } from "./deployTargets";
 import { mainAtOf } from "./deployTargetsState";
@@ -169,5 +169,38 @@ export const stampRunKeys = internalMutation({
       if (!args.dry) await ctx.db.patch(d._id, { workflow_run: fields.workflow_run });
     }
     return { stamped, next: page.isDone ? null : page.continueCursor };
+  },
+});
+
+/**
+ * Close every deploy left open after a newer one of its target went live (closeSuperseded), once, for deploys
+ * recorded before the close ran on every live. `dry` lists them without writing. Paged by created_at.
+ */
+export const closeSupersededDeploys = internalMutation({
+  args: { dry: v.boolean(), since: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const PAGE = 2000;
+    const page: Doc<"deploys">[] = await ctx.db.query("deploys").withIndex("by_creation_time", (q: any) => q.gt("_creationTime", args.since ?? 0)).order("asc").take(PAGE);
+    const lives = page.filter((d) => d.status === "live");
+    const seen = new Set<string>();
+    const closed: Array<{ short_id: string; workspace: string; repository: string | null; target: string; status: string; created_at: number; superseded_by: string }> = [];
+    // The newest live of each target closes everything open before it, so one per target is enough.
+    const newest = new Map<string, Doc<"deploys">>();
+    for (const d of lives) {
+      const key = `${d.workspace}|${d.target}|${d.repository ?? ""}`;
+      const was = newest.get(key);
+      if (!was || was.created_at < d.created_at) newest.set(key, d);
+    }
+    for (const live of newest.values()) {
+      for (const d of await closeSuperseded(ctx, live, { dry: args.dry })) {
+        if (seen.has(d.short_id)) continue;
+        seen.add(d.short_id);
+        // Named by the first live after it, the one that superseded it.
+        const by = lives.filter((l) => l.workspace === d.workspace && l.target === d.target && l.created_at > d.created_at).sort((a, b) => a.created_at - b.created_at)[0] ?? live;
+        if (!args.dry && by._id !== live._id) await ctx.db.patch(d._id, { superseded_by: by.short_id, note: [supersededNote(by.short_id), d.note].filter(Boolean).join("\n") });
+        closed.push({ short_id: d.short_id, workspace: d.workspace, repository: d.repository ?? null, target: d.target, status: d.status, created_at: d.created_at, superseded_by: by.short_id });
+      }
+    }
+    return { dry: args.dry, closed, next: page.length === PAGE ? page[page.length - 1]._creationTime : null };
   },
 });
