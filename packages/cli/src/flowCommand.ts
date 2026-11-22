@@ -11,9 +11,10 @@ import { commandGroup } from "./commandGroups.js";
 import { spawnSync } from "./proc.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { holdUntil, libraryTree, liveFlowLines, namesLiveFlow, variantChanges, variantSummary, type LibraryNode, type LiveFlow } from "./flowLibrary.js";
-import { parseWorkflowSource } from "./workflow/parser.js";
-import { describeFlow, flowLine, poolFlows, type PoolFlow, type PushedPoolRow } from "./workflow/flowPool.js";
+import { holdUntil, libraryTree, liveFlowLines, namesLiveFlow, variantChangeLines, variantChanges, variantSummary, type LibraryNode, type LiveFlow, type VariantChanges } from "./flowLibrary.js";
+import type { WorkflowGraph } from "./workflow/types.js";
+import { graphExtends, parseWorkflowSource } from "./workflow/parser.js";
+import { describeFlow, flowLine, poolFlows, workspaceDefaultFlow, type PoolFlow, type PushedPoolRow } from "./workflow/flowPool.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
 import type { Workspace } from "./resolveWorkspace.js";
 import { choiceOption, notFoundLine } from "./argChecks.js";
@@ -47,11 +48,14 @@ export interface FlowDeps {
   realCwd: () => string;
   /** The workspace a read names: the team given, else the one this shell reads. */
   readWorkspace: (team?: string) => Promise<Workspace>;
+  /** The team this directory is mapped to (`cast teams map`, directoryTeam.ts), or null when none is. */
+  directoryTeam: () => Promise<string | null>;
   /** The workspace a write names outright (a team, or it stops with why). */
   writeWorkspace: (team?: string) => Promise<Workspace>;
   /** Stops with the team feature's own words unless Flows is on for the workspace (the team given, else this shell's).
    *  The commands that start work call it; reading and a run already going are left alone. */
-  requireFlows: (team?: string) => Promise<void>;
+  /** Stops the command, saying why, when Flows is off in this workspace. */
+  requireFlows: (ws: Workspace) => Promise<void>;
 }
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -109,7 +113,9 @@ Choosing a flow:
   extended: name it with extends and fill its slots with steps you write. The rest stays the team's.
   A flow written whole fits only when nothing in the library has the shape of the work.
 
-  cast flow run change                      a library flow, on this session's own edits
+  cast flow run                             the workspace's default flow (cast flow ls marks it),
+                                            on this session's own edits; --task, --branch, --pr name another change
+  cast flow run change                      a library flow by name, on this session's own edits
   cast flow run - <<'EOF'                   a flow written here, checked before it starts
   digraph flaky_fix {
     graph [extends="change"]
@@ -139,16 +145,16 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--team <name>", "Read this team's library (default: the workspace this directory reads)")
     .option("--json", "Print { library, live } as JSON")
     .action(async (opts: { kind?: string; json?: boolean; team?: string }) => {
-      const tdeps = teamDeps(deps, opts.team);
-      const [pool, live] = await Promise.all([readPool(tdeps), readLive(deps, opts.team)]);
+      const at = poolWorkspace(deps, opts.team);
+      const [{ flows: pool, defaultFlow }, live] = await Promise.all([readPool(deps, at), readLive(deps, at)]);
       const library = pool.filter((f) => !opts.kind || f.kind === opts.kind);
       const tree = libraryTree(library, live.flows);
       if (opts.json) {
         const spines = new Set(tree.spine.map((n) => n.flow.slug));
-        console.log(JSON.stringify({ library: library.map((f) => ({ ...f, spine: spines.has(f.slug) })), live: live.flows }, null, 2));
+        console.log(JSON.stringify({ library: library.map((f) => ({ ...f, spine: spines.has(f.slug) })), default: defaultFlow?.slug ?? null, live: live.flows }, null, 2));
         return;
       }
-      const home = (f: typeof pool[number]) => (f.draft ? dim("  (your draft)") : f.where === "repo" ? dim("  (this repo)") : f.where === "team" ? dim(`  (the team's${f.by ? `, from ${f.by}` : ""})`) : f.where === "pushed" ? dim("  (yours)") : "");
+      const home = (f: typeof pool[number]) => (f.slug === defaultFlow?.slug ? bold("  (default)") : "") + (f.draft ? dim("  (your draft)") : f.where === "repo" ? dim("  (this repo)") : f.where === "team" ? dim(`  (the team's${f.by ? `, from ${f.by}` : ""})`) : f.where === "pushed" ? dim("  (yours)") : "");
       const print = (n: LibraryNode, depth: number) => {
         const f = n.flow;
         const lead = depth ? `${"  ".repeat(depth)}└ ` : "  ";
@@ -176,6 +182,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         for (const l of live.flows) for (const line of liveFlowLines(l, { top: 3, bold, dim })) console.log(`  ${line}`);
         console.log("");
       } else if (live.error) console.log(dim(`Live flows: ${live.error}\n`));
+      if (defaultFlow) console.log(dim(`Run this session's change through ${defaultFlow.slug}, the default:  cast flow run`));
       console.log(dim("Run this session's change through one:  cast flow run <flow>"));
       console.log(dim("See a flow's stations and routes:        cast flow show <flow>"));
     });
@@ -186,9 +193,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--team <name>", "Read this team's library (default: the workspace this directory reads)")
     .option("--json", "Print the flow as JSON (with its live flow, and a variant's changes)")
     .action(async (slug: string, opts: { json?: boolean; team?: string }) => {
-      const tdeps = teamDeps(deps, opts.team);
       // A live flow is named by its flow (slug, label or id) or its own id; the flow it runs prints after it.
-      const [lives, pool] = await Promise.all([readLive(deps, opts.team), readPool(tdeps)]);
+      const at = poolWorkspace(deps, opts.team);
+      const [lives, { flows: pool }] = await Promise.all([readLive(deps, at), readPool(deps, at)]);
       const live = lives.flows.find((l) => namesLiveFlow(l, slug)) ?? null;
       const name = live ? live.flow.slug : slug;
       if (live && !pool.some((p) => p.slug === name)) {
@@ -197,7 +204,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         console.log(dim(`\nIts flow ${name} is not in this team's library, so its stations cannot be read here.`));
         return;
       }
-      const found = await findFlow(name, tdeps, pool);
+      const found = await findFlow(name, deps, pool);
       const stale = staleRepoFlow(found, deps.realCwd());
       if (stale) console.error(`! ${stale}`);
       const spineLive = live ?? lives.flows.find((l) => l.flow.slug === found.slug) ?? null;
@@ -291,7 +298,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .description("Publish a repo flow to the team's pool, where every member sees and runs it (cast flow ls, the Flows page)")
     .option("--team <name>", "The team whose pool it joins (default: your active team; personal keeps it yours)")
     .action(async (slug: string, opts: { team?: string }) => {
-      await deps.requireFlows(opts.team);
+      await deps.requireFlows(await deps.readWorkspace(opts.team));
       const found = await findFlow(slug, deps);
       if (!found.file) { console.error(`${found.slug} ships with codecast; it is in every pool already`); process.exit(1); }
       if (found.where === "team" || found.where === "pushed") {
@@ -310,8 +317,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     });
 
   flow
-    .command("run <flow>")
-    .description("Run a change through a flow (a library name, a file, or - for a graph on stdin): this session's own edits by default, or a task, branch or pull request")
+    .command("run [flow]")
+    .description("Run a change through a flow (a library name, a file, or - for a graph on stdin; none runs the workspace's default flow, the one cast flow ls marks): this session's own edits by default, or a task, branch or pull request")
     .option("--task <id>", "The change is this task's (its branch, or the session's edits bound to it)")
     .option("--session [id]", "The change is a session's own uncommitted edits (default: this session)")
     .option("--branch <name>", "The change is this branch")
@@ -323,11 +330,23 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
     .option("--library", "Run the library's flow of that name even though the repo's default branch has its own")
     .option("--json", "Print {run_id, task, branch, worktree, files} as JSON")
-    .action(async (slug: string, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean; team?: string; library?: boolean }) => {
-      await deps.requireFlows(opts.team);
+    .action(async (named: string | undefined, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean; team?: string; library?: boolean }) => {
+      // Flows must be on in the workspace the run reads its pool from, not merely the active one (flows.md FL2).
+      const at = poolWorkspace(deps, opts.team);
+      const where = await at.catch((err: unknown) => {
+        console.error(`Could not tell which workspace this directory reads its flows from (${err instanceof Error ? err.message : String(err)}): pass --team`);
+        process.exit(1);
+      });
+      await deps.requireFlows(where.ws);
       const only = opts.only ? opts.only.split(",").map((s) => s.trim()).filter(Boolean) : null;
       const cwd = deps.realCwd();
-      const found = await findFlow(slug, teamDeps(deps, opts.team));
+      const read = await readPool(deps, at);
+      // No flow named: the workspace's default, by the rule the web's pickers use (flows.md FL4).
+      if (!named && read.failed) { console.error(`Could not read the workspace's flows, so its default flow is unknown (${read.failed}): name the flow to run (cast flow ls)`); process.exit(1); }
+      if (!named && !read.defaultFlow) { console.error("No flow here takes a session's change, so there is no default to run: name one (cast flow ls)"); process.exit(1); }
+      const slug = named ?? read.defaultFlow!.slug;
+      if (!named && !opts.json) console.error(`${dim("No flow named:")} running ${bold(slug)}, the workspace's default`);
+      const found = await findFlow(slug, deps, read.flows);
       const stale = opts.library ? null : staleRepoFlow(found, cwd);
       if (stale) { console.error(`✗ ${stale}`); process.exit(1); }
       if (found.errors.length) { console.error(`✗ ${found.slug} does not run: ${found.errors.join("; ")}`); process.exit(1); }
@@ -576,7 +595,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--force", "Replace a flow of that name")
     .option("--args <json>", "The args the script reads (default: the args its run was launched with, when this machine ran it)")
     .action(async (script: string, opts: { as: string; slug?: string; force?: boolean; args?: string }) => {
-      await deps.requireFlows();
+      await deps.requireFlows(await deps.readWorkspace());
       const { importWorkflowScript } = await import("./workflow/flowImport.js");
       const cwd = deps.realCwd();
       const file = resolveScript(script, cwd);
@@ -653,7 +672,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       .option("--json", "Print the live flow as JSON")
       .action(async (name: string | undefined, opts: { team?: string; json?: boolean }) => {
         // A switch is a write: it names its team outright, and the server decides who may turn it.
-        if (on) await deps.requireFlows(opts.team);
+        if (on) await deps.requireFlows(await deps.readWorkspace(opts.team));
         const ws = await deps.writeWorkspace(opts.team);
         const l: LiveFlow | null = await deps.cliPost(`/cli/flow/live/${on ? "on" : "off"}`, { ...(ws.kind === "team" ? { team_id: ws.teamId } : {}), ...(name ? { flow: name } : {}), from_session: deps.callingSession() });
         if (opts.json) { console.log(JSON.stringify(l, null, 2)); return; }
@@ -665,10 +684,10 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
 }
 
 /** The team's live flows, or why they could not be read (the pool still lists without them). */
-async function readLive(deps: FlowDeps, team?: string): Promise<{ flows: LiveFlow[]; error: string | null }> {
+async function readLive(deps: FlowDeps, at: PoolAt): Promise<{ flows: LiveFlow[]; error: string | null }> {
   try {
     // A personal workspace has no live flow, and a server from before them answers 404 (convex liveFlows.ts).
-    const ws = await deps.readWorkspace(team);
+    const { ws } = await at;
     if (ws.kind !== "team") return { flows: [], error: null };
     const r = await deps.cliPost("/cli/flow/live/show", { team_id: ws.teamId }, { throwOnError: true }).catch((err: Error) => {
       if (err.message.includes("/cli/flow/live/show route")) return null;
@@ -711,20 +730,35 @@ function printSlots(f: Pick<FoundFlow, "stations" | "slug">): void {
   if (slots.some((s) => s.slot!.filled === "empty")) console.log(dim(`  fill them from a flow with graph [extends="${f.slug}"] and subgraph <slot> { ... }`));
 }
 
-/** The deps with the pool read from a named team's workspace. */
-const teamDeps = (deps: FlowDeps, team?: string): FlowDeps => (team ? { ...deps, readWorkspace: () => deps.readWorkspace(team) } : deps);
-
-/** The flows published to the workspace's pool (/cli/workflows/pool, flows.md FL2). */
-async function fetchPool(deps: FlowDeps): Promise<PushedPoolRow[]> {
-  const ws = await deps.readWorkspace();
-  const r = await deps.cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
-  return r?.flows ?? [];
+/**
+ * The workspace a flow read names (flows.md FL2): the team given, else the team this directory is mapped to, else the
+ * active one. `ownsDefault` says whether that team's default flow is this directory's: a team named or mapped, never
+ * the active team of an unmapped directory, whose session start names no team's default either.
+ */
+type PoolAt = Promise<{ ws: Workspace; ownsDefault: boolean }>;
+async function poolWorkspace(deps: FlowDeps, team?: string): PoolAt {
+  if (team) return { ws: await deps.readWorkspace(team), ownsDefault: true };
+  const mapped = await deps.directoryTeam();
+  return mapped ? { ws: { kind: "team", teamId: mapped }, ownsDefault: true } : { ws: await deps.readWorkspace(), ownsDefault: false };
 }
 
-/** The pool as this session sees it: the repo's, the shipped, and the workspace's published flows. */
-async function readPool(deps: FlowDeps) {
-  const pushed = await fetchPool(deps).catch(() => []);
-  return poolFlows(deps.realCwd(), await shortSessionId(deps.callingSession() ?? null, deps), pushed);
+/** The flows published to the workspace's pool (/cli/workflows/pool, flows.md FL2), and the default flow this directory takes from it. */
+async function fetchPool(deps: FlowDeps, at: PoolAt): Promise<{ flows: PushedPoolRow[]; default_flow: string | null }> {
+  const { ws, ownsDefault } = await at;
+  const r = await deps.cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {}, { throwOnError: true });
+  return { flows: r?.flows ?? [], default_flow: ownsDefault ? r?.default_flow ?? null : null };
+}
+
+/** The pool as this session sees it (the repo's, the shipped, and the workspace's published flows), and the workspace's
+ *  default flow in it: the one a nameless `cast flow run` runs. `failed` says why the workspace's pool could not be
+ *  read: the local flows still list, but no default can be told from them. */
+async function readPool(deps: FlowDeps, at: PoolAt): Promise<{ flows: PoolFlow[]; defaultFlow: PoolFlow | null; failed: string | null }> {
+  const read = await fetchPool(deps, at).then(
+    (r) => ({ ...r, failed: null }),
+    (err: unknown) => ({ flows: [], default_flow: null, failed: err instanceof Error ? err.message : String(err) }),
+  );
+  const flows = poolFlows(deps.realCwd(), await shortSessionId(deps.callingSession() ?? null, deps), read.flows);
+  return { flows, defaultFlow: read.failed ? null : workspaceDefaultFlow(flows, read.default_flow), failed: read.failed };
 }
 
 async function findFlow(slug: string, deps: FlowDeps, pool?: PoolFlow[]): Promise<FoundFlow> {
@@ -735,7 +769,7 @@ async function findFlow(slug: string, deps: FlowDeps, pool?: PoolFlow[]): Promis
     if (!text.trim()) { console.error("No graph on stdin: pipe a flow's digraph in, e.g. cast flow run - <<'EOF' ... EOF"); process.exit(1); }
     const top = (spawnSync("git", ["-C", deps.realCwd(), "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim() || deps.realCwd();
     try {
-      const kept = writeSessionFlow(top, text, await shortSessionId(deps.callingSession() ?? null, deps), (pool ?? (await readPool(deps))));
+      const kept = writeSessionFlow(top, text, await shortSessionId(deps.callingSession() ?? null, deps), (pool ?? (await readPool(deps, poolWorkspace(deps))).flows));
       return { ...describeFlow(kept.slug, kept.source, "repo", kept.file), source: kept.source };
     } catch (err) {
       console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
@@ -747,7 +781,7 @@ async function findFlow(slug: string, deps: FlowDeps, pool?: PoolFlow[]): Promis
     const source = fs.readFileSync(abs, "utf-8");
     return { ...describeFlow(path.basename(abs).replace(/\.cast$/, ""), source, "repo", abs), source };
   }
-  const f = (pool ?? (await readPool(deps))).find((p) => p.slug === slug.replace(/\.cast$/, ""));
+  const f = (pool ?? (await readPool(deps, poolWorkspace(deps))).flows).find((p) => p.slug === slug.replace(/\.cast$/, ""));
   if (!f) {
     console.error(notFoundLine("flow", slug, "cast flow ls"));
     process.exit(1);
