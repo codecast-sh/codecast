@@ -329,6 +329,9 @@ function FaceSeat({
   );
 }
 
+/** Repeat clicks on a face within this long of the one that pinned its card keep it open. */
+const REPEAT_CLICK_MS = 700;
+
 export function FaceRow({
   row,
   density,
@@ -489,9 +492,18 @@ export function FaceRow({
     if (!holdCard && openId && !pinned) close();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- only the hold's edge
   }, [holdCard]);
+  // A click pins; a later click on the same face unpins. Clicks that land
+  // within REPEAT_CLICK_MS of the one that pinned are the same ask (a double
+  // or rage click), so they keep the card open instead of flickering it shut.
+  const pinnedAt = useRef(0);
   const toggle = (id: string) => {
-    if (openId === id && pinned) return close();
+    const now = Date.now();
+    if (openId === id && pinned) {
+      if (now - pinnedAt.current < REPEAT_CLICK_MS) return void (pinnedAt.current = now);
+      return close();
+    }
     clearTimers();
+    pinnedAt.current = now;
     setOpenId(id);
     setPinned(true);
   };
