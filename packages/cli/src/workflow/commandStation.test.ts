@@ -133,4 +133,13 @@ describe("a station that ends on its own", () => {
     expect(ctx["leaves.output"]).toBe("done");
     await pollUntil(() => !pidsIn(pids).some(alive), "the left job ending", { ms: 15_000 });
   }, 30_000);
+
+  test("is flagged when it prints nothing past its bound, and not cut off", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "station-procs-"));
+    const node = { id: "quiet", type: "command", script: "sleep 2; exit 3", silent: 1 } as WorkflowNode;
+    const ctx: Record<string, string> = {};
+    expect(await executeCommand(node, ctx, tmp, { everyMs: 100 })).toBe("failure");
+    expect(ctx["quiet.exit_code"]).toBe("3");
+    expect(ctx["quiet.output"]).toContain("printed nothing for");
+  }, 30_000);
 });

@@ -147,17 +147,21 @@ function stationEnded(group: number): void {
 /**
  * What a station watches while its script runs: `ended` says whether its run
  * ended elsewhere (a person cancelled it on the web), looked at every
- * `everyMs`. `graceMs` is how long its processes get between TERM and KILL
- * when it is cut off (tests shorten it).
+ * `everyMs`, which is also how often silence is checked. `graceMs` is how long
+ * its processes get between TERM and KILL when it is cut off (tests shorten it).
  */
 export type StationWatch = { ended?: () => Promise<boolean>; everyMs?: number; graceMs?: number };
 
+/** Seconds a station may print nothing before it is flagged (node `silent=`, 0 never). */
+const SILENT_DEFAULT_S = 1800;
 /**
  * How long a station whose script exited waits for its output pipes to close.
  * A process that left the station's group (setsid) can hold them for good, and
  * waiting on `close` alone hung the station with it.
  */
 const PIPE_CLOSE_GRACE_MS = 2000;
+
+const seconds = (ms: number) => (ms >= 120_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`);
 
 export async function executeCommand(
   node: WorkflowNode,
@@ -175,7 +179,8 @@ export async function executeCommand(
     // minute cap on most repos; a timeout read as a failed check and burned an
     // implement visit. Per node, in seconds.
     const timeoutMs = (node.timeout ?? 120) * 1000;
-    type Result = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean; stopped: boolean };
+    const silentMs = (node.silent ?? SILENT_DEFAULT_S) * 1000;
+    type Result = { status: number | null; signal: NodeJS.Signals | null; stdout: string; stderr: string; timedOut: boolean; stopped: boolean; notes: string[] };
     const result = await new Promise<Result>((resolve, reject) => {
       const child = spawn("bash", ["-c", script], {
         cwd,
@@ -190,7 +195,8 @@ export async function executeCommand(
       });
       const group = process.platform === "win32" ? undefined : child.pid;
       let stdout = "", stderr = "", timedOut = false, stopped = false, closed = false, done = false;
-      let looking = false;
+      const notes: string[] = [];
+      let quietSince = Date.now(), flagged = false, looking = false;
       let ending: Promise<void> | null = null;
       // Every process of the station, the ones that left its group included (stationProcs.ts).
       const end = () => {
@@ -199,13 +205,21 @@ export async function executeCommand(
       if (child.pid) endWithRunner(child.pid, graceMs);
       const timer = setTimeout(() => { timedOut = true; end(); }, timeoutMs);
       const tick = setInterval(() => {
+        // A station that prints nothing for long is flagged, never cut off: its timeout is the bound.
+        if (silentMs > 0 && !flagged && Date.now() - quietSince >= silentMs) {
+          flagged = true;
+          const note = `printed nothing for ${seconds(Date.now() - quietSince)}`;
+          notes.push(note);
+          console.log(`  ${c.yellow}! ${node.label || node.id} has ${note}; still running (timeout ${seconds(timeoutMs)})${c.reset}`);
+        }
         if (watch.ended && !looking && !ending) {
           looking = true;
           watch.ended().then((ended) => { if (ended && !done) { stopped = true; end(); } }, () => {}).finally(() => { looking = false; });
         }
       }, watch.everyMs ?? 30_000);
-      child.stdout!.on("data", (d) => { stdout += d; });
-      child.stderr!.on("data", (d) => { stderr += d; });
+      const heard = () => { quietSince = Date.now(); flagged = false; };
+      child.stdout!.on("data", (d) => { stdout += d; heard(); });
+      child.stderr!.on("data", (d) => { stderr += d; heard(); });
       let onClose: (() => void) | null = null;
       child.on("close", () => { closed = true; onClose?.(); });
       const settle = () => { clearTimeout(timer); clearInterval(tick); if (child.pid) stationEnded(child.pid); };
@@ -222,12 +236,13 @@ export async function executeCommand(
             settle();
             child.stdout!.destroy();
             child.stderr!.destroy();
-            resolve({ status, signal, stdout, stderr, timedOut, stopped });
+            resolve({ status, signal, stdout, stderr, timedOut, stopped, notes });
           });
       });
     });
 
     const output = result.stdout + result.stderr
+      + result.notes.map((n) => `\n${n}`).join("")
       + (result.timedOut ? `\ntimed out after ${timeoutMs / 1000}s` : "")
       + (result.stopped ? "\nstopped: the run ended" : "");
     if (output.trim()) {
