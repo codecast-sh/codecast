@@ -13,7 +13,7 @@ import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthC
 import { installCallbackHandler } from "./lib/githubInstallCallback";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./lib/conversationRead";
-import { readOriginator } from "./lib/originatorChain";
+import { readOriginator, verifyCitation } from "./lib/originatorChain";
 import { SHARED_CALL_VIDEO_PATH, signForCli } from "./callRecordings";
 import { SHARED_CALL_AUDIO_PATH, sharedCallAudio, sharedCallVideo } from "./lib/sharedCallMedia";
 import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMirror";
@@ -3449,7 +3449,28 @@ cliRoute("/cli/role/line/merge", async (ctx, body) => ctx.runMutation(api.orgLin
 cliRoute("/cli/line/merge/check", async (ctx, body) => ctx.runQuery(api.orgLineMerge.check, body));
 cliRoute("/cli/line/merge/record", async (ctx, body) => ctx.runMutation(api.orgLineMerge.record, body));
 // `cast workflow clear <run> --why`: a script station of the run's own graph cleared it to land with no card.
-cliRoute("/cli/workflow-runs/clear", async (ctx, body) => ctx.runMutation(api.orgLineMerge.clearForMerge, body));
+// With a cite (the intent segment): the clear rests on the run starter's own typed line, and code checks that line
+// before the stamp is written (verifyCitation); the model that chose it decides nothing here.
+cliRoute("/cli/workflow-runs/clear", async (ctx, body) => {
+  if (body.cite === undefined) return ctx.runMutation(api.orgLineMerge.clearForMerge, body);
+  const { api_token, run_id, why, cite, quote } = body;
+  if (typeof api_token !== "string" || typeof run_id !== "string" || typeof why !== "string") return { error: "Missing api_token, run_id or why" };
+  if (typeof cite?.conversation_short_id !== "string" || !Number.isInteger(cite?.line) || typeof quote !== "string") {
+    return { error: "A cite is {conversation_short_id, line} with a quote" };
+  }
+  const cited = await verifyCitation({
+    run: () => ctx.runQuery(internal.originator.citeRun, { api_token, run_id }),
+    typedStep: (id, state) => ctx.runQuery(internal.originator.typedStep, { api_token, conversation_id: id, ...(state === undefined ? {} : { state }) }),
+  }, { conversation_short_id: cite.conversation_short_id, line: cite.line }, quote);
+  if ("refused" in cited) return { error: `Not cleared: ${cited.refused}` };
+  const cleared = await ctx.runMutation(internal.orgLineMerge.clearForMergeCited, {
+    api_token, run_id, why,
+    cite: { conversation_short_id: cited.short_id, line: cited.line },
+    quote: cited.quote,
+    name: cited.user_name ?? "the person who started the run",
+  });
+  return { ...cleared, starter_id: cited.user_id, starter_name: cited.user_name, cite: `${cited.short_id}:${cited.line}`, quote: cited.quote };
+});
 cliRoute("/cli/line/requeue", async (ctx, body) => ctx.runMutation(api.orgLine.requeueFromCli, body));
 // `cast flow show|on|off` on a team's live flow (liveFlows.ts). on and off are a person's, on the web: the CLI's are refused with that reason.
 cliRoute("/cli/flow/live/show", async (ctx, body) => ctx.runQuery(api.liveFlows.showFromCli, body));
@@ -4185,10 +4206,12 @@ cliRoute("/cli/sessions/unpin", async (ctx, body) => {
 // (`cast flow asker`): its chain up to the originator, and each typed line
 // with its provenance, numbered as `cast read` numbers it.
 cliRoute("/cli/sessions/originator", async (ctx, body) => {
-  const { api_token, conversation_id, task } = body;
+  const { api_token, conversation_id, task, run_id } = body;
   if (typeof api_token !== "string" || typeof conversation_id !== "string") return { error: "Missing api_token or conversation_id" };
   return await readOriginator({
-    head: () => ctx.runQuery(internal.originator.chain, { api_token, conversation_id, ...(typeof task === "string" ? { task } : {}) }),
+    head: () => ctx.runQuery(internal.originator.chain, {
+      api_token, conversation_id, ...(typeof task === "string" ? { task } : {}), ...(typeof run_id === "string" ? { run_id } : {}),
+    }),
     typedStep: (id, state) => ctx.runQuery(internal.originator.typedStep, { api_token, conversation_id: id, ...(state === undefined ? {} : { state }) }),
   });
 });

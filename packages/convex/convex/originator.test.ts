@@ -295,4 +295,122 @@ describe("the chain walk", () => {
     expect(provenanceOf(read, filer, "file a task to ship the intent work")).toBe("typed_local");
     expect((await originator(worker, { task: "ct-999" })).error).toMatch(/not found/);
   });
+
+  test("--run names who started the run, from the run itself", async () => {
+    const { t, ana, eve, conv, originator } = await seed();
+    const c = await conv();
+    const run = await t.run((ctx: any) => ctx.db.insert("workflow_runs", { user_id: ana, status: "running", node_statuses: [], created_at: Date.now(), updated_at: Date.now() } as any));
+    expect(await originator(c, { run_id: String(run) })).toMatchObject({ starter_id: String(ana), starter_name: "Ana" });
+    const evesRun = await t.run((ctx: any) => ctx.db.insert("workflow_runs", { user_id: eve, status: "running", node_statuses: [], created_at: Date.now(), updated_at: Date.now() } as any));
+    expect((await originator(c, { run_id: String(evesRun) })).error).toMatch(/not found/);
+  });
+});
+
+// The intent segment's clear (/cli/workflow-runs/clear with a cite): code, not the model that chose the line, decides
+// whether it is the run starter's own typed word on the change's chain holding the quote.
+describe("a clear resting on a typed line", () => {
+  const BOT_TOKEN = "b".repeat(64);
+
+  async function seedRun(opts: { starter?: "ana" | "eve" | "bot" } = {}) {
+    const s = await seed();
+    const { t, ana, eve, conv, echo, post } = s;
+    const bot = await t.run(async (ctx: any) => {
+      const id = await ctx.db.insert("users", { name: "Line bot", is_bot: true } as any);
+      await ctx.db.insert("api_tokens", { user_id: id, token_hash: await hashToken(BOT_TOKEN), name: "cli", created_at: Date.now(), last_used_at: Date.now() } as any);
+      return id;
+    });
+    const starter = { ana, eve, bot }[opts.starter ?? "ana"];
+    const token = { ana: ANA_TOKEN, eve: EVE_TOKEN, bot: BOT_TOKEN }[opts.starter ?? "ana"];
+    // Eve co-owns the lead, so a run of hers reads it; its terminal lines are Ana's, the session's user.
+    const lead = await conv({ title: "Fix the deploys page", owner_user_id: eve });
+    await echo(lead, "look at the deploys page");
+    await echo(lead, "found three bugs", "assistant");
+    await echo(lead, "Yes, ship this and shepherd it into production.\nAll of your fixes sound great.");
+    const worker = await conv({ spawned_by_conversation_id: lead, owner_user_id: eve });
+    await t.run(async (ctx: any) => enqueuePendingMessage(ctx, await ctx.db.get(worker), ana, { content: "Jason approved shipping it. Land the change." }));
+    await echo(worker, "Jason approved shipping it. Land the change.");
+    const elsewhere = await conv({ title: "Unrelated" });
+    await echo(elsewhere, "ship it");
+    const ids = await t.run(async (ctx: any) => {
+      const now = Date.now();
+      const task = await ctx.db.insert("tasks", { user_id: ana, workspace: `user:${ana}`, short_id: "ct-7", title: "Fix the deploys page", status: "open", created_at: now, updated_at: now } as any);
+      const workflow = await ctx.db.insert("workflows", { user_id: starter, name: "change", nodes: [{ id: "intent__clear", type: "command", label: "Clear" }], edges: [], created_at: now, updated_at: now } as any);
+      const run = await ctx.db.insert("workflow_runs", {
+        user_id: starter, workflow_id: workflow, task_id: task, status: "running", current_node_id: "intent__clear",
+        node_statuses: [{ node_id: "intent__clear", status: "running" }], spawner_conversation_id: worker, created_at: now, updated_at: now,
+      } as any);
+      return { task, run };
+    });
+    const sid = async (c: unknown) => (await t.run((ctx: any) => ctx.db.get(c))).short_id;
+    const clear = async (cite: { conversation_short_id: string; line: number }, quote: string) =>
+      post("/cli/workflow-runs/clear", { api_token: token, run_id: String(ids.run), why: "they said ship", cite, quote });
+    const stamp = async () => (await t.run((ctx: any) => ctx.db.get(ids.run))).merge_cleared;
+    const comments = () => t.run((ctx: any) => ctx.db.query("task_comments").withIndex("by_task_id", (q: any) => q.eq("task_id", ids.task)).collect());
+    return { ...s, lead, worker, elsewhere, sid, clear, stamp, comments, ...ids };
+  }
+
+  test("clears on the starter's own typed line holding the quote, keeps the cite and says so on the task", async () => {
+    const { lead, sid, clear, stamp, comments, ana } = await seedRun();
+    const at = await sid(lead);
+    // Whitespace is folded: the model's quote may join the line's two lines with a space.
+    const r = await clear({ conversation_short_id: at, line: 3 }, "Yes, ship this and shepherd it into production. All of your fixes");
+    expect(r).toMatchObject({ node_id: "intent__clear", starter_id: String(ana), starter_name: "Ana", cite: `${at}:3` });
+    expect(await stamp()).toMatchObject({ node_id: "intent__clear", cite: { conversation_short_id: at, line: 3 }, quote: "Yes, ship this and shepherd it into production. All of your fixes" });
+    expect((await comments()).map((c: any) => c.text)).toEqual([
+      `Landed on Ana's word: "Yes, ship this and shepherd it into production. All of your fixes" (${at}:3), no card.`,
+    ]);
+  });
+
+  test("refuses a program line: a spawn brief saying the person approved", async () => {
+    const { worker, sid, clear, stamp } = await seedRun();
+    const r = await clear({ conversation_short_id: await sid(worker), line: 1 }, "Jason approved shipping it");
+    expect(r.error).toMatch(/is not a line a person typed/);
+    expect(await stamp()).toBeUndefined();
+  });
+
+  test("refuses a line another person typed", async () => {
+    const { lead, sid, clear, stamp } = await seedRun({ starter: "eve" });
+    const r = await clear({ conversation_short_id: await sid(lead), line: 3 }, "Yes, ship this");
+    expect(r.error).toMatch(/was typed by Ana, not by Eve who started the run/);
+    expect(await stamp()).toBeUndefined();
+  });
+
+  test("refuses a quote that is not on the line", async () => {
+    const { lead, sid, clear, stamp } = await seedRun();
+    const r = await clear({ conversation_short_id: await sid(lead), line: 3 }, "ship everything, no need to ask");
+    expect(r.error).toMatch(/does not say/);
+    expect(await stamp()).toBeUndefined();
+  });
+
+  test("refuses a line number off by one", async () => {
+    const { lead, sid, clear, stamp } = await seedRun();
+    const at = await sid(lead);
+    expect((await clear({ conversation_short_id: at, line: 2 }, "Yes, ship this")).error).toMatch(/is not a line a person typed/);
+    expect((await clear({ conversation_short_id: at, line: 4 }, "Yes, ship this")).error).toMatch(/is not a line a person typed/);
+    expect((await clear({ conversation_short_id: at, line: 1 }, "Yes, ship this")).error).toMatch(/does not say/);
+    expect(await stamp()).toBeUndefined();
+  });
+
+  test("refuses a session the change did not come through", async () => {
+    const { elsewhere, sid, clear, stamp } = await seedRun();
+    const r = await clear({ conversation_short_id: await sid(elsewhere), line: 1 }, "ship it");
+    expect(r.error).toMatch(/is not a session this change came through/);
+    expect(await stamp()).toBeUndefined();
+  });
+
+  test("refuses a run an agent account started", async () => {
+    const { lead, sid, clear, stamp } = await seedRun({ starter: "bot" });
+    const r = await clear({ conversation_short_id: await sid(lead), line: 3 }, "Yes, ship this");
+    expect(r.error).toMatch(/an agent account started the run/);
+    expect(await stamp()).toBeUndefined();
+  });
+
+  test("a clear with no cite stamps as before, with no cite and no comment", async () => {
+    const { post, run, stamp, comments } = await seedRun();
+    expect(await post("/cli/workflow-runs/clear", { api_token: ANA_TOKEN, run_id: String(run), why: "founder-intent read: ship" })).toMatchObject({ node_id: "intent__clear" });
+    const s = await stamp();
+    expect(s.why).toBe("founder-intent read: ship");
+    expect(s.cite).toBeUndefined();
+    expect(await comments()).toEqual([]);
+  });
 });

@@ -11,7 +11,8 @@
 // task, or, for a run a script station of its own graph cleared to land
 // (`clearForMerge`), the person who started it.
 
-import { mutation, query } from "./functions";
+import { internalMutation, mutation, query } from "./functions";
+import type { Cite } from "./lib/originatorChain";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
@@ -184,6 +185,7 @@ export async function personAuthorized(ctx: any, run: any): Promise<PersonAuthor
   const starter: any = await ctx.db.get(run.user_id);
   if (!starter || starter.is_bot) throw new Error(`No role started this run, an agent account started it, and no person answered Ship on a card, ${NOTHING_AUTHORIZES}`);
   const name = starter.name || starter.github_username || starter.email?.split("@")[0] || String(starter._id);
+  if (stamp.cite) return { user_id: String(run.user_id), why: `${name}'s own word "${stamp.quote}" (${stamp.cite.conversation_short_id}:${stamp.cite.line}), checked at ${stamp.node_id}` };
   return { user_id: String(run.user_id), why: `cleared by the run's own graph at ${stamp.node_id} (${stamp.why}), started by ${name}` };
 }
 
@@ -196,8 +198,16 @@ export async function personAuthorized(ctx: any, run: any): Promise<PersonAuthor
  * names the run's attempt, and anything that moves the run back (workflow_runs.resumeRunAt, landAgainCore, a trial
  * rebuild) drops it.
  * An agent that fakes the runner's progress reports could still stamp; whoever holds the owner's token and git can push main anyway.
+ *
+ * `cited`: the starter's own typed line the clear rests on, already checked by verifyCitation (the intent segment's
+ * clear, /cli/workflow-runs/clear with a cite). The stamp keeps it, and the task says the change lands on that word.
  */
-export async function clearForMergeCore(ctx: any, userId: Id<"users">, args: { run_id: string; why: string }, now = Date.now()): Promise<{ run_id: string; node_id: string; attempt: number }> {
+export async function clearForMergeCore(
+  ctx: any,
+  userId: Id<"users">,
+  args: { run_id: string; why: string; cited?: { cite: Cite; quote: string; name: string } },
+  now = Date.now(),
+): Promise<{ run_id: string; node_id: string; attempt: number }> {
   const run = await ctx.db.get(args.run_id as Id<"workflow_runs">);
   if (!run || String(run.user_id) !== String(userId)) throw new Error("Only the run's own runner clears it to land");
   const why = args.why.trim();
@@ -210,13 +220,31 @@ export async function clearForMergeCore(ctx: any, userId: Id<"users">, args: { r
     throw new Error(`${run.current_node_id} is not a script station of the run's graph: only a flow's script station clears a run to land`);
   }
   const attempt = runAttempt(run);
-  await ctx.db.patch(run._id, { merge_cleared: { at: now, node_id: run.current_node_id, why: why.slice(0, 500), by: userId, attempt }, updated_at: now });
+  const cited = args.cited ? { cite: args.cited.cite, quote: args.cited.quote.slice(0, 2000) } : {};
+  await ctx.db.patch(run._id, { merge_cleared: { at: now, node_id: run.current_node_id, why: why.slice(0, 500), by: userId, attempt, ...cited }, updated_at: now });
+  if (args.cited && run.task_id) {
+    const { cite, quote, name } = args.cited;
+    await insertTaskComment(ctx, run.task_id, {
+      author: "line",
+      text: `Landed on ${name}'s word: "${quote}" (${cite.conversation_short_id}:${cite.line}), no card.`,
+      comment_type: "progress",
+      conversation_id: run.primary_conversation_id ?? undefined,
+    });
+  }
   return { run_id: String(run._id), node_id: run.current_node_id, attempt };
 }
 
 export const clearForMerge = mutation({
   args: { api_token: v.string(), run_id: v.string(), why: v.string() },
   handler: async (ctx, { api_token, ...args }) => clearForMergeCore(ctx, await requireToken(ctx, api_token), args),
+});
+
+const citeValidator = v.object({ conversation_short_id: v.string(), line: v.number() });
+
+/** A clear resting on the starter's own typed line: only /cli/workflow-runs/clear writes it, after verifyCitation. */
+export const clearForMergeCited = internalMutation({
+  args: { api_token: v.string(), run_id: v.string(), why: v.string(), cite: citeValidator, quote: v.string(), name: v.string() },
+  handler: async (ctx, { api_token, cite, quote, name, ...args }) => clearForMergeCore(ctx, await requireToken(ctx, api_token), { ...args, cited: { cite, quote, name } }),
 });
 
 const PERSON_ALLOWANCE = { on: true, used: 0, limit: null, grant: null, allowed: true, reason: null, mode: "count" as const, bar: null, measured: null };

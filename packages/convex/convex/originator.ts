@@ -2,7 +2,8 @@
 // from a session up to the one that started its line of work, and every line
 // a person typed into the sessions on it, each with its provenance
 // (lib/messageProvenance.ts). The route drives them through
-// lib/originatorChain.readOriginator.
+// lib/originatorChain.readOriginator. /cli/workflow-runs/clear with a cite
+// drives citeRun and typedStep through lib/originatorChain.verifyCitation.
 import { v } from "convex/values";
 import { internalQuery } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
@@ -14,7 +15,10 @@ import { isNonEmptyMessage } from "./lib/conversationBasics";
 import type { ScanCursor } from "./lib/conversationRead";
 import { commandExpansionName } from "../../web/lib/conversationProcessor";
 import { launchedByProgram, mayBeTyped, messageProvenance } from "./lib/messageProvenance";
-import { walkOriginatorChain, type ChainLink, type ChainStop, type TypedLine } from "./lib/originatorChain";
+import { walkOriginatorChain, type ChainLink, type ChainStop, type CiteRun, type TypedLine } from "./lib/originatorChain";
+import { verifyApiToken } from "./apiTokens";
+import { canReadRun } from "./workflow_runs";
+import { changeSessionOf } from "./lib/taskOwner";
 
 type Conv = Doc<"conversations">;
 
@@ -63,13 +67,31 @@ async function walkFrom(ctx: any, userId: Id<"users">, start: Conv) {
   return { chain, stopped, root: hops[hops.length - 1].conversation };
 }
 
-/** The chain from a session to its originator, and a task's filing session's chain when one is named. */
+/** The chain of the session that filed a task, as far as `userId` may read it. */
+async function filingChain(ctx: any, userId: Id<"users">, task: Doc<"tasks">): Promise<{ chain: ChainEntry[]; stopped?: ChainStop }> {
+  const filedIn = task.created_from_conversation ? await ctx.db.get(task.created_from_conversation as Id<"conversations">) : null;
+  if (!filedIn) return { chain: [] };
+  if (!(await canOwnerOrTeamAccess(ctx, userId, filedIn))) return { chain: [], stopped: "access_denied" };
+  const walk = await walkFrom(ctx, userId, filedIn);
+  return { chain: walk.chain, ...(walk.stopped ? { stopped: walk.stopped } : {}) };
+}
+
+/** Who started a run (workflow_runs.user_id), read from the run itself. */
+async function starterOf(ctx: any, run: Doc<"workflow_runs">) {
+  const row = await ctx.db.get(run.user_id);
+  return { starter_id: String(run.user_id), starter_name: nameOf(row), starter_is_bot: !!row?.is_bot };
+}
+
+/** The chain from a session to its originator, a task's filing session's chain when one is named, and who started the run when one is. */
 export const chain = internalQuery({
-  args: { api_token: v.string(), conversation_id: v.string(), task: v.optional(v.string()) },
-  handler: async (ctx, args): Promise<OriginatorHead | { error: string }> => {
+  args: { api_token: v.string(), conversation_id: v.string(), task: v.optional(v.string()), run_id: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<(OriginatorHead & Partial<Awaited<ReturnType<typeof starterOf>>>) | { error: string }> => {
     const access = await readableConversation(ctx, args.api_token, args.conversation_id);
     if ("error" in access) return { error: access.error ?? "Access denied" };
     const userId = access.user._id;
+    const runId = args.run_id ? ctx.db.normalizeId("workflow_runs", args.run_id) : null;
+    const run = runId ? await ctx.db.get(runId) : null;
+    if (args.run_id && (!run || !(await canReadRun(ctx, userId, run)))) return { error: `Run ${args.run_id} not found` };
     const walk = await walkFrom(ctx, userId, access.conv);
     const author = walk.root.author_user_id ?? walk.root.user_id;
     const authorRow = await ctx.db.get(author);
@@ -88,16 +110,38 @@ export const chain = internalQuery({
     if (args.task) {
       const task = await findTaskByRef(ctx, args.task);
       if (!task || !(await canAccessTask(ctx, userId, task))) return { error: `Task ${args.task} not found` };
-      const filedIn = task.created_from_conversation ? await ctx.db.get(task.created_from_conversation as Id<"conversations">) : null;
-      const readable = filedIn && (await canOwnerOrTeamAccess(ctx, userId, filedIn));
-      const taskWalk = readable ? await walkFrom(ctx, userId, filedIn) : null;
-      head.task = {
-        short_id: task.short_id ?? String(task._id),
-        chain: taskWalk?.chain ?? [],
-        ...(taskWalk?.stopped ? { stopped: taskWalk.stopped } : filedIn && !readable ? { stopped: "access_denied" as const } : {}),
-      };
+      head.task = { short_id: task.short_id ?? String(task._id), ...(await filingChain(ctx, userId, task)) };
     }
-    return head;
+    return run ? { ...head, ...(await starterOf(ctx, run)) } : head;
+  },
+});
+
+/**
+ * What a cited clear (`cast workflow clear --cite`) is checked against: who started the run, and every session its
+ * change came through, as the run's own runner may read them. Every anchor is the server's own record of the run,
+ * never the caller's word: the session that started it (spawner_conversation_id), the session its task's change
+ * came from (changeSessionOf, what the runner was handed as the change's session) and the one that filed the task,
+ * each walked up to its originator.
+ */
+export const citeRun = internalQuery({
+  args: { api_token: v.string(), run_id: v.string() },
+  handler: async (ctx, args): Promise<CiteRun | { error: string }> => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    const runId = ctx.db.normalizeId("workflow_runs", args.run_id);
+    const run = runId ? await ctx.db.get(runId) : null;
+    if (!auth || !run || String(run.user_id) !== String(auth.userId)) return { error: "Only the run's own runner clears it to land" };
+    const task = run.task_id ? await ctx.db.get(run.task_id) : null;
+    const comments = task ? await ctx.db.query("task_comments").withIndex("by_task_id", (q: any) => q.eq("task_id", task._id)).collect() : [];
+    const made = task ? await changeSessionOf(ctx, task, comments) : null;
+    const spawner = run.spawner_conversation_id ? await ctx.db.get(run.spawner_conversation_id) : null;
+    const chain = new Map<string, { conversation_id: string; short_id: string }>();
+    for (const anchor of [spawner, made]) {
+      if (!anchor || !(await canOwnerOrTeamAccess(ctx, run.user_id, anchor))) continue;
+      for (const hop of (await walkFrom(ctx, run.user_id, anchor)).chain) chain.set(hop.conversation_id, hop);
+    }
+    if (task) for (const hop of (await filingChain(ctx, run.user_id, task)).chain) chain.set(hop.conversation_id, hop);
+    const starter = await starterOf(ctx, run);
+    return { ...starter, chain: [...chain.values()].map(({ conversation_id, short_id }) => ({ conversation_id, short_id })) };
   },
 });
 

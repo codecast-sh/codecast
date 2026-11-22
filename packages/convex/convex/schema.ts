@@ -8763,8 +8763,13 @@ export default defineSchema({
     merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()), authorized: v.optional(v.object({ user_id: v.id("users"), why: v.string() })) })),
     // The run's own graph cleared it to land with no card (orgLineMerge.clearForMerge): when, the script station that
     // wrote it and its words, the runner's account, and the attempt (runAttempt). Valid only in that attempt; every
-    // resume, reask and land-again drops it.
-    merge_cleared: v.optional(v.object({ at: v.number(), node_id: v.string(), why: v.string(), by: v.id("users"), attempt: v.number() })),
+    // resume, reask and land-again drops it. `cite` and `quote`: the starter's own typed line it rests on, when the
+    // graph cleared on a person's word (the intent segment), checked by the server before the stamp.
+    merge_cleared: v.optional(v.object({
+      at: v.number(), node_id: v.string(), why: v.string(), by: v.id("users"), attempt: v.number(),
+      cite: v.optional(v.object({ conversation_short_id: v.string(), line: v.number() })),
+      quote: v.optional(v.string()),
+    })),
     graph_hash: v.optional(v.string()), // LE14: content hash of the graph the runner executed (parser.graphHash)
     graph_nodes: v.optional(v.array(v.object({ id: v.string(), h: v.string() }))), // LE14: each station's hash in that graph (parser.graphNodeHashes)
     // The machine whose runner drives the run (its device id): where the run
