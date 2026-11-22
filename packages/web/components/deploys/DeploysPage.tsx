@@ -13,7 +13,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { activeTeamIdOf } from "../../lib/activeTeam";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
-import { orderTargets, recordTargets, rollbackTarget, sessionWords, sessionsOf, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
+import { orderTargets, recordTargets, rollbackTarget, sessionWords, sessionsOf, sourceWord, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
 import type { Press } from "./DeployPress";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { ageShort } from "../../lib/lineFlow";
@@ -25,17 +25,6 @@ import { PageHeader } from "../ui/page-header";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
 import "./deploys.css";
 
-/** Who sent a deploy codecast did not start, by where it reports from. */
-function sourceWord(d: Pick<TeamDeployRow, "source" | "url">): string {
-  const host = d.url ? (() => { try { return new URL(d.url!).hostname; } catch { return ""; } })() : "";
-  if (/railway\./.test(host)) return "Railway";
-  if (/expo\./.test(host)) return "EAS";
-  const src = d.source ?? "";
-  if (src.startsWith("github")) return "GitHub";
-  if (src.includes("ship mark") || src === "marker") return "deploy.sh";
-  if (src === "codecast") return "codecast";
-  return src;
-}
 /** Where a deploy's own log is, named by its host. */
 const logWord = (d: Pick<TeamDeployRow, "source" | "url">) => `${sourceWord(d)} log`;
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 7) : "—");

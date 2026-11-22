@@ -4,6 +4,7 @@
 // agentTasks.ts so conversations.ts and cleanup.ts can call them without
 // importing agentTasks, which reaches the big import cycle (ct-92432).
 import type { Doc, Id } from "../_generated/dataModel";
+import { internal } from "../_generated/api";
 import { armedTriggerKindFor } from "../dormancy";
 import { runParentOf } from "@codecast/shared/contracts";
 import { hostedHomeStamp } from "../assistant/routines";
@@ -35,6 +36,22 @@ export async function patchTask(ctx: TaskCtx, task: Doc<"agent_tasks">, patch: R
   }
   await ctx.db.patch(task._id, patch);
   if (task.originating_conversation_id) await refreshArmedTriggerKind(ctx, task.originating_conversation_id);
+  const next = { ...task, ...patch };
+  if (("run_at" in patch || "status" in patch) && next.status === "scheduled") await scheduleProjectFire(ctx, next, next.run_at);
+}
+
+/** A project trigger whose runs are turns in the project's main session: the
+ *  server fires it (projectSources.fireProjectTrigger), never a daemon. */
+export function projectRunsInline(task: Pick<Doc<"agent_tasks">, "project_id" | "project_spawn">): boolean {
+  return !!task.project_id && !task.project_spawn;
+}
+
+/** Wake the server firing for an inline project trigger at its run_at. Every
+ *  arming path reaches it (patchTask, insertTask, matchTaskTriggers); the
+ *  firing reads the row again, so an outrun wake does nothing. */
+export async function scheduleProjectFire(ctx: TaskCtx, task: Pick<Doc<"agent_tasks">, "_id" | "project_id" | "project_spawn">, runAt: number | undefined): Promise<void> {
+  if (!projectRunsInline(task) || runAt === undefined || !ctx.scheduler) return;
+  await ctx.scheduler.runAfter(Math.max(0, runAt - Date.now()), internal.projectSources.fireProjectTrigger, { task_id: task._id });
 }
 
 // A recurring trigger keeps a cadence: slots one interval apart. run_at is when
@@ -214,4 +231,33 @@ export async function reactivateTasksCanceledOnKill(
     if (await applyReactivate(ctx, task)) rearmed++;
   }
   return rearmed;
+}
+
+/** A project at rest: paused, or done. Its triggers wait with it. */
+export function projectQuiet(status: string | undefined): boolean {
+  return status === "paused" || status === "done";
+}
+
+/** A project's status moved: going quiet pauses every armed trigger it feeds
+ *  and stamps each, waking resumes only the ones its quiet paused, so a
+ *  trigger a person paused by hand stays paused. Same rule as a role's pause
+ *  (org-staffing.md S25). */
+export async function syncProjectTriggers(ctx: TaskCtx, projectId: Id<"projects">, from: string | undefined, to: string | undefined): Promise<number> {
+  if (projectQuiet(from) === projectQuiet(to)) return 0;
+  const rows: Doc<"agent_tasks">[] = await ctx.db.query("agent_tasks").withIndex("by_project", (q: any) => q.eq("project_id", projectId)).collect();
+  let moved = 0;
+  for (const t of rows) {
+    if (projectQuiet(to) && (t.status === "scheduled" || t.status === "running")) {
+      await patchTask(ctx, t, { status: "paused", paused_by_project_id: projectId, paused_by_role_id: undefined });
+      moved++;
+    } else if (!projectQuiet(to) && t.status === "paused" && String(t.paused_by_project_id ?? "") === String(projectId)) {
+      // An event trigger stays disarmed until its next event, as applyResume
+      // leaves it, unless a window was open at the pause: its lines run now.
+      const now = Date.now();
+      const run_at = t.schedule_type === "event" ? (t.pending_events?.length ? now : undefined) : Math.max(t.run_at ?? 0, now);
+      await patchTask(ctx, t, { status: "scheduled", paused_by_project_id: undefined, run_at });
+      moved++;
+    }
+  }
+  return moved;
 }
