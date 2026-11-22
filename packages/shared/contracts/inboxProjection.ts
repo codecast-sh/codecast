@@ -10,7 +10,6 @@ import { isMachineDeliveredMessage } from "./machineMessages";
 import { isLoopFresh, LOOP_OVERDUE_GRACE_MS, type LoopState } from "./loopState";
 import { openTasksVouchForWaiting } from "./openTasks";
 import { isHostedAgentType } from "./agentClients";
-import { roleDrives, startedByRole } from "./sessionOwners";
 import type { WorkState } from "./workState";
 import { isNoiseTitle, type InboxRowIdentity, type RunLogIdentity, isRunLog, isNestedIdentity, isOrphanOrSubagent, type RollupRow, rollupParentIdOf } from "./inboxMembership";
 // Field ownership (design C1): which channel writes which row field.
@@ -807,15 +806,28 @@ export function commandsSession(
 // questions with it. "Started by a role" is provenance, never an absent owner:
 // a person's own session filed under a role has no owner rows either, and it
 // stays theirs. A role's standing session under another role counts as the
-// parent role's start (org-staffing.md S28). Provenance is sessionOwners'
-// startedByRole, the same rule that gives such a session no starter owner.
-// The person owners are the session_owners rows themselves, which the caller
+// parent role's start (org-staffing.md S28). startedByRole is the same rule
+// that gives such a session no starter owner (sessionOwners starterOf). The
+// person owners are the session_owners rows themselves, which the caller
 // reads (hasPersonOwner).
+export function startedByRole(row: { org_role_id?: unknown; role_started?: boolean | null; standing_role_id?: unknown }): boolean {
+  return !!row.org_role_id && (!!row.role_started || !!row.standing_role_id);
+}
+
 export function isHeldByRoleAlone(
   row: { org_role_id?: unknown; role_started?: boolean | null; standing_role_id?: unknown },
   hasPersonOwner: boolean,
 ): boolean {
   return startedByRole(row) && !hasPersonOwner;
+}
+
+// The role drives the session: it is filed under a role and no person took
+// over (driver_user_id unset). What it waits on is the role's to answer, so it
+// files as working ("With <role>") instead of in the person's needs input or
+// questions. A person driving (the role paused) files it like any session.
+// ONE rule: sessionOwners driverOf names the role driver exactly when this holds.
+export function roleDrives(row: { org_role_id?: unknown; driver_user_id?: unknown }): boolean {
+  return !!row.org_role_id && !row.driver_user_id;
 }
 
 // The role itself acts through this session: its standing session, or a

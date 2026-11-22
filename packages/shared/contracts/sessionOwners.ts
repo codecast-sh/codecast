@@ -9,6 +9,8 @@
 // filed under and whether a role started it, the person who took the wheel,
 // and the primary-owner cache.
 
+import { roleDrives, startedByRole } from "./inboxProjection";
+
 export type OwnerRowFact = { user_id: string; added_at: number; added_by?: string; seen_at?: number; note?: string };
 
 export type OwnersFacts = {
@@ -67,16 +69,6 @@ export function sortedRows(rows: OwnerRowFact[]): OwnerRowFact[] {
   return rows.map((r, i) => ({ r, i })).sort((a, b) => a.r.added_at - b.r.added_at || a.i - b.i).map(({ r }) => r);
 }
 
-// Started by a role: a session the role started on its own (role_started),
-// or a role's standing session, while it is still filed under a role. No
-// person started it, so no person owns it without a row: it is the role's
-// alone and in no person's inbox (inboxProjection isHeldByRoleAlone). It is
-// provenance, never an absent owner: a person's own session filed under a
-// role has no owner rows either, and it stays theirs.
-export function startedByRole(row: { org_role_id?: unknown; role_started?: boolean | null; standing_role_id?: unknown }): boolean {
-  return !!row.org_role_id && (!!row.role_started || !!row.standing_role_id);
-}
-
 /** The person who started it: the author, else the runner, never an agent,
  *  and nobody when a role started it. */
 export function starterOf(f: Pick<OwnersFacts, "author_id" | "runner_id" | "bots" | "role_id" | "role_started" | "standing_role_id">): string | null {
@@ -91,14 +83,6 @@ export function listedOwnerIds(f: OwnersFacts): string[] {
   if (f.rows.length) return sortedRows(f.rows).map((r) => r.user_id);
   const starter = starterOf(f);
   return starter ? [starter] : [];
-}
-
-// The role drives the session: it is filed under a role and no person took
-// over (driver_user_id unset). What it waits on is the role's to answer, so
-// the inbox files it as working ("With <role>") instead of in a person's
-// needs input. A person driving (the role paused) files it like any session.
-export function roleDrives(row: { org_role_id?: unknown; driver_user_id?: unknown }): boolean {
-  return !!row.org_role_id && !row.driver_user_id;
 }
 
 /** Who drives, ONE rule: the filed role unless a person took the wheel

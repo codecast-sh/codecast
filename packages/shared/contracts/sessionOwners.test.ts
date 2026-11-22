@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { applyOwnersChangeTo, driverOf, listedOwnerIds, roleDrives, type OwnersFacts } from "./sessionOwners";
+import { applyOwnersChangeTo, driverOf, listedOwnerIds, type OwnersFacts } from "./sessionOwners";
+import { roleDrives } from "./inboxProjection";
 
 const base: OwnersFacts = { rows: [], author_id: null, runner_id: "me", bots: [], role_id: null, role_started: false, standing_role_id: null, driver_user_id: null, primary_id: null };
 const at = { actor: "me", now: 100 };
