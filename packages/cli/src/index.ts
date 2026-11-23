@@ -4194,7 +4194,7 @@ async function readOwners(sessionId: string): Promise<any> {
   return result;
 }
 
-// A role named on `own --drive`/`disown` must be the one the session is filed under.
+// A role named on `own --pause/--resume`/`disown` must be the one the session is filed under.
 async function requireFiledRole(read: any, ref: string, sessionId: string): Promise<void> {
   // ownersView loads inside the owner verbs, off the boot graph (bootGraph.guard).
   const { namesFiledRole } = await import("./ownersView.js");
@@ -4209,55 +4209,62 @@ program
   .description(
     "Add an owner to a session: a teammate, or one role\n\n" +
     "A session's owners are whose inbox it sits in: people, and at most one\n" +
-    "role. Exactly one owner drives it, the one the agent works for. With a\n" +
-    "role filed, the role drives unless a person has taken over, in which case\n" +
-    "that person drives and the role is paused; with no role, a person drives.\n" +
-    "An owner takes over by sending into the session, and the role drives\n" +
-    "again when someone makes it driver.\n\n" +
-    "Naming a person ADDS them without displacing anyone and notifies them;\n" +
-    "adding someone never moves the wheel to them. Naming a role (@handle)\n" +
-    "files the session under it, replacing any other role, and the role drives.\n" +
-    "--drive hands the wheel to an owner or to the filed role. Only an owner,\n" +
-    "or the account that runs the session, may change its owners or driver.\n\n" +
-    "To hand a session to a teammate, add them and make them driver.\n\n" +
+    "role. A role owner is active (the agent works for it) or paused (an\n" +
+    "owner is working in the session). An owner who sends into the session\n" +
+    "from its composer pauses the role; resuming hands the session back to it.\n\n" +
+    "Naming a person ADDS them without displacing anyone and notifies them.\n" +
+    "Naming a role (@handle) files the session under it, replacing any other\n" +
+    "role, and the role is active. --pause pauses the filed role and you work\n" +
+    "in the session; --resume makes it active again. Only an owner, or the\n" +
+    "account that runs the session, may change its owners or pause its role.\n\n" +
+    "To hand a session to a teammate, add them as an owner.\n\n" +
     "Owning is separate from whose account runs the session and which machine\n" +
     "it runs on. A session is in the inbox of each person who owns it and of\n" +
     "the account that runs it, except one a role started that no person owns.\n\n" +
     "Examples:\n" +
-    "  cast own jx7c6zk ashot@example.com --drive ashot@example.com  # hand it to a teammate\n" +
-    "  cast own jx7c6zk ashot@example.com   # add a teammate as an owner\n" +
+    "  cast own jx7c6zk ashot@example.com   # add a teammate as an owner (a hand-off)\n" +
     "  cast own ashot@example.com           # ...on the CURRENT session\n" +
-    "  cast own jx7c6zk @growth             # file it under @growth, which drives\n" +
-    "  cast own jx7c6zk --drive me          # take the wheel yourself\n" +
-    "  cast own jx7c6zk --drive @growth     # hand it back to its role\n" +
+    "  cast own jx7c6zk @growth             # file it under @growth, active\n" +
+    "  cast own jx7c6zk --pause @growth     # pause @growth; you work in it\n" +
+    "  cast own jx7c6zk --resume @growth    # hand it back to @growth\n" +
     "  cast own jx7c6zk                     # claim it yourself\n" +
-    "  cast owners jx7c6zk                  # who owns it, who drives, who runs it\n" +
+    "  cast owners jx7c6zk                  # its owners, its role, who runs it\n" +
     "  cast disown jx7c6zk @growth          # take the role off"
   )
   .argument("<session_or_owner>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or an owner, to use the CURRENT session")
   .argument("[owner]", "A teammate (exact email, or name) or a role (@handle or or-N); defaults to you")
-  .option("--drive <who>", "Make this owner the driver: me, a teammate who owns it, or the filed role (@handle)")
-  .action(async (first: string, second: string | undefined, opts: { drive?: string }) => {
+  .option("--pause <role>", "Pause the filed role (@handle): you work in the session")
+  .option("--resume <role>", "Make the filed role (@handle) active again")
+  .action(async (first: string, second: string | undefined, opts: { pause?: string; resume?: string }) => {
     const { sessionId, member } = resolveOwnerTarget(first, second, "own");
     const { isRoleRef, ownersLine } = await import("./ownersView.js");
     const who = member?.trim();
     const from_session = callingSession();
+    const roleRef = (opts.pause ?? opts.resume)?.trim();
+    if (opts.pause && opts.resume) {
+      console.error("Pick one of --pause and --resume");
+      process.exit(1);
+    }
+    if (roleRef && !isRoleRef(roleRef)) {
+      console.error(`--${opts.pause ? "pause" : "resume"} takes the session's role (@handle), not ${roleRef}`);
+      process.exit(1);
+    }
     let told: any = null;
     let already = false;
     if (who && isRoleRef(who)) {
       told = (await cliPost("/cli/sessions/owners/change", { session_id: sessionId, change: { role: who }, from_session })).told;
-    } else if (who || !opts.drive) {
+    } else if (who || !roleRef) {
       const result = await cliPost("/cli/sessions/own", { session_id: sessionId, owner: who || "me", from_session });
       already = !(result.added?.length > 0);
       told = result.told;
     }
-    if (opts.drive) {
-      const drive = opts.drive.trim();
-      if (isRoleRef(drive)) await requireFiledRole(await readOwners(sessionId), drive, sessionId);
-      await cliPost("/cli/sessions/drive", { session_id: sessionId, driver: isRoleRef(drive) ? { kind: "role" } : { kind: "user", user_id: drive }, from_session });
+    if (roleRef) {
+      await requireFiledRole(await readOwners(sessionId), roleRef, sessionId);
+      // Paused: the person pausing it is who the agent works for. Resumed: the role is.
+      await cliPost("/cli/sessions/drive", { session_id: sessionId, driver: opts.pause ? { kind: "user", user_id: "me" } : { kind: "role" }, from_session });
     }
     const read = await readOwners(sessionId);
-    const note = already && !opts.drive ? ` ${c.dim}(already an owner)${c.reset}` : "";
+    const note = already && !roleRef ? ` ${c.dim}(already an owner)${c.reset}` : "";
     console.log(
       `${c.green}✓${c.reset} ${c.cyan}${read.short_id || sessionId}${c.reset} ` +
       `${c.dim}owners →${c.reset} ${c.magenta}${ownersLine(read)}${c.reset}${note}${toldSuffix(told)}`
@@ -4346,7 +4353,7 @@ program
 
 program
   .command("owners")
-  .description("List a session's owners: the people and the role, who drives, and who runs it (see: cast own)")
+  .description("List a session's owners: the people, the role (active or paused), and who runs it (see: cast own)")
   .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
   .action(async (sessionId: string) => {
     const read = await readOwners(sessionId);

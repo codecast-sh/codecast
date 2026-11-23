@@ -35,7 +35,7 @@ describe("a paused role hears no decisions", () => {
     expect(row.holder).toEqual({ kind: "user", id: HOST });
     expect(new Set(tables.decision_inbox.map((i) => i.user_id))).toEqual(new Set([HOST, OWNER2]));
     const r = await answerCore(ctx, { userId: HOST }, { decision_id: "sd-1", session_id: "sess-standing", answer_index: 1 });
-    expect(r.error).toContain("A person drives the session that asked");
+    expect(r.error).toContain("is paused on the session that asked: a person is working in it");
     expect(tables.session_decisions[0].status).toBe("pending");
 
     // Handing the wheel back gives the role its hold again.

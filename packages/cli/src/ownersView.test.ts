@@ -27,18 +27,24 @@ describe("namesFiledRole", () => {
 });
 
 describe("describeOwners", () => {
-  test("the role drives", () => {
+  test("the role is active", () => {
     const d = describeOwners({ owners: [ME, MATE], role: ROLE, driver: { kind: "role", role_id: "r1" }, runner: { name: "Jason Benn" } });
-    expect(d).toEqual({ people: "Jason Benn, ashot@x.ai", role: "@growth (drives)", runner: "Jason Benn" });
+    expect(d).toEqual({ people: "Jason Benn, ashot@x.ai", role: "@growth (active)", runner: "Jason Benn" });
   });
 
-  test("a person drives and the role is paused", () => {
+  test("a person works in it and the role is paused; no person is marked", () => {
     const d = describeOwners({ owners: [ME, MATE], role: ROLE, driver: { kind: "user", user_id: "u2" }, runner: { name: "Mr Bot", is_bot: true } });
-    expect(d).toEqual({ people: "Jason Benn, ashot@x.ai (drives)", role: "@growth (paused: ashot@x.ai drives)", runner: "Mr Bot (agent account)" });
+    expect(d).toEqual({ people: "Jason Benn, ashot@x.ai", role: "@growth (paused)", runner: "Mr Bot (agent account)" });
   });
 
   test("no owners reads as nobody, and the line drops a missing role", () => {
     expect(ownersLine({ owners: [], role: null, driver: null })).toBe("nobody");
-    expect(ownersLine({ owners: [ME], role: ROLE, driver: { kind: "user", user_id: "u1" } })).toBe("Jason Benn (drives) · @growth (paused: Jason Benn drives)");
+    expect(ownersLine({ owners: [ME], role: ROLE, driver: { kind: "user", user_id: "u1" } })).toBe("Jason Benn · @growth (paused)");
+  });
+
+  test("never says drives", () => {
+    for (const driver of [{ kind: "role" as const, role_id: "r1" }, { kind: "user" as const, user_id: "u1" }, null]) {
+      expect(ownersLine({ owners: [ME, MATE], role: ROLE, driver })).not.toMatch(/driv/i);
+    }
   });
 });

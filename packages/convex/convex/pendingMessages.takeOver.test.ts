@@ -257,7 +257,7 @@ describe("a paused role may not write into the session", () => {
     const { ctx, row } = await world();
     await composerSend(ctx, row("filed"), ME);
     await expect(performSessionSend(ctx, ME as any, { to: "jxfiled", from: "s-seat", body: "status?" }))
-      .rejects.toThrow(/^Not sent\. Me drives jxfiled now, so @growth is paused there\./);
+      .rejects.toThrow(/^Not sent\. @growth is paused on jxfiled: Me is working in it\./);
   });
 
   test("while the role drives, its session writes in as before", async () => {
@@ -276,12 +276,12 @@ describe("a paused role may not write into the session", () => {
     expect(report.message_id).toBeTruthy();
   });
 
-  test("a person's own session its task filed under the role: the refusal says it is theirs, not that the role is paused", async () => {
+  test("a person's own session its task filed under the role: the refusal says it is theirs, and never says drives", async () => {
     const { ctx, tables } = await world();
     tables.conversations.push(session("bound", { org_role_id: tables.org_roles[0]._id, org_role_hold: "bound", driver_user_id: ME }));
     const err = await performSessionSend(ctx, ME as any, { to: "jxbound", from: "s-seat", body: "status?" }).then(() => null, (e) => e as Error);
-    expect(err?.message).toMatch(/^Not sent\. Me drives jxbound: it is their session, filed under @growth by its task\./);
-    expect(err?.message).not.toContain("paused");
+    expect(err?.message).toMatch(/^Not sent\. @growth is paused on jxbound: it is Me's own session, filed under @growth by its task/);
+    expect(err?.message).not.toMatch(/driv/i);
   });
 
   test("a send into the role itself is never refused", async () => {
@@ -297,10 +297,10 @@ describe("a paused role does not take the wheel back itself", () => {
     const { ctx, row } = await world();
     await composerSend(ctx, row("filed"), ME);
     await expect(performSetSessionDriver(ctx, ME as any, { session_id: "filed", driver: { kind: "role" }, from_session: "s-seat" }))
-      .rejects.toThrow(/^Me drives jxfiled, so @growth is paused there, and only a person who owns or runs it changes its owners or who drives\./);
-    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "filed", change: { role: null }, from_session: "s-seat" })).rejects.toThrow(/@growth is paused there/);
+      .rejects.toThrow(/^@growth is paused on jxfiled: Me is working in it, and only a person who owns or runs it changes its owners or resumes @growth\./);
+    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "filed", change: { role: null }, from_session: "s-seat" })).rejects.toThrow(/@growth is paused on/);
     // The mutation's and the web dispatch's door (applyOwnersChangeAs) holds it too.
-    await expect(applyOwnersChangeAs(ctx, ME as any, { session_id: "filed", change: { driver: { kind: "role" } }, from_session: "s-seat" })).rejects.toThrow(/@growth is paused there/);
+    await expect(applyOwnersChangeAs(ctx, ME as any, { session_id: "filed", change: { driver: { kind: "role" } }, from_session: "s-seat" })).rejects.toThrow(/@growth is paused on/);
     expect(row("filed").driver_user_id).toBe(ME);
     expect(row("filed").org_role_id).toBeTruthy();
 
@@ -342,17 +342,17 @@ describe("a paused role changes nothing about the owners of the session it is pa
 
   test("removing the person who drives, or setting the owners, is refused", async () => {
     const { ctx, row } = await peerDrives();
-    await expect(performRemoveSessionOwner(ctx, ME as any, { session_id: "filed", owner: PEER, ...fromSeat })).rejects.toThrow(/@growth is paused there/);
-    await expect(performSetSessionOwners(ctx, ME as any, { session_id: "filed", owners: [], ...fromSeat })).rejects.toThrow(/@growth is paused there/);
-    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "filed", change: { remove: [PEER] }, ...fromSeat })).rejects.toThrow(/@growth is paused there/);
+    await expect(performRemoveSessionOwner(ctx, ME as any, { session_id: "filed", owner: PEER, ...fromSeat })).rejects.toThrow(/@growth is paused on/);
+    await expect(performSetSessionOwners(ctx, ME as any, { session_id: "filed", owners: [], ...fromSeat })).rejects.toThrow(/@growth is paused on/);
+    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "filed", change: { remove: [PEER] }, ...fromSeat })).rejects.toThrow(/@growth is paused on/);
     expect(row("filed").driver_user_id).toBe(PEER);
   });
 
   test("leaving as the person who drives is refused", async () => {
     const { ctx, row } = await world();
     await composerSend(ctx, row("hand"), ME);
-    await expect(performLeaveSession(ctx, ME as any, { session_id: "hand", ...fromSeat })).rejects.toThrow(/@growth is paused there/);
-    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "hand", change: { leave: {} }, ...fromSeat })).rejects.toThrow(/@growth is paused there/);
+    await expect(performLeaveSession(ctx, ME as any, { session_id: "hand", ...fromSeat })).rejects.toThrow(/@growth is paused on/);
+    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "hand", change: { leave: {} }, ...fromSeat })).rejects.toThrow(/@growth is paused on/);
     expect(row("hand").driver_user_id).toBe(ME);
   });
 });

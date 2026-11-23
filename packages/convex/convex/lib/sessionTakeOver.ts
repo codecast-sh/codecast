@@ -68,9 +68,9 @@ export async function pausedRoleRefusal(ctx: { db: any }, sender: any, target: a
   // A person's own session a task binding filed under the role was never the
   // role's to drive; anything else the role drove until a person took it.
   if (target.org_role_hold === "bound" && !target.role_started) {
-    return `Not sent. ${name} drives ${short}: it is their session, filed under ${handle} by its task. Ask them in your own thread (cast decide reaches them).`;
+    return `Not sent. ${handle} is paused on ${short}: it is ${name}'s own session, filed under ${handle} by its task, and they are working in it. Ask them in your own thread (cast decide reaches them).`;
   }
-  return `Not sent. ${name} drives ${short} now, so ${handle} is paused there. If ${name} needs to hear this, ask them in your own thread (cast decide reaches them); they can make ${handle} driver again from the session's owners.`;
+  return `Not sent. ${handle} is paused on ${short}: ${name} is working in it. If ${name} needs to hear this, ask them in your own thread (cast decide reaches them); they can resume ${handle} from the session's owners.`;
 }
 
 // A paused role changes nothing about the session it is paused on: not its
@@ -88,5 +88,5 @@ export async function refusePausedRoleEdit(ctx: { db: any }, authUserId: Id<"use
   const [role, driver] = await Promise.all([ctx.db.get(conversation.org_role_id), ctx.db.get(conversation.driver_user_id)]);
   const handle = role?.handle ? `@${role.handle}` : "the role";
   const name = personName(driver);
-  throw new Error(`${name} drives ${conversation.short_id ?? String(conversation._id).slice(0, 7)}, so ${handle} is paused there, and only a person who owns or runs it changes its owners or who drives. Ask ${name} in your own thread (cast decide reaches them).`);
+  throw new Error(`${handle} is paused on ${conversation.short_id ?? String(conversation._id).slice(0, 7)}: ${name} is working in it, and only a person who owns or runs it changes its owners or resumes ${handle}. Ask ${name} in your own thread (cast decide reaches them).`);
 }

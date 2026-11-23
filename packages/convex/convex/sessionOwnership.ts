@@ -535,7 +535,7 @@ export async function performSetSessionDriver(
 ): Promise<{ ok: true; short_id: string; conversation_id: Id<"conversations">; driver: SessionDriver | null }> {
   const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
-  if (!(await mayEditOwners(ctx, authUserId, conversation))) throw new Error("Only an owner of the session, or the account that runs it, can change who drives it");
+  if (!(await mayEditOwners(ctx, authUserId, conversation))) throw new Error("Only an owner of the session, or the account that runs it, can pause or resume its role");
   await refusePausedRoleEdit(ctx, authUserId, conversation, args.from_session);
   if (args.driver.kind === "none") {
     await setDriver(ctx, authUserId, conversation._id, null, args.from_session);
@@ -543,7 +543,7 @@ export async function performSetSessionDriver(
     return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: driver! };
   }
   if (args.driver.kind === "role") {
-    if (!conversation.org_role_id) throw new Error(`Session ${shortId} is not filed under a role, so no role can drive it`);
+    if (!conversation.org_role_id) throw new Error(`Session ${shortId} is not filed under a role, so it has no role to resume`);
     await setDriver(ctx, authUserId, conversation._id, null, args.from_session);
     return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "role", role_id: conversation.org_role_id } };
   }
@@ -553,7 +553,7 @@ export async function performSetSessionDriver(
   let userId = ownerIds.includes(ref) ? ref : null;
   if (!userId && ref.trim().toLowerCase() !== "me") userId = await ownerNamed(ctx, ownerIds, ref);
   userId ??= String((await resolveOwnerRef(ctx, authUserId, conversation, ref))._id);
-  if (!ownerIds.includes(userId)) throw new Error("Only an owner of the session can drive it; add them as an owner first");
+  if (!ownerIds.includes(userId)) throw new Error("Only an owner of the session can work in it with its role paused; add them as an owner first");
   await setDriver(ctx, authUserId, conversation._id, userId, args.from_session);
   return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "user", user_id: userId as Id<"users"> } };
 }

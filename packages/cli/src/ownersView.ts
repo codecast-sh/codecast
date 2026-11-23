@@ -1,6 +1,7 @@
 // How `cast own`, `cast disown` and `cast owners` name a session's owners,
-// read from sessionOwnership.listOwners: the people, at most one role, the one
-// owner who drives, and the account that runs it. Its own module so the
+// read from sessionOwnership.listOwners: the people, at most one role (active,
+// or paused while a person works in the session), and the account that runs
+// it. Its own module so the
 // wording is unit-testable (index.ts runs the CLI on import).
 
 /** A role as an owner ref: `@handle` or its short id (or-N). */
@@ -23,15 +24,11 @@ export function namesFiledRole(read: OwnersRead, ref: string): boolean {
   return r.handle.toLowerCase() === want || r.short_id === ref.trim() || r.role_id === ref.trim();
 }
 
-/** The owners as words: people (the driver marked), the role (driving or
- *  paused), and who runs it. */
+/** The owners as words: the people, the role (active, or paused while a
+ *  person works in the session), and who runs it. */
 export function describeOwners(read: OwnersRead): { people: string; role: string | null; runner: string | null } {
-  const driver = read.driver ?? null;
-  const people = (read.owners ?? []).map((o) => `${nameOf(o)}${driver?.kind === "user" && driver.user_id === o.user_id ? " (drives)" : ""}`);
-  const driverName = driver?.kind === "user" ? nameOf((read.owners ?? []).find((o) => o.user_id === driver.user_id)) : null;
-  const role = read.role
-    ? `@${read.role.handle} ${driver?.kind === "role" ? "(drives)" : `(paused${driverName ? `: ${driverName} drives` : ""})`}`
-    : null;
+  const people = (read.owners ?? []).map(nameOf);
+  const role = read.role ? `@${read.role.handle} (${read.driver?.kind === "role" ? "active" : "paused"})` : null;
   const runner = read.runner ? `${nameOf(read.runner)}${read.runner.is_bot ? " (agent account)" : ""}` : null;
   return { people: people.length ? people.join(", ") : "nobody", role, runner };
 }

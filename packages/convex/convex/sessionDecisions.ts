@@ -1967,10 +1967,10 @@ async function answererFor(
     }
     const role = await roleOfConversation(ctx, conversation);
     if (!role) return { error: SESSION_CANNOT_ANSWER_AS_PERSON };
-    // A person drives the session that asked: its questions are theirs, unless they handed this one to the role.
+    // The role is paused on the session that asked: its questions are the people's, unless they handed this one to the role.
     const asking = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
     if (asking && rolePaused(asking) && !(row.passed_to?.kind === "role" && row.passed_to.id === String(role._id))) {
-      return { error: `A person drives the session that asked, so ${role.name} answers none of its questions; recommend instead (cast decide recommend), or they answer it` };
+      return { error: `${role.name} is paused on the session that asked: a person is working in it, so it answers none of its questions. Recommend instead (cast decide recommend), or they answer it` };
     }
     // A line run's change card: the lead on its ladder answers it when the
     // lead starts work on its own, whatever its category; the session that
