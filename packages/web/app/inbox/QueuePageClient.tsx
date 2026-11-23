@@ -8,6 +8,7 @@ import { useMissingSessionLookup } from "../../hooks/useMissingSessionRow";
 import { SessionPrewarm } from "../../components/SessionPrewarm";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTabActive } from "../../hooks/usePagePresence";
+import { useComposeLink } from "../../hooks/useComposeLink";
 import { urlSessionId } from "../../lib/pathLabel";
 import { ConversationUnavailable } from "../../components/ConversationUnavailable";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -380,6 +381,9 @@ export function QueuePageClient() {
   // and scroll position survive untouched until it's brought forward again.
   // Outside the tab shell (web standalone), there's no context → always active.
   const isActiveTab = useTabActive();
+  // `/inbox?compose=…`: a link from outside opens the new-session composer
+  // with its draft (lib/composeLink).
+  useComposeLink(isActiveTab);
 
   // The session rail's route defaults (auto-open on entering the inbox) live
   // in DashboardLayout's navigation effects, gated so a tab switch — which
