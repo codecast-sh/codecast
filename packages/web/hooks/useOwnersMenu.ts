@@ -160,7 +160,8 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
     ...(added.length > 3 ? [`+ ${added.length} people`] : added.map((id) => `+ ${personOf(id).name}${drivesTag(`p:${id}`)}`)),
     ...(roleChanged && draft.role ? [`+ ${draft.role.name}${drivesTag(`r:${draft.role.role_id}`)}`] : []),
     ...removed.map((id) => `− ${personOf(id).name}`),
-    ...(iLeave ? ["You leave"] : []),
+    // A leave that cannot be undone says so before Save.
+    ...(iLeave ? [inverse ? "You leave" : "You leave · can't undo"] : []),
     ...(roleChanged && initial.role ? [`− ${initial.role.name}`] : []),
     ...(driverChanged && draft.driver && !driverOnNew ? [`${driverName(draft.driver)} · driver`] : []),
     ...(iLeave && draft.moveTo ? [`Move to ${draft.moveTo.label}`] : []),

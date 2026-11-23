@@ -190,7 +190,8 @@ test("leaving a session on your own account picks a machine first, unless a role
   useInboxStore.setState({ sessionOwners: { [ID]: { ...(useInboxStore.getState() as any).sessionOwners[ID], role_started: true } } } as any);
   await openMenu();
   await act(async () => { (w.document.querySelector(`[data-owner-row='p:${ME}'] .own-x`) as HTMLElement).click(); });
-  expect(chips()).toEqual(["You leave"]);
+  // The read gives no team access here, so the leave has no undo, and says so.
+  expect(chips()).toEqual(["You leave · can't undo"]);
   expect(w.document.querySelector("[data-leave-box]")).toBeNull();
 });
 
@@ -226,11 +227,20 @@ test("leaving keeps you out of the candidates, and its chips say where it goes a
   await openMenu();
   await act(async () => { (w.document.querySelector(`[data-owner-row='p:${ME}'] .own-x`) as HTMLElement).click(); });
   await act(async () => { (w.document.querySelector("[data-leave-target='box1']") as HTMLElement).click(); });
-  expect(chips()).toEqual(["You leave", "Ashot Petrosian · driver", "Move to Aivery's Mac-mini"]);
+  expect(chips()).toEqual(["You leave · can't undo", "Ashot Petrosian · driver", "Move to Aivery's Mac-mini"]);
   const candidates = [...w.document.querySelectorAll("[data-owner-candidate]")].map((e: any) => e.getAttribute("data-owner-candidate"));
   expect(candidates).not.toContain(`p:${ME}`);
   // Select all teammates adds the others, never you: the leave stands.
   await act(async () => { (w.document.querySelector("[data-select-all-teammates]") as HTMLElement).click(); });
-  expect(chips()).toEqual(["+ Samvit Rao", "You leave", "Ashot Petrosian · driver", "Move to Aivery's Mac-mini"]);
+  expect(chips()).toEqual(["+ Samvit Rao", "You leave · can't undo", "Ashot Petrosian · driver", "Move to Aivery's Mac-mini"]);
 });
 
+test("a leave that can be undone (a teammate's run the team shares) needs no warning", async () => {
+  useInboxStore.setState({
+    sessions: { [ID]: { ...(useInboxStore.getState().sessions as any)[ID], user_id: "user_ashot", org_role_id: null, driver_user_id: "user_ashot" } },
+    sessionOwners: { [ID]: { ...(useInboxStore.getState() as any).sessionOwners[ID], role: null, team_access: true, runner: { user_id: "user_ashot", is_bot: false } } },
+  } as any);
+  await openMenu();
+  await act(async () => { (w.document.querySelector(`[data-owner-row='p:${ME}'] .own-x`) as HTMLElement).click(); });
+  expect(chips()).toEqual(["You leave"]);
+});
