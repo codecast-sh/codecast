@@ -8696,6 +8696,11 @@ export default defineSchema({
     line: v.optional(v.string()),
     // Its number in the row's history (`v<seq>`), from ct-98653 on.
     seq: v.optional(v.number()),
+    // A library version's segments (`flow="<slug>"`) the workspace keeps in its library, each at the version that was
+    // current when this one was saved (flowVersions.ts segmentPins): a run on it records them and its runner reads
+    // each segment from there, never a host's index or checkout. Unset on versions saved before, and on a flow none of
+    // whose segments the library holds: those resolve their segments on the host, as before.
+    segments: v.optional(v.array(v.object({ slug: v.string(), workflow_id: v.id("workflows"), version_id: v.id("workflow_versions") }))),
   })
     .index("by_workflow_at", ["workflow_id", "at"])
     .index("by_workflow_line", ["workflow_id", "line", "at"]),

@@ -91,7 +91,7 @@ const workflowBySlug = (ctx: any, userId: Id<"users">, slug: string) =>
  * library save. A version with no line (a push from no file) is the newest
  * no-file version again when its graph is the same.
  */
-export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }> }, now: number, snapshot: Doc<"workflow_versions">["snapshot"] | undefined, kept: { line?: string; pushed_from?: Doc<"workflow_versions">["pushed_from"]; graph?: () => Promise<Id<"workflow_version_graphs">> }): Promise<{ id: Id<"workflow_versions">; created: boolean }> {
+export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }> }, now: number, snapshot: Doc<"workflow_versions">["snapshot"] | undefined, kept: { line?: string; pushed_from?: Doc<"workflow_versions">["pushed_from"]; graph?: () => Promise<Id<"workflow_version_graphs">>; segments?: SegmentPins }): Promise<{ id: Id<"workflow_versions">; created: boolean }> {
   const newest: Doc<"workflow_versions"> | null = await ctx.db.query("workflow_versions").withIndex("by_workflow_at", (q: any) => q.eq("workflow_id", workflowId)).order("desc").first();
   // The version this one would be again: the newest of its line; a library flow's, the newest of the row, so its
   // first save of the graph its history already names keeps that version; a push from no file, the newest when it too
@@ -99,8 +99,10 @@ export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, 
   const prev: Doc<"workflow_versions"> | null = kept.line === LIBRARY_LINE ? newest
     : kept.line ? await newestOfLine(ctx, workflowId, kept.line)
     : newest && !newest.line && !newest.pushed_from ? newest : null;
-  if (prev?.graph_hash === origin.graph_hash) {
-    if (snapshot && !prev.snapshot) await ctx.db.patch(prev._id, { snapshot, ...(kept.line ? { line: kept.line } : {}) });
+  // A library version is its graph and the segment versions it pins: the same graph saved when a segment has moved on
+  // is a new version, so a version's runs never change under it. A version no run read yet (no content) takes them.
+  if (prev?.graph_hash === origin.graph_hash && (!kept.segments || !prev.snapshot || sameSegmentPins(prev.segments, kept.segments))) {
+    if (snapshot && !prev.snapshot) await ctx.db.patch(prev._id, { snapshot, ...(kept.line ? { line: kept.line } : {}), ...(kept.segments?.length ? { segments: kept.segments } : {}) });
     if (kept.graph && !prev.graph_id) await ctx.db.patch(prev._id, { graph_id: await kept.graph() });
     return { id: prev._id, created: false };
   }
@@ -111,8 +113,12 @@ export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, 
   const changed = origin.nodes.filter((n) => !was.size || was.get(n.id) !== n.h).map((n) => n.id);
   const graph_id = kept.graph ? await kept.graph() : undefined;
   const seq = newest?.seq ? newest.seq + 1 : await nextSeq(ctx, workflowId);
-  return { id: await ctx.db.insert("workflow_versions", { workflow_id: workflowId, graph_hash: origin.graph_hash, nodes: origin.nodes, changed, by: userId, at: now, seq, ...(kept.line ? { line: kept.line } : {}), ...(snapshot ? { snapshot } : {}), ...(graph_id ? { graph_id } : {}), ...(kept.pushed_from ? { pushed_from: kept.pushed_from } : {}) }), created: true };
+  return { id: await ctx.db.insert("workflow_versions", { workflow_id: workflowId, graph_hash: origin.graph_hash, nodes: origin.nodes, changed, by: userId, at: now, seq, ...(kept.line ? { line: kept.line } : {}), ...(snapshot ? { snapshot } : {}), ...(graph_id ? { graph_id } : {}), ...(kept.pushed_from ? { pushed_from: kept.pushed_from } : {}), ...(kept.segments?.length ? { segments: kept.segments } : {}) }), created: true };
 }
+
+export type SegmentPins = NonNullable<Doc<"workflow_versions">["segments"]>;
+const sameSegmentPins = (a: SegmentPins | undefined, b: SegmentPins) =>
+  JSON.stringify((a ?? []).map((x) => [x.slug, String(x.version_id)])) === JSON.stringify(b.map((x) => [x.slug, String(x.version_id)]));
 
 // `serves`: a list or null (a push: written as the file says), undefined (the web: left as it is).
 // `library`: "switch" puts the flow in the library (`cast flow save`, a session's Save); "new" only a flow this write creates (the web's).
