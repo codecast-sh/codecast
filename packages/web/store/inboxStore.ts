@@ -2644,7 +2644,11 @@ export function isForeignRow(s: InboxSession, meId: string | null | undefined): 
 }
 function isForeignRowUncached(s: InboxSession, meId: string): boolean {
   if (!isConvexId(s._id)) return false; // optimistic stub — always mine
-  if (s.role_alone && !s.owned_by_me) return true;
+  // owner_ids is the one home of its people, so a take-over's paint (which
+  // adds me there) brings the row in before the server's owned_by_me does.
+  const owns = !!s.owned_by_me || (Array.isArray(s.owner_ids) && s.owner_ids.includes(meId));
+  if (s.role_alone && !owns) return true;
+  if (owns) return false;
   if (!s.user_id) return false; // thin/legacy row with no author → keep
   return isForeignSession(s, undefined, meId);
 }

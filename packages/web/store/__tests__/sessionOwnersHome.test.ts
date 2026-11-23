@@ -3,7 +3,8 @@
 // it; the header (ownerIdsOnRow) and the card (coOwnersOf) both read it, so
 // they converge on whichever answer is newest and a Save never freezes it.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { useInboxStore } from "../inboxStore";
+import { isForeignRow, useInboxStore } from "../inboxStore";
+import { paintTakeOverOnSend } from "../sessionOwnersSlice";
 import { applyCollectionFeed } from "../../hooks/useSyncCollection";
 import { feedOwnerIds, selectOwnersRow } from "../../hooks/useOwners";
 import { ownerIdsOnRow } from "../../hooks/useOwnersStoreEnv";
@@ -169,4 +170,18 @@ test("a whole-row push that changes only owner_ids applies to the conversation r
   useInboxStore.setState({ pending: {}, sessions: {}, conversations: { [ID]: { _id: ID, user_id: "me", updated_at: 1, owner_ids: ["me"] } } } as any);
   useInboxStore.getState().syncTable("conversations", [{ _id: ID, user_id: "me", updated_at: 1, owner_ids: ["me", "mate"] }] as any);
   expect((useInboxStore.getState().conversations as any)[ID].owner_ids).toEqual(["me", "mate"]);
+});
+
+// A run that only a role holds (role_alone) is out of its runner's inbox. A
+// take-over send paints the runner into owner_ids, and that alone brings the
+// row in, before the server's owned_by_me echo.
+test("taking over a run only a role holds brings it into the taker's inbox at once", () => {
+  const RID = "jx700000000000000000000000000tko";
+  const row = { _id: RID, session_id: "s-own", user_id: "me", updated_at: 1, org_role_id: "roleR", role_alone: true, owned_by_me: false, owner_ids: [] };
+  const draft: any = { currentUser: { _id: "me" }, sessionOwners: {}, sessions: { [RID]: { ...row } }, conversations: {} };
+  expect(isForeignRow(draft.sessions[RID], "me")).toBe(true);
+  paintTakeOverOnSend(draft, RID);
+  expect(draft.sessions[RID].owner_ids).toEqual(["me"]);
+  expect(draft.sessions[RID].driver_user_id).toBe("me");
+  expect(isForeignRow({ ...draft.sessions[RID] }, "me")).toBe(false);
 });
