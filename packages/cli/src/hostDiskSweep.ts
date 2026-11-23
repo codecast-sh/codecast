@@ -23,6 +23,7 @@ import * as path from "node:path";
 import { execFileAsync } from "./proc.js";
 import { LANDED_REF, MOVE_CLONE_RE } from "./remote/session-move.js";
 import { releaseSessionWorktree, type GcVerdict, type RunTreesInUse } from "./worktreeGc.js";
+import { sweepTrashAtLowPriority, TRASH_GRACE_MS, TRASH_PREFIX } from "./workspace/trash.js";
 
 async function git(cwd: string, args: string[]): Promise<string> {
   const { stdout } = await execFileAsync("git", ["-C", cwd, ...args], { encoding: "utf-8", timeout: 60_000, env: { ...process.env, GIT_TERMINAL_PROMPT: "0" } });
@@ -78,10 +79,15 @@ async function sweepWorktrees(repo: string, opts: SweepOpts, result: SweepResult
   let names: string[] = [];
   try { names = fs.readdirSync(root); } catch { return; }
   for (const name of names) {
+    if (name.startsWith(TRASH_PREFIX)) continue;
     const wt = path.join(root, name);
     if (!fs.statSync(wt).isDirectory() || inUse(wt, opts.inUsePaths)) continue;
     const verdict: GcVerdict = await releaseSessionWorktree(wt, opts.log, undefined, opts.runTreesInUse).catch((err) => ({ action: "kept" as const, name, path: wt, reason: String(err).slice(0, 120) }));
     if (verdict.action === "released") result.released.push(wt);
     else if (verdict.action === "kept") result.kept.push({ path: wt, reason: verdict.reason });
   }
+  const trash = await sweepTrashAtLowPriority(root);
+  if (trash.swept.length) opts.log(`[DISK] deleted ${trash.swept.length} destroyed worktree(s) in ${root}`);
+  result.released.push(...trash.swept);
+  result.kept.push(...trash.young.map((p) => ({ path: p, reason: `destroyed under ${TRASH_GRACE_MS / 60_000} min ago` })));
 }
