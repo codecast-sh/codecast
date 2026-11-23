@@ -5,7 +5,7 @@
 // right there: an answer at Decide, the session's fix when a stage sent work
 // back, the deploy when it has landed. The Ship panel previews a flow with it
 // and the run's card in the thread draws the run with it.
-import { memo, useMemo, useState } from "react";
+import { memo, useId, useMemo, useState } from "react";
 import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
 import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, X } from "lucide-react";
@@ -18,7 +18,8 @@ import { deploysFocusHref, deploysHref, runFocus, type DeployFocus } from "../..
 import { useDeployPress } from "../../hooks/useDeployPress";
 import "./ship.css";
 
-export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false, open, onOpen }: { stages: JourneyStage[]; compact?: boolean; open?: string | null; onOpen?: (id: string | null) => void }) {
+/** `insideId`: the element an open segment's inside is drawn in, which its stage's toggle controls. */
+export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false, open, onOpen, insideId }: { stages: JourneyStage[]; compact?: boolean; open?: string | null; onOpen?: (id: string | null) => void; insideId?: string }) {
   // A finished journey says only what happened: no one acts any more, and nothing goes back.
   const finished = stages.length > 0 && stages.every((s) => s.state === "done" || s.state === "skipped") && stages.some((s) => s.state === "done");
   // The stages whose findings come back to the session, as one return line under them.
@@ -32,7 +33,7 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
           return (
             <li key={s.id} className="sj-stage" data-state={s.state} data-who={s.who} data-past={next && (next.state !== "idle" || s.state === "done") ? "" : undefined} data-stage={s.id}>
               {onOpen && (s.steps?.length || s.inside) ? (
-                <button type="button" className="sj-stage-btn" aria-expanded={open === s.id} onClick={() => onOpen(open === s.id ? null : s.id)} data-journey-stage={s.id}>
+                <button type="button" className="sj-stage-btn" aria-expanded={open === s.id} aria-controls={s.inside ? insideId : undefined} onClick={() => onOpen(open === s.id ? null : s.id)} data-journey-stage={s.id}>
                   <StageFace s={s} finished={finished} />
                 </button>
               ) : <StageFace s={s} finished={finished} />}
@@ -91,10 +92,10 @@ function StateWords({ state }: { state: JourneyStage["state"] }) {
  * goes back to, and the segment's end last, so nothing reads as after it. A route a person answers on is dashed and says
  * what makes a run ask: it asks only when a run turns there.
  */
-function SegmentInside({ stage }: { stage: JourneyStage }) {
+function SegmentInside({ stage, id }: { stage: JourneyStage; id?: string }) {
   const { path, routes, end } = stage.inside!;
   return (
-    <ol className="sj-in" aria-label={`Inside ${stage.label}`} data-journey-inside={stage.id}>
+    <ol id={id} className="sj-in" aria-label={`Inside ${stage.label}`} data-journey-inside={stage.id}>
       {path.map((p) => {
         const off = routes.filter((r) => r.from === p.id);
         return (
@@ -119,7 +120,7 @@ function Route({ r }: { r: InsideRoute }) {
       {r.label ? <span className="sj-in-when">{r.label}</span> : null}
       {r.steps.map((s) => <span key={s.id} className="sj-in-hop" data-who={s.who} data-state={s.state}>{s.label}<StateWords state={s.state} /></span>)}
       <span className="sj-in-to">
-        {r.to.kind === "stop" ? <><X className="w-2.5 h-2.5" aria-hidden />stops</> : <><CornerDownLeft className="w-2.5 h-2.5" aria-hidden />{r.to.kind === "session" ? "this session" : r.to.label}</>}
+        {r.to.kind === "stop" ? <><X className="w-2.5 h-2.5" aria-hidden />stops</> : <><CornerDownLeft className="w-2.5 h-2.5" aria-hidden /><span className="sr-only">back to </span>{r.to.kind === "session" ? "this session" : r.to.label}</>}
       </span>
       {r.asks ? <span className="sj-in-if">{approvalWords({ kind: "if", when: r.asks.when })}</span> : null}
     </li>
@@ -293,13 +294,14 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
 /** `targets`, when the caller knows them from the landed commit's deploy reach, are where the change is: never guessed from the session's commits. */
 export function JourneyView({ journey, run, now_ms, compact, actions, again, targets }: { journey: JourneyModel; run?: any; now_ms: number; compact?: boolean; actions?: React.ReactNode; again?: (primary: boolean) => React.ReactNode; targets?: ReadonlyArray<TargetState> }) {
   const [open, setOpen] = useState<string | null>(null);
+  const insideId = useId();
   const opened = open ? journey.stages.find((s) => s.id === open) ?? null : null;
   const landed = journey.now.kind === "landed" || journey.now.kind === "deploying" || journey.now.kind === "live";
   const team = typeof run?.workspace === "string" && run.workspace.startsWith("team:") ? run.workspace.slice(5) : null;
   return (
     <div className="sj" data-journey={journey.now.kind}>
-      <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={setOpen} />
-      {opened?.inside ? <SegmentInside stage={opened} /> : null}
+      <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={setOpen} insideId={insideId} />
+      {opened?.inside ? <SegmentInside stage={opened} id={insideId} /> : null}
       {opened?.steps?.length ? <StageDetail stage={opened} now_ms={now_ms} /> : null}
       {run ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms} again={again}>{actions}</JourneyNowBar> : null}
       {run && landed && team && run.spawner_conversation_id ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} focus={runFocus(run)} /> : null}

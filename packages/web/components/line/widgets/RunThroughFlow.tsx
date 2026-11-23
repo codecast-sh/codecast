@@ -240,10 +240,8 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
               <input type="radio" className="shp-radio" name={`ship-flow-${conversationId}`} value={f.slug} checked={f.slug === flow.slug}
                 onChange={() => setPicked(f.slug)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onRun(f); } }} />
               <b>{f.label}{f === fallback ? <span className="shp-default" data-run-through-default=""><span className="sr-only"> </span>Default</span> : f.base ? <span className="shp-base">on {f.base}</span> : null}</b>
-              <span className="shp-path">
-                <Asks flow={f} />
-                {journeyStages(f).map((s) => s.label).join(" → ")}
-              </span>
+              <span className="shp-path">{journeyStages(f).map((s) => s.label).join(" → ")}</span>
+              <Asks flow={f} />
             </label>
           ))}
         </div>

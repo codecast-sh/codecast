@@ -32,14 +32,14 @@ describe("states that read without color", () => {
 });
 
 const { journeyStages } = await import("../../lib/ship/journey");
-const { pushedFlow } = await import("../../lib/line/flowPool");
-const { LAND_FLOW } = await import("../../lib/ship/journeyFixtures");
+const { appPool, flowBySlug } = await import("../../lib/line/flowPool");
+const { LAND_REPO_FLOW } = await import("../../lib/ship/journeyFixtures");
 
 describe("a segment stage", () => {
-  const stages = journeyStages(pushedFlow({ _id: "wf_land", ...LAND_FLOW })).map((s) => ({ ...s, state: "idle", round: null })) as any;
+  const stages = journeyStages(flowBySlug(appPool([], [LAND_REPO_FLOW]), "change")!).map((s) => ({ ...s, state: "idle", round: null })) as any;
   test("hints at its inside under its name, a press away from opening it", () => {
-    const html = renderToStaticMarkup(<JourneyTrack stages={stages} onOpen={() => {}} />);
-    expect(html).toContain('aria-expanded="false"');
+    const html = renderToStaticMarkup(<JourneyTrack stages={stages} onOpen={() => {}} insideId="in1" />);
+    expect(html).toContain('aria-expanded="false" aria-controls="in1"');
     expect(text(html)).toContain("PR · CI + Review · Merge");
   });
   test("alone and sending work back, it draws a hook under itself, not a bracket of no width", () => {

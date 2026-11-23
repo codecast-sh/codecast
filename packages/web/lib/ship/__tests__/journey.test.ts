@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { approvalOf, approvalWords, canAnswer, deployHold, insideWords, journeyOf, journeyStages, journeyWords, landedSha, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
-import { BRANCHING_FLOW, FANOUT_FLOW, LAND_FLOW } from "../journeyFixtures";
-import { pushedFlow } from "../../line/flowPool";
+import { BRANCHING_FLOW, FANOUT_FLOW, LAND_ASKS, LAND_FLOW, LAND_REPO_FLOW } from "../journeyFixtures";
+import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
 import { SHIPPED_FLOWS } from "../../line/shippedFlows.generated";
 import { GALLERY_FLOW, renderGalleryRecords } from "../../renderGallery";
 // The library change flow, parsed with its segments expanded (bun packages/cli/scripts/gen-change-graph-fixture.ts).
@@ -449,8 +449,9 @@ describe("approvalOf", () => {
 
 // Union's change: one segment, Land, as Union's checkout reports it (the card's gate holds land.cast's asks_if).
 describe("a segment's inside", () => {
-  const land = pushedFlow({ _id: "wf_land", ...LAND_FLOW });
-  const ASKS = "it edits CI or the flow, or touches consent, bulk sends or bulk changes to people's records";
+  // As the Ship picker reads it in Union's checkout: the repository's own flow, folded into the pool.
+  const land = flowBySlug(appPool([], [LAND_REPO_FLOW]), "change")!;
+  const ASKS = LAND_ASKS;
   const stage = () => journeyStages(land)[0];
   test("the stage holds its passing path, read from the graph: PR, CI beside Review, Merge, then the segment's end", () => {
     const s = stage();
@@ -487,6 +488,17 @@ describe("a segment's inside", () => {
     expect(approvalOf(at("land__card"))).toEqual({ kind: "if", when: "it is Tuesday" });
     expect(approvalOf(at("land"))).toEqual({ kind: "if", when: "it is Tuesday" });
     expect(approvalOf(at(null))).toEqual({ kind: "if", when: null });
+    // A pushed row stores no asks_if, and its source (change.cast) does not name the card: it can only say "sometimes".
+    expect(approvalWords(approvalOf(pushedFlow({ _id: "wf_land", ...LAND_FLOW })))).toBe("Sometimes asks you");
+  });
+  test("round 2 back at PR: nothing inside reads as last round's", () => {
+    let t = 1000;
+    const at = (id: string, status = "completed", visits = 1) => st(id, status, (t += 10), { visits });
+    const round1 = [at("land"), at("land__pr"), at("land__checks"), at("land__ci"), at("land__review"), at("land__read"), at("land__merge", "failed"), at("land__retest"), at("land__brief"), at("land__changes", "failed"), at("fix")];
+    const j = journeyOf(land, run({ current_node_id: "land__pr", node_statuses: [...round1, at("land__pr", "running", 2)] }), [], { id: ME, decision: null });
+    expect([j.stages[0].state, j.stages[0].round]).toEqual(["active", 2]);
+    expect(j.stages[0].inside!.path.map((p) => p.state)).toEqual(["active", "idle", "idle"]);
+    expect(j.stages[0].inside!.routes.every((r) => r.state === "idle" && r.steps.every((s) => s.state === "idle"))).toBe(true);
   });
   test("a segment whose inside is one step, nothing off it, draws none", () => {
     expect(journeyStages(branching).some((s) => s.inside)).toBe(false);

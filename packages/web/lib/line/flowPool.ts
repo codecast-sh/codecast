@@ -36,8 +36,7 @@ export type PushedFlowRow = {
   /** The nodes the graph fills with steps it wrote in place, for a row that carries no source. */
   fills?: ReadonlyArray<string> | null;
   variant_of?: string | null;
-  /** `asks_if` on a node of a row written parsed (a gate inside a segment, which the flow's own source does not hold). */
-  nodes: ReadonlyArray<{ id: string; label: string; type: string; shape?: string; asks_if?: string } & StationDetail>;
+  nodes: ReadonlyArray<{ id: string; label: string; type: string; shape?: string } & StationDetail>;
   edges: ReadonlyArray<{ from: string; to: string; label?: string; condition?: string }>;
 };
 
@@ -69,7 +68,7 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
       ...(Number(maxVisits[n.id]) > 0 ? { max_visits: Number(maxVisits[n.id]) } : {}),
       ...(machine[n.id] === "true" ? { machine: true } : {}),
       ...(fold[n.id] === "true" ? { fold: true } : {}),
-      ...(n.asks_if || asksIf[n.id] ? { asks_if: n.asks_if || asksIf[n.id] } : {}),
+      ...(asksIf[n.id] ? { asks_if: asksIf[n.id] } : {}),
       ...(stops[n.id] ? { stop: stops[n.id] } : {}),
       ...(top !== n.id ? { segment: top } : {}),
       ...(exit ? { segment_exit: exit } : {}),

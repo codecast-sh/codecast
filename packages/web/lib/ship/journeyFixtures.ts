@@ -12,15 +12,16 @@
 // - LAND_FLOW: Union's change (outreach/line/change.cast and land.cast, Nov 23):
 //   one segment, Land (PR, CI beside Review joined at Read, Merge), whose side
 //   routes send findings back to the session, run CI again when main moved,
-//   wait for a green main, or ask a person's card on Merge's exit 6. Its nodes
-//   are as Union's checkout reports them (repoFlows): the card's gate carries
-//   the `asks_if` land.cast writes on the card, which change.cast's source
-//   does not hold.
+//   wait for a green main, or ask a person's card on Merge's exit 6. As a
+//   pushed row it has no `asks_if`: land.cast writes it on the card, and a row
+//   stores neither land.cast's source nor that attribute. LAND_REPO_FLOW is
+//   the same graph as Union's checkout reports it (repoFlows, parsed), which
+//   the Ship picker reads there: the card's gate carries it.
 //
 // Hand-written, so a flow rewritten in the library does not move what they show.
 // Pure and free of the `@/` alias: the phone's bundle imports the gallery.
 
-type Node = { id: string; label: string; type: string; shape: string; timeout?: number; asks_if?: string };
+type Node = { id: string; label: string; type: string; shape: string; timeout?: number };
 type Edge = { from: string; to: string; label?: string; condition?: string };
 
 const SHAPE: Record<string, string> = {
@@ -259,7 +260,7 @@ export const LAND_FLOW: FixtureFlowRow = {
     inLand("landed", "Merged", "command"),
     inLand("conflicted", "Does not fit main", "command", { timeout: 60 }),
     ...LAND_STOPS.map(([id, label]) => inLand(id, label, "command")),
-    inLand("card__decide", "Decide", "human", { asks_if: "it edits CI or the flow, or touches consent, bulk sends or bulk changes to people's records" }),
+    inLand("card__decide", "Decide", "human"),
     inLand("card__ship", "Ship", "command"),
     inLand("card__revise", "Revise", "command"),
     inLand("card__dropped", "Dropped", "command"),
@@ -325,4 +326,20 @@ export const LAND_FLOW: FixtureFlowRow = {
     { from: "land__card__decide", to: "land__card__revise", label: "[R] Revise :: Your note goes to the session that made it; the change comes back through review" },
     { from: "land__card__decide", to: "land__card__dropped", label: "[D] Drop :: Closes it unlanded; the session hears your reason" },
   ],
+};
+
+/** What makes Union's Land ask a person: the `asks_if` on its card (land.cast). */
+export const LAND_ASKS = "it edits CI or the flow, or touches consent, bulk sends or bulk changes to people's records";
+
+/** LAND_FLOW as Union's checkout reports it (cli repoFlowsReport, parsed): the session's fix stations its own, Land's
+ *  steps marked as the segment's, and the card's gate holding the `asks_if` the parser copies onto it. */
+export const LAND_REPO_FLOW = {
+  slug: "change", name: "change", kind: "line" as const, label: "Change", description: null, takes: ["task", "branch"],
+  nodes: LAND_FLOW.nodes.map((n) => ({
+    ...n,
+    ...(["fix", "fix_conflict", "revise"].includes(n.id) ? { backend: "subject", max_visits: 3 } : {}),
+    ...(n.id === "land" ? { segment: "land", segment_entry: true, segment_flow: "land" } : n.id.startsWith("land__") ? { segment: "land" } : {}),
+    ...(n.id === "land__card__decide" ? { asks_if: LAND_ASKS } : {}),
+  })),
+  edges: LAND_FLOW.edges,
 };

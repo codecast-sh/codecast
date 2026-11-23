@@ -613,27 +613,37 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     if (said === "missing") return "routed";
     return passed && last ? "done" : passed ? "skipped" : "idle";
   };
-  // A segment's inside on the run: each of its steps as its latest visit left it (the card a gate holds waits, the step the
-  // run stands at is current), a route waiting or current with its step, and the route that last went back to the
-  // session, while the stage has sent the work back, back.
-  const stepState = (ids: string[]): StageState => {
-    if (gateNode && ids.some((id) => inGroup(id, gateNode))) return "waiting";
-    if (live && at && ids.some((id) => inGroup(id, at))) return run.status === "paused" ? "waiting" : "active";
-    const last = newest(statuses.filter((n) => ids.some((id) => inGroup(id, n.node_id))));
-    if (!last) return "idle";
-    if (last.status === "running" || last.status === "pending") return live ? "active" : "idle";
-    return last.status === "failed" ? "routed" : "done";
-  };
-  const insideOn = (b: Base): StageInside => {
+  // A segment's inside on the run, this round only (from the newest entry into its first step): each step as its visit
+  // this round left it (the card a gate holds waits, the step the run stands at is current), nothing after where the run
+  // stands, a route waiting or current with its step, and the route that last went back to the session, while the stage
+  // has sent the work back, back. A stage after where the run stands holds nothing of this round.
+  const insideOn = (b: Base, index: number): StageInside => {
     const inside = b.inside!;
-    const pathOn = (p: Base): JourneyStage => ({ ...idleStage(p), state: stepState(p.members), ...(p.branches ? { branches: p.branches.map(pathOn) } : {}) });
-    const visited = (r: RouteBase) => Math.max(0, ...statuses.filter((n) => r.steps.some((s) => inGroup(s.id, n.node_id))).map((n) => n.started_at ?? 0));
+    const later = !passed && current >= 0 && index > current;
+    const since = newest(statuses.filter((n) => inside.path[0]?.members.some((m) => inGroup(m, n.node_id))))?.started_at ?? 0;
+    const round = statuses.filter((n) => (n.started_at ?? 0) >= since);
+    const here = gateNode ?? (live ? at : null);
+    const on = (ids: string[]) => !!here && ids.some((id) => inGroup(id, here));
+    const stepAt = (p: Base) => on(p.members) || inside.routes.some((r) => r.from === p.id && on(r.steps.map((s) => s.id)));
+    const cut = inside.path.findIndex(stepAt);
+    const stepState = (ids: string[], i: number): StageState => {
+      if (later || (cut >= 0 && i > cut)) return "idle";
+      if (gateNode && on(ids)) return "waiting";
+      if (on(ids)) return run.status === "paused" ? "waiting" : "active";
+      const last = newest(round.filter((n) => ids.some((id) => inGroup(id, n.node_id))));
+      if (!last) return "idle";
+      if (last.status === "running" || last.status === "pending") return live ? "active" : "idle";
+      return last.status === "failed" ? "routed" : "done";
+    };
+    const pathOn = (i: number) => (p: Base): JourneyStage => ({ ...idleStage(p), state: stepState(p.members, i), ...(p.branches ? { branches: p.branches.map(pathOn(i)) } : {}) });
+    const fromAt = (r: RouteBase) => inside.path.findIndex((p) => p.id === r.from);
+    const visited = (r: RouteBase) => Math.max(0, ...round.filter((n) => r.steps.some((s) => inGroup(s.id, n.node_id))).map((n) => n.started_at ?? 0));
     const back = b.id === backStage ? inside.routes.filter((r) => r.to.kind === "session" && visited(r) > 0).sort((x, y) => visited(y) - visited(x))[0] : undefined;
     return {
       ...inside,
-      path: inside.path.map(pathOn),
+      path: inside.path.map((p, i) => pathOn(i)(p)),
       routes: inside.routes.map((r) => {
-        const steps = r.steps.map((s) => ({ ...s, state: stepState([s.id]), who: gateNode && inGroup(s.id, gateNode) ? (gateMine ? "you" as const : "person" as const) : s.who }));
+        const steps = r.steps.map((s) => ({ ...s, state: stepState([s.id], fromAt(r)), who: gateNode && inGroup(s.id, gateNode) ? (gateMine ? "you" as const : "person" as const) : s.who }));
         const has = (s: StageState) => steps.some((x) => x.state === s);
         const state: StageState = has("waiting") ? "waiting" : has("active") ? "active" : r === back ? "back" : steps.length && steps.every((x) => x.state !== "idle") ? "done" : "idle";
         return { ...r, steps, state };
@@ -645,7 +655,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     const rounds = Math.max(0, ...mine.map((n) => n.visits ?? 1));
     // An open card says who may answer it: the viewer, or someone else.
     const who: StageWho = b.id === gateStage ? (gateMine ? "you" : "person") : b.who;
-    const base = { ...strip(b), ...(b.id === gateStage && gateOff ? { label: gateOff } : {}), who, steps: stepsOf(b), round: rounds > 1 ? rounds : null, ...(b.inside ? { inside: insideOn(b) } : {}) };
+    const base = { ...strip(b), ...(b.id === gateStage && gateOff ? { label: gateOff } : {}), who, steps: stepsOf(b), round: rounds > 1 ? rounds : null, ...(b.inside ? { inside: insideOn(b, index) } : {}) };
     if (b.role === "live") return { ...base, state: allLive ? "done" : passed ? "skipped" : "idle" };
     if (b.role === "deploy") {
       const state: StageState = allLive ? "done"

@@ -214,6 +214,8 @@ button.shp-link { background: none; border: 0; padding: 0; cursor: pointer; font
 .sj-target-item { display: inline-flex; align-items: center; gap: 4px; }
 .shp-asks { display: inline-block; margin-right: 10px; padding: 0 7px; border-radius: 999px; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text-dim) 12%, transparent); }
 .shp-flowname .shp-asks { margin: 0 0 0 8px; }
+/* In a flow's row, whether it asks reads in full on a line of its own under the name and path. */
+.shp-flow > .shp-asks { grid-column: 2 / -1; justify-self: start; margin: -4px 0 0; padding: 1px 8px; border-radius: 8px; line-height: 1.4; }
 .shp-asks[data-asks] { color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 12%, transparent); }
 .shp-foot .sj-btn[data-primary] { background: var(--sol-blue); border-color: var(--sol-blue); color: #fff; }
 .shp-foot .sj-btn[data-primary]:hover { filter: brightness(1.08); background: var(--sol-blue); }
