@@ -286,7 +286,9 @@
 [data-cc-runner] [data-owners-seg].is-open { background: color-mix(in srgb, var(--sol-text) 7%, transparent); }
 .own-stack { display: inline-flex; align-items: center; gap: 5px; }
 .own-drv { outline: 1.5px solid var(--sol-text); outline-offset: 1px; }
-.own-paused { filter: grayscale(1); opacity: .45; }
+/* A paused role: grey, and a dashed ring, which still reads on a grayscale
+   screen where opacity alone does not. */
+.own-paused { filter: grayscale(1); opacity: .6; outline: 1.5px dashed var(--sol-text-muted); outline-offset: 1px; }
 /* "Make driver" shows on the row under the pointer or the keyboard. */
 [data-owners-menu] .own-mk { display: none; height: 24px; padding: 0 8px; font-size: var(--fs-meta); }
 [data-owners-menu] .own-row[data-highlighted] .own-mk { display: inline-flex; }
