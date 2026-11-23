@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from "bun:test";
-import { awaitTrackedSessionCreateResult, computeInboxVisible, isFavoriteInStore, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, hydrateMergeValue, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, NEW_SESSION_HOLD_MS, releaseExpiredNewSessionHolds, type InboxSession } from "../inboxStore";
+import { awaitTrackedSessionCreateResult, claimsViewer, isForeignRow, computeInboxVisible, isFavoriteInStore, computeNewDividerIndex, dropLatchedFeedHasMore, feedPagePersistence, findReusableBlankSession, getSessionRenderKey, hydrateMergeValue, isConvexId, isSessionDismissed, isSessionStashed, orchestrationGroupLabelOf, PENDING_SEND_PRUNE_GRACE_MS, pendingSendConsumed, reconcilePendingSendForSession, resolveAssigneeInfo, resolveSessionAuthor, resolveShowOld, seedLiveInboxIdsFromCache, seedTeamInboxIdsFromCache, selectNavCollapsed, selectSessionRailOpen, SessionCreatePendingError, sessionsWithPendingSend, unionHydrate, useInboxStore, worktreeKeyOf, NEW_SESSION_HOLD_MS, releaseExpiredNewSessionHolds, type InboxSession } from "../inboxStore";
 import { convHasPendingSend, pendingRowsUnsettled } from "../inboxOverlays";
 import { _resetSnapshotLedger } from "../idbCollectionDiff";
 import { isPersistedStoreKey } from "../idbCache";
@@ -5025,6 +5025,25 @@ describe("clearDisownedClaims: the claims byIds confirmed are no longer mine", (
     expect(s[DISOWNED].owner_user_id).toBeNull();
     expect(s[STILL_MINE].owned_by_me).toBe(true);
     expect(s[STILL_MINE].owner_user_id).toBe(ME);
+  });
+
+  // owner_ids counts for membership too: a disowned row that still listed me
+  // there stayed "mine" for good (the jx78xak bug, back through owner_ids).
+  it("takes me out of owner_ids on both twins, so the row is no longer mine", () => {
+    const MATE = "kd74rxrw000000000000000000000mat";
+    useInboxStore.setState({
+      sessions: { ...useInboxStore.getState().sessions, [DISOWNED]: { ...foreignOwned(DISOWNED), user_id: MATE, owner_user_id: MATE, owner_ids: [MATE, ME] } },
+      conversations: { [DISOWNED]: { _id: DISOWNED, user_id: MATE, owner_ids: [MATE, ME] } },
+    } as any);
+    useInboxStore.getState().clearDisownedClaims([DISOWNED]);
+    const s = useInboxStore.getState() as any;
+    expect(s.sessions[DISOWNED].owner_ids).toEqual([MATE]);
+    expect(s.conversations[DISOWNED].owner_ids).toEqual([MATE]);
+    expect(isForeignRow(s.sessions[DISOWNED], ME)).toBe(true);
+  });
+
+  it("sees a claim that rests on owner_ids alone", () => {
+    expect(claimsViewer({ user_id: BOT, owner_ids: [BOT, ME] }, ME)).toBe(true);
   });
 
   it("never touches my own-run sessions", () => {

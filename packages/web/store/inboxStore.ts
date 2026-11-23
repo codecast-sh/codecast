@@ -3414,9 +3414,9 @@ export function orchestrationGroupLabelOf(s: InboxSession): string | null {
 // A foreign-run cached row that claims the viewer as an owner: the rows a
 // disown can change (my own runs keep their stamps; another user's ownership
 // is server truth about them).
-export function claimsViewer(s: { user_id?: string | null; owned_by_me?: boolean; owner_user_id?: string | null }, meId: string): boolean {
+export function claimsViewer(s: { user_id?: string | null; owned_by_me?: boolean; owner_user_id?: string | null; owner_ids?: string[] | null }, meId: string): boolean {
   if (!s.user_id || s.user_id === meId) return false;
-  return !!s.owned_by_me || s.owner_user_id === meId;
+  return !!s.owned_by_me || s.owner_user_id === meId || (Array.isArray(s.owner_ids) && s.owner_ids.includes(meId));
 }
 
 function patchConversationRows(draft: { sessions: any; conversations: any; feedConversations?: any }, id: string, apply: (row: any) => void) {
@@ -10061,6 +10061,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
       if (!s || !claimsViewer(s, meId)) continue;
       s.owned_by_me = false;
       s.owner_user_id = null;
+      // owner_ids counts for membership (isForeignRow), so the viewer leaves
+      // it too, on both twins, or the never-pruned row stays "mine".
+      for (const row of [s, this.conversations[id]]) {
+        if (Array.isArray(row?.owner_ids) && row.owner_ids.includes(meId)) row.owner_ids = row.owner_ids.filter((x: string) => x !== meId);
+      }
     }
   }),
   setShowOldSessions: (show: boolean) => get().updateClientUI({ inbox_show_old: show }),
