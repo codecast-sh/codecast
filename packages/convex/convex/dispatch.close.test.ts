@@ -11,6 +11,7 @@ import { api, internal } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
 import { closeSetsAsideOnServer } from "./lib/closeAside";
+import { isClosedSession } from "@codecast/shared/contracts";
 
 setDefaultTimeout(60_000);
 
@@ -150,6 +151,47 @@ describe("the server sets aside what the client closed while it is in flight", (
     expectAside(await s.read());
   });
 
+  test("open background work (a run_in_background Bash its daemon still vouches for) is a wake: the session is stashed", async () => {
+    const s = await setup();
+    await s.t.run(async (ctx) => {
+      const now = Date.now();
+      await ctx.db.insert("managed_sessions", {
+        session_id: "s-close", conversation_id: s.ids.conv, user_id: s.ids.user, pid: 1, started_at: now - 3_600_000, last_heartbeat: now,
+        agent_status: "waiting", agent_status_updated_at: now - 600_000, open_tasks: [{ id: "b1", kind: "background", command: "bun run build" }], open_tasks_at: now - 30_000,
+      } as any);
+    });
+    await s.send("closeSession", [String(s.ids.conv)]);
+    expectAside(await s.read());
+  });
+
+  test("a lead whose child holds open background work is stashed, the child untouched", async () => {
+    const s = await setup();
+    const child = await s.t.run(async (ctx) => {
+      const now = Date.now();
+      const c = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: now, updated_at: now - 600_000, status: "active", session_id: "s-bgkid", message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv, last_message_role: "assistant" } as any);
+      await ctx.db.insert("managed_sessions", { session_id: "s-bgkid", conversation_id: c, user_id: s.ids.user, pid: 2, started_at: now, last_heartbeat: now, agent_status: "waiting", agent_status_updated_at: now - 600_000, open_tasks: [{ id: "m1", kind: "monitor", description: "watch CI" }], open_tasks_at: now - 10_000 } as any);
+      return c;
+    });
+    await s.send("closeSession", [String(s.ids.conv)]);
+    expectAside(await s.read());
+    expect(((await s.t.run((ctx) => ctx.db.get(child))) as any).inbox_dismissed_at).toBeUndefined();
+  });
+
+  test("undoing a close the server set aside clears the stash it wrote", async () => {
+    const s = await setup({ queuedRow: true });
+    const t = Date.now();
+    await s.send("closeSession", [String(s.ids.conv)], { [s.ids.conv]: { inbox_dismissed_at: t, inbox_closed_at: t } });
+    const aside = (await s.read()).conv;
+    expect(aside.inbox_stashed_at).toBe(t);
+    // The marker stays, inert (no dismissed stamp), as the cell the undo clears with.
+    expect(aside.inbox_closed_at).toBe(t);
+    // The web's undo of the close (store undo/policies/sessions.ts spellUnclose).
+    await s.send("restoreSession", [String(s.ids.conv)], { [s.ids.conv]: { inbox_closed_at: null, inbox_stashed_at: null } });
+    const back = (await s.read()).conv;
+    expect(back.inbox_stashed_at).toBeUndefined();
+    expect(back.inbox_dismissed_at).toBeUndefined();
+  });
+
   test("a session with a queued message is stashed", async () => {
     const s = await setup({ queued: true });
     await s.send("closeSession", [String(s.ids.conv)]);
@@ -246,7 +288,8 @@ describe("a lead is in flight when any member of its nested group is", () => {
       expectAside(await s.read());
       const k = (await s.t.run((ctx) => ctx.db.get(child))) as any;
       expect(k.inbox_dismissed_at).toBeUndefined();
-      expect(k.inbox_closed_at).toBeUndefined();
+      // Set aside by the server: its marker stays, inert without a dismissed stamp.
+      expect(isClosedSession(k)).toBe(false);
       expect(k.inbox_stashed_at).toBeGreaterThan(0);
     });
   }
@@ -318,6 +361,41 @@ describe("the aside check is cheap on a big finished group", () => {
     expect(counted.reads).toBeLessThan(20);
     await s.send("closeSession", [String(s.ids.conv)]);
     expectAside(await s.read());
+  });
+
+  test("a lead with 100 finished and 100 already-closed subagents reads under 2 per child, and a second close tears none down again", async () => {
+    const s = await setup();
+    const closedIds = await s.t.run(async (ctx) => {
+      const out: string[] = [];
+      for (let i = 0; i < 200; i++) {
+        const closed = i % 2 === 0;
+        const id = await ctx.db.insert("conversations", {
+          user_id: s.ids.user, agent_type: "claude_code", started_at: i, updated_at: i, session_id: `s-m${i}`, message_count: 9,
+          is_subagent: true, parent_conversation_id: s.ids.conv, last_message_role: "assistant",
+          ...(closed ? { status: "active", inbox_dismissed_at: 5, inbox_closed_at: 5 } : { status: "completed" }),
+        } as any);
+        if (closed) out.push(String(id));
+      }
+      return out;
+    });
+    const counted = await s.t.run(async (ctx) => {
+      const { db, counter } = countingDb(ctx.db);
+      const verdict = await closeSetsAsideOnServer({ db }, await ctx.db.get(s.ids.conv), Date.now(), { forceKill: true });
+      return { verdict, reads: counter.reads };
+    });
+    expect(counted.verdict).toBeNull();
+    expect(counted.reads).toBeLessThan(2 * 200);
+    expect(counted.reads).toBeLessThan(20);
+    await s.send("closeSession", [String(s.ids.conv)]);
+    // The already-closed children are not stopped again (the finished ones are
+    // hidden with the lead, as any hide does).
+    for (let i = 0; i < 3; i++) {
+      await new Promise((r) => setTimeout(r, 30));
+      await s.t.finishInProgressScheduledFunctions();
+    }
+    const killed = (await s.kills()).map((c: any) => JSON.parse(c.args).conversation_id);
+    expect(killed.filter((id: string) => closedIds.includes(id))).toEqual([]);
+    expect(killed).toContain(String(s.ids.conv));
   });
 
   test("a killed child is not one the close takes down, so it costs nothing and holds nothing", async () => {

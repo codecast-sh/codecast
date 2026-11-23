@@ -28,6 +28,7 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
+import { useKillWithReview } from "../hooks/useKillWithReview";
 import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
 import { isClosedSession, withSafetyBlock } from "@codecast/shared/contracts";
@@ -2615,6 +2616,13 @@ function SessionListPanelImpl({
   // hook surfaces both side effects; the same hook backs the palette and the
   // keyboard chords, so every kill surface says the same thing.
   const { killWithNotice, killManyWithNotice, restoreWithNotice } = useTriggerKillNotice();
+  const closedKill = useKillWithReview(killManyWithNotice);
+  const closedKillOf = closedKill.kill;
+  const handleCloseShelfX = useCallback((id: string) => {
+    const row = useInboxStore.getState().sessions[id];
+    if (row && isClosedSession(row)) closedKillOf([id]);
+    else handleKillDismissed(id);
+  }, [closedKillOf, handleKillDismissed]);
   // Close: "done looking at it", the card's one remove. A session mid-turn is
   // set aside and finishes; any other stops and files under Closed, keeping
   // its triggers and queue (store closeSession). Undoable via the toast.
@@ -3653,7 +3661,9 @@ function SessionListPanelImpl({
           expanded: openBuckets.dismissed,
           onToggle: () => setOpenBuckets((o) => ({ ...o, dismissed: !o.dismissed })),
           variant: "dismissed",
-          onKill: handleKillDismissed,
+          // A closed row's X is a Kill like the menu's (its review, a role seat's retire
+          // question); a killed row's X only takes it off the list, as before.
+          onKill: handleCloseShelfX,
           // The rows above are this replica's cached kills (recent by kill time)
           // plus what the shelf already paged in; older or never-cached kills
           // are one click away. Chip filters apply to shelf rows like any other.
@@ -3709,6 +3719,7 @@ function SessionListPanelImpl({
       <CursorPopover state={characterPicker}>
         {(rows) => <CharacterPicker rows={rows} onDone={closeCharacterPicker} />}
       </CursorPopover>
+      {closedKill.dialog}
       <ContextMenu state={sessionCtxMenu}>
         {({ session, isForeign, sessions }) => sessions.length > 1 ? (
           <BulkSessionMenuItems

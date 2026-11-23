@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from "react";
 import Link from "next/link";
 import { Star, Rocket } from "lucide-react";
-import { withSafetyBlock, isStashHidden, isHostedAgentType } from "@codecast/shared/contracts";
+import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType } from "@codecast/shared/contracts";
 import { entityRoute } from "@codecast/shared/entities";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
@@ -369,7 +369,7 @@ export function ModernSessionCardView({
             onRestore={onRestore && (() => onRestore(session._id))}
             restoreLabel={variant === "snoozed" ? "Move to Needs You now" : "Restore"}
             onKill={onKill && (() => onKill(session._id))}
-            killLabel={isStashed ? "Kill" : "Remove from list"}
+            killLabel={isStashed || isClosedSession(session) ? "Kill" : "Remove from list"}
           />
         ) : (
           <ModernCardToolbar

@@ -129,6 +129,26 @@ describe("closeSessions", () => {
     expect(get(BUSY).inbox_stashed_at ?? null).toBeNull();
   });
 
+  test("undo of a close the server set aside clears the stash too, so the session is back in the list", async () => {
+    await animatedCloseSessions([IDLE]);
+    // The server's own read set it aside: its echo stashes the row, with the
+    // close's own stamp, instead (dispatch.ts).
+    const t = get(IDLE).inbox_dismissed_at;
+    const asideRow = (r: any) => ({ ...r, inbox_dismissed_at: null, inbox_closed_at: t, inbox_stashed_at: t });
+    useInboxStore.setState((s: any) => ({
+      sessions: { ...s.sessions, [IDLE]: asideRow(s.sessions[IDLE]) },
+      conversations: { ...s.conversations, [IDLE]: asideRow(s.conversations[IDLE]) },
+    }));
+    sent = [];
+    expect(performUndo()).toBe(true);
+    expect(get(IDLE).inbox_stashed_at ?? null).toBeNull();
+    expect(get(IDLE).inbox_dismissed_at ?? null).toBeNull();
+    // The undo's send leaves through the outbox.
+    await new Promise((r) => setTimeout(r, 50));
+    const cleared = sent.some((s) => Object.values<any>(s.patches?.conversations ?? {}).some((f) => "inbox_stashed_at" in f && f.inbox_stashed_at == null));
+    expect(cleared).toBe(true);
+  });
+
   test("a single close keeps the session's name in its label", async () => {
     await animatedCloseSessions([SEAT]);
     expect(getUndoHistory().items.map((i) => i.label)).toEqual(["Closed “Row c”"]);

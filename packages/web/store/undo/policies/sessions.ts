@@ -80,6 +80,25 @@ export const revivesKilledRow = (ctx: Pick<UndoCtx, "changes" | "before">): bool
 
 const HIDE: Partial<UndoSpec> = { inverse: restoreEachHidden, restoreView: true, toast: true };
 const KILL: Partial<UndoSpec> = { ...HIDE, spell: spellUnkill };
+// The server may set a close aside (a stash its own read decided, dispatch.ts),
+// a stamp the close's draft never wrote, so the captured cells cannot clear
+// it, and by the time of the undo its echo has already cleared the dismissed
+// stamp the close wrote (that cell no longer applies; the server keeps the
+// inert inbox_closed_at, the cell that still does). So the spell reads what
+// the close recorded: each row it hid that was not stashed before gets a clear
+// of inbox_stashed_at, and comes back to the live list whichever way the
+// server decided.
+function spellUnclose(cells: CellChange[], ctx?: UndoCtx): CellChange[] {
+  const out = [...cells];
+  for (const c of ctx?.changes ?? []) {
+    if (!isSessionCell(c) || c.field !== "inbox_dismissed_at" || c.before || !c.after) continue;
+    if (ctx?.before?.conversations?.[c.id]?.inbox_stashed_at || ctx?.before?.sessions?.[c.id]?.inbox_stashed_at) continue;
+    if (out.some((k) => k.store === c.store && k.id === c.id && k.field === "inbox_stashed_at")) continue;
+    out.push({ ...c, field: "inbox_stashed_at", before: null, hadBefore: true, after: undefined, hadAfter: false });
+  }
+  return out;
+}
+const CLOSE: Partial<UndoSpec> = { ...HIDE, spell: spellUnclose };
 const KILL_NOTE = "(agent stays stopped on undo)";
 
 // patchConversation's gesture callers (the /sessions page) write the triage
@@ -193,14 +212,14 @@ export const SESSIONS_UNDO_POLICY: UndoPolicy = {
   // A close sets a running session aside and hides the rest; it stamps no
   // retirement marker (no inbox_killed_at), so its undo is a plain un-hide.
   // Nothing was canceled, so the label needs no note.
-  closeSession: onSession("Closed", HIDE),
+  closeSession: onSession("Closed", CLOSE),
   closeSessions: {
     spec: {
       label: (ctx) => {
         const ids = (ctx.args[0] ?? []) as string[];
         return ids.length === 1 ? `Closed ${sessionTitle(ctx.before, ids[0]!)}` : `Closed ${counted(ids.length, "session")}`;
       },
-      ...HIDE,
+      ...CLOSE,
     },
   },
   // assignSessionToBucket and switchProject are classified in work.ts, beside

@@ -5,7 +5,7 @@
 // as "set aside" lands as a stop (or the reverse).
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
-import { closeInFlightReason } from "@codecast/shared/contracts";
+import { closeInFlightReason, IN_FLIGHT_FACT_KEYS } from "@codecast/shared/contracts";
 import schema from "./schema";
 import { allModules } from "./testModules.testkit";
 import { inFlightFactsOnServer } from "./lib/closeAside";
@@ -17,6 +17,7 @@ const NOW = Date.now();
 type Scenario = {
   conv?: Record<string, unknown>;
   agent?: string;
+  openTasks?: { at: number; heartbeat: number };
   queuedRow?: boolean;
   run?: { run_kind?: "workflow"; status: string };
   poll?: boolean;
@@ -36,6 +37,8 @@ const SCENARIOS: Record<string, Scenario> = {
   "overdue loop": { conv: { loop_state: { status: "armed", wakeup_at: NOW - 3_600_000, armed_at: NOW - 7_200_000, event_at: NOW - 7_200_000 } } },
   "workflow tool run": { run: { run_kind: "workflow", status: "running" } },
   "flow run": { run: { status: "running" } },
+  "background work": { agent: "waiting", openTasks: { at: NOW - 30_000, heartbeat: NOW - 1000 } },
+  "background work, daemon gone": { agent: "waiting", openTasks: { at: NOW - 30_000, heartbeat: NOW - 3_600_000 } },
   "usage limit": { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000 } },
   "old usage limit": { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 30 * 24 * 3_600_000 } },
 };
@@ -54,14 +57,17 @@ async function bothSides(sc: Scenario) {
       runStatus = sc.run.status;
       runKind = sc.run.run_kind ?? null;
     }
-    if (sc.agent) await ctx.db.insert("managed_sessions", { session_id: "s-agree", conversation_id: convId, user_id: user, pid: 1, started_at: NOW, last_heartbeat: NOW - 1000, agent_status: sc.agent, agent_status_updated_at: NOW - 1000 } as any);
+    const heartbeat = sc.openTasks?.heartbeat ?? NOW - 1000;
+    const openTasks = sc.openTasks ? { open_tasks: [{ id: "b1", kind: "background", command: "bun run build" }], open_tasks_at: sc.openTasks.at } : {};
+    if (sc.agent) await ctx.db.insert("managed_sessions", { session_id: "s-agree", conversation_id: convId, user_id: user, pid: 1, started_at: NOW, last_heartbeat: heartbeat, agent_status: sc.agent, agent_status_updated_at: NOW - 1000, ...openTasks } as any);
     if (sc.queuedRow) await ctx.db.insert("pending_messages", { conversation_id: convId, from_user_id: user, content: "x", status: "pending", created_at: NOW, retry_count: 0 } as any);
     if (sc.poll) await ctx.db.insert("messages", { conversation_id: convId, role: "assistant", content: "", timestamp: NOW, tool_calls: [{ id: "q", name: "AskUserQuestion", input: "{}" }] } as any);
     const server = await inFlightFactsOnServer(ctx, await ctx.db.get(convId), NOW);
     const row = {
       ...base,
       agent_status: sc.agent ?? null,
-      last_heartbeat: sc.agent ? NOW - 1000 : null,
+      last_heartbeat: sc.agent ? heartbeat : null,
+      ...openTasks,
       agent_status_updated_at: sc.agent ? NOW - 1000 : null,
       has_pending: !!(sc.conv as any)?.has_pending_messages,
       // The inbox row's awaiting_input: an open poll or a permission prompt.
@@ -76,6 +82,12 @@ async function bothSides(sc: Scenario) {
 }
 
 describe("the client and the server gather the same in-flight facts", () => {
+  test("each fills exactly the shared fact set, so neither can leave a fact out", async () => {
+    const { server, client } = await bothSides(SCENARIOS.settled!);
+    expect(Object.keys(client).sort()).toEqual([...IN_FLIGHT_FACT_KEYS].sort());
+    expect(Object.keys(server).sort()).toEqual([...IN_FLIGHT_FACT_KEYS].sort());
+  });
+
   for (const [name, sc] of Object.entries(SCENARIOS)) {
     test(name, async () => {
       const { server, client } = await bothSides(sc);

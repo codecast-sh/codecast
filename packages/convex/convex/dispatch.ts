@@ -442,7 +442,9 @@ export async function applyPatches(
         if (close && (finalSafe as any).inbox_dismissed_at && await closeSetsAsideOnServer(ctx, doc, Date.now(), { forceKill: opts?.forceKill })) {
           (finalSafe as any).inbox_stashed_at = (finalSafe as any).inbox_dismissed_at;
           delete (finalSafe as any).inbox_dismissed_at;
-          delete (finalSafe as any).inbox_closed_at;
+          // inbox_closed_at stays: with no dismissed stamp it is inert (not a close),
+          // and it is the cell the close's undo finds to clear this stash with.
+          if ((finalSafe as any).inbox_closed_at == null) (finalSafe as any).inbox_closed_at = (finalSafe as any).inbox_stashed_at;
         }
         if (Object.keys(finalSafe).length === 0) continue;
         // Capture the PRE-patch hide state. The un-kill mirror below decides on

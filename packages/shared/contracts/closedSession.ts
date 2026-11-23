@@ -38,9 +38,20 @@ export type InFlightFacts = {
   awaitingInput: boolean;
   /** Parked on a usage limit the reset or an account switch continues. */
   limitParked: boolean;
+  /** Background work its harness still holds (a run_in_background Bash, a
+   *  Monitor, a background Agent): it re-invokes the agent when it finishes,
+   *  and dies with the process (openTasks.ts openTasksVouchForWaiting). */
+  openBackgroundWork: boolean;
 };
 
-export type InFlightReason = "queued" | "loop" | "workflow" | "live" | "awaiting" | "limit";
+// Every fact, at runtime: the type forces each key here, and a test holds both
+// gatherers to filling exactly these (convex closeInFlight.agree.test.ts).
+const IN_FLIGHT_FACT_SPEC: Record<keyof InFlightFacts, true> = {
+  queued: true, loopFresh: true, inProcessRun: true, turnLive: true, awaitingInput: true, limitParked: true, openBackgroundWork: true,
+};
+export const IN_FLIGHT_FACT_KEYS = Object.keys(IN_FLIGHT_FACT_SPEC) as ReadonlyArray<keyof InFlightFacts>;
+
+export type InFlightReason = "queued" | "loop" | "workflow" | "live" | "awaiting" | "background" | "limit";
 
 /** Why a close must set this session aside, or null when stopping it loses nothing. */
 export function closeInFlightReason(f: InFlightFacts): InFlightReason | null {
@@ -48,6 +59,7 @@ export function closeInFlightReason(f: InFlightFacts): InFlightReason | null {
   if (f.awaitingInput) return "awaiting";
   if (f.queued) return "queued";
   if (f.inProcessRun) return "workflow";
+  if (f.openBackgroundWork) return "background";
   if (f.loopFresh) return "loop";
   if (f.limitParked) return "limit";
   return null;

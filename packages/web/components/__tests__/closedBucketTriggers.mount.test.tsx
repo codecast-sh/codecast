@@ -16,6 +16,15 @@ const restoreGlobals = replaceGlobals({
   Element: dom.window.Element,
   Node: dom.window.Node,
   MutationObserver: dom.window.MutationObserver,
+  Event: dom.window.Event,
+  CustomEvent: dom.window.CustomEvent,
+  KeyboardEvent: dom.window.KeyboardEvent,
+  FocusEvent: dom.window.FocusEvent,
+  MouseEvent: dom.window.MouseEvent,
+  PointerEvent: dom.window.MouseEvent,
+  DocumentFragment: dom.window.DocumentFragment,
+  NodeFilter: dom.window.NodeFilter,
+  HTMLButtonElement: dom.window.HTMLButtonElement,
   ResizeObserver: class { observe() {} disconnect() {} },
   IntersectionObserver: class { observe() {} unobserve() {} disconnect() {} },
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
@@ -72,8 +81,8 @@ const task = (_id: string, conv: string, status: string) => ({
 function seed() {
   __resetInboxPlacementCacheForTests();
   useInboxStore.setState({
-    // A close stamps only inbox_dismissed_at; a kill also stamps the retirement marker and completes it.
-    sessions: { [CLOSED]: row(CLOSED, "Closed with a trigger"), [KILLED]: { ...row(KILLED, "Killed, trigger canceled"), inbox_killed_at: NOW - 30_000, status: "completed" } },
+    // A close stamps inbox_closed_at equal to its dismissed stamp; a kill stamps the retirement marker and completes it.
+    sessions: { [CLOSED]: { ...row(CLOSED, "Closed with a trigger"), inbox_closed_at: NOW - 30_000 }, [KILLED]: { ...row(KILLED, "Killed, trigger canceled"), inbox_killed_at: NOW - 30_000, status: "completed" } },
     conversations: {},
     pending: {},
     pendingMessages: {},
@@ -112,4 +121,30 @@ test("in the Closed group a closed card shows its armed trigger under it, and a 
   expect(closed.querySelector('[data-schedrow="t1"]')).not.toBeNull();
   expect(killed.querySelector("[data-schedrow]")).toBeNull();
   await m.unmount();
+});
+
+test("a closed card's X is a Kill that asks first (it would cancel the trigger); a killed card's X takes it off the list", async () => {
+  const calls: unknown[][] = [];
+  const realConvCommand = useInboxStore.getState().convCommand;
+  useInboxStore.setState({ convCommand: (async (...args: unknown[]) => { calls.push(args); }) as any });
+  try {
+    const m = await mountInbox();
+    const head = [...m.host.querySelectorAll("[data-sv-hidden-label]")].find((el) => el.textContent?.startsWith("Closed"));
+    await act(async () => { (head!.closest("button") as HTMLButtonElement).click(); });
+    const xOf = (id: string, label: string) => blockOf(m.host, id)!.querySelector(`button[aria-label="${label}"]`) as HTMLButtonElement | null;
+
+    expect(xOf(CLOSED, "Remove from list")).toBeNull();
+    await act(async () => { xOf(CLOSED, "Kill")!.click(); });
+    const review = document.querySelector("[data-switch-review]");
+    expect(review?.textContent).toContain("Check CI for");
+    expect(calls).toEqual([]);
+    await act(async () => { (document.querySelector("[data-switch-cancel]") as HTMLButtonElement).click(); });
+
+    expect(xOf(KILLED, "Kill")).toBeNull();
+    await act(async () => { xOf(KILLED, "Remove from list")!.click(); });
+    expect(calls.map((c) => [c[0], c[1], (c[2] as any)?.mark_completed])).toEqual([[KILLED, "killSession", true]]);
+    await m.unmount();
+  } finally {
+    useInboxStore.setState({ convCommand: realConvCommand } as any);
+  }
 });
