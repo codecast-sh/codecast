@@ -54,6 +54,11 @@ export function useStoreOwnersEnv(
     return undefined;
   })();
   const { roles } = useOrgRoles();
+  // The row's own snapshot of its role names it while the org tree is not loaded.
+  const snap = useInboxStore(useShallow((s) => {
+    const r = sessionRowOf(s, conversationId)?.role;
+    return [r?._id ?? null, r?.short_id ?? "", r?.handle ?? "", r?.name ?? "", r?.avatar ?? null] as const;
+  }));
   // The people, the role, the driver and the primary owner live on the session row.
   const [roleId, driverUserId, primaryId, runnerId, rowOwners] = useInboxStore(useShallow((s) => {
     const row = sessionRowOf(s, conversationId);
@@ -70,7 +75,8 @@ export function useStoreOwnersEnv(
     apply: (change, inverse) => useInboxStore.getState().applySessionOwners(conversationId, change, inverse),
     roleById: (roleId) => {
       const r = roles.find((x) => x._id === roleId);
-      return r ? { role_id: r._id, short_id: r.short_id, handle: r.handle, name: r.name, avatar: (r as any).avatar ?? null } : null;
+      if (r) return { role_id: r._id, short_id: r.short_id, handle: r.handle, name: r.name, avatar: (r as any).avatar ?? null };
+      return snap[0] === roleId ? { role_id: roleId, short_id: snap[1], handle: snap[2], name: snap[3], avatar: snap[4] } : null;
     },
   };
 }

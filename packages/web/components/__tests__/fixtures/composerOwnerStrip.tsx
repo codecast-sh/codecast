@@ -107,6 +107,12 @@ test("nothing for the driver of an unfiled session, or for someone who neither o
   expect(strip()).toBeNull();
 });
 
+test("an owners answer without the role's face names it from the session row's own snapshot", async () => {
+  await setSession({ org_role_id: "role1", role: { _id: "role1", short_id: "or-1", handle: "dance", name: "Dance tutor", avatar: "fox" } }, ["me"], { role: null });
+  await render(true);
+  expect(strip()!.textContent).toContain("Sending takes over from Dance tutor.");
+});
+
 test("sending paints the take-over on the session row before the server answers", async () => {
   await setSession({ org_role_id: "role1" }, ["me"]);
   await render(true);

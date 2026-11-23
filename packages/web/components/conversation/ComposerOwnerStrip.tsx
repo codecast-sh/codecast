@@ -51,7 +51,7 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
 
   if (paused) {
     return (
-      <div data-cc-owner-strip="paused" className={`${STRIP} ${className}`}>
+      <div className={className}><div data-cc-owner-strip="paused" className={STRIP}>
         <OwnerFace role={paused} size={16} paused />
         <span className="flex-1 min-w-0 truncate"><b className="font-medium text-sol-text">{paused.name}</b> paused while you drive.</span>
         <Button
@@ -62,12 +62,12 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
         >
           Make driver
         </Button>
-      </div>
+      </div></div>
     );
   }
   if (!active || (!fromRole && !fromPerson)) return null;
   return (
-    <div data-cc-owner-strip={fromRole ? "role" : "person"} className={`${STRIP} ${className}`}>
+    <div className={className}><div data-cc-owner-strip={fromRole ? "role" : "person"} className={STRIP}>
       {fromRole ? <OwnerFace role={fromRole} size={16} driver /> : <OwnerFace person={{ _id: driver!.kind === "user" ? driver!.user_id : "", ...fromPerson! }} size={16} driver />}
       <span className="flex-1 min-w-0 truncate">
         {telling
@@ -85,6 +85,6 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
           ]}
         />
       )}
-    </div>
+    </div></div>
   );
 });
