@@ -39,6 +39,7 @@ const SCENARIOS: Record<string, Scenario> = {
   "flow run": { run: { status: "running" } },
   "background work": { agent: "waiting", openTasks: { at: NOW - 30_000, heartbeat: NOW - 1000 } },
   "background work, daemon gone": { agent: "waiting", openTasks: { at: NOW - 30_000, heartbeat: NOW - 3_600_000 } },
+  "fleet queued": { conv: { subagent_slot: "queued", subagent_slot_at: NOW - 60_000, parent_conversation_id: undefined } },
   "usage limit": { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000 } },
   "old usage limit": { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 30 * 24 * 3_600_000 } },
 };

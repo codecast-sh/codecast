@@ -85,6 +85,33 @@ describe("closeSessions", () => {
     }
   });
 
+  test("a close of a lead neither re-stamps nor sends its already-closed and killed children; a finished one goes with it", () => {
+    const CLOSED_KID = "e".repeat(32);
+    const KILLED_KID = "f".repeat(32);
+    const DONE_KID = "9".repeat(32);
+    const kid = (id: string, extra: Record<string, unknown>) => row(id, { parent_conversation_id: IDLE, is_subagent: true, status: "completed", ...extra });
+    const kids = {
+      [CLOSED_KID]: kid(CLOSED_KID, { status: "active", inbox_dismissed_at: 5, inbox_closed_at: 5 }),
+      [KILLED_KID]: kid(KILLED_KID, { inbox_dismissed_at: 5, inbox_killed_at: 5 }),
+      [DONE_KID]: kid(DONE_KID, {}),
+    };
+    useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, ...kids }, conversations: { ...s.conversations, ...kids } }));
+    useInboxStore.getState().closeSession(IDLE);
+    expect(get(CLOSED_KID).inbox_dismissed_at).toBe(5);
+    expect(get(KILLED_KID).inbox_dismissed_at).toBe(5);
+    expect(get(DONE_KID).inbox_dismissed_at).toBeGreaterThan(5);
+    const sentRows = Object.keys(sent.find((s) => s.action === "closeSession")!.patches.conversations);
+    expect(sentRows.sort()).toEqual([IDLE, DONE_KID].sort());
+  });
+
+  test("a fleet-queued worker is in flight: closing it, or its lead, sets it aside", () => {
+    const Q = "8".repeat(32);
+    const q = row(Q, { parent_conversation_id: IDLE, is_subagent: true, message_count: 0, subagent_slot: "queued" });
+    useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [Q]: q }, conversations: { ...s.conversations, [Q]: { ...q } } }));
+    expect(useInboxStore.getState().closeSessions([IDLE])?.aside).toEqual([IDLE]);
+    expect(get(Q).inbox_dismissed_at ?? null).toBeNull();
+  });
+
   test("a close writes inbox_closed_at equal to its dismissed stamp, and sends it", () => {
     useInboxStore.getState().closeSession(IDLE);
     expect(get(IDLE).inbox_closed_at).toBe(get(IDLE).inbox_dismissed_at);

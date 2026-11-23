@@ -5,7 +5,7 @@ import { selfUpdateBlocked } from "./lib/deviceUpdate";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
-import { isReservedDevice, settingsAfterSnippet, stableModeOf, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, isAgentSetupTool, type AgentToolSetupStatus, cloudAgentProviderOfSession, isCloudAgentActionName, isCloudAgentLoginState, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
+import { isClosedSession, isReservedDevice, settingsAfterSnippet, stableModeOf, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, isAgentSetupTool, type AgentToolSetupStatus, cloudAgentProviderOfSession, isCloudAgentActionName, isCloudAgentLoginState, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -454,6 +454,9 @@ export const resolveConversationBySession = query({
       project_path: conv.project_path ?? null,
       status: conv.status,
       title: conv.title ?? null,
+      // The daemon's status-only fallback reads this too: a closed session
+      // is not brought back on its own (closedSession.ts).
+      closed: isClosedSession(conv),
     };
   },
 });

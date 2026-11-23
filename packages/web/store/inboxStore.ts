@@ -93,7 +93,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, cascadeTakesDownRow, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
 import { closeFactsOf, closeSetsAside, nestedInFlightOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
@@ -9201,6 +9201,10 @@ function hideSessionInDraft(
   mode: "stash" | "kill",
   now: number = Date.now(),
   stashHidden = false,
+  // A close: the cascade takes only the children the server's would
+  // (shared cascadeTakesDownRow), so an already-closed or killed child is
+  // neither re-stamped nor torn down again.
+  close = false,
 ): HideResult {
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const stashHiddenValue = mode === "stash" && stashHidden ? true : null;
@@ -9220,7 +9224,9 @@ function hideSessionInDraft(
   // brings them back with it. A kill still takes every child down.
   const childIds = mode === "stash"
     ? groupIds.filter((cid) => !isOrphanOrSubagent(draft.sessions[cid]))
-    : groupIds;
+    : close
+      ? groupIds.filter((cid) => cascadeTakesDownRow(draft.sessions[cid], field, { forceKill: true, close: true, queued: !!draft.sessions[cid]?.has_pending }))
+      : groupIds;
   const allIds = [id, ...childIds];
   // The viewer. A session whose user_id isn't ours was injected into this cache
   // by viewing/searching a TEAMMATE's session — we can't durably hide it.
@@ -9618,7 +9624,7 @@ function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
   const merge = (mode: "stash" | "kill", list: string[]) => {
     const merged: HideResult = { hidden: [], forgotten: [], writes: {}, ts: now };
     for (const id of list) {
-      const r = hideSessionInDraft(draft, id, mode, now);
+      const r = hideSessionInDraft(draft, id, mode, now, false, mode === "kill");
       merged.hidden.push(...r.hidden);
       merged.forgotten.push(...r.forgotten);
       Object.assign(merged.writes, r.writes);
@@ -9626,6 +9632,8 @@ function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
         for (const sid of r.hidden) {
           if (draft.sessions[sid]) draft.sessions[sid].inbox_closed_at = now;
           if (draft.conversations[sid]) draft.conversations[sid].inbox_closed_at = now;
+          // Sibling windows see a close as a close (gestureBridge BRIDGED_FIELDS).
+          if (r.writes[sid]) r.writes[sid].inbox_closed_at = now;
         }
       }
     }
@@ -9833,7 +9841,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
     // forget broadcast — see gestureBridge.ts.
     if (msg.forget?.length) forget(msg.forget, msg.ts);
     const field = msg.mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
-    const constrained = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_pinned_at"];
+    const constrained = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_closed_at", "inbox_pinned_at"];
     for (const sid of msg.ids) {
       const wrote = msg.writes?.[sid];
       if (wrote) {
