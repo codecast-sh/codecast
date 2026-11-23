@@ -525,7 +525,9 @@ describe("command groups stay off the boot graph", () => {
     // pin lists that let a newer client through (+1).
     // 4851 (2026-11-23): contracts/closedSession.ts, the shared Close verdict,
     // and the daemon's close-aware lifecycle reads (+6).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4851);
+    // 4852 the same day: auto-resume reads the transcript's latest permission
+    // mode, not its first (resumeCommand.ts +1).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4852);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
