@@ -52,6 +52,8 @@ export function useDashboardFeed(docId: string, blocks: readonly ArtifactElement
     };
     send();
     const timer = setInterval(send, HEARTBEAT_MS);
+    // The phone app has no document; its heartbeat alone keeps the answers fresh.
+    if (typeof document === "undefined") return () => clearInterval(timer);
     const onVisible = () => !document.hidden && send();
     document.addEventListener("visibilitychange", onVisible);
     return () => {

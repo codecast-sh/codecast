@@ -5,7 +5,7 @@
 // report, and the answers right there, or the answer once it is settled.
 // Answering is the store's answerDecision, so the card flips the moment it
 // is pressed and the asking session wakes with the answer.
-import { RUN_OPTION, SKIP_OPTION, approvesPersonsAct, fallbackLine } from '@codecast/shared/contracts/commandRun';
+import { RUN_OPTION, SKIP_OPTION, approveNeedsPresence, approvesPersonsAct, fallbackLine } from '@codecast/shared/contracts/commandRun';
 import { approvalButtonLabel } from '@codecast/shared/contracts/assistant';
 import { useCallback, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -15,6 +15,7 @@ import Feather from '@expo/vector-icons/Feather';
 import Ionicons from '@expo/vector-icons/Ionicons';
 import { Text, TextInput } from '@/components/Themed';
 import { themedStyles, useTheme } from '@/constants/Theme';
+import { useRunPlace } from './PermissionRecord';
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { QueueChip, askingSessionLine } from '@/components/decisions/QueueMeta';
@@ -42,15 +43,15 @@ function settledOf(row: SessionDecisionItem): string | null {
 
 
 /**
- * The answer press for one decision: approving an Ask first read takes Touch
- * ID first (lib/presence), one confirmation at a time; then the store's
+ * The answer press for one decision: approving a Touch ID secret's read or a
+ * run takes Touch ID first (lib/presence), one confirmation at a time; then the store's
  * answer (which adopts a row read by id from outside the viewer's queue).
  * `after` runs once the answer is in.
  */
-export function useDecisionAnswer(source: Parameters<typeof approvesPersonsAct>[0] | undefined, decisionId: string, after?: () => void) {
+export function useDecisionAnswer(source: Parameters<typeof approveNeedsPresence>[0] | undefined, decisionId: string, after?: () => void) {
   const confirming = useRef(false);
   return useCallback(async (input: DecisionAnswerInput) => {
-    if (source && 'index' in input && input.index !== undefined && approvesPersonsAct(source, input.index)) {
+    if (source && 'index' in input && input.index !== undefined && approveNeedsPresence(source, input.index)) {
       if (confirming.current) return;
       confirming.current = true;
       try {
@@ -115,6 +116,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
           <View style={styles.permissionTile}><Feather name="shield" size={16} color={Theme.yellow} /></View>
           <Text style={[styles.question, { flex: 1, marginTop: 4 }]}>{row.question}</Text>
         </View>
+        <RunPlaceLine decisionId={String(row._id)} />
         <View style={[styles.compactRow, { paddingLeft: 44 }]}>
           {yes >= 0 ? (
             <Pressable accessibilityRole="button" accessibilityHint="Confirms with Touch ID" onPress={() => answer({ index: yes })} style={[styles.compact, styles.permissionYes]}>
@@ -282,3 +284,19 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   footerRight: { flexDirection: 'row', gap: 18 },
   footerText: { fontSize: 13, color: Theme.textMuted },
 }));
+
+/** Where Yes runs, when it is not the session's own machine (`--on laptop`): part of what Yes means, so above the buttons. */
+function RunPlaceLine({ decisionId }: { decisionId: string }) {
+  const Theme = useTheme();
+  const { machine } = useRunPlace(decisionId);
+  if (!machine) return null;
+  return (
+    <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, paddingLeft: 44, marginTop: 4 }}>
+      <Feather name="monitor" size={12} color={Theme.textDim} />
+      <Text style={{ fontSize: 12, color: Theme.textDim }}>
+        Runs on <Text style={{ fontSize: 12, color: Theme.textMuted }}>{machine.name}</Text>
+        {machine.offline ? <Text style={{ fontSize: 12, color: Theme.yellow }}> · offline, runs when it is back</Text> : null}
+      </Text>
+    </View>
+  );
+}

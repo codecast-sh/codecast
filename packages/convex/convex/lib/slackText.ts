@@ -273,6 +273,14 @@ export function markdownToSlack(md: string, resolve: SlackOutboundResolver): str
     links.push(token);
     return `\u0000L${links.length - 1}\u0000`;
   };
+  // A named reference (`@[Title id]`, how the chat picker names an object) reads
+  // as its title in Slack, linked when the id has a page Slack can open.
+  out = out.replace(/@\[([^\]]*?)\s+([\w:-]+)\](?:\s*\([^)]*\))?/g, (whole, title: string, id: string) => {
+    const name = title.trim();
+    if (!name) return whole;
+    const url = resolve.entityUrl?.(id);
+    return shield(url ? `<${url}|${name}>` : name);
+  });
   out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_m, alt: string, url: string) => shield(`<${url}|${alt || "image"}>`));
   out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_m, label: string, url: string) => shield(`<${url}|${label}>`));
   // Headers: Slack has none; bold the line.
