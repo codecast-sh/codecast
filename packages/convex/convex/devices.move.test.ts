@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { performMoveSessionToDevice, moveToRemote, reassignToDevice } from "./devices";
+import { performMoveSessionToDevice, performReassignToDevice, moveToRemote, reassignToDevice } from "./devices";
 import { forConversation, results } from "./sessionCommands";
 import { MACHINE_SWITCH_NOTICE_PREFIX } from "@codecast/shared/contracts";
 
@@ -174,5 +174,38 @@ describe("device moves from the store carry the request id", () => {
     expect(resumes[0]).toMatchObject({ request_id: "move-2", target_device_id: LAPTOP });
     const rows = await (forConversation as any)._handler({ db, auth: authAs }, { conversation_id: "conv1" });
     expect(rows.map((r: any) => [r._id, r.command])).toContainEqual(["move-2", "resume_session"]);
+  });
+});
+
+// A closed session is dormant, not retired. Running it on another machine is
+// a wake: the move that resumes it there ends the close (every machine reader
+// would otherwise treat the live session as torn down); a move that does not
+// resume it leaves it closed.
+describe("a run-it-there move of a closed session ends the close", () => {
+  const CLOSED = { inbox_dismissed_at: 50, inbox_closed_at: 50 };
+
+  test("a move that resumes it there un-closes it", async () => {
+    const db = fixtures(CLOSED);
+    await performMoveSessionToDevice({ db }, ME as any, { conversation_id: "conv1" as any, owner_device_id: BOX, project_path: "/home/ubuntu/work/repo" });
+    expect(conv(db).inbox_dismissed_at).toBeUndefined();
+    expect(commands(db).map((c: any) => c.command)).toContain("resume_session");
+  });
+
+  test("a move without a resume keeps it closed", async () => {
+    const db = fixtures(CLOSED);
+    await performMoveSessionToDevice({ db }, ME as any, { conversation_id: "conv1" as any, owner_device_id: BOX, project_path: "/home/ubuntu/work/repo", resume: false });
+    expect(conv(db).inbox_dismissed_at).toBe(50);
+  });
+
+  test("Run on this device un-closes it", async () => {
+    const db = fixtures(CLOSED);
+    await performReassignToDevice({ db }, ME as any, { conversation_id: "conv1" as any, device_id: BOX });
+    expect(conv(db).inbox_dismissed_at).toBeUndefined();
+  });
+
+  test("a killed session's dismissal is not touched: a kill is not a close", async () => {
+    const db = fixtures({ inbox_dismissed_at: 50, inbox_killed_at: 50 });
+    await performReassignToDevice({ db }, ME as any, { conversation_id: "conv1" as any, device_id: BOX });
+    expect(conv(db).inbox_dismissed_at).toBe(50);
   });
 });

@@ -2,16 +2,17 @@
 // (docs/architecture/decisions-as-documents.md D1).
 //
 // A category decides who may answer. The open categories may be delegated to a
-// role under a grant; the protected ones, `limit` and `unknown` are always
-// held by a person. The SERVER assigns the category: an asker may propose one,
-// and the proposal stands only when it is not looser than what a conservative
-// keyword read of the question and options finds. Any option that names a
-// deploy, a purchase, a deletion, an access change, an external message or a
-// product choice pins the decision to that protected category, whatever the
-// asker proposed.
+// role under a grant; the protected ones, `limit` and `unknown` are always held
+// by a person. The asker names the category, because only the asker knows
+// whose call the answer is: card text describes the situation, not who should
+// answer it. `unknown` is the server's own value, which the CLI never offers: a
+// decision a workflow run asks of a person (a gate, the card a gate adopts, a
+// failure gate, a card a run's session posts) with no category declared, a
+// proposal outside the vocabulary, and the admins' areas card.
 
-export const OPEN_CATEGORIES = ["approach", "scope", "priority", "retry", "review", "allocation"] as const;
-export const PROTECTED_CATEGORIES = ["production", "billing", "data", "access", "external", "product"] as const;
+import { OPEN_CATEGORIES, PROTECTED_CATEGORIES } from "@codecast/shared/contracts/decisionCategory";
+
+export { OPEN_CATEGORIES, PROTECTED_CATEGORIES };
 export const DECISION_CATEGORIES = [...OPEN_CATEGORIES, ...PROTECTED_CATEGORIES, "limit", "unknown"] as const;
 
 export type DecisionCategory = (typeof DECISION_CATEGORIES)[number];
@@ -36,91 +37,50 @@ export function isHumanOnlyCategory(category: string | undefined): boolean {
   );
 }
 
-// Word-boundary phrase lists. Each phrase is matched as a whole word or word
-// sequence on the lowercased text, so "deploy" does not fire on "deployment
-// notes" being merely mentioned... it does, and that is the conservative side:
-// a false pin costs a person one answer; a false release costs an unattended
-// production change.
-const PROTECTED_KEYWORDS: Record<(typeof PROTECTED_CATEGORIES)[number], string[]> = {
-  production: [
-    "deploy", "deploys", "deploying", "deployment", "ship to prod", "to production", "in production", "on production",
-    "prod deploy", "release to", "roll out", "rollout", "rollback", "roll back", "go live", "cut a release", "cut the release",
-    "publish the release", "hotfix", "restart prod", "migrate prod", "prod database", "production database",
-  ],
-  billing: [
-    "purchase", "buy", "pay for", "payment", "subscription", "subscribe", "invoice", "charge the card", "credit card",
-    "spend", "spending", "budget", "billing", "upgrade the plan", "quota", "cost money", "dollars", "$",
-  ],
-  data: [
-    "delete", "deletes", "deleting", "drop the table", "drop table", "truncate", "wipe", "purge", "erase",
-    "migrate data", "data migration", "migration", "backfill", "irreversible", "permanently remove", "hard delete",
-    "reset the database", "destructive",
-  ],
-  access: [
-    "grant access", "revoke access", "permission", "permissions", "admin role", "make admin", "api key", "api token",
-    "rotate the key", "rotate key", "credentials", "secret", "secrets", "share access", "invite", "remove from the team",
-    "access change", "auth", "oauth", "sso",
-  ],
-  external: [
-    "send the email", "send an email", "email the", "email to", "message the customer", "reply to the customer",
-    "post to slack", "post on", "tweet", "publish the post", "announce", "announcement", "notify the customer",
-    "notify users", "contact", "reach out", "external", "press release", "newsletter", "dm ",
-  ],
-  product: [
-    "product decision", "product choice", "product direction", "feature flag", "pricing", "user-facing", "user facing",
-    "ux change", "the product should", "what the product", "roadmap", "launch", "rename the product", "positioning",
-    "which feature", "should the product", "default behavior", "default behaviour",
-  ],
-};
-
-const LIMIT_KEYWORDS = ["raise the cap", "raise the limit", "increase the limit", "increase the cap", "lift the limit", "rate limit", "raise quota", "higher limit"];
-
-// Order matters only for the pinning read: the first protected category whose
-// phrase appears wins, and the order is the one a person would expect to be
-// the most consequential first.
-const PIN_ORDER: (typeof PROTECTED_CATEGORIES)[number][] = ["production", "data", "billing", "access", "external", "product"];
-
-function normalize(text: string): string {
-  return ` ${text.toLowerCase().replace(/[\s\n]+/g, " ")} `;
+// The assignment (D1): the asker's proposal from the vocabulary stands. No
+// proposal is the fallback: `review`, which a role may answer under a grant,
+// for an agent's own card; `unknown`, which a person holds, for a run's. A
+// proposal outside the vocabulary (kept in category_proposed by the caller) is
+// `unknown`: a word the asker meant as a constraint is never loosened to an
+// open category.
+export function assignCategory(proposed: string | undefined, fallback: "review" | "unknown" = "review"): DecisionCategory {
+  if (proposed === undefined) return fallback;
+  return isDecisionCategory(proposed) ? proposed : "unknown";
 }
 
-function hasPhrase(haystack: string, phrase: string): boolean {
-  if (phrase === "$") return haystack.includes("$");
-  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").trim();
-  return new RegExp(`(^|[^a-z0-9])${escaped}([^a-z0-9]|$)`, "i").test(haystack);
+// A decision a workflow run asks (its gate, the card its gate adopts, a failure
+// gate): the category the flow declares, else a person's.
+export function runCategory(declared: string | undefined): DecisionCategory {
+  return assignCategory(declared, "unknown");
 }
 
-export type ClassifiableDecision = {
-  question: string;
-  options: Array<{ label: string; description?: string; body_md?: string; cost?: string; risk?: string }>;
-  context_md?: string;
-};
-
-// The conservative read: what a keyword scan of the question, the option
-// labels, descriptions and bodies finds. Returns a protected category or
-// `limit` when a phrase pins it, else null (the text does not force a
-// category). Cost and risk strings are NOT scanned: "$2k" on an option's
-// cost would pin every priced approach decision to billing and defeat grants.
-export function pinnedCategory(input: ClassifiableDecision): DecisionCategory | null {
-  const parts = [input.question, ...input.options.flatMap((o) => [o.label, o.description ?? "", o.body_md ?? ""])];
-  const text = normalize(parts.join(" "));
-  for (const category of PIN_ORDER) {
-    if (PROTECTED_KEYWORDS[category].some((p) => hasPhrase(text, p))) return category;
-  }
-  if (LIMIT_KEYWORDS.some((p) => hasPhrase(text, p))) return "limit";
-  return null;
+// The category a gate leaves the card it adopts with: a person's category the
+// station named stands (a gate only tightens); otherwise the gate's declared
+// one, else a person's. A station's card with none carries the server's
+// `unknown`, which the gate's word replaces.
+export function adoptedCategory(card: string | undefined, declared: string | undefined): DecisionCategory {
+  return isDecisionCategory(card) && card !== "unknown" && isHumanOnlyCategory(card) ? card : runCategory(declared);
 }
 
-// The assignment (D1): a pinned protected category beats any proposal. An
-// open proposal stands when nothing pins. No proposal and nothing pinned is
-// `unknown`, which a person holds. A proposal outside the vocabulary is
-// ignored (kept in category_proposed by the caller for the audit trail).
-export function assignCategory(
-  input: ClassifiableDecision,
+// The category an ask or an edit leaves a decision with (D1).
+// - `current`: the open row's category on a re-ask or an edit (null for a new
+//   ask). Without a proposal it stays.
+// - `runDeclares`: the run itself asks (its gate, the runner's failure card),
+//   so the proposal is the flow's word: runCategory.
+// - `runs`: the card serves a run (a session of the run asks it, or a gate took
+//   it up). Its asker may only tighten it: a proposal that is not a person's
+//   leaves an open card as it was, and a new one with a person.
+export function categoryFor(
   proposed: string | undefined,
-): { category: DecisionCategory; pinned: boolean } {
-  const pinned = pinnedCategory(input);
-  if (pinned) return { category: pinned, pinned: true };
-  if (isDecisionCategory(proposed)) return { category: proposed, pinned: false };
-  return { category: "unknown", pinned: false };
+  o: { current: string | undefined | null; runDeclares: boolean; runs: boolean },
+): DecisionCategory {
+  if (o.current !== null) {
+    const kept: DecisionCategory = isDecisionCategory(o.current) ? o.current : "unknown";
+    if (proposed === undefined) return kept;
+    const next = assignCategory(proposed);
+    return o.runs && !isHumanOnlyCategory(next) ? kept : next;
+  }
+  if (o.runDeclares) return runCategory(proposed);
+  const next = assignCategory(proposed);
+  return o.runs && !isHumanOnlyCategory(next) ? "unknown" : next;
 }

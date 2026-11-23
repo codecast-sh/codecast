@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
+import { spawnSync } from "../proc.js";
 import { parseWorkflowFile, parseWorkflowSource, resolveFlowSource, type ResolveFlow } from "./parser.js";
 import { resolveWorkflowSource } from "./templates.js";
 import type { WorkflowGraph } from "./types.js";
 import { repoLineForRun } from "../repoLine.js";
-import { materializePushedFlow } from "./flowPool.js";
+import { materializePushedFlow, repoFlowsDir } from "./flowPool.js";
 import { codecastPath } from "../codecastDir.js";
 
 // The graph `cast workflow run-daemon` executes for a run (the-line.md L9).
@@ -86,7 +87,7 @@ export function daemonRunGraph(
     if (wf.name) graph.name = wf.name;
     return { graph, file: null };
   }
-  const origin = (run.fresh_branch || resume) && deviceId && wf?.origin?.device_id === deviceId ? path.join(wf.origin.root, wf.origin.file) : null;
+  const origin = (run.fresh_branch || resume) && deviceId && wf?.origin?.device_id === deviceId && !foreignOrigin(wf, cwd, deviceId) ? path.join(wf.origin.root, wf.origin.file) : null;
   if (origin && fs.existsSync(origin)) {
     const graph = parseWorkflowFile(origin);
     if (run.goal_override) graph.goal = run.goal_override;
@@ -103,6 +104,16 @@ function graphElsewhere(run: DaemonRun, wf: DaemonRow, cwd: string, deviceId?: s
     const graph = parseWorkflowSource(repo.source, repo.dir);
     if (run.goal_override) graph.goal = run.goal_override;
     return graph;
+  }
+  // The row holds whichever checkout pushed its slug last (one row per user and slug), so a row pushed from a
+  // checkout of another repo on this machine is that repo's flow: Union's `change` once answered codecast's runs.
+  // Such a run resolves the name in its own checkout, its repo flow else the shipped one.
+  if (foreignOrigin(wf, cwd, deviceId)) {
+    const own = ownFlowByName(wf?.slug || run.workflow_name, cwd);
+    if (own) {
+      if (run.goal_override) own.goal = run.goal_override;
+      return own;
+    }
   }
   // The pushed source is the whole graph; the stored node copy keeps only the
   // attributes its table names (a stop exit's words, a segment's routing are
@@ -177,6 +188,32 @@ function sourceGraph(wf: DaemonRow, cwd: string, deviceId?: string): WorkflowGra
   } catch {
     return null;
   }
+}
+
+/** Whether the row's graph was pushed from a checkout on this machine of another repo than the run's. Unknown (either side not a git checkout here) is not foreign. */
+function foreignOrigin(wf: DaemonRow, cwd: string, deviceId?: string): boolean {
+  if (!deviceId || !wf?.origin || wf.origin.device_id !== deviceId) return false;
+  const theirs = repoOf(wf.origin.root);
+  const ours = repoOf(cwd);
+  return !!theirs && !!ours && theirs !== ours;
+}
+
+/** A checkout's repo, as its shared git directory: every worktree of one repo names the same one. */
+function repoOf(dir: string): string | null {
+  if (!fs.existsSync(dir)) return null;
+  const r = spawnSync("git", ["-C", dir, "rev-parse", "--path-format=absolute", "--git-common-dir"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] });
+  const common = r.status === 0 ? r.stdout.trim() : "";
+  return common ? fs.realpathSync(common) : null;
+}
+
+/** A flow by name as a checkout resolves it: its `.codecast/flows/<name>.cast`, else the shipped template. */
+function ownFlowByName(name: string | null | undefined, cwd: string): WorkflowGraph | null {
+  if (!name) return null;
+  const dir = repoFlowsDir(cwd);
+  const file = dir ? path.join(dir, `${name}.cast`) : null;
+  if (file && fs.existsSync(file)) return parseWorkflowFile(file);
+  const shipped = resolveWorkflowSource(name, cwd);
+  return shipped ? parseWorkflowSource(shipped.source, shipped.dir) : null;
 }
 
 function stackFromSource(source: string | undefined): string | undefined {

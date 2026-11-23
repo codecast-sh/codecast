@@ -169,7 +169,7 @@
         "pinned": 3,
         "new": 0,
         "needs_input": 4,
-        "done": 2,
+        "done": 1,
         "dormant": 0,
         "working": 2,
         "idle": 0,
@@ -183,7 +183,7 @@
         "pinned": 0,
         "new": 1,
         "needs_input": 0,
-        "done": 0,
+        "done": 1,
         "dormant": 1,
         "working": 0,
         "idle": 0,
@@ -193,7 +193,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "593558f84323fa84",
+    "set_digest": "5a355a8bbb735157",
     "placements": {
       "ancientpinz100000000000000000000": [
         "pinned",
@@ -238,7 +238,7 @@
       "foldeddonez100000000000000000000": [
         "done",
         "done",
-        false
+        true
       ],
       "foldedhiddenanchorz1800000000000": [
         "hidden",

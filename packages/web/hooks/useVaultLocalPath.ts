@@ -4,7 +4,7 @@ import { isVaultAssetPath, isVaultMarkdownPath } from "@codecast/shared/contract
 import { useWatchEffect } from "./useWatchEffect";
 import { useVaultStore } from "../store/vaultStore";
 import { locateVault, VaultRequestError } from "../lib/vault/client";
-import { filesHref, resolveVaultTarget } from "../lib/vault/vaultHref";
+import { filesHref, resolveVaultTarget, sameNamedCheckoutPaths } from "../lib/vault/vaultHref";
 import { ancestorDirs } from "../lib/vault/explorerModel";
 import { inferHomeDir, resolveCustomPath } from "../lib/utils";
 
@@ -30,11 +30,24 @@ export function useVaultLocalPath(
     if (!needsLocate || !abs || !endpoint) return;
     let cancelled = false;
     useVaultStore.getState().clearOpError();
-    void locateVault(endpoint, abs).then((located) => {
+    void (async () => {
+      const located = await locateVault(endpoint, abs);
       if (cancelled) return;
-      if (located) useVaultStore.getState().adoptVault(located.vault);
-      else useVaultStore.setState({ opError: `${abs} does not exist on this machine.` });
-    }).catch((error: unknown) => {
+      if (located) return useVaultStore.getState().adoptVault(located.vault);
+      // A path from another machine (a teammate's or a cloud host's session):
+      // open the same file in this machine's checkout of that folder.
+      // When no copy sits at the same place, the checkout's own scan still
+      // finds a file a relative mention put under the wrong folder.
+      const roots = useVaultStore.getState().vaults.map((v) => v.root);
+      const candidates = sameNamedCheckoutPaths(abs, roots);
+      for (const candidate of candidates) {
+        const found = await locateVault(endpoint, candidate);
+        if (cancelled) return;
+        if (found) return router.replace(filesHref({ localPath: candidate, line: targetLine }));
+      }
+      if (candidates.length) return router.replace(filesHref({ localPath: candidates[0], line: targetLine }));
+      useVaultStore.setState({ opError: `${abs} does not exist on this machine.` });
+    })().catch((error: unknown) => {
       if (cancelled) return;
       captureException(error);
       const detail = error instanceof VaultRequestError && error.status === 404

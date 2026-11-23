@@ -27,7 +27,8 @@ import { Doc, Id } from "./_generated/dataModel";
 import { recordPRMergedActivity, resolveActorUserIdForTeam } from "./pull_requests";
 import { recordExternalEvent } from "./externalEvents";
 import { recordCiRun, type CiRun } from "./ingest";
-import { checkSuiteCi, deploymentStatusEventOf, recordCommitCi, recordGithubDeployStatus, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
+import { JUDGING_TIMEOUT_MS, noteCiWorkflow, noteMainCiRun, notePayload } from "./mainRed";
+import { checkSuiteCi, deploymentStatusEventOf, recordCommitCi, recordGithubDeployStatus, recordWorkflowRunDeploy, stampMainOrder, statusEventOf, workflowRunCi } from "./deployTargetsCi";
 import { markCommitDirty } from "./lib/changesDirty";
 import { claimDrain, releaseDrain, renewDrain } from "./lib/drainMarker";
 import { checkLabel, repositoryOwner } from "@codecast/shared/contracts";
@@ -670,6 +671,7 @@ export const processPRClosedEvent = internalMutation({
       state: merged ? "merged" : "closed",
       merged_at: mergedAt ? new Date(mergedAt).getTime() : undefined,
       closed_at: closedAt ? new Date(closedAt).getTime() : Date.now(),
+      ...(merged && prPayload.merge_commit_sha ? { merge_commit_sha: String(prPayload.merge_commit_sha).toLowerCase() } : {}),
     });
     if (!result) {
       await ctx.db.patch(args.event_id, { processed: true });
@@ -1291,7 +1293,18 @@ async function applyWorkflowRun(ctx: any, payload: any) {
   const commitCi = workflowRunCi(payload);
   const team = ci || commitCi ? await resolveTeamForRepository(ctx, repository) : null;
   if (commitCi && team) await recordCommitCi(ctx, commitCi, team);
+  // A run of a target's deploy workflow is that target's deploy, whoever dispatched it (deploys.md DP11).
+  await recordWorkflowRunDeploy(ctx, payload);
   const filed = ci && team ? await recordCiRun(ctx, { ...ci, team_id: team }) : undefined;
+  // Red main (docs/architecture/main-red.md): a pull request's run marks its workflow as CI, and a push's run of CI on the
+  // default branch is judged. Its failure must not roll back the deploy and CI filing above, so it is tried once more on its own.
+  try {
+    await noteCiWorkflow(ctx, payload);
+    await noteMainCiRun(ctx, ci, payload);
+  } catch (err) {
+    console.error(`main_red: noting ${repository} run ${run.id} failed, trying again once a stuck claim has timed out:`, err instanceof Error ? err.message : err);
+    await ctx.scheduler.runAfter(JUDGING_TIMEOUT_MS + 60_000, internal.mainRed.noteLater, { ci, payload: notePayload(payload) });
+  }
   return { success: true, suite_id: suiteId, event: row.event, ...(filed ? { ci: filed } : {}) };
 }
 
@@ -1632,6 +1645,8 @@ export const processPushEvent = internalMutation({
     let created = 0;
     let firstConversation: Id<"conversations"> | undefined;
     const onMain: Id<"commits">[] = [];
+    // Who put these commits on the default branch: GitHub authenticates the pusher, never the author.
+    const pushedBy = branch === payload.repository?.default_branch ? pusher : undefined;
     for (const commit of commits) {
       const sha: string = commit.id;
       const message: string = commit.message ?? "";
@@ -1671,6 +1686,7 @@ export const processPushEvent = internalMutation({
           conversation_id: fromTrailer ?? existing.conversation_id ?? conversationId,
           task_ids: existing.task_ids?.length ? existing.task_ids : links.task_ids,
           files: existing.files?.length ? existing.files : files.length ? files : undefined,
+          ...(!existing.pushed_by && pushedBy ? { pushed_by: pushedBy } : {}),
         });
       } else {
         commitId = await ctx.db.insert("commits", {
@@ -1690,6 +1706,7 @@ export const processPushEvent = internalMutation({
           conversation_id: conversationId,
           task_ids: links.task_ids.length ? links.task_ids : undefined,
           files: files.length ? files : undefined,
+          ...(pushedBy ? { pushed_by: pushedBy } : {}),
         });
         created++;
       }

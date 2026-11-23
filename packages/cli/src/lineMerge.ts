@@ -22,7 +22,8 @@ export type MergeCheck = {
   on: boolean;
   used: number;
   limit: number | null;
-  role: { handle: string; short_id: string; name: string } | null; // null: a person answered Ship on a run no role started
+  role: { handle: string; short_id: string; name: string } | null; // null: no role started the run; `authorized` says whose word lets it merge
+  authorized?: { user_id: string; why: string };
   task: { short_id: string; title: string; pr_url: string | null } | null;
 };
 
@@ -44,11 +45,11 @@ export function checksGreen(rollup: unknown): { green: boolean; detail: string }
   return bad.length ? { green: false, detail: bad.join(", ") } : { green: true, detail: `${rollup.length} checks green` };
 }
 
-/** Merge `branch` into `into`. With a pull request, `gh pr merge --rebase`
- *  after its checks are green; without one, a fast forward push onto the
- *  default branch of what landingCommit says lands, read again when the
- *  default branch moves between the read and the push. */
-export function mergeBranch(args: { cwd: string; branch: string; into: string; pr_url: string | null; exec?: Exec }): MergeOutcome {
+/** Merge `branch` into `into`. With a pull request, `mergePullRequest` after
+ *  its checks are green; without one, a fast forward push onto the default
+ *  branch of what landingCommit says lands, read again when the default branch
+ *  moves between the read and the push. */
+export function mergeBranch(args: { cwd: string; branch: string; into: string; pr_url: string | null; exec?: Exec; wait?: Wait }): MergeOutcome {
   const exec = args.exec ?? defaultExec;
   const { cwd, branch, into } = args;
   const fetch = exec("git", ["fetch", "origin", branch, into], cwd);
@@ -68,15 +69,15 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
     const onto = exec("git", ["rev-parse", `origin/${into}`], cwd).stdout.trim();
     const undone = onto ? undoneChanges(exec, cwd, onto, sha) : [];
     if (undone.length) return { kind: "left", reason: undoneReason(branch, into, undone) };
-    const merge = exec("gh", ["pr", "merge", args.pr_url, "--rebase", "--delete-branch"], cwd);
-    if (merge.status !== 0) return { kind: "left", reason: `gh pr merge failed: ${(merge.stderr || merge.stdout).trim().split("\n")[0]}` };
-    return { kind: "merged", sha, into, via: "pr" };
+    const merged = mergePullRequest(exec, cwd, { pr: args.pr_url, branch, head: sha, into, wait: args.wait });
+    if ("reason" in merged) return { kind: "left", reason: merged.reason };
+    return { kind: "merged", sha: merged.sha, into, via: "pr" };
   }
   // No pull request: the push is a fast forward, so history stays flat.
   for (let attempt = 1; ; attempt++) {
     const landing = landingCommit(exec, cwd, branch, into, sha);
     if ("reason" in landing) return { kind: "left", reason: landing.reason };
-    const undone = undoneChanges(exec, cwd, exec("git", ["rev-parse", `origin/${into}`], cwd).stdout.trim(), landing.sha);
+    const undone = undoneChanges(exec, cwd, exec("git", ["rev-parse", `origin/${into}`], cwd).stdout.trim(), landing.sha, { head: sha });
     if (undone.length) return { kind: "left", reason: undoneReason(branch, into, undone) };
     const push = exec("git", ["push", "origin", `${landing.sha}:refs/heads/${into}`], cwd);
     if (push.status === 0) {
@@ -90,26 +91,101 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
   }
 }
 
+const firstLine = (r: { stdout: string; stderr: string }) => (r.stderr || r.stdout).trim().split("\n")[0];
+
+export type Wait = (ms: number) => void;
+export const sleepSync: Wait = (ms) => { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms); };
+
+/** The squash commit's body: each of the branch's own commits whole, as a `* ` bullet, the shape GitHub gives a
+ *  squash, so every Codecast-Session trailer stays in the trailer block that ends its commit's bullet, where
+ *  `cast blame` reads it (shared/blame splitSessionTrailer). A repository whose squash default is the PR's
+ *  description would otherwise drop them all. Null when the branch's commits cannot be read, and gh writes its own. */
+export function squashBody(exec: Exec, cwd: string, head: string, into: string): string | null {
+  const log = exec("git", ["log", "--reverse", "--format=%B%x00", `origin/${into}..${head}`], cwd);
+  if (log.status !== 0) return null;
+  const messages = log.stdout.split("\0").map((m) => m.trim()).filter(Boolean);
+  return messages.length ? messages.map((m) => `* ${m}`).join("\n\n") : null;
+}
+
+/** `gh pr merge --squash` pinned to the head that was checked (never --admin), and the sha that landed. A gh that
+ *  exits non-zero may still have merged, so a failed merge is read again before it counts as one. Only origin's
+ *  branch is deleted, and only while it still stands at the merged head: gh's --delete-branch also deletes the local
+ *  branch, and gh 2.105 first removes any worktree that has it checked out, a person's or a session's own included
+ *  (ct-99406). A branch already gone, or moved since, stays as it is. */
+export function mergePullRequest(exec: Exec, cwd: string, args: { pr: string; branch: string; head: string; into: string; wait?: Wait }): { sha: string } | { reason: string } {
+  const body = squashBody(exec, cwd, args.head, args.into);
+  const merge = exec("gh", ["pr", "merge", args.pr, "--squash", "--match-head-commit", args.head, ...(body ? ["--body", body] : [])], cwd);
+  if (merge.status !== 0) {
+    let merged = false;
+    try { merged = JSON.parse(exec("gh", ["pr", "view", args.pr, "--json", "state"], cwd).stdout)?.state === "MERGED"; } catch {}
+    if (!merged) return { reason: `gh pr merge failed: ${firstLine(merge)}` };
+  }
+  const landed = landedSha(exec, cwd, args.pr, args.into, args.wait);
+  if ("sha" in landed) exec("git", ["push", `--force-with-lease=refs/heads/${args.branch}:${args.head}`, "origin", "--delete", args.branch], cwd);
+  return landed;
+}
+
+const LANDED_TRIES = 6;
+const LANDED_WAIT_MS = 2000;
+
+/** The sha a merged pull request landed as: its merge commit, read back from GitHub and found on origin's `into`.
+ *  GitHub's git replicas can trail its API for a moment after a merge, so it reads again for about ten seconds
+ *  before it calls the merge missing. A pull request GitHub calls merged whose commit the default branch does not
+ *  hold has landed nothing. */
+export function landedSha(exec: Exec, cwd: string, pr: string, into: string, wait: Wait = sleepSync): { sha: string } | { reason: string } {
+  for (let attempt = 1; ; attempt++) {
+    let sha = "";
+    try { sha = String(JSON.parse(exec("gh", ["pr", "view", pr, "--json", "mergeCommit"], cwd).stdout)?.mergeCommit?.oid ?? ""); } catch {}
+    let reason = `gh says ${pr} is merged, but names no merge commit`;
+    if (sha) {
+      const fetch = exec("git", ["fetch", "origin", into], cwd);
+      if (fetch.status !== 0) reason = `gh says ${pr} merged as ${sha.slice(0, 10)}, but origin/${into} could not be fetched to find it: ${firstLine(fetch)}`;
+      else if (exec("git", ["merge-base", "--is-ancestor", sha, `origin/${into}`], cwd).status === 0) return { sha };
+      else reason = `gh says ${pr} merged as ${sha.slice(0, 10)}, but origin/${into} does not hold that commit`;
+    }
+    if (attempt >= LANDED_TRIES) return { reason };
+    wait(LANDED_WAIT_MS);
+  }
+}
+
 const lines = (text: string) => text.split("\n").map((l) => l.trim()).filter(Boolean);
 
 /** The files `landing` would set back to their content from before one of the default branch's own recent changes
  *  to them, each with the change it undoes. A commit squashed onto the default branch's head over a tree built on an
  *  older default branch carries all the work that landed in between back out, as a fast forward that every other
  *  check passes: on Nov 10 one such commit undid nine commits on Union's main. Reads each touched file's last
- *  `depth` changes on the default branch, and stops after `most` hits. */
-export function undoneChanges(exec: Exec, cwd: string, onto: string, landing: string, depth = 8, most = 5): Array<{ file: string; commit: string }> {
+ *  `depth` changes on the default branch, and stops after `most` files it would set back.
+ *
+ *  A file the landing deletes reads as missing, which is also what it was before the commit that created it, so a
+ *  deliberate deletion of any file with fewer than `depth` changes looked like undoing its creation (ct-98089: Union's
+ *  ct-97881 replaced two files with one and was refused). A stale tree drops main's new files the same way, but it
+ *  sets main's other recent changes back with them. So a deletion passes as the change's own when the branch's own
+ *  commits, from where `head` left `onto`, deleted the file and the landing sets nothing else back. */
+export function undoneChanges(exec: Exec, cwd: string, onto: string, landing: string, opts: { head?: string; depth?: number; most?: number } = {}): Array<{ file: string; commit: string }> {
+  const { head = landing, depth = 8, most = 5 } = opts;
   const git = (...args: string[]) => exec("git", args, cwd);
   // `rev:path` reads the path from the repository's top, wherever in it the step runs; a missing file reads empty.
   const blob = (rev: string, file: string) => { const r = git("rev-parse", "--verify", "-q", `${rev}:${file}`); return r.status === 0 ? r.stdout.trim() : ""; };
-  const out: Array<{ file: string; commit: string }> = [];
+  const setBack: Array<{ file: string; commit: string }> = [];
+  const dropped: Array<{ file: string; commit: string }> = [];
   for (const file of lines(git("diff", "--name-only", "--no-renames", onto, landing).stdout)) {
     const mine = blob(landing, file);
     if (mine === blob(onto, file)) continue;
     const commit = lines(git("log", "--format=%H", "-n", String(depth), onto, "--", `:(top,literal)${file}`).stdout).find((c) => blob(`${c}^`, file) === mine);
-    if (commit) out.push({ file, commit });
-    if (out.length >= most) break;
+    if (commit) (mine ? setBack : dropped).push({ file, commit });
+    if (setBack.length >= most) break;
   }
-  return out;
+  if (setBack.length || !dropped.length) return [...setBack, ...dropped].slice(0, most);
+  const deleted = branchDeletions(git, onto, head);
+  return dropped.filter((d) => !deleted.has(d.file)).slice(0, most);
+}
+
+/** The files the branch's own commits deleted, from where `head` left `onto`: a branch built before a file existed
+ *  never deleted it, however its tree reads. */
+function branchDeletions(git: (...args: string[]) => ReturnType<Exec>, onto: string, head: string): Set<string> {
+  const base = git("merge-base", onto, head).stdout.trim();
+  if (!base) return new Set();
+  return new Set(lines(git("log", "--format=", "--name-only", "--no-renames", "--diff-filter=D", `${base}..${head}`).stdout));
 }
 
 const undoneReason = (branch: string, into: string, undone: Array<{ file: string; commit: string }>) =>

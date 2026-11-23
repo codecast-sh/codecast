@@ -72,7 +72,8 @@ restore_env() {
     for f in ${HELD[@]+"${HELD[@]}"}; do [ -f "$f.deployhold" ] && mv "$f.deployhold" "$f"; done
     HELD=()
 }
-trap 'restore_env; release_lock' EXIT
+OWN_CHANGES=""
+trap 'restore_env; release_lock; [ -n "$OWN_CHANGES" ] && rm -f "$OWN_CHANGES"' EXIT
 
 # Prod is self-hosted. The admin key comes from the vault when the shell does
 # not carry it: the macOS Interactive re-exec above keeps no credentials, and
@@ -85,6 +86,27 @@ WITH_KEY=()
 # uncommitted edits to what the backend bundles (its functions, shared code,
 # the vendored platform packages).
 DIRTY="$(git -C "$ROOT" status --porcelain -- packages/convex/convex packages/shared platform/packages | wc -l | tr -d ' ')"
+
+# What this push changes on prod (scripts/prod-diff.ts, read-only): every
+# function, route, index and table prod has that this tree lacks is gone
+# after the push, so each is printed with the recorded push that put it
+# there. It warns and never refuses: the marker below carries the list, and
+# the server tells whoever's uncommitted push it was. Prod unreadable, the
+# push goes ahead without it.
+# Under `cast ship checkout` the ship names the file (CAST_PUSH_CHANGES_FILE),
+# reads it after this step and puts it on the deploy it records.
+if [ -n "${CAST_PUSH_CHANGES_FILE:-}" ]; then
+    CHANGES="$CAST_PUSH_CHANGES_FILE"
+else
+    CHANGES="$(mktemp "${TMPDIR:-/tmp}/convex-push-changes.XXXXXX" 2>/dev/null)" || CHANGES=""
+    OWN_CHANGES="$CHANGES"
+fi
+if [ -z "$CHANGES" ] || ! ${WITH_KEY[@]+"${WITH_KEY[@]}"} bun scripts/prod-diff.ts --out "$CHANGES"; then
+    echo "warning: could not read what this push changes on prod; pushing without that check" >&2
+    # The ship still records where the push came from; with no lists in it, nobody reads it as "dropped nothing".
+    if [ -n "${CAST_PUSH_CHANGES_FILE:-}" ]; then echo '{}' > "$CAST_PUSH_CHANGES_FILE"; elif [ -n "$CHANGES" ]; then rm -f "$CHANGES"; fi
+    CHANGES=""
+fi
 
 ${WITH_KEY[@]+"${WITH_KEY[@]}"} env -u CONVEX_DEPLOYMENT npx convex deploy -y "$@"
 restore_env
@@ -104,6 +126,12 @@ MARK_DRY=""
 case " $* " in *" --dry-run "*) MARK_DRY="--dry-run" ;; esac
 MARK_EXTRA=()
 [ "$DIRTY" != "0" ] && MARK_EXTRA+=(--dirty "$DIRTY")
+# The machine it went out from and what it changed, for a cast that knows those flags (an older one records the rest).
+MARK_HELP="$(command -v cast >/dev/null 2>&1 && cast ship mark --help 2>/dev/null || true)"
+if [[ "$MARK_HELP" == *--changes* ]]; then
+    MARK_EXTRA+=(--via deploy.sh)
+    [ -n "$CHANGES" ] && MARK_EXTRA+=(--changes "$CHANGES")
+fi
 # A deploy codecast asked for (dp-N, run by the line-deploy graph) is finished with the sha that actually went out.
 [ -n "${CAST_DEPLOY_ID:-}" ] && MARK_EXTRA+=(--deploy "$CAST_DEPLOY_ID")
 if [ -n "${CAST_SHIP:-}" ] && [ -z "${CAST_DEPLOY_ID:-}" ]; then
@@ -116,3 +144,4 @@ elif CAST_HTTP_TIMEOUT_MS=15000 cast ship mark --surface backend --sha "$SHA" ${
 else
     echo "warning: deploy marker for backend at ${SHA:0:7} not recorded; the deploy itself succeeded" >&2
 fi
+exit 0

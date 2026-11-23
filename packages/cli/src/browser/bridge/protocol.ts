@@ -45,6 +45,10 @@ export const BRIDGE_PROTOCOL = 5;
 /** Default loopback port for the bridge host. Override: CAST_BRIDGE_PORT. */
 export const BRIDGE_DEFAULT_PORT = 41729;
 
+/** The first host-side port a laptop's link forwards from (laptopLink.ts linkHostPort), and how many follow it. */
+export const LINK_HOST_PORT_BASE = 42_000;
+export const LINK_HOST_PORT_SPAN = 8_000;
+
 /**
  * The extension's ID, the same on every machine because the manifest carries
  * a fixed public key (`key` in packages/browser-extension/manifest.json). Chrome

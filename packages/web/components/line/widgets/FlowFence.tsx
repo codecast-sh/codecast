@@ -8,20 +8,28 @@
 //
 // or `{"run":"<run id>"}` to show where a change is in its flow. The card of a
 // `cast flow run` in a transcript is the same widget on the run it started.
+// `{"edit":{...}}` is what `cast flow edit` made (FlowEditCard), and
+// `{"pipeline":"owner/repo"}` a repository's pipeline (FlowPipelineCard),
+// docs/architecture/pipeline.md PL5, PL6.
 import { memo, useMemo, useState } from "react";
 import Link from "next/link";
 import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { useNamedFlow, useRunFlow, type FlowLibraryState } from "../../../hooks/useFlowObject";
-import { takesSessionChange, type AppFlow } from "../../../lib/line/flowPool";
+import { type AppFlow } from "../../../lib/line/flowPool";
+import { takesSessionChange } from "@codecast/shared/contracts/flowPool";
 import { journeyOf, runIsLive } from "../../../lib/ship/journey";
 import { JourneyView } from "../../ship/Journey";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
+import { useJourneyViewer } from "../../../hooks/useJourneyViewer";
 import { flowRunState, readFlowFence } from "../../../lib/line/flowFence";
 import { CodeBlock } from "../../CodeBlock";
 import { lineWorkspaceHref } from "../../../lib/line/lineWorkspaceUrl";
 import { useInboxStore } from "../../../store/inboxStore";
 import { FlowExplorer } from "./FlowStationPanel";
+import { FlowEditCard } from "./FlowEditCard";
+import { FlowPipelineCard } from "./FlowPipelineCard";
+import { ShipAgainButton } from "./RunThroughFlow";
 import "../workspace/workspace.css";
 
 export default function FlowFence({ code, fallback }: { code: string; fallback?: React.ReactNode }) {
@@ -29,7 +37,10 @@ export default function FlowFence({ code, fallback }: { code: string; fallback?:
   const flowsOn = useWorkspaceFeature("line");
   const read = useMemo(() => readFlowFence(code), [code]);
   if (!read.ok || !flowsOn) return fallback !== undefined ? <>{fallback}</> : <CodeBlock code={code} language="json" />;
-  return read.spec.run ? <FlowRunCard runId={read.spec.run} title={read.spec.title} /> : <FlowCard slug={read.spec.flow!} title={read.spec.title} />;
+  const { spec } = read;
+  if (spec.edit) return <FlowEditCard edit={spec.edit} />;
+  if (spec.pipeline) return <FlowPipelineCard repository={spec.pipeline} title={spec.title} />;
+  return spec.run ? <FlowRunCard runId={spec.run} title={spec.title} /> : <FlowCard slug={spec.flow!} title={spec.title} />;
 }
 
 const KIND_WORD = { line: "Flow", segment: "Segment" } as const;
@@ -105,7 +116,8 @@ export const FlowRunCard = memo(function FlowRunCard({ runId, title }: { runId: 
 function ShipRunCard({ run, flow, title, library }: { run: any; flow: AppFlow; title?: string | null; library: FlowLibraryState }) {
   const [graph, setGraph] = useState(false);
   const now = useCoarseNow(15_000);
-  const journey = useMemo(() => journeyOf(flow, run), [flow, run]);
+  const viewer = useJourneyViewer(run);
+  const journey = useMemo(() => journeyOf(flow, run, [], viewer), [flow, run, viewer]);
   const live = runIsLive(run);
   return (
     <div className="lw-widget lw-flow" data-flow-run={run._id} data-ship-run-card={journey.now.kind}>
@@ -116,7 +128,7 @@ function ShipRunCard({ run, flow, title, library }: { run: any; flow: AppFlow; t
       {graph ? <FlowExplorer flow={flow} run={run} /> : null}
       <JourneyView journey={journey} run={run} now_ms={now} compact={graph} actions={
         live ? <button type="button" className="sj-btn" data-quiet onClick={() => void useInboxStore.getState().stopLineRun(run._id)} data-flow-stop={run._id}>Stop</button> : null
-      } />
+      } again={run.spawner_conversation_id ? (primary) => <ShipAgainButton flow={flow} conversationId={String(run.spawner_conversation_id)} sessionTitle={run.task_title ?? "This session"} primary={primary} /> : undefined} />
     </div>
   );
 }

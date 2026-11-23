@@ -18,10 +18,14 @@ const eff = {};
 if (fs.existsSync("effect.txt")) for (const l of fs.readFileSync("effect.txt", "utf8").split("\\n")) { const [k, v] = l.split("="); if (k) eff[k.trim()] = Number(v); }
 const version = createHash("sha256").update(fs.readFileSync("evals/grader.txt")).digest("hex").slice(0, 12);
 const cases = [];
+// FAKE_VOID: the candidate leaves a case the base scored unscored. FAKE_BASE_ABSENT: the base has cases it never
+// scores (Union's empty pitch lists), and the candidate scores them.
+const cand = process.env.CODECAST_ENV_CANDIDATE !== "base";
+const absent = process.env.FAKE_BASE_ABSENT && !cand ? 1 : 0;
 if (env === "fake/floor") {
-  for (let i = 1; i <= (process.env.FAKE_VOID ? 4 : 5); i++) cases.push({ id: "f" + i, score: i === 3 && fs.existsSync("pressure.txt") ? 0 : 1 });
+  for (let i = 1; i <= (cand && process.env.FAKE_VOID ? 4 : 5) - absent; i++) cases.push({ id: "f" + i, score: i === 3 && fs.existsSync("pressure.txt") ? 0 : 1 });
 } else if (env === "fake/fit") {
-  for (let i = 1; i <= 20; i++) cases.push({ id: "p" + i, score: Math.min(1, Math.max(0, 0.8 + (eff.fit ?? 0))) });
+  for (let i = 1; i <= 20 - 5 * absent; i++) cases.push({ id: "p" + i, score: Math.min(1, Math.max(0, 0.8 + (eff.fit ?? 0))) });
 } else {
   const wide = env === "fake/noisy" ? 0.1 : 0.005;
   const count = split === "held" ? 30 : 40;
@@ -34,7 +38,7 @@ if (env === "fake/floor") {
 const mean = cases.reduce((a, c) => a + c.score, 0) / cases.length;
 const now = new Date().toISOString();
 fs.writeFileSync(out, JSON.stringify({ env, env_version: version, level: env === "fake/floor" ? "L0" : env === "fake/noisy" ? "L1" : "L2",
-  candidate: { label: process.env.CODECAST_ENV_CANDIDATE }, split, cases, summary: { n: cases.length, mean, ...(process.env.FAKE_VOID && env === "fake/floor" ? { unscored: 1 } : {}) }, cost_usd: env === "fake/floor" ? 0 : 0.25, started_at: now, finished_at: now }));
+  candidate: { label: process.env.CODECAST_ENV_CANDIDATE }, split, cases, summary: { n: cases.length, mean, ...(process.env.FAKE_VOID && cand && env === "fake/floor" ? { unscored: 1 } : absent ? { unscored: env === "fake/fit" ? 5 : 1 } : {}) }, cost_usd: env === "fake/floor" ? 0 : 0.25, started_at: now, finished_at: now }));
 `;
 
 export const ENVS = `

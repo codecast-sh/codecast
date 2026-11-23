@@ -5,7 +5,7 @@ import { selfUpdateBlocked } from "./lib/deviceUpdate";
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { AgentClientId, AgentDefinitionSpec } from "@codecast/shared/contracts";
-import { isReservedDevice, settingsAfterSnippet, stableModeOf, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, isAgentSetupTool, type AgentToolSetupStatus, cloudAgentProviderOfSession, isCloudAgentActionName, isCloudAgentLoginState, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
+import { isClosedSession, isReservedDevice, settingsAfterSnippet, stableModeOf, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, isAgentSetupTool, type AgentToolSetupStatus, cloudAgentProviderOfSession, isCloudAgentActionName, isCloudAgentLoginState, type CloudAgentLoginStateName } from "@codecast/shared/contracts";
 import { verifyApiToken } from "./apiTokens";
 import { Id } from "./_generated/dataModel";
 import { internal } from "./_generated/api";
@@ -454,6 +454,7 @@ export const resolveConversationBySession = query({
       project_path: conv.project_path ?? null,
       status: conv.status,
       title: conv.title ?? null,
+      closed: isClosedSession(conv), // the daemon's fallback: a closed session is not brought back on its own
     };
   },
 });
@@ -522,6 +523,7 @@ export async function performMoveSessionToDevice(
     status: "active" as const,
     updated_at: Date.now(),
     ...(await unparkForMove(ctx, conv, dest)),
+    ...(args.resume !== false && isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}), // run it there: no longer closed
   });
 
   if (priorDeviceId && priorDeviceId !== args.owner_device_id) {
@@ -706,6 +708,7 @@ export async function performReassignToDevice(
     status: "active" as const,
     updated_at: Date.now(),
     ...(await unparkForMove(ctx, conv, device)),
+    ...(isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}), // run it there: no longer closed
   });
 
   if (prevOwner && prevOwner !== args.device_id) {
@@ -903,6 +906,7 @@ export async function performReparentSessionToDevice(
     status: "active" as const,
     updated_at: Date.now(),
     ...(await unparkForMove(ctx, conv, device)),
+    ...(isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}), // the reparent resumes it: no longer closed
   };
   if (crossUser) {
     // Account follows device: the destination's runner now runs + bills it.

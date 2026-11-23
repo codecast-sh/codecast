@@ -30,7 +30,7 @@ writes files nobody in the checkout has changed.
 | Import gap | When groups are held, a shipped file that imports a held file stops the pass: the tree would typecheck and the commit would not. | `importGaps` |
 | Level | The checkout moves to the result. Files equal to the result are only re-indexed; files nobody touched are rewritten; files edited since the freeze are merged three-way from their frozen content, so typing during a ship is kept, never overwritten. | `level.ts` |
 | Check | `[ship] check` runs in the checkout, then the test files the pass changed. `CAST_SHIP_BASE` names the upstream commit the pass replayed onto, so `cast check --changed-since $CAST_SHIP_BASE` checks only the programs holding a changed file. Errors only in files the pass left out are ignored. With more projects than the machine's watcher cap (6 here, 7 projects), a pass touching all of them cold-starts one or two programs, about two minutes. | `runPlan` |
-| Deploy, push | `before_push` deploy steps whose paths match, then the push. If upstream moved meanwhile, the commits replay onto it and the checkout levels again. Then `after_push` steps. | `runPlan` |
+| Deploy, push | `before_push` deploy steps whose paths match, then the push. If upstream moved meanwhile, the commits replay onto it and the checkout levels again. Then `after_push` steps. The repository's lease on the server (`land/repoLease.ts`) is held from the first `before_push` step through the push, so a change flow's Merge station on any machine never deploys or merges in between (flows.md, Merge). | `runPlan` |
 
 On the real checkout (768 files, 43 sessions) a plan takes under a second warm
 and the pass about 6 seconds before the check and deploys.
@@ -79,6 +79,7 @@ mode = "direct"        # or "pr"
 check = "cast check --changed-since $CAST_SHIP_BASE"   # the projects this ship touches; "" skips
 tests = true           # run the test files the pass changed
 level = true           # the daemon keeps the checkout level with upstream
+flow = "change"        # run each pass through this flow, always by name
 
 [[ship.deploy]]
 name = "convex"
@@ -93,6 +94,39 @@ deploy their uncommitted backend work to test it, and deploying only the
 shipped commit would remove functions they are using. A held group that
 touches deployed paths therefore still reaches the backend.
 
+### A pass through a flow
+
+With `flow` set, `cast ship checkout` neither pushes nor opens a pull request:
+it runs `cast flow run <flow> --checkout` and prints what that started. `flow`
+always names its flow; shipping never takes a workspace's default flow, so
+`"default"` is refused. The flow freezes the checkout as its change, planned
+as above, a commit per writer on a branch of its own cut onto freshly fetched
+upstream, and its stages check, review, land and deploy it (flows.md FL4). A
+finding goes to the sessions that wrote the files it names, each told only its
+own files; the run waits for them, freezes the pass again and goes on.
+
+What changes for whoever ships: the plan file is not read. `--dry-run` still
+prints the plan, but the pass is frozen again when the flow starts, its
+messages come from the writers' session titles, and every group that can ship
+does. So the flags that steer a pass this command pushes itself (`--plan`,
+`--only`, `--hold`, `--commits-only`, `--message`, `--no-check`, `--no-push`,
+`--no-deploy`) and `--no-fetch` are refused rather than ignored. Work that is
+half done stays out by its writer finishing it or setting it aside, not by a
+hold.
+
+One checkout runs one such pass at a time. The pass that holds it is written
+to `.git/codecast/checkout-run.json` (`checkoutRunHold.ts`): the starting
+`cast flow run`'s pid and start time until its run exists, then the run's id
+(a `--foreground` run holds it by that pid while it runs here, and by its id
+when it stops at a person's gate). A second `cast flow run --checkout`, or
+`cast ship checkout` with `flow` set, is refused before it freezes anything
+while that run is pending, running or paused, naming it. A hold whose starter
+died, or whose pid now belongs to a process that started at another time, or
+whose run ended is stale and taken over, so nothing has to clear it. A stale hold is moved aside and
+read again before it is deleted, so two passes that both judged it stale
+cannot delete each other's fresh hold: one takes the checkout and the other is
+refused.
+
 ## The level sweep
 
 Every minute the daemon fetches each checkout a session runs in and, when the
@@ -103,6 +137,67 @@ upstream lacks. A checkout whose own commits upstream already holds by
 content (pushed from a detached worktree) is levelled: `git cherry` marks
 them, and that state used to block every Convex deploy from the tree.
 `cast config level_checkouts_enabled false` turns the sweep off on a machine.
+
+A level is all or nothing: one file changed here and upstream without a
+clean three-way merge holds the whole checkout where it is, because moving
+HEAD past a file still at its old base's content is the stale copy above.
+The writer of that file is the one who can unblock it. Once the level has
+refused on the same files for 30 minutes (`LEVEL_STUCK_FILE_MS`), the
+checkout report asks for help (`land/checkoutReport.ts`, `tellWriters`). It
+groups the conflicting files by the session that wrote each last, as the
+ship pass attributes its groups, and tells each writer once per episode
+about its own files only. The files no session wrote go to one finding on
+the repository's project. An episode is the set of files. It ends when the
+checkout levels or the sweep stops levelling it for good (the repo turns it
+off, a worktree, off the branch, commits upstream lacks). A ship, a rebase or
+an unreadable HEAD only pauses it: the checkout shows off meanwhile, and the
+episode carries on after. A level whose HEAD moved off its base asks nobody.
+
+Each writer's brief (`heldBrief` in `land/levelConflicts.ts`) names up to eight
+of its conflicting files and points at a list file holding all of them. It
+says the other conflicting files belong to other sessions, told separately.
+It lists the upstream commits that touched its files, and it points at a
+three-way merge with conflict markers for each file under
+`.git/codecast/level-conflicts/<path>`: upstream's version when the file was
+deleted here, none for a binary file or a symlink. The way out is one: bring
+upstream's change into each file by hand, from its merge file or `git show
+<upstream>:<path>`. The brief forbids pull, merge, rebase, stash, checkout,
+restore, reset and commit in the shared checkout, where other sessions'
+uncommitted work lives. Once the files carry upstream's change, the next
+sweep levels by itself and clears the merge files. The words are
+`levelAskWords` (`contracts/checkouts.ts`), which the pipeline page's ask
+shares: sent from the page, with no list or merge files, it names every file
+and the `git show` of upstream's version of each.
+
+The brief is a machine wake from codecast's level sweep (origin
+`scheduler`), so it leaves the writer's pinned state and a hidden stash
+alone, and it revives a killed writer. Its client id (`levelAskClientId`)
+comes from the device, the checkout, the episode and the writer. A retried
+send lands once, and a writer already told from the pipeline page, whose ask
+carries the same id, is answered with that ask rather than a second. A send
+that takes over 10 seconds counts as failed. A failed send is not recorded as
+told. It is tried again after 1, 2, 4 ... minutes, at most an hour apart, for as
+long as the episode lasts, and each failed try is logged once; only a refusal
+no retry changes gives a writer up. The episode, who it told (`told`, which
+the checkouts page shows), the failed tries and who the server will never
+deliver to are kept in the daemon's `checkout-state.json`, so a
+restart neither forgets nor asks again. Merge files already made against the
+same upstream commit are left as they are, since the writer may be resolving
+one.
+
+Known limit: a teammate's session gets no brief. The server delivers this
+machine's messages only to its own user's conversations, so such a writer
+(like one whose conversation is gone, or a hosted one) is
+named in the daemon's `[LEVEL]` log line, left out of `told`, and not asked
+again this episode. A shared checkout's writers are normally the person's
+own sessions.
+
+A level that raced a writer (a file kept changing while it moved) leaves
+HEAD on upstream and that file without upstream's change, which would revert
+upstream's change when shipped. The next sweep finds the checkout level, so
+the sweep briefs that writer at once (`briefRacedStale`), with the merge
+saved under `.git/codecast/level-stale/<path>`. A later level does not clear
+those files; the sweep prunes them a day after they were written.
 
 ## Fix forward
 

@@ -47,6 +47,7 @@ const OTHER_PAGES = [
   "components/mods/ModPanePage.tsx",
   "components/repo/RepoChrome.tsx",
   "components/repo/BlobContent.tsx",
+  "components/line/pipeline/PipelineDiagram.tsx",
 ];
 
 const SHARE = /<(ShareControl|ConversationSharePopover|SharePopover|ShareMoment|CodeShareMenu|CodeShareItems)\b/;

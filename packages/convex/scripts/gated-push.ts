@@ -18,12 +18,20 @@
 //   5. push once (`convex dev --once --typecheck disable`);
 //   6. take the signature again. If it moved, the push may have bundled a
 //      mid-edit state, so it is dirty again and goes around once more.
+// Around the push it also says what prod gains and loses: before it, the
+// diff against prod (scripts/prod-diff.ts) prints what the push would take
+// off prod and which recorded push put each thing there; after it, the push
+// is recorded as a dev push (`cast ship mark --via "dev watcher"`, never a
+// deploy) with this machine, the commit and uncommitted file count it pushed
+// and those changes, so a later push that drops this work can name who to
+// tell. Neither ever blocks a push.
 // Function logs keep streaming in the same pane through `convex logs`.
 //
 // The state machine is `Gate`, with every side effect injected, so the test
 // beside this file drives it with fakes; `main` below wires the real ones.
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, statSync, watch } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, rmSync, statSync, watch, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 
 export const QUIET_MS = 3_000;
@@ -65,6 +73,9 @@ export function bundledSources(root: string): { dir: string; prefix: string }[] 
 
 export type CheckResult = { errors: number; diagnostics: string };
 
+/** What a push puts on prod and takes off it, by name (scripts/prod-diff.ts). */
+export type PushChanges = { adds: string[]; drops: string[]; read_at?: number };
+
 export type GateIO = {
   now: () => number;
   /** Is HEAD a superset of `base`? */
@@ -75,6 +86,10 @@ export type GateIO = {
   typecheck: () => Promise<CheckResult>;
   /** Exit code of the push. */
   push: () => Promise<number>;
+  /** What the push would change on prod, printed for the person; null when prod or the tree can't be read. */
+  diff: () => Promise<PushChanges | null>;
+  /** Record a push that went out as a deploy. Must not throw: a push is never undone by its record. */
+  record: (changes: PushChanges | null) => Promise<void>;
   log: (line: string) => void;
 };
 
@@ -128,9 +143,14 @@ export class Gate {
       }
 
       this.dirty = false;
-      this.io.log("Typecheck green, pushing to prod…");
+      this.io.log("Typecheck green.");
+      const changes = await this.io.diff();
+      this.io.log("Pushing to prod…");
       const code = await this.io.push();
+      // Read the tree before recording, so a save while the record runs is not taken for a mid-push edit.
       const after = await this.io.signature();
+      // A push that went out changed prod, even one that has to go around again.
+      if (code === 0) await this.io.record(changes);
       if (after !== before) {
         this.io.log("Files changed while the push ran; that push may hold a mid-edit state, pushing again after the tree settles.");
         this.dirty = true;
@@ -239,6 +259,75 @@ async function push(): Promise<number> {
   return r.code;
 }
 
+/** HEAD and the uncommitted count as the push bundles them: read before the push, recorded after it. */
+let atPush: { sha: string; dirty: number } | null = null;
+
+async function diff(): Promise<PushChanges | null> {
+  const head = await run(["git", "rev-parse", "HEAD"], { cwd: ROOT, timeoutMs: 10_000 });
+  atPush = head.code === 0 && head.stdout.trim() ? { sha: head.stdout.trim(), dirty: await uncommittedCount() } : null;
+  // The summary (and each drop's adder) prints on stderr, straight into this pane.
+  const r = spawn("bun", [join(PKG, "scripts", "prod-diff.ts"), "--json"], { cwd: PKG, stdio: ["ignore", "pipe", "inherit"], env: process.env });
+  let stdout = "";
+  r.stdout?.on("data", (d) => { stdout += d; });
+  const code = await new Promise<number>((resolve) => {
+    const timer = setTimeout(() => r.kill("SIGTERM"), 3 * 60_000);
+    r.on("error", () => { clearTimeout(timer); resolve(127); });
+    r.on("close", (c) => { clearTimeout(timer); resolve(c ?? 1); });
+  });
+  if (code !== 0) {
+    log("Could not read what this push changes on prod; pushing without that check.");
+    return null;
+  }
+  try {
+    const { adds, drops, read_at } = JSON.parse(stdout);
+    return { adds, drops, ...(typeof read_at === "number" ? { read_at } : {}) };
+  } catch {
+    return null;
+  }
+}
+
+/** Uncommitted files under what the backend bundles: the count deploy.sh records. */
+async function uncommittedCount(): Promise<number> {
+  const r = await run(["git", "status", "--porcelain", "--", "packages/convex/convex", "packages/shared", "platform/packages"], { cwd: ROOT, timeoutMs: 30_000 });
+  return r.code === 0 ? r.stdout.split("\n").filter((l) => l.trim()).length : 0;
+}
+
+/** The `cast ship mark` that records a watcher push, or null when this cast
+ *  can't say the push came from the watcher (no `--via`): a plain mark would
+ *  read as a deploy, finishing and superseding the line's deploys and firing
+ *  deploy triggers on every save. */
+export function watcherMarkArgs(markHelp: string, sha: string, dirty: number, changesFile?: string): string[] | null {
+  if (!markHelp.includes("--changes")) return null;
+  return ["cast", "ship", "mark", "--surface", "backend", "--sha", sha, "--via", "dev watcher",
+    ...(dirty > 0 ? ["--dirty", String(dirty)] : []), ...(changesFile ? ["--changes", changesFile] : [])];
+}
+
+let markHelp: string | null = null;
+
+async function record(changes: PushChanges | null): Promise<void> {
+  try {
+    if (markHelp === null) {
+      const help = await run(["cast", "ship", "mark", "--help"], { cwd: ROOT, timeoutMs: 15_000 });
+      // Only a real answer is kept: a slow or missing cast is asked again at the next push.
+      if (help.code !== 0) return log("Push not recorded: `cast ship mark --help` did not answer (cast missing or busy); the push itself went out.");
+      markHelp = help.stdout;
+    }
+    if (!watcherMarkArgs(markHelp, "", 0)) return log("Push not recorded: this cast is older than `cast ship mark --via`; update cast to record watcher pushes.");
+    if (!atPush) return log("Push not recorded: no HEAD commit.");
+    const { sha, dirty } = atPush;
+    const dir = changes ? mkdtempSync(join(tmpdir(), "convex-push-")) : null;
+    try {
+      if (dir) writeFileSync(join(dir, "changes.json"), JSON.stringify(changes));
+      const r = await run(watcherMarkArgs(markHelp, sha, dirty, dir ? join(dir, "changes.json") : undefined)!, { cwd: ROOT, timeoutMs: 30_000 });
+      log(r.code === 0 ? `Recorded this push${dirty ? ` (${dirty} uncommitted file${dirty === 1 ? "" : "s"})` : ""}.` : "Push not recorded (cast missing, logged out or offline); the push itself went out.");
+    } finally {
+      if (dir) rmSync(dir, { recursive: true, force: true });
+    }
+  } catch (e) {
+    log(`Push not recorded: ${(e as Error)?.message ?? e}`);
+  }
+}
+
 function tailLogs(): void {
   // `convex dev` used to stream function logs into this pane; keep that.
   const child = spawn(join(PKG, "node_modules", ".bin", "convex"), ["logs"], { cwd: PKG, stdio: "inherit", env: process.env });
@@ -248,7 +337,7 @@ function tailLogs(): void {
 async function main(): Promise<void> {
   if (!existsSync(FUNCTIONS)) throw new Error(`no functions directory at ${FUNCTIONS}`);
   const remote = await baseRemote();
-  const gate = new Gate({ now: Date.now, treeIsFresh: treeIsFreshAgainst(remote), base: `${remote}/main`, signature, typecheck, push, log });
+  const gate = new Gate({ now: Date.now, treeIsFresh: treeIsFreshAgainst(remote), base: `${remote}/main`, signature, typecheck, push, diff, record, log });
   for (const source of SOURCES) {
     if (!existsSync(source.dir)) continue;
     watch(source.dir, { recursive: true }, (_event, filename) => {

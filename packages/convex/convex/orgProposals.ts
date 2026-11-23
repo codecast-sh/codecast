@@ -57,6 +57,7 @@ import {
 } from "@codecast/shared/contracts/orgProposal";
 import { orgAppliedDiff } from "@codecast/shared/contracts/orgChange";
 import { humanizeConvexError } from "@codecast/shared/contracts/convexErrors";
+import { roleCharterOf } from "./lib/roleCharter";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): a set of changes
 // to the chart with a rationale each, authored by an agent or a person and
@@ -127,7 +128,7 @@ async function checkedRecordChange<T extends OrgChange>(ctx: Ctx, change: T, sea
   // role this proposal creates has no charter yet; its apply checks it.
   if (change.kind === "charter_edit") {
     const role = roleByRef(await rolesInBoundary(ctx, seat), change.handle);
-    const edited = role ? applyCharterEdits(role.charter ?? "", change.edits) : null;
+    const edited = role ? applyCharterEdits(await roleCharterOf(ctx, role), change.edits) : null;
     if (edited?.error !== undefined) throw new Error(`@${role.handle}'s charter: ${edited.error}`);
     return change;
   }

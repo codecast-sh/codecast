@@ -3,8 +3,9 @@
 // and what derives from them at read time. A target's live deploy, the one
 // going out and its history are read from its deploys, never stored on it.
 // Pure: no store, no React.
-import type { CommitCiState, DeployTargetPolicy, QueueGroup } from "@codecast/shared/contracts/deployTargets";
-import type { DeployView } from "@codecast/shared/contracts/deploys";
+import { worstCi, type CommitCiState, type DeployTargetPolicy, type QueueGroup, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
+import { prNumberOf } from "@codecast/shared/changes";
+import type { DeployPushSummary, DeployView } from "@codecast/shared/contracts/deploys";
 import type { TargetState } from "../ship/journey";
 
 export type DeployTargetRow = {
@@ -26,6 +27,9 @@ export type DeployTargetRow = {
   /** No checkout declared it: the page knows it only from its deploy records (no queue, no press). */
   record_only?: boolean;
   last_read?: { sha?: string; version?: string; at: number; error?: string } | null;
+  /** The newest dev push (a dev watcher's push from a working tree) after the live deploy went live: prod runs
+   *  someone's uncommitted work on top of that deploy. Never a deploy itself. */
+  dev_push?: TargetDevPush | null;
   queue: {
     known: boolean;
     truncated: boolean;
@@ -72,7 +76,7 @@ export type TeamDeployRow = {
   created_at: number;
   live_at: number | null;
   finished_at: number | null;
-};
+} & Partial<DeployPushSummary>;
 
 export type DeploySession = { conversation_id: string; short_id?: string | null; title?: string | null };
 
@@ -97,7 +101,9 @@ export const sessionsOf = (d: Pick<TeamDeployRow, "sessions">): DeploySession[] 
  * sha already live. With no commits named but a new sha, its commits are only
  * unrecorded (or none touched the target), so it is not called a rebuild.
  */
-export function rebuiltOnly(d: Pick<TeamDeployRow, "status" | "action" | "commits" | "sha" | "previous_sha">): boolean {
+export function rebuiltOnly(d: Pick<TeamDeployRow, "status" | "action" | "commits" | "sha" | "previous_sha" | "dirty">): boolean {
+  // A push with uncommitted files shipped something new even on the same sha.
+  if (d.dirty) return false;
   return d.status === "live" && d.action === "deploy" && !d.commits && (!d.previous_sha || d.previous_sha === d.sha);
 }
 
@@ -129,6 +135,12 @@ export function teamRowOfView(v: DeployView & { after?: TeamDeployRow["after"] }
     ...(v.steps ? { steps: v.steps.map(({ id, status }) => ({ id, status })) } : {}),
     commit_rows: v.commits.map((c) => ({ sha: c.sha, subject: c.subject, ...(c.author ? { author: c.author } : {}), ...(c.conversation_id ? { conversation_id: String(c.conversation_id) } : {}) })),
     tasks: v.carries.map((c) => ({ short_id: c.task_short_id, title: c.task_title })),
+    // How the push got there, as a list row carries it: the names stay on the view.
+    dirty: v.dirty ?? null,
+    machine: v.machine ?? null,
+    pushed_via: v.pushed_via ?? null,
+    adds_count: v.adds?.length ?? 0,
+    drops_count: v.drops?.length ?? 0,
     after: v.after ?? null,
     created_at: v.created_at,
     live_at: v.live_at,
@@ -144,10 +156,14 @@ export function deploysOf(t: Pick<DeployTargetRow, "name" | "repository">, deplo
 }
 
 /** What a target runs now, what is going out to it, and its history. */
+/** Whether a newer deploy of the target went live after this one was asked for. */
+export const supersededBy = (d: Pick<TeamDeployRow, "created_at">, live: Pick<TeamDeployRow, "created_at"> | null): boolean => !!live && live.created_at > d.created_at;
+
 export function targetNow(t: Pick<DeployTargetRow, "name" | "repository">, deploys: ReadonlyArray<TeamDeployRow>) {
   const mine = deploysOf(t, deploys);
   const live = mine.filter((d) => d.status === "live").sort((a, b) => (b.live_at ?? b.created_at) - (a.live_at ?? a.created_at))[0] ?? null;
-  const open = mine.find(isOpen) ?? null;
+  // A deploy asked for before the live one never went out as asked (the server closes it as superseded): not going out.
+  const open = mine.find((d) => isOpen(d) && !supersededBy(d, live)) ?? null;
   const failed = mine[0]?.status === "failed" ? mine[0] : null;
   return { live, open, failed, history: mine };
 }
@@ -194,14 +210,6 @@ export function orderTargets(targets: ReadonlyArray<DeployTargetRow>, deploys: R
   });
 }
 
-/** The Deploys page for the run's team, at one target when the words name one ("web dp-12"). */
-export function deploysHref(run: any, words?: string | null): string {
-  const team = typeof run?.workspace === "string" && run.workspace.startsWith("team:") ? run.workspace.slice(5) : null;
-  const target = words?.match(/\b([a-z][a-z0-9-]{0,31}) dp-\d+/)?.[1] ?? null;
-  const q = [team ? `team=${team}` : null, target ? `target=${encodeURIComponent(target)}` : null].filter(Boolean).join("&");
-  return `/deploys${q ? `?${q}` : ""}`;
-}
-
 /** The targets a team's deploy records name that no checkout declared, as targets the page can show from their records. */
 export function recordTargets(declared: ReadonlyArray<DeployTargetRow>, deploys: ReadonlyArray<TeamDeployRow>, teamId: string): DeployTargetRow[] {
   const known = new Set(declared.map((t) => t.name));
@@ -219,4 +227,28 @@ export function recordTargets(declared: ReadonlyArray<DeployTargetRow>, deploys:
 export function sessionWords(s: { title?: string | null; short_id?: string | null; conversation_id: string }): string {
   const t = (s.title ?? "").replace(/<\/?[a-z_][^>]*>/gi, " ").replace(/\s+/g, " ").trim();
   return t || s.short_id || s.conversation_id.slice(0, 7);
+}
+
+/** A squash-merged commit's pull request: GitHub's trailing "(#N)" taken off the subject, so the number can lead the row. */
+export function prOfSubject(subject: string): { pr: number | null; subject: string } {
+  const pr = prNumberOf(subject);
+  return { pr, subject: pr ? subject.replace(/\s*\(#\d+\)\s*$/, "") : subject };
+}
+
+/** Whether the viewer wrote a commit: its author is their GitHub login or their name. */
+export function isMineCommit(author: string | null | undefined, me: { login?: string | null; name?: string | null }): boolean {
+  if (!author) return false;
+  const a = author.toLowerCase();
+  return [me.login, me.name].some((x) => !!x && x.toLowerCase() === a);
+}
+
+/**
+ * A target's waiting groups cut to the viewer's own commits; a group with none of them drops out. A commit `keep` names
+ * (the one a link points at) stays, so a link never opens on a commit the filter hid.
+ */
+export function mineOnly(groups: ReadonlyArray<QueueGroup>, me: { login?: string | null; name?: string | null }, keep?: (c: QueueGroup["commits"][number]) => boolean): QueueGroup[] {
+  return groups.flatMap((g) => {
+    const commits = g.commits.filter((c) => isMineCommit(c.author, me) || !!keep?.(c));
+    return commits.length ? [{ ...g, commits, ci: worstCi(commits.map((c) => c.ci)) }] : [];
+  });
 }

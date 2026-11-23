@@ -56,8 +56,12 @@ describe("commandExpansionName", () => {
     expect(commandExpansionName(INVOCATION, { content: LONG_PROSE, timestamp: T0 + 120_000 })).toBeNull();
   });
 
-  test("short messages never classify", () => {
-    expect(commandExpansionName(INVOCATION, { content: "go", timestamp: T0 })).toBeNull();
+  test("a short one-line template folds only on the invocation's exact timestamp", () => {
+    // /deploy with no args expands to 139 characters, ending on a bare "policy:".
+    const SHORT = "Follow the `cast-deploy` skill (~/.claude/skills/cast-deploy/SKILL.md) for this checkout. Targets named here go out whatever their policy:";
+    expect(commandExpansionName({ content: "/deploy", timestamp: T0 }, { content: SHORT, timestamp: T0 })).toBe("deploy");
+    expect(commandExpansionName(INVOCATION, { content: "go", timestamp: T0 + 1_500 })).toBeNull();
+    expect(commandExpansionName(INVOCATION, { content: "   ", timestamp: T0 })).toBeNull();
   });
 
   test("a command sent from the app keeps its typed form and still folds its expansion", () => {

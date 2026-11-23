@@ -78,6 +78,21 @@ export function fleetModels(sessionModels: readonly string[]): string[] {
   return [...new Set(sessionModels.filter((m) => counts.get(family(m))! * 2 > sessionModels.length))];
 }
 
+const MODEL_LIMIT_FAMILIES = new Set(["fable", "opus", "sonnet", "haiku"]);
+
+/** The model family a limit banner names when only that model's week is
+ *  spent ("You've hit your Fable limit · resets …" → "fable"), else
+ *  undefined (a weekly, session or spend limit stops every model). */
+export function modelLimitFamily(banner: string | null | undefined): string | undefined {
+  const word = banner?.match(/you['’]ve (?:hit|reached) your ([a-z]+) limit\b/i)?.[1]?.toLowerCase();
+  return word && MODEL_LIMIT_FAMILIES.has(word) ? word : undefined;
+}
+
+/** Does a fleet's model list (fleetModels) include this model family? */
+export function fleetRunsFamily(models: readonly string[], family: string): boolean {
+  return models.some((m) => m.toLowerCase().includes(family));
+}
+
 /** Each limit window an account reports, the one listing every surface
  *  reads: `name`, what a meter row beside its bar says ("Session", "Week", a
  *  model-scoped week by its model, "Fable"), and `label`, the name with its

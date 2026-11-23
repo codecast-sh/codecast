@@ -28,19 +28,21 @@ import { useSyncRuns } from '@codecast/web/hooks/useSyncRuns';
 import { useSyncTeamShipFeeds } from '@codecast/web/hooks/useSessionShipState';
 import { useActiveWorkspaceKey } from '@codecast/web/hooks/useWorkspaceCollection';
 import { compactAge } from '@codecast/web/lib/threadState';
-import { defaultFlowOf, flowBySlug, takesSessionChange, type AppFlow } from '@codecast/web/lib/line/flowPool';
+import { flowBySlug, type AppFlow } from '@codecast/web/lib/line/flowPool';
+import { defaultFlowOf, takesSessionChange } from '@codecast/shared/contracts/flowPool';
 import { changesAnything, libraryEntry } from '@codecast/web/lib/line/flowLibrary';
 import { flowDiagram, routeTail, type DiagramStep, type SideRoute } from '@codecast/web/lib/line/flowDiagram';
 import { flowRunState, type FlowRunTone } from '@codecast/web/lib/line/flowFence';
 import { useFlowStations } from '@codecast/web/lib/line/flowStations';
 import { stationView } from '@codecast/web/lib/line/stationView';
 import { journeyOf, journeyWords, readableWhy } from '@codecast/web/lib/ship/journey';
+import { useJourneyViewer } from '@codecast/web/hooks/useJourneyViewer';
 
 type Tone = FlowRunTone;
 const RUNS_FEED = { limit: 200 };
 const RUNS_SHOWN = 20;
 /** A session change's journey tone as a run tone (the web's Flows view does the same). */
-const JOURNEY_TONE: Record<string, Tone> = { idle: 'running', working: 'running', agent: 'running', session: 'waiting', you: 'waiting', ok: 'passed', bad: 'stopped' };
+const JOURNEY_TONE: Record<string, Tone> = { idle: 'running', working: 'running', agent: 'running', session: 'waiting', you: 'waiting', wait: 'waiting', ok: 'passed', bad: 'stopped' };
 const TAKES_WORDS: Record<string, string> = { branch: "a branch or a session's edits", task: 'a task' };
 
 export default function FlowScreen() {
@@ -221,7 +223,7 @@ function Routes({ routes }: { routes: SideRoute[] }) {
   );
 }
 
-const TEXT_WORD = { prompt: 'Prompt', system: 'System prompt', script: 'Script', doc: 'Decision document' } as const;
+const TEXT_WORD = { prompt: 'Prompt', guide: "Project's guidance", system: 'System prompt', script: 'Script', doc: 'Decision document' } as const;
 
 /** One step, whole: who does it and with what, the words it runs, and where each outcome sends the work. */
 function StepSheet({ flow, step, onClose, onOpenFlow }: { flow: AppFlow; step: DiagramStep | null; onClose: () => void; onOpenFlow: (slug: string) => void }) {
@@ -295,7 +297,8 @@ function RunRow({ run, flow, now, first, onPress }: { run: FlowRun; flow: AppFlo
   const Theme = useTheme();
   const tones = useToneColor();
   const st = flowRunState(run as any, flow);
-  const jw = takesSessionChange(flow) && flow.kind === 'line' ? journeyWords(journeyOf(flow, run as any)) : null;
+  const viewer = useJourneyViewer(run as any);
+  const jw = takesSessionChange(flow) && flow.kind === 'line' ? journeyWords(journeyOf(flow, run as any, [], viewer)) : null;
   const tone = jw ? JOURNEY_TONE[jw.tone] ?? st.tone : st.tone;
   const why = readableWhy(st.why);
   return (

@@ -78,6 +78,13 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
   deploy_live: derived("deploy_live"),
   deploy_failed: derived("deploy_failed"),
 
+  // ── Derived red-main events (docs/architecture/main-red.md) ──
+  // Fired from CI runs on a repository's default branch: main_red once per
+  // culprit (a run still red after one rerun of its failed jobs), main_green
+  // when the branch is first green again after it, with the same culprit.
+  main_red: derived("main_red"),
+  main_green: derived("main_green"),
+
   // ── Derived call events ──
   // Fired once per call when its record is ready to read: the summary and
   // action items written, or for a call too short to summarize, its words
@@ -108,6 +115,8 @@ export const TRIGGER_EVENT_SHORTHANDS: Record<string, TriggerEventFilter> = {
  */
 export const DEPLOY_LIVE_EVENT = "deploy_live";
 export const DEPLOY_FAILED_EVENT = "deploy_failed";
+export const MAIN_RED_EVENT = "main_red";
+export const MAIN_GREEN_EVENT = "main_green";
 
 export const SESSION_NEEDS_INPUT_EVENT = "session_needs_input";
 
@@ -157,6 +166,8 @@ export const TRIGGER_EVENT_LABELS: Record<string, string> = {
   deploy: "deploy",
   deploy_live: "a deploy went live",
   deploy_failed: "a deploy failed",
+  main_red: "main went red",
+  main_green: "main green again",
   call_ended: "call ended",
   chat_message: "message in a channel",
   page_state: "page data changed",

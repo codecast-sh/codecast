@@ -16,6 +16,7 @@
 // subscribes to a SIGNATURE of the fields it renders (store/wakeSig.ts) and
 // reads the raw collection in the body.
 
+import { titleLine } from "@codecast/shared/contracts";
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useIsSyncHost } from "./useSyncRole";
 import { agentName, agentTitle, type AnchorRow } from "./useSyncAnchors";
@@ -492,20 +493,23 @@ export function useChatRail(scope: ChatRailScope = "team"): ChatRailChannel[] {
 
 /** The session that typed a chat line, as its lines show it: its title and
  *  agent, and the role or character it speaks as (the way its transcript
- *  names it). Keyed by the agent's session id, which a chat row carries. */
+ *  names it). A chat row names its session by conversation id (rows written
+ *  before 2026-09-01 by the agent's own session id), so both key the map. */
 export function sessionPersonasFrom(sessions: Record<string, any> | undefined, tree: RoleRows | null | undefined, prefs: IdentityPrefs): (sessionId: string) => SessionPersona | undefined {
   const map = new Map<string, SessionPersona>();
   for (const row of Object.values(sessions ?? {}) as any[]) {
-    if (!row?.session_id) continue;
+    if (!row?._id && !row?.session_id) continue;
     const identity = withLiveRole(identityRowOf(row), tree);
     const id = sessionIdentity(identity, prefs);
-    map.set(String(row.session_id), {
-      title: row.display_title || row.title || undefined,
+    const persona: SessionPersona = {
+      title: titleLine(row.display_title || row.title) || undefined,
       agentType: row.agent_type,
       speaker: id.kind === "role"
         ? { name: id.name, role: { shortId: id.role.short_id, handle: id.handle, avatar: id.avatar, title: id.role.name } }
         : id.kind === "character" ? { name: id.name, identity } : undefined,
-    });
+    };
+    if (row._id) map.set(String(row._id), persona);
+    if (row.session_id) map.set(String(row.session_id), persona);
   }
   return (id) => map.get(id);
 }

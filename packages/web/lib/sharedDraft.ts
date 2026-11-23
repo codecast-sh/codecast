@@ -188,8 +188,12 @@ export class SharedDraftSession {
     const tr = editTransaction(state, target);
     this.state = tr ? state.apply(tr) : state;
     this.on.version(getVersion(this.state));
-    void this.flush();
-    return target;
+    // Resolve only once my words are on the server: the box then reports it is
+    // in the draft, and a box waiting on that must find them when it loads.
+    // Resolve with the draft as it is then, since remote steps may have landed
+    // while my edit was on its way.
+    await this.flush();
+    return this.closed ? null : this.text;
   }
 
   /** The box's text changed (typing, a paste, a send that emptied it). */

@@ -186,7 +186,7 @@ function isAuthError(error: any): boolean {
   );
 }
 
-export type AgentType = "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
+export type AgentType = "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse" | "antigravity";
 
 export interface SyncConfig {
   convexUrl: string;
@@ -253,7 +253,12 @@ export interface ConversationLifecycle {
   inboxKilledAt?: number | null;
   inboxStashedAt?: number | null;
   inboxDismissedAt?: number | null;
+  /** A Close's marker: the session is closed while it equals inboxDismissedAt (shared isClosedSession). */
+  inboxClosedAt?: number | null;
   inboxPinnedAt?: number | null;
+  /** The person closed it and no message waits for it: the daemon does not
+   *  bring it back on its own (the server computes it; lifecycle source only). */
+  closed?: boolean;
   /** Undelivered messages are queued for this conversation. Only the lifecycle
    *  source carries it; the status fallback leaves it undefined. */
   hasPendingMessages?: boolean;
@@ -1177,6 +1182,14 @@ export class SyncService {
     });
   }
 
+  /** Mark a session recorded before the daemon marked launches as one a person runs (interactiveMark.ts). */
+  async markInteractive(conversationId: string): Promise<void> {
+    await this.throttle();
+    return this.guarded(async () => {
+      await this.mutate("conversations:markInteractive" as any, { conversation_id: conversationId, api_token: this.apiToken });
+    });
+  }
+
   async linkSessions(parentConversationId: string, childConversationId: string, subagentDescription?: string): Promise<void> {
     await this.throttle();
     return this.guarded(async () => {
@@ -1911,7 +1924,9 @@ export class SyncService {
             inboxKilledAt: res.inbox_killed_at ?? null,
             inboxStashedAt: res.inbox_stashed_at ?? null,
             inboxDismissedAt: res.inbox_dismissed_at ?? null,
+            inboxClosedAt: res.inbox_closed_at ?? null,
             inboxPinnedAt: res.inbox_pinned_at ?? null,
+            closed: res.closed === true,
             hasPendingMessages: res.has_pending_messages ?? undefined,
             agentType: res.agent_type ?? null,
             hideStateKnown: true,
@@ -1941,7 +1956,9 @@ export class SyncService {
         api_token: this.apiToken,
         session_id: sessionId,
       });
-      return res ? { status: res.status ?? null, hideStateKnown: false, source: "status-fallback" } : null;
+      // `closed` rides the fallback so a degraded read never revives a closed
+      // session (isConversationRetired).
+      return res ? { status: res.status ?? null, closed: res.closed === true, hideStateKnown: false, source: "status-fallback" } : null;
     } catch (err) {
       if (opts.strict) throw err;
       return null;
@@ -2194,7 +2211,8 @@ export class SyncService {
   // the server then leaves a HIDDEN stash (`cast stash --hide`) in place so a
   // looping session keeps working out of the user's active queue; a plain
   // stash pops back into the inbox on the wake. Human/agent sends omit it.
-  async sendMessageToSession(conversationId: string, content: string, origin?: "scheduler"): Promise<string | null> {
+  // A `clientId` makes a retried send land once.
+  async sendMessageToSession(conversationId: string, content: string, origin?: "scheduler", clientId?: string): Promise<string | null> {
     if (!this.apiToken) return null;
     return this.guarded(async () => {
       const result = await this.mutate(
@@ -2203,6 +2221,7 @@ export class SyncService {
           conversation_id: conversationId,
           content,
           ...(origin ? { origin } : {}),
+          ...(clientId ? { client_id: clientId } : {}),
           api_token: this.apiToken,
         },
       );

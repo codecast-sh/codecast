@@ -1,7 +1,9 @@
 // The Ask agent logic behind AskAgentControl: per-surface drafts, the start
 // confirm's state, sending an ask, picking its target, and the page's Ask claim.
 import { createContext, useCallback, useContext, useRef, useState, useSyncExternalStore } from "react";
-import { nanoid } from "nanoid";
+// Ids that only name writes and threads, never secrets: the non-secure
+// generator needs no crypto, which the phone's Hermes runtime lacks.
+import { nanoid } from "nanoid/non-secure";
 import { toast } from "sonner";
 import { askAgentBrief, type ArtifactElement, type ArtifactOp, type ArtifactType } from "@codecast/shared/artifacts";
 import { sendLiveOps } from "./useLiveArtifact";

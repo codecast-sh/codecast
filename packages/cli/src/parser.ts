@@ -5,6 +5,8 @@ import { extractSentFiles, type SyncFile } from "./userFiles.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { parseMuseSessionFile } from "./museTranscript.js";
 export { parseMuseSessionFile, extractMuseCwd } from "./museTranscript.js";
+import { parseAntigravityTranscript } from "./antigravityTranscript.js";
+export { parseAntigravityTranscript } from "./antigravityTranscript.js";
 import type { CodexTurnError } from "@codecast/shared/contracts";
 import { CLIENT_ERROR_BANNER_PREFIX, claudeAutoContinueBanner, isAgentContextMessage, isModelSwitchLimitBanner, isTransientRateLimit429, throttleBannerContent } from "@codecast/shared/contracts";
 
@@ -574,8 +576,10 @@ export function detectCliFlags(content: string): string | null {
       if (parsed.permissionMode === "bypassPermissions") {
         flags.push("--dangerously-skip-permissions");
       }
-      // `claude -p`: a program wrote the prompt and nobody is at a terminal.
-      if (parsed.entrypoint === "sdk-cli") flags.push("--print");
+      // `claude` at a terminal is the one entrypoint where a person types (convex lib/messageProvenance reads
+      // the mark); `claude -p` (sdk-cli) is a program's; the Agent SDK and unknown entrypoints carry neither.
+      if (parsed.entrypoint === "cli") flags.push("--interactive");
+      else if (parsed.entrypoint === "sdk-cli") flags.push("--print");
     } catch {}
   }
   if (content.includes("mcp__claude-in-chrome__") || content.includes('"claude-in-chrome"')) {
@@ -2061,6 +2065,8 @@ export function parseTranscriptFor(clientId: AgentClientId, content: string, onE
       return parseGrokSessionFile(content);
     case "muse":
       return parseMuseSessionFile(content);
+    case "antigravity":
+      return parseAntigravityTranscript(content);
     default:
       return parseSessionFile(content, onEmit);
   }

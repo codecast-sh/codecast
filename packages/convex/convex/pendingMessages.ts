@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 import { UNCONFIRMED_DELIVERY_REASON, isReservedDevice } from "@codecast/shared/contracts";
 import { noteScreenRecordingSent } from "./lib/screenRecordingSent";
 import { steeringOwnerFor, suggestFromTeammate } from "./teamSuggestions";
@@ -20,7 +21,7 @@ import { hasGrantedSendAccess } from "./collab";
 import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
-import { insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
+import { composerChannel, insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
 import { answeredThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage, sendArrival, sessionMessageIntentOf, trustedAgentStatus, restoreFrameTags, SESSION_MESSAGE_OPEN_TAG, type SendArrival, type SessionMessageIntent } from "@codecast/shared/contracts";
 import { autoRecoveryEnabled, listOnlineDevices } from "./ccAccountsShared";
 import { resolveOwnerDeviceView } from "./lib/ownerDevice";
@@ -417,6 +418,14 @@ export async function enqueuePendingMessage(
     // (account-switch "continue", undeliverable receipts, model/effort slash
     // commands) that leave `origin` unset.
     human?: boolean;
+    // Sent from a signed-in person's web or phone composer, never through an
+    // API token (schema pending_messages.channel). Set only through
+    // composerChannel, when the composer's own submit hands over its words;
+    // every other producer leaves it unset, which reads as a program
+    // (lib/messageProvenance.ts).
+    channel?: "composer";
+    // With channel: what the person typed in the box (composerChannel).
+    typed_text?: string;
     // A note the session reads on its NEXT turn, never a turn of its own: the
     // row is parked as "held" (the daemon and the retry cron read "pending"
     // only) and nothing about the conversation moves, so a session whose
@@ -432,6 +441,10 @@ export async function enqueuePendingMessage(
     // The composer's "Queue for later": held for the end of the agent's
     // turn in the session's shared queue (schema pending_messages.queued).
     queue?: boolean;
+    // Work a session hands another out of sight: a flow run's brief to the
+    // session it runs for (flows.md FL4). A hidden stash and a snooze survive
+    // it, as they survive a trigger's wake; everything else wakes as for any send.
+    quiet?: boolean;
     // Why a hosted conversation wakes for this row, when the caller knows
     // better than the origin says (an answered approval). Ignored for every
     // other conversation.
@@ -497,6 +510,8 @@ export async function enqueuePendingMessage(
       content: fields.content,
       clientId: fields.client_id,
       human: fields.human,
+      channel: fields.channel,
+      typedText: fields.typed_text,
       createdAt: Date.now(),
       queued: true,
     });
@@ -514,6 +529,8 @@ export async function enqueuePendingMessage(
       content: fields.content,
       clientId: fields.client_id,
       human: fields.human,
+      channel: fields.channel,
+      typedText: fields.typed_text,
       createdAt: Date.now(),
       held: true,
     });
@@ -544,7 +561,10 @@ export async function enqueuePendingMessage(
     clientId: fields.client_id,
     origin: fields.origin,
     human: fields.human,
+    channel: fields.channel,
+    typedText: fields.typed_text,
     createdAt: Date.now(),
+    quiet: fields.quiet,
     delivery: fenced ?? undefined,
   });
 
@@ -591,9 +611,9 @@ export async function enqueuePendingMessage(
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" } : {}),
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-    ...(conversation.inbox_stashed_at && !(machineWake && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
+    ...(conversation.inbox_stashed_at && !((machineWake || fields.quiet) && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
-    ...(!machineWake && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
+    ...(!machineWake && !fields.quiet && conversation.inbox_snoozed_until ? { inbox_snoozed_until: undefined } : {}),
     ...(answersThreadState ? answeredThreadStateFields() : {}),
     // New input opens a new turn, which owes its own report (workerSettle.ts).
     ...(conversation.reported_to_parent_at ? { reported_to_parent_at: undefined } : {}),
@@ -720,6 +740,10 @@ export const sendMessageV2 = mutation({
     // The composer quotes this message carries (quoteDrafts.ts): stamped sent
     // here, in the transaction that queues it.
     quote_client_ids: v.optional(v.array(v.string())),
+    // The words the person typed, sent by the composer's own submit
+    // (composerChannel). Left out of the command fingerprint, so a redrive
+    // that lacks it still matches its receipt.
+    typed: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -814,11 +838,13 @@ export const sendMessageV2 = mutation({
 
       const waiting = await quotesWaiting(ctx, conversation._id, quoteClientIds);
       if (!existing) {
+        // Session login only (requireUser).
         await enqueuePendingMessage(ctx, conversation, userId, {
           content: args.content,
           image_storage_ids: imageStorageIds,
           client_id: args.client_id,
           human: true,
+          ...composerChannel(args.typed),
         });
       }
       const quotes = quoteClientIds
@@ -909,7 +935,7 @@ export async function performSessionSend(
   authUserId: Id<"users">,
   // `target`: a session the caller already resolved and checked (a role's
   // standing session behind `cast role wake`); it skips the `to` lookup.
-  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; queue?: boolean; intent?: SessionMessageIntent; image_storage_ids?: Id<"_storage">[]; target?: any }
+  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; queue?: boolean; quiet?: boolean; intent?: SessionMessageIntent; image_storage_ids?: Id<"_storage">[]; target?: any }
 ): Promise<{
   // null when the send waits as a suggestion for the owner (suggestion_id).
   message_id: Id<"pending_messages"> | null;
@@ -1081,6 +1107,8 @@ export async function performSessionSend(
     // picker's slash command, a gesture rather than a message.
     human: !fromRef && !args.raw,
     queue: !!args.queue && !!args.direct,
+    // Only a session hands work over out of sight; a person's send always shows the session.
+    quiet: !!args.quiet && !!senderConversation && !args.raw && !args.direct,
   });
   if (senderConversation && !args.raw && !args.direct && String(senderConversation.parent_conversation_id) === String(target._id)) {
     await ctx.db.patch(senderConversation._id, { reported_to_parent_at: Date.now() });
@@ -1166,6 +1194,9 @@ export const sendSessionMessage = mutation({
     // A person's "Queue for later": held for the end of the agent's turn in
     // the session's shared queue (enqueuePendingMessage.queue). Direct sends only.
     queue: v.optional(v.boolean()),
+    // A session's send that leaves a hidden stash hidden, as a trigger's wake
+    // does (enqueuePendingMessage.quiet). Ignored without a sender session.
+    quiet: v.optional(v.boolean()),
     // What the sender wants back (formatSessionMessage): request is the default.
     intent: v.optional(v.union(v.literal("request"), v.literal("inform"), v.literal("done"))),
   },
@@ -1424,6 +1455,9 @@ export async function mergeQueuedForUser(
   await ctx.db.patch(keep._id, {
     content: formatJointMessage(parts),
     ...(images.length ? { image_storage_ids: images, image_storage_id: undefined } : {}),
+    // The joint message carries both rows' words, so neither person's typed mark stands (lib/messageProvenance).
+    channel: undefined,
+    typed_text: undefined,
   });
   await ctx.db.patch(absorb._id, { status: "cancelled" as const, merged_into: keep._id });
   return "merged";
@@ -2249,7 +2283,7 @@ export async function notifyStuckSend(
   const senderConv = await ctx.db.get(msg.from_conversation_id);
   // A sender the user killed has nobody to read the receipt, and queuing it would revive the
   // killed agent just to tell it about an old send (enqueue clears the kill).
-  if (!senderConv || senderConv.inbox_killed_at || senderConv.status === "completed") {
+  if (!senderConv || senderConv.inbox_killed_at || isClosedSession(senderConv) || senderConv.status === "completed") {
     // Sender's session is gone or stopped — nowhere to report; just stop re-evaluating this row.
     await ctx.db.patch(msg._id, { sender_notified_at: Date.now() });
     if (giveUp) await patchPendingMessageStatus(ctx, msg, { status: "cancelled" as const });

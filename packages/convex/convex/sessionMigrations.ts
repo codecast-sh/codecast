@@ -52,7 +52,7 @@ import { findSharedCheckoutOccupant } from "./cloudPlacement";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { resolveLabelConvIds } from "./buckets";
 import { isDaemonManagedRow, listLiveManagedSessions } from "./lib/liveSessions";
-import { DAEMON_COMMAND_TTL_MS } from "@codecast/shared/contracts";
+import { DAEMON_COMMAND_TTL_MS, isClosedSession } from "@codecast/shared/contracts";
 import { invalidBringPaths } from "@codecast/shared/contracts/moveRehearsal";
 import {
   type MigrationDirection, type MigrationStatus, IN_FLIGHT_STATUSES, TERMINAL_STATUSES, type PlannedRow, type SkippedRow, type PlanConversation, planMigration, summarizeBatch, STALE_MIGRATION_MS, isStaleMigration, DEFAULT_WAIT_FOR_IDLE_MS, MAX_WAIT_FOR_IDLE_MS, DEFAULT_CONCURRENCY, MAX_CONCURRENCY, MAX_BATCH_ROWS,
@@ -168,7 +168,7 @@ export async function annotateHeld<T extends { _id: string }>(ctx: { db: any }, 
 /**
  * The live, movable-in-principle sessions of a user, by owner device: every
  * conversation each device owns (plus the unowned ones) that has not ended or
- * been killed, and every live session's conversation, subagents included (a
+ * been killed or closed, and every live session's conversation, subagents included (a
  * worker with its own process moves on its own; heldReason says which).
  * Bounded per device so a long history stays one small pass. Shared by the web
  * roster and the CLI selectors.
@@ -183,7 +183,7 @@ export async function collectMigrationCandidates(ctx: { db: any }, userId: Id<"u
       .order("desc")
       .take(300);
     for (const c of rows) {
-      if (c.status === "completed" || c.inbox_killed_at || c.is_subagent) continue;
+      if (c.status === "completed" || c.inbox_killed_at || isClosedSession(c) || c.is_subagent) continue;
       out.push(c);
     }
   }
@@ -196,7 +196,7 @@ export async function collectMigrationCandidates(ctx: { db: any }, userId: Id<"u
     if (!s.conversation_id || seen.has(String(s.conversation_id))) continue;
     seen.add(String(s.conversation_id));
     const c = await ctx.db.get(s.conversation_id);
-    if (!c || c.user_id !== userId || c.status === "completed" || c.inbox_killed_at) continue;
+    if (!c || c.user_id !== userId || c.status === "completed" || c.inbox_killed_at || isClosedSession(c)) continue;
     out.push(c);
   }
   return out;
@@ -575,6 +575,7 @@ export async function performBeginSession(
   }
   if (conv.status === "completed" && row.direction === "to_cloud") return fail("the session has ended");
   if (conv.inbox_killed_at) return fail("the session was killed");
+  if (isClosedSession(conv)) return fail("the session was closed");
   if (conv.owner_device_id === row.to_device_id) return fail("already on the destination");
   if (!conv.session_id) return fail("the session has no transcript yet");
 

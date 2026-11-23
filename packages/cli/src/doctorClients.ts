@@ -169,6 +169,19 @@ export function clientFixture(id: LocalAgentClientId): ClientFixture {
         watchRelPath: path.join("2026", "09", "18", sessionId, "session.jsonl"),
       };
     }
+    case "antigravity": {
+      // Rows in agy 1.5.14's transcript_full.jsonl shape; the conversation id
+      // is the brain/<uuid> directory.
+      const conversationId = uuid();
+      return {
+        transcript:
+          `{"step_index":0,"source":"USER_EXPLICIT","type":"USER_INPUT","status":"DONE","created_at":"2026-01-01T00:00:00Z","content":${JSON.stringify(`<USER_REQUEST>\n${PROBE}\n</USER_REQUEST>`)}}\n` +
+          `{"step_index":1,"source":"MODEL","type":"PLANNER_RESPONSE","status":"DONE","created_at":"2026-01-01T00:00:01Z","model":"gemini-4-argon-high","content":"pong"}\n`,
+        // The idle frame: a ─ rule, the `>` composer, the footer below.
+        readySample: "────────────────\n> \n────────────────\n? for shortcuts",
+        watchRelPath: path.join(conversationId, ".system_generated", "logs", "transcript_full.jsonl"),
+      };
+    }
   }
 }
 
@@ -226,7 +239,7 @@ export async function watcherFires(id: AgentClientId, fixture: ClientFixture, ti
   const watcher =
     id === "claude"
       ? new SessionWatcher(root)
-      : new TranscriptDirWatcher(transcriptDirWatcherConfig(id as "codex" | "gemini" | "pi" | "grok" | "muse", root));
+      : new TranscriptDirWatcher(transcriptDirWatcherConfig(id as "codex" | "gemini" | "pi" | "grok" | "muse" | "antigravity", root));
 
   try {
     await watcher.start();

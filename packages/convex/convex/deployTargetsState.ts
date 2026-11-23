@@ -7,6 +7,9 @@ import { conversationFromSessionTrailer, normalizeRepository, resolveTaskLinksFr
 import { afterFor, deployStepsOf } from "./deploysView";
 import { ciOf } from "./deployTargetsCi";
 import { canRedeploySha, commitTouchesTarget, groupQueueBySession, type QueueCommit } from "@codecast/shared/contracts/deployTargets";
+import { parseOwnerRepo } from "@codecast/shared/contracts";
+import { liveDeployOf, type DeployPushSummary } from "@codecast/shared/contracts/deploys";
+import type { TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 
 const DAY = 86_400_000;
 /** Commits on main read for one target's queue. */
@@ -95,6 +98,7 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
     tasks.push({ task_id: key, short_id: t?.short_id ?? null, title: t?.title ?? null });
   }
   const ci = await ciOf(ctx, c.repository!, c.sha);
+  const branch = await commitBranch(ctx, c, session ? convCache.get(session.conversation_id) : null);
   return {
     sha: c.sha,
     subject: c.message.split("\n")[0].slice(0, 200),
@@ -102,10 +106,28 @@ export async function queueCommitOf(ctx: any, c: Doc<"commits">, convCache: Map<
     author: c.author_login ?? c.author_name ?? null,
     session,
     tasks,
+    branch,
     ci: ci.state,
     ci_url: ci.url,
   };
 }
+
+/**
+ * The branch a commit on main came from. A squash merge's own row only knows the ref it landed on, so the branch is
+ * its pull request's head (linked, else the "(#N)" its subject names), else the branch its session worked on. The
+ * default branch names nothing.
+ */
+export async function commitBranch(ctx: any, c: Doc<"commits">, conv: { git_branch?: string } | null): Promise<string | null> {
+  const prNumber = /\(#(\d+)\)\s*$/.exec(c.message.split("\n")[0])?.[1];
+  const pr: Doc<"pull_requests"> | null = c.pr_id
+    ? await ctx.db.get(c.pr_id)
+    : prNumber && c.repository
+      ? await ctx.db.query("pull_requests").withIndex("by_repository_number", (q: any) => q.eq("repository", normalizeRepository(c.repository!)).eq("number", Number(prNumber))).first()
+      : null;
+  const branch = pr?.head_ref ?? conv?.git_branch ?? null;
+  return branch && !DEFAULT_BRANCHES.has(branch) ? branch : null;
+}
+const DEFAULT_BRANCHES = new Set(["main", "master", "HEAD"]);
 
 /** Commits on main as a deploy's record keeps them, each with the session behind it (commitSession) and the tasks it links. */
 export async function deployCommitsOf(ctx: any, rows: Doc<"commits">[]) {
@@ -122,6 +144,10 @@ export async function deployCommitsOf(ctx: any, rows: Doc<"commits">[]) {
     });
   }
   return out;
+}
+
+export function pushSummary(d: Doc<"deploys">): DeployPushSummary {
+  return { dirty: d.dirty ?? null, machine: d.machine ?? null, pushed_via: d.pushed_via ?? null, adds_count: d.adds?.length ?? 0, drops_count: d.drops?.length ?? 0 };
 }
 
 type DeployAfterCounts = { new_errors: number; regressions: number; reopened: number; quiet: boolean; open: boolean };
@@ -159,7 +185,8 @@ export async function deployLine(ctx: any, d: Doc<"deploys">, caches: { conv: Ma
     source: d.source,
     started_by: d.started_by?.name ?? null,
     note: d.note ?? null,
-    dirty: d.dirty ?? null,
+    // A list row counts the names; the deploy itself (deploysView.shapeView) lists them.
+    ...pushSummary(d),
     commits: d.commits?.length ?? 0,
     sessions,
     tasks,
@@ -179,11 +206,40 @@ export async function targetDeploys(ctx: any, workspace: string, target: string,
     .take(take);
 }
 
+/** A target's dev pushes, the one saved last first; `after` keeps those saved since then. */
+export async function targetDevPushes(ctx: any, workspace: string, target: string, take: number, after?: number): Promise<Doc<"dev_pushes">[]> {
+  return await ctx.db
+    .query("dev_pushes")
+    .withIndex("by_workspace_target_live", (q: any) => {
+      const range = q.eq("workspace", workspace).eq("target", target);
+      return after == null ? range : range.gt("live_at", after);
+    })
+    .order("desc")
+    .take(take);
+}
+
+/** Whether a dev push of the repository saved after a deploy went live: prod runs someone's working tree on top of it. */
+export async function devPushedOver(ctx: any, d: Doc<"deploys">): Promise<boolean> {
+  const rows = await targetDevPushes(ctx, d.workspace, d.target, 5, d.live_at ?? d.created_at);
+  return rows.some((p) => !p.repository || !d.repository || p.repository === d.repository);
+}
+
+/**
+ * Uncommitted work prod runs on top of a target's live deploy: the dev push saved last after the deploy went live, or
+ * null when there is none (a deploy since put the committed tree back).
+ */
+export async function devPushOver(ctx: any, t: Pick<Doc<"deploy_targets">, "workspace" | "name" | "repository">, live: Doc<"deploys"> | null): Promise<TargetDevPush | null> {
+  const rows = await targetDevPushes(ctx, t.workspace, t.name, 10, live ? live.live_at ?? live.created_at : undefined);
+  const p = rows.find((x) => !x.repository || x.repository === t.repository);
+  if (!p) return null;
+  return { sha: p.sha, machine: p.machine ?? null, by: p.started_by?.name ?? null, at: p.live_at, dirty: p.dirty, adds_count: p.adds.length, drops_count: p.drops.length };
+}
+
 /** One target's state: live, going out, recent history, and what waits on main. */
 export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
   const deploys = await targetDeploys(ctx, t.workspace, t.name);
   const deploysHere = deploys.filter((d) => !d.repository || d.repository === t.repository);
-  const live = deploysHere.find((d) => d.status === "live") ?? null;
+  const live = liveDeployOf(deploysHere) ?? null;
   const open = deploysHere.find((d) => d.status === "requested" || d.status === "running") ?? null;
   const convCache = new Map<string, any>();
   const taskCache = new Map<string, any>();
@@ -217,6 +273,7 @@ export async function targetState(ctx: any, t: Doc<"deploy_targets">) {
     device_id: t.device_id ?? null,
     publisher_user_id: String(t.publisher_user_id),
     live: live ? await deployLine(ctx, live, caches, countsOf(live)) : null,
+    dev_push: await devPushOver(ctx, t, live),
     open: open ? { ...(await deployLine(ctx, open, caches)), steps: open.run_id ? await deployStepsOf(ctx, open.run_id) : [] } : null,
     history: await Promise.all(history.map((d) => deployLine(ctx, d, caches, countsOf(d)))),
     last_read: t.last_read ?? null,
@@ -288,3 +345,19 @@ export async function upsertMainCommits(ctx: any, args: { repository: string; te
   }
 }
 
+/** Commits kept on one deploy's record. */
+export const COMMITS_MAX = 200;
+
+export function repositoryArg(raw: string): string {
+  const repository = parseOwnerRepo(raw);
+  if (!repository) throw new Error(`"${raw}" is not an owner/name repository.`);
+  return normalizeRepository(repository);
+}
+
+export async function targetRows(ctx: any, workspace: string, repository?: string): Promise<Doc<"deploy_targets">[]> {
+  const rows: Doc<"deploy_targets">[] = await ctx.db
+    .query("deploy_targets")
+    .withIndex("by_workspace_repository", (q: any) => (repository ? q.eq("workspace", workspace).eq("repository", repository) : q.eq("workspace", workspace)))
+    .take(200);
+  return rows.filter((r) => !r.retired_at);
+}

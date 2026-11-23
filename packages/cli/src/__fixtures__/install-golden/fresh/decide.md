@@ -1,15 +1,9 @@
 
 ## Asking for a decision
 
-`cast decide` puts a question in a queue the human clears in one sitting, so unlike asking inline (in prose or through your harness's question tool) it does not stop them mid-thought, and the bar is lower. If you would have picked a direction and mentioned it in passing, queue it instead. Queue one before you:
+`cast decide` queues a question, so unlike an inline ask it does not stop the human mid-thought. Each still costs an answer, so ask only when it is theirs: intent nothing written settles, a fact only they hold, money beyond the run's budget, or an irreversible change whose mistake hits many. Decide the rest and say what you chose. Never a card: what reading answers, a status update, a probe or test, or deleting disposable or rebuildable data.
 
-- pick between approaches that are hard to reverse (a schema, a data model, a protocol),
-- spend real money or their quota, or touch billing, auth, or anything user-facing in prod,
-- delete or migrate data, or drop something recoverable only from a backup,
-- settle a tradeoff by taste rather than evidence,
-- proceed on a guess about what they want the product to do.
-
-Never queue what reading more code answers, a status update, or a probe or test sample: every ask reaches the human's real queue and phone at once.
+Never re-ask what an earlier card (`cast decide ls`), ruling or project instruction answered. When the answer deploys, spends, changes access or messages outside the team, pass `--category production|billing|data|access|external|product|limit`: the card is then a person's alone, else (outside a run) `review`, open to a granted role.
 
 ```bash
 cast decide "<one question>" \

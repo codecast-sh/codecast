@@ -232,11 +232,12 @@ describe("hasLiveDraft", () => {
   });
 });
 
-// Server-side hide cascade: killing/stashing a session takes the whole nested
-// group (Task subagents + agent-team teammates) — the same set the inbox
-// renders beneath the card. Bug history: cast kill on a team lead stranded its
-// teammates as loose top-level needs-input cards (only the web store's
-// optimistic sweep cascaded, and only over parent_conversation_id).
+// Server-side hide cascade: killing a session takes the whole nested group
+// (Task subagents + agent-team teammates) — the same set the inbox renders
+// beneath the card; stashing one stamps its teammates. Bug history: cast kill
+// on a team lead stranded its teammates as loose top-level needs-input cards
+// (only the web store's optimistic sweep cascaded, and only over
+// parent_conversation_id).
 describe("cascadeHideToNestedChildren", () => {
   const LEAD = "conv_lead";
   const mkTables = (): Record<string, any[]> => ({
@@ -327,26 +328,30 @@ describe("cascadeHideToNestedChildren", () => {
     const scheduler = { runAfter: async (_ms: number, _fn: any, args: any) => { scheduled.push(args); } };
     const lead = tables.conversations[0];
 
-    const cascaded = await cascadeHideToNestedChildren({ db, scheduler } as any, lead, { inbox_stashed_at: 444 });
+    const cascaded = await cascadeHideToNestedChildren({ db, scheduler } as any, lead, { inbox_dismissed_at: 444 });
     expect(cascaded).toBe(52);
-    const stashed = tables.conversations.filter((r: any) => r.inbox_stashed_at === 444);
-    expect(stashed).toHaveLength(20);
+    const hidden = tables.conversations.filter((r: any) => r.inbox_dismissed_at === 444);
+    expect(hidden).toHaveLength(20);
     expect(scheduled).toHaveLength(1);
     expect(scheduled[0].child_ids).toHaveLength(32);
-    expect(scheduled[0]).toMatchObject({ lead_id: LEAD, field: "inbox_stashed_at", stamp: 444 });
-    expect(scheduled[0].child_ids.some((id: string) => stashed.some((r: any) => r._id === id))).toBe(false);
+    expect(scheduled[0]).toMatchObject({ lead_id: LEAD, field: "inbox_dismissed_at", stamp: 444 });
+    expect(scheduled[0].child_ids.some((id: string) => hidden.some((r: any) => r._id === id))).toBe(false);
   });
 
-  test("stash cascade sets inbox_stashed_at only — agents stay alive", async () => {
+  // A Task subagent files with its parent at read time, so a stash writes no
+  // stamp on it: a copy went stale on every restore that reached only the
+  // parent, and stranded the children as cards when the parent changed hands.
+  test("stash cascade stamps teammates only — Task subagents stay unstamped, agents stay alive", async () => {
     const tables = mkTables();
     const db = makeFakeDb(tables);
     const lead = tables.conversations[0];
 
     const cascaded = await cascadeHideToNestedChildren({ db }, lead, { inbox_stashed_at: 333 });
-    expect(cascaded).toBe(2);
+    expect(cascaded).toBe(1);
     const row = (id: string) => tables.conversations.find((r: any) => r._id === id)!;
     expect(row("conv_mate").inbox_stashed_at).toBe(333);
     expect(row("conv_mate").inbox_killed_at).toBeUndefined();
+    expect(row("conv_sub").inbox_stashed_at).toBeUndefined();
     expect(row("conv_sub").status).toBeUndefined();
     expect(db._inserted.filter((i: any) => i.table === "daemon_commands")).toHaveLength(0);
   });
@@ -379,8 +384,9 @@ describe("cascadeHideToNestedChildren", () => {
     await db.patch(LEAD, patch);
     const { action, cascaded } = await applyHideTransition({ db }, lead, patch);
     expect(action).toBe("none");
-    expect(cascaded).toBe(2);
+    expect(cascaded).toBe(1);
     expect(tables.conversations.find((r: any) => r._id === "conv_mate")!.inbox_stashed_at).toBe(555);
+    expect(tables.conversations.find((r: any) => r._id === "conv_sub")!.inbox_stashed_at).toBeUndefined();
   });
 
   test("cascade: false keeps the per-child transition single-level", async () => {

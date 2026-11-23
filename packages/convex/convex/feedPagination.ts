@@ -165,3 +165,49 @@ export async function paginateTeamFeed(opts: {
 
   return { rows: returnedRows, nextCursor: encodeFeedCursor(nextBounds) };
 }
+
+// --- Strictly newest first across member streams ---
+//
+// A team read key's pages (teamReadKeys.sessionsForKey) keep one order across
+// pages: newest first, no row skipped or repeated. Each sharing member is a
+// stream on its own index, resumed below the cursor. A page reads one head per
+// sharing member, then repeatedly takes the newest head and reads the next row
+// of that member only, up to `limit` accepted rows or `budget` rows taken. The
+// cursor is the last row taken, as (updated_at, _creationTime), so rows that
+// share a millisecond stay apart and every stream resumes below it.
+
+export type StreamPosition = { t: number; c: number };
+type StreamRow = { updated_at: number; _creationTime: number };
+
+/** Whether `row` comes after `p` in newest-first order. */
+export const isAfter = (row: StreamRow, p: StreamPosition): boolean =>
+  row.updated_at < p.t || (row.updated_at === p.t && row._creationTime < p.c);
+
+export async function pageNewestFirst<R extends StreamRow>(opts: {
+  /** Each stream's rows below the cursor, newest first. */
+  streams: AsyncIterable<R>[];
+  limit: number;
+  budget: number;
+  accept: (row: R) => boolean;
+}): Promise<{ rows: R[]; next: StreamPosition | null }> {
+  const streams = opts.streams.map((s) => s[Symbol.asyncIterator]());
+  const pull = async (i: number) => {
+    const r = await streams[i].next();
+    return r.done ? undefined : r.value;
+  };
+  const heads: (R | undefined)[] = await Promise.all(streams.map((_, i) => pull(i)));
+  const rows: R[] = [];
+  let next: StreamPosition | null = null;
+  for (let taken = 0; ; taken++) {
+    let i = -1;
+    heads.forEach((h, j) => {
+      if (h && (i < 0 || isAfter(heads[i]!, { t: h.updated_at, c: h._creationTime }))) i = j;
+    });
+    if (i < 0) return { rows, next: null };
+    if (rows.length === opts.limit || taken === opts.budget) return { rows, next };
+    const row = heads[i]!;
+    next = { t: row.updated_at, c: row._creationTime };
+    if (opts.accept(row)) rows.push(row);
+    heads[i] = await pull(i);
+  }
+}

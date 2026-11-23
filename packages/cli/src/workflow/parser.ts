@@ -1,367 +1,16 @@
-import { WorkflowGraph, WorkflowNode, WorkflowEdge, NodeShape, NodeType } from "./types";
+import type { WorkflowGraph } from "./types";
 import * as fs from "fs";
 import * as path from "path";
 import { createHash } from "crypto";
 import { conditionError } from "./condition";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
-import { SEGMENT_SEP } from "@codecast/shared/contracts/flowPool";
+import { SEGMENT_SEP, segmentTopOf } from "@codecast/shared/contracts/flowPool";
+import { Parser, tokenize, inlineRef, isStopExit, mentionsFailure, shapeOf, type Attr, type RawGraph, type ReadFile } from "./rawGraph";
+import { VARIANT_KEYS, applyOverrides, variantEdits, withGuides } from "./variantEdits";
 import { teamFlowFile } from "./teamFlowIndex";
 
-// --- Tokenizer ---
-
-type Token =
-  | { type: "IDENT"; value: string }
-  | { type: "STRING"; value: string }
-  | { type: "NUMBER"; value: number }
-  | { type: "ARROW" }
-  | { type: "LBRACE" }
-  | { type: "RBRACE" }
-  | { type: "LBRACKET" }
-  | { type: "RBRACKET" }
-  | { type: "EQ" }
-  | { type: "COMMA" }
-  | { type: "SEMI" }
-  | { type: "EOF" };
-
-function tokenize(src: string): Token[] {
-  const tokens: Token[] = [];
-  let i = 0;
-
-  while (i < src.length) {
-    // Skip whitespace
-    if (/\s/.test(src[i])) { i++; continue; }
-
-    // Line comment
-    if (src[i] === '/' && src[i + 1] === '/') {
-      while (i < src.length && src[i] !== '\n') i++;
-      continue;
-    }
-
-    // Block comment
-    if (src[i] === '/' && src[i + 1] === '*') {
-      i += 2;
-      while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++;
-      i += 2;
-      continue;
-    }
-
-    // Quoted string
-    if (src[i] === '"') {
-      i++;
-      let val = '';
-      while (i < src.length && src[i] !== '"') {
-        if (src[i] === '\\' && i + 1 < src.length) {
-          const esc = src[i + 1];
-          if (esc === 'n') val += '\n';
-          else if (esc === 't') val += '\t';
-          else if (esc === '"') val += '"';
-          else val += esc;
-          i += 2;
-        } else {
-          val += src[i++];
-        }
-      }
-      i++; // closing "
-      tokens.push({ type: "STRING", value: val });
-      continue;
-    }
-
-    // Arrow
-    if (src[i] === '-' && src[i + 1] === '>') {
-      tokens.push({ type: "ARROW" });
-      i += 2;
-      continue;
-    }
-
-    // Single chars
-    if (src[i] === '{') { tokens.push({ type: "LBRACE" }); i++; continue; }
-    if (src[i] === '}') { tokens.push({ type: "RBRACE" }); i++; continue; }
-    if (src[i] === '[') { tokens.push({ type: "LBRACKET" }); i++; continue; }
-    if (src[i] === ']') { tokens.push({ type: "RBRACKET" }); i++; continue; }
-    if (src[i] === '=') { tokens.push({ type: "EQ" }); i++; continue; }
-    if (src[i] === ',') { tokens.push({ type: "COMMA" }); i++; continue; }
-    if (src[i] === ';') { tokens.push({ type: "SEMI" }); i++; continue; }
-
-    // Number
-    if (/[0-9]/.test(src[i]) || (src[i] === '-' && /[0-9]/.test(src[i + 1] || ''))) {
-      let num = '';
-      if (src[i] === '-') num += src[i++];
-      while (i < src.length && /[0-9.]/.test(src[i])) num += src[i++];
-      tokens.push({ type: "NUMBER", value: parseFloat(num) });
-      continue;
-    }
-
-    // Identifier (alphanum + _ + .)
-    if (/[a-zA-Z_@$]/.test(src[i])) {
-      let id = '';
-      // A `-` belongs to the name (`fix-check`) unless it opens an arrow: `a->b` is an edge.
-      while (i < src.length && /[a-zA-Z0-9_.$@/\-]/.test(src[i]) && !(src[i] === '-' && src[i + 1] === '>')) id += src[i++];
-      tokens.push({ type: "IDENT", value: id });
-      continue;
-    }
-
-    // Skip unknown
-    i++;
-  }
-
-  tokens.push({ type: "EOF" });
-  return tokens;
-}
-
-// --- Parser ---
-
-class Parser {
-  private tokens: Token[];
-  private pos = 0;
-
-  constructor(tokens: Token[]) {
-    this.tokens = tokens;
-  }
-
-  private peek(): Token { return this.tokens[this.pos]; }
-  private consume(): Token { return this.tokens[this.pos++]; }
-
-  private expect(type: Token["type"]): Token {
-    const t = this.consume();
-    if (t.type !== type) throw new Error(`Expected ${type}, got ${t.type}`);
-    return t;
-  }
-
-  private peekIs(type: Token["type"]): boolean {
-    return this.peek().type === type;
-  }
-
-  private skipSemis() {
-    while (this.peekIs("SEMI")) this.consume();
-  }
-
-  /** The file as written: graph attributes, each declared node's attributes, the edges. */
-  parseRaw(): RawGraph {
-    // optional: digraph or graph keyword
-    const first = this.peek();
-    if (first.type === "IDENT" && (first.value === "digraph" || first.value === "graph")) {
-      this.consume();
-    }
-
-    // graph name (optional)
-    let name = "Workflow";
-    if (this.peekIs("IDENT") || this.peekIs("STRING")) {
-      name = (this.consume() as any).value;
-    }
-
-    this.expect("LBRACE");
-    const raw: RawGraph = { name, attrs: {}, nodes: new Map(), edges: [], files: [] };
-    while (!this.peekIs("RBRACE") && !this.peekIs("EOF")) {
-      this.parseStatement(raw);
-      this.skipSemis();
-    }
-    this.expect("RBRACE");
-    return raw;
-  }
-
-  private parseStatement(raw: RawGraph) {
-    const t = this.peek();
-
-    // rankdir=LR (graph attribute shorthand)
-    if (t.type === "IDENT" && t.value === "rankdir") {
-      this.consume();
-      this.expect("EQ");
-      raw.attrs.rankdir = (this.consume() as any).value;
-      return;
-    }
-
-    // subgraph <node> { ... }: the steps that fill that node (a slot of the base, or a node of this file) in place
-    if (t.type === "IDENT" && t.value === "subgraph") {
-      this.consume();
-      const name = this.peekIs("IDENT") || this.peekIs("STRING") ? this.parseId() : null;
-      if (!name) throw new Error("A subgraph needs the name of the node it fills: subgraph <node> { ... }");
-      this.expect("LBRACE");
-      const fill: RawGraph = { name, attrs: {}, nodes: new Map(), edges: [], files: [] };
-      while (!this.peekIs("RBRACE") && !this.peekIs("EOF")) {
-        this.parseStatement(fill);
-        this.skipSemis();
-      }
-      this.expect("RBRACE");
-      if (fill.fills?.size) throw new Error(`subgraph ${name}: a fill holds steps, not another subgraph`);
-      (raw.fills ??= new Map()).set(name, fill);
-      return;
-    }
-
-    // graph [ attrs ] - graph attributes
-    if (t.type === "IDENT" && t.value === "graph") {
-      this.consume();
-      if (this.peekIs("LBRACKET")) Object.assign(raw.attrs, this.parseAttrList());
-      return;
-    }
-
-    // node_id or edge statement
-    // node_id can be: IDENT or STRING
-    if (t.type !== "IDENT" && t.type !== "STRING") {
-      this.consume(); // skip unknown
-      return;
-    }
-
-    const ids = [this.parseId()];
-
-    // Collect chained nodes: a -> b -> c
-    while (this.peekIs("ARROW")) {
-      this.consume(); // ->
-      ids.push(this.parseId());
-    }
-
-    // Attr list (applies to edge if multiple ids, node if single)
-    const attrs = this.peekIs("LBRACKET") ? this.parseAttrList() : {};
-
-    if (ids.length === 1) {
-      // Node statement; a second one for the same id adds to the first (DOT's rule)
-      const id = ids[0];
-      if (!["graph", "node", "edge", "digraph"].includes(id)) raw.nodes.set(id, { ...raw.nodes.get(id), ...attrs });
-    } else {
-      // Edge statement(s)
-      for (let i = 0; i < ids.length - 1; i++) {
-        raw.edges.push({
-          from: ids[i],
-          to: ids[i + 1],
-          label: attrs.label as string | undefined,
-          condition: attrs.condition as string | undefined,
-          weight: attrs.weight as number | undefined,
-          fidelity: attrs.fidelity as string | undefined,
-          ...(attrs.free_visit ? { free_visit: String(attrs.free_visit) } : {}),
-        });
-      }
-    }
-  }
-
-  private parseId(): string {
-    const t = this.consume();
-    if (t.type === "IDENT" || t.type === "STRING") return (t as any).value;
-    throw new Error(`Expected identifier, got ${t.type}`);
-  }
-
-  private parseAttrList(): Record<string, string | number | boolean> {
-    this.expect("LBRACKET");
-    const attrs: Record<string, string | number | boolean> = {};
-
-    while (!this.peekIs("RBRACKET") && !this.peekIs("EOF")) {
-      if (this.peekIs("COMMA")) { this.consume(); continue; }
-
-      // key=value
-      const key = this.parseId();
-      if (this.peekIs("EQ")) {
-        this.consume(); // =
-        const val = this.parseValue();
-        attrs[key] = val;
-      } else {
-        attrs[key] = true;
-      }
-    }
-
-    this.expect("RBRACKET");
-    return attrs;
-  }
-
-  private parseValue(): string | number | boolean {
-    const t = this.peek();
-    if (t.type === "STRING") { this.consume(); return (t as any).value; }
-    if (t.type === "NUMBER") { this.consume(); return (t as any).value; }
-    if (t.type === "IDENT") {
-      this.consume();
-      const v = (t as any).value;
-      if (v === "true") return true;
-      if (v === "false") return false;
-      return v;
-    }
-    throw new Error(`Expected value, got ${t.type}`);
-  }
-
-  static buildNode(id: string, attrs: Record<string, any>): WorkflowNode {
-    const shape = (attrs.shape as NodeShape) || "box";
-    const type = shapeToType(shape);
-
-    const node: WorkflowNode = {
-      id,
-      label: (attrs.label as string) || id,
-      shape,
-      type,
-    };
-
-    if (attrs.prompt) node.prompt = attrs.prompt as string;
-    if (attrs.script) node.script = attrs.script as string;
-    if (attrs.reasoning_effort) node.reasoning_effort = attrs.reasoning_effort as string;
-    if (attrs.model) node.model = attrs.model as string;
-    if (attrs.backend) node.backend = attrs.backend as any;
-    if (attrs.agent) node.agent = String(attrs.agent);
-    if (attrs.definition) node.definition = String(attrs.definition);
-    if (attrs.isolated !== undefined) node.isolated = attrs.isolated === true || attrs.isolated === "true";
-    for (const k of ["parks", "machine"] as const) if (attrs[k] === true || attrs[k] === "true") node[k] = true;
-    if (attrs.refresh !== undefined) node.refresh = attrs.refresh === true || attrs.refresh === "true";
-    if (attrs.reviewer !== undefined) node.reviewer = attrs.reviewer === true || attrs.reviewer === "true";
-    if (attrs.temperature !== undefined) node.temperature = attrs.temperature as number;
-    if (attrs.timeout !== undefined) node.timeout = Number(attrs.timeout);
-    if (attrs.max_visits !== undefined) node.max_visits = attrs.max_visits as number;
-    if (attrs.max_free_visits !== undefined) node.max_free_visits = Number(attrs.max_free_visits);
-    if (attrs.max_retries !== undefined) node.max_retries = attrs.max_retries as number;
-    if (attrs.retry_target) node.retry_target = attrs.retry_target as string;
-    if (attrs.goal_gate) node.goal_gate = attrs.goal_gate as boolean;
-    if (attrs.thread_id) node.thread_id = attrs.thread_id as string;
-    if (attrs.fidelity) node.fidelity = attrs.fidelity as string;
-    if (attrs.doc) node.doc = String(attrs.doc);
-    if (attrs.category) node.category = String(attrs.category);
-    if (attrs.card) node.card = String(attrs.card);
-    if (attrs.asker) node.asker = String(attrs.asker);
-    if (attrs.answerer) node.answerer = String(attrs.answerer);
-    if (attrs.stop) node.stop = String(attrs.stop);
-    if (attrs.max_tokens !== undefined) node.max_tokens = Number(attrs.max_tokens);
-    if (attrs.system) node.system = String(attrs.system);
-    if (attrs.output) node.output = String(attrs.output) === "text" ? "text" : "json";
-    if (attrs.segment) node.segment = String(attrs.segment);
-    if (attrs.segment_label) node.segment_label = String(attrs.segment_label);
-    if (attrs.segment_flow) node.segment_flow = String(attrs.segment_flow);
-    if (attrs.segment_entry === true || attrs.segment_entry === "true") node.segment_entry = true;
-    if (attrs.segment_exit === "done" || attrs.segment_exit === "stop") node.segment_exit = attrs.segment_exit;
-    if (typeof attrs.slot === "string" && attrs.slot) node.slot = attrs.slot;
-    else if (attrs.slot === true) node.slot = node.label;
-    if (attrs.segment_generated === true || attrs.segment_generated === "true") node.segment_generated = true;
-
-    return node;
-  }
-}
-
-function shapeToType(shape: NodeShape): NodeType {
-  switch (shape) {
-    case "Mdiamond": return "start";
-    case "Msquare": return "exit";
-    case "hexagon": return "human";
-    case "parallelogram": return "command";
-    case "diamond": return "conditional";
-    case "component": return "parallel_fanout";
-    case "tripleoctagon": return "parallel_fanin";
-    case "tab": return "prompt";
-    case "note": return "call";
-    default: return "agent";
-  }
-}
-
-// --- Public API ---
-
-type Attr = string | number | boolean;
-
-/** One .cast file as written (or a variant merged onto its base): nothing built or read yet. */
-interface RawGraph {
-  name: string;
-  attrs: Record<string, Attr>;
-  /** Declared nodes only; an id an edge names without declaring it becomes an agent node when built. */
-  nodes: Map<string, Record<string, Attr>>;
-  edges: WorkflowEdge[];
-  /** The base files a variant was read on top of. */
-  files: string[];
-  /** `subgraph <node> { ... }` blocks: the steps that fill that node, by node id. */
-  fills?: Map<string, RawGraph>;
-}
-
-/** Reads a file for the parser: absolute path in, its text or null when there is none. */
-export type ReadFile = (abs: string) => string | null;
-const readDisk: ReadFile = (abs) => (fs.existsSync(abs) ? fs.readFileSync(abs, "utf-8") : null);
+export type { ReadFile };
+const readDisk: ReadFile = (abs) => (fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf-8") : null);
 
 export interface ParseOptions {
   read?: ReadFile;
@@ -409,8 +58,14 @@ export function parseWorkflowSource(src: string, dir?: string, opts: ParseOption
   const resolve = opts.resolveFlow ?? resolveFlowSource;
   const loaded = loadRaw(src, dir, read, file ? [file] : [], resolve);
   const raw = expandFlows(ownParams(loaded), dir, read, resolve, opts.inline !== false, []);
-  const graph = buildGraph(raw);
   const sources = new Set<string>(raw.files);
+  const guides = withGuides(raw, opts.inline !== false ? read : null, sources);
+  const graph = buildGraph(raw);
+  // Each guide edit carries the text its station reads and which station that is.
+  for (const e of graph.edits ?? []) {
+    const g = e.op === "guide" ? guides.find((x) => x.node === e.station || x.node.startsWith(`${e.station}${SEGMENT_SEP}`)) : undefined;
+    if (g) Object.assign(e, { node: g.node, ...(g.text !== null ? { text: g.text } : {}) });
+  }
   if (dir && opts.inline !== false) {
     // Every file the graph inlined: a runner compares them at a gate's answer (runResume.ts runnerStamp).
     for (const node of graph.nodes.values()) {
@@ -433,7 +88,7 @@ function loadRaw(src: string, dir: string | undefined, read: ReadFile, chain: st
   if (dir) {
     // `@file` against the file that wrote it, so a base's stations keep reading the base's files.
     for (const attrs of raw.nodes.values()) {
-      for (const field of ["prompt", "script"]) {
+      for (const field of ["prompt", "script", "guide"]) {
         const v = attrs[field];
         if (typeof v !== "string" || !v.startsWith("@")) continue;
         const abs = path.resolve(dir, v.slice(1));
@@ -445,12 +100,24 @@ function loadRaw(src: string, dir: string | undefined, read: ReadFile, chain: st
   const here = chain[chain.length - 1] ?? raw.name;
   if (ext === undefined) {
     for (const id of raw.fills?.keys() ?? []) if (!raw.nodes.has(id)) throw new Error(`${here}: subgraph ${id} fills no node: declare ${id} in the graph, or name a slot of the flow this one extends`);
+    for (const [id, a] of raw.nodes) {
+      const key = VARIANT_KEYS.find((k) => a[k] !== undefined && a[k] !== false);
+      if (key) throw new Error(`${here}: ${id} [${key}=...] edits the flow this one extends, and this file extends none: add graph [extends="<flow>"], or write ${id}'s ${key === "guide" ? "prompt" : "edges"} out in full`);
+    }
     return raw;
   }
   // A file beside this one, else a flow by name (the repo's, then a shipped one).
   const asFile = dir ? path.resolve(dir, String(ext)) : null;
   const fileSrc = asFile ? read(asFile) : null;
-  const found: FlowSource | null = fileSrc !== null ? { src: fileSrc, dir: path.dirname(asFile!), file: asFile! } : resolve(String(ext), dir, read);
+  // A repo's `change.cast` that extends "change" means the flow it shadows, never itself.
+  const self = chain[chain.length - 1];
+  const bySlug = /^[\w-]+$/.test(String(ext));
+  // Callers that parse a source with only its directory name no file: the file whose text this is, is this file.
+  const notSelf: ReadFile = (abs) => {
+    const text = read(abs);
+    return bySlug && (abs === self || text === src) ? null : text;
+  };
+  const found: FlowSource | null = fileSrc !== null ? { src: fileSrc, dir: path.dirname(asFile!), file: asFile! } : resolve(String(ext), dir, notSelf);
   if (!found) throw new Error(`${here}: extends="${ext}": no graph at ${asFile ?? ext}, and no flow of that name in the pool`);
   const key = found.file ?? `flow:${ext}`;
   if (chain.includes(key)) throw new Error(`${here}: extends="${ext}" comes back to itself`);
@@ -477,21 +144,34 @@ function inherit(base: RawGraph, child: RawGraph, baseFile: string, here: string
       throw new Error(`${here}: ${e.from} goes to ${e.to}, which this file removes: write ${e.from}'s edges here`);
     }
   }
+  // `review__review [...]` names a station inside a segment, which exists only once the segment is expanded.
+  const inEdges = new Set(child.edges.flatMap((e) => [e.from, e.to]));
+  const overrides = new Map(base.overrides ?? []);
+  const own = new Map<string, Record<string, Attr>>();
+  for (const [id, a] of child.nodes) {
+    if (id.includes(SEGMENT_SEP) && !base.nodes.has(id) && !inEdges.has(id)) overrides.set(id, { ...overrides.get(id), ...a });
+    else own.set(id, a);
+  }
   const nodes = new Map<string, Record<string, Attr>>();
   for (const [id, a] of base.nodes) if (!removed.has(id)) nodes.set(id, a);
-  for (const [id, a] of child.nodes) if (!removed.has(id)) nodes.set(id, { ...nodes.get(id), ...a });
+  for (const [id, a] of own) if (!removed.has(id)) nodes.set(id, { ...nodes.get(id), ...a });
   // `serves` names the sources this file's own version runs, so a version never claims its base's.
   const { extends: _extends, serves: _baseServes, ...baseAttrs } = base.attrs;
   const { extends: _childExtends, ...childAttrs } = child.attrs;
   const attrs = { ...baseAttrs, ...childAttrs };
-  return {
+  const merged: RawGraph = {
     name: child.name,
     attrs,
     nodes,
     edges: [...base.edges.filter((e) => !routed.has(e.from) && !removed.has(e.from) && !removed.has(e.to)), ...child.edges],
     files: [...(path.isAbsolute(baseFile) ? [baseFile] : []), ...base.files],
     fills: new Map([...(base.fills ?? [])].filter(([id]) => !removed.has(id)).concat([...(child.fills ?? [])])),
+    overrides,
+    // What the base gated or took off stays so down a chain; edits are this file's own (cast flow show reads them against its base).
+    pruned: base.pruned,
+    gated: base.gated,
   };
+  return variantEdits(merged, own, child.nodes, new Set(base.nodes.keys()), path.basename(baseFile).replace(/\.cast$/, "").replace(/^flow:/, ""), here);
 }
 
 function buildGraph(raw: RawGraph): WorkflowGraph {
@@ -510,6 +190,9 @@ function buildGraph(raw: RawGraph): WorkflowGraph {
   if (a.description) graph.description = String(a.description);
   if (a.draft) graph.draft = String(a.draft);
   if (a.takes) graph.takes = String(a.takes).split(/[\s,]+/).map((s) => s.trim()).filter(Boolean);
+  if (raw.edits?.length) graph.edits = raw.edits;
+  if (raw.pruned?.length) graph.pruned = raw.pruned;
+  if (raw.gated && Object.keys(raw.gated).length) graph.gated = raw.gated;
   for (const [id, attrs] of raw.nodes) graph.nodes.set(id, Parser.buildNode(id, attrs));
   // Ensure nodes referenced in edges exist (as placeholder agent nodes)
   for (const e of raw.edges) for (const id of [e.from, e.to]) if (!graph.nodes.has(id)) graph.nodes.set(id, Parser.buildNode(id, {}));
@@ -550,10 +233,7 @@ export function resolveFlowSource(slug: string, dir: string | undefined, read: R
   return team && text !== null ? { src: text, dir: path.dirname(team), file: team } : null;
 }
 
-const shapeOf = (a: Record<string, Attr>) => String(a.shape ?? "box");
-const isStopExit = (a: Record<string, Attr>) => shapeOf(a) === "Msquare" && !!a.stop;
-const mentionsFailure = (e: WorkflowEdge) => /\boutcome\s*=\s*failure\b/.test(e.condition ?? "");
-const STRING_FIELDS = ["prompt", "script", "doc", "card", "stop", "goal"];
+const STRING_FIELDS = ["prompt", "script", "doc", "card", "stop", "goal", "guide"];
 const ID_FIELDS = ["asker", "answerer", "retry_target"];
 
 /**
@@ -591,7 +271,7 @@ function ownParams(raw: RawGraph): RawGraph {
 function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, resolve: ResolveFlow, inline: boolean, chain: string[]): RawGraph {
   const fills = raw.fills ?? new Map<string, RawGraph>();
   const flowNodes = [...raw.nodes].filter(([id, a]) => fills.has(id) || (typeof a.flow === "string" && a.flow));
-  if (!flowNodes.length) return raw;
+  if (!flowNodes.length) return applyOverrides(raw);
   const nodes = new Map(raw.nodes);
   let edges = [...raw.edges];
   const files = [...raw.files];
@@ -644,6 +324,8 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
       for (const f of ID_FIELDS) if (typeof copy[f] === "string" && inner.includes(String(copy[f]))) copy[f] = rename(String(copy[f]));
       // The graph that composes the segment knows which of its stations answers the segment's gates.
       if (attrs.answerer && shapeOf(a) === "hexagon" && !copy.asker && !copy.answerer) copy.answerer = attrs.answerer;
+      // What makes a run ask, said where the graph names the segment, is its gates'.
+      if (attrs.asks_if && shapeOf(a) === "hexagon" && !copy.asks_if) copy.asks_if = attrs.asks_if;
       if (shapeOf(a) === "Msquare" && !(isStopExit(a) && !routesFailure)) {
         // An exit the node's own edges leave from: a step that says which exit it took.
         const failing = isStopExit(a);
@@ -662,7 +344,7 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
     nodes.set(id, { shape: "diamond", label: segLabel, segment: id, segment_label: segLabel, ...marks, segment_entry: true, ...(slot ? { slot } : {}) });
     for (const e of seg.edges) edges.push({ ...e, from: rename(e.from), to: rename(e.to), ...(e.condition ? { condition: rewriteCondition(e.condition) } : {}) });
   }
-  return { ...raw, nodes, edges, files, fills: undefined };
+  return applyOverrides({ ...raw, nodes, edges, files, fills: undefined });
 }
 
 /**
@@ -701,27 +383,6 @@ export function graphSlots(graph: WorkflowGraph): Array<{ id: string; label: str
   return [...graph.nodes.values()].filter((n) => n.slot).map((n) => ({ id: n.id, label: n.label, does: n.slot!, filled: !n.segment_entry ? "empty" : n.segment_generated ? "generated" : "default" }));
 }
 
-/** An absolute `@/path` value as that file's text, its `@include` lines taken in; any other value as written. */
-function inlineRef(value: string, read: ReadFile, sources: Set<string>): string {
-  if (!value.startsWith("@") || !path.isAbsolute(value.slice(1))) return value;
-  const file = value.slice(1);
-  sources.add(file);
-  return withIncludes(read(file) ?? "", file, read, sources, [file]);
-}
-
-const INCLUDE = /^@include[ \t]+(\S+)[ \t]*$/gm;
-
-function withIncludes(text: string, file: string, read: ReadFile, sources: Set<string>, stack: string[]): string {
-  return text.replace(INCLUDE, (_line, rel: string) => {
-    const abs = path.resolve(path.dirname(file), rel);
-    if (stack.includes(abs)) throw new Error(`${file}: @include ${rel} comes back to itself`);
-    const part = read(abs);
-    if (part === null) throw new Error(`${file}: @include ${rel}: no file at ${abs}`);
-    sources.add(abs);
-    return withIncludes(part.replace(/\n$/, ""), abs, read, sources, [...stack, abs]);
-  });
-}
-
 export function validateWorkflow(graph: WorkflowGraph): string[] {
   const errors: string[] = [];
 
@@ -738,6 +399,60 @@ export function validateWorkflow(graph: WorkflowGraph): string[] {
     if (!graph.nodes.has(edge.to)) errors.push(`Edge references unknown node: ${edge.to}`);
     const conditionErr = edge.condition ? conditionError(edge.condition) : null;
     if (conditionErr) errors.push(`Edge ${edge.from} -> ${edge.to} condition "${edge.condition}": ${conditionErr}`);
+  }
+
+  // A station named by another (who answers a gate, where a retry goes) must still be there, and so must one a $ref reads.
+  // Only a real reference counts: `$review.output` or `$review__review.x` in text, `review.exit` in a condition.
+  const gone = new Set(graph.pruned ?? []);
+  const gated = graph.gated ?? {};
+  const esc = (id: string) => id.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const textRef = (text: string, ids: Iterable<string>) => [...ids].find((id) => new RegExp(`\\$${esc(id)}(\\.|${SEGMENT_SEP})`).test(text));
+  const condRef = (cond: string, ids: Iterable<string>) => [...ids].find((id) => new RegExp(`(^|[^\\w.$])${esc(id)}(\\.|${SEGMENT_SEP})`).test(cond.replace(/"[^"]*"/g, "")));
+  const runsWhen = (id: string) => `runs only when the change touches ${gated[id].join(", ")}`;
+  for (const node of graph.nodes.values()) {
+    const others = (ids: Iterable<string>) => [...ids].filter((id) => id !== segmentTopOf(node.id));
+    for (const f of ID_FIELDS) {
+      const v = (node as unknown as Record<string, unknown>)[f];
+      if (typeof v !== "string") continue;
+      const top = segmentTopOf(v);
+      if (!graph.nodes.has(v)) {
+        errors.push(gone.has(top)
+          ? `${node.id} [${f}="${v}"] names ${v}, and this flow skips ${top}: point ${f} at a station that stays, or stop skipping ${top}`
+          : `${node.id} [${f}="${v}"] names no station of this flow`);
+      } else if (gated[top] && top !== segmentTopOf(node.id)) {
+        errors.push(`${node.id} [${f}="${v}"] names ${v}, and ${top} ${runsWhen(top)}: point ${f} at a station that always runs, or drop ${top}'s when=`);
+      }
+    }
+    for (const f of ["prompt", "script", "doc", "card", "stop"] as const) {
+      const text = node[f];
+      if (typeof text !== "string") continue;
+      const skippedRef = textRef(text, gone);
+      if (skippedRef) errors.push(`${node.id}'s ${f} reads $${skippedRef}, and this flow skips ${skippedRef}: change ${node.id}'s ${f}, or stop skipping ${skippedRef}`);
+      const gatedRef = textRef(text, others(Object.keys(gated)));
+      if (gatedRef) errors.push(`${node.id}'s ${f} reads $${gatedRef}, and ${gatedRef} ${runsWhen(gatedRef)}: change ${node.id}'s ${f}, or drop ${gatedRef}'s when=`);
+    }
+  }
+  for (const edge of graph.edges) {
+    if (!edge.condition) continue;
+    const ref = condRef(edge.condition, gone);
+    if (ref) errors.push(`Edge ${edge.from} -> ${edge.to} condition "${edge.condition}" reads ${ref}, and this flow skips ${ref}`);
+    const g = condRef(edge.condition, Object.keys(gated).filter((id) => id !== segmentTopOf(edge.from)));
+    if (g) errors.push(`Edge ${edge.from} -> ${edge.to} condition "${edge.condition}" reads ${g}, and ${g} ${runsWhen(g)}`);
+  }
+
+  // A fan-out runs only its branches and goes on from the first join after them (runner.ts executeFanout). A branch
+  // also entered from outside the fan-out (the fan-out's retry_target, or the target of another node's edge) runs on
+  // its own there, and its other edges route that run, so it may have them.
+  for (const fan of [...graph.nodes.values()].filter((n) => n.type === "parallel_fanout")) {
+    const branches = graph.edges.filter((e) => e.from === fan.id).map((e) => e.to);
+    const join = branches.flatMap((b) => graph.edges.filter((e) => e.from === b).map((e) => e.to)).find((t) => graph.nodes.get(t)?.type === "parallel_fanin");
+    if (!join) continue;
+    const alone = (b: string) => fan.retry_target === b || graph.edges.some((e) => e.to === b && e.from !== fan.id);
+    for (const b of branches) {
+      if (alone(b)) continue;
+      const off = graph.edges.filter((e) => e.from === b && e.to !== join).map((e) => e.to);
+      if (off.length) errors.push(`${fan.id}'s branch ${b} goes on to ${off.join(", ")}, but a fan-out runs only its branches and goes on from ${join}: lead ${b} straight to ${join}`);
+    }
   }
 
   // Check command nodes have scripts
@@ -768,7 +483,7 @@ const sortedAttrs = (o: object) => Object.fromEntries(Object.entries(o).filter((
 export function graphHash(graph: WorkflowGraph): string {
   const sorted = sortedAttrs;
   // Where the graph was read from is not what it is.
-  const { nodes, edges, sources: _sources, ...attrs } = graph;
+  const { nodes, edges, sources: _sources, edits: _edits, pruned: _pruned, gated: _gated, ...attrs } = graph;
   const canonical = JSON.stringify({
     graph: sorted(attrs),
     nodes: [...nodes.values()].sort((a, b) => a.id.localeCompare(b.id)).map(sorted),

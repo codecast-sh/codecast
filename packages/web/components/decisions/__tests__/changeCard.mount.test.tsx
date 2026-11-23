@@ -23,6 +23,12 @@ const restoreGlobals = replaceGlobals({
   Element: dom.window.Element,
   Node: dom.window.Node,
   KeyboardEvent: dom.window.KeyboardEvent,
+  MutationObserver: dom.window.MutationObserver,
+  Event: dom.window.Event,
+  CustomEvent: dom.window.CustomEvent,
+  FocusEvent: dom.window.FocusEvent,
+  HTMLButtonElement: dom.window.HTMLButtonElement,
+  HTMLInputElement: dom.window.HTMLInputElement,
   localStorage: dom.window.localStorage,
   getComputedStyle: dom.window.getComputedStyle.bind(dom.window),
   requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(0), 0) as unknown as number,
@@ -167,7 +173,7 @@ test("an answerable surface says the recommendation once, on the control", async
   await unmount();
 });
 
-test("Ship on a real line run never ships on one click: the first press arms it, the second ships", async () => {
+test("Ship on a real line run never ships on one click: the press opens the shared confirm, and its confirm ships", async () => {
   const { useInboxStore } = await import("../../../store/inboxStore");
   const started: unknown[] = [];
   const realStart = useInboxStore.getState().startShip;
@@ -178,10 +184,12 @@ test("Ship on a real line run never ships on one click: the first press arms it,
   const ship = () => container.querySelector("[data-verdict=ship]") as HTMLButtonElement;
   await act(() => { ship().click(); });
   expect(started).toHaveLength(0);
-  expect(ship().textContent).toContain("Press again to ship");
-  expect(ship().getAttribute("aria-pressed")).toBe("true");
-  await act(() => { ship().click(); });
+  expect(ship().getAttribute("aria-expanded")).toBe("true");
+  const review = document.querySelector("[data-switch-review=Ship]")!;
+  expect(review.textContent).toContain("Pull request");
+  await act(() => { (review.querySelector("[data-switch-confirm]") as HTMLButtonElement).click(); });
   expect(started).toHaveLength(1);
+  expect(document.querySelector("[data-switch-review]")).toBeNull();
   expect(answered).toHaveLength(0);
   useInboxStore.setState({ startShip: realStart });
   await unmount();

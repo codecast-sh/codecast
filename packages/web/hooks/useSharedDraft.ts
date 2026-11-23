@@ -57,9 +57,39 @@ export function typingEditors(editors: Record<string, number>, now = Date.now())
   return Object.entries(editors).filter(([, at]) => now - at < TYPING_MS).map(([id]) => id);
 }
 
-/** A row from someone whose box is in the shared draft (it reports a caret). */
+/**
+ * A row from someone whose box is in the shared draft, focused or not. Its
+ * caret alone would not say: an unfocused box reports none, and its words
+ * would be taken for a leftover nobody is in and replaced on join.
+ */
 export function inSharedDraft(row: PresenceRow): boolean {
-  return row.cursor_pos != null;
+  return !!row.in_draft;
+}
+
+/** Words of their own outside the shared draft: a row only carries a draft while its box is not in one. */
+function holdsOwnWords(row: PresenceRow): boolean {
+  return !row.in_draft && !!row.draft_text?.trim();
+}
+
+/**
+ * Whether anyone else's words are in the shared draft or on their way into
+ * it, so the words my box brings go under theirs and never replace them.
+ */
+export function othersWriting(others: readonly PresenceRow[]): boolean {
+  return others.some((r) => inSharedDraft(r) || holdsOwnWords(r));
+}
+
+/**
+ * Whether my box, holding words of its own, must let another box holding
+ * words join first. Two boxes that join at once both find the draft empty and
+ * both put their words in it, so one would replace the other or the two would
+ * run together. The lower user id goes first; the other joins once that row
+ * reports it is in the draft (its words are on the server by then: join
+ * resolves after its edit is confirmed). An empty box never waits.
+ */
+export function waitsToJoin(others: readonly PresenceRow[], me: string | null, mine: string): boolean {
+  if (!me || !mine.trim()) return false;
+  return others.some((r) => holdsOwnWords(r) && r.user_id < me);
 }
 
 function serverOf(convex: ReturnType<typeof useConvex>): SharedDraftServer {
@@ -86,7 +116,12 @@ export function useSharedDraft(opts: {
   const docId = composeDocId(conversationId);
   const can = enabled && !!myId && isConvexId(conversationId);
   const others = usePresenceRows(docId, can);
-  const active = can && others.length > 0;
+  // Boxes holding words join one at a time (waitsToJoin). Once this box may
+  // join it stays in until everyone leaves: a later typist never pulls it out.
+  const clearedRef = useRef(false);
+  if (!can || others.length === 0) clearedRef.current = false;
+  else if (!clearedRef.current && !waitsToJoin(others, myId, text)) clearedRef.current = true;
+  const active = can && others.length > 0 && clearedRef.current;
 
   const textRef = useRef(text);
   textRef.current = text;
@@ -135,7 +170,7 @@ export function useSharedDraft(opts: {
     });
     sessionRef.current = session;
     void session
-      .join(() => textRef.current, { seed, othersLive: () => othersRef.current.some(inSharedDraft) })
+      .join(() => textRef.current, { seed, othersLive: () => othersWriting(othersRef.current) })
       .then((next) => {
         if (next == null || sessionRef.current !== session) return;
         if (next !== textRef.current) show(next);

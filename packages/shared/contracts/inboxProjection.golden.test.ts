@@ -109,6 +109,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // v26: a flow station the person adopted stands alone (adopted.json).
   26: "118ba0e91820a47d",
   27: "118ba0e91820a47d",
+  // v28: the first row past the fold's gap folds (the edge rows in fold,
+  // teammates and windows).
+  28: "817c90c9dd300267",
 };
 
 type Expected = {

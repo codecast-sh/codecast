@@ -3,7 +3,9 @@
 // a page paints, and the read hooks. useLiveArtifact.ts owns the feeders and
 // the write path and re-exports the public readers from here.
 import { useCallback, useMemo, useSyncExternalStore } from "react";
-import { nanoid } from "nanoid";
+// Ids that only name writes and threads, never secrets: the non-secure
+// generator needs no crypto, which the phone's Hermes runtime lacks.
+import { nanoid } from "nanoid/non-secure";
 import { fromElement, isPresenceLive, type ArtifactElement, type ArtifactPresence, type ElementState } from "@codecast/shared/artifacts";
 import { useInboxStore } from "../../store/inboxStore";
 import { liveRowId, type LiveLayer } from "../../store/liveArtifactsSlice";

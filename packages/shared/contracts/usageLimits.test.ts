@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import {
   fallbackProfiles,
   fleetModels,
+  fleetRunsFamily,
+  modelLimitFamily,
   isUsageExhausted,
   rankByHeadroom,
   switchUsagePercent,
@@ -401,5 +403,22 @@ describe("a spend-limit block", () => {
     expect(standingLabel(u, now)).toBe("spend limit reached");
     expect(exhaustedLabel(u, now)).toBe("spend limit reached");
     expect(isUsageExhausted(u, now + 2 * 86_400_000)).toBe(false);
+  });
+});
+
+describe("modelLimitFamily", () => {
+  test("names the model whose week alone is spent", () => {
+    expect(modelLimitFamily("You've hit your Fable limit · resets Nov 24 at 2am (America/Los_Angeles). /model to switch models.")).toBe("fable");
+    expect(modelLimitFamily("You've reached your Fable limit. Run /usage-credits to continue or switch models with /model.")).toBe("fable");
+  });
+  test("an account-wide limit names no model", () => {
+    expect(modelLimitFamily("You've hit your weekly limit · resets Nov 19, 7pm (UTC)")).toBeUndefined();
+    expect(modelLimitFamily("You've hit your session limit · resets 7am (UTC)")).toBeUndefined();
+    expect(modelLimitFamily("You've hit your org's monthly spend limit")).toBeUndefined();
+    expect(modelLimitFamily(undefined)).toBeUndefined();
+  });
+  test("fleetRunsFamily matches versions of the family", () => {
+    expect(fleetRunsFamily(["claude-opus-5-5"], "fable")).toBe(false);
+    expect(fleetRunsFamily(["claude-fable-5-2"], "fable")).toBe(true);
   });
 });

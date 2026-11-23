@@ -7,18 +7,13 @@ import { repositoryOfCheckout } from "./users";
 import { standingReportsToFields } from "./lib/standingSeat";
 import { listSessionOwnerIds, stampSeatOwners } from "./sessionOwners";
 import { backfillProjectCountsPage, resetProjectCounts } from "./lib/projectTaskCounts";
-import { EXECUTIVE_ASSISTANT_NAME, HEAD_OF_PEOPLE_HANDLE, HEAD_OF_PEOPLE_NAME, LEGACY_HEAD_OF_PEOPLE_HANDLE, LEGACY_HEAD_OF_PEOPLE_NAME, isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
-import { defaultAssistantHandle, executiveAssistantCharter, ensureRoleRoutine, headOfPeopleCharter, roleRoutineOf, standingConversationOf } from "./orgRoles";
-import { isScopeless } from "./lib/orgScope";
-import { performReparentSession, personName } from "./sessionOwnership";
+import { performReparentSession } from "./sessionOwnership";
 import { rolesInBoundary } from "./lib/orgAccess";
 import { sessionWork } from "./lib/orgOwnership";
 import { ownsWork } from "@codecast/shared/contracts/orgLead";
 import { roleSubject, withOrgChange } from "./lib/orgChangeLog";
 import { isHandBriefing } from "./spawn";
-import { seatTitlePatch } from "./anchors";
-import { findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf } from "./lib/orgRoutine";
-import { applyCancel, applyReactivate } from "./agentTasks";
+import { isOrphanOrSubagent } from "./inboxFilters";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -452,264 +447,6 @@ export const stampStandingSeats = internalMutation({
   },
 });
 
-// The Head of People rename (org-staffing.md S30). Every role that still
-// answers to `chief-of-staff` and is not an Executive Assistant is the Head of
-// People under its old name: a team's gets the new handle, the birth name
-// where it kept the default, the Head of People's charter, its seat retitled
-// and its review routine refreshed. The personal workspace's root is the
-// agent the person already talks to, so with `personal_root: "convert"` it
-// becomes their global Executive Assistant instead: the handle, name and
-// charter become the assistant's (the old handle always names the Head of
-// People), the Company review is cancelled and the assistant's daily check
-// armed; a person who already has a global assistant is skipped. The charter
-// doc (what the agent reads) follows the row: its heading names the new role,
-// and its charter paragraph is replaced only while it is still the old
-// default text; a charter a person wrote stays and is reported. A row the run
-// already renamed gets the doc pass alone, so the run is idempotent. Every
-// row records what changed in `renamed_from`, and `reverse: true` puts it
-// back. Dry by default.
-//   packages/convex/run.sh migrations:renameHeadOfPeople '{"dryRun":false,"personal_root":"convert"}'
-//   packages/convex/run.sh migrations:renameHeadOfPeople '{"dryRun":false,"only":["or-19","or-35"]}'   (team roots only)
-//   packages/convex/run.sh migrations:renameHeadOfPeople '{"dryRun":false,"scope":"team"}'
-export type RenameHeadPlanRow = {
-  role: string; workspace: string; action: "rename" | "convert" | "doc" | "reverse" | "skip";
-  from: { handle: string; name: string }; to: { handle: string; name: string };
-  seat: string | null; retitle: boolean; charter: boolean;
-  /** What happens to the charter doc: rewritten (heading and the default
-   *  charter), heading (a person's charter stays), current (already names
-   *  the role), custom (not the template; untouched), restored (on reverse), null (no doc). */
-  charter_doc?: CharterDocOutcome | null;
-  /** Convert only: the review trigger cancelled, and whether the personal
-   *  workspace has other roles and so still needs a Head of People. */
-  review_cancelled?: string | null; needs_head_of_people?: boolean;
-  reason?: string;
-};
-
-export type RenameHeadArgs = {
-  dryRun?: boolean;
-  personal_root?: "head_of_people" | "convert";
-  reverse?: boolean;
-  /** Only these roles (short ids like "or-19"), so a run can take the team
-   *  roots now and leave other people's personal agents for later. */
-  only?: string[];
-  /** Only team roots, or only personal roots. */
-  scope?: "team" | "user";
-};
-
-// The charter was the opening's job paragraph (the right hand's); a charter
-// a person wrote is theirs and stays.
-const OLD_DEFAULT_CHARTER_RE = /right hand|keep .* goals in view/i;
-const isOldDefaultCharter = (text?: string | null) => !text || OLD_DEFAULT_CHARTER_RE.test(text);
-
-export type CharterDocOutcome = "rewritten" | "heading" | "current" | "custom" | "restored";
-const charterHeading = (r: { name: string; handle: string }) => `# Charter: ${r.name} (@${r.handle})`;
-
-/** The charter doc as the run leaves it: the heading names the role as it
- *  is now, and the charter paragraph (what sits before the first section) is
- *  replaced only while it is the old default. Null when nothing changes. */
-export function rewriteCharterDoc(content: string, was: { name: string; handle: string }, to: { name: string; handle: string }, charter: string): { content: string; outcome: CharterDocOutcome } | null {
-  const [heading, ...rest] = content.split("\n");
-  const named = heading === charterHeading(was) ? "old" : heading === charterHeading(to) ? "new" : null;
-  if (!named) return null;
-  const body = rest.join("\n");
-  const at = body.search(/^## /m);
-  const paragraph = (at < 0 ? body : body.slice(0, at)).trim();
-  const isDefault = isOldDefaultCharter(paragraph);
-  if (named === "new" && !isDefault) return null;
-  const next = [charterHeading(to), "", isDefault ? charter : paragraph, ...(at < 0 ? [] : ["", body.slice(at).trimStart()])].join("\n");
-  return next === content ? null : { content: next, outcome: isDefault ? "rewritten" : "heading" };
-}
-
-/** The outcome a doc reports when it is not rewritten. */
-const charterDocOutcomeOf = (content: string, to: { name: string; handle: string }): CharterDocOutcome => (content.split("\n")[0] === charterHeading(to) ? "current" : "custom");
-
-export async function performRenameHeadOfPeople(
-  ctx: any,
-  args: RenameHeadArgs,
-): Promise<{ dryRun: boolean; reverse: boolean; rows: RenameHeadPlanRow[] }> {
-  const dryRun = args.dryRun ?? true;
-  const reverse = !!args.reverse;
-  const convertPersonal = (args.personal_root ?? "head_of_people") === "convert";
-  const only = args.only?.length ? new Set(args.only.map((s) => s.trim())) : null;
-  const all: any[] = await ctx.db.query("org_roles").collect();
-  const roles = all.filter((r) => (!only || only.has(r.short_id) || only.has(String(r._id))) && (!args.scope || r.scope_type === args.scope));
-  const rows: RenameHeadPlanRow[] = [];
-  const now = Date.now();
-  for (const role of roles) {
-    const workspace = role.team_id ? ((await ctx.db.get(role.team_id))?.name ?? "a team") : `${personName(await ctx.db.get(role.scope_user_id ?? role.host_user_id))}'s personal workspace`;
-    const standing = await standingConversationOf(ctx, role);
-    const seat = standing?.short_id ?? null;
-    if (reverse) {
-      const was = role.renamed_from;
-      if (!was) continue;
-      const retitle = !!standing && standing.title === role.name;
-      rows.push({ role: role.short_id, workspace, action: "reverse", from: { handle: role.handle, name: role.name }, to: { handle: was.handle, name: was.name }, seat, retitle, charter: was.charter !== undefined, charter_doc: was.charter_doc !== undefined ? "restored" : null, review_cancelled: was.review_trigger_id ? String(was.review_trigger_id) : null });
-      if (dryRun) continue;
-      await ctx.db.patch(role._id, { handle: was.handle, name: was.name, charter: was.charter, assistant: undefined, renamed_from: undefined, updated_at: now });
-      if (was.charter_doc !== undefined && role.charter_doc_id) await ctx.db.patch(role.charter_doc_id, { content: was.charter_doc, updated_at: now });
-      if (retitle) await ctx.db.patch(standing._id, { ...seatTitlePatch(standing, was.name), updated_at: now });
-      if (was.routine_trigger_id) { const t = await ctx.db.get(was.routine_trigger_id); if (t && isLiveTrigger(t)) await applyCancel(ctx, t); }
-      if (was.review_trigger_id) { const t = await ctx.db.get(was.review_trigger_id); if (t) await applyReactivate(ctx, t); }
-      continue;
-    }
-    const doc = role.charter_doc_id ? await ctx.db.get(role.charter_doc_id) : null;
-    const person = personName(await ctx.db.get(role.reports_to?.kind === "user" ? role.reports_to.user_id : role.host_user_id));
-    // The charter doc follows the row: rewritten here for a row renamed on
-    // this run, and alone for a row an earlier run renamed before the doc
-    // was part of it. The content before is kept so reverse restores it.
-    const docPatch = async (was: { name: string; handle: string }, charter: string): Promise<CharterDocOutcome | null> => {
-      if (!doc) return null;
-      const fresh = await ctx.db.get(role._id);
-      const next = rewriteCharterDoc(doc.content ?? "", was, fresh, charter);
-      if (!next) return charterDocOutcomeOf(doc.content ?? "", fresh);
-      if (!dryRun) {
-        await ctx.db.patch(doc._id, { content: next.content, updated_at: now });
-        await ctx.db.patch(role._id, { renamed_from: { ...fresh.renamed_from, charter_doc: doc.content ?? "" } });
-      }
-      return next.outcome;
-    };
-    if (role.renamed_from && !role.assistant && role.status !== "retired" && role.renamed_from.charter_doc === undefined && doc) {
-      const next = rewriteCharterDoc(doc.content ?? "", role.renamed_from, role, role.charter ?? headOfPeopleCharter(person));
-      if (!next) continue;
-      rows.push({ role: role.short_id, workspace, action: "doc", from: { handle: role.handle, name: role.name }, to: { handle: role.handle, name: role.name }, seat, retitle: false, charter: false, charter_doc: next.outcome, reason: "renamed by an earlier run; the charter doc alone" });
-      await docPatch(role.renamed_from, role.charter ?? headOfPeopleCharter(person));
-      continue;
-    }
-    if (role.handle !== LEGACY_HEAD_OF_PEOPLE_HANDLE || role.assistant || role.renamed_from) continue;
-    if (role.status === "retired") {
-      // A retired seat keeps its name in history; only its handle moves, so
-      // a later hire does not meet a dead row under the live handle.
-      rows.push({ role: role.short_id, workspace, action: "rename", from: { handle: role.handle, name: role.name }, to: { handle: HEAD_OF_PEOPLE_HANDLE, name: role.name }, seat, retitle: false, charter: false, reason: "retired" });
-      if (!dryRun) await ctx.db.patch(role._id, { handle: HEAD_OF_PEOPLE_HANDLE, renamed_from: { handle: role.handle, name: role.name, at: now }, updated_at: now });
-      continue;
-    }
-    const defaultName = role.name === LEGACY_HEAD_OF_PEOPLE_NAME;
-    const was = { handle: role.handle, name: role.name };
-    if (role.scope_type === "user" && convertPersonal) {
-      const others = all.filter((r) => r._id !== role._id && String(r.scope_user_id ?? "") === String(role.scope_user_id) && r.status !== "retired");
-      const has = others.find(isGlobalAssistant);
-      if (has) { rows.push({ role: role.short_id, workspace, action: "skip", from: { handle: role.handle, name: role.name }, to: { handle: role.handle, name: role.name }, seat, retitle: false, charter: false, reason: `${has.short_id} is already their global Executive Assistant` }); continue; }
-      const review = standing ? await findRoleRoutineInAnyStatus(ctx, role, standing) : null;
-      const handle = defaultAssistantHandle({ reach: "global" }, true, null, (h) => others.some((r) => r.handle === h));
-      const retitle = !!standing && standing.title === role.name;
-      const row: RenameHeadPlanRow = { role: role.short_id, workspace, action: "convert", from: was, to: { handle, name: EXECUTIVE_ASSISTANT_NAME }, seat, retitle, charter: true, review_cancelled: review && isLiveTrigger(review) ? (review.short_id ?? String(review._id)) : null, needs_head_of_people: others.length > 0 };
-      rows.push(row);
-      if (!dryRun) {
-        const renamed_from: any = { handle: role.handle, name: role.name, charter: role.charter, converted: true, at: now, ...(review ? { review_trigger_id: review._id } : {}) };
-        await ctx.db.patch(role._id, { assistant: { reach: "global" }, handle, name: EXECUTIVE_ASSISTANT_NAME, charter: executiveAssistantCharter(person), renamed_from, updated_at: now });
-      }
-      row.charter_doc = doc ? (dryRun ? (rewriteCharterDoc(doc.content ?? "", was, { handle, name: EXECUTIVE_ASSISTANT_NAME }, executiveAssistantCharter(person))?.outcome ?? charterDocOutcomeOf(doc.content ?? "", { handle, name: EXECUTIVE_ASSISTANT_NAME })) : await docPatch(was, executiveAssistantCharter(person))) : null;
-      if (dryRun) continue;
-      if (review && isLiveTrigger(review)) await applyCancel(ctx, review);
-      if (standing) {
-        if (retitle) await ctx.db.patch(standing._id, { ...seatTitlePatch(standing, EXECUTIVE_ASSISTANT_NAME), updated_at: now });
-        const routine = await ensureRoleRoutine(ctx, await ctx.db.get(role._id), standing);
-        await ctx.db.patch(role._id, { renamed_from: { ...(await ctx.db.get(role._id)).renamed_from, routine_trigger_id: routine.id } });
-      }
-      continue;
-    }
-    const name = defaultName ? HEAD_OF_PEOPLE_NAME : role.name;
-    const retitle = !!standing && standing.title === role.name && defaultName;
-    const charter = isOldDefaultCharter(role.charter);
-    const to = { handle: HEAD_OF_PEOPLE_HANDLE, name };
-    const nextCharter = charter ? headOfPeopleCharter(person) : role.charter;
-    const row: RenameHeadPlanRow = { role: role.short_id, workspace, action: "rename", from: was, to, seat, retitle, charter };
-    rows.push(row);
-    if (!dryRun) await ctx.db.patch(role._id, { handle: HEAD_OF_PEOPLE_HANDLE, name, ...(charter ? { charter: nextCharter } : {}), renamed_from: { handle: role.handle, name: role.name, ...(charter ? { charter: role.charter } : {}), at: now }, updated_at: now });
-    row.charter_doc = doc ? (dryRun ? (rewriteCharterDoc(doc.content ?? "", was, to, nextCharter)?.outcome ?? charterDocOutcomeOf(doc.content ?? "", to)) : await docPatch(was, nextCharter)) : null;
-    if (dryRun) continue;
-    if (retitle) await ctx.db.patch(standing._id, { ...seatTitlePatch(standing, name), updated_at: now });
-    // The routine's prompt names the role; refresh brings it up to date.
-    if (standing) await roleRoutineOf(ctx, await ctx.db.get(role._id), standing);
-  }
-  return { dryRun, reverse, rows };
-}
-
-export const renameHeadOfPeople = internalMutation({
-  args: {
-    dryRun: v.optional(v.boolean()),
-    personal_root: v.optional(v.union(v.literal("head_of_people"), v.literal("convert"))),
-    reverse: v.optional(v.boolean()),
-    only: v.optional(v.array(v.string())),
-    scope: v.optional(v.union(v.literal("team"), v.literal("user"))),
-  },
-  handler: async (ctx, args) => performRenameHeadOfPeople(ctx, args),
-});
-
-const isGlobalAssistant = (r: any) => r.assistant?.reach === "global" && r.status !== "retired";
-
-// A personal role a person already works with becomes their global Executive
-// Assistant (org-staffing.md S30). The row gains `assistant` and nothing else
-// moves: its name, handle, brief, standing session and triggers are as they
-// were. Its charter keeps its words too, except that a charter written before
-// the rename calls the structure role by its old name, and that one phrase is
-// brought up to date on the row and in the charter doc. Only the roles named
-// by short id are touched, and `reverse: true` puts both back. Dry by default.
-//   packages/convex/run.sh migrations:seatExecutiveAssistant '{"only":["or-44"]}'
-//   packages/convex/run.sh migrations:seatExecutiveAssistant '{"dryRun":false,"only":["or-44"]}'
-export type SeatAssistantPlanRow = {
-  role: string; workspace: string; action: "seat" | "reverse" | "skip";
-  name: string; handle: string; reports_to: string | null;
-  /** What stays: the standing session, the brief and the live triggers. */
-  seat: string | null; brief: boolean; triggers: string[];
-  /** Where the charter's phrase is reworded ("role", "doc"), and to what. */
-  charter: { in: string[]; from: string; to: string } | null;
-  reason?: string;
-};
-
-const CHARTER_PHRASE = [`the ${LEGACY_HEAD_OF_PEOPLE_NAME}'s job`, `the ${HEAD_OF_PEOPLE_NAME}'s job`] as const;
-
-export async function performSeatExecutiveAssistant(
-  ctx: any,
-  args: { dryRun?: boolean; only: string[]; reverse?: boolean },
-): Promise<{ dryRun: boolean; reverse: boolean; rows: SeatAssistantPlanRow[] }> {
-  const dryRun = args.dryRun ?? true;
-  const reverse = !!args.reverse;
-  const only = new Set(args.only.map((s) => s.trim()));
-  const all: any[] = await ctx.db.query("org_roles").collect();
-  const rows: SeatAssistantPlanRow[] = [];
-  for (const role of all.filter((r) => only.has(r.short_id))) {
-    const standing = await standingConversationOf(ctx, role);
-    const boss = role.reports_to?.kind === "user" ? personName(await ctx.db.get(role.reports_to.user_id)) : null;
-    const [from, to] = reverse ? [CHARTER_PHRASE[1], CHARTER_PHRASE[0]] : CHARTER_PHRASE;
-    const reword = (text?: string) => (text?.includes(from) ? text.split(from).join(to) : undefined);
-    const charterDoc = role.charter_doc_id ? await ctx.db.get(role.charter_doc_id) : null;
-    const charter = reword(role.charter);
-    const charterDocContent = reword(charterDoc?.content);
-    const reworded = [...(charter !== undefined ? ["role"] : []), ...(charterDocContent !== undefined ? ["doc"] : [])];
-    const twin = all.find((r) => r._id !== role._id && String(r.scope_user_id ?? "") === String(role.scope_user_id ?? "") && isGlobalAssistant(r));
-    const reason = role.status === "retired" ? "retired"
-      : role.scope_type !== "user" ? "a global Executive Assistant lives in a person's own workspace"
-      : !boss ? "it reports to a role, not to a person"
-      : !isScopeless(role.scope) ? "it names an area; an Executive Assistant owns none"
-      : isHeadOfPeopleRole(role) ? "it is the Head of People"
-      : reverse ? (isGlobalAssistant(role) ? undefined : "not a global Executive Assistant")
-      : role.assistant ? "already an Executive Assistant"
-      : twin ? `${twin.short_id} is already their global Executive Assistant`
-      : undefined;
-    rows.push({
-      role: role.short_id,
-      workspace: `${personName(await ctx.db.get(role.scope_user_id ?? role.host_user_id))}'s personal workspace`,
-      action: reason ? "skip" : reverse ? "reverse" : "seat",
-      name: role.name, handle: role.handle, reports_to: boss,
-      seat: standing?.short_id ?? null, brief: !!role.brief_doc_id,
-      triggers: standing ? (await liveRoutinesOf(ctx, standing)).map((t: any) => `${t.short_id ?? String(t._id)} ${t.title}`) : [],
-      charter: reworded.length && !reason ? { in: reworded, from, to } : null,
-      ...(reason ? { reason } : {}),
-    });
-    if (dryRun || reason) continue;
-    const now = Date.now();
-    await ctx.db.patch(role._id, { assistant: reverse ? undefined : { reach: "global" }, ...(charter !== undefined ? { charter } : {}), updated_at: now });
-    if (charterDocContent !== undefined) await ctx.db.patch(charterDoc._id, { content: charterDocContent, updated_at: now });
-  }
-  return { dryRun, reverse, rows };
-}
-
-export const seatExecutiveAssistant = internalMutation({
-  args: { dryRun: v.optional(v.boolean()), only: v.array(v.string()), reverse: v.optional(v.boolean()) },
-  handler: async (ctx, args) => performSeatExecutiveAssistant(ctx, args),
-});
-
 // Hand back what a lead holds only through the folder rule (org-staffing.md
 // S35). A role holds a session for two reasons: bound to work the role owns,
 // or filed there by a person or role. Before S35 a lead also took every
@@ -903,3 +640,101 @@ export const backfillProjectTaskCounts = internalMutation({
     return { dropped, scanned, done };
   },
 });
+
+// One-time cleanup: a parent's stash used to copy its stamp onto every nested
+// child (isOrphanOrSubagent), and no restore of the parent cleared the copies,
+// so each child stayed stashed as a card of its own after its parent came back
+// or moved to another account. A child now rides its parent's stash, and a
+// stamp of its own means an act on the child (the person stashed it, or its
+// trigger run was folded). This clears the stamps that are provably copies:
+// the parent is missing or another user's, the parent is stashed and the child
+// was stamped at or after it, or a sibling carries the very same stamp (one
+// gesture stamped the group). A trigger run (agent_task_id) is folded by its
+// own stamp and is never touched, nor is a workflow sub without a parent
+// pointer or any non-nested row. Running it twice clears nothing new. With
+// `user_id` a dry run reports one page of that user's stashed rows (pass
+// `cursor` on for the next) and a real run walks them all. Without it, a real
+// run schedules one run per user, and a dry run reports a first page for each
+// user in one page of the users table.
+//   packages/convex/run.sh migrations:clearCopiedChildStashStamps '{"dry_run":true}'
+//   packages/convex/run.sh migrations:clearCopiedChildStashStamps '{"dry_run":false}'
+export const clearCopiedChildStashStamps = internalMutation({
+  args: { user_id: v.optional(v.id("users")), dry_run: v.boolean(), cursor: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const { dry_run } = args;
+    if (args.user_id) {
+      const r = await clearCopiedStashPage(ctx, args.user_id, dry_run, args.cursor ?? null, 100);
+      if (!dry_run && !r.done) {
+        await ctx.scheduler.runAfter(0, internal.migrations.clearCopiedChildStashStamps, { user_id: args.user_id, dry_run, cursor: r.cursor ?? undefined });
+      }
+      return { dry_run, user_id: args.user_id, ...r };
+    }
+    const users = await ctx.db.query("users").paginate({ cursor: args.cursor ?? null, numItems: dry_run ? 10 : 100 });
+    const perUser: any[] = [];
+    for (const u of users.page) {
+      if (!dry_run) {
+        await ctx.scheduler.runAfter(0, internal.migrations.clearCopiedChildStashStamps, { user_id: u._id, dry_run });
+        continue;
+      }
+      const r = await clearCopiedStashPage(ctx, u._id, true, "peek", 40);
+      if (r.examined || !r.done) perUser.push({ user_id: u._id, ...r });
+    }
+    if (!dry_run && !users.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.clearCopiedChildStashStamps, { dry_run, cursor: users.continueCursor });
+    }
+    return { dry_run, users_scanned: users.page.length, users: perUser, cursor: users.continueCursor, done: users.isDone };
+  },
+});
+
+// A "peek" reads a first page with take: Convex allows one paginate per
+// function, and the all-users dry run already spends it on the users table.
+async function clearCopiedStashPage(ctx: { db: any }, userId: any, dryRun: boolean, cursor: string | null | "peek", numItems: number) {
+  const stashedRows = () => ctx.db
+    .query("conversations")
+    .withIndex("by_user_stashed", (q: any) => q.eq("user_id", userId).gt("inbox_stashed_at", 0));
+  const page = cursor === "peek"
+    ? await stashedRows().take(numItems).then((rows: any[]) => ({ page: rows, continueCursor: null, isDone: rows.length < numItems }))
+    : await stashedRows().paginate({ cursor, numItems });
+  // Whether another child of the same parent carries this exact stamp: the
+  // rows sharing one stamp are one gesture, read off the same index.
+  const shared = new Map<string, boolean>();
+  const sharesStampWithSibling = async (row: any) => {
+    const key = `${row.parent_conversation_id}:${row.inbox_stashed_at}`;
+    let hit = shared.get(key);
+    if (hit === undefined) {
+      const twins = await ctx.db
+        .query("conversations")
+        .withIndex("by_user_stashed", (q: any) => q.eq("user_id", userId).eq("inbox_stashed_at", row.inbox_stashed_at))
+        .filter((q: any) => q.eq(q.field("parent_conversation_id"), row.parent_conversation_id))
+        .take(2);
+      hit = twins.length > 1;
+      shared.set(key, hit);
+    }
+    return hit;
+  };
+  const by_reason = { parent_missing: 0, parent_other_user: 0, copied_from_stashed_parent: 0, shared_with_sibling: 0 };
+  let examined = 0;
+  let kept = 0;
+  for (const row of page.page) {
+    if (!row.inbox_stashed_at || !isOrphanOrSubagent(row) || !row.parent_conversation_id || row.agent_task_id) continue;
+    examined++;
+    const parent: any = await ctx.db.get(row.parent_conversation_id);
+    const reason: keyof typeof by_reason | null = !parent ? "parent_missing"
+      : parent.user_id !== row.user_id ? "parent_other_user"
+      : parent.inbox_stashed_at && row.inbox_stashed_at >= parent.inbox_stashed_at ? "copied_from_stashed_parent"
+      : (await sharesStampWithSibling(row)) ? "shared_with_sibling"
+      : null;
+    if (!reason) { kept++; continue; }
+    by_reason[reason]++;
+    if (!dryRun) await ctx.db.patch(row._id, { inbox_stashed_at: undefined, inbox_stash_hidden: undefined });
+  }
+  const cleared = Object.values(by_reason).reduce((a, b) => a + b, 0);
+  return {
+    examined,
+    [dryRun ? "would_clear" : "cleared"]: cleared,
+    kept_explicit: kept,
+    by_reason,
+    cursor: page.continueCursor as string | null,
+    done: page.isDone as boolean,
+  };
+}

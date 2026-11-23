@@ -5,6 +5,7 @@
 // (shared/contracts/flowPool.ts) the CLI's `cast flow ls` uses, so both say
 // the same stations in the same order. Pure: no store, no React.
 import { flowBase, flowFills, flowGraphAttr as graphAttr, flowNodeAttrOf, flowPathWords, flowSlotsOf, foldFlow, publishableFlowSource, segmentTopOf, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
+import type { RepoFlow } from "@codecast/shared/contracts/repoFlows";
 import { SHIPPED_FLOWS } from "./shippedFlows.generated";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
 import { stationsOfNodes, type FlowStations, type StationDetail } from "./flowStations";
@@ -12,8 +13,8 @@ import { stationsOfNodes, type FlowStations, type StationDetail } from "./flowSt
 export type ShippedFlow = PoolFlowSummary & { name: string; nodes: FlowNodeIn[]; edges: FlowEdgeIn[]; /** The flow it extends, as the generator reads it (cli workflow/flowPool.ts PoolFlow). */ extends?: string | null };
 
 export type AppFlow = ShippedFlow & {
-  /** `team`: published to a team's pool; `pushed`: the viewer's own. */
-  where: "shipped" | "pushed" | "team";
+  /** `team`: published to a team's pool; `pushed`: the viewer's own; `repo`: the session's repository's own (`.codecast/flows`). */
+  where: "shipped" | "pushed" | "team" | "repo";
   /** The pushed row, for a flow the team published. */
   workflowId: string | null;
   /** The library flow it extends, by slug. */
@@ -46,9 +47,14 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
   // A segment the graph wrote in place, and a slot it declares, read from its source (or the row's own list).
   const fills = new Set(row.fills ?? flowFills(row.source));
   const slots = flowSlotsOf(row.source);
-  // A stored node carries no backend or visit limit: the session's own stations and their limits read from the source.
+  // A stored node carries no backend, visit limit or stop: the session's own stations, their limits and the run's
+  // deliberate ends read from the source.
   const backends = flowNodeAttrOf(row.source, "backend");
   const maxVisits = flowNodeAttrOf(row.source, "max_visits");
+  const machine = flowNodeAttrOf(row.source, "machine");
+  const fold = flowNodeAttrOf(row.source, "fold");
+  const asksIf = flowNodeAttrOf(row.source, "asks_if");
+  const stops = flowNodeAttrOf(row.source, "stop");
   const nodes: FlowNodeIn[] = row.nodes.map((n) => {
     const top = segmentTopOf(n.id);
     const entry = top === n.id && row.nodes.some((x) => x.id.startsWith(`${n.id}__`));
@@ -60,6 +66,10 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
       id: n.id, label: n.label, type: n.type, shape: n.shape,
       ...(backends[n.id] ? { backend: backends[n.id] } : {}),
       ...(Number(maxVisits[n.id]) > 0 ? { max_visits: Number(maxVisits[n.id]) } : {}),
+      ...(machine[n.id] === "true" ? { machine: true } : {}),
+      ...(fold[n.id] === "true" ? { fold: true } : {}),
+      ...(asksIf[n.id] ? { asks_if: asksIf[n.id] } : {}),
+      ...(stops[n.id] ? { stop: stops[n.id] } : {}),
       ...(top !== n.id ? { segment: top } : {}),
       ...(exit ? { segment_exit: exit } : {}),
       ...(entry ? { segment_entry: true, ...(written ? {} : { segment_flow: n.id }) } : {}),
@@ -86,31 +96,34 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
   };
 }
 
-/** The pool: every shipped flow, then each published one the shipped set does not already name. */
+/** The pool as `cast flow run` sees it in a repository (cli workflow/flowPool.ts poolFlows): the repository's own flows,
+ *  then each shipped flow they do not override, then each published one neither names. */
 // Every pill, fence and picker in a transcript asks for the pool over the
 // same store rows, each through its own memo with its own array; building it
 // parses every pushed graph's source. The answer is kept for the last few row
 // lists, matched row by row. Callers read it and never change it.
 const POOL_SLOTS = 4;
-const poolMemo: { rows: ReadonlyArray<PushedFlowRow>; pool: AppFlow[] }[] = [];
-const sameRows = (a: ReadonlyArray<PushedFlowRow>, b: ReadonlyArray<PushedFlowRow>) => a.length === b.length && a.every((r, i) => r === b[i]);
-export function appPool(pushed: ReadonlyArray<PushedFlowRow> = []): AppFlow[] {
-  const hit = poolMemo.find((m) => sameRows(m.rows, pushed));
+const poolMemo: { rows: ReadonlyArray<PushedFlowRow>; repo: ReadonlyArray<RepoFlow>; pool: AppFlow[] }[] = [];
+const sameRows = <T,>(a: ReadonlyArray<T>, b: ReadonlyArray<T>) => a.length === b.length && a.every((r, i) => r === b[i]);
+export function appPool(pushed: ReadonlyArray<PushedFlowRow> = [], repo: ReadonlyArray<RepoFlow> = []): AppFlow[] {
+  const hit = poolMemo.find((m) => sameRows(m.rows, pushed) && sameRows(m.repo, repo));
   if (hit) return hit.pool;
-  const pool = buildPool(pushed);
-  poolMemo.unshift({ rows: pushed.slice(), pool });
+  const pool = buildPool(pushed, repo);
+  poolMemo.unshift({ rows: pushed.slice(), repo: repo.slice(), pool });
   poolMemo.length = Math.min(poolMemo.length, POOL_SLOTS);
   return pool;
 }
 
-function buildPool(pushed: ReadonlyArray<PushedFlowRow>): AppFlow[] {
+function buildPool(pushed: ReadonlyArray<PushedFlowRow>, repo: ReadonlyArray<RepoFlow>): AppFlow[] {
+  const own: AppFlow[] = repo.map((f) => ({ ...f, ...foldFlow(f.nodes, f.edges), where: "repo" as const, workflowId: null }));
+  const ownSlugs = new Set(own.map((f) => f.slug));
   // The shipped template's graph names no label of its own; people read it as the Standard steps.
-  const shipped = SHIPPED_FLOWS.map((f) => ({ ...f, ...(f.slug === DEFAULT_LINE_SLUG && f.label === "Line" ? { label: DEFAULT_STEPS_LABEL } : {}), where: "shipped" as const, workflowId: null }));
-  const names = new Set(shipped.map((f) => f.slug));
+  const local = [...own, ...SHIPPED_FLOWS.filter((f) => !ownSlugs.has(f.slug)).map((f) => ({ ...f, ...(f.slug === DEFAULT_LINE_SLUG && f.label === "Line" ? { label: DEFAULT_STEPS_LABEL } : {}), where: "shipped" as const, workflowId: null }))];
+  const names = new Set(local.map((f) => f.slug));
   // A pushed graph joins the pool only when it says what kind of flow it is and is no session's draft, never a probe or a trial's copy.
   const joins = pushed.filter((r) => !names.has(r.slug) && r.nodes.length && publishableFlowSource(r.source));
   const pushedFlows = joins.filter((r, i) => joins.findIndex((x) => x.slug === r.slug) === i).map((r) => ({ flow: pushedFlow(r), saysTakes: !!graphAttr(r.source, "takes") }));
-  const all: AppFlow[] = [...shipped, ...pushedFlows.map((p) => p.flow)];
+  const all: AppFlow[] = [...local, ...pushedFlows.map((p) => p.flow)];
   // A flow that extends another and says nothing of what it takes takes what its base takes (a team's variant of Change takes a session's change).
   for (const p of pushedFlows) {
     const base = !p.saysTakes && p.flow.base ? all.find((f) => f.slug === p.flow.base) : null;
@@ -119,20 +132,15 @@ function buildPool(pushed: ReadonlyArray<PushedFlowRow>): AppFlow[] {
   return all;
 }
 
-export const flowBySlug = (pool: ReadonlyArray<AppFlow>, slug: string | null | undefined) => (slug ? pool.find((f) => f.slug === slug) ?? null : null);
-
-/** The flow a team's sessions are offered first when the team has set none. */
-export const CHANGE_FLOW_SLUG = "change";
-
-/** Can a session's own change run through it? A flow that takes a branch can (the run freezes the session's edits onto one). */
-export const takesSessionChange = (flow: AppFlow) => flow.takes.includes("branch");
-
-/** The team's default flow out of a pool: the slug it set when that flow is in the pool and takes a session's change,
- *  else Change, else the first that does. */
-export function defaultFlowOf(pool: ReadonlyArray<AppFlow>, teamSlug: string | null | undefined): AppFlow | null {
-  const ok = (f: AppFlow | null) => (f && takesSessionChange(f) ? f : null);
-  return ok(flowBySlug(pool, teamSlug)) ?? ok(flowBySlug(pool, CHANGE_FLOW_SLUG)) ?? pool.find(takesSessionChange) ?? null;
+/** A repository's flow that replaces a library flow of its slug, named with the repository's short name ("Change ·
+ *  union-mobile"), so it never reads as the library's own. `repository` is the session's, as its remote names it. */
+export function namedForRepo(pool: ReadonlyArray<AppFlow>, repository: string | null): AppFlow[] {
+  const name = repository?.split("/").pop();
+  if (!name) return pool.slice();
+  return pool.map((f) => (f.where === "repo" && SHIPPED_FLOWS.some((s) => s.slug === f.slug) ? { ...f, label: `${f.label} · ${name}` } : f));
 }
+
+export const flowBySlug = (pool: ReadonlyArray<AppFlow>, slug: string | null | undefined) => (slug ? pool.find((f) => f.slug === slug) ?? null : null);
 
 /** The flow a run ran, from its workflow name or slug. */
 export function flowOfRun(pool: ReadonlyArray<AppFlow>, run: { workflow_slug?: string | null; workflow_name?: string | null }): AppFlow | null {

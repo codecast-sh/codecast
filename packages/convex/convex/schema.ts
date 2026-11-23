@@ -64,6 +64,7 @@ import { slackTables } from "./slackSchema";
 import { callRoomTables } from "./callRoomSchema";
 import { passkeyTables } from "./passkeysSchema";
 import { accessLogTables } from "./accessLogSchema";
+import { teamReadKeyTables } from "./teamReadKeysSchema";
 import { dataDeletionTables } from "./dataDeletionsSchema";
 import { eventFilterValidator, pendingEventValidator } from "./lib/eventFilterValidator";
 import { decisionValidator, intentSourceValidator, milestoneValidator, questionValidator, scoreValidator } from "./lib/initiativeValidators";
@@ -163,6 +164,7 @@ export default defineSchema({
   ...slackTables,
   ...passkeyTables,
   ...accessLogTables,
+  ...teamReadKeyTables,
   ...dataDeletionTables,
   ...authTables,
   users: defineTable({
@@ -232,6 +234,9 @@ export default defineSchema({
     // The agent clients this user's pickers show (registry ids). Absent means
     // the registry default (pinnedAgentIds in shared/contracts/agentClients).
     pinned_agents: v.optional(v.array(v.string())),
+    // The registry ids pinned_agents was chosen from, written with it. A client
+    // missing here was added later and follows its own default.
+    pinned_agents_known: v.optional(v.array(v.string())),
     notification_preferences: v.optional(v.object({
       team_session_start: v.boolean(),
       mention: v.boolean(),
@@ -275,6 +280,9 @@ export default defineSchema({
       // dropped (tasks.ts notifyTaskStatus). Absent reads as OFF: status
       // moves are the board's, like Linear's opt-in "status changes".
       task_status_changes: v.optional(v.boolean()),
+      // A laptop or daemon under sustained load (machine_overloaded,
+      // daemon_overloaded). Absent reads as ON.
+      machine_alerts: v.optional(v.boolean()),
     })),
     // Cooldown stamp for the email digest — at most one digest per cooldown
     // window, and items created before this stamp are never re-emailed.
@@ -757,6 +765,7 @@ export default defineSchema({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
       // The hosted assistant (plan pl-840): Convex actions run its turns and
       // no device ever claims the row (convex/assistant).
       v.literal("codecast"),
@@ -793,6 +802,18 @@ export default defineSchema({
     // (`--account`). An automatic pin follows the machine's account on the
     // next resume (resumePinFor); a chosen one never moves.
     cc_account_auto: v.optional(v.boolean()),
+    // Set when recovery moved this session ALONE onto an account with room on
+    // the model whose week parked it ("Fable limit") while the fleet runs
+    // another model (lib/modelLimitPins.ts). A resume keeps that pin while
+    // `cc_account` still names `profile` and the account proves room on
+    // `family` (resumePinFor). `tried`: the accounts it was pinned to for
+    // `family`, never picked again for it within a week.
+    cc_account_model_pin: v.optional(v.object({
+      family: v.string(),
+      profile: v.string(),
+      at: v.number(),
+      tried: v.optional(v.array(v.object({ profile: v.string(), at: v.number() }))),
+    })),
     // The Codex account profile this session's PROCESS is running on, recorded
     // by the daemon that launched it. Not a pin like cc_account: Codex reads
     // ~/.codex/auth.json once at start and holds that grant for life, so a
@@ -1015,6 +1036,10 @@ export default defineSchema({
     // cleared), so a clear of the stamp needs no companion clear here.
     inbox_stash_hidden: v.optional(v.boolean()),
     inbox_killed_at: v.optional(v.number()),
+    // A Close (web/phone): equal to the inbox_dismissed_at it stamped while the
+    // row stays closed (shared isClosedSession). Never cleared: an un-hide clears
+    // the dismissed stamp, which ends the equality.
+    inbox_closed_at: v.optional(v.number()),
     pending_kill_generation: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
     // The user's own rest verdict — where they filed the row (Needs You,
@@ -1522,6 +1547,8 @@ export default defineSchema({
     // on demand — the inbox scan excludes killed rows, so this is their one
     // server channel.
     .index("by_user_killed", ["user_id", "inbox_killed_at"])
+    // The Closed shelf's closes (listClosedSessions), newest-first.
+    .index("by_user_closed", ["user_id", "inbox_closed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
     // A device's live rows (cloud.hostSessions): a host that has run thousands
     // of stations reads only the ones still active, not its whole history.
@@ -1811,7 +1838,6 @@ export default defineSchema({
       v.object({ kind: v.literal("role"), role_id: v.id("org_roles") }),
     ),
     status: v.union(v.literal("active"), v.literal("paused"), v.literal("retired")),
-    charter: v.optional(v.string()), // short free text for now; a doc later
     anchor_id: v.optional(v.id("anchors")), // reserved: the standing session
     // Chat channels whose lines ride the role's wake frame (agent-channels.md
     // C1/C2 pull mode). Edited by orgChannels.follow/unfollow.
@@ -2887,6 +2913,15 @@ export default defineSchema({
     // the echo can tell a person's message from one a program queued in
     // their name (a spawn brief, an account-switch "continue").
     human: v.optional(v.boolean()),
+    // "composer": a signed-in person sent this from the web or phone composer
+    // (a session login, never an API token). Server-set at those sends only;
+    // absent reads as a program (lib/messageProvenance.ts). Unlike `human`,
+    // no caller can declare it.
+    channel: v.optional(v.literal("composer")),
+    // With channel "composer": the words the person typed in the box, before
+    // the composer folded in quotes, mention context or attachments. The part
+    // of the message that is theirs (lib/messageProvenance.typedPart).
+    typed_text: v.optional(v.string()),
     status: v.union(
       v.literal("pending"),
       v.literal("injected"),
@@ -2916,6 +2951,9 @@ export default defineSchema({
     // queue where it can be moved or merged, and released (releaseQueued)
     // when the turn ends. Ordinary sends never release these.
     queued: v.optional(v.boolean()),
+    // Work a session handed another out of sight (enqueuePendingMessage.quiet): a hidden
+    // stash survives it, and survives its risk resend too (executionBindings), which reads it here.
+    quiet: v.optional(v.boolean()),
     delivered_at: v.optional(v.number()),
     // The transcript message this row's echo produced. Stamped when the echo
     // adopts the row (content rewrite, client_id, images, from_user_id). Lets a
@@ -2967,6 +3005,9 @@ export default defineSchema({
     resend_of_delivery_id: v.optional(v.string()),
   })
     .index("by_conversation_id", ["conversation_id"])
+    // The rows a session's queue held around a moment (originator.queuedNear): a terminal line's words checked
+    // against what the queue sent then, without reading a long-lived session's whole queue.
+    .index("by_conversation_created", ["conversation_id", "created_at"])
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_conversation_status_kill_generation", ["conversation_id", "status", "kill_generation"])
     .index("by_user_status", ["from_user_id", "status"])
@@ -3024,6 +3065,7 @@ export default defineSchema({
         v.literal("pi"),
         v.literal("grok"),
         v.literal("muse"),
+        v.literal("antigravity"),
       ),
       transport: v.union(v.literal("tmux"), v.literal("app-server"), v.literal("external")),
       project_path: v.string(),
@@ -3114,6 +3156,7 @@ export default defineSchema({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     ),
     transport: v.union(v.literal("tmux"), v.literal("app-server"), v.literal("external")),
     project_path: v.string(),
@@ -3161,6 +3204,7 @@ export default defineSchema({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     )),
     runtime_id: v.optional(v.string()),
     handle: v.optional(v.string()),
@@ -3617,6 +3661,9 @@ export default defineSchema({
     // commits a millisecond apart): what orders main, so a target's waiting
     // queue is the commits after its live sha (deploys.md DP12).
     main_at: v.optional(v.number()),
+    // The GitHub login that pushed it onto the default branch (the push webhook's pusher, which GitHub
+    // authenticates; author_login is derived from an email anyone can set). Red main wakes only its sessions.
+    pushed_by: v.optional(v.string()),
   })
     .index("by_repository_main", ["repository", "main_at"])
     .index("by_conversation_id", ["conversation_id"])
@@ -3624,7 +3671,10 @@ export default defineSchema({
     .index("by_sha", ["sha"])
     .index("by_repository", ["repository"])
     .index("by_repository_timestamp", ["repository", "timestamp"])
-    .index("by_team_timestamp", ["team_id", "timestamp"]),
+    .index("by_team_timestamp", ["team_id", "timestamp"])
+    // Walked one row per repository to list the repositories a team's
+    // activity names (repos.ts repositoriesForUser).
+    .index("by_team_repository", ["team_id", "repository"]),
 
   // Per-edit file changes materialized at message ingest (materializeFileChanges
   // in messages.ts). Lets the diff viewer show the full session diff without
@@ -3767,6 +3817,9 @@ export default defineSchema({
     updated_at: v.number(),
     merged_at: v.optional(v.number()),
     closed_at: v.optional(v.number()),
+    // The commit the merge put on the base branch (a squash, a merge commit, or the last rebased commit): what a
+    // deploy must hold for the change to be live (deployReach.ts).
+    merge_commit_sha: v.optional(v.string()),
     // Live state mirrored from GitHub by the webhook processors and the merge
     // state refresh (githubWebhooks / prShepherd). Every field is optional so
     // rows that predate it stay valid.
@@ -3855,7 +3908,9 @@ export default defineSchema({
     .index("by_repository_head", ["repository", "head_sha"])
     .index("by_shepherd_conversation", ["shepherd_conversation_id"])
     // A team's pull requests touched in a trailing window (page data readers).
-    .index("by_team_updated", ["team_id", "updated_at"]),
+    .index("by_team_updated", ["team_id", "updated_at"])
+    // Walked one row per repository (repos.ts repositoriesForUser).
+    .index("by_team_repository", ["team_id", "repository"]),
 
   // A change guide a model wrote for a pull request whose author wrote none
   // (prGuides.ts, the PR page's Guide tab). One row per write, the newest
@@ -4258,6 +4313,9 @@ export default defineSchema({
     version: v.optional(v.string()),
     // The CI run or the page that shows the deploy.
     url: v.optional(v.string()),
+    // The GitHub Actions run that carried it (actionsRunKey of url, `<id>` or `<id>/attempts/<n>`), stamped wherever
+    // url is written: how a run's marker finds its deploy and a run link in a message resolves to it.
+    workflow_run: v.optional(v.string()),
     // What went out, with the session whose Codecast-Session trailer each commit carries.
     commits: v.optional(v.array(v.object({ sha: v.string(), subject: v.string(), author: v.optional(v.string()), conversation_id: v.optional(v.id("conversations")), task_ids: v.optional(v.array(v.id("tasks"))) }))),
     // The fixes it carried (contracts/deploys DeployCarry).
@@ -4280,11 +4338,26 @@ export default defineSchema({
     // Files under the target's sources that were uncommitted when it went out:
     // the sha names every commit up to it, and these went too.
     dirty: v.optional(v.number()),
+    // The hostname of the machine that pushed it.
+    machine: v.optional(v.string()),
+    // Which push path sent it. The dev watcher's pushes are not deploys: they are dev_pushes.
+    pushed_via: v.optional(v.literal("deploy.sh")),
+    // What it put on the target that was not there before, and what it took off, as names (`fn:<module>:<export>`,
+    // `http:<METHOD> <path>`, `index:<table>.<index>`, `table:<table>`). At most 500 each, 200 characters a name.
+    // Present exactly when the push's diff ran (possibly empty).
+    adds: v.optional(v.array(v.string())),
+    drops: v.optional(v.array(v.string())),
+    // When the push's diff read prod: a clean deploy that kept a name proves it committed only for pushes made before
+    // this (deploys.adderOf).
+    changes_read_at: v.optional(v.number()),
     // The `cast ship checkout` pass that sent it (DP11).
     ship_pass_id: v.optional(v.id("ship_passes")),
     // The line-deploy run that carries it through its steps (DP8): each
     // step's state is that run's station, read from the run, never copied here.
     run_id: v.optional(v.id("workflow_runs")),
+    // A deploy still open when a newer one of its target went live, closed as cancelled: that deploy's short id.
+    // A later report of its own (live, failed) still lands on it.
+    superseded_by: v.optional(v.string()),
     created_at: v.number(),
     live_at: v.optional(v.number()),
     finished_at: v.optional(v.number()),
@@ -4294,7 +4367,47 @@ export default defineSchema({
     .index("by_workspace_created", ["workspace", "created_at"])
     .index("by_source_created", ["source_id", "created_at"])
     .index("by_repository_created", ["repository", "created_at"])
-    .index("by_workspace_target_created", ["workspace", "target", "created_at"]),
+    .index("by_workspace_target_created", ["workspace", "target", "created_at"])
+    .index("by_workflow_run", ["workflow_run"]),
+
+  // A dev watcher's push (scripts/gated-push.ts) of someone's working tree to a
+  // target, which is not a deploy: nobody asked for it, it carries no fix and
+  // ends no deploy's window, so it never enters `deploys`. One row per pusher,
+  // machine, repository and sha between deploys of the target: a save lands on
+  // its pusher's row from that machine that began after the target's live
+  // deploy went live, and is a row of its own otherwise
+  // (deploys.recordDevPush). Read for who added a name (deploys.adderOf), for
+  // the notice that a push dropped someone's work, and for the uncommitted
+  // work a target runs on top of its live deploy (deployTargetsState).
+  dev_pushes: defineTable({
+    // Access: the key the deploy of the same push would carry (`team:<id>`).
+    workspace: v.string(),
+    // Routing: the team whose deploys these are.
+    team_id: v.optional(v.id("teams")),
+    repository: v.optional(v.string()),
+    target: v.string(),
+    sha: v.string(),
+    // The hostname of the machine that pushed.
+    machine: v.optional(v.string()),
+    started_by: v.optional(v.object({
+      kind: v.union(v.literal("person"), v.literal("role"), v.literal("line"), v.literal("source"), v.literal("cli")),
+      name: v.string(),
+      user_id: v.optional(v.id("users")),
+      role_id: v.optional(v.id("org_roles")),
+    })),
+    // Uncommitted files under the target's sources at the last save.
+    dirty: v.number(),
+    // The net change of the row's saves against what the target ran before the row began, by name (as deploys.adds):
+    // a save's add of a name the row dropped takes it off drops, and its drop of a name the row added takes it off adds.
+    adds: v.array(v.string()),
+    drops: v.array(v.string()),
+    created_at: v.number(),
+    // The last save.
+    live_at: v.number(),
+    updated_at: v.number(),
+  })
+    .index("by_workspace_target_live", ["workspace", "target", "live_at"])
+    .index("by_workspace_target_machine_sha", ["workspace", "target", "machine", "sha", "created_at"]),
 
   // Read-through cache of repository content fetched with the GitHub App
   // token for the source browser and history pages: branch lists, trees,
@@ -4939,6 +5052,9 @@ export default defineSchema({
       v.literal("card_waiting"),
       v.literal("change_shipped"),
       v.literal("cause_reopened"),
+      // A deploy took off what the recipient's uncommitted push had put on its
+      // target (deploys.noticeDroppedWork). Entity is the dropping deploy.
+      v.literal("deploy_dropped_work"),
       // The last blocker of a task assigned to the recipient cleared and no
       // session owns it (taskWaits.onUnblocked, task-graph.md TG2).
       v.literal("task_unblocked"),
@@ -4950,6 +5066,8 @@ export default defineSchema({
       v.literal("decision_passed"),
       v.literal("decision_escalated"),
       v.literal("decision_assigned"),
+      // A card waiting on the recipient: every card one session asked in one turn (lib/decisionPush.ts).
+      v.literal("decision_waiting"),
       // A comment in the thread of a decision the recipient owns or takes part in (decisionThread.ts).
       v.literal("decision_comment"),
       // Finding a team by work email (teamDiscovery.ts): someone asked to
@@ -4997,7 +5115,9 @@ export default defineSchema({
       // A weekly card by its week key: opens /week on that week.
       v.literal("weekly_card"),
       // A metric watch by its short id: opens /ops/metrics/mw-N.
-      v.literal("metric_watch")
+      v.literal("metric_watch"),
+      // A deploy by its short id: opens /deploys?deploy=dp-N.
+      v.literal("deploy")
     )),
     entity_id: v.optional(v.string()),
     // The exact chat message a chat notification points at. entity_id names the
@@ -5621,6 +5741,9 @@ export default defineSchema({
       v.literal("team_member_role_changed"),
       v.literal("team_member_visibility_changed"),
       v.literal("staff_daemon_command"),
+      v.literal("team_read_key_minted"),
+      v.literal("team_read_key_revoked"),
+      v.literal("team_read_key_used"),
     ),
     actor_user_id: v.id("users"),
     actor_conversation_id: v.optional(v.id("conversations")),
@@ -6233,6 +6356,8 @@ export default defineSchema({
     .index("by_team_id", ["team_id"])
     .index("by_workspace", ["workspace"])
     .index("by_short_id", ["short_id"])
+    // A fresh role restart moves projects off the seat it retires.
+    .index("by_default_session", ["default_session_id"])
     // Trial projects that start their own runs (lineTrial.dispatch).
     .index("by_trial_dispatch_cap", ["line_trial.dispatch.cap_usd"])
     // Trial projects (lineTrial.priceRunsTick prices their runs).
@@ -7715,6 +7840,8 @@ export default defineSchema({
   })
     .index("by_slug", ["slug"])
     .index("by_user", ["user_id"])
+    // The gallery reads each owner's newest pages first (artifacts.listForWeb).
+    .index("by_user_updated", ["user_id", "updated_at"])
     .index("by_user_path", ["user_id", "source_path"])
     .index("by_task", ["task_id"])
     .index("by_plan", ["plan_id"])
@@ -8143,6 +8270,9 @@ export default defineSchema({
     anchor: v.optional(v.object({ message_id: v.string(), offset: v.number() })),
     anchor_at: v.optional(v.number()),
     claims: v.optional(v.array(v.object({ user_id: v.id("users"), text: v.string(), at: v.number(), how: v.optional(v.string()) }))),
+    // compose: rows only. This person's box has joined the shared draft, focused
+    // or not; cursor_pos is set only while it is focused.
+    in_draft: v.optional(v.boolean()),
     updated_at: v.number(),
   })
     .index("by_doc", ["doc_id"])
@@ -8433,6 +8563,34 @@ export default defineSchema({
 
   ...callTables,
 
+  // A repository's own flows (`.codecast/flows`), as the viewer's checkouts of
+  // it report them (repoFlows.ts, shared/contracts/repoFlows.ts): the flows
+  // `cast flow run` takes there ahead of the shipped and published ones. One
+  // row per person and checkout (`root`, its git top level): a repository's
+  // worktrees hold different flows. The owner alone reads it. `flows` holds
+  // each graph parsed, its nodes the parser's FlowNodeIn, which grows with
+  // the parser, so they are not pinned field by field here.
+  checkout_flows: defineTable({
+    user_id: v.id("users"),
+    root: v.string(),
+    repository: v.string(),
+    hash: v.string(),
+    flows: v.array(v.object({
+      slug: v.string(),
+      name: v.string(),
+      kind: v.union(v.literal("line"), v.literal("segment")),
+      label: v.string(),
+      description: v.union(v.string(), v.null()),
+      takes: v.array(v.string()),
+      nodes: v.array(v.any()),
+      edges: v.array(v.object({ from: v.string(), to: v.string(), label: v.optional(v.string()), condition: v.optional(v.string()) })),
+    })),
+    updated_at: v.number(),
+  })
+    .index("by_user_root", ["user_id", "root"])
+    // A session in a checkout that never reported reads its repository's newest report.
+    .index("by_user_repository_updated", ["user_id", "repository", "updated_at"]),
+
   workflows: defineTable({
     user_id: v.id("users"),
     team_id: v.optional(v.id("teams")),
@@ -8477,6 +8635,10 @@ export default defineSchema({
     // current version, on every machine; "repo" = the checkout's file (pinned).
     // Unset: the resolution from before the library (daemonGraph.ts).
     runs_from: v.optional(v.union(v.literal("library"), v.literal("repo"))),
+    // The version the row stands at now (ct-98653): the one its last push or save left, which a run started with no
+    // version named pins. A place that pushes a graph again keeps its old version, so the newest version by time can
+    // be another checkout's.
+    version_id: v.optional(v.id("workflow_versions")),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -8486,8 +8648,8 @@ export default defineSchema({
     .index("by_user_slug", ["user_id", "slug"]),
 
   // Every version of a pushed graph (line-workspace.md LW4: every save is a
-  // version of the step): one row per new graph_hash a push of the row
-  // brought, with each station's hash and the stations that moved, so a
+  // version of the step): one row per new graph_hash, or per new place that
+  // pushed it, with each station's hash and the stations that moved, so a
   // step's history reads its saves whether or not a run has read them yet.
   workflow_versions: defineTable({
     workflow_id: v.id("workflows"),
@@ -8499,8 +8661,29 @@ export default defineSchema({
     at: v.number(),
     // The version itself (ct-70169): a run in the library runs it, and a restore writes it back.
     snapshot: v.optional(workflowSnapshotValidator),
+    // A flow outside the library keeps its graph apart (ct-98653), so a list of versions never loads it: a run
+    // reads the version it started on (workflow_runs.graph_version_id, convex lib/runGraph.ts).
+    graph_id: v.optional(v.id("workflow_version_graphs")),
+    // The checkout on a machine the push read its file from; absent for a push from no file.
+    pushed_from: v.optional(v.object({ device_id: v.string(), root: v.string() })),
+    // The versions a run pinned to this one resumes with (lib/runGraph.ts): "place:<device>:<root>" for a push from
+    // a file, "library" for a library flow. Only a later version of its line supersedes a pinned run. A push from no
+    // file has none: its run resumes with its own pinned graph. Unset too on versions from before ct-98653.
+    line: v.optional(v.string()),
+    // Its number in the row's history (`v<seq>`), from ct-98653 on.
+    seq: v.optional(v.number()),
   })
-    .index("by_workflow_at", ["workflow_id", "at"]),
+    .index("by_workflow_at", ["workflow_id", "at"])
+    .index("by_workflow_line", ["workflow_id", "line", "at"]),
+
+  // A pushed graph's content, once per row per content (`key`, a hash of the
+  // whole snapshot): the versions that pushed the same graph share it.
+  workflow_version_graphs: defineTable({
+    workflow_id: v.id("workflows"),
+    key: v.string(),
+    snapshot: workflowSnapshotValidator,
+  })
+    .index("by_workflow_key", ["workflow_id", "key"]),
 
   // A person's verdict on one decision a line step made (line-workspace.md
   // LW4): the step at `node_id` in run `run_id` decided right or wrong, with
@@ -8702,17 +8885,39 @@ export default defineSchema({
     // Public sharing: "anyone with the link" (publicShare.ts).
     share_token: v.optional(v.string()),
     // The line's merge step landed (the-line.md L12): what went where, when.
-    merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()) })),
+    // `authorized`: on a merge no role is behind, the person whose word allowed it and why (orgLineMerge.personAuthorized).
+    merge: v.optional(v.object({ sha: v.string(), branch: v.string(), into: v.string(), at: v.number(), pr_url: v.optional(v.string()), authorized: v.optional(v.object({ user_id: v.id("users"), why: v.string() })) })),
+    // The run's own graph cleared it to land with no card (orgLineMerge.clearForMerge): when, the script station that
+    // wrote it and its words, the runner's account, and the attempt (runAttempt). Valid only in that attempt; every
+    // resume, reask and land-again drops it.
+    merge_cleared: v.optional(v.object({ at: v.number(), node_id: v.string(), why: v.string(), by: v.id("users"), attempt: v.number() })),
+    // The CI station's verdict as it reported it from its own running node (orgLineMerge.recordCiVerdict): green or
+    // not on which pull-request head, in which attempt. A clearance to land needs a green one on the head it merges.
+    // `ci_changed`: the pull request edits CI's own config, so a clearance also needs a person's Ship on the run's card.
+    ci_verdict: v.optional(v.object({ node_id: v.string(), green: v.boolean(), head_sha: v.string(), ci_changed: v.optional(v.boolean()), at: v.number(), attempt: v.number() })),
+    // The reviewer's verdict as its own session reported it (orgLineMerge.recordReviewVerdict): on which head, in which round.
+    review_verdict: v.optional(v.object({ node_id: v.string(), verdict: v.string(), head_sha: v.string(), round: v.optional(v.string()), at: v.number(), attempt: v.number() })),
+    // The Merge station's own rebases of a reviewed head, pushed to be tested again (orgLineMerge.recordStationRebase):
+    // a review of `from` covers `to`, which differs only by the default branch it sits on. The newest few.
+    station_rebases: v.optional(v.array(v.object({ from: v.string(), to: v.string(), at: v.number(), attempt: v.number() }))),
     graph_hash: v.optional(v.string()), // LE14: content hash of the graph the runner executed (parser.graphHash)
     graph_nodes: v.optional(v.array(v.object({ id: v.string(), h: v.string() }))), // LE14: each station's hash in that graph (parser.graphNodeHashes)
     // The machine whose runner drives the run (its device id): where the run
     // is resumed when that runner dies (cli workflow/runResume.ts).
     runner_device: v.optional(v.string()),
+    // A run placed on another of its owner's machines (`cast flow run --device`): the change it works on, pushed to
+    // origin, which that machine fetches and freezes in its own checkout before the run starts (cli workflow/placedChange.ts).
+    placed_change: v.optional(v.any()),
     // The last time a person asked for the run to be resumed (the trace's Resume).
     resume_requested_at: v.optional(v.number()),
     // A rerun from the trial page: its runner sets the earlier run's branch
     // aside and starts from origin/main (cli lineTrialBranch.ts).
     fresh_branch: v.optional(v.boolean()),
+    // The version of its workflows row the run started on, or the one its runner reported loading since
+    // (lib/runGraph.ts, ct-98653). The row is one per (user, slug), rewritten by every checkout and team that
+    // pushes the slug, so the run's stations, agents and supersession read this, never the row. Unset on a run
+    // from before pins, which reads the row.
+    graph_version_id: v.optional(v.id("workflow_versions")),
     // The library versions the run executes, its flow and the base it extends (flowVersions.ts).
     flow_versions: v.optional(v.array(v.object({ workflow_id: v.id("workflows"), version_id: v.id("workflow_versions") }))),
     // When a failed run was last resumed at a station as a new attempt: its
@@ -8922,7 +9127,9 @@ export default defineSchema({
       // A weekly card, for its owner's Monday notice. Same reason.
       v.literal("weekly_card"),
       // A metric watch, for its alert to the people it names. Same reason.
-      v.literal("metric_watch")
+      v.literal("metric_watch"),
+      // A deploy, for the notice that it dropped someone's work. Same reason.
+      v.literal("deploy")
     ),
     entity_id: v.string(),
     reason: v.union(
@@ -9411,8 +9618,8 @@ export default defineSchema({
   // this hour. `key` names what is counted ("post:<channel>:<poster>",
   // "root:<channel>:<poster>", "mention_from:<user>", "mention_from:<user>:<session>"
   // for a mention reply charged to the replying session, "mention_to:<target>")
-  // and `bucket` is the window it counts in (a UTC day "2026-09-12" or hour
-  // "2026-09-12T14"). One row per (key, bucket); old buckets are simply never
+  // and `bucket` is the window it counts in (a UTC day "2026-09-12", an hour
+  // "2026-09-12T14", or in a DM the person's latest line "since:<created_at>"). One row per (key, bucket); old buckets are simply never
   // read again. Separate from `rate_limits`, whose window is one minute.
   chat_agent_quota: defineTable({
     key: v.string(),

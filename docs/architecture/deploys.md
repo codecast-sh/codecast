@@ -183,13 +183,22 @@ as a deploy object, oldest first, one source or repository per call, paged by
 writes nothing. `deploysBackfill:backfillTargets` lists the sources and repositories
 to walk. `deploysBackfill:recarry` recomputes the carries of deploys recorded from
 markers, ten per call, oldest first, after the merges the rule reads change; it
-stamps each deploy's `cut_at` first. Run them
+stamps each deploy's `cut_at` first. `deploysBackfill:stampRunKeys` stamps
+`workflow_run` (the Actions run a deploy's url names) on deploys recorded
+before it, a page per call from `cursor`. Run them
 through `packages/convex/run.sh`.
 
 ## DP7. Where deploys show
 
-- `dp-N` is a reference everywhere (entity type `deploy`): a pill with its
-  state, opening `/flows?view=deploys&deploy=dp-N`.
+- `dp-N` is a reference everywhere (entity type `deploy`): a pill whose icon,
+  colour and last word are its state (waiting, going out with its elapsed
+  time, live, was live once replaced, failed, cancelled), opening
+  `/flows?view=deploys&deploy=dp-N`. A GitHub Actions run url in a message,
+  and a run's bare id after "run" or "deploy" ("Deploy 44822506482"), is the
+  same pill when that run carried a deploy (`deploys.get` takes either), and
+  stays as written otherwise.
+- A merged pull request's and a main commit's pill end with how far the change
+  has gone (DP16).
 - The Line app's Deploys view: what waits to go out per project with its
   Deploy press (through the shared confirm flow) and, on a role-trigger line,
   the role that sends it with today's deploys against its limit or why it
@@ -283,7 +292,13 @@ desktop app. They are declared once, in the checkout:
   the previous version back, and `policy` who starts it (`press`, a person's
   Deploy, the default; `auto`, it goes out by itself when CI on main's head
   is green; `release`, it goes out with every release, DP15). `after`,
-  `ci` and `finish` give a release its order and steps (DP15).
+  `ci` and `finish` give a release its order and steps, and `deadline` how
+  long a change flow's Deploy stage waits for it (DP15).
+  `ci`, `gate`, `rollout` and `finish` are the deploy's step commands
+  (DP13), each run like `run` with `$sha`, `$deploy` and `$actor`; a step
+  left out passes with a note.
+  `workflow = "deploy.yml"` names the GitHub Actions workflow file every
+  deploy of the target runs as, whoever dispatches it (DP11).
   `ship = "<step>"` ties it to the `[[ship.deploy]]` step of
   workspace.toml that sends it at a ship: the target takes that step's `run`
   and `when` (unless it gives its own), and the ship records a deploy of it.
@@ -309,9 +324,13 @@ Deploys page) parses through `contracts/deployTargets`.
 The targets have their own file because every released CLI validates
 workspace.toml strictly (an unknown key in `[[ship.deploy]]`, `[ship]` or at
 the top level refuses the whole manifest, and with it `cast ship` and
-workspace acquire). An older CLI never opens deploy.toml, so declaring a
-target is safe whatever CLI a machine runs. Keep workspace.toml to the keys
-the oldest CLI in use reads.
+workspace acquire). Keep workspace.toml to the keys the oldest CLI in use
+reads. deploy.toml is read past that: a target key this CLI does not know is
+ignored and named (`cast line deploy targets` prints it), so a file written
+for a newer CLI still deploys. CLIs before 1.1.249 refuse an unknown target
+key instead, and a pressed deploy of that repository fails on them: raise
+`min_cli_version` to a release that knows a key before any repository writes
+it (`gate` and `rollout` came after `ci` and `finish`, which 1.1.235 reads).
 
 ## DP11. Every way a target goes live leaves a dp-N
 
@@ -332,6 +351,24 @@ the oldest CLI in use reads.
   a target's `github-status` reader names: pending records a running deploy,
   success makes it live, failure or error fails it
   (`deployTargets.recordGithubDeployStatus`).
+- **A target's deploy workflow.** Every `workflow_run` webhook on the default
+  branch of the file a target's `workflow` names is that target's deploy
+  (`deployTargetsCi.recordWorkflowRunDeploy`), so a run dispatched by hand
+  shows while it runs and when it fails: queued or in progress is running,
+  success live, failure failed, cancelled or skipped cancelled. The commit a
+  dispatched run ships is the one its run-name names (a dispatch input:
+  Union's `run-name: Deploy <sha> for <actor>`), the commit main knows first;
+  any other run ships the commit it runs on, since its title is a commit
+  subject. A requested delivery can come before GitHub fills the run-name in,
+  so a later delivery that names the commit corrects the head the first one
+  recorded. One workflow is one target's: a file two targets name is refused.
+  The run's url is the deploy's, stamped as `workflow_run` (indexed, so a
+  run's link in a message is a point lookup), and a marker from a run speaks
+  only for that run's deploy: a second run queued behind the first is a deploy of its own, a
+  rerun (attempt 2) another, and a run finishes an open deploy asked for from
+  codecast only when it ships that deploy's sha or the deploy names none yet.
+  A later report of the same sha (the target's live reader) finds the same
+  deploy. A failure fires `deploy_failed` like any other.
 - **A release document.** `deployTargets.pollLiveReaders` (every five
   minutes) reads each `json` reader and records a deploy when it names a new
   commit or version: the CLI release goes live when latest.json says so.
@@ -368,7 +405,11 @@ commits whole and the total, main's head and its CI.
 ## DP13. Deploying any target from codecast
 
 `deployTargets.request` (team or repository, target, `action`) asks for a
-deploy: `deploy` sends main's head, `redeploy` sends an earlier deploy's sha
+deploy: `deploy` sends main's head, or the commit `sha` names (a commit on
+the default branch after the live one; a target whose command takes no `$sha`
+sends the tree it runs in, so only main's head can be named for it), and the
+deploy row records it from the start, so every step judges and sends that
+commit; `redeploy` sends an earlier deploy's sha
 again (only a command that takes `$sha`; a command that deploys the tree it
 runs in cannot), `rollback` runs the target's rollback back to the live
 deploy before the current one, or the one named. It refuses a `push` target,
@@ -378,7 +419,28 @@ The row is `requested`, carries the commits it will send, and queues
 runs the line-deploy graph with the target's commands
 (`lineDeploy.deployProfileFor`): the send is its command or rollback, and a
 target read from elsewhere gets a live step (`cast line deploy await-live`)
-that waits for its reader to record the sha. From a terminal: `cast line
+that waits for its reader to record the sha. Its other steps run the
+target's own commands (DP10), and a rollback runs none of them:
+
+- `ci` before the send: the sha's verdict (`cast line deploy ci`).
+- `gate` after the send: the gate's verdict on what went out.
+- `rollout` after the gate: the rollout finishing.
+- `finish` once live: what follows (`$version` expands).
+
+A target whose send dispatches one GitHub Actions run that does CI, the gate
+and the rollout itself (Union's deploy.yml) mirrors that run's jobs as steps
+with `cast line deploy follow --jobs <names>`: the send's output names the
+run (`https://github.com/<repo>/actions/runs/<id>`), the deploy records it,
+and each later step reads it as `CAST_DEPLOY_URL`. A step passes when its
+jobs pass and fails when one fails or is cancelled. A job the workflow
+skipped passes and says "skipped by the workflow", unless the run ended
+failed, which means a job it needs did not pass, and then it fails.
+
+```toml
+ci      = "cast line deploy follow --jobs ci-verdict"
+gate    = "cast line deploy follow --jobs gate,evals"
+rollout = "cast line deploy follow --jobs deploy"
+``` From a terminal: `cast line
 deploy --target <name> [--redeploy dp-N | --rollback [dp-N]] --go`.
 
 A deploy that goes live fires `deploy_live`, one that fails `deploy_failed`
@@ -402,7 +464,11 @@ A team ships main many times a day; each push leaves some targets behind
 cast deploy                 every `release` target main moved past, and the push targets it waits on
 cast deploy cli mobile      those targets, whatever their policy
 cast deploy --dry-run       what it would send, wait for and leave alone, and why
-cast deploy --files "<paths>" --sha <sha> [--except <targets>]   only what one landed change touches
+cast deploy --files "<paths>" --carrying <sha> [--except <targets>]   only what one landed change touches, sending main's head
+cast deploy --sha <sha>     every deploy of the release makes exactly that commit live (request sha), not main's head
+cast deploy                 pins origin's head as the release plans it for each target whose command takes $sha,
+                            so a push after planning never rides along; a commit codecast has not read from
+                            GitHub yet is asked for again for up to two minutes
 ```
 
 `deployRelease.ts planRelease` reads the checkout's targets (the file is the
@@ -421,7 +487,7 @@ whose live sha is not in the checkout's history counts as behind. Then:
   until a live deploy holds the sha.
 - `skip`: `press` and `auto` targets the command did not name, with why.
 
-Four keys of a `[[target]]` make the release a declaration rather than a
+Five keys of a `[[target]]` make the release a declaration rather than a
 script. They are read only by the CLI; the server's copy leaves them out
 (`publishableTarget`).
 
@@ -431,6 +497,7 @@ script. They are read only by the CLI; the server's copy leaves them out
 | `after = ["backend"]` | sent only once those targets are live with this release; an `after` the release does not touch is not waited on; a cycle or an unknown name refuses the file |
 | `ci = "<command>"` | the line-deploy graph's CI station: the deploy sha's verdict before the send (`cast line deploy ci --workflow ci.yml`) |
 | `finish = "<command>"` | the Finish station once live; `$version` is what went out (`cast force-update $version` after a CLI release) |
+| `deadline = "45m"` | how long a change flow's Deploy stage waits for the target to go live, from when it can first go out, before it calls the deploy stuck; default a day for a target a person or a role sends, 60m for one it sends, 30m for one that deploys itself; at most 24h |
 
 Targets run side by side except where `after` orders them; a target whose
 `after` failed is not sent. The command exits 1 when any target failed.
@@ -442,15 +509,106 @@ targets are done `cast deploy` levels the checkout it ran in onto origin
 and prints what it moved. The checkout ends a release level with what it
 released, rather than a commit behind until the daemon's sweep comes round.
 
-A change flow's Deploy stage is the same release narrowed to one change: the
-`deploy` segment's `send` param (`deploy [flow="deploy", send="release"]`, set
-by the shipped `change` and `quick-change`) makes its wait station run
-`cast deploy --files <the change's files> --sha <its landed commit>` once the
-change lands, then wait as before. A flow that composes the segment without
-`send` only waits, so a team's own fix flows (Union's) keep deploying on their
-role's or person's clock.
+A change flow's Deploy stage is the same release narrowed to one change and
+held to a promise (`workflow/awaitDeploy.ts`, the `deploy` segment's station
+`cast flow await-deploy`): Live means every target the change's files touch
+carries it. It starts only from the commit the run merged: `$run_dir/
+merge.json`'s sha (Merge, or Land, FL4), else the merge recorded on the run
+(`run.merge.sha`, which `cast line merge` writes without a merge.json). With
+neither, or a sha that is not on origin's default branch, it stops at once at
+Not merged. Of the targets the change's files touch:
+
+- `release` targets that run here: it sends them, `cast deploy <targets>
+  --carrying <merged sha>` in a process of its own, then waits for them. One with a `ci`
+  step is sent only while main CI on main's head (the commit its deploy would
+  send) is green by the verdict that step reads (the workflow `--workflow`
+  names, by its conclusion, so an advisory job that fails holds nothing; every
+  CI workflow when it names none, leaving out the deploy workflows targets name
+  with `workflow`). Red or running main holds it, not fails it, and it goes out
+  the moment a fix or revert turns the head green. A send that went out at a
+  head main moved to between the gate and the request, and failed there while
+  that head was red or running, is held the same way and sent again at green.
+  One whose `after` target the run sends goes in the same `cast deploy`, which
+  orders them; one whose `after` target the run does not send (a person, a
+  role, a push, the server, or a target held back with `except`) is held unsent,
+  `mobile: held until backend is live with 1a2b3c4 (held 3m, then 60m)`, until that
+  target's record shows a live deploy carrying the commit (the Merge station's
+  pre-merge deploy counts). An `after` the change does not touch is not waited
+  on. A flow that composes the segment with `send=""` sends none of them and
+  waits for a deploy someone else sends. `send` defaults to `release`, the
+  library's default: a flow that composes the segment without it sends.
+- `push` targets, whatever their policy: it waits until their own deploy
+  carries the commit.
+- `auto` targets: it waits until the server sends them from green main CI (every
+  CI workflow, deploy workflows left out).
+- `press` targets, and the target the line profile's `[line.deploy]` sends
+  whatever its policy (by a person's Deploy, or the line's role, DP4): it never
+  sends them and only waits, a day by default, `production: waiting for a person
+  to send it (2h of 24h)` or `waiting for @release to send it`. The station
+  parks, so that day holds no slot.
+
+A target held back with `except` is not waited on; the last line names it. A
+deploy sends main's head (DP13), so a later commit's deploy that carries the
+merged one satisfies the wait. When the send ends and a target it sent has no
+deploy carrying the commit, the stage fails at once rather than wait out the
+deadline, naming the sha the deploy did send: the checkout that publishes the
+target may be behind origin.
+
+Every progress line names each target, what it waits for, how long and its
+deadline: `cli: dp-13 sending 1a2b3c4 (12m of 45m)`. A target's deadline starts
+when it can first go out: every `after` target live with the commit, whoever
+sends it, and, when gated, main green, so a target behind a person's day never
+spends its own hour waiting for that person. Until then it reads `held 12m, then 45m`, as in `cli: waiting on main CI at 9f8e7d6
+(red since 5e4d3c2: test-cli; held 12m, then 45m)`; "red since" names red
+main's open culprit for the repository (main-red.md, `/cli/main-red/open`) that
+the commit's history holds, and, when the server names none or cannot answer,
+the oldest commit of the red run main's first-parent history ends in. Deadlines default to
+a day for a target a person or a role sends, an hour for one the stage sends and
+half an hour for one that deploys itself; `deadline` overrides each, up to a day.
+The whole wait is capped at the longest deadline and an hour, from the station's
+first start. `$run_dir/deploy-clock.json` keeps that start for the merged commit
+across a station re-run mid-wait; it is deleted wherever merge.json is, and a
+resume of a run that ended at Deploy stuck starts a fresh clock. The station's
+own timeout is 15 minutes past the cap. When every target is live it prints
+`Live: 1a2b3c4 on backend dp-12, cli dp-13.` and exits 0. A deploy that would
+carry the commit failing ends it at Deploy failed. A target past its deadline,
+or any target still waiting at the cap, posts one blocker on the run's task
+naming the target, the commit and its last state, and ends it at Deploy stuck.
+Deploy targets have no owner of their own, so the task's blocker is the one
+card.
 
 The `cast-deploy` skill ships everything uncommitted in a shared checkout and
 ends with `cast deploy`, so what a project deploys, in what order and with what
 follow-ups lives in its `.codecast/deploy.toml`, not in the skill.
 
+## DP16. How far a change has gone
+
+A merged pull request (`owner/repo#N`) or a commit on main (`owner/repo@sha`)
+reads its reach through `deployReach.get`: for each target whose paths the
+change touches (the pull request's files, else its merge commit's), one of
+the states below. A target that names no paths ships every change only in a
+repository whose targets name none; beside targets that name theirs (Union's
+production beside its line-profile apps) it is left out, since it cannot say
+what a change touches.
+
+| State | When |
+|---|---|
+| live | the target's newest live deploy holds it; the deploy named is the first live one that did |
+| going out | a running deploy holds it |
+| queued | a deploy asked for, that no machine has started, holds it |
+| rolled back | an earlier live deploy held it and the one live now does not |
+| deploy failed | a deploy started after the live one held it and failed |
+| not live yet | none of the above |
+
+A deploy holds a change by DP3's rule: the same commit, else its sha's place
+on main at or after the change's, else (no place) live at or after the merge.
+A deploy is stamped with its place once live; an open or failed one is placed
+from `commits.main_at` at read. The change's state is the one that most needs
+an eye: failed, rolled back, not live yet, queued, going out, live, over the
+targets still shipping: a target with nothing going out and no deploy in a
+week (Union's aivery-operator, a backend copy shipped rarely) keeps its row
+but would otherwise hold every change at not live yet; when every target is
+dormant, all of them speak. A pull request
+names its commit on main by `pull_requests.merge_commit_sha`, which the closed
+webhook and the GitHub sync write. The rule is `contracts/deployReach`; the
+web's store holds each answer in `deployReach`, keyed by its ref.

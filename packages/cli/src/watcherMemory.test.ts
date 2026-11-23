@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import { isolateCodecastDir, type IsolatedCodecastDir } from "./test-helpers/codecastDir.js";
 import {
-  coldReservationBytes, countFloorWatchers, DEFAULT_COLD_BYTES, budgetBytes, FLOOR_BYTES, footprintOf, peakOfPids, rssOfPids, fitsBudget, holdBytes, HISTORY, learnedSizes, peaksPath, percentile, readPeaks, recordPeak,
+  admissionBudget, coldReservationBytes, DEFAULT_COLD_BYTES, budgetBytes, FLOOR_BYTES, footprintsOf, parseDarwinSysctl, parseFootprints, parseMeminfo, parseVmStat, peakOfPids, rssOfPids, fitsBudget, holdBytes, HISTORY, learnedSizes, peaksPath, percentile, readPeaks, recordPeak,
   reservationBytes, reserveBytes, treeRssBytes, watcherCeilingBytes, type Peak, type ProcTable,
 } from "./watcherMemory.js";
 
@@ -96,13 +96,6 @@ describe("what a live watcher holds", () => {
 });
 
 describe("the budget", () => {
-  test("never runs fewer watchers than the count rule it replaced: one per 12 GB, 2 to 16", () => {
-    expect(countFloorWatchers(128 * GB)).toBe(10);
-    expect(countFloorWatchers(64 * GB)).toBe(5);
-    expect(countFloorWatchers(16 * GB)).toBe(2);
-    expect(countFloorWatchers(512 * GB)).toBe(16);
-  });
-
   test("is total memory minus a reserve: 8 GB or a fifth by default, else the env, else check.reserve_gb", () => {
     expect(reserveBytes(128 * GB, {})).toBe(Math.round(128 * GB * 0.2));
     expect(budgetBytes(128 * GB, {})).toBe(Math.round(128 * GB * 0.8));
@@ -158,12 +151,87 @@ test("a watcher's memory is its own RSS plus every process under it", () => {
   expect(rssOfPids([])).toBe(0);
   if (process.platform === "darwin") {
     // footprint counts compressed pages RSS leaves out; its peak never falls below what the process holds now.
-    const f = footprintOf(process.pid)!;
+    const f = footprintsOf([process.pid]).get(process.pid)!;
     expect(f.now).toBeGreaterThan(10 * 2 ** 20);
     expect(f.peak).toBeGreaterThanOrEqual(f.now);
     const peak = peakOfPids([process.pid]);
     expect(peak).toBeGreaterThanOrEqual(f.peak);
-    expect(peak).toBeLessThanOrEqual(footprintOf(process.pid)!.peak);
-    expect(footprintOf(999_999_999)).toBeNull();
+    expect(peak).toBeLessThanOrEqual(footprintsOf([process.pid]).get(process.pid)!.peak);
+    // One call reads several pids; one it cannot find is left out, not a failure for the rest.
+    const both = footprintsOf([process.pid, 999_999_999]);
+    expect([...both.keys()]).toEqual([process.pid]);
+    expect(footprintsOf([999_999_999]).size).toBe(0);
   }
+});
+
+describe("reading what the machine can give", () => {
+  test("footprint's report of several pids is read per pid", () => {
+    const text = `======================================================================
+claude [11627]: 64-bit    Footprint: 282 MB (16384 bytes per page)
+======================================================================
+
+Auxiliary data:
+    phys_footprint: 282 MB
+    phys_footprint_peak: 323 MB
+
+======================================================================
+bash [22479]: 64-bit (translated)    Footprint: 4009 KB (4096 bytes per page)
+======================================================================
+
+Auxiliary data:
+    phys_footprint: 4041 KB
+    phys_footprint_peak: 4669 KB
+
+======================================================================
+Summary Footprint: 286 MB
+======================================================================`;
+    expect(parseFootprints(text)).toEqual(new Map([[11627, { now: 282 * 2 ** 20, peak: 323 * 2 ** 20 }], [22479, { now: 4041 * 1024, peak: 4669 * 1024 }]]));
+  });
+
+  test("macOS: available is free, speculative, purgeable and file-backed inactive pages; swap and the kernel's verdict from sysctl", () => {
+    const vm = `Mach Virtual Memory Statistics: (page size of 16384 bytes)
+Pages free:                                     7821.
+Pages inactive:                              1479206.
+Pages speculative:                               678.
+Pages purgeable:                                   8.
+File-backed pages:                            966961.
+Anonymous pages:                             1994891.`;
+    // The 1.48M inactive pages are mostly anonymous: only the 0.97M file-backed ones count.
+    expect(parseVmStat(vm)).toBe((7821 + 678 + 8 + 966961) * 16384);
+    expect(parseVmStat("nothing")).toBeNull();
+    expect(parseDarwinSysctl("vm.swapusage: total = 26624.00M  used = 25164.38M  free = 1459.62M  (encrypted)\nkern.memorystatus_vm_pressure_level: 2\n"))
+      .toEqual({ swapTotalBytes: 26624 * 2 ** 20, swapUsedBytes: 25164.38 * 2 ** 20, pressureLevel: 2 });
+    expect(parseDarwinSysctl("")).toBeNull();
+  });
+
+  test("Linux: MemAvailable and swap from /proc/meminfo", () => {
+    expect(parseMeminfo("MemTotal:       65536000 kB\nMemAvailable:   20000000 kB\nSwapTotal:       8000000 kB\nSwapFree:        2000000 kB\n"))
+      .toEqual({ availableBytes: 20000000 * 1024, swapTotalBytes: 8000000 * 1024, swapUsedBytes: 6000000 * 1024 });
+  });
+});
+
+describe("the measured budget", () => {
+  const cap = 102.4 * GB;
+  const total = 128 * GB;
+  const margin = Math.round(6.4 * GB);
+  test("calm: what watchers hold plus available beyond the margin (a twentieth, 6.4 GB here), never above the cap", () => {
+    expect(admissionBudget({ totalBytes: total, capBytes: cap, watcherBytes: 20 * GB, memory: { availableBytes: 30 * GB, swapUsedBytes: 0, swapTotalBytes: 0, pressureLevel: 1 } }))
+      .toEqual({ budgetBytes: 20 * GB + 30 * GB - margin, pressure: false });
+    expect(admissionBudget({ totalBytes: total, capBytes: cap, watcherBytes: 90 * GB, memory: { availableBytes: 30 * GB, swapUsedBytes: 0, swapTotalBytes: 0 } }).budgetBytes).toBe(cap);
+  });
+
+  test("the laptop at 21.0 of 21.5 GB swap with macOS at warn: no headroom at all", () => {
+    expect(admissionBudget({ totalBytes: total, capBytes: cap, watcherBytes: 62 * GB, memory: { availableBytes: 16 * GB, swapUsedBytes: 21 * GB, swapTotalBytes: 21.5 * GB, pressureLevel: 2 } }))
+      .toEqual({ budgetBytes: 62 * GB, pressure: true });
+  });
+
+  test("short of available memory with swap filling: less than the watchers hold, by the shortfall", () => {
+    expect(admissionBudget({ totalBytes: total, capBytes: cap, watcherBytes: 30 * GB, memory: { availableBytes: 4 * GB, swapUsedBytes: 6 * GB, swapTotalBytes: 8 * GB } }))
+      .toEqual({ budgetBytes: 30 * GB - (2 * margin - 4 * GB), pressure: true });
+  });
+
+  test("old swap on a machine with room is not pressure; an unreadable machine falls back to the cap", () => {
+    expect(admissionBudget({ totalBytes: total, capBytes: cap, watcherBytes: 0, memory: { availableBytes: 40 * GB, swapUsedBytes: 3 * GB, swapTotalBytes: 4 * GB } }).pressure).toBe(false);
+    expect(admissionBudget({ totalBytes: total, capBytes: cap, watcherBytes: 0, memory: null })).toEqual({ budgetBytes: cap, pressure: false });
+  });
 });

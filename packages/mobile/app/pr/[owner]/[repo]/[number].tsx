@@ -2,7 +2,8 @@
 // review decision), its checks with failures first, its reviews, and the
 // sessions that worked on it. The data and every rule about it are web's PR
 // page's (hooks/useSyncTimeline, usePRDetails, lib/prView); the diff and line
-// threads stay on GitHub, one tap away.
+// threads stay on GitHub, one tap away. A merged one also says where it runs
+// in production, target by target (web's components/pr/PRDeploy).
 import { useMemo, useState } from 'react';
 import { ActivityIndicator, ScrollView, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
@@ -24,8 +25,27 @@ import { Text as RNText } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme, type Palette } from '@/constants/Theme';
 import { solColor } from '@/lib/solColor';
 import { formatRelativeTime } from '@/components/SessionItem';
+import Feather from '@expo/vector-icons/Feather';
+import { useDeployReach } from '@codecast/web/hooks/useDeployReach';
+import { useDeployTargets } from '@codecast/web/hooks/useSyncDeployTargets';
+import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
+import { repoObjectId } from '@codecast/web/lib/entityLinks';
+import { REACH_LOOK, deployAgo } from '@codecast/web/lib/deploys/deployPill';
+import { prDeployRows, prReachHeadline, prRowLine, prRowParts } from '@codecast/web/lib/deploys/prDeploy';
+import { REACH_ICON, toneColor, type FeatherName } from '@/components/EntityPill';
 
 const color = (accent: ExternalEventAccent | undefined, Theme: Palette) => solColor(accentVar(accent), Theme);
+
+// The web PR page's production band (components/pr/PRDeploy): the same rows and the same words (prRowParts),
+// read-only. The press that sends a deploy lives on web's Deploys page and its confirm flow.
+function useProductionRows(pr: any, repository: string) {
+  const merged = pr?.state === 'merged';
+  const reach = useDeployReach(merged ? repoObjectId({ type: 'pr', repository, number: pr.number }) : null);
+  const { targets, deploys } = useDeployTargets(merged ? ((pr?.team_id as string | undefined) ?? null) : null, repository);
+  const now = useCoarseNow(30_000);
+  const model = useMemo(() => prDeployRows(reach, targets, deploys, repository, now), [reach, targets, deploys, repository, now]);
+  return { ...model, headline: prReachHeadline(reach?.state, model.rows), now, mergedAt: (pr?.merged_at as number | undefined) ?? null };
+}
 
 export default function PullRequestScreen() {
   const Theme = useTheme();
@@ -45,6 +65,7 @@ export default function PullRequestScreen() {
   );
   const githubUrl = repoObjectGitHubUrl({ type: 'pr', repository, number } as any);
   const [showPassed, setShowPassed] = useState(false);
+  const production = useProductionRows(pr, repository);
 
   if (!pr) {
     return (
@@ -77,6 +98,13 @@ export default function PullRequestScreen() {
         <RNText style={styles.title}>{pr.title}</RNText>
         <RNView style={styles.chips}>
           <Chip label={state.label} color={color(state.accent, Theme)} />
+          {production.headline && (
+            <Chip
+              label={production.headline.words}
+              color={toneColor(Theme, REACH_LOOK[production.headline.state].tone)}
+              icon={REACH_ICON[production.headline.state]}
+            />
+          )}
           {merge && <Chip label={merge.label} color={color(merge.accent, Theme)} />}
           {decision && <Chip label={decision.label} color={color(decision.accent, Theme)} />}
         </RNView>
@@ -84,6 +112,33 @@ export default function PullRequestScreen() {
           {pr.author_github_username ? `${pr.author_github_username} · ` : ''}{pr.head_ref} → {pr.base_ref}
           {pr.additions != null ? `  +${pr.additions} −${pr.deletions ?? 0}` : ''}
         </RNText>
+
+        {production.rows.length + production.dormant.length > 0 && (
+          <Section title="Production">
+            {production.rows.map((row, i) => {
+              const tint = toneColor(Theme, REACH_LOOK[row.state].tone);
+              const to = row.deploy ?? row.now;
+              return (
+                <TouchableOpacity key={`${row.target}#${i}`} style={styles.prodRow} disabled={!to} onPress={() => to && router.push(`/deploy/${to.short_id}`)}>
+                  <RNView style={styles.row}>
+                    <Feather name={REACH_ICON[row.state]} size={15} color={tint} />
+                    <RNText style={styles.rowTitle} numberOfLines={1}>{row.target}</RNText>
+                    <RNText style={[styles.rowMeta, { color: tint }]}>{REACH_LOOK[row.state].word}</RNText>
+                  </RNView>
+                  <RNText style={styles.prodDetail} numberOfLines={2}>{prRowLine(prRowParts(row, production.now, production.mergedAt))}</RNText>
+                  {row.note ? <RNText style={[styles.prodDetail, { color: Theme.red }]} numberOfLines={2}>{row.note}</RNText> : null}
+                </TouchableOpacity>
+              );
+            })}
+            {production.dormant.map((t, i) => (
+              <RNView key={`${t.target}#idle${i}`} style={styles.row}>
+                <Feather name="circle" size={15} color={Theme.textDim} />
+                <RNText style={[styles.rowTitle, styles.dimRow]} numberOfLines={1}>{t.target}</RNText>
+                <RNText style={[styles.rowMeta, { color: Theme.textDim }]}>idle{t.at ? ` · ${deployAgo(t.at, production.now)}` : ''}</RNText>
+              </RNView>
+            ))}
+          </Section>
+        )}
 
         <Section title={fold.total ? `Checks · ${fold.failed ? `${fold.failed} failed · ` : ''}${fold.passed}/${fold.total} passed` : 'Checks'}>
           {checks.length === 0 ? (
@@ -145,9 +200,10 @@ export default function PullRequestScreen() {
   );
 }
 
-function Chip({ label, color }: { label: string; color: string }) {
+function Chip({ label, color, icon }: { label: string; color: string; icon?: FeatherName }) {
   return (
     <RNView style={[styles.chip, { borderColor: color + '66', backgroundColor: color + '1a' }]}>
+      {icon ? <Feather name={icon} size={11} color={color} /> : null}
       <RNText style={[styles.chipText, { color }]}>{label}</RNText>
     </RNView>
   );
@@ -169,7 +225,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', gap: Spacing.lg, backgroundColor: Theme.bg, padding: Spacing.lg },
   title: { fontSize: 18, fontWeight: '700', color: Theme.text },
   chips: { flexDirection: 'row', flexWrap: 'wrap', gap: Spacing.sm, marginTop: Spacing.md },
-  chip: { borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
+  chip: { flexDirection: 'row', alignItems: 'center', gap: 5, borderWidth: 1, borderRadius: 999, paddingHorizontal: 10, paddingVertical: 3 },
   chipText: { fontSize: 12, fontWeight: '600' },
   meta: { fontSize: 12, color: Theme.textMuted, marginTop: Spacing.sm },
   section: { marginTop: Spacing.xl, gap: 2 },
@@ -178,6 +234,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   rowTitle: { flex: 1, fontSize: 14, color: Theme.text },
   rowMeta: { fontSize: 12, color: Theme.textMuted },
   review: { paddingVertical: 4 },
+  prodRow: { paddingBottom: 6 },
+  prodDetail: { fontSize: 12, color: Theme.textMuted, marginLeft: 15 + Spacing.sm, marginTop: -4 },
   reviewBody: { fontSize: 13, color: Theme.textMuted, marginBottom: Spacing.sm },
   dim: { fontSize: 13, color: Theme.textMuted },
   dimRow: { color: Theme.textMuted },

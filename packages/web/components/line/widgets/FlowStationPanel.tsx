@@ -4,7 +4,7 @@
 // and limits, the words it runs (prompt, script, the document a person decides
 // on), where each outcome sends the work, and on a run what that station did.
 // The flow card, a run's card and the Flows library all draw a flow this way.
-import { memo, useMemo, useState } from "react";
+import { memo, useMemo, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import type { AppFlow } from "../../../lib/line/flowPool";
 import { useFlowStations } from "../../../lib/line/flowStations";
@@ -29,15 +29,21 @@ export const FlowExplorer = memo(function FlowExplorer({ flow, run = null, compa
   );
 });
 
-const TEXT_WORD: Record<StationView["texts"][number]["kind"], string> = { prompt: "Prompt", system: "System prompt", script: "Script", doc: "Decision document" };
+const TEXT_WORD: Record<StationView["texts"][number]["kind"], string> = { prompt: "Prompt", guide: "Project's guidance", system: "System prompt", script: "Script", doc: "Decision document" };
 const STATUS_WORD: Record<string, string> = { completed: "Done", running: "Running", failed: "Failed", pending: "Waiting" };
 
-function FlowStationPanel({ flow, pick, run, onClose }: { flow: AppFlow; pick: StepPick; run: RunLike | null; onClose: () => void }) {
+/** One station open under its drawing. `children`: what a host adds about it (a pipeline's when, who and recent runs), under its header.
+ *  `inherited`: the prompt is the backbone's, so its tab says so beside the project's guidance. */
+/** `title`: the station's name as the host draws it, when a step inside a frame would otherwise be named by its own node. */
+/** `after`: what the host adds below what the station runs (its changes, its whole script). */
+export function FlowStationPanel({ flow, pick, run, onClose, children, after, inherited = false, title }: { flow: AppFlow; pick: StepPick; run: RunLike | null; onClose: () => void; children?: ReactNode; after?: ReactNode; inherited?: boolean; title?: string }) {
+  // A host that says who does the step itself (children) needs no fallback word for it in the header.
   const stations = useFlowStations(flow);
   const view = useMemo(() => stationView(flow, pick.id, pick.kind, stations), [flow, pick, stations]);
   const [tab, setTab] = useState(0);
   if (!view) return null;
   const Icon = WHO[view.who].icon;
+  const wordOf = (kind: keyof typeof TEXT_WORD) => (kind === "prompt" && inherited ? "Inherited prompt" : TEXT_WORD[kind]);
   const text = view.texts[Math.min(tab, view.texts.length - 1)];
   const visits = run?.node_statuses?.filter((n) => n.node_id === view.id) ?? [];
   const last = visits[visits.length - 1];
@@ -45,13 +51,14 @@ function FlowStationPanel({ flow, pick, run, onClose }: { flow: AppFlow; pick: S
     <section className="fsp" data-flow-station={view.id} aria-label={`${view.label}: what this step does`}>
       <header className="fsp-head">
         <Icon className="fsp-who" aria-hidden strokeWidth={2} />
-        <span className="fsp-name">{view.label}</span>
-        {view.segment ? <span className="fsp-in">in {view.segment}</span> : null}
+        <span className="fsp-name">{title ?? view.label}</span>
+        {view.segment && !title ? <span className="fsp-in">in {view.segment}</span> : null}
         <span className="fsp-facts">
-          {(view.facts.length ? view.facts : [WHO[view.who].word]).map((f, i) => <span key={i} className="fsp-fact">{f}</span>)}
+          {(view.facts.length ? view.facts : children ? [] : [WHO[view.who].word]).map((f, i) => <span key={i} className="fsp-fact">{f}</span>)}
         </span>
         <button type="button" className="fsp-close" onClick={onClose} aria-label="Close step"><X aria-hidden strokeWidth={2} /></button>
       </header>
+      {children}
       {last ? (
         <div className="fsp-run" data-status={last.status}>
           <span className="fsp-run-state">{STATUS_WORD[last.status] ?? last.status}{visits.length > 1 ? ` · ${visits.length} visits` : ""}</span>
@@ -67,10 +74,10 @@ function FlowStationPanel({ flow, pick, run, onClose }: { flow: AppFlow; pick: S
           {view.texts.length > 1 ? (
             <div className="fsp-tabs" role="tablist">
               {view.texts.map((t, i) => (
-                <button key={t.kind} type="button" role="tab" aria-selected={t === text} className="fsp-tab" onClick={() => setTab(i)}>{TEXT_WORD[t.kind]}</button>
+                <button key={t.kind} type="button" role="tab" aria-selected={t === text} className="fsp-tab" onClick={() => setTab(i)}>{wordOf(t.kind)}</button>
               ))}
             </div>
-          ) : <div className="fsp-label">{TEXT_WORD[text.kind]}</div>}
+          ) : <div className="fsp-label">{wordOf(text.kind)}</div>}
           <div className="fsp-text" data-kind={text.kind}>
             {text.kind === "script" ? <CodeBlock code={text.text} language="bash" /> : <MarkdownBlocks content={text.text} />}
           </div>
@@ -87,6 +94,7 @@ function FlowStationPanel({ flow, pick, run, onClose }: { flow: AppFlow; pick: S
           ))}
         </ul>
       ) : null}
+      {after}
     </section>
   );
 }

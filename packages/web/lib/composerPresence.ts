@@ -38,6 +38,19 @@ export function composeDocId(conversationId: string): string {
   return `compose:${conversationId}`;
 }
 
+/**
+ * Whether someone besides me holds this session's owner composer: anyone in
+ * its owner set, or the account it runs on (an owner by access even when the
+ * set names others). An owner's box waits for someone else to appear before
+ * it announces itself, so two owners would each wait forever.
+ */
+export function hasCoOwner(ownerIds: Iterable<string>, runnerId: string | null | undefined, me: string | null | undefined): boolean {
+  if (!me) return false;
+  if (runnerId && runnerId !== me) return true;
+  for (const id of ownerIds) if (id !== me) return true;
+  return false;
+}
+
 /** A draft from someone who may not send into the session: a suggestion for those who may. */
 export function isSuggestion(row: PresenceRow): boolean {
   return row.can_send === false;

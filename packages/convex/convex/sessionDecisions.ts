@@ -33,8 +33,9 @@ import { roleOfConversation } from "./lib/actor";
 import { headOfPeopleIn, projectLeadRole, userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { gateMirror, gateResponseOf, optionMoves } from "./lib/gateChoices";
-import { assignCategory, isHumanOnlyCategory, isProtectedCategory } from "./lib/decisionCategory";
+import { categoryFor, isHumanOnlyCategory, isProtectedCategory } from "./lib/decisionCategory";
 import { syncDecisionInbox } from "./lib/decisionInbox";
+import { settleDecisionWaiting } from "./lib/decisionRing";
 import { answerLabel, normalizeVerdict, verdictOfRow, type Verdict } from "./lib/decisionVerdict";
 import { noticeAreaOwner, routeByArea } from "./decisionRouting";
 import { settleAreasCard } from "./decisionAreas";
@@ -44,7 +45,7 @@ import { humanStarterUser, listSessionOwnerIds } from "./sessionOwners";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { learnFromCardGate } from "./lineLearn";
 import { settleCardWaiting } from "./lineNotices";
-import { gateTrialPages, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
+import { gateTrialPages, runOfStation, settleTrialCard, trialDeciderOf, trialProjectOf, trialStackOf, trialStationOf } from "./lib/trialDecision";
 import { linkProposalDecision, proposalToAsk, settleExpectationCard } from "./lib/expectationsApply";
 import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./lib/secretApprovals";
 import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
@@ -827,8 +828,10 @@ async function settleResolution(ctx: Ctx, row: DecisionRow, verdict: Verdict, by
   await closeStackIfDone(ctx, row.stack_id, row._id, now);
   // An answered card gate is recorded and learned from (LE12); a trial's answer only records what the person would have done.
   if (!row.trial) await learnFromCardGate(ctx, row, verdict, by.user_id);
-  // Its "card waiting" notice stops claiming a card waits (LE16).
+  // Its "card waiting" notice stops claiming a card waits (LE16), and so does its phone notice (lib/decisionPush.ts).
   await settleCardWaiting(ctx, row);
+  const holderId = row.holder?.kind === "user" ? row.holder.id : null;
+  await settleDecisionWaiting(ctx, row.conversation_id, [...(row.asked_user_ids ?? []), row.user_id, ...(holderId ? [holderId] : [])]);
   // A trial card reads its decision's answer; its row only learns the run is past it.
   if (row.trial) await settleTrialCard(ctx, row._id, verdict.status, now);
   await noticeAnsweredForPeople(ctx, row, verdict, by);
@@ -1172,9 +1175,6 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   const stack = trialProject ? await trialStackOf(ctx, trialProject, now) : bound.stack;
   if (trialProject) await gateTrialPages(ctx, trialProject, [args.report_slug, ...args.options.map((o) => o.page_slug)], now);
 
-  const assigned = assignCategory({ question: args.question, options: args.options, context_md: args.context_md }, args.category);
-  // Running a command in the person's name is always the person's (never a role's under a grant).
-  const { category, pinned } = parsedRun && !isProtectedCategory(assigned.category) ? { category: "access", pinned: true } : assigned;
   const run: CommandRun | undefined = parsedRun
     ? {
         argv: parsedRun.argv,
@@ -1206,6 +1206,15 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       }));
 
   const existing = openRows.find((r) => r.question === args.question);
+  // Who may answer (D1): the run's own asks take the flow's category; a card a session of the run posts, or one a gate
+  // took up, is a person's unless the gate says otherwise; a re-ask keeps the open card's category.
+  const assigned = categoryFor(args.category, {
+    current: existing ? existing.category : null,
+    runDeclares: !!args.workflow_run_id,
+    runs: !!args.workflow_run_id || !!existing?.workflow_run_id || !!(await runOfStation(ctx, conversation)),
+  });
+  // Running a command in the person's name is always the person's (never a role's under a grant).
+  const category = parsedRun && !isProtectedCategory(assigned) ? "access" : assigned;
   const docId = args.doc_md ? await upsertDecisionDoc(ctx, conversation, args.question, args.doc_md, now, existing?.doc_id) : undefined;
   const routed = await routeFor(ctx, conversation, now, task, args.as_station);
   // A hosted conversation asks its owner only, so an address (--to) is ignored.
@@ -1269,7 +1278,6 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
       short_id: existing.short_id,
       updated: true,
       category,
-      category_pinned: pinned,
       holder: updated?.holder,
       stack: stack ? { id: stack._id, short_id: stack.short_id } : undefined,
       doc_id: docId,
@@ -1328,7 +1336,8 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   // A role whose recommendation carried over from the card this one replaces has said its piece: the people see it now.
   const carried = !!hears && hops.some((h) => String(h.role_id) === String(hears._id) && h.recommendation !== undefined);
   const woken = carried ? [] : await tellHearingRole(ctx, hears, { _id: id, short_id, question: args.question, conversation_id: conversation._id }, now);
-  await syncDecisionInbox(ctx, id, people, now, woken.length === 0 && routed.trial !== "owner");
+  // A card shared out by area rings through noticeAreaOwner just below, which never tells the asker's own person.
+  await syncDecisionInbox(ctx, id, people, now, woken.length === 0 && routed.trial !== "owner", { announce: !areaOwner || String(areaOwner) === String(conversation.user_id) });
   if (areaOwner && woken.length === 0) await noticeAreaOwner(ctx, areaOwner, { question: args.question, short_id, conversation_id: conversation._id }, conversation.user_id);
   if (stack) await joinStack(ctx, stack, { _id: id, stack_id: stack._id, scope_keys: scopeKeys }, now);
   if (!args.workflow_run_id) await followStationCard(ctx, conversation, id, now);
@@ -1338,7 +1347,6 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
     short_id,
     updated: false,
     category,
-    category_pinned: pinned,
     holder,
     grant_id: grant?._id,
     people: people.length,
@@ -1495,10 +1503,10 @@ export const edit = mutation({
     const conversation = args.doc_md ? await ctx.db.get(row.conversation_id) : null;
     const docId = args.doc_md && conversation ? await upsertDecisionDoc(ctx, conversation, question, args.doc_md, now, row.doc_id) : undefined;
 
-    // Options that changed may pin a protected category the old text did not;
-    // a new proposal is re-assigned the same way the ask assigned it.
+    // Without a proposal the row keeps its category; a run's card is only tightened (categoryFor).
     const proposed = args.category ?? row.category_proposed;
-    const { category } = assignCategory({ question, options, context_md: args.context_md ?? row.context_md }, proposed);
+    const asker = row.workflow_run_id ? null : await ctx.db.get(row.conversation_id);
+    const category = categoryFor(args.category, { current: row.category, runDeclares: false, runs: !!row.workflow_run_id || !!(await runOfStation(ctx, asker)) });
     const joined = stack ? await joinStack(ctx, stack, row as any, now) : {};
     const joinsStack = "stack_id" in joined;
     const trialProject = row.trial ? await trialProjectOf(ctx, task ?? (row.task_id ? await ctx.db.get(row.task_id) : null)) : null;
@@ -1652,6 +1660,9 @@ function cliRowShape(r: DecisionRow, conversation?: any) {
     impact_reason: r.impact_reason,
     task_id: r.task_id,
     station: r.station,
+    // The run whose gate posted the card, which a resume does not clear (the run's own gate_decision_id it does):
+    // a flow reads a task's own gate cards by it, as Land's personAuthorized does.
+    workflow_run_id: r.workflow_run_id,
     stack_id: r.stack_id,
     holder: r.holder,
     hops: r.hops,

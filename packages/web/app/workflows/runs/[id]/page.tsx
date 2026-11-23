@@ -22,7 +22,7 @@ import { useDecisionDetail, useSyncDecisionDetail } from "../../../../hooks/useS
 import { useCoarseNow } from "../../../../hooks/useCoarseNow";
 import { lineRefHref, lineWorkspaceHref, type LineSelectionPatch } from "../../../../lib/line/lineWorkspaceUrl";
 import { graphKeyOf, type GraphRun } from "../../../../lib/line/lineGraphs";
-import { useWorkflow, useWorkflowRun } from "../../../../hooks/useSyncWorkflows";
+import { useRunWorkflow, useWorkflowRun } from "../../../../hooks/useSyncWorkflows";
 import { useInboxStore } from "../../../../store/inboxStore";
 import { useForeignWorkspace } from "../../../../hooks/useForeignWorkspace";
 import { AuthGuard } from "../../../../components/AuthGuard";
@@ -91,7 +91,7 @@ function RunDetailContent({ runId }: { runId: string }) {
   // the cache; the feeders keep them fresh.
   const run = useWorkflowRun(runId) as WorkflowRun | null | undefined;
   const titlebarRef = useTitlebarHead<HTMLDivElement>();
-  const workflow = useWorkflow(run?.workflow_id) as Workflow | null | undefined;
+  const workflow = useRunWorkflow(run) as Workflow | null | undefined;
 
   const respondToGate = useInboxStore((s) => s.respondToGate);
   const [gateText, setGateText] = useState("");

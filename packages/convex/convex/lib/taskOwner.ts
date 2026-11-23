@@ -9,6 +9,7 @@
 
 import type { Id } from "../_generated/dataModel";
 import { HEARTBEAT_ALIVE_MS } from "../inboxFilters";
+import { HANDOFF_COMMENT } from "./runAgentSessions";
 
 // A session that touched the conversation this recently is treated as working
 // even without a daemon heartbeat (a cloud agent, a session between turns).
@@ -36,6 +37,20 @@ export async function boundSessionsOf(ctx: { db: any }, task: any): Promise<any[
     out.push(conv);
   }
   return out.sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0));
+}
+
+/** The session a change on `task` came from: the live session bound to it, else the newest live session that
+ *  handed it off (its HANDOFF_COMMENT review comment), since an implementer often moves to other work once it does.
+ *  A session reviewing the task is neither. */
+export async function changeSessionOf(ctx: { db: any }, task: any, comments: { conversation_id?: Id<"conversations">; comment_type: string; text: string; created_at: number }[]): Promise<any | null> {
+  const [bound] = (await boundSessionsOf(ctx, task)).filter((c) => !c.inbox_killed_at);
+  if (bound) return bound;
+  const handoffs = comments.filter((c) => c.conversation_id && c.comment_type === "review" && HANDOFF_COMMENT.test(c.text));
+  for (const h of handoffs.sort((a, b) => b.created_at - a.created_at)) {
+    const conv = await ctx.db.get(h.conversation_id);
+    if (conv && !conv.inbox_killed_at && String(conv.review_of_task_id ?? "") !== String(task._id)) return conv;
+  }
+  return null;
 }
 
 /** Is the session still doing work: a fresh daemon heartbeat, or recent

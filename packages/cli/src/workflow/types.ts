@@ -1,3 +1,4 @@
+import type { FlowEditChange } from "@codecast/shared/contracts/flowEdit";
 export type NodeShape =
   | "Mdiamond"       // start
   | "Msquare"        // exit
@@ -64,6 +65,9 @@ export interface WorkflowNode {
   script?: string;
   // Command nodes: seconds the script may run (default 120).
   timeout?: number;
+  // Command nodes: seconds with no output before the runner flags the station as silent (default 1800, none for a
+  // station that parks; 0 never).
+  silent?: number;
   // Control flow
   max_visits?: number;
   /** How many entries along `free_visit` edges this node takes without counting them toward max_visits. */
@@ -95,6 +99,13 @@ export interface WorkflowNode {
   // test database, a missing tool), not that the change is wrong: the task
   // gets a note and the run's owner hears it, never followers as a blocker.
   machine?: boolean;
+  // Bookkeeping (flows.md FL6): the station finishes the stage before it (reads
+  // its verdicts, records the sha it merged), so a person sees it as part of
+  // that stage, never as a stage of its own. It runs like any other station.
+  fold?: boolean;
+  // A person's step a run reaches only on a side route (flows.md FL6): what
+  // makes a run ask, as words that finish "Asks you if …" ("it edits CI").
+  asks_if?: string;
   // A station that came from a segment (flows.md FL3): the node that named the
   // segment, the segment's name and slug, and for its entry and exits which one.
   segment?: string;
@@ -149,6 +160,12 @@ export interface WorkflowGraph {
   edges: WorkflowEdge[];
   /** The files the graph was read from: its own file and every @file it inlined (parser.ts). */
   sources?: string[];
+  /** The edits a variant made over the flow it extends (after=, skip, guide=, when=), as written: not part of the graph's hash. */
+  edits?: FlowEditChange[];
+  /** The base stations a skip took off the path, with the ones nothing reached after it: not part of the graph's hash. */
+  pruned?: string[];
+  /** Stations that run only when the change touches their paths (when=), with those paths: not part of the graph's hash. */
+  gated?: Record<string, string[]>;
 }
 
 export interface WorkflowRunState {

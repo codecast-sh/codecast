@@ -28,6 +28,14 @@ export type FlowNodeIn = {
   stop?: string;
   /** How many times a run may enter the node (a way back to the session, usually); the next visit ends the run. */
   max_visits?: number;
+  /** Seconds the node may run: a run card's deadline for its wait. */
+  timeout?: number;
+  /** An exit the machine caused, not the change (a check it could not run): running again can help. */
+  machine?: boolean;
+  /** Bookkeeping that finishes the stage before it (`fold=true`): drawn as part of that stage. */
+  fold?: boolean;
+  /** A side-route person's step: what makes a run ask, finishing "Asks you if …" (`asks_if="it edits CI"`). */
+  asks_if?: string;
 };
 export type FlowEdgeIn = { from: string; to: string; label?: string; condition?: string };
 
@@ -57,6 +65,9 @@ export type FoldedFlow = {
   ends: string[];
   /** The segments it uses, by slug. */
   uses: string[];
+  /** The main path's stations in the order a passing run reaches them, a fan-out's branches right after it. Absent on a
+   *  pool snapshot folded before it existed. */
+  path?: string[];
 };
 
 /** A flow in the pool: what a picker lists and what a graph draws. */
@@ -74,6 +85,16 @@ export const segmentTopOf = (id: string) => id.split(SEGMENT_SEP)[0];
 export function flowGraphAttr(source: string | null | undefined, key: string): string | null {
   const m = source?.match(new RegExp(`graph\\s*\\[[^\\]]*\\b${key}\\s*=\\s*(?:"([^"]*)"|([\\w.-]+))`));
   return m ? (m[1] ?? m[2] ?? null) : null;
+}
+
+/**
+ * Whether a flow's source takes a session's change, for a reader holding no parser: it takes a branch and is either a
+ * whole flow (`kind="line"`) or lands the branch itself (a station runs the ship segment), as a flow a session writes
+ * for its own change does.
+ */
+export function sourceTakesSessionChange(source: string | null | undefined): boolean {
+  if (!/\bbranch\b/.test(flowGraphAttr(source, "takes") ?? "")) return false;
+  return flowGraphAttr(source, "kind") === "line" || /\bflow\s*=\s*"?ship(?:"|[\s,;\]])/.test(source ?? "");
 }
 
 /** The nodes a source fills with steps it writes in place (`subgraph <node> { ... }`), for a reader holding no parser. */
@@ -163,15 +184,24 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
   for (const id of top.keys()) if (!seen.has(id)) order.push(id);
   // The main path: from the start, the edge a passing station takes; an end only when nothing else is left.
   const main = new Set<string>();
+  const path: string[] = [];
   // The subject's own stations (backend=subject: the session the change came from fixes what a stage found) are a way back, never the way on.
   const rank = (x: { to: string; score: number }) => x.score - (top.get(x.to)?.type === "exit" ? 10 : 0) - (top.get(x.to)?.backend === "subject" ? 20 : 0);
   for (let at = start?.id; at && !main.has(at); ) {
     main.add(at);
-    // A fan-out runs every branch: all are on the path, and the path goes on where they join.
+    path.push(at);
+    // A fan-out runs every branch: each branch's stations are on the path up to the join, and the path goes on there.
     if (top.get(at)?.type === "parallel_fanout") {
-      const branches = (outOf.get(at) ?? []).map((x) => x.to);
-      for (const b of branches) main.add(b);
-      at = branches.flatMap((b) => (outOf.get(b) ?? []).map((x) => x.to)).find((t) => top.get(t)?.type === "parallel_fanin");
+      let join: string | undefined;
+      for (const first of (outOf.get(at) ?? []).map((x) => x.to)) {
+        for (let b: string | undefined = first; b && !main.has(b); ) {
+          if (top.get(b)?.type === "parallel_fanin") { join ??= b; break; }
+          main.add(b);
+          path.push(b);
+          b = [...(outOf.get(b) ?? [])].filter((x) => !main.has(x.to)).sort((x, y) => rank(y) - rank(x))[0]?.to;
+        }
+      }
+      at = join;
       continue;
     }
     at = [...(outOf.get(at) ?? [])].filter((x) => !main.has(x.to)).sort((a, b) => rank(b) - rank(a))[0]?.to;
@@ -199,21 +229,37 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
   }
   // A stop inside a segment ends the run there: the flow's end too.
   for (const n of nodes) if (n.type === "exit" && n.segment && !ends.includes(n.label)) ends.push(n.label);
-  return { stations, ends, uses: [...uses] };
+  return { stations, ends, uses: [...uses], path: path.filter((id) => top.get(id)?.type !== "start" && top.get(id)?.type !== "exit") };
 }
 
 /** A flow's main path in words: its passing stations joined by arrows, and how many sit on side routes. */
 export function flowPathWords(f: Pick<FoldedFlow, "stations">): { path: string; side: number } {
   const main = f.stations.filter((s) => s.main && s.kind !== "join");
-  // Branches of a fan-out read as one step, joined by "+".
+  // A fan-out reads as one step: its own name when the graph gives it one, else its branches joined by "+".
   const branchOf = new Set(f.stations.filter((s) => s.kind === "parallel").flatMap((s) => s.next.map((n) => n.toId)));
   const words: string[] = [];
   for (const s of main) {
     if (branchOf.has(s.id)) continue;
-    words.push(s.kind === "parallel" ? s.next.map((n) => n.to).join(" + ") : s.label);
+    words.push(s.kind === "parallel" && (!s.label || s.label === s.id) ? s.next.map((n) => n.to).join(" + ") : s.label);
   }
   const counted = f.stations.filter((s) => s.kind !== "join");
   return { path: words.join(" → "), side: counted.length - main.length };
+}
+
+/** The flow a workspace's sessions ship through when it has set none. */
+export const CHANGE_FLOW_SLUG = "change";
+
+/** Can a session's own change run through it? A flow that takes a branch can (the run freezes the session's edits onto one). */
+export const takesSessionChange = (flow: { takes: ReadonlyArray<string> }) => flow.takes.includes("branch");
+
+/** The workspace's default flow out of a pool (flows.md FL4): the slug it set when that flow is in the pool and takes a
+ *  session's change, else Change, else the first that does. The web's pickers and a nameless `cast flow run` both read it. */
+export function defaultFlowOf<F extends { slug: string; takes: ReadonlyArray<string> }>(pool: ReadonlyArray<F>, workspaceSlug: string | null | undefined): F | null {
+  const ok = (slug: string | null | undefined) => {
+    const f = slug ? pool.find((p) => p.slug === slug) : undefined;
+    return f && takesSessionChange(f) ? f : null;
+  };
+  return ok(workspaceSlug) ?? ok(CHANGE_FLOW_SLUG) ?? pool.find(takesSessionChange) ?? null;
 }
 
 /**

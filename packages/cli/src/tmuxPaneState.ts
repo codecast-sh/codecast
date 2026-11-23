@@ -123,6 +123,16 @@ export function isGrokTrustDialog(text: string): boolean {
     && /No,\s*quit\b[^\n]*\bn\b/i.test(text);
 }
 
+// agy's first launch in a folder it has not trusted: "Do you trust the contents
+// of this project?" over "> Yes, I trust this folder" / "No, exit", with a
+// "↑/↓ Navigate · enter Confirm" footer. "Yes" is preselected, so the shared
+// highlight walker in acceptTrustPrompt confirms it. The daemon writes the
+// folder into agy's trustedWorkspaces before launch (antigravityLocal.ts), so
+// this is the fallback. Answered, the dialog is cleared off the pane.
+export function isAntigravityTrustDialog(text: string): boolean {
+  return /Do you trust the contents of this project\?/.test(text) && /Yes, I trust this folder/.test(text);
+}
+
 // cursor-agent's first launch in a directory: "Workspace Trust Required" over
 // "[a] Trust this workspace" / "[q] Quit". The TUI names `a` as the grant key.
 // The answered box stays in the pane's history under the composer, so only a
@@ -258,6 +268,19 @@ export const CLAUDE_TURN_STATUS_LINE = /^\s*[·✢✳✶✻✽*]\s+\S[^\n]*…\s
 // the pane deferred as AGENT_UNKNOWN_STATE for four hours (2026-11-07, jx7aztd).
 export const CLAUDE_OVERPAINTED_RULE = /^\s*[·✢✳✶✻✽*][─━][^\n]*[─━]{10,}\s*$/m;
 
+// A spinner frame, or the "esc to interrupt" hint: drawn only while a turn runs.
+export const TURN_SPINNER_OR_INTERRUPT = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i;
+
+// Whether the pane shows a turn running now, by the marks only a running turn
+// draws. Narrower than classifyTmuxLiveState's "busy", which also reads two
+// idle shapes as busy because typing into them is safe either way: the
+// overpainted rule an idle compaction leaves (for hours), and a lead's
+// teammate panel. A slash command held for a turn's end is not safe either
+// way: on those shapes it would wait for a turn that is not running.
+export function claudeTurnRunningOnPane(region: string): boolean {
+  return TURN_SPINNER_OR_INTERRUPT.test(region) || CLAUDE_TURN_STATUS_LINE.test(region);
+}
+
 // A draft taller than Claude Code's composer scrolls inside the box, and the
 // box's rules then count the hidden lines: "─── ↑ 74 more ───…" on top, where
 // the ❯ row has scrolled out of view, and "─── ↓ 3 more ───…" at the bottom.
@@ -267,12 +290,38 @@ export const CLAUDE_OVERPAINTED_RULE = /^\s*[·✢✳✶✻✽*][─━][^\n]*[�
 export const CLAUDE_COMPOSER_SCROLLED_ABOVE = /^\s*[─━]{2,}\s+↑\s*\d+\s+more\s+[─━]{2,}\s*$/;
 export const CLAUDE_COMPOSER_SCROLLED_BELOW = /^\s*[─━]{2,}\s+↓\s*\d+\s+more\s+[─━]{2,}\s*$/;
 
+// Claude Code's slash-command menu hangs under the composer's bottom rule and
+// marks its selected row with the same ❯, indented ("  ❯ /drive   Take an ask
+// …"). Read as the last glyph, the menu became the composer, and a skill whose
+// description names its own command read as the payload twice, so every
+// /drive sent from the app was held and given up on (2026-11-22). Such a row
+// gives way to the composer's ❯ only in the menu's exact shape: the row sits
+// directly under a bottom rule, and above that rule is a closed box whose ❯
+// starts its line directly under the top rule. A dialog's ❯ ("Do you want to
+// proceed?" / " ❯ 1. Yes") is never skipped, so the transcript's last user
+// turn above it can never read as an unsent draft and draw an Enter.
+const COMPOSER_RULE = /^[─━═]{3,}\s*$/;
+function lineEndingAt(pane: string, newlineAt: number): string {
+  return pane.slice(pane.lastIndexOf("\n", newlineAt - 1) + 1, newlineAt);
+}
+function skipSuggestionMenu(pane: string, glyphAt: number): number {
+  if (glyphAt === -1) return -1;
+  const rowStart = pane.lastIndexOf("\n", glyphAt) + 1;
+  if (rowStart === 0 || !/^[ \t]+$/.test(pane.slice(rowStart, glyphAt))) return glyphAt;
+  if (!COMPOSER_RULE.test(lineEndingAt(pane, rowStart - 1))) return glyphAt;
+  const bottomRuleStart = pane.lastIndexOf("\n", rowStart - 2) + 1;
+  const composerGlyph = Math.max(pane.lastIndexOf("❯", bottomRuleStart), pane.lastIndexOf("›", bottomRuleStart));
+  if (composerGlyph <= 0 || pane[composerGlyph - 1] !== "\n") return glyphAt;
+  const topRule = lineEndingAt(pane, composerGlyph - 1);
+  return COMPOSER_RULE.test(topRule) || CLAUDE_OVERPAINTED_RULE.test(topRule) ? composerGlyph : glyphAt;
+}
+
 // Where the composer's text starts: after its last ❯/› glyph, or under the top
 // rule of a composer scrolled past its ❯ row, whichever is lower on the pane.
 // Taking the last glyph alone read the transcript's newest user turn, above the
 // box, as the draft. -1 when neither is in view.
 export function composerTextStart(pane: string): number {
-  const glyphAt = Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›"));
+  const glyphAt = skipSuggestionMenu(pane, Math.max(pane.lastIndexOf("❯"), pane.lastIndexOf("›")));
   let scrolledAt = -1;
   let offset = 0;
   for (const line of pane.split("\n")) {
@@ -308,7 +357,7 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // busy: "not reading input yet" is a stronger statement than "a turn is
   // running", and the type-ahead paste busy allows is exactly what is unsafe here.
   if (/^\s*Resuming session[.…]/mi.test(newestPaintedFrame(region))) return "starting";
-  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|esc to interrupt/i.test(region)) return "busy";
+  if (TURN_SPINNER_OR_INTERRUPT.test(region)) return "busy";
   // Claude Code's own turn status line: a cycling asterisk glyph, a verb, an
   // ellipsis, then the elapsed time in parentheses — "✶ Perambulating… (50s ·
   // ↓ 161 tokens)". v2.1.270 prints no "esc to interrupt" anywhere on such a
@@ -460,8 +509,9 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
 //  - Glyph that LIES while busy: grok keeps its ❯ composer visible for the whole
 //    turn (live pane capture, v1.0.5), so the glyph-whitelist path would read a
 //    mid-turn pane "idle" and the paste's leading Escape would cancel the running
-//    turn. grok needs the busy-first order this classifier guarantees.
-export const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode", "pi", "grok", "cursor"]);
+//    turn. grok needs the busy-first order this classifier guarantees. agy does
+//    the same with its `>` composer ("esc to cancel" in the footer while busy).
+export const GLYPHLESS_PROMPT_CLIENTS: ReadonlySet<AgentClientId> = new Set(["opencode", "pi", "grok", "cursor", "antigravity"]);
 
 // The registry promptReadyPattern for a client classified whole-pane (see
 // GLYPHLESS_PROMPT_CLIENTS above), null for the ❯/›-glyph clients. Every pane
@@ -494,7 +544,7 @@ export function classifyGlyphlessClientPaneState(
   // BEFORE any store/transcript exists (jx702ea). Without this rule the pane
   // classified "unknown" (no ❯ yet) and ensureTmuxReady's glyphless skip polled
   // until timeout, never sending the `y` the dialog asks for.
-  if (isGrokTrustDialog(paneContent) || isCursorTrustDialog(paneContent)) return "trust";
+  if (isGrokTrustDialog(paneContent) || isCursorTrustDialog(paneContent) || isAntigravityTrustDialog(paneContent)) return "trust";
   if (isAgentLoginScreen(paneContent)) return "signed_out";
   // cursor-agent's tool approval menu ("Run this command?" … "Skip & tell the
   // agent what to do instead") when it runs without --force: only a person
@@ -509,7 +559,10 @@ export function classifyGlyphlessClientPaneState(
   // an idle grok pane as busy forever.
   // cursor-agent's spinner is a two-glyph braille pair before a verb
   // ("⠰⠳ Working", "⠀⠞ Editing") while its composer stays painted.
-  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|⬝⬝|esc (?:to )?interrupt|Esc:cancel|Waiting for response|\[stop\]/i.test(paneContent)) return "busy";
+  // agy's footer reads "esc to cancel" for the whole turn (its spinner is an
+  // eight-dot braille frame beside "Running command..."); idle it reads
+  // "? for shortcuts". Its promo banners say "esc to dismiss", never "cancel".
+  if (/⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|⠏|⬝⬝|esc (?:to )?interrupt|esc to cancel|Esc:cancel|Waiting for response|\[stop\]/i.test(paneContent)) return "busy";
   if (/^\s*[\u2800-\u28FF]{2} [A-Z][a-z]+\b/m.test(paneContent)) return "busy";
   if (readyPattern.test(paneContent)) return "idle";
   return "unknown";

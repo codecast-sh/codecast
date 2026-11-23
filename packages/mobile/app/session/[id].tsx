@@ -1,4 +1,6 @@
 import { captureError } from '@/lib/analytics';
+import { ChangesProvider } from '@codecast/web/components/changes/ChangesContext';
+import { sessionRepository } from '@codecast/web/lib/repoNavigation';
 import { MOVE_VERBS, moveAgentOptions, sessionMoveVerbs } from '@codecast/web/lib/sessionControl';
 import { forkSessionAsAgent, sessionRowFor, switchSessionAgent } from '@codecast/web/lib/sessionAgentActions';
 import { usePinnedAgentIds } from '@codecast/web/hooks/usePinnedAgents';
@@ -39,7 +41,9 @@ import { ROW_LAYOUT, arriveEntering, sendEntering } from '@/lib/transcriptMotion
 import { messageRowKey, uniqueRowKeys } from '@codecast/web/lib/messageRowKey';
 import Reanimated, { Easing as ReEasing, FadeIn, ReduceMotion, useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { chatWakePlace, chatWakeAction, isToolResultCarrier, type ChatWakePrompt } from '@codecast/web/components/sessionMessage';
-import { buildNavigatorRows, sampleTicks, stickyEligibleIds, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
+import { buildNavigatorRows, sampleTicks, stickyEligibleIds, pickStickyFallback, resolveStickyPrompt, countCommentsByMessage, resolveNavigatorAuthors, type NavigatorRow } from '@codecast/web/lib/messageNavigator';
+import { resolveMessageSender } from '@codecast/web/lib/messageSender';
+import { useSenderContext } from '@codecast/web/hooks/useSenderContext';
 import { resolveSessionTitle } from '@codecast/web/lib/sessionTitle';
 import { hasRichMarkdown } from '@codecast/web/lib/richMarkdown';
 import { formatModel, isCommandMessage, isHiddenSystemNotice, isWarningSystemNotice } from '@codecast/web/lib/conversationProcessor';
@@ -72,6 +76,7 @@ import { RoleFailoverBanner } from '@/components/org/RoleFailoverBanner';
 import { useSessionHuddle } from '@/components/calls/SessionHuddleButton';
 import { RenameSessionSheet } from '@/components/session/RenameSessionSheet';
 import { appAlert, showActionSheet, type SheetItem } from '@/lib/popups';
+import { MessageIdentity } from '@codecast/web/lib/conversationBlockContexts';
 import { MessageLongPressContext, OutsideMessage, useMessageLongPress, type BlockCopy } from '@/components/MessageLongPress';
 import { openSelectText } from '@/components/SelectTextSheet';
 import { readableText } from '@/lib/markdown';
@@ -198,6 +203,8 @@ type Message = {
   files?: SentFileData[];
   subtype?: string;
   message_uuid?: string;
+  /** The account that sent a user row (lib/messageSender resolves it). */
+  from_user_id?: string;
   /** A synthetic pull request row: the PR it opens. */
   pr?: { repository: string; number: number };
   usage?: {
@@ -272,7 +279,8 @@ type ConversationData = {
     username: string;
     share_token?: string;
   };
-  user?: { name?: string; email?: string } | null;
+  user_id?: string;
+  user?: { name?: string; email?: string; avatar_url?: string | null } | null;
   git_branch?: string | null;
   git_remote_url?: string | null;
   git_status?: string | null;
@@ -2012,6 +2020,8 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
   const router = useRouter();
   // Who the agent speaks as: its role, its character, or its product name.
   const speakerRow = useSessionIdentityRow(conversationId);
+  // Which message a block inside it belongs to: an edit card finds the session's runs and when it was made from it.
+  const identity = useMemo(() => (conversationId ? { conversationId, messageId: message._id } : null), [conversationId, message._id]);
   const [expandedTools, setExpandedTools] = useState<Set<string>>(() => {
     const initial = new Set<string>();
     message.tool_calls?.forEach(tc => {
@@ -2154,6 +2164,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
     // with nothing to do puts the keyboard away here. Links, tool rows and
     // images inside are deeper pressables and take their own taps.
     <MessageLongPressContext.Provider value={handleLongPress}>
+    <MessageIdentity.Provider value={identity}>
     <Pressable onLongPress={() => handleLongPress()} onPress={globalCollapsed && !localExpanded ? handleTapToExpand : Keyboard.dismiss}>
       {isUser && sender ? <RNText style={styles.userBubbleSender} numberOfLines={1}>{sender}</RNText> : null}
       <RNView
@@ -2402,6 +2413,7 @@ function MessageBubble({ message, agentType, model, showHeader = true, forkChild
       )}
       </RNView>
     </Pressable>
+    </MessageIdentity.Provider>
     </MessageLongPressContext.Provider>
   );
 }
@@ -2575,7 +2587,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     // lays out without animating, and the bubble would snap in instead of rising.
     requestAnimationFrame(() => {
       try {
-        dispatchComposerSend(conversationId, content, sendImages);
+        dispatchComposerSend(conversationId, content, sendImages, trimmedMessage);
         // Reported only once the send is committed: a refused one is retried.
         suggestion.settleSend(trimmedMessage);
       } catch (error) {
@@ -3585,6 +3597,15 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
     () => buildNavigatorRows(navSourceMessages ?? [], commentCountsByMessage, resolveSessionTitle),
     [navSourceMessages, commentCountsByMessage],
   );
+  // Who sent each prompt (lib/messageSender, the resolver web's transcript
+  // and navigator use, against the same roster), so the sheet, the rail and
+  // the bubbles name one person.
+  const senderContext = useSenderContext({
+    id: conversation?.user_id ? String(conversation.user_id) : null,
+    name: conversation?.user?.name || conversation?.user?.email?.split('@')[0],
+    image: conversation?.user?.avatar_url,
+  });
+  const navAuthors = useMemo(() => resolveNavigatorAuthors(navigatorRows, senderContext), [navigatorRows, senderContext]);
   const navRowById = useMemo(() => {
     const map = new Map<string, NavigatorRow>();
     for (const r of navigatorRows) map.set(r._id, r);
@@ -4430,7 +4451,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
           globalImageMap={globalImageMap}
           openGallery={openGallery}
           openFullscreen={openFullscreen}
-          userName={sender || conversation.user?.name || conversation.user?.email?.split('@')[0]}
+          userName={resolveMessageSender({ fromUserId: item.from_user_id ? String(item.from_user_id) : undefined, wireFrom: sender, pending: isPending }, senderContext).name}
           sender={sender}
           showToast={showToast}
           collapsed={collapsed}
@@ -4475,6 +4496,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
 
   return (
     <ProposalBatchContext.Provider value={proposalBatch}>
+    {/* A branch a message names draws as its change, read from this session's repository (changes.md CH4). */}
+    <ChangesProvider repository={conversation ? sessionRepository(conversation as any) : null}>
       <Stack.Screen options={SCREEN_NO_HEADER} />
       <KeyboardAvoidingView
         // iOS: KAV 'padding' (resets cleanly via keyboardWillHide). Android:
@@ -4889,6 +4912,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         <MessageTickRail
           ticks={navTicks}
           promptCount={promptCount}
+          authors={navAuthors}
           activeMessageId={activeStickyId}
           visible={userScrolled}
           onOpen={openNavigatorSheet}
@@ -5014,6 +5038,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         visible={navSheetVisible}
         onClose={closeNavigatorSheet}
         rows={navigatorRows}
+        authors={navAuthors}
         currentMessageId={activeStickyId}
         onSelect={jumpToMessage}
       />
@@ -5063,6 +5088,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
         visible={galleryVisible}
         onClose={() => setGalleryVisible(false)}
       />
+    </ChangesProvider>
     </ProposalBatchContext.Provider>
   );
 }

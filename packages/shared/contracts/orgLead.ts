@@ -62,8 +62,8 @@ export const HEAD_OF_PEOPLE_HANDLE = "head-of-people";
 /** The name the role is born with (org-staffing.md S22: renamable like any role). */
 export const HEAD_OF_PEOPLE_NAME = "Head of People";
 /** The handle and birth name the role carried before 2026-10-02
- *  (org-staffing.md S30), when it was called the Chief of Staff. Rows in prod
- *  keep them until `migrations:renameHeadOfPeople` runs, and old references
+ *  (org-staffing.md S30), when it was called the Chief of Staff. Some rows in
+ *  prod still carry them, and old references
  *  (charters, triggers, a person's habit) keep naming the handle, so every
  *  reader accepts both and the old one always finds the Head of People. */
 export const LEGACY_HEAD_OF_PEOPLE_HANDLE = "chief-of-staff";

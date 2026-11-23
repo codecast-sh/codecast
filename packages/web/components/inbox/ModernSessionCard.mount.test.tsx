@@ -88,8 +88,7 @@ const card = (props: Record<string, unknown> = {}) => (
             globalIndex={0}
             sectionStatus="blocked"
             onSelect={(s, e) => calls.push(`select ${s._id} ${e ? "click" : "key"}`)}
-            onDismiss={(id) => calls.push(`kill ${id}`)}
-            onStash={(id) => calls.push(`stash ${id}`)}
+            onClose={(id) => calls.push(`close ${id}`)}
             onPin={(id) => calls.push(`pin ${id}`)}
             onCardContextMenu={(_e, s, foreign) => calls.push(`menu ${s._id} ${foreign}`)}
             sessionLabel={null}
@@ -113,10 +112,10 @@ describe("the Modern card, mounted", () => {
     expect(host.querySelector("[data-sv-title]")!.textContent).toBe("Fix the auth race");
   });
 
-  test("its four actions sit in one row and each reaches its handler", async () => {
+  test("its three actions sit in one row, Close last, and each reaches its handler", async () => {
     const tools = host.querySelector("[data-mc-tools]")!;
     const buttons = [...tools.querySelectorAll("button")];
-    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Pin", "Kill Session", "Label session", "Stash"]);
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Pin", "Label session", "Close"]);
     // One row: every action is a direct child of the toolbar, which lays
     // them out side by side (flex, no wrap, no column).
     expect(buttons.every((b) => b.parentElement === tools)).toBe(true);
@@ -131,7 +130,7 @@ describe("the Modern card, mounted", () => {
     calls.length = 0;
     for (const b of buttons) await press(b);
     useInboxStore.setState({ openPalette });
-    expect(calls).toEqual([`pin ${ID}`, `kill ${ID}`, `stash ${ID}`]);
+    expect(calls).toEqual([`pin ${ID}`, `close ${ID}`]);
     expect(opened).toBe(true);
   });
 
@@ -168,9 +167,9 @@ describe("the Modern card, mounted", () => {
   });
 
   test("a set-aside card offers Restore and Kill in the same row", async () => {
-    await act(async () => { root.render(card({ variant: "stashed", onRestore: (id: string) => calls.push(`restore ${id}`), onKill: (id: string) => calls.push(`kill-aside ${id}`), onDismiss: undefined, onStash: undefined, onPin: undefined })); });
+    await act(async () => { root.render(card({ variant: "stashed", onRestore: (id: string) => calls.push(`restore ${id}`), onKill: (id: string) => calls.push(`kill-aside ${id}`), onClose: undefined, onPin: undefined })); });
     const tools = host.querySelector("[data-mc-tools]")!;
-    expect([...tools.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual(["Restore", "Kill Session"]);
+    expect([...tools.querySelectorAll("button")].map((b) => b.getAttribute("aria-label"))).toEqual(["Restore", "Kill"]);
     expect(host.querySelector("[data-status-word]")!.textContent).toBe("Stashed");
     calls.length = 0;
     for (const b of tools.querySelectorAll("button")) await press(b);

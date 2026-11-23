@@ -214,3 +214,32 @@ test("a failed daemon lookup opens the file rather than calling it outside the v
   expect(useVaultStore.getState().opError).toBeNull();
   expect(view.routes).toEqual([`/files?f=${encodeURIComponent(rel)}&l=23`]);
 });
+
+test("a path from a teammate's machine opens the same file in this machine's checkout", async () => {
+  await update({ endpoint });
+  const foreign = "/Users/jason/code/app/docs/notes.md";
+  const view = await mount(foreign);
+  await answer(0, { error: "no such path" }, 404);
+  expect(new URL(requests[1].url).searchParams.get("path")).toBe(`${known.root}/docs/notes.md`);
+  await answer(1, { vault: known, rel: "docs/notes.md" });
+  expect(view.routes).toEqual([`/files?path=${encodeURIComponent(`${known.root}/docs/notes.md`)}&l=23`]);
+  expect(useVaultStore.getState().opError).toBeNull();
+});
+
+test("a teammate's path with no exact copy opens in the same-named checkout, where the scan can find it", async () => {
+  await update({ endpoint });
+  const view = await mount("/Users/jason/code/app/docs/moved.md");
+  await answer(0, { error: "no such path" }, 404);
+  await answer(1, { error: "no such path" }, 404);
+  expect(view.routes).toEqual([`/files?path=${encodeURIComponent(`${known.root}/docs/moved.md`)}&l=23`]);
+});
+
+test("a teammate's path with no same-named checkout here says it does not exist", async () => {
+  await update({ endpoint });
+  const foreign = "/Users/jason/code/other/docs/gone.md";
+  const view = await mount(foreign);
+  await answer(0, { error: "no such path" }, 404);
+  expect(requests).toHaveLength(1);
+  expect(useVaultStore.getState().opError).toBe(`${foreign} does not exist on this machine.`);
+  expect(view.routes).toEqual([]);
+});

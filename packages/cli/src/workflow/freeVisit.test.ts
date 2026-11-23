@@ -41,4 +41,24 @@ describe("workflow/runner (a round that spends no visit)", () => {
   test("an edge without the mark spends a visit as before", async () => {
     expect(await runWorkflow(line(2, 3, false), { cwd: tmpDir })).toBe("failed");
   });
+
+  // After a gate clears the counts, the first round back can come along a free edge (the line's red CI after Ship).
+  test("a free edge's entry spends no visit even as the node's first", async () => {
+    const n = path.join(tmpDir, "checks");
+    const graph = (mark: boolean) => parseWorkflowSource(`digraph first {
+      start [shape=Mdiamond]
+      ship [shape=parallelogram, script="true"]
+      build [shape=parallelogram, max_visits=1, max_free_visits=1, script="true"]
+      check [shape=parallelogram, script="k=$(cat ${n} 2>/dev/null || echo 0); k=$((k+1)); echo $k > ${n}; [ $k -gt 1 ]"]
+      exit [shape=Msquare]
+      start -> ship
+      ship -> build [${mark ? `free_visit="build"` : `label="red"`}]
+      build -> check
+      check -> exit [condition="outcome = success"]
+      check -> build [condition="outcome = failure"]
+    }`);
+    expect(await runWorkflow(graph(true), { cwd: tmpDir })).toBe("completed");
+    fs.rmSync(n);
+    expect(await runWorkflow(graph(false), { cwd: tmpDir })).toBe("failed");
+  });
 });

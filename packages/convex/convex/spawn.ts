@@ -156,7 +156,7 @@ export async function spawnSessionCore(
   ctx: any,
   userId: Id<"users">,
   opts: {
-    agentType?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
+    agentType?: "claude_code" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse" | "antigravity";
     projectPath?: string;
     gitRoot?: string;
     // A name the caller already knows (a line station: "Prove · ct-42"). Kept
@@ -367,6 +367,7 @@ export const createSessionFromCli = mutation({
         v.literal("pi"),
         v.literal("grok"),
         v.literal("muse"),
+        v.literal("antigravity"),
       ),
     ),
     project_path: v.optional(v.string()),

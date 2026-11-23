@@ -1,6 +1,7 @@
 import type { AppTab } from "../store/inboxStore";
 import { isHostedAgentType } from "@codecast/shared/contracts";
-import { conversationTitle } from "./conversationTitle";
+import { conversationTitle, pendingAsk } from "./conversationTitle";
+import { untitledSessionName } from "./sessionCard";
 import { pathLabel, inboxTabSessionId } from "./pathLabel";
 import { staleNavTitle } from "./navRegistry";
 import { isModernStyle } from "./visualStyle";
@@ -64,7 +65,7 @@ export function initiativeTabTitle(path: string, initiatives: Record<string, { s
 
 /** The records a tab can be titled by, read by key only (never a scan, so
  *  the window title can derive on every store tick). */
-export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any>; orgTree?: { roles?: readonly unknown[] } | null; teamMembers?: readonly unknown[]; clientState?: unknown };
+export type TabRecords = { tasks?: Record<string, any>; projects?: Record<string, any>; workflowRuns?: Record<string, any>; orgTree?: { roles?: readonly unknown[] } | null; teamMembers?: readonly unknown[]; clientState?: unknown; pendingMessages?: Record<string, ReadonlyArray<{ role?: string; content?: unknown }>> };
 
 /** A task, project, run, role or person tab reads its record's name once the
  *  store holds the row: the task's title, the project's title (by Convex id
@@ -104,9 +105,10 @@ export function tabTitle(tab: AppTab, sessions: Record<string, any>, channels: R
     // A hosted conversation is named by what the person asked until its
     // title arrives, never by an id.
     if (isHostedAgentType(s.agent_type)) return conversationTitle(s);
-    // Untitled: the 7-char short handle (what every cast link and command
-    // uses), never a slice of the agent's UUID.
-    return s.title || (isConvexId(sid) ? sid.slice(0, 7) : "Session");
+    // Untitled: the name its card shows (the person's first message, sent or
+    // still on its way), else the 7-char short handle (what every cast link
+    // and command uses), never a slice of the agent's UUID.
+    return s.title || untitledSessionName(s, pendingAsk(records?.pendingMessages?.[sid])) || (isConvexId(sid) ? sid.slice(0, 7) : "Session");
   }
   const chat = chatTabTitle(tab.path, channels, members, viewerId);
   if (chat) return chat;

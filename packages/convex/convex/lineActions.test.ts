@@ -76,8 +76,10 @@ describe("a pushed graph's origin and versions", () => {
     expect(row.origin.file).toBe("outreach/line/agentwatch.cast");
     expect(row.origin.graph_hash).toBe("g-i2");
     const versions = await t.run((ctx) => ctx.db.query("workflow_versions").collect());
-    expect(versions.map((v) => v.graph_hash)).toEqual(["g-i1", "g-i2"]);
+    // The push from no file is a version of its own (no place it was pushed from), hashed by content.
+    expect(versions.map((v) => v.graph_hash.startsWith("w") ? "content" : v.graph_hash)).toEqual(["g-i1", "g-i2", "content"]);
     expect(versions[1].changed).toEqual(["investigate"]);
+    expect(versions.map((v) => !!v.pushed_from)).toEqual([true, true, false]);
   });
 
   test("a teammate who reads a run of the graph reads its versions", async () => {

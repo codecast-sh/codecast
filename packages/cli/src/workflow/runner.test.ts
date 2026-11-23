@@ -3,8 +3,9 @@ import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 import { parseWorkflowSource, parseWorkflowFile, validateWorkflow } from "./parser.js";
-import { runWorkflow, reportRunStopped, refreshedOnResume, graphToPushPayload, parseGateEdgeLabel, gatePayload, handTimeoutMs, stationTitle, runRegistrationIsFatal, buildNodePrompt, PRESENTER_BASE, type RunOptions } from "./runner.js";
+import { runWorkflow, reportRunStopped, refreshedOnResume, graphToPushPayload, parseGateEdgeLabel, gatePayload, stationTitle, runRegistrationIsFatal, buildNodePrompt, PRESENTER_BASE, type RunOptions } from "./runner.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
+import { handTimeouts } from "./handWatch.js";
 import { isolateCodecastDirEachTest } from "../test-helpers/codecastDir.js";
 isolateCodecastDirEachTest("cast-wf-state-");
 
@@ -356,10 +357,10 @@ describe("workflow/runner (gate payload)", () => {
     fs.rmSync(tmpDir, { recursive: true });
   });
 
-  test("a hand runs as long as its node's timeout, else the run's, else 30 minutes", () => {
-    expect(handTimeoutMs({ timeout: 5400 }, { agentTimeout: 60_000 })).toBe(5_400_000);
-    expect(handTimeoutMs({}, { agentTimeout: 60_000 })).toBe(60_000);
-    expect(handTimeoutMs({}, {})).toBe(1_800_000);
+  test("a hand may stay quiet for the run's agent timeout, else 30 minutes, and runs at most its node's timeout, else 4 hours", () => {
+    expect(handTimeouts({ timeout: 5400 }, { agentTimeout: 60_000 })).toEqual({ idleMs: 60_000, capMs: 5_400_000 });
+    expect(handTimeouts({}, { agentTimeout: 60_000 })).toEqual({ idleMs: 60_000, capMs: 14_400_000 });
+    expect(handTimeouts({}, {})).toEqual({ idleMs: 1_800_000, capMs: 14_400_000 });
   });
 
   test("a failing dry run on a bound task never moves or comments on the task", async () => {
@@ -613,6 +614,23 @@ describe("workflow/runner (LE14: json vars, graph hash, plan ready_tasks)", () =
     expect(ctx["quiet.output"]).toBe("only a log line");
     expect(ctx["fail.output"]).toBe("why it failed");
   });
+
+  test("a station gone quiet is noted on the run's task while it runs, and its node keeps the note after it succeeds", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      quiet [shape=parallelogram, script="sleep 3; echo ok", silent=1]
+      exit  [shape=Msquare]
+      start -> quiet -> exit
+    }`);
+    expect(await runWorkflow(g, { cwd: tmpDir, runId: "run-1", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test" })).toBe("completed");
+    const note = calls.findIndex(c => c.route === "/cli/work/comment" && /quiet has printed nothing for \d+s; still running/.test(c.body.text));
+    const settled = calls.findIndex(c => c.route === "/cli/workflow-runs/progress" && c.body.node_id === "quiet" && c.body.node_status === "completed");
+    expect(note).toBeGreaterThanOrEqual(0);
+    expect(calls[note].body).toMatchObject({ short_id: "ct-9", comment_type: "note" });
+    expect(calls[note].body.text).toContain("/workflows/runs/run-1");
+    expect(note).toBeLessThan(settled);
+    expect(calls[settled].body.result_preview).toMatch(/^ok\nprinted nothing for \d+s$/);
+  }, 30_000);
 
   test("a fanout with a failed branch stops the run: no branch reruns and nothing past the fanin runs", async () => {
     const log = path.join(tmpDir, "fanout.log");
@@ -1150,7 +1168,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     // A Ctrl-C ends the run and the server stops its hands; a later resume
     // that reattached to the stopped hand read it as settled, with half a turn.
     inboxReads = [{ id: "conv_left", work_state: "needs_input", is_live: true, is_killed: true, message_count: 9 } as any];
-    const outcome = await runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, resumed: { node_id: "ground", hand: "conv_left" } } as any);
+    const outcome = await runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, resumed: { node_id: "ground", hands: { ground: "conv_left" } } } as any);
     expect(outcome).toBe("completed");
     expect(calls.filter(c => c.route === "/cli/spawn")).toHaveLength(1);
   }, 30000);
@@ -1164,7 +1182,7 @@ describe("workflow/runner (stations nest under the run, gates complete)", () => 
     inboxReads = [dead("working"), dead("needs_input"), dead("needs_input"), { ...dead("working"), is_live: true, agent_status: "working" }, dead("done")] as any;
     pinned = { state: "Halfway through the check", status: "working" };
     pinnedReads = [{ state: "Grounded ct-9", status: "done" }];
-    const outcome = await runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, resumed: { node_id: "ground", hand: "conv_left" } } as any);
+    const outcome = await runWorkflow(graph(), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, resumed: { node_id: "ground", hands: { ground: "conv_left" } } } as any);
     expect(outcome).toBe("completed");
     expect(calls.filter(c => c.route === "/cli/spawn" && /ground/i.test(JSON.stringify(c.body)))).toHaveLength(0);
     expect(inboxReads).toHaveLength(0);
@@ -1347,6 +1365,12 @@ describe("gatePayload asker", () => {
     expect(graphToPushPayload(g).nodes.find((n) => n.id === "decide")).toMatchObject({ asker: "card_write" });
     expect(gatePayload(node, g, { "card_write.session_id": "sess-card" })).toMatchObject({ asker_session_id: "sess-card" });
     expect(gatePayload(node, g, {})).not.toHaveProperty("asker_session_id");
+  });
+  test("names the session the change came from, so a run nobody's session started asks from it", () => {
+    const g = parseWorkflowSource(src);
+    const node = g.nodes.get("decide")!;
+    expect(gatePayload(node, g, { change_conversation: "jx7maker" })).toMatchObject({ subject_conversation_id: "jx7maker" });
+    expect(gatePayload(node, g, {})).not.toHaveProperty("subject_conversation_id");
   });
 });
 
@@ -1540,8 +1564,8 @@ describe("workflow/runner (typed text at a ship gate)", () => {
   test("the change flow names its reviewer as the answerer of the decide segment's gate", () => {
     const g = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.change);
     const gate = g.nodes.get("decide__decide")!;
-    expect(gate.answerer).toBe("review__review");
-    expect(g.nodes.get("review__review")?.backend).toBe("session");
+    expect(gate.answerer).toBe("review");
+    expect(g.nodes.get("review")?.backend).toBe("session");
     expect(gate.asker).toBeUndefined();
     // Decide alone names nobody: a question there is asked again with the question on top.
     expect(parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.decide).nodes.get("decide")!.answerer).toBeUndefined();

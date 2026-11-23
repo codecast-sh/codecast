@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeEach, expect, mock, test } from "bun:test";
 import { act } from "react";
 import { JSDOM } from "jsdom";
 import { replaceGlobals } from "../../../test-helpers/globals";
@@ -6,6 +6,14 @@ import { replaceGlobals } from "../../../test-helpers/globals";
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "http://localhost", pretendToBeVisual: true });
 const restore = replaceGlobals({ window: dom.window, document: dom.window.document, navigator: dom.window.navigator, HTMLElement: dom.window.HTMLElement, Element: dom.window.Element, Node: dom.window.Node, MutationObserver: dom.window.MutationObserver, localStorage: dom.window.localStorage, sessionStorage: dom.window.sessionStorage, IS_REACT_ACT_ENVIRONMENT: true });
 const { createRoot } = await import("react-dom/client");
+// The app's own link, forced for the one scenario that drops it; every other
+// scenario reads the real hook. This file runs in a process of its own.
+const realOffline = { ...(await import("../../../hooks/useAppOffline")) };
+let forcedOffline: ReturnType<typeof realOffline.useAppOffline> | null = null;
+mock.module("../../../hooks/useAppOffline", () => ({
+  ...realOffline,
+  useAppOffline: () => { const real = realOffline.useAppOffline(); return forcedOffline ?? real; },
+}));
 const { DaemonHealthHarness, daemonHealthClient, seedDaemonHealth, healthRows, healthProbe } = await import("./daemonHealth");
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { useStatusNoticeStore } = await import("../../../hooks/useStatusNotice");
@@ -37,7 +45,7 @@ beforeEach(() => {
   globalThis.fetch = healthProbe as typeof fetch;
   host = document.createElement("div"); document.body.append(host); root = createRoot(host);
 });
-afterEach(async () => { await act(() => root.unmount()); host.remove(); globalThis.fetch = realFetch; });
+afterEach(async () => { await act(() => root.unmount()); host.remove(); globalThis.fetch = realFetch; forcedOffline = null; });
 afterAll(() => { Date.now = realNow; dom.window.close(); restore(); });
 
 test("two physical Macs: only the authenticated local daemon affects global notices", async () => {
@@ -96,6 +104,31 @@ test("local quiet, offline, overloaded, stalled and draining states surface and 
   await update({});
   expect(globalPill()).toBeUndefined();
   expect(syncLabel()).toBeUndefined();
+});
+
+test("a cut-off app blames its own link for a waiting message, not the daemon", async () => {
+  cache(); await mount(); await settle();
+  const rows = healthRows(Date.now());
+  const quiet = (min: number) => act(() => useInboxStore.getState().setMachineRoster(rows.map(d => d.device_id === "laptop" ? { ...d, last_seen: Date.now() - min * 60_000 } : d)));
+  await quiet(7);
+  expect(sessionText("laptop")).toContain("Delivery delayed");
+  // The link drops: the roster stops moving, so the same daemon reads quieter
+  // by the minute while it is beating normally on the far side.
+  forcedOffline = { offline: true, online: true };
+  await quiet(8);
+  expect(sessionText("laptop")).toContain("Server unreachable");
+  expect(sessionText("laptop")).toContain("your message is kept");
+  expect(sessionText("laptop")).not.toContain("Delivery delayed");
+  expect(sessionText("laptop")).not.toContain("daemon");
+  expect(host.querySelector('[data-session="laptop"] [data-testid="pending-message-app-offline"]')).not.toBeNull();
+  forcedOffline = { offline: true, online: false };
+  await quiet(9);
+  expect(sessionText("laptop")).toContain("Offline");
+  expect(sessionText("laptop")).toContain("no network");
+  // Back on the wire: the roster is live again and the daemon is judged on it.
+  forcedOffline = null;
+  await quiet(0);
+  expect(sessionText("laptop")).toBe("Session delivery controls");
 });
 
 test("missing identity, missing local row, empty roster and changed viewer never borrow another daemon", async () => {

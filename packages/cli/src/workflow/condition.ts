@@ -6,8 +6,15 @@
 //   and     := not (("and" | "&&") not)*
 //   not     := ("not" | "!") not | primary
 //   primary := "(" expr ")" | operand (cmp operand)?
-//   cmp     := = | == | != | > | < | >= | <= | contains
+//   cmp     := = | == | != | > | < | >= | <= | contains | touches
 //
+// `touches` reads its left side as paths (space-separated, as $change_files
+// holds them) and its right as globs (comma- or space-separated): true when
+// any path matches any glob. A glob ending in `/`, or one with no glob
+// characters, matches everything under that directory too; braces hold
+// alternatives (`{api,web}/**`). A left side that names no context value, or an
+// empty one (a run with no change files known), touches everything, so a
+// station gated on paths runs rather than passing unseen.
 // An operand is a quoted string (taken as written) or a bare word. A bare word
 // that names a context key reads its value; `context.<key>` reads `<key>`;
 // `<node>.json.<path>` reads a field of that node's JSON output. Any other
@@ -20,6 +27,7 @@
 // context value that is non-empty and not "false" or "0".
 
 import { lastJsonBlock } from "@codecast/shared/contracts";
+import { whenPaths } from "@codecast/shared/contracts/flowEdit";
 
 type Token =
   | { kind: "op"; value: string }
@@ -36,7 +44,21 @@ type Node =
   | { kind: "cmp"; op: string; left: Operand; right: Operand }
   | { kind: "truthy"; operand: Operand };
 
-const CMP_OPS = new Set(["=", "==", "!=", ">", "<", ">=", "<=", "contains"]);
+const CMP_OPS = new Set(["=", "==", "!=", ">", "<", ">=", "<=", "contains", "touches"]);
+
+/** Whether any of `paths` (space-separated) matches any of `globs` (comma- or space-separated). */
+export function pathsTouch(paths: string, globs: string): boolean {
+  const files = paths.split(/\s+/).filter(Boolean).map((f) => f.replace(/^\.\//, ""));
+  return whenPaths(globs).some((raw) => {
+    const g = raw.replace(/^\.\//, "");
+    if (!/[*?[{]/.test(g)) {
+      const dir = g.replace(/\/+$/, "");
+      return files.some((f) => f === dir || f.startsWith(`${dir}/`));
+    }
+    const glob = new Bun.Glob(g.endsWith("/") ? `${g}**` : g);
+    return files.some((f) => glob.match(f));
+  });
+}
 
 function tokenize(src: string): Token[] {
   const tokens: Token[] = [];
@@ -66,7 +88,7 @@ function tokenize(src: string): Token[] {
     if (j === i) throw new Error(`unexpected '${ch}' at ${i}`);
     const word = src.slice(i, j);
     const lower = word.toLowerCase();
-    if (lower === "and" || lower === "or" || lower === "not" || lower === "contains") tokens.push({ kind: "op", value: lower });
+    if (lower === "and" || lower === "or" || lower === "not" || lower === "contains" || lower === "touches") tokens.push({ kind: "op", value: lower });
     else tokens.push({ kind: "word", value: word });
     i = j;
   }
@@ -182,6 +204,10 @@ function evalNode(node: Node, context: Record<string, string>): boolean {
       const a = value(node.left);
       const b = value(node.right);
       if (node.op === "contains") return a.includes(b);
+      if (node.op === "touches") {
+        const paths = node.left.quoted ? a : lookupContextVar(context, node.left.text);
+        return paths === undefined || !paths.trim() || pathsTouch(paths, b);
+      }
       const na = asNumber(a);
       const nb = asNumber(b);
       const numeric = na !== null && nb !== null;

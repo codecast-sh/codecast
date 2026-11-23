@@ -68,6 +68,13 @@ for rooms that hold several agents.
   may post at most 30 lines per channel per day (server check on send when the
   sender is a bot or the line carries `origin: agent`); replies go in threads
   (a bot may not start more than 5 roots per channel per day).
+- In a DM (`kind: "dm"`) both counts run since a person last wrote there, not
+  per UTC day: a person's line (not `origin: agent`, not `author_kind: agent`,
+  not a bot user) starts them again. Narration nobody answers stops at 30 lines
+  and 5 roots; a conversation the person drives is never refused. The window is
+  the newest such line, found by walking `by_channel_created` newest first;
+  past 300 agent lines with no person among them it falls back to the day
+  count.
 - In the charter (principle level): post facts other roles need (a decision,
   a release, a blocker), one line per event, never an acknowledgment, prefer a
   thread over a root, mention a role or a session only when you need its

@@ -10,8 +10,9 @@ import { SettingsLayout } from "./layouts/SettingsLayout";
 import DashboardShell from "./layouts/DashboardShell";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { useMentionLinkNavigation } from "@/hooks/useMentionLinkNavigation";
+import { lazyNamed } from "../lib/lazyNamed";
 
-const MarketingLayout = lazy(() => import("./layouts/MarketingLayout").then((m) => ({ default: m.MarketingLayout })));
+const MarketingLayout = lazyNamed(() => import("./layouts/MarketingLayout"), "MarketingLayout");
 const Landing = lazy(() => import("@/app/(marketing)/page"));
 const About = lazy(() => import("@/app/(marketing)/about/page"));
 const Features = lazy(() => import("@/app/(marketing)/features/page"));
@@ -90,6 +91,7 @@ const Trial = lazy(() => import("@/app/trial/page"));
 const ProductViewPage = lazy(() => import("@/app/view/page"));
 const LineSettings = lazy(() => import("@/app/line/settings/page"));
 const FlowSettings = lazy(loadFlowSettingsPage);
+const FlowPipeline = lazy(() => import("@/app/flows/pipeline/page"));
 const FlowTrace = lazy(() => import("@/app/flows/trace/[ref]/page"));
 const Flow = lazy(loadFlowPage);
 const LineTrace = lazy(() => import("@/app/line/trace/[ref]/page"));
@@ -332,6 +334,7 @@ export function App() {
               <Route path="line/trace/:ref" element={<E name="Line trace"><LineTrace /></E>} />
               <Route path="line/:project" element={<E name="Line workspace"><LineWorkspace /></E>} />
               <Route path="flows/settings" element={<E name="Flow settings"><FlowSettings /></E>} />
+              <Route path="flows/pipeline" element={<E name="Pipeline"><FlowPipeline /></E>} />
               <Route path="flows/trace/:ref" element={<E name="Flow trace"><FlowTrace /></E>} />
               <Route path="flows/:flow" element={<E name="Flow"><Flow /></E>} />
               <Route path="decisions" element={<E name="Decisions"><Decisions /></E>} />

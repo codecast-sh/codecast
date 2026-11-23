@@ -26,6 +26,10 @@ export function scanPredicates(root: string, policy: ScanPolicy) {
           || (d.length === 2 && /^\d{4}$/.test(d[0]) && /^\d{2}$/.test(d[1]))
           || (d.length === 3 && /^\d{4}$/.test(d[0]) && /^\d{2}$/.test(d[1]) && /^\d{2}$/.test(d[2]))
           || (d.length === 4 && /^\d{4}$/.test(d[0]) && /^\d{2}$/.test(d[1]) && /^\d{2}$/.test(d[2]) && CLAUDE_UUID_RE.test(d[3])));
+      // agy: brain/<uuid>/.system_generated/logs/transcript_full.jsonl, and no
+      // other directory of a conversation (scratch/, steps/, logs/chunks/).
+      case 'antigravityWatch': return CLAUDE_UUID_RE.test(d[0])
+        && (d.length === 1 || (d[1] === '.system_generated' && (d.length === 2 || (d.length === 3 && d[2] === 'logs'))));
       case 'cursor': return d.length === 1 || d.length <= 3 && d[1] === 'agent-transcripts';
       case 'vault': return vault(rel);
       default: return true;
@@ -43,6 +47,7 @@ export function scanPredicates(root: string, policy: ScanPolicy) {
       case 'geminiWatch': return rel.endsWith('.json') && rel.split(/[\\/]/).includes('chats');
       case 'grokWatch': return /[\\/]updates\.jsonl$/.test(rel);
       case 'museWatch': return d.length === 5 && base === 'session.jsonl';
+      case 'antigravityWatch': return d.length === 4 && base === 'transcript_full.jsonl' && CLAUDE_UUID_RE.test(d[0]) && d[1] === '.system_generated' && d[2] === 'logs';
       case 'cursor': case 'cursorStale': return isCursorTranscriptPath(rel);
       case 'cursorDb': return /state\.vscdb(-wal)?$/.test(rel);
       case 'reconciliation': return base.endsWith('.jsonl') && !base.startsWith('agent-');

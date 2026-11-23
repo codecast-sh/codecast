@@ -55,9 +55,13 @@ export async function openLink(url: string): Promise<void> {
   const trimmed = url?.trim();
   if (!trimmed) return;
 
-  // A bare "www.example.com" has no scheme; everything else keeps its own.
-  // Normalise first, so "www.codecast.sh/tasks/ct-42" is recognised as ours.
-  const absolute = /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  // A path ("/decisions/sd-12", what notifications and the server store) is
+  // an address in this app. A bare "www.example.com" has no scheme; everything
+  // else keeps its own. Normalise first, so "www.codecast.sh/tasks/ct-42" is
+  // recognised as ours.
+  const absolute = trimmed.startsWith('/')
+    ? `${WEB_ORIGIN}${trimmed}`
+    : /^[a-z][a-z0-9+.-]*:/i.test(trimmed) ? trimmed : `https://${trimmed}`;
 
   const route = mobileRouteForUrl(absolute);
   if (route) {

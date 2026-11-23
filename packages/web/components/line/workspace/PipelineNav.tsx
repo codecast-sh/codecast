@@ -7,14 +7,16 @@
 // A number the map has not answered yet shows as a dash, never as a zero that
 // would read as settled.
 import { memo } from "react";
-import { AlertCircle, BarChart3, Inbox, Rocket, Rss, Workflow, type LucideIcon } from "lucide-react";
+import Link from "next/link";
+import { AlertCircle, BarChart3, GitMerge, Inbox, Rocket, Rss, Workflow, type LucideIcon } from "lucide-react";
 import { KeyCap } from "../../KeyCap";
 import { PIPELINE_KEYS, PIPELINE_LABELS, PIPELINE_RAIL, type PipelineStage, type StageFigure } from "../../../lib/line/pipeline";
 import "./pipeline.css";
 
 const ICONS: Record<PipelineStage, LucideIcon> = { decisions: Inbox, signals: Rss, problems: AlertCircle, flows: Workflow, shipped: Rocket, volume: BarChart3 };
 
-export const PipelineNav = memo(function PipelineNav({ figures, at, open, settling }: { figures: Record<PipelineStage, StageFigure>; at: PipelineStage | null; open: (stage: PipelineStage) => void; settling?: boolean }) {
+/** `pipelines`: the team's pipelines are open (the app's landing, pipeline.md PL6), the nav's first item. */
+export const PipelineNav = memo(function PipelineNav({ figures, at, open, settling, pipelines = false }: { figures: Record<PipelineStage, StageFigure>; at: PipelineStage | null; open: (stage: PipelineStage) => void; settling?: boolean; pipelines?: boolean }) {
   const item = (stage: PipelineStage) => {
     const f = figures[stage];
     const Icon = ICONS[stage];
@@ -29,13 +31,17 @@ export const PipelineNav = memo(function PipelineNav({ figures, at, open, settli
         {/* What the number counts (For you's label already says it), then the stage's state. */}
         <span className="pn-state">
           {stage !== "decisions" ? <span className="pn-unit">{f.unit}</span> : null}
-          {f.state.map((s, i) => <span key={i} className="pl-word" data-tone={s.tone}><i aria-hidden />{s.words}</span>)}
+          {f.state.map((s, i) => <span key={i} className="pl-word" data-tone={s.tone} title={s.words}><i aria-hidden /><span className="pl-word-t">{s.words}</span></span>)}
         </span>
       </button>
     );
   };
   return (
     <nav className="pn" aria-label="Flows" data-pipeline data-settling={settling ? "" : undefined}>
+      <Link href="/flows" className="pn-item" aria-label="Pipelines" title="Pipelines" aria-current={pipelines ? "page" : undefined} data-pipelines-link>
+        <GitMerge className="pn-icon" aria-hidden />
+        <span className="pn-label">Pipelines</span>
+      </Link>
       {item("decisions")}
       {item("volume")}
       <div className="pn-rail" data-pipeline-rail>{PIPELINE_RAIL.map(item)}</div>

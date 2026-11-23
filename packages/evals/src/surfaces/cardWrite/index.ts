@@ -72,6 +72,7 @@ export function cardWritePrompt(snap: CardWriteSnap, places: { worktree: string;
     task_id: snap.task.short_id,
     task_title: inlineForeignText(snap.task.title),
     default_branch: BASE_BRANCH,
+    diff_base: BASE_BRANCH,
     branch: branchOf(snap.task.short_id),
     worktree: worktreeOf(snap.task.short_id),
     run_dir: places.runDir,

@@ -19,7 +19,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as net from "node:net";
 import * as path from "node:path";
-import { execSync, spawn } from "../proc.js";
+import { execSync, spawn, spawnSync } from "../proc.js";
 import { codecastPath } from "../codecastDir.js";
 import { worktreeEnv } from "../worktreeEnv.js";
 import { isPortFree } from "./ports.js";
@@ -151,6 +151,172 @@ export async function probeOnce(probe: { kind: "http" | "tcp"; port: number; pat
   return Promise.any(tries.map((t) => t.then((ok) => ok || Promise.reject()))).catch(() => false);
 }
 
+/** lsof's field output, "" when nothing matched; null when lsof cannot answer (missing, failed, timed out). */
+function lsof(args: string[]): string | null {
+  const r = spawnSync("lsof", args, { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"], timeout: 15_000, env: process.env });
+  if (r.error || (r.status !== 0 && r.status !== 1)) return null;
+  return r.stdout ?? "";
+}
+
+/** A TCP listener. pid 0: a socket whose process this user cannot see. */
+export interface Listener { pid: number; pgid: number; port: number }
+
+/** LISTEN rows of /proc/net/tcp or tcp6, as socket inode → port. */
+export function parseProcNetTcp(text: string): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const line of text.split("\n").slice(1)) {
+    const cols = line.trim().split(/\s+/);
+    if (cols[3] === "0A") out.set(cols[9], parseInt(cols[1].split(":")[1], 16));
+  }
+  return out;
+}
+
+/** The process group in a /proc/<pid>/stat line (after the parenthesized command, which may hold spaces). */
+export function pgidFromStat(stat: string): number {
+  return Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);
+}
+
+/** Linux reads /proc directly: no subprocess to stall under load, and no dependency on lsof being installed. */
+function procListeners(): Listener[] | null {
+  const inodes = new Map<string, number>();
+  try {
+    for (const [inode, port] of parseProcNetTcp(fs.readFileSync("/proc/net/tcp", "utf-8"))) inodes.set(inode, port);
+    for (const [inode, port] of parseProcNetTcp(fs.readFileSync("/proc/net/tcp6", "utf-8"))) inodes.set(inode, port);
+  } catch {
+    if (inodes.size === 0) return null;
+  }
+  const found: Listener[] = [];
+  const seen = new Set<string>();
+  for (const entry of fs.readdirSync("/proc").filter((d) => /^\d+$/.test(d))) {
+    let fds: string[];
+    try { fds = fs.readdirSync(`/proc/${entry}/fd`); } catch { continue; }
+    for (const fd of fds) {
+      let link = "";
+      try { link = fs.readlinkSync(`/proc/${entry}/fd/${fd}`); } catch { continue; }
+      const inode = /^socket:\[(\d+)\]$/.exec(link)?.[1];
+      const port = inode ? inodes.get(inode) : undefined;
+      if (!inode || !port) continue;
+      let pgid = 0;
+      try { pgid = pgidFromStat(fs.readFileSync(`/proc/${entry}/stat`, "utf-8")); } catch { continue; }
+      seen.add(inode);
+      found.push({ pid: Number(entry), pgid, port });
+    }
+  }
+  for (const [inode, port] of inodes) if (!seen.has(inode)) found.push({ pid: 0, pgid: 0, port });
+  return found;
+}
+
+/**
+ * The TCP listeners of one process group, or on one port; null when they cannot
+ * be read. Only the process group scope is cheap on macOS: lsof then reads
+ * just that group's processes (0.07s at load 150). A port scope, like no scope,
+ * walks every process on the machine (0.7 to 0.8s there, and over 15s at worse
+ * load), so callers keep it off the common path.
+ */
+export function tcpListeners(scope: { pgid: number } | { port: number }): Listener[] | null {
+  const wanted = (l: Listener) => ("pgid" in scope ? l.pgid === scope.pgid : l.port === scope.port);
+  if (process.platform === "linux") return procListeners()?.filter(wanted) ?? null;
+  const select = "pgid" in scope ? ["-a", "-g", String(scope.pgid), "-iTCP", "-sTCP:LISTEN"] : [`-iTCP:${scope.port}`, "-sTCP:LISTEN"];
+  const out = lsof(["-nP", ...select, "-Fpgn"]);
+  if (out === null) return null;
+  const found: Listener[] = [];
+  let pid = 0;
+  let pgid = 0;
+  for (const line of out.split("\n")) {
+    if (line[0] === "p") pid = Number(line.slice(1));
+    else if (line[0] === "g") pgid = Number(line.slice(1));
+    else if (line[0] === "n") found.push({ pid, pgid, port: Number(line.slice(line.lastIndexOf(":") + 1)) });
+  }
+  return found;
+}
+
+/** A process's working directory; null when it cannot be read. */
+function processCwd(pid: number): string | null {
+  if (pid <= 0) return null;
+  if (process.platform === "linux") {
+    try { return fs.readlinkSync(`/proc/${pid}/cwd`); } catch { return null; }
+  }
+  return (lsof(["-a", "-p", String(pid), "-d", "cwd", "-Fn"]) ?? "").split("\n").find((l) => l.startsWith("n"))?.slice(1) ?? null;
+}
+
+function realPath(p: string): string {
+  try { return fs.realpathSync(p); } catch { return path.resolve(p); }
+}
+
+function gitTopLevel(dir: string): string | null {
+  try {
+    return execSync("git rev-parse --show-toplevel", { cwd: dir, encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).trim();
+  } catch {
+    return null;
+  }
+}
+
+export type PortOwner =
+  | { owner: "ours" }
+  /** A server running in another git checkout, a worktree nested inside this one included. */
+  | { owner: "other-checkout"; pid: number; checkout: string }
+  /** Running outside any git checkout (a container's proxy, say): not another checkout's server. */
+  | { owner: "outside" }
+  /** No process this user can see listens there (maybe one it cannot see). */
+  | { owner: "none" }
+  /** Ownership could not be established. Never reported as this checkout's server. */
+  | { owner: "unknown"; why: string };
+
+/** Whose server listens on `port`, judged by the listener's working directory. */
+export function portOwner(port: number, checkout: string): PortOwner {
+  const on = tcpListeners({ port });
+  if (!on) return { owner: "unknown", why: "the listening sockets could not be read" };
+  if (on.length === 0) return { owner: "none" };
+  const root = realPath(checkout);
+  let verdict: PortOwner | undefined;
+  for (const { pid } of on) {
+    const cwd = processCwd(pid);
+    if (!cwd) return { owner: "unknown", why: pid ? `the working directory of pid ${pid} could not be read` : "its process is not visible to this user" };
+    const top = gitTopLevel(cwd);
+    if (top && realPath(top) !== root) return { owner: "other-checkout", pid, checkout: top };
+    verdict ??= top || (realPath(cwd) + path.sep).startsWith(root + path.sep) ? { owner: "ours" } : { owner: "outside" };
+  }
+  return verdict!;
+}
+
+function heldReason(port: number, owner: Exclude<PortOwner, { owner: "ours" | "outside" }>): string {
+  if (owner.owner === "none") return `nothing this user can see listens on port ${port}`;
+  return owner.owner === "other-checkout"
+    ? `port ${port} is held by another checkout's server (${owner.checkout}, pid ${owner.pid})`
+    : `could not tell which process listens on port ${port}: ${owner.why}`;
+}
+
+/**
+ * Where a server this checkout started answers, or why that cannot be said.
+ * It may not hold the port it was given: vite moves to the next free port when
+ * that one is taken, and then another checkout's server answers on the
+ * recorded one. The server's own process group says where it went, which
+ * answers the common case. Only a group listening nowhere (not up yet, or a
+ * server run by another process, such as a container) asks who holds the
+ * recorded port, and keeps it only when that listener is provably not another
+ * checkout's. That question walks every process on the machine, so it is asked
+ * only once something accepts on the port and the group still listens nowhere
+ * after that: a server that binds between the first look and the connect is
+ * found by the second look, not by the walk.
+ */
+export async function ownPort(record: DevRecord, checkout: string): Promise<{ port: number } | { refused: string }> {
+  const fromGroup = (): { port: number } | { refused: string } | null => {
+    const group = tcpListeners({ pgid: record.pid });
+    if (!group) return { refused: heldReason(record.port, { owner: "unknown", why: "the listening sockets could not be read" }) };
+    const ports = [...new Set(group.map((l) => l.port))].sort((a, b) => a - b);
+    if (ports.includes(record.port)) return { port: record.port };
+    if (ports.length) return { port: ports.find((p) => p > record.port) ?? ports[0] };
+    return null;
+  };
+  const first = fromGroup();
+  if (first) return first;
+  if (!(await probeOnce({ kind: "tcp", port: record.port, path: "/" }, 2_000))) return { refused: heldReason(record.port, { owner: "none" }) };
+  const second = fromGroup();
+  if (second) return second;
+  const owner = portOwner(record.port, checkout);
+  return owner.owner === "ours" || owner.owner === "outside" ? { port: record.port } : { refused: heldReason(record.port, owner) };
+}
+
 /** The port a service should listen on in this checkout. */
 async function choosePort(svc: DevService, manifest: WorkspaceManifest, env: Record<string, string | undefined>): Promise<{ port: number; assigned: boolean }> {
   const fromEnv = Number(env[`PORT_${svc.portName.toUpperCase()}`]);
@@ -188,22 +354,20 @@ export async function ensureService(svc: DevService, opts: StartOptions): Promis
   const env: Record<string, string | undefined> = { ...process.env, ...worktreeEnv(opts.checkout), ...opts.manifest.env };
   if (svc.spec.mode === "shared") return { name: svc.name, state: "shared", url: expandVars(svc.spec.url ?? "", env) };
 
+  const portVar = `PORT_${svc.portName.toUpperCase()}`;
+  const probeAt = (port: number) => readyProbe(svc.spec, port, { ...env, [portVar]: String(port) });
   const existing = readRecord(opts.checkout, svc.name);
-  if (existing && isAlive(existing.pid)) {
-    const probe = readyProbe(svc.spec, existing.port, { ...env, [`PORT_${svc.portName.toUpperCase()}`]: String(existing.port) });
-    if (await probeOnce(probe)) return { name: svc.name, state: "running", record: existing };
-    return waitReady(svc, existing, probe, opts);
-  }
+  if (existing && isAlive(existing.pid)) return waitReady(svc, existing, probeAt, opts);
   if (existing) clearRecord(opts.checkout, svc.name);
 
   const { port, assigned } = await choosePort(svc, opts.manifest, env);
-  const portVar = `PORT_${svc.portName.toUpperCase()}`;
   const runEnv = { ...env, [portVar]: String(port), PORT: String(port) };
-  const probe = readyProbe(svc.spec, port, runEnv);
   const url = `http://localhost:${port}`;
   if (assigned && !(await isPortFree(port))) {
-    // This checkout's own port already answers: a server someone started by hand.
-    if (await probeOnce(probe)) return { name: svc.name, state: "external", port, url };
+    // This checkout's own port already answers: a server someone started by hand, unless it runs in another checkout.
+    const owner = portOwner(port, opts.checkout);
+    if (owner.owner !== "ours" && owner.owner !== "outside") return { name: svc.name, state: "failed", reason: `${heldReason(port, owner)}; ${portVar} names it for this checkout` };
+    if (await probeOnce(probeAt(port))) return { name: svc.name, state: "external", port, url };
     return { name: svc.name, state: "failed", reason: `port ${port} (${portVar}) is held by another process that does not answer HTTP` };
   }
 
@@ -241,7 +405,7 @@ export async function ensureService(svc: DevService, opts: StartOptions): Promis
   writeRecord(opts.checkout, record);
   const small = thisMachineTooSmall(opts.checkout);
   if (small) opts.onNote?.(small);
-  const status = await waitReady(svc, record, probe, opts);
+  const status = await waitReady(svc, record, probeAt, opts);
   if (status.state === "failed" && status.reason === "the server exited") {
     const memory = memoryDeath({ what: `the ${svc.name} server`, killed, oomBefore, oomAfter: oomKillCount(), repoRoot: opts.checkout });
     if (memory) return { ...status, reason: memory };
@@ -249,28 +413,42 @@ export async function ensureService(svc: DevService, opts: StartOptions): Promis
   return status.state === "running" ? { ...status, state: "started" } : status;
 }
 
-async function waitReady(
-  svc: DevService,
-  record: DevRecord,
-  probe: { kind: "http" | "tcp"; port: number; path: string },
-  opts: StartOptions,
-): Promise<DevStatus> {
+type ProbeAt = (port: number) => { kind: "http" | "tcp"; port: number; path: string };
+
+/** The record, moved to the port its server actually took. */
+function movedTo(record: DevRecord, port: number, checkout: string): DevRecord {
+  if (port === record.port) return record;
+  const moved = { ...record, port, url: `http://localhost:${port}` };
+  writeRecord(checkout, moved);
+  return moved;
+}
+
+async function waitReady(svc: DevService, record: DevRecord, probeAt: ProbeAt, opts: StartOptions): Promise<DevStatus> {
   const limitMs = (opts.timeoutSec ?? svc.spec.readyTimeoutSec ?? DEFAULT_READY_TIMEOUT_SEC) * 1000;
   const start = Date.now();
   let lastNote = 0;
+  let held: string | undefined;
   while (Date.now() - start < limitMs) {
     if (!isAlive(record.pid)) {
       clearRecord(opts.checkout, svc.name);
       return { name: svc.name, state: "failed", reason: "the server exited", record, logTail: tailFile(record.log, 30) };
     }
-    if (await probeOnce(probe)) return { name: svc.name, state: "running", record };
+    const where = await ownPort(record, opts.checkout);
+    if ("port" in where) {
+      held = undefined;
+      record = movedTo(record, where.port, opts.checkout);
+      if (await probeOnce(probeAt(record.port))) return { name: svc.name, state: "running", record };
+    } else {
+      held = where.refused;
+    }
     const waited = Math.floor((Date.now() - start) / 1000);
     if (waited - lastNote >= 15) { lastNote = waited; opts.onWait?.(svc, waited); }
     await new Promise((r) => setTimeout(r, 1000));
   }
+  const probe = probeAt(record.port);
   return {
     name: svc.name, state: "failed", record, logTail: tailFile(record.log, 30),
-    reason: `not answering on ${probe.kind}:${probe.port}${probe.kind === "http" ? probe.path : ""} after ${Math.round(limitMs / 1000)}s (still running, pid ${record.pid})`,
+    reason: `${held ?? `not answering on ${probe.kind}:${probe.port}${probe.kind === "http" ? probe.path : ""}`} after ${Math.round(limitMs / 1000)}s (still running, pid ${record.pid})`,
   };
 }
 
@@ -278,8 +456,11 @@ async function waitReady(
 export async function serviceStatus(svc: DevService, checkout: string, manifest: WorkspaceManifest): Promise<DevStatus> {
   const env: Record<string, string | undefined> = { ...process.env, ...worktreeEnv(checkout), ...manifest.env };
   if (svc.spec.mode === "shared") return { name: svc.name, state: "shared", url: expandVars(svc.spec.url ?? "", env) };
-  const record = readRecord(checkout, svc.name);
-  if (record && isAlive(record.pid)) {
+  const found = readRecord(checkout, svc.name);
+  if (found && isAlive(found.pid)) {
+    const where = await ownPort(found, checkout);
+    if (!("port" in where)) return { name: svc.name, state: "failed", reason: `running, but ${where.refused}`, record: found };
+    const record = movedTo(found, where.port, checkout);
     const ok = await probeOnce(readyProbe(svc.spec, record.port, { ...env, [`PORT_${svc.portName.toUpperCase()}`]: String(record.port) }));
     return ok ? { name: svc.name, state: "running", record } : { name: svc.name, state: "failed", reason: "running but not answering", record, logTail: tailFile(record.log, 15) };
   }

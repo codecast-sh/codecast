@@ -12,6 +12,7 @@ import { patchTask } from "./lib/agentTaskRows";
 import { recalcPlanProgress } from "./tasks";
 import { setTaskStatus } from "./orgInit";
 import { outsideKeptArea, scopeIds } from "./lib/orgScope";
+import { cliDocWriter, writeDocBody } from "./lib/docBody";
 import { noteOrgChange, openOrgBatch, openBatchId, sessionParent, withOrgChange, type OrgWrite } from "./lib/orgChangeLog";
 import { canonical, dependentBatches, invertRow, type OrgLogEntry, type OrgLogRow, type OrgUndoPreview } from "@codecast/shared/contracts/orgChange";
 
@@ -228,6 +229,12 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
   for (const row of orderedRows) {
     if (row.undone_by) continue;
     if (!(await mayChangeRow(ctx, userId, row))) { preview.refused = "You can only undo changes you could make yourself"; continue; }
+    if (row.effects?.restarted_fresh) {
+      preview.refused = String(row.batch) === String(target._id)
+        ? "A fresh restart cannot be undone: the old session was retired. Restart the role fresh again for a new session"
+        : "This cannot be undone: a later fresh restart depends on it, and that restart retired the old session";
+      continue;
+    }
     const writes: OrgWrite[] = [];
     // Ids whose write stands: restored as recorded, or with only its owners
     // left as they are now.
@@ -243,6 +250,8 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
       // moved since (a co-owner added) stay as they are, and the rest of the
       // write (the seat markers of an adopt) still comes back.
       const { owner_user_ids: ownersAfter, ...fieldsAfter } = w.after;
+      // A role's old charter field is no longer its charter (lib/roleCharter): the rest of an old write is judged without it.
+      if (w.table === "org_roles") delete fieldsAfter.charter;
       if (!fieldsMatch(current, fieldsAfter)) {
         leaveAlone(w.id, current ? "it changed after this, or is no longer editable by you" : "it no longer exists");
         continue;
@@ -280,7 +289,7 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
     messageCount += row.effects.takeover?.told?.sessions ?? 0;
   }
   const refusal = await validateRestoredRoles(ctx, steps.flatMap((s) => s.writes), read) ?? await refuseOrphans(ctx, steps.flatMap((s) => s.writes), read);
-  if (refusal) preview.refused = refusal;
+  if (refusal) preview.refused ??= refusal;
   if (messageCount) preview.cannot_take_back.push({ kind: "message_sent", count: messageCount });
   let worked = 0;
   for (const id of sessions) if ((await ctx.db.get(id))?.message_count) worked++;
@@ -290,14 +299,16 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
 
 async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
   const current = await ctx.db.get(w.id);
+  // A row logged before a role's charter moved to its doc (lib/roleCharter) may name the old field: it is never written back.
   const { owner_user_ids: owners, owner_rows: ownerRows, ...patch } = patchOf(w.before);
+  if (w.table === "org_roles") delete patch.charter;
   if (w.table === "org_roles" && current.status !== "retired" && patch.status !== "retired") {
     if (patch.reports_to) await performReparentRole(ctx, userId, { role_id: w.id, reports_to: patch.reports_to });
     // The whole caps object as it was, the line's slots and start switch included
     // (LL5): a line switched on after the change goes back to off.
     if (patch.caps) await performSetCaps(ctx, userId, { role_id: w.id, hands: patch.caps.hands_per_day, wakes: patch.caps.wakes_per_day, tokens: patch.caps.tokens_per_day, cards: patch.caps.cards, line_on: patch.caps.line_on ?? (current.caps?.line_on ? false : undefined) });
     if (patch.trust) await performSetTrust(ctx, userId, { role_id: w.id, trust: patch.trust });
-    const fields = Object.fromEntries(Object.entries(patch).filter(([k, value]) => ["name", "handle", "scope", "charter", "avatar", "status"].includes(k) && value !== undefined));
+    const fields = Object.fromEntries(Object.entries(patch).filter(([k, value]) => ["name", "handle", "scope", "avatar", "status"].includes(k) && value !== undefined));
     if (Object.keys(fields).length) await performUpdateRole(ctx, userId, { role_id: w.id, ...fields, leave_sessions: true });
   }
   if (w.table === "conversations" && "org_role_id" in patch) {
@@ -307,6 +318,13 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
       for (const id of (await sessionParent(ctx, current)).owner_user_ids) await removeSessionOwnerRow(ctx, current._id, id as Id<"users">);
       await syncPrimaryOwnerCache(ctx, current._id);
     }
+  }
+  // A charter's text goes back the way every body write goes (lib/docBody), so an open editor remounts on it.
+  if (w.table === "docs" && "content" in patch) {
+    const { content, ...rest } = patch;
+    await writeDocBody(ctx as any, current, { content: content ?? "", title: current.title }, { writer: await cliDocWriter(ctx as any, userId, undefined) });
+    if (Object.keys(rest).length) await ctx.db.patch(w.id, rest);
+    return;
   }
   if (w.table === "tasks" && patch.status) await setTaskStatus(ctx, { team_id: current.team_id }, current, patch.status, Date.now(), { actorUserId: userId });
   if (w.table === "anchors" && "status" in patch && current.team_id) {

@@ -1,6 +1,6 @@
 import type React from "react";
 import Link from "next/link";
-import { CornerUpLeft, ArrowRight, GitBranch, GitPullRequest, MessageSquare, Tag, Users, Workflow } from "lucide-react";
+import { CornerUpLeft, ArrowRight, GitBranch, GitPullRequest, MessageSquare, Square, Tag, Users, Workflow } from "lucide-react";
 import { runHref } from "../../lib/decisionLinks";
 import { badgeVariants } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -16,6 +16,7 @@ import { repoTreeHref } from "../../lib/repoView";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import { AvatarImg } from "../../lib/avatarCache";
 import { RoleFace } from "../org/RoleFace";
+import { SessionCloseTip } from "./SessionCloseTip";
 import type { IdentityPrefs } from "../../lib/sessionIdentity";
 import type { InboxSession, SessionRoleSnapshot } from "../../store/inboxStore";
 import type { AvatarKey } from "@codecast/shared/contracts/orgAvatars";
@@ -213,26 +214,25 @@ function Glyph({ d }: { d: string }) {
   );
 }
 const CLOSE_PATH = "M6 18L18 6M6 6l12 12";
-const STASH_PATH = "M7 7l10 10M17 17h-6m6 0v-6";
 const RESTORE_PATH = "M17 17L7 7M7 7h6M7 7v6";
 
 const TOOL = "pointer-events-auto text-sol-text-dim";
 
 /** The card's actions in one row at its top right, over a fade of the card's
  *  own ground: shown on hover and while the card holds keyboard focus. One
- *  row, so no card height clips it. A set-aside card (stashed, snoozed,
- *  killed) offers Restore and Kill instead. */
-export function ModernCardToolbar({ session, onPin, onKill, onLabel, onStash, onRestore, restoreLabel = "Restore", killLabel = "Kill" }: {
+ *  row, so no card height clips it. A live card ends on Close; a set-aside
+ *  card (stashed, snoozed, closed) offers Restore and its remove instead. */
+export function ModernCardToolbar({ session, onPin, onLabel, onClose, onRestore, onKill, restoreLabel = "Restore", killLabel = "Kill" }: {
   session: InboxSession;
   onPin?: (e: React.MouseEvent) => void;
-  onKill?: () => void;
   onLabel?: () => void;
-  onStash?: (e: React.MouseEvent) => void;
+  onClose?: () => void;
   onRestore?: () => void;
+  onKill?: () => void;
   restoreLabel?: string;
   killLabel?: string;
 }) {
-  if (!onPin && !onKill && !onLabel && !onStash && !onRestore) return null;
+  if (!onPin && !onLabel && !onClose && !onRestore && !onKill) return null;
   const pinned = !!session.is_pinned;
   return (
     <div data-mc-tools className="mc-tools absolute right-0 top-0 z-[3] flex items-center gap-0.5 pl-8 pr-1.5 pt-1.5 pb-1 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
@@ -240,6 +240,13 @@ export function ModernCardToolbar({ session, onPin, onKill, onLabel, onStash, on
         <ShortcutTooltip label={pinned ? "Unpin" : "Pin"} action="session.pin">
           <Button variant="ghost" size="icon-xs" aria-label={pinned ? "Unpin" : "Pin"} onClick={(e) => { stop(e); onPin(e); }} className={`${TOOL} ${pinned ? "text-sol-magenta" : "hover:text-sol-magenta"}`}>
             <ModernPinGlyph filled={pinned} />
+          </Button>
+        </ShortcutTooltip>
+      )}
+      {onLabel && (
+        <ShortcutTooltip label="Label session" action="session.moveToBucket">
+          <Button variant="ghost" size="icon-xs" aria-label="Label session" onClick={(e) => { stop(e); onLabel(); }} className={`${TOOL} hover:text-sol-blue`}>
+            <Tag aria-hidden className="w-3.5 h-3.5" />
           </Button>
         </ShortcutTooltip>
       )}
@@ -251,23 +258,17 @@ export function ModernCardToolbar({ session, onPin, onKill, onLabel, onStash, on
         </ShortcutTooltip>
       )}
       {onKill && (
-        <ShortcutTooltip label={killLabel === "Kill" ? "Kill: stops the agent and its schedules, keeps the conversation" : killLabel} action={killLabel === "Kill" ? "session.kill" : undefined}>
-          <Button variant="ghost" size="icon-xs" aria-label={killLabel === "Kill" ? "Kill Session" : killLabel} onClick={(e) => { stop(e); onKill(); }} className={`${TOOL} hover:text-sol-red`}>
+        <ShortcutTooltip label={killLabel}>
+          <Button variant="ghost" size="icon-xs" aria-label={killLabel} onClick={(e) => { stop(e); onKill(); }} className={`${TOOL} hover:text-sol-red`}>
+            {/* A Kill wears the menus' Kill mark, never the live card's Close X: the reflex must not carry over. */}
+            {killLabel === "Kill" ? <Square aria-hidden data-kill-glyph className="w-3.5 h-3.5" /> : <Glyph d={CLOSE_PATH} />}
+          </Button>
+        </ShortcutTooltip>
+      )}
+      {onClose && (
+        <ShortcutTooltip label={<SessionCloseTip session={session} />} action="session.close">
+          <Button variant="ghost" size="icon-xs" aria-label="Close" data-mc-close onClick={(e) => { stop(e); onClose(); }} className={`${TOOL} hover:text-sol-text`}>
             <Glyph d={CLOSE_PATH} />
-          </Button>
-        </ShortcutTooltip>
-      )}
-      {onLabel && (
-        <ShortcutTooltip label="Label session" action="session.moveToBucket">
-          <Button variant="ghost" size="icon-xs" aria-label="Label session" onClick={(e) => { stop(e); onLabel(); }} className={`${TOOL} hover:text-sol-blue`}>
-            <Tag aria-hidden className="w-3.5 h-3.5" />
-          </Button>
-        </ShortcutTooltip>
-      )}
-      {onStash && (
-        <ShortcutTooltip label="Stash: set aside, keeps running" action="session.stash">
-          <Button variant="ghost" size="icon-xs" aria-label="Stash" onClick={(e) => { stop(e); onStash(e); }} className={`${TOOL} hover:text-sol-yellow`}>
-            <Glyph d={STASH_PATH} />
           </Button>
         </ShortcutTooltip>
       )}

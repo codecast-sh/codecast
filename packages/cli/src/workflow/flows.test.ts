@@ -118,8 +118,11 @@ describe("expanding a segment", () => {
     const wait = (attrs: string) => parseWorkflowSource(main(attrs), root).nodes.get("deploy__wait")!.script!;
     expect(wait(`, except="aivery-operator"`)).toContain(`--except "aivery-operator"`);
     expect(wait("")).toContain(`--except ""`);
+    // send defaults to release; a flow whose deploys a person sends composes it empty and only waits.
+    expect(wait("")).toContain(`--send "release"`);
+    expect(wait(`, send=""`)).toContain(`--send ""`);
     // Run vars are left for the runner; only the declared param is filled in.
-    expect(wait(`, except="x"`)).toContain("--branch $branch");
+    expect(wait(`, except="x"`)).toContain(`--merge "$run_dir/merge.json"`);
     expect(() => parseWorkflowSource(main(`, except="a; rm -rf ."`), root)).toThrow(/may hold only words/);
   });
 
@@ -161,9 +164,9 @@ describe("running a segment", () => {
 });
 
 describe("the shipped pool", () => {
-  const SEGMENTS = ["check", "review", "judge", "eval", "decide", "ship", "prove-implement"];
+  const SEGMENTS = ["check", "review", "judge", "intent", "eval", "decide", "ship", "prove-implement"];
 
-  test("each starter segment says it is one, and the change line strings five of them", () => {
+  test("each starter segment says it is one, and the change line asks a person through decide and ends in the deploy segment", () => {
     for (const slug of SEGMENTS) {
       const g = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[slug]);
       expect({ slug, errors: validateWorkflow(g), kind: g.kind, has: !!g.description }).toEqual({ slug, errors: [], kind: "segment", has: true });
@@ -172,7 +175,7 @@ describe("the shipped pool", () => {
     expect(change.kind).toBe("line");
     expect(validateWorkflow(change)).toEqual([]);
     const entries = [...change.nodes.values()].filter((n) => n.segment_entry).map((n) => n.segment_flow);
-    expect(entries).toEqual(["check", "review", "decide", "ship", "deploy"]);
+    expect(entries).toEqual(["decide", "deploy"]);
   });
 
   test("segments read the line's own station files, so the prompts are one copy", () => {

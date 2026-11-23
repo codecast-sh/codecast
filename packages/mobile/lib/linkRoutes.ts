@@ -9,6 +9,7 @@
 import { entityRoute, flowSlugOf, isOrgObjectKind, orgObjectOfRef, parseProposalChangeRef, parseEntityUrl, parseMessageRefUrl, parseRepoObjectId, parseSharedEntityUrl, parseSharePath, sharePath, isAppHost, type EntityType } from '@codecast/shared/entities';
 import { laneRedirectTarget, pageAliasTarget } from '@codecast/web/lib/laneRedirect';
 import { settingsPathFor } from '@codecast/web/lib/settingsSections';
+import { notificationHref } from '@codecast/web/lib/notificationTypes';
 import { isMobileSettingsSection } from './settingsSections';
 
 /**
@@ -140,6 +141,8 @@ const PAGE_ROUTES: Record<string, string> = {
   '/decisions': '/decisions',
   '/questions': '/decisions',
   '/calls': '/calls',
+  // The team's deploy targets, each with its live deploy and any dev push on top (a dev push's notice links here).
+  '/deploys': '/deploys',
   '/plans': '/(tabs)/tasks?segment=plans',
   '/docs': '/(tabs)/tasks?segment=docs',
   '/triggers': '/(tabs)/tasks?segment=routines',
@@ -152,6 +155,8 @@ const PAGE_ROUTES: Record<string, string> = {
   [settingsPathFor('team')]: '/settings/team',
   [settingsPathFor('plan')]: '/settings/plan',
   [settingsPathFor('integrations')]: '/settings/mail',
+  // Passkeys are the web's Accounts section; the phone gives them a screen of their own.
+  [settingsPathFor('accounts')]: '/passkeys',
 };
 
 /**
@@ -247,6 +252,35 @@ export function mobileRouteForUrl(url: string): string | null {
   // A person's activity profile (/team/<handle>) is a view of the person.
   const profile = /^\/team\/([^/]+)\/?$/.exec(path);
   if (profile && profile[1] !== 'charts') return mobileEntityRoute('person', safeDecode(profile[1]));
+  // Pages the phone renders natively under its own address, keeping the
+  // query the web reads (?w= for a week, ?c= for one comment on a page).
+  const query = (key: string): string | null => {
+    const v = new RegExp(`[?&]${key}=([^&#]+)`).exec(url)?.[1];
+    return v ? safeDecode(v) : null;
+  };
+  const run = /^\/workflows\/runs\/([^/]+)\/?$/.exec(path);
+  if (run) return `/run/${run[1]}`;
+  const metric = /^\/ops\/metrics\/([^/]+)\/?$/.exec(path);
+  if (metric) return `/metric/${metric[1]}`;
+  if (/^\/week\/?$/.test(path)) {
+    const week = query('w');
+    return week ? `/week?w=${encodeURIComponent(week)}` : '/week';
+  }
+  if (/^\/resources\/?$/.test(path)) {
+    const machine = query('offload');
+    if (machine) return `/offload/${encodeURIComponent(machine)}`;
+  }
+  const published = /^\/a\/([^/]+)\/?$/.exec(path);
+  if (published) {
+    const comment = query('c');
+    return comment ? `/page/${published[1]}?c=${encodeURIComponent(comment)}` : `/page/${published[1]}`;
+  }
+  // A channel by its id, at one message when the link names it (chatPermalink's shape).
+  const channel = /^\/chat\/([a-z0-9]{32})\/?$/.exec(path);
+  if (channel) {
+    const message = query('m');
+    return message ? `/chat/${channel[1]}?m=${encodeURIComponent(message)}` : `/chat/${channel[1]}`;
+  }
   // Team invites are completed on the web; the Chat tab (where the team
   // lives on the phone) is the nearest screen. The web's chat pages land
   // there too.
@@ -254,4 +288,29 @@ export function mobileRouteForUrl(url: string): string | null {
     return '/(tabs)/chat';
   }
   return null;
+}
+
+/**
+ * The screen a notification opens, for a tap in the bell list and on a push
+ * alike. The web's notificationHref decides where a notification points; this
+ * maps that to the phone's screen, trying the entity and the conversation when
+ * the link itself has none, and lands on the inbox last. Never a web page.
+ */
+export function mobileNotificationRoute(n: {
+  link?: string;
+  entity_type?: string;
+  entity_id?: string;
+  chat_message_id?: string;
+  conversation_id?: string;
+}): string {
+  const candidates = [
+    notificationHref(n),
+    notificationHref({ ...n, link: undefined }),
+    n.conversation_id ? `/conversation/${n.conversation_id}` : undefined,
+  ];
+  for (const href of candidates) {
+    const route = href ? mobileRouteForUrl(href) : null;
+    if (route) return route;
+  }
+  return '/(tabs)/inbox';
 }

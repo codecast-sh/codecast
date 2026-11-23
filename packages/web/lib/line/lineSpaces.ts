@@ -1,7 +1,8 @@
 // Which workspace /line reads (line-journeys.md LJ5 "Workspace"). /line reads
 // one workspace of its own, never silently the app's active one: a founder
-// whose app sits on Personal still lands on the team his lines run in. A
-// workspace is offered when it holds problems (cause tasks); the one read is,
+// whose app sits on Personal still lands on the team his lines run in. Every
+// team the viewer is in is offered (its pipelines read there whether or not it
+// holds problems), and Personal when it holds problems; the one read is,
 // in order: the workspace of the thing a link names (a
 // need, a decision, a problem), the one last picked on this device, else the
 // team's (the busiest team's when there are several), Personal only when no
@@ -23,11 +24,11 @@ type TeamRow = { _id?: string; name?: string };
 
 const terminal = (status?: string) => status === "done" || status === "dropped";
 
-/** The workspaces with problems: the teams busiest first (open problems, then all), the viewer's Personal last. */
+/** The viewer's teams, busiest first (open problems, then all), then Personal when it holds problems. */
 export function lineSpaces(tasks: Iterable<CauseRow>, teams: ReadonlyArray<TeamRow>, viewerId: string | null): LineSpace[] {
   const own = viewerId ? `user:${viewerId}` : null;
   const teamName = new Map(teams.map((t) => [`team:${t._id}`, t.name ?? "Team"]));
-  const by = new Map<string, { open: number; problems: number }>();
+  const by = new Map<string, { open: number; problems: number }>([...teamName.keys()].map((k) => [k, { open: 0, problems: 0 }]));
   for (const t of tasks) {
     if (!t.cause || !t.workspace) continue;
     // Only the viewer's own workspaces: a cached row of a team they left, or of another person, is not offered.

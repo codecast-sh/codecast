@@ -487,3 +487,41 @@ async function verifyFirstScreen() {
 }
 
 test("F5.4: the first screen holds two project sentences and one activity line, and no digit outside them", verifyFirstScreen, 120_000);
+
+// ct-87448: a role's header is one row at every width, as a session's is.
+// On a phone the role's facts dropped to a second bordered row under the
+// header, so the page spent two rows of chrome before the conversation
+// where a session spends one. Whatever the facts become on a phone, they
+// live on the header row or not at all, and nothing sits between the
+// header and the conversation.
+async function verifyPhoneHeaderOneRow() {
+  const { React, act, env, state, ORG_FIXTURE } = await world();
+  const { createRoot } = await import("react-dom/client");
+  const { ScopePageInner } = await import("./ScopePage");
+  const { MemoryRouter } = await import("react-router");
+  const growth = ORG_FIXTURE.roles[0];
+  env.tree = ORG_FIXTURE as OrgTree;
+  env.qs = "";
+  state.sessions = { "fixture-growth-conv": { _id: "fixture-growth-conv", standing_role_id: growth._id } };
+  env.phone = true; env.wide = false;
+  const root = createRoot(document.getElementById("root")!);
+  try {
+    await act(async () => root.render(React.createElement(MemoryRouter, null, React.createElement(ScopePageInner, { id: "or-1" }))));
+    const head = document.querySelector("[data-scope-head]")!;
+    assert.ok(head, "the role page has its header");
+    for (const facts of document.querySelectorAll("[data-scope-head-facts]")) {
+      assert.ok(facts.closest("[data-scope-head]"), "on a phone the role's facts sit on the header row, not on a second row under it");
+    }
+    const body = document.querySelector("[data-scope-conversation]")!;
+    const rows: string[] = [];
+    for (let el = head.nextElementSibling; el && !el.contains(body); el = el.nextElementSibling) {
+      if ((el.textContent ?? "").trim() || el.children.length) rows.push(el.outerHTML.slice(0, 120));
+    }
+    assert.deepEqual(rows, [], "no chrome row sits between the role's header and its conversation on a phone");
+  } finally {
+    await act(async () => root.unmount());
+    env.phone = false; env.wide = true;
+  }
+}
+
+test("ct-87448: on a phone a role's header is one row, its facts on it or gone", verifyPhoneHeaderOneRow, 120_000);

@@ -14,7 +14,7 @@
 // Cross-component state is in inboxStore's ephemeral review fields; the store
 // choreography is in lib/reviewActions.
 
-import React, { lazy, memo, Suspense, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
+import React, { memo, Suspense, useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import type { PendingComment, ReviewVerdict } from "../lib/quoteFormat";
@@ -41,8 +41,10 @@ import { openForwardToChat } from "../lib/forwardToChat";
 import { parseMessageHash } from "../lib/messageHash";
 import { useTeamFeature } from "../lib/teamFeatures";
 import { TOOLBAR_BTN, TOOLBAR_SHELL } from "./conversation/toolbarStyles";
+import { lazyNamed } from "../lib/lazyNamed";
+import { teamCommentCount, type CommentRows } from "../lib/teamCommentCount";
 
-const RightCommentRail = lazy(() => import("./comments/RightCommentRail").then((m) => ({ default: m.RightCommentRail })));
+const RightCommentRail = lazyNamed(() => import("./comments/RightCommentRail"), "RightCommentRail");
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 // Comment-rail sizing (px). When the empty left margin is at least MIN, float the
@@ -67,29 +69,6 @@ function scrollerOf(el: HTMLElement | null): HTMLElement | null {
   let s: HTMLElement | null = el;
   while (s && getComputedStyle(s).overflowY === "visible") s = s.parentElement;
   return s;
-}
-
-type CommentRows = Record<string, { conversation_id?: string; message_id?: string }>;
-
-// Comment counts by message, built once per comments collection (the store
-// hands back a new object only when a comment changes) and shared by every
-// row. Each row's selector runs on every store write, so it must not walk
-// every comment there.
-const COMMENT_COUNTS = new WeakMap<object, Map<string, number>>();
-
-function teamCommentCount(comments: CommentRows | undefined, conversationId: string, messageId: string): number {
-  if (!comments) return 0;
-  let counts = COMMENT_COUNTS.get(comments);
-  if (!counts) {
-    counts = new Map();
-    for (const id in comments) {
-      const c = comments[id];
-      const key = `${c.conversation_id}\u0000${c.message_id}`;
-      counts.set(key, (counts.get(key) ?? 0) + 1);
-    }
-    COMMENT_COUNTS.set(comments, counts);
-  }
-  return counts.get(`${conversationId}\u0000${messageId}`) ?? 0;
 }
 
 type Props = {

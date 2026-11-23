@@ -31,6 +31,7 @@ import {
   type FormatOptions,
 } from "@platform/cli-kit/doctor";
 import { spawnSync } from "./proc.js";
+import { outsideTmuxEnv } from "./tmuxRoute.js";
 import { cliFetch } from "./cliHttp.js";
 import { fetchExport } from "./jsonlGenerator.js";
 import { claudeProjectDirName } from "./projectPathResolver.js";
@@ -311,7 +312,7 @@ function daemonLogEvidence(configDir: string, sessionId: string, conversationId:
 }
 
 function tmuxRunQuiet(args: string[]): { ok: boolean; stdout: string; stderr: string } {
-  const r = spawnSync("tmux", args, { encoding: "utf-8", timeout: 10_000 });
+  const r = spawnSync("tmux", args, { encoding: "utf-8", timeout: 10_000, env: outsideTmuxEnv() });
   return { ok: r.status === 0, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
 }
 

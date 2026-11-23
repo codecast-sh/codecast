@@ -1,6 +1,8 @@
 "use client";
 
 import { useTaskHref } from "../../lib/taskHrefContext";
+import { answererNameOf } from "../../lib/decisionLinks";
+export { answererNameOf };
 import { Suspense, lazy, useCallback, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import Link from "next/link";
 import { Check, ChevronRight, GitPullRequest, Minus, X } from "lucide-react";
@@ -29,6 +31,8 @@ import { KeyCap } from "../KeyboardShortcutsHelp";
 import { useDecisionDraft, useDecisionDraftText } from "../../hooks/useDecisionDraft";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { hasOpenModal } from "../../shortcuts";
+import { SwitchReview } from "../consequential/ConsequentialSwitch";
+import { cardShipLedger } from "../consequential/ledgers";
 import { formatTimeAgo } from "../../lib/messageNavigator";
 import { lookup } from "../../lib/liveEntities";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -291,15 +295,6 @@ export function cardOutcome(decision: Pick<SessionDecisionItem, "status" | "opti
     pill: `${head} ${tail}`,
     line: outcomeLine(VERDICT_TONE[verdict], head, tail, note),
   };
-}
-
-/** Who answered a decision, in the words a card's outcome line uses: a person's name ("you" for the viewer), a role's, or "policy". */
-export function answererNameOf(detail: Pick<DecisionDetailItem, "decision" | "asked_users" | "holder_role" | "ladder">, meId: string | null | undefined): string {
-  const by = detail.decision.answered_by;
-  if (!by) return "a person";
-  if (by.kind === "policy") return "policy";
-  if (by.kind === "role") return detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === by.id)?.role?.name ?? "a role";
-  return detail.asked_users.find((u) => u._id === by.id)?.name ?? (by.id === meId ? "you" : "a person");
 }
 
 function outcomeLine(tone: string, head: string, tail: string, note?: string) {
@@ -966,6 +961,8 @@ export function ChangeCardAnswer({
   // cursor leaves the card.
   const [armed, setArmed] = useState<ChangeVerdict | "dismiss" | null>(null);
   useWatchEffect(() => { if (!keys) setArmed(null); }, [keys]);
+  // A real Ship's confirm (components/consequential): open until the person ships or backs out.
+  const [reviewing, setReviewing] = useState(false);
   const recommended = decision.card?.recommend.verdict;
   const why = decision.card?.recommend.why;
   // Any failing check (the proof counts as one, cardChecks) leaves Ship the
@@ -997,21 +994,30 @@ export function ChangeCardAnswer({
     if (!t) { setError(true); noteRef.current?.focus(); return; }
     onAnswer({ index: indexes.revise, text: `Revise: ${t}` });
   }, [note, onAnswer, indexes.revise]);
-  // Ship on a real line run starts the ship itself (commit, push, PR, maybe merge), so it is never one press: the first
-  // press arms it, by key or by click, and a second press (or Enter) ships.
+  // Ship on a real line run starts the ship itself (commit, push, PR, maybe merge), so it is never one press: every
+  // Ship press, by click, digit or the line's return, opens the shared confirm, and only its confirm ships. The
+  // review is modal, so the person cannot move to another decision with it half done.
+  // A trial card's Ship only records the choice (the server refuses to ship a trial change).
   const realShip = !!(decision.task_id && decision.workflow_run_id && !decision.trial);
+  // The row leaves the list as it answers, so a toast says what was sent.
+  const sent = useCallback((v: ChangeVerdict) => {
+    if (line) toast.success(`${verdictLabel(v)} sent`, { description: decision.card?.cause.title });
+  }, [line, decision.card]);
   const pick = useCallback((v: ChangeVerdict) => {
     if (v === "revise") return openNote();
-    // Ship on a line run's card is the One Ship control's press (ship.ts):
-    // the same action the task, session and PR buttons run, which answers
-    // the card on its own rail and records the ship run against it.
-    // A trial card's Ship only records the choice (the server refuses to ship a trial change).
-    if (v === "ship" && decision.task_id && decision.workflow_run_id && !decision.trial) {
-      useInboxStore.getState().startShip({ kind: "task", id: decision.task_id }, `ship-${Date.now().toString(36)}`, decision._id);
-    } else onAnswer({ index: indexes[v] });
-    // The row leaves the list as it answers, so a toast says what was sent.
-    if (line) toast.success(`${verdictLabel(v)} sent`, { description: decision.card?.cause.title });
-  }, [onAnswer, indexes, openNote, line, decision.card, decision.task_id, decision.workflow_run_id, decision.trial, decision._id]);
+    if (v === "ship" && realShip) return setReviewing(true);
+    onAnswer({ index: indexes[v] });
+    sent(v);
+  }, [onAnswer, indexes, openNote, realShip, sent]);
+  // Ship on a line run's card is the One Ship control's press (ship.ts):
+  // the same action the task, session and PR buttons run, which answers
+  // the card on its own rail and records the ship run against it.
+  const ship = useCallback(() => {
+    setReviewing(false);
+    if (!decision.task_id) return;
+    useInboxStore.getState().startShip({ kind: "task", id: decision.task_id }, `ship-${Date.now().toString(36)}`, decision._id);
+    sent("ship");
+  }, [decision.task_id, decision._id, sent]);
   const commit = useCallback(() => {
     if (armed === "dismiss") { onDismiss?.(); toast(`Dismissed`, { description: decision.card?.cause.title }); }
     else if (armed) pick(armed);
@@ -1029,7 +1035,7 @@ export function ChangeCardAnswer({
         return;
       }
       if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable || target.tagName === "SELECT")) return;
-      if (armed && (line || armed === "ship") && (e.key === "Enter" || e.key === "Escape")) {
+      if (armed && line && (e.key === "Enter" || e.key === "Escape")) {
         e.preventDefault(); e.stopImmediatePropagation();
         if (e.key === "Enter") commit(); else setArmed(null);
         return;
@@ -1038,7 +1044,7 @@ export function ChangeCardAnswer({
       const verdict = (Object.keys(indexes) as ChangeVerdict[]).find((v) => indexes[v] === n);
       if (verdict && verdict !== current) {
         e.preventDefault(); e.stopImmediatePropagation();
-        if ((line || (realShip && verdict === "ship")) && verdict !== "revise") setArmed(verdict); else { setArmed(null); pick(verdict); }
+        if (line && verdict !== "revise") setArmed(verdict); else { setArmed(null); pick(verdict); }
         return;
       }
       if ((e.key === "x" || e.key === "X") && onDismiss) {
@@ -1048,7 +1054,7 @@ export function ChangeCardAnswer({
     };
     window.addEventListener("keydown", onKey, true);
     return () => window.removeEventListener("keydown", onKey, true);
-  }, [keys, keyScope, indexes, current, pick, sendRevise, onDismiss, setNoteOpen, line, armed, commit, realShip]);
+  }, [keys, keyScope, indexes, current, pick, sendRevise, onDismiss, setNoteOpen, line, armed, commit]);
 
   const compact = size !== "full";
   const order: ChangeVerdict[] = (["ship", "revise", "drop"] as ChangeVerdict[]).sort((a, b) => indexes[a] - indexes[b]);
@@ -1080,9 +1086,9 @@ export function ChangeCardAnswer({
         {order.map((v) => (
           <button
             key={v}
-            onClick={() => (v === "ship" && realShip ? (armed === "ship" ? commit() : setArmed("ship")) : pick(v))}
-            onBlur={() => { if (armed === "ship" && v === "ship" && realShip) setArmed(null); }}
-            aria-pressed={v === "ship" && realShip ? armed === "ship" : undefined}
+            onClick={() => pick(v)}
+            aria-haspopup={v === "ship" && realShip ? "dialog" : undefined}
+            aria-expanded={v === "ship" && realShip ? reviewing : undefined}
             disabled={current === v}
             data-verdict={v}
             className={`cc-verdict cc-tone-${VERDICT_TONE[v]} ${recommended === v && !current ? "is-recommended" : ""} ${current === v ? "is-current" : ""} ${wentAhead === v ? "is-taken" : ""} ${v === "revise" && noteOpen ? "is-open" : ""} ${armed === v ? "is-armed" : ""} ${v === "ship" && weakShip && !current ? "is-weak" : ""}`}
@@ -1091,13 +1097,13 @@ export function ChangeCardAnswer({
             {showKeys && indexes[v] < 9 && current !== v && <KeyCap size="xs">{String(indexes[v] + 1)}</KeyCap>}
             {describe && !line ? (
               <span className="cc-verdict-stack">
-                <span className="cc-verdict-word">{v === "ship" && realShip && armed === "ship" ? "Press again to ship" : verdictLabel(v)}{recommended === v && !current && armed !== v && <span className="cc-verdict-rec">recommended</span>}</span>
+                <span className="cc-verdict-word">{verdictLabel(v)}{recommended === v && !current && armed !== v && <span className="cc-verdict-rec">recommended</span>}</span>
                 {v === "revise" && suggested
                   ? <span className="cc-verdict-desc cc-verdict-ask" title={suggested} data-cc-ask>{suggested}</span>
                   : decision.options[indexes[v]]?.description && <span className="cc-verdict-desc">{decision.options[indexes[v]]?.description}</span>}
                 {v === "ship" && weakShip && !current && <span className="cc-verdict-desc cc-text-red" data-cc-fails>Ships with {failing} {failing === 1 ? "check" : "checks"} red</span>}
               </span>
-            ) : <span>{v === "ship" && realShip && armed === "ship" ? "Press again to ship" : verdictLabel(v)}</span>}
+            ) : <span>{verdictLabel(v)}</span>}
             {/* The row has no caption, so the tint and ring on the card's own
                 answer say it; the word stays for screen readers and the tooltip. */}
             {line && recommended === v && !current && !wentAhead && <span className="sr-only" data-cc-suggested>suggested</span>}
@@ -1117,6 +1123,7 @@ export function ChangeCardAnswer({
           </button>
         )}
       </div>
+      {reviewing && <SwitchReview ledger={cardShipLedger({ title: decision.card?.cause.title ?? decision.question, failing })} onClose={() => setReviewing(false)} onConfirm={ship} />}
       {line && armed && (
         <p className={`cc-armed cc-tone-${armed === "dismiss" ? "red" : VERDICT_TONE[armed]}`} data-cc-armed>
           <KeyCap size="xs">return</KeyCap><span>{armed === "dismiss" ? "close without answering" : verdictLabel(armed)}</span>

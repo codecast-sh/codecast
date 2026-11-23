@@ -5,11 +5,11 @@
 // they hand the event to this host (lib/filePathMenu requestFilePathMenu),
 // mounted once in the dashboard shell next to the other docks.
 
-import { Folder, FolderOpen } from "lucide-react";
+import { FileDiff, Folder, FolderOpen } from "lucide-react";
 import { ContextMenu, CtxItem, CtxSeparator, useContextMenu } from "./ui/context-menu";
 import { OpenLinkItems, SessionsLinkItem } from "./LinkMenuHost";
 import { fileSessionsLink } from "../lib/sessionSearchLinks";
-import { filePathHref, resolveMentionPath } from "../lib/filePathLinks";
+import { filePathHref, matchSessionChangedFile, resolveMentionPath } from "../lib/filePathLinks";
 import { setFilePathMenuListener, type FilePathMenuPayload } from "../lib/filePathMenu";
 import { parentDir } from "../lib/utils";
 import { openFiles } from "../lib/filesPane";
@@ -17,6 +17,8 @@ import { resolveVaultTarget } from "../lib/vault/vaultHref";
 import { vaultOp } from "../lib/vault/client";
 import { fileManagerName } from "../lib/vault/reveal";
 import { useVaultStore } from "../store/vaultStore";
+import { useDiffViewerStore } from "../store/diffViewerStore";
+import { openSessionChangedPath } from "../lib/sessionChangedFiles";
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 export function FilePathMenuHost() {
@@ -30,8 +32,21 @@ export function FilePathMenuHost() {
         const folderHref = filePathHref(parentDir(abs), undefined, null);
         const vs = useVaultStore.getState();
         const target = vs.endpoint && !vs.isRemote ? resolveVaultTarget(abs, vs.vaults) : null;
+        const dv = useDiffViewerStore.getState();
+        const inSessionDiff =
+          !!p.ctx?.conversationId &&
+          dv.conversationId === p.ctx.conversationId &&
+          matchSessionChangedFile(p.path, dv.changes, p.ctx) !== null;
         return (
           <>
+            {inSessionDiff && (
+              <>
+                <CtxItem icon={FileDiff} onSelect={() => openSessionChangedPath(p.path, p.ctx)}>
+                  Open in session changes
+                </CtxItem>
+                <CtxSeparator />
+              </>
+            )}
             <OpenLinkItems href={p.href} openLabel="Open in Files" />
             <CtxSeparator />
             <CtxItem icon={Folder} onSelect={() => openFiles(folderHref)}>

@@ -1,4 +1,5 @@
 import { refuseSeatKill } from "./lib/seatKill";
+import { hasDeliverableMessage } from "./lib/closeAside";
 import { sanitizeConvexObjectKeys } from "./lib/convexFieldNames";
 import { noteWriteCause } from "./lifecycleEvents";
 import { isClaudeSubagentSessionId } from "./lib/claudeSubagentSession";
@@ -14,6 +15,7 @@ import { cloudPlacementFor,
   checkoutInUseMessage,
   posixRepoBasename,
   agentTypeChangeRefusal,
+  titleLine,
 } from "@codecast/shared/contracts";
 import { enqueueCloudSpawn } from "./cloudPlacement";
 import { isConversationSafetyBlocked, safetyBlockPatch } from "./conversationSafety";
@@ -44,6 +46,7 @@ import {
   BLOCKED_BANNER_KINDS,
   placeProjectableRow,
   deriveLiveAt,
+  isClosedSession,
   trustedStatusAt,
   rowLiveDeadlines,
   childAskingAt,
@@ -68,14 +71,14 @@ import { internal } from "./_generated/api";
 import { resetConversationPendingMessages, cancelQueuedMessagesOnKill, enqueuePendingMessage } from "./pendingMessages";
 import { latestImagePreviewUrl, listConversationFileChanges } from "./lib/messageReads";
 import { inboxVisibilityFields, INBOX_PINNED_CAP, pinCapExceeded, PIN_CAP_ERROR } from "./inboxProjection";
-import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRunConversation } from "./lib/agentTaskRows";
+import { cancelTasksBoundToConversation, reactivateTasksCanceledOnKill, stampRunConversation, tasksOriginatedBy } from "./lib/agentTaskRows";
 import { advanceForkCopy, type ForkCopyCtx } from "./forkCopy";
 import { hasRecentPendingDaemonCommand, extractDaemonCommandConversationId, enqueueResumeSession, enqueueHibernateSession, requireSessionCommandTarget, findSessionCommandByRequest, recentConversationCommands, validateSessionCommandRequestId, stopAndSendForUser, insertEscapeCommand } from "./daemonCommandUtils";
 import { normalizePaneUrl } from "@codecast/shared/contracts/browserPaneOffer";
 import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, localAgentTypeOf, toConvexAgentType, normalizeThreadState, parseThreadStateStatus, clearedThreadStateFields, THREAD_STATE_RESULT_MAX_CHARS, formatAgentSwitchNotice, findModelOption, canSessionBecomeAgent, agentForksFromAnyMessage, agentForksNatively, isHostedAgentType, computeConversationTaskStats, isTodoStatTool } from "@codecast/shared/contracts";
 import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
-import { subagentLinkFields } from "./ccAccountsShared";
+import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, sessionOwnerRow } from "./sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, navPromptField, navPromptPatch, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
@@ -94,8 +97,9 @@ import {
   resolveVisibilityMode,
   buildShareUpdate,
   buildPathRestampUpdate,
+  teamFloorScope,
   type AccessLevel,
-  type TeamFeedFilter,
+  type TeamFloor,
   matchDirectoryMapping,
 } from "./privacy";
 import { currentMembershipVisibility, effectiveMembershipVisibility } from "./teamVisibility";
@@ -460,15 +464,14 @@ async function resolveReadScope(
   }
   if (opts.mineOnly) teamIds = [];
 
-  const feedFilters = new Map<string, TeamFeedFilter>();
+  const floors = new Map<string, TeamFloor>();
   const teamNames = new Map<string, string>();
   const userById = new Map<string, Doc<"users">>();
   for (const teamId of teamIds) {
-    const ff = await createTeamFeedFilter(ctx, teamId);
-    feedFilters.set(teamId.toString(), ff);
+    const floor = await teamFloorScope(ctx, teamId);
+    floors.set(teamId.toString(), floor);
     if (opts.allTeams) teamNames.set(teamId.toString(), (await ctx.db.get(teamId))?.name ?? "");
-    const members = await Promise.all(ff.memberships.map((m) => ctx.db.get(m.user_id)));
-    for (const u of members) if (u) userById.set(u._id.toString(), u);
+    for (const u of floor.members) userById.set(u._id.toString(), u);
   }
   const teamUsers = [...userById.values()];
   userById.set(userId.toString(), user);
@@ -481,19 +484,16 @@ async function resolveReadScope(
   const isOwn = (conv: Doc<"conversations">) =>
     conv.user_id.toString() === userId.toString() &&
     (ownAnywhere || (scopeTeam ? String(conv.team_id ?? "") === scopeTeam : !conv.team_id));
-  const teamFilterFor = (conv: Doc<"conversations">): TeamFeedFilter | undefined => {
-    if (!conv.team_id || !userById.has(conv.user_id.toString())) return undefined;
-    return feedFilters.get(conv.team_id.toString());
-  };
+  const floorFor = (conv: Doc<"conversations">) => (conv.team_id ? floors.get(conv.team_id.toString()) : undefined);
   const isVisible = (conv: Doc<"conversations">): boolean => {
     if (isRunLog(conv)) return false;
     if (isOwn(conv)) return true;
-    return teamFilterFor(conv)?.isVisible(conv) ?? false;
+    return floorFor(conv)?.isVisible(conv) ?? false;
   };
   const contentVisible = (conv: Doc<"conversations">): boolean => {
     if (isRunLog(conv)) return false;
     if (isOwn(conv)) return true;
-    return teamFilterFor(conv)?.contentVisible(conv) ?? false;
+    return floorFor(conv)?.contentVisible(conv) ?? false;
   };
   const workspaceOf = (conv: Doc<"conversations">) => (conv.team_id ? `team:${conv.team_id}` : `user:${userId}`);
   const teamNameOf = (conv: Doc<"conversations">) => (conv.team_id ? teamNames.get(conv.team_id.toString()) : undefined);
@@ -1130,6 +1130,7 @@ const SHARE_HIDDEN_CONVERSATION_FIELDS = [
   "subagent_slot_device",
   "cc_account",
   "cc_account_auto",
+  "cc_account_model_pin",
   "codex_account",
   "cli_flags",
   "draft_message",
@@ -1385,6 +1386,11 @@ async function ownedParentConversationId(
   return parent._id;
 }
 
+/** A session title as stored: paste markers out, one line. Undefined when nothing is left. */
+function storedTitle(title: string | undefined): string | undefined {
+  return title === undefined ? undefined : titleLine(title) || undefined;
+}
+
 export const createConversation = mutation({
   args: {
     user_id: v.id("users"),
@@ -1398,6 +1404,7 @@ export const createConversation = mutation({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     ),
     session_id: v.string(),
     project_hash: v.optional(v.string()),
@@ -1462,6 +1469,9 @@ export const createConversation = mutation({
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
+    // Stored as a person reads it: an older CLI titled a session from the raw
+    // opening message, paste markers (`<pasted_content id=…>`) and all.
+    const title = storedTitle(args.title);
     const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
@@ -1582,8 +1592,8 @@ export const createConversation = mutation({
       agent_type: args.agent_type,
       session_id: args.session_id,
       slug: args.slug,
-      title: args.title,
-      ...(args.title && args.title_is_custom ? { title_is_custom: true } : {}),
+      title,
+      ...(title && args.title_is_custom ? { title_is_custom: true } : {}),
       project_hash: args.project_hash,
       project_path: args.project_path,
       owner_device_id: args.owner_device_id,
@@ -1695,7 +1705,7 @@ export const createConversation = mutation({
         team_id: resolvedTeamId,
         actor_user_id: args.user_id,
         event_type: "session_started" as const,
-        title: args.title || (args.slug ? formatSlugAsTitle(args.slug) : "New session"),
+        title: title || (args.slug ? formatSlugAsTitle(args.slug) : "New session"),
         description: args.project_path,
         related_conversation_id: conversationId,
         metadata: {
@@ -1756,6 +1766,7 @@ export const createQuickSession = mutation({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
@@ -5437,13 +5448,14 @@ export const updateTitle = mutation({
       throw new Error("Unauthorized: can only update your own conversations");
     }
 
+    const title = storedTitle(args.title) ?? args.title;
     const replaceable = args.agent_guess
       ? !conversation.title_is_custom && conversation.subtitle === undefined
       : !conversation.title_is_custom || (!!conversation.title && !!args.replaces?.includes(conversation.title));
-    const changed = replaceable && (conversation.title !== args.title || (!!args.title_is_custom && !conversation.title_is_custom));
+    const changed = replaceable && (conversation.title !== title || (!!args.title_is_custom && !conversation.title_is_custom));
     if (changed) {
       await ctx.db.patch(args.conversation_id, {
-        title: args.title,
+        title,
         ...(args.title_is_custom ? { title_is_custom: true } : {}),
       });
     }
@@ -6061,6 +6073,7 @@ export const forkFromMessage = mutation({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     )),
     // `cast fork --cloud`: the branch runs on the cloud host, in a worktree the
     // CLI already acquired there. Routing goes to that device, the row and the
@@ -6886,6 +6899,35 @@ export const listKilledSessions = query({
     const rows: any[] = [];
     for (const conv of result.page) {
       if (isOrphanOrSubagent(conv) || isRunLog(conv)) continue;
+      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, undefined, getDoc);
+      await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
+      stripInboxLiveness(row);
+      rows.push(row);
+    }
+    return { page: rows, isDone: result.isDone, continueCursor: result.continueCursor };
+  },
+});
+
+// The Closed shelf's other half: the user's closes newest-first, paged with
+// listKilledSessions from the Closed bucket's "Load older". A closed row is in
+// the inbox scan (it is not killed), but only inside the scan's recency window;
+// this serves the older ones. A row whose close was later undone keeps a stale
+// inbox_closed_at, which isClosedSession reads as not closed, so it is skipped.
+export const listClosedSessions = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { page: [], isDone: true, continueCursor: "" };
+    const now = Date.now();
+    const result = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_closed", (q) => q.eq("user_id", userId).gt("inbox_closed_at", 0))
+      .order("desc")
+      .paginate(args.paginationOpts);
+    const getDoc = makeMemoGet(ctx);
+    const rows: any[] = [];
+    for (const conv of result.page) {
+      if (!isClosedSession(conv) || isOrphanOrSubagent(conv) || isRunLog(conv)) continue;
       const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, undefined, getDoc);
       await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
       stripInboxLiveness(row);
@@ -8133,6 +8175,10 @@ const TEAM_INBOX_PER_MEMBER_CAP = 60;
 // costs one row and names itself in `truncated` (sync-convergence C2). Single
 // source: the shared caps the replica's selection also applies (C4).
 const INBOX_WINDOW_CAP = INBOX_WINDOW_CAPS.recent;
+// How many of my owner rows the scan reads to answer ownership for the
+// candidates the owner window (INBOX_WINDOW_CAP) missed. One db call; owner
+// rows are small, so the bound is on documents read, well inside a query's.
+const INBOX_OWNER_LOOKUP_CAP = 2000;
 // Pinned rows are a deliberate, bounded set (INBOX_PINNED_CAP, inboxProjection.ts):
 // the window reads newest-first so the newest pins win, and the pin writers
 // refuse past the cap so the limit is enforced where the user can see it.
@@ -8650,6 +8696,8 @@ async function enrichInboxSessionRow(
   // already in hand — zero extra reads): identity, progress, and the latest
   // running agent's "what it's doing" line.
   let workflow_run_status: string | null = null;
+  // "workflow" for a Workflow-tool run, which runs inside this session's own agent process.
+  let workflow_run_kind: string | null = null;
   let workflow_run_name: string | null = null;
   let workflow_run_agents_done: number | null = null;
   let workflow_run_agents_total: number | null = null;
@@ -8659,6 +8707,7 @@ async function enrichInboxSessionRow(
     const run = await getDoc(conv.workflow_run_id);
     if (run) {
       workflow_run_status = run.status;
+      workflow_run_kind = run.run_kind ?? null;
       workflow_run_name = run.workflow_name ?? null;
       const nodes = run.node_statuses ?? [];
       workflow_run_agents_total = run.agent_count ?? (nodes.length || null);
@@ -8766,6 +8815,7 @@ async function enrichInboxSessionRow(
     // The retired marker: classifyWorkState uses it to keep a killed row out of
     // the Working bucket no matter what stale flags it still carries.
     inbox_killed_at: conv.inbox_killed_at ?? null,
+    inbox_closed_at: conv.inbox_closed_at ?? null,
     inbox_adopted_at: conv.inbox_adopted_at ?? null,
     // The daemon's own status: every reader derives what it means at its own
     // clock (trustedStatusAt), since a verdict does not replay (ct-56054).
@@ -8822,6 +8872,7 @@ async function enrichInboxSessionRow(
     is_workflow_sub: conv.is_workflow_sub || false,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
+    workflow_run_kind,
     workflow_run_name,
     flow_name,
     flow_run_id,
@@ -8979,6 +9030,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_snoozed_until: child.inbox_snoozed_until ?? null,
     inbox_stash_hidden: child.inbox_stash_hidden ?? null,
     inbox_killed_at: child.inbox_killed_at ?? null,
+    inbox_closed_at: child.inbox_closed_at ?? null,
     inbox_adopted_at: child.inbox_adopted_at ?? null,
     // The child's own rest verdict, carried like every other stamp above (the
     // is_deferred/is_pinned twins over it are hardcoded because a child never
@@ -9027,6 +9079,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     is_workflow_sub: child.is_workflow_sub || false,
     is_workflow_primary: false,
     workflow_run_status: null,
+    workflow_run_kind: null,
     workflow_run_name: null,
     workflow_run_agents_done: null,
     workflow_run_agents_total: null,
@@ -9256,12 +9309,22 @@ export async function scanInboxConversations(
   // Owner rows are keyed by user alone (no denormalized updated_at — that would
   // make every conversation heartbeat fan out and patch all of its owner rows),
   // so hydrate here and apply the same recency/status window as the main scan.
+  //
+  // The same range read further (INBOX_OWNER_LOOKUP_CAP) answers "is this row
+  // mine?" for every candidate the window missed, in one db call: past the
+  // window's cap, a per-row owner read for each candidate and child put a
+  // full account past Convex's limits (ct-73243). Rows past the window are
+  // never admitted on that account; they only answer the lookup.
+  let ownerLookupRows: any[] = [];
+  let ownerLookupComplete = false;
   const ownerRowsQ = noWindows ? Promise.resolve([] as any[]) : ctx.db
     .query("session_owners")
     .withIndex("by_user", (q: any) => q.eq("user_id", userId))
     .order("desc")
-    .take(INBOX_WINDOW_CAP + 1)
+    .take(INBOX_OWNER_LOOKUP_CAP + 1)
     .then((rows: any[]) => {
+      ownerLookupComplete = rows.length <= INBOX_OWNER_LOOKUP_CAP;
+      ownerLookupRows = rows.slice(0, INBOX_OWNER_LOOKUP_CAP);
       if (rows.length > INBOX_WINDOW_CAP) truncated.add("owned");
       return rows.slice(0, INBOX_WINDOW_CAP);
     });
@@ -9294,16 +9357,34 @@ export async function scanInboxConversations(
   const myOwnerRowById = new Map<string, any>(
     ownerRows.map((r: any) => [r.conversation_id.toString(), r])
   );
-  // The owner window holds my newest INBOX_WINDOW_CAP owner rows. While it
-  // is complete, absence from it is the answer; once it overflowed, absence
+  // The owner window holds my newest INBOX_WINDOW_CAP owner rows, and the
+  // lookup range my newest INBOX_OWNER_LOOKUP_CAP. While the lookup range is
+  // complete, absence from it is the answer; once it overflowed, absence
   // proves nothing, and a row it missed is read by id (the read byIds and the
   // floor make), so one row reads one owner row whichever feeder served it.
+  const ownerLookupById = new Map<string, any>(
+    ownerLookupRows.map((r: any) => [r.conversation_id.toString(), r])
+  );
   const ownerLookups = new Map<string, Promise<any | null>>();
   const ownerRowFor = (conv: any): Promise<any | null> => {
     const idStr = conv._id.toString();
     const held = myOwnerRowById.get(idStr);
-    // An empty owner window proves nothing when it was never read.
-    if (held || (!truncated.has("owned") && !opts.namedOnly)) return Promise.resolve(held ?? null);
+    if (held) return Promise.resolve(held);
+    const looked = ownerLookupById.get(idStr);
+    if (looked) {
+      ownedByMeIds.add(idStr);
+      myOwnerRowById.set(idStr, looked);
+      return Promise.resolve(looked);
+    }
+    // An empty owner range proves nothing when it was never read.
+    if (ownerLookupComplete && !opts.namedOnly) return Promise.resolve(null);
+    // A conversation with no owner_user_id has no owner rows at all: the
+    // cache names the primary owner whenever one exists (every owner-row
+    // writer resyncs it through syncPrimaryOwnerCache). Only a row with an
+    // owner can have me among its owners, so only that row pays the read; on
+    // a full account the per-row read for every candidate and child put
+    // listInboxSessions past Convex's limits (ct-73243).
+    if (!conv.owner_user_id) return Promise.resolve(null);
     let hit = ownerLookups.get(idStr);
     if (!hit) {
       hit = sessionOwnerRow(ctx, conv._id, userId).then((row: any) => {
@@ -9577,6 +9658,9 @@ export async function computeInboxSessions(
     projection?: boolean;
     // Only the named extraConvIds, read per conversation (scan's namedOnly).
     namedOnly?: boolean;
+    // With namedOnly: list a named row even when it is killed. A flow run reads the session its change came from
+    // this way (flows.md FL4): a killed subject still owns the change, and the run needs its row to revive it.
+    includeKilled?: boolean;
     // Debug-only (timing harness) — see InboxEnrichSkip.
     _skip?: InboxEnrichSkip;
     // The split wire form's hot set (shared/contracts/inboxSplit), read off
@@ -9639,7 +9723,8 @@ export async function computeInboxSessions(
   // Rows are independent — enrich them concurrently (sequential per-row awaits
   // made this heartbeat-hot path slow enough to time out under load; see
   // computeSessionsLiveness). Assembly below stays in candidate order.
-  const shownConvs = conversations.filter((conv) => shouldShowInInbox(conv));
+  const includeKilled = !!opts.includeKilled && !!opts.namedOnly;
+  const shownConvs = conversations.filter((conv) => shouldShowInInbox(conv) || (includeKilled && shouldShowInInbox({ ...conv, inbox_killed_at: undefined })));
   const enrichedRows = await Promise.all(shownConvs.map(async (conv) => {
     // Deliberately-filed rows (label extras, sessions assigned to me by another
     // account) never cluster-hide: an assignment routes a session into my inbox
@@ -10187,7 +10272,7 @@ export async function buildAskingParents(
     if (alreadyAsking?.has(pid)) { asking.add(pid); continue; }
     for (const c of children) {
       const cid = c._id.toString();
-      if (c.inbox_killed_at) continue;
+      if (c.inbox_killed_at || isClosedSession(c)) continue;
       // A child's own pending `cast decide` (a spawned subagent worker posts
       // on ITS session) lifts the parent exactly as its open prompt does.
       if (alreadyAsking?.has(cid)) { asking.add(pid); break; }
@@ -10220,7 +10305,7 @@ export async function buildAskingParents(
   const askingAt = (pid: string, t: number): boolean => {
     if (alreadyAsking?.has(pid)) return true;
     return (childrenByParent.get(pid) ?? []).some((c) => {
-      if (c.inbox_killed_at || !pooledAt(c._id.toString(), t)) return false;
+      if (c.inbox_killed_at || isClosedSession(c) || !pooledAt(c._id.toString(), t)) return false;
       if (alreadyAsking?.has(c._id.toString())) return true;
       const ask = childAskAt(c, t);
       // A poll this execution never read (its parent resolved first) is not
@@ -10989,6 +11074,8 @@ export const inboxForCLI = query({
     // or conversation id). Resolved own-only; the rows are hydrated past the
     // recency window and a subagent row among them is listed instead of hidden.
     session_ids: v.optional(v.array(v.string())),
+    // With session_ids alone: list those rows even when killed (computeInboxSessions includeKilled).
+    include_killed: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -11066,6 +11153,7 @@ export const inboxForCLI = query({
       extraConvIds: extraConvIds.length ? extraConvIds : undefined,
       projection: true,
       namedOnly,
+      includeKilled: !!args.include_killed,
     });
 
     // Project bounding (label views): scope the inbox to one project so labels
@@ -11524,6 +11612,10 @@ export const markSessionCompleted = mutation({
     // standing member that goes dormant is never flipped to "completed"; it is
     // retired only by decommissionAnchor, which clears `persistent` first.
     if (conv.persistent) return;
+    // A closed session stopped because the person closed it, not because it
+    // ended: completing it would retire it (cast send refuses a completed
+    // session, a role drops it, a worker's report to it is dropped).
+    if (isClosedSession(conv)) return;
     // A move in flight stopped this agent itself (the runner's quiesce): the
     // session is moving, not ending. Completing it here left every session
     // whose move then failed marked ended on its own machine.
@@ -11617,6 +11709,7 @@ export const getConversationLifecycle = query({
       inbox_killed_at: conv.inbox_killed_at ?? null,
       inbox_stashed_at: conv.inbox_stashed_at ?? null,
       inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
+      inbox_closed_at: conv.inbox_closed_at ?? null,
       inbox_pinned_at: conv.inbox_pinned_at ?? null,
       // Undelivered work is waiting for this session. The hibernation pass
       // refuses to park such a session, because parking it would trade a live
@@ -11626,6 +11719,10 @@ export const getConversationLifecycle = query({
       // an in-place switch away from Codex (jx7dj4aq: divider landed, Codex
       // still answered). Null when the row has no stamp.
       agent_type: conv.agent_type ?? null,
+      // The person closed it (shared isClosedSession): the daemon does not
+      // bring it back on its own. A message still waiting for it is a wake, so
+      // a close never holds back its delivery, whatever has_pending_messages says.
+      closed: isClosedSession(conv) && !(await hasDeliverableMessage(ctx, conv._id)),
     };
   },
 });
@@ -11780,6 +11877,77 @@ export const cliSetSessionVisibility = mutation({
       canceled_messages: canceledMessages,
       cascaded_children: cascaded,
     };
+  },
+});
+
+// Statuses of a live agent that is doing something or asking: retiring it would cut that off.
+const RETIRE_BUSY_STATUSES = new Set(["working", "thinking", "compacting", "starting", "waiting", "permission_blocked"]);
+
+/**
+ * Why a session must not be retired now, or null when nothing would be lost. The run read the session settled and
+ * found no other work of its own, but that read is old by the time it asks, and it only sees the inbox row. A kill
+ * also cancels every trigger bound to the session, drops its queued messages and tears down its nested children.
+ */
+export async function retireRefusal(ctx: { db: any }, conv: any, expectedMessageCount: number, now: number): Promise<string | null> {
+  if (conv.inbox_killed_at) return "it is already stopped";
+  // A pin is a person keeping it in their inbox: theirs to end, not the run's.
+  if (conv.inbox_pinned_at) return "a person pinned it";
+  if ((conv.message_count ?? 0) !== expectedMessageCount) return `it has moved since the run read it (${expectedMessageCount} messages then, ${conv.message_count ?? 0} now)`;
+  const liveAgent = async (id: Id<"conversations">) => (await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", id)).collect())
+    .filter((m: any) => now - (m.last_heartbeat ?? 0) < HEARTBEAT_ALIVE_MS);
+  const held = await queuedOrArmed(ctx, conv._id);
+  if (held) return `${held} for it`;
+  if ((await liveAgent(conv._id)).some((m: any) => RETIRE_BUSY_STATUSES.has(m.agent_status ?? ""))) return "it is working";
+  // The kill cascades to its nested sessions, live or not, and takes their queued messages and triggers with them.
+  const [subs, spawned] = await Promise.all([
+    ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conv._id)).take(200),
+    ctx.db.query("conversations").withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", conv._id)).take(200),
+  ]);
+  for (const child of [...subs, ...spawned]) {
+    if (child.inbox_killed_at || nestParentIdOf(child) !== conv._id.toString()) continue;
+    const name = child.short_id ?? String(child._id).slice(0, 7);
+    if ((await liveAgent(child._id)).length) return `its nested session ${name} is live`;
+    const childHeld = await queuedOrArmed(ctx, child._id);
+    if (childHeld) return `${childHeld} for its nested session ${name}`;
+  }
+  return null;
+}
+
+/** What a kill of this conversation would drop: a queued message, or an armed trigger. */
+async function queuedOrArmed(ctx: { db: any }, id: Id<"conversations">): Promise<string | null> {
+  for (const status of ["pending", "injected", "held"]) {
+    const queued = await ctx.db.query("pending_messages").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", id).eq("status", status)).first();
+    if (queued) return "a message is queued";
+  }
+  const armed = (await tasksOriginatedBy(ctx, id)).find((t: any) => t.status === "scheduled" || t.status === "running" || t.status === "paused");
+  return armed ? "a trigger is armed" : null;
+}
+
+// A flow run retires the session its change came from once that change is live (flows.md FL4): the same kill as
+// `cast kill`, but only when retireRefusal finds nothing it would cut off. A refusal kills nothing and says why; the
+// run then tells the session it is over instead.
+export const cliRetireSession = mutation({
+  args: {
+    session: v.string(),
+    // The transcript length the run read the session settled at: any later message means it moved since.
+    expected_message_count: v.number(),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    noteWriteCause(ctx, "cli:retire");
+    const userId = args.api_token ? await getAuthenticatedUserId(ctx, args.api_token) : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    const conv = await findConversationByAnyRefWhere(ctx, args.session, (c) =>
+      c.user_id?.toString() === userId.toString() || c.owner_user_id?.toString() === userId.toString()
+    );
+    if (!conv) throw new Error(`No session found for "${args.session}" (you can only retire sessions you run or own)`);
+    const shortId = conv.short_id ?? conv._id.toString().slice(0, 7);
+    const reason = await retireRefusal(ctx, conv, args.expected_message_count, Date.now());
+    if (reason) return { retired: false as const, short_id: shortId, reason };
+    const patch = { inbox_dismissed_at: Date.now() };
+    await ctx.db.patch(conv._id, patch);
+    await applyHideTransition(ctx, conv, patch, { forceKill: true, cause: "cli:retire" });
+    return { retired: true as const, short_id: shortId };
   },
 });
 
@@ -12422,6 +12590,7 @@ export const reconfigureSession = mutation({
       v.literal("pi"),
       v.literal("grok"),
       v.literal("muse"),
+      v.literal("antigravity"),
     )),
     project_path: v.optional(v.string()),
     git_root: v.optional(v.string()),
@@ -12652,6 +12821,7 @@ const switchAgentType = v.union(
   v.literal("pi"),
   v.literal("grok"),
   v.literal("muse"),
+  v.literal("antigravity"),
 );
 
 // Stay on THIS conversation: patch agent/model, drop a transcript divider, and
@@ -12808,6 +12978,26 @@ export const switchSessionAgent = mutation({
       reconstituted: false,
       live_commands: liveCommands,
     };
+  },
+});
+
+/**
+ * The daemon's heal for a session recorded before it marked interactive launches: it read the transcript head as
+ * one a person runs at a terminal (cli parser detectCliFlags, codexLaunchFlags), so the session gains
+ * `--interactive`, the mark lib/messageProvenance needs to read a terminal line as typed. Only on the caller's own
+ * conversation, only that mark, and never on a session already marked either way: no other flag is added or removed.
+ */
+export const markInteractive = mutation({
+  args: { api_token: v.string(), conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<{ marked: boolean }> => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || String(conversation.user_id) !== String(auth.userId)) throw new Error("Only the session's own account marks it interactive");
+    const flags = (conversation.cli_flags ?? "").split(/\s+/).filter(Boolean);
+    if (flags.includes("--interactive") || flags.includes("--print")) return { marked: false };
+    await ctx.db.patch(conversation._id, { cli_flags: [...flags, "--interactive"].join(" ") });
+    return { marked: true };
   },
 });
 

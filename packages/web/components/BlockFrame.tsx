@@ -85,6 +85,12 @@ export function BlockFrame({
     return () => window.removeEventListener("keydown", onKey);
   }, [fullscreen]);
 
+  // The cap holds from the first paint, before the observer has answered: a
+  // tall block that mounted at full height and folded a frame later swung its
+  // row by thousands of px on every mount, and the virtualized transcript
+  // chased each swing with a scroll jump (blank panes, rows drawn over rows).
+  // `overflowing` only decides the fade and the control.
+  const capped = !expanded;
   const collapsed = overflowing && !expanded;
   const copyButton = (size: number) => copyText !== undefined && (
     <button onClick={handleCopy} className={headerBtn} title={copyLabel}>
@@ -119,7 +125,7 @@ export function BlockFrame({
         <div className="px-1">{source}</div>
       ) : (
         <>
-          <div ref={clipRef} className="relative overflow-hidden" style={collapsed ? { maxHeight: COLLAPSE_PX } : undefined}>
+          <div ref={clipRef} className="relative overflow-hidden" style={capped ? { maxHeight: COLLAPSE_PX } : undefined}>
             {children}
             {collapsed && (
               <div

@@ -116,6 +116,8 @@ import { join } from "node:path";
 // 2026-11-16: the fix forward of 458b815d8 split nine files back under their
 // pins and took lib/mods/host.ts under the cap (its collection reads moved to
 // lib/mods/collectionQuery.ts). PIN 245.
+// 2026-11-20: a role's charter moved to its doc and its fold migration ran,
+// taking convex/migrations.ts under the cap. PIN 244.
 
 const REPO_ROOT = join(import.meta.dir, "..", "..", "..");
 const ALLOWLIST = join(import.meta.dir, "max-lines-baseline.txt");
@@ -132,7 +134,7 @@ function pinnedSize(source: string): number {
 }
 
 /** How many files are over the cap today. May only fall. */
-const PIN = 245;
+const PIN = 244;
 
 const result = checkRatchet({
   name: "max lines",

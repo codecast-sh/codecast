@@ -28,5 +28,6 @@ describe("unplaced lines", () => {
     expect(unplacedCountLine(view({ plans: [], projects: [], loose_tasks: { total: 0, by_session: [] }, sessions: [] }))).toBe("nothing: every live plan and project reaches a goal");
     expect(unplacedCountLine(view({ truncated: true }))).toEndWith("(a floor)");
     expect(unplacedLines(null, NOW)).toEqual([]);
+    expect(unplacedLines(null, NOW, "  ", "Too many reads").map(strip)).toEqual(["  unplaced: not read (Too many reads)"]);
   });
 });

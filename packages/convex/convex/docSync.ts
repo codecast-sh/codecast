@@ -578,6 +578,8 @@ export const updatePresence = mutation({
     draft_text: v.optional(v.string()),
     // Composer co-presence only: where the sender is reading the transcript.
     anchor: v.optional(vAnchor),
+    // Composer co-presence only: the sender's box has joined the shared draft.
+    in_draft: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireAuth(ctx);
@@ -597,6 +599,7 @@ export const updatePresence = mutation({
       cursor_pos: args.cursor_pos,
       anchor_pos: args.anchor_pos,
       draft_text: draft,
+      in_draft: args.in_draft,
       anchor,
       anchor_at: anchor ? (moved ? now : existing?.anchor_at ?? now) : undefined,
       can_send: canSend,
@@ -657,6 +660,7 @@ export const getPresence = query({
     anchor: v.optional(vAnchor),
     anchor_at: v.optional(v.number()),
     claims: v.optional(v.array(v.object({ user_id: v.id("users"), text: v.string(), at: v.number(), how: v.optional(v.string()) }))),
+    in_draft: v.optional(v.boolean()),
     updated_at: v.number(),
   })),
   handler: async (ctx, args) => {
@@ -684,6 +688,7 @@ export const getPresence = query({
           anchor: p.anchor,
           anchor_at: p.anchor_at,
           claims: claims.length ? claims : undefined,
+          in_draft: p.in_draft,
           updated_at: p.updated_at,
         };
       });

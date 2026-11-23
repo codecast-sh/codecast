@@ -3,6 +3,7 @@ import { makeFakeDb } from "./testDb";
 import { performAcceptUpgrade, performAnswerInput, performCatalog, performFileLesson, performRetire, performYank, performInstanceForRole, performInstanceStatus, performListInstances, performListLessons, performMarkSetup, performPublish, performRecordEvidence, performRecordScores, performRelease, performRequestBind, performSetLessonStatus, performUpsertInstance, performWriteLoaderCharter, refuseHiredRowFromWire } from "./orgTemplates";
 import { templateLoaderPrompt } from "@codecast/shared/contracts/orgTemplateManifest";
 import { applyOrgChange } from "./orgInit";
+import { charterText, giveCharter } from "./roleCharter.testkit";
 
 // Roles hired from a template (org-hire.md W8): the server side of publish,
 // catalog, the instance row, its record and lessons, driven through the same
@@ -186,9 +187,10 @@ describe("the loader charter of a web hire (org-hire.md H3)", () => {
   const boundary = { team_id: ACME } as any;
   const human = { provision: false, human_decision: "sd-1" } as any;
   const humanCtx = (db: any) => ({ db, auth: { getUserIdentity: async () => ({ subject: ME }) } }) as any;
-  const other = { _id: "role-2", short_id: "or-2", handle: "acme-seo", name: "SEO", status: "active", trust: "understand", scope_type: "team", team_id: ACME, host_user_id: ME, reports_to: { kind: "user", user_id: ME }, scope: { project_ids: [P], plan_ids: [] }, charter: "The person's words", created_at: 1, updated_at: 1 };
+  const other = { _id: "role-2", short_id: "or-2", handle: "acme-seo", name: "SEO", status: "active", trust: "understand", scope_type: "team", team_id: ACME, host_user_id: ME, reports_to: { kind: "user", user_id: ME }, scope: { project_ids: [P], plan_ids: [] }, created_at: 1, updated_at: 1 };
   test("the host step writes its own hire's loader on the accept, from a terminal, and nothing else", async () => {
     const db = fixtures({ org_roles: [cmoRole(), other] });
+    await giveCharter(db, "role-2", "The person's words");
     await performPublish(ctx(db), ME, { as_codecast: true, manifest: manifest(), digest: D1, status: "stable" });
     const terminal = ctx(db); // an api token call: no browser identity
     const write = { project_id: P as any, instance: "acme-growth", role_id: "role-1" as any, dir: "/src/acme" };
@@ -198,17 +200,17 @@ describe("the loader charter of a web hire (org-hire.md H3)", () => {
     // Another role, a relative folder: refused, and the other role's charter stands.
     await expect(performWriteLoaderCharter(terminal, ME, { ...write, role_id: "role-2" as any })).rejects.toThrow(/another role/);
     await expect(performWriteLoaderCharter(terminal, ME, { ...write, dir: "src/acme" })).rejects.toThrow(/absolute folder/);
-    expect((await db.get("role-2" as any)).charter).toBe("The person's words");
+    expect(await charterText(db, "role-2")).toBe("The person's words");
     // The hire's own role gets the loader the server builds, under the charter the person gave it, once.
-    await db.patch("role-1" as any, { charter: "Owns growth for Acme." });
+    await giveCharter(db, "role-1", "Owns growth for Acme.");
     const loader = templateLoaderPrompt("/src/acme", "acme-growth", "charter");
     await performWriteLoaderCharter(terminal, ME, write);
-    expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${loader}`);
+    expect(await charterText(db, "role-1")).toBe(`Owns growth for Acme.\n\n${loader}`);
     await performWriteLoaderCharter(terminal, ME, write);
-    expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${loader}`);
+    expect(await charterText(db, "role-1")).toBe(`Owns growth for Acme.\n\n${loader}`);
     // A host step rerun from another folder before the claim moves the loader, never stacks a second one.
     await performWriteLoaderCharter(terminal, ME, { ...write, dir: "/src/acme/site" });
-    expect((await db.get("role-1" as any)).charter).toBe(`Owns growth for Acme.\n\n${templateLoaderPrompt("/src/acme/site", "acme-growth", "charter")}`);
+    expect(await charterText(db, "role-1")).toBe(`Owns growth for Acme.\n\n${templateLoaderPrompt("/src/acme/site", "acme-growth", "charter")}`);
     // Once the host claims the row, the charter is the person's again.
     await performUpsertInstance(ctx(db), ME, { instance_key: "receipt-uuid", instance: "acme-growth", template_id: "growth", version: "2.0.0", digest: D1, project_id: P as any, role_id: "role-1" as any, host: { machine: "mbp", dir: "/src/acme" }, phase: "ready" });
     await expect(performWriteLoaderCharter(terminal, ME, { ...write, dir: "/elsewhere" })).rejects.toThrow(/awaiting its host step/);

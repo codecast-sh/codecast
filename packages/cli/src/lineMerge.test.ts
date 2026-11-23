@@ -3,8 +3,8 @@ import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { extractSessionTrailer } from "@codecast/shared/blame";
-import { checksGreen, defaultExec, mergeBranch, runMergeStep, type Exec, type MergeCheck } from "./lineMerge";
+import { extractSessionTrailer, splitSessionTrailer } from "@codecast/shared/blame";
+import { checksGreen, defaultExec, landedSha, mergeBranch, mergePullRequest, runMergeStep, squashBody, type Exec, type MergeCheck } from "./lineMerge";
 
 // The line's merge step (the-line.md L12), driven with a scripted git/gh and
 // a scripted server: what it merges, what it leaves to a person, and that a
@@ -161,6 +161,48 @@ describe("mergeBranch", () => {
     } finally { r.done(); }
   });
 
+  // ct-98089: Union's ct-97881 replaced two young files with one, main had not touched them, and the guard read the
+  // deletion as undoing their creation.
+  test("a branch that deletes files main created lands when nothing else it lands sets main back: the deletion is its own", () => {
+    const r = gitRepo();
+    try {
+      r.commit("line/check.md", "check\n", "add check");
+      r.commit("line/reconcile.md", "reconcile\n", "add reconcile");
+      r.git(r.work, "push", "-q", "origin", "main");
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.git(r.work, "rm", "-q", "line/check.md", "line/reconcile.md");
+      r.commit("line/review.md", "review\n", "fix: one review step replaces check and reconcile");
+      r.git(r.work, "push", "-q", "origin", "b");
+      r.advanceMain("m.txt", "main moved\n");
+      const out = mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null });
+      expect(out.kind).toBe("merged");
+      expect(r.git(r.origin, "ls-tree", "-r", "--name-only", "main")).toBe("a.txt\nline/review.md\nm.txt");
+    } finally { r.done(); }
+  });
+
+  test("a deletion of the branch's own is held with the rest when the landing also sets main back, as a squash over a stale tree does", () => {
+    const r = gitRepo();
+    try {
+      r.commit("old.txt", "old\n", "add old");
+      r.git(r.work, "push", "-q", "origin", "main");
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.git(r.work, "rm", "-q", "old.txt");
+      r.commit("b.txt", "fix\n", "fix: b, and old goes");
+      r.advanceMain("a.txt", "one\ntwo\n");
+      r.git(r.work, "fetch", "-q", "origin");
+      r.git(r.work, "reset", "-q", "--soft", "origin/main");
+      r.git(r.work, "commit", "-q", "-m", "fix: b, squashed");
+      r.git(r.work, "push", "-q", "-f", "origin", "b");
+      const main = r.git(r.origin, "rev-parse", "main");
+      const out = mergeBranch({ cwd: r.work, branch: "b", into: "main", pr_url: null });
+      expect(out.kind).toBe("left");
+      const reason = out.kind === "left" ? out.reason : "";
+      expect(reason).toContain("a.txt from ");
+      expect(reason).toContain("old.txt from ");
+      expect(r.git(r.origin, "rev-parse", "main")).toBe(main);
+    } finally { r.done(); }
+  });
+
   test("a branch whose files the default branch also changed is left, naming them, and nothing is pushed", () => {
     const r = gitRepo();
     try {
@@ -227,15 +269,63 @@ describe("mergeBranch", () => {
     } finally { r.done(); }
   });
 
-  test("with a pull request: checks must be green and the PR open, then gh merges with a rebase", () => {
+  test("with a pull request: checks must be green and the PR open, then gh squashes the checked head and the merge commit on main is the sha", () => {
     const pr = "https://github.com/o/r/pull/5";
     const red = scripted({ "git rev-parse": { stdout: "abc\n" }, "gh pr view": { stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", statusCheckRollup: [{ name: "ci", conclusion: "FAILURE" }] }) } });
     expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: red.exec })).toEqual({ kind: "left", reason: "checks are not green: ci=FAILURE" });
     expect(red.calls.some((c) => c.args[0] === "pr" && c.args[1] === "merge")).toBe(false);
 
-    const green = scripted({ "git rev-parse": { stdout: "abc\n" }, "gh pr view": { stdout: JSON.stringify({ state: "OPEN", mergeable: "MERGEABLE", statusCheckRollup: [{ name: "ci", conclusion: "SUCCESS" }] }) } });
-    expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: green.exec })).toEqual({ kind: "merged", sha: "abc", into: "main", via: "pr" });
-    expect(green.calls.find((c) => c.args[0] === "pr" && c.args[1] === "merge")?.args).toEqual(["pr", "merge", pr, "--rebase", "--delete-branch"]);
+    const view = { state: "OPEN", mergeable: "MERGEABLE", statusCheckRollup: [{ name: "ci", conclusion: "SUCCESS" }], mergeCommit: { oid: "squashed" } };
+    const green = scripted({ "git rev-parse": { stdout: "abc\n" }, "gh pr view": { stdout: JSON.stringify(view) } });
+    expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: green.exec })).toEqual({ kind: "merged", sha: "squashed", into: "main", via: "pr" });
+    expect(green.calls.find((c) => c.args[0] === "pr" && c.args[1] === "merge")?.args).toEqual(["pr", "merge", pr, "--squash", "--match-head-commit", "abc"]);
+    // Only origin's branch goes, and only while it stands at the merged head: gh's --delete-branch would also take
+    // the local branch and any worktree holding it.
+    expect(green.calls.at(-1)?.args).toEqual(["push", "--force-with-lease=refs/heads/b:abc", "origin", "--delete", "b"]);
+    expect(green.calls.some((c) => c.args.join(" ") === "merge-base --is-ancestor squashed origin/main")).toBe(true);
+
+    // gh calls it merged, but main does not hold the commit: nothing landed.
+    const absent = scripted({ "git rev-parse": { stdout: "abc\n" }, "gh pr view": { stdout: JSON.stringify(view) }, "git merge-base --is-ancestor": { status: 1 } });
+    const waits: number[] = [];
+    expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: absent.exec, wait: (ms) => waits.push(ms) })).toEqual({ kind: "left", reason: `gh says ${pr} merged as squashed, but origin/main does not hold that commit` });
+    // Read again for about ten seconds first: GitHub's git replicas trail its API.
+    expect(waits.reduce((a, b) => a + b, 0)).toBe(10_000);
+
+    // A replica that catches up on the third read lands.
+    let reads = 0;
+    const lagging: Exec = (cmd, args, cwd) => (args[0] === "merge-base" && args[1] === "--is-ancestor" ? { status: ++reads >= 3 ? 0 : 1, stdout: "", stderr: "" } : green.exec(cmd, args, cwd));
+    expect(landedSha(lagging, "/repo", pr, "main", () => {})).toEqual({ sha: "squashed" });
+    expect(reads).toBe(3);
+
+    // gh can exit 1 after the merge went through: the PR reads merged, so it counts.
+    const afterMerge = scripted({ "gh pr merge": { status: 1, stderr: "connection reset" }, "gh pr view": { stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: "squashed" } }) } });
+    expect(mergePullRequest(afterMerge.exec, "/repo", { pr, branch: "b", head: "abc", into: "main" })).toEqual({ sha: "squashed" });
+    // A branch GitHub already deleted: the push fails and the merge still stands.
+    const gone = scripted({ "gh pr view": { stdout: JSON.stringify(view) }, "git push": { status: 1, stderr: "error: unable to delete 'b': remote ref does not exist" } });
+    expect(mergePullRequest(gone.exec, "/repo", { pr, branch: "b", head: "abc", into: "main" })).toEqual({ sha: "squashed" });
+    const refused = scripted({ "gh pr merge": { status: 1, stderr: "Head branch was modified" }, "gh pr view": { stdout: JSON.stringify({ state: "OPEN" }) } });
+    expect(mergePullRequest(refused.exec, "/repo", { pr, branch: "b", head: "abc", into: "main" })).toEqual({ reason: "gh pr merge failed: Head branch was modified" });
+    expect(refused.calls.some((c) => c.args[0] === "push")).toBe(false);
+  });
+});
+
+describe("squashBody", () => {
+  test("carries each of the branch's commits whole, in GitHub's squash shape, so blame reads every session's trailer", () => {
+    const r = gitRepo();
+    const s1 = "jx7389x8e30114ecc93nk6txzn8jnxrg";
+    const s2 = "jx7ek23bt01nysvawb3781jg558jnpme";
+    try {
+      r.git(r.work, "checkout", "-q", "-b", "b");
+      r.commit("x.txt", "1\n", `Add x\n\nCodecast-Session: https://codecast.sh/conversation/${s1}`);
+      const head = r.commit("y.txt", "2\n", `Add y\n\nCodecast-Session: https://codecast.sh/conversation/${s2}`);
+      r.git(r.work, "fetch", "-q", "origin");
+      const body = squashBody(defaultExec, r.work, head, "main")!;
+      expect(body).toBe(`* Add x\n\nCodecast-Session: https://codecast.sh/conversation/${s1}\n\n* Add y\n\nCodecast-Session: https://codecast.sh/conversation/${s2}`);
+      // Each trailer block ends its commit's bullet, so blame finds both; the squash names the newest.
+      const squash = `Squash (#5)\n\n${body}`;
+      expect(extractSessionTrailer(squash)).toBe(s2);
+      expect(splitSessionTrailer(squash).message).not.toContain("Codecast-Session");
+    } finally { r.done(); }
   });
 });
 

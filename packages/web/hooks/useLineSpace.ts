@@ -80,13 +80,13 @@ export function linkedWorkspace(s: State, sel: Pick<LineSelection, "need" | "cas
 /** Every workspace the line reads (those holding problems), for a surface that lists across them all: For you. */
 export function useLineSpaceKeys(): WorkspaceKey[] {
   const sig = useInboxStore(spacesSig);
-  return useMemo(() => (JSON.parse(sig) as LineSpace[]).map((x) => x.key), [sig]);
+  return useMemo(() => (JSON.parse(sig) as LineSpace[]).filter((x) => x.problems > 0).map((x) => x.key), [sig]);
 }
 
 export type LineSpaceState = {
-  /** The workspace /line reads; null when no workspace has a problem (the app's active one holds). */
+  /** The workspace /line reads; null when the viewer has no team and no problem (the app's active one holds). */
   key: WorkspaceKey | null;
-  /** Every workspace with problems, busiest first. */
+  /** Every team of the viewer's, busiest first, then Personal when it holds problems. */
   spaces: LineSpace[];
   /** Read another workspace, remembered on this device. */
   pick: (key: WorkspaceKey) => void;

@@ -28,7 +28,7 @@ export const EXECUTION_PROTOCOL_CAPABILITIES = [
   "runtime-inspection-v1",
 ] as const;
 
-type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse";
+type AgentClientId = "claude" | "codex" | "cursor" | "gemini" | "opencode" | "pi" | "grok" | "muse" | "antigravity";
 type RuntimeTransport = "tmux" | "app-server" | "external";
 type RuntimeCapability = (typeof EXECUTION_PROTOCOL_CAPABILITIES)[number];
 type SuccessorPolicy = "drain-current" | "cancel-unstarted";
@@ -151,6 +151,7 @@ function strictConversationAgent(agentType: unknown): AgentClientId {
     case "pi":
     case "grok":
     case "muse":
+    case "antigravity":
       return agentType;
     default:
       return fail("INVALID_EXECUTION_AGENT", `unsupported conversation agent ${String(agentType)}`);
@@ -2088,15 +2089,17 @@ export async function abandonAmbiguousAndResendInDb(
     origin: message.origin,
     createdAt: fence.now,
     delivery: allocation,
+    quiet: message.quiet,
     resendOfDeliveryId: fence.deliveryId,
   });
+  // The same stash rule as the send it resends (enqueuePendingMessage): a hidden stash survives a machine wake and a quiet handover.
   const machineWake = message.origin === "scheduler";
   await ctx.db.patch(fence.conversationId, {
     updated_at: fence.now,
     has_pending_messages: true,
     ...(conversation.status === "completed" ? { status: "active" as const } : {}),
     ...(conversation.inbox_dismissed_at ? { inbox_dismissed_at: undefined } : {}),
-    ...(conversation.inbox_stashed_at && !(machineWake && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
+    ...(conversation.inbox_stashed_at && !((machineWake || message.quiet) && isStashHidden(conversation)) ? { inbox_stashed_at: undefined } : {}),
     ...(conversation.inbox_killed_at ? { inbox_killed_at: undefined } : {}),
   });
   return {
@@ -2529,6 +2532,7 @@ const agentClientValidator = v.union(
   v.literal("pi"),
   v.literal("grok"),
   v.literal("muse"),
+  v.literal("antigravity"),
 );
 const transportValidator = v.union(
   v.literal("tmux"),

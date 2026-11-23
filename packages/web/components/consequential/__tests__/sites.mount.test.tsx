@@ -185,7 +185,7 @@ test("bulk kill: idle sessions end at once; a selection with working ones opens 
     await render(React.createElement(InboxSelectionBar, { sessions: mixed, onKill: (ids: string[]) => killed.push(ids), onClear: () => {} }));
     await click("[data-bulk-kill]");
     assert.equal(killed.length, 1, "a working session in the selection: the press asks first");
-    assert.equal(q('[data-switch-figure="cut off mid-turn"]')!.textContent, "1");
+    assert.equal(q('[data-switch-figure="cut off"]')!.textContent, "1");
     assert.match(q('[data-switch-row="Working"]')!.textContent!, /Busy one/);
     await click("[data-switch-confirm]");
     assert.deepEqual(killed[1], ["s1", "s2"]);

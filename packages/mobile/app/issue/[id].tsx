@@ -13,7 +13,7 @@ import { Text as RNText } from '@/components/Themed';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { Mono, uiFace } from '@/constants/fonts';
 import { appAlert } from '@/lib/popups';
-import { openWebPage, WEB_ORIGIN } from '@/lib/links';
+import { WEB_ORIGIN } from '@/lib/links';
 import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { ActionButton, LinkRow, ObjectHeader, ObjectMissing, SectionLabel, FactChip, objectStyles } from '@/components/objects/ObjectParts';
 import { HourStrip, Vital, ago, clock, groupKindLook, groupStatusColor, opsStyles } from '@/components/ops/OpsRows';
@@ -87,7 +87,6 @@ function IssueBody({ g }: { g: OpsGroup }) {
         shortId={g.short_id}
         title={g.title}
         link={`${WEB_ORIGIN}/ops/issues/${ref}`}
-        menu={[{ label: 'Open on the web', onPress: () => { void openWebPage(`${WEB_ORIGIN}/ops/issues/${ref}`); } }]}
       />
       <ScrollView ref={scroller} style={objectStyles.container} contentContainerStyle={objectStyles.content}>
         <RNText style={objectStyles.title} selectable>{g.title}</RNText>

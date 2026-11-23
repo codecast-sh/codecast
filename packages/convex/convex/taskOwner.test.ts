@@ -121,3 +121,30 @@ describe("a person's comment reaches the session that owns the task", () => {
     expect(await pending(t)).toHaveLength(0);
   });
 });
+
+describe("the session a task's change came from (change_session on /cli/work/get)", () => {
+  const changeSession = async (t: any) => (await t.query(api.tasks.get, { api_token: TOKEN, short_id: "ct-1" }))?.change_session;
+  const handoff = (t: any, taskId: any, convId: any, at: number) => t.run(async (ctx: any) => {
+    await ctx.db.insert("task_comments", { task_id: taskId, author: "Owner", text: "Handoff: done\n\nverified", comment_type: "review", conversation_id: convId, created_at: at } as any);
+  });
+
+  test("the session bound to the task", async () => {
+    const { t, ownerId } = await setup(60_000);
+    expect(await changeSession(t)).toEqual({ short_id: "jx7aaaa", conversation_id: ownerId });
+  });
+
+  test("a session that handed the task off and moved to other work still owns its change", async () => {
+    const { t, ownerId, otherId, taskId, elsewhereId } = await setup(60_000);
+    await t.run(async (ctx) => { await ctx.db.patch(ownerId, { active_task_id: elsewhereId } as any); });
+    await handoff(t, taskId, otherId, Date.now() - HOUR);
+    await handoff(t, taskId, ownerId, Date.now());
+    expect(await changeSession(t)).toEqual({ short_id: "jx7aaaa", conversation_id: ownerId });
+  });
+
+  test("none when nobody holds it and the session that handed it off was killed", async () => {
+    const { t, ownerId, taskId, elsewhereId } = await setup(60_000);
+    await t.run(async (ctx) => { await ctx.db.patch(ownerId, { active_task_id: elsewhereId, inbox_killed_at: Date.now() } as any); });
+    await handoff(t, taskId, ownerId, Date.now());
+    expect(await changeSession(t)).toBeNull();
+  });
+});

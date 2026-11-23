@@ -4,10 +4,28 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fmt } from "../colors.js";
+import { spawnSync } from "../proc.js";
 import { formatAgeShort } from "../publishCommand.js";
 import { git } from "../wipSnapshot.js";
 import { inboxRoster } from "./cli.js";
-import { makePlan, planPath, runPlan, shipSpec, type ShipGroup, type ShipOutcome, type ShipPlan } from "./shipCheckout.js";
+import { makePlan, planPath, runPlan, shipSpec, type Log, type ShipGroup, type ShipOutcome, type ShipPlan } from "./shipCheckout.js";
+import { holdRepoLease, leaseHolder, leaseRouteMissing, type LeasePost } from "./repoLease.js";
+
+/** The repository's lease for the ship's before-push deploys and push. A server that cannot be asked about it (one older
+ *  than the lease, with no route for it) does not stop a person's ship: it says so and goes on, as the ship did before
+ *  there was a lease. Any other failure stops the ship rather than deploy beside another holder. */
+async function checkoutLease(root: string, post: LeasePost, log: Log): Promise<() => Promise<void>> {
+  const { readLocalGitContext } = await import("../prCommand.js");
+  const repository = readLocalGitContext(root).repository;
+  if (!repository) return async () => {};
+  try {
+    return (await holdRepoLease(post, { repository, holder: leaseHolder("cast ship checkout"), log })).release;
+  } catch (err) {
+    if (!leaseRouteMissing(err)) throw err;
+    log(`warning: this server has no lease on ${repository}'s deploys (it needs a newer deployment); a Merge station elsewhere may deploy between this deploy and its push`);
+    return async () => {};
+  }
+}
 
 export interface CheckoutOptions {
   plan?: string | boolean;
@@ -132,14 +150,54 @@ export function shipPassBody(plan: ShipPlan, r: ShipOutcome, repository: string,
       return { sha: c.sha, message: c.message, files: c.files, ...(s?.id ? { session_id: s.id } : {}), ...(s?.conversation_id ? { conversation_id: s.conversation_id } : {}) };
     }),
     held: r.held.map((h) => ({ group: h.group, paths: h.paths.length, ...(h.note ? { note: h.note } : {}) })),
-    deploys: r.deploys.map((d) => ({ name: d.name, stage: d.stage, ok: d.ok, ...(d.target ? { target: d.target } : {}), ...(d.dirty ? { dirty: d.dirty } : {}), ...(d.output ? { output: d.output.slice(-3000) } : {}) })),
+    deploys: r.deploys.map((d) => ({
+      name: d.name, stage: d.stage, ok: d.ok, ...(d.target ? { target: d.target } : {}), ...(d.dirty ? { dirty: d.dirty } : {}),
+      // What the push did to its target (machine, path, names added and dropped), when the step said.
+      ...(d.machine ? { machine: d.machine } : {}), ...(d.via ? { via: d.via } : {}),
+      // When the step's push went out, as an age the server dates on its own clock.
+      ...(d.pushed_at ? { pushed_age_ms: Math.max(0, Math.round(Date.now() - d.pushed_at)) } : {}), ...(d.adds && d.drops ? { adds: d.adds, drops: d.drops, ...(d.changes_read_at ? { changes_read_age_ms: Math.max(0, Math.round(Date.now() - d.changes_read_at)) } : {}) } : {}),
+      ...(d.output ? { output: d.output.slice(-3000) } : {}),
+    })),
     started_at: startedAt,
   };
 }
 
-export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: Record<string, unknown>) => Promise<any>): Promise<void> {
+/**
+ * The `cast flow run` a pass goes through when `[ship] flow` names a flow, or null when it names none (and on a dry
+ * run, which only plans). The flow freezes the checkout as its change and checks, lands and deploys it, so this
+ * command pushes nothing. Flags that steer a pass this command pushes itself would be dropped silently, so they are
+ * refused, `--no-fetch` among them: the flow always cuts the pass onto freshly fetched upstream.
+ */
+export function checkoutFlowArgs(named: string | undefined, opts: CheckoutOptions): string[] | null {
+  const flow = named?.trim();
+  if (!flow || opts.dryRun) return null;
+  const steered = [
+    opts.plan !== undefined && "--plan", opts.only !== undefined && "--only", opts.hold && "--hold", opts.commitsOnly && "--commits-only",
+    opts.message?.length && "--message", opts.check === false && "--no-check", opts.push === false && "--no-push", opts.deploy === false && "--no-deploy",
+    opts.fetch === false && "--no-fetch",
+  ].filter((f): f is string => !!f);
+  if (steered.length) throw new Error(`[ship] flow = "${flow}" runs the pass through that flow, which plans, checks and lands it; ${steered.join(", ")} only steer${steered.length === 1 ? "s" : ""} a pass cast ship checkout pushes itself`);
+  return ["flow", "run", flow, "--checkout", ...(opts.json ? ["--json"] : [])];
+}
+
+/** Run a `cast` command in `cwd` with this terminal, returning its exit code. */
+async function runCast(args: string[], cwd: string): Promise<number> {
+  const { resolveCastInvocation } = await import("../castInvocation.js");
+  const { cmd, prefixArgs } = resolveCastInvocation();
+  return spawnSync(cmd, [...prefixArgs, ...args], { cwd, stdio: "inherit", env: process.env }).status ?? 1;
+}
+
+export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: Record<string, unknown>) => Promise<any>, runFlow: (args: string[], cwd: string) => Promise<number> = runCast, post?: LeasePost): Promise<void> {
   const startedAt = Date.now();
   const root = (await git(process.cwd(), ["rev-parse", "--show-toplevel"]));
+  const flow = shipSpec(root).flow;
+  const flowArgs = checkoutFlowArgs(flow, opts);
+  if (flowArgs) {
+    log(`[ship] flow = "${flow}": running the pass through it (cast ${flowArgs.join(" ")})`);
+    const code = await runFlow(flowArgs, root);
+    if (code !== 0) process.exitCode = code;
+    return;
+  }
   const gitDir = await git(root, ["rev-parse", "--absolute-git-dir"]);
   const file = typeof opts.plan === "string" ? path.resolve(opts.plan) : planPath(gitDir);
 
@@ -163,10 +221,11 @@ export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: 
   if (opts.dryRun) {
     // The plan file's own object, so what is read here is what is edited there; plan_file and ship ride beside it.
     console.log(opts.json ? JSON.stringify({ ...plan, plan_file: file, ship: shipSpec(root) }, null, 2) : formatPlan(plan, file));
+    if (flow && !opts.json) console.log(fmt.muted(`[ship] flow = "${flow}": cast ship checkout runs the pass through that flow, which freezes the checkout again when it starts.`));
     return;
   }
 
-  const result = await runPlan(plan, { noCheck: opts.check === false, noPush: opts.push === false, noDeploy: opts.deploy === false, log });
+  const result = await runPlan(plan, { noCheck: opts.check === false, noPush: opts.push === false, noDeploy: opts.deploy === false, log, ...(post ? { lease: (l: Log) => checkoutLease(root, post, l) } : {}) });
   // Recorded whatever the outcome, so a stopped ship is as visible as a shipped one; a record that fails warns and never fails the ship.
   if (record && (result.commits.length || result.deploys.length || !result.ok)) {
     try {

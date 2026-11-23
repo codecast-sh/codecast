@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { AREA_WATCH_PASSES, performApplyAreaWatch, planAreaWatch, type WatchInput, type WatchPlan } from "./orgWatch";
+import { UNPLACED_CAPS } from "./lib/orgCoverage";
 import { formatScheduledTask, parseScheduledTask } from "@codecast/shared/contracts";
 import { ORG_AREA_CHANGE_EVENT } from "@codecast/shared/contracts";
 import { HEAD_AREA_CHANGE_TITLE } from "./lib/orgRoutine";
@@ -169,6 +170,13 @@ describe("planAreaWatch: unplaced work (ct-95901)", () => {
     const p3 = planAreaWatch(input([], { now: NOW + 30 * H, head: { role_id: "org_roles_head", unowned_told: p2.head_write!.unowned_told }, unplaced: { plans: [], projects: [] } }));
     expect(p3.changes).toEqual([]);
     expect(p3.head_write!.unowned_told).toEqual([]);
+  });
+
+  test("a list cut at its cap keeps what it told: a gap pushed off the list is not closed (review finding 12)", () => {
+    const full = Array.from({ length: UNPLACED_CAPS.plans }, (_, i) => plan({ short_id: `pl-${i}` }));
+    const told = [{ id: "plan_without_project:pl-off", since: NOW }];
+    const p = planAreaWatch(input([], { head: { role_id: "org_roles_head", unowned_told: told }, unplaced: { plans: full, projects: [] } }));
+    expect(p.head_write!.unowned_told.map((t) => t.id)).toContain("plan_without_project:pl-off");
   });
 
   test("a plan with no open task is not told; a pass that could not read unplaced work keeps what it told", () => {

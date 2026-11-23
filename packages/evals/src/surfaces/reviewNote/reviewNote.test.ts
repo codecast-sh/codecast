@@ -12,6 +12,7 @@ const VARS = {
   task_title: 'Typed answers at a gate never ship',
   branch: 'codecast/gate-text',
   default_branch: 'main',
+  diff_base: 'origin/main',
   acceptance_criteria: 'A typed question is answered\n- and never lands the change',
   'line.principles': 'docs/principles.md',
   'line.prompting': 'docs/prompting.md',

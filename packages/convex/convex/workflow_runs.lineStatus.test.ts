@@ -360,6 +360,47 @@ describe("the repair restamps its own close (LE16)", () => {
   });
 });
 
+// quick-change (ct-98836): Review approves, then Land fails and the run stops at Not shipped.
+describe("a review approve inside a run that is not a line run", () => {
+  const quickNodes = (...ids: string[]) => [node("start", T0), ...ids.map((id, i) => node(id, T0 + 10 + i))];
+  const approve = (t: any) => t.mutation(api.tasks.update, { api_token: TOKEN, short_id: "ct-1", status: "done", review_verdict: "approve" });
+
+  test("holds the task in review while the run goes on", async () => {
+    const { t, read } = await setup({ status: "in_review" }, { workflow_name: "quick-change", node_statuses: quickNodes("check", "review__review") });
+    await approve(t);
+    const { task } = await read();
+    expect(task.status).toBe("in_review");
+    expect(task.review_verdict.verdict).toBe("approve");
+  });
+
+  test("a run that stops at Not shipped leaves its task open, never done", async () => {
+    const { t, end, finish, read } = await setup({ status: "in_review" }, { workflow_name: "quick-change", node_statuses: quickNodes("check", "review__review") });
+    await approve(t);
+    await end(quickNodes("check", "review__review", "review__approved", "ship__ship", "ship__unshipped"));
+    await finish("failed");
+    const { task, history } = await read();
+    expect(task.status).not.toBe("done");
+    expect(task.execution_status).toBe("blocked");
+    expect(history.some((h: any) => h.new_value === "done")).toBe(false);
+  });
+
+  test("a run that lands and goes live makes its task done", async () => {
+    const { t, end, finish, read } = await setup({ status: "in_review" }, { workflow_name: "quick-change", node_statuses: quickNodes("check", "review__review") });
+    await approve(t);
+    await end(quickNodes("check", "review__review", "review__approved", "ship__ship", "ship__shipped", "deploy__wait"));
+    await finish("completed");
+    expect((await read()).task.status).toBe("done");
+  });
+
+  test("an approve from an earlier run does not close the task at this run's end", () => {
+    const run = { created_at: T0, node_statuses: quickNodes("check") };
+    expect(runEndStatus("in_review", "completed", run, { verdict: "approve", at: T0 + 1 })).toBe("done");
+    expect(runEndStatus("in_review", "completed", run, { verdict: "approve", at: T0 - 1 })).toBeNull();
+    expect(runEndStatus("in_review", "completed", run, { verdict: "changes", at: T0 + 1 })).toBeNull();
+    expect(runEndStatus("in_review", "failed", run, { verdict: "approve", at: T0 + 1 })).toBeNull();
+  });
+});
+
 describe("runEndStatus and repairedLineStatus", () => {
   const nodes = (...ends: string[]) => ({ node_statuses: lineNodes(...ends) });
   test("never overwrites done or dropped", () => {

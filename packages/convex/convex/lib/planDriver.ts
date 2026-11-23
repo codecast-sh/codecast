@@ -1,21 +1,25 @@
 // The session driving a plan or a task, as unplaced work and a goal's open
-// plans name it (orgUnplaced, initiatives). A leaf: it reads rows and defines
-// no function, so any module may import it.
+// plans name it (orgUnplaced, initiatives), read with the viewer's grants.
 
 import type { Id } from "../_generated/dataModel";
 import type { SessionRef } from "./orgCoverage";
+import { canAccessConversation } from "./access";
 
 type Ctx = { db: any };
 
-/** Conversation id → SessionRef, each row read once. */
-export function sessionRefs(ctx: Ctx) {
+/** Conversation id → SessionRef, each row read once, for `viewer`. A session
+ *  the viewer may not read (a teammate's private one) answers null, so its
+ *  title never reaches them: the same rule the plan page applies to its
+ *  sessions (plans.ts, canAccessConversation). */
+export function sessionRefs(ctx: Ctx, viewer: Id<"users">) {
   const cache = new Map<string, SessionRef | null>();
   return async (id: unknown): Promise<SessionRef | null> => {
     if (!id) return null;
     const k = String(id);
     if (!cache.has(k)) {
       const c: any = await ctx.db.get(id as Id<"conversations">);
-      cache.set(k, c ? { short_id: c.short_id ?? k.slice(0, 7), title: String(c.title ?? "").slice(0, 100), last_active_at: c.updated_at ?? c._creationTime } : null);
+      const readable = !!c && (await canAccessConversation(ctx as any, viewer, c));
+      cache.set(k, readable ? { short_id: c.short_id ?? k.slice(0, 7), title: String(c.title ?? "").slice(0, 100), last_active_at: c.updated_at ?? c._creationTime } : null);
     }
     return cache.get(k)!;
   };

@@ -12,7 +12,7 @@ import { ArrowUpRight, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useCollectionRows } from "../../../hooks/useCollectionRows";
 import { useSyncTaskSignals } from "../../../hooks/useSyncSignals";
 import { useInboxStore, useTrackedStore } from "../../../store/inboxStore";
-import { useWorkflow, useWorkflowRun } from "../../../hooks/useSyncWorkflows";
+import { useRunWorkflow, useWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { runPath, type ReportRun, type ReportTask } from "../../../lib/line/runReport";
 import { runHref } from "../../../lib/decisionLinks";
 import { RunOutcomeText, RunPathView } from "../RunReport";
@@ -176,7 +176,7 @@ function ProblemPanel({ taskId, findings }: { taskId: string; findings: number }
 /** The run that worked the problem: how it ended and every station it passed, phase by phase. */
 function RunPanel({ runId, taskId }: { runId: string; taskId: string | null }) {
   const run = useWorkflowRun(runId) as ReportRun | null | undefined;
-  const workflow = useWorkflow((run as any)?.workflow_id);
+  const workflow = useRunWorkflow(run as any);
   const task = useInboxStore((st) => (taskId ? (st.tasks as any)[taskId] : null)) as ReportTask | null;
   const phases = useMemo(() => (run ? runPath(run, workflow, task) : []), [run, workflow, task]);
   if (run === undefined) return <div className="ot-quiet">Loading the run</div>;

@@ -28,6 +28,7 @@ import { seatPlace } from "./lib/seatPlace";
 import { trustOf } from "./lib/orgCaps";
 import type { OrgTemplateBindArgs, OrgTemplateBindResult, OrgTemplateBindSecret } from "@codecast/shared/contracts/orgTemplateBind";
 import { truncateStr } from "@codecast/shared/render";
+import { roleCharterOf } from "./lib/roleCharter";
 
 /** The one value beside a workspace key that grants visibility: a template every workspace may hire. */
 export const CODECAST_TEMPLATE_ACCESS = "codecast";
@@ -281,7 +282,7 @@ export async function performWriteLoaderCharter(ctx: Ctx, userId: Id<"users">, a
   if (!row || row.phase !== "awaiting_host" || row.workspace !== (await resolveWorkspaceKey(ctx as any, project))) throw new Error(`No hire of ${args.instance} on this project is awaiting its host step; change the charter from the role page`);
   if (String(row.role_id) !== String(args.role_id)) throw new Error(`The hire ${args.instance} is for another role`);
   if (!/^\/[^\n']*[^/\n']$/.test(args.dir)) throw new Error("dir must be the project's absolute folder on the host");
-  const own = ((await ctx.db.get(args.role_id))?.charter ?? "").trim();
+  const own = await roleCharterOf(ctx, (await ctx.db.get(args.role_id)) ?? {});
   const charter = withTemplateLoader(own, args.dir, args.instance);
   if (charter === own) return { role_id: args.role_id, charter };
   await performUpdateRole(ctx, userId, { role_id: String(args.role_id), charter, human_decision: `hire:${String(row._id)}` });

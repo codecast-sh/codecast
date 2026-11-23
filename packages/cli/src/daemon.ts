@@ -9,19 +9,20 @@ import type { SdkLaunchSpec } from "./claudeSdk/options.js";
 import type { SdkPermissionAnswer } from "./claudeSdk/protocol.js";
 import { DeliveryEchoLedger, deliveryEchoLedger, deliveryRecordUuid, echoCandidatesOf, transcriptRecordsSend } from "./deliveryEchoLedger.js";
 import { VersionedObservationSet } from "./versionedObservationSet.js";
+import { ProcessCwdCache } from "./processCwdCache.js";
 import { PendingDeliveryHeldError, createDeliveryAdmission } from "./pendingDeliveryAdmission.js";
 import { handoffParentSessionId, linkPlanHandoffChild, planHandoffTarget } from "./planHandoff.js";
 import { createPendingDeliveryBatches } from "./pendingDeliveryBatches.js";
 import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, receiptSettled, TmuxDeliveryExhaustedError, TmuxDeliveryUncertainError, type TmuxDeliveryIdentity, type TmuxDeliveryJournal, tmuxDeliveryJournal } from "./tmuxDeliveryJournal.js";
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isValidBrowserStreamKey, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
-import { CLOUD_START_RUN_MS, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
+import { CLOUD_START_RUN_MS, canonicalSlashCommand, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
-import { materializeFileTags } from "@codecast/shared/contracts";
+import { isClosedSession, materializeFileTags } from "@codecast/shared/contracts";
 import { downloadAttachedFile } from "./attachedFileDownload.js";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer.js";
-import { closeOwnCommandPanel, mayOpenPanel, paneDialogQuestion, rememberCommandPanel } from "./commandPanel.js";
+import { closeOwnCommandPanel, confirmModelSwitch, mayOpenPanel, paneDialogQuestion, rememberCommandPanel } from "./commandPanel.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_CLIENTS, INGEST_WINDOW_ROWS, type IngestJob } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner, transcriptFailureLog, type TranscriptRetrySource } from "./workers/ingestRetryOwner.js";
@@ -110,7 +111,7 @@ import {
 import { worktreeEnv, worktreeEnvPrefix } from "./worktreeEnv.js";
 import { hasActiveCloudWork } from "./cloud/activity.js";
 import { startMirrorProcess } from "./cloud/mirror/process.js";
-import { releaseSessionWorktree, runTreesInUseVia } from "./worktreeGc.js";
+import { releaseSessionMadeWorktrees, releaseSessionWorktree, runTreesInUseVia } from "./worktreeGc.js";
 import { reparentNotice, type ReparentCommandFacts } from "./sessionMoveNotice.js";
 import { defaultRemote, knownValuesInPush, pushWipSnapshot, restoreWipSnapshot } from "./wipSnapshot.js";
 import { createTurnSnapshot, type TurnSnapshot } from "./treeSnapshot.js";
@@ -241,7 +242,7 @@ import {
 } from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { claudeBannerText, extractCwd, extractGrokCwd, extractMuseCwd, extractSummaryTitle, extractTeamInfo, isGrokInternalSession, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
-import { extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCodexProgramLaunch } from "./codexSessionMeta.js";
+import { codexLaunchFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCodexProgramLaunch } from "./codexSessionMeta.js";
 import { headlessRunStaysOutOfInbox, inheritedConversationOfHeadless, repairLeakedHeadlessCodexRuns } from "./headlessRuns.js";
 import {
   CodexAppServer,
@@ -333,6 +334,7 @@ import {
   performReconciliation,
   repairDiscrepancies,
 } from "./reconciliation.js";
+import { SubagentFinishTracker } from "./subagentFinish.js";
 import { TEST_SCRATCH_DIRNAME, isTestArtifactPath, isProjectAllowedToSync, launchScopeRefusal, markLaunched, transcriptScopeRefusal, wasLaunched, watchDirFilter, watchFilter } from "./syncScope.js";
 import { folderOnThisMachine } from "@codecast/shared/team/folderLists";
 import { parseOrphanProcessIdentity } from "./orphanProcessIdentity.js";
@@ -413,9 +415,9 @@ import { AwakeIdleClock, captureProcessSnapshot, collectSessionResources, decode
 import { collectMachineResources, processesStartedOutside, readHostPressure } from "./systemResources.js";
 import { setBackgroundSessions, setGovernorBackground, holdForDelivery, isDeliveryHeld } from "./backgroundPriority.js";
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
-import { followsCredentialStore, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
+import { followsCredentialStore, orcaPaneKeyOf, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState, agentAtLoginScreen } from "./tmuxPaneState.js";
+import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, claudeTurnRunningOnPane, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState, agentAtLoginScreen } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -1565,6 +1567,12 @@ export function buildBlankLaunchArgs(
     const flags = [getAgentArgs(config, "muse") || "", permFlags || ""].filter(Boolean).join(" ");
     return flags ? flags.split(/\s+/).filter(Boolean) : [];
   }
+  if (agentType === "antigravity") {
+    // Same codex shape: getPermissionFlags returns null when agent_args pins
+    // --dangerously-skip-permissions or a --mode, so they can't double up.
+    const flags = [getAgentArgs(config, "antigravity") || "", permFlags || ""].filter(Boolean).join(" ");
+    return flags ? flags.split(/\s+/).filter(Boolean) : [];
+  }
   // cursor/gemini/pi: no configured args or permission flags yet.
   return [];
 }
@@ -2027,6 +2035,14 @@ export function statusFlipStartsTurn(prevStatus: AgentStatus | undefined, status
   if (prevStatus && ACTIVE_AGENT_STATUSES.has(prevStatus)) return false;
   if (prevStatus && DECLARED_VERDICT_STATUSES.has(prevStatus)) return false;
   return true;
+}
+
+// Whether a status transition ends a turn: from working, or stopped inside the
+// turn on a prompt, to anything else. A slash command held for the turn's end
+// (injectViaTmuxInner) goes in at this moment rather than when its hold lapses.
+export function statusFlipEndsTurn(prevStatus: AgentStatus | undefined, status: AgentStatus): boolean {
+  const inTurn = (s: string) => ACTIVE_AGENT_STATUSES.has(s) || MID_TURN_AGENT_STATUSES.has(s);
+  return !!prevStatus && inTurn(prevStatus) && !inTurn(status);
 }
 const DAEMON_BOOTED_AT = Date.now();
 const lastHeartbeatLogged = new Map<string, { status: string; ts: number; since: number }>();
@@ -2655,6 +2671,11 @@ function sendAgentStatus(
     markTurnStarted(sessionId, Date.now());
   }
   lastSentAgentStatus.set(sessionId, status);
+  // Every settle passes here, the Stop hook's and the pane reconcile's alike (a
+  // turn that ends on an API error, as at a usage limit, sends no Stop). A
+  // slash command held for the turn's end gets its next look now; a dialog
+  // hold that is still up only costs one refused attempt.
+  if (statusFlipEndsTurn(prevStatus, status)) releasePromptHold(conversationId);
   // The open-task report a settle just computed rides along with its verdict;
   // any other status drops it (a turn start makes the parked picture moot).
   const openTasks = pendingOpenTaskReports.get(sessionId);
@@ -6807,6 +6828,9 @@ async function killConversationBackends(
   await clearConversationDeliveryAndResumeState(conversationId, sessionId, "REMOTE");
 
   if (retireWorkspace && gcCwd && (teardown.killedAppServer || teardown.killedSdk || teardownPlan.reapPidTree) && !error) {
+    // First the trees it made that its pane's cwd never shows (workspaces it acquired, its Claude Code
+    // subagents' worktrees): its own tree's release can take gcCwd away, and the repo is found from it.
+    if (sessionId) await releaseSessionMadeWorktrees(sessionId, gcCwd, log).catch((err) => log(`[WORKTREE-GC] made-worktree release failed: ${String(err).slice(0, 120)}`));
     const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef
       ? syncServiceRef.isWorktreeShared(conversationId, p)
       : Promise.reject(new Error("No session roster")), runTreesInUseVia(liveWorkflowRunIds));
@@ -7677,6 +7701,11 @@ async function executeRemoteCommand(
         // identity), not codecast/bun (see disclaim.ts). The wrapper execs
         // plain argv, which works here because envPrefix starts with `env`.
         let cmdText = `${accountPrefix}${keyPrefix}${disclaimPrefix()}${envPrefix} ${[binary, ...binaryArgs].join(" ")}`;
+        if (agentType === "antigravity" && cwd && (await import("./antigravityLocal.js")).ensureAntigravityFolderTrusted(cwd)) {
+          // Same reason as grok below: agy's first-launch trust dialog comes
+          // before any transcript, so the session could never bind behind it.
+          log(`antigravity folder trust granted for ${cwd}`);
+        }
         if (agentType === "grok") {
           // Pre-trust the cwd so grok does not park on the first-launch folder
           // dialog. The pane classifier still answers `y` if the dialog appears.
@@ -10441,6 +10470,8 @@ export { generateTitleFromMessage } from "./workers/ingestMetadata.js";
 // unlike the older pi/grok classifiers, which predate that seam and exist in
 // both places) and is wired into the daemon's classifier map below.
 import { classifyCursorTranscriptTail, classifyGrokTranscriptTail, classifyMuseTranscriptTail, classifyOpencodeTranscriptTail, classifyPiTranscriptTail } from "./workers/ingestMetadata.js";
+import { classifyAntigravityTranscriptTail } from "./antigravityTranscript.js";
+import { antigravitySessionIdFromPath } from "./antigravityPaths.js";
 export { classifyGrokTranscriptTail, classifyOpencodeTranscriptTail, classifyPiTranscriptTail };
 
 // Every watcher event, the command poll and the sweeps read the state file
@@ -12251,6 +12282,49 @@ export function subagentParentSessionFromPath(filePath: string): string | undefi
   return idx >= 1 ? parts[idx - 1] : undefined;
 }
 
+// A Claude subagent transcript by its place on disk (either layout above). The
+// subagent runs inside its parent's process, in the parent's cwd, so it has no
+// process of its own: a process lookup for it can only find the PARENT. Holding
+// that pid as the subagent's kept a finished subagent heartbeating for as long
+// as its parent lived, put the parent's tmux on the subagent's row, and made a
+// kill of the subagent's card reap the parent's pane.
+export function isSubagentTranscriptPath(filePath: string | null | undefined): boolean {
+  return !!filePath && filePath.split(path.sep).includes("subagents");
+}
+
+/** A registry file the daemon wrote (not the SessionStart hook) for a subagent: it can only name the parent's pid. */
+export function isDaemonGuessForSubagent(reg: unknown, jsonlPath: string | null | undefined): boolean {
+  return !isHookRegistration(reg) && isSubagentTranscriptPath(jsonlPath);
+}
+
+/**
+ * Strategy C's guess: the agent processes (from `ps aux` lines) whose cwd is the
+ * session's project or below it, and those no other session has claimed. A
+ * subagent gets none, and its lookup spawns nothing: the only process in its
+ * cwd that could match is its parent's.
+ */
+export async function cwdMatchCandidates(
+  jsonlPath: string,
+  projectCwd: string,
+  read: { psLines: () => Promise<string[]>; cwds: (pids: number[]) => Promise<Map<number, string | null>>; claimedElsewhere: (pid: number) => boolean },
+): Promise<{ candidates: Array<{ pid: number; tty: string }>; unclaimed: Array<{ pid: number; tty: string }> }> {
+  if (isSubagentTranscriptPath(jsonlPath)) return { candidates: [], unclaimed: [] };
+  const agents: Array<{ pid: number; tty: string }> = [];
+  for (const line of await read.psLines()) {
+    const parts = line.trim().split(/\s+/);
+    if (parts.length < 7) continue;
+    const pid = parseInt(parts[1], 10);
+    const tty = parts[6];
+    if (isNaN(pid) || tty === "?" || tty === "??") continue;
+    agents.push({ pid, tty });
+  }
+  const cwds = await read.cwds(agents.map((a) => a.pid));
+  const candidates = agents
+    .filter(({ pid }) => { const cwd = cwds.get(pid); return !!cwd && (cwd === projectCwd || cwd.startsWith(projectCwd + "/")); })
+    .map(({ pid, tty }) => ({ pid, tty: normalizeTty(tty) }));
+  return { candidates, unclaimed: candidates.filter((c) => !read.claimedElsewhere(c.pid)) };
+}
+
 // When a subagent last wrote to its own transcript, keyed by the PARENT session
 // id. A headless child has no pane: it runs as a process inside the parent
 // pane's tree, so killing that pane kills the child mid-turn and nobody ever
@@ -12283,6 +12357,10 @@ export function resetSubagentActivityForTests(): void {
   subagentActivityByParent.clear();
   subagentCoverageLost = false;
 }
+
+// Marks a finished Task subagent completed after its transcript goes quiet,
+// and reopens it when its transcript grows again (subagentFinish.ts).
+export const subagentFinish = new SubagentFinishTracker();
 
 // Cap how many bytes a single sync pass reads from a file. A large unsynced
 // backlog (e.g. an old, image-heavy session that gets resumed) used to be re-read
@@ -12514,6 +12592,7 @@ async function processSessionFilePass(
       if (metadata.backupAttempted) bakImageRecoveryDone.add(filePath);
       permissionJustResolved.consume(sessionId, permissionObservation);
     });
+    if (isSubagent) void subagentFinish.noteGrowth(filePath, conversationId, syncService);
     await continueSyncPass(lastPosition, bytesConsumed, stats.size, continuationDepth, () => processSessionFilePass(
       filePath,
       sessionId,
@@ -12695,6 +12774,7 @@ async function processSessionFilePass(
         conversationId = await syncService.createConversation(createParams);
         conversationId = finishCreate(conversationId);
         if (createParams.agentTaskId) forgetTriggerRun(sessionId);
+        if (isSubagent) subagentFinish.noteCreated(filePath);
         conversationCache[sessionId] = conversationId;
         saveConversationCache(conversationCache);
         if (isPlanHandoff && parentConversationId) {
@@ -12828,6 +12908,9 @@ async function processSessionFilePass(
   if (conversationId && spawnLinkAttempts.has(sessionId)) {
     maybeRetrySpawnLink(filePath, sessionId, "claude", conversationId, syncService, conversationCache).catch(() => {});
   }
+
+  // A session recorded before the daemon marked interactive launches gains the mark its head shows (interactiveMark.ts).
+  if (conversationId) void import("./interactiveMark.js").then(({ healInteractiveMark }) => healInteractiveMark((id) => syncService.markInteractive(id), conversationId, metadata.cliFlags, log));
 
   // Agent-team teammate? Link it to its lead (once, bounded attempts inside).
   // This runs on every pass, not only the create pass: a create that fell to
@@ -13012,10 +13095,12 @@ async function processSessionFilePass(
       permissionJustResolved.consume(sessionId, permissionObservation);
       markSynced(filePath, lastPosition + bytesConsumed, messages.length, conversationId);
     });
+    if (isSubagent) void subagentFinish.noteGrowth(filePath, conversationId, syncService);
     log(`Synced ${messages.length} messages for session ${sessionId} [SYNC-TIMING] pass_started=${new Date(passStartedAt).toISOString()} pass=${Date.now() - passStartedAt}ms`);
     syncStats.messagesSynced += messages.length;
     syncStats.sessionsActive.add(sessionId);
-    tryRegisterSessionProcess(sessionId, "claude");
+    // A subagent has no process of its own to register (isSubagentTranscriptPath).
+    if (!subagentTranscript) tryRegisterSessionProcess(sessionId, "claude");
 
     const askTc = messages.flatMap(m => m.toolCalls || []).find((tc: any) => tc.name === "AskUserQuestion");
     if (askTc && !pendingInteractivePrompts.has(sessionId)) {
@@ -13073,7 +13158,7 @@ async function processSessionFilePass(
                     await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
                     log(`Injected '${key}' via tmux for session ${sessionId.slice(0, 8)}`);
                   } else {
-                    await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true });
+                    await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true, pid: proc.pid });
                     log(`Injected '${key}' via terminal for session ${sessionId.slice(0, 8)}`);
                   }
                 } catch (err) {
@@ -13751,7 +13836,7 @@ async function processCodexSessionPass(
             isSubagent: !!nativeParentSessionId || !!parentConversationId
               || headlessRunStaysOutOfInbox({ headless: isCodexProgramLaunch(codexMetadata), triggerRun: !!agentTaskId }) || undefined,
             // The mark the claude path stamps for `claude -p`.
-            cliFlags: isCodexProgramLaunch(codexMetadata) ? "--print" : undefined,
+            cliFlags: codexLaunchFlags(codexMetadata),
             // Same stamp as the claude path: without it every codex session
             // keys on its cwd, so a linked worktree under ~/.codex/worktrees
             // never folds into its checkout and the sharing page lists one row
@@ -13878,6 +13963,9 @@ async function processCodexSessionPass(
     if (conversationId && spawnLinkAttempts.has(sessionId)) {
       maybeRetrySpawnLink(filePath, sessionId, "codex", conversationId, syncService, conversationCache).catch(() => {});
     }
+
+    // A thread recorded before the daemon marked interactive launches gains the mark its head shows (interactiveMark.ts).
+    if (conversationId) void import("./interactiveMark.js").then(({ healInteractiveMark }) => healInteractiveMark((id) => syncService.markInteractive(id), conversationId, codexLaunchFlags(codexMetadata), log));
 
     // Agent status tracking for Codex sessions (skip if managed by app-server)
     if (conversationId && !appServerConversations.has(conversationId)) {
@@ -14532,7 +14620,7 @@ export async function processTranscriptDeltaSession(...args: Parameters<typeof p
 type CloudMirrorSource = { mirror: Exclude<Extract<AgentClientId, IngestJob["client"]>, "claude"> };
 
 async function processTranscriptDeltaSessionPass(
-  source: Extract<AgentClientId, "pi" | "grok" | "muse" | "cursor"> | CloudMirrorSource,
+  source: Extract<AgentClientId, "pi" | "grok" | "muse" | "cursor" | "antigravity"> | CloudMirrorSource,
   filePath: string,
   sessionId: string,
   syncService: SyncService,
@@ -14550,7 +14638,9 @@ async function processTranscriptDeltaSessionPass(
     // parent's transcript; ingesting them here would mint a top-level codecast
     // conversation per subagent.
     const ingest = await readTranscriptIngest({client,file:filePath,sessionId,offset:0,...(mirror ? {mirror} : {})});
-    if (client === "grok" && ingest.metadata.internal) return;
+    // An Antigravity conversation another conversation started (a subagent,
+    // conversation_summaries.db names its parent) is skipped the same way.
+    if ((client === "grok" || client === "antigravity") && ingest.metadata.internal) return;
     const allMessages = ingest.messages;
     // A transient empty/corrupt parse must be a no-op, never a signal to delete the
     // synced conversation (orphan detection below would treat every synced uuid as
@@ -14562,11 +14652,12 @@ async function processTranscriptDeltaSessionPass(
     // grok's long-path hash dirs don't decode at all).
     const projectPath = client === "pi" && !mirror
       ? ingest.metadata.cwd ?? decodePiCwdSlug(path.basename(path.dirname(filePath)))
-      : mirror || client === "muse" || client === "cursor"
+      : mirror || client === "muse" || client === "cursor" || client === "antigravity"
         // muse's date-sharded dirs carry no cwd — only the log's own
         // route_facts record (ingest metadata) can place the session.
         // cursor's projects/<slug> dir is lossy; its chat meta.json is not,
-        // and neither is a cloud mirror's.
+        // and neither is a cloud mirror's. agy's brain/<uuid>/ dirs carry no
+        // cwd either; conversation_summaries.db does (ingest metadata).
         ? ingest.metadata.cwd ?? undefined
       : ingest.metadata.cwd ?? decodeGrokCwdSlug(path.basename(path.dirname(path.dirname(filePath)))) ?? undefined;
     // Cursor's transcripts and cloud mirrors are judged at their watcher's
@@ -14787,6 +14878,7 @@ async function transcriptHeldStill(filePath: string, sizeAtRead: number, settleM
 const processPiSession = processTranscriptDeltaSession.bind(null, "pi");
 const processGrokSession = processTranscriptDeltaSession.bind(null, "grok");
 const processMuseSession = processTranscriptDeltaSession.bind(null, "muse");
+const processAntigravitySession = processTranscriptDeltaSession.bind(null, "antigravity");
 
 interface ActiveSession {
   sessionId: string;
@@ -15025,6 +15117,20 @@ async function psAuxGrep(pattern: string): Promise<string[]> {
 
 const findSessionProcessInflight = new Map<string, Promise<ClaudeSessionInfo | null>>();
 
+// Strategy C's cwd reads: one lsof for every candidate pid, kept briefly (processCwdCache.ts).
+// execFile, not a shell, so a timeout kills lsof itself (see psSnapshotLines).
+const processCwdCache = new ProcessCwdCache(async (pids) => {
+  try {
+    const { stdout } = await _execFileAsync("lsof", ["-a", "-d", "cwd", "-p", pids.join(","), "-F", "pn"], { timeout: 15_000, killSignal: "SIGKILL", maxBuffer: 4 * 1024 * 1024, env: SAFE_ENV });
+    return String(stdout);
+  } catch (err) {
+    // lsof exits 1 when any listed pid is gone, with the rest on stdout.
+    const partial = String((err as { stdout?: unknown })?.stdout ?? "");
+    if (partial) return partial;
+    throw err;
+  }
+});
+
 /**
  * The token to grep the process table with (`ps aux | grep -E '<token>'`) when
  * locating a live session's process, per client. codex and gemini match by their
@@ -15039,7 +15145,9 @@ export function sessionProcessGrepToken(agentType: AgentClientId, claudePattern:
   // grok is a compiled Rust binary whose ps comm/argv is its registry binary name
   // (verified live on v1.0.5) — same rule as codex/gemini. Falling through to the
   // claude pattern would grep for claude processes and never find a grok session.
-  if (agentType === "codex" || agentType === "gemini" || agentType === "grok") return AGENT_CLIENTS[agentType].binary;
+  // agy is a single native binary run as itself (~/.local/bin/agy, ps comm
+  // "agy"), the same rule.
+  if (agentType === "codex" || agentType === "gemini" || agentType === "grok" || agentType === "antigravity") return AGENT_CLIENTS[agentType].binary;
   // muse launches through a bash launcher shim that execs `muse-bin-<version>`,
   // so the registry binary "muse" never appears in ps — match the real binary
   // (same reason pi matches "pi-coding-agent" instead of "pi").
@@ -15318,9 +15426,12 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         const pid = reg.pid;
         const tty = normalizeTty(reg.tty);
         const termProgram = reg.term || undefined;
-        // Verify process is still alive and is a claude-like process
-        const { stdout: checkPs } = await execAsync(`ps -o comm= -p ${pid} 2>/dev/null`);
-        if (checkPs.trim()) {
+        if (isDaemonGuessForSubagent(reg, findSessionJsonlPath(sessionId))) {
+          // The daemon's own guess for a subagent, which could only have named
+          // its parent's pid (isSubagentTranscriptPath). Not this session's process.
+          try { fs.unlinkSync(registryFile); } catch {}
+        } else if ((await execAsync(`ps -o comm= -p ${pid} 2>/dev/null`)).stdout.trim()) {
+          // Alive and a claude-like process.
           if (agentType === "codex") {
             log(`Ignoring registry candidate for codex session ${shortId(sessionId)} (pid=${pid})`);
           } else if (await rejectsForeignProcess(sessionId, pid, "registry", typeof reg.ts === "number" ? reg.ts : undefined)) {
@@ -15517,7 +15628,8 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
       }
     } catch {}
 
-    // Strategy C: CWD-based matching for non-resumed sessions
+    // Strategy C: CWD-based matching for non-resumed sessions. Never for a
+    // subagent: the only process in its cwd that could be it is its parent.
     const jsonlPath = processLookupAllowsCwdFallback(agentType) ? findSessionJsonlPath(sessionId) : null;
     if (jsonlPath) {
       const jsonlStat = fs.statSync(jsonlPath);
@@ -15531,37 +15643,10 @@ async function findSessionProcessImpl(sessionId: string, agentType: AgentClientI
         if (projectCwd) {
           try {
             const psPattern = sessionProcessGrepToken(agentType, "/claude\\b|claude-code");
-            const psOut = (await psAuxGrep(psPattern)).join("\n");
-            const candidates: Array<{ pid: number; tty: string }> = [];
-
-            for (const line of psOut.trim().split("\n")) {
-              if (!line.trim()) continue;
-              const parts = line.trim().split(/\s+/);
-              if (parts.length < 7) continue;
-              const pid = parseInt(parts[1], 10);
-              const tty = parts[6];
-              if (isNaN(pid) || tty === "?" || tty === "??") continue;
-
-              // Check CWD of this process
-              try {
-                const { stdout: lsofOut } = await execAsync(`lsof -d cwd -a -p ${pid} -F n 2>/dev/null`);
-                const cwdLine = lsofOut.split("\n").find(l => l.startsWith("n"));
-                if (cwdLine) {
-                  const processCwd = cwdLine.slice(1);
-                  // Match if CWD is the project dir or a subdirectory of it
-                  if (processCwd === projectCwd || processCwd.startsWith(projectCwd + "/")) {
-                    candidates.push({ pid, tty: normalizeTty(tty) });
-                  }
-                }
-              } catch {}
-            }
-
-            // Filter out candidates already cached for a different session
-            const unclaimed = candidates.filter(c => {
-              for (const [cachedSid, cachedInfo] of sessionProcessCache) {
-                if (cachedSid !== sessionId && cachedInfo.pid === c.pid) return false;
-              }
-              return true;
+            const { candidates, unclaimed } = await cwdMatchCandidates(jsonlPath, projectCwd, {
+              psLines: () => psAuxGrep(psPattern),
+              cwds: (pids) => processCwdCache.cwds(pids),
+              claimedElsewhere: (pid) => [...sessionProcessCache].some(([sid, info]) => sid !== sessionId && info.pid === pid),
             });
 
             if (unclaimed.length === 1) {
@@ -16145,7 +16230,11 @@ async function checkForInteractivePrompt(
     // A dialog raised between turns (a background agent's permission ask) sits under
     // the previous turn's prose, which the JSONL already holds: posting it again
     // repeats that message in the transcript.
-    const scraped = terminalDialog ? "" : extractAssistantProseAbovePrompt(paneContent);
+    // Antigravity writes each step to its transcript before the next one paints,
+    // so its ask_question call and everything above it are already synced; its
+    // pane rows ("Ran 17 commands … (ctrl+o to expand)") are TUI chrome, and
+    // scraping them posted that chrome once per question (jx79syt, 2026-11-22).
+    const scraped = terminalDialog || file?.agentType === "antigravity" ? "" : extractAssistantProseAbovePrompt(paneContent);
     const prose = scraped && !sessionJsonlHasAssistantProse(sessionId, scraped) ? scraped : "";
 
     // Prefer the hook's full tool_input (option descriptions + headers + multiSelect,
@@ -17127,6 +17216,7 @@ const CLASSIFY_TRANSCRIPT_TAIL_BY_CLIENT: Partial<
   grok: classifyGrokTranscriptTail,
   muse: classifyMuseTranscriptTail,
   cursor: classifyCursorTranscriptTail,
+  antigravity: classifyAntigravityTranscriptTail,
 };
 
 export function classifyTranscriptTailFor(
@@ -17834,6 +17924,9 @@ class InputBlockedError extends Error {
   }
 }
 
+// What a slash command held for a running turn's end shows its sender (see injectViaTmuxInner).
+export const MID_TURN_COMMAND_HOLD_REASON = "waiting for the agent's turn to end: a slash command sent mid-turn would not run";
+
 // A live agent whose screen matches nothing the classifier knows. The message
 // stays "AGENT_UNKNOWN_STATE" for the pane-rebuild count; the screen rides
 // along so the held message can show its sender what the terminal shows.
@@ -17945,7 +18038,7 @@ export function autoContinueArmedOnPane(region: string): boolean {
   return region.split("\n").some((line) => isClaudeAutoContinueLine(line));
 }
 
-export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines?: number, pastDialog = false): Promise<{ busy: boolean }> {
+export async function ensureTmuxReady(target: string, agentType?: AgentClientId, inspectPane?: (pane: string) => void, captureLines?: number, pastDialog = false): Promise<{ busy: boolean; turnRunning: boolean }> {
   const STUCK_BUDGET_MS = 8_000;
   await ensureTmuxPaneWide(target);
   const startedAt = Date.now();
@@ -18002,7 +18095,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
       await escapeOnce("automatic continue wait", `Cancelling Claude Code's automatic continue wait in ${target} (one Escape) before delivering`);
       continue;
     }
-    if (state === "idle") return { busy: false };
+    if (state === "idle") return { busy: false, turnRunning: false };
     if (state === "exited") {
       throw new Error("SESSION_EXITED: agent has exited, refusing to inject into bare shell");
     }
@@ -18012,14 +18105,16 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     // interrupted; Claude Code queues the pasted message and hands it to the
     // model with the next tool result (a queued_command attachment), or when
     // the turn ends if no tool call comes. verifyTmuxSubmitAfterPaste confirms
-    // it reached the queue.
-    if (state === "busy") return { busy: true };
+    // it reached the queue. A queued slash command never runs, so the caller
+    // holds one while turnRunning says a turn is really running (busy alone
+    // also covers idle panes that are safe to type into).
+    if (state === "busy") return { busy: true, turnRunning: claudeTurnRunningOnPane(region) };
 
     // A dialog only a person can answer: no key of ours is safe, and a paste
     // lands in no composer. The delivery layer holds the message (see
     // pendingPromptHold) until the scraped card is answered.
     if (state === "menu") {
-      if (pastDialog) return { busy: false };
+      if (pastDialog) return { busy: false, turnRunning: false };
       throw new InputBlockedError("terminal is waiting for a human answer", undefined, holdScreen(stdout));
     }
     if (state === "signed_out") throw signedOutError(agentType, holdScreen(stdout));
@@ -18106,7 +18201,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
       if (headless) throw new TerminalHoldError(`a headless ${headless} run`, "it goes out when the run ends");
       // The sender saw this screen on the held message and chose Send anyway:
       // the message goes in, as it does past a dialog they chose to send past.
-      if (pastDialog) return { busy: false };
+      if (pastDialog) return { busy: false, turnRunning: false };
       log(`Unrecognized live UI in ${target}, deferring: ${region.replace(/\s+/g, " ").slice(0, 240)}`);
       throw new UnreadableScreenError(holdScreen(stdout));
     }
@@ -19094,7 +19189,17 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
     log(`Answering "${menu!.question}" in ${target} with the person's message`);
     return injectViaTmuxInner(target, reply, agentType, opts);
   }
-  await ensureTmuxReady(target, agentType, (pane) => assertPromptAbsent(pane, sanitized, pastDialog), captureLines, pastDialog);
+  const ready = await ensureTmuxReady(target, agentType, (pane) => assertPromptAbsent(pane, sanitized, pastDialog), captureLines, pastDialog);
+  // A slash command typed into a running turn never runs: Claude Code queues
+  // it, and the queued command is dropped, not run when the turn ends. The
+  // web's "/model opus" went in this way while a resumed session's "continue"
+  // was running, and the session stayed on Fable (jx7ey2y, 2026-11-20). It
+  // waits for the turn to end: held like a dialog, the conversation is skipped
+  // until the turn settles (sendAgentStatus releases the hold), so every
+  // message behind it keeps its place. Send anyway types it regardless.
+  if (ready.turnRunning && !pastDialog && (agentType ?? "claude") === "claude" && canonicalSlashCommand(sanitized) !== null) {
+    throw new InputBlockedError("a turn is running, and a slash command typed into it never runs", MID_TURN_COMMAND_HOLD_REASON);
+  }
 
   // First LINE, not first 40 characters: the submit verifier looks for this
   // text at the prompt, and a composer that holds the message as real text
@@ -19322,8 +19427,13 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   if (verify.outcome === "delivered") delivery?.journal.advance(opts!.delivery!.messageId, "verified");
   // The panel will not echo the command until it closes, so it is delivered now.
   if (verify.evidence === "command_panel") {
-    const question = paneDialogQuestion(await captureTmuxComposerPane(tmuxExec, target, captureLines).catch(() => ""));
-    if (question !== null) rememberCommandPanel(target, question);
+    const panel = await captureTmuxComposerPane(tmuxExec, target, captureLines).catch(() => "");
+    if (await confirmModelSwitch(target, sanitized, panel, tmuxExec)) {
+      log(`Confirmed the model switch "${sanitized}" asked about in ${target}`);
+    } else {
+      const question = paneDialogQuestion(panel);
+      if (question !== null) rememberCommandPanel(target, question);
+    }
     if (opts?.delivery && syncServiceRef) await syncServiceRef.updateMessageStatus({ messageId: opts.delivery.messageId, status: "delivered", deliveredAt: Date.now() }).catch(logConvexFailure);
   }
   if (verify.outcome === "exited") {
@@ -19507,12 +19617,26 @@ function getTerminalLabel(termProgram?: string): string {
     case "kitty": return "Kitty";
     case "WezTerm": return "WezTerm";
     case "Alacritty": return "Alacritty";
+    case "Orca": return "Orca";
     default: return termProgram || "iTerm2";
   }
 }
 
-// Terminals where we know there's no direct injection API — tmux required
-const TMUX_ONLY_TERMINALS = new Set(["Alacritty"]);
+// The terminals injectViaTerminal has an injector for. AppleScript reaches only
+// iTerm2 and Terminal.app, so any other terminal that names itself (vscode,
+// WarpTerminal, …) owns a tty neither app has: sending it down that path failed
+// every attempt, and a failure streak stops the person's own agent. Alacritty
+// has no injection API at all. tmux is reached upstream, and an unnamed
+// terminal keeps the AppleScript default.
+const INJECTABLE_TERMINALS = new Set(["iTerm.app", "Apple_Terminal", "kitty", "WezTerm", "herdr", "ghostty", "Orca", "tmux"]);
+
+/** Orca's transport, loaded on first use: only an agent in an Orca tab needs it, and the daemon boots without it. */
+const orcaPane: typeof import("./orca.js").orcaPane = async (...args) => (await import("./orca.js")).orcaPane(...args);
+
+/** A terminal codecast cannot type into, so a live agent in it is held rather than retried. */
+function terminalLacksInjector(termProgram?: string): boolean {
+  return !!termProgram && !INJECTABLE_TERMINALS.has(termProgram);
+}
 
 // ── AppleScript injection (iTerm2 + Terminal.app) ──────────────────────────
 // Extracted from original injectViaTerminal — logic is identical
@@ -19861,7 +19985,7 @@ export async function injectViaTerminal(
   tty: string,
   content: string,
   termProgram?: string,
-  opts: { keystrokes?: boolean; agentType?: AgentClientId } = {},
+  opts: { keystrokes?: boolean; agentType?: AgentClientId; pid?: number } = {},
 ): Promise<void> {
   const keystrokes = opts.keystrokes ?? false;
   const bracketed = clientAcceptsBracketedPaste(opts.agentType);
@@ -19877,10 +20001,12 @@ export async function injectViaTerminal(
   if (termProgram === "ghostty") {
     return injectViaGhostty(tty, content, keystrokes, bracketed);
   }
-  if (termProgram && TMUX_ONLY_TERMINALS.has(termProgram)) {
-    throw new Error(`${getTerminalLabel(termProgram)} does not support direct injection — use tmux for this terminal`);
+  if (termProgram === "Orca") {
+    const paneKey = opts.pid ? orcaPaneKeyOf(opts.pid) : undefined;
+    return injectThroughPane(await orcaPane(paneKey, bracketed, log), content, keystrokes);
   }
-  // Apple_Terminal, iTerm.app, unknown → existing AppleScript path
+  if (terminalLacksInjector(termProgram)) throw new TerminalHoldError(getTerminalLabel(termProgram));
+  // Apple_Terminal, iTerm.app, unnamed → existing AppleScript path
   return injectViaAppleScript(tty, content, termProgram, keystrokes, bracketed);
 }
 
@@ -20165,6 +20291,22 @@ function sessionFileIndexStores(home: string): IndexStore[] {
         },
       },
       idOf: (f) => segs(f.rel)[3] ?? null,
+    },
+    // antigravity: ~/.gemini/antigravity-cli/brain/<sessionId>/.system_generated/
+    // logs/transcript_full.jsonl — the conversation DIRECTORY is named by the id.
+    {
+      root: path.join(home, ".gemini", "antigravity-cli", "brain"),
+      agentType: "antigravity",
+      walk: {
+        policy: { dirs: "antigravityWatch", files: "antigravityWatch" },
+        maxDepth: 4,
+        dirFilter: (rel) => {
+          const d = segs(rel);
+          return CLAUDE_UUID_RE.test(d[0]) && (d.length === 1 || (d[1] === ".system_generated" && (d.length === 2 || (d.length === 3 && d[2] === "logs"))));
+        },
+        fileFilter: (rel) => antigravitySessionIdFromPath(path.join(home, ".gemini", "antigravity-cli", "brain", rel)) !== null,
+      },
+      idOf: (f) => antigravitySessionIdFromPath(f.path),
     },
   ];
 }
@@ -21299,7 +21441,7 @@ async function rehydratePersistedAppServerThreads(requestedConversations: Readon
           service.getConversationOwnerInfo(conversationId),
         ]);
         if (!lifecycle?.hideStateKnown || !owner) throw new Error("Codex recovery is waiting to verify the conversation owner and lifecycle");
-        if (lifecycle.inboxKilledAt || lifecycle.status === "completed" || owner.ownerDeviceId !== deviceId()) {
+        if (lifecycle.inboxKilledAt || lifecycle.closed || lifecycle.status === "completed" || owner.ownerDeviceId !== deviceId()) {
           forgetPersistedAppServerConversation(conversationId);
           continue;
         }
@@ -22060,11 +22202,58 @@ async function sweepLevelCheckouts(sessionIds: string[]): Promise<void> {
     if (root) roots.add(root);
   }
   if (!roots.size) return;
-  const { levelOne, describeLevel } = await import("./land/levelSweep.js");
+  const { sweepOne } = await import("./land/levelSweep.js");
+  const { classifySendError } = await import("./land/levelConflicts.js");
+  // A level conflict is briefed to the session that wrote the file (a raced
+  // level at once, here; a held one by the checkout report once it has stuck),
+  // as a machine wake: a person's message would clear its pinned state and
+  // pull it into the inbox.
+  const svc = syncServiceRef;
+  const send = svc && getAuthToken()
+    ? async (to: string, body: string, clientId: string) => {
+      // A hung mutation would stall every checkout's sweep; the client id keeps the retry idempotent.
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<"failed">((resolve) => { timer = setTimeout(() => resolve("failed"), 10_000); });
+      const sending = svc.sendMessageToSession(to, body, "scheduler", clientId)
+        .then((id) => (id ? "sent" as const : getAuthToken() ? "failed" as const : "unreachable" as const), classifySendError);
+      try {
+        return await Promise.race([sending, timeout]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    : undefined;
+  const outcomes: import("./land/levelSweep.js").LevelSweepOutcome[] = [];
   for (const root of roots) {
-    const line = describeLevel(await levelOne(root).catch((e) => ({ root, skipped: String((e as Error)?.message ?? e) })));
-    if (line) log(`[LEVEL] ${line}`);
+    const line = await sweepOne(root, { send }, outcomes).catch((e) => `${root}: ${(e as Error)?.message ?? e}`);
+    // A refusal repeats every pass until someone moves the edit: say it when it changes, not every minute.
+    if (line && line !== lastLevelLine.get(root)) log(`[LEVEL] ${line}`);
+    lastLevelLine.set(root, line);
   }
+  // Off the sweep's path: a checkout's first attribution reads up to two weeks of transcripts, and levels keep their minute.
+  if (!checkoutReportInProgress) {
+    checkoutReportInProgress = true;
+    void reportCheckoutsAfterSweep(outcomes, send ?? (async () => "failed" as const)).finally(() => { checkoutReportInProgress = false; });
+  }
+}
+
+const lastLevelLine = new Map<string, string | null>();
+let checkoutReportInProgress = false;
+
+/** Each swept checkout's state to the server, on change only (land/checkoutReport.ts, contracts/checkouts.ts). */
+async function reportCheckoutsAfterSweep(outcomes: import("./land/levelSweep.js").LevelSweepOutcome[], sendBrief: import("./land/levelConflicts.js").SendBrief): Promise<void> {
+  const siteUrl = getSiteUrl();
+  const token = getAuthToken();
+  if (!siteUrl || !token || !outcomes.length) return;
+  const { reportCheckouts } = await import("./land/checkoutReport.js");
+  const { readLocalGitContext } = await import("./prCommand.js");
+  const post = async (urlPath: string, body: Record<string, unknown>) => {
+    const resp = await fetch(`${siteUrl}${urlPath}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ api_token: token, ...body }) });
+    const data = await resp.json().catch(() => null);
+    if (!resp.ok || data?.error) throw new Error(data?.error ?? `${urlPath} answered ${resp.status}`);
+    return data;
+  };
+  await reportCheckouts(outcomes, { post, sendBrief, deviceId: deviceId(), repositoryOf: (root) => readLocalGitContext(root).repository ?? null, log }).catch((e) => log(`[LEVEL] checkout report: ${(e as Error)?.message ?? e}`));
 }
 const WIP_SNAPSHOT_CONCURRENCY = 3;
 // PUSHES per pass, not sessions per pass. Every eligible session is snapshotted
@@ -23298,6 +23487,8 @@ async function reapOneTerminal(
   await killTmuxSessionAndTree(tmux);
   reaperLog(`REAPED ${tmux} session=${sessionId.slice(0, 8)} conv=${(convId || "?").slice(0, 12)} idle=${idleHours}h`);
   if (gcCwd) {
+    // Before its own tree: that release can take gcCwd away (releaseSessionMadeWorktrees).
+    await releaseSessionMadeWorktrees(sessionId, gcCwd, log).catch((err) => log(`[WORKTREE-GC] made-worktree release failed: ${String(err).slice(0, 120)}`));
     const verdict = await releaseSessionWorktree(gcCwd, log, (p) => syncServiceRef && convId
       ? syncServiceRef.isWorktreeShared(convId, p)
       : Promise.reject(new Error("No session roster")), runTreesInUseVia(liveWorkflowRunIds)).catch((err) => ({ action: "kept" as const, reason: String(err).slice(0, 120) }));
@@ -23400,7 +23591,9 @@ async function reapIdleOrphanTerminals(): Promise<void> {
       resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
     });
     if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
-    const gcWorktree = cand.kind === "stamped" && !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
+    // A closed session keeps its worktree: it wakes into its own folder.
+    const closed = !!lifecycle && isClosedSession({ inbox_closed_at: lifecycle.inboxClosedAt, inbox_dismissed_at: lifecycle.inboxDismissedAt, inbox_killed_at: lifecycle.inboxKilledAt });
+    const gcWorktree = cand.kind === "stamped" && !closed && !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
     if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours, { gcWorktree })) reaped++;
     else skips.push("busy-at-kill");
   }
@@ -24379,7 +24572,12 @@ async function heartbeatHealthCheck(sessionId: string, reverse?: Readonly<Record
 // status=completed with inbox_killed_at stamped, resurrected on every pass).
 // The verdict is this pure function; "killed" and "completed" are equivalent
 // here, since killSession stamps both and a completed conversation is finished
-// either way.
+// either way. A CLOSED conversation (the person's Close, shared
+// isClosedSession) is not retired, but it is not to come back on its own
+// either; the server reports `closed` only while no message waits for it, so a
+// delivery is never held back, and a message or trigger reaching it un-hides it.
+// Other dismissals (bulk tidy, a linked child) are not closes and stay
+// resumable, as they always were.
 export function isConversationRetired(
   lifecycle: ConversationLifecycle | null | undefined,
   opts: { trustStatusFallback: boolean },
@@ -24396,7 +24594,7 @@ export function isConversationRetired(
   // Every other path (delivery, warm pool, resume repair) requires the real
   // conversation-id-resolved query and otherwise proceeds.
   if (!lifecycle.hideStateKnown && !opts.trustStatusFallback) return false;
-  return !!lifecycle.inboxKilledAt || lifecycle.status === "completed";
+  return !!lifecycle.inboxKilledAt || !!lifecycle.closed || lifecycle.status === "completed";
 }
 
 export type ResumeOptions = {
@@ -26411,6 +26609,8 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
       // muse's date-sharded dirs carry no cwd — the log's own route_facts
       // record (extractMuseCwd) is authoritative.
       : agentType === "muse" ? (extractMuseCwd(jsonlContent) || undefined)
+      // agy's transcript carries no cwd; conversation_summaries.db does.
+      : agentType === "antigravity" ? (await import("./antigravityLocal.js")).antigravitySessionCwd(jsonlPath, sessionId)
       : (extractCwd(jsonlContent) || undefined);
     const resolvedCwd = await resolveResumeCwdOrRefuse({ recordedCwd, cwdOverride, conversationId });
     if (resolvedCwd) {
@@ -26434,6 +26634,9 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
   // The account this resume actually runs on, for the OAuth refresh gate.
   let resumeAccount: string | undefined;
   let stableRulesFile: string | undefined;
+  if (agentType === "antigravity" && cwd && (await import("./antigravityLocal.js")).ensureAntigravityFolderTrusted(cwd)) {
+    log(`antigravity folder trust granted on resume for ${cwd}`);
+  }
   if (agentType === "grok") {
     if (cwd && ensureGrokFolderTrusted(cwd)) {
       log(`grok folder trust granted on resume for ${cwd}`);
@@ -26681,7 +26884,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // Inject the message (skip if empty — resume-only mode)
     if (content) {
-      await injectViaTmux(tmuxSession + ":0.0", content, agentType, { delivery: opts?.delivery });
+      // No agent held this session before the launch, so an earlier pane's
+      // receipt for this message has nothing left to echo: settle it now and
+      // let the transcript decide (receiptSettleMs 0), instead of holding the
+      // resume's message for the whole echo window.
+      await injectViaTmux(tmuxSession + ":0.0", content, agentType, { delivery: opts?.delivery, receiptSettleMs: 0 });
       log(`Injected message to auto-resumed ${agentType} session ${shortId}`);
     } else {
       log(`Auto-resumed ${agentType} session ${shortId} (no message to inject)`);
@@ -28134,7 +28341,7 @@ async function deliverMessageIntoSession(
       // every wake to one session retried into an empty osascript for hours on
       // 2026-09-07. Fall through to the resume paths instead.
       logDelivery(`Live process pid=${live.proc.pid} has no tty — no terminal to inject into`);
-    } else if (live.proc.termProgram && TMUX_ONLY_TERMINALS.has(live.proc.termProgram)) {
+    } else if (terminalLacksInjector(live.proc.termProgram)) {
       // Nothing can type into this window, and the agent is the person's own
       // process: hold with a reason they can see (terminalHold.ts).
       throw new TerminalHoldError(termLabel);
@@ -28151,6 +28358,7 @@ async function deliverMessageIntoSession(
         handedOver = true;
         await injectViaTerminal(live.proc.tty, content, live.proc.termProgram, {
           agentType: detectedType,
+          pid: live.proc.pid,
         });
         logDelivery(`Injected via ${termLabel} tty=${live.proc.tty}`);
         return true;
@@ -32544,7 +32752,7 @@ async function main(): Promise<void> {
                           if (tmuxTarget) {
                             await tmuxExec(["send-keys", "-t", tmuxTarget, key]);
                           } else {
-                            await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true });
+                            await injectViaTerminal(proc.tty, decision.approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true, pid: proc.pid });
                           }
                           log(`Injected '${key}' for session ${sessionId.slice(0, 8)}`);
                           sendAgentStatus(syncService, convId, sessionId, "working");
@@ -33954,6 +34162,22 @@ async function main(): Promise<void> {
     ),
   );
 
+  registerJsonlDirWatcher(
+    new TranscriptDirWatcher(transcriptDirWatcherConfig("antigravity")),
+    "antigravity",
+    (event) => processAntigravitySession(
+      event.filePath,
+      event.sessionId,
+      syncService,
+      config.user_id!,
+      config.team_id,
+      conversationCache,
+      retryQueue,
+      pendingMessages,
+      updateState
+    ),
+  );
+
   const subscriptionClient = syncService.getSubscriptionClient();
   let unsubscribe: (() => void) | null = null;
   let permissionUnsubscribe: (() => void) | null = null;
@@ -34528,7 +34752,7 @@ async function main(): Promise<void> {
                   }
                   if (!injected) {
                     try {
-                      await injectViaTerminal(proc.tty, approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true });
+                      await injectViaTerminal(proc.tty, approved ? "\r" : "\x1b", proc.termProgram, { keystrokes: true, pid: proc.pid });
                       injected = true;
                     } catch {}
                   }
@@ -34789,6 +35013,7 @@ async function main(): Promise<void> {
       sync.stop();
     }
     transcriptRetryOwners.stop();
+    subagentFinish.stop();
 
     if (releasePidFileIfOwned(PID_FILE, process.pid)) {
       log("PID file removed");

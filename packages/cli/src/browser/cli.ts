@@ -62,7 +62,7 @@ import { provisionCredentials } from "./credentials.js";
 import { bridgeEndpoint, requestBrowserProfile } from "./bridge/host.js";
 import { BROWSER_START_HELP, prepareRealBrowserStart, registerBridgeCommands, targetFlags } from "./bridge/commands.js";
 import {
-  hostOwnsBrowser, selectHostBrowser, isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
+  hostOwnsBrowser, selectHostBrowser, prepareHostChrome, isPaneMode, isRealMode, listRealTargets, ownedRealTab, realTabOwnership, rememberRealTab, requireRealBridge, resolveRealTarget, withRealPage, realModeHint,
 } from "./bridge/real.js";
 import { runBrowserSync, DEFAULT_SYNC_WAIT_S } from "./sync.js";
 import { cloudHostSignInHint } from "../cloud/browserSync.js";
@@ -292,6 +292,10 @@ export function registerBrowserCommand(program: Command, deps: PublishDeps): voi
   // sees the choice.
   br.hook("preAction", async (_br, action) => {
     await selectHostBrowser();
+    // The verb directly under `browser` (`extension` for `extension status`).
+    let verb = action;
+    while (verb.parent && verb.parent !== _br) verb = verb.parent;
+    await prepareHostChrome(verb.name());
     // `--browser <id>`: the Chrome profile this session's new tabs open in (bridge/host.ts).
     const browser = (action.opts() as { browser?: string }).browser;
     if (browser) requestBrowserProfile(browser);

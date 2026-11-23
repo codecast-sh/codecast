@@ -17,6 +17,9 @@ target=$default_branch
 br=$branch
 dir=$run_dir
 mkdir -p "$dir"
+# merge.json is written only once the change is found on the default branch (here when it already is, else by ship),
+# and the deploy clock is for the commit it names.
+rm -f "$dir/merge.json" "$dir/deploy-clock.json"
 clean() { printf '%s' "$1" | tr -d '\000-\037\\"'; }
 answer() { printf '{"rebased": %s, "landed": %s, "why": "%s"}\n' "$1" "$2" "$(clean "$3")"; }
 
@@ -91,6 +94,15 @@ if [ "$(git rev-list --count "$upstream..HEAD")" = 0 ]; then
     for f in "${touched[@]}"; do [ "$(git rev-parse -q --verify "$c:$f")" = "$(git rev-parse -q --verify "$was:$f")" ] || { same=0; break; }; done
     [ "$same" = 1 ] && { echo "$c"; break; }
   done)"
+  # The commit that carries it goes where Deploy starts from, and on the run as its merge, as Land would have done.
+  # Where the change started: what Land read before landing it ($run_dir/since), else the commit the run froze the
+  # change on (change.json's base), else the fork here unless that is the branch's own tip (after a fast-forward it is,
+  # and a branch with no commit of its own sits there too). With none of them nothing says this tip is the change, so
+  # no merge.json is written and Deploy says nothing was merged.
+  since="$(cat "$dir/since" 2>/dev/null)"
+  [ -n "$since" ] || since="$(sed -n 's/^ *"base": *"\([0-9a-f]*\)".*/\1/p' "$dir/change.json" 2>/dev/null | head -n 1)"
+  [ -n "$since" ] || { [ "$fork" != "$was" ] && since="$fork"; }
+  [ -n "$since" ] && cast flow landed --branch "$was" --as "$br" --base "$target" --files "$change_files" --since "$since" --out "$dir/merge.json" --run "$run_id" > /dev/null 2>&1
   cast task comment $task_id "Already on $target${landed:+ as ${landed:0:10}}: nothing of $br is left to ship, so the flow goes on to watch." -t progress > /dev/null
   answer true true "already on $upstream${landed:+ as ${landed:0:10}}"
   exit 0

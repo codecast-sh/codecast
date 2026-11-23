@@ -25,10 +25,13 @@ import { ModernAskCard } from "./ModernAsk";
 // What is typed is the caller's to hold: it outlives the card, which is
 // drawn again for each ask.
 //
-// The card folds to one row (the Needs you mark, the question, its place)
-// under the chevron at its top right, for a person who wants the thread
-// room; the row opens it again. The caller holds the fold so it lasts from
-// one ask to the next.
+// The question is the way to the whole ask: pressing it, folded or open,
+// opens the sheet (onOpen), the same as Open. The card folds to one row (the
+// Needs you mark, the question, its place) under the chevron at its top
+// right, for a person who wants the thread room; only the chevron unfolds it
+// in place. A folded row that merely unfolded read as the panel having no
+// way to the decision at all. The caller holds the fold so it lasts from one
+// ask to the next.
 
 /** How many of the thread's other asks show before the rest fold behind a row. */
 const OTHERS_SHOWN = 3;
@@ -89,9 +92,10 @@ export function ModernDecisionDock({ question, kicker, aside, options, recommend
   if (collapsed && onCollapsed) return (
     <ModernAskCard
       kicker={
-        <button type="button" onClick={() => onCollapsed(false)} title={shownQuestion} data-decision-collapsed-question className="flex min-w-0 items-center gap-2 text-left">
+        <button type="button" onClick={onOpen} title={`Open: ${shownQuestion}`} data-decision-collapsed-question className="group/q flex min-w-0 items-center gap-2 text-left">
           {kicker && <span className="shrink-0">{kicker}</span>}
-          <span className="truncate text-ui font-medium text-sol-text">{shownQuestion}</span>
+          <span className="truncate text-ui font-medium text-sol-text group-hover/q:underline">{shownQuestion}</span>
+          <Maximize2 aria-hidden className="h-3.5 w-3.5 shrink-0 text-sol-text-dim opacity-0 transition-opacity group-hover/q:opacity-100" />
         </button>
       }
       aside={corner}
@@ -101,7 +105,17 @@ export function ModernDecisionDock({ question, kicker, aside, options, recommend
     />
   );
   return (
-    <ModernAskCard kicker={kicker} aside={corner} question={shownQuestion} data-decision-dock className="!my-1">
+    <ModernAskCard
+      kicker={kicker}
+      aside={corner}
+      question={
+        <button type="button" onClick={onOpen} title="Open the whole question, its reasoning and its keys" data-decision-question-open className="text-left hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/60">
+          {shownQuestion}
+        </button>
+      }
+      data-decision-dock
+      className="!my-1"
+    >
       {drawn && (
         <div className="flex flex-wrap items-center gap-2" data-decision-options>
           {options.map((o) => (

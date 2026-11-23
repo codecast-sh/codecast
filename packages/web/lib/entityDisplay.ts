@@ -289,7 +289,8 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   // Ops replays in the store, kept live by the query.
   const replayRef = type === "replay" ? parseReplayRef(rawId) : null;
   const { data: replay } = useQueryNoThrow(api.replays.webGetReplay, live && type === "replay" ? { ref: replayRef?.replay ?? rawId } : "skip");
-  // A deploy (`dp-N`) seeds from the line's deploys in the store; the query covers one the viewer's line never fed.
+  // A deploy (`dp-N`, or the url of the Actions run carrying it) seeds from the deploys in the store; the query covers
+  // one the viewer's line and Deploys page never fed.
   const { data: deploy } = useQueryNoThrow(api.deploys.get, live && type === "deploy" ? { ref: rawId } : "skip");
   // A flow (`flow:change`) is the pool's flow of that slug, shipped or the team's, else the viewer's own of that name.
   const { flow: namedFlow } = useNamedFlow(live && type === "flow" ? flowSlugOf(rawId) : null);
@@ -349,8 +350,9 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   const label = changeOnly ?? entityReferenceLabel(labelArgs) + partSuffix;
   const fullLabel = resolvedTitle?.trim() ? resolvedTitle.trim() + partSuffix : label;
   // Sessions carry a generated short name (title generation writes
-  // `short_title`); everything else derives one from its title.
-  const shortLabel = changeOnly ?? entityShortLabel({ ...labelArgs, shortTitle: entity?.short_title }) + partSuffix;
+  // `short_title`); a deploy's is its target, the sha left to its first
+  // mention; everything else derives one from its title.
+  const shortLabel = changeOnly ?? (type === "deploy" && entity?.target ? entity.target : entityShortLabel({ ...labelArgs, shortTitle: entity?.short_title }) + partSuffix);
 
   // Route that opens this entity. Prefer the resolved Convex id; fall back to
   // the raw id so the link still works in the brief window before the query

@@ -18,7 +18,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { browserHome } from "../profile.js";
 import { defaultConfigDir, readSharedConfig } from "../../config/sharedConfig.js";
-import { bridgeProof, randomNonce, secretMatches } from "./protocol.js";
+import { bridgeProof, LINK_HOST_PORT_BASE, LINK_HOST_PORT_SPAN, randomNonce, secretMatches } from "./protocol.js";
 import { hashHostToken } from "./hostClients.js";
 import { RUN_ON_LAPTOP, askToRun } from "@codecast/shared/contracts/commandRun";
 import { bridgeStatus, type BridgeHostStatus, type ProvenBridge } from "./host.js";
@@ -40,9 +40,7 @@ export const LAPTOP_LINKS_DIR = "laptop-links";
 
 export interface LaptopLinkClosed { v: 1; reason: "revoked"; laptop: string; hostId: string; at: number }
 
-/** The first host-side port a laptop may forward to, and how many follow it. */
-export const LINK_HOST_PORT_BASE = 42_000;
-export const LINK_HOST_PORT_SPAN = 8_000;
+export { LINK_HOST_PORT_BASE, LINK_HOST_PORT_SPAN };
 
 /**
  * The host loopback port a laptop's link binds, derived from its device id so
@@ -58,7 +56,7 @@ export const isLinkDevice = (d: unknown): d is string => typeof d === "string" &
 
 export interface LaptopLink {
   v: 1;
-  /** The host loopback port forwarded to the laptop's bridge (the same number as the laptop's). */
+  /** The host loopback port forwarded to the laptop's bridge (linkHostPort: one per laptop). */
   port: number;
   /** This host's own client token; the laptop stores only its hash. */
   token: string;
@@ -160,8 +158,15 @@ export const revokedVerdict = (laptop: string, hostId: string): LinkVerdict => (
   reason: `${laptop} refused this host's key (revoked there). To let this host use that Chrome again, ask your person with a Yes card: ${askToRun("Let this cloud host use the Chrome on your laptop again?", `cast browser extension link --host ${hostId}`, RUN_ON_LAPTOP)}`,
 });
 
-/** The whole probe's budget: a dead laptop costs a session this much per command, no more. */
-export const LINK_PROBE_BUDGET_MS = 1_500;
+/**
+ * The whole probe's budget: a laptop that stopped answering costs a session
+ * this much per command, no more. A laptop that went away usually costs
+ * nothing, because its link's port refuses at once. Two round trips through
+ * the reverse tunnel took 0.3 to 3.4 s each from a loaded laptop on an
+ * ordinary connection (2026-11-19), so a tighter budget sent every host
+ * session to its own Chrome while the laptop's was there.
+ */
+export const LINK_PROBE_BUDGET_MS = 5_000;
 
 /**
  * Does the link reach a bridge that holds this host's token, with the
@@ -203,8 +208,9 @@ export async function probeLaptopLink(link: LaptopLink, budgetMs = LINK_PROBE_BU
       bridgeStatus(bridge),
       new Promise<never>((_, reject) => setTimeout(() => reject(new Error("timeout")), left())),
     ]);
-  } catch {
-    return host("the laptop's bridge did not answer in time");
+  } catch (err) {
+    const msg = (err as Error).message;
+    return host(msg === "timeout" ? "the laptop's bridge did not answer in time" : `the laptop's bridge refused its status: ${msg.split(" — ")[0]}`);
   }
   if (!status.extensionConnected) return host("the Chrome extension on the laptop is not connected");
   return { mode: "laptop", laptop: link.laptop, bridge, status };

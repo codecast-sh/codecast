@@ -8,6 +8,7 @@
 // desktop), and a line profile's `[line.deploy]` (Union) as one more. Both normalize here, so the CLI that
 // runs a target, the server that records it and the Deploys page that shows
 // it read the same shape.
+import { parseDuration } from "../time";
 
 /** Where a target's command runs. */
 export const DEPLOY_TARGET_RUNS = ["here", "push"] as const;
@@ -62,17 +63,49 @@ export type DeployTarget = {
   after?: string[];
   /** Before the send: the deploy sha's verdict, as the line-deploy graph's CI station runs it (`cast line deploy ci`). */
   ci?: string;
+  /** After the send: the gate's verdict on what went out (evals, a canary), e.g. `cast line deploy follow --jobs gate`. */
+  gate?: string;
+  /** After the gate: the rollout finishing, e.g. `cast line deploy follow --jobs deploy`. */
+  rollout?: string;
   /** Once live: what follows a deploy (raising the fleet's minimum CLI to the version that went out). `$version` expands. */
   finish?: string;
+  /** How long a change flow's Deploy stage waits for it to go live before calling the deploy stuck, in ms (deployDeadlineMs). */
+  deadline?: number;
+  /**
+   * The GitHub Actions workflow file every deploy of this target runs as (`deploy.yml`), whoever starts it: each run
+   * on the default branch is a deploy (running, then live, failed or cancelled), so one dispatched by hand shows too.
+   */
+  workflow?: string;
 };
 
 /** The keys a target holds that only the CLI reads: the server stores the rest. */
-export const CLI_ONLY_TARGET_KEYS = ["after", "ci", "finish"] as const;
+export const CLI_ONLY_TARGET_KEYS = ["after", "ci", "gate", "rollout", "finish", "deadline"] as const;
 
 /** A target as the server's publish takes it. */
 export function publishableTarget(t: DeployTarget): Omit<DeployTarget, (typeof CLI_ONLY_TARGET_KEYS)[number]> {
-  const { after: _a, ci: _c, finish: _f, ...rest } = t;
+  const { after: _a, ci: _c, gate: _g, rollout: _r, finish: _f, deadline: _d, ...rest } = t;
   return rest;
+}
+
+/** The longest `deadline` a target may set: a day, as long as a change waits for a person to send it. */
+export const MAX_DEPLOY_DEADLINE_MS = 24 * 60 * 60_000;
+
+/**
+ * The longest a change flow's Deploy stage waits in all, whatever holds a target before its own deadline starts (red
+ * main, an `after` target still going out): the longest deadline and an hour. The station parks, so the wait holds no
+ * slot; the deploy segment's station times out 15 minutes after it.
+ */
+export const DEPLOY_WAIT_CAP_MS = MAX_DEPLOY_DEADLINE_MS + 60 * 60_000;
+
+/**
+ * How long a change flow's Deploy stage waits for a target to go live: its `deadline`, else a day for one a person or
+ * a role sends (`others`: a press target, the line profile's own), an hour for one the stage sends (a release builds
+ * and publishes) and half an hour for one that deploys itself (a push or auto deploy).
+ */
+export function deployDeadlineMs(t: Pick<DeployTarget, "deadline" | "policy" | "runs">, others = false): number {
+  if (t.deadline) return t.deadline;
+  if (others) return MAX_DEPLOY_DEADLINE_MS;
+  return t.runs === "here" && t.policy === "release" ? 60 * 60_000 : 30 * 60_000;
 }
 
 export const DEPLOY_TARGET_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
@@ -122,7 +155,12 @@ export function readJsonLive(r: Extract<DeployLiveReader, { kind: "json" }>, doc
 /** A `[[ship.deploy]]` step of .codecast/workspace.toml, as far as a target needs it. */
 export type ShipStepRef = { name: string; when: string[]; run: string; stage: "before_push" | "after_push" };
 
-const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "finish"] as const;
+const TARGET_KEYS = ["name", "ship", "run", "when", "runs", "live", "rollback", "policy", "after", "ci", "gate", "rollout", "finish", "deadline", "workflow"] as const;
+/** The step commands a target may give its deploy (DP13), each run like `run`. */
+const STEP_KEYS = ["ci", "gate", "rollout", "finish"] as const;
+
+/** A workflow file's name as `.github/workflows/` holds it. */
+export const DEPLOY_WORKFLOW_RE = /^[A-Za-z0-9_.-]+\.ya?ml$/;
 
 /**
  * The `[[target]]` tables of .codecast/deploy.toml as targets. The file is the targets' own: workspace.toml keeps
@@ -135,20 +173,24 @@ export function parseDeployTargets(raw: unknown, ship: readonly ShipStepRef[]): 
 }
 
 /** The same, each with the [[ship.deploy]] step that sends it at a ship. */
-export function parseDeployTargetEntries(raw: unknown, ship: readonly ShipStepRef[]): Array<{ target: DeployTarget; ship_step?: string }> {
+export function parseDeployTargetEntries(raw: unknown, ship: readonly ShipStepRef[]): Array<{ target: DeployTarget; ship_step?: string; unknown?: string[] }> {
   if (raw === undefined || raw === null) return [];
   if (typeof raw !== "object" || Array.isArray(raw)) throw new DeployTargetError("deploy.toml must be a TOML table");
   for (const key of Object.keys(raw)) if (key !== "target") throw new DeployTargetError(`unknown top-level key '${key}' (the file holds [[target]] tables)`);
   const list = (raw as Record<string, unknown>)["target"] ?? [];
   if (!Array.isArray(list)) throw new DeployTargetError("'target' must be an array of tables ([[target]])");
-  const out: Array<{ target: DeployTarget; ship_step?: string }> = [];
+  const out: Array<{ target: DeployTarget; ship_step?: string; unknown?: string[] }> = [];
   list.forEach((entry, i) => {
     const at = `target[${i}]`;
     try {
       const t = targetFromEntry(entry, ship);
+      // A key a newer CLI added is read past, never refused, so a file written for it still deploys here (DP10).
+      const unknown = entry && typeof entry === "object" ? Object.keys(entry).filter((k) => !(TARGET_KEYS as readonly string[]).includes(k)) : [];
       if (out.some((o) => o.target.name === t.name)) throw new DeployTargetError(`target ${t.name} is declared twice`);
+      const shared = t.workflow ? out.find((o) => o.target.workflow === t.workflow) : undefined;
+      if (shared) throw new DeployTargetError(`target ${t.name}: workflow ${t.workflow} is already target ${shared.target.name}'s; a run of it is one deploy of one target`);
       const step = (entry as Record<string, unknown>)["ship"];
-      out.push({ target: t, ...(typeof step === "string" ? { ship_step: step } : {}) });
+      out.push({ target: t, ...(typeof step === "string" ? { ship_step: step } : {}), ...(unknown.length ? { unknown } : {}) });
     } catch (err) {
       throw err instanceof DeployTargetError ? new DeployTargetError(`${at}: ${err.message}`) : err;
     }
@@ -184,8 +226,7 @@ export function releaseOrder<T extends Pick<DeployTarget, "name" | "after">>(tar
 function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget {
   if (!e || typeof e !== "object" || Array.isArray(e)) throw new DeployTargetError("must be a table");
   const r = e as Record<string, unknown>;
-  for (const key of Object.keys(r)) if (!(TARGET_KEYS as readonly string[]).includes(key)) throw new DeployTargetError(`unknown key '${key}'`);
-  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy", "ci", "finish"]) {
+  for (const key of ["name", "ship", "run", "runs", "live", "rollback", "policy", ...STEP_KEYS, "deadline", "workflow"]) {
     if (r[key] !== undefined && typeof r[key] !== "string") throw new DeployTargetError(`'${key}' must be a string`);
   }
   const name = String(r["name"] ?? "").trim().toLowerCase();
@@ -204,7 +245,15 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
   const afterRaw = r["after"] ?? [];
   const after = typeof afterRaw === "string" ? [afterRaw] : afterRaw;
   if (!Array.isArray(after) || after.some((a) => typeof a !== "string")) throw new DeployTargetError(`target ${name}: 'after' must be a target name or a list of them`);
-  if (runs === "push" && (r["ci"] || r["finish"])) throw new DeployTargetError(`target ${name}: runs = "push" sends nothing, so it has no ci or finish step`);
+  const steps = STEP_KEYS.filter((k) => typeof r[k] === "string" && (r[k] as string).trim());
+  if (runs === "push" && steps.length) throw new DeployTargetError(`target ${name}: runs = "push" sends nothing, so it has no ${steps.join(" or ")} step`);
+  let deadline: number | undefined;
+  if (typeof r["deadline"] === "string") {
+    try { deadline = parseDuration(r["deadline"]); } catch { throw new DeployTargetError(`target ${name}: deadline "${r["deadline"]}" is not a duration (30m, 1h30m)`); }
+    if (deadline > MAX_DEPLOY_DEADLINE_MS) throw new DeployTargetError(`target ${name}: deadline "${r["deadline"]}" is over 24h; a deploy that takes longer is stuck`);
+  }
+  const workflow = typeof r["workflow"] === "string" ? r["workflow"].trim().replace(/^\.github\/workflows\//, "") : "";
+  if (r["workflow"] !== undefined && !DEPLOY_WORKFLOW_RE.test(workflow)) throw new DeployTargetError(`target ${name}: workflow "${r["workflow"]}" is not a workflow file (deploy.yml)`);
   return {
     name,
     ...(command ? { command } : {}),
@@ -215,8 +264,9 @@ function targetFromEntry(e: unknown, ship: readonly ShipStepRef[]): DeployTarget
     paths: when as string[],
     ship_stage: step?.stage ?? "press",
     ...(after.length ? { after: (after as string[]).map((a) => a.trim().toLowerCase()) } : {}),
-    ...(typeof r["ci"] === "string" && r["ci"].trim() ? { ci: r["ci"].trim() } : {}),
-    ...(typeof r["finish"] === "string" && r["finish"].trim() ? { finish: r["finish"].trim() } : {}),
+    ...Object.fromEntries(steps.map((k) => [k, (r[k] as string).trim()])),
+    ...(deadline ? { deadline } : {}),
+    ...(workflow ? { workflow } : {}),
   };
 }
 
@@ -273,6 +323,22 @@ export function commitCiState(runs: readonly CommitCiRun[]): CommitCiState {
   return "passed";
 }
 
+/**
+ * A targets view row's `dev_push`: uncommitted work prod runs on top of the target's live deploy, the dev watcher's
+ * push saved last after that deploy went live. Null when none has since.
+ */
+export type TargetDevPush = {
+  sha: string;
+  machine: string | null;
+  /** The pusher's name. */
+  by: string | null;
+  /** The last save. */
+  at: number;
+  dirty: number;
+  adds_count: number;
+  drops_count: number;
+};
+
 // ── the waiting queue ────────────────────────────────────────────────────────
 
 export type QueueCommit = {
@@ -283,6 +349,8 @@ export type QueueCommit = {
   /** The session that wrote it: its Codecast-Session trailer, or (`via: "task"`) the newest session on the task it names. */
   session: { conversation_id: string; short_id: string | null; title: string | null; via?: "task" } | null;
   tasks: Array<{ task_id: string; short_id: string | null; title: string | null }>;
+  /** The branch the change came from: its pull request's head, else the branch its session worked on (never the default branch). */
+  branch?: string | null;
   ci: CommitCiState;
   ci_url: string | null;
 };

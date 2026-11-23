@@ -38,6 +38,8 @@ export const OPTIONAL_INBOX_TIMESTAMPS: ReadonlySet<string> = new Set([
   "inbox_stash_hidden",
   "inbox_pinned_at",
   "inbox_killed_at",
+  // A Close's marker: written by the close, cleared by its undo, unset by the server.
+  "inbox_closed_at",
   "inbox_adopted_at",
   "thread_state",
   "thread_state_at",

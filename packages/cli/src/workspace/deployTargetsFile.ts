@@ -14,13 +14,18 @@ export function readDeployTargets(root: string, ship: readonly ShipStepRef[]): D
 }
 
 /** The same, each with the [[ship.deploy]] step that sends it at a ship. */
-export function readDeployTargetEntries(root: string, ship: readonly ShipStepRef[]): Array<{ target: DeployTarget; ship_step?: string }> {
+export function readDeployTargetEntries(root: string, ship: readonly ShipStepRef[]): Array<{ target: DeployTarget; ship_step?: string; unknown?: string[] }> {
   const file = path.join(root, DEPLOY_TARGETS_REL_PATH);
   if (!fs.existsSync(file)) return [];
   return parseDeployTargetsText(fs.readFileSync(file, "utf-8"), ship, file);
 }
 
-export function parseDeployTargetsText(text: string, ship: readonly ShipStepRef[], file = DEPLOY_TARGETS_REL_PATH): Array<{ target: DeployTarget; ship_step?: string }> {
+/** What the file says that this CLI reads past: a key of a newer CLI, or a typo, named so a person can tell which. */
+export function deployTargetWarnings(entries: ReadonlyArray<{ target: DeployTarget; unknown?: string[] }>, file = DEPLOY_TARGETS_REL_PATH): string[] {
+  return entries.flatMap((e) => (e.unknown ?? []).map((k) => `${file}: target ${e.target.name}: '${k}' is not a key this cast reads, so it is ignored (a newer cast's step? cast update; a typo? fix it)`));
+}
+
+export function parseDeployTargetsText(text: string, ship: readonly ShipStepRef[], file = DEPLOY_TARGETS_REL_PATH): Array<{ target: DeployTarget; ship_step?: string; unknown?: string[] }> {
   let raw: unknown;
   try {
     raw = Bun.TOML.parse(text);

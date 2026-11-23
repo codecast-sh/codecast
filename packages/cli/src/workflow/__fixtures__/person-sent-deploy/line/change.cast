@@ -1,0 +1,7 @@
+// A synthetic team flow for awaitDeploy.personSent.test.ts: the shipped
+// quick-change, with Deploy composed to send nothing, because a person sends
+// this team's production deploy.
+digraph change {
+  graph [extends="quick-change", label="Change", description="Check, review, land, then wait for the deploy a person sends"]
+  deploy [send=""]
+}

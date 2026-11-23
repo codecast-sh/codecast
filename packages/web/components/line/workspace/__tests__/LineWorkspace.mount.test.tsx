@@ -98,8 +98,13 @@ beforeEach(() => { moves.length = 0; pushed.length = 0; seed(); });
 
 const key = (k: string) => act(async () => { document.body.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: k, bubbles: true })); });
 
-test("with no live flow the Flows stage is the library, and a flow the address names opens on its map", async () => {
+test("the bare address is the team's pipelines; with no live flow the Flows stage is the library, and a flow the address names opens on its map", async () => {
   search = "";
+  const landing = await mount(React.createElement(LineWorkspace));
+  expect(landing.host.querySelector("[data-pipelines-link]")?.getAttribute("aria-current")).toBe("page");
+  expect(landing.host.querySelector("[data-pipeline-stage='flows']")?.getAttribute("aria-current")).toBeNull();
+  await act(async () => { landing.root.unmount(); });
+  search = "view=flows";
   const lib = await mount(React.createElement(LineWorkspace));
   expect(lib.host.querySelector("[data-pipeline-stage='flows']")?.getAttribute("aria-current")).toBe("page");
   expect(lib.host.querySelector("[data-flows-home]")).not.toBeNull();

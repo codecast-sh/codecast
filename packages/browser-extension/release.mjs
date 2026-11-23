@@ -34,12 +34,11 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { SHIPPED } from "./shipped.mjs";
 
 const extDir = path.dirname(new URL(import.meta.url).pathname);
 const manifestPath = path.join(extDir, "manifest.json");
 
-/** What ships. Everything else in the directory is for developing it. */
-const SHIPPED = ["background.js", "page.js", "options.html", "options.js", "popup.html", "popup.js", "offscreen.html", "offscreen.js", "status.js", "brand.css", "icons"];
 
 const API = "https://chromewebstore.googleapis.com";
 const SCOPE = "https://www.googleapis.com/auth/chromewebstore";

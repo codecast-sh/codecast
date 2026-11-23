@@ -22,7 +22,7 @@ import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
 import { computeOrgHealth, HEALTH_CAPS, HEALTH_WINDOW_7D_MS, healthMembersAndRoles, readHealthDecisions, readWorkTasks, slimWorkTasks, type HealthDecisions, type WorkTasks } from "./orgHealth";
 import { fireRoleEvent } from "./agentTasks";
 import { HEAD_AREA_CHANGE_SPEC } from "./lib/orgRoutine";
-import type { OrgUnplaced } from "./lib/orgCoverage";
+import { UNPLACED_CAPS, type OrgUnplaced } from "./lib/orgCoverage";
 
 /** How often a pass runs (crons.ts). Two passes in a row is the bar an area
  *  status clears before it reaches the Head of People, so a status must hold this long. */
@@ -40,7 +40,7 @@ export type WatchInput = {
   head: { role_id: string; unowned_told: UnownedTold[] };
   unowned: Array<{ id: string; title: string }>;
   /** What reaches no goal (orgUnplaced): its open plans with no project and active projects no open goal carries. */
-  unplaced?: Pick<OrgUnplaced, "plans" | "projects"> | null;
+  unplaced?: Pick<OrgUnplaced, "plans" | "projects" | "truncated"> | null;
 };
 export type WatchPlan = {
   role_writes: Array<{ role_id: string; area_watch: AreaWatch }>;
@@ -101,8 +101,10 @@ export function planAreaWatch(input: WatchInput): WatchPlan {
     })),
   ];
   const current = new Set(gaps.map((g) => g.key));
-  // A pass that could not read the unplaced kinds keeps what it told of them.
-  const unread = (id: string) => !input.unplaced && Object.values(UNPLACED_TOLD_PREFIX).some((prefix) => id.startsWith(prefix));
+  // A pass that could not read the unplaced kinds, or read a list cut at its
+  // cap, keeps what it told of them: a gap pushed off a cut list is not closed.
+  const partial = !input.unplaced || !!input.unplaced.truncated || input.unplaced.plans.length >= UNPLACED_CAPS.plans || input.unplaced.projects.length >= UNPLACED_CAPS.projects;
+  const unread = (id: string) => partial && Object.values(UNPLACED_TOLD_PREFIX).some((prefix) => id.startsWith(prefix));
   const told = input.head.unowned_told.filter((t) => current.has(t.id) || unread(t.id));
   for (const g of gaps) {
     if (told.some((t) => t.id === g.key)) continue;

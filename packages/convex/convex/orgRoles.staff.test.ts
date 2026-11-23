@@ -10,6 +10,7 @@ import { charterPatch, charterLine } from "./lib/orgCharter";
 import { computeBriefFacts } from "./org";
 import { workspaceAnchorFor } from "./anchors";
 import { resolveChatMentions } from "./lib/mentionResolve";
+import { charterText } from "./roleCharter.testkit";
 
 // The head of people (docs/architecture/org-staffing.md S6) and the charters
 // on projects and plans (S7): one seat per company, adoptable, starting work
@@ -73,7 +74,7 @@ describe("orgRoles.staff", () => {
     expect(role.scope).toEqual({ project_ids: [], plan_ids: [] });
     expect(role.trust).toBe("direct");
     expect(role.reports_to).toEqual({ kind: "user", user_id: ME });
-    expect(role.charter).toBe(headOfPeopleCharter("Me"));
+    expect(await charterText(ctx.db, role)).toBe(headOfPeopleCharter("Me"));
     expect(role.anchor_id).toBeDefined();
     // The adopted row IS the standing session: identity, anchor, persistence.
     const mine = tables.conversations.find((c) => c._id === "mine")!;

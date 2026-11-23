@@ -1932,54 +1932,72 @@ async function visibleOwnersFor(ctx: { db: QueryCtx["db"] }, viewerId: Id<"users
 async function pageWorkspace(
   ctx: { db: QueryCtx["db"] },
   row: Doc<"artifacts">,
-  convs: Map<string, Doc<"conversations"> | null>,
+  // Docs already read for earlier pages (tasks, plans, conversations), by id:
+  // many pages share one session or task.
+  seen: Map<string, any>,
 ): Promise<WorkspaceKey> {
-  const bound = row.task_id ? await ctx.db.get(row.task_id) : row.plan_id ? await ctx.db.get(row.plan_id) : null;
+  const read = async (id: string | undefined) => {
+    if (!id) return null;
+    if (!seen.has(id)) seen.set(id, await ctx.db.get(id as any));
+    return seen.get(id) ?? null;
+  };
+  const bound = row.task_id ? await read(row.task_id) : row.plan_id ? await read(row.plan_id) : null;
   if (bound) return resolveWorkspaceKey(ctx, bound);
-  const cid = row.session_conversation_id;
-  let conv: Doc<"conversations"> | null = null;
-  if (cid) {
-    if (!convs.has(cid)) convs.set(cid, await ctx.db.get(cid));
-    conv = convs.get(cid) ?? null;
-  }
+  const conv: Doc<"conversations"> | null = await read(row.session_conversation_id);
   return computeWorkspaceKey({ user_id: row.user_id }, conv);
 }
 
 export type VisiblePage = { row: Doc<"artifacts">; workspace: WorkspaceKey; author: { name: string | null; image: string | null }; mine: boolean };
 
 /** The pages a viewer's gallery holds: their own, and teammates' pages whose
- *  workspace is a team they share. The one enumeration behind the app's Pages
- *  view and the MCP list_pages tool. */
-export async function pagesVisibleTo(ctx: { db: QueryCtx["db"] }, userId: Id<"users">): Promise<VisiblePage[]> {
-  const convs = new Map<string, Doc<"conversations"> | null>();
+ *  workspace is a team they share, each owner's newest first. The one
+ *  enumeration behind the app's Pages view and the MCP list_pages tool.
+ *  `perOwner` caps how many of each owner's pages are read: every page costs
+ *  reads to place in a workspace, and one account holds thousands. */
+export async function pagesVisibleTo(
+  ctx: { db: QueryCtx["db"] },
+  userId: Id<"users">,
+  opts: { perOwner?: number } = {},
+): Promise<VisiblePage[]> {
+  const seen = new Map<string, any>();
   const rows: VisiblePage[] = [];
+  const newestOf = (uid: Id<"users">) => {
+    const q = ctx.db
+      .query("artifacts")
+      .withIndex("by_user_updated", (q) => q.eq("user_id", uid))
+      .order("desc");
+    return opts.perOwner === undefined ? q.collect() : q.take(opts.perOwner);
+  };
 
   const viewer = await ctx.db.get(userId);
   const me = { name: viewer?.name ?? null, image: viewer?.image ?? null };
-  const mine = await ctx.db
-    .query("artifacts")
-    .withIndex("by_user", (q) => q.eq("user_id", userId))
-    .collect();
-  for (const row of mine) rows.push({ row, workspace: await pageWorkspace(ctx, row, convs), author: me, mine: true });
+  for (const row of await newestOf(userId)) {
+    rows.push({ row, workspace: await pageWorkspace(ctx, row, seen), author: me, mine: true });
+  }
 
   // Teammates' artifacts: visible in the gallery, but WITHOUT the secrets —
   // manage/edit keys belong to the owner alone. Team edit rights flow
   // through editForWeb (authed), not through key possession.
   for (const [uid, teams] of await visibleOwnersFor(ctx, userId)) {
-    const theirs = await ctx.db
-      .query("artifacts")
-      .withIndex("by_user", (q) => q.eq("user_id", uid))
-      .collect();
+    const theirs = await newestOf(uid);
     if (!theirs.length) continue;
     const user = await ctx.db.get(uid);
     const author = { name: user?.name ?? null, image: user?.image ?? null };
     for (const row of theirs) {
-      const workspace = await pageWorkspace(ctx, row, convs);
+      const workspace = await pageWorkspace(ctx, row, seen);
       if (teams.has(workspace)) rows.push({ row, workspace, author, mine: false });
     }
   }
   return rows;
 }
+
+// The gallery's read budget. Convex refuses a query past 4,096 reads, and an
+// account with 1,759 pages crossed it: every page costs a workspace read and
+// two enrichment reads (stats, comments). The gallery reads each owner's
+// newest GALLERY_SCAN_PER_OWNER pages and enriches the newest
+// GALLERY_LIMIT of those; older pages stay reachable by link and `cast publish ls`.
+export const GALLERY_SCAN_PER_OWNER = 300;
+export const GALLERY_LIMIT = 500;
 
 export const listForWeb = query({
   args: {},
@@ -1987,7 +2005,9 @@ export const listForWeb = query({
     const userId = await getAuthUserId(ctx);
     if (!userId) return { artifacts: [] };
 
-    const rows = await pagesVisibleTo(ctx, userId);
+    const rows = (await pagesVisibleTo(ctx, userId, { perOwner: GALLERY_SCAN_PER_OWNER }))
+      .sort((a, b) => b.row.updated_at - a.row.updated_at)
+      .slice(0, GALLERY_LIMIT);
     const out = [];
     for (const { row, workspace, author, mine: isMine } of rows) {
       const stats = await ctx.db
@@ -2017,7 +2037,6 @@ export const listForWeb = query({
         comments_open: comments.filter((c) => c.status === "open").length,
       });
     }
-    out.sort((a, b) => b.updated_at - a.updated_at);
     return { artifacts: out };
   },
 });
@@ -2185,5 +2204,55 @@ export const getShared = query({
       gated: false,
       user: user ? { name: user.name, image: user.image } : null,
     };
+  },
+});
+
+// The phone's page screen (mobile app/page/[slug].tsx) reads a page's discussion here, in the shape the store's
+// pageThreads rows hold (threadPageCodeKinds pageKind.load), so the reply stub addPageComment writes and this push
+// meet in one row. Who sees what follows the page itself: a reader the page admits sees its open comments, as
+// ?meta=1 shows every viewer; the owner and teammates who may steer its agent see the resolved ones too.
+export const discussionForApp = query({
+  args: { slug: v.string(), decision: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const artifact = await ctx.db.query("artifacts").withIndex("by_slug", (q) => q.eq("slug", args.slug)).first();
+    if (!artifact || isExpired(artifact)) return null;
+    if (isGated(artifact) && !(await unlockKeys(ctx, userId, artifact, args.decision))) return null;
+    const { role } = await accountAdmission(ctx, artifact, userId);
+    const rows = await ctx.db
+      .query("artifact_comments")
+      .withIndex("by_artifact", (q) => q.eq("artifact_id", artifact._id))
+      .collect();
+    const comments = rows
+      .filter((c) => c.status === "open" || !!role)
+      .sort((a, b) => a.created_at - b.created_at)
+      .map(({ author_email: _email, ...c }) => c);
+    return {
+      _id: String(artifact._id),
+      slug: artifact.slug,
+      title: artifact.title,
+      kind: artifact.kind,
+      user_id: String(artifact.user_id),
+      updated_at: artifact.updated_at,
+      comments_disabled: !!artifact.comments_disabled,
+      comments,
+    };
+  },
+});
+
+// Resolve or reopen one comment from inside the app, as the page's owner. The served page resolves through its
+// owner_key (artifactsHttp manage → applyManage); the app holds the owner's account instead.
+export const setCommentStatusForApp = mutation({
+  args: { comment_id: v.id("artifact_comments"), resolved: v.boolean() },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) throw new Error("Sign in required");
+    const comment = await ctx.db.get(args.comment_id);
+    if (!comment) return { ok: false as const };
+    const artifact = await ctx.db.get(comment.artifact_id);
+    if (!artifact || artifact.user_id !== userId) throw new Error("Only the page owner can resolve comments");
+    await ctx.db.patch(comment._id, { status: args.resolved ? "resolved" : "open" });
+    return { ok: true as const };
   },
 });

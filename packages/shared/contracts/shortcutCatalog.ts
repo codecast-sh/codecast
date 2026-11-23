@@ -17,7 +17,7 @@ export type ShortcutAction =
   | 'view.switch'
   | 'session.stash'
   | 'session.stashHide'
-  | 'session.kill'
+  | 'session.close'
   | 'session.deferAdvance'
   | 'session.dormantAdvance'
   | 'session.snooze'
@@ -226,7 +226,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   // Stash and hide: the stash survives trigger wakes (a plain stash pops back
   // on one). One modifier up from stash, same as dormant sits above defer.
   { key: 'ctrl+alt+backspace', action: 'session.stashHide', skipInputCheck: 'whenEmpty', description: 'Stash and hide (stays out through trigger wakes)' },
-  { key: 'ctrl+shift+backspace', action: 'session.kill', skipInputCheck: 'whenEmpty', description: 'Kill session' },
+  { key: 'ctrl+shift+backspace', action: 'session.close', skipInputCheck: 'whenEmpty', description: 'Close session (sets it aside if it is mid-turn)' },
   { key: 'shift+backspace', action: 'session.deferAdvance', skipInputCheck: 'whenEmpty', description: 'Defer and advance' },
   // Dormant joins the backspace triage family one modifier up from defer, its
   // nearest verb (both park a row that returns on its own; defer on activity,

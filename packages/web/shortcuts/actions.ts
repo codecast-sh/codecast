@@ -190,9 +190,9 @@ export function useGlobalShortcutActions() {
     if (currentId) triage.hide(currentId, "stash", "key", { hidden: true });
   }, [focusedId, triage]));
 
-  useShortcutAction('session.kill', useCallback(() => {
+  useShortcutAction('session.close', useCallback(() => {
     const currentId = focusedId();
-    if (currentId) triage.hide(currentId, "kill", "key");
+    if (currentId) triage.hide(currentId, "close", "key");
   }, [focusedId, triage]));
 
   useShortcutAction('session.deferAdvance', useCallback(() => {

@@ -17,7 +17,7 @@ import type { ChatMessageRow, ChatReactionRow } from "../store/chatSlice";
 import type { IdentityRow } from "./sessionIdentity";
 import { attachmentKind, type ChatAuthor, type ChatChannelView, type ChatMessageView, type ChatReaction } from "../components/chat/chatTypes";
 import { botHandle } from "@codecast/convex/convex/chatText";
-import { chatRoomKey } from "@codecast/shared/contracts";
+import { chatRoomKey, titleLine } from "@codecast/shared/contracts";
 import { dmOtherIds, isClosedAgentPlaceholder, isSessionPartyId, mentionUserIds, threadFaceKey } from "@codecast/shared/chat";
 import { isAgentMember, isPerson } from "@codecast/shared/team/memberKind";
 
@@ -272,7 +272,7 @@ export function sessionAuthorFor(row: LineAuthorFields, ctx: Pick<ViewContext, "
   if (row.origin !== "agent" || !row.origin_session_id || row.author_kind === "agent") return null;
   const live = ctx.sessionFor?.(row.origin_session_id);
   const human = ctx.members.get(row.user_id);
-  const title = live?.title || row.origin_session_title;
+  const title = live?.title || titleLine(row.origin_session_title);
   const speaker = live?.speaker;
   return {
     id: row.user_id,

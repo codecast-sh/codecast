@@ -1,4 +1,4 @@
-import { MUSE_MARK_PATH } from "@codecast/shared/render/mobileSessionStyle";
+import { ANTIGRAVITY_MARK_PATH, MUSE_MARK_PATH } from "@codecast/shared/render/mobileSessionStyle";
 import { CodexIcon, GrokIcon } from "./BrandIcons";
 import { LogoMark } from "./Logo";
 import { agentDisplayName, isHostedAgentType } from "@codecast/shared/contracts";
@@ -48,6 +48,12 @@ export function AgentTypeIcon({ agentType, className = "w-3 h-3", mono = false }
     return (
       <svg className={`${className}${tone("text-blue-500")}`} viewBox="0 0 24 24" fill="currentColor" fillRule="evenodd">
         <path d={MUSE_MARK_PATH} />
+      </svg>
+    );
+  } else if (agentType === "antigravity") {
+    return (
+      <svg className={`${className}${tone("text-indigo-400")}`} viewBox="0 0 24 24" fill="currentColor">
+        <path d={ANTIGRAVITY_MARK_PATH} />
       </svg>
     );
   } else if (isHostedAgentType(agentType)) {

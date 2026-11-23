@@ -1,0 +1,21 @@
+# Synthetic deploy targets: two sent from the checkout with different step commands, one that deploys itself.
+[[target]]
+name = "api"
+when = ["api/**", "package.json"]
+run = "./tools/deploy-api.sh --sha $sha"
+live = "json:https://example.invalid/health#sha"
+ci = "./tools/ci-verdict.sh $sha"
+policy = "press"
+
+[[target]]
+name = "worker"
+when = ["worker/**"]
+run = "./tools/deploy-worker.sh $sha"
+live = "marker"
+policy = "release"
+
+[[target]]
+name = "site"
+runs = "push"
+when = ["site/**"]
+live = "github-status:acme - site"

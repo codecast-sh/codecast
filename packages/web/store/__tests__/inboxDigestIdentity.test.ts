@@ -161,16 +161,19 @@ describe("server projection == replica projection", () => {
     expect(overlay.projection.v).toBe(INBOX_PROJECTION_VERSION);
     expect(overlay.projection.epoch).toBe(EPOCH);
     expect(overlay.projection.set_digest).toMatch(/^[0-9a-f]{16}$/);
-    // Transport omission (C4): the folded row is stamped but not in the base list.
-    expect(base.sessions.map((s: any) => s._id)).not.toContain(cid("folded"));
-    expect(overlay.liveness[cid("folded")]?.below_fold).toBe(true);
+    // Transport omission (C4): the fold rows (the first row past the gap and
+    // everything older) are stamped but not in the base list.
+    for (const id of [cid("edge"), cid("folded")]) {
+      expect(base.sessions.map((s: any) => s._id)).not.toContain(id);
+      expect(overlay.liveness[id]?.below_fold).toBe(true);
+    }
 
     // The cold-replica shape of the diff: exactly the fold rows are missing,
     // nothing else disagrees.
     const first = evaluateInboxCompare(replica(), ctx);
     expect(first.kind).toBe("diff");
     if (first.kind !== "diff") return;
-    expect(first.diff.missing).toEqual([cid("folded")]);
+    expect(first.diff.missing).toEqual([cid("edge"), cid("folded")]);
     expect(first.diff.extra).toEqual([]);
     expect(first.diff.bucket_deltas).toEqual([]);
     expect(first.diff.fold_deltas).toEqual([]);
@@ -291,7 +294,7 @@ describe("server projection == replica projection", () => {
   it("show old on both sides changes nothing about the digest (shown + folded is the headline, not the set)", async () => {
     const db = fixture();
     const { overlay } = await feedServer(db);
-    const healed = await collectInboxSessionsByIds({ db }, ME as any, [cid("folded")]);
+    const healed = await collectInboxSessionsByIds({ db }, ME as any, [cid("edge"), cid("folded")]);
     useInboxStore.getState().syncTable("sessions", healed.sessions as unknown as InboxSession[]);
     useInboxStore.getState().applyInboxLivenessPayload("mine", overlay);
     useInboxStore.setState((s: any) => ({
@@ -302,14 +305,14 @@ describe("server projection == replica projection", () => {
     const placed = placeInboxRows(replica(), { scope: "mine", now: NOW });
     expect(placed.set_digest).toBe(overlay.projection.set_digest!);
     // The fold still counts (it is membership data), and show-old renders it.
-    expect(placed.oldCount).toBe(1);
+    expect(placed.oldCount).toBe(2);
     expect(placed.visibleSessions[cid("folded")]).toBeDefined();
   });
 
   it("a fact the overlay changes moves the replica's placement with it — stamps and facts from one payload always agree", async () => {
     const db = fixture();
     const { overlay } = await feedServer(db);
-    const healed = await collectInboxSessionsByIds({ db }, ME as any, [cid("folded")]);
+    const healed = await collectInboxSessionsByIds({ db }, ME as any, [cid("edge"), cid("folded")]);
     useInboxStore.getState().syncTable("sessions", healed.sessions as unknown as InboxSession[]);
     useInboxStore.getState().applyInboxLivenessPayload("mine", overlay);
     // The working agent goes idle server-side: a NEW overlay execution.

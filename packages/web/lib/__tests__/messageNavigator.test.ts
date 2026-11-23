@@ -20,6 +20,7 @@ import {
   matchIndex,
   matchSnippet,
   navigatorRowBody,
+  resolveNavigatorAuthors,
 } from "../messageNavigator";
 import { stickyCommand } from "../../components/conversation/classify";
 import { NAV_ROW_SNIPPET_CHARS } from "@codecast/convex/convex/userMessagesFilter";
@@ -597,5 +598,101 @@ describe("slash command with an expanded body", () => {
   it("names the command for the sticky body", () => {
     expect(stickyCommand(invocation)).toEqual({ cmdName: "deploy", args: "web only" });
     expect(stickyCommand("fix the login bug")).toBeNull();
+  });
+});
+
+describe("resolveNavigatorAuthors", () => {
+  const people: Record<string, { name: string; image?: string }> = {
+    u_jason: { name: "Jason Benn", image: "https://x/jason.png" },
+    u_cam: { name: "Cam" },
+    u_ashot: { name: "Ashot Petrosian" },
+  };
+  const lookup = (id: string) => people[id];
+  const from = (id: string, content: string, user?: string) => ({ ...msg(id, content), ...(user ? { from_user_id: user } : {}) });
+  const authorsOf = (rows: ReturnType<typeof buildNavigatorRows>, viewerId = "u_jason") =>
+    resolveNavigatorAuthors(rows, { ownerId: "u_jason", ownerName: "Jason Benn", viewerId, lookup });
+
+  test("a thread only its owner wrote names nobody", () => {
+    const a = authorsOf(buildNavigatorRows([from("a", "fix it", "u_jason"), from("b", "now tests")]));
+    expect(a.attributed).toBe(false);
+    expect(a.authors.map((x) => [x.label, x.count])).toEqual([["You", 2]]);
+  });
+
+  test("a teammate's direct send is theirs: by account, and by the wrapper's name", () => {
+    const rows = buildNavigatorRows([
+      from("a", "fix it", "u_jason"),
+      from("b", '<user-message from="Cam">\nI think it would be great', "u_cam"),
+      from("c", '<user-message from="Cam">\nidk\n</user-message>'),
+      from("d", "ship it", "u_jason"),
+    ]);
+    const a = authorsOf(rows);
+    expect(a.attributed).toBe(true);
+    expect(rows.map((r) => a.byRow.get(r._id)?.label)).toEqual(["You", "Cam", "Cam", "You"]);
+    // The wrapper-only row joins Cam's account rather than standing apart.
+    expect(a.authors.map((x) => [x.key, x.count, x.tone])).toEqual([["u_jason", 2, 0], ["u_cam", 2, 1]]);
+  });
+
+  test("the viewer is the unmarked voice; everyone else is colored in the order they first wrote", () => {
+    const rows = buildNavigatorRows([
+      from("a", '<user-message from="Aivery">\nNew scenario'),
+      from("b", "plain owner row"),
+      from("c", "typed by ashot", "u_ashot"),
+    ]);
+    const a = authorsOf(rows, "u_ashot");
+    expect(a.authors.map((x) => [x.label, x.tone])).toEqual([["You", 0], ["Aivery", 1], ["Jason", 2]]);
+  });
+
+  test("a viewer who wrote nothing leaves the owner unmarked", () => {
+    const rows = buildNavigatorRows([from("a", "owner row", "u_jason"), from("b", "hi", "u_cam")]);
+    const a = authorsOf(rows, "u_ashot");
+    expect(a.authors.map((x) => [x.label, x.tone])).toEqual([["Jason", 0], ["Cam", 1]]);
+  });
+
+  test("rows say first names, and the whole name when two people share one", () => {
+    const people2: Record<string, { name: string }> = { u_a: { name: "Sam Ito" }, u_b: { name: "Sam Ray" }, u_c: { name: "Ashot Petrosian" } };
+    const rows = buildNavigatorRows([from("a", "draft the brief", "u_a"), from("b", "check the numbers", "u_b"), from("c", "ship the fix", "u_c")]);
+    const a = resolveNavigatorAuthors(rows, { ownerId: "u_c", lookup: (id) => people2[id] });
+    expect(a.authors.map((x) => x.label)).toEqual(["Ashot", "Sam Ito", "Sam Ray"]);
+  });
+
+  test("a thread only a teammate wrote in is still attributed: the owner did not write it", () => {
+    const a = authorsOf(buildNavigatorRows([from("a", '<user-message from="Cam">\nidk\n</user-message>', "u_cam")]));
+    expect(a.attributed).toBe(true);
+    expect(a.authors.map((x) => [x.label, x.tone])).toEqual([["Cam", 1]]);
+  });
+
+  test("an account nobody can name, with no wrapper, is not passed off as the owner", () => {
+    const rows = buildNavigatorRows([from("a", "hello", "u_stranger")]);
+    expect(authorsOf(rows).byRow.get("a")?.name).toBe("Someone");
+  });
+
+  test("machine rows have no author", () => {
+    const rows = buildNavigatorRows([from("a", SESSION_WIRE, "u_ashot"), from("b", "mine", "u_jason")]);
+    const a = authorsOf(rows);
+    expect(a.byRow.has("a")).toBe(false);
+    expect(a.attributed).toBe(false);
+  });
+
+  test("filtering narrows to one person, and a search for a name finds what they sent", () => {
+    const rows = buildNavigatorRows([
+      from("a", "fix it", "u_jason"),
+      from("b", '<user-message from="Cam">\nbroker calls', "u_cam"),
+    ]);
+    const authors = authorsOf(rows);
+    expect(filterNavigatorRows(rows, { search: "", showHidden: false, authors, authorKey: "u_cam" }).map((r) => r._id)).toEqual(["b"]);
+    expect(filterNavigatorRows(rows, { search: "cam", showHidden: false, authors }).map((r) => r._id)).toEqual(["b"]);
+    expect(filterNavigatorRows(rows, { search: "you", showHidden: false, authors }).map((r) => r._id)).toEqual(["a"]);
+  });
+
+  test("the sender survives merging the loaded window into the cache", () => {
+    const merged = mergeNavigatorSources([], [{ _id: "x", role: "user", content: "hi", timestamp: 1, from_user_id: "u_cam" }]);
+    expect(merged[0].from_user_id).toBe("u_cam");
+  });
+
+  test("a message the viewer just sent is theirs while it has no account on it", () => {
+    const merged = mergeNavigatorSources([{ _id: "a", content: "owner row", timestamp: 0, from_user_id: "u_jason" }], [{ _id: "stub", role: "user", content: "on it", timestamp: 1, _isOptimistic: true }]);
+    const rows = buildNavigatorRows(merged);
+    const a = resolveNavigatorAuthors(rows, { ownerId: "u_jason", viewerId: "u_ashot", lookup });
+    expect(a.byRow.get("stub")?.label).toBe("You");
   });
 });

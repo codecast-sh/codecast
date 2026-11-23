@@ -23,8 +23,9 @@ import { useInboxStore } from "../store/inboxStore";
 import { DISPATCH_REFUSED, latestSessionCommand, switchPending } from "../lib/sessionCommands";
 import { formatResetPhrase, limitResetAsPrinted, limitWindowLabel, parseLimitResetAt } from "../lib/limitReset";
 import type { LimitRecoveryAction } from "../lib/limitRecovery";
-import { continueOnAccount, limitContinueTarget } from "../lib/limitContinue";
+import { continueOnAccount, continueOnModel, familyStandingLabel, limitContinueTarget, otherModelFor } from "../lib/limitContinue";
 import { Button } from "./ui/button";
+import { notifyModelToast } from "../lib/modelSwitchWeb";
 
 type Profile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
 
@@ -58,17 +59,21 @@ export function LimitParkCard({
   const pinnedAccount = useInboxStore((s) => (conversationId ? s.sessions[conversationId]?.cc_account : undefined));
 
   const profiles: Profile[] = device?.profiles ?? [];
+  // Only one model's week is spent ("Fable limit"). That week is per account:
+  // another account with room on it continues the session on the same model,
+  // and only when none has room is the way on another model.
+  const limitFamily = /^(fable|opus|sonnet|haiku) limit$/i.exec(windowLabel)?.[1]?.toLowerCase();
   // The account the session ran on (its own token pin when it has one, else
   // the machine's fleet account) and the account the button continues on: one
   // rule, shared with the phone (lib/limitContinue).
-  const { fleetEmail, active, best } = limitContinueTarget(device, now, live);
+  const { fleetEmail, active, best } = limitContinueTarget(device, now, live, limitFamily);
   const accountLabel = accountDisplayName(profiles, pinnedAccount ?? active?.email ?? fleetEmail);
   const bestLabel = accountDisplayName(profiles, best?.email ?? best?.name);
   const exhausted = isExhaustionCurrent(device?.auto_switch_state?.exhausted_at, profiles, now);
   const proposal = live && device ? pendingProposal([device], now) : null;
   // The standing shown on the button matches the meters: "stale" when a rolled
   // window is unmeasured, never a confident green percent the switcher distrusts.
-  const bestNote = best ? standingLabel(best.usage, now) : null;
+  const bestNote = best ? (limitFamily && familyStandingLabel(best.usage, limitFamily, now)) || standingLabel(best.usage, now) : null;
   const canSwitch = !!best && !!device && device.online && !device.is_remote && !!conversationId;
 
   const switchAndContinue = () => {
@@ -77,6 +82,12 @@ export function LimitParkCard({
   const continueNow = () => {
     if (!conversationId) return;
     useInboxStore.getState().sendMessage(conversationId, "continue");
+  };
+  const other = limitFamily ? otherModelFor(limitFamily) : undefined;
+  const otherModel = other?.key;
+  const otherModelLabel = other?.label;
+  const continueOnOtherModel = () => {
+    if (conversationId && otherModel) continueOnModel(conversationId, otherModel, notifyModelToast);
   };
 
   if (phase.phase === "recovering" || phase.phase === "resumed") {
@@ -112,6 +123,10 @@ export function LimitParkCard({
     next = "The session continued after this.";
   } else if (resetPassed) {
     next = "The window is open again and nothing resumed the session — continue it.";
+  } else if (otherModelLabel && canSwitch) {
+    next = `${windowLabel.replace(/ limit$/, "")} is out on this account — ${bestLabel} still has ${windowLabel.replace(/ limit$/, "")}.`;
+  } else if (otherModelLabel) {
+    next = `${windowLabel.replace(/ limit$/, "")} is out${best ? "" : " on every account"} — continue on ${otherModelLabel}, or it waits for the reset.`;
   } else if (!device) {
     next = "Parked until the window resets — send a message after that.";
   } else if (device.auto_switch && exhausted) {
@@ -169,6 +184,11 @@ export function LimitParkCard({
                 Continue
               </Button>
             )}
+            {!resetPassed && otherModelLabel && conversationId && !canSwitch && (
+              <Button type="button" variant="amber" size="xs" onClick={continueOnOtherModel}>
+                Continue on {otherModelLabel}
+              </Button>
+            )}
             {!resetPassed && canSwitch && (
               <button
                 type="button"
@@ -186,6 +206,15 @@ export function LimitParkCard({
                   : proposal
                     ? `Approve switch to ${bestLabel}${bestNote ? ` (${bestNote})` : ""}`
                     : `Continue on ${bestLabel}${bestNote ? ` (${bestNote})` : ""}`}
+              </button>
+            )}
+            {!resetPassed && otherModelLabel && conversationId && canSwitch && (
+              <button
+                type="button"
+                onClick={continueOnOtherModel}
+                className="text-meta text-sol-text-muted hover:text-sol-text hover:underline"
+              >
+                or {otherModelLabel}
               </button>
             )}
             <Link href="/settings/claude-accounts" className="text-meta text-sol-cyan hover:underline">

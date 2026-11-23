@@ -328,3 +328,31 @@ describe("the link connection", () => {
     expect(browserLinkRefusal(cloud, { port: 1, token: "t" })).toContain("never paired");
   });
 });
+
+describe("a request that arrives through a laptop link", () => {
+  /** The bridge's answer to /status with this Host header: what a cloud host's client sends through its reverse forward. */
+  const statusWithHost = async (port: number, token: string, hostHeader: string): Promise<number> => {
+    const net = await import("node:net");
+    return new Promise((resolve, reject) => {
+      const socket = net.connect(port, "127.0.0.1", () => socket.write(`GET /status?token=${token} HTTP/1.1\r\nHost: ${hostHeader}\r\nConnection: close\r\n\r\n`));
+      let seen = "";
+      socket.on("data", (c) => { seen += c.toString("latin1"); });
+      socket.on("close", () => resolve(Number(/^HTTP\/1\.1 (\d{3})/.exec(seen)?.[1] ?? 0)));
+      socket.on("error", reject);
+    });
+  };
+
+  test("names the host's link port, and is answered", async () => {
+    const c = newHostClient("i-link");
+    const { port } = await bridgeWithHosts({ "i-link": c.record });
+    expect(await statusWithHost(port, c.token, `127.0.0.1:${linkHostPort("laptop-device")}`)).toBe(200);
+    expect(await statusWithHost(port, c.token, `127.0.0.1:${port}`)).toBe(200);
+  });
+
+  test("a rebound page's name, or a port outside the links, is still refused", async () => {
+    const c = newHostClient("i-link");
+    const { port } = await bridgeWithHosts({ "i-link": c.record });
+    expect(await statusWithHost(port, c.token, `evil.example:${LINK_HOST_PORT_BASE}`)).toBe(403);
+    expect(await statusWithHost(port, c.token, `127.0.0.1:${LINK_HOST_PORT_BASE + LINK_HOST_PORT_SPAN}`)).toBe(403);
+  });
+});

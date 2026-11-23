@@ -9,6 +9,7 @@
 import { lazy } from "react";
 import { usePathname } from "next/navigation";
 import { EvalsApp, type EvalsPage, type EvalsPages } from "@platform/evals/react";
+import { namedExport } from "../../lib/lazyNamed";
 import { AuthGuard } from "../../components/AuthGuard";
 import { CodecastEvalsProvider } from "../../components/evals/host";
 import "@platform/evals/react/tokens.css";
@@ -20,8 +21,8 @@ const page = <V extends "sim" | "sim-run">(load: () => Promise<EvalsPage<V>>) =>
 
 /** Codecast's own views: the Multiplayer sim. */
 const SIM_PAGES: EvalsPages = {
-  sim: page(() => import("../../components/evals/pages/SimCatalogPage").then((m) => m.SimCatalogPage)),
-  "sim-run": page(() => import("../../components/evals/pages/SimRunPage").then((m) => m.SimRunPage)),
+  sim: page(() => namedExport(() => import("../../components/evals/pages/SimCatalogPage"), "SimCatalogPage")),
+  "sim-run": page(() => namedExport(() => import("../../components/evals/pages/SimRunPage"), "SimRunPage")),
 };
 
 export default function EvalsPage() {

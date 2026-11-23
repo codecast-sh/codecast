@@ -15,7 +15,7 @@ import { spawn, spawnSync } from "./proc.js";
 import { deployStepCommand, LINE_DEPLOY_GRAPH, LINE_DEPLOY_STEP_LABELS, LINE_DEPLOY_STEPS, type LineDeployProfile, type LineDeployStep } from "@codecast/shared/contracts/lineDeploy";
 import { resolveCastInvocation } from "./castInvocation.js";
 import type { ResolvedLineProfile } from "./lineProfile.js";
-import { targetFromLineDeploy, type DeployTarget } from "@codecast/shared/contracts/deployTargets";
+import { targetFromLineDeploy, type DeployTarget, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 
 export type DeployStageReply = {
   project: { _id: string; short_id: string | null; title: string | null };
@@ -59,6 +59,19 @@ export function originHead(root: string): { sha: string | null; branch: string }
   return { sha: sha.status === 0 ? String(sha.stdout).trim() : null, branch };
 }
 
+/**
+ * The commit `cast deploy --sha` names, in full, when it is on origin's default branch (fetched by originHead): a
+ * deploy makes only a commit of the default branch live. An error in words otherwise.
+ */
+export function pinnedSha(root: string, named: string, branch: string): { sha: string } | { error: string } {
+  const full = spawnSync("git", ["rev-parse", "--verify", "--quiet", `${named}^{commit}`], { cwd: root, encoding: "utf-8" });
+  const sha = full.status === 0 ? String(full.stdout).trim() : "";
+  if (!sha) return { error: `${named} is not a commit in this checkout: fetch it, or name it by a longer sha` };
+  const on = spawnSync("git", ["merge-base", "--is-ancestor", sha, `origin/${branch}`], { cwd: root, encoding: "utf-8" });
+  if (on.status !== 0) return { error: `${sha.slice(0, 10)} is not on origin/${branch}: a deploy makes a commit of the default branch live, so land it there first` };
+  return { sha };
+}
+
 /** The stage in words, for `cast line deploy`. */
 export function formatStage(s: DeployStageReply): string {
   const out: string[] = [];
@@ -89,7 +102,17 @@ export function formatDeploy(d: any): string {
     `${d.short_id}  ${d.target}${d.sha ? ` ${String(d.sha).slice(0, 10)}` : ""}  ${d.status}`,
     `went live ${when(d.live_at)} · started by ${d.started_by?.name ?? d.source} (${d.trigger}) · reported by ${d.source}${d.url ? ` · ${d.url}` : ""}`,
   ];
+  if (d.pushed_via || d.machine || d.dirty) {
+    const from = [d.pushed_via ? `pushed by ${d.pushed_via}` : "pushed", d.machine ? `on ${d.machine}` : null].filter(Boolean).join(" ");
+    out.push(`${from}${d.dirty ? ` · ${d.dirty} uncommitted file${d.dirty === 1 ? "" : "s"} went out with ${String(d.sha ?? "").slice(0, 7)}` : ""}`);
+  }
   if (d.steps?.length) out.push(formatSteps(d.steps));
+  // What the push put on the surface and took off it, by name (prod-diff).
+  for (const [label, names] of [["added", d.adds], ["dropped", d.drops]] as const) {
+    if (!names?.length) continue;
+    out.push("", `${label} ${names.length}`, ...names.slice(0, 20).map((n: string) => `  ${n}`));
+    if (names.length > 20) out.push(`  … and ${names.length - 20} more`);
+  }
   out.push("", `carried ${d.carries.length}`);
   for (const c of d.carries) {
     const p = d.after?.problems?.find((x: any) => x.task_id === c.task_id);
@@ -264,15 +287,23 @@ const JOB_PASSED = new Set(["success", "neutral"]);
 
 export type GhJob = { name: string; status: string; conclusion: string | null; databaseId?: number; url?: string };
 
-/** Where the named jobs of a run stand: all passed, one failed, or still going. A skipped or cancelled job fails: the step it stands for did not happen. */
-export function jobsVerdict(jobs: GhJob[], names: string[], runDone: boolean): { state: "passed" | "failed" | "waiting"; detail: string } {
+/**
+ * Where the named jobs of a run stand: all passed, one failed, or still going. A job the workflow skipped (its `if:`
+ * said no) passes and says "skipped by the workflow", unless the run failed: then it was skipped because a job it
+ * needs failed, and it fails. Which of the two it was is known only once the run ends, so until then a skipped job
+ * waits. A cancelled one fails: the step it stands for did not happen.
+ */
+export function jobsVerdict(jobs: GhJob[], names: string[], runDone: boolean, runConclusion?: string | null): { state: "passed" | "failed" | "waiting"; detail: string } {
   const picked = names.map((n) => ({ name: n, job: jobs.find((j) => j.name === n || j.name.startsWith(`${n} `) || j.name.startsWith(`${n} /`)) }));
-  const failed = picked.find((p) => p.job && p.job.status === "completed" && !JOB_PASSED.has(p.job.conclusion ?? ""));
+  const skippedByFailure = picked.find((p) => p.job?.status === "completed" && p.job.conclusion === "skipped" && runDone && runConclusion && runConclusion !== "success");
+  if (skippedByFailure) return { state: "failed", detail: `${skippedByFailure.name} was skipped: the run ended ${runConclusion}, so a job it needs did not pass` };
+  const failed = picked.find((p) => p.job && p.job.status === "completed" && p.job.conclusion !== "skipped" && !JOB_PASSED.has(p.job.conclusion ?? ""));
+  const skippedEarly = picked.find((p) => p.job?.status === "completed" && p.job.conclusion === "skipped" && !runDone);
   if (failed) return { state: "failed", detail: `${failed.name} ended ${failed.job!.conclusion}${failed.job!.url ? ` (${failed.job!.url})` : ""}` };
   const missing = picked.filter((p) => !p.job);
   if (missing.length && runDone) return { state: "failed", detail: `the run finished with no job named ${missing.map((p) => p.name).join(", ")}` };
-  if (missing.length || picked.some((p) => p.job!.status !== "completed")) return { state: "waiting", detail: picked.map((p) => `${p.name}: ${p.job ? p.job.conclusion ?? p.job.status : "not started"}`).join(", ") };
-  return { state: "passed", detail: picked.map((p) => `${p.name}: ${p.job!.conclusion}`).join(", ") };
+  if (missing.length || skippedEarly || picked.some((p) => p.job!.status !== "completed")) return { state: "waiting", detail: picked.map((p) => `${p.name}: ${p.job ? p.job.conclusion ?? p.job.status : "not started"}`).join(", ") };
+  return { state: "passed", detail: picked.map((p) => `${p.name}: ${p.job!.conclusion === "skipped" ? "skipped by the workflow" : p.job!.conclusion}`).join(", ") };
 }
 
 /**
@@ -301,7 +332,7 @@ export async function followJobs(opts: {
     const r = gh(["run", "view", run.id, "--repo", run.repo, "--json", "status,conclusion,jobs"]);
     if (r.code === 0) {
       const view = JSON.parse(r.out);
-      const v = jobsVerdict(view.jobs ?? [], opts.jobs, view.status === "completed");
+      const v = jobsVerdict(view.jobs ?? [], opts.jobs, view.status === "completed", view.conclusion);
       if (v.detail !== last) { log(v.detail); last = v.detail; }
       if (v.state === "passed") return 0;
       if (v.state === "failed") {
@@ -447,9 +478,8 @@ export function targetDeployProfile(t: DeployTarget, action: "deploy" | "redeplo
     target: t.name,
     trigger: "person",
     ...(t.live.kind !== "marker" ? { live: "cast line deploy await-live $deploy" } : {}),
-    // A rollback puts an earlier version back: what a release waits on and follows with does not apply to it.
-    ...(action !== "rollback" && t.ci ? { ci: t.ci } : {}),
-    ...(action !== "rollback" && t.finish ? { finish: t.finish } : {}),
+    // A rollback puts an earlier version back: the steps a release waits on and follows with do not apply to it.
+    ...(action !== "rollback" ? Object.fromEntries((["ci", "gate", "rollout", "finish"] as const).flatMap((k) => (t[k] ? [[k, t[k]]] : []))) : {}),
   };
 }
 
@@ -482,13 +512,38 @@ export async function awaitLive(opts: { deploy: string; read: DeployRead; sleep?
 }
 
 /** The targets view in words, for `cast line deploy targets`. */
-export function formatTargets(view: { targets: any[] }): string {
+/** "just now", "3m ago", "5h ago", "2d ago". */
+function agoWords(ms: number): string {
+  const m = Math.floor(Math.max(0, ms) / 60_000);
+  if (m < 1) return "just now";
+  if (m < 60) return `${m}m ago`;
+  const h = Math.floor(m / 60);
+  return h < 24 ? `${h}h ago` : `${Math.floor(h / 24)}d ago`;
+}
+
+/** A target's dev push (a dev watcher's push of a working tree after the live deploy) in one line, as the Deploys
+ *  page says it: `uncommitted push · ana-mac · Ana · 3m ago · 2 files`. */
+export function devPushLine(p: TargetDevPush, now: number = Date.now()): string {
+  return [
+    p.dirty > 0 ? "uncommitted push" : `dev push of ${p.sha.slice(0, 7)}`,
+    p.machine,
+    p.by,
+    agoWords(now - p.at),
+    p.dirty > 0 ? `${p.dirty} ${p.dirty === 1 ? "file" : "files"}` : null,
+    p.adds_count ? `added ${p.adds_count}` : null,
+    p.drops_count ? `dropped ${p.drops_count}` : null,
+  ].filter(Boolean).join(" · ");
+}
+
+export function formatTargets(view: { targets: any[] }, now: number = Date.now()): string {
   if (!view.targets.length) return "No deploy targets published. Declare one as a [[target]] in .codecast/deploy.toml, then: cast line deploy targets --publish";
   const out: string[] = [];
   const short = (s: string | null | undefined) => (s ? s.slice(0, 9) : "-");
   for (const t of view.targets) {
     const live = t.live ? `${t.live.short_id} ${short(t.live.sha)}${t.live.version ? ` ${t.live.version}` : ""}, ${new Date(t.live.live_at ?? t.live.created_at).toLocaleString()}` : "nothing recorded live";
     out.push(`${t.name}  live: ${live}${t.open ? `  · ${t.open.short_id} ${t.open.status}` : ""}`);
+    // Prod runs someone's uncommitted work on top of the live deploy.
+    if (t.dev_push) out.push(`  ${devPushLine(t.dev_push, now)}`);
     const q = t.queue;
     if (!q.known) out.push(`  waiting: unknown (the live sha is not on main as codecast knows it)`);
     else if (!q.commits) out.push(`  nothing waiting${q.untouched ? ` (${q.untouched} commit${q.untouched === 1 ? "" : "s"} on main touch none of its paths)` : ""}`);

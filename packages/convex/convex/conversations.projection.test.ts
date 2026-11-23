@@ -297,7 +297,7 @@ describe("overlay projection — a team files as one group", () => {
     expect(liveness.conversations_mate_fresh_under_old_lead).toMatchObject({ bucket: "needs_input", below_fold: true });
     expect(projection.tally.shown.working).toBe(2);
     expect(projection.tally.shown.pinned).toBe(1);
-    expect(projection.tally.folded.needs_input).toBe(2);
+    expect(projection.tally.folded.needs_input).toBe(3);
     // The CLI stamping files the team the same way.
     _resetChildAuqProbeCacheForTests();
     const cli = await computeInboxSessions({ db: db(tables) }, ME as any, { show_all: true, projection: true });
@@ -314,8 +314,8 @@ describe("overlay projection — the fold", () => {
     conversations: [
       conv("fresh", { updated_at: EPOCH - H }),
       conv("fresh2", { updated_at: EPOCH - 2 * H }),
-      // A 13h gap: the row AT the gap is the cut (never folded itself);
-      // everything strictly below it is under the cut.
+      // A 13h gap: the first row past it is the cut, and it folds with
+      // everything older.
       conv("edge", { updated_at: EPOCH - 15 * H }),
       conv("old", { updated_at: EPOCH - 16 * H }),
       conv("old_pinned", { updated_at: EPOCH - 17 * H, inbox_pinned_at: EPOCH - 17 * H }),
@@ -326,23 +326,23 @@ describe("overlay projection — the fold", () => {
   test("fold rows stay projection members with below_fold, and shown + folded is the whole set", async () => {
     const { liveness, projection } = await computeSessionsLiveness({ db: db(foldTables()) }, ME as any);
     expect(liveness.conversations_old.below_fold).toBe(true);
-    expect(liveness.conversations_edge.below_fold).toBe(false);
+    expect(liveness.conversations_edge.below_fold).toBe(true);
     expect(liveness.conversations_fresh.below_fold).toBe(false);
     expect(liveness.conversations_old_pinned.below_fold).toBe(false); // pinned rows never fold
     expect(liveness.conversations_old_pending.below_fold).toBe(false); // queued work never folds
     const total = (t: Record<InboxBucket, number>) => Object.values(t).reduce((a, b) => a + b, 0);
     expect(total(projection.tally.shown) + total(projection.tally.folded)).toBe(Object.keys(liveness).length);
-    expect(total(projection.tally.folded)).toBe(1);
-    expect(projection.tally.folded.needs_input).toBe(1);
+    expect(total(projection.tally.folded)).toBe(2);
+    expect(projection.tally.folded.needs_input).toBe(2);
   });
 
   test("the base list keeps omitting fold rows unless show_all, and hidden_count is the fold count", async () => {
     const dflt = await computeInboxSessions({ db: db(foldTables()) }, ME as any, { show_all: false, includeLiveness: false });
     expect(dflt.sessions.map((s: any) => s._id)).not.toContain("conversations_old");
-    expect(dflt.hidden_count).toBe(1);
+    expect(dflt.hidden_count).toBe(2);
     const all = await computeInboxSessions({ db: db(foldTables()) }, ME as any, { show_all: true, includeLiveness: false });
     expect(all.sessions.map((s: any) => s._id)).toContain("conversations_old");
-    expect(all.hidden_count).toBe(1);
+    expect(all.hidden_count).toBe(2);
   });
 });
 
@@ -444,9 +444,9 @@ describe("overlay projection — truncation flags", () => {
     // plain sessions that settled an hour, two days and three days ago. The
     // plain rows keep their recent seats: the index reads plain rows only, so
     // the recent window is not even full. The 12h gap after the fresh row is
-    // the cut: the row at the gap stays shown and the one behind it folds (the
-    // show-old toggle counts it) — before the fix both were cut from the set
-    // outright, and the toggle had nothing to show.
+    // the cut: both settled rows past it fold (the show-old toggle counts
+    // them) — before the fix both were cut from the set outright, and the
+    // toggle had nothing to show.
     const tables = {
       conversations: [
         conv("older", { updated_at: EPOCH - 72 * H }),
@@ -459,9 +459,9 @@ describe("overlay projection — truncation flags", () => {
     expect(projection.truncated).toEqual(["stashed"]);
     expect(liveness.conversations_older.bucket).toBe("needs_input");
     expect(liveness.conversations_older.below_fold).toBe(true);
-    expect(liveness.conversations_old.below_fold).toBe(false);
+    expect(liveness.conversations_old.below_fold).toBe(true);
     expect(liveness.conversations_fresh.below_fold).toBe(false);
-    expect(projection.tally.folded.needs_input).toBe(1);
+    expect(projection.tally.folded.needs_input).toBe(2);
     expect(projection.tally.shown.stashed).toBe(200);
   });
 
@@ -794,12 +794,13 @@ describe("inboxForCLI path — the same placement, tallied from the stamps", () 
     // that was its only emission — so `cast sessions <subagent-id>`, which
     // lists a named child, handed the tally a stampless row and threw.
     expect(row("sub")).toMatchObject({ work_state: expect.any(String), bucket: expect.any(String), below_fold: false });
-    expect(hidden_count).toBe(1);
+    expect(row("edge")).toMatchObject({ bucket: "needs_input", below_fold: true });
+    expect(hidden_count).toBe(2);
 
     const { counts, rows } = tallyInboxRows(sessions, { showAll: true, stateFilter: null, labelByConv: new Map() });
     expect(counts.needs_input).toBe(5);
     expect(counts.pinned).toBe(1);
-    expect(counts.below_fold).toBe(1);
+    expect(counts.below_fold).toBe(2);
     expect(counts.total).toBe(5);
     expect(rows.find((r) => r.id === "conversations_q")).toMatchObject({ bucket: "questions", below_fold: false });
     expect(rows.find((r) => r.id === "conversations_old")).toMatchObject({ below_fold: true });

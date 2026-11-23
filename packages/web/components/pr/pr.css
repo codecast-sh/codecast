@@ -182,3 +182,168 @@
     display: none;
   }
 }
+
+/* Production: a merged pull request's band under the figures, one row per
+ * deploy target. Label on the left like a figure's; each row reads target,
+ * state, what it rests on, then the press at the right edge. Rows share one
+ * grid, so their states and presses line up down the band. */
+.pr-deploy {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: baseline;
+  gap: 0.25rem 1.25rem;
+  padding-top: 0.75rem;
+  border-top: 1px dashed color-mix(in srgb, var(--sol-border) 70%, transparent);
+}
+.pr-deploy-label {
+  padding-top: 0.2rem;
+}
+.pr-deploy-rows {
+  display: grid;
+  grid-template-columns: max-content max-content minmax(0, 1fr) auto;
+  align-items: baseline;
+  gap: 0.35rem 0.9rem;
+  font-size: 12px;
+  min-width: 0;
+}
+.pr-deploy-row {
+  display: contents;
+}
+.pr-deploy-name {
+  font-weight: 600;
+  color: var(--sol-text);
+  text-decoration: none;
+}
+.pr-deploy-name:hover {
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, currentColor 40%, transparent);
+  text-underline-offset: 2px;
+}
+.pr-deploy-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 500;
+  white-space: nowrap;
+}
+.pr-deploy-state > svg {
+  align-self: center;
+}
+.pr-deploy-detail {
+  display: block;
+  overflow: hidden;
+  color: var(--sol-text-muted);
+  min-width: 0;
+}
+/* Every part brings its separator on its left, inside a gutter the row pulls
+ * back by the same width: the part that starts a line has its dot clipped. */
+.pr-deploy-parts {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  row-gap: 0.15rem;
+  margin-left: -0.9rem;
+}
+.pr-deploy-part {
+  position: relative;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.25rem;
+  padding-left: 0.9rem;
+}
+.pr-deploy-part::before {
+  content: "·";
+  position: absolute;
+  left: 0.32rem;
+  color: color-mix(in srgb, var(--sol-text-dim) 60%, transparent);
+}
+.pr-deploy-note {
+  grid-column: 3 / 4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+}
+.pr-deploy-act {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  white-space: nowrap;
+  align-self: center;
+}
+.pr-deploy-row--idle > * {
+  opacity: 0.75;
+}
+.pr-deploy-go {
+  font-size: 12px;
+  font-weight: 600;
+  padding: 3px 11px;
+  border-radius: 7px;
+  border: 1px solid color-mix(in srgb, var(--sol-blue) 60%, transparent);
+  background: var(--sol-blue);
+  color: #fff;
+  cursor: pointer;
+}
+.pr-deploy-go:hover {
+  filter: brightness(1.08);
+}
+.pr-deploy-go:focus-visible,
+.pr-deploy-open:focus-visible {
+  outline: 2px solid var(--pr-accent);
+  outline-offset: 2px;
+}
+.pr-deploy-open {
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 6px;
+  color: var(--sol-text-dim);
+}
+.pr-deploy-open:hover {
+  color: var(--sol-text);
+  background: color-mix(in srgb, var(--sol-text-dim) 14%, transparent);
+}
+/* Static: the colour says running. */
+.pr-deploy-ci-run {
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--sol-yellow);
+}
+
+/* A narrow page stacks each row: target and state on one line, what it rests
+ * on under them, the press last. */
+@container (max-width: 720px) {
+  .pr-deploy {
+    grid-template-columns: 1fr;
+  }
+  .pr-deploy-rows {
+    grid-template-columns: max-content minmax(0, 1fr);
+  }
+  .pr-deploy-detail,
+  .pr-deploy-note,
+  .pr-deploy-act {
+    grid-column: 1 / -1;
+  }
+  .pr-deploy-act {
+    justify-content: flex-start;
+    padding-bottom: 0.35rem;
+  }
+  /* Stacked, the target's name is the way to its deploys; the arrow alone would take a line. */
+  .pr-deploy-open {
+    display: none;
+  }
+}
+.pr-deploy-dp {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11.5px;
+  color: var(--sol-text-muted);
+  text-decoration: none;
+  border-bottom: 1px dotted color-mix(in srgb, currentColor 45%, transparent);
+}
+.pr-deploy-dp:hover {
+  color: var(--sol-text);
+  border-bottom-style: solid;
+}

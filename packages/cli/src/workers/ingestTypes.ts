@@ -7,7 +7,7 @@ export const INGEST_PAGE_BYTES = 256 * 1024;
 export const INGEST_PAGE_TOKENS = 128;
 export const INGEST_STRING_CHUNK = 8192;
 export const INGEST_MAX_BYTES = 128 * 1024 * 1024;
-export const INGEST_CLIENTS = ['claude','cursor','cursorDb','codex','gemini','opencode','pi','grok','muse'] as const;
+export const INGEST_CLIENTS = ['claude','cursor','cursorDb','codex','gemini','opencode','pi','grok','muse','antigravity'] as const;
 export type IngestIdentity = { dev: number; ino: number; birthtimeMs: number; mtimeMs: number; ctimeMs: number; size: number };
 /** `mirror`: the file is a cloud agent's mirror (cloudAgents/transcript.ts) for a session that runs under `client`, not the client's own transcript. */
 export type IngestJob = { client: typeof INGEST_CLIENTS[number]; file: string; sessionId: string; generation: string; identity: IngestIdentity; walIdentity?: IngestIdentity | null; offset: number; model?: string; modelKnown?: boolean; recoverBackup?: boolean; mirror?: boolean };

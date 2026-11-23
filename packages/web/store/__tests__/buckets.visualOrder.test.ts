@@ -106,15 +106,15 @@ describe("visualOrder follows the active view mode", () => {
   // the SAME set. (Membership only applies to real Convex ids — stubs are the
   // create_stub overlay — hence the 32-char fixtures.)
   const LIVE_ID = "live".padEnd(32, "0"); // fresh activity: above the fold
-  const EDGE_ID = "edge".padEnd(32, "2"); // at the fold cut: stays visible
-  const OLD_ID = "olds".padEnd(32, "1");  // past the cut → folded ("old")
+  const EDGE_ID = "edge".padEnd(32, "2"); // oldest row before the gap: stays visible
+  const OLD_ID = "olds".padEnd(32, "1");  // first row past the gap → folded ("old")
   for (const mode of ["grouped", "bucket"] as const) {
     it(`${mode} mode skips "old" (folded) sessions when show_old is off, matching the render`, () => {
       const now = Date.now();
       const sessions = {
         [LIVE_ID]: session(LIVE_ID, { message_count: 3, updated_at: now, git_root: "/x/web" }),
-        [EDGE_ID]: session(EDGE_ID, { message_count: 3, updated_at: now - 13 * 60 * 60 * 1000, git_root: "/x/web" }),
-        [OLD_ID]: session(OLD_ID, { message_count: 3, updated_at: now - 14 * 60 * 60 * 1000, git_root: "/x/web" }),
+        [EDGE_ID]: session(EDGE_ID, { message_count: 3, updated_at: now - 11 * 60 * 60 * 1000, git_root: "/x/web" }),
+        [OLD_ID]: session(OLD_ID, { message_count: 3, updated_at: now - 24 * 60 * 60 * 1000, git_root: "/x/web" }),
       };
       // show_old off (the default): the folded card is hidden on screen, so nav
       // drops it too.

@@ -28,7 +28,8 @@
       "usesAppleSignIn": true,
       "associatedDomains": [
         "applinks:codecast.sh",
-        "applinks:www.codecast.sh"
+        "applinks:www.codecast.sh",
+        "webcredentials:codecast.sh"
       ],
       "infoPlist": {
         "UIBackgroundModes": [

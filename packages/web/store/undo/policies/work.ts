@@ -611,6 +611,16 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   // A code review thread: the flag flips both ways, and the server's call
   // settles the whole thread, so the undo names the rows that flipped and is
   // refused whole if one of them changed since.
+  // One comment on a published page's discussion: the flag flips both ways.
+  resolvePageComment: {
+    spec: {
+      label: (ctx) => (ctx.args[2] ? "Resolved a page comment" : "Reopened a page comment"),
+      inverse: (ctx) => {
+        const [artifactId, commentId, resolved] = ctx.args as [string, string, boolean];
+        return [call("resolvePageComment", artifactId, commentId, !resolved)];
+      },
+    },
+  },
   resolveCodeCommentThread: {
     spec: {
       label: (ctx) => (ctx.args[1] ? "Resolved a review thread" : "Reopened a review thread"),

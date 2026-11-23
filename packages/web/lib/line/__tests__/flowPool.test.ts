@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { appPool, CHANGE_FLOW_SLUG, defaultFlowOf } from "../flowPool";
+import { appPool } from "../flowPool";
+import { CHANGE_FLOW_SLUG, defaultFlowOf } from "@codecast/shared/contracts/flowPool";
 
 const row = (over: Record<string, unknown>) => ({
   _id: String(over.slug), slug: "x", name: "x",

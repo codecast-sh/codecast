@@ -2,7 +2,8 @@
 
 import React, { memo, useMemo, useRef, useState } from "react";
 import { useLayoutFlag } from "../hooks/useOverflows";
-import { Check, ChevronDown, Copy, X } from "lucide-react";
+import { Check, ChevronDown, Copy, Maximize2, X } from "lucide-react";
+import { useDecisionOpener } from "../lib/decisionOpenRegistry";
 import { toast } from "sonner";
 import { threadStateAskParts, type ThreadStateRow } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
@@ -65,6 +66,10 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
   const prSig = useInboxStore((s) => sessionPullRequestsSig(s as any, conversationId));
   const linkedPrs = useMemo(() => titledSessionPullRequests(useInboxStore.getState() as any, conversationId), [prSig, conversationId]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // The decision docked under this panel, when there is one: the `You` line
+  // usually names it ("answer the card…"), so pressing the line opens it.
+  const openDecision = useDecisionOpener(conversationId);
+
   const toggle = () =>
     useInboxStore.getState().updateClientUI({ thread_state_collapsed: !collapsed });
 
@@ -105,6 +110,7 @@ export const ThreadStatePanel = memo(function ThreadStatePanel({
       messageCount={messageCount}
       now={now}
       collapsed={collapsed}
+      onOpenDecision={openDecision ?? undefined}
       prStatus={prStatus}
       linkedPrs={linkedPrs}
       onToggle={toggle}
@@ -130,6 +136,7 @@ export function ThreadStatePanelView({
   linkedPrs = [],
   onToggle,
   onClear,
+  onOpenDecision,
 }: {
   conversationId: string;
   threadState?: string | null;
@@ -143,6 +150,8 @@ export function ThreadStatePanelView({
   linkedPrs?: readonly LinkedPr[];
   onToggle: () => void;
   onClear?: (headline: string) => void;
+  /** Opens the decision docked below, when the thread has one open. */
+  onOpenDecision?: () => void;
 }) {
   // Long states expand in place instead of scrolling inside the panel: the body
   // clamps at a readable height, and when the text runs past it a "Show all"
@@ -264,7 +273,7 @@ export function ThreadStatePanelView({
                 ref={bodyRef}
                 className={`relative overflow-hidden transition-[max-height] duration-300 ${expanded ? "max-h-[1200px]" : "max-h-64"}`}
               >
-                <StateRows rows={view.rows} />
+                <StateRows rows={view.rows} onOpenDecision={onOpenDecision} />
                 {overflows && !expanded && (
                   <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-sol-bg-alt to-transparent" />
                 )}
@@ -299,7 +308,7 @@ const LEADING_TIME = /^((?:(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,?\s+)?\d{1,2}(?
 const items = (text: string) => text.split(/\s+·\s+/).map((s) => s.trim()).filter(Boolean);
 
 /** The lines under the headline: a narrow label column and the line beside it. */
-function StateRows({ rows }: { rows: ThreadStateRow[] }) {
+function StateRows({ rows, onOpenDecision }: { rows: ThreadStateRow[]; onOpenDecision?: () => void }) {
   return (
     <div className="grid grid-cols-[max-content_minmax(0,1fr)] gap-x-3 gap-y-1 text-[12.5px] leading-normal break-words">
       {rows.map((row, i) => {
@@ -310,7 +319,7 @@ function StateRows({ rows }: { rows: ThreadStateRow[] }) {
               {row.label}
             </span>
             {ask ? (
-              <AskLine text={row.text} />
+              <AskLine text={row.text} onOpenDecision={onOpenDecision} />
             ) : row.label === "Done" ? (
               <span className="min-w-0 text-sol-text-muted">
                 {items(row.text).map((item, j) => (
@@ -345,12 +354,33 @@ function StateRows({ rows }: { rows: ThreadStateRow[] }) {
 }
 
 /** The ask, at full contrast on an amber wash. A command that ends it gets a
- *  line of its own and a copy button. */
-function AskLine({ text }: { text: string }) {
+ *  line of its own and a copy button. With a decision open below, the prose
+ *  opens it: the line says "answer the card", so it is the way to the card. */
+function AskLine({ text, onOpenDecision }: { text: string; onOpenDecision?: () => void }) {
   const { prose, command } = threadStateAskParts(text);
   return (
     <div className="min-w-0 -ml-2 rounded-md border border-sol-yellow/20 bg-sol-yellow/[0.08] px-2 py-1 text-sol-text">
-      {prose && <RowText text={prose} />}
+      {prose && (onOpenDecision ? (
+        // The prose may hold live pills (links), which cannot sit inside a
+        // button: the row takes the click unless a pill inside took it, and
+        // Open is the real control for the keyboard.
+        <div
+          onClick={(e) => { if (!(e.target as HTMLElement).closest("a, button")) onOpenDecision(); }}
+          title="Open the decision"
+          className="group/ask flex min-w-0 cursor-pointer items-start gap-2"
+        >
+          <span className="min-w-0 flex-1 group-hover/ask:underline"><RowText text={prose} /></span>
+          <button
+            type="button"
+            onClick={onOpenDecision}
+            data-state-open-decision
+            className="mt-px inline-flex shrink-0 items-center gap-1 rounded px-1 text-meta font-semibold text-sol-yellow hover:bg-sol-yellow/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring/60"
+          >
+            <Maximize2 className="h-3 w-3" strokeWidth={2.2} />
+            Open
+          </button>
+        </div>
+      ) : <RowText text={prose} />)}
       {command && (
         <div className={`flex min-w-0 overflow-hidden rounded border border-sol-border/40 bg-sol-bg/70 ${prose ? "mt-1" : ""}`}>
           <code className="min-w-0 flex-1 whitespace-pre-wrap break-all px-2 py-0.5 text-meta leading-relaxed text-sol-text-secondary">

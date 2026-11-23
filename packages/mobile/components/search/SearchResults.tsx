@@ -20,13 +20,12 @@ import {
 import { objectKindLabel, type ObjectHit as ObjectHitRow, type ObjectKind } from '@codecast/web/hooks/useObjectSearch';
 import type { SessionSearchRow } from '@codecast/web/lib/instantSessionSearch';
 import { memberAvatarUrl, memberDisplayName } from '@codecast/web/lib/liveEntities';
-import { CODECAST_BASE_URL } from '@codecast/shared/entities';
 import { Text as RNText } from '@/components/Themed';
 import { BottomSheet } from '@/components/BottomSheet';
 import { ChatAvatar } from '@/components/chat/MessageRow';
 import { SessionListSkeleton } from '@/components/SkeletonLoader';
 import { useActiveTeamFeature } from '@/lib/teamFeatures';
-import { mobileRouteForUrl, openAppRoute, openWebPage } from '@/lib/links';
+import { mobileRouteForUrl, openAppRoute } from '@/lib/links';
 import { CHROME_FONT_CAP, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { SessionHit } from './SessionHit';
 import { ObjectHit } from './ObjectHit';
@@ -110,10 +109,8 @@ export function SearchResults({ query, onOpenSession }: {
   const patch = useCallback((p: Partial<SearchFilters>) => { setFilters((f) => ({ ...f, ...p })); setLimit(SEARCH_PAGE_SIZE); }, []);
 
   const openObject = useCallback((hit: ObjectHitRow) => {
-    const route = hit.external ? null : mobileRouteForUrl(hit.href);
+    const route = mobileRouteForUrl(hit.href);
     if (route) openAppRoute(router, route);
-    // A kind the phone has no screen for yet opens its web page in the sheet.
-    else void openWebPage(/^https?:/i.test(hit.href) ? hit.href : `${CODECAST_BASE_URL}${hit.href}`);
   }, [router]);
   const openChat = useCallback((permalink: string) => {
     const route = mobileRouteForUrl(permalink);

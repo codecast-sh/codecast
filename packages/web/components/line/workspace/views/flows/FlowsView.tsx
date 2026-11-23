@@ -9,14 +9,15 @@ import { useContext, useMemo, useState, type ReactNode } from "react";
 import { journeyOf, journeyWords, readableWhy } from "../../../../../lib/ship/journey";
 
 /** The run-state tone the pill styles know, for a journey's tone. */
-const JOURNEY_TONE: Record<string, string> = { idle: "running", working: "running", agent: "running", session: "waiting", you: "waiting", ok: "passed", bad: "stopped" };
+const JOURNEY_TONE: Record<string, string> = { idle: "running", working: "running", agent: "running", session: "waiting", you: "waiting", wait: "waiting", ok: "passed", bad: "stopped" };
 import Link from "next/link";
 import { useSyncWorkflowRun, useTeamDefaultFlowSlug } from "../../../../../hooks/useSyncWorkflows";
 import { useFlowLibrary, type FlowRun as Run } from "../../../../../hooks/useFlowLibrary";
 import { useOwnedFlows } from "../../../../../hooks/useOwnedFlows";
 import { useSessionFlows, type LiveFlow, type SessionFlow } from "../../../../../hooks/useLiveFlow";
 import { useInboxStore } from "../../../../../store/inboxStore";
-import { appPool, CHANGE_FLOW_SLUG, defaultFlowOf, flowBySlug, flowRowPath, pushedFlow, takesSessionChange, type AppFlow } from "../../../../../lib/line/flowPool";
+import { appPool, flowBySlug, flowRowPath, pushedFlow, type AppFlow } from "../../../../../lib/line/flowPool";
+import { CHANGE_FLOW_SLUG, defaultFlowOf, takesSessionChange } from "@codecast/shared/contracts/flowPool";
 import { changesAnything, libraryEntry, libraryFlows, type FlowLibrary, type LibraryEntry, type VariantChange } from "../../../../../lib/line/flowLibrary";
 import { liveFlowLedger, liveQueue, moveFlowLedger, startFlowLedger, type LiveQueueRow } from "../../../../../lib/line/liveFlow";
 import { scoreBand } from "../../../../../lib/line/problemScore";
@@ -352,6 +353,15 @@ function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
   const [openRunId, setOpenRunId] = useState<string | null>(null);
   const openRun = openRunId ? pickedRuns.find((r) => r._id === openRunId) ?? null : null;
   const now = workspace.now;
+  const viewerId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
+  // The cards these runs wait on, as far as the viewer's queue holds them: a run reads "Your call" only when the viewer
+  // may answer its card. A signature of who may answer each, so the view wakes only when that changes.
+  const gateIds = pickedRuns.map((r) => (r as any).gate_decision_id as string | undefined).filter((id): id is string => !!id);
+  const gateSig = useInboxStore((s) => JSON.stringify(gateIds.map((id) => {
+    const d = (s.sessionDecisions as Record<string, any>)[id];
+    return d ? [id, d.user_id ?? null, d.holder ?? null, d.passed_to ?? null, d.asked_user_ids ?? null] : null;
+  }).filter(Boolean)));
+  const decisions = useMemo(() => Object.fromEntries((JSON.parse(gateSig) as any[]).map(([id, user_id, holder, passed_to, asked_user_ids]) => [id, { user_id, holder, passed_to, asked_user_ids }])), [gateSig]);
   const pick = (slug: string) => select({ item: slug, run: null });
 
   return (
@@ -403,7 +413,7 @@ function PoolFlow({ selection, select, workspace, space }: LineViewProps) {
               {pickedRuns.slice(0, 30).map((r) => {
                 const st = flowRunState(r, picked);
                 // A session's change reads as its journey: the words its Ship control shows, not the step's own name.
-                const jw = takesSessionChange(picked) && picked.kind === "line" ? journeyWords(journeyOf(picked, r as any)) : null;
+                const jw = takesSessionChange(picked) && picked.kind === "line" ? journeyWords(journeyOf(picked, r as any, [], { id: viewerId, decision: (r as any).gate_decision_id ? decisions[(r as any).gate_decision_id] ?? null : null })) : null;
                 return (
                   <li key={r._id}>
                     <button type="button" className="flv-run" aria-current={openRun?._id === r._id ? "true" : undefined} onClick={() => setOpenRunId(openRun?._id === r._id ? null : r._id)} data-flow-run-row={r._id}>

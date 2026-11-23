@@ -304,7 +304,7 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       {/* header: one row. The face, the name, its state line, who it reports
           to; the rare controls (pause, retire) sit behind the menu, and the
           board is an icon. The composer below is Talk. */}
-      <header ref={titlebarRef} data-scope-head className={cn("scope-head-cq shrink-0 border-b", phone ? "px-2.5 py-1.5" : "px-4 py-1.5")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
+      <header ref={titlebarRef} data-scope-head className={cn("object-head-row scope-head-cq shrink-0 border-b", phone ? "px-2.5" : "px-4")} style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)", background: stateMeta ? `linear-gradient(180deg, color-mix(in srgb, ${stateMeta.color} 5%, var(--sol-bg)) 0%, var(--sol-bg) 100%)` : undefined }}>
         <div className="flex items-center gap-2 min-w-0">
           {session?.onBack ? (
             <button type="button" onClick={session.onBack} className={HEAD_ICON} style={{ color: "var(--sol-text-muted)" }} aria-label="Back to the inbox" data-scope-back="inbox">
@@ -325,13 +325,13 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
               notes. A seated role's conversation pins that line above its
               composer, so its header gives the row to the role's facts. */}
           {role && standingId ? (
-            !phone && <><RoleHeadFacts role={role} tree={tree} onOpen={panelOpen ? undefined : () => openPanelOn(scopeDefaultTab(true))} /><span className="flex-1" /></>
+            <><RoleHeadFacts role={role} tree={tree} onOpen={panelOpen ? undefined : () => openPanelOn(scopeDefaultTab(true))} /><span className="flex-1" /></>
           ) : headLine ? (
             <p className={cn("min-w-0 flex-1 truncate", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-muted)" }} title={stripeLine ?? undefined} data-scope-stripe>{headLine}</p>
           ) : (
             <p className={cn("min-w-0 flex-1 truncate italic", phone ? "text-[12px]" : "text-[12.5px]")} style={{ color: "var(--sol-text-dim)" }} data-scope-stripe>{role ? (noStanding ? "Not started yet." : "") : "Everything in the workspace."}</p>
           )}
-          {role && !standingId && !phone && <RoleHeadFacts role={role} tree={tree} onOpen={panelOpen ? undefined : () => openPanelOn(scopeDefaultTab(true))} />}
+          {role && !standingId && <RoleHeadFacts role={role} tree={tree} onOpen={panelOpen ? undefined : () => openPanelOn(scopeDefaultTab(true))} />}
           {standingId && <SeatHeadControls open={seatHeadOpen} onToggle={seatHead.onToggle} onSessionView={seat.onSessionView} />}
           {role && (
             <DropdownMenu>
@@ -368,12 +368,6 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
           <PanelToggle open={panelOpen} root={!role} onClick={() => setPanelOpen((v) => !v)} />
         </div>
       </header>
-
-      {role && phone && (
-        <div className="shrink-0 border-b px-2.5 py-1 flex min-w-0" style={{ borderColor: "color-mix(in srgb, var(--sol-border) 22%, transparent)" }}>
-          <RoleHeadFacts role={role} tree={tree} onOpen={panelOpen ? undefined : () => openPanelOn(scopeDefaultTab(true))} />
-        </div>
-      )}
 
       {role && (
         <Dialog open={retireOpen} onOpenChange={setRetireOpen}>
@@ -436,7 +430,9 @@ function retireSentence(role: OrgRole, parent: string): string {
  *  reports to, its state, what it carries, since when), and the goals it
  *  serves, kept to one line that gives way to the state line before it. Whom
  *  it reports to opens their sheet; while the panel is shut the facts open it
- *  on the overview. On a phone the row sits under the header. */
+ *  on the overview. On a phone it stays on the header row too, where the
+ *  narrow container keeps the state and drops the rest (.scope-head-cq), so
+ *  a role spends one row of chrome as a session does (ct-87448). */
 function RoleHeadFacts({ role, tree, onOpen }: { role: OrgRole; tree: OrgTree; onOpen?: () => void }) {
   const head = useRoleHead(role);
   const members = useTeamRosterIdentity() as Parameters<typeof reportsToNamed>[1];

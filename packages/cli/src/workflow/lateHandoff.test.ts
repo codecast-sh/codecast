@@ -6,10 +6,11 @@
 // node's timeout. The hand reads finished with no pin, the runner asks it for
 // its handoff, and it pins dormant on the check, which holds it until it hands
 // off or the node times out.
-import { describe, test, expect, beforeEach, afterEach, setSystemTime } from "bun:test";
+import { describe, test, expect, beforeEach, afterEach, setSystemTime, spyOn } from "bun:test";
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
+import nodeOs from "node:os";
 import { parseWorkflowSource } from "./parser.js";
 import { runWorkflow, type RunOptions } from "./runner.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
@@ -21,9 +22,9 @@ const builders = ["implement", "implement_line"];
 
 // The station with the shipped line's own edges out of it, between a start and
 // the two places they lead: verify, and the stopped exit.
-const graphFor = (id: string) => parseWorkflowSource(`digraph line {
+const graphFor = (id: string, timeout = 600) => parseWorkflowSource(`digraph line {
   start [shape=Mdiamond]
-  ${id} [label="Build", backend=session, agent=claude, timeout=600, prompt="build it"]
+  ${id} [label="Build", backend=session, agent=claude, timeout=${timeout}, prompt="build it"]
   verify [shape=parallelogram, script="true"]
   exit [shape=Msquare]
   stopped [shape=Msquare, label="Stopped", stop="$handoff_note"]
@@ -49,6 +50,12 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
   let pinned: { state: string; status: string };
   // Inbox reads on which the hand sits parked on a usage limit.
   let limitReads: (n: number) => boolean;
+  // A jump is time the machine was awake: the node's clock runs on
+  // performance.now(), which setSystemTime leaves alone (parkedClock.ts).
+  let awakeShift: number;
+  let awakeSpy: { mockRestore(): void };
+  let loadSpy: { mockRestore(): void } | undefined;
+  const jump = (ms: number) => { setSystemTime(new Date(Date.now() + ms)); awakeShift += ms; };
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-wf-late-"));
@@ -65,6 +72,9 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     jumpMs = 0;
     pinned = { state: "", status: "" };
     limitReads = () => false;
+    awakeShift = 0;
+    const realAwake = performance.now.bind(performance);
+    awakeSpy = spyOn(performance, "now").mockImplementation(() => realAwake() + awakeShift);
     globalThis.fetch = (async (url: any, init: any) => {
       const route = String(url).replace(/^https?:\/\/[^/]+/, "");
       const body = JSON.parse(init?.body || "{}");
@@ -73,7 +83,7 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
       if (route === "/cli/spawn") return reply({ conversation_id: "conv_hand", short_id: "jx7hand" });
       if (route === "/cli/inbox") {
         reads++;
-        if (reads === jumpAt) setSystemTime(new Date(Date.now() + jumpMs));
+        if (reads === jumpAt) jump(jumpMs);
         if (reads === handoffAt) task = { ...task, status: "in_review", execution_status: handoffStatus, verification_evidence: "cannot build: x" };
         // The hand ended its turn on a backgrounded check: live, needs input, nothing pinned.
         return reply({ sessions: [{ id: "conv_hand", work_state: "needs_input", is_live: true, message_count: 40, ...(limitReads(reads) ? { blocked_on: "limit" } : {}) }] });
@@ -87,13 +97,16 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
   });
 
   afterEach(() => {
+    loadSpy?.mockRestore();
+    loadSpy = undefined;
     setSystemTime();
+    awakeSpy.mockRestore();
     globalThis.fetch = origFetch;
     console.log = origLog;
     fs.rmSync(tmpDir, { recursive: true });
   });
 
-  const run = (id: string) => runWorkflow(graphFor(id), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
+  const run = (id: string, timeout?: number) => runWorkflow(graphFor(id, timeout), { cwd: tmpDir, runId: "run-1", runSession: "conv_run", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1 } as RunOptions);
   const reached = (id: string) => calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === id);
   const failReason = () => calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.fail_reason).map((c) => String(c.body.fail_reason)).pop() ?? "";
 
@@ -138,7 +151,55 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
     expect(reads).toBe(5);
     // The node's failed report is what stops its hand (workflow_runs.stopStationHands).
     expect(calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_id === id && c.body.node_status === "failed")).toBe(true);
-    expect(failReason()).toContain("killed after 10m");
+    expect(failReason()).toContain("ran 10m, its station's limit");
+    expect(failReason()).toMatch(/^hand jx7hand killed after \d+m at \w+ \(it ran 10m, its station's limit\)$/);
+  }, 30000);
+
+  // A hand waiting on work it declared shows no transcript growth for as long as the work takes, and lives to its
+  // cap (Implement and Prove set timeout=10800), never only the 30-minute quiet window.
+  const waits: Array<[string, (n: number) => Record<string, unknown>]> = [
+    ["pins dormant on its check", () => ({})],
+    ["reads waiting on its background work", (n) => n >= 2 ? { work_state: "dormant", agent_status: "waiting" } : {}],
+    ["has a daemon gone dark", (n) => n >= 2 ? { is_live: false } : {}],
+    ["reads dormant on its own dormant pin", (n) => {
+      if (n >= 2) pinned = { state: "Waiting on the eval replay", status: "dormant" };
+      return n >= 2 ? { work_state: "dormant", is_live: true } : {};
+    }],
+  ];
+  test.each(waits)("a hand that %s for 45 minutes is not killed, and routes on its handoff after", async (_, rowAt) => {
+    // An idle machine: a loaded one stretches the quiet window past 45 minutes, and the test would prove nothing.
+    loadSpy = spyOn(nodeOs, "loadavg").mockReturnValue([0, 0, 0]);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const res = await realFetch(url, init);
+      if (!String(url).endsWith("/cli/inbox")) return res;
+      const body = await res.json();
+      Object.assign(body.sessions[0], rowAt(reads));
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    jumpAt = 5;
+    jumpMs = 45 * 60_000;
+    handoffAt = 8;
+    expect(await run("implement", 10800)).toBe("completed");
+    expect(reached("verify")).toBe(true);
+    expect(failReason()).not.toContain("killed after");
+  }, 30000);
+
+  test("a snoozed hand that declared no wait is killed at its quiet window, not its cap", async () => {
+    // A person's snooze (or a filed rest, or a standing trigger) reads dormant with nothing at work and no dormant pin.
+    loadSpy = spyOn(nodeOs, "loadavg").mockReturnValue([0, 0, 0]);
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: any, init: any) => {
+      const res = await realFetch(url, init);
+      if (!String(url).endsWith("/cli/inbox")) return res;
+      const body = await res.json();
+      Object.assign(body.sessions[0], { work_state: "dormant", agent_status: "idle" });
+      return new Response(JSON.stringify(body), { status: 200 });
+    }) as typeof fetch;
+    jumpAt = 5;
+    jumpMs = 45 * 60_000;
+    expect(await run("implement", 10800)).toBe("failed");
+    expect(failReason()).toMatch(/^hand jx7hand killed after \d+m at implement \(it showed no work for 30m\)$/);
   }, 30000);
 
   test.each(builders)("%s: a hand parked on its task's wait outlives the node's timeout and routes on its handoff after", async (id) => {
@@ -235,6 +296,7 @@ describe("workflow/runner (a builder's handoff lands after its turn ends)", () =
       return new Response(JSON.stringify(body), { status: 200 });
     }) as typeof fetch;
     expect(await run(id)).toBe("failed");
-    expect(failReason()).toContain("killed after 10m");
+    expect(failReason()).toContain("ran 10m, its station's limit");
+    expect(failReason()).toMatch(/^hand jx7hand killed after \d+m at \w+ \(it ran 10m, its station's limit\)$/);
   }, 30000);
 });

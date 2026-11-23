@@ -10,7 +10,9 @@
 // composing node's `above` (default 50), or Unscored when it could not be
 // judged (a script or the call failed, or the answer held no risk).
 // A flow routes on `<node>.exit`; the record is how the judge's misses are
-// counted (a change it passed that a later fix traces to).
+// counted (a change it passed that a later fix traces to). The scripts fall
+// back to origin/<default branch> where $diff_base is unset: a runner older
+// than it leaves it to the shell, which reads it empty.
 //
 //   judge [flow="judge", above=60]
 //   judge -> ship   [condition="judge.exit = low"]
@@ -19,9 +21,9 @@ digraph judge {
   graph [kind="segment", label="Judge", description="A model scores the change's risk from its diff and the repository's guidelines, blind to who made it", takes="branch", params="above=50"]
   start [shape=Mdiamond]
   guidelines [label="Guidelines", shape=parallelogram, timeout=120,
-    script="cast flow blind guidelines --base $default_branch --head $branch"]
+    script="_base=$diff_base; cast flow blind guidelines --base \"${_base:-origin/$default_branch}\" --head $branch"]
   diff [label="Diff", shape=parallelogram, timeout=120,
-    script="cast flow blind diff --base $default_branch --head $branch --redact $branch $worktree $change_session $change_conversation"]
+    script="_base=$diff_base; cast flow blind diff --base \"${_base:-origin/$default_branch}\" --head $branch --redact $branch $worktree $change_session $change_conversation"]
   judge [label="Judge", shape=note, model="claude-sonnet-5-5", max_tokens=2000, prompt="@judge/risk.md"]
   low      [shape=Msquare, label="Low risk"]
   high     [shape=Msquare, label="High risk"]

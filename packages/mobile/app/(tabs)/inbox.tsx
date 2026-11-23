@@ -1,9 +1,9 @@
-import { StyleSheet, RefreshControl, TouchableOpacity, View as RNView, ScrollView } from 'react-native';
+import { StyleSheet, RefreshControl, TouchableOpacity, View as RNView, FlatList, type ListRenderItem } from 'react-native';
 import { probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect, startTransition } from 'react';
+import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme, useAppearanceKey } from '@/constants/Theme';
@@ -16,6 +16,7 @@ import {
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels,
   sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
+import { hiddenBucketTree, killAllIds } from '@codecast/web/store/hiddenBucketTree';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
 import { DecisionsBadge } from '@/components/decisions/DecisionsBadge';
 import { useTriggers } from '@codecast/web/hooks/useSyncTriggers';
@@ -28,7 +29,8 @@ import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/
 import { bootMark } from '@/lib/bootProfile';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { holdKill, showNotice, useUndoBar } from '@/lib/undoBar';
-import { appAlert, appPrompt, showActionSheet } from '@/lib/popups';
+import { appAlert, appPrompt, showActionSheet, type SheetItem } from '@/lib/popups';
+import { closeDetail, reviewedKill } from '@/lib/sessionVerbs';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
@@ -68,6 +70,16 @@ export default function InboxScreen() {
 
 // Rows that fill a phone screen with some to spare, mounted with the list.
 const FIRST_PAINT_ROWS = 14;
+
+/** One line of the inbox list: a section's heading, a session row, or a whole
+ *  state (the skeleton, an empty inbox). The list is virtualized, so only the
+ *  lines near the screen are mounted, whatever the account holds. */
+type InboxListItem =
+  | { kind: 'header'; key: string; section: string; label: string; color?: string; count: number; collapsed: boolean }
+  | { kind: 'row'; key: string; session: InboxSession }
+  | { kind: 'node'; key: string; node: ReactNode };
+
+const inboxItemKey = (item: InboxListItem) => item.key;
 
 /** The inbox list. The tab shows it whole; a conversation's slide-out panel
  *  shows it as `panel`, where a row opens in place of the conversation
@@ -129,6 +141,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const catchingUp = useInboxStore((s) => s.livenessHeldAt != null);
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const stashSession = useInboxStore((s) => s.stashSession);
+  const closeSession = useInboxStore((s) => s.closeSession);
   const restoreSession = useInboxStore((s) => s.restoreSession);
   const pinSession = useInboxStore((s) => s.pinSession);
   // Store actions, not the raw convex mutation: the hide data-transition is
@@ -193,6 +206,13 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const handleStash = useCallback((conversationId: string) => {
     stashSession(conversationId);
   }, [stashSession]);
+
+  // Close: done looking at it, the web card's one remove (store closeSession).
+  // A turn in progress is set aside and finishes; anything else stops and
+  // files under Closed, keeping its triggers and queued messages.
+  const handleClose = useCallback((conversationId: string) => {
+    closeSession(conversationId);
+  }, [closeSession]);
 
   const handleRestore = useCallback((conversationId: string) => {
     restoreSession(conversationId);
@@ -263,21 +283,42 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     ]);
   }, []);
 
+  // One Kill for every phone surface (the menu, a Stashed row): it asks first
+  // when it would cut a turn off or cancel a trigger or a queued message (the
+  // web's kill review, as an alert), else goes behind the undo bar.
+  const reviewedKillOf = useCallback((session: InboxSession) => {
+    const tasks = Object.values(useInboxStore.getState().agentTasks ?? {}) as TaskRow[];
+    reviewedKill(session as any, tasks, {
+      hold: holdKill,
+      ask: (review, confirm) => appAlert(review.title, review.message, [
+        { text: review.keep, style: 'cancel' },
+        { text: review.confirm, style: 'destructive', onPress: confirm },
+      ]),
+    });
+  }, []);
+
   const handleSessionLongPress = useCallback((session: InboxSession) => {
     const favoriteLabel = session.is_favorite ? 'Unfavorite' : 'Favorite';
     const toggleFavorite = () => useInboxStore.getState().toggleFavorite(session._id);
     // Same verb as the web card's right-click menu, same store action, so the
     // dot the phone lights is the dot the desktop shows.
     const markUnread = () => useInboxStore.getState().markSessionUnread(session._id);
+    // The web menu's "Hide from team": only on the viewer's own session while a
+    // team can see it. The store action records its own Undo on the bar.
+    const store = useInboxStore.getState();
+    const canHide = session.is_private === false && !!session.team_id && session.user_id === store.currentUser?._id;
+    const kill = () => reviewedKillOf(session);
     showActionSheet(sessionTitle(session), [
+      { label: 'Close', detail: closeDetail(session, store as any, Date.now()), icon: 'x', onPress: () => handleClose(session._id) },
       { label: session.is_pinned ? 'Unpin' : 'Pin', icon: 'map-pin', onPress: () => handlePin(session._id) },
       { label: favoriteLabel, icon: 'star', onPress: toggleFavorite },
       { label: 'Mark unread', icon: 'circle', onPress: markUnread },
       { label: 'Label…', icon: 'tag', onPress: () => openLabelPicker(session) },
+      ...(canHide ? [{ label: 'Hide from team', icon: 'lock', onPress: () => useInboxStore.getState().setPrivacy(session._id, true) } satisfies SheetItem] : []),
       { label: 'Stash', icon: 'archive', onPress: () => handleStash(session._id) },
-      { label: 'Kill session', icon: 'x-octagon', destructive: true, onPress: () => holdKill(session._id) },
+      { label: 'Kill session', icon: 'x-octagon', destructive: true, onPress: kill },
     ]);
-  }, [handlePin, handleStash, openLabelPicker]);
+  }, [handlePin, handleStash, handleClose, openLabelPicker, reviewedKillOf]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -291,17 +332,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- the signature IS the dep
     [unreadSig],
   );
-
-  // Mounting every row at once (the inbox's first paint, a conversation's
-  // panel opening) held the screen for a second or more on a long inbox. The
-  // first screenful mounts with the list and the rest in a transition right
-  // after, which a tap interrupts. listData hands each section what is left.
-  const [rowBudget, setRowBudget] = useState(FIRST_PAINT_ROWS);
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => startTransition(() => setRowBudget(Infinity)));
-    return () => cancelAnimationFrame(frame);
-  }, []);
-  const rowsLeft = useRef(Infinity);
 
   // A row's times read in minutes ("2m ago"), so rows re-render once a
   // minute; placement itself re-runs on the finer clock.
@@ -320,7 +350,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       isUnread={!!unreadByConv[s._id]}
       selected={currentId === s._id}
       onPress={openSession}
-      onDismiss={handleStash}
+      onClose={handleClose}
       onLongPress={handleSessionLongPress as (session: SessionData) => void}
       roleSessions={roleSessionsByLead.get(s._id)}
       onOpenRole={openRole}
@@ -331,7 +361,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     return s._id === heldKillId
       ? <RNView key={s._id} style={styles.heldKill} pointerEvents="none">{row}</RNView>
       : row;
-  }, [openSession, currentId, handleStash, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId]);
+  }, [openSession, currentId, handleClose, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
@@ -340,33 +370,37 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // `count` is the chokepoint's section count (flat cards plus members nested
   // under a same-bucket lead) — the header number web, the tally and the CLI
   // agree on; items.length is only the flat cards.
-  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number) => {
-    if (items.length === 0) return null;
+  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number): InboxListItem[] => {
+    if (items.length === 0) return [];
     const key = collapseKey ?? label;
     const collapsed = !!collapsedSections?.[key];
-    const shown = collapsed ? [] : items.slice(0, Math.max(0, rowsLeft.current));
-    rowsLeft.current -= shown.length;
-    const rows = collapsed ? null : shown.map((row) => renderSessionItem(row));
-    // One heading for every lens: sentence case in the interface face, muted
-    // ink, the count beside it, and a dot in the section's colour.
+    const out: InboxListItem[] = [{ kind: 'header', key: `h:${key}`, section: key, label, color, count: count ?? items.length, collapsed }];
+    if (!collapsed) for (const session of items) out.push({ kind: 'row', key: `${key}:${session._id}`, session });
+    return out;
+  }, [collapsedSections]);
+
+  // One heading for every lens: sentence case in the interface face, muted
+  // ink, the count beside it, and a dot in the section's colour.
+  const renderListItem = useCallback<ListRenderItem<InboxListItem>>(({ item }) => {
+    if (item.kind === 'row') return renderSessionItem(item.session);
+    if (item.kind === 'node') return <>{item.node}</>;
+    const { section, label, color, count, collapsed } = item;
     return (
-      <RNView key={key}>
-        <TouchableOpacity
-          style={styles.sectionHeader}
-          onPress={() => { void Haptics.selectionAsync(); toggleCollapsedSection(key); }}
-          activeOpacity={0.6}
-          accessibilityRole="header"
-          accessibilityState={{ expanded: !collapsed }}
-        >
-          {color ? <RNView style={[styles.sectionDot, { backgroundColor: color }]} /> : null}
-          <RNText style={styles.sectionTitle}>{label}</RNText>
-          <RNText style={styles.sectionCount}>{count ?? items.length}</RNText>
-          <Feather name={collapsed ? "chevron-right" : "chevron-down"} size={15} color={Theme.textMuted0} style={{ marginLeft: 'auto' }} />
-        </TouchableOpacity>
-        {rows}
-      </RNView>
+      <TouchableOpacity
+        style={styles.sectionHeader}
+        onPress={() => { void Haptics.selectionAsync(); toggleCollapsedSection(section); }}
+        activeOpacity={0.6}
+        accessibilityRole="header"
+        accessibilityState={{ expanded: !collapsed }}
+      >
+        {color ? <RNView style={[styles.sectionDot, { backgroundColor: color }]} /> : null}
+        <RNText style={styles.sectionTitle}>{label}</RNText>
+        <RNText style={styles.sectionCount}>{count}</RNText>
+        <Feather name={collapsed ? "chevron-right" : "chevron-down"} size={15} color={Theme.textMuted0} style={{ marginLeft: 'auto' }} />
+      </TouchableOpacity>
     );
-  }, [renderSessionItem, collapsedSections, toggleCollapsedSection]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- appearance re-reads the palette baked into the heading
+  }, [renderSessionItem, toggleCollapsedSection, appearance]);
 
   const filteredPinned = useMemo(() => chipFilter(pinned), [chipFilter, pinned]);
   const filteredNew = useMemo(() => chipFilter(newSessions), [chipFilter, newSessions]);
@@ -375,6 +409,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const filteredDormant = useMemo(() => chipFilter(dormant), [chipFilter, dormant]);
   const filteredWorking = useMemo(() => chipFilter(working), [chipFilter, working]);
   const filteredStashed = useMemo(() => chipFilter(stashedSessions), [chipFilter, stashedSessions]);
+  // A stashed card's subagents ride it: they open from its conversation, and
+  // "Kill all" names only the rows a kill does not already take down.
+  const stashedCards = useMemo(() => hiddenBucketTree(filteredStashed).topLevel, [filteredStashed]);
   const filteredKilled = useMemo(() => chipFilter(dismissedOnly), [chipFilter, dismissedOnly]);
 
   // Schedules in the inbox (mirrors GlobalSessionPanel). The same per-user
@@ -407,9 +444,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const statusDormant = filteredDormant;
   const statusWorking = filteredWorking;
 
-  const listData = useMemo(() => {
-    rowsLeft.current = rowBudget;
-    const sections: React.ReactNode[] = [];
+  const listData = useMemo((): InboxListItem[] => {
+    const sections: InboxListItem[][] = [];
     if (Object.keys(sessions).length === 0) {
       // Skeletons only for a genuinely cold cache: hydration has landed with
       // no rows AND the live subscription hasn't delivered its first payload
@@ -418,24 +454,24 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       // taken. Once the live payload has arrived, an empty collection is a
       // real empty account — not an eternal skeleton.
       if (!hydrated || sessionsFirstLoad !== false) {
-        return [<SessionListSkeleton key="skeleton" />];
+        return [{ kind: 'node', key: 'skeleton', node: <SessionListSkeleton /> }];
       }
-      return [(
-        <RNView key="empty" style={styles.emptyInbox}>
+      return [{ kind: 'node', key: 'empty', node: (
+        <RNView style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
           <RNText style={styles.emptyText}>No sessions yet</RNText>
           <RNText style={styles.emptySubtext}>Sessions you run with the codecast CLI will appear here</RNText>
         </RNView>
-      )];
+      ) }];
     }
     if (activeSessions.length === 0) {
-      return [(
-        <RNView key="empty" style={styles.emptyInbox}>
+      return [{ kind: 'node', key: 'empty', node: (
+        <RNView style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
           <RNText style={styles.emptyText}>Inbox zero</RNText>
-          <RNText style={styles.emptySubtext}>All sessions stashed, killed, or idle</RNText>
+          <RNText style={styles.emptySubtext}>All sessions stashed, closed, or idle</RNText>
         </RNView>
-      )];
+      ) }];
     }
     const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
       sectionHeaderCount(shown, full, n, showSubagents);
@@ -450,7 +486,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         manualOrder: useInboxStore.getState().clientState?.ui?.inbox_manual_order,
         chipMatches,
       });
-      return [renderSection("All", flat, Theme.cyan, "all")].filter(Boolean);
+      return renderSection("All", flat, Theme.cyan, "all");
     }
     // Label / plan lenses: pinned stays its own top section (pin is urgency,
     // not theme); the active set regroups by label or plan, with unfiled
@@ -472,7 +508,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         for (const { name, items } of projectGroups)
           sections.push(renderSection(name, items, name === "other" ? Theme.textMuted0 : labelHexColor(name), `planproj_${name}`));
       }
-      return sections.filter(Boolean);
+      return sections.flat();
     }
     // Questions lead: a session that asked you something is your move before
     // anything else, pinned or not — same order as the web panel.
@@ -488,11 +524,11 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     sections.push(renderSection("Done", statusDone, Theme.cyan, undefined, countOf(statusDone, done, placed.counts.done)));
     sections.push(renderSection("Working", statusWorking, Theme.greenBright, undefined, countOf(statusWorking, working, placed.counts.working)));
     sections.push(renderSection('Dormant', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
-    return sections.filter(Boolean);
+    return sections.flat();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, rowBudget, planRows, placed]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
 
-  // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
+  // Stashed (agent alive, kill-all) and Closed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
   const ListFooter = useMemo(() => (
     <RNView>
@@ -508,7 +544,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           activeOpacity={0.7}
         >
           <FontAwesome name={showStashed ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
-          <RNText style={styles.dismissedToggleText}>Stashed <RNText style={styles.sectionCount}>{filteredStashed.length}</RNText></RNText>
+          <RNText style={styles.dismissedToggleText}>Stashed <RNText style={styles.sectionCount}>{stashedCards.length}</RNText></RNText>
         </TouchableOpacity>
         <RNView style={styles.hiddenToggleDivider} />
         <TouchableOpacity
@@ -517,12 +553,12 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           activeOpacity={0.7}
         >
           <FontAwesome name={showKilled ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
-          <RNText style={styles.dismissedToggleText}>Killed <RNText style={styles.sectionCount}>{filteredKilled.length}</RNText></RNText>
+          <RNText style={styles.dismissedToggleText}>Closed <RNText style={styles.sectionCount}>{filteredKilled.length}</RNText></RNText>
         </TouchableOpacity>
       </RNView>
-      {showStashed && filteredStashed.length > 0 && (
+      {showStashed && stashedCards.length > 0 && (
         <TouchableOpacity
-          onPress={() => confirmKillAllStashed(filteredStashed.map(s => s._id))}
+          onPress={() => confirmKillAllStashed(killAllIds(filteredStashed))}
           style={styles.killAllBtn}
           activeOpacity={0.7}
         >
@@ -531,17 +567,17 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       )}
       {showStashed && (
         <RNView style={styles.dismissedSection}>
-          {filteredStashed.length === 0 ? (
+          {stashedCards.length === 0 ? (
             <RNText style={styles.dismissedEmpty}>No stashed sessions</RNText>
           ) : (
-            filteredStashed.map(s => (
+            stashedCards.map(s => (
               <HiddenSessionRow
                 key={s._id}
                 session={s as SessionData}
                 variant="stashed"
                 onPress={() => openSession(s._id)}
                 onRestore={() => handleRestore(s._id)}
-                onKill={() => holdKill(s._id)}
+                onKill={() => reviewedKillOf(s)}
                 held={heldKillId === s._id}
               />
             ))
@@ -551,13 +587,13 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       {showKilled && (
         <RNView style={styles.dismissedSection}>
           {filteredKilled.length === 0 ? (
-            <RNText style={styles.dismissedEmpty}>No killed sessions</RNText>
+            <RNText style={styles.dismissedEmpty}>No closed sessions</RNText>
           ) : (
             filteredKilled.slice(0, 100).map(s => (
               <HiddenSessionRow
                 key={s._id}
                 session={s as SessionData}
-                variant="killed"
+                variant="closed"
                 onPress={() => openSession(s._id)}
                 onRestore={() => handleRestore(s._id)}
               />
@@ -569,7 +605,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         </RNView>
       )}
     </RNView>
-  ), [schedulePartition, showStashed, showKilled, filteredStashed, filteredKilled, openSession, handleRestore, confirmKillAllStashed, heldKillId, appearance]);
+  ), [schedulePartition, showStashed, showKilled, filteredStashed, stashedCards, filteredKilled, openSession, handleRestore, confirmKillAllStashed, heldKillId, appearance, reviewedKillOf]);
 
   // What the inbox is narrowed to, named in the title: a label or a project
   // picked in the slide-out panel. The clear mark beside it goes back to all.
@@ -587,12 +623,12 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // its first section, so a short pull shows it and a longer one refreshes.
   const SEARCH_REVEAL_HEIGHT = 44;
   const [listHeight, setListHeight] = useState(0);
-  const listRef = useRef<ScrollView>(null);
+  const listRef = useRef<FlatList<InboxListItem>>(null);
   // contentOffset applies only at mount, before the list is measured, so a
   // short list would open with the search row showing. Tuck it once the list
   // has a height, and again whenever a new filter replaces the rows.
   useEffect(() => {
-    if (listHeight > 0 && !searchOpen) listRef.current?.scrollTo({ y: SEARCH_REVEAL_HEIGHT, animated: false });
+    if (listHeight > 0 && !searchOpen) listRef.current?.scrollToOffset({ offset: SEARCH_REVEAL_HEIGHT, animated: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-tuck on measure and on a filter change only
   }, [listHeight > 0, activeProjectFilter, activeBucketFilter]);
 
@@ -696,8 +732,14 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           />
         </SearchErrorBoundary>
       ) : (
-        <ScrollView
+        <FlatList
           ref={listRef}
+          data={listData}
+          keyExtractor={inboxItemKey}
+          renderItem={renderListItem}
+          initialNumToRender={FIRST_PAINT_ROWS}
+          maxToRenderPerBatch={10}
+          windowSize={7}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -711,16 +753,14 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           contentContainerStyle={[activeSessions.length === 0 ? styles.emptyList : styles.listContent, { minHeight: listHeight + SEARCH_REVEAL_HEIGHT }]}
           contentOffset={searchOpen ? undefined : { x: 0, y: SEARCH_REVEAL_HEIGHT }}
           showsVerticalScrollIndicator={false}
-        >
-          {!searchOpen && (
+          ListHeaderComponent={searchOpen ? null : (
             <TouchableOpacity style={styles.searchReveal} onPress={() => setSearchOpen(true)} activeOpacity={0.7}>
               <FontAwesome name="search" size={13} color={Theme.textMuted0} />
               <RNText style={styles.searchRevealText}>Search all conversations</RNText>
             </TouchableOpacity>
           )}
-          {listData}
-          {ListFooter}
-        </ScrollView>
+          ListFooterComponent={ListFooter}
+        />
       )}
       {panel && <AreaBar />}
 

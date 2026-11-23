@@ -2,8 +2,8 @@ import { internalMutation, mutation, query } from "./functions";
 import { roleRunner } from "./lib/seatPlace";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
-import { applyPause, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, ensureRoleEventTriggers, insertTask } from "./agentTasks";
-import { handRoleTriggersToRunner, mayRewriteTrigger } from "./lib/agentTaskRows";
+import { applyPause, applyReactivate, applyResume, applyRunNow, applyTaskUpdate, cancelTasksOriginatingFrom, patchTask, ensureRoleEventTriggers, insertTask, refreshArmedTriggerKind } from "./agentTasks";
+import { handRoleTriggersToRunner } from "./lib/agentTaskRows";
 import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
 import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, andList, lineSlugOf, orgAuthorityGrantsError, authorityWords, orgEveryToMs, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
@@ -46,17 +46,21 @@ import { syncRoleAgenda } from "./orgAgenda";
 import { syncInboxLook } from "./orgInbox";
 import { roleMergeAllowance } from "./lib/regretRead";
 import { announceSeating, decommissionAnchorRow, provisionStandingAgent, roleBootstrapOf, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor } from "./anchors";
-import { enqueuePendingMessage, formatSessionMessage, tellRole, performSessionSend } from "./pendingMessages";
+import { clearHasPendingIfQuiet, enqueuePendingMessage, formatSessionMessage, tellRole, performSessionSend } from "./pendingMessages";
+import { isFencedPendingMessage } from "./executionBindings";
+import { byQueueOrder, queueOrder } from "./lib/sessionQueue";
 import { standingReportsToFields } from "./lib/standingSeat";
 import { stampSeatOwners } from "./sessionOwners";
-import { enqueueKillAndResume, performSetThreadState } from "./conversations";
+import { enqueueKillAndResume, performSetThreadState, resolveRestartTarget } from "./conversations";
 import { performReparentSessionToDevice } from "./devices";
-import { ACTIVE_AGENT_STATUSES, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, isBootstrapPrompt, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { siteUrl } from "./lib/siteUrl";
 import { movedFields, type OrgLogFields } from "@codecast/shared/contracts/orgChange";
 import { labelsOf, noteOrgChange, noteRoleChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
 import { capsFor, countersNow, roleStartsOnItsOwn, trustOf } from "./lib/orgCaps";
 import { cliDocWriter, docRevision, writeDocBody } from "./lib/docBody";
+import { defaultCharter, insertCharterDoc, roleCharterOf, writeRoleCharter } from "./lib/roleCharter";
+import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { COMPANY_REVIEW_EVERY_MS, COMPANY_REVIEW_PROMPT, COMPANY_REVIEW_TITLE, ROLE_CHECK_EVERY_MS, ROLE_CHECK_PROMPT, findRoleNeedsInputTrigger, findRoleRoutine, findRoleRoutineInAnyStatus, isLiveTrigger, liveRoutinesOf, roleRoutineFor } from "./lib/orgRoutine";
 import { autonomyChangeWords, defaultTrustFor, switchFromStageWord, trustForSwitch } from "@codecast/shared/contracts/roleAutonomy";
 
@@ -419,7 +423,6 @@ async function performCreateRoleCore(
     scope,
     reports_to,
     status: "active",
-    charter: args.charter?.trim() || undefined,
     review_backend: normalizeBackend(args.review_backend),
     // The switch (org-staffing.md S23.1): on for every role a person hires.
     trust: defaultTrustFor({ handle }),
@@ -431,8 +434,12 @@ async function performCreateRoleCore(
     created_at: now,
     updated_at: now,
   });
+  // The charter's one home is its doc (lib/roleCharter), made with the role.
+  const { scopeNames, parentName } = await roleBootstrapOf(ctx, await ctx.db.get(id));
+  const charter = args.charter?.trim() || defaultCharter({ name }, scopeNames, parentName);
+  await ctx.db.patch(id, { charter_doc_id: await insertCharterDoc(ctx, userId, { name, team_id: args.team_id }, charter) });
   const created = await ctx.db.get(id);
-  await noteRoleChange(ctx, userId, "role", null, created);
+  await noteRoleChange(ctx, userId, "role", null, { ...created, charter });
   // The practical face (S13): drawn after the hire commits, so the generator
   // sees the role and every sibling icon as they stand.
   await (ctx as any).scheduler?.runAfter(0, internal.roleIcons.generateForRole, { role_id: id });
@@ -499,8 +506,14 @@ async function updateRole(
     overlaps = checked.overlaps;
     reports_outside = checked.outside_children;
   }
-  if (args.charter !== undefined) patch.charter = args.charter.trim() || undefined;
   if (args.status !== undefined) patch.status = args.status;
+  // The charter is its doc's text (lib/roleCharter): the edit writes the doc,
+  // and the log reads the text before and after.
+  const charterBefore = args.charter !== undefined ? await roleCharterOf(ctx, role) : undefined;
+  if (args.charter !== undefined) {
+    const created = await writeRoleCharter(ctx as any, userId, role, args.charter, args.from_session);
+    if (created) patch.charter_doc_id = created;
+  }
   // The areas this edit touches, and who owned each before it (S32).
   const touched = patch.scope ? areasOf([role, { scope: patch.scope }]) : [];
   const ownersBefore = touched.length ? await ownerSnapshot(ctx, role, touched) : null;
@@ -521,7 +534,8 @@ async function updateRole(
     });
   }
   const updated = await ctx.db.get(role._id);
-  await noteRoleChange(ctx, userId, patch.scope ? "scope" : "role_edit", role, updated);
+  const charterAfter = charterBefore !== undefined ? await roleCharterOf(ctx, updated) : undefined;
+  await noteRoleChange(ctx, userId, patch.scope ? "scope" : "role_edit", { ...role, charter: charterBefore }, { ...updated, charter: charterAfter });
   // A live role that GAINS scope takes over the sessions in it that report to
   // its host and to no role (org-roles-run-work.md R1). Here, in the one role
   // update, so every door that widens a scope inherits the takeover and the
@@ -1114,7 +1128,7 @@ export const reparentSession = mutation({
 
 // ── Standing agent (org-roles-standing.md T1, T2, T4) ────────────────────────
 
-const BACKENDS = new Set(["claude", "claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse"]);
+const BACKENDS = new Set(["claude", "claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse", "antigravity"]);
 function normalizeBackend(raw: string | undefined): string | undefined {
   const b = (raw ?? "").trim().toLowerCase();
   if (!b) return undefined;
@@ -1125,24 +1139,6 @@ function normalizeBackend(raw: string | undefined): string | undefined {
 
 export const TRUST_STAGES = ["understand", "decide", "direct"] as const;
 
-// Scope is opt in (org-staffing.md S26): a role that names no projects and no
-// plans looks after no area, and only the Head of People then stands for the
-// whole workspace.
-export function charterTemplate(role: { name: string; handle: string; charter?: string | null }, scopeNames: string[], parentName: string): string {
-  const job = scopeNames.length
-    ? `${role.name} looks after the work in its area on behalf of ${parentName}: it keeps the area's plans and tasks moving, reports what changed and why, and raises what needs a person with a recommendation.`
-    : `${role.name} works on behalf of ${parentName}: it runs its routine, answers what it is asked, and raises what needs a person with a recommendation.`;
-  const none = isHeadOfPeopleRole(role) ? `- the whole workspace, apart from what a lead looks after` : `- no area of its own`;
-  return [
-    `# Charter: ${role.name} (@${role.handle})`,
-    ``,
-    role.charter?.trim() || job,
-    ``,
-    `## Area`,
-    scopeNames.length ? scopeNames.map((n) => `- ${n}`).join("\n") : none,
-  ].join("\n");
-}
-
 function briefTemplate(role: { name: string }): string {
   return [
     `${role.name}: new, has not run yet`,
@@ -1151,15 +1147,15 @@ function briefTemplate(role: { name: string }): string {
   ].join("\n");
 }
 
-async function insertRoleDoc(ctx: Ctx, userId: Id<"users">, role: any, docType: "charter" | "brief", title: string, content: string): Promise<Id<"docs">> {
+async function insertBriefDoc(ctx: Ctx, userId: Id<"users">, role: any, content: string): Promise<Id<"docs">> {
   const now = Date.now();
   return await ctx.db.insert("docs", {
     user_id: userId,
     team_id: role.team_id ?? undefined,
-    title,
+    title: `Brief: ${role.name}`,
     content,
-    doc_type: docType,
-    source: docType === "charter" ? "human" : "agent",
+    doc_type: "brief",
+    source: "agent",
     created_at: now,
     updated_at: now,
   });
@@ -1213,41 +1209,51 @@ async function requireAdoptable(ctx: Ctx, userId: Id<"users">, role: any, ref: s
 export async function performProvisionRole(
   ctx: any,
   userId: Id<"users">,
-  args: { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string },
+  args: ProvisionRoleArgs,
 ): Promise<any> {
   return withOrgChange(ctx, userId, { kind: "adopt" }, () => performProvisionRoleCore(ctx, userId, args));
 }
 
+// `fresh` always starts a new session: a project's session is never seated.
+// `host_user_id` runs and bills the new session when it is not the caller (a
+// restart keeps the seat on its runner); the caller is still who is authorized.
+// `target_device_id` places a new session on that machine. `carry_from` is
+// a fresh restart's old seat: its triggers and queued turns move onto the new
+// session before the role's routines arm there (carrySeat).
+type ProvisionRoleArgs = { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string; fresh?: boolean; host_user_id?: Id<"users">; target_device_id?: string; carry_from?: Id<"conversations"> };
+
 async function performProvisionRoleCore(
   ctx: any,
   userId: Id<"users">,
-  args: { role_id: string; model?: string; project_path?: string; agent_type?: string; adopt_conversation_id?: string; announce?: string },
+  args: ProvisionRoleArgs,
 ): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
-  const projectSession = args.adopt_conversation_id ? undefined : await projectSessionToSeat(ctx, role);
+  const projectSession = args.adopt_conversation_id || args.fresh ? undefined : await projectSessionToSeat(ctx, role);
   const adopt = args.adopt_conversation_id
     ? await requireAdoptable(ctx, userId, role, args.adopt_conversation_id)
     : projectSession ? await requireAdoptable(ctx, userId, role, projectSession).catch(() => undefined) : undefined;
   const bootstrap = await roleBootstrapOf(ctx, role);
   const { scopeNames, parentName } = bootstrap;
   const patch: Record<string, any> = { updated_at: Date.now() };
-  if (!role.charter_doc_id) patch.charter_doc_id = await insertRoleDoc(ctx, userId, role, "charter", `Charter: ${role.name}`, charterTemplate(role, scopeNames, parentName));
-  if (!role.brief_doc_id) patch.brief_doc_id = await insertRoleDoc(ctx, userId, role, "brief", `Brief: ${role.name}`, briefTemplate(role));
+  if (!role.charter_doc_id) patch.charter_doc_id = await insertCharterDoc(ctx, userId, role, defaultCharter(role, scopeNames, parentName));
+  if (!role.brief_doc_id) patch.brief_doc_id = await insertBriefDoc(ctx, userId, role, briefTemplate(role));
   if (!role.trust) patch.trust = defaultTrustFor(role);
   const agentType = args.agent_type ? (normalizeBackend(args.agent_type) === "claude" ? "claude_code" : normalizeBackend(args.agent_type)) : undefined;
-  const provisioned = await provisionStandingAgent(ctx, userId, {
+  const provisioned = await provisionStandingAgent(ctx, args.host_user_id ?? userId, {
     scope_type: role.scope_type,
     team_id: role.team_id ?? undefined,
     name: role.name,
     project_path: args.project_path ?? adopt?.project_path ?? undefined,
     model: args.model,
     agent_type: agentType as any,
+    target_device_id: args.target_device_id,
     role: { _id: role._id, bootstrap, adopt, announce: adopt ? args.announce : undefined },
   });
   patch.anchor_id = provisioned.anchor_id;
   await ctx.db.patch(role._id, patch);
   const standing = await standingConversationOf(ctx, { ...role, ...patch });
+  if (standing && args.carry_from) await carrySeat(ctx, role, args.carry_from, standing);
   // The role's one scheduled wake (org-staffing.md S25): a recurring trigger
   // on its standing session, the same row a person arms with `cast trigger`.
   if (standing) await ensureRoleRoutine(ctx, { ...role, ...patch }, standing);
@@ -1794,13 +1800,160 @@ async function performResumeRoleCore(ctx: any, userId: Id<"users">, args: { role
   return await ctx.db.get(role._id);
 }
 
-// restart — kill and resume the standing session.
-export async function performRestartRole(ctx: any, userId: Id<"users">, args: { role_id: string }): Promise<any> {
+// restart — kill and resume the standing session. `fresh` starts a new
+// conversation instead, seeded the way a first standing session is, and
+// retires the old one: its anchor decommissioned, its seat markers cleared,
+// and its thread kept as the role's previous standing session. The new
+// session runs where the old one ran (its runner and its machine, not the
+// caller's), keeps the old seat's Slack channels, and a project whose
+// canonical session was the old seat points at the new one. What the old seat
+// was waiting on moves with the role (carrySeat): its triggers in the state
+// they stood in and its queued turns. The kill then takes only what was the
+// old process's own. A fresh restart cannot be undone from the org history:
+// the old session is already killed.
+const FRESH_SEAT_START_MS = 2 * 60_000;
+
+async function latestRestartSeated(ctx: any, role: any, conv: any): Promise<boolean> {
+  const row = await ctx.db.query("org_changes").withIndex("by_subject", (q: any) => q.eq("subject.id", String(role._id))).order("desc").first();
+  return !!row?.effects?.restarted_fresh && String(row.after?.standing_session?.conversation_id ?? "") === String(conv._id);
+}
+
+/** A seat's start still on its way: under two minutes old, and neither the
+ *  row nor its start command reports that it failed. */
+async function seatStartPending(ctx: any, conv: any): Promise<boolean> {
+  const startedAt = conv.started_at ?? 0;
+  if (conv.session_error || Date.now() - startedAt >= FRESH_SEAT_START_MS) return false;
+  const executed: any[] = await ctx.db.query("daemon_commands").withIndex("by_user_pending", (q: any) => q.eq("user_id", conv.user_id).gte("executed_at", startedAt)).collect();
+  return !executed.some((c) => c.command === "start_session" && c.error && String(JSON.parse(c.args ?? "{}").conversation_id ?? "") === String(conv._id));
+}
+
+/** The machine a seat ran on, while it is online; else routing chooses. */
+async function onlineDeviceOf(ctx: any, conv: any): Promise<string | undefined> {
+  if (!conv.owner_device_id) return undefined;
+  const devices: any[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", conv.user_id)).collect();
+  const device = devices.find((d) => d.device_id === conv.owner_device_id);
+  return device && Date.now() - device.last_seen < DEVICE_ONLINE_MS ? device.device_id : undefined;
+}
+
+/** The turns a session has not taken yet: sent and waiting, or parked. */
+async function queuedTurnsOf(ctx: any, conversationId: Id<"conversations">): Promise<any[]> {
+  const rows: any[] = [];
+  for (const status of ["pending", "held"] as const) {
+    rows.push(...await ctx.db.query("pending_messages").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conversationId).eq("status", status)).collect());
+  }
+  return rows.sort(byQueueOrder);
+}
+
+/** A trigger a role's own fault stopped (failed slots, or completed with a
+ *  killed session) rather than a person's cancel. */
+const faultStopped = (t: any) => t.status === "failed" || (t.status === "completed" && !!t.canceled_on_kill_at);
+
+// A fresh restart's old seat hands its work to the new one before the role's
+// routines arm there, so they find their own rows instead of arming new ones.
+// Every live trigger the old seat armed (inline, its runs posting back, or a
+// --spawn whose runs report to it) points at the new seat. The role's own
+// check, agenda, inbox look and event triggers move in whatever state they
+// stand: one the person cancelled stays cancelled, one they paused stays
+// paused, one a fault stopped comes back armed (S25). Its queued turns, a
+// person's parked message included, wait behind the new seat's opening; an
+// opening the old seat never took is the new one's twin and stays. A turn
+// typed into the old pane or failed there goes with the kill, and finished
+// triggers stay on the old thread.
+async function carrySeat(ctx: any, role: any, fromId: Id<"conversations">, to: any): Promise<void> {
+  const from = String(fromId);
+  const repoint = (t: any) => ({
+    ...(String(t.originating_conversation_id ?? "") === from ? { originating_conversation_id: to._id } : {}),
+    ...(String(t.target_conversation_id ?? "") === from ? { target_conversation_id: to._id } : {}),
+    ...(String(t.created_by_conversation_id ?? "") === from ? { created_by_conversation_id: to._id } : {}),
+  });
+  const inline: any[] = await ctx.db.query("agent_tasks").withIndex("by_originating_conversation", (q: any) => q.eq("originating_conversation_id", fromId)).collect();
+  for (const trigger of inline) {
+    const rolesOwn = String(trigger.role_id ?? "") === String(role._id) && trigger.status !== "cancelled";
+    if (!isLiveTrigger(trigger) && !rolesOwn) continue;
+    await patchTask(ctx, trigger, repoint(trigger));
+    if (rolesOwn && faultStopped(trigger)) await applyReactivate(ctx, (await ctx.db.get(trigger._id))!);
+  }
+  const spawned: any[] = await ctx.db.query("agent_tasks").withIndex("by_created_by_conversation", (q: any) => q.eq("created_by_conversation_id", fromId)).collect();
+  for (const trigger of spawned) if (isLiveTrigger(trigger)) await patchTask(ctx, trigger, repoint(trigger));
+  await refreshArmedTriggerKind(ctx, to._id);
+
+  const queued = (await queuedTurnsOf(ctx, fromId)).filter((row) => !isBootstrapPrompt(row.content));
+  if (!queued.length) return;
+  const ahead: any[] = await ctx.db.query("pending_messages").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", to._id)).collect();
+  const after = Math.max(Date.now(), ...ahead.map(queueOrder)) + 1;
+  for (const [i, row] of queued.entries()) {
+    await ctx.db.patch(row._id, { conversation_id: to._id, owner_user_id: to.user_id, kill_generation: to.pending_kill_generation ?? 0, queue_at: after + i });
+  }
+  if (queued.some((row) => row.status === "pending")) await ctx.db.patch(to._id, { has_pending_messages: true });
+  await clearHasPendingIfQuiet(ctx, fromId);
+}
+
+export async function performRestartRole(ctx: any, userId: Id<"users">, args: { role_id: string; fresh?: boolean }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   const conv = await standingConversationOf(ctx, role);
   if (!conv) throw new Error("This role has no standing session yet (cast role create provisions one, or run cast role provision)");
-  await enqueueKillAndResume(ctx, conv.user_id, conv);
-  return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id };
+  if (!args.fresh) {
+    // A restart is a person's gesture: it brings a closed, stashed or killed
+    // seat back to the list the way a session's Restart does.
+    const { conv: seat } = await resolveRestartTarget(ctx, conv.user_id, conv._id, {});
+    await enqueueKillAndResume(ctx, conv.user_id, seat);
+    return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id };
+  }
+  if (role.status === "retired") throw new Error("That role is retired");
+  // A fresh seat would start its routines and opening as if the role ran.
+  if (role.status === "paused") throw new Error(`@${role.handle} is paused: resume it first (cast role resume @${role.handle}), then restart it fresh`);
+  const shortOf = (c: any) => c.short_id ?? String(c._id).slice(0, 7);
+  // A second press: the seat a fresh restart started moments ago, whose start
+  // is still on its way, is already the fresh session. The role's latest log
+  // row must be that restart, so an old previous_standing never matches. A
+  // seat that failed to start, or never did, is restarted again for real.
+  if (role.previous_standing_conversation_id && String(role.previous_standing_conversation_id) !== String(conv._id)
+    && !conv.message_count && await seatStartPending(ctx, conv)
+    && await latestRestartSeated(ctx, role, conv)) {
+    const prev = await ctx.db.get(role.previous_standing_conversation_id);
+    return { role_id: role._id, conversation_id: conv._id, short_id: shortOf(conv), fresh: true, already_fresh: true, previous_conversation_id: role.previous_standing_conversation_id, previous_short_id: prev ? shortOf(prev) : undefined };
+  }
+  // The new seat is hosted by the old seat's runner, who must still be on the team.
+  if (role.scope_type === "team" && role.team_id) {
+    const member = await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", conv.user_id).eq("team_id", role.team_id)).first();
+    if (!member) throw new Error(`${personName(await ctx.db.get(conv.user_id))}, who runs @${role.handle}'s seat, is no longer on the team: run cast role move @${role.handle} on a team member's machine first, then restart it fresh`);
+  }
+  // A message on the fenced delivery path holds a place in the old session's
+  // own sequence, so it cannot move to another session.
+  const fenced = (await queuedTurnsOf(ctx, conv._id)).filter(isFencedPendingMessage).length;
+  if (fenced) throw new Error(`@${role.handle}'s seat has ${fenced} queued message${fenced === 1 ? "" : "s"} that cannot move to a new session: let ${fenced === 1 ? "it" : "them"} deliver, or cancel ${fenced === 1 ? "it" : "them"}, then restart it fresh`);
+  return withOrgChange(ctx, userId, { kind: "adopt" }, async () => {
+    const now = Date.now();
+    const anchor = await ctx.db.get(role.anchor_id);
+    const retiring = anchor && anchor.status !== "decommissioned" ? anchor : null;
+    const previous = { conversation_id: String(conv._id), short_id: shortOf(conv) };
+    await noteOrgChange(ctx, userId, whereOfRole(role), { kind: "adopt", subject: roleSubject(role), before: { standing_session: previous }, effects: { restarted_fresh: { previous } } });
+    const channels: any[] = anchor ? await ctx.db.query("anchor_channels").withIndex("by_anchor", (q: any) => q.eq("anchor_id", anchor._id)).collect() : [];
+    // The old anchor steps aside so the role can hold a new one; its session
+    // is killed only once its work has moved (carrySeat).
+    if (retiring) await ctx.db.patch(retiring._id, { status: "decommissioned", updated_at: now });
+    await ctx.db.patch(conv._id, { standing_role_id: undefined, anchor_id: undefined, acting_user_id: undefined, updated_at: now });
+    await ctx.db.patch(role._id, { previous_standing_conversation_id: conv._id, updated_at: now });
+    const provisioned = await performProvisionRole(ctx, userId, {
+      role_id: String(role._id),
+      project_path: conv.project_path ?? undefined,
+      model: conv.model ?? anchor?.model ?? undefined,
+      // A backend a device can start (not the hosted assistant's).
+      agent_type: BACKENDS.has(conv.agent_type) ? conv.agent_type : undefined,
+      fresh: true,
+      host_user_id: conv.user_id,
+      target_device_id: await onlineDeviceOf(ctx, conv),
+      carry_from: conv._id,
+    });
+    if (retiring) await decommissionAnchorRow(ctx, retiring, { keepChannels: true });
+    for (const ch of channels) await ctx.db.patch(ch._id, { anchor_id: provisioned.anchor_id });
+    if (provisioned.conversation_id) {
+      // Any workspace, past the access chokepoint: each project already named this seat as its session.
+      const pointing: any[] = await ctx.db.query("projects").withIndex("by_default_session", (q: any) => q.eq("default_session_id", conv._id)).collect();
+      for (const project of pointing) await ctx.db.patch(project._id, { default_session_id: provisioned.conversation_id });
+    }
+    return { role_id: role._id, conversation_id: provisioned.conversation_id, short_id: provisioned.short_id, fresh: true, previous_conversation_id: conv._id, previous_short_id: previous.short_id };
+  });
 }
 
 // move — run a role on the caller's machine: its standing session is pulled
@@ -1992,7 +2145,7 @@ export async function performBriefEdit(ctx: any, userId: Id<"users">, args: { ro
   const briefDoc = briefDocId ? await ctx.db.get(briefDocId) : null;
   let revision = docRevision(content, 0);
   if (!briefDoc) {
-    briefDocId = await insertRoleDoc(ctx, userId, role, "brief", `Brief: ${role.name}`, content);
+    briefDocId = await insertBriefDoc(ctx, userId, role, content);
     await ctx.db.patch(role._id, { brief_doc_id: briefDocId, updated_at: now });
   } else {
     // `base` is the revision `cast brief` handed out: a person editing the
@@ -2068,10 +2221,6 @@ export async function applyRoutineTune(
     ...(change.focus !== undefined ? { focus: change.focus.trim() || null } : {}),
   };
   if (wanted.every_ms === before.every_ms && wanted.precheck === before.precheck && wanted.focus === before.focus) throw new Error("Nothing to change: the check already runs that way");
-  // The cadence and focus are the role's to tune; the precheck is a shell
-  // command on the seat's machine, so it is for the check's owner or the
-  // account running the seat (mayRewriteTrigger), as on every edit door.
-  if (wanted.precheck !== before.precheck && !(await mayRewriteTrigger(ctx, routine, userId))) throw new Error("Only the account running this role's session can change its check's precheck: it runs as a shell command on that machine");
   return withOrgChange(ctx, userId, { kind: "routine_tune", subject: roleSubject(role), ...head }, async () => {
     const now = Date.now();
     const cadenceMoved = wanted.every_ms !== before.every_ms;
@@ -2082,7 +2231,9 @@ export async function applyRoutineTune(
       ...(wanted.precheck !== before.precheck ? { precheck: wanted.precheck ?? "" } : {}),
       ...(wanted.focus !== before.focus ? { role_focus: wanted.focus ?? "" } : {}),
       tune_why: change.why,
-    }, { userId, source: "cli" });
+      // A person's tune: the cadence and focus are the role's admins' to set,
+      // the precheck runs on the seat's machine (applyTaskUpdate, assertMayRewrite).
+    }, { userId, source: "cli", person: true });
     if (!result.ok) throw new Error("The check cannot be changed right now; try again when this run has ended");
     await ctx.db.patch(routine._id, { tuned_at: now });
     const tuned = await ctx.db.get(routine._id);
@@ -2179,7 +2330,7 @@ export const resume = mutation({
   handler: async (ctx, { api_token, ...args }) => performResumeRole(ctx, await requireCaller(ctx, api_token), args),
 });
 export const restart = mutation({
-  args: { api_token: v.optional(v.string()), role_id: v.string() },
+  args: { api_token: v.optional(v.string()), role_id: v.string(), fresh: v.optional(v.boolean()) },
   handler: async (ctx, { api_token, ...args }) => performRestartRole(ctx, await requireCaller(ctx, api_token), args),
 });
 export const move = mutation({

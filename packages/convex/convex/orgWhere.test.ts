@@ -17,7 +17,7 @@ const GROWTH = "org_roles_growth";
 const SEO = "org_roles_seo";
 const HOP = "org_roles_hop";
 
-const role = (over: any) => ({ team_id: TEAM, status: "active", charter: "", scope: { project_ids: [], plan_ids: [] }, created_at: 1, ...over });
+const role = (over: any) => ({ team_id: TEAM, status: "active", scope: { project_ids: [], plan_ids: [] }, created_at: 1, ...over });
 const conv = (over: any) => ({ user_id: ME, team_id: TEAM, status: "active", agent_type: "claude", created_at: 1, updated_at: 1, message_count: 1, ...over });
 
 function db() {

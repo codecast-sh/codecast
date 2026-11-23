@@ -439,6 +439,56 @@ describe("cast decide pass --to and escalate on the wire", () => {
   });
 });
 
+// A category word outside the vocabulary is refused before any request (decisions-as-documents.md D1): the server
+// would hold it for a person, but the asker meant something it never says.
+describe("cast decide --category outside the vocabulary", () => {
+  const SITE = "https://x.test";
+  const calls: string[] = [];
+  const realFetch = globalThis.fetch;
+  const realError = console.error;
+  const realExit = process.exit;
+  let errors: string[] = [];
+  const deps = { getCliEndpoint: () => ({ siteUrl: SITE, apiToken: "t" }), detectCurrentSessionId: () => "s1" } as any;
+
+  beforeEach(() => {
+    calls.length = 0;
+    errors = [];
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      calls.push(String(url).slice(SITE.length));
+      return new Response(JSON.stringify({ decisions: [] }), { status: 200 });
+    }) as typeof fetch;
+    console.error = (...args: unknown[]) => { errors.push(args.map(String).join(" ")); };
+    process.exit = ((code?: number) => { throw new Error(`exit ${code}`); }) as any;
+  });
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+    console.error = realError;
+    process.exit = realExit;
+  });
+
+  async function run(...argv: string[]) {
+    const { Command } = await import("commander");
+    const { registerDecideCommand } = await import("./decideCommand.js");
+    const program = new Command();
+    program.exitOverride();
+    registerDecideCommand(program, deps);
+    await program.parseAsync(["node", "cast", "decide", ...argv]);
+  }
+
+  it("an ask with --category deploy is refused, naming the categories", async () => {
+    await expect(run("Ship the fix?", "-o", "Ship", "-o", "Hold", "--context", "The fix is ready.", "--category", "deploy")).rejects.toThrow("exit 1");
+    expect(calls).toEqual([]);
+    expect(errors.join("\n")).toContain("--category deploy is not a category");
+    expect(errors.join("\n")).toContain("production, billing, data, access, external, product, limit");
+  });
+
+  it("an edit with --category deploy is refused", async () => {
+    await expect(run("edit", "sd-7", "--category", "deploy")).rejects.toThrow("exit 1");
+    expect(calls.filter((c) => c === "/cli/decide")).toEqual([]);
+    expect(errors.join("\n")).toContain("--category deploy is not a category");
+  });
+});
+
 describe("the cards' confidence against their answers", () => {
   const row = (answer_label: string, verdict: "ship" | "revise" | "drop", confidence?: number) => ({
     id: answer_label, question: "q", options: [], answer_label,

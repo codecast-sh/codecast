@@ -93,8 +93,9 @@ import {
   accessJudgeFor,
 } from "./lib/access";
 import { forbidden, notFound } from "./lib/auth";
-import { boundSessionsOf, claimTaskOwnership, isSessionWorking, type TaskOwnerRef } from "./lib/taskOwner";
+import { boundSessionsOf, changeSessionOf, claimTaskOwnership, isSessionWorking, type TaskOwnerRef } from "./lib/taskOwner";
 import { changeGuideInputValidator } from "./lib/changeGuideValidator";
+import { runWorkflowOf } from "./lib/runGraph";
 export { canAccessTask };
 
 // The six status CATEGORIES (see @codecast/shared/tasks/statuses.ts). Teams
@@ -402,6 +403,12 @@ export async function notifyTaskStatus(
   });
 }
 
+/** The task's bound run, while it is still going, whatever its graph. */
+async function liveRun(ctx: any, task: any): Promise<any | null> {
+  const run = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
+  return run && (run.status === "pending" || run.status === "running" || run.status === "paused") ? run : null;
+}
+
 /**
  * The task's bound run, when it is a line run still going: the line's own
  * graph (it started at ground), or whatever graph a trial project runs (a
@@ -409,8 +416,8 @@ export async function notifyTaskStatus(
  * with their runs left waiting at a gate nobody could answer).
  */
 async function liveLineRun(ctx: any, task: any): Promise<any | null> {
-  const run = task.workflow_run_id ? await ctx.db.get(task.workflow_run_id) : null;
-  if (!run || !(run.status === "pending" || run.status === "running" || run.status === "paused")) return null;
+  const run = await liveRun(ctx, task);
+  if (!run) return null;
   if (isLineRun(run)) return run;
   const project = task.project_id ? await ctx.db.get(task.project_id) : null;
   return project?.line_trial ? run : null;
@@ -433,7 +440,7 @@ const LINE_CLOSING_STATIONS: ReadonlySet<string> = new Set(["drop", "dissolve"])
 async function closesItself(ctx: any, run: any): Promise<boolean> {
   if (LINE_CLOSING_STATIONS.has(run.current_node_id)) return true;
   if (run.status === "paused") return false;
-  const workflow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+  const workflow: any = await runWorkflowOf(ctx, run);
   const station = workflow?.nodes?.find((n: any) => n.id === run.current_node_id);
   if (!station?.script) return false;
   if (!isLineRun(run)) return true;
@@ -2019,8 +2026,14 @@ export const get = query({
       ...history.flatMap((h) => [h.user_id, ...(h.field === "assignee" ? [h.old_value, h.new_value] : [])]),
     ]);
     const plan = task.plan_id ? await ctx.db.get(task.plan_id) : null;
+    // The session the task's change came from (lib/taskOwner changeSessionOf): a flow run started from a plain
+    // shell takes it as its subject (flows.md FL4).
+    const changeSession = await changeSessionOf(ctx, task, comments);
     return {
       ...task,
+      change_session: changeSession && (await canAccessConversation(ctx, auth.userId, changeSession))
+        ? { short_id: changeSession.short_id ?? String(changeSession._id).slice(0, 7), conversation_id: changeSession._id }
+        : null,
       creator_name: assigneeNames[task.user_id],
       history: history.map((h) => ({
         created_at: h.created_at,
@@ -2162,9 +2175,11 @@ export const update = mutation({
       statusWrite.status = undefined;
       statusWrite.statusId = { set: false };
     }
-    // A review approve inside a live line run is one station, not the end:
-    // the run decides when the cause is done (LE16), so it stays in review.
-    if (args.review_verdict === "approve" && statusWrite.status === "done" && (await liveLineRun(ctx, task))) {
+    // A review approve inside a live run is one station, not the end: the
+    // run decides when the task is done (LE16, runEndStatus), so it stays in
+    // review. An approve that closed the task left it done after Land then
+    // stopped the run at Not shipped (ct-98836).
+    if (args.review_verdict === "approve" && statusWrite.status === "done" && (await liveRun(ctx, task))) {
       statusWrite.status = "in_review";
     }
     const nextStatus = statusWrite.status;
@@ -4137,7 +4152,7 @@ export async function spawnSessionForTask(
 export const assignToAgent = mutation({
   args: {
     short_id: v.string(),
-    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi"), v.literal("grok"), v.literal("muse")),
+    agent_type: v.union(v.literal("claude_code"), v.literal("codex"), v.literal("cursor"), v.literal("gemini"), v.literal("opencode"), v.literal("pi"), v.literal("grok"), v.literal("muse"), v.literal("antigravity")),
     // Optional lead-in the user types before launch (defaults to "lets do this
     // task" in the palette). Prepended to the structured task prompt below.
     initial_message: v.optional(v.string()),

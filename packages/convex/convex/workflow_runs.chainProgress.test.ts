@@ -39,4 +39,25 @@ describe("workflow_runs.updateProgress result_preview (the-line.md L7)", () => {
     expect(run.fail_reason).toBe("planner exited 2");
     expect(run.node_statuses[0].result_preview).toBe("the plan");
   });
+
+  test("a progress line while the node runs keeps its entry time; a new visit restarts it and drops the last visit's line", async () => {
+    const { ctx, tables } = await makeCtx();
+    const node = () => tables.workflow_runs[0].node_statuses.find((n: any) => n.node_id === "step-1");
+    const realNow = Date.now;
+    try {
+      Date.now = () => 1_000;
+      await report(ctx, { node_status: "running", visits: 1 });
+      Date.now = () => 61_000;
+      await report(ctx, { node_status: "running", visits: 1, result_preview: "CI: 9 of 14 jobs" });
+      expect(node()).toMatchObject({ started_at: 1_000, result_preview: "CI: 9 of 14 jobs" });
+      Date.now = () => 120_000;
+      await report(ctx, { node_status: "completed", outcome: "success", result_preview: "CI red on #12: 2 failures in web" });
+      Date.now = () => 300_000;
+      await report(ctx, { node_status: "running", visits: 2 });
+      expect(node().started_at).toBe(300_000);
+      expect(node().result_preview).toBeUndefined();
+    } finally {
+      Date.now = realNow;
+    }
+  });
 });

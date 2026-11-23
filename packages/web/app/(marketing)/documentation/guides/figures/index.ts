@@ -1,4 +1,5 @@
 import { lazy, type ComponentType, type LazyExoticComponent } from "react";
+import { loadedModule } from "../../../../../lib/lazyNamed";
 
 /**
  * Animated figures for the guides. A guide's markdown places one with a fence:
@@ -26,7 +27,7 @@ export function guideFigure(slug: string, name: string): LazyExoticComponent<Com
   let comp = cache.get(key);
   if (!comp) {
     comp = lazy(async () => {
-      const mod = (await load()) as FigureModule;
+      const mod = (await loadedModule(load)) as FigureModule;
       const found = mod[name];
       if (!found) throw new Error(`Guide figure ${key} is not exported from figures/${slug}.tsx`);
       return { default: found };

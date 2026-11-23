@@ -34,6 +34,8 @@ import changeCast from "./templates/change.cast" with { type: "text" };
 import quickChangeCast from "./templates/quick-change.cast" with { type: "text" };
 import judgeCast from "./templates/judge.cast" with { type: "text" };
 import judgeRisk from "./templates/judge/risk.md" with { type: "text" };
+import intentCast from "./templates/intent.cast" with { type: "text" };
+import intentAsker from "./templates/intent/asker.md" with { type: "text" };
 import climbCast from "./templates/climb.cast" with { type: "text" };
 import climbFrame from "./templates/climb/frame.md" with { type: "text" };
 import climbPropose from "./templates/climb/propose.md" with { type: "text" };
@@ -43,8 +45,11 @@ import climbPromoteLine from "./templates/climb/promote_line.md" with { type: "t
 import climbRecord from "./templates/climb/record.sh" with { type: "text" };
 import changeFixCheck from "./templates/change/fix_check.md" with { type: "text" };
 import changeFixReview from "./templates/change/fix_review.md" with { type: "text" };
-import changeRevise from "./templates/change/revise.md" with { type: "text" };
 import changeFixConflict from "./templates/change/fix_conflict.md" with { type: "text" };
+import changeReview from "./templates/change/review.md" with { type: "text" };
+import changeBrief from "./templates/change/brief.md" with { type: "text" };
+import changeConflict from "./templates/change/conflict.md" with { type: "text" };
+import changeCiConflict from "./templates/change/ci_conflict.md" with { type: "text" };
 import featureCast from "../../workflows/feature/workflow.cast" with { type: "text" };
 import planAutopilotCast from "../../workflows/plan-autopilot/workflow.cast" with { type: "text" };
 import { JUDGE_REVIEW_GRAPH } from "@codecast/shared/contracts/judgeReview";
@@ -81,10 +86,15 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   // What the change flows send back to the session a change came from (flows.md FL4).
   "change/fix_check.md": changeFixCheck,
   "change/fix_review.md": changeFixReview,
-  "change/revise.md": changeRevise,
   "change/fix_conflict.md": changeFixConflict,
+  "change/review.md": changeReview,
+  "change/brief.md": changeBrief,
+  "change/conflict.md": changeConflict,
+  "change/ci_conflict.md": changeCiConflict,
   // What the blind risk judge reads (judge.cast).
   "judge/risk.md": judgeRisk,
+  // What the intent segment's model reads (intent.cast).
+  "intent/asker.md": intentAsker,
   // The climb's stations (climb.cast, flows.md FL10).
   "climb/frame.md": climbFrame,
   "climb/propose.md": climbPropose,
@@ -94,11 +104,22 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   "climb/record.sh": climbRecord,
 };
 
+/** A template file's text with each line that is only `@include <file>` replaced by that file, as the parser takes them in from disk. */
+export function withTemplateIncludes(text: string, ref: string, files: Readonly<Record<string, string>>): string {
+  return text.replace(/^@include[ \t]+(\S+)[ \t]*$/gm, (_line, rel: string) => {
+    const key = path.posix.join(path.posix.dirname(ref), rel);
+    const part = files[key];
+    if (part === undefined) throw new Error(`${ref}: @include ${rel}: no template file ${key}`);
+    return withTemplateIncludes(part.replace(/\n$/, ""), key, files);
+  });
+}
+
 /** Replace each quoted `"@<file>"` value naming one of `files` with that file's text as a DOT string. */
 export function inlineTemplateFiles(source: string, files: Readonly<Record<string, string>>): string {
   return source.replace(/"@([\w./-]+)"/g, (whole, ref: string) => {
-    const text = files[ref];
-    if (text === undefined) return whole;
+    const raw = files[ref];
+    if (raw === undefined) return whole;
+    const text = withTemplateIncludes(raw, ref, files);
     return `"${text.replace(/\\/g, "\\\\").replace(/"/g, '\\"').replace(/\n/g, "\\n")}"`;
   });
 }
@@ -113,6 +134,7 @@ export const BUILTIN_WORKFLOW_TEMPLATES: Readonly<Record<string, string>> = {
   check: inlineTemplateFiles(checkCast, LINE_TEMPLATE_FILES),
   review: inlineTemplateFiles(reviewCast, LINE_TEMPLATE_FILES),
   judge: inlineTemplateFiles(judgeCast, LINE_TEMPLATE_FILES),
+  intent: inlineTemplateFiles(intentCast, LINE_TEMPLATE_FILES),
   eval: inlineTemplateFiles(evalCast, LINE_TEMPLATE_FILES),
   decide: decideCast,
   ship: inlineTemplateFiles(shipCast, LINE_TEMPLATE_FILES),

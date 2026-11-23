@@ -7,31 +7,25 @@ export const WORKFLOW_SNIPPET_END = "<!-- /codecast-workflows -->";
 export const WORKFLOW_SNIPPET = `
 ## Workflows
 
-Workflows are DOT execution graphs with loops, conditions and human approval gates, bound to a task or plan. Nodes are agent sessions, shell commands, approval gates or conditionals; the dashboard shows progress and gate buttons.
+Workflows are DOT graphs with loops, conditions and approval gates, bound to a task or plan (\`cast workflow run flow.cast --task ct-N\`). Flows are the team's library of them: whole flows that take a change to done, and segments (check, review, eval, decide, ship). Run a library flow that fits; extend one and fill its slots when a step needs this change's own work; write a whole flow only when nothing fits.
 
 \`\`\`bash
-cast workflow run flow.cast --task ct-N     # or --plan pl-N
-cast workflow list | runs | push
-\`\`\`
-
-Flows are the team's library of these graphs: whole flows that take a change to done, and segments (check, review, eval, decide, ship) that do one part. A finished change goes through one before it ships, its run drawn live in the conversation.
-
-Run a library flow that fits as it stands. When one fits as a backbone but a step needs this change's own work, extend it and fill its slots. Write a whole flow only when nothing in the library has the shape of the work.
-
-\`\`\`bash
-cast flow ls                        # the library
-cast flow run change                # this session's own edits through a library flow
+cast flow ls                        # the library, the workspace's default flow marked
+cast flow run                       # this session's own edits through the default flow
+cast flow run change                # or through a library flow by name
 cast flow run - <<'EOF' … EOF       # a flow written here (extends a backbone, or whole)
 \`\`\`
 
-\`cast guide workflows\` shows the graph syntax, segments, slots and import.
+To add a check to the project's pipeline or tweak a station's prompt (Review's, say), run \`cast flow edit\` (\`cast flow edit change add lint --after pr --fix brief --run "bun run lint"\`), never a rewrite of the flow file.
+
+\`cast guide workflows\` shows the graph syntax, segments, slots, import and every \`cast flow edit\`.
 ${WORKFLOW_SNIPPET_END}
 `;
 
 /** What `cast guide workflow` prints after the body: the detail an install leaves out of CLAUDE.md. */
 export const WORKFLOW_REFERENCE = `
 \`\`\`bash
-cast workflow run flow.cast --task ct-N     # or --plan pl-N
+cast workflow run flow.cast --task ct-N     # or --plan pl-N; the dashboard shows progress and gate buttons
 cast workflow list                          # available templates
 cast workflow push                          # push a workflow to the web UI
 cast workflow runs [--task ct-N|--plan pl-N] # status, task, current node, gate, a failed run's reason (-l: machine, run id)
@@ -65,7 +59,7 @@ A node with \`flow="<slug>"\` runs that segment in place: its steps join the gra
 \`\`\`bash
 cast flow show <flow>               # its steps, who does each, where each sends the work, and its slots
 cast flow validate <flow|file|->    # read it with its segments and slots expanded and name what is missing
-cast flow run <flow> --task ct-N    # a task's change (or --branch, --pr); default: this session's own edits
+cast flow run [flow] --task ct-N    # a task's change (or --branch, --pr); no flow: the workspace's default; no change: this session's own edits
 cast flow import <wf_id>            # a Workflow-tool run becomes a flow: your draft until you make it general, then cast flow publish
 cast flow publish <flow>            # a repo flow into the team's pool, on the Line page's Flows view
 \`\`\`
@@ -84,11 +78,32 @@ digraph trial {
 }
 \`\`\`
 
-A backbone leaves part of itself to the flow that extends it: a node marked \`slot="<what it must do>"\`, with \`flow=\` for the steps it runs when nothing fills it. A flow naming it by \`extends="<flow>"\` fills the slot with \`subgraph <slot> { ... }\`, whose steps run in its place as a segment's would: written as a chain they start at the first and leave by the slot's own routes after the last, or they name their own start and exit. A subgraph fills only a slot or a node of its own flow, so the backbone's other stations stay as the team keeps them, and a backbone with an empty slot does not run. \`cast flow run -\` and \`cast flow validate -\` read the graph from stdin, keep it in \`.codecast/session-flows/\` (outside git) as this session's draft, and check it, slots included, before anything starts. \`change\` leaves its Check as a slot.
+A finished change goes through a flow before it ships, its run drawn live in the conversation. Asked to change the project's pipeline (add a lint check, tell Review about a house rule, skip a step, run e2e only when some paths change), make the edit with \`cast flow edit\`, never by rewriting the flow: it writes one line in \`.codecast/flows/<flow>.cast\`, validates it, and prints the edit for the conversation. It commits nothing; the edit ships through the pipeline like any change.
+
+\`\`\`bash
+cast flow edit change add lint --after pr --fix brief --run "bun run lint"   # red goes back to the session; or --agent, --person; --when "<globs>"
+cast flow edit change guide review "Also check the migrations"      # appended to the inherited prompt (prompt replaces it)
+cast flow edit change run lint "bun run lint --changed"
+cast flow edit change skip decide | when e2e "landing/**" | undo review
+\`\`\`
+
+Each line desugars into the edges you would write by hand (the graph hashes the same), and \`cast flow show <flow>\` prints them in words:
+
+\`\`\`dot
+digraph change {
+  graph [extends="change"]
+  lint   [after="pr", fix="brief", label="Lint", shape=parallelogram, script="bun run lint"]  // pr -> lint -> checks; red goes back to the session
+  review [guide="@change/review.md"]          // appended to Review's inherited prompt; review__review [...] edits a segment's station
+  e2e    [after="pr", fix="brief", when="landing/**", shape=parallelogram, script="bun e2e"]  // runs only when $change_files touches it
+  decide [skip=true]                          // ci_card -> merge; what only Decide reached goes too
+}
+\`\`\`
+
+A backbone leaves part of itself to the flow that extends it: a node marked \`slot="<what it must do>"\`, with \`flow=\` for the steps it runs when nothing fills it. A flow naming it by \`extends="<flow>"\` fills the slot with \`subgraph <slot> { ... }\`, whose steps run in its place as a segment's would: written as a chain they start at the first and leave by the slot's own routes after the last, or they name their own start and exit. A subgraph fills only a slot or a node of its own flow, so the backbone's other stations stay as the team keeps them, and a backbone with an empty slot does not run. \`cast flow run -\` and \`cast flow validate -\` read the graph from stdin, keep it in \`.codecast/session-flows/\` (outside git) as this session's draft, and check it, slots included, before anything starts. \`quick-change\` leaves its Check as a slot.
 
 \`\`\`dot
 digraph flaky_fix {
-  graph [extends="change", label="Change, flaky test"]
+  graph [extends="quick-change", label="Quick, flaky test"]
   subgraph check {
     reproduce [prompt="Run the flaky test until it fails and name the race"]
     prove [shape=parallelogram, script="bun test --rerun-each 20"]
@@ -127,5 +142,5 @@ A tree lists its programs in \`.codecast/check.toml\` as a \`[projects]\` table 
 
 Point each entry at the tsconfig the package's own \`typecheck\` script runs, not necessarily the plain \`tsconfig.json\`: a build that narrows \`rootDir\` often keeps a widened \`tsconfig.typecheck.json\`, and checking the build config reports hundreds of files-outside-root errors.
 
-Sessions in one checkout share a watcher. A worktree's first pass starts from the main checkout's last one and rechecks only what differs. Work in the shared checkout unless parallel edits would collide, and never give every agent of a fan-out a worktree by default. A machine always runs one watcher per 12 GB of memory, and more while the memory each project has been measured to need fits beside them (\`cast check-status\` shows it). Past that an ask waits in a queue for up to three minutes, then exits 75: ask again, it keeps its place. A pass nobody waits on gives its room up, and a watcher stops after 45 idle minutes.
+Sessions in one checkout share a watcher. A worktree's first pass starts from the main checkout's last one and rechecks only what differs. Work in the shared checkout unless parallel edits would collide, and never give every agent of a fan-out a worktree by default. A new watcher starts while the memory its project has been measured to need fits in what the machine has free now, and none beyond the first while the machine is under memory pressure; first builds run a few at a time (\`cast check-status\` shows both). Past that an ask waits in a queue for up to three minutes, then exits 75: ask again, it keeps its place. A pass nobody waits on gives its room up, and a watcher stops after 45 idle minutes.
 `;

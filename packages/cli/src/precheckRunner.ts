@@ -9,9 +9,10 @@
 // Three rules the daemon depends on:
 //   • It never blocks the loop. spawn() is asynchronous end to end, and the
 //     timeout is a timer, not a wait.
-//   • The command runs in its own process group, so a precheck that starts
-//     children ("git fetch | grep") is fully stopped on timeout rather than
-//     leaving the children orphaned past the kill.
+//   • The command runs in its own process group, and a timeout ends everything
+//     it started as a flow station's are ended (stationProcs.ts): children
+//     that left the group (setsid, `set -m`) included, TERM first, then an
+//     identity-checked KILL. A group-only kill left those under init.
 //   • It carries no agent env markers. A precheck runs under the daemon, whose
 //     env may still hold whatever shell bootstrapped it — and a leaked
 //     CLAUDE_CODE_CHILD_SESSION makes any `claude` the precheck itself invokes
@@ -32,6 +33,7 @@ import {
 } from "@codecast/shared/contracts";
 import { scrubAgentEnv } from "./agentEnv.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
+import { endStation } from "./workflow/stationProcs.js";
 
 /** What a `changes` precheck keeps of its stdout: enough to tell it changed. */
 export function precheckFingerprint(stdout: string): string {
@@ -66,13 +68,12 @@ export function runTriggerPrecheck(opts: {
     let timedOut = false;
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
-    let killTimer: ReturnType<typeof setTimeout> | null = null;
+    let ending: Promise<void> = Promise.resolve();
 
     const settle = (fields: Partial<TriggerPrecheckResult>) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
-      if (killTimer) clearTimeout(killTimer);
       resolve({
         command: opts.command,
         timedOut,
@@ -102,23 +103,11 @@ export function runTriggerPrecheck(opts: {
     timer = setTimeout(() => {
       timedOut = true;
       const pid = child.pid;
-      if (!pid) {
+      if (!pid || process.platform === "win32") {
         child.kill("SIGTERM");
         return;
       }
-      try {
-        process.kill(-pid, "SIGTERM");
-      } catch {
-        child.kill("SIGTERM");
-      }
-      killTimer = setTimeout(() => {
-        try {
-          process.kill(-pid, "SIGKILL");
-        } catch {
-          /* the group is already gone */
-        }
-      }, SIGKILL_DELAY_MS);
-      killTimer.unref?.();
+      ending = endStation(pid, SIGKILL_DELAY_MS);
     }, timeoutMs);
     timer.unref?.();
 
@@ -137,7 +126,8 @@ export function runTriggerPrecheck(opts: {
       // A timed-out command's exit status is the signal that killed it, which
       // says nothing about the check — leave exitCode absent so `timedOut` is
       // the only thing read.
-      settle(timedOut || typeof code !== "number" ? {} : { exitCode: code });
+      // A timed-out command reports once everything it started is ended.
+      void ending.then(() => settle(timedOut || typeof code !== "number" ? {} : { exitCode: code }));
     });
   });
 }

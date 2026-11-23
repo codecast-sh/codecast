@@ -12,6 +12,13 @@ describe("the line's notes in plain words (learning-loop.md LL6)", () => {
       .toBe("Dissolve ran out of time after 30 minutes and was stopped. The problem is open again.");
     expect(lineCommentWords("The run stopped: hand jx79c63 killed after 30m at dissolve. The problem is open again."))
       .toBe("Dissolve ran out of time after 30 minutes and was stopped. The problem is open again.");
+    // The kill note's parenthesis says why: no work for its quiet window, or its station's limit.
+    expect(failReasonWords("hand jx79c63 killed after 47m at dissolve (it showed no work for 30m)"))
+      .toBe("Dissolve showed no work for 30 minutes and was stopped. The problem is open again.");
+    expect(lineCommentWords("The run stopped: hand jx79c63 killed after 47m at dissolve (it showed no work for 30m). The problem is open again."))
+      .toBe("Dissolve showed no work for 30 minutes and was stopped. The problem is open again.");
+    expect(failReasonWords("hand jx79c63 killed after 240m at dissolve (it ran 240m, its station's limit)"))
+      .toBe("Dissolve ran out of time after 240 minutes and was stopped. The problem is open again.");
     expect(lineCommentWords("The run stopped: the runner lost its machine. The problem is open again."))
       .toBe("The run stopped: the runner lost its machine. The problem is open again.");
     expect(deadEndWords("Investigate", "failure")).toBe("Investigate failed, and the flow had no next step for it. The problem is open again.");

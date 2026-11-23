@@ -6,7 +6,7 @@ import { useSessionCardBuckets, useSyncSessionCardBucket } from "../hooks/useSyn
 import { useSyncOpsSources } from "../hooks/useSyncOps";
 import { useSyncSessionIndex } from "../hooks/useSyncSessionIndex";
 import { HuddleStartHost } from "./calls/HuddleStartHost";
-import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, lazy, Suspense } from "react";
+import { ReactNode, useState, useCallback, useRef, useMemo, memo, createContext, useContext, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -74,13 +74,14 @@ import { featurePageRedirect, useWorkspaceFeature } from "../lib/teamFeatures";
 import { useSyncSettings } from "../hooks/useSyncSettings";
 import { useIsSyncHost, useSyncReplication } from "../hooks/useSyncRole";
 import { useSessionCommandResults } from "../hooks/useSessionCommands";
+import { useSyncLandedReach } from "../hooks/useSessionShipState";
 import { useEnsureDispatch } from "../hooks/useEnsureDispatch";
 import { TmuxMissingBanner } from "./TmuxMissingBanner";
 import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
-import { useInboxStore, useTrackedStore, getProjectName, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, projectAxisKeys, projectOfFromState, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectToast";
 import { pathOnMyMachines, savedDefaultProject } from "../lib/machinePicker";
@@ -129,22 +130,13 @@ import { useLocalAuth } from "../lib/localAuth";
 import { ModRuntimes } from "./mods/ModRuntimes";
 import { useSyncMods } from "../lib/mods/useMods";
 import { resolveCommentsEnabled } from "../lib/uiPrefDefaults";
+import { lazyNamed } from "../lib/lazyNamed";
 
-const SettingsModal = lazy(() =>
-  import("./settings/SettingsModal").then((module) => ({ default: module.SettingsModal })),
-);
-const CallSyncEffects = lazy(() =>
-  import("./calls/CallSyncEffects").then((module) => ({ default: module.CallSyncEffects })),
-);
-const CallDock = lazy(() =>
-  import("./calls/CallDock").then((module) => ({ default: module.CallDock })),
-);
-const RecordingPill = lazy(() =>
-  import("./calls/RecordingPill").then((module) => ({ default: module.RecordingPill })),
-);
-const ElsewhereCallPill = lazy(() =>
-  import("./calls/ElsewhereCallPill").then((module) => ({ default: module.ElsewhereCallPill })),
-);
+const SettingsModal = lazyNamed(() => import("./settings/SettingsModal"), "SettingsModal");
+const CallSyncEffects = lazyNamed(() => import("./calls/CallSyncEffects"), "CallSyncEffects");
+const CallDock = lazyNamed(() => import("./calls/CallDock"), "CallDock");
+const RecordingPill = lazyNamed(() => import("./calls/RecordingPill"), "RecordingPill");
+const ElsewhereCallPill = lazyNamed(() => import("./calls/ElsewhereCallPill"), "ElsewhereCallPill");
 
 interface DashboardLayoutProps {
   children: ReactNode;
@@ -586,6 +578,7 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
         change while the document lives, but the rule stays visible. */}
     {windowEffects ? <WindowOnlyEffects /> : null}
     <SessionCommandResultsFeeder />
+    <LandedReachFeeder />
     <InboxWarmLoop />
     <LocalDeviceProbe />
     {isSyncHost ? <HostFeeders /> : null}
@@ -599,6 +592,15 @@ export function DashboardSyncEffects({ windowEffects = !PANE_EMBED }: { windowEf
  *  request re-renders only this. */
 function SessionCommandResultsFeeder() {
   useSessionCommandResults();
+  return null;
+}
+
+/** How far each session's landed change has gone toward production, for the
+ *  inbox cards. deployReach is per-window, so every window feeds its own from
+ *  the runs replication gives it: never host-gated. Its own component, so a
+ *  new answer re-renders only this. */
+function LandedReachFeeder() {
+  useSyncLandedReach();
   return null;
 }
 
@@ -926,7 +928,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     if (
       selected?.project_path &&
       seedable(selected.project_path) &&
-      (!activeProjectFilter || getProjectName(selected.git_root, selected.project_path) === activeProjectFilter)
+      // Any key the session answers to on the chip axis: its folder, project or machine.
+      (!activeProjectFilter || projectAxisKeys(selected, projectOfFromState(store)).includes(activeProjectFilter))
     ) {
       return {
         path: selected.project_path,
@@ -1367,6 +1370,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {appWindow && <AppWindowBar app={appWindow} />}
       <header
         data-cc-topbar
+        data-zen-bar-hidden={zenBar && !zenPeek.open ? "" : undefined}
         {...zenPeek.barProps}
         ref={headerRef}
         className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] modern:border-sol-border ${desktopClass} ${appWindow ? "hidden" : ""} ${zenBar ? `fixed inset-x-0 top-0 !z-[120] transition-transform duration-200 ease-out ${zenPeek.open ? "translate-y-0 shadow-lg" : "-translate-y-full pointer-events-none"}` : "relative"}`}

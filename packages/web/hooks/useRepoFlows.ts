@@ -1,0 +1,56 @@
+// A checkout's own flows, as the viewer's machines reported them (convex repoFlows.forCheckout): the flows `cast flow
+// run` takes there ahead of the shipped ones of the same slug. The Ship picker mounts this while it is open.
+import { useMemo } from "react";
+import { makeFunctionReference } from "convex/server";
+import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import type { RepoFlow } from "@codecast/shared/contracts/repoFlows";
+import { useSyncCollection } from "./useSyncCollection";
+import { useCollectionRows } from "./useCollectionRows";
+
+const FOR_CHECKOUT = makeFunctionReference<"query">("repoFlows:forCheckout");
+
+export type RepoFlowsRow = { _id: string; root: string; repository: string; flows: RepoFlow[]; updated_at: number };
+
+const NONE: RepoFlow[] = [];
+const rowSig = (r: RepoFlowsRow) => `${r.root}|${r.updated_at}`;
+
+/** The repository an origin remote names, the way a checkout reports its flows under it. */
+export const repositoryOfRemote = (remote: string | null | undefined): string | null => repositoryKeyOfRemote(remote ?? undefined);
+
+type SessionRows = { sessions?: Record<string, any>; conversations?: Record<string, any> };
+
+/** A session's origin remote. A sessions row can lack it while the conversation row has it, so both are read. */
+export function sessionRemoteOf(s: SessionRows, id: string): string | null {
+  return s.sessions?.[id]?.git_remote_url ?? s.conversations?.[id]?.git_remote_url ?? null;
+}
+
+/** A session's checkout: its git top level, the key a checkout reports its flows under. */
+export function sessionRootOf(s: SessionRows, id: string): string | null {
+  return s.sessions?.[id]?.git_root ?? s.conversations?.[id]?.git_root ?? null;
+}
+
+/** The workspace whose pool a session's flows come from: the team the session is routed to (its directory's team, the
+ *  one `cast flow run` there reads), else the viewer's personal one. Null while the session or the viewer is unknown. */
+export function sessionWorkspaceOf(s: SessionRows & { currentUser?: { _id?: unknown } | null }, id: string): string | null {
+  if (!s.sessions?.[id] && !s.conversations?.[id]) return null;
+  const team = s.sessions?.[id]?.team_id ?? s.conversations?.[id]?.team_id;
+  if (team) return `team:${team}`;
+  return s.currentUser?._id ? `user:${s.currentUser._id}` : null;
+}
+
+/** Of the rows held for a checkout and its repository: the checkout's own, else the repository's newest report. */
+export function checkoutRow(rows: ReadonlyArray<RepoFlowsRow>, root: string | null): RepoFlowsRow | null {
+  return rows.find((r) => r.root === root) ?? [...rows].sort((a, b) => b.updated_at - a.updated_at)[0] ?? null;
+}
+
+/** The flows of the checkout at `root` (of `repository`), as `cast flow run` reads them there; none while unknown. */
+export function useRepoFlows(root: string | null, repository: string | null): RepoFlow[] {
+  // The answer is whole for this checkout: a row of it the answer lacks was pruned on the server, and a row with no
+  // root is a cached report from before checkouts were the key. Both leave disk as well as memory (the rows are
+  // Convex-keyed, so only pruneAbsentScope reaches IndexedDB); a re-reported checkout comes back under a new _id.
+  const syncOpts = useMemo(() => ({ isDelta: true, pruneAbsentScope: (r: Partial<RepoFlowsRow>) => !r.root || r.root === root }), [root]);
+  useSyncCollection("repoFlows", FOR_CHECKOUT, root || repository ? { root, repository } : "skip", { syncOpts });
+  const where = useMemo(() => (r: RepoFlowsRow) => !!r.root && (r.root === root || (!!repository && r.repository === repository)), [root, repository]);
+  const rows = useCollectionRows<RepoFlowsRow>("repoFlows", { where, sig: rowSig });
+  return useMemo(() => checkoutRow(rows, root)?.flows ?? NONE, [rows, root]);
+}

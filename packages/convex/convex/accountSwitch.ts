@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 // Claude Code account switching + mass-continue for limit-blocked sessions.
 //
 // The daemon owns the actual swap (the credential lives in the machine's
@@ -75,6 +76,7 @@ import { recoveryFleet } from "./lib/hostRecovery";
 import { withSafetyBlock, describeDecision, peggedWindowLabel, oauthApprovalCode, CONTEXT_RECOVERY_DELAY_MS, fleetModels } from "@codecast/shared/contracts";
 import { spendCapsOf, withSpendCap } from "./lib/spendCaps";
 import { hasUndeliveredContinue, insertSwitchCommands } from "./lib/switchCommands";
+import { pinModelLimitParks, splitModelLimitParks } from "./lib/modelLimitPins";
 
 export { insertSwitchCommands };
 
@@ -1807,7 +1809,15 @@ export const autoSwitchCheck = internalMutation({
     // cooldown, forever), and could spend a Claude account's week on sessions
     // a Claude switch cannot reach.
     const codexLimit = limitBlocked.filter((c) => c.agent_type === "codex");
-    const claudeLimit = limitBlocked.filter((c) => c.agent_type !== "codex");
+    // A park on one model's week ("Fable limit") moves the fleet only when
+    // most of the fleet runs that model (fleetModels): one Fable session
+    // hopped an Opus fleet across three accounts every few minutes
+    // (2026-11-21). Otherwise, with switching on, it moves alone onto an
+    // account whose meter proves room on that model (pinModelLimitParks); with
+    // none, it waits for its reset or a model change on its card.
+    const split = await splitModelLimitParks(ctx, limitBlocked.filter((c) => c.agent_type !== "codex"), await runningClaudeModels(ctx, args.user_id, now));
+    const claudeLimit = split.fleet;
+    const pinned = allowSwitch ? await pinModelLimitParks(ctx, args.user_id, { parks: split.minority, online, primary, now }) : [];
     const authParks = blocked.filter((c) => c.pending_api_error_kind === "auth" && recentEnough(c) &&
       (!c.owner_device_id || c.owner_device_id === primary.device_id));
     const { restart: authRestart, dead: authDead } = splitAuthParks(
@@ -1841,7 +1851,7 @@ export const autoSwitchCheck = internalMutation({
           },
         });
       }
-      return { acted: "nothing_blocked", dismissed };
+      return pinned.length ? { acted: "model_pin", dismissed, pinned } : { acted: "nothing_blocked", dismissed };
     }
     // Auto mode switches on its own. A proposal left over from ask mode would
     // keep the banner waiting for an approval that is not how this machine
@@ -2512,7 +2522,7 @@ export const reclassifyParkedApiErrorFlags = internalMutation({
     let skippedSettled = 0;
     for (const conv of page.page) {
       // A killed or completed row is the human saying they are done with it.
-      if (conv.status !== "active" || conv.inbox_killed_at != null) {
+      if (conv.status !== "active" || conv.inbox_killed_at != null || isClosedSession(conv)) {
         skippedSettled++;
         continue;
       }

@@ -35,6 +35,15 @@
 .sj-stage[data-state="active"] .sj-node { border-color: var(--sj-who-c); box-shadow: 0 0 0 4px color-mix(in srgb, var(--sj-who-c) 16%, transparent); }
 .sj-stage[data-state="waiting"] .sj-node { border-color: var(--sj-wait); background: color-mix(in srgb, var(--sj-wait) 16%, var(--sj-card)); box-shadow: 0 0 0 4px color-mix(in srgb, var(--sj-wait) 14%, transparent); }
 .sj-stage[data-state="back"] .sj-node { border-color: var(--sj-session); background: color-mix(in srgb, var(--sj-session) 16%, var(--sj-card)); color: var(--sj-session); box-shadow: 0 0 0 4px color-mix(in srgb, var(--sj-session) 14%, transparent); }
+/* Routed: a step chose another way on (a script that exits non-zero to route), neither a pass nor a stop. */
+.sj-stage[data-state="routed"] .sj-node { border-color: var(--sol-text-dim); color: var(--sol-text-muted); }
+.sj-stage[data-state="skipped"] .sj-node { border-style: dashed; border-color: var(--sj-rule); }
+.sj-stage[data-state="skipped"] .sj-label { color: var(--sol-text-dim); }
+/* A fan-out's one name: a branch that sent work back, stopped or waits takes that state's color. */
+.sj-branch[data-state="back"] { color: var(--sj-session); }
+.sj-branch[data-state="stopped"] { color: var(--sj-bad); }
+.sj-branch[data-state="waiting"] { color: var(--sj-wait); }
+.sj-branch-flag { font-style: normal; font-weight: 700; margin-left: 2px; }
 .sj-stage { --sj-who-c: var(--sj-auto); }
 .sj-stage[data-who="agent"] { --sj-who-c: var(--sj-agent); }
 .sj-stage[data-who="you"] { --sj-who-c: var(--sj-you); }
@@ -55,7 +64,8 @@
 .sj-now[data-kind="working"] { --sj-who-c: var(--sj-auto); }
 .sj-now[data-kind="working"][data-who="agent"] { --sj-who-c: var(--sj-agent); }
 .sj-now[data-kind="session"] { color: var(--sj-session); background: color-mix(in srgb, var(--sj-session) 7%, var(--sj-sunk)); }
-.sj-now[data-kind="you"] { background: color-mix(in srgb, var(--sj-wait) 9%, var(--sj-sunk)); }
+.sj-now:is([data-kind="you"], [data-kind="gate"]) { background: color-mix(in srgb, var(--sj-wait) 9%, var(--sj-sunk)); }
+.sj-what[data-late] { color: var(--sj-bad); }
 .sj-now[data-kind="landed"], .sj-now[data-kind="live"] { color: var(--sj-ok); }
 .sj-now[data-kind="stopped"] { color: var(--sj-bad); background: color-mix(in srgb, var(--sj-bad) 6%, var(--sj-sunk)); }
 .sj-now .sj-what { color: var(--sol-text-muted); min-width: 0; }
@@ -66,10 +76,11 @@
 .sj-gate { flex-basis: 100%; margin-top: 4px; }
 .sj-act, .sj-btn { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 7px; border: 1px solid var(--sj-rule); background: var(--sj-card); color: var(--sol-text); cursor: pointer; white-space: nowrap; text-decoration: none; }
 .sj-act:hover, .sj-btn:hover { background: color-mix(in srgb, var(--sol-bg-alt) 60%, var(--sj-card)); }
-.sj-btn[data-primary] { border-color: color-mix(in srgb, var(--sol-blue) 55%, transparent); background: color-mix(in srgb, var(--sol-blue) 14%, var(--sj-card)); color: var(--sol-blue); }
-.sj-btn[data-primary]:hover { background: color-mix(in srgb, var(--sol-blue) 22%, var(--sj-card)); }
+.sj-act[data-primary], .sj-btn[data-primary] { border-color: color-mix(in srgb, var(--sol-blue) 55%, transparent); background: color-mix(in srgb, var(--sol-blue) 14%, var(--sj-card)); color: var(--sol-blue); }
+.sj-act[data-primary]:hover, .sj-btn[data-primary]:hover { background: color-mix(in srgb, var(--sol-blue) 22%, var(--sj-card)); }
 .sj-btn[data-quiet] { border-color: transparent; background: none; color: var(--sol-text-muted); }
 .sj-btn[data-quiet]:hover { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 8%, transparent); }
+.sj-act:focus-visible, .sj-btn:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: 2px; }
 
 /* The header chip: Ship, or where the session's change is. */
 .shp-chip { --shp-c: var(--sol-text-muted); }
@@ -77,8 +88,10 @@
 .shp-chip[data-tone="agent"] { --shp-c: var(--sol-orange); }
 .shp-chip[data-tone="session"] { --shp-c: var(--sol-violet); }
 .shp-chip[data-tone="you"] { --shp-c: var(--sol-yellow); color: var(--sol-text); border-color: color-mix(in srgb, var(--sol-yellow) 55%, transparent); background: color-mix(in srgb, var(--sol-yellow) 12%, transparent); }
+.shp-chip[data-tone="wait"] { --shp-c: var(--sol-yellow); }
 .shp-chip[data-tone="ok"] { --shp-c: var(--sol-green); }
 .shp-chip[data-tone="bad"] { --shp-c: var(--sol-red); }
+.shp-chip[data-tone="wait"] { --shp-c: var(--sol-yellow); }
 .shp-chip-dot { width: 6px; height: 6px; border-radius: 999px; background: var(--shp-c); flex: none; }
 .shp-chip[data-tone="working"] .shp-chip-dot, .shp-chip[data-tone="agent"] .shp-chip-dot { animation: sj-pulse 1.6s ease-in-out infinite; }
 
@@ -93,17 +106,31 @@
 .shp-flows { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 2px; border-bottom: 1px solid var(--sj-rule-2); }
 .shp-flow { width: 100%; display: grid; grid-template-columns: 14px auto 1fr; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 8px; border: 1px solid transparent; background: none; text-align: left; cursor: pointer; color: var(--sol-text); }
 .shp-flow:hover { background: color-mix(in srgb, var(--sol-bg-alt) 50%, transparent); }
-.shp-flow[aria-selected="true"] { background: var(--sj-card); border-color: var(--sj-rule); }
+.shp-flow:has(.shp-radio:checked) { background: var(--sj-card); border-color: var(--sj-rule); }
+/* The keyboard's place in the group, drawn inside the row so the popover's clipped edge never cuts it. */
+.shp-flow:has(.shp-radio:focus-visible) { outline: 2px solid var(--sol-blue); outline-offset: -2px; }
 .shp-flow b { font-size: 12.5px; font-weight: 600; }
-.shp-radio { width: 12px; height: 12px; border-radius: 999px; border: 1.5px solid var(--sj-rule); }
-.shp-flow[aria-selected="true"] .shp-radio { border: 4px solid var(--sol-blue); }
+.shp-radio { appearance: none; margin: 0; width: 12px; height: 12px; border-radius: 999px; border: 1.5px solid var(--sj-rule); background: none; cursor: pointer; }
+.shp-radio:focus-visible { outline: none; }
+.shp-radio:checked { border: 4px solid var(--sol-blue); }
 .shp-default { font-size: var(--fs-meta); font-weight: 600; color: var(--sol-blue); margin-left: 6px; }
 .shp-base { font-size: var(--fs-meta); font-weight: 400; color: var(--sol-text-dim); margin-left: 6px; }
-.shp-path { justify-self: end; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.shp-path { justify-self: end; max-width: 100%; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .shp-preview { background: var(--sol-bg); }
 .shp-foot { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--sj-rule-2); }
 .shp-flowname { font-size: 12.5px; font-weight: 600; margin-right: auto; }
 .shp-foot .sj-btn { padding: 5px 16px; font-size: 12.5px; }
+
+/* On a phone the panel is a sheet from the bottom: clear of the home indicator, every press at least 44px tall, and a
+   flow's approval and path under its name, wrapping rather than cut. */
+.shp-sheet { padding-bottom: env(safe-area-inset-bottom); }
+.shp-close { margin-left: auto; align-self: center; flex: none; width: 44px; height: 44px; margin-block: -10px; margin-right: -10px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--sol-text-muted); }
+.shp-link + .shp-close { margin-left: 0; }
+.shp-close:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: -2px; }
+.shp-sheet .shp-flow { min-height: 44px; grid-template-columns: 14px minmax(0, 1fr); row-gap: 2px; }
+.shp-sheet .shp-path { grid-column: 2; justify-self: start; white-space: normal; line-height: 1.5; }
+.shp-sheet .sj-btn, .shp-sheet .shp-link { min-height: 44px; display: inline-flex; align-items: center; }
+.shp-sheet .shp-foot .sj-btn { padding: 0 24px; }
 
 /* Where the landed change is on each target. */
 .sj-targets { list-style: none; margin: 0; padding: 8px 12px 10px; display: flex; flex-wrap: wrap; gap: 6px; border-top: 1px solid var(--sj-rule-2); background: var(--sj-sunk); }
@@ -129,6 +156,13 @@
 .sj-detail-mark[data-status="running"] { background: var(--sol-blue); animation: sj-pulse 1.6s ease-in-out infinite; }
 .sj-detail-session { color: var(--sol-blue); text-decoration: none; }
 .sj-detail-session:hover { text-decoration: underline; }
+/* A Ship press the session answered without a run: its answer, quoted. */
+.shp-declined { padding: 9px 14px 10px; border-bottom: 1px solid var(--sj-rule-2); background: var(--sj-sunk); }
+.shp-declined header { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.shp-declined header b { font-size: 12.5px; font-weight: 600; flex: none; }
+.shp-declined header span { font-size: 12px; color: var(--sol-text-muted); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shp-declined blockquote { margin: 6px 0 0; padding-left: 9px; border-left: 2px solid var(--sj-rule); font-size: 12.5px; line-height: 1.45; color: var(--sol-text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+button.shp-link { background: none; border: 0; padding: 0; cursor: pointer; font: inherit; font-size: var(--fs-meta); }
 .shp-session { font-size: 13px; color: var(--sol-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sj-target-item { display: inline-flex; align-items: center; gap: 4px; }
 .shp-asks { display: inline-block; margin-right: 10px; padding: 0 7px; border-radius: 999px; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text-dim) 12%, transparent); }

@@ -183,7 +183,7 @@ export async function showInputs(deps: OrgInitDeps, options: any): Promise<void>
     if (numbers) console.log(`    ${fmt.muted(numbers)}`);
   }
   if (s.coverage) console.log(`  ${fmt.muted("coverage:")} ${coverageLine(s.coverage)}`);
-  for (const line of unplacedLines(inputs.coverage?.unplaced, Date.now())) console.log(line);
+  for (const line of unplacedLines(inputs.coverage?.unplaced, Date.now(), "  ", inputs.coverage?.unplaced_unread)) console.log(line);
   // Where the work is (S9): the busiest areas and the records behind them.
   for (const a of (inputs.activity?.areas ?? []).slice(0, 8)) console.log(`  ${fmt.muted("area")} ${a.repository ? `${a.repository}${a.path_prefix ? "/" : ""}` : ""}${a.path_prefix || fmt.muted(" (commits with no file list: could not verify)")} ${fmt.muted(`· ${a.commits_30d} commits · ${a.sessions_30d} sessions${a.authors?.length ? ` · ${a.authors.slice(0, 3).map((x: any) => x.name).join(", ")}` : ""}`)}`);
   if (s.stale.plans + s.stale.tasks + s.stale.projects) console.log(`  ${fmt.muted("stale:")} ${s.stale.plans} plans · ${s.stale.tasks} tasks · ${s.stale.projects} projects ${fmt.muted("(records behind the activity; a review proposes their status changes first)")}`);
@@ -560,7 +560,7 @@ export async function health(deps: OrgInitDeps, options: any): Promise<void> {
   // Warnings and blockers print one per line; info flags (a charter missing on
   // each of forty plans) collapse to one line per code with a few examples,
   // and --json keeps every row.
-  for (const line of unplacedLines(company.unplaced, now, "    ")) console.log(line);
+  for (const line of unplacedLines(company.unplaced, now, "    ", company.unplaced_unread)) console.log(line);
   const info = flags(company.flags).filter((f) => f.severity === "info");
   for (const fl of flags(company.flags).filter((f) => f.severity !== "info")) console.log(flagLine(fl, "    "));
   const byCode = new Map<string, any[]>();

@@ -336,7 +336,15 @@ describe("command groups stay off the boot graph", () => {
     // detect.ts, share.ts, manifest.ts and contracts/dataSync.ts off the graph.
     // 370 the same day: contracts/fileAttachment.ts, the [File <path>] tag a
     // web attachment becomes (no imports), carried by the contracts barrel.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(370);
+    // 372 on 2026-11-22: Antigravity CLI (agy) as a client: contracts/
+    // antigravityClient.ts, its registry descriptor (out of agentClients.ts for
+    // its max-lines pin), and antigravityTranscript.ts, its parser (out of
+    // parser.ts the way museTranscript.ts is).
+    // 373 the same day: contracts/agentPins.ts, the pinned-agents helpers (out
+    // of agentClients.ts for its max-lines pin), carried by the contracts barrel.
+    // 374 (2026-11-23): contracts/closedSession.ts, the shared Close verdict
+    // (isClosedSession, closeInFlightReason), carried by the contracts barrel.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(374);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -505,7 +513,19 @@ describe("command groups stay off the boot graph", () => {
     // across the person's machines (folderLists.ts +1, syncPlan.ts), a start
     // clones a missing checkout (resumePlacement.ts +2),
     // syncService.getSyncSettings +1, reconciliation.ts and projectRoots.ts +1.
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4839);
+    // 4840 on 2026-11-22, measured on main at 07e47c2f8 plus the change: the
+    // Antigravity CLI client adds 17 KB, contracts/antigravityClient.ts +4 and
+    // antigravityTranscript.ts +8 (the parser parser.ts dispatches to, as it
+    // does museTranscript.ts), its model options +2, and its launch, resume,
+    // process and scan branches +3; main had shrunk by 16 since the last pin.
+    // 4841 the same day: `cast typed`'s command-group line (+1); its body
+    // loads on demand (typedCommand.ts).
+    // 4845 the same day: antigravityTranscript.ts maps agy's tool calls onto
+    // Bash/Read/Edit/Write/WebSearch/Agent (+3), and contracts/agentPins.ts,
+    // pin lists that let a newer client through (+1).
+    // 4851 (2026-11-23): contracts/closedSession.ts, the shared Close verdict,
+    // and the daemon's close-aware lifecycle reads (+6).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4851);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -718,7 +738,24 @@ describe("command groups stay off the boot graph", () => {
     // 613 the same day: remote/localSession.ts, out of remote/session-move.ts, the same split.
     // 615 the same day: contracts/fileAttachment.ts (no imports) and attachedFileDownload.ts,
     // which saves a file attached on the web next to the agent before its prompt is delivered.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(615);
+    // 616 on 2026-11-20: subagentFinish.ts (node imports only), which marks a finished
+    // Task subagent completed and reopens it when its transcript grows.
+    // 618 on 2026-11-22: processCwdCache.ts, one batched lsof for the cwd match
+    // (was one shell-wrapped lsof per claude process, ~230 a minute), and
+    // workspace/trash.ts, which removes a worktree whole or not at all.
+    // 619 the same day: workflow/stationProcs.ts, which ends a flow station's whole
+    // process tree and reaps a dead runner's stations by what their record proves.
+    // 620 the same day: cloud/mirror/contextOps.ts, the project-context walk's file and git
+    // operations split out of discovery.ts for max-lines, no new code.
+    // 624 the same day: Antigravity CLI (agy) as a client: the descriptor and
+    // parser above, antigravityPaths.ts (pure path rules the watcher and scan
+    // worker share without loading the parser) and antigravityLocal.ts (folder
+    // trust and the conversation's cwd from agy's own files).
+    // 623 the same day: antigravityLocal.ts loads only when an agy pane
+    // launches or resumes.
+    // 624 the same day: contracts/agentPins.ts, as on index.ts's graph above.
+    // 625 (2026-11-23): contracts/closedSession.ts, as on index.ts's graph above.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(625);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

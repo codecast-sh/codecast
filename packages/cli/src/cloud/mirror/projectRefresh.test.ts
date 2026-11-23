@@ -450,3 +450,104 @@ test("a host never mirrored still answers --verify with its receiver's capabilit
   expect(answer.hash).toBe("");
   expect(answer.complete).toBe(false);
 });
+
+test("union-mobile's tracked outreach/.agents -> .claude link: placement mirrors untracked agent config once, at its real path, and never a tracked file", async () => {
+  const local = temp();
+  const remote = temp();
+  const sourceRoot = path.join(local, "code", "union-mobile");
+  const targetRoot = path.join(remote, "work", "union-mobile");
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" }, stdio: "ignore" });
+  // The same commit on both machines: the host's checkout recreates the tracked link.
+  for (const root of [sourceRoot, targetRoot]) {
+    write(root, "outreach/CLAUDE.md", "outreach rules\n");
+    write(root, "outreach/.claude/agents/arc.md", "tracked agent\n");
+    write(root, "outreach/.gitignore", ".claude/settings.local.json\n");
+    fs.symlinkSync(".claude", path.join(root, "outreach/.agents"));
+    git(root, "init", "-q");
+    git(root, "add", ".");
+    git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+  }
+  // The laptop moves on: an edit to a tracked agent file, an untracked skill, a gitignored settings file.
+  write(sourceRoot, "outreach/.claude/agents/arc.md", "tracked agent, edited on the laptop\n");
+  write(sourceRoot, "outreach/.claude/skills/flags/SKILL.md", "untracked skill\n");
+  write(sourceRoot, "outreach/.claude/settings.local.json", JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+  const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects: [{ host: "u@h", sourceRoot, targetRoot }], narrowProjects: true, gitEnv: { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" } });
+  const parsed = await parseMirrorBundle(built.bytes);
+  expect(parsed.files.map((f) => f.path).filter((p) => p.startsWith("work/union-mobile/")).sort()).toEqual([
+    "work/union-mobile/outreach/.claude/settings.local.json",
+    "work/union-mobile/outreach/.claude/skills/flags/SKILL.md",
+  ]);
+  const result = await applyMirrorBundle(parsed, { home: remote, configUserId: "u", previousStamp: null, refresh: () => {} });
+  expect(result.errors).toEqual([]);
+  expect(result.host_edited).toEqual([]);
+  expect(fs.readlinkSync(path.join(targetRoot, "outreach/.agents"))).toBe(".claude");
+  expect(read(targetRoot, "outreach/.agents/skills/flags/SKILL.md")).toBe("untracked skill\n");
+  expect(JSON.parse(read(targetRoot, "outreach/.agents/settings.local.json")).permissions.allow).toEqual(["Bash(ls)"]);
+  expect(read(targetRoot, "outreach/.claude/agents/arc.md")).toBe("tracked agent\n");
+  expect(verifyMirrorStamp(remote)?.complete).toBe(true);
+}, 60_000);
+
+test("a tracked link leaving the project (`.codex -> ../shared-agents`): its files go by their home path where the host's recreated link lands there, and stay behind with a warning where it lands elsewhere; placement never fails", async () => {
+  const gitEnv = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { env: { ...process.env, ...gitEnv }, stdio: "ignore" });
+  const checkout = (root: string) => {
+    write(root, "AGENTS.md", "repo rules\n");
+    fs.symlinkSync("../shared-agents", path.join(root, ".codex"));
+    git(root, "init", "-q");
+    git(root, "add", ".");
+    git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+  };
+  const local = temp();
+  const sourceRoot = path.join(local, "code", "repo");
+  write(local, "code/shared-agents/skills/team/SKILL.md", "shared skill\n");
+  checkout(sourceRoot);
+  for (const narrowProjects of [true, false]) {
+    for (const [layout, lands] of [["code", true], ["work", false]] as const) {
+      const remote = temp();
+      const targetRoot = path.join(remote, layout, "repo");
+      checkout(targetRoot);
+      const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects: [{ host: "u@h", sourceRoot, targetRoot }], narrowProjects, gitEnv });
+      const parsed = await parseMirrorBundle(built.bytes);
+      const shared = parsed.files.map((f) => f.path).filter((p) => p.includes("shared-agents") || p.includes(".codex/"));
+      expect(shared).toEqual(lands ? ["code/shared-agents/skills/team/SKILL.md"] : []);
+      expect(built.summary.warnings.some((w) => w.includes(".codex -> ../shared-agents resolves elsewhere on the host"))).toBe(!lands);
+      const result = await applyMirrorBundle(parsed, { home: remote, configUserId: "u", previousStamp: null, refresh: () => {} });
+      expect(result.errors).toEqual([]);
+      if (lands) expect(read(targetRoot, ".codex/skills/team/SKILL.md")).toBe("shared skill\n");
+    }
+  }
+}, 60_000);
+
+test("a tracked link to another link (`.codex -> ../alias`, `alias -> shared-agents`): its files go where the host has the same chain, and stay behind with a warning where the host's first hop lands elsewhere", async () => {
+  const gitEnv = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
+  const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { env: { ...process.env, ...gitEnv }, stdio: "ignore" });
+  const checkout = (root: string) => {
+    write(root, "AGENTS.md", "repo rules\n");
+    fs.symlinkSync("../alias", path.join(root, ".codex"));
+    git(root, "init", "-q");
+    git(root, "add", ".");
+    git(root, "-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "init");
+  };
+  const local = temp();
+  const sourceRoot = path.join(local, "code", "repo");
+  write(local, "code/shared-agents/skills/team/SKILL.md", "shared skill\n");
+  fs.symlinkSync("shared-agents", path.join(local, "code/alias"));
+  checkout(sourceRoot);
+  for (const narrowProjects of [true, false]) {
+    for (const [layout, lands] of [["code", true], ["work", false]] as const) {
+      const remote = temp();
+      const targetRoot = path.join(remote, layout, "repo");
+      checkout(targetRoot);
+      fs.mkdirSync(path.join(remote, layout, "shared-agents"));
+      fs.symlinkSync("shared-agents", path.join(remote, layout, "alias"));
+      const built = await buildHomeMirror({ config: { user_id: "u" }, home: local, hostHome: remote, deviceId: "d", projects: [{ host: "u@h", sourceRoot, targetRoot }], narrowProjects, gitEnv });
+      const parsed = await parseMirrorBundle(built.bytes);
+      const shared = parsed.files.map((f) => f.path).filter((p) => p.includes("shared-agents") || p.includes("alias") || p.includes(".codex/"));
+      expect(shared).toEqual(lands ? ["code/shared-agents/skills/team/SKILL.md"] : []);
+      expect(built.summary.warnings.some((w) => w.includes(".codex -> ../alias resolves elsewhere on the host"))).toBe(!lands);
+      const result = await applyMirrorBundle(parsed, { home: remote, configUserId: "u", previousStamp: null, refresh: () => {} });
+      expect(result.errors).toEqual([]);
+      if (lands) expect(read(targetRoot, ".codex/skills/team/SKILL.md")).toBe("shared skill\n");
+    }
+  }
+}, 60_000);

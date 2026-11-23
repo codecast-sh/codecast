@@ -6,7 +6,8 @@ import { describe, expect, test } from "bun:test";
 import { canBrowse, listRepositories } from "./repos";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { withdrawUnroutedRepositoryRows } from "./githubApp";
-import { makeFakeDb } from "./testDb";
+import { makeFakeDb, schemaIndexes } from "./testDb";
+import schema from "./schema";
 
 function context(viewer: string, overrides: Record<string, any[]> = {}) {
   return {
@@ -30,7 +31,7 @@ function context(viewer: string, overrides: Record<string, any[]> = {}) {
       pull_requests: [],
       commits: [],
       ...overrides,
-    }),
+    }, { indexes: schemaIndexes(schema) }),
   };
 }
 

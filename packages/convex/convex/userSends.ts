@@ -6,6 +6,7 @@ import { recordSendFor } from "./lib/userSend";
 import { createTeamFeedFilter } from "./privacy";
 import { dayBounds } from "./lib/teamDay";
 import { isTestArtifactPath } from "@codecast/shared/contracts";
+import { verifyApiToken } from "./apiTokens";
 
 export const record = internalMutation({
   args: {
@@ -206,5 +207,60 @@ export const fullText = query({
     const send = await ctx.db.query("user_sends").withIndex("by_message", (q) => q.eq("message_id", args.message_id)).first();
     if (!send || String(send.user_id) !== String(viewer)) return null;
     return { text: send.text, clipped: send.clipped };
+  },
+});
+
+// ── `cast typed`: when the token's person typed, across every workspace ─────
+//
+// Timestamps, session short ids and character counts only, never text: a
+// script on another machine reads this as a productivity signal. Rows come
+// from the per-send log, so the same rule as the Typed chart decides what a
+// person typed (lib/userSend.classifyUserSend + isProgramLaunched). A decision
+// answer is marked by `kind`, so a reader can drop the picks (a tap).
+
+const TYPED_PAGE_MAX = 1000;
+const PASTED_BLOCK_RE = /<pasted_content(?=[\s>])[^>]*>[\s\S]*?<\/pasted_content[^>]*>/g;
+// A paste the log cut at SEND_TEXT_CAP has lost its closing tag: the rest is paste.
+const CUT_PASTE_RE = /<pasted_content(?=[\s>])[^>]*>[\s\S]*$/;
+
+export type TypedRow = {
+  at: number;
+  session: string;
+  chars: number;
+  kind: "message" | "decision_written" | "decision_picked";
+};
+
+/** One page of the person's sends at or after `since`, oldest first.
+ *  `next` is the cursor for the following page, null once the window is read. */
+export const typedSince = query({
+  args: { api_token: v.string(), since: v.number(), after: v.optional(v.number()), limit: v.optional(v.number()) },
+  handler: async (ctx, args): Promise<{ messages: TypedRow[]; next: number | null }> => {
+    const auth = await verifyApiToken(ctx, args.api_token);
+    if (!auth) throw new Error("Unauthorized");
+    const limit = Math.max(1, Math.min(args.limit ?? TYPED_PAGE_MAX, TYPED_PAGE_MAX));
+    const sends: Doc<"user_sends">[] = await ctx.db
+      .query("user_sends")
+      .withIndex("by_user_timestamp", (q) =>
+        args.after !== undefined
+          ? q.eq("user_id", auth.userId).gt("timestamp", args.after)
+          : q.eq("user_id", auth.userId).gte("timestamp", args.since),
+      )
+      .order("asc")
+      .take(limit);
+    const conversations = new Map<string, Doc<"conversations"> | null>();
+    const messages: TypedRow[] = [];
+    for (const send of sends) {
+      const key = String(send.conversation_id);
+      if (!conversations.has(key)) conversations.set(key, await ctx.db.get(send.conversation_id));
+      const c = conversations.get(key);
+      if (!c || isTestArtifactPath(c.project_path ?? "")) continue;
+      messages.push({
+        at: send.timestamp,
+        session: c.short_id ?? key.slice(0, 7),
+        chars: send.text.replace(PASTED_BLOCK_RE, "").replace(CUT_PASTE_RE, "").trim().length,
+        kind: send.decision ? (send.decision.picked ? "decision_picked" : "decision_written") : "message",
+      });
+    }
+    return { messages, next: sends.length === limit ? sends[sends.length - 1].timestamp : null };
   },
 });

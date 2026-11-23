@@ -10,6 +10,8 @@ import {
   keychainArgs,
   launchChrome,
   stopChrome,
+  automationChromeBinary,
+  chromeForTestingDir,
   type ChromeInstance,
 } from "./chrome.js";
 import { isPortFree } from "./ports.js";
@@ -104,6 +106,62 @@ describe("findChromeBinary / probes", () => {
     }
   });
 });
+
+describe("automationChromeBinary", () => {
+  const platformName = process.arch === "arm64" ? "mac-arm64" : "mac-x64";
+  const install = (version: string) => {
+    const p = path.join(chromeForTestingDir(tmpDir), version, `chrome-${platformName}`, "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, "");
+    return p;
+  };
+  const run = (platform: NodeJS.Platform = "darwin") => {
+    const installs: string[] = [];
+    const binary = automationChromeBinary({ home: tmpDir, platform, install: (dir) => installs.push(dir) });
+    return { binary, installs };
+  };
+
+  test("macOS runs codecast's newest Chrome for Testing, never the human's Chrome", () => {
+    install("998.0.1.0");
+    const newest = install("999.0.2.0");
+    expect(run()).toEqual({ binary: newest, installs: [] });
+  });
+
+  test("a copy a major version behind the human's Chrome still runs, and a newer one downloads", () => {
+    if (humanChromeMajor() < 2) return;
+    const old = install("1.0.0.0");
+    expect(run()).toEqual({ binary: old, installs: [chromeForTestingDir(tmpDir)] });
+  });
+
+  test("with none installed it downloads one and runs the human's Chrome meanwhile", () => {
+    expect(run()).toEqual({ binary: findChromeBinary(), installs: [chromeForTestingDir(tmpDir)] });
+  });
+
+  test("an explicit binary override and other platforms keep the system probe and download nothing", () => {
+    install("999.0.2.0");
+    const fake = path.join(tmpDir, "fake-chrome");
+    fs.writeFileSync(fake, "");
+    const prev = process.env.CHROME_PATH;
+    process.env.CHROME_PATH = fake;
+    try {
+      expect(run()).toEqual({ binary: fake, installs: [] });
+    } finally {
+      if (prev === undefined) delete process.env.CHROME_PATH;
+      else process.env.CHROME_PATH = prev;
+    }
+    expect(run("linux")).toEqual({ binary: findChromeBinary(), installs: [] });
+  });
+});
+
+/** The installed Google Chrome's major version, 0 without one. */
+function humanChromeMajor(): number {
+  try {
+    const plist = fs.readFileSync("/Applications/Google Chrome.app/Contents/Info.plist", "utf-8");
+    return Number(plist.match(/<key>CFBundleShortVersionString<\/key>\s*<string>(\d+)/)?.[1]) || 0;
+  } catch {
+    return 0;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // isPidAlive (cheap helper, no Chrome needed)

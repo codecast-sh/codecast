@@ -1,4 +1,5 @@
-import { useSettingsData } from "../../../hooks/useSyncSettings";
+import { useSyncTeamMembers } from "../../../hooks/useSyncTeamMembers";
+import { teamMembersOf } from "../../../lib/activeTeam";
 import { useState } from "react";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { useRouter } from "next/navigation";
@@ -26,6 +27,7 @@ import { TeamTaskStatusEditor } from "../../../components/settings/TeamTaskStatu
 import { TeamFeaturesEditor } from "../../../components/settings/TeamFeaturesEditor";
 import { ManagedDevicesLink } from "../../../components/settings/ManagedDevicesEditor";
 import { AccessLogLink } from "../../../components/settings/AccessLogPanel";
+import { TeamReadKeys } from "../../../components/settings/TeamReadKeys";
 import { TeamTemplateLearning } from "../../../components/settings/TeamTemplateLearning";
 import { TeamModelBudget } from "../../../components/settings/TeamModelBudget";
 import { TeamDomainAccess } from "../../../components/settings/TeamDomainAccess";
@@ -56,7 +58,11 @@ export default function TeamPage() {
   const setTeamMemberRole = useInboxStore((s) => s.setTeamMemberRole);
   const syncGithubOrg = useAction(api.teams.syncGithubOrg);
   const updateTeamIcon = useInboxStore((s) => s.updateTeamIcon);
-  const { data: teamMembers, error: membersError } = useSettingsData("teamMembers");
+  // The roster's one home is the store's teamMembers, which the role and
+  // remove actions above write, so the list shows their result at once.
+  const roster = useInboxStore(teamMembersOf);
+  const teamMembers = roster.length ? roster : undefined;
+  const { error: membersError } = useSyncTeamMembers(activeTeamId);
   // Nothing cached and the roster query failed: no count is known, so none
   // is claimed.
   const membersUnknown = teamMembers === undefined && !!membersError;
@@ -496,6 +502,7 @@ export default function TeamPage() {
 
       {isAdmin && effectiveTeamId && <ManagedDevicesLink teamId={String(effectiveTeamId)} />}
       {isAdmin && effectiveTeamId && <AccessLogLink teamId={String(effectiveTeamId)} />}
+      {isAdmin && effectiveTeamId && <TeamReadKeys key={String(effectiveTeamId)} teamId={effectiveTeamId} teamName={team.name} />}
 
       {effectiveTeamId && <TeamTemplateLearning teamId={String(effectiveTeamId)} />}
 

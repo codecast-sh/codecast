@@ -36,8 +36,8 @@ describe("outputSummary", () => {
   });
 });
 
-describe("the shipped change flows route a check the machine could not run to the machine's stop", () => {
-  for (const name of ["change", "quick-change"]) {
+describe("the shipped quick-change flow routes a check the machine could not run to the machine's stop", () => {
+  for (const name of ["quick-change"]) {
     test(name, () => {
       const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[name]);
       const route = (from: string, ctx: Record<string, string>) =>

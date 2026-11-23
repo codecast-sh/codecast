@@ -24,10 +24,12 @@ import { CastCanvas, canvasAvailable } from './CastCanvas';
 import { CastDiff } from './CastDiff';
 import { DIFF_FENCE } from '@codecast/web/lib/castDiff';
 import { FLOW_FENCE_LANG, readFlowFence } from '@codecast/web/lib/line/flowFence';
-import { FlowCard, FlowRunCard } from './session/FlowCard';
+import { FlowCard, FlowEditCard, FlowPipelineCard, FlowRunCard } from './session/FlowCard';
 import { CONVERSATION_FENCE_LANG } from '@codecast/web/lib/conversationFence';
 import { ConversationFence } from './ConversationFence';
 import { EntityPill } from './EntityPill';
+import { MentionedCode } from './ChangeText';
+import { pushRunRefs, runOrLink } from './DeployRunRefs';
 import { ProposalCard } from './org/ProposalCard';
 import { DecisionCard } from './decisions/DecisionCard';
 import { SearchHighlightContext, markedRuns } from './search/highlight';
@@ -86,7 +88,9 @@ function linkedEntity(url: string): { type: EntityType; id: string; to?: string 
 
 function renderTextRefs(text: string, ctx: MdCtx, kp: string): React.ReactNode[] {
   const out: React.ReactNode[] = [];
-  const plain = (s: string) => out.push(markedRuns(s, ctx.found, `${kp}h${out.length}-`));
+  const words = (s: string) => out.push(markedRuns(s, ctx.found, `${kp}h${out.length}-`));
+  // Prose between references may name a run by its bare id ("Deploy 44822506482").
+  const plain = (s: string) => pushRunRefs(s, out, words, (w, key) => markedRuns(w, ctx.found, key), kp);
   const re = new RegExp(TEXT_REF_SOURCE, 'g');
   let last = 0;
   let m: RegExpExecArray | null;
@@ -98,9 +102,10 @@ function renderTextRefs(text: string, ctx: MdCtx, kp: string): React.ReactNode[]
       // pushed back as plain text instead of ending up inside the target.
       const url = trimUrlTail(m[1]);
       const entityRef = linkedEntity(url);
+      const link = <LinkText key={k} url={url} isUser={ctx.isUser} />;
       out.push(entityRef
         ? <EntityPill key={k} type={entityRef.type} id={entityRef.id} to={entityRef.to} />
-        : <LinkText key={k} url={url} isUser={ctx.isUser} />);
+        : runOrLink(url, link, k));
       const tail = m[1].slice(url.length);
       if (tail) plain(tail);
     } else if (m[2]) {
@@ -190,7 +195,8 @@ function renderInlineNode(node: Nodes, ctx: MdCtx, k: string): React.ReactNode {
       if (isEntityId(node.value)) {
         return <EntityPill key={k} shortId={node.value} fallback={<RNText style={style}>{node.value}</RNText>} />;
       }
-      return <RNText key={k} style={style}>{markedRuns(node.value, ctx.found, `${k}h`)}</RNText>;
+      // A branch the conversation's repository knows draws as its change, as on the web (changes.md CH4).
+      return <MentionedCode key={k} value={node.value}><RNText style={style}>{markedRuns(node.value, ctx.found, `${k}h`)}</RNText></MentionedCode>;
     }
     case 'link': {
       // A codecast object URL becomes a rich in-app pill, not an external link
@@ -199,7 +205,8 @@ function renderInlineNode(node: Nodes, ctx: MdCtx, k: string): React.ReactNode {
       if (entityRef) return <EntityPill key={k} type={entityRef.type} id={entityRef.id} to={entityRef.to} />;
       // An autolink (<https://…>) reads as its shortened URL.
       const label = plainText(node) === node.url ? undefined : renderInline(node.children, ctx, k);
-      return <LinkText key={k} url={node.url} label={label} isUser={ctx.isUser} />;
+      const link = <LinkText key={k} url={node.url} label={label} isUser={ctx.isUser} />;
+      return runOrLink(node.url, link, k);
     }
     case 'image':
       // Inline among text, or from a source that is not ours: a link, never an
@@ -427,7 +434,7 @@ function SoloRefCard({ solo, isUser }: { solo: SoloRef; isUser: boolean }) {
     path = (u.pathname + u.search).replace(/\/$/, '');
   } catch {}
   const kicker = parsePublishedPageUrl(solo.url) ? 'Published page' : parseClaudeArtifactUrl(solo.url) ? 'Claude artifact' : null;
-  return (
+  const card = (
     <TouchableOpacity
       activeOpacity={0.7}
       onPress={() => { void openLink(solo.url); }}
@@ -443,6 +450,8 @@ function SoloRefCard({ solo, isUser }: { solo: SoloRef; isUser: boolean }) {
       <FontAwesome name="external-link" size={11} color={Theme.textDim} />
     </TouchableOpacity>
   );
+  // An Actions run that carries a deploy is the deploy's pill; any other run keeps its card.
+  return runOrLink(solo.url, card);
 }
 
 const RULE_RESIDUE_RE = /^[─━═—–]{3,}$/;
@@ -498,7 +507,11 @@ function renderBlock(node: Nodes, ctx: MdCtx, k: string, first: boolean): React.
       if (language === 'cast-canvas' && canvasAvailable) return <CastCanvas key={k} code={node.value} />;
       if (language === FLOW_FENCE_LANG) {
         const read = readFlowFence(node.value);
-        if (read.ok) return read.spec.run ? <FlowRunCard key={k} runId={read.spec.run} /> : <FlowCard key={k} slug={read.spec.flow!} />;
+        if (read.ok) {
+          if (read.spec.edit) return <FlowEditCard key={k} edit={read.spec.edit} />;
+          if (read.spec.pipeline) return <FlowPipelineCard key={k} repository={read.spec.pipeline} />;
+          return read.spec.run ? <FlowRunCard key={k} runId={read.spec.run} /> : <FlowCard key={k} slug={read.spec.flow!} />;
+        }
       }
       if (language === CONVERSATION_FENCE_LANG) return <ConversationFence key={k} code={node.value} fallback={<CodeBlockWithCopy content={node.value} language="json" />} />;
       if (language === DIFF_FENCE) return <CastDiff key={k} raw={node.value} fallback={<CodeBlockWithCopy content={node.value} language="diff" />} />;

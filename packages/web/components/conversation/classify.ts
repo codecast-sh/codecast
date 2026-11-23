@@ -290,6 +290,29 @@ function extractPlanContent(text: string): string | null {
 
 const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Your task is to create a detailed summary", "Full transcript available at:", "[Codecast import]"];
 
+// A person's words delivered under a wrapper that names them: the sender and
+// the body the bubble draws. The message navigator reads the sender from here
+// too, so a wrapper added here is attributed in both places.
+export function directUserOf(t: string): { from: string; body: string } | null {
+  // A joint turn (send together, or merged queue rows): one bubble naming
+  // every author; UserPrompt draws each part under its own name.
+  const joint = parseJointMessage(t);
+  if (joint) return { from: jointAuthors(joint), body: t };
+  const directUser = parseUserMessage(t);
+  if (directUser) return directUser;
+  // A message from the staffing pane into a proposal's thread (S18), a
+  // comment on the task this session owns, or a person discussing a decision
+  // the session presents: their words under a quote of the row, task or
+  // decision they were looking at; the reply note for the agent stays out.
+  const quoted = parseProposalMessage(t) ?? parseTaskCommentMessage(t) ?? parseDecisionDiscussion(t);
+  if (quoted) return { from: quoted.from, body: quoted.about ? `> ${quoted.about}\n\n${quoted.body}` : quoted.body };
+  // A person talking with a project's line from its workspace's chat: their
+  // words, the brief and the reply note left out of the bubble.
+  const lineChat = parseLineChat(t);
+  if (lineChat) return { from: lineChat.from, body: lineChat.body };
+  return null;
+}
+
 // The user rows fold mode keeps: what a person said to the agent, a chat
 // line that woke it, a Vault request they filled, and a trigger run (a role's routine or a session under it
 // needing input: what woke the agent and why, so its reply never reads as
@@ -355,29 +378,8 @@ export function classifyUserMessage(
   // A spawned schedule run's opening prompt (plain-text wire format from
   // taskScheduler.buildPrompt) gets the same rich block as injected schedules.
   if (isSpawnedTaskPrompt(tNoReminders)) return { kind: 'scheduled_task' };
-  // A joint turn (send together, or merged queue rows): one bubble naming
-  // every author; UserPrompt draws each part under its own name.
-  const joint = parseJointMessage(t);
-  if (joint) return { kind: 'direct_user', from: jointAuthors(joint), body: t };
-  const directUser = parseUserMessage(t);
-  if (directUser) return { kind: 'direct_user', from: directUser.from, body: directUser.body };
-  // A message from the staffing pane into a proposal's thread (S18): the
-  // person's words under a quote of the row they were looking at; the reply
-  // note the wrapper carries for the agent stays out of the bubble.
-  const proposalMsg = parseProposalMessage(t);
-  if (proposalMsg) return { kind: 'direct_user', from: proposalMsg.from, body: proposalMsg.about ? `> ${proposalMsg.about}\n\n${proposalMsg.body}` : proposalMsg.body };
-  // A person's comment on the task this session owns, delivered while it
-  // works: their words under a quote naming the task, the same as above.
-  const taskComment = parseTaskCommentMessage(t);
-  if (taskComment) return { kind: 'direct_user', from: taskComment.from, body: taskComment.about ? `> ${taskComment.about}\n\n${taskComment.body}` : taskComment.body };
-  // A person discussing a decision with the session that presents it: their
-  // words under a quote naming the decision, the same as above.
-  const discussion = parseDecisionDiscussion(t);
-  if (discussion) return { kind: 'direct_user', from: discussion.from, body: discussion.about ? `> ${discussion.about}\n\n${discussion.body}` : discussion.body };
-  // A person talking with a project's line from its workspace's chat: their
-  // words, the brief and the reply note left out of the bubble.
-  const lineChat = parseLineChat(t);
-  if (lineChat) return { kind: 'direct_user', from: lineChat.from, body: lineChat.body };
+  const direct = directUserOf(t);
+  if (direct) return { kind: 'direct_user', ...direct };
   if (isSessionEscalationMessage(tNoReminders)) {
     const escalation = parseSessionEscalation(tNoReminders);
     if (escalation) return { kind: 'session_escalation', escalation };

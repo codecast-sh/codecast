@@ -471,6 +471,9 @@ function stampModeMatches(info: Pick<StampFile, "mode" | "satisfied_alias">, act
   return info.satisfied_alias ? ((actual & 0o100) !== 0) === ((want & 0o100) !== 0) : (actual & 0o777) === want;
 }
 
+// Never write through a symlink: whoever wrote the host's tree (a repo tracking
+// `notes -> ~/.ssh`) controls its links. The laptop names a file behind a tracked
+// link by its real path instead (discovery.ts); the host's checkout supplies the link.
 function checkDestination(home: string, rel: string): void {
   assertSafePath(rel);
   let dir = home;

@@ -2,7 +2,7 @@ import { CallsNavRow } from "./sidebar/CallsNav";
 import { workspaceNameOf, workspaceColorOf } from "../lib/projectColors";
 import { useCallsAvailable, useTeamFeature, useWorkspaceFeature, useWorkspaceFeatureState } from "../lib/teamFeatures";
 import { usePathname, useRouter } from "next/navigation";
-import { lazy, Suspense, useState, useMemo, useCallback, useRef, memo } from "react";
+import { Suspense, useState, useMemo, useCallback, useRef, memo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { railFocused, railFocusOffered } from "../lib/railFocus";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -48,10 +48,9 @@ import { usePoppedOut } from "../hooks/usePoppedOut";
 import { useIsModernStyle, useIsModernFocused } from "../hooks/useVisualStyle";
 import { ModernSidebar } from "./sidebar/ModernSidebar";
 import { inActiveWorkspace } from "../lib/workspaceScope";
+import { lazyNamed } from "../lib/lazyNamed";
 
-const LiveNowRail = lazy(() =>
-  import("./calls/LiveNow").then((module) => ({ default: module.LiveNowRail })),
-);
+const LiveNowRail = lazyNamed(() => import("./calls/LiveNow"), "LiveNowRail");
 
 const api = _api as any;
 

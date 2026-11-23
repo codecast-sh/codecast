@@ -11,6 +11,7 @@ import {
   readProposal, performBreachSnapshot, performWriteBreaches,
   performReviseProposal, cleanFailedNote, performSayInThread, formatProposalMessage, callerIsAuthor, performDecideAsk, performReply, settleEmptiedProposals } from "./orgProposals";
 import { ctxOf, change, spec, fixtures, ME, MATE, TEAM, WS, NOW, P, Q, GROWTH, S1, S_GROWTH } from "./orgProposals.testkit";
+import { charterText, giveCharter } from "./roleCharter.testkit";
 
 // Staffing proposals (docs/architecture/org-staffing.md S4): create from a
 // session or a person (no queue card: the proposal is a card in its thread), decide
@@ -1624,7 +1625,7 @@ describe("record groups, charter edits and charter lists", () => {
   });
   test("a charter edit substitutes the passages it names through the role's own update, and refuses a passage that is not there", async () => {
     const db = fixtures();
-    await db.patch(GROWTH as any, { charter: "Keeps paid acquisition on budget and pointed at the funnel. Reads the ads account every morning." });
+    await giveCharter(db, GROWTH, "Keeps paid acquisition on budget and pointed at the funnel. Reads the ads account every morning.");
     // One charter change per role in a proposal: two fold into one subject, so a second edit is a second proposal.
     const r = await performCreateProposal(ctxOf(db), ME as any, { team_id: TEAM, from_session: "s1", spec: spec([
       change({ kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "on budget", after: "under budget" }, { op: "add", line: "Reports spend every Monday." }] }, "The lead now reports spend."),
@@ -1645,12 +1646,12 @@ describe("record groups, charter edits and charter lists", () => {
     ]) })).rejects.toThrow("@growth's charter: the charter would be");
     const ok = await performDecideChange(ctxOf(db), ME as any, { change_id: String(r.changes[0].id), verdict: "accept", provision: false });
     expect([ok.status, ok.note]).toEqual(["applied", "@growth: charter a passage rewritten, a line added (128 characters)"]);
-    expect((await db.get(GROWTH as any)).charter).toBe("Keeps paid acquisition under budget and pointed at the funnel. Reads the ads account every morning.\n\nReports spend every Monday.");
+    expect(await charterText(db, GROWTH)).toBe("Keeps paid acquisition under budget and pointed at the funnel. Reads the ads account every morning.\n\nReports spend every Monday.");
     // The accepted row stamps the charter before and after (S39), so the card draws the real passages after apply.
     const stamp = (await readProposal(ctxOf(db), ME as any, r.short_id)).changes[0].applied_diff;
     expect(stamp).toMatchObject([{ kind: "charter_edit", before: { charter: "Keeps paid acquisition on budget and pointed at the funnel. Reads the ads account every morning." }, after: { charter: "Keeps paid acquisition under budget and pointed at the funnel. Reads the ads account every morning.\n\nReports spend every Monday." } }]);
     // The first edit rewrote the charter under the second: its passage is gone now, so the apply refuses it.
-    await db.patch(GROWTH as any, { charter: "Keeps paid acquisition under budget." });
+    await giveCharter(db, GROWTH, "Keeps paid acquisition under budget.");
     const miss = await performDecideChange(ctxOf(db), ME as any, { change_id: String(r2.changes[0].id), verdict: "accept", provision: false });
     expect(miss.status).toBe("failed");
     expect(miss.note ?? miss.error).toContain('@growth\'s charter: the passage "Reads the ads account every morning." is not in the charter as it stands; quote it exactly');

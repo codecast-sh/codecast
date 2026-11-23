@@ -31,3 +31,12 @@ export function conversationTitle(row: TitleRow): string {
 export function hostedTitle(conversation: TitleRow, session: TitleRow, firstAsk: () => string | null | undefined): string {
   return ownTitle(conversation) || ownTitle(session) || promptTitle(firstAsk());
 }
+
+/** What the person wrote in a session's first send while it is still on its
+ *  way (the store's pendingMessages for that session): the only name a
+ *  session has before the agent receives that message and the row learns a
+ *  title or first prompt. */
+export function pendingAsk(pending: ReadonlyArray<{ role?: string; content?: unknown }> | undefined): string {
+  const m = pending?.find((p) => p.role === "user" && typeof p.content === "string" && p.content.trim());
+  return (m?.content as string | undefined) ?? "";
+}

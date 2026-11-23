@@ -53,10 +53,15 @@ docs.doc_type        + "charter" | "brief"   (schema, CLI DOC_TYPE_ICONS, Create
 
 ## T2. Charter and brief
 
-- Charter: a doc the humans own. Created at provision from a template that
-  states the role's job in one paragraph, its scope, and the rules. Any
-  session carrying `standing_role_id` or `org_role_id` may not write a charter
-  doc (server check in docs.update keyed on the stored doc_type).
+- Charter: a doc the humans own, and the charter's only home: the role row
+  holds `charter_doc_id` and no text. Created with the role, from the words
+  the hire gave or else the role's job in one sentence. Every reader (the role
+  page, the org tree, `cast brief`, the router, the role card) and every
+  writer (the role page, `cast role update --charter`, a proposal's charter
+  edit, a template loader) goes through `lib/roleCharter.ts`; a charter edit
+  is logged and undone as a write to the doc's content. Any session carrying
+  `standing_role_id` or `org_role_id` may not write a charter doc (server
+  check in docs.update keyed on the stored doc_type).
 - Brief: a doc the role owns. Body = narrative (first line is the state line,
   then `Status:`/`Next:`/`Blocked:` lines, then a few paragraphs with evidence
   links as short ids). `cast brief` prints facts + narrative; `cast brief edit -`
@@ -112,15 +117,54 @@ through `orgRoles.markBriefRead`).
 - Pause: `orgRoles.pause` sets status paused; flush holds; hands under the role
   receive one interrupt ("stop at a safe point"); the spawn path refuses new
   hands under a paused role. Resume flushes held rows as one wake.
-- Restart: `orgRoles.restart` calls the existing `restartSession` on the
-  standing conversation; the first frame after a restart carries the brief in
-  full and the charter text.
+- Restart: `orgRoles.restart` kills and resumes the standing conversation in
+  place (`enqueueKillAndResume`); the first frame after a restart carries the
+  brief in full and the charter text. `fresh: true` (`cast role restart <h>
+  --fresh`) starts a new standing session instead. It refuses a paused role
+  (resume it first), a seat whose runner has left the team (`cast role
+  move` it first), and a seat holding queued messages on the fenced delivery
+  path (they hold a place in the old session's own sequence), naming how
+  many. The old anchor steps aside, the old seat's markers
+  (`standing_role_id`, `anchor_id`, `acting_user_id`) are cleared, and it is
+  recorded as `org_roles.previous_standing_conversation_id`. The role is then
+  provisioned as on its first seating (new bot, anchors row, conversation,
+  opening message) with the old session's project path, model and backend,
+  and never seats a project's session. The new session runs and bills on
+  the old one's runner (its `user_id`) and starts on its machine
+  (`owner_device_id`) while that machine is online, else where routing sends
+  it, whoever asked; the caller is only who is authorized.
+  Before the role's routines arm on the new seat, the old seat's work moves
+  to it (`carrySeat`). Every live trigger it armed is re-pointed
+  (`originating_conversation_id`, `target_conversation_id`,
+  `created_by_conversation_id`): a `pr_comment` trigger, a follow-up, a
+  `--spawn` monitor whose runs report to it. The role's own triggers (check,
+  morning agenda, inbox look, event triggers) move in whatever state they
+  stand, so arming finds them instead of making new ones: one the person
+  cancelled (`completed` with no `canceled_on_kill_at`) stays cancelled, one
+  they paused stays paused, and one stopped by fault (failed slots, or
+  cancelled with a killed session) comes back armed; tuning (cadence,
+  precheck, focus) stays on the row. Its `pending` and `held` messages, a
+  person's parked message included, move to the new conversation behind its
+  opening, in their order; an opening the old seat never took stays. Only
+  then is the old anchor decommissioned (kill, bot off the roster), and the
+  kill takes only what was the old process's own: a turn already typed into
+  its pane, or one whose delivery to it failed. Finished triggers stay on the
+  old thread. The old anchor's `anchor_channels` move to
+  the new anchor, so Slack keeps routing. Projects whose `default_session_id`
+  was the old seat (`projects.by_default_session`) point at the new one. A
+  second press returns the fresh seat unchanged while its start is on its
+  way: it has no messages, is under two minutes old, neither it
+  (`session_error`) nor its `start_session` command reports a failure, and
+  the role's latest log row is the restart that seated it. Otherwise the
+  press restarts it fresh again. The org log row carries
+  `effects.restarted_fresh`, and the history refuses to undo it, or any
+  earlier entry it depends on: the old session is already killed.
 
 ## T5. CLI
 
 ```
 cast role create <name> --handle <h> [--project <ref>]... [--plan <ref>]... [--reports-to @handle|me] [--charter -] [--model m] [--no-session]
-cast role ls | show <h> | wake <h> "msg" | pause <h> | resume <h> | retire <h> | restart <h> | trust <h> <stage> | caps <h> --hands n --wakes n --tokens n
+cast role ls | show <h> | wake <h> "msg" | pause <h> | resume <h> | retire <h> | restart <h> [--fresh] | trust <h> <stage> | caps <h> --hands n --wakes n --tokens n
 cast brief [<h>] [--json]            # facts + narrative; inside a role, its own
 cast brief edit -                    # narrative from stdin (inside a role, or --for <h> as the parent)
 cast role wakes <h> [-n 20]          # the wake log

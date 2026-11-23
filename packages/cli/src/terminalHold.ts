@@ -1,9 +1,9 @@
 import { unreachableTerminalHoldReason } from "@codecast/shared/contracts/deliveryHold";
 import { formatDuration } from "@codecast/shared/time";
 
-// A live agent whose terminal has no way for the daemon to type into it (a
-// plain Alacritty window: daemon.ts TMUX_ONLY_TERMINALS; a Ghostty whose
-// AppleScript is out of reach). No retry can reach it, and the agent is the
+// A live agent whose terminal has no way for the daemon to type into it (any
+// terminal outside daemon.ts INJECTABLE_TERMINALS, such as a plain Alacritty
+// window; a Ghostty or Orca the daemon cannot reach). No retry can reach it, and the agent is the
 // person's own process, so the message is held with a reason the sender sees,
 // never counted as a failed attempt. It goes out once the terminal can be
 // typed into, or the process exits and the next attempt resumes it in tmux.

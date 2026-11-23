@@ -2,7 +2,7 @@
 // view renders through here, so this is the one switch from a view to its
 // page (the home, a tab, an issue, a replay, a watch). It reads the
 // workspace the app's switcher has active.
-import { lazy, Suspense, useMemo, type ComponentType, type ReactNode } from "react";
+import { Suspense, useMemo, type ComponentType, type ReactNode } from "react";
 import { useOpsSources } from "../../hooks/useSyncOps";
 import { OpsShell } from "./OpsShell";
 import { resolveSource } from "./opsHomeModel";
@@ -11,18 +11,19 @@ import { OpsNotFound } from "./OpsShellParts";
 import { useForeignItemWorkspace, useForeignSourceLookup } from "./opsShellHooks";
 import { useOpsFeed } from "./parts";
 import type { OpsTab, OpsView } from "./opsPaths";
+import { lazyNamed } from "../../lib/lazyNamed";
 
 type TabPage = ComponentType<{ source: string | null; app: string | null }>;
 const TABS: Record<OpsTab, TabPage> = {
-  timeline: lazy(() => import("./TimelineTab").then((m) => ({ default: m.TimelineTab }))),
-  issues: lazy(() => import("./IssuesTab").then((m) => ({ default: m.IssuesTab }))),
-  replays: lazy(() => import("./ReplaysTab").then((m) => ({ default: m.ReplaysTab }))),
-  metrics: lazy(() => import("./MetricsTab").then((m) => ({ default: m.MetricsTab }))),
-  apps: lazy(() => import("./AppsTab").then((m) => ({ default: m.AppsTab }))),
+  timeline: lazyNamed(() => import("./TimelineTab"), "TimelineTab"),
+  issues: lazyNamed(() => import("./IssuesTab"), "IssuesTab"),
+  replays: lazyNamed(() => import("./ReplaysTab"), "ReplaysTab"),
+  metrics: lazyNamed(() => import("./MetricsTab"), "MetricsTab"),
+  apps: lazyNamed(() => import("./AppsTab"), "AppsTab"),
 };
-const IssuePage = lazy(() => import("./IssuePage").then((m) => ({ default: m.IssuePage })));
-const ReplayPage = lazy(() => import("./ReplayPage").then((m) => ({ default: m.ReplayPage })));
-const MetricPage = lazy(() => import("./MetricPage").then((m) => ({ default: m.MetricPage })));
+const IssuePage = lazyNamed(() => import("./IssuePage"), "IssuePage");
+const ReplayPage = lazyNamed(() => import("./ReplayPage"), "ReplayPage");
+const MetricPage = lazyNamed(() => import("./MetricPage"), "MetricPage");
 
 /**
  * A page narrowed to a source this workspace does not have (renamed, removed,

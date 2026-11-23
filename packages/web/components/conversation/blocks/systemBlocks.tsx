@@ -15,7 +15,7 @@ import { WorkflowRunNodes } from "../../WorkflowRunNodes";
 import { wfStatusMeta, wfFmtTokens } from "../../../lib/workflowRun";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { copyToClipboard } from "../../../lib/utils";
-import { useWorkflow, useWorkflowRun } from "../../../hooks/useSyncWorkflows";
+import { useRunWorkflow, useWorkflowRun } from "../../../hooks/useSyncWorkflows";
 import { EntityIdPill, TextWithMentions } from "../../EntityIdPill";
 import { EstablishedRefsProvider } from "../../../hooks/entityMentionScope";
 import { FormattedSummary } from "../../FormattedSummary";
@@ -1271,7 +1271,7 @@ function SystemBlockImpl({ content, subtype, timestamp, messageUuid, messageId, 
 // (posted once as an anchor message), so it updates as the run progresses.
 function DynamicRunCard({ runId, name, goal }: { runId?: string; name?: string; goal?: string }) {
   const run = useWorkflowRun(runId);
-  const workflow = useWorkflow(run?.workflow_id);
+  const workflow = useRunWorkflow(run);
   const status = run?.status as string | undefined;
   const sm = wfStatusMeta(status);
   return (

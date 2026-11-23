@@ -4,7 +4,8 @@
 // so it lives here once. The number says which PR; the word says what the PR
 // is waiting for, and its color says whether that is the reader's problem.
 // Green means nothing is blocking, red means something broke, orange and
-// yellow mean it is waiting on a person or on CI.
+// yellow mean it is waiting on a person or on CI. In the panel, a merged one
+// also says how far it has gone toward production.
 import React, { useState } from "react";
 import Link from "next/link";
 import { GitPullRequest } from "lucide-react";
@@ -13,6 +14,11 @@ import { CI_WORDS, LINKED_PR_LOOK, showsCi, type LinkedPr, type LinkedPrCi } fro
 import type { PrStatus } from "../store/inboxStore";
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/popover";
 import { KEEP_DRAG_OFF_CARD, KEEP_OFF_CARD } from "../lib/keepOffCard";
+import { repoObjectId } from "../lib/entityLinks";
+import { useDeployReach } from "../hooks/useDeployReach";
+import { REACH_LOOK, type DeployTone } from "../lib/deploys/deployPill";
+
+const TONE_ACCENT: Record<DeployTone, ExternalEventAccent> = { green: "green", yellow: "yellow", red: "red", orange: "orange", muted: "muted", dim: "muted" };
 
 export function PrStatusChip({
   status,
@@ -43,6 +49,11 @@ export function PrStatusChip({
       <span className="tabular-nums">#{status.number}</span>
       {ci && <span data-pr-ci={ci} aria-hidden className="w-1.5 h-1.5 rounded-full shrink-0" style={{ background: accentVar(CI_WORDS[ci].accent) }} />}
       {label && <span className="opacity-80">{label}</span>}
+      {/* The panel above the composer reads a merged pull request's reach live. A card,
+          drawn from props alone, shows none: the row it would read can be days old. */}
+      {size === "panel" && status.state === "merged" && (
+        <ChipReach refId={repoObjectId({ type: "pr", repository: status.repository, number: status.number })} after={!!label} />
+      )}
     </>
   );
   const chip = `inline-flex items-center gap-0.5 px-1 py-0 rounded border font-semibold text-meta ${className}`;
@@ -72,6 +83,14 @@ export function PrStatusChip({
       {body}
     </Link>
   );
+}
+
+/** A merged pull request's reach on the panel's chip: its word in its tone, or nothing. */
+function ChipReach({ refId, after }: { refId: string; after: boolean }) {
+  const reach = useDeployReach(refId);
+  if (!reach) return null;
+  const look = REACH_LOOK[reach.state];
+  return <span data-pr-reach={reach.state} style={{ color: accentVar(TONE_ACCENT[look.tone]) }}>{after ? "· " : ""}{look.word}</span>;
 }
 
 function linkedPrHover(pr: LinkedPr): string {

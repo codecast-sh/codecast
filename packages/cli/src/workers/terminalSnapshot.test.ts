@@ -1,5 +1,8 @@
 import { expect, test } from "bun:test";
+import fs from "node:fs";
 import http from "node:http";
+import os from "node:os";
+import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcess } from "node:child_process";
@@ -21,6 +24,11 @@ test("actual terminal HTTP handler never awaits a probe and never turns a probe 
     },
     killChild() {},
   }))!;
+  // The preload's tmux dir is shared by every file a --parallel worker runs, and a
+  // session server another file left there turns this listing into a fleet of them.
+  const tmuxDir = fs.mkdtempSync(path.join(os.tmpdir(), "term-snap-"));
+  const priorTmuxDir = process.env.TMUX_TMPDIR;
+  process.env.TMUX_TMPDIR = tmuxDir;
   terminalSessionSnapshot.invalidate();
   const server = http.createServer((req, res) => { handleTerminalHttp(req, res, { token: "fixture", log() {} }); });
   await new Promise<void>(r => server.listen(0, "127.0.0.1", r));
@@ -38,5 +46,7 @@ test("actual terminal HTTP handler never awaits a probe and never turns a probe 
   } finally {
     closeDaemonWorkers(); terminalSessionSnapshot.invalidate();
     await new Promise<void>(r => server.close(() => r()));
+    process.env.TMUX_TMPDIR = priorTmuxDir;
+    fs.rmSync(tmuxDir, { recursive: true, force: true });
   }
 });

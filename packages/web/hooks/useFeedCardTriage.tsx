@@ -13,7 +13,7 @@
 import { createContext, useContext } from "react";
 import type React from "react";
 import { useInboxStore } from "../store/inboxStore";
-import { animatedHideSessions } from "../store/undoActions";
+import { animatedCloseSessions, animatedHideSessions } from "../store/undoActions";
 import { selectionIdsFor, useInboxSelection } from "../lib/inboxSelection";
 import { isSessionSetAside } from "../lib/sessionRetirement";
 import { useTriggerKillNotice } from "./useTriggerKillNotice";
@@ -42,8 +42,7 @@ export function useFeedCardTriage(id: string, own: boolean, open: () => void) {
         session={session}
         labels={false}
         fadeGround="var(--sol-card-hover)"
-        onDismiss={() => { void animatedHideSessions(selectionIdsFor(id), "kill"); }}
-        onStash={() => { void animatedHideSessions(selectionIdsFor(id), "stash"); }}
+        onClose={() => { void animatedCloseSessions(selectionIdsFor(id)); }}
       />
       <ContextMenu state={menu}>{() => <FeedCardMenu id={id} open={open} />}</ContextMenu>
     </>
@@ -63,6 +62,7 @@ function FeedCardMenu({ id, open }: { id: string; open: () => void }) {
       <BulkSessionMenuItems
         sessions={sessions}
         onStash={(ids) => { void animatedHideSessions(ids, "stash"); }}
+        onClose={(ids) => { void animatedCloseSessions(ids); }}
         onKill={killManyWithNotice}
         onClear={clear}
       />

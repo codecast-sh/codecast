@@ -133,9 +133,11 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
   // branch is reset to right after creation (seedBase), so the GC can tell
   // "still the laptop's tree" from host-made work and heal can rebuild it.
   const seed = opts.startPoint ? seedFieldsFor(repoRoot, opts.startPoint) : undefined;
-  const seedFields = seed
-    ? { startPoint: seed.startPoint, seedBase: seed.seedBase }
-    : { ...(previous?.startPoint ? { startPoint: previous.startPoint } : {}), ...(previous?.seedBase ? { seedBase: previous.seedBase } : {}) };
+  const purpose = opts.purpose ?? previous?.purpose;
+  const seedFields = {
+    ...(seed ? { startPoint: seed.startPoint, seedBase: seed.seedBase } : { ...(previous?.startPoint ? { startPoint: previous.startPoint } : {}), ...(previous?.seedBase ? { seedBase: previous.seedBase } : {}) }),
+    ...(purpose ? { purpose } : {}),
+  };
 
   const prepared = await withPortReservations(repoRoot, async (reservations) => {
     const existing = readState(repoRoot, name);
@@ -161,6 +163,11 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
         return { result: { workspace: claimed.workspace, created: true } };
       }
     }
+
+    // A rebuild starts without a browser: one the old record still ran would
+    // be orphaned by the record written below, holding its port and profile.
+    const orphan = liveChrome(existing?.chrome);
+    if (orphan) await stopChrome(orphan.pid, { timeoutMs: 3000 }).catch(() => {});
 
     const root = fs.realpathSync(repoRoot);
     const { portAlloc, notices } = await allocateWorkspacePorts(
@@ -243,29 +250,11 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
       });
     }
 
-    // Launch per-workspace Chrome AFTER setup (so any generated config files
-    // are already on disk) but BEFORE the after-create hook (so hooks can
-    // assume CDP is reachable).
-    let chrome: ChromeBinding | undefined;
-    if (manifest.browser.enabled && !opts.skipBrowser) {
-      chrome = await launchWorkspaceChrome(
-        repoRoot,
-        name,
-        manifest,
-        portAlloc.resourceIndex,
-      );
-      if (chrome) {
-        initialEnv.CDP_PORT = String(chrome.cdpPort);
-        initialEnv.CODECAST_CDP_PORT = String(chrome.cdpPort);
-      }
-    }
-
+    // No Chrome here: a workspace's browser starts only when something asks
+    // for it (`cast ws browser`, startWorkspaceBrowser). Six parked change
+    // runs each held one at ~460% CPU on Nov 21 (ct-98941).
     if (!opts.skipHooks) {
-      // Augment hook ctx with chrome's CDP port if present.
-      const hookCtx = chrome
-        ? { ...ctxBase, extraEnv: { ...initialEnv, CDP_PORT: String(chrome.cdpPort) } }
-        : ctxBase;
-      await runHook("after-create", hookCtx);
+      await runHook("after-create", ctxBase);
     }
 
     // Validate contract and persist final state.
@@ -278,7 +267,6 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
       ports: portAlloc.ports,
       env: initialEnv,
       state: "ready",
-      chrome,
       ...seedFields,
       ...(noPorts ? { noPorts: true } : {}),
     };
@@ -298,7 +286,6 @@ export interface RootCheckoutOptions {
   /** A workspace input snapshot (`stageCloudInputs`): the manifest and the secret files to copy INTO the root, overwriting its gitignored copies. */
   inputRoot?: string;
   skipSetup?: boolean;
-  skipBrowser?: boolean;
 }
 
 /** `git rev-parse --abbrev-ref HEAD` in a checkout ("HEAD" when detached). */
@@ -360,14 +347,9 @@ async function acquireRootCheckoutUnlocked(repoRoot: string, opts: RootCheckoutO
       // the root is a real checkout and an untracked log would dirty it.
       await runSetup(manifest, root, { env: initialEnv, stream: null, logDir: path.join(root, WORKSPACES_STATE_DIR, name, "logs") });
     }
-    let chrome: ChromeBinding | undefined = existing?.chrome && isPidAlive(existing.chrome.pid) ? existing.chrome : undefined;
-    if (manifest.browser.enabled && !opts.skipBrowser && !chrome) {
-      chrome = await launchWorkspaceChrome(repoRoot, name, manifest, portAlloc.resourceIndex);
-    }
-    if (chrome) {
-      initialEnv.CDP_PORT = String(chrome.cdpPort);
-      initialEnv.CODECAST_CDP_PORT = String(chrome.cdpPort);
-    }
+    // A browser someone started keeps running across a refresh; none starts here.
+    const chrome = liveChrome(existing?.chrome);
+    if (chrome) initialEnv.CDP_PORT = String(chrome.cdpPort);
     const ws: Workspace = {
       name,
       path: root,
@@ -377,7 +359,7 @@ async function acquireRootCheckoutUnlocked(repoRoot: string, opts: RootCheckoutO
       ports: portAlloc.ports,
       env: initialEnv,
       state: "ready",
-      chrome,
+      ...(chrome ? { chrome } : {}),
     };
     const contract = await validateContract(ws);
     ws.contract = contract;
@@ -422,7 +404,7 @@ function refreshRootBranch(repoRoot: string, state: PersistedWorkspaceState, opt
   return next;
 }
 
-/** Release (tear down) a workspace: stop Chrome, run teardown, remove worktree, drop state. */
+/** Release (tear down) a workspace: stop its Chrome if one runs, run teardown, remove worktree, drop state. */
 export async function releaseWorkspace(repoRoot: string, name: string): Promise<void> {
   return withWorkspaceOperation(repoRoot, name, () => releaseWorkspaceUnlocked(repoRoot, name));
 }
@@ -478,28 +460,6 @@ async function releaseWorkspaceUnlocked(repoRoot: string, name: string): Promise
   void sweepTrash(path.join(repoRoot, WORKTREES_DIR));
 }
 
-/**
- * Launch Chrome for an existing workspace if its manifest enables browser
- * and it doesn't have a live Chrome already. Used by the pool's claim path
- * after pre-warming (which intentionally skips Chrome).
- */
-export async function attachBrowserToWorkspace(
-  repoRoot: string,
-  name: string,
-): Promise<Workspace> {
-  const state = readState(repoRoot, name);
-  if (!state) throw new Error(`workspace '${name}' not found`);
-  let chrome = state.chrome;
-  if (state.manifest.browser.enabled) {
-    if (!chrome || !isPidAlive(chrome.pid)) {
-      chrome = await launchWorkspaceChrome(repoRoot, name, state.manifest, state.resourceIndex);
-    }
-  }
-  const ws: Workspace = { ...stateToWorkspace(state), chrome };
-  writeState(repoRoot, workspaceToState(ws));
-  return ws;
-}
-
 /** Idempotent re-run of setup to recover a broken workspace. */
 export async function healWorkspace(repoRoot: string, name: string): Promise<Workspace> {
   return withWorkspaceOperation(repoRoot, name, () => healWorkspaceUnlocked(repoRoot, name));
@@ -529,19 +489,11 @@ async function healWorkspaceUnlocked(repoRoot: string, name: string): Promise<Wo
     stream: null,
   });
 
-  // Re-launch Chrome if browser enabled and prior PID is dead.
-  let chrome = state.chrome;
-  if (state.manifest.browser.enabled) {
-    if (!chrome || !isPidAlive(chrome.pid)) {
-      chrome = await launchWorkspaceChrome(repoRoot, name, state.manifest, state.resourceIndex);
-    }
-  } else if (chrome && isPidAlive(chrome.pid)) {
-    // Browser was disabled in manifest; stop a stale Chrome.
-    await stopChrome(chrome.pid).catch(() => {});
-    chrome = undefined;
-  }
+  // Heal never starts a browser; a dead one's record is dropped.
+  const chrome = liveChrome(state.chrome);
+  if (!chrome) state = withoutChrome(state);
 
-  const ws: Workspace = { ...stateToWorkspace(state), chrome };
+  const ws: Workspace = stateToWorkspace(state);
   const contract = await validateContract(ws);
   ws.contract = contract;
   ws.state = contract.ok ? "ready" : "broken";
@@ -612,6 +564,7 @@ function workspaceToState(ws: Workspace): PersistedWorkspaceState {
     ...(ws.noPorts ? { noPorts: true } : {}),
     ...(ws.startPoint ? { startPoint: ws.startPoint } : {}),
     ...(ws.seedBase ? { seedBase: ws.seedBase } : {}),
+    ...(ws.purpose ? { purpose: ws.purpose } : {}),
   };
 }
 
@@ -678,34 +631,75 @@ function describePortExhaustion(
   );
 }
 
-/**
- * Launch Chrome for a workspace. Allocates a free CDP port from
- * manifest.browser.cdpPort.{base,range} starting at resourceIndex, bumping up
- * if the computed port is occupied. user-data-dir lives inside the worktree's
- * state directory.
- */
-/**
- * The workspace's own headless Chrome, or undefined with a warning when it
- * will not start: the browser is an extra the manifest asked for, and a
- * worktree without it is still a worktree a session can run in (a cloud host
- * cloned from an image took over 20s for its first Chrome, and the whole
- * placement failed on it, 2026-09-29).
- */
-async function launchWorkspaceChrome(
-  repoRoot: string,
-  workspaceName: string,
-  manifest: WorkspaceManifest,
-  resourceIndex: number,
-): Promise<ChromeBinding | undefined> {
-  try {
-    return await startWorkspaceChrome(repoRoot, workspaceName, manifest, resourceIndex);
-  } catch (err) {
-    process.stderr.write(`workspace ${workspaceName}: no browser (${err instanceof Error ? err.message : String(err)}); continuing without it\n`);
-    return undefined;
-  }
+/** A recorded browser that is still running, else undefined. */
+function liveChrome(chrome: ChromeBinding | undefined): ChromeBinding | undefined {
+  return chrome && isPidAlive(chrome.pid) ? chrome : undefined;
 }
 
-async function startWorkspaceChrome(
+/** The record with no browser: no binding, and no CDP_PORT in its env. */
+function withoutChrome(state: PersistedWorkspaceState): PersistedWorkspaceState {
+  const { chrome: _gone, ...rest } = state;
+  const { CDP_PORT: _port, CODECAST_CDP_PORT: _legacy, ...env } = state.env;
+  return { ...rest, env };
+}
+
+/**
+ * The workspace's own headless Chrome, started now if it is not running.
+ *
+ * Nothing starts it implicitly: acquire, heal, a pool claim and a root
+ * refresh all leave it off, because `cast browser` drives the machine's one
+ * managed Chrome (browser/managedBrowser.ts) and never this one. It exists
+ * for a project's own tooling that wants a CDP port of its own (Playwright, a
+ * hook), which asks for it here (`cast ws browser <name>`) and gets the port
+ * as CDP_PORT. It stops when the flow station that started it ends
+ * (stopRunBrowser in workflow/runWorktree.ts), on `cast ws browser --stop`,
+ * and on release. Six parked change runs each held one at ~460% CPU on a
+ * laptop, Nov 21 (ct-98941).
+ */
+export async function startWorkspaceBrowser(repoRoot: string, name: string): Promise<ChromeBinding> {
+  return withWorkspaceOperation(repoRoot, name, async () => {
+    const state = readState(repoRoot, name);
+    if (!state) throw new Error(`workspace '${name}' not found`);
+    const running = liveChrome(state.chrome);
+    if (running) return running;
+    if (!state.manifest.browser.enabled) {
+      throw new Error(`workspace '${name}' has no browser of its own: set \`[browser] enabled = true\` in ${MANIFEST_REL_PATH} if this project's tooling needs one (\`cast browser\` does not; it drives the machine's managed Chrome)`);
+    }
+    const chrome = await launchWorkspaceChrome(repoRoot, name, state.manifest, state.resourceIndex);
+    const base = withoutChrome(state);
+    writeState(repoRoot, { ...base, chrome, env: { ...base.env, CDP_PORT: String(chrome.cdpPort) }, updatedAt: new Date().toISOString() });
+    return chrome;
+  });
+}
+
+/** Stop the workspace's Chrome if one runs and drop its record. True when one was running. */
+export async function stopWorkspaceBrowser(repoRoot: string, name: string): Promise<boolean> {
+  return withWorkspaceOperation(repoRoot, name, async () => {
+    const state = readState(repoRoot, name);
+    if (!state?.chrome && !state?.env.CDP_PORT && !state?.env.CODECAST_CDP_PORT) return false;
+    const running = liveChrome(state.chrome);
+    if (running) await stopChrome(running.pid, { timeoutMs: 3000 });
+    writeState(repoRoot, { ...withoutChrome(state), updatedAt: new Date().toISOString() });
+    return !!running;
+  });
+}
+
+/** Stop every workspace Chrome in this repo; the names of the ones that were running. */
+export async function stopAllWorkspaceBrowsers(repoRoot: string): Promise<string[]> {
+  const stopped: string[] = [];
+  for (const state of listStates(repoRoot)) {
+    if (state.chrome && await stopWorkspaceBrowser(repoRoot, state.name)) stopped.push(state.name);
+  }
+  return stopped;
+}
+
+/**
+ * Launch Chrome for a workspace on a free CDP port from
+ * manifest.browser.cdpPort.{base,range}, starting at resourceIndex and bumping
+ * up if the computed port is occupied. The user-data-dir lives in the
+ * workspace's state directory.
+ */
+async function launchWorkspaceChrome(
   repoRoot: string,
   workspaceName: string,
   manifest: WorkspaceManifest,

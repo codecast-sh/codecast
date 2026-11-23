@@ -121,9 +121,18 @@ describe("cast ship checkout, direct mode", () => {
     let ticks = 0;
     const typing = setInterval(() => { ticks++; write(shared, "server/api.ts", `export const api = 2;\n// typing ${ticks}\n`); write(shared, "scratch.ts", `// ${ticks}\n`); }, 5);
     await new Promise((r) => setTimeout(r, 30));
-    const result = await runPlan(plan).finally(() => clearInterval(typing));
+    // The repository's lease is held from before the deploy through the push, as a Merge station's is.
+    const lease: string[] = [];
+    const deployedAt = path.join(shared, "..", "deployed-at");
+    const result = await runPlan(plan, {
+      lease: async () => {
+        lease.push(`take, deployed: ${fs.existsSync(deployedAt)}`);
+        return async () => { lease.push(`release, main at ${sh(path.join(shared, "..", "origin.git"), "rev-parse", "main").slice(0, 9)}`); };
+      },
+    }).finally(() => clearInterval(typing));
     expect(result.reason).toBeUndefined();
     expect(result.ok).toBe(true);
+    expect(lease).toEqual(["take, deployed: false", `release, main at ${result.pushed!.slice(0, 9)}`]);
 
     // The report names the commits as they landed, not as first built.
     expect(result.commits.map((c) => c.sha).every((sha) => w.originLog() && sh(path.join(shared, "..", "origin.git"), "merge-base", "--is-ancestor", sha, "main") === "")).toBe(true);

@@ -46,6 +46,7 @@ principles = ["outreach/docs/line/principles.md"]
 prompting = "outreach/docs/line/prompting.md"   # omitted: codecast's standard
 size_budget = 400                    # changed lines before a run returns to plan
 watch_days = 7
+ci_paths = ["scripts/ci/**"]         # beyond .github/** and .codecast/**, what decides what CI runs; read from the base, a change touching one goes to a person
 
 [line.commands]                      # run from the run's worktree; $vars expand
 check = "cast check && cd outreach/backend && bun run test:touched"
@@ -151,7 +152,16 @@ a declaration.
   is true now: live, or waiting on a deploy and where. A refusal says why on
   stderr, which the station puts on the task. Exit 3 means the default branch
   moved past the branch after the rebase station, and the run rebases again
-  (three rebases at most). Without one the ship
+  (three times after the Ship answer). Exit 7 means CI went red on the
+  landing: the command has put its brief on the task as a blocker and prints
+  the same brief on stdout, which the station writes to
+  `$run_dir/<run id>-ci-brief.md` for the builder, and the run goes back to
+  implement. After a Ship answer a run gets up to three red-CI rounds and up
+  to three other fix rounds (a conflict, a failed check, review changes), in
+  any order; a fourth red stops it at "Not shipped: CI stayed red". The Ship
+  answer covers those rounds: a fix that review approves goes straight to
+  rebase and ship, with no second card. The station parks, so a command that
+  waits on CI holds no machine slot. Without one the ship
   station runs Ship (docs/architecture/ship.md), which opens the pull request
   and merges in either of two cases: the profile sets `[line.merge] auto`, or
   the role that owns the line holds a merge grant (`org_roles.line_merge` with

@@ -9,6 +9,7 @@ principles = ["docs/line/principles.md"]  # codecast's own set; the shared docs/
 prompting = "docs/prompting.md"
 size_budget = 400                    # changed lines before a run returns to plan
 watch_days = 7
+ci_paths = ["scripts/ci/**"]         # changed-path-scope.ts and kin decide which CI jobs run: a change to them goes to a person
 
 # Run from the run's worktree; $vars expand in the command's own shell.
 # scripts/line.ts is codecast's side of the contract (LP4), through ./evals.

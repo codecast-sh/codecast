@@ -1,4 +1,5 @@
 import { internalMutation, mutation, query } from "./functions";
+import { internal } from "./_generated/api";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { ConvexError, v } from "convex/values";
 import { verifyApiToken } from "./apiTokens";
@@ -12,6 +13,7 @@ import { workflowEdgeValidator, workflowNodeValidator } from "./lib/workflowGrap
 import { libraryOfFlow, recordWorkflowVersion } from "./flowVersions";
 import { flowRouteFor, type FlowRoute } from "./lib/flowRoute";
 import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
+import { LIBRARY_LINE, newestOfLine, nextSeq } from "./lib/runGraph";
 
 const nodeV = workflowNodeValidator;
 const edgeV = workflowEdgeValidator;
@@ -83,24 +85,39 @@ const workflowBySlug = (ctx: any, userId: Id<"users">, slug: string) =>
 
 /**
  * A new version of the graph when its hash moved (LW4: every save is a
- * version of the step): each station's hash, and which stations changed
- * since the version before.
+ * version of the step): each station's hash, which stations changed since the
+ * version before, and its number in the row's history. `kept.line` is the
+ * line it extends (lib/runGraph.ts): a later push from the same place, or a
+ * library save. A version with no line (a push from no file) is the newest
+ * no-file version again when its graph is the same.
  */
-export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }> }, now = Date.now(), snapshot?: Doc<"workflow_versions">["snapshot"]) {
-  const last = await ctx.db.query("workflow_versions").withIndex("by_workflow_at", (q: any) => q.eq("workflow_id", workflowId)).order("desc").first();
-  if (last?.graph_hash === origin.graph_hash) {
-    // A library flow's first save of a graph its history already names keeps that version, now with its content.
-    if (snapshot && !last.snapshot) await ctx.db.patch(last._id, { snapshot });
-    return null;
+export async function recordGraphVersion(ctx: any, workflowId: Id<"workflows">, userId: Id<"users">, origin: { graph_hash: string; nodes: Array<{ id: string; h: string }> }, now: number, snapshot: Doc<"workflow_versions">["snapshot"] | undefined, kept: { line?: string; pushed_from?: Doc<"workflow_versions">["pushed_from"]; graph?: () => Promise<Id<"workflow_version_graphs">> }): Promise<{ id: Id<"workflow_versions">; created: boolean }> {
+  const newest: Doc<"workflow_versions"> | null = await ctx.db.query("workflow_versions").withIndex("by_workflow_at", (q: any) => q.eq("workflow_id", workflowId)).order("desc").first();
+  // The version this one would be again: the newest of its line; a library flow's, the newest of the row, so its
+  // first save of the graph its history already names keeps that version; a push from no file, the newest when it too
+  // came from no file.
+  const prev: Doc<"workflow_versions"> | null = kept.line === LIBRARY_LINE ? newest
+    : kept.line ? await newestOfLine(ctx, workflowId, kept.line)
+    : newest && !newest.line && !newest.pushed_from ? newest : null;
+  if (prev?.graph_hash === origin.graph_hash) {
+    if (snapshot && !prev.snapshot) await ctx.db.patch(prev._id, { snapshot, ...(kept.line ? { line: kept.line } : {}) });
+    if (kept.graph && !prev.graph_id) await ctx.db.patch(prev._id, { graph_id: await kept.graph() });
+    return { id: prev._id, created: false };
   }
-  const was = new Map<string, string>((last?.nodes ?? []).map((n: any) => [n.id, n.h]));
-  const changed = origin.nodes.filter((n) => was.get(n.id) !== n.h).map((n) => n.id);
-  return await ctx.db.insert("workflow_versions", { workflow_id: workflowId, graph_hash: origin.graph_hash, nodes: origin.nodes, changed, by: userId, at: now, ...(snapshot ? { snapshot } : {}) });
+  // Stations that moved since its line's version before, else the row's (a checkout's first push of a graph the row
+  // already has shows no change); all of them when that version has no hashes to compare.
+  const basis = prev ?? newest;
+  const was = new Map<string, string>((basis?.nodes ?? []).map((n: any) => [n.id, n.h]));
+  const changed = origin.nodes.filter((n) => !was.size || was.get(n.id) !== n.h).map((n) => n.id);
+  const graph_id = kept.graph ? await kept.graph() : undefined;
+  const seq = newest?.seq ? newest.seq + 1 : await nextSeq(ctx, workflowId);
+  return { id: await ctx.db.insert("workflow_versions", { workflow_id: workflowId, graph_hash: origin.graph_hash, nodes: origin.nodes, changed, by: userId, at: now, seq, ...(kept.line ? { line: kept.line } : {}), ...(snapshot ? { snapshot } : {}), ...(graph_id ? { graph_id } : {}), ...(kept.pushed_from ? { pushed_from: kept.pushed_from } : {}) }), created: true };
 }
 
 // `serves`: a list or null (a push: written as the file says), undefined (the web: left as it is).
 // `library`: "switch" puts the flow in the library (`cast flow save`, a session's Save); "new" only a flow this write creates (the web's).
-export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, save, library, ...args }: { name: string; slug: string; label?: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish; save?: boolean; library?: "switch" | "new" }) {
+// `web`: the web's settings edit, which never moves a flow off its file's version (flowVersions.ts recordWorkflowVersion).
+export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_only, serves, publish, save, library, web, ...args }: { name: string; slug: string; label?: string; goal?: string; source?: string; nodes: any[]; edges: any[]; model_stylesheet?: string; create_only?: boolean; origin?: any; serves?: string[] | null; publish?: Publish; save?: boolean; library?: "switch" | "new"; web?: boolean }) {
   const now = Date.now();
   const existing = await workflowBySlug(ctx, userId, args.slug);
 
@@ -124,8 +141,8 @@ export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_
       ...(library === "switch" && existing.runs_from !== "library" ? { runs_from: "library" as const } : {}),
       updated_at: now,
     });
-    await recordWorkflowVersion(ctx, existing._id, userId, args.origin, now);
-    return { id: existing._id, updated: true };
+    const version = await recordWorkflowVersion(ctx, existing._id, userId, args.origin, now, web);
+    return { id: existing._id, updated: true, ...(version ? { version_id: version.id } : {}) };
   }
 
   const id = await ctx.db.insert("workflows", {
@@ -147,8 +164,8 @@ export async function upsertWorkflowFor(ctx: any, userId: Id<"users">, { create_
     created_at: now,
     updated_at: now,
   });
-  await recordWorkflowVersion(ctx, id, userId, args.origin, now);
-  return { id, updated: false };
+  const version = await recordWorkflowVersion(ctx, id, userId, args.origin, now);
+  return { id, updated: false, ...(version ? { version_id: version.id } : {}) };
 }
 
 export const upsert = mutation({
@@ -175,7 +192,7 @@ export const webUpsert = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not signed in");
     if (!LINE_SLUG_RE.test(args.slug)) throw new Error("A workflow slug is 1 to 64 characters of a-z, 0-9 and -");
-    return await upsertWorkflowFor(ctx, userId, { ...args, save: true, library: "new" });
+    return await upsertWorkflowFor(ctx, userId, { ...args, save: true, library: "new", web: true });
   },
 });
 
@@ -254,6 +271,8 @@ export const poolForCli = query({
     return {
       // Whether the workspace has the Flows feature on: session start names the pool only then.
       flows_on: await workspaceHasFeature(ctx, { team_id: args.team_id ?? null, user_id: result.userId }, "line"),
+      // The flow the team set as its default (teams.default_flow): a nameless `cast flow run` resolves it with defaultFlowOf.
+      default_flow: args.team_id && (await isTeamMember(ctx, result.userId, args.team_id)) ? (await ctx.db.get(args.team_id))?.default_flow ?? null : null,
       flows: rows.map((r) => ({
         _id: r._id, slug: r.slug, name: r.name, source: r.source, workspace: r.workspace, updated_at: r.updated_at, runs_from: r.runs_from ?? null,
         nodes: r.nodes.map((n: any) => ({ id: n.id, ...(n.prompt ? { prompt: n.prompt } : {}), ...(n.script ? { script: n.script } : {}) })),
@@ -300,8 +319,28 @@ export const webRemove = mutation({
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not signed in");
     const row = await workflowBySlug(ctx, userId, args.slug);
-    if (row) await ctx.db.delete(row._id);
+    if (row) {
+      await ctx.db.delete(row._id);
+      // The graphs its versions kept go with it.
+      await removeKeptGraphsCore(ctx, row._id);
+    }
     return { removed: !!row };
+  },
+});
+
+// A kept graph is up to SNAPSHOT_MAX_BYTES, so a heavily edited flow's graphs go a few at a time, each batch its own
+// mutation, until none is left.
+const KEPT_GRAPH_BATCH = 8;
+async function removeKeptGraphsCore(ctx: any, workflowId: Id<"workflows">) {
+  const batch = await ctx.db.query("workflow_version_graphs").withIndex("by_workflow_key", (q: any) => q.eq("workflow_id", workflowId)).take(KEPT_GRAPH_BATCH + 1);
+  for (const g of batch.slice(0, KEPT_GRAPH_BATCH)) await ctx.db.delete(g._id);
+  if (batch.length > KEPT_GRAPH_BATCH) await ctx.scheduler.runAfter(0, internal.workflows.removeKeptGraphs, { workflow_id: workflowId });
+}
+
+export const removeKeptGraphs = internalMutation({
+  args: { workflow_id: v.id("workflows") },
+  handler: async (ctx, args) => {
+    await removeKeptGraphsCore(ctx, args.workflow_id);
   },
 });
 

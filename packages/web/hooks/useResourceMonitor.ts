@@ -12,7 +12,9 @@ import { useCollectionRows } from "./useCollectionRows";
 import { useCoarseNow } from "./useCoarseNow";
 import { useManagedSessions } from "./useSyncManagedSessions";
 import { useMigrationBatches, useMigrationCandidates, useMoveRehearsals } from "./useSyncMigrations";
-import { useDevices, deviceDisplayName, type Device } from "../components/DeviceBadge";
+import { deviceDisplayName } from "@codecast/shared/contracts";
+import type { Device } from "../lib/deviceRow";
+import { useSyncDevices } from "./useSyncDevices";
 import { buildOffloadPlan } from "../lib/resourceOffload";
 import { batchAwaitingEcho, effectiveRowStatus, isRowTerminal, type MigrationBatch } from "../lib/migrationPlan";
 import type { MachineRole, OffloadPlan, OffloadRun, ResourceMachine, ResourceSession, ResourceSessionState } from "../components/resources/types";
@@ -131,7 +133,10 @@ const rowIdSig = (r: any) => r._id;
 export function useResourceMonitor() {
   const now = useCoarseNow(15_000);
   const rows = useMachineResourceRows();
-  const { devices, loaded } = useDevices();
+  // The roster straight off the store, not DeviceBadge's useDevices: the phone's offload screen runs this hook too.
+  useSyncDevices();
+  const devices = useInboxStore((s) => s.machineRoster) as Device[];
+  const loaded = devices.length > 0;
   const { sessions: managed, ready: managedReady } = useManagedSessions();
   const { candidates } = useMigrationCandidates();
   const { batches } = useMigrationBatches();

@@ -1,4 +1,4 @@
-import { useWorkflow, useWorkflowRun } from "../hooks/useSyncWorkflows";
+import { useRunWorkflow, useWorkflowRun } from "../hooks/useSyncWorkflows";
 import { flowName } from "@codecast/shared/contracts/flowPool";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import Link from "next/link";
@@ -30,7 +30,7 @@ export function WorkflowContextPanel({ workflowRunId }: { workflowRunId: Id<"wor
   // Store-fed (hooks/useSyncWorkflows): paints from cached rows on the first
   // frame instead of popping in a round-trip late.
   const run = useWorkflowRun(workflowRunId);
-  const workflow = useWorkflow(run?.workflow_id);
+  const workflow = useRunWorkflow(run);
   if (!run) return null;
   return <WorkflowRunPanel run={run} workflow={workflow} />;
 }

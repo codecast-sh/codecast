@@ -36,8 +36,8 @@ import { TeamShareChip } from "./feed/TeamShareChip";
 import { FEED_CARD_ATTR, feedCardOpened, feedCardSelect } from "../lib/feedCardSelection";
 import { useFeedCardTriage } from "../hooks/useFeedCardTriage";
 import { useTeamFeed, inboxSessionToConv } from "../hooks/useTeamFeed";
-import { settingsDataKey } from "../lib/settingsData";
 import { LivePulseDot } from "./SessionActivityLine";
+import { teamMembersOf } from "../lib/activeTeam";
 import { resolveImageThumbs } from "../lib/uiPrefDefaults";
 import { extractWorkspace, formatDate, formatMsgCount, relTime, shortDuration, heatTier, cardSummary, hashIndex, HEAT_COLOR, MSG_BREAKS, DUR_MIN_BREAKS, AVATAR_BG, AVATAR_RING, PROJECT_PALETTE } from "./feed/activityFeedFormat";
 // Activity feed. Two sources, one rendering (FeedBody):
@@ -864,10 +864,8 @@ export function TeamShareNudge({ teamId }: { teamId: string }) {
 
 function TeamFeed({ compact, directoryFilter, onNavigate, initialActorId, hidePeopleRow }: ActivityFeedProps) {
   const viewer = useViewerIdentity();
-  const activeTeamIdForRoster = useInboxStore((s) => s.clientState.ui?.active_team_id);
-  const rosterKey = settingsDataKey("teamMembers", viewer?._id, activeTeamIdForRoster);
-  const roster = useInboxStore((s) => rosterKey ? s.settingsData[rosterKey]?.value : undefined);
-  const members = Array.isArray(roster) ? roster : undefined;
+  const roster = useInboxStore(teamMembersOf);
+  const members = roster.length ? roster : undefined;
   const { activeTeamId, stubTeam, rows: sourceConvs, hasMore, loadMore, loadingMore, isLoading } = useTeamFeed({ directoryFilter, members });
   const activeTeamName = useInboxStore((s) => (s.teams || []).find((t: any) => String(t._id) === String(activeTeamId))?.name) as string | undefined;
 

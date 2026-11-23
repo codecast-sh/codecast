@@ -4,6 +4,7 @@
 // HostFeeders), and one map of every session's state built once per change of
 // either collection, which each card reads its own entry of through its one
 // store subscription (SessionCard), as a signature string.
+import { useMemo } from "react";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { activeTeamIdOf } from "../lib/activeTeam";
 import { api as _api } from "@codecast/convex/convex/_generated/api";
@@ -11,8 +12,11 @@ import { useSyncCollection } from "./useSyncCollection";
 import { useSyncTeamDeployRecords } from "./useSyncDeployTargets";
 import { workspaceRows } from "./useWorkspaceCollection";
 import { activeWorkspaceKeyOf } from "../lib/workspaceScope";
-import { sessionShips, type SessionShip } from "../lib/ship/sessionShip";
+import { landedShas, sessionShips, type SessionShip } from "../lib/ship/sessionShip";
 import type { TeamDeployRow } from "../lib/deploys/targets";
+import { cachedAt, pinDetailRows } from "../lib/detailRows";
+import { useWatchEffect } from "./useWatchEffect";
+import type { DeployReachRow } from "./useDeployReach";
 
 const api = _api as any;
 
@@ -28,21 +32,60 @@ export function useSyncTeamShipFeeds() {
   useSyncTeamDeployRecords(teamId);
 }
 
+/** The landed runs' commits, sorted and joined: the feeder's args change only when the set does. */
+let landedMemo: { runs: unknown; workspace: string | null; key: string } | null = null;
+const landedKey = (s: ShipState): string => {
+  // The cards on screen are the active workspace's: its runs only.
+  const workspace = activeWorkspaceKeyOf(s);
+  if (!landedMemo || landedMemo.runs !== s.workflowRuns || landedMemo.workspace !== workspace) {
+    const runs = Object.values(s.workflowRuns ?? {}).filter((r: any) => !workspace || !r.workspace || r.workspace === workspace);
+    landedMemo = { runs: s.workflowRuns, workspace, key: landedShas(runs).join(",") };
+  }
+  return landedMemo.key;
+};
+
+/**
+ * Feeder: how far each change a session's newest run landed has gone toward production (deployReach.many), so its card
+ * says "Not live yet", "Deploying" or "Live" from the deploy records rather than from the run. Every window feeds its own
+ * (deployReach is per-window), from the runs replication already gives it; the rows are pinned while they are asked for.
+ */
+export function useSyncLandedReach() {
+  const key = useInboxStore((s) => landedKey(s as unknown as ShipState));
+  const { refs, opts } = useMemo(() => {
+    const refs = key ? key.split(",") : [];
+    const asked = new Set(refs);
+    return {
+      refs,
+      opts: {
+        select: (rows: DeployReachRow[] | null) => rows?.map((r) => ({ ...r, _cachedAt: cachedAt(useInboxStore.getState().deployReach?.[r._id] as DeployReachRow | undefined, Date.now()) })),
+        // The answer is the whole truth about the refs asked: one it leaves out touches no target, or is not on main yet.
+        dropAbsent: (row: { _id: string }) => asked.has(row._id),
+      },
+    };
+  }, [key]);
+  useSyncCollection("deployReach", api.deployReach.many, refs.length ? { refs } : "skip", opts);
+  useWatchEffect(() => (refs.length ? pinDetailRows("deployReach", refs) : undefined), [key]);
+}
+
 type ShipState = {
   workflowRuns?: Record<string, any>;
   teamDeploys?: Record<string, TeamDeployRow>;
+  deployReach?: Record<string, DeployReachRow>;
   clientState: { ui?: { active_team_id?: string | null } };
   currentUser?: { _id?: unknown } | null;
+  /** The decisions the viewer's queue holds: a run's open card says "Your call" only when the viewer may answer it. */
+  sessionDecisions?: Record<string, any>;
 };
 
-let memo: { runs: unknown; deploys: unknown; workspace: string | null; map: Map<string, SessionShip> } | null = null;
+let memo: { runs: unknown; deploys: unknown; reach: unknown; decisions: unknown; workspace: string | null; viewer: string | null; map: Map<string, SessionShip> } | null = null;
 
 function shipMap(s: ShipState): Map<string, SessionShip> {
   const workspace = activeWorkspaceKeyOf(s);
-  if (memo && memo.runs === s.workflowRuns && memo.deploys === s.teamDeploys && memo.workspace === workspace) return memo.map;
+  const viewer = s.currentUser?._id ? String(s.currentUser._id) : null;
+  if (memo && memo.runs === s.workflowRuns && memo.deploys === s.teamDeploys && memo.reach === s.deployReach && memo.decisions === s.sessionDecisions && memo.workspace === workspace && memo.viewer === viewer) return memo.map;
   const deploys = workspaceRows<TeamDeployRow>("teamDeploys", s.teamDeploys ?? {}, workspace);
-  const map = sessionShips(Object.values(s.workflowRuns ?? {}), deploys);
-  memo = { runs: s.workflowRuns, deploys: s.teamDeploys, workspace, map };
+  const map = sessionShips(Object.values(s.workflowRuns ?? {}), deploys, s.deployReach ?? {}, viewer, s.sessionDecisions ?? {});
+  memo = { runs: s.workflowRuns, deploys: s.teamDeploys, reach: s.deployReach, decisions: s.sessionDecisions, workspace, viewer, map };
   return map;
 }
 

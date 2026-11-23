@@ -10,6 +10,8 @@
 // pixels never show.
 
 import type { TerminalEndpoint } from "./terminal/endpoint";
+import { loopbackWsUrl } from "./terminal/loopbackUrl";
+import { openWebSocket } from "./openWebSocket";
 
 export interface WatchTabInfo {
   title: string;
@@ -232,10 +234,8 @@ export interface WatchConnection {
   sendInput: (events: WatchInputEvent[]) => void;
 }
 
-export function watchWsUrl(ep: TerminalEndpoint): string {
-  // Literal IPv4 for the same reason as termWsUrl: macOS resolves `localhost`
-  // to ::1 first and the daemon may bind IPv4 only.
-  return `ws://127.0.0.1:${ep.port}/watch/ws`;
+export function watchWsUrl(ep: TerminalEndpoint): string | null {
+  return loopbackWsUrl(ep, "/watch/ws");
 }
 
 export function connectBrowserWatch(
@@ -243,8 +243,16 @@ export function connectBrowserWatch(
   session: { sessionUuid?: string | null; tmuxSession?: string | null; control?: boolean; source?: WatchSource },
   handlers: WatchHandlers,
 ): WatchConnection {
-  const ws = new WebSocket(watchWsUrl(ep));
+  const ws = openWebSocket(watchWsUrl(ep));
   let done = false;
+  if (!ws) {
+    // Reported after the caller holds the connection, as a dropped socket is.
+    queueMicrotask(() => {
+      if (!done) handlers.onError("socket", "invalid daemon address");
+      done = true;
+    });
+    return { close: () => { done = true; }, sendInput: () => {} };
+  }
 
   ws.onopen = () => {
     ws.send(

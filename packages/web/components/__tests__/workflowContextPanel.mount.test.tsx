@@ -18,7 +18,7 @@ const realWorkflows = { ...(await import("../../hooks/useSyncWorkflows")) };
 mock.module("../../hooks/useSyncWorkflows", () => ({
   ...realWorkflows,
   useWorkflowRun: (id: string | null | undefined) => useInboxStore((s: any) => (id ? s.workflowRuns[id] ?? null : undefined)),
-  useWorkflow: (id: string | null | undefined) => useInboxStore((s: any) => (id ? s.workflows[id] ?? null : undefined)),
+  useRunWorkflow: (run: any) => useInboxStore((s: any) => (run?.workflow_id ? s.workflows[run.workflow_id] ?? null : undefined)),
 }));
 afterAll(() => { mock.module("../../hooks/useSyncWorkflows", () => realWorkflows); });
 

@@ -10,7 +10,7 @@ policies, and binds it to the task and station it blocks.
 
 ```
 kind?               "single" | "multi" | "rank" | "form"     default single
-category?           string   from the vocabulary below (server assigned; asker may propose)
+category?           string   from the vocabulary below (the asker's proposal, else review; a run's, else unknown)
 category_proposed?  string
 doc_id?             Id<docs>  rich body (markdown doc); report_slug stays for a published page
 options[i]          + body_md?, evidence?: { label, url }[], cost?: string, risk?: string, page_slug?: string
@@ -48,11 +48,25 @@ decision_grants    role_id, category, scope_key: string ("role:<id>" | "project:
 Vocabulary: `approach`, `scope`, `priority`, `retry`, `review`, `allocation`,
 and the protected set `production`, `billing`, `data`, `access`, `external`,
 `product`, plus `limit` (raising a cap) and `unknown`. Protected, `limit` and
-`unknown` are always human held. The server assigns the category: the asker's
-proposal is accepted only when it is not looser than what a conservative
-classifier reads from the question and options (any option naming a deploy,
-purchase, deletion, access change, external message or product choice pins
-the category to the protected one).
+`unknown` are always human held; the open six may be answered by a role under
+a grant. The asker's proposal (`cast decide --category`) stands, because only
+the asker knows whose call the answer is: card text describes the situation,
+not who should answer it. No proposal is `review`, so a `review` grant covers
+every agent card asked without a category and the change flow's Ship cards,
+whose gate declares `review`: granting `review` grants both. A proposal
+outside the vocabulary is `unknown` (the CLI refuses it). Asked again or
+edited without a proposal, a card keeps its category. A decision serving a
+workflow run is human held unless the run says otherwise: the run's own asks
+(a gate, the runner's failure card) take the category the gate declares, else
+`unknown`; a card a station posts (a session whose parent is the primary
+conversation of a live run, whether the run's own log or a person's session
+that hosts it) is `unknown` unless it proposes a human held category; a gate
+that adopts a station's card keeps a protected or `limit` category the
+station named, else sets the category it declares, else `unknown`; and an
+asker who re-asks or edits a run's card may only tighten it. Separately, a lead on a run's ladder that starts work on its own answers
+the run's change cards whatever their category (`isChangeCard`). A `--run`
+card runs a command in the person's name, so the server sets it to `access`
+unless the asker proposed another protected category.
 
 ## D2. The race
 

@@ -90,8 +90,9 @@ describe("the climb's dry run", () => {
     fs.writeFileSync(path.join(repo, "prompt.txt"), "pitch\n");
     // The product's eval gate, as the line profile names it: FAKE_GATE=worse makes it refuse.
     fs.mkdirSync(path.join(repo, "scripts"));
-    fs.writeFileSync(path.join(repo, "scripts/gate.sh"), `[ "$FAKE_GATE" = void ] && { echo '{"void": true}' > "$run_dir/reps.json"; exit 0; }; [ "$FAKE_GATE" = worse ] && w=true || w=false; echo "{\\"worse\\": $w}" > "$run_dir/reps.json"\n`);
+    fs.writeFileSync(path.join(repo, "scripts/gate.sh"), `[ "$FAKE_GATE" = hang ] && { echo "running the eval on the eval host"; sleep 60; }; [ "$FAKE_GATE" = void ] && { echo '{"void": true}' > "$run_dir/reps.json"; exit 0; }; [ "$FAKE_GATE" = worse ] && w=true || w=false; echo "{\\"worse\\": $w}" > "$run_dir/reps.json"\n`);
     fs.writeFileSync(path.join(repo, ".codecast/line.toml"), `[line.commands]\neval = "bash scripts/gate.sh"\n`);
+    fs.writeFileSync(path.join(repo, ".codecast/climb.toml"), `[guard]\ntimeout_s = 3\n`);
     process.env.FAKE_COUNTER = path.join(tmp, "counter");
     execFileSync("git", ["init", "-q", "-b", "main", repo]);
     g("config", "user.email", "t@t"); g("config", "user.name", "t");
@@ -388,6 +389,21 @@ describe("the climb's dry run", () => {
     await admit(io(), dir, [{ branch: "climb/gatehack", hypothesis: "h", predicted_delta: 0.2 }]);
     await expect(guard(io(), dir)).rejects.toThrow("every survivor failed the guard");
     expect(readState(dir)!.candidates[0].guard!.why).toContain("changes the files the product's eval command starts");
+  });
+
+  // ct-97276: the base never scores the moments whose list is empty, and the climb fills them.
+  test("cases only the candidate scored never hold a check: the base's unscored cases are outside it", async () => {
+    await gauge(io(), dir, { card: CARD, base });
+    await admit(io(), dir, proposed);
+    process.env.FAKE_BASE_ABSENT = "1";
+    try {
+      const s = await guard(io(), dir);
+      const good = s.candidates.find((c) => c.branch === "climb/good")!;
+      expect(good.status).toBe("promoted");
+      expect(s.pending).toBeUndefined();
+      // A real failure on the cases the base scored still fails.
+      expect(s.candidates.find((c) => c.branch === "climb/pushy")!.status).toBe("guard_failed");
+    } finally { delete process.env.FAKE_BASE_ABSENT; }
   });
 
   // From the first real climb (Union in-9).
@@ -713,5 +729,19 @@ describe("the climb's dry run", () => {
     expect(s.levels.find((l) => l.env === "fake/replay")!.kept).toBe(true);
     const home = (await import("./store")).climbHome(dir);
     expect(fs.readdirSync(home).filter((f) => /^state\..+\.json$/.test(f))).toHaveLength(1);
+  });
+
+  // From ct-97276's sixth run: the eval gate waited three hours on an ssh whose remote process was gone.
+  test("an eval gate past its limit is void, never a pass: Guard holds and names the stuck command and its last output", async () => {
+    await gauge(io(), dir, { card: CARD, base });
+    await admit(io(), dir, proposed);
+    process.env.FAKE_GATE = "hang";
+    try {
+      const err = await guard(io(), dir).catch((e) => e);
+      expect(err.code).toBe(6);
+      expect(err.message).toContain("the eval gate ran past its 3 second limit (declared) and was stopped: bash scripts/gate.sh; its last output: running the eval on the eval host");
+      expect(readState(dir)!.candidates.some((c) => c.status === "promoted")).toBe(false);
+    } finally { delete process.env.FAKE_GATE; }
+    expect((await guard(io(), dir, { rerunVoid: true })).candidates.find((c) => c.status === "promoted")).toBeTruthy();
   });
 });

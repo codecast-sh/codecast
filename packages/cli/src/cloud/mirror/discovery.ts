@@ -1,7 +1,6 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { execFile, spawnSync } from "../../proc.js";
 import { isCodecastHookCommand, isCodecastOwnedHomePath } from "../../codecastOwned.js";
 import type { Config } from "../../config/types.js";
 import type { TouchLedger } from "./ledger.js";
@@ -9,6 +8,7 @@ import { INSTALLABLE_CLIENTS } from "../../remote/agentAuth.js";
 import { GH_WRAPPER_REL } from "../ghWrapper.js";
 import { MAX_MIRROR_BODY_BYTES } from "./bundle.js";
 import { isCredentialFilePath } from "../../secretPatterns.js";
+import { executeContextAsync, executeContextSync, type ContextOperation, type ContextSteps } from "./contextOps.js";
 import { credentialContentReason, homeRelative, isActiveConfig, kindForPath, parseJsonLoose, portableText, transformByKind, type MirrorKind } from "./transform.js";
 export { isActiveConfig } from "./transform.js";
 
@@ -454,6 +454,12 @@ export interface ProjectContextFile {
   kind: MirrorKind;
   mode: "0600" | "0700";
   bytes: Buffer;
+  /**
+   * The tracked project link a home-scope file was reached through: the host's
+   * checkout recreates it, so the file is of use there only when the link,
+   * resolved from its place on the host, lands where the file is mirrored.
+   */
+  throughLink?: { path: string; target: string; real: string };
 }
 
 export interface ProjectContextOptions {
@@ -514,14 +520,58 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
   let overflowBytes = 0;
   const excludes = configPatterns(opts.config?.cloud_mirror_exclude);
   const includes = configPatterns(opts.config?.cloud_mirror_include);
-  const tracked = new Set<string>();
-  if (opts.includeTracked === false) {
-    const paths: string[] = yield { op: "tracked", path: root };
-    for (const rel of paths) tracked.add(rel);
-  }
+  // Git's index lists a tracked link itself (mode 120000), never a file behind one.
+  const index: Array<{ path: string; link: boolean }> = yield { op: "tracked", path: root };
+  const tracked = new Set(index.map((entry) => entry.path));
   // Ignored files and whole ignored folders ("dir/"), when only those travel.
   // Outside a git repo nothing else carries the files, so all of them travel.
   const inRepo: boolean = opts.agentContextOnly ? yield { op: "inRepo", path: root } : false;
+  // A folder reached through a link git tracks inside the project (union-mobile
+  // tracks `outreach/.agents -> .claude`, a repo may track `.codex ->
+  // ../shared-agents`) is located at its real path, in the project or in home:
+  // the host's checkout recreates that link, and its receiver never writes
+  // through one. Behind an untracked link the host has no link, so the logical
+  // name stays. The index names a link by its located name, so a link behind
+  // another tracked link is looked up there.
+  const locatedDirs = new Map<string, string>([[root, root]]);
+  const locateDir = function* (dir: string): ContextSteps<string> {
+    const known = locatedDirs.get(dir);
+    if (known !== undefined) return known;
+    if (!homeRelative(dir, root)) return dir;
+    const name = path.join(yield* locateDir(path.dirname(dir)), path.basename(dir));
+    let located = name;
+    const link: fs.Stats | undefined = yield { op: "lstat", path: dir };
+    if (link?.isSymbolicLink() && tracked.has(homeRelative(name, root)!)) {
+      try {
+        const real: string = yield { op: "realpath", path: dir };
+        if (homeRelative(real, root) !== null || homeRelative(real, home) !== null) located = real;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "ENOENT" && (err as NodeJS.ErrnoException).code !== "ELOOP") throw err;
+      }
+    }
+    locatedDirs.set(dir, located);
+    return located;
+  };
+  // Each tracked link with the real folder it is located at: every name an
+  // agent can read a located file by, so its kind never depends on which name
+  // the walk met first.
+  const linkAliases: Array<{ path: string; target: string; real: string }> = [];
+  for (const entry of index) {
+    if (!entry.link) continue;
+    const link = path.join(root, entry.path);
+    const real = yield* locateDir(link);
+    if (real !== link) linkAliases.push({ path: link, target: yield { op: "readlink", path: link }, real });
+  }
+  const agentNames = (file: string): string[] => {
+    const names = [file];
+    for (let i = 0; i < names.length && names.length < 32; i++) {
+      for (const link of linkAliases) {
+        const alias = names[i]!.startsWith(`${link.real}/`) ? link.path + names[i]!.slice(link.real.length) : null;
+        if (alias && !names.includes(alias)) names.push(alias);
+      }
+    }
+    return names;
+  };
   const isAgentContext = (rel: string) => INSTRUCTION_FILE_RE.test(path.basename(rel)) || path.basename(rel) === ".mcp.json"
     || /(?:^|\/)\.(?:claude|codex|gemini|grok|opencode|agents|cursor|pi)\//.test(rel);
   const denied = (abs: string, directory: boolean) => {
@@ -568,11 +618,20 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
       for (const name of names.sort()) yield* visit(path.join(logical, name), chain, includeAll, optionalReference);
       return;
     }
-    if (!actual.isFile() || scanned.has(logical)) return;
-    const projectRel = homeRelative(logical, root);
+    if (!actual.isFile()) return;
+    // A file behind a tracked in-project link is judged and carried once, at
+    // its real path (locateDir), whichever name reaches it first; a name that
+    // reaches it later inherits its credential verdict.
+    const located = projectPath !== null ? path.join(yield* locateDir(path.dirname(logical)), path.basename(logical)) : logical;
+    if (scanned.has(logical) || scanned.has(located)) {
+      if (credentialPaths.has(located)) credentialPaths.add(logical);
+      return;
+    }
+    const projectRel = homeRelative(located, root);
     const scope = projectRel === null ? "home" : "project";
-    const rel = projectRel ?? homeRelative(logical, home)!;
-    if (!includeAll && !isContextFile(rel)) return;
+    const rel = projectRel ?? homeRelative(located, home)!;
+    const reachedAs = projectPath ?? rel;
+    if (!includeAll && !isContextFile(reachedAs)) return;
     if ((!includeAll || optionalReference) && MEDIA_FILE_RE.test(rel)) { if (!skippedMedia.has(logical)) result.skipped.push({ path: logical, reason: "audio or video" }); skippedMedia.add(logical); return; }
     const prefix: Buffer = yield { op: "prefix", path: real };
     if (isNativeBinary(prefix)) { result.skipped.push({ path: logical, reason: "native binary" }); return; }
@@ -580,31 +639,40 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
     // so the walk can still name what to leave out; a required one fails here.
     const droppable = !includeAll || optionalReference;
     // Only what ships counts against the cap; a file read just for its references does not.
-    const emit = scope !== "project" || ((opts.includeTracked !== false || !tracked.has(rel)) && (!inRepo || isAgentContext(rel)));
+    const throughLink = scope === "home" && projectPath !== null ? linkAliases.find((link) => located.startsWith(`${link.real}/`)) : undefined;
+    // Behind a tracked link leaving the project, only what an agent reads by
+    // one of the project's names travels when only agent context does.
+    const emit = scope !== "project"
+      ? !throughLink || !inRepo || [reachedAs, ...agentNames(located).map((name) => homeRelative(name, root))].some((name) => name !== null && isAgentContext(name))
+      : (opts.includeTracked !== false || !tracked.has(rel)) && (!inRepo || isAgentContext(rel));
     if (emit && actual.size + result.totalBytes + overflowBytes > cap) {
       if (!droppable) throw new Error(`project context exceeds ${cap / 1048576} MiB at ${logical}`);
-      scanned.add(logical);
+      scanned.add(logical).add(located);
       overflowBytes += actual.size;
       candidates.push({ path: homeRelative(logical, home) ?? logical, bytes: actual.size });
       return;
     }
     let bytes: Buffer = yield { op: "bytes", path: real };
-    scanned.add(logical);
-    const kind = kindForPath(rel);
+    scanned.add(logical).add(located);
+    // Judged by the names an agent reads it by: `.claude -> agent-config` makes
+    // agent-config/settings.json Claude's settings, hooks and credential gate included.
+    const kind = [...agentNames(located).map((name) => homeRelative(name, root) ?? homeRelative(name, home)!), reachedAs].map(kindForPath).find(isActiveConfig) ?? kindForPath(rel);
+    // Under a name that is not agent context, the folder sync carries it verbatim.
+    if (scope === "project" && inRepo && isActiveConfig(kind) && !isAgentContext(rel) && !tracked.has(rel)) result.warnings.push(`${rel}: agent config behind a tracked link travels with the folder sync, its paths not rewritten for the host`);
     const hooks = yield* portableHookSteps(bytes, logical, home, kind);
     bytes = hooks.bytes;
     result.warnings.push(...hooks.warnings);
     const credential = !isActiveConfig(kind) && credentialContentReason(bytes);
-    if (credential) { credentialPaths.add(logical); result.skipped.push({ path: logical, reason: credential }); return; }
+    if (credential) { credentialPaths.add(logical).add(located); result.skipped.push({ path: logical, reason: credential }); return; }
     if (emit) {
-      files.set(`${scope}:${rel}`, { sourcePath: logical, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes });
+      files.set(`${scope}:${rel}`, { sourcePath: located, relativePath: rel, scope, kind, mode: actual.mode & 0o100 ? "0700" : "0600", bytes, ...(throughLink ? { throughLink } : {}) });
       result.totalBytes += bytes.length;
       if (droppable) candidates.push({ path: homeRelative(logical, home) ?? logical, bytes: bytes.length });
     }
     const text = portableText(bytes);
     if (text !== null) {
       result.warnings.push(...commandCompatibilityWarnings(text, rel));
-      const required = activeContextReferences(text, logical, home, kindForPath(rel));
+      const required = activeContextReferences(text, logical, home, kind);
       for (const ref of new Set([...contextReferences(text, logical, home), ...required])) {
         if (required.has(ref) && credentialPaths.has(ref)) throw new Error(`active context reference contains credential material: ${logical} -> ${ref}`);
         if (required.has(ref) && (securityPaths.has(ref) || securityDenied(ref, true))) throw new Error(`active context reference is denied: ${logical} -> ${ref}`);
@@ -660,58 +728,8 @@ function* projectContextSteps(opts: ProjectContextOptions): ContextSteps<Project
 }
 
 
-type ContextOperation = { op: "lstat" | "realpath" | "stat" | "readdir" | "prefix" | "bytes" | "tracked" | "inRepo"; path: string };
-type ContextSteps<T> = Generator<ContextOperation, T, any>;
-
-
 export function isAccessError(err: unknown): boolean {
   return ["EACCES", "EPERM", "ENOENT", "ENOTDIR"].includes((err as NodeJS.ErrnoException)?.code ?? "");
-}
-
-function trackedFiles(stdout: string, stderr: string, code: number | null): string[] {
-  if (code !== 0 && !stderr.includes("not a git repository")) throw new Error(`project context git enumeration failed (exit ${code})`);
-  return code === 0 ? stdout.split("\0").filter(Boolean) : [];
-}
-
-function executeContextSync(op: ContextOperation): unknown {
-  if (op.op === "lstat") return fs.lstatSync(op.path, { throwIfNoEntry: false });
-  if (op.op === "realpath") return fs.realpathSync(op.path);
-  if (op.op === "stat") return fs.statSync(op.path);
-  if (op.op === "readdir") return fs.readdirSync(op.path);
-  if (op.op === "inRepo") return spawnSync("git", ["-C", op.path, "rev-parse", "--git-dir"], { stdio: "ignore", timeout: 30_000 }).status === 0;
-  if (op.op === "tracked") {
-    const r = spawnSync("git", ["-C", op.path, "ls-files", "-z"], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 });
-    if (r.error) throw r.error;
-    return trackedFiles(r.stdout, r.stderr, r.status);
-  }
-  const fd = fs.openSync(op.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try {
-    if (op.op === "bytes") return fs.readFileSync(fd);
-    const prefix = Buffer.alloc(4);
-    fs.readSync(fd, prefix, 0, 4, 0);
-    return prefix;
-  } finally { fs.closeSync(fd); }
-}
-
-async function executeContextAsync(op: ContextOperation): Promise<unknown> {
-  if (op.op === "lstat") return fs.promises.lstat(op.path).catch((err: NodeJS.ErrnoException) => { if (err.code !== "ENOENT") throw err; return undefined; });
-  if (op.op === "realpath") return fs.promises.realpath(op.path);
-  if (op.op === "stat") return fs.promises.stat(op.path);
-  if (op.op === "readdir") return fs.promises.readdir(op.path);
-  if (op.op === "inRepo") return new Promise((resolve) => { execFile("git", ["-C", op.path, "rev-parse", "--git-dir"], { timeout: 30_000 }, (err) => resolve(!err)); });
-  if (op.op === "tracked") return new Promise((resolve, reject) => {
-    execFile("git", ["-C", op.path, "ls-files", "-z"], { encoding: "utf8", timeout: 30_000, maxBuffer: 64 * 1024 * 1024 }, (err, stdout, stderr) => {
-      if (err && !stderr.includes("not a git repository")) { reject(new Error("project context git enumeration failed")); return; }
-      resolve(trackedFiles(stdout, stderr, err ? 1 : 0));
-    });
-  });
-  const fd = await fs.promises.open(op.path, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
-  try {
-    if (op.op === "bytes") return await fd.readFile();
-    const prefix = Buffer.alloc(4);
-    await fd.read(prefix, 0, 4, 0);
-    return prefix;
-  } finally { await fd.close(); }
 }
 
 export function collectProjectContext(opts: ProjectContextOptions): ProjectContext {

@@ -39,6 +39,16 @@ export function subscriptionWindow(timeoutMs: number): string {
   return `${Math.ceil((timeoutMs + 10 * 60_000) / 3_600_000)}h`;
 }
 
+/** What each state the extension reports (background.js handoffs) means, said whole. */
+export const HANDOFF_STATE_LINE: Record<string, string> = {
+  none: "No handoff on this session's tab.",
+  waiting: "The handoff is still waiting for the human.",
+  done: "The human pressed Continue: the step is done.",
+  expired: "The handoff timed out before the human pressed Continue.",
+  cancelled: "The handoff was cancelled.",
+  gone: "The tab with the handoff is gone.",
+};
+
 type HandoffReply = { id: string; state: string; shown?: boolean; expires?: number };
 
 /** Send `Cast.handoff` over this session's tab; the extension answers it without involving Chrome. */
@@ -72,7 +82,7 @@ export function registerHandoffCommand(br: Command, deps: BrowserSubDeps & { ses
         if (o.status) {
           const state = await readHandoffState(await deps.currentTab());
           if (typeof state !== "string") fail(state.error);
-          console.log(state === "none" ? "No handoff on this session's tab." : `This tab's handoff is ${state}.`);
+          console.log(HANDOFF_STATE_LINE[state] ?? `This tab's handoff is ${state}.`);
           return;
         }
         if (o.cancel) {

@@ -1,17 +1,17 @@
 import { replaceGlobals } from "../test-helpers/globals";
 import { afterAll, test, expect } from "bun:test";
 import { JSDOM } from "jsdom";
-import React, { act, useCallback, useState } from "react";
+import { act } from "react";
 import { createRoot } from "react-dom/client";
 
 import { closeDomWindow } from "../test-helpers/domGlobals";
-// Regression: SessionListPanel keeps the current chip filter FUNCTION in state
-// so it can re-close the Stashed/Killed buckets when the filter identity
-// changes. A function handed straight to a state setter is an UPDATER, so
-// React called filterByChip(previousFilter) and threw
-// "items.filter is not a function" (prod, 2026-08-26, ErrorBoundary
-// SessionList). The setter must go through a thunk. The crash only fires when
-// the identity CHANGES, so this test re-renders with a new dep, not once.
+import { useHiddenBucketsOpen } from "../hooks/useHiddenBucketsOpen";
+
+// Regression: the sidebar's Stashed bucket shut itself every few seconds while
+// someone was reading it. The reset was keyed on the chip filter callback's
+// identity, which turns over on every placement tick. It is keyed on the
+// filter's value now: a re-render with the same filter keeps an open bucket
+// open, and a filter change closes it.
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>", { url: "https://app.test/" });
 const restoreGlobals = replaceGlobals({
@@ -25,37 +25,34 @@ afterAll(() => {
   restoreGlobals();
 });
 
+let openStashed: () => void = () => {};
 
-
-
-
-function Panel({ project }: { project: string }) {
-  const filterByChip = useCallback(
-    (items: { p: string }[]) => items.filter((x) => x.p === project),
-    [project],
-  );
-  const [bucketsFilter, setBucketsFilter] = useState(() => filterByChip);
-  if (bucketsFilter !== filterByChip) setBucketsFilter(() => filterByChip);
-  return <span>{bucketsFilter([{ p: "a" }, { p: "b" }, { p: "b" }]).length}</span>;
+function Buckets({ project, tick }: { project: string; tick: number }) {
+  // A fresh array every render, like the panel's filter terms.
+  const [open, setOpen] = useHiddenBucketsOpen(JSON.stringify([[{ id: project }], []]));
+  openStashed = () => setOpen((o) => ({ ...o, stashed: true }));
+  return <span data-tick={tick}>{open.stashed ? "open" : "closed"}</span>;
 }
 
-test("re-seeding a function-valued state during render does not invoke it as an updater", () => {
+test("an open bucket stays open across re-renders and closes when the filter changes", () => {
   const host = document.createElement("div");
   document.body.appendChild(host);
   const root = createRoot(host);
-  let error: unknown = null;
-  const onError = (e: unknown) => { error = e; };
 
-  act(() => root.render(<Panel project="a" />));
-  expect(host.textContent).toBe("1");
+  act(() => root.render(<Buckets project="a" tick={0} />));
+  expect(host.textContent).toBe("closed");
 
-  // Filter identity changes: the render-time setState must store the new
-  // function, not call it with the previous filter as its argument.
-  try {
-    act(() => root.render(<Panel project="b" />));
-  } catch (e) { onError(e); }
-  expect(error).toBeNull();
-  expect(host.textContent).toBe("2");
+  act(() => openStashed());
+  expect(host.textContent).toBe("open");
+
+  // Placement ticks: same filter value, new objects each render.
+  for (let tick = 1; tick <= 3; tick++) {
+    act(() => root.render(<Buckets project="a" tick={tick} />));
+    expect(host.textContent).toBe("open");
+  }
+
+  act(() => root.render(<Buckets project="b" tick={4} />));
+  expect(host.textContent).toBe("closed");
 
   act(() => root.unmount());
   host.remove();

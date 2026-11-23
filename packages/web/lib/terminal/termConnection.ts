@@ -3,6 +3,7 @@
 // seat (controller/observer) protocol, and tab teardown.
 
 import { killTerminalSession, termWsUrl, type TerminalEndpoint } from "./endpoint";
+import { openWebSocket } from "../openWebSocket";
 import { connectRemotePane, frameToBytes, type RemotePaneSource } from "./remotePane";
 import { PaneStreamFilter } from "./paneStreamFilter";
 import { bump, fitInstance, instances, reg, type OpenTerminalOptions, type TermInstance } from "./termRegistry";
@@ -112,7 +113,13 @@ function connectLocal(inst: TermInstance): void {
     bump();
     return;
   }
-  const ws = new WebSocket(termWsUrl(endpoint));
+  const ws = openWebSocket(termWsUrl(endpoint));
+  if (!ws) {
+    inst.state.status = "error";
+    inst.state.statusDetail = "invalid terminal address";
+    bump();
+    return;
+  }
   ws.binaryType = "arraybuffer";
   inst.ws = ws;
   // What ended this socket, when the server said: no reconnect after either.

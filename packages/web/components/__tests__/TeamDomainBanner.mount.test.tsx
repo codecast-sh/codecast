@@ -68,6 +68,21 @@ test("an unproven address is offered a code, then proves it", async () => {
   expect(calls[1]).toEqual(["teamDiscovery:confirmWorkEmailCode", { code: "123456" }]);
 });
 
+test("a wrong code is an answer: the banner stays on the field and says so", async () => {
+  answers["teamDiscovery:teamsForMyDomain"] = { domain: "acme.dev", needs_proof: true, teams: [] };
+  answers["teamDiscovery:confirmWorkEmailCode:result"] = { proven: false, error: "That code is not right" };
+  await render(<TeamDomainBanner />);
+  await click("Email me a code");
+  const input = document.querySelector("input")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")!.set!.call(input, "000000");
+    input.dispatchEvent(new window.Event("input", { bubbles: true }));
+  });
+  await click("Confirm");
+  expect(text()).toContain("That code is not right");
+  expect(document.querySelector("input")).not.toBeNull();
+});
+
 test("a proven coworker sees the team and asks to join", async () => {
   answers["teamDiscovery:teamsForMyDomain"] = { domain: "acme.dev", needs_proof: false, teams: [{ _id: "t1", name: "Acme", member_count: 5, request: "none" }] };
   await render(<TeamDomainBanner />);
@@ -104,4 +119,25 @@ test("an admin on a personal address cannot open the team", async () => {
   await render(<TeamDomainAccess teamId={"t1" as any} />);
   expect(text()).toContain("personal address");
   expect(document.querySelector("[role=switch]")!.hasAttribute("disabled") || document.querySelector("[role=switch]")!.getAttribute("data-disabled") !== null).toBe(true);
+});
+
+test("a team open to one domain offers an admin proven at another a switch to theirs", async () => {
+  answers["teamDiscovery:discoverySettings"] = { enabled_domain: "oldco.dev", admin_domain: "acme.dev", admin_domain_proven: true };
+  answers["teamDiscovery:pendingRequests"] = [];
+  await render(<TeamDomainAccess teamId={"t1" as any} />);
+  // The switch still names the domain the team is open to.
+  expect(text()).toContain("Let @oldco.dev coworkers find this team");
+  expect(text()).toContain("Open to @acme.dev instead");
+  await click("Switch");
+  expect(calls).toEqual([["teamDiscovery:setDiscoverable", { team_id: "t1", enabled: true }]]);
+});
+
+test("no switch is offered when the domains match or the admin's address is unproven", async () => {
+  answers["teamDiscovery:pendingRequests"] = [];
+  answers["teamDiscovery:discoverySettings"] = { enabled_domain: "acme.dev", admin_domain: "acme.dev", admin_domain_proven: true };
+  await render(<TeamDomainAccess teamId={"t1" as any} />);
+  expect(button("Switch")).toBeUndefined();
+  answers["teamDiscovery:discoverySettings"] = { enabled_domain: "oldco.dev", admin_domain: "acme.dev", admin_domain_proven: false };
+  await render(<TeamDomainAccess teamId={"t2" as any} />);
+  expect(button("Switch")).toBeUndefined();
 });

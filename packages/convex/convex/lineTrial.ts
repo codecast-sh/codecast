@@ -41,6 +41,7 @@ export { sameCode };
 import { validateJudgeFixCard, type JudgeFixCard } from "@codecast/shared/contracts/judgeFix";
 import { isJudgeProblem, JUDGE_CASE_SOURCE } from "@codecast/shared/contracts/judgeReview";
 import { cancelCore, createRunCore, isLiveRunStatus, openDecisionOf, queueRunOnDaemon, resumeRunAt, stationSession, type GateChoice } from "./workflow_runs";
+import { adoptedCategory } from "./lib/decisionCategory";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, refreshHolder, routeFor, routeToRole, syncDecisionInbox, tellHearingRole, userMayRead, withdrawClosedProblemAsks, withdrawCore } from "./sessionDecisions";
 import { gateMirror } from "./lib/gateChoices";
 import { fileTrialCard, trialDeciderOf, trialProjectOf, trialStackOf } from "./lib/trialDecision";
@@ -49,8 +50,9 @@ import { fateOf, problemEvidence, type FindingFate } from "./lib/problemEvidence
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { failedAtStation } from "@codecast/shared/contracts/causeHistory";
 import { insertTaskComment, moveTaskStatus } from "./tasks";
-import { newLineMemo, problemSuperseded, runSuperseded } from "./lib/superseded";
+import { newLineMemo, problemSuperseded, runSuperseded, type LineMemo } from "./lib/superseded";
 import { supersededCard, type Superseded } from "@codecast/shared/contracts/superseded";
+import { graphOfVersion, ownLineAfter, pinnedRowOf } from "./lib/runGraph";
 
 type Ctx = { db: any };
 
@@ -97,6 +99,8 @@ export async function askTrialGate(
       workflow_run_id: run._id,
       gate_node_id: args.node_id,
       blocking: true,
+      // Who may answer: a person's category the station named, else the one the flow declares on the gate, else a person.
+      category: adoptedCategory(own.category, args.category),
       trial: true,
       hops: told ? own.hops : routed.ladder.hops,
       asked_user_ids: routed.people,
@@ -245,13 +249,29 @@ export function overlapOf(mine: string[], theirs: string[], sameRule: boolean): 
  * is held, never asked of a person (ct-59540's proposal_gate after the line
  * dropped its proposal stations). False when the graph is unknown.
  */
-export function gateGone(nodeId: string, workflow: Pick<Doc<"workflows">, "nodes"> | null | undefined): boolean {
+export function gateGone(nodeId: string, workflow: { nodes: ReadonlyArray<{ id: string }> } | null | undefined): boolean {
   const nodes = workflow?.nodes ?? [];
   return nodes.length > 0 && !nodes.some((n: { id: string }) => n.id === nodeId);
 }
 
-async function staleGateOf(ctx: Ctx, row: Pick<Doc<"trial_cards">, "node_id">, run: Pick<Doc<"workflow_runs">, "workflow_id"> | null): Promise<boolean> {
-  const workflow: Doc<"workflows"> | null = run?.workflow_id ? await ctx.db.get(run.workflow_id) : null;
+export async function staleGateOf(ctx: Ctx, row: Pick<Doc<"trial_cards">, "node_id">, run: Pick<Doc<"workflow_runs">, "workflow_id" | "graph_version_id" | "flow_versions"> | null, memo?: LineMemo): Promise<boolean> {
+  if (!run) return false;
+  // A run that pinned its version is judged against its own line only (lib/runGraph.ts).
+  const pinned = await pinnedRowOf(ctx, run, memo?.graph);
+  if (pinned?.line) {
+    const after = await ownLineAfter(ctx, pinned, memo?.graph);
+    if (!after) return false;
+    return gateGone(row.node_id, { nodes: after.nodes.length ? after.nodes : (await graphOfVersion(ctx, after, memo?.graph))?.nodes ?? [] });
+  }
+  // A pin from no file resumes with its own graph, which nothing replaces (lib/superseded.ts ownLineOf).
+  if (pinned?.graph_id) return false;
+  let workflow: Doc<"workflows"> | null = null;
+  if (run.workflow_id && memo) {
+    // The call's shared memo holds each workflows row once (runSuperseded reads the same rows).
+    const key = String(run.workflow_id);
+    if (!memo.workflows.has(key)) memo.workflows.set(key, ctx.db.get(run.workflow_id));
+    workflow = await memo.workflows.get(key)!;
+  } else if (run.workflow_id) workflow = await ctx.db.get(run.workflow_id);
   return gateGone(row.node_id, workflow);
 }
 
@@ -290,15 +310,31 @@ export async function cardBranch(ctx: Ctx, run: Doc<"workflow_runs"> | null, sou
   return source ? { repository: source.repository, name: `codecast/${slug}`, base: `origin/${source.default_branch || "main"}` } : null;
 }
 
-async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Doc<"projects"> | null) => Promise<Map<string, CardRule>>, sources: Map<string, Doc<"repo_sources"> | null> = new Map()) {
-  const [task, run, project] = await Promise.all([ctx.db.get(row.task_id), ctx.db.get(row.run_id), ctx.db.get(row.project_id)]);
-  const evidence = task ? await problemEvidence(ctx, task, row.created_at) : null;
+/**
+ * What one `cards` call has read already, shared by every card it builds: each
+ * project, each line's graph and workflows row (LineMemo), and each checkout
+ * (repo_sources). Read per card, a backlog of 400 waiting cards read ~58
+ * documents a card and timed out at 3s (ct-73205).
+ */
+type CardsMemo = { projects: Map<string, Promise<Doc<"projects"> | null>>; line: LineMemo; sources: Map<string, Doc<"repo_sources"> | null> };
+const newCardsMemo = (): CardsMemo => ({ projects: new Map(), line: newLineMemo(), sources: new Map() });
+
+async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Doc<"projects"> | null) => Promise<Map<string, CardRule>>, memo: CardsMemo = newCardsMemo()) {
+  const projectKey = String(row.project_id);
+  if (!memo.projects.has(projectKey)) memo.projects.set(projectKey, ctx.db.get(row.project_id));
+  const [task, run, project] = await Promise.all([ctx.db.get(row.task_id), ctx.db.get(row.run_id), memo.projects.get(projectKey)!]);
+  // The problem's findings, read once: its evidence, the cited findings still on it, and its coverage all come from them.
+  const findings: Doc<"signals">[] = task ? await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect() : [];
+  const findingByShortId = new Map(findings.map((s) => [s.short_id, s]));
+  const evidence = task ? await problemEvidence(ctx, task, row.created_at, findings) : null;
   // The findings the card cites, as they stand now, and the rule the first one breaks.
   const proposal = row.proposal as ProposalCard | undefined;
   const citedIds = [...new Set([proposal?.case?.signal, ...((row.card as ChangeCard | undefined)?.seen ?? []).map((x) => x.signal)].filter((x): x is string => !!x))];
   const cited: CitedCase[] = [];
+  let firstCited: Doc<"signals"> | null = null;
   for (const id of citedIds) {
-    const s: Doc<"signals"> | null = await ctx.db.query("signals").withIndex("by_short_id", (q: any) => q.eq("short_id", id)).first();
+    const s: Doc<"signals"> | null = findingByShortId.get(id) ?? await ctx.db.query("signals").withIndex("by_short_id", (q: any) => q.eq("short_id", id)).first();
+    if (id === citedIds[0]) firstCited = s;
     if (!s) { cited.push({ signal: id, state: "missing" }); continue; }
     const base = { signal: id, claim: s.title, ...(s.subject ? { subject: s.subject } : {}) };
     if (s.retired) cited.push({ ...base, state: "withdrawn", fate: fateOf(s.retired.reason ?? "").fate });
@@ -308,7 +344,6 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
     } else cited.push({ ...base, state: s.task_id ? "live" : "elsewhere" });
   }
   // A problem merged away keeps no key; the findings it cites still say whether they were cases against a judge.
-  const firstCited: Doc<"signals"> | null = citedIds[0] ? await ctx.db.query("signals").withIndex("by_short_id", (q: any) => q.eq("short_id", citedIds[0])).first() : null;
   const citedSource = firstCited?.source;
   const rules = await rulesOf(project);
   // The proposal's author names the line the miss breaks, or none; older cards show the cited finding's subject.
@@ -320,8 +355,7 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
   const card = row.card as ChangeCard | undefined;
   let coverage: CardCoverage | null = null;
   if (card?.reach?.read && task) {
-    const live: Doc<"signals">[] = await ctx.db.query("signals").withIndex("by_task", (q: any) => q.eq("task_id", task._id)).collect();
-    coverage = coverageOf(card.reach, live.map((s) => ({ short_id: s.short_id, conv: findingConversation({ ...s, _id: String(s._id) }) })));
+    coverage = coverageOf(card.reach, findings.map((s) => ({ short_id: s.short_id, conv: findingConversation({ ...s, _id: String(s._id) }) })));
   }
   // A waiting card whose run moved on or ended without an answer reads closed; so does one whose problem
   // was merged into another, which the survivor's card supersedes (`superseded_by`, filled by `cards`).
@@ -341,7 +375,7 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
   const problem = await problemSuperseded(ctx, task);
   const superseded = supersededCard({
     waiting: recorded === "waiting",
-    run: run && !offGate ? await runSuperseded(ctx, run, task) : null,
+    run: run && !offGate ? await runSuperseded(ctx, run, task, memo.line) : null,
     run_at_gate: !!live,
     problem,
     covered: card?.reach?.covers ? coverage?.covered ?? null : null,
@@ -392,7 +426,7 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
     evals_owed: card ? evalsOwedBy(run) : [],
     coverage,
     /** Where a change card's fix lives, so its diff can be read in place (cardBranch); null for other cards. */
-    branch: card ? await cardBranch(ctx, run, sources) : null,
+    branch: card ? await cardBranch(ctx, run, memo.sources) : null,
     /** Other open cards touching the same code (filled by `cards`). */
     overlaps: [] as CardOverlap[],
     /** The problem this card's problem was merged into, when it was. */
@@ -401,7 +435,7 @@ async function cardView(ctx: Ctx, row: Doc<"trial_cards">, rulesOf: (project: Do
     superseded_by: null as { card?: string; task: string } | null,
     rebuilding,
     /** The run waits at a gate its line dropped: no answer has an edge to follow, so the card is held until the run is picked up at a station the line still has. */
-    stale_gate: status === "waiting" && (await staleGateOf(ctx, row, run)),
+    stale_gate: status === "waiting" && (await staleGateOf(ctx, row, run, memo.line)),
     /** Findings joined its problem after the card was written (a regroup or a re-extraction): a count the card carries predates them. */
     regrouped: !!task?.cause?.joined_at && task.cause.joined_at > (row.carded_at ?? row.created_at),
     /** line-versions.md LV1: why the card no longer stands, and what replaced it; null while it is current. */
@@ -502,29 +536,33 @@ export async function supersedeMerged(cards: Supersedable[], getTask: (id: Id<"t
   }
 }
 
-/** Every trial card in the workspace, newest first: the review page's list (web store key `trialCards`) and `cast line trial`. */
-/** The waiting cards one read lists beyond the recent window. */
-const WAITING_CARDS_CAP = 1000;
+/**
+ * The cards one read builds, newest first: the review page's list (web store key `trialCards`) and `cast line trial`.
+ * Each card costs about 9 database calls and 18 documents, and Convex gives a query 3s, so one read builds at
+ * most CARDS_CAP cards (ct-73205: 1,300 cards timed out). Waiting cards come first, since each is a decision the
+ * team still owes, then the newest of the rest; past the cap the oldest waiting cards are left out.
+ */
+export const CARDS_CAP = 350;
 
 export const cards = query({
   args: { ...scopeArgs, project: v.optional(v.string()), limit: v.optional(v.number()) },
   handler: async (ctx, args): Promise<TrialCardView[]> => {
     const { userId, workspaceKey } = await scopeOf(ctx, args);
-    const limit = Math.min(Math.max(1, args.limit ?? 300), 500);
+    const limit = Math.min(Math.max(1, args.limit ?? 300), CARDS_CAP);
     const project = args.project ? await resolveWorkspaceProject(ctx, workspaceKey, args.project) : null;
     if (args.project && !project) throw new Error(`No project "${args.project}" in this workspace`);
+    const waiting: Doc<"trial_cards">[] = project
+      ? await ctx.db.query("trial_cards").withIndex("by_project_status_created", (q: any) => q.eq("project_id", project._id).eq("status", "waiting")).order("desc").take(CARDS_CAP)
+      : await ctx.db.query("trial_cards").withIndex("by_workspace_status_created", (q: any) => q.eq("workspace", workspaceKey).eq("status", "waiting")).order("desc").take(CARDS_CAP);
     const recent: Doc<"trial_cards">[] = project
       ? await ctx.db.query("trial_cards").withIndex("by_project_created", (q: any) => q.eq("project_id", project._id)).order("desc").take(limit)
       : await ctx.db.query("trial_cards").withIndex("by_workspace_created", (q: any) => q.eq("workspace", workspaceKey)).order("desc").take(limit);
-    // Every waiting card, past the window of recent ones too: each is a decision the team still owes.
-    const waiting: Doc<"trial_cards">[] = await ctx.db.query("trial_cards")
-      .withIndex("by_workspace_status_created", (q: any) => q.eq("workspace", workspaceKey).eq("status", "waiting")).order("desc").take(WAITING_CARDS_CAP);
-    const seenCard = new Set(recent.map((r) => String(r._id)));
-    const rows = [...recent, ...waiting.filter((r) => !seenCard.has(String(r._id)) && (!project || String(r.project_id) === String(project._id)))];
+    const seenCard = new Set(waiting.map((r) => String(r._id)));
+    const rows = [...waiting, ...recent.filter((r) => !seenCard.has(String(r._id)))].slice(0, CARDS_CAP).sort((a, b) => b.created_at - a.created_at);
     const out: TrialCardView[] = [];
     const allowed = new Map<string, boolean>();
     const rulesByProject = new Map<string, Map<string, CardRule>>();
-    const sources = new Map<string, Doc<"repo_sources"> | null>();
+    const memo = newCardsMemo();
     const rulesOf = async (p: Doc<"projects"> | null) => {
       if (!p) return new Map<string, CardRule>();
       if (!rulesByProject.has(String(p._id))) {
@@ -540,7 +578,9 @@ export const cards = query({
         const p = await ctx.db.get(row.project_id);
         allowed.set(key, !!p && (await canAccessProject(ctx, userId, p)));
       }
-      if (allowed.get(key)) out.push(await cardView(ctx, row, rulesOf, sources));
+      if (!allowed.get(key)) continue;
+      // One card whose rows are malformed is left out, never the whole list.
+      try { out.push(await cardView(ctx, row, rulesOf, memo)); } catch (e) { console.error(`lineTrial.cards: left out ${row.short_id}:`, e); }
     }
     // Where each problem's fix lives, from its newest proposal (a change card's own proposal was answered before it).
     const whereByTask = new Map<string, string[]>();
@@ -2023,6 +2063,12 @@ export const recardForCli = mutation({
   },
 });
 
+/** A trial card's rebuild puts its run back at `at` on the graph given, from fresh: nothing it asked stays on the row,
+ *  nor a clearance to land (merge_cleared), which belonged to the attempt it replaces. */
+export async function restartRunFresh(ctx: { db: any }, runId: Id<"workflow_runs">, graph: { workflow_id?: Id<"workflows">; workflow_name?: string }, at: string, now: number): Promise<void> {
+  await ctx.db.patch(runId, { ...graph, fresh_branch: true, merge_cleared: undefined, status: "running", current_node_id: at, gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, updated_at: now });
+}
+
 /**
  * `cast line trial rebuild <tc-N>`: a waiting change card whose branch is
  * stale against main goes back to the line's `fresh` station, which rebases
@@ -2053,7 +2099,7 @@ export const rebuildForCli = mutation({
     // read again from its file (fresh_branch makes the daemon re-read it; on a resume it never resets the branch).
     const current = (await dueProblems(ctx, project)).like.product;
     const graph = current && current.workflow_id !== run.workflow_id ? { workflow_id: current.workflow_id, workflow_name: current.workflow_name } : {};
-    await ctx.db.patch(run._id, { ...graph, fresh_branch: true, status: "running", current_node_id: args.from ?? "fresh", gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, updated_at: now });
+    await restartRunFresh(ctx, run._id, graph, args.from ?? "fresh", now);
     await ctx.db.patch(row._id, { rebuild_at: now, updated_at: now });
     await queueRunOnDaemon(ctx as any, userId, run._id, { device: run.runner_device, now });
     return { short_id: row.short_id, run_id: run._id, stale: stale.detail };

@@ -1,5 +1,5 @@
 import { flowName } from "@codecast/shared/contracts/flowPool";
-import type { SessionDecisionItem } from "../store/inboxStore";
+import type { DecisionDetailItem, SessionDecisionItem } from "../store/inboxStore";
 import { inViewerQueue } from "./decisionQueue";
 
 // The route of a decision's document page: its short id when it has one.
@@ -74,4 +74,13 @@ export function decisionWaitLabel(d: Pick<SessionDecisionItem, "status" | "block
   if (!waitsOnViewer(d, viewerId)) return "Waiting on a teammate";
   if (d.blocking) return "Waiting on you";
   return d.silent ? "Asked of you" : "The agent went ahead; you can change course";
+}
+
+/** Who answered a decision, in the words a card's outcome line uses: a person's name ("you" for the viewer), a role's, or "policy". */
+export function answererNameOf(detail: Pick<DecisionDetailItem, "decision" | "asked_users" | "holder_role" | "ladder">, meId: string | null | undefined): string {
+  const by = detail.decision.answered_by;
+  if (!by) return "a person";
+  if (by.kind === "policy") return "policy";
+  if (by.kind === "role") return detail.holder_role?.name ?? detail.ladder.find((h) => h.role_id === by.id)?.role?.name ?? "a role";
+  return detail.asked_users.find((u) => u._id === by.id)?.name ?? (by.id === meId ? "you" : "a person");
 }

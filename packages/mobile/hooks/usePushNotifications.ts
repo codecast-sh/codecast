@@ -11,7 +11,8 @@ import { useNotificationCatchUp } from '@/hooks/useNotificationCatchUp';
 import { acceptInvite, declineInvite, joinCall } from '@/lib/calls/callManager';
 import { useAuth } from '@/lib/auth';
 import { catchUpConversation } from '@/lib/foregroundResume';
-import { openLink } from '@/lib/links';
+import { openAppRoute } from '@/lib/links';
+import { mobileNotificationRoute } from '@/lib/linkRoutes';
 import { goToTab } from '@/lib/tabNavigation';
 import { setDevicePushToken } from '@/lib/devicePushToken';
 import {
@@ -173,37 +174,34 @@ export function usePushNotifications() {
         goToTab(router, '/(tabs)/chat');
         return;
       }
+      if (data.type === 'aggregate') {
+        // A batched push ("12 notifications") has no single place to open —
+        // land on the list that itemizes them.
+        goToTab(router, '/(tabs)/notifications');
+        return;
+      }
       if (data.conversationId) {
         // Its new rows start over HTTPS now, beside the socket's reconnect.
         void catchUpConversation(String(data.conversationId));
-        // A hosted conversation opens as its own screen there, with its approval card.
-        router.push(`/session/${data.conversationId}` as never);
-      } else if ((data.type === "task_completed" || data.type === "task_failed") && typeof data.url === "string") {
-        void openLink(data.url);
-      } else if (data.channelId) {
-        // A team chat push lands in the channel it came from — and when it was
-        // a thread reply, in that thread, which is where the words actually
-        // are. threadRootId rides along in the push payload for exactly this.
-        // Object form + cast: expo's typed-route union only regenerates when
-        // Metro runs, so a freshly added route is unknown to tsc until then.
-        const m = data.messageId ? { m: String(data.messageId) } : {};
-        if (data.threadRootId) {
-          router.push({
-            pathname: '/chat/thread/[id]',
-            params: { id: String(data.threadRootId), channel: String(data.channelId), ...m },
-          } as never);
-        } else {
-          router.push({ pathname: '/chat/[id]', params: { id: String(data.channelId), ...m } } as never);
-        }
-      } else if (data.type === 'sessions_need_input') {
-        // The hourly fold-up names several sessions — the inbox is where they
-        // all are, and where the needs-input group sits at the top.
-        goToTab(router, '/(tabs)/inbox');
-      } else if (data.type === 'aggregate') {
-        // A batched push ("12 notifications") has no single session to open —
-        // land on the list that itemizes them.
-        goToTab(router, '/(tabs)/notifications');
       }
+      if (data.channelId && data.threadRootId) {
+        // A thread reply's words live in the thread, so that is where the tap lands.
+        const m = data.messageId ? { m: String(data.messageId) } : {};
+        router.push({
+          pathname: '/chat/thread/[id]',
+          params: { id: String(data.threadRootId), channel: String(data.channelId), ...m },
+        } as never);
+        return;
+      }
+      // Every other push opens the same screen its row in the bell list does.
+      const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
+      openAppRoute(router, mobileNotificationRoute({
+        link: str(data.link) ?? str(data.url),
+        entity_type: str(data.entity_type),
+        entity_id: str(data.entity_id),
+        chat_message_id: str(data.messageId),
+        conversation_id: str(data.conversationId),
+      }));
     };
 
     handleRef.current = handleNotificationResponse;

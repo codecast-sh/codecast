@@ -10,6 +10,9 @@
 import type { ConvexReactClient } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
+import { isUsableEndpoint, isValidPort, loopbackWsUrl } from "./loopbackUrl";
+
+export { isUsableEndpoint, isValidPort, loopbackWsUrl } from "./loopbackUrl";
 
 export interface TerminalEndpoint {
   port: number;
@@ -118,8 +121,9 @@ function readOverride(): TerminalEndpoint | null {
     const raw = localStorage.getItem(OVERRIDE_KEY);
     if (!raw) return null;
     const [port, token] = raw.split(":");
-    if (!port || !token) return null;
-    return { port: parseInt(port, 10), token, deviceId: OVERRIDE_DEVICE_ID, tmux: true };
+    if (!port || !/^\d+$/.test(port)) return null;
+    const ep = { port: Number(port), token, deviceId: OVERRIDE_DEVICE_ID, tmux: true };
+    return isUsableEndpoint(ep) ? ep : null;
   } catch {
     return null;
   }
@@ -128,10 +132,13 @@ function readOverride(): TerminalEndpoint | null {
 function readCache(): TerminalEndpoint | null {
   try {
     const raw = sessionStorage.getItem(CACHE_KEY);
-    return raw ? (JSON.parse(raw) as TerminalEndpoint) : null;
-  } catch {
-    return null;
-  }
+    if (!raw) return null;
+    const ep = JSON.parse(raw) as TerminalEndpoint | null;
+    if (isUsableEndpoint(ep)) return ep;
+  } catch {}
+  // A malformed entry is dropped, so the next lookup runs discovery afresh.
+  writeCache(null);
+  return null;
 }
 
 function writeCache(ep: TerminalEndpoint | null): void {
@@ -147,8 +154,8 @@ export function termHttpBase(ep: TerminalEndpoint): string {
   return `http://127.0.0.1:${ep.port}`;
 }
 
-export function termWsUrl(ep: TerminalEndpoint): string {
-  return `ws://127.0.0.1:${ep.port}/term/ws`;
+export function termWsUrl(ep: TerminalEndpoint): string | null {
+  return loopbackWsUrl(ep, "/term/ws");
 }
 
 /** Probe an endpoint: does a daemon with this token answer on loopback? */
@@ -262,11 +269,11 @@ async function discover(convex: ConvexReactClient, deviceId?: string): Promise<T
           tmux: parsed.tmux,
         };
         // First endpoint that actually answers on loopback wins.
-        if (ep.port > 0 && (await probeWithPatience(ep)) !== null) {
+        if (isUsableEndpoint(ep) && (await probeWithPatience(ep)) !== null) {
           lastFailure = "none";
           return ep;
         }
-        if (deviceId && ep.port > 0 && ep.deviceId === deviceId) missedReplies.set(deviceId, ep);
+        if (deviceId && isUsableEndpoint(ep) && ep.deviceId === deviceId) missedReplies.set(deviceId, ep);
         if (lastProbeMiss === "timeout") sawTimeout = true;
       } catch {}
     }
@@ -325,7 +332,7 @@ async function hostForwardedEndpoint(convex: ConvexReactClient, deviceId: string
   const reply = missedReplies.get(deviceId);
   if (!reply) return null;
   const port = await forwardHostPort(convex, deviceId, reply.port);
-  if (port === null) return null;
+  if (!isValidPort(port)) return null;
   const ep: TerminalEndpoint = { ...reply, port };
   if ((await probeWithPatience(ep)) === null) return null;
   forwardedByDevice.set(deviceId, ep);
@@ -349,7 +356,8 @@ export async function forwardHostPort(convex: ConvexReactClient, deviceId: strin
     );
     if (!res.ok) return null;
     if (port === undefined) return 0;
-    return ((await res.json()) as { port: number }).port;
+    const forwarded = ((await res.json()) as { port?: unknown }).port;
+    return isValidPort(forwarded) ? forwarded : null;
   } catch {
     return null;
   }

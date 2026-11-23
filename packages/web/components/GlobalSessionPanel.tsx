@@ -3,6 +3,7 @@ import { InboxDecisionQueue } from "./decisions/InboxDecisionQueue";
 import { forkTreeRootId } from "../lib/forkTreeRoot";
 import React, { useState, useCallback, useRef, memo, useMemo } from "react";
 import { useWatchEffect } from "../hooks/useWatchEffect";
+import { useHiddenBucketsOpen } from "../hooks/useHiddenBucketsOpen";
 import { useConvex, useMutation, useQuery } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
@@ -19,7 +20,7 @@ import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsByMachine, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
 import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -27,9 +28,10 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
+import { useKillWithReview } from "../hooks/useKillWithReview";
 import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
-import { withSafetyBlock } from "@codecast/shared/contracts";
+import { isClosedSession, withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
 import { USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionLiveAt } from "../lib/liveness";
@@ -58,7 +60,7 @@ import { isUnderRole } from "@codecast/shared/contracts";
 import { AuthErrorBadge } from "./AuthErrorBadge";
 import { toast } from "sonner";
 import { toastWriteError } from "../lib/dispatchBinding";
-import { animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
+import { animatedCloseSessions, animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
 
 import { soundKill } from "../lib/sounds";
 import { latestSessionCommand, requestAccountSwitchCommand, switchPending } from "../lib/sessionCommands";
@@ -82,6 +84,8 @@ import { useThinkingAvailable } from "./simple/assistantPromise";
 import { useUpgradesOpen } from "./simple/billing";
 import type { NoticeKind } from "@codecast/shared/contracts/assistant";
 import { LabelChipsRow } from "./LabelChipsRow";
+import { DeviceIcon, deviceDisplayName, useRosterMachines } from "./DeviceBadge";
+import { machineIdOfChipKey } from "../store/workProjects";
 import { RailFilterMenu } from "./RailFilterMenu";
 import { useIsModernFocused } from "../hooks/useVisualStyle";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -1528,6 +1532,7 @@ const STALE_PROMPT_SNOOZE_MS = 7 * 24 * 60 * 60 * 1000;
 // Stable empty list so the favorites memo keeps a constant ref when not in the
 // favorites view (a fresh [] each render would defeat downstream memoization).
 const EMPTY_FAVORITES: InboxSession[] = [];
+const NO_MACHINE_CHIPS: Array<[string, number]> = [];
 // The Dismissed bucket only renders sessions dismissed within this window — a bulk
 // sweep can dismiss thousands, and an unbounded list is noise.
 const DISMISSED_VISIBLE_MS = 45 * 24 * 60 * 60 * 1000;
@@ -1913,11 +1918,19 @@ function SessionListPanelImpl({
   // is_favorite out, so a placed row still carries the flag from before the toggle.
   // Resolved to a scalar so each card memoizes on it.
   const cardIsFavorite = (sess: InboxSession) => isFavoriteInStore(s, sess._id);
-  const { bucketCounts, projectCounts, projectPathByName, projectActivity } = useMemo(
+  const { bucketCounts, projectCounts, projectPathByName, projectActivity, machineCounts } = useMemo(
     // Project chips resolve each session's project off the store's sessions,
     // tasks and plans (store/workProjects, memoized on their refs).
     () => computeChipCounts(activeSessions, bucketByConv, projectOfFromState(useInboxStore.getState())),
     [activeSessions, bucketByConv],
+  );
+  // Machines are offered (as chips and as a grouping) only when the viewer can
+  // name them: their own roster. A teammate's machine has no name here.
+  const machines = useRosterMachines();
+  const namedMachine = useCallback((deviceId: string) => machines.has(deviceId), [machines]);
+  const namedMachineCounts = useMemo(
+    () => machineCounts.filter(([key]) => namedMachine(machineIdOfChipKey(key)!)),
+    [machineCounts, namedMachine],
   );
 
   // ONE filter pipeline for every list the panel renders. Project and bucket
@@ -1935,20 +1948,13 @@ function SessionListPanelImpl({
     [s.activeProjectFilter, s.activeBucketFilter, s.chipFilterExclude, s.extraBucketFilters, s.extraProjectFilters, bucketByConv, globalSubByParent],
   );
 
-  // The Stashed / Killed buckets' open state is ephemeral and CLOSED by
-  // default: closed on every load, and re-closed whenever the chip filter
-  // (label, layout, project) changes — filterByChip's identity is that filter.
-  // It used to live in the synced clientState (show_stashed / show_dismissed),
-  // so one auto-reveal left the bucket open on every device, forever.
-  const CLOSED_BUCKETS = { snoozed: false, stashed: false, dismissed: false };
-  const [openBuckets, setOpenBuckets] = useState(CLOSED_BUCKETS);
-  const [bucketsFilter, setBucketsFilter] = useState(() => filterByChip);
-  if (bucketsFilter !== filterByChip) {
-    // The state holds a FUNCTION: pass it through a thunk, or React runs it
-    // as an updater with the previous filter as its argument.
-    setBucketsFilter(() => filterByChip);
-    setOpenBuckets(CLOSED_BUCKETS);
-  }
+  // The Stashed / Killed buckets' open state is ephemeral and closed by
+  // default, re-closed when the chip filter (label, project) changes. It used
+  // to live in the synced clientState (show_stashed / show_dismissed), so one
+  // auto-reveal left the bucket open on every device, forever.
+  const [openBuckets, setOpenBuckets] = useHiddenBucketsOpen(
+    JSON.stringify([chipProjectFilters(s), chipBucketFilters(s)]),
+  );
 
   const filteredPinned = useMemo(() => filterByChip(pinned), [filterByChip, pinned]);
   const filteredNew = useMemo(() => filterByChip(newSessions), [filterByChip, newSessions]);
@@ -2123,12 +2129,12 @@ function SessionListPanelImpl({
     // thousands of stale sessions all at once (dismissed_at = today), so filtering
     // by dismissal time would still show them all; filtering by recency hides that
     // old noise while keeping things you recently worked on but set aside. Hidden
-    // ones stay searchable and reachable by direct link. A KILL is exempt: it is
+    // ones stay searchable and reachable by direct link. A KILL or a CLOSE is exempt: it is
     // the user's own act, never bulk noise, and the shelf pages old kills in on
     // purpose — an activity window would hide exactly what "Load more" fetched.
     const cutoff = Date.now() - DISMISSED_VISIBLE_MS;
     const filtered = filterByChip(dismissedList).filter(
-      (sess) => !!sess.inbox_killed_at || (sess.updated_at ?? 0) >= cutoff,
+      (sess) => !!sess.inbox_killed_at || isClosedSession(sess) || (sess.updated_at ?? 0) >= cutoff,
     );
     const retiredAt = (sess: InboxSession) => sess.inbox_dismissed_at || sess.inbox_killed_at || sess.dismissed_at || sess.updated_at || 0;
     return filtered.sort((a, b) => retiredAt(b) - retiredAt(a));
@@ -2409,6 +2415,12 @@ function SessionListPanelImpl({
     if (viewMode !== "plan") return null;
     return groupSessionsByPlan(lensRows, { plans: s.plans, placements: placed.placements, sessions: s.sessions, restingFrom: workspacePlans, now: coarseNow });
   }, [viewMode, lensRows, workspacePlans, placed, coarseNow, s.plans]);
+  // "By machine" lens: one group per machine the sessions run on; offered only
+  // once they run on more than one.
+  const machineView = useMemo(() => {
+    if (viewMode !== "machine") return null;
+    return groupSessionsByMachine(lensRows, namedMachine);
+  }, [viewMode, lensRows, namedMachine]);
   // Offer the "By plan" option only when a plan is actually in play, mirroring how
   // "By label" appears only with buckets.
   const hasPlanSessions = useMemo(() => activeSessions.some((x) => !!x.active_plan), [activeSessions]);
@@ -2457,8 +2469,8 @@ function SessionListPanelImpl({
   // The groupings offered as tabs, published so Ctrl+, cycles exactly these.
   const showViewTabs = !favoritesView;
   const viewModes = useMemo(
-    () => inboxViewModes({ hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0 }),
-    [visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length],
+    () => inboxViewModes({ hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0, hasMachines: namedMachineCounts.length > 1 }),
+    [visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length, namedMachineCounts.length],
   );
   const viewModesKey = showViewTabs ? viewModes.join(",") : "";
   useWatchEffect(() => {
@@ -2483,6 +2495,9 @@ function SessionListPanelImpl({
     () => (favoritesView ? computeChipCounts(allFavorites, bucketByConv, projectOfFromState(useInboxStore.getState())) : null),
     [favoritesView, allFavorites, bucketByConv],
   );
+  // Machines are a filter only once sessions run on more than one.
+  const machineChipsAll = favoritesView ? favChipCounts!.machineCounts.filter(([key]) => namedMachine(machineIdOfChipKey(key)!)) : namedMachineCounts;
+  const machineChips = machineChipsAll.length > 1 ? machineChipsAll : NO_MACHINE_CHIPS;
 
   // Shared drop sink for every label target — chips AND the "by label" view's
   // sections. bucketId null = remove the label (dropping onto a project group
@@ -2591,7 +2606,7 @@ function SessionListPanelImpl({
         armed.length === 1
           ? `Stashed — schedule "${armed[0].title}" stays armed`
           : `Stashed — ${armed.length} schedules stay armed`,
-        { description: "It keeps firing here quietly — the session comes back to your queue only if a run flags needs-attention. Dismiss or kill would cancel it.", duration: 8000 },
+        { description: "It keeps firing here quietly — the session comes back to your queue only if a run flags needs-attention. Kill would cancel it.", duration: 8000 },
       );
     }
   }, []);
@@ -2601,14 +2616,23 @@ function SessionListPanelImpl({
   // hook surfaces both side effects; the same hook backs the palette and the
   // keyboard chords, so every kill surface says the same thing.
   const { killWithNotice, killManyWithNotice, restoreWithNotice } = useTriggerKillNotice();
-  // Dismiss: "done with it" — clears the session from the inbox into the Dismissed
-  // group. The server tears the (usually idle) agent down on the inbox_dismissed_at
-  // transition, so this is codecast's kill gesture, surfaced as the PRIMARY remove
-  // action. Undoable via the toast.
-  const handleAnimatedDismiss = killWithNotice;
-  // On a stashed card the destructive slot kills (server tears the agent down
-  // on the transition) — the row moves down into Killed.
-  const handleKillStashed = killWithNotice;
+  const closedKill = useKillWithReview(killManyWithNotice);
+  const closedKillOf = closedKill.kill;
+  const handleCloseShelfX = useCallback((id: string) => {
+    const row = useInboxStore.getState().sessions[id];
+    if (row && isClosedSession(row)) closedKillOf([id]);
+    else handleKillDismissed(id);
+  }, [closedKillOf, handleKillDismissed]);
+  // Close: "done looking at it", the card's one remove. A session mid-turn is
+  // set aside and finishes; any other stops and files under Closed, keeping
+  // its triggers and queue (store closeSession). Undoable via the toast.
+  const handleAnimatedClose = useCallback((id: string) => { void animatedCloseSessions([id]); }, []);
+  const handleAnimatedCloseMany = useCallback((ids: string[]) => { void animatedCloseSessions(ids); }, []);
+  // On a stashed or snoozed card the destructive slot is a Kill (server tears
+  // the agent down on the transition; the row moves down into Closed). It is
+  // the same reviewed Kill as everywhere: a session Close set aside mid-turn
+  // sits here, so a bare press would cut that turn off and cancel triggers.
+  const handleKillStashed = useCallback((id: string) => closedKillOf([id]), [closedKillOf]);
   // Right-click menu: ONE cursor-anchored instance serves every card in the
   // panel; cards only report the click. Verbs reuse the exact handlers the
   // hover toolbar uses, so animations and trigger notices stay identical.
@@ -2693,6 +2717,11 @@ function SessionListPanelImpl({
         ? [
             ...planView.planGroups.map(({ key, items }) => [items, `plan_${key}`] as [InboxSession[], string]),
             ...planView.projectGroups.map(({ name, items }) => [items, `planproj_${name}`] as [InboxSession[], string]),
+          ]
+        : viewMode === "machine" && machineView
+        ? [
+            ...machineView.machineGroups.map(({ deviceId, items }) => [items, `machine_${deviceId}`] as [InboxSession[], string]),
+            ...machineView.projectGroups.map(({ name, items }) => [items, `machineproj_${name}`] as [InboxSession[], string]),
           ]
         : orgLensView
         ? [
@@ -3066,8 +3095,7 @@ function SessionListPanelImpl({
                   onSelect={opts?.onSelect ?? handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
-                  onDismiss={handleAnimatedDismiss}
-                  onStash={handleAnimatedStash}
+                  onClose={handleAnimatedClose}
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
@@ -3110,8 +3138,7 @@ function SessionListPanelImpl({
                     onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
-                    onDismiss={handleAnimatedDismiss}
-                    onStash={handleAnimatedStash}
+                    onClose={handleAnimatedClose}
                     variant={sectionVariant || "default"}
                     subRow={subRowOf(sub)}
                     sessionLabel={labelByConv[sub._id] ?? null}
@@ -3190,6 +3217,7 @@ function SessionListPanelImpl({
             projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
             projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
             projectActivity={favoritesView ? favChipCounts!.projectActivity : projectActivity}
+            machineCounts={machineChips}
             dropSessionOnLabel={dropSessionOnLabel}
           />
         ) : (
@@ -3197,6 +3225,7 @@ function SessionListPanelImpl({
             bucketCounts={favoritesView ? favChipCounts!.bucketCounts : bucketCounts}
             projectCounts={favoritesView ? favChipCounts!.projectCounts : projectCounts}
             projectPathByName={favoritesView ? favChipCounts!.projectPathByName : projectPathByName}
+            machineCounts={machineChips}
             dropSessionOnLabel={dropSessionOnLabel}
           />
         )}
@@ -3425,6 +3454,29 @@ function SessionListPanelImpl({
           </div>
         ))}
         </>
+        ) : viewMode === "machine" && machineView ? (
+        <>
+        {machineView.machineGroups.map(({ deviceId, items }) => {
+          const device = machines.get(deviceId);
+          return (
+            <div key={deviceId}>
+              {renderSection(deviceDisplayName(device), items, "text-sol-text", undefined, undefined, {
+                key: `machine_${deviceId}`,
+                monoLabel: true,
+                icon: device ? <DeviceIcon d={device} className="w-3 h-3 shrink-0" /> : undefined,
+                ...groupTally(items),
+              })}
+            </div>
+          );
+        })}
+        {/* Sessions no machine owns yet group by folder, the fallback tier
+            every lens shares. */}
+        {machineView.projectGroups.map(({ name, items }) => (
+          <div key={`machineproj-${name}`}>
+            {renderSection(name, items, name === "other" ? "text-sol-text-dim" : getLabelColor(name).text, undefined, undefined, { key: `machineproj_${name}` })}
+          </div>
+        ))}
+        </>
         ) : orgLensView ? (
         <>
         {orgLensView.groups.map(({ key, label, items, roleId, userId, image }) => {
@@ -3484,8 +3536,7 @@ function SessionListPanelImpl({
                   onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
-                  onDismiss={handleAnimatedDismiss}
-                  onStash={handleAnimatedStash}
+                  onClose={handleAnimatedClose}
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
                   forkColorKey={forkColorKeyOf(session)}
@@ -3597,35 +3648,34 @@ function SessionListPanelImpl({
           ),
         })}
         {renderHiddenBucket({
-          // "Killed" is honest for what dominates this bucket. It is keyed on
-          // inbox_dismissed_at, and both real kill surfaces write that stamp:
-          // the web's kill action optimistically (hideSessionInDraft mode
-          // "kill"), and `cast kill` durably (cliSetSessionVisibility, which
-          // patches inbox_dismissed_at and then stamps inbox_killed_at via
-          // applyHideTransition). The dismissed reconcile crawl
-          // (collectHiddenSessionsLite) has no shouldShowInInbox filter, so a
-          // `cast kill`ed row keeps arriving here. The non-kill dismissals that
-          // also land here (agentTasks' auto-tidy, dismissStaleInboxSessions)
-          // are the minority — and renaming this to "Dismissed" would mean
-          // pressing Kill, reading a "Killed" toast, and watching the row drop
-          // into "Dismissed". See inboxFilters.ts on why conflating the two
-          // loses the one difference that matters operationally.
-          label: "Killed",
+          // "Closed" names the card's own gesture, Close, which files the
+          // rows here; a Kill (the menu, `cast kill`) lands here too. The
+          // bucket is keyed on inbox_dismissed_at, which both write: the web
+          // optimistically (hideSessionInDraft mode "kill"), and `cast kill`
+          // durably (cliSetSessionVisibility, which patches inbox_dismissed_at
+          // and then stamps inbox_killed_at via applyHideTransition). The
+          // dismissed reconcile crawl (collectHiddenSessionsLite) has no
+          // shouldShowInInbox filter, so a `cast kill`ed row keeps arriving
+          // here. See inboxFilters.ts on why conflating the stashed and the
+          // closed loses the one difference that matters operationally.
+          label: "Closed",
           items: filteredDismissed,
           expanded: openBuckets.dismissed,
           onToggle: () => setOpenBuckets((o) => ({ ...o, dismissed: !o.dismissed })),
           variant: "dismissed",
-          onKill: handleKillDismissed,
+          // A closed row's X is a Kill like the menu's (its review, a role seat's retire
+          // question); a killed row's X only takes it off the list, as before.
+          onKill: handleCloseShelfX,
           // The rows above are this replica's cached kills (recent by kill time)
           // plus what the shelf already paged in; older or never-cached kills
           // are one click away. Chip filters apply to shelf rows like any other.
           // For an account no machine has connected to yet, the list waits for
-          // something to hold: an empty "Killed" under a newcomer's first
+          // something to hold: an empty "Closed" under a newcomer's first
           // screen offers nothing, and neither does an empty one under a chip
           // (a project's page): older kills page in for the whole inbox.
           footer: (noMachineYet && filteredDismissed.length === 0 && s.killedShelf.ids.length === 0) || (chipMatchesId && filteredDismissed.length === 0) ? undefined : s.killedShelf.complete ? (
             s.killedShelf.ids.length > 0 && (
-              <div className="w-full px-3 py-1.5 text-meta text-sol-text-dim/60 border-b border-sol-border/30">No older kills</div>
+              <div className="w-full px-3 py-1.5 text-meta text-sol-text-dim/60 border-b border-sol-border/30">No older closed sessions</div>
             )
           ) : (
             <button
@@ -3633,7 +3683,7 @@ function SessionListPanelImpl({
               disabled={s.killedShelf.loading}
               className="w-full px-3 py-1.5 text-meta font-medium text-sol-text-dim hover:text-sol-cyan disabled:hover:text-sol-text-dim disabled:opacity-60 transition-colors text-left border-b border-sol-border/30"
             >
-              {s.killedShelf.loading ? "Loading older kills…" : "Load older kills"}
+              {s.killedShelf.loading ? "Loading older…" : "Load older closed sessions"}
             </button>
           ),
         })}
@@ -3671,11 +3721,13 @@ function SessionListPanelImpl({
       <CursorPopover state={characterPicker}>
         {(rows) => <CharacterPicker rows={rows} onDone={closeCharacterPicker} />}
       </CursorPopover>
+      {closedKill.dialog}
       <ContextMenu state={sessionCtxMenu}>
         {({ session, isForeign, sessions }) => sessions.length > 1 ? (
           <BulkSessionMenuItems
             sessions={sessions}
             onStash={handleAnimatedStashMany}
+            onClose={handleAnimatedCloseMany}
             onKill={killManyWithNotice}
             onClear={clearSelection}
           />
@@ -3685,7 +3737,8 @@ function SessionListPanelImpl({
             isForeign={isForeign}
             onOpen={() => handleSelect(session)}
             onStash={() => handleAnimatedStash(session._id)}
-            onKill={() => handleAnimatedDismiss(session._id)}
+            onClose={() => handleAnimatedClose(session._id)}
+            onKill={() => killWithNotice(session._id)}
             onPickCharacter={() => {
               // Hand off under the cursor: close the menu, open the picker where
               // the menu stood, on the same targets the menu was acting on.

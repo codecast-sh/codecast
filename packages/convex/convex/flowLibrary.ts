@@ -26,6 +26,7 @@ import { recordWorkflowVersion } from "./flowVersions";
 import { verifyApiToken } from "./apiTokens";
 import { runGraphValidator } from "./lib/workflowGraphValidators";
 import { isExtendsPath } from "./lib/flowRoute";
+import { runWorkflowOf } from "./lib/runGraph";
 
 export type RunGraph = {
   hash: string; name: string; label?: string; source: string;
@@ -81,7 +82,8 @@ export async function recordRunGraph(ctx: any, run: Pick<Doc<"workflow_runs">, "
  */
 export async function recordRoutineRunGraph(ctx: any, run: Doc<"workflow_runs">, hash: string, now = Date.now()) {
   if (run.org_role_id || !run.spawner_conversation_id || !run.workflow_id || run.graph_hash === hash) return null;
-  const row = await ctx.db.get(run.workflow_id);
+  // The graph the run pinned, and where that version was pushed from (lib/runGraph.ts).
+  const row = await runWorkflowOf(ctx, run);
   if (!row?.origin || row.origin.graph_hash !== hash || isLineRunSlug(row.slug)) return null;
   return await recordRunGraph(ctx, run, {
     hash, name: row.name, label: row.label, source: row.source ?? "",

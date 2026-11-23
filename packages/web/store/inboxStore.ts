@@ -3,7 +3,7 @@ import { planSyncChange } from "@codecast/shared/team/syncPlan";
 import { approvesCommandRun } from "@codecast/shared/contracts/commandRun";
 import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, GOAL_RESUME_RESET, goalCanPause, goalCanResume, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
-import { cleanReservationPurpose } from "@codecast/shared/contracts";
+import { cleanReservationPurpose, pinnableAgentIds } from "@codecast/shared/contracts";
 import { parseStagePinRef, stagePinRowId } from "@codecast/shared/contracts/stagePins";
 import type { InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { captureError } from "../lib/analytics";
@@ -25,7 +25,7 @@ import { carryNodeSessions } from "../lib/workflowRun";
 import { runFilesOf } from "../lib/calls/callVideo";
 import { nextMembershipVisibility, type TeamVisibilityLevel, type VisibilityChangeMode } from "@codecast/convex/convex/teamVisibility";
 import { queuedMessagesFromPending } from "./pendingMessageJournal";
-import { mergeQueueRows, reorderQueueRows } from "../lib/sharedQueue";
+import { carryReleasedQueueRows, mergeQueueRows, rehold, reorderQueueRows } from "../lib/sharedQueue";
 import { parseJointMessage } from "@codecast/shared/contracts/jointMessage";
 import { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
 export { isSessionDismissed, isSessionKilled, isSessionStashed } from "../lib/sessionRetirement";
@@ -93,8 +93,9 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, cascadeTakesDownRow, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
+import { closeFactsOf, closeSetsAside, nestedInFlightOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
 // Membership on this replica is the SAME selection the server scan runs.
@@ -249,7 +250,8 @@ import { stampSessionCommand } from "./sessionCommandStamp";
 // `isConvexId` from the store keep working.
 import { isConvexId } from "../lib/entityLinks";
 import { pathOnMyMachines, savedDefaultProject, wakesOnUse, type MachineCandidate } from "../lib/machinePicker";
-import { projectChipLabel, workProjectChipKey, workProjectOf, type WorkProjectSource } from "./workProjects";
+import type { DeviceNameSource } from "@codecast/shared/contracts";
+import { machineChipKey, projectAxisLabel, projectAxisNoun, projectChipLabel, workProjectChipKey, workProjectOf, type WorkProjectSource } from "./workProjects";
 import { pendingJoinRow } from "../lib/teamMachines";
 import { projectRootOf } from "../lib/recentProjectPaths";
 import { cloudPlacementFor, CLOUD_SESSION_SOURCES, isHostedAgentType, type CloudSessionSource } from "@codecast/shared/contracts";
@@ -817,6 +819,8 @@ export type InboxSession = {
   // send, Restart, undismiss) — see classifyWorkState in convex/inboxFilters.ts,
   // whose precedence the client predicates below mirror.
   inbox_killed_at?: number | null;
+  // A Close (shared isClosedSession): equal to inbox_dismissed_at while closed.
+  inbox_closed_at?: number | null;
   last_user_message?: string | null;
   // Newest image in the conversation (server-denormalized, see convex schema).
   // Presence doubles as "this session has images"; rendered as the inbox row
@@ -913,6 +917,9 @@ export type InboxSession = {
   is_workflow_sub?: boolean;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
+  // "workflow": a Workflow-tool run, inside this session's own agent process (a
+  // codecast flow run has station sessions of its own and reports back).
+  workflow_run_kind?: string | null;
   workflow_run_name?: string | null;
   workflow_run_agents_done?: number | null;
   workflow_run_agents_total?: number | null;
@@ -1707,7 +1714,24 @@ const sessionUnreadMaps = new WeakMap<
 // One row's verdict, kept while the row ref, its winning mark and its local
 // viewed time hold: a heartbeat hands back a new sessions map in which every
 // other row keeps its ref, so the rebuild re-judges only the rows that moved.
-const sessionUnreadByRow = new WeakMap<InboxSession, { mark: SessionReadItem | undefined; viewed: number | undefined; unread: boolean }>();
+type UnreadVerdict = { mark: SessionReadItem | undefined; viewed: number | undefined; unread: boolean; a: number; b: number };
+const sessionUnreadByRow = new WeakMap<InboxSession, UnreadVerdict>();
+// One row's unread verdict against its read mark and local view stamp, cached
+// on the row; it carries two hashes of the id so the set's digest is a sum.
+function unreadVerdictOf(session: InboxSession, id: string, mark: SessionReadItem | undefined, viewed: number | undefined): UnreadVerdict {
+  let verdict = sessionUnreadByRow.get(session);
+  if (!verdict || verdict.mark !== mark || verdict.viewed !== viewed) {
+    let a = 0x811c9dc5, b = 5381;
+    for (let i = 0; i < id.length; i++) {
+      const c = id.charCodeAt(i);
+      a = Math.imul(a ^ c, 0x01000193);
+      b = (Math.imul(b, 33) + c) | 0;
+    }
+    verdict = { mark, viewed, unread: isSessionUnread({ ...sessionActivityFacts(session), mark, localViewedAt: viewed }), a, b };
+    sessionUnreadByRow.set(session, verdict);
+  }
+  return verdict;
+}
 
 /** Which sessions are lit for this viewer, derived from the marks, the rows'
  *  own updated_at, and the local "last opened" record as the fallback for a
@@ -1730,14 +1754,7 @@ export function sessionUnreadMap(state: {
   for (const id in state.sessions) {
     const session = state.sessions[id];
     if (!session) continue;
-    const mark = marks[id];
-    const viewed = state._lastViewedAt[id];
-    let verdict = sessionUnreadByRow.get(session);
-    if (!verdict || verdict.mark !== mark || verdict.viewed !== viewed) {
-      verdict = { mark, viewed, unread: isSessionUnread({ ...sessionActivityFacts(session), mark, localViewedAt: viewed }) };
-      sessionUnreadByRow.set(session, verdict);
-    }
-    if (verdict.unread) out[id] = true;
+    if (unreadVerdictOf(session, id, marks[id], state._lastViewedAt[id]).unread) out[id] = true;
   }
   byViewed.set(state._lastViewedAt, out);
   return out;
@@ -1769,11 +1786,38 @@ export function sessionUnreadWakeSig(state: {
   sessionReads: Record<string, SessionReadItem>;
   _lastViewedAt: Record<string, number>;
 }): string {
-  return unreadSetSig(sessionUnreadMap(state));
+  let byReads = sessionUnreadSigs.get(state.sessions);
+  if (!byReads) sessionUnreadSigs.set(state.sessions, byReads = new WeakMap());
+  let byViewed = byReads.get(state.sessionReads);
+  if (!byViewed) byReads.set(state.sessionReads, byViewed = new WeakMap());
+  const cached = byViewed.get(state._lastViewedAt);
+  if (cached !== undefined) return cached;
+  // A digest of the lit set, summed from the per-row verdicts: a write that
+  // moves one row costs one verdict, and no map of the set is built for it.
+  // When the map for these inputs is already built, its ids are the set.
+  let a = 0, b = 0, n = 0;
+  const add = (verdict: UnreadVerdict) => {
+    a = (a + verdict.a) | 0;
+    b = (b + verdict.b) | 0;
+    n++;
+  };
+  const built = sessionUnreadMaps.get(state.sessions)?.get(state.sessionReads)?.get(state._lastViewedAt);
+  if (built) {
+    for (const id in built) add(sessionUnreadByRow.get(state.sessions[id])!);
+  } else {
+    const marks = sessionReadMap(state.sessionReads);
+    for (const id in state.sessions) {
+      const session = state.sessions[id];
+      if (!session) continue;
+      const verdict = unreadVerdictOf(session, id, marks[id], state._lastViewedAt[id]);
+      if (verdict.unread) add(verdict);
+    }
+  }
+  const sig = `${n}.${(a >>> 0).toString(36)}.${(b >>> 0).toString(36)}`;
+  byViewed.set(state._lastViewedAt, sig);
+  return sig;
 }
-// A digest of the lit set (makeCollectionSig over the unread map), so the
-// signature is short whatever the number of unread sessions.
-const unreadSetSig = makeCollectionSig<boolean>(() => "");
+const sessionUnreadSigs = new WeakMap<object, WeakMap<object, WeakMap<object, string>>>();
 
 // Close the open subtree under a parent in the draft — the optimistic mirror
 // of the server's cascadeClose, so a "close subtasks too" choice renders
@@ -2967,8 +3011,21 @@ const REST_RANK: Record<SessionRestState, number> = { needs_input: 0, done: 1, d
 export function rankVerdictOf(s: InboxSession, placement?: { work_state: WorkState } | null): SessionVerdict {
   return placement ? verdictOfWorkState(placement.work_state) : classifySession(s);
 }
-function sessionSortRank(s: InboxSession, placement?: { work_state: WorkState } | null): [number, number, number, number, number, number, number] {
-  const c = rankVerdictOf(s, placement);
+type SortRank = [number, number, number, number, number, number, number];
+// A row's rank reads only its own fields and the class it sorts by, so it is
+// cached on the row object (the sync layer keeps the ref while no field
+// changes) and keyed by that class: placing again after one row moved builds
+// one tuple, not one per row.
+const _sortRankCache = new WeakMap<object, { work_state: WorkState; rank: SortRank }>();
+function sessionSortRank(s: InboxSession, placement?: { work_state: WorkState } | null): SortRank {
+  const work_state = sortWorkStateOf(s, placement);
+  const hit = _sortRankCache.get(s);
+  if (hit && hit.work_state === work_state) return hit.rank;
+  const rank = buildSortRank(s, verdictOfWorkState(work_state));
+  _sortRankCache.set(s, { work_state, rank });
+  return rank;
+}
+function buildSortRank(s: InboxSession, c: SessionVerdict): SortRank {
   return [
     s.is_pinned ? 0 : 1,                              // pinned first
     s.is_deferred ? 1 : 0,                            // deferred last
@@ -3639,14 +3696,19 @@ export function sectionHeaderCount(
 
 // The store-state subset the chokepoint reads. Structural (never the store
 // type itself) so tests and computeVisualOrder's narrowed state can call it.
+// The Closed bucket's paged history: kills (listKilledSessions) and closes
+// (listClosedSessions), each on its own cursor.
 export type KilledShelf = {
   ids: readonly string[];
   cursor: string | null;
-  /** True once the server reported the last page. */
+  closedCursor: string | null;
+  /** True once the server reported the last page of both. */
   complete: boolean;
+  killedDone: boolean;
+  closedDone: boolean;
   loading: boolean;
 };
-export const EMPTY_KILLED_SHELF: KilledShelf = { ids: [], cursor: null, complete: false, loading: false };
+export const EMPTY_KILLED_SHELF: KilledShelf = { ids: [], cursor: null, closedCursor: null, complete: false, killedDone: false, closedDone: false, loading: false };
 
 // How far back the Killed bucket lists kills from THIS replica's cache on its
 // own. A kill is a working-set nonmember on every replica (inWorkingSet mirrors
@@ -4241,21 +4303,48 @@ export function placeInboxRows(
   const dismissed: InboxSession[] = [];
   const stashed: InboxSession[] = [];
   const snoozed: InboxSession[] = [];
+  const stashedIds = new Set<string>();
+  const childRows: InboxSession[] = [];
   for (const s of Object.values(visibleSessions)) {
     const p = placements.get(s._id) ?? null;
-    // A placed row files by its placement; a stub or child row by its own
-    // stamps. An anchor's standing thread lives in its own space unless hard
-    // blocked — the shared `hidden` bucket, never rendered here.
-    const subagent = isOrphanOrSubagent(s);
-    const hidden = subagent
-      ? !!s.inbox_killed_at || !!s.inbox_stashed_at || (s.inbox_snoozed_until ?? 0) > now
-      : isSessionHidden(s);
-    const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "snoozed" || p.bucket === "hidden" : hidden;
+    // An unplaced child row files after every parent (below).
+    if (!p && isOrphanOrSubagent(s)) { childRows.push(s); continue; }
+    // A placed row files by its placement; a stub by its own stamps. An
+    // anchor's standing thread lives in its own space unless hard blocked —
+    // the shared `hidden` bucket, never rendered here.
+    const setAside = p ? p.bucket === "dismissed" || p.bucket === "stashed" || p.bucket === "snoozed" || p.bucket === "hidden" : isSessionHidden(s);
     // The rank reads the SAME verdict the section files under (rankVerdictOf).
     if (!setAside) activeKeyed.push({ s, rank: sessionSortRank(s, p), key: sessionSortKey(s, p, now) });
-    if (p ? p.bucket === "dismissed" : !subagent && isSessionDismissed(s)) dismissed.push(s);
-    if (p ? p.bucket === "stashed" : isSessionStashed(s)) stashed.push(s);
+    if (p ? p.bucket === "dismissed" : isSessionDismissed(s)) dismissed.push(s);
+    if (p ? p.bucket === "stashed" : isSessionStashed(s)) { stashed.push(s); stashedIds.add(s._id); }
     if (p?.bucket === "snoozed") snoozed.push(s);
+  }
+  // A child row (a Task subagent, a workflow sub, an orphan) takes no stash
+  // stamp from its parent: it is stashed while the row it rides is (its
+  // nearest non-nested ancestor), so Stashed nests it under that card and any
+  // restore of the parent brings it back. A stamp of its own is an act on the
+  // child itself (the person stashed it, or its trigger run was folded) and
+  // takes it off the parent's card into Stashed. A child whose parent is
+  // outside the viewer's scope (another account, deleted, not loaded) is never
+  // a card in any list. A child with no parent pointer (a workflow sub) has no
+  // parent to ride and files by its own stamps.
+  const nestRootMemo = new Map<string, string | null>();
+  const nestRootOf = (s: InboxSession): string | null => {
+    if (!isOrphanOrSubagent(s) || !nestParentIdOf(s)) return s._id;
+    const known = nestRootMemo.get(s._id);
+    if (known !== undefined) return known;
+    nestRootMemo.set(s._id, null); // a parent cycle has no root
+    const parent = scoped[nestParentIdOf(s) ?? ""];
+    const root = parent ? nestRootOf(parent) : null;
+    nestRootMemo.set(s._id, root);
+    return root;
+  };
+  for (const s of childRows) {
+    const root = nestRootOf(s);
+    const ridesStash = root !== null && stashedIds.has(root) && !s.inbox_killed_at;
+    const hidden = ridesStash || !!s.inbox_killed_at || !!s.inbox_stashed_at || (s.inbox_snoozed_until ?? 0) > now;
+    if (!hidden) activeKeyed.push({ s, rank: sessionSortRank(s, null), key: sessionSortKey(s, null, now) });
+    if (root !== null && (ridesStash || isSessionStashed(s))) stashed.push(s);
   }
   activeKeyed.sort(compareRankedSessions);
   const sorted = activeKeyed.map((x) => x.s);
@@ -4268,7 +4357,7 @@ export function placeInboxRows(
   // Subagent children keep nesting under their parent as everywhere else.
   const listedDismissed = new Set(dismissed.map((s) => s._id));
   const listKilled = (s: InboxSession | undefined) => {
-    if (!s?.inbox_killed_at || listedDismissed.has(s._id) || isOrphanOrSubagent(s)) return;
+    if (!s || !(s.inbox_killed_at || isClosedSession(s)) || listedDismissed.has(s._id) || isOrphanOrSubagent(s)) return;
     listedDismissed.add(s._id);
     dismissed.push(s);
   };
@@ -4775,10 +4864,14 @@ export function computeChipCounts(
   /** Per folder: sessions active in the last 30 days and the newest activity,
    *  which rank the rail Filter menu's short list (lib/railFolderFilter). */
   projectActivity: Record<string, FolderActivity>;
+  /** Per machine (`mc:<device>` keys, same chip axis), biggest first. Its own
+   *  list so surfaces that can't name a device never show a raw key. */
+  machineCounts: Array<[string, number]>;
 } {
   const bucketCounts: Record<string, number> = {};
   const projCounts: Record<string, number> = {};
   const workCounts: Record<string, number> = {};
+  const machineCounts: Record<string, number> = {};
   const projectPathByName: Record<string, string> = {};
   const projectActivity: Record<string, FolderActivity> = {};
   const windowStart = Date.now() - FOLDER_ACTIVE_WINDOW_MS;
@@ -4799,6 +4892,10 @@ export function computeChipCounts(
       const key = workProjectChipKey(work);
       workCounts[key] = (workCounts[key] || 0) + 1;
     }
+    if (s.owner_device_id) {
+      const key = machineChipKey(s.owner_device_id);
+      machineCounts[key] = (machineCounts[key] || 0) + 1;
+    }
   }
   const byCount = (a: [string, number], b: [string, number]) => b[1] - a[1];
   return {
@@ -4806,6 +4903,7 @@ export function computeChipCounts(
     projectCounts: [...Object.entries(projCounts).sort(byCount), ...Object.entries(workCounts).sort(byCount)],
     projectPathByName,
     projectActivity,
+    machineCounts: Object.entries(machineCounts).sort(byCount),
   };
 }
 
@@ -4849,8 +4947,10 @@ export function resolveComposeProjectPath(opts: {
     : undefined;
   const activeProjectFilter = opts.chipFilterExclude ? null : opts.activeProjectFilter;
   const activeProjectPath = opts.chipFilterExclude ? null : opts.activeProjectPath;
+  // Only a folder chip names a folder; a project or machine chip leaves the
+  // conversation's own folder free to seed.
   const rawConvPath =
-    !activeProjectFilter || getProjectName(conversation.gitRoot, conversation.projectPath) === activeProjectFilter
+    !activeProjectFilter || projectAxisNoun(activeProjectFilter) !== "folder" || getProjectName(conversation.gitRoot, conversation.projectPath) === activeProjectFilter
       ? conversation.projectPath || conversation.gitRoot
       : undefined;
   // The viewed session may run in a worktree; a new session starts from its checkout.
@@ -5064,6 +5164,25 @@ export function groupSessionsForLabelView(
       .filter((g) => g.items.length > 0),
   );
   return { labelGroups: primaryGroups, projectGroups };
+}
+
+// "By machine" lens: one group per machine that runs a session
+// (owner_device_id), biggest first. Only machines in the viewer's roster
+// (`named`) get a group, since only those have a name to show; a teammate's
+// machine, or none yet, falls to the project tier like every other lens. The
+// panel and keyboard order share it.
+export function groupSessionsByMachine(items: InboxSession[], named: (deviceId: string) => boolean): {
+  machineGroups: Array<{ deviceId: string; items: InboxSession[] }>;
+  projectGroups: Array<{ name: string; items: InboxSession[] }>;
+} {
+  const { primaryGroups, projectGroups } = groupSessionsBy(
+    items,
+    (sess) => (sess.owner_device_id && named(sess.owner_device_id) ? sess.owner_device_id : null),
+    (byMachine) => Array.from(byMachine.entries())
+      .map(([deviceId, list]) => ({ deviceId, items: list.sort(byPinThenActivity) }))
+      .sort((a, b) => b.items.length - a.items.length),
+  );
+  return { machineGroups: primaryGroups, projectGroups };
 }
 
 // "By plan" lens: the sibling of groupSessionsForLabelView, keyed on the
@@ -5500,11 +5619,13 @@ export function passesFilterTerms(terms: readonly BucketFilterTerm[] | undefined
 }
 
 /** The keys a session answers to on the project chip axis: its folder's name,
- *  and `pj:<id>` for the project it works in (store/workProjects). */
-export function projectAxisKeys(s: Pick<InboxSession, "_id" | "git_root" | "project_path">, projectOf?: (sessionId: string) => string | null): string[] {
+ *  `pj:<id>` for the project it works in, and `mc:<device>` for the machine
+ *  that runs it (store/workProjects). */
+export function projectAxisKeys(s: Pick<InboxSession, "_id" | "git_root" | "project_path" | "owner_device_id">, projectOf?: (sessionId: string) => string | null): string[] {
   const keys = [getProjectName(s.git_root, s.project_path)];
   const project = projectOf?.(s._id);
   if (project) keys.push(workProjectChipKey(project));
+  if (s.owner_device_id) keys.push(machineChipKey(s.owner_device_id));
   return keys;
 }
 
@@ -5834,6 +5955,8 @@ export function computeVisualOrder(state: {
   currentUser?: { _id?: string } | null;
   recentFreezeOrder?: string[] | null;
   collapsedSections?: Record<string, boolean>;
+  // The viewer's machines: the machine lens groups only these.
+  machineRoster?: Array<Pick<MachineCandidate, "device_id">>;
   // What the org lenses group by (orgLensSourcesOf); optional for callers
   // (tests) that model no org.
 } & Partial<Omit<OrgLensState, "sessions" | "currentUser">> & {
@@ -5915,6 +6038,14 @@ export function computeVisualOrder(state: {
     return [
       ...planGroups.flatMap((g) => (collapsed[`plan_${g.key}`] || planTierFolded(planTierOf(g.standing.state), collapsed) ? [] : g.items)),
       ...projectGroups.flatMap((g) => (collapsed[`planproj_${g.name}`] ? [] : g.items)),
+    ];
+  }
+  if (mode === "machine") {
+    const roster = new Set((state.machineRoster ?? []).map((d) => d.device_id));
+    const { machineGroups, projectGroups } = groupSessionsByMachine(base, (id) => roster.has(id));
+    return [
+      ...machineGroups.flatMap((g) => (collapsed[`machine_${g.deviceId}`] ? [] : g.items)),
+      ...projectGroups.flatMap((g) => (collapsed[`machineproj_${g.name}`] ? [] : g.items)),
     ];
   }
   if (isOrgLensMode(mode)) {
@@ -6379,6 +6510,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   killSession: (id: string) => void;
   deleteSession: (id: string) => void;
   killSessions: (ids: string[]) => void;
+  closeSession: (id: string) => { aside: string[] } | undefined;
+  closeSessions: (ids: string[]) => { aside: string[] } | undefined;
   markSessionsDismissed: (ids: string[]) => void;
   markBlockedAcknowledged: (ids: string[]) => void;
   markBlockedReviveRequested: (ids: string[]) => void;
@@ -6452,16 +6585,20 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // force: "Send anyway" on a message held for a dialog (delivery_force).
   retryPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string; force?: boolean }) => Promise<string>;
   cancelPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string }) => Promise<string>;
-  queueMessage: (convId: string, content: string, clientId: string) => void;
+  /** `typed`: the words the person typed, passed only by the composer's own submit (server composerChannel). */
+  queueMessage: (convId: string, content: string, clientId: string, typed?: string) => void;
   releaseQueued: (convId: string) => void;
+  /** A refused releaseQueued: the rows it let go back in the line (lib/dispatchBinding). */
+  rollbackRelease: (convId: string) => void;
   reorderQueued: (convId: string, messageId: string, beforeId: string | null) => void;
   mergeQueued: (convId: string, messageId: string, intoId: string) => void;
   /** `quoteIds`: the composer quotes this message carries, stamped sent by the server (quoteDrafts.ts). */
-  sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string, quoteIds?: string[]) => void;
+  /** `typed`: the words the person typed in the box, passed only by the composer's own submit, so the server marks that part of the send theirs (composerChannel). */
+  sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string, quoteIds?: string[], typed?: string) => void;
   // sendMessage for a conversation that may still be a local stub (a session
   // started a moment ago): resolves the real id first, then sends under the
   // same client id as the optimistic bubble.
-  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
+  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string, typed?: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
   stopAndSend: (convId: string, content: string, clientId: string) => Promise<any>;
@@ -7366,6 +7503,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   setTeamBudget: (teamId: string, capUsd: number) => void;
   setTeamPolicy: (teamId: string, policy: Record<string, unknown>) => void;
   revokeEnrollmentToken: (teamId: string, tokenId: string) => void;
+  revokeTeamReadKey: (teamId: string, keyId: string) => void;
   revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   restoreDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
@@ -8303,6 +8441,11 @@ const STORE_SYNC_OPTS: Record<string, SyncOpts> = {
   // Run feeds overlay with different session budgets: a bare node keeps the
   // session another feed attached (lib/workflowRun carryNodeSessions).
   workflowRuns: { ...REGISTRY_SYNC_OPTS.workflowRuns, normalize: (rows: any, state: any) => carryNodeSessions(rows, state?.workflowRuns) },
+  // "Send now" lets the queued rows go on the draft; a push computed before
+  // the release reached the server, still saying held, keeps them let go
+  // (lib/sharedQueue carryReleasedQueueRows). A refusal puts them back
+  // (rollbackRelease).
+  pendingMessageStatus: { ...REGISTRY_SYNC_OPTS.pendingMessageStatus, normalize: (rows: any, state: any) => carryReleasedQueueRows(rows, state?.pendingMessageStatus) },
 };
 
 const SYNC_REGISTRY: Record<string, SyncOpts> = Object.fromEntries(
@@ -9058,6 +9201,10 @@ function hideSessionInDraft(
   mode: "stash" | "kill",
   now: number = Date.now(),
   stashHidden = false,
+  // A close: the cascade takes only the children the server's would
+  // (shared cascadeTakesDownRow), so an already-closed or killed child is
+  // neither re-stamped nor torn down again.
+  close = false,
 ): HideResult {
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const stashHiddenValue = mode === "stash" && stashHidden ? true : null;
@@ -9069,9 +9216,17 @@ function hideSessionInDraft(
   // behind as loose top-level needs-input cards — a teammate with an absent
   // lead deliberately floats first-class, so the categorizer can't hide it;
   // the cascade is the only place the group can be taken down together.
-  const childIds = sessionValues
+  const groupIds = sessionValues
     .filter((s) => s._id !== id && nestParentIdOf(s) === id)
     .map((s) => s._id);
+  // A stash leaves nested children (isOrphanOrSubagent) unstamped: they file
+  // with their parent at read time (placeInboxRows), so restoring the parent
+  // brings them back with it. A kill still takes every child down.
+  const childIds = mode === "stash"
+    ? groupIds.filter((cid) => !isOrphanOrSubagent(draft.sessions[cid]))
+    : close
+      ? groupIds.filter((cid) => cascadeTakesDownRow(draft.sessions[cid], field, { forceKill: true, close: true, queued: !!draft.sessions[cid]?.has_pending }))
+      : groupIds;
   const allIds = [id, ...childIds];
   // The viewer. A session whose user_id isn't ours was injected into this cache
   // by viewing/searching a TEAMMATE's session — we can't durably hide it.
@@ -9079,7 +9234,7 @@ function hideSessionInDraft(
   const hidden: string[] = [];
   const forgotten: string[] = [];
   const writes: HideResult["writes"] = {};
-  const newSessionId = sessionPastRemoved(draft, allIds);
+  const newSessionId = sessionPastRemoved(draft, [id, ...groupIds]);
   for (const sid of allIds) {
     // A local-only stub (optimistic create that never landed server-side)
     // can't be hidden durably: the server never knew it, so the reconcile's
@@ -9271,7 +9426,11 @@ function setProjectFilterHeadInDraft(draft: Draft, name: string | null, path?: s
     draft.activeBucketFilter = null;
     draft.extraBucketFilters = [];
     // An exclusion isn't a "view" you revisit — only include mode records.
-    if (!exclude) recordVisitInDraft(draft, { kind: "view", key: `project:${name}`, label: projectChipLabel(name, draft.projects), path: path ?? undefined });
+    if (!exclude) {
+      const roster = draft.machineRoster as unknown as Array<DeviceNameSource & { device_id: string }>;
+      const label = projectAxisLabel(name, draft.projects, (id) => roster.find((d) => d.device_id === id));
+      recordVisitInDraft(draft, { kind: "view", key: `project:${name}`, label, path: path ?? undefined });
+    }
   }
   commitChipFilterChange(draft, prev);
 }
@@ -9442,6 +9601,49 @@ function writeCharacterInDraft(draft: Draft, id: string, next: { avatar?: string
     if (next.avatar !== undefined) row.character_avatar = next.avatar;
     if (next.name !== undefined) row.character_name = next.name;
   }
+}
+
+// Shared body of closeSession/closeSessions: a session in flight (shared
+// closeInFlightReason) is set aside like a stash and keeps running; every
+// other one is hidden like a kill, with inbox_closed_at written equal to its
+// dismissed stamp, which is what makes it a close on any rail (dispatch.ts):
+// the agent stops but keeps its triggers and queue, and a role's own session
+// closes without the retire question. The ids set aside are the action's
+// result, which the server side effect reads for a teammate's row it can only
+// hide for this viewer.
+function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
+  const now = Date.now();
+  // A lead any member of whose nested group is in flight is set aside whole: a
+  // close of it would take the group down with it (hideSessionInDraft and the
+  // server's cascade), killing that member's turn or wake.
+  const rows = Object.values(draft.sessions) as InboxSession[];
+  const aside = ids.filter((id) => {
+    const row = draft.sessions[id] ?? draft.conversations[id];
+    return !!row && closeSetsAside(closeFactsOf(row, 0, now, convHasPendingSend(draft.pendingMessages?.[id], now), nestedInFlightOf(rows, id, now)));
+  });
+  const merge = (mode: "stash" | "kill", list: string[]) => {
+    const merged: HideResult = { hidden: [], forgotten: [], writes: {}, ts: now };
+    for (const id of list) {
+      const r = hideSessionInDraft(draft, id, mode, now, false, mode === "kill");
+      merged.hidden.push(...r.hidden);
+      merged.forgotten.push(...r.forgotten);
+      Object.assign(merged.writes, r.writes);
+      if (mode === "kill") {
+        for (const sid of r.hidden) {
+          if (draft.sessions[sid]) draft.sessions[sid].inbox_closed_at = now;
+          if (draft.conversations[sid]) draft.conversations[sid].inbox_closed_at = now;
+          // Sibling windows see a close as a close (gestureBridge BRIDGED_FIELDS).
+          if (r.writes[sid]) r.writes[sid].inbox_closed_at = now;
+        }
+      }
+    }
+    announceHide(draft, mode, merged);
+  };
+  if (aside.length < ids.length) soundKill();
+  else soundDismiss();
+  merge("stash", aside);
+  merge("kill", ids.filter((id) => !aside.includes(id)));
+  return { aside };
 }
 
 function announceHide(
@@ -9639,7 +9841,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
     // forget broadcast — see gestureBridge.ts.
     if (msg.forget?.length) forget(msg.forget, msg.ts);
     const field = msg.mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
-    const constrained = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_pinned_at"];
+    const constrained = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_closed_at", "inbox_pinned_at"];
     for (const sid of msg.ids) {
       const wrote = msg.writes?.[sid];
       if (wrote) {
@@ -11024,12 +11226,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // transition (dispatch.applyPatches sees inbox_dismissed_at flip), so this
   // action only has to move the rows; every kill path gets the teardown
   // without remembering to ask for it. (The persisted field keeps its
-  // historical name inbox_dismissed_at and the UI calls the bucket "Killed";
+  // historical name inbox_dismissed_at and the UI calls the bucket "Closed";
   // the server's kill transition additionally stamps inbox_killed_at, which is
   // what actually marks the row retired.)
   killSession: action(function (this: Draft, id: string) {
     soundKill();
     announceHide(this, "kill", hideSessionInDraft(this, id, "kill"));
+  }),
+
+  // Close = done looking at it (closeInDraft): never cancels a wake and never
+  // cuts a turn off. Kill stays the retirement, in the card's menu.
+  closeSession: action(function (this: Draft, id: string) {
+    return closeInDraft(this, [id]);
+  }),
+  closeSessions: action(function (this: Draft, ids: string[]) {
+    if (ids.length === 0) return;
+    return closeInDraft(this, ids);
   }),
 
   // Delete for good (sessionDelete.deleteSession, by action name): the server
@@ -12001,13 +12213,19 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // agent's turn, in the session's shared queue for everyone in it. The
   // server releases the row when the turn ends
   // (managedSessions.applyAgentStatus), or now via releaseQueued.
-  queueMessage: action(function (this: Draft, convId: string, content: string, clientId: string) {
+  queueMessage: action(function (this: Draft, convId: string, content: string, clientId: string, _typed?: string) {
     draftQueuedRow(this, convId, content, clientId);
   }),
 
   releaseQueued: action(function (this: Draft, convId: string) {
     const row = (this as any).pendingMessageStatus?.[convId];
     for (const r of row?.inflight ?? []) if (r.status === "held" && r.queued) r.status = "pending";
+  }),
+
+  // pendingMessageStatus holds no lock to roll back, so a refused release
+  // from any caller (the button, an outbox replay) lands here.
+  rollbackRelease: sync(function (this: Draft, convId: string) {
+    rehold((this as any).pendingMessageStatus?.[convId]?.inflight);
   }),
 
   reorderQueued: action(function (this: Draft, convId: string, messageId: string, beforeId: string | null) {
@@ -12020,7 +12238,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (row?.inflight) row.inflight = mergeQueueRows(row.inflight, messageId, intoId);
   }),
 
-  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string, _quoteIds?: string[]) {
+  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string, _quoteIds?: string[], _typed?: string) {
     clearSessionSnoozeInDraft(this, _convId);
     notePendingMessageSendRequested(_clientId);
     // A message into a session that is asking you something IS the answer —
@@ -12057,13 +12275,16 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // is still on its way (parked, or fenced by a binding rewire) leaves the
   // bubble pending: the stranded-stub sweep re-creates and re-sends it under
   // the same client id. Only a refused create fails the bubble.
-  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string) => {
+  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string, typed?: string) => {
+    const send = (id: string) => typed
+      ? get().sendMessage(id, content, imageIds, clientId, undefined, typed)
+      : get().sendMessage(id, content, imageIds, clientId);
     if (isConvexId(convId)) {
-      get().sendMessage(convId, content, imageIds, clientId);
+      send(convId);
       return;
     }
     void get().awaitConvexId(convId).then(
-      (realId: string) => get().sendMessage(realId, content, imageIds, clientId),
+      (realId: string) => send(realId),
       (error: unknown) => {
         if (!isRefusedDispatchError(error)) return;
         if (clientId) get().markOptimisticAsFailed(convId, clientId);
@@ -13561,16 +13782,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
+  // The coverage poll marks a refused send failed on every pass, in every
+  // window, for as long as the row stays: a row already failed is left alone,
+  // or each pass was a new pendingMessages and a rewrite of its journal row.
   markOptimisticAsFailed: sync(function (this: Draft, convId: string, clientId: string) {
-    const mark = (m: Message): Message => {
-      if (m._clientId === clientId || m._id === clientId) {
-        return { ...m, _isFailed: true as const };
-      }
-      return m;
-    };
+    const isRow = (m: Message) => m._clientId === clientId || m._id === clientId;
     const pending = this.pendingMessages[convId];
-    if (pending) {
-      this.pendingMessages[convId] = pending.map(mark);
+    if (pending?.some((m) => isRow(m) && !m._isFailed)) {
+      this.pendingMessages[convId] = pending.map((m) => (isRow(m) && !m._isFailed ? { ...m, _isFailed: true as const } : m));
     }
   }),
 
@@ -15823,6 +16042,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const device = key ? (this.settingsData as any)[key]?.value?.devices?.find((d: any) => String(d._id) === enrollmentId) : undefined;
     if (device) device.status = "pending";
   }),
+  // Revoking a team read key paints its cached row in Read-only keys; the feed's next answer replaces it.
+  revokeTeamReadKey: action(function (this: Draft, teamId: string, keyId: string) {
+    const key = settingsDataKey("teamReadKeys", (this.currentUser as any)?._id, teamId);
+    const row = key ? (this.settingsData as any)[key]?.value?.find((k: any) => String(k._id) === keyId) : undefined;
+    if (row && !row.revoked_at) row.revoked_at = Date.now();
+  }),
 
   // A team's monthly model budget (learning-loop.md LL10; admin only on the
   // server). Paints the cached settings row; the server's answer replaces it,
@@ -15868,6 +16093,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setPinnedAgents: action(function (this: Draft, agents: string[]) {
     if (!this.currentUser) return;
     (this.currentUser as any).pinned_agents = [...agents];
+    (this.currentUser as any).pinned_agents_known = pinnableAgentIds();
   }),
 
   // The room flags: draft flip, then the same-named dispatch side effect

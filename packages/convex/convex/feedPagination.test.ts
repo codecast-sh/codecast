@@ -2,8 +2,11 @@ import { describe, expect, test } from "bun:test";
 import {
   batchScanConversations,
   encodeFeedCursor,
+  isAfter,
+  pageNewestFirst,
   paginateTeamFeed,
   parseFeedCursor,
+  type StreamPosition,
 } from "./feedPagination";
 
 // Rows for one member, updated_at descending. `subagent: true` rows simulate
@@ -208,5 +211,68 @@ describe("batchScanConversations", () => {
       fetchPage, startCursor: null, want: 5, accept: acceptMain, batchSize: 50, maxBatches: 2,
     });
     expect(drained.exhausted).toBe(true);
+  });
+});
+
+describe("pageNewestFirst", () => {
+  type Row = { _id: string; updated_at: number; _creationTime: number; visible: boolean };
+  // One member's rows as its index serves them: updated_at, then _creationTime, newest first.
+  const stream = (id: string, rows: Array<[number, number, boolean]>): Row[] =>
+    rows
+      .map(([t, c, visible]) => ({ _id: `${id}-${t}-${c}`, updated_at: t, _creationTime: c, visible }))
+      .sort((x, y) => y.updated_at - x.updated_at || y._creationTime - x._creationTime);
+
+  async function drainNewest(tables: Record<string, Row[]>, limit: number, budget: number) {
+    const served: Row[] = [];
+    const readsPerPage: number[] = [];
+    let after: StreamPosition | null = null;
+    for (let i = 0; i < 500; i++) {
+      let reads = 0;
+      async function* below(rows: Row[], from: StreamPosition | null) {
+        for (const r of rows) if (!from || isAfter(r, from)) yield (reads++, r);
+      }
+      const page: { rows: Row[]; next: StreamPosition | null } = await pageNewestFirst({
+        streams: Object.values(tables).map((rows) => below(rows, after)),
+        limit,
+        budget,
+        accept: (r) => r.visible,
+      });
+      served.push(...page.rows);
+      readsPerPage.push(reads);
+      if (!page.next) return { served, readsPerPage };
+      after = page.next;
+    }
+    throw new Error("never ended");
+  }
+
+  test("serves every visible row once, newest first across pages, through ties and hidden bands", async () => {
+    const tables = {
+      // Rows sharing a millisecond, a hidden one between two visible ones.
+      a: stream("a", [[11, 3, true], [11, 2, false], [11, 1, true], [2, 1, true]]),
+      // A hidden band longer than a page's budget, with older visible work under it.
+      b: stream("b", [[10, 1, false], [9, 1, false], [8, 1, false], [7, 1, false], [6, 1, false], [5, 1, false], [4, 1, true]]),
+      c: stream("c", [[12, 1, true], [3, 1, true], [1, 1, true]]),
+    };
+    const visible = Object.values(tables).flat().filter((r) => r.visible);
+    const expected = visible.sort((x, y) => y.updated_at - x.updated_at || y._creationTime - x._creationTime).map((r) => r._id);
+    for (const limit of [1, 2, 50]) {
+      const { served } = await drainNewest(tables, limit, 6);
+      expect(served.map((r) => r._id)).toEqual(expected);
+    }
+  });
+
+  test("reads one row per member and at most its budget more a page", async () => {
+    const tables = Object.fromEntries(
+      Array.from({ length: 100 }, (_, m) => [`m${m}`, stream(`m${m}`, Array.from({ length: 30 }, (_, i) => [1000 - i * 7 - m, m, i % 3 === 0] as [number, number, boolean]))]),
+    );
+    const { served, readsPerPage } = await drainNewest(tables, 50, 100);
+    expect(served.length).toBe(100 * 10);
+    expect(Math.max(...readsPerPage)).toBeLessThanOrEqual(100 + 100);
+  });
+
+  test("a read with no member, or none with rows left, ends with no cursor", async () => {
+    expect(await pageNewestFirst({ streams: [], limit: 10, budget: 10, accept: () => true })).toEqual({ rows: [], next: null });
+    const { served } = await drainNewest({ a: stream("a", [[5, 1, false]]), b: [] }, 10, 10);
+    expect(served).toEqual([]);
   });
 });

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { GitBranch, Tag } from "lucide-react";
 import { LoadingSkeleton } from "../LoadingSkeleton";
@@ -6,6 +6,11 @@ import { useRepoBranchDetails, useRepoBranches, useRepoTags } from "../../hooks/
 import { commitPageHref, prPageHref, repoCompareHref, repoTreeHref, type RepoRouteFamily } from "../../lib/repoView";
 import { relTimeShort } from "../../lib/utils";
 import { serverErrorText } from "../../lib/errorCause";
+import { useRepoChanges } from "../../hooks/useRepoChanges";
+import { findChange } from "../../lib/changes/assemble";
+import { ChangeBoard } from "../changes/ChangeBoard";
+import { boardRows, changeRowOf } from "../../lib/changes/rows";
+import { ChangeChip } from "../changes/ChangeChip";
 
 export function RepoRefsContent({ repository, family, tags = false }: { repository: string; family: RepoRouteFamily; tags?: boolean }) {
   const branches = useRepoBranchDetails(tags ? undefined : repository);
@@ -19,7 +24,17 @@ export function RepoRefsContent({ repository, family, tags = false }: { reposito
     : (branches.data?.branches ?? []).map((row) => ({ ...row, kind: "branch" as const }))
   ).filter((row) => row.name.toLowerCase().includes(filter.toLowerCase()));
   const Icon = tags ? Tag : GitBranch;
+  // Every change on its way (changes.md CH4): the lifecycle grid above the branch list, and each branch's chip.
+  const changes = useRepoChanges(tags ? null : repository, undefined, { branches: branches.data ?? null }).changes;
+  const changeRows = useMemo(() => boardRows(changes.map(changeRowOf)), [changes]);
   return <div className="max-w-[1200px] mx-auto">
+    {!tags && changes.length ? <section className="mb-10" data-repo-changes>
+      <div className="flex items-baseline gap-3 mb-3">
+        <h2 className="font-serif text-xl text-sol-text">Changes</h2>
+        <span className="text-xs text-sol-text-dim">From edit to live, for every branch, pull request, checkout and commit on its way</span>
+      </div>
+      <ChangeBoard rows={changeRows} />
+    </section> : null}
     <div className="flex items-center gap-3 mb-4">
       <h2 className="font-serif text-xl text-sol-text">{tags ? "Tags" : "Branches"}</h2>
       <input aria-label={`Filter ${tags ? "tags" : "branches"}`} placeholder={`Find a ${tags ? "tag" : "branch"}`} value={filter} onChange={(e) => setFilter(e.target.value)} className="ml-auto border border-sol-border/60 rounded bg-sol-bg px-3 py-1.5 text-xs" />
@@ -33,6 +48,7 @@ export function RepoRefsContent({ repository, family, tags = false }: { reposito
         <div className="flex-1 min-w-0">
           <div className="flex gap-2 items-center"><Link href={repoTreeHref(repository, tags ? `refs/tags/${row.name}` : row.name, undefined, family)} className="modern:font-mono text-sol-blue truncate">{row.name}</Link>
             {!tags && row.name === defaultBranch && <span className="text-meta border border-sol-border rounded-full px-2">default</span>}
+            {!tags && row.name !== defaultBranch ? <BranchChange changes={changes} name={row.name} /> : null}
           </div>
           <div className="flex flex-wrap gap-2 text-xs mt-2 text-sol-text-dim">
             <Link href={commitPageHref(repository, row.sha, family)} className="modern:font-mono hover:text-sol-text">{row.sha?.slice(0, 7)}</Link>
@@ -51,4 +67,12 @@ export function RepoRefsContent({ repository, family, tags = false }: { reposito
       {read.ready && rows.length === 0 && <p className="p-8 text-center text-sol-text-dim">{filter ? "No matching refs." : `No ${tags ? "tags" : "branches"} found.`}</p>}
     </div>
   </div>;
+}
+
+/** A branch's chip beside its name, when the branch is a change on its way. */
+function BranchChange({ changes, name }: { changes: ReturnType<typeof useRepoChanges>["changes"]; name: string }) {
+  const c = findChange(changes, name) as (typeof changes)[number] | null;
+  if (!c) return null;
+  const row = changeRowOf(c);
+  return <ChangeChip lifecycle={row.lifecycle} links={row.links} writers={row.writers} bare className="text-xs" />;
 }

@@ -18,6 +18,20 @@ export async function trialProjectOf(ctx: Ctx, task: { project_id?: Id<"projects
   return project?.line_trial ? project : null;
 }
 
+const ENDED_RUN = new Set(["completed", "failed", "cancelled"]);
+
+/**
+ * The live run a station works for: the session's parent is the conversation the run names as its primary, where the
+ * runner nests its hands (workflow_runs isRunHand). The primary may be the run's own log or a person's session that
+ * hosts it (a run launched from the composer, which carries only workflow_run_id). An ended run has no stations, so a
+ * host session's later workers are its own.
+ */
+export async function runOfStation(ctx: Ctx, conversation: Pick<Doc<"conversations">, "parent_conversation_id"> | null | undefined): Promise<Doc<"workflow_runs"> | null> {
+  const parent: Doc<"conversations"> | null = conversation?.parent_conversation_id ? await ctx.db.get(conversation.parent_conversation_id) : null;
+  const run: Doc<"workflow_runs"> | null = parent?.workflow_run_id ? await ctx.db.get(parent.workflow_run_id) : null;
+  return run && String(run.primary_conversation_id) === String(parent!._id) && !ENDED_RUN.has(run.status) ? run : null;
+}
+
 /** The trial run a session works for: a station nested under a trial run's primary conversation, or that conversation itself. */
 export async function trialStationOf(
   ctx: Ctx,

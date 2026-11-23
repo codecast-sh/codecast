@@ -34,6 +34,7 @@ import { liveRoleByHandle } from "./lib/orgAccess";
 import { scheduleTriggerMatch } from "./lib/triggerMatch";
 import { fillDeployRange } from "./deployTargets";
 import { afterFor, shapeView } from "./deploysView";
+import { devPushedOver } from "./deployTargetsState";
 import { DEPLOY_FAILED_EVENT, DEPLOY_LIVE_EVENT } from "@codecast/shared/contracts";
 import {
   carriesForMarker,
@@ -44,14 +45,16 @@ import {
   workspaceDeploys,
   workspaceMerges,
 } from "./deployCarries";
+import { closeSuperseded, deployByRef, deploysOfRun, finishable, liveOf, MARKER_SCAN, OPEN, urlFields } from "./lib/deployRows";
+import { capNames, deployDropper, NAME_MAX, newNames, noticeDroppedWork, scheduleDroppedWork } from "./lib/droppedWork";
 import {
+  actionsRunKey,
   DAY,
   DEPLOY_SHORT_ID_PREFIX,
-  DEPLOY_SHORT_ID_RE,
+  liveDeploys,
   normalizeDeployTarget,
   waitingMerges,
   type DeployMerge,
-  type DeployStatus,
 } from "@codecast/shared/contracts/deploys";
 
 /** A line deploy older than this, still waiting for its marker, no longer takes one. */
@@ -60,8 +63,6 @@ const NOTE_MAX = 2000;
 /** A role asks for a deploy only once the newest waiting fix has sat this long, so a burst of merges goes out as one deploy. */
 export const DEPLOY_SETTLE_MS = 30 * 60 * 1000;
 const COMMITS_MAX = 200;
-
-const OPEN: ReadonlySet<DeployStatus> = new Set(["requested", "running"]);
 
 /** Whether a deploy is in a project's scope: its own project, else its repository's projects, else (a workspace-wide source) every project. */
 function inScope(d: Pick<Doc<"deploys">, "project_id" | "repository">, projectId: string | null, repositories: ReadonlySet<string> | null): boolean {
@@ -113,14 +114,37 @@ export type DeployMarker = {
   previous_sha?: string;
   commits?: Array<{ sha: string; subject: string; author?: string }>;
   started_by?: Doc<"deploys">["started_by"];
-  /** What the marker says happened: live (the default), still running, or failed. */
-  status?: "live" | "running" | "failed";
+  /** What the marker says happened: live (the default), still running, failed, or cancelled before it went out. */
+  status?: "live" | "running" | "failed" | "cancelled";
+  /**
+   * The Actions run the marker reports (its id, `/attempts/N` for a rerun): such a marker speaks only for that run's
+   * deploy, and a deploy already tied to another run is never its match.
+   */
+  workflow_run?: string;
+  /** The run's name named `sha`: it corrects the run's head an earlier delivery recorded before GitHub filled the name in. */
+  sha_named?: true;
+  /** When what it reports began (a run's start), when that is earlier than `at`: a new deploy's created_at. */
+  started_at?: number;
   note?: string;
   /** Uncommitted files under the target's sources that went out with the sha. */
   dirty?: number;
   ship_pass_id?: Id<"ship_passes">;
   /** The deploy the marker finishes (dp-N), when the deploy path knows it: its sha is what actually went out. */
   deploy?: string;
+  /** The hostname of the machine that pushed. */
+  machine?: string;
+  /** Which push path sent it. The dev watcher's pushes are dev pushes (recordDevPush), never markers. */
+  pushed_via?: "deploy.sh";
+  /** Names the push put on the target and took off it (`fn:`, `http:`, `index:`, `table:`). */
+  adds?: string[];
+  drops?: string[];
+  /** When the push's diff read prod (adderOf), by the server's clock. */
+  changes_read_at?: number;
+  /**
+   * The marker reports a push its deploy path just made (`cast ship mark`, a ship pass's deploy step), not a report of
+   * a deploy already made (a live reader, a GitHub status, a backfill, a past deploy).
+   */
+  push?: boolean;
   at: number;
 };
 
@@ -134,6 +158,15 @@ export type DeployMarker = {
  *     marker finishes it (live, with the sha).
  *  3. Otherwise a deploy of its own, started outside the line, carrying the
  *     fixes the history's rule says it carried.
+ *
+ * Unless it names its deploy or run, a marker that is dirty or added or
+ * dropped names is a deploy of its own. Any other marker that reports a deploy
+ * already made (a live reader, a GitHub status, a backfill) lands on any live
+ * deploy of its sha, clean or dirty; a fresh push (`push`) lands only on the
+ * clean deploy the target runs now, with no dev push on top of it (a retry).
+ *
+ * Names the write newly drops are told to whoever's uncommitted push put them
+ * there (noticeDroppedWork, once this write commits).
  */
 export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<string | null> {
   const target = normalizeDeployTarget(m.target);
@@ -141,30 +174,66 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   const now = Date.now();
   const status = m.status ?? "live";
   const repository = m.repository ? normalizeRepository(m.repository) : undefined;
-  const recent = await workspaceDeploys(ctx, m.workspace, 100);
+  const recent = await workspaceDeploys(ctx, m.workspace, MARKER_SCAN);
+  // The push's diff ran exactly when it reports adds and drops (each possibly empty); an older cast, or a prod the diff
+  // could not read, reports neither, and its row records neither.
+  const diffRan = Array.isArray(m.adds) || Array.isArray(m.drops);
+  const adds = diffRan ? capNames(m.adds) : undefined;
+  const drops = diffRan ? capNames(m.drops) : undefined;
+  const machine = m.machine?.slice(0, NAME_MAX);
+
   const named = m.deploy ? recent.find((d) => d.short_id === m.deploy!.toLowerCase()) ?? (await deployByRef(ctx, m.deploy)) : null;
   const ownNamed = named && named.workspace === m.workspace && named.target === target ? named : null;
+  // A workflow run's marker never lands on a deploy another run carries: two runs of one sha are two deploys.
+  const ownRun = m.workflow_run ? (await deploysOfRun(ctx, m.workflow_run)).find((d) => d.workspace === m.workspace && d.target === target) : undefined;
+  const runFree = (d: Doc<"deploys">) => !m.workflow_run || !d.workflow_run;
+  // A run that went live may be the target's live deploy another path already recorded; a run still going, failed,
+  // or shipping the sha of a superseded deploy (a rollback) is a deploy of its own.
+  const currentLive = m.workflow_run ? liveOf(recent, target, repository) : undefined;
+  // A push (`cast ship mark`, a ship pass's deploy step) speaks for the target as it runs now: it lands only on the
+  // target's current live deploy (or the deploy that already holds its event, a report of it again). An older live
+  // deploy of the sha was replaced since, so the sha going live again is a deploy of its own. Any other marker (a
+  // status re-sent for an old commit, a past deploy, a backfill) reports a deploy already recorded: it lands on any
+  // live deploy of its sha.
+  const push = !!m.push;
+  const runningNow = liveOf(recent, target, repository);
+  // A push over someone's dev push put the committed tree back: what runs changed, so it is a deploy of its own.
+  const overDevPush = push && !!runningNow && (await devPushedOver(ctx, runningNow));
+  // A push that changed what runs (uncommitted files, names it added or dropped) is a deploy of its own: two people's
+  // dirty trees of one HEAD are two deploys, and folding one into the other hides what it dropped. Only a clean push
+  // that changed nothing is the clean live deploy of its sha again (a retry). It may still finish an open deploy or
+  // the one it names.
+  const changes = !!m.dirty || !!adds?.length || !!drops?.length;
+  const liveMatch = (d: Doc<"deploys">) => d.status === "live" && (m.workflow_run
+    // A dirty push of a sha is not the run's clean deploy of it.
+    ? status === "live" && d === currentLive && !!d.dirty === !!m.dirty
+    : (!changes && (!push || (!d.dirty && d === runningNow && !overDevPush))) || (!!m.event_id && d.event_ids.some((e) => String(e) === String(m.event_id))));
 
-  const same = ownNamed ?? recent.find((d) =>
-    d.target === target && (d.status === "live" || OPEN.has(d.status))
+  // A push carrying uncommitted files is that person's own deploy: it finishes a deploy only when it names it
+  // (--deploy dp-N), never one somebody else asked for, or its work would be recorded as theirs.
+  const uncommitted = push && !!m.dirty;
+  const same = ownNamed || ownRun || recent.find((d) =>
+    d.target === target && (liveMatch(d) || (OPEN.has(d.status) && !uncommitted)) && runFree(d)
     && (!d.repository || !repository || d.repository === repository)
     && ((m.sha && sameSha(d.sha, m.sha)) || (!m.sha && m.version && d.version === m.version)),
   );
-  const open = same ?? recent.find((d) =>
-    d.target === target && OPEN.has(d.status) && now - d.created_at < OPEN_DEPLOY_MAX_AGE_MS
+  const open = same ?? (uncommitted ? undefined : recent.find((d) =>
+    d.target === target && OPEN.has(d.status) && now - d.created_at < OPEN_DEPLOY_MAX_AGE_MS && runFree(d)
     && (!d.repository || !repository || d.repository === repository)
     // A deploy asked for at an earlier sha (a redeploy, a rollback) is finished only by its own sha.
-    && (!d.action || d.action === "deploy" || !d.sha || (m.sha && sameSha(d.sha, m.sha))),
-  );
+    && (!d.action || d.action === "deploy" || !d.sha || (m.sha && sameSha(d.sha, m.sha)))
+    // A run's marker finishes an open deploy only when it ships that deploy's sha, or the deploy names none yet.
+    && (!m.workflow_run || !d.sha || (m.sha && sameSha(d.sha, m.sha))),
+  ));
 
   // The same failure reported again (a redelivery, a backfill) enriches the failed deploy it already recorded.
-  const failedBefore = !open && status === "failed" && m.sha
+  const failedBefore = !open && !m.workflow_run && status === "failed" && m.sha
     ? recent.find((d) => d.target === target && d.status === "failed" && sameSha(d.sha, m.sha) && (!d.repository || !repository || d.repository === repository))
     : null;
   if (failedBefore) {
     const patch: Partial<Doc<"deploys">> = {};
     if (m.note && !failedBefore.note) patch.note = m.note.slice(-NOTE_MAX);
-    if (m.url && !failedBefore.url) patch.url = m.url;
+    if (m.url && !failedBefore.url) Object.assign(patch, urlFields(m.url));
     if (Object.keys(patch).length) await ctx.db.patch(failedBefore._id, { ...patch, updated_at: now });
     return failedBefore.short_id;
   }
@@ -172,24 +241,34 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   if (open) {
     const patch: Partial<Doc<"deploys">> = { updated_at: now };
     if (m.event_id && !open.event_ids.some((e) => String(e) === String(m.event_id))) patch.event_ids = [...open.event_ids, m.event_id];
-    if (OPEN.has(open.status)) {
+    if (finishable(open)) {
       if (status === "running") patch.status = "running";
       else { patch.status = status; patch.finished_at = now; if (status === "live") patch.live_at = m.at; }
+      if (open.superseded_by) patch.superseded_by = undefined;
     }
-    // The deploy path that names its deploy says what actually went out; otherwise the first sha stands.
-    if (m.sha && (!open.sha || (ownNamed && !sameSha(open.sha, m.sha) && (open.action ?? "deploy") === "deploy"))) patch.sha = m.sha;
+    // The deploy path that names its deploy, or a run whose name now names its commit, says what actually went out;
+    // otherwise the first sha stands.
+    const says = (ownNamed && (open.action ?? "deploy") === "deploy") || (m.sha_named && open === ownRun);
+    if (m.sha && (!open.sha || (says && !sameSha(open.sha, m.sha)))) patch.sha = m.sha;
     if (m.note && !open.note) patch.note = m.note.slice(-NOTE_MAX);
     if (m.dirty && !open.dirty) patch.dirty = m.dirty;
     if (m.ship_pass_id && !open.ship_pass_id) patch.ship_pass_id = m.ship_pass_id;
     if (m.version && !open.version) patch.version = m.version;
     if (repository && !open.repository) patch.repository = repository;
-    if (m.url && !open.url) patch.url = m.url;
+    if (m.url && !open.url) Object.assign(patch, urlFields(m.url));
     if (m.previous_sha && !open.previous_sha) patch.previous_sha = m.previous_sha;
     if (m.commits?.length && !open.commits?.length) patch.commits = m.commits.slice(0, COMMITS_MAX);
     if (m.source_id && !open.source_id) patch.source_id = m.source_id;
+    if (machine && !open.machine) patch.machine = machine;
+    if (m.pushed_via && !open.pushed_via) patch.pushed_via = m.pushed_via;
+    if (adds) patch.adds = capNames(open.adds, adds);
+    if (drops) patch.drops = capNames(open.drops, drops);
+    if (m.changes_read_at != null) patch.changes_read_at = Math.max(open.changes_read_at ?? 0, m.changes_read_at);
     await ctx.db.patch(open._id, patch);
     await stampEvent(ctx, m.event_id, open.short_id);
     if (patch.status && patch.status !== open.status) await onDeployStatus(ctx, open._id);
+    // Whoever pushed is the dropper, not whoever asked for the deploy the push finished (a role, another person).
+    if (patch.drops && (patch.status ?? open.status) === "live") await scheduleDroppedWork(ctx, deployDropper({ ...open, ...patch }), newNames(patch.drops, open.drops), m.started_by);
     return open.short_id;
   }
 
@@ -210,13 +289,18 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
     ...(m.sha ? { sha: m.sha } : {}),
     ...(m.previous_sha ? { previous_sha: m.previous_sha } : {}),
     ...(m.version ? { version: m.version } : {}),
-    ...(m.url ? { url: m.url } : {}),
+    ...(m.url ? urlFields(m.url) : {}),
     ...(m.commits?.length ? { commits: m.commits.slice(0, COMMITS_MAX) } : {}),
     ...(m.note ? { note: m.note.slice(-NOTE_MAX) } : {}),
     ...(m.dirty ? { dirty: m.dirty } : {}),
     ...(m.ship_pass_id ? { ship_pass_id: m.ship_pass_id } : {}),
+    ...(machine ? { machine } : {}),
+    ...(m.pushed_via ? { pushed_via: m.pushed_via } : {}),
+    ...(adds ? { adds } : {}),
+    ...(drops ? { drops } : {}),
+    ...(m.changes_read_at != null ? { changes_read_at: m.changes_read_at } : {}),
     carries: [],
-    created_at: m.at,
+    created_at: Math.min(m.started_at ?? m.at, m.at),
     ...(status === "live" ? { live_at: m.at } : {}),
     ...(status !== "running" ? { finished_at: m.at } : {}),
     updated_at: now,
@@ -229,8 +313,34 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   }
   await stampEvent(ctx, m.event_id, shortId);
   await onDeployStatus(ctx, id);
+  if (status === "live") await scheduleDroppedWork(ctx, deployDropper(row), drops ?? [], m.started_by);
   return shortId;
 }
+
+const startedByArg = v.object({
+  kind: v.union(v.literal("person"), v.literal("role"), v.literal("line"), v.literal("source"), v.literal("cli")),
+  name: v.string(),
+  user_id: v.optional(v.id("users")),
+  role_id: v.optional(v.id("org_roles")),
+});
+
+/** noticeDroppedWork, run after the push's own transaction (scheduleDroppedWork). */
+export const tellDroppedWork = internalMutation({
+  args: {
+    dropper: v.object({
+      workspace: v.string(),
+      target: v.string(),
+      repository: v.optional(v.string()),
+      machine: v.optional(v.string()),
+      deploy: v.union(v.string(), v.null()),
+      on: v.optional(v.union(v.string(), v.null())),
+      exclude: v.string(),
+    }),
+    names: v.array(v.string()),
+    by: v.optional(startedByArg),
+  },
+  handler: async (ctx, args) => noticeDroppedWork(ctx, args.dropper, args.names, args.by),
+});
 
 /**
  * A deploy that just went live or failed: a live one fills its range on main
@@ -240,7 +350,10 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
 async function onDeployStatus(ctx: any, id: Id<"deploys">): Promise<void> {
   const d: Doc<"deploys"> | null = await ctx.db.get(id);
   if (!d || (d.status !== "live" && d.status !== "failed")) return;
-  if (d.status === "live") await fillDeployRange(ctx, id);
+  if (d.status === "live") {
+    await fillDeployRange(ctx, id);
+    await closeSuperseded(ctx, d);
+  }
   const sha = d.sha ? ` at ${d.sha.slice(0, 7)}` : d.version ? ` ${d.version}` : "";
   const title = d.status === "live" ? `${d.short_id} live on ${d.target}${sha}` : `${d.short_id} to ${d.target}${sha} failed`;
   await scheduleTriggerMatch(ctx, {
@@ -512,7 +625,10 @@ export const report = mutation({
     if (!d || !(await workspaceGrantsAccess(ctx, userId, d.workspace))) throw new Error(`No deploy ${args.deploy} you can read`);
     const now = Date.now();
     const patch: Partial<Doc<"deploys">> = { updated_at: now };
-    if (args.url) patch.url = args.url;
+    // A run another deploy already carries (its own marker recorded it at the sha it shipped) stays that deploy's.
+    const run = args.url ? actionsRunKey(args.url) : null;
+    const taken = run ? (await deploysOfRun(ctx, run)).some((x) => String(x._id) !== String(d._id)) : false;
+    if (args.url && !taken) Object.assign(patch, urlFields(args.url));
     if (args.sha && !d.sha) patch.sha = args.sha.toLowerCase();
     if (args.previous_sha && !d.previous_sha) patch.previous_sha = args.previous_sha.toLowerCase();
     if (args.commits?.length && !d.commits?.length) patch.commits = args.commits.slice(0, COMMITS_MAX);
@@ -521,13 +637,14 @@ export const report = mutation({
     const runId = args.run_id ? ctx.db.normalizeId("workflow_runs", args.run_id) : null;
     if (runId && !d.run_id) patch.run_id = runId;
     // A marker may have finished it already; a report never moves a deploy backwards.
-    if (OPEN.has(d.status)) {
+    if (finishable(d)) {
       if (args.status === "running") patch.status = "running";
       else {
         patch.status = args.status;
         patch.finished_at = now;
         if (args.status === "live") patch.live_at = now;
       }
+      if (d.superseded_by) patch.superseded_by = undefined;
     }
     await ctx.db.patch(d._id, patch);
     if (patch.status && patch.status !== d.status) await onDeployStatus(ctx, d._id);
@@ -572,12 +689,6 @@ export const rewatchFromLive = internalMutation({
   },
 });
 
-async function deployByRef(ctx: any, ref: string): Promise<Doc<"deploys"> | null> {
-  if (DEPLOY_SHORT_ID_RE.test(ref)) return await ctx.db.query("deploys").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.toLowerCase())).first();
-  const id = ctx.db.normalizeId("deploys", ref);
-  return id ? await ctx.db.get(id) : null;
-}
-
 // ── reads ────────────────────────────────────────────────────────────────────
 
 /** One deploy, whole: what went out, who started it, what happened after. */
@@ -585,8 +696,20 @@ export const get = query({
   args: { ref: v.string(), api_token: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
-    const d = await deployByRef(ctx, args.ref.trim());
-    if (!d || !(await workspaceGrantsAccess(ctx, userId, d.workspace))) return null;
+    const ref = args.ref.trim();
+    // A run's url, or its bare id (run ids are GitHub-wide): the deploy it carried that this viewer can read.
+    const run = actionsRunKey(ref) ?? (/^\d{9,}$/.test(ref) ? ref : null);
+    let d: Doc<"deploys"> | null = null;
+    if (run) {
+      const repository = normalizeRepository(/github\.com\/([^/\s]+\/[^/\s]+)\/actions\//i.exec(ref)?.[1] ?? "");
+      for (const x of await deploysOfRun(ctx, run)) {
+        if (!d && (!repository || !x.repository || x.repository === repository) && (await workspaceGrantsAccess(ctx, userId, x.workspace))) d = x;
+      }
+    } else {
+      d = await deployByRef(ctx, ref);
+      if (d && !(await workspaceGrantsAccess(ctx, userId, d.workspace))) d = null;
+    }
+    if (!d) return null;
     const around = (await workspaceDeploys(ctx, d.workspace)).filter((x) => x.target === d.target);
     const after = await afterFor(ctx, d.workspace, around.some((x) => String(x._id) === String(d._id)) ? around : [...around, d], Date.now());
     const events = [];
@@ -595,9 +718,15 @@ export const get = query({
       if (row) events.push({ _id: String(row._id), title: row.title, url: row.url ?? null, at: row.created_at, source: row.data?.source_name ?? row.source });
     }
     const project = d.project_id ? await ctx.db.get(d.project_id) : null;
+    // A live deploy that is no longer what runs: the deploy that went live after it on its target.
+    const wentLive = d.live_at ?? d.created_at;
+    const replacer = d.status === "live"
+      ? liveDeploys(around, { repository: d.repository }).filter((x) => (x.live_at ?? x.created_at) > wentLive || ((x.live_at ?? x.created_at) === wentLive && x._creationTime > d._creationTime)).at(-1)
+      : undefined;
     return {
       ...(await shapeView(ctx, d)),
       after: after.get(String(d._id)) ?? null,
+      replaced_by: replacer ? { short_id: replacer.short_id, sha: replacer.sha ?? null, at: replacer.live_at ?? replacer.created_at, rollback: replacer.action === "rollback" } : null,
       events,
       project: project ? { _id: String(project._id), short_id: project.short_id ?? null, title: project.title ?? null } : null,
     };
@@ -633,10 +762,11 @@ export async function projectDeployViews(ctx: any, project: Doc<"projects">, rep
   const after = await afterFor(ctx, workspace, mine, Date.now());
   const out = [];
   for (const d of mine) {
-    const view = await shapeView(ctx, d);
+    // A list row counts the names a push added and dropped; the deploy itself (deploys.get) lists them.
+    const { adds, drops, ...view } = await shapeView(ctx, d);
     // One row per deploy, whichever project's feed brought it: its own project when the line sent it, none when it
     // ships the whole workspace's code. The store scopes rows by `workspace` (lineDeploys workspaceScoped).
-    out.push({ ...deployRowOf(d), ...view, workspace: d.workspace, after: after.get(String(d._id)) ?? null });
+    out.push({ ...deployRowOf(d), ...view, adds_count: adds?.length ?? 0, drops_count: drops?.length ?? 0, workspace: d.workspace, after: after.get(String(d._id)) ?? null });
   }
   return out;
 }

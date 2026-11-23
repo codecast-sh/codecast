@@ -17,8 +17,13 @@ import { editKey } from "../lib/lineSettings";
 import { LINE_CAUSE_CATEGORY, type LineCauseFields } from "../lib/line/lineCause";
 import { taskCreateStub, taskStubId } from "./taskStub";
 import { lineLabelKey, type LabelVerdict } from "../lib/line/lineLabels";
+import { levelWriters, toldOf, type CheckoutRow, type CheckoutTold } from "@codecast/shared/contracts/checkouts";
 
 export type LineSliceActions = {
+  /** "Tell <writer>" / "File a finding" on a stuck checkout: `who` is a session that wrote some of its conflicting files,
+   *  or "finding" for the files nobody wrote (convex checkoutAsk). The ask reads as told at once; `at` is its moment,
+   *  which the server keeps too, so its echo is the level painted here and the lock retires. */
+  askCheckout: (checkoutId: string, who: string, at: number) => void;
   editLineProfile: (requestId: string, projectId: string, edits: LineProfileEdit[]) => Promise<{ command_id: string } | null | undefined>;
   fileLineCause: (clientKey: string, projectId: string, fields: LineCauseFields) => Promise<{ task_id: string; task_short_id: string } | null | undefined>;
   /** `queued`: the role's machines are full, so the problem went back to the line's queue instead of starting (convex lineCause). */
@@ -111,6 +116,21 @@ export function createLineSlice(): LineSliceActions {
       const task = this.tasks[taskId];
       if (task) { task.status = "in_progress"; task.updated_at = Date.now(); }
     }) as LineSliceActions["startLineCause"],
+
+    // A stuck checkout's ask: painted on the row's told (the daemon's own record of whom it asked), and carried to the
+    // server, which sends the same words the daemon would and keeps the ask on the row.
+    askCheckout: action(function (this: { checkouts: Record<string, CheckoutRow> }, checkoutId: string, who: string, at: number) {
+      const row = this.checkouts[checkoutId];
+      if (!row || row.level.state !== "stuck") return;
+      // A finding waits until the daemon knows who wrote the files (convex checkoutAsk refuses it before then).
+      if (who === "finding" && row.uncommitted.attributing) return;
+      const { writers, nobody } = levelWriters(row);
+      const files = who === "finding" ? nobody.length : writers.find((w) => w.conversation_id === who)?.files.length ?? 0;
+      if (!files) return;
+      const ask: CheckoutTold = who === "finding" ? { at, files, to: "finding" } : { at, files, to: "session", conversation_id: who };
+      // The whole level is assigned, so the field holds until the server's row echoes this same level.
+      row.level = { ...row.level, told: [...toldOf(row.level), ask] };
+    }) as LineSliceActions["askCheckout"],
 
     // "Make this a problem": the server opens it; the finding's row comes back filed through the signals feed.
     makeProblemOfFinding: asyncAction(function (_signalId: string, _more?: string[], _title?: string, _into?: string) {}) as LineSliceActions["makeProblemOfFinding"],

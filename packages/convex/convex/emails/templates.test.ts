@@ -2,6 +2,8 @@ import { describe, expect, test } from "bun:test";
 import { renderEmail, escapeHtml, type RenderedEmail } from "./render";
 import {
   artifactComment,
+  confirmNewEmail,
+  emailChanged,
   passkeyAdded,
   passwordChanged,
   passwordReset,
@@ -35,6 +37,16 @@ const ALL: Array<{ name: string; email: RenderedEmail }> = [
       passkeyName: "MacBook Touch ID",
       addedAt: 1755172800000,
       settingsUrl: "https://codecast.sh/settings",
+    }),
+  },
+  { name: "confirmNewEmail", email: confirmNewEmail({ code: "481516", email: "dev@example.com", expiryMinutes: 15 }) },
+  {
+    name: "emailChanged",
+    email: emailChanged({
+      oldEmail: "dev@old.example",
+      newEmail: "dev@example.com",
+      changedAt: 1755172800000,
+      settingsUrl: "https://codecast.sh/settings/accounts",
     }),
   },
   {
@@ -94,6 +106,14 @@ describe("codes", () => {
     expect(e.subject).toStartWith("K4M7PQ");
     expect(e.html).toContain("K4M7PQ");
     expect(e.text).toContain("K4M7PQ");
+  });
+
+  test("the change-email code leads the subject and names the address it moves the account to", () => {
+    const e = confirmNewEmail({ code: "481516", email: "dev@example.com", expiryMinutes: 15 });
+    expect(e.subject).toStartWith("481516");
+    expect(e.text).toContain("481516");
+    expect(e.text).toContain("dev@example.com");
+    expect(e.text).not.toContain("creating your");
   });
 
   test("reset code appears in preheader, body, and text", () => {

@@ -1575,6 +1575,7 @@ export function mapPull(pull: any) {
     base_sha: pull.base?.sha as string | undefined,
     requested_reviewers: (pull.requested_reviewers ?? []).map((r: any) => r.login as string),
     merged_at: pull.merged_at ? new Date(pull.merged_at).getTime() : null,
+    merge_commit_sha: (pull.merged_at ? pull.merge_commit_sha ?? undefined : undefined) as string | undefined,
     created_at: pull.created_at ? new Date(pull.created_at).getTime() : null,
     updated_at: pull.updated_at ? new Date(pull.updated_at).getTime() : null,
     closed_at: pull.closed_at ? new Date(pull.closed_at).getTime() : null,

@@ -103,7 +103,7 @@ packages/convex/convex/githubWebhooks.checks.test.ts 850
 packages/convex/convex/githubWebhooks.ts 2350
 packages/convex/convex/googleOAuth.test.ts 1100
 packages/convex/convex/googleOAuth.ts 1000
-packages/convex/convex/http.ts 5450
+packages/convex/convex/http.ts 4800
 packages/convex/convex/inboxFilters.test.ts 1200
 packages/convex/convex/ingest.ts 1450
 packages/convex/convex/issueSync.ts 1900
@@ -112,7 +112,6 @@ packages/convex/convex/lineTrial.test.ts 900
 packages/convex/convex/lineTrial.ts 2150
 packages/convex/convex/managedSessions.ts 1300
 packages/convex/convex/messages.ts
-packages/convex/convex/migrations.ts 950
 packages/convex/convex/notifications.needsInput.test.ts 900
 packages/convex/convex/notifications.ts
 packages/convex/convex/oauthConnectors.test.ts 850
@@ -218,7 +217,7 @@ packages/web/components/conversation/sessionChrome.tsx 950
 packages/web/components/conversation/sessionControls.tsx
 packages/web/components/decisions/ChangeCardView.tsx 1250
 packages/web/components/faces/FaceRow.tsx 1050
-packages/web/components/faces/__tests__/faceRow.mount.test.tsx 1050
+packages/web/components/faces/__tests__/faceRow.mount.test.tsx 900
 packages/web/components/org/OrgGraph.tsx 850
 packages/web/components/org/OrgNodeCards.tsx 850
 packages/web/components/org/orgLayout.ts 850

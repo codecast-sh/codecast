@@ -6,6 +6,7 @@
 // shows one, runs a change through one, switches a live flow, and turns a
 // Claude Code workflow script into a flow (lineCommand.ts adds the flows'
 // working commands).
+import { registerIntentCommands } from "./workflow/intentCommands.js";
 import type { Command } from "commander";
 import { commandGroup } from "./commandGroups.js";
 import { spawnSync } from "./proc.js";
@@ -14,29 +15,16 @@ import * as path from "node:path";
 import { holdUntil, libraryTree, liveFlowLines, namesLiveFlow, variantChangeLines, variantChanges, variantSummary, type LibraryNode, type LiveFlow, type VariantChanges } from "./flowLibrary.js";
 import type { WorkflowGraph } from "./workflow/types.js";
 import { graphExtends, parseWorkflowSource } from "./workflow/parser.js";
-import { describeFlow, flowLine, poolFlows, type PoolFlow, type PushedPoolRow } from "./workflow/flowPool.js";
-import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
+import { flowLine } from "./workflow/flowPool.js";
 import type { Workspace } from "./resolveWorkspace.js";
-import { choiceOption, notFoundLine } from "./argChecks.js";
-
-/**
- * Why `cast ws acquire --json` left no worktree to run in, in words. A
- * worktree whose contract failed prints its JSON and exits 2: the failed
- * checks are the reason, and the worktree stays, broken, until it is healed.
- */
-export function acquireFailureLine(worktree: string, out: string, err: string): string {
-  const last = out.trim().split("\n").pop() ?? "";
-  let ws: { state?: string; contract?: { failures?: Array<{ name: string; reason?: string }>; warnings?: Array<{ name: string; reason?: string }> } | null } | null = null;
-  try {
-    ws = last.startsWith("{") ? JSON.parse(last) : null;
-  } catch {}
-  if (ws?.state === "broken") {
-    const checks = ws.contract?.failures?.length ? ws.contract.failures : ws.contract?.warnings ?? [];
-    const why = checks.map((c) => `${c.name}${c.reason ? `: ${c.reason}` : ""}`).join("; ");
-    return `The worktree ${worktree} for the change is broken${why ? ` (${why})` : ""}. Repair it with cast ws heal ${worktree}, or remove it with cast ws destroy ${worktree}, then run this again.`;
-  }
-  return `Could not make the worktree for the change: ${(err || out).trim().split("\n").pop()}`;
-}
+import { choiceOption } from "./argChecks.js";
+import { staleRepoFlow } from "./workflow/staleRepoFlow.js";
+import { registerFlowStations } from "./flowStations.js";
+import { registerFlowEditCommand } from "./flowEditCommand.js";
+import { registerFlowAwaitDeployCommand } from "./flowAwaitDeployCommand.js";
+import { baseOf, graphOf, printVariantChanges } from "./flowBase.js";
+import { findFlow, poolWorkspace, readPool, shortSessionId, type FoundFlow, type PoolAt } from "./flowFind.js";
+import { acquireFailureLine } from "./flowAcquire.js";
 
 export interface FlowDeps {
   cliPost: (urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number; throwOnError?: boolean }) => Promise<any>;
@@ -45,11 +33,16 @@ export interface FlowDeps {
   realCwd: () => string;
   /** The workspace a read names: the team given, else the one this shell reads. */
   readWorkspace: (team?: string) => Promise<Workspace>;
+  /** The team this directory is mapped to (`cast teams map`, directoryTeam.ts), or null when none is. */
+  directoryTeam: () => Promise<string | null>;
   /** The workspace a write names outright (a team, or it stops with why). */
   writeWorkspace: (team?: string) => Promise<Workspace>;
   /** Stops with the team feature's own words unless Flows is on for the workspace (the team given, else this shell's).
    *  The commands that start work call it; reading and a run already going are left alone. */
-  requireFlows: (team?: string) => Promise<void>;
+  /** Stops the command, saying why, when Flows is off in this workspace. */
+  requireFlows: (ws: Workspace) => Promise<void>;
+  /** This machine's `flow` config: the default machine a flow run is placed on (workflow/placedChange.ts). */
+  flowDeviceConfig?: () => import("./workflow/placedChange.js").FlowDeviceConfig | undefined;
 }
 
 const dim = (s: string) => `\x1b[2m${s}\x1b[0m`;
@@ -70,14 +63,34 @@ async function sessionTitleOf(conversation: string, deps: Pick<FlowDeps, "cliPos
   return t && t !== "New Session" ? t.slice(0, 120) : null;
 }
 
+/** What `cast flow run` prints for a change upstream already holds: JSON for a caller that parses it (`--json`), else a sentence. */
+export function landedOutput(json: boolean, what: string, upstream: string, landed: string): string {
+  return json ? JSON.stringify({ landed, upstream }) : `${what} is already on ${upstream} at ${landed.slice(0, 10)}: nothing to run.`;
+}
+
 /**
  * The run's subject when the change is named (a task, branch or pull request) from inside a session: that session
- * started the run, so it hears what each stage finds (flows.md FL4). Undefined at a plain shell.
+ * started the run, so it hears what each stage finds (flows.md FL4). From a plain shell (a run started over ssh on
+ * another machine), the session the task's change came from (`change_session` on /cli/work/get). Undefined when there is neither.
  */
-export async function callingSubject(deps: Pick<FlowDeps, "cliPost" | "callingSession">): Promise<{ session: string; conversation: string } | undefined> {
+export async function callingSubject(deps: Pick<FlowDeps, "cliPost" | "callingSession">, task?: string): Promise<{ session: string; conversation: string } | undefined> {
   const ref = deps.callingSession();
   const row = ref ? await sessionRowOf(ref, deps) : null;
-  return row?.id ? { session: String(row.id).slice(0, 7), conversation: String(row.id) } : undefined;
+  if (row?.id) return { session: String(row.id).slice(0, 7), conversation: String(row.id) };
+  const made = task ? (await deps.cliPost("/cli/work/get", { short_id: task }).catch(() => null))?.change_session : null;
+  return made?.conversation_id ? { session: String(made.short_id), conversation: String(made.conversation_id) } : undefined;
+}
+
+/**
+ * What a run on a task named alone works on: the branch an earlier run of the task left in `top` (named for the run's
+ * worktree, or a line's), else the calling session's own edits, else nothing it can run on. A branch an earlier run
+ * froze from the calling session's edits is that session's change as it was: while the session still holds edits of
+ * its own here (`hasOwnEdits`), those are frozen onto it again, so the edits it made since are not left out.
+ */
+export async function taskChange(top: string, worktree: string, task: string, callingSession: string | undefined, hasOwnEdits: (session: string) => Promise<boolean>): Promise<{ branch: string } | { session: string } | null> {
+  const known = [`codecast/${worktree}`, `line-${task}`, `codecast/line-${task}`].find((b) => spawnSync("git", ["-C", top, "rev-parse", "--verify", "--quiet", b]).status === 0);
+  if (known === `codecast/${worktree}` && callingSession && (await hasOwnEdits(callingSession))) return { session: callingSession };
+  return known ? { branch: known } : callingSession ? { session: callingSession } : null;
 }
 
 /** The task a session is bound to (its task pulse, written by `cast task start`), while that task is still open. */
@@ -97,23 +110,31 @@ async function cast(args: string[], cwd: string): Promise<{ code: number; out: s
 }
 
 /** When each way of putting work in a flow fits: what `cast flow --help` says after the verbs. */
-const FLOW_HELP = `
+export const FLOW_HELP = `
 Choosing a flow:
   A library flow that fits the work runs as it stands: it carries what the team has learned.
   A library flow that fits as a backbone, with a step this change needs done its own way, is
   extended: name it with extends and fill its slots with steps you write. The rest stays the team's.
   A flow written whole fits only when nothing in the library has the shape of the work.
 
-  cast flow run change                      a library flow, on this session's own edits
+  cast flow run                             the workspace's default flow (cast flow ls marks it),
+                                            on this session's own edits; --task, --branch, --pr name another change
+  cast flow run change                      a library flow by name, on this session's own edits
   cast flow run - <<'EOF'                   a flow written here, checked before it starts
   digraph flaky_fix {
-    graph [extends="change"]
+    graph [extends="quick-change"]
     subgraph check { reproduce -> prove }   steps that fill the backbone's check slot
   }
   EOF
 
+  cast flow edit change add lint --after pr --fix brief --run "bun run lint"
+                                            a project's own step, one line in its flow (cast flow edit --help)
+
   cast flow show <flow> lists a flow's slots. A flow written here is kept in .codecast/session-flows/
   as this session's draft; its run draws in the conversation, where it can be saved to the library.
+  A run keeps the station prompts it started with: an edited flow reaches it only at a gate answered
+  after the edit, or when the run moves onto a newer version. The line profile's $line.* values are
+  read again before every station.
 `;
 
 export function registerFlowCommands(program: Command, deps: FlowDeps): Command {
@@ -131,16 +152,16 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--team <name>", "Read this team's library (default: the workspace this directory reads)")
     .option("--json", "Print { library, live } as JSON")
     .action(async (opts: { kind?: string; json?: boolean; team?: string }) => {
-      const tdeps = teamDeps(deps, opts.team);
-      const [pool, live] = await Promise.all([readPool(tdeps), readLive(deps, opts.team)]);
+      const at = poolWorkspace(deps, opts.team);
+      const [{ flows: pool, defaultFlow }, live] = await Promise.all([readPool(deps, at), readLive(deps, at)]);
       const library = pool.filter((f) => !opts.kind || f.kind === opts.kind);
       const tree = libraryTree(library, live.flows);
       if (opts.json) {
         const spines = new Set(tree.spine.map((n) => n.flow.slug));
-        console.log(JSON.stringify({ library: library.map((f) => ({ ...f, spine: spines.has(f.slug) })), live: live.flows }, null, 2));
+        console.log(JSON.stringify({ library: library.map((f) => ({ ...f, spine: spines.has(f.slug) })), default: defaultFlow?.slug ?? null, live: live.flows }, null, 2));
         return;
       }
-      const home = (f: typeof pool[number]) => (f.draft ? dim("  (your draft)") : f.where === "repo" ? dim("  (this repo)") : f.where === "team" ? dim(`  (the team's${f.by ? `, from ${f.by}` : ""})`) : f.where === "pushed" ? dim("  (yours)") : "");
+      const home = (f: typeof pool[number]) => (f.slug === defaultFlow?.slug ? bold("  (default)") : "") + (f.draft ? dim("  (your draft)") : f.where === "repo" ? dim("  (this repo)") : f.where === "team" ? dim(`  (the team's${f.by ? `, from ${f.by}` : ""})`) : f.where === "pushed" ? dim("  (yours)") : "");
       const print = (n: LibraryNode, depth: number) => {
         const f = n.flow;
         const lead = depth ? `${"  ".repeat(depth)}└ ` : "  ";
@@ -168,6 +189,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         for (const l of live.flows) for (const line of liveFlowLines(l, { top: 3, bold, dim })) console.log(`  ${line}`);
         console.log("");
       } else if (live.error) console.log(dim(`Live flows: ${live.error}\n`));
+      if (defaultFlow) console.log(dim(`Run this session's change through ${defaultFlow.slug}, the default:  cast flow run`));
       console.log(dim("Run this session's change through one:  cast flow run <flow>"));
       console.log(dim("See a flow's stations and routes:        cast flow show <flow>"));
     });
@@ -178,9 +200,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--team <name>", "Read this team's library (default: the workspace this directory reads)")
     .option("--json", "Print the flow as JSON (with its live flow, and a variant's changes)")
     .action(async (slug: string, opts: { json?: boolean; team?: string }) => {
-      const tdeps = teamDeps(deps, opts.team);
       // A live flow is named by its flow (slug, label or id) or its own id; the flow it runs prints after it.
-      const [lives, pool] = await Promise.all([readLive(deps, opts.team), readPool(tdeps)]);
+      const at = poolWorkspace(deps, opts.team);
+      const [lives, { flows: pool }] = await Promise.all([readLive(deps, at), readPool(deps, at)]);
       const live = lives.flows.find((l) => namesLiveFlow(l, slug)) ?? null;
       const name = live ? live.flow.slug : slug;
       if (live && !pool.some((p) => p.slug === name)) {
@@ -189,9 +211,11 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         console.log(dim(`\nIts flow ${name} is not in this team's library, so its stations cannot be read here.`));
         return;
       }
-      const found = await findFlow(name, tdeps, pool);
+      const found = await findFlow(name, deps, pool);
+      const stale = staleRepoFlow(found, deps.realCwd());
+      if (stale) console.error(`! ${stale}`);
       const spineLive = live ?? lives.flows.find((l) => l.flow.slug === found.slug) ?? null;
-      const base = found.extends ? pool.find((p) => p.slug === found.extends) ?? baseBeside(found) : null;
+      const base = found.extends ? baseOf(found, pool) : null;
       const baseGraph = graphOf(base);
       const ownGraph = baseGraph ? graphOf(found) : null;
       const changes = baseGraph && ownGraph ? variantChanges(baseGraph, ownGraph) : null;
@@ -231,6 +255,38 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     });
 
   flow
+    .command("pipeline")
+    .description("This repository's pipeline: the change flow a session's Ship runs here and the release flow each deploy runs, every station with who does it, own or inherited, when it runs and what it runs, and the targets a release goes out to")
+    .option("--team <name>", "Resolve the team's default flow and published flows for this team (default: the workspace this directory reads)")
+    .option("--publish", "Also publish it for the app's pipeline page (every deploy targets publish does this too)")
+    .option("--json", "Print the pipeline as JSON (contracts/pipeline.ts)")
+    .action(async (opts: { team?: string; publish?: boolean; json?: boolean }) => {
+      const { checkoutPipeline, pipelineLines, publishPipeline, teamFlowFacts } = await import("./pipeline.js");
+      const cwd = deps.realCwd();
+      const root = (spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim();
+      if (!root) { console.error("Not inside a repository: run from the checkout whose pipeline this is"); process.exit(1); }
+      const ws = await deps.readWorkspace(opts.team).catch(() => null);
+      const teamId = ws?.kind === "team" ? ws.teamId : null;
+      const post = (p: string, b: Record<string, unknown>) => deps.cliPost(p, b, { throwOnError: true });
+      const { deviceId } = await import("./remote/device.js");
+      let pipeline;
+      try {
+        ({ pipeline } = await checkoutPipeline(root, { ...(await teamFlowFacts(post, teamId)), deviceId: deviceId() }));
+      } catch (err) {
+        console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
+        process.exit(1);
+      }
+      const published = opts.publish ? await publishPipeline(post, root, { teamId, deviceId: deviceId() }).catch((err: Error) => ({ error: err.message })) : null;
+      if (opts.json) { console.log(JSON.stringify({ ...pipeline, ...(published ? { published } : {}) }, null, 2)); return; }
+      for (const line of pipelineLines(pipeline)) console.log(line);
+      if (!published) return;
+      if ("error" in published) console.log(`\n✗ not published: ${published.error}`);
+      else if ("skipped" in published) console.log(`\nNot published: ${published.skipped}`);
+      else if (published.refused) console.log(`\nNot published: ${published.refused}`);
+      else console.log(`\n${published.changed ? "Published" : "Already published, unchanged"} for ${published.repository}`);
+    });
+
+  flow
     .command("validate <flow>")
     .description("Read a flow (a file, a library name, or - for a graph on stdin), segments and slots expanded, and name what is missing")
     .action(async (ref: string) => {
@@ -242,12 +298,14 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       if (ref === "-") await keepSessionFlow(f, deps);
     });
 
+  registerFlowEditCommand(flow, deps);
+
   flow
     .command("publish <flow>")
     .description("Publish a repo flow to the team's pool, where every member sees and runs it (cast flow ls, the Flows page)")
     .option("--team <name>", "The team whose pool it joins (default: your active team; personal keeps it yours)")
     .action(async (slug: string, opts: { team?: string }) => {
-      await deps.requireFlows(opts.team);
+      await deps.requireFlows(await deps.readWorkspace(opts.team));
       const found = await findFlow(slug, deps);
       if (!found.file) { console.error(`${found.slug} ships with codecast; it is in every pool already`); process.exit(1); }
       if (found.where === "team" || found.where === "pushed") {
@@ -266,23 +324,44 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     });
 
   flow
-    .command("run <flow>")
-    .description("Run a change through a flow (a library name, a file, or - for a graph on stdin): this session's own edits by default, or a task, branch or pull request")
+    .command("run [flow]")
+    .description("Run a change through a flow (a library name, a file, or - for a graph on stdin; none runs the workspace's default flow, the one cast flow ls marks): this session's own edits by default, or a task, branch, pull request or the whole shared checkout")
     .option("--task <id>", "The change is this task's (its branch, or the session's edits bound to it)")
     .option("--session [id]", "The change is a session's own uncommitted edits (default: this session)")
     .option("--branch <name>", "The change is this branch")
     .option("--pr <number>", "The change is this pull request's head branch")
+    .option("--checkout", "The change is everything uncommitted in this shared checkout, a commit per session that wrote it (as cast ship checkout plans a pass); each finding goes to the sessions that wrote the files it names")
     .option("--title <text>", "Title for the task the run binds to, when one is made")
     .option("--only <paths>", "With a session's edits: only these files belong to the change (comma-separated paths or globs)")
     .option("--foreground", "Run here and wait, rather than handing the run to this machine's daemon")
+    .option("--device <name>", "Run the whole flow on this machine of yours (id, label or hostname), in its checkout of this repository; \"here\" keeps it on this one. Default: cast config flow.device")
     .option("--dry-run", "Say what would run on what, and start nothing")
     .option("--team <name>", "Read this team's pool (default: the workspace this directory reads)")
+    .option("--library", "Run the library's flow of that name even though the repo's default branch has its own")
     .option("--json", "Print {run_id, task, branch, worktree, files} as JSON")
-    .action(async (slug: string, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; title?: string; only?: string; foreground?: boolean; dryRun?: boolean; json?: boolean; team?: string }) => {
-      await deps.requireFlows(opts.team);
+    .action(async (named: string | undefined, opts: { task?: string; session?: string | boolean; branch?: string; pr?: string; checkout?: boolean; title?: string; only?: string; foreground?: boolean; device?: string; dryRun?: boolean; json?: boolean; team?: string; library?: boolean }) => {
+      // Flows must be on in the workspace the run reads its pool from, not merely the active one (flows.md FL2).
+      const at = poolWorkspace(deps, opts.team);
+      const where = await at.catch((err: unknown) => {
+        console.error(`Could not tell which workspace this directory reads its flows from (${err instanceof Error ? err.message : String(err)}): pass --team`);
+        process.exit(1);
+      });
+      await deps.requireFlows(where.ws);
+      if (opts.checkout && (opts.session !== undefined || opts.branch || opts.pr || opts.only)) {
+        console.error("--checkout runs the whole checkout's change: it takes no --session, --branch, --pr or --only");
+        process.exit(1);
+      }
       const only = opts.only ? opts.only.split(",").map((s) => s.trim()).filter(Boolean) : null;
       const cwd = deps.realCwd();
-      const found = await findFlow(slug, teamDeps(deps, opts.team));
+      const read = await readPool(deps, at);
+      // No flow named: the workspace's default, by the rule the web's pickers use (flows.md FL4).
+      if (!named && read.failed) { console.error(`Could not read the workspace's flows, so its default flow is unknown (${read.failed}): name the flow to run (cast flow ls)`); process.exit(1); }
+      if (!named && !read.defaultFlow) { console.error("No flow here takes a session's change, so there is no default to run: name one (cast flow ls)"); process.exit(1); }
+      const slug = named ?? read.defaultFlow!.slug;
+      if (!named && !opts.json) console.error(`${dim("No flow named:")} running ${bold(slug)}, the workspace's default`);
+      const found = await findFlow(slug, deps, read.flows);
+      const stale = opts.library ? null : staleRepoFlow(found, cwd);
+      if (stale) { console.error(`✗ ${stale}`); process.exit(1); }
       if (found.errors.length) { console.error(`✗ ${found.slug} does not run: ${found.errors.join("; ")}`); process.exit(1); }
       const empty = found.stations.filter((s) => s.slot?.filled === "empty");
       if (empty.length) {
@@ -292,10 +371,13 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       }
       const top = (spawnSync("git", ["-C", cwd, "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim();
       if (!top) { console.error("cast flow run works inside a git checkout"); process.exit(1); }
+      // The machine the whole run goes to (ct-98920, workflow/placedChange.ts); null is here.
+      const placed = await (await import("./workflow/placedChange.js")).runDeviceFor(opts.device, deps.flowDeviceConfig?.(), top, opts.foreground);
+      if (placed && opts.checkout) { console.error(`--checkout runs this checkout's own pass, which only this machine can freeze again: pass --device here to run it here`); process.exit(1); }
 
       // Which change: a branch or PR names its own; else a session's edits, unless only a task was named.
-      const sessionRef = typeof opts.session === "string" ? opts.session : opts.session === true || (!opts.task && !opts.branch && !opts.pr) ? deps.callingSession() : undefined;
-      if (!opts.task && !opts.branch && !opts.pr && !sessionRef) {
+      let sessionRef = opts.checkout ? undefined : typeof opts.session === "string" ? opts.session : opts.session === true || (!opts.task && !opts.branch && !opts.pr) ? deps.callingSession() : undefined;
+      if (!opts.task && !opts.branch && !opts.pr && !sessionRef && !opts.checkout) {
         console.error("Name the change: run this from inside a session (its own edits), or pass --task, --branch, --pr or --session <id>");
         process.exit(1);
       }
@@ -314,19 +396,54 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const { runSlug, lineRunDir } = await import("./workflow/runner.js");
       const graph = parseWorkflowSource(found.source, found.file ? path.dirname(found.file) : cwd);
       let task = opts.task;
+      // A task named alone, when the flow works on a change: the branch an earlier run of it left, else the calling
+      // session's own edits, bound to that task rather than a new one, so its description and requester stay the run's.
+      if (task && !branch && !sessionRef && !opts.checkout && found.takes.includes("branch")) {
+        const ownEdits = async (session: string) => {
+          const { previewSessionChange } = await import("./workflow/flowChange.js");
+          return previewSessionChange(top, session, only, { fetch: false }).then((p) => p.paths.length > 0, () => false);
+        };
+        const taken = await taskChange(top, runSlug(graph, { task_id: task }, "run"), task, deps.callingSession(), ownEdits);
+        if (!taken) {
+          console.error(`${found.label} works on a change, and ${task} has no branch here yet: run it from inside the session that made the change (its own edits), or name the change with --branch or --pr`);
+          process.exit(1);
+        }
+        if ("branch" in taken) branch = taken.branch;
+        else sessionRef = taken.session;
+      }
       // A session's change is read first: a session with nothing here stops before anything is made.
-      const { previewSessionChange } = await import("./workflow/flowChange.js");
+      const { previewSessionChange, previewCheckoutChange, inboxRosterVia, NoCheckoutChange } = await import("./workflow/flowChange.js");
       const preview = sessionRef && !branch ? await previewSessionChange(top, sessionRef, only).catch((err) => { console.error(err.message); process.exit(1); }) : null;
+      // The checkout's change is planned first too: a checkout with nothing that can ship stops before anything is made.
+      const roster = inboxRosterVia((route, body) => deps.cliPost(route, body));
+      const pass = opts.checkout ? await previewCheckoutChange(top, { roster }).catch((err) => { console.error(err.message); process.exit(1); }) : null;
+      if (pass && !pass.groups.length) { console.error(new NoCheckoutChange(top, pass.held).message); process.exit(1); }
+      // A change upstream already holds has nothing to land: nothing is made for it.
+      const landed = preview?.landed ?? pass?.landed;
+      if (landed) {
+        console.log(landedOutput(!!opts.json, preview ? `Session ${preview.session}'s change` : "The shared checkout's change", (preview ?? pass)!.upstream, landed));
+        return;
+      }
       // A session's change runs on the session's own task (flows.md FL4): the one it is bound to, else one made and
       // bound to it below, so the run's messages and a second run find the same task, branch and worktree.
       const subjectRun = !task && !branch && !!preview;
       if (subjectRun) task = await boundOpenTask(preview!.agentSession, deps);
       // A session's change is named for what the session says it is doing: its own title, not the flow it runs through.
       const sessionTitle = preview?.conversation ? await sessionTitleOf(preview.conversation, deps) : null;
-      const changeTitle = title ?? (branch ? `Run ${branch} through ${found.label}` : sessionTitle ?? `Change from session ${preview?.session ?? "here"}`);
+      const passFiles = pass?.groups.reduce((n, g) => n + g.paths.length, 0) ?? 0;
+      const changeTitle = title ?? (branch ? `Run ${branch} through ${found.label}`
+        : pass ? `Ship the shared checkout: ${passFiles} file${passFiles === 1 ? "" : "s"} in ${pass.groups.length} commit${pass.groups.length === 1 ? "" : "s"}`
+        : sessionTitle ?? `Change from session ${preview?.session ?? "here"}`);
       if (opts.dryRun) {
         console.log(`${bold(found.label)}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
-        console.log(`on ${branch ? `branch ${branch}` : preview ? `session ${preview.session}'s own edits` : `task ${task}`}, bound to ${task ?? `a new task "${changeTitle}"`}`);
+        console.log(`on ${branch ? `branch ${branch}` : preview ? `session ${preview.session}'s own edits` : pass ? "the shared checkout's uncommitted pass" : `task ${task}`}, bound to ${task ?? `a new task "${changeTitle}"`}`);
+        for (const g of pass?.groups ?? []) {
+          const who = g.session ? `session ${g.session.id ?? g.session.conversation_id?.slice(0, 7) ?? g.id.slice(2)}${g.session.title ? ` (${g.session.title})` : ""}` : "no session's edit names these";
+          console.log(`${who}: ${g.paths.length} file${g.paths.length === 1 ? "" : "s"}, ${dim(g.message)}`);
+          for (const f of g.paths) console.log(`  ${f}`);
+        }
+        for (const h of pass?.held ?? []) console.log(`held out: ${h.path} (${h.why})`);
+        console.log(placed ? `runs on ${placed.name} (${placed.device_id.slice(0, 8)}, ${placed.from}), in its checkout of this repository: the change's branch is pushed to origin and fetched there` : "runs on this machine");
         if (preview) {
           console.log(`${preview.paths.length} file${preview.paths.length === 1 ? "" : "s"}:`);
           for (const f of preview.paths) {
@@ -338,6 +455,17 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         console.log(dim("Nothing started (--dry-run)."));
         if (slug === "-") await keepSessionFlow(found, deps);
         return;
+      }
+      // One pass through a flow per checkout at a time: a second would freeze, brief and land the same files again.
+      const checkoutGitDir = opts.checkout ? spawnSync("git", ["-C", top, "rev-parse", "--absolute-git-dir"], { encoding: "utf-8" }).stdout.trim() : "";
+      if (opts.checkout) {
+        const { claimCheckoutRun } = await import("./workflow/checkoutRunHold.js");
+        const runLive = async (runId: string) => {
+          const read = await deps.cliPost("/cli/workflow-runs/list", { run_id: runId, limit: 1, slim: true }).catch(() => null);
+          if (!Array.isArray(read?.runs)) return null;
+          return ["pending", "running", "paused"].includes(String(read.runs[0]?.status ?? ""));
+        };
+        await claimCheckoutRun(checkoutGitDir, runLive).catch((err) => { console.error(err instanceof Error ? err.message : String(err)); process.exit(1); });
       }
       if (!task) {
         const made = await cast(["task", "create", changeTitle, "-d", `A change run through the ${found.label} flow (${found.slug}).`, "--found-during", "none"], top);
@@ -353,38 +481,45 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // The change on its own branch and worktree, named as the run's isolated stations name theirs.
       const worktree = runSlug(graph, { task_id: task }, "run");
       const runDir = lineRunDir(top, worktree);
-      const { writeFrozenChange } = await import("./workflow/flowChange.js");
+      const { writeFrozenChange, originTip, freezeSessionChange } = await import("./workflow/flowChange.js");
       let change: import("./workflow/flowChange.js").FrozenChange | null = null;
       // A worktree an earlier run of this change made, read before its branch moves: one holding work of its own is never reset.
       const earlierPath = (await cast(["ws", "path", worktree], top)).out.trim();
       const earlier = earlierPath && fs.existsSync(earlierPath) ? earlierPath : null;
-      if (earlier && (branch || sessionRef)) {
+      if (earlier && !placed && (branch || sessionRef || opts.checkout)) {
         const dirty = spawnSync("git", ["-C", earlier, "status", "--porcelain", "--untracked-files=no"], { encoding: "utf-8" }).stdout.trim();
         if (dirty) { console.error(`The run's worktree ${earlier} holds uncommitted work from an earlier run; finish or clear it before running this change again`); process.exit(1); }
-      }
-      // A task named alone brings the branch an earlier run of it left, when the flow works on a branch.
-      if (!branch && !sessionRef && task && found.takes.includes("branch")) {
-        const known = [`codecast/${worktree}`, `line-${task}`, `codecast/line-${task}`].find((b) => spawnSync("git", ["-C", top, "rev-parse", "--verify", "--quiet", b]).status === 0);
-        if (!known) {
-          console.error(`${found.label} works on a change, and ${task} has no branch here yet: run it from the session that made the change (its own edits), or name the change with --branch or --pr`);
-          process.exit(1);
-        }
-        branch = known;
       }
       if (branch) {
         const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();
         if (!head) { console.error(`No branch ${branch} here`); process.exit(1); }
-        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps)), base: head, tip: head, branch, worktree, paths: [], shared: [], held: [] };
-      } else if (sessionRef) {
-        const { freezeSessionChange } = await import("./workflow/flowChange.js");
+        const { branchChangePaths } = await import("./workflow/flowChangeFile.js");
+        const remoteTip = await originTip(top, branch);
+        // The files the branch changes, so a station gated on paths (when=) runs when they say it should.
+        change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps, task)), base: head, tip: head, ...(remoteTip ? { remote_tip: remoteTip } : {}), branch, worktree, paths: branchChangePaths(top, branch), shared: [], held: [] };
+      } else if (opts.checkout) {
+        const { freezeCheckoutChange } = await import("./workflow/flowChange.js");
         try {
-          change = await freezeSessionChange(top, sessionRef, { branch: `codecast/${worktree}`, worktree, title: changeTitle, only });
+          // The session that ran this hears the findings that name none of the change's files.
+          change = { ...(await freezeCheckoutChange(top, { branch: `codecast/${worktree}`, worktree, title: changeTitle, roster, fetched: true })), ...(await callingSubject(deps, task)) };
         } catch (err) {
           console.error(err instanceof Error ? err.message : String(err));
           process.exit(1);
         }
+      } else if (sessionRef) {
+        change = await freezeSessionChange(top, sessionRef, { branch: `codecast/${worktree}`, worktree, title: changeTitle, only, fetched: true }).catch((err: unknown) => {
+          console.error(err instanceof Error ? err.message : String(err));
+          process.exit(1);
+        });
       }
       if (change) {
+        const { behindWords } = await import("./workflow/flowChangeFile.js");
+        const behind = behindWords(change);
+        if (behind) console.error(`  behind upstream: ${behind}`);
+      }
+      // A placed run's machine makes the worktree in its own checkout: the change goes there by origin.
+      const changeFile = change && placed ? (await import("./workflow/placedChange.js")).handOffPlacedChange(top, runDir, change) : null;
+      if (change && !placed) {
         // The workspace's setup (its install) runs here, before the run starts: it can take minutes.
         if (!opts.json) console.error(dim(`  making worktree ${worktree} on ${change.branch} (its setup can take a few minutes)`));
         const ws = await cast(["ws", "acquire", worktree, "--branch", change.branch, "--skip-pool", "--json"], top);
@@ -396,87 +531,55 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
 
       const runArgs = ["workflow", "run", found.file ?? found.slug, "--task", task!];
       if (!opts.foreground) runArgs.push("--detach", "--json");
+      if (placed) runArgs.push("--device", placed.device_id, ...(changeFile ? ["--change", changeFile] : []));
       if (opts.foreground) {
         const { resolveCastInvocation } = await import("./castInvocation.js");
         const { cmd, prefixArgs } = resolveCastInvocation();
+        // This process's pid holds the checkout while the run goes here. A run it leaves live (at a person's gate)
+        // then holds it by its id.
         const r = spawnSync(cmd, [...prefixArgs, ...runArgs], { cwd: top, stdio: "inherit", env: process.env });
+        if (opts.checkout) {
+          const read = await deps.cliPost("/cli/workflow-runs/list", { task_id: task, limit: 1, slim: true }).catch(() => null);
+          const run = Array.isArray(read?.runs) ? read.runs[0] : null;
+          if (run?._id && ["pending", "running", "paused"].includes(String(run.status))) {
+            try { (await import("./workflow/checkoutRunHold.js")).recordCheckoutRun(checkoutGitDir, String(run._id), task); } catch (err) { console.error(err instanceof Error ? err.message : String(err)); }
+          }
+        }
         process.exit(r.status ?? 1);
       }
       const started = await cast(runArgs, top);
       const runId = started.out.match(/"run_id"\s*:\s*"([^"]+)"/)?.[1];
       if (started.code !== 0 || !runId) { console.error((started.err || started.out).trim()); process.exit(1); }
-      const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [] };
+      if (opts.checkout) {
+        try {
+          (await import("./workflow/checkoutRunHold.js")).recordCheckoutRun(checkoutGitDir, runId, task);
+        } catch (err) {
+          // The run is going; the checkout's hold says another pass has it, so a second pass is not kept out.
+          console.error(`${err instanceof Error ? err.message : String(err)} Run ${runId} is going; cancel it (cast workflow cancel ${runId}) if the other pass holds the same files.`);
+          process.exitCode = 1;
+        }
+      }
+      const result = { run_id: runId, task, flow: found.slug, branch: change?.branch ?? null, worktree: change ? worktree : null, files: change?.paths ?? [], shared: change?.shared ?? [], held: change?.held ?? [], ...(placed ? { device: placed.device_id } : {}) };
       if (opts.json) { console.log(JSON.stringify(result)); return; }
-      console.log(`${bold(found.label)} started on ${task}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
+      console.log(`${bold(found.label)} started on ${task}${placed ? ` on ${placed.name}` : ""}: ${found.stations.filter((s) => s.main).map((s) => s.label).join(" → ")}`);
       if (change?.source === "session") {
         console.log(`  ${change.paths.length} file${change.paths.length === 1 ? "" : "s"} from session ${change.session} on ${change.branch}`);
         for (const s of change.shared) console.log(`  ${s.path} also holds edits from ${s.also.join(", ")}`);
+        for (const h of change.held) console.log(`  held out: ${h.path} (${h.why})`);
+      } else if (change?.source === "checkout") {
+        console.log(`  ${change.paths.length} file${change.paths.length === 1 ? "" : "s"} from the shared checkout on ${change.branch}`);
+        const bySession = new Map<string, number>();
+        for (const p of change.paths) { const w = change.writers?.[p]?.session ?? "no session"; bySession.set(w, (bySession.get(w) ?? 0) + 1); }
+        for (const [w, n] of bySession) console.log(`  ${w}: ${n} file${n === 1 ? "" : "s"}`);
         for (const h of change.held) console.log(`  held out: ${h.path} (${h.why})`);
       } else if (change) console.log(`  on ${change.branch}`);
       console.log(dim(`  run ${runId} · cast workflow runs --task ${task}`));
     });
 
-  // The Deploy stage's wait (workflow/awaitDeploy.ts, flows.md FL4): run by the
-  // deploy segment's parked station in the change's worktree.
-  flow
-    .command("await-deploy")
-    .description("Wait until a change's branch has landed on the default branch and the deploy carrying it is live on every target its files touch; exits 1 when that deploy failed")
-    .requiredOption("--branch <name>", "The change's branch")
-    .option("--base <name>", "The default branch it lands on", "main")
-    .option("--interval <seconds>", "How often to look again", "60")
-    .option("--once", "Look once and say where it stands: exit 0 live (or nothing to deploy), 1 failed, 3 still waiting")
-    .option("--run <id>", "The run whose station this is: each new line goes on the station while it waits")
-    .option("--node <id>", "That station's id in the run")
-    .option("--files <paths>", "The change's files, space-separated (the run's $change_files); else read from git")
-    .option("--except <targets>", "Targets the change does not wait for, space- or comma-separated")
-    .option("--send <policy>", "Once the change lands, send the targets it touches whose policy this names (release) with cast deploy, then wait")
-    .action(async (opts: { branch: string; base: string; interval: string; once?: boolean; run?: string; node?: string; files?: string; except?: string; send?: string }) => {
-      const { landedCommit, targetTouches, targetState, deployWords, holds } = await import("./workflow/awaitDeploy.js");
-      const cwd = deps.realCwd();
-      const every = Math.max(5, Number(opts.interval) || 60) * 1000;
-      let said = "";
-      let sent = false;
-      // Inside a run the waiting lines go to the station on the card, and only the verdict is the station's output,
-      // which is what a stop and the session's end message quote. At a terminal every line prints.
-      const say = (line: string, verdict = false) => {
-        if (line === said) return;
-        if (verdict || !opts.run) console.log(line);
-        said = line;
-        // What the card shows on the station while the run waits there.
-        if (opts.run && opts.node) void deps.cliPost("/cli/workflow-runs/progress", { run_id: opts.run, current_node_id: opts.node, node_id: opts.node, node_status: "running", result_preview: line }).catch(() => {});
-      };
-      for (;;) {
-        const known = (opts.files ?? "").split(/\s+/).filter(Boolean);
-        const landed = await landedCommit(cwd, opts.branch, opts.base, known).catch((err) => { say(`Cannot read ${opts.branch} here: ${err instanceof Error ? err.message : String(err)}`); return null; });
-        if (landed) {
-          const read = await cast(["line", "deploy", "targets", "--json"], cwd);
-          let targets: import("./workflow/awaitDeploy.js").DeployTargetRow[] | null = null;
-          try { targets = JSON.parse(read.out).targets ?? []; } catch { say(`Waiting to read the deploy targets: ${(read.err || read.out).trim().split("\n").pop()}`); }
-          // The flow sends what the repository says goes out with a release (deploys.md DP15), once, then waits like any change.
-          if (targets && opts.send === "release" && !sent && !opts.once) {
-            sent = true;
-            say(`${landed.sha.slice(0, 10)} landed; sending the release targets it touches.`);
-            const release = await cast(["deploy", "--sha", landed.sha, "--files", landed.files.join(" "), ...(opts.except ? ["--except", opts.except] : [])], cwd);
-            const last = (release.out + release.err).trim().split("\n").filter(Boolean);
-            if (release.code !== 0) say(`cast deploy stopped: ${last.slice(-3).join(" | ")}`);
-            const reread = await cast(["line", "deploy", "targets", "--json"], cwd);
-            try { targets = JSON.parse(reread.out).targets ?? targets; } catch { /* keep the first read */ }
-          }
-          if (targets) {
-            const skipped = new Set((opts.except ?? "").split(/[\s,]+/).filter(Boolean));
-            const touched = targets.filter((t) => !skipped.has(t.name) && targetTouches(t.paths, landed.files));
-            const states = await Promise.all(touched.map((t) => targetState(t, (sha) => holds(cwd, landed.sha, sha))));
-            const failed = states.some((s) => s.state === "failed");
-            const live = states.every((s) => s.state === "live");
-            say(deployWords(landed.sha, states), failed || live);
-            if (failed) process.exit(1);
-            if (live) return;
-          }
-        } else say(`Waiting for ${opts.branch} to land on ${opts.base}.`);
-        if (opts.once) { if (opts.run) console.log(said); process.exit(3); }
-        await new Promise((r) => setTimeout(r, every));
-      }
-    });
+  flow.command("refreeze <run>").description("For a run placed on another machine (cast flow run --device): freeze this session's edits again onto the run's branch, without touching this tree, and push it for that machine to fetch")
+    .action(async (runId: string) => (await import("./workflow/placedChange.js")).refreezeRunCommand(runId, deps.realCwd(), deps.cliPost));
+
+  registerFlowAwaitDeployCommand(flow, deps, cast);
 
   // What the judge segment's call reads (workflow/blindChange.ts): a change's
   // diff or the guidelines it answers to, with every sign of its author removed.
@@ -496,6 +599,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       else throw new Error(`The part is diff or guidelines, not ${part}`);
     });
 
+  // The intent segment's commands (asker, intent-verify).
+  registerIntentCommands(flow, deps.cliPost);
+
   // The daemon's tracer for a Claude Code Workflow run (daemon.ts
   // workflowRunGraph): the script as the graph it ran, as JSON, in its own
   // process so a script that never yields cannot hold the daemon.
@@ -503,7 +609,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .command("trace <script>", { hidden: true })
     .description("Print the graph a Claude Code workflow script would run, as JSON (the daemon's tracer)")
     .action(async (script: string) => {
-      const { traceScriptGraph } = await import("./workflow/flowImport.js");
+      const { traceScriptGraph, launchArgs } = await import("./workflow/flowImport.js");
       const text = fs.readFileSync(script, "utf-8");
       console.log(JSON.stringify(await traceScriptGraph(text, launchArgs(script, text))));
     });
@@ -529,8 +635,8 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .option("--force", "Replace a flow of that name")
     .option("--args <json>", "The args the script reads (default: the args its run was launched with, when this machine ran it)")
     .action(async (script: string, opts: { as: string; slug?: string; force?: boolean; args?: string }) => {
-      await deps.requireFlows();
-      const { importWorkflowScript } = await import("./workflow/flowImport.js");
+      await deps.requireFlows(await deps.readWorkspace());
+      const { importWorkflowScript, resolveScript, launchArgs } = await import("./workflow/flowImport.js");
       const cwd = deps.realCwd();
       const file = resolveScript(script, cwd);
       const text = fs.readFileSync(file, "utf-8");
@@ -606,7 +712,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       .option("--json", "Print the live flow as JSON")
       .action(async (name: string | undefined, opts: { team?: string; json?: boolean }) => {
         // A switch is a write: it names its team outright, and the server decides who may turn it.
-        if (on) await deps.requireFlows(opts.team);
+        if (on) await deps.requireFlows(await deps.readWorkspace(opts.team));
         const ws = await deps.writeWorkspace(opts.team);
         const l: LiveFlow | null = await deps.cliPost(`/cli/flow/live/${on ? "on" : "off"}`, { ...(ws.kind === "team" ? { team_id: ws.teamId } : {}), ...(name ? { flow: name } : {}), from_session: deps.callingSession() });
         if (opts.json) { console.log(JSON.stringify(l, null, 2)); return; }
@@ -614,39 +720,14 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         for (const line of liveFlowLines(l, { top: 3, bold, dim })) console.log(line);
       });
   }
-  return flow;
-}
-
-/** What a variant changes from the flow it extends, under its header. */
-function printVariantChanges(slug: string, base: PoolFlow | null, changes: VariantChanges | null): void {
-  if (!base) { console.log(dim(`extends ${slug}, which this library does not hold`)); return; }
-  const lines = changes ? variantChangeLines(changes) : [];
-  console.log(`extends ${bold(base.label)} ${dim(`(${slug})`)}${lines.length ? ", changing:" : changes ? ", changing nothing" : ""}`);
-  for (const l of lines) console.log(`  ${l}`);
-}
-
-/** A graph file's base read from where its `extends` points, for a variant whose base is not in the library. */
-function baseBeside(f: FoundFlow): PoolFlow | null {
-  let ext: string | undefined;
-  try { ext = f.file ? graphExtends(f.source) : undefined; } catch { return null; }
-  const file = ext ? path.resolve(path.dirname(f.file!), ext) : null;
-  if (!file || !fs.existsSync(file)) return null;
-  return describeFlow(path.basename(file).replace(/\.cast$/, ""), fs.readFileSync(file, "utf-8"), "repo", file);
-}
-
-/** A pool flow's parsed graph, or null when it has none or does not parse. */
-function graphOf(f: (PoolFlow & { source?: string }) | null | undefined): WorkflowGraph | null {
-  if (!f || f.errors.length) return null;
-  const source = f.source ?? (f.file ? fs.readFileSync(f.file, "utf-8") : BUILTIN_WORKFLOW_TEMPLATES[f.slug]);
-  if (!source) return null;
-  try { return parseWorkflowSource(source, f.file ? path.dirname(f.file) : undefined); } catch { return null; }
+  return registerFlowStations(flow, deps);
 }
 
 /** The team's live flows, or why they could not be read (the pool still lists without them). */
-async function readLive(deps: FlowDeps, team?: string): Promise<{ flows: LiveFlow[]; error: string | null }> {
+async function readLive(deps: FlowDeps, at: PoolAt): Promise<{ flows: LiveFlow[]; error: string | null }> {
   try {
     // A personal workspace has no live flow, and a server from before them answers 404 (convex liveFlows.ts).
-    const ws = await deps.readWorkspace(team);
+    const { ws } = await at;
     if (ws.kind !== "team") return { flows: [], error: null };
     const r = await deps.cliPost("/cli/flow/live/show", { team_id: ws.teamId }, { throwOnError: true }).catch((err: Error) => {
       if (err.message.includes("/cli/flow/live/show route")) return null;
@@ -656,17 +737,6 @@ async function readLive(deps: FlowDeps, team?: string): Promise<{ flows: LiveFlo
   } catch (err) {
     return { flows: [], error: err instanceof Error ? err.message : String(err) };
   }
-}
-
-type FoundFlow = PoolFlow & { source: string };
-
-/** A session's 7-character codecast id, from whatever id the caller holds (its codecast id, or its agent's session id). */
-async function shortSessionId(session: string | null, deps: FlowDeps): Promise<string | null> {
-  if (!session) return null;
-  if (/^jx[a-z0-9]{5,}$/.test(session)) return session.slice(0, 7);
-  const { readLocalConversationMap } = await import("./localConversationMap.js");
-  const conv = readLocalConversationMap()[session];
-  return conv ? String(conv).slice(0, 7) : session.slice(0, 8);
 }
 
 /**
@@ -687,92 +757,4 @@ function printSlots(f: Pick<FoundFlow, "stations" | "slug">): void {
   const how = { empty: "empty", default: "default steps", generated: "filled here" } as const;
   for (const s of slots) console.log(`  ${s.id.padEnd(16)} ${how[s.slot!.filled].padEnd(14)} ${dim(s.slot!.does)}`);
   if (slots.some((s) => s.slot!.filled === "empty")) console.log(dim(`  fill them from a flow with graph [extends="${f.slug}"] and subgraph <slot> { ... }`));
-}
-
-/** The deps with the pool read from a named team's workspace. */
-const teamDeps = (deps: FlowDeps, team?: string): FlowDeps => (team ? { ...deps, readWorkspace: () => deps.readWorkspace(team) } : deps);
-
-/** The flows published to the workspace's pool (/cli/workflows/pool, flows.md FL2). */
-async function fetchPool(deps: FlowDeps): Promise<PushedPoolRow[]> {
-  const ws = await deps.readWorkspace();
-  const r = await deps.cliPost("/cli/workflows/pool", ws.kind === "team" ? { team_id: ws.teamId } : {});
-  return r?.flows ?? [];
-}
-
-/** The pool as this session sees it: the repo's, the shipped, and the workspace's published flows. */
-async function readPool(deps: FlowDeps) {
-  const pushed = await fetchPool(deps).catch(() => []);
-  return poolFlows(deps.realCwd(), await shortSessionId(deps.callingSession() ?? null, deps), pushed);
-}
-
-async function findFlow(slug: string, deps: FlowDeps, pool?: PoolFlow[]): Promise<FoundFlow> {
-  if (slug === "-") {
-    // A graph this session writes now: kept in the checkout as its draft, the library flows it names pinned beside it.
-    const { readStdin, writeSessionFlow } = await import("./workflow/sessionFlow.js");
-    const text = readStdin();
-    if (!text.trim()) { console.error("No graph on stdin: pipe a flow's digraph in, e.g. cast flow run - <<'EOF' ... EOF"); process.exit(1); }
-    const top = (spawnSync("git", ["-C", deps.realCwd(), "rev-parse", "--show-toplevel"], { encoding: "utf-8" }).stdout ?? "").trim() || deps.realCwd();
-    try {
-      const kept = writeSessionFlow(top, text, await shortSessionId(deps.callingSession() ?? null, deps), (pool ?? (await readPool(deps))));
-      return { ...describeFlow(kept.slug, kept.source, "repo", kept.file), source: kept.source };
-    } catch (err) {
-      console.error(`✗ ${err instanceof Error ? err.message : String(err)}`);
-      process.exit(1);
-    }
-  }
-  const abs = path.resolve(deps.realCwd(), slug);
-  if (fs.existsSync(abs) && fs.statSync(abs).isFile()) {
-    const source = fs.readFileSync(abs, "utf-8");
-    return { ...describeFlow(path.basename(abs).replace(/\.cast$/, ""), source, "repo", abs), source };
-  }
-  const f = (pool ?? (await readPool(deps))).find((p) => p.slug === slug.replace(/\.cast$/, ""));
-  if (!f) {
-    console.error(notFoundLine("flow", slug, "cast flow ls"));
-    process.exit(1);
-  }
-  return { ...f, source: f.file ? fs.readFileSync(f.file, "utf-8") : BUILTIN_WORKFLOW_TEMPLATES[f.slug] };
-}
-
-/** A script path, or a dynamic workflow run id whose script the session kept (`<session>/workflows/scripts/<name>-<wf_id>.js`). */
-function resolveScript(ref: string, cwd: string): string {
-  const abs = path.resolve(cwd, ref);
-  if (fs.existsSync(abs)) return abs;
-  if (/^wf_[\w-]+$/.test(ref)) {
-    const projects = path.join(process.env.HOME ?? "", ".claude", "projects");
-    for (const proj of fs.existsSync(projects) ? fs.readdirSync(projects) : []) {
-      const projDir = path.join(projects, proj);
-      for (const sess of fs.readdirSync(projDir)) {
-        const dir = path.join(projDir, sess, "workflows", "scripts");
-        if (!fs.existsSync(dir)) continue;
-        const hit = fs.readdirSync(dir).find((f) => f.endsWith(`-${ref}.js`));
-        if (hit) return path.join(dir, hit);
-      }
-    }
-  }
-  console.error(`No workflow script at ${ref} (a path, or a wf_ run id this machine ran)`);
-  process.exit(1);
-}
-
-/**
- * The args a kept script's run was launched with: the Workflow call in its
- * session's transcript (`<project>/<session>.jsonl`, beside `<session>/workflows/scripts/`)
- * whose script is this one. Undefined when the script was not kept by a session here.
- */
-function launchArgs(file: string, text: string): unknown {
-  const m = file.match(/^(.*)\/([^/]+)\/workflows\/scripts\/[^/]+$/);
-  if (!m) return undefined;
-  const transcript = path.join(m[1], `${m[2]}.jsonl`);
-  if (!fs.existsSync(transcript)) return undefined;
-  const base = path.basename(file);
-  let found: unknown;
-  for (const line of fs.readFileSync(transcript, "utf-8").split("\n")) {
-    if (!line.includes('"Workflow"') || !line.includes('"tool_use"')) continue;
-    try {
-      for (const b of JSON.parse(line)?.message?.content ?? []) {
-        if (b?.type !== "tool_use" || b.name !== "Workflow" || b.input?.args === undefined) continue;
-        if (b.input.script === text || String(b.input.scriptPath ?? "").endsWith(base)) found = b.input.args;
-      }
-    } catch {}
-  }
-  return found;
 }

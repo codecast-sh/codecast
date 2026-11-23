@@ -120,10 +120,12 @@
    header's width, the query container on [data-sv-convhead]) so it still
    holds a readable run of words. Level 6 folds the chips the overflow menu
    already repeats (the parent link and the branch map). Level 7 is the last:
-   the title drops its floor and gives up its last words first, and then the
-   action cluster gives way from its start (justify-end clips its leftmost
-   live pills), so share and the session menu, which repeats what the row
-   sheds, stay on screen in the narrowest pane.
+   the title drops its floor and gives up its last words first, the status's
+   wake line (what wakes a dormant session) keeps only its arrow and when,
+   and then the action cluster gives way from its start
+   (justify-end clips its leftmost live pills), so Ship, share and the session
+   menu, which repeats what the row sheds, stay on screen in the narrowest
+   pane.
 
    The row NEVER wraps. A header that grows to two lines is a bug, not a
    fallback: it moves the whole transcript down, and it reads as a broken
@@ -156,11 +158,17 @@
    menu at its end (see the level ladder above). The title still yields
    first: its shrink weight dwarfs the cluster's. */
 [data-sv-convhead] [data-squeeze~="7"] .cc-panel__title { flex-shrink: 1000; }
+[data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] { min-width: max-content; flex-shrink: 0; }
+[data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] :is([data-dormant-what], [data-dormant-sep]) { display: none; }
 [data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] {
   flex-shrink: 1;
   min-width: 0;
   justify-content: flex-end;
 }
+/* Ship is never what gives way: in the narrowest pane its chip moves to the
+   end of the cluster, before the session menu, where nothing clips it. */
+[data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] > [data-run-through] { order: 1; }
+[data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] > [aria-label="Session menu"] { order: 2; }
 /* The in-conversation search box sizes to the header, not the window: a
    narrow pane in a wide window keeps the narrow box. */
 [data-sv-convhead] [data-cc-conv-search-input] { width: 6rem; }
@@ -3675,6 +3683,18 @@ diffs-container {
   border-radius: 4px;
   margin: 4px 0;
 }
+/* An object page's header is one row exactly as tall as a conversation's
+   (the same --cc-panel-head-h the session header's .cc-panel__head reads),
+   whatever its icons and facts would otherwise stretch it to (ct-87448;
+   lib/__tests__/densityRules.guard.test.ts holds this). */
+.object-head-row {
+  display: flex;
+  align-items: center;
+  height: var(--cc-panel-head-h);
+  min-height: 0;
+  padding-block: 0;
+}
+.object-head-row > * { flex: 1 1 auto; min-width: 0; }
 /* Scope page header: in a narrow pane the reports-to link (also on the
    Settings tab) steps aside, so the name and state line keep their width. */
 .scope-head-cq { container-type: inline-size; }
@@ -6910,6 +6930,28 @@ p:has(.object-reveal-slot[data-reveal-inline])::after, li:has(.object-reveal-slo
   padding-block: 2px !important;
   font-size: var(--fs-meta);
 }
+/* A reference in running text is a run of words, not a box: it takes the
+   line's own height, its title wraps at the column edge like the words
+   around it, and a wrapped reference keeps its tint and rounding on each
+   piece. Its icon hangs on the text's baseline at the text's size, so a
+   line holding one is exactly as tall as a line without (ct-87448;
+   lib/__tests__/densityRules.guard.test.ts holds this). */
+.entity-ref--flow {
+  display: inline;
+  /* The break between the icon and the title is the link's to allow, and it
+     never does; the title itself wraps (.entity-ref__label below). */
+  white-space: nowrap;
+  line-height: inherit;
+  padding-block: 0;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
+}
+.entity-ref--flow .entity-ref__label { white-space: normal; }
+.entity-ref--flow .entity-ref__icon {
+  vertical-align: -0.125em;
+  height: 1em;
+  margin-right: 0.2em;
+}
 /* A pill that can reveal is split in two: the label is the link, and the
    caret after it is its own button that opens the full page in a band under
    the line. The two halves share one fill; a hairline and the caret's own
@@ -7481,7 +7523,9 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
    components/conversation/blocks/ModernRow.tsx): one line of 16px icon, a
    verb, the object in mono and a quiet result at the right, then a chevron
    when the row opens. Rows sit tight with no card around each; what opens
-   lands on a tinted panel under the words. A failed row turns red and its
+   lands on a tinted panel under the words. A row is its 20px line and 2px
+   above and below: 24px, the smallest target a stacked row can be (WCAG
+   2.5.8), and no taller (ct-87448; densityRules.guard.test.ts holds it). A failed row turns red and its
    result says what failed. */
 .modern-style [data-sv-feed] [data-cc-row] {
   margin-top: 0;
@@ -7501,9 +7545,9 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   align-items: baseline;
   gap: 8px;
   min-width: 0;
-  min-height: 28px;
+  min-height: 24px;
   margin: 0 -8px;
-  padding: 4px 8px;
+  padding: 2px 8px;
   border: 0;
   border-radius: var(--radius-control, 6px);
   background: transparent;
@@ -7611,7 +7655,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   background: transparent;
   font-family: var(--font-mono), monospace;
   font-size: var(--fs-meta);
-  line-height: 20px;
+  line-height: 18px; /* the 12px mono on the 13px verb's baseline stays inside its 20px line */
   font-weight: 400;
   font-style: normal;
   color: var(--sol-text-muted);
@@ -7641,7 +7685,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   border-radius: 0;
   background: transparent;
   font-size: var(--fs-meta);
-  line-height: 20px;
+  line-height: 18px;
   font-weight: 400;
   font-style: normal;
   letter-spacing: normal;
@@ -7659,7 +7703,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   background: transparent;
   font-family: var(--font-ui);
   font-size: var(--fs-meta);
-  line-height: 20px;
+  line-height: 18px;
   font-weight: 400;
   letter-spacing: normal;
   text-transform: none;
@@ -7916,7 +7960,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  margin: -4px 0;
+  margin: -2px 0;
 }
 .modern-style [data-sv-feed] [data-cc-row-head] [data-cc-path] { vertical-align: top; }
 .modern-style [data-sv-feed] :is([data-cc-block], [data-cc-session-msg], [data-cc-row="brief"], [data-cc-row="chat"], [data-cc-row="huddle"]) {

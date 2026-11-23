@@ -17,8 +17,9 @@
  */
 
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { execFileAsync, spawn } from "../proc.js";
+import { execFileAsync, spawn, type ChildProcess } from "../proc.js";
 import { SESSION_TRAILER_KEY, sessionTrailerValue } from "@codecast/shared/blame";
 import { isCredentialFilePath, liveVendorToken, PRIVATE_KEY_RE } from "../secretPatterns.js";
 import { readSessionLinkCache } from "../localConversationMap.js";
@@ -161,6 +162,11 @@ function mtimeOf(root: string, p: string): number {
   try { return fs.statSync(path.join(root, p)).mtimeMs; } catch { return 0; }
 }
 
+/** Since when a dirty file's writer can be found: its oldest mtime, less a minute, within the attribution horizon. */
+export function attributionSince(root: string, paths: string[], now = Date.now()): number {
+  return Math.max(oldestMtime(root, paths) - 60_000, now - ATTRIBUTION_HORIZON_MS);
+}
+
 function oldestMtime(root: string, paths: string[]): number {
   let oldest = Date.now();
   for (const p of paths) {
@@ -196,7 +202,7 @@ export async function freezeAndAttribute(root: string, upstream: string, log: Lo
   const frozen = await freezeWorktree(root);
   const paths = frozen.changes.map((c) => c.path);
   log(`froze ${paths.length} changed file(s) at ${frozen.tree.slice(0, 9)}`);
-  const since = Math.max(oldestMtime(root, paths) - 60_000, Date.now() - ATTRIBUTION_HORIZON_MS);
+  const since = attributionSince(root, paths);
   const attribution = attributeEdits(root, paths, { since });
   log(`attributed ${attribution.owners.size}/${paths.length} to ${attribution.sessions.length} session(s) in ${attribution.tookMs}ms`);
   const texts = await readBlobs(root, frozen.changes.map((c) => c.blob ?? ""));
@@ -210,7 +216,10 @@ export async function freezeAndAttribute(root: string, upstream: string, log: Lo
   return { frozen, paths, attribution, credentials, stale };
 }
 
-export async function makePlan(root: string, opts: { roster?: (ids: string[]) => Promise<RosterRow[] | null>; fetch?: boolean; log?: Log } = {}): Promise<ShipPlan> {
+export type FrozenAttribution = Awaited<ReturnType<typeof freezeAndAttribute>>;
+
+/** The pass's plan; `frozen` plans a freeze already taken (a flow's checkout change keeps its per-file reasons). */
+export async function makePlan(root: string, opts: { roster?: (ids: string[]) => Promise<RosterRow[] | null>; fetch?: boolean; log?: Log; frozen?: FrozenAttribution } = {}): Promise<ShipPlan> {
   const log = opts.log ?? (() => {});
   const spec = shipSpec(root);
   const upstream = await upstreamRef(root);
@@ -219,7 +228,7 @@ export async function makePlan(root: string, opts: { roster?: (ids: string[]) =>
     await gitTry(root, ["fetch", "--quiet", remote, branch]);
   }
 
-  const { frozen, paths, attribution, credentials: held, stale } = await freezeAndAttribute(root, upstream, log);
+  const { frozen, paths, attribution, credentials: held, stale } = opts.frozen ?? await freezeAndAttribute(root, upstream, log);
   const owning = [...new Set([...attribution.owners.values()].map((s) => s.conversationId?.slice(0, 7)).filter((id): id is string => !!id))];
   const rows = opts.roster && owning.length ? await opts.roster(owning).catch(() => null) : null;
   const roster = new Map((rows ?? []).filter((r) => r.short_id).map((r) => [r.short_id!, r]));
@@ -330,6 +339,48 @@ export interface RunOptions {
   log?: Log;
   /** Overridable for tests. */
   exec?: (command: string, cwd: string, log: Log, env?: Record<string, string>) => Promise<{ code: number; output: string }>;
+  /** The repository's lease (land/repoLease.ts), held from the first before-push deploy through the push, so a Merge
+   *  station's deploy and merge, on any machine, never land between them; returns its release. */
+  lease?: (log: Log) => Promise<() => Promise<void>>;
+}
+
+/** What a deploy step's push did to its target, as the step reports it (packages/convex/deploy.sh writes it). */
+export type PushChanges = { machine?: string; via?: "deploy.sh"; adds?: string[]; drops?: string[]; changes_read_at?: number; pushed_at?: number };
+
+/**
+ * Run a deploy step with a file it may fill with what its push put on its
+ * target and took off it (`{ adds, drops, read_at }`, named in CAST_PUSH_CHANGES_FILE).
+ * The ship records the deploy, so these ride on its record; a step that
+ * writes nothing reports nothing.
+ */
+export async function runDeployStep(
+  run: (env: Record<string, string>) => Promise<{ code: number; output: string }>,
+): Promise<{ code: number; output: string; changes: PushChanges }> {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "cast-push-"));
+  const file = path.join(dir, "changes.json");
+  try {
+    const r = await run({ CAST_PUSH_CHANGES_FILE: file });
+    // The step's push went out by now; the ship records the deploy only after its own push and later steps.
+    const pushedAt = Date.now();
+    let changes: PushChanges = {};
+    try {
+      const raw = JSON.parse(fs.readFileSync(file, "utf-8"));
+      if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+        // Any object says the step is a push that reports itself: where it came from and when it went out, always.
+        changes = { machine: os.hostname(), via: "deploy.sh", pushed_at: pushedAt };
+        // Both lists, empty or not, only when its diff ran: their presence says so.
+        if (Array.isArray(raw.adds) && Array.isArray(raw.drops)) {
+          const names = (v: unknown[]) => v.filter((x): x is string => typeof x === "string");
+          // read_at: when the diff read prod, so a later push's record can say what it knew.
+          const readAt = typeof raw.read_at === "number" && Number.isFinite(raw.read_at) ? raw.read_at : undefined;
+          changes = { ...changes, adds: names(raw.adds), drops: names(raw.drops), ...(readAt ? { changes_read_at: readAt } : {}) };
+        }
+      }
+    } catch { /* the step wrote nothing */ }
+    return { ...r, changes };
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 export interface ShipOutcome {
@@ -343,17 +394,19 @@ export interface ShipOutcome {
   level?: LevelResult;
   check?: { command: string; ok: boolean; ignored?: string[]; output?: string };
   /** Each deploy step's result; a step that names a target records a deploy of it (deploys.md DP11). */
-  deploys: Array<{ name: string; stage: string; ok: boolean; output?: string; target?: string; dirty?: number }>;
+  deploys: Array<{ name: string; stage: string; ok: boolean; output?: string; target?: string; dirty?: number } & PushChanges>;
   /** The upstream commit the pass replayed onto. */
   base?: string;
   import_gaps?: string[];
   pr?: string;
 }
 
-/** Run a shell command, streaming nothing, capturing the tail of its output. */
-export function runShell(command: string, cwd: string, log: Log, env: Record<string, string> = {}): Promise<{ code: number; output: string }> {
+/** Run a shell command, streaming nothing, capturing the tail of its output. Given `onChild`, the command runs in a
+ *  process group of its own, handed over so a caller can stop the whole group (the Merge station on SIGTERM). */
+export function runShell(command: string, cwd: string, log: Log, env: Record<string, string> = {}, onChild?: (child: ChildProcess) => void): Promise<{ code: number; output: string }> {
   return new Promise((resolve) => {
-    const child = spawn("/bin/bash", ["-c", command], { cwd, env: { ...process.env, CAST_SHIP: "1", ...env } });
+    const child = spawn("/bin/bash", ["-c", command], { cwd, env: { ...process.env, CAST_SHIP: "1", ...env }, ...(onChild ? { detached: true } : {}) });
+    onChild?.(child);
     let output = "";
     const take = (b: Buffer) => { output = (output + b.toString()).slice(-200_000); };
     child.stdout.on("data", take);
@@ -365,7 +418,8 @@ export function runShell(command: string, cwd: string, log: Log, env: Record<str
   });
 }
 
-function trailerFor(group: ShipGroup): string {
+/** The Codecast-Session trailer for a group's commit, when its session is team visible; else nothing. */
+export function trailerFor(group: Pick<ShipGroup, "session">): string {
   const conversationId = group.session?.conversation_id;
   if (!conversationId) return "";
   const links = readSessionLinkCache();
@@ -465,6 +519,7 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
   const problems = await validatePlan(root, plan);
   if (problems.length) return fail("plan", problems.join("\n"));
   const release = lock(gitDir);
+  let leased: (() => Promise<void>) | null = null;
   try {
     const shipping = plan.groups.filter((g) => g.ship && g.paths.length);
     out.held = plan.groups.filter((g) => !g.ship && g.paths.length).map((g) => ({ group: g.id, paths: g.paths, ...(g.note ? { note: g.note } : {}) }));
@@ -565,12 +620,13 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
 
     // 6. Deploys that must precede the push (a backend the pushed client calls).
     const steps = opts.noDeploy ? [] : deploysFor(spec.deploy, shippedPaths);
+    if (opts.lease && steps.some((s) => s.stage === "before_push")) leased = await opts.lease(log);
     for (const step of steps.filter((s) => s.stage === "before_push")) {
       out.stage = "deploy";
       log(`deploying ${step.name}: ${step.run}`);
       const dirty = step.target ? await dirtyUnder(root, step.when) : 0;
-      const r = await exec(step.run, root, log, { ...shipEnv, CAST_SHIP_TIP: tip });
-      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(step.target ? { target: step.target } : {}), ...(dirty ? { dirty } : {}), ...(r.code ? { output: r.output.slice(-6000) } : {}) });
+      const r = await runDeployStep((env) => exec(step.run, root, log, { ...shipEnv, CAST_SHIP_TIP: tip, ...env }));
+      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(step.target ? { target: step.target } : {}), ...(dirty ? { dirty } : {}), ...(r.code === 0 ? r.changes : {}), ...(r.code ? { output: r.output.slice(-6000) } : {}) });
       if (r.code !== 0) return fail("deploy", `${step.name} failed before the push; nothing was pushed`);
     }
 
@@ -597,17 +653,20 @@ export async function runPlan(plan: ShipPlan, opts: RunOptions = {}): Promise<Sh
     await relabelCommits(root, upstreamSha, tip, out);
     await gitTry(root, ["update-ref", `refs/remotes/${upstream}`, tip]);
     log(`pushed ${tip.slice(0, 9)} to ${upstream}`);
+    await leased?.();
+    leased = null;
 
     // 8. The rest of the deploys.
     for (const step of steps.filter((s) => s.stage === "after_push")) {
       out.stage = "deploy";
       log(`deploying ${step.name}: ${step.run}`);
-      const r = await exec(step.run, root, log, { ...shipEnv, CAST_SHIP_TIP: tip });
-      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(step.target ? { target: step.target } : {}), ...(r.code ? { output: r.output.slice(-6000) } : {}) });
+      const r = await runDeployStep((env) => exec(step.run, root, log, { ...shipEnv, CAST_SHIP_TIP: tip, ...env }));
+      out.deploys.push({ name: step.name, stage: step.stage, ok: r.code === 0, ...(step.target ? { target: step.target } : {}), ...(r.code === 0 ? r.changes : {}), ...(r.code ? { output: r.output.slice(-6000) } : {}) });
       if (r.code !== 0) return { ...out, ok: false, stage: "deploy", reason: `pushed, but ${step.name} failed` };
     }
     return { ...out, ok: true, stage: "done" };
   } finally {
+    await leased?.();
     release();
   }
 }

@@ -33,7 +33,9 @@ export function unplacedCountLine(u: UnplacedView): string {
   return parts.length ? `${parts.join(" · ")}${u.truncated ? " (a floor)" : ""}` : "nothing: every live plan and project reaches a goal";
 }
 
-export function unplacedLines(u: UnplacedView | null | undefined, now: number, indent = "  "): string[] {
+/** `unread`: the reading failed and the rest of the answer came back without it; the line says so. */
+export function unplacedLines(u: UnplacedView | null | undefined, now: number, indent = "  ", unread?: string): string[] {
+  if (unread) return [`${indent}${fmt.muted("unplaced:")} ${fmt.warning(`not read (${unread})`)}`];
   if (!u) return [];
   const out = [`${indent}${fmt.muted("unplaced:")} ${unplacedCountLine(u)}`];
   const more = (n: number) => (n > SHOWN ? [`${indent}  ${fmt.muted(`+${n - SHOWN} more (--json)`)}`] : []);

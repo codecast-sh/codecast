@@ -78,12 +78,12 @@ export const railMessagesSig = makeCollectionSig<ChatMessageRow>(
 );
 
 /** What a session PERSONA on a chat line renders (chatViews sessionAuthorFor):
- *  the session's current title and agent, keyed by session id. Sessions
+ *  the session's current title and agent, keyed by conversation and session id. Sessions
  *  heartbeat about once a second, so the transcript must never subscribe to the
  *  raw collection — this wakes it only when a session is renamed, retyped, or
  *  appears. */
 export const sessionOriginSig = makeCollectionSig<any>(
-  (s) => `${s.session_id ?? ""}|${s.display_title || s.title || ""}|${s.agent_type ?? ""}|${identitySig(s)}`,
+  (s) => `${s._id ?? ""}|${s.session_id ?? ""}|${s.display_title || s.title || ""}|${s.agent_type ?? ""}|${identitySig(s)}`,
 );
 
 /** Role seats: what a role's standing agent's chat lines show (seatAuthorFor). */

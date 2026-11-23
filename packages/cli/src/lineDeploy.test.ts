@@ -4,7 +4,9 @@ import os from "node:os";
 import path from "node:path";
 import { parseWorkflowSource, validateWorkflow } from "./workflow/parser";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates";
-import { deployEnv, deployFailureSignal, expandDeployCommand, failedStep, followJobs, jobsVerdict, returnDeploy, runDeployStep, waitForCi, watchDeploy } from "./lineDeploy";
+import { spawnSync } from "node:child_process";
+import { deployEnv, deployFailureSignal, devPushLine, expandDeployCommand, failedStep, followJobs, formatDeploy, formatTargets, jobsVerdict, pinnedSha, returnDeploy, runDeployStep, waitForCi, watchDeploy } from "./lineDeploy";
+import { askUntilRead, releaseRequest, requestShaFor } from "./deployCommand";
 
 // The line's deploy stage (deploys.md DP2, DP8, DP9): each step runs a
 // profile command with no model keys, judges one sha, and a failed one comes
@@ -142,10 +144,15 @@ describe("watch and return", () => {
 describe("following the deploy path's own run", () => {
   const jobs = (...j: Array<[string, string, string | null]>) => j.map(([name, status, conclusion]) => ({ name, status, conclusion, databaseId: 7 }));
 
-  test("named jobs pass when they pass, fail when one fails or was skipped, and wait otherwise", () => {
+  test("named jobs pass when they pass, fail when one fails, and wait otherwise", () => {
     expect(jobsVerdict(jobs(["gate", "completed", "success"], ["evals", "completed", "success"]), ["gate", "evals"], false).state).toBe("passed");
-    // A gate that failed leaves the rollout job skipped: no rollout happened.
-    expect(jobsVerdict(jobs(["deploy", "completed", "skipped"]), ["deploy"], true)).toMatchObject({ state: "failed", detail: "deploy ended skipped" });
+    // A gate that failed leaves the rollout job skipped: the run ends failed, and no rollout happened.
+    expect(jobsVerdict(jobs(["deploy", "completed", "skipped"]), ["deploy"], true, "failure")).toMatchObject({ state: "failed", detail: "deploy was skipped: the run ended failure, so a job it needs did not pass" });
+    // While the run goes on (Union's finalize runs after a failed deploy), a skip cannot be told apart yet.
+    expect(jobsVerdict(jobs(["deploy", "completed", "skipped"]), ["deploy"], false).state).toBe("waiting");
+    // A job its workflow chose not to run (its if: said no) in a run that passed: passed, and said.
+    expect(jobsVerdict(jobs(["gate", "completed", "skipped"], ["evals", "completed", "success"]), ["gate", "evals"], true, "success")).toEqual({ state: "passed", detail: "gate: skipped by the workflow, evals: success" });
+    expect(jobsVerdict(jobs(["deploy", "completed", "cancelled"]), ["deploy"], true, "cancelled").state).toBe("failed");
     expect(jobsVerdict(jobs(["gate", "completed", "success"], ["evals", "in_progress", null]), ["gate", "evals"], false).state).toBe("waiting");
     expect(jobsVerdict(jobs(["gate", "completed", "failure"]), ["gate", "evals"], false)).toMatchObject({ state: "failed" });
     expect(jobsVerdict(jobs(["gate", "completed", "success"]), ["gate", "evals"], true)).toMatchObject({ state: "failed", detail: "the run finished with no job named evals" });
@@ -166,11 +173,145 @@ describe("following the deploy path's own run", () => {
     expect(await followJobs({ url: null, jobs: ["deploy"], gh, log: () => {} })).toBe(1);
   });
 
+  test("follow: a job the workflow skipped in a run that passed passes and says so; one the run failed past fails", async () => {
+    const view = (conclusion: string, jobs: Array<[string, string]>) => JSON.stringify({ status: "completed", conclusion, jobs: jobs.map(([name, c]) => ({ name, status: "completed", conclusion: c })) });
+    const out: string[] = [];
+    const passed = await followJobs({ url: "https://github.com/acme/app/actions/runs/7", jobs: ["gate", "evals"], gh: () => ({ code: 0, out: view("success", [["gate", "skipped"], ["evals", "success"]]) }), sleep: async () => {}, log: (l) => out.push(l) });
+    expect(passed).toBe(0);
+    expect(out).toEqual(["gate: skipped by the workflow, evals: success"]);
+    const failed = await followJobs({ url: "https://github.com/acme/app/actions/runs/7", jobs: ["deploy"], gh: () => ({ code: 0, out: view("failure", [["gate", "failure"], ["deploy", "skipped"]]) }), sleep: async () => {}, log: (l) => out.push(l) });
+    expect(failed).toBe(1);
+    expect(out.at(-1)).toBe("deploy was skipped: the run ended failure, so a job it needs did not pass");
+  });
+
   test("ci waits for the named workflow's newest finished run on the sha", async () => {
     const lists = [[], [{ status: "completed", conclusion: "success", url: "https://ci/1", startedAt: "2026-10-22T10:00:00Z" }]];
     const code = await waitForCi({ sha: "abc1234def", workflow: "ci.yml", repo: "acme/app", gh: () => ({ code: 0, out: JSON.stringify(lists.shift()) }), sleep: async () => {}, log: () => {} });
     expect(code).toBe(0);
     const red = await waitForCi({ sha: "abc1234def", workflow: "ci.yml", repo: "acme/app", gh: () => ({ code: 0, out: JSON.stringify([{ status: "completed", conclusion: "failure", url: "https://ci/2", startedAt: "x" }]) }), sleep: async () => {}, log: () => {} });
     expect(red).toBe(1);
+  });
+});
+
+describe("a deploy.toml written for a newer cast", () => {
+  test("its unknown keys are named, and the targets still read", async () => {
+    const { parseDeployTargetsText, deployTargetWarnings } = await import("./workspace/deployTargetsFile");
+    const entries = parseDeployTargetsText(`[[target]]\nname = "production"\nrun = "./deploy.sh"\ncanary = "x"\n`, []);
+    expect(entries.map((e) => e.target.name)).toEqual(["production"]);
+    expect(deployTargetWarnings(entries)).toEqual([".codecast/deploy.toml: target production: 'canary' is not a key this cast reads, so it is ignored (a newer cast's step? cast update; a typo? fix it)"]);
+  });
+});
+
+// `cast deploy --sha 3117e08fd` once made dp-2322 of main's head: the request named no sha, and the first step took
+// origin's head. A deploy that names its sha runs every step on it.
+describe("a deploy pinned to a commit", () => {
+  test("every step, CI first, runs on the deploy's own sha, not origin's head", async () => {
+    const s = fakeServer({ sha: "3117e08fd0000000000000000000000000000000", status: "requested" });
+    const ran: string[] = [];
+    const exec = async (cmd: string, env: NodeJS.ProcessEnv) => { ran.push(`${cmd} | ${env.CAST_DEPLOY_SHA}`); return 0; };
+    const head = () => ({ sha: "cd98ab98c0000000000000000000000000000000", branch: "main" });
+    for (const step of ["ci", "send"] as const) {
+      await runDeployStep({ step, deploy: "dp-3", root: tmp(), profile: { command: "./send.sh $sha", ci: "cast line deploy ci --sha $sha" }, read: s.read, post: s.post, exec, head, log: () => {} });
+    }
+    expect(ran).toEqual([
+      "cast line deploy ci --sha '3117e08fd0000000000000000000000000000000' | 3117e08fd0000000000000000000000000000000",
+      "./send.sh '3117e08fd0000000000000000000000000000000' | 3117e08fd0000000000000000000000000000000",
+    ]);
+    expect(s.posts.find(([p]) => p === "/cli/line/deploy/report")?.[1]).toMatchObject({ status: "running", sha: "3117e08fd0000000000000000000000000000000" });
+  });
+
+  test("cast deploy --sha asks for that commit; with none, the server sends main's head", () => {
+    expect(releaseRequest("acme/app", "cli", "3117e08fd0000000000000000000000000000000", false)).toEqual({ repository: "acme/app", target: "cli", action: "deploy", sha: "3117e08fd0000000000000000000000000000000" });
+    expect(releaseRequest("acme/app", "web", null, true)).toEqual({ repository: "acme/app", target: "web", action: "deploy", here: true });
+  });
+
+  test("the named commit is read in full, and refused when it is not on origin's default branch", () => {
+    const root = fs.realpathSync(tmp());
+    const git = (...a: string[]) => spawnSync("git", ["-C", root, "-c", "user.email=t@t", "-c", "user.name=t", ...a], { encoding: "utf8" }).stdout.trim();
+    git("init", "-q", "-b", "main");
+    git("commit", "-q", "--allow-empty", "-m", "a");
+    const a = git("rev-parse", "HEAD");
+    git("update-ref", "refs/remotes/origin/main", a);
+    git("checkout", "-q", "-b", "side");
+    git("commit", "-q", "--allow-empty", "-m", "b");
+    const b = git("rev-parse", "HEAD");
+    expect(pinnedSha(root, a.slice(0, 9), "main")).toEqual({ sha: a });
+    expect(pinnedSha(root, b.slice(0, 9), "main")).toEqual({ error: `${b.slice(0, 10)} is not on origin/main: a deploy makes a commit of the default branch live, so land it there first` });
+    expect(pinnedSha(root, "0123456789", "main")).toEqual({ error: "0123456789 is not a commit in this checkout: fetch it, or name it by a longer sha" });
+  });
+});
+
+describe("a release with no --sha", () => {
+  test("pins the head it was planned at for a target whose command takes $sha, and nothing else", () => {
+    const planned = "b".repeat(40);
+    expect(requestShaFor({ command: "./deploy.sh --sha $sha" }, { pinned: null, planned, carrying: false })).toBe(planned);
+    // Sends the tree it runs in: it ships what it holds, so pinning would only refuse it.
+    expect(requestShaFor({ command: "scripts/cut-cli-release.sh" }, { pinned: null, planned, carrying: false })).toBeNull();
+    // A change flow's Deploy: main's head, whatever it carries.
+    expect(requestShaFor({ command: "./deploy.sh --sha $sha" }, { pinned: null, planned, carrying: true })).toBeNull();
+    // --sha names the commit for every target; the server refuses a tree-sending one it cannot send.
+    expect(requestShaFor({ command: "scripts/cut-cli-release.sh" }, { pinned: "c".repeat(40), planned, carrying: false })).toBe("c".repeat(40));
+  });
+
+  test("a head codecast has not read yet is asked for again, up to the wait; any other refusal is not", async () => {
+    let t = 0;
+    let calls = 0;
+    const log: string[] = [];
+    const notYet = new Error("bbbb is not a commit on acme/app's default branch as codecast has read it: push it ...");
+    const ask = async () => { calls++; if (calls < 3) throw notYet; return { short_id: "dp-9" }; };
+    expect(await askUntilRead(ask, { sleep: async (ms) => { t += ms; }, now: () => t, log: (l) => log.push(l) })).toEqual({ short_id: "dp-9" });
+    expect([calls, t, log.length]).toEqual([3, 20_000, 1]);
+    t = 0;
+    await expect(askUntilRead(async () => { throw notYet; }, { sleep: async (ms) => { t += ms; }, now: () => t })).rejects.toThrow("as codecast has read it");
+    expect(t).toBe(120_000);
+    let other = 0;
+    await expect(askUntilRead(async () => { other++; throw new Error("dp-8 is already going out to cli"); }, { sleep: async () => {}, now: () => 0 })).rejects.toThrow("already going out");
+    expect(other).toBe(1);
+  });
+});
+
+describe("cast line deploy show", () => {
+  const base = { short_id: "dp-9", target: "backend", sha: "7975db5eed352f8839223ea71023225380a5af86", status: "live", live_at: 1, trigger: "outside", source: "cast ship mark", started_by: { name: "Ashot" }, carries: [] };
+
+  test("a push from uncommitted files says so, with where it came from and what it changed", () => {
+    const text = formatDeploy({ ...base, dirty: 78, pushed_via: "deploy.sh", machine: "MacBook-Pro-182", adds: ["table:voiceprints", "index:voiceprints.by_user"], drops: ["fn:old:gone"] });
+    expect(text).toContain("pushed by deploy.sh on MacBook-Pro-182 · 78 uncommitted files went out with 7975db5");
+    expect(text).toContain("added 2\n  table:voiceprints\n  index:voiceprints.by_user");
+    expect(text).toContain("dropped 1\n  fn:old:gone");
+  });
+
+  test("a clean deploy reads as before", () => {
+    const text = formatDeploy(base);
+    expect(text).not.toContain("pushed");
+    expect(text).not.toContain("added");
+    expect(text).toContain("carried 0");
+  });
+
+  test("a long list is cut at twenty", () => {
+    const adds = Array.from({ length: 25 }, (_, i) => `fn:m:f${i}`);
+    expect(formatDeploy({ ...base, adds })).toContain("… and 5 more");
+  });
+});
+
+describe("cast line deploy targets", () => {
+  const NOW = 1_700_000_000_000;
+  const queue = { known: true, commits: 0, untouched: 0, groups: [], shown: 0, head_ci: "passed" };
+  const live = { short_id: "dp-9", sha: "7975db5eed352f88", live_at: NOW - 3_600_000, created_at: NOW - 3_600_000 };
+  const push = { sha: "1a2b3c4d5e", machine: "ana-mac", by: "Ana", at: NOW - 3 * 60_000, dirty: 2, adds_count: 0, drops_count: 0 };
+
+  test("a dev push on top of the live deploy reads as one line under it", () => {
+    const lines = formatTargets({ targets: [{ name: "backend", live, open: null, queue, dev_push: push }] }, NOW).split("\n");
+    expect(lines[0]).toStartWith("backend  live: dp-9 7975db5ee");
+    expect(lines[1]).toBe("  uncommitted push · ana-mac · Ana · 3m ago · 2 files");
+    expect(lines[2]).toBe("  nothing waiting");
+  });
+
+  test("with no dev push, nothing is added", () => {
+    expect(formatTargets({ targets: [{ name: "backend", live, open: null, queue, dev_push: null }] }, NOW)).not.toContain("push");
+  });
+
+  test("what the push added and dropped, and a clean tree's sha", () => {
+    expect(devPushLine({ ...push, by: null, adds_count: 1, drops_count: 2 }, NOW)).toBe("uncommitted push · ana-mac · 3m ago · 2 files · added 1 · dropped 2");
+    expect(devPushLine({ ...push, dirty: 0, at: NOW - 5_000 }, NOW)).toBe("dev push of 1a2b3c4 · ana-mac · Ana · just now");
   });
 });

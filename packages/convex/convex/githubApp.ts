@@ -1096,6 +1096,7 @@ async function ingestPull(
       updated_at: pull.updated_at ?? Date.now(),
       merged_at: pull.merged_at ?? undefined,
       closed_at: pull.closed_at ?? undefined,
+      ...(pull.merge_commit_sha ? { merge_commit_sha: pull.merge_commit_sha } : {}),
     },
   );
   if (pull.state !== "open" || !result.created) return result;

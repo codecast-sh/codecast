@@ -528,12 +528,26 @@ function settleSend(clientId: string, outcome: string | Error) {
  * raw Convex error and stack as a crash toast.
  */
 function driveChatSend(
-  get: () => { dispatchChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => unknown },
+  get: () => {
+    dispatchChatSend: (channelId: string, content: string, clientId: string, opts?: ChatSendOptions) => unknown;
+    markChatSendFailed: (rowId: string, reason?: string) => void;
+  },
   channelId: string,
   content: string,
   clientId: string,
   opts?: ChatSendOptions,
 ): Promise<ChatSendResult | undefined> | undefined {
+  // chat.sendMessage refuses a line with no text and no attachment, and the
+  // outbox would re-drive that refusal forever. Hold it back here, where every
+  // send, retry and edit of an unsent line passes (ct-91208). A row already on
+  // screen is marked failed with the server's reason, so the person sees why
+  // and discard stays the way out.
+  if (!content.trim() && !opts?.attachments?.length) {
+    const reason = "A message needs text or an attachment";
+    get().markChatSendFailed(clientId, reason);
+    settleSend(clientId, new Error(reason));
+    return undefined;
+  }
   // (The impl type says void because the BODY returns nothing; the middleware
   // wraps an asyncAction to resolve with the dispatch result.)
   const sent = get().dispatchChatSend(channelId, content, clientId, opts) as Promise<ChatSendResult | undefined> | undefined;
@@ -648,6 +662,8 @@ export type ChatSliceActions = {
    *  caller mints the client id (newPageCommentClientId) because the dispatch
    *  effect reads it from this one argument object. */
   addPageComment: (o: { artifactId: string; text: string; parentId?: string; clientId: string }) => void;
+  /** The page owner resolving (or reopening) one comment on its discussion. */
+  resolvePageComment: (artifactId: string, commentId: string, resolved: boolean) => void;
   /** Drop local rows a fresh listMine page no longer returns (revoked access). */
   pruneThreadInbox: (keepIds: string[], teamId: string | undefined | null, floorActivityAt: number) => void;
   setChannelNotifyLevel: (channelId: string, level: ChatNotifyLevel) => void;
@@ -1291,6 +1307,11 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
       }
     }),
 
+    resolvePageComment: action(function (this: ChatDraft, artifactId: string, commentId: string, resolved: boolean) {
+      const c = this.pageThreads[artifactId]?.comments.find((x) => x._id === commentId);
+      if (c) c.status = resolved ? "resolved" : "open";
+    }),
+
     updateChatChannel: action(function (this: ChatDraft, channelId: string, fields: { name?: string; topic?: string }) {
       const channel = this.chatChannels[channelId];
       if (!channel) return;
@@ -1533,11 +1554,6 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
 /** Spread into SYNC_REGISTRY. Every collection is a delta overlay so one
  *  channel's page never prunes another's, and the two collections with an
  *  optimistic create carry the altKey that supersedes their stub. */
-/** Client id for an optimistic page comment (the server dedupes on it). */
-export function newPageCommentClientId(): string {
-  return `pagecmt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-}
-
 /** A delta table's exclude tombstone never clears on its own (absence is not
  *  deletion there), so a room retired locally (retireChannelRows) would stay
  *  hidden even after the server sends it again. Here the server's word wins: a

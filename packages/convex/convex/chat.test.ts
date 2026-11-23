@@ -654,9 +654,10 @@ describe("unread state", () => {
     const older = await call(sendMessage, alice, { channel_id: CHANNEL, content: "older" });
     messagesIn(ctx)[0].created_at = 1_000;
     await call(markRead, ctx, { channel_id: CHANNEL });
-    const at = ctx.db._tables.chat_reads[0].last_read_at;
+    const bobRead = () => ctx.db._tables.chat_reads.find((r: any) => r.user_id === BOB && r.channel_id === CHANNEL);
+    const at = bobRead().last_read_at;
     await call(markRead, ctx, { channel_id: CHANNEL, last_read_message_id: older.message_id });
-    expect(ctx.db._tables.chat_reads[0].last_read_at).toBe(at);
+    expect(bobRead().last_read_at).toBe(at);
   });
 
   test("a message from another channel cannot move this channel's mark, and is not refused", async () => {
@@ -665,14 +666,15 @@ describe("unread state", () => {
     await call(sendMessage, alice, { channel_id: CHANNEL, content: "here" });
     messagesIn(ctx)[0].created_at = 1_000;
     await call(markRead, ctx, { channel_id: CHANNEL });
-    const before = { ...ctx.db._tables.chat_reads[0] };
+    const bobRead = () => ctx.db._tables.chat_reads.find((r: any) => r.user_id === BOB && r.channel_id === CHANNEL);
+    const before = { ...bobRead() };
     const elsewhere = await call(sendMessage, alice, {
       channel_id: OTHER_CHANNEL, content: "over here",
     });
     const result = await call(markRead, ctx, {
       channel_id: CHANNEL, last_read_message_id: elsewhere.message_id,
     });
-    const after = ctx.db._tables.chat_reads.find((r: any) => r.channel_id === CHANNEL);
+    const after = bobRead();
     expect(after.last_read_at).toBe(before.last_read_at);
     expect(after.last_read_message_id).toBe(before.last_read_message_id);
     expect(result.last_read_at).toBe(before.last_read_at);
@@ -1407,6 +1409,65 @@ describe("the anchor in a thread", () => {
     expect(outsider.session_relay.skipped).toBe("no_access");
     expect(ctx.db._tables.pending_messages.length).toBe(2);
   });
+
+  test("a person's line at the top of a DM answers the session that posted there last", async () => {
+    // A session running as Bob DMs Alice a question; Alice answers at the top
+    // of the DM, not in its thread. The answer reaches the session, which
+    // answers at the top too, and its thinking row waits there.
+    const DM = "chat_channels_dm_pair" as any;
+    const seed = anchorTeamSeed({
+      conversations: [
+        { _id: CONV, user_id: BOB, title: "Anchor", status: "active", updated_at: 1 },
+        { _id: "conv-bob", user_id: BOB, session_id: "sess-bob", short_id: "jx7bobb", title: "<pasted_content id=\"375a\">\nRequested by Alice", agent_type: "claude_code", status: "active", updated_at: 1, team_id: TEAM, is_private: false },
+      ],
+      chat_channels: [...channels(), {
+        _id: DM, team_id: TEAM, name: "", kind: "dm", dm_key: dmKeyFor(String(TEAM), [ALICE, BOB].map(String)),
+        workspace: `restricted:${DM}`, created_by: BOB, created_at: 1_000, updated_at: 1_000,
+      }],
+      chat_channel_members: [
+        { _id: "cm-a", channel_id: DM, user_id: ALICE, added_by: BOB, added_at: 1 },
+        { _id: "cm-b", channel_id: DM, user_id: BOB, added_by: BOB, added_at: 1 },
+      ],
+    });
+    const ctx = context(BOB, seed);
+    const asked = await call(sendMessage, ctx, {
+      channel_id: DM, content: "Copy the 66 keys into the vault?", origin: "agent", origin_session_id: "sess-bob",
+    });
+    // The line wears the session's title as a person reads it.
+    expect(messagesIn(ctx).find((m: any) => String(m._id) === String(asked.message_id)).origin_session_title).toBe("Requested by Alice");
+
+    const alice = as(ctx, ALICE);
+    await call(sendMessage, alice, { channel_id: DM, content: "hm, let me look" });
+    const answer = await call(sendMessage, alice, { channel_id: DM, content: "do it" });
+    expect(answer.session_relay).toMatchObject({ delivered: true, session_short_id: "jx7bobb" });
+    // Each of Alice's lines reaches it, as two replies in a thread would; the
+    // later one quotes the whole exchange since the session's line.
+    const queued = ctx.db._tables.pending_messages;
+    expect(queued.map((p: any) => String(p.conversation_id))).toEqual(["conv-bob", "conv-bob"]);
+    const wake = queued[1].content;
+    expect(wake).toContain("Alice messaged you directly.");
+    expect(wake).toContain("You (earlier): Copy the 66 keys into the vault?");
+    expect(wake).toContain("Alice: hm, let me look");
+    expect(wake).toContain("Alice: do it");
+    expect(wake).toContain(`cast chat send --channel ${DM} "<your reply>"`);
+    expect(wake).not.toContain("--thread");
+    const thinking = messagesIn(ctx).filter((m: any) => m.agent_status === "thinking");
+    expect(thinking.length).toBe(1);
+    expect(thinking[0].thread_root_id).toBeUndefined();
+    expect(thinking[0].origin_session_id).toBe("conv-bob");
+
+    // The session answers at the top: its thinking row closes, and Alice's
+    // next line answers that answer, so it reaches the session again.
+    await call(sendMessage, ctx, { channel_id: DM, content: "Done: 66 copied.", origin: "agent", origin_session_id: "sess-bob" });
+    expect(messagesIn(ctx).filter((m: any) => m.agent_status === "thinking" && !m.deleted_at).length).toBe(0);
+
+    // Bob's own line in between means Alice is talking to Bob, not the session.
+    await call(sendMessage, ctx, { channel_id: DM, content: "thanks, I'll check it later" });
+    const toBob = await call(sendMessage, alice, { channel_id: DM, content: "sounds good" });
+    expect(toBob.session_relay.delivered).toBe(false);
+    expect(ctx.db._tables.pending_messages.length).toBe(2);
+  });
+
 
   test("a person's reply reaches a session that answered mid-thread, not only the thread's starter", async () => {
     const seed = anchorTeamSeed({
@@ -3501,6 +3562,49 @@ describe("agent channels: roles and sessions in chat", () => {
     }));
     await expect(call(sendAsAnchor, bot, { anchor_id: ANCHOR, channel_id: CHANNEL, content: "digest" }))
       .rejects.toMatchObject({ data: { code: "RATE_LIMITED" } });
+  });
+
+  test("in a DM an agent's caps count since a person last wrote there, so a person's line restarts them", async () => {
+    const DM = "chat_channels_dm" as any;
+    const dmSeed = (extra: Record<string, any[]> = {}) => seed({
+      chat_channels: [...channels(), {
+        _id: DM, team_id: TEAM, name: "", kind: "dm", dm_key: dmKeyFor(String(TEAM), [ALICE, BOB].map(String)),
+        workspace: `restricted:${DM}`, created_by: ALICE, created_at: 1_000, updated_at: 1_000,
+      }],
+      chat_channel_members: [
+        { _id: "cm-a", channel_id: DM, user_id: ALICE, added_by: ALICE, added_at: 1 },
+        { _id: "cm-b", channel_id: DM, user_id: BOB, added_by: ALICE, added_at: 1 },
+      ],
+      ...extra,
+    });
+    const ctx = context(ALICE, dmSeed());
+    const agent = { channel_id: DM, origin: "agent" as const, origin_session_id: "sess-alice" };
+    const roots: string[] = [];
+    for (let i = 0; i < 5; i++) roots.push((await call(sendMessage, ctx, { ...agent, content: `root ${i}` })).message_id);
+    await expect(call(sendMessage, ctx, { ...agent, content: "root 6" }))
+      .rejects.toMatchObject({ data: { code: "RATE_LIMITED", message: expect.stringContaining("at most 5 threads in this conversation until a person writes in it") } });
+    for (let i = 0; i < 25; i++) await call(sendMessage, ctx, { ...agent, content: `reply ${i}`, thread_root_id: roots[0] });
+    await expect(call(sendMessage, ctx, { ...agent, content: "line 31", thread_root_id: roots[0] }))
+      .rejects.toMatchObject({ data: { code: "RATE_LIMITED", message: expect.stringContaining("at most 30 lines in this conversation until a person writes in it") } });
+
+    // Bob answers: both counts start again.
+    await call(sendMessage, as(ctx, BOB), { channel_id: DM, content: "and the eval for case 12?" });
+    await call(sendMessage, ctx, { ...agent, content: "case 12 passes" });
+    await call(sendMessage, ctx, { ...agent, content: "details", thread_root_id: roots[0] });
+
+    // An agent's line is not a person's: neither an anchor's reply nor a bot
+    // writing through chat.send restarts the count.
+    const capped = context(ALICE, dmSeed({
+      chat_messages: [
+        { _id: "dm-person", team_id: TEAM, channel_id: DM, user_id: BOB, content: "status?", created_at: 100, updated_at: 100 },
+        { _id: "dm-anchor", team_id: TEAM, channel_id: DM, user_id: BOT, author_kind: "agent", content: "green", created_at: 200, updated_at: 200 },
+        { _id: "dm-bot", team_id: TEAM, channel_id: DM, user_id: BOT, author_kind: "user", content: "digest", created_at: 300, updated_at: 300 },
+        { _id: "dm-session", team_id: TEAM, channel_id: DM, user_id: BOB, origin: "agent", content: "noted", created_at: 400, updated_at: 400 },
+      ],
+      chat_agent_quota: [{ _id: "q1", key: `post:${DM}:${ALICE}:sess-alice`, bucket: "since:100", count: 30, updated_at: 1 }],
+    }));
+    await expect(call(sendMessage, capped, { ...agent, content: "one more", thread_root_id: "dm-person" }))
+      .rejects.toMatchObject({ data: { code: "RATE_LIMITED", message: expect.stringContaining("until a person writes in it") } });
   });
 
   test("an agent line rings the bell but never pushes a phone", async () => {

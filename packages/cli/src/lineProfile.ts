@@ -53,6 +53,13 @@ export interface ResolvedLineProfile {
   notes: string[];
   /** Shapes the loader accepted but the contract spells another way; the file should change. */
   warnings: string[];
+  /**
+   * `[line] ci_paths`: paths beyond `.github/**` and `.codecast/**` that decide what CI runs (scripts CI calls to
+   * scope itself). A change touching one goes to a person, since CI cannot vouch for a change to itself. `cast flow
+   * ci` reads the base's copy, never the change's; kept off `profile` so a publish carries nothing an older backend
+   * refuses.
+   */
+  ci_paths?: string[];
 }
 
 export class LineProfileError extends Error {
@@ -68,9 +75,10 @@ export type LineProfileValues = Omit<{ [K in keyof LineProfile]?: LineProfile[K]
   caps?: { cards?: number; stations?: Record<string, number> };
   merge?: Partial<NonNullable<LineProfile["merge"]>>;
   deploy?: Partial<NonNullable<LineProfile["deploy"]>>;
+  ci_paths?: string[];
 };
 
-export const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "deploy", "finders"] as const;
+export const LINE_KEYS = ["team", "project", "principles", "prompting", "size_budget", "watch_days", "commands", "caps", "merge", "deploy", "finders", "ci_paths"] as const;
 export const FINDER_KEYS = ["id", "source", "kind", "fingerprint", "runs", "opens_causes", "project", "label", "what", "group"] as const;
 
 const isTable = (x: unknown): x is Record<string, unknown> => !!x && typeof x === "object" && !Array.isArray(x) && !(x instanceof Date);
@@ -194,6 +202,10 @@ export function parseLineProfileText(textIn: string, file?: string): { values: L
       if (values.deploy.trigger === "role" && !values.deploy.role) throw new LineProfileError('[line.deploy] trigger = "role" needs role: the handle of the role that deploys');
       if (values.deploy.trigger === "schedule" || values.deploy.trigger === "count") warnings.push(`[line.deploy] trigger = "${values.deploy.trigger}" is not built yet: only a person starts this line's deploys`);
     }
+    if (line.ci_paths !== undefined) {
+      if (!Array.isArray(line.ci_paths)) throw new LineProfileError("[line] ci_paths must be a list of path patterns");
+      values.ci_paths = line.ci_paths.map((p, i) => text(p, `[line] ci_paths[${i}]`));
+    }
     if (line.finders !== undefined) {
       if (!Array.isArray(line.finders)) throw new LineProfileError("[[line.finders]] must be an array of tables");
       const seen = new Set<string>();
@@ -275,7 +287,7 @@ export function resolveLineProfile(values: LineProfileValues, opts: { root?: str
     finders: pick("finders", values.finders, d.finders),
   };
   const notes = lineProfileNotes(profile);
-  return { root: opts.root ?? null, file: opts.file ?? null, profile, sources, notes, warnings: opts.warnings ?? [] };
+  return { root: opts.root ?? null, file: opts.file ?? null, profile, sources, notes, warnings: opts.warnings ?? [], ...(values.ci_paths ? { ci_paths: values.ci_paths } : {}) };
 }
 
 /** `[line.deploy]` role and step commands the file sets (deploys.md DP4, DP8), each with its source. */

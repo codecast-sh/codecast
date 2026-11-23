@@ -98,6 +98,38 @@ describe("scripts/line.ts ship", () => {
     }
   }, 30000);
 
+  test("a tree whose HEAD lags origin, where upstream also changed a shipped file, lands; an edit made after review there is still refused", () => {
+    const repo = mkdtempSync(path.join(tmpdir(), "line-ship-"));
+    const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();
+    const ship = (tree: string) => spawnSync("bun", [path.join(import.meta.dir, "line.ts"), "ship", "--base", "main", "--tree", tree], { cwd: repo, encoding: "utf8" });
+    try {
+      git("init", "-q", "-b", "main");
+      writeFileSync(path.join(repo, "a.txt"), "a\nb\nc\nd\ne\nf\ng\n");
+      git("add", "a.txt");
+      git("commit", "-qm", "a");
+      // The main checkout stays on this commit while origin moves on (ct-98836: 82 commits behind).
+      git("worktree", "add", "-q", "--detach", "tree", "main");
+      writeFileSync(path.join(repo, "a.txt"), "a\nb\nc\nd\ne\nf\nupstream\n");
+      git("commit", "-qam", "upstream");
+      git("update-ref", "refs/remotes/origin/main", "HEAD");
+      git("checkout", "-q", "-b", "work");
+      writeFileSync(path.join(repo, "a.txt"), "a\nreviewed\nc\nd\ne\nf\nupstream\n");
+      git("commit", "-qam", "session edits, rebased onto origin");
+      const tree = path.join(repo, "tree");
+      writeFileSync(path.join(tree, "a.txt"), "a\nreviewed\nc\nd\ne\nf\ng\n");
+      const landed = ship(tree);
+      expect(landed.stderr).toBe("");
+      expect(landed.stdout).toStartWith("already in the working tree");
+      writeFileSync(path.join(tree, "a.txt"), "a\nreviewed\nc\nd\ne\nwritten after review\ng\n");
+      const after = ship(tree);
+      expect(after.status).toBe(1);
+      expect(after.stderr).toContain("holds edits the reviewed branch does not, in a.txt");
+      expect(readFileSync(path.join(tree, "a.txt"), "utf8")).toBe("a\nreviewed\nc\nd\ne\nwritten after review\ng\n");
+    } finally {
+      rmSync(repo, { recursive: true, force: true });
+    }
+  }, 30000);
+
   test("a tree that holds the branch's first commit, as a session's edits under review rounds do, gets only the later commits", () => {
     const repo = mkdtempSync(path.join(tmpdir(), "line-ship-"));
     const git = (...args: string[]) => execFileSync("git", ["-C", repo, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", ...args], { encoding: "utf8" }).trim();

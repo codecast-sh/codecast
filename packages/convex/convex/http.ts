@@ -13,16 +13,18 @@ import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthC
 import { installCallbackHandler } from "./lib/githubInstallCallback";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./lib/conversationRead";
+import { intentVerifyRoute, originatorRoute } from "./lib/intentHttp";
 import { SHARED_CALL_VIDEO_PATH, signForCli } from "./callRecordings";
 import { SHARED_CALL_AUDIO_PATH, sharedCallAudio, sharedCallVideo } from "./lib/sharedCallMedia";
 import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMirror";
 import { ipRateLimited } from "./lib/httpRateLimit";
 import { cliAuthRequest } from "./cliAuthHttp";
-import { registerCliRoute, type CliRouteOptions } from "./lib/cliRoute";
+import { registerCliPreflight, registerCliRoute, type CliRouteOptions } from "./lib/cliRoute";
 import { INGEST_PREFIXES, ingestPreflight, ingestServe } from "./ingestHttp";
 import { publishedKeys } from "./lib/codecastSigning";
 import { CODECAST_KEYS_PATH } from "@codecast/shared/contracts/codecastSignature";
 import { ENROLL_PATH, enrollHttp } from "./lib/enrollHttp";
+import { TEAM_SESSIONS_PATH, teamSessionsHttp } from "./lib/teamReadKeyHttp";
 import { REPLAY_CHUNK_PATH, REPLAY_FRAME_ADMIT_PATH, REPLAY_PLAYER_MANIFEST_PATH, REPLAY_SIGN_PREFIXES, replayChunk, replayChunkPreflight, replayFrameAdmit, replayPlayerManifest, replayPlayerManifestPreflight, replaySign } from "./replaysHttp";
 import { signReplayChunks } from "./lib/replayChunks";
 import { hmacSha256Hex, timingSafeEqualHex } from "./lib/hmac";
@@ -35,6 +37,7 @@ import { RECALL_REALTIME_PATH, RECALL_STATUS_PATH } from "./lib/recall";
 import { claimFrontier } from "./lib/claimFrontier";
 import { vendorRefusalFor } from "./lib/vendorGuard";
 import { heartbeatTailnetArg } from "./lib/heartbeatTailnet";
+import { waitingOutLiveEdits } from "./lib/docBody";
 import {
   serve as repoPublicServe,
   preflight as repoPublicPreflight,
@@ -43,6 +46,8 @@ import {
 
 const http = httpRouter();
 // A `cast` route on this router: POST + OPTIONS, the device-binding gate and the CLI error shape (lib/cliRoute.ts).
+// A decision's 1-5 weight from `cast decide --impact`, on ask and on edit.
+const decisionImpactOf = (body: any) => ({ impact: typeof body.impact === "number" ? body.impact : undefined, impact_reason: typeof body.impact_reason === "string" ? body.impact_reason : undefined });
 const cliRoute = (path: string, handler: (ctx: any, body: any) => Promise<any>, opts?: CliRouteOptions) => registerCliRoute(http, path, handler, opts);
 
 auth.addHttpRoutes(http);
@@ -128,20 +133,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/exchange-token",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/exchange-token");
 
 // pi on a cast machine reaches the model through here, with its machine's key.
 http.route({ pathPrefix: CAST_MODEL_PROXY_PATH + "/", method: "POST", handler: castModelProxy });
@@ -199,24 +191,12 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/claim-auth",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/claim-auth");
 
 // A managed device presents its MDM profile's enrollment token
 // (lib/enrollHttp.enrollHttp).
 http.route({ path: ENROLL_PATH, method: "POST", handler: enrollHttp });
+http.route({ path: TEAM_SESSIONS_PATH, method: "GET", handler: teamSessionsHttp });
 
 // The install callback is a plain function (lib/githubInstallCallback.ts) so
 // a test can drive the real handler.
@@ -642,20 +622,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/search",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/search");
 
 http.route({
   path: "/cli/read",
@@ -717,20 +684,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/read",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/read");
 
 http.route({
   path: "/cli/export",
@@ -781,20 +735,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/export",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/export");
 
 http.route({
   path: "/cli/local-checkouts",
@@ -831,20 +772,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/local-checkouts",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/local-checkouts");
 
 http.route({
   path: "/cli/feed",
@@ -913,20 +841,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/feed",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/feed");
 
 // Record the stable-context feed a session was started with (posted by
 // `cast stable-context` / the daemon's Codex launch). Body: { api_token,
@@ -968,20 +883,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/stable-context",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/stable-context");
 
 http.route({
   path: "/cli/inbox",
@@ -995,7 +897,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, show_all, state, limit, label, project_path, session_ids } = body;
+      const { api_token, show_all, state, limit, label, project_path, session_ids, include_killed } = body;
 
       if (!api_token) {
         return new Response(JSON.stringify({ error: "Missing api_token" }), {
@@ -1012,6 +914,7 @@ http.route({
         label,
         project_path,
         session_ids: Array.isArray(session_ids) ? session_ids : undefined,
+        include_killed: include_killed === true ? true : undefined,
       });
 
       if (result.error) {
@@ -1035,20 +938,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/inbox",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/inbox");
 
 http.route({
   path: "/cli/sessions",
@@ -1086,20 +976,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/sessions",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/sessions");
 
 http.route({
   path: "/cli/bookmark",
@@ -1151,20 +1028,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/bookmark",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/bookmark");
 
 http.route({
   path: "/cli/bookmark/list",
@@ -1214,20 +1078,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/bookmark/list",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/bookmark/list");
 
 http.route({
   path: "/cli/bookmark/delete",
@@ -1285,20 +1136,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/bookmark/delete",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/bookmark/delete");
 
 http.route({
   path: "/cli/decisions",
@@ -1352,20 +1190,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/decisions",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/decisions");
 
 http.route({
   path: "/cli/decisions/add",
@@ -1423,20 +1248,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/decisions/add",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/decisions/add");
 
 http.route({
   path: "/cli/decisions/delete",
@@ -1486,20 +1298,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/decisions/delete",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/decisions/delete");
 
 // `cast decide` — an agent hands its human one explicit decision (question +
 // options + context, optionally a published HTML report). Distinct from
@@ -1568,7 +1367,7 @@ http.route({
                 station: body.station,
                 stack: body.stack,
                 category: body.category,
-                card: body.card,
+                card: body.card, ...decisionImpactOf(body),
               });
       } else {
         if (!session_id || !question || !Array.isArray(options)) {
@@ -1604,7 +1403,7 @@ http.route({
           // `cast decide --run`: a cast command for a person to run (commandRun.ts).
           run: typeof body.run === "string" ? body.run : undefined,
           // LM5: the expectations proposal the decision settles.
-          proposal: body.proposal,
+          proposal: body.proposal, ...decisionImpactOf(body),
         });
       }
 
@@ -1631,20 +1430,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/decide",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/decide");
 
 // The race verbs (docs/architecture/decisions-as-documents.md D2, D6): a role
 // on the ladder recommends from its session; a person in the
@@ -1779,20 +1565,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/patterns",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/patterns");
 
 http.route({
   path: "/cli/patterns/add",
@@ -1846,20 +1619,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/patterns/add",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/patterns/add");
 
 http.route({
   path: "/cli/patterns/show",
@@ -1909,20 +1669,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/patterns/show",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/patterns/show");
 
 http.route({
   path: "/cli/patterns/delete",
@@ -1972,20 +1719,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/patterns/delete",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/patterns/delete");
 
 http.route({
   path: "/cli/similar",
@@ -2046,20 +1780,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/similar",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/similar");
 
 http.route({
   path: "/cli/blame",
@@ -2109,20 +1830,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/blame",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/blame");
 
 // Line-level blame resolution: maps git blame SHAs (and uncommitted line
 // texts) to the sessions that produced them. The file-level /cli/blame above
@@ -2178,20 +1886,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/blame/resolve",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/blame/resolve");
 
 http.route({
   path: "/cli/sync-settings",
@@ -2239,20 +1934,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/sync-settings",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/sync-settings");
 
 http.route({
   path: "/cli/sync-settings/update",
@@ -2302,20 +1984,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/sync-settings/update",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/sync-settings/update");
 
 http.route({
   path: "/cli/log",
@@ -2364,20 +2033,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/log",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/log");
 
 http.route({
   path: "/cli/log-batch",
@@ -2430,20 +2086,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/log-batch",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/log-batch");
 
 http.route({
   path: "/cli/teams",
@@ -2491,20 +2134,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/teams",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/teams");
 
 http.route({
   path: "/cli/teams/mappings",
@@ -2552,20 +2182,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/teams/mappings",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/teams/mappings");
 
 http.route({
   path: "/cli/teams/mappings/update",
@@ -2619,20 +2236,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/teams/mappings/update",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/teams/mappings/update");
 
 http.route({
   path: "/cli/conversations/count",
@@ -2681,20 +2285,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/conversations/count",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/conversations/count");
 
 http.route({
   path: "/cli/conversations/delete-by-path",
@@ -2755,20 +2346,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/conversations/delete-by-path",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/conversations/delete-by-path");
 
 http.route({
   path: "/cli/teams/projects",
@@ -2817,20 +2395,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/teams/projects",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/teams/projects");
 
 http.route({
   path: "/cli/heartbeat",
@@ -2995,20 +2560,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/heartbeat",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/heartbeat");
 
 http.route({
   path: "/cli/command-result",
@@ -3052,20 +2604,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/command-result",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/command-result");
 
 
 http.route({
@@ -3119,20 +2658,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/fork",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/fork");
 
 http.route({
   path: "/cli/tree",
@@ -3178,20 +2704,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tree",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tree");
 
 // --- Agent Tasks endpoints ---
 
@@ -3225,20 +2738,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/create",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/create");
 
 http.route({
   path: "/cli/tasks/list",
@@ -3299,20 +2799,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/list",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/list");
 
 http.route({
   path: "/cli/tasks/due",
@@ -3343,20 +2830,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/due",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/due");
 
 http.route({
   path: "/cli/tasks/claim",
@@ -3388,20 +2862,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/claim",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/claim");
 
 http.route({
   path: "/cli/tasks/renew-lease",
@@ -3433,20 +2894,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/renew-lease",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/renew-lease");
 
 http.route({
   path: "/cli/tasks/complete",
@@ -3485,20 +2933,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/complete",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/complete");
 
 http.route({
   path: "/cli/tasks/fail",
@@ -3531,20 +2966,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/fail",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/fail");
 
 http.route({
   path: "/cli/tasks/cancel",
@@ -3575,20 +2997,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/cancel",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/cancel");
 
 http.route({
   path: "/cli/tasks/pause",
@@ -3619,20 +3028,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/pause",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/pause");
 
 http.route({
   path: "/cli/tasks/resume",
@@ -3663,20 +3059,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/resume",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/resume");
 
 http.route({
   path: "/cli/tasks/run",
@@ -3708,20 +3091,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/run",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/run");
 
 // `cast trigger update` — edit a trigger in place; every effective edit is
 // recorded in agent_task_revisions (version history + audit log).
@@ -3773,20 +3143,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/update",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/update");
 
 // `cast trigger history` — the trigger's edit log with actor names resolved.
 http.route({
@@ -3818,20 +3175,7 @@ http.route({
   }),
 });
 
-http.route({
-  path: "/cli/tasks/history",
-  method: "OPTIONS",
-  handler: httpAction(async () => {
-    return new Response(null, {
-      status: 204,
-      headers: {
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Methods": "POST, OPTIONS",
-        "Access-Control-Allow-Headers": "Content-Type",
-      },
-    });
-  }),
-});
+registerCliPreflight(http, "/cli/tasks/history");
 
 // --- Task Layer Routes ---
 
@@ -4104,6 +3448,9 @@ cliRoute("/cli/role/line/set", async (ctx, body) => ctx.runMutation(api.orgRoles
 cliRoute("/cli/role/line/merge", async (ctx, body) => ctx.runMutation(api.orgLineMerge.setLineMerge, body));
 cliRoute("/cli/line/merge/check", async (ctx, body) => ctx.runQuery(api.orgLineMerge.check, body));
 cliRoute("/cli/line/merge/record", async (ctx, body) => ctx.runMutation(api.orgLineMerge.record, body));
+// The Merge station: the run's own graph cleared it to land with no card, on the proof the server recorded.
+cliRoute("/cli/workflow-runs/clear", async (ctx, body) => ctx.runMutation(api.orgLineMerge.clearForMerge, body));
+for (const [route, fn, write] of [["workflow-runs/ci-verdict", api.orgLineMerge.recordCiVerdict, true], ["workflow-runs/review-verdict", api.orgLineMerge.recordReviewVerdict, true], ["workflow-runs/rebase", api.orgLineMerge.recordStationRebase, true], ["workflow-runs/merge-proof", api.orgLineMerge.mergeProof, false], ["repo-lease", api.repoLeases.lease, true], ["main-red/open", api.mainRed.open, false]] as const) cliRoute(`/cli/${route}`, async (ctx, body) => write ? ctx.runMutation(fn as any, body) : ctx.runQuery(fn as any, body));
 cliRoute("/cli/line/requeue", async (ctx, body) => ctx.runMutation(api.orgLine.requeueFromCli, body));
 // `cast flow show|on|off` on a team's live flow (liveFlows.ts). on and off are a person's, on the web: the CLI's are refused with that reason.
 cliRoute("/cli/flow/live/show", async (ctx, body) => ctx.runQuery(api.liveFlows.showFromCli, body));
@@ -4125,6 +3472,12 @@ cliRoute("/cli/deploys/get", async (ctx, body) => ctx.runQuery(api.deploys.get, 
 cliRoute("/cli/deploys/targets/publish", async (ctx, body) => ctx.runMutation(api.deployTargets.publish, body), { forwardDeviceId: true });
 cliRoute("/cli/deploys/targets", async (ctx, body) => ctx.runQuery(api.deployTargets.view, body));
 cliRoute("/cli/deploys/targets/poll", async (ctx, body) => ctx.runAction(api.deployTargets.pollNow, body));
+// A repository's pipeline (pipeline.md PL6), published beside its deploy targets, and read back per team.
+cliRoute("/cli/pipelines/publish", async (ctx, body) => ctx.runMutation(api.pipelines.publish, body), { forwardDeviceId: true });
+cliRoute("/cli/pipelines", async (ctx, body) => ctx.runQuery(api.pipelines.forTeam, body));
+// Every device's checkouts of a repository (ct-98780): a daemon's report on change, and a team's read back.
+cliRoute("/cli/checkouts/report", async (ctx, body) => ctx.runMutation(api.checkouts.report, body), { forwardDeviceId: true });
+cliRoute("/cli/checkouts", async (ctx, body) => ctx.runQuery(api.checkouts.forTeam, body));
 cliRoute("/cli/deploys/target/request", async (ctx, body) => ctx.runMutation(api.deployTargets.request, body));
 cliRoute("/cli/deploys/target/for-deploy", async (ctx, body) => ctx.runQuery(api.deployTargets.forDeploy, body));
 cliRoute("/cli/deploys/main-commits", async (ctx, body) => ctx.runMutation(api.deployTargets.reportMainCommits, body));
@@ -4138,7 +3491,7 @@ cliRoute("/cli/brief/get", async (ctx, { from_session, ...body }) => {
   // A whole workspace role places what reaches no goal (ct-95900): the read
   // runs in its own query budget beside the brief's.
   if (brief?.facts?.scope?.whole_workspace) {
-    brief.facts.unplaced = await ctx.runQuery((api as any).orgUnplaced.part, { api_token: body.api_token, ...(brief.role.team_id ? { team_id: brief.role.team_id } : {}) }).catch(() => null);
+    brief.facts.unplaced = await ctx.runQuery((api as any).orgUnplaced.part, { api_token: body.api_token, ...(brief.role.team_id ? { team_id: brief.role.team_id } : {}) }).catch((e: unknown) => { brief.facts.unplaced_unread = String(e instanceof Error ? e.message : e).split("\n")[0].slice(0, 200); return undefined; });
   }
   // Read from the role's own session, the brief's "changed since" clock moves
   // to now (org-staffing.md S25); a person reading it moves nothing.
@@ -4795,23 +4148,6 @@ cliRoute("/cli/progress/latest", async (ctx, body) => {
 cliRoute("/cli/docs/create", async (ctx, body) => await ctx.runMutation(api.docs.create, body));
 cliRoute("/cli/docs/list", async (ctx, body) => await ctx.runQuery(api.docs.list, body));
 cliRoute("/cli/docs/get", async (ctx, body) => await ctx.runQuery(api.docs.get, body));
-// A whole-body write refuses while a person's editor holds steps it has not
-// saved yet (lib/docBody.ts writeDocBody). The editor saves a second after
-// its last step reaches the server, which on a live rig measured about five
-// seconds after the last keystroke, so wait that out before answering.
-// wait_ms bounds the wait.
-async function waitingOutLiveEdits<T>(body: any, run: (args: any) => Promise<T>): Promise<T> {
-  const { wait_ms, ...args } = body;
-  const deadline = Date.now() + (typeof wait_ms === "number" ? Math.min(Math.max(wait_ms, 0), 15_000) : 10_000);
-  for (;;) {
-    try {
-      return await run(args);
-    } catch (e: any) {
-      if (e?.data?.reason !== "live_edit" || Date.now() >= deadline) throw e;
-      await new Promise((r) => setTimeout(r, 400));
-    }
-  }
-}
 // Both write the collab snapshot themselves, in the same transaction.
 cliRoute("/cli/docs/update", async (ctx, body) => waitingOutLiveEdits(body, (args) => ctx.runMutation(api.docs.update, args)));
 // Live artifacts: `cast board|sheet|data` (liveArtifacts.ts). Each acts as
@@ -4846,6 +4182,8 @@ cliRoute("/cli/sessions/pin", async (ctx, body) => {
 cliRoute("/cli/sessions/unpin", async (ctx, body) => {
   return await ctx.runMutation(api.conversations.unpinFromProfile, body);
 });
+cliRoute("/cli/sessions/originator", originatorRoute);
+cliRoute("/cli/intent/verify", intentVerifyRoute);
 
 cliRoute("/cli/docs/share", async (ctx, body) => await ctx.runMutation(api.docs.generateShareLink, body));
 cliRoute("/cli/docs/unshare", async (ctx, body) => await ctx.runMutation(api.docs.unshare, body));
@@ -4865,6 +4203,8 @@ cliRoute("/cli/workflows/list", async (ctx, body) => {
 });
 // The team's published flows (flows.md FL2), for `cast flow ls/show/run`.
 cliRoute("/cli/workflows/pool", async (ctx, body) => ctx.runQuery(api.workflows.poolForCli, body));
+// A checkout's own flows (repoFlows.ts), so the Ship picker shows what `cast flow run` runs in that repository.
+cliRoute("/cli/repo-flows/report", async (ctx, body) => ctx.runMutation((api as any).repoFlows.report, body));
 // A Try's case settling on the graph's machine (line-workspace.md LW4, cli lineTry.ts).
 cliRoute("/cli/line-tries/report", async (ctx, body) => ctx.runMutation((api as any).lineActions.reportTry, body));
 
@@ -4979,6 +4319,9 @@ cliRoute("/cli/read/ask", async (ctx, body) => ctx.runAction(internal.sessionAsk
 cliRoute("/cli/sessions/dismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "dismiss" }));
 cliRoute("/cli/sessions/undismiss", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "undismiss" }));
 cliRoute("/cli/sessions/kill", async (ctx, body) => ctx.runMutation(api.conversations.cliSetSessionVisibility, { ...body, action: "kill" }));
+// Retire (a flow run's subject once its change is live, flows.md FL4): a kill that refuses when anything would be
+// lost. body: { api_token, session, expected_message_count }.
+cliRoute("/cli/sessions/retire", async (ctx, body) => ctx.runMutation(api.conversations.cliRetireSession, body));
 
 // Resume (cast resume <session> --tmux): bring the agent up in its managed pane
 // without killing a live one. body: { api_token, session }.
@@ -5144,6 +4487,8 @@ cliRoute("/cli/pr/notes", async (ctx, body) => {
 
 // `cast ship mark`: a deploy marker for the Changes page (changesDeploy.ts).
 cliRoute("/cli/changes/mark-deploy", async (ctx, body) => ctx.runMutation((api as any).changesDeploy.markDeploy, body));
+// Which deploy put each name (a function, route, index or table) on a surface: who to ask before dropping it.
+cliRoute("/cli/deploys/added-by", async (ctx, body) => ctx.runQuery((api as any).changesDeploy.addedBy, body));
 
 cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));
@@ -5300,6 +4645,8 @@ cliRoute("/cli/sources/rotate-key", async (ctx, body) => ctx.runMutation(api.ing
 cliRoute("/cli/sources/remove", async (ctx, body) => ctx.runMutation(api.ingest.removeSource, body));
 // A workspace's work as major events since a cursor (workTimeline.ts): `cast timeline`.
 cliRoute("/cli/timeline", async (ctx, body) => ctx.runQuery(api.workTimeline.since, body));
+// When the token's person typed, from the per-send log (userSends.typedSince): `cast typed`.
+cliRoute("/cli/typed", async (ctx, body) => ctx.runQuery(api.userSends.typedSince, body));
 cliRoute("/cli/events/list", async (ctx, body) => ctx.runQuery(api.ingest.listEvents, body));
 cliRoute("/cli/events/groups", async (ctx, body) => ctx.runQuery(api.ingest.listGroups, body));
 cliRoute("/cli/events/group", async (ctx, body) => ctx.runQuery(api.ingest.getGroup, body));

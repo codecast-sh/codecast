@@ -30,6 +30,19 @@ export type DiagramStep = {
   slot?: FlowStation["slot"];
 };
 
+/**
+ * What a pipeline says on one step beside its name (pipeline.md PL7): whether the project added or changed it
+ * (null: inherited from the backbone), what it changed, the paths it runs for, that it has no command and passes,
+ * that its command differs by target, that it waits for a deploy and sends none, and how many changes stand on it now. A plain flow draws no marks.
+ */
+export type StepMark = { own: "added" | "changed" | null; changed?: string[]; when?: string; passes?: true; varies?: true; waits?: true; here?: number; hereNames?: string[];
+  /** Of `here`, how many stand on the steps inside this frame: an open frame shows them on those steps and counts only the rest. */
+  hereInside?: number;
+  /** An edit proposed and not live yet, in words ("proposed · <session>"): the step is drawn as a ghost. */
+  proposed?: string;
+  /** A proposed edit takes this step off the path. */
+  skipped?: true };
+
 /** `hub`: in a flow run around one step (every stage hands the work back to it, as a one-session flow does), that step:
  *  its stages follow it in the order it names them, and their ways back lead to it. */
 export type FlowDiagramModel = { steps: DiagramStep[]; end: string | null; endId: string | null; hub?: { id: string; label: string } };
@@ -93,16 +106,18 @@ function diagramOf(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<FlowEd
 
   // A segment's stop the flow sends back to the session the change came from (its subject station) is no stop:
   // the work goes back, the session fixes it, and the stage runs again. The route to the subject station itself
-  // is said once, on that exit, never as a separate way on.
+  // is said once, on that exit, never as a separate way on. A plain station (a script, a fan-in) has no exit to say
+  // it on, so its route to the subject station is the way back itself, said by the edge's words.
   const subjectIds = new Set(nodes.filter((n) => n.backend === "subject").map((n) => n.id));
-  const backExits = new Set(edges.filter((e) => subjectIds.has(e.to) && takesOwnExit(e)).map((e) => prefix + e.from));
-  const toSession = (r: SideRoute): SideRoute | null =>
-    subjectIds.has(r.toId.slice(prefix.length)) ? null : backExits.has(r.toId) ? { ...r, tone: "back", leadsTo: SESSION_WORDS } : r;
+  const backExits = new Set(edges.filter((e) => subjectIds.has(e.to) && !!byId.get(e.from)?.segment_exit && takesOwnExit(e)).map((e) => prefix + e.from));
+  const toSession = (r: SideRoute, fromSegment: boolean): SideRoute | null =>
+    subjectIds.has(r.toId.slice(prefix.length)) ? (fromSegment ? null : { ...r, tone: "back", leadsTo: SESSION_WORDS })
+    : backExits.has(r.toId) ? { ...r, tone: "back", leadsTo: SESSION_WORDS } : r;
   const reroute = (step: DiagramStep): DiagramStep => {
     const inner = step.inner.map(reroute);
     // A segment's frame repeats what one of its steps already says when the parent's end has the same name.
     const said = new Set(inner.flatMap((i) => i.side.map((r) => `${r.tone}|${r.outcome}`)));
-    const side = step.side.map(toSession).filter((r): r is SideRoute => !!r && !said.has(`${r.tone}|${r.outcome}`));
+    const side = step.side.map((r) => toSession(r, step.kind === "segment")).filter((r): r is SideRoute => !!r && !said.has(`${r.tone}|${r.outcome}`));
     return { ...step, side, inner };
   };
 

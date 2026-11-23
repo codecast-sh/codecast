@@ -27,28 +27,24 @@ import { requireUserOrToken } from "./lib/auth";
 import { requireTeamMembership } from "./lib/access";
 import { workspaceGrantsAccess } from "./lib/accessKeys";
 import { normalizeRepository } from "./lib/gitRefs";
-import { nextShortId } from "./counters";
-import { enqueueConfigCommand } from "./users";
 import { deployTeamFor, findDeployTeam } from "./changesDeploy";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { recordDeployMarker } from "./deploys";
 import { lineDeployTargets } from "./deployCarries";
-import { parseOwnerRepo } from "@codecast/shared/contracts";
-import { DEPLOY_SHORT_ID_PREFIX } from "@codecast/shared/contracts/deploys";
 import {
   DEPLOY_TARGET_NAME_RE,
-  canRedeploySha,
   commitTouchesTarget,
   readJsonLive,
   type DeployLiveReader,
 } from "@codecast/shared/contracts/deployTargets";
+import { liveDeployOf } from "@codecast/shared/contracts/deploys";
 import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, workflowRunCi } from "./deployTargetsCi";
-import { commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, targetDeploys, targetState, upsertMainCommits } from "./deployTargetsState";
+import { COMMITS_MAX, commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, repositoryArg, targetDeploys, targetRows, targetState, upsertMainCommits } from "./deployTargetsState";
+import { requestTargetDeployCore } from "./deployTargetRequest";
+export { requestTargetDeployCore };
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
 import { guardedFetch, RefusedHostError } from "./lib/guardedFetch";
 
-/** Commits kept on one deploy's record. */
-const COMMITS_MAX = 200;
 
 const liveReaderValidator = v.union(
   v.object({ kind: v.literal("marker") }),
@@ -65,29 +61,16 @@ const targetValidator = v.object({
   policy: v.union(v.literal("press"), v.literal("release"), v.literal("auto")),
   paths: v.array(v.string()),
   ship_stage: v.optional(v.union(v.literal("before_push"), v.literal("after_push"), v.literal("press"))),
+  workflow: v.optional(v.string()),
 });
 
 /** The team a CLI call means: the one it names (a member), else the repository's (deployTeamFor). */
-async function teamFor(ctx: any, userId: Id<"users">, repository: string, teamId?: Id<"teams">): Promise<Id<"teams">> {
+export async function teamFor(ctx: any, userId: Id<"users">, repository: string, teamId?: Id<"teams">): Promise<Id<"teams">> {
   if (teamId) {
     await requireTeamMembership(ctx, userId, teamId);
     return teamId;
   }
   return await deployTeamFor(ctx, userId, repository);
-}
-
-function repositoryArg(raw: string): string {
-  const repository = parseOwnerRepo(raw);
-  if (!repository) throw new Error(`"${raw}" is not an owner/name repository.`);
-  return normalizeRepository(repository);
-}
-
-async function targetRows(ctx: any, workspace: string, repository?: string): Promise<Doc<"deploy_targets">[]> {
-  const rows: Doc<"deploy_targets">[] = await ctx.db
-    .query("deploy_targets")
-    .withIndex("by_workspace_repository", (q: any) => (repository ? q.eq("workspace", workspace).eq("repository", repository) : q.eq("workspace", workspace)))
-    .take(200);
-  return rows.filter((r) => !r.retired_at);
 }
 
 // ── publish ──────────────────────────────────────────────────────────────────
@@ -101,6 +84,8 @@ export const publish = mutation({
     targets: v.array(targetValidator),
     device_id: v.optional(v.string()),
     root: v.optional(v.string()),
+    head_sha: v.optional(v.string()),
+    head_at: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
@@ -112,6 +97,11 @@ export const publish = mutation({
       .query("deploy_targets")
       .withIndex("by_workspace_repository", (q) => q.eq("workspace", workspace).eq("repository", repository))
       .take(200);
+    // The newest commit's targets stand: a publish from an older one (or one that names no commit, once one did) is refused.
+    const newest = existing.filter((r) => !r.retired_at && r.head_at !== undefined).sort((a, b) => b.head_at! - a.head_at!)[0];
+    if (newest && (args.head_at === undefined || args.head_at < newest.head_at!) && args.head_sha !== newest.head_sha) {
+      return { team_id: teamId, repository, targets: [], refused: `the published targets are from a newer commit (${String(newest.head_sha ?? "").slice(0, 10)})` };
+    }
     const declared = new Set<string>();
     const out: Array<{ name: string; changed: boolean }> = [];
     for (const t of args.targets) {
@@ -119,6 +109,7 @@ export const publish = mutation({
       if (!DEPLOY_TARGET_NAME_RE.test(name)) throw new Error(`"${t.name}" is not a target name`);
       if (declared.has(name)) throw new Error(`target ${name} is declared twice`);
       declared.add(name);
+      if (t.workflow && args.targets.some((o) => o !== t && o.workflow === t.workflow)) throw new Error(`target ${name}: workflow ${t.workflow} is named by another target; a run of it is one deploy of one target`);
       const readerRefusal = t.live.kind === "json" ? liveReaderUrlRefusal(t.live.url) : null;
       if (readerRefusal) throw new Error(`target ${name}: ${readerRefusal}`);
       const fields = {
@@ -129,6 +120,7 @@ export const publish = mutation({
         policy: t.policy,
         paths: t.paths,
         ship_stage: t.ship_stage,
+        workflow: t.workflow,
         device_id: args.device_id,
         root: args.root,
       };
@@ -137,10 +129,10 @@ export const publish = mutation({
         const changed = JSON.stringify(Object.entries(fields).map(([k, val]) => [k, (row as any)[k]])) !== JSON.stringify(Object.entries(fields).map(([k, val]) => [k, val])) || !!row.retired_at;
         // A changed reader reads afresh.
         const readerChanged = JSON.stringify(row.live) !== JSON.stringify(t.live);
-        await ctx.db.patch(row._id, { ...fields, publisher_user_id: userId, retired_at: undefined, published_at: now, updated_at: now, ...(readerChanged ? { last_read: undefined } : {}) });
+        await ctx.db.patch(row._id, { ...fields, head_sha: args.head_sha, head_at: args.head_at, publisher_user_id: userId, retired_at: undefined, published_at: now, updated_at: now, ...(readerChanged ? { last_read: undefined } : {}) });
         out.push({ name, changed });
       } else {
-        await ctx.db.insert("deploy_targets", { workspace, team_id: teamId, repository, name, ...fields, publisher_user_id: userId, published_at: now, updated_at: now });
+        await ctx.db.insert("deploy_targets", { workspace, team_id: teamId, repository, name, ...fields, head_sha: args.head_sha, head_at: args.head_at, publisher_user_id: userId, published_at: now, updated_at: now });
         out.push({ name, changed: true });
       }
     }
@@ -227,7 +219,8 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
       .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", d.workspace).eq("target", d.target).lte("created_at", d.created_at))
       .order("desc")
       .take(30);
-    const before = earlier.find((x) => x._id !== d._id && x.status === "live" && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at));
+    // The deploy that went live last before it.
+    const before = liveDeployOf(earlier.filter((x) => x._id !== d._id && x.sha && (x.live_at ?? x.created_at) <= (d.live_at ?? d.created_at)), { repository: d.repository });
     if (before?.sha && before.sha !== d.sha) previous = patch.previous_sha = before.sha;
   }
   if (!d.commits?.length && previous) {
@@ -246,89 +239,6 @@ export async function fillDeployRange(ctx: any, deployId: Id<"deploys">): Promis
 
 // ── deploying a target from codecast (DP13) ──────────────────────────────────
 
-/**
- * Ask for a deploy of one target: main's head (`deploy`), an earlier deploy's
- * sha again (`redeploy`, only for a command that takes `$sha`), or the
- * target's rollback command (`rollback`, back to the live deploy before the
- * current one, or the one named). The machine that published the target runs
- * it (`cast line deploy run dp-N`, the line-deploy graph), and the deploy ends
- * live or failed.
- */
-export async function requestTargetDeployCore(
-  ctx: any,
-  userId: Id<"users">,
-  args: { team_id: Id<"teams">; target: string; repository?: string; action?: "deploy" | "redeploy" | "rollback"; of?: string; here?: boolean; cli?: boolean; client_key?: string; request_id?: string },
-): Promise<{ _id: string; short_id: string; target: string; action: string; sha: string | null; commits: number }> {
-  const workspace = teamKey(args.team_id);
-  if (!(await workspaceGrantsAccess(ctx, userId, workspace))) throw new Error("Not a member of that team");
-  const name = args.target.trim().toLowerCase();
-  const candidates = (await targetRows(ctx, workspace, args.repository ? repositoryArg(args.repository) : undefined)).filter((r) => r.name === name);
-  if (!candidates.length) throw new Error(`No deploy target ${name}: declare it as a [[target]] in .codecast/deploy.toml and publish (cast line deploy targets --publish)`);
-  if (candidates.length > 1) throw new Error(`More than one repository has a target ${name}; name the repository`);
-  const t = candidates[0];
-  const action = args.action ?? "deploy";
-  if (t.runs === "push") throw new Error(`${name} deploys itself when main moves; there is nothing to send from here`);
-  if (!t.command) throw new Error(`${name} names no command`);
-  if (!args.here && (!t.device_id || !t.root)) throw new Error(`No machine publishes ${name}, so nothing can run it`);
-  const deploys = await targetDeploys(ctx, workspace, name);
-  const open = deploys.find((d) => (d.status === "requested" || d.status === "running") && (!d.repository || d.repository === t.repository));
-  if (open) throw new Error(`${open.short_id} is already going out to ${name} (${open.status}); wait for it to finish`);
-  const live = deploys.find((d) => d.status === "live");
-  let sha: string | undefined;
-  let rollbackOf: string | undefined;
-  if (action !== "deploy") {
-    const of = args.of
-      ? deploys.find((d) => d.short_id === args.of!.toLowerCase())
-      : deploys.find((d) => d.status === "live" && d._id !== live?._id && d.sha && d.sha !== live?.sha);
-    if (!of?.sha) throw new Error(args.of ? `No deploy ${args.of} of ${name} with a sha` : `No earlier live deploy of ${name} to go back to`);
-    if (action === "redeploy" && !canRedeploySha(t)) throw new Error(`${name}'s command sends the tree it runs in, not a sha: it cannot redeploy ${of.short_id}${t.rollback ? "; use its rollback" : ""}`);
-    if (action === "rollback" && !t.rollback) throw new Error(`${name} names no rollback command`);
-    sha = of.sha;
-    rollbackOf = of.short_id;
-  }
-  // What it will send: the commits on main after the live sha that touch the target (a deploy of main's head).
-  let commits: Doc<"deploys">["commits"] & {} = [];
-  if (action === "deploy") {
-    const after = await mainCommitsAfter(ctx, t.repository, live?.sha ?? null);
-    commits = await deployCommitsOf(ctx, after.commits
-      .filter((c) => commitTouchesTarget(t.paths, (c.files ?? []).map((f) => f.filename)))
-      .reverse()
-      .slice(0, COMMITS_MAX));
-  }
-  const now = Date.now();
-  const user = await ctx.db.get(userId);
-  const shortId = await nextShortId(ctx.db, DEPLOY_SHORT_ID_PREFIX);
-  const id = await ctx.db.insert("deploys", {
-    short_id: shortId,
-    ...(args.client_key ? { client_key: args.client_key } : {}),
-    workspace,
-    team_id: args.team_id,
-    target: name,
-    status: "requested",
-    trigger: "person",
-    started_by: { kind: args.cli ? "cli" : "person", name: user?.name ?? user?.github_username ?? user?.email ?? "someone", user_id: userId },
-    source: "codecast",
-    event_ids: [],
-    repository: t.repository,
-    ...(sha ? { sha } : {}),
-    ...(live?.sha ? { previous_sha: live.sha } : {}),
-    ...(commits.length ? { commits } : {}),
-    carries: [],
-    action,
-    ...(rollbackOf ? { rollback_of: rollbackOf } : {}),
-    created_at: now,
-    updated_at: now,
-  });
-  if (!args.here) {
-    try {
-      await enqueueConfigCommand(ctx, userId, "line_deploy", JSON.stringify({ deploy: shortId, root: t.root }), t.device_id, args.request_id);
-    } catch (err) {
-      throw new Error(`${name} runs on the machine that published it, which is not yours: ask its owner, or run \`cast line deploy --target ${name} --go\` there (${err instanceof Error ? err.message : String(err)})`);
-    }
-  }
-  return { _id: String(id), short_id: shortId, target: name, action, sha: sha ?? null, commits: commits.length };
-}
-
 export const request = mutation({
   args: {
     api_token: v.optional(v.string()),
@@ -337,6 +247,8 @@ export const request = mutation({
     repository: v.optional(v.string()),
     action: v.optional(v.union(v.literal("deploy"), v.literal("redeploy"), v.literal("rollback"))),
     of: v.optional(v.string()),
+    /** A deploy's commit to make live (a commit on the default branch); default main's head. */
+    sha: v.optional(v.string()),
     here: v.optional(v.boolean()),
     client_key: v.optional(v.string()),
   },
@@ -411,7 +323,19 @@ export const recordShipPass = mutation({
     pr_url: v.optional(v.string()),
     commits: v.array(v.object({ sha: v.optional(v.string()), message: v.string(), files: v.number(), session_id: v.optional(v.string()), conversation_id: v.optional(v.string()) })),
     held: v.array(v.object({ group: v.string(), paths: v.number(), note: v.optional(v.string()) })),
-    deploys: v.array(v.object({ name: v.string(), stage: v.string(), ok: v.boolean(), target: v.optional(v.string()), output: v.optional(v.string()), dirty: v.optional(v.number()) })),
+    deploys: v.array(v.object({
+      name: v.string(), stage: v.string(), ok: v.boolean(), target: v.optional(v.string()), output: v.optional(v.string()), dirty: v.optional(v.number()),
+      // The push the step made, as deploy.sh reports it (changesDeploy.markDeploy takes the same): the machine, the
+      // path, the names it put on the target and took off it, and how long before this call its diff read prod.
+      machine: v.optional(v.string()),
+      via: v.optional(v.literal("deploy.sh")),
+      adds: v.optional(v.array(v.string())),
+      drops: v.optional(v.array(v.string())),
+      changes_read_age_ms: v.optional(v.number()),
+      // How long before this call the step's push finished (ms, by the shipper's clock): the pass records at its end,
+      // minutes after the push, and the deploy went live when it pushed.
+      pushed_age_ms: v.optional(v.number()),
+    })),
     started_at: v.number(),
   },
   handler: async (ctx, args) => {
@@ -460,8 +384,15 @@ export const recordShipPass = mutation({
           ...(step.ok ? {} : { note: (step.output ?? "").slice(-1500) || `${step.name} failed` }),
           ...(!args.pushed && step.ok ? { note: `deployed from ${sha.slice(0, 10)}, which the ship did not push` } : {}),
           ...(step.dirty ? { dirty: step.dirty } : {}),
+          ...(step.machine?.trim() ? { machine: step.machine.trim() } : {}),
+          ...(step.via ? { pushed_via: step.via } : {}),
+          // Sent exactly when the push's diff ran, empty or not: a deploy whose diff ran is evidence of what its tree held.
+          ...(step.adds ? { adds: step.adds } : {}),
+          ...(step.drops ? { drops: step.drops } : {}),
+          ...(step.changes_read_age_ms != null ? { changes_read_at: now - Math.max(0, step.changes_read_age_ms) } : {}),
           ship_pass_id: passId,
-          at: now,
+          push: true,
+          at: step.pushed_age_ms != null ? now - Math.max(0, step.pushed_age_ms) : now,
         });
       }
       deploys.push({ name: step.name, stage: step.stage, ok: step.ok, ...(step.target ? { target: step.target } : {}), ...(deploy ? { deploy } : {}), ...(step.output ? { output: step.output.slice(-3000) } : {}) });
@@ -738,7 +669,8 @@ export const correctDeploySha = internalMutation({
     const d = await ctx.db.query("deploys").withIndex("by_short_id", (q) => q.eq("short_id", args.deploy.toLowerCase())).first();
     if (!d) throw new Error(`No deploy ${args.deploy}`);
     if (d.trigger !== "outside") throw new Error(`${d.short_id} was sent by codecast; its sha is what its path reported`);
-    await ctx.db.patch(d._id, { sha: args.sha.toLowerCase(), commits: undefined, previous_sha: undefined, updated_at: Date.now() });
+    // Its place on main is the corrected sha's: fillDeployRange stamps it again.
+    await ctx.db.patch(d._id, { sha: args.sha.toLowerCase(), cut_at: undefined, commits: undefined, previous_sha: undefined, updated_at: Date.now() });
     await fillDeployRange(ctx, d._id);
     return { short_id: d.short_id, sha: args.sha.toLowerCase() };
   },

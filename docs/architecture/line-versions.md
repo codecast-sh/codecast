@@ -18,7 +18,7 @@ sets, and never item by item.
 | Artifact | Superseded when | Replaced by |
 |---|---|---|
 | Problem (cause task) | it was merged into another (`cause.merged_into`); or it is open, once held findings (`cause.last_seen`), and holds none now (`cause.signal_count` 0) | the survivor, or nothing |
-| Run (live only) | a later run exists on the same problem; or its problem is superseded or closed; or it stands at a station its line's graph no longer has; or it waits at a gate the line has changed since (below) | the newer run, the problem's next run, or the line's newer version |
+| Run (live only) | a later run exists on the same problem; or its problem is superseded or closed; or it stands at a station its line's graph no longer has; or it waits at a gate the line has changed since (below). For a pinned run, its line's graph is the one it would resume with (below) | the newer run, the problem's next run, or the line's newer version |
 | Card or decision a run's gate asks | its run or its problem is superseded; or its run has left that gate; or it declares what it covers (`reach.covers`) and none of the problem's live findings is among them | its run's or problem's replacement |
 | Finding | it does not stand as evidence (`retired`, `merged_into`, `case_of`, `judge_review`); or its judge is no longer published | the finding it merged into, or nothing |
 
@@ -31,10 +31,38 @@ session where the line now has one. A change to the gate's own wording or to
 any other station leaves it current. The run's hashes are the `graph_nodes` it recorded, else
 the version published when it started; the line's are its newest saved
 version (`workflow_versions`), or the hashes its newest run recorded when that
-run is newer, since every run pushes the graph before it starts (the shipped
-line is pushed from no file, so it has no saved versions). Nothing is written:
+run is newer, since every run pushes the graph before it starts (a push from
+no file saves a version with no station hashes). Nothing is written:
 the comparison is made at read time (`gateOutdated`, `gateLineChange` in
 `convex/lib/superseded.ts`), and unknown hashes hide nothing.
+
+**A pinned run's card is superseded only by a later version of the graph it
+would resume with.** A workflows row is one per (user, slug), and every
+checkout and team that pushes the slug rewrites it, so the row is whatever was
+pushed last, from anywhere. Every push saves a version, numbered in the row's
+history (`seq`), with its graph kept once per row (`workflow_version_graphs`; a
+library version holds its own). A run pins the version it started on
+(`workflow_runs.graph_version_id`: the one its own push left; a run created
+without one, such as the sweep's or the web's Run, pins the version the row
+stands at, `workflows.version_id`; a library run's `flow_versions`), and its card, its resumed runner,
+the agents a machine needs for it and its station reads all read that version
+(`convex/lib/runGraph.ts`). What it resumes with decides what supersedes it:
+a pin from a file resumes from that checkout's file, so a later version pushed
+from the same place (`line` = the place) is its line; a library pin resumes
+with the library's current version (`line` = `library`); a pin from no file (a
+CLI built-in, a web or session save) resumes with its own pinned graph, so
+nothing supersedes it. Another repository's or team's push is never on its
+line. A run from before pins, or pinned to a version from before ct-98653,
+reads the row as the rules above say.
+
+**The row stands at the version its runs would read.** A push from a file, a
+push from no file (a CLI's shipped template), a library save, a restore and
+`cast flow pin` move `workflows.version_id`: a pin to the library stands at its
+current version, a pin to the repo at its file's newest push (recorded from the
+file the row names when the flow never pushed one). A web settings edit records
+a version but leaves a row that stands at a file's version where it is, so a
+settings edit never detaches a flow's later runs from its checkout. A library flow's run
+reads its current version, never `version_id`.
 
 A card or run carries the root reason, not a wrapper: a card whose run waits
 at a removed gate reads "station removed", one whose problem lost every

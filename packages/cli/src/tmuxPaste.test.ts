@@ -50,6 +50,15 @@ describe("prepareInjectedContent", () => {
     expect(prepareInjectedContent("body\n\n", { bracketed: true })).toBe("body");
     expect(prepareInjectedContent("\r\n\n", { bracketed: true })).toBe(" ");
   });
+
+  test("message text cannot end the bracketed paste it is wrapped in", () => {
+    for (const bracketed of [true, false]) {
+      expect(prepareInjectedContent("a\x1b[201~b\x1b[200~c", { bracketed })).toBe("abc");
+      // Removing one marker must not join the pieces around it into another.
+      expect(prepareInjectedContent("x\x1b[20\x1b[201~1~y", { bracketed })).toBe("xy");
+    }
+    expect(prepareInjectedContent("\x1b[201~", { bracketed: true })).toBe(" ");
+  });
 });
 
 describe("tmuxLiteralArg", () => {

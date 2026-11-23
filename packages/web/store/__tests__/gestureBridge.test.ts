@@ -110,6 +110,23 @@ afterEach(() => {
   store._setDispatch(null);
 });
 
+describe("a close crosses windows as a close", () => {
+  it("closeSession's hide carries inbox_closed_at equal to its dismissed stamp, and a sibling applies both", () => {
+    seed({ sessions: { [REAL_A]: session(REAL_A) }, conversations: { [REAL_A]: { _id: REAL_A } } });
+    useInboxStore.getState().closeSession(REAL_A);
+    const msg = hub.posted.find((p) => p.data.kind === "hide")!.data;
+    const wrote = msg.writes[REAL_A];
+    expect(wrote.inbox_closed_at).toBe(wrote.inbox_dismissed_at);
+
+    // A sibling window holding the row un-hidden receives it.
+    seed({ sessions: { [REAL_A]: session(REAL_A) }, conversations: { [REAL_A]: { _id: REAL_A } } });
+    (useInboxStore.getState() as any).applyGestureBridge({ ...msg, source: "another-window" });
+    const row = useInboxStore.getState().sessions[REAL_A] as any;
+    expect(row.inbox_dismissed_at).toBe(wrote.inbox_dismissed_at);
+    expect(row.inbox_closed_at).toBe(wrote.inbox_closed_at);
+  });
+});
+
 describe("gesture bridge senders", () => {
   it("killSession broadcasts exactly one hide with the resolved cascade set", () => {
     const child = REAL_B;

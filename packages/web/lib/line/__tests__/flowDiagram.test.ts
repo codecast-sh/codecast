@@ -6,18 +6,36 @@ import { flowCommandTarget } from "../flowCommandOutput";
 
 const pool = appPool();
 const change = flowBySlug(pool, "change")!;
+const quick = flowBySlug(pool, "quick-change")!;
 
 describe("a flow as a diagram", () => {
-  test("the change line reads as its five segments, each holding its own steps, ending at Live", () => {
+  test("the change line reads as PR, CI beside review, Verdicts, Merge, Merged and Deploy, ending at Live", () => {
     const d = flowDiagram(change);
-    expect(d.steps.map((s) => s.label)).toEqual(["Check", "Review", "Decide", "Land", "Deploy"]);
-    expect(d.steps.map((s) => s.inner.map((i) => i.label))).toEqual([["Verify"], ["Review"], ["Decide"], ["Rebase", "Land"], ["Go live"]]);
+    expect(d.steps.map((s) => s.label)).toEqual(["PR", "CI and review", "Verdicts", "Merge", "Merged", "Deploy"]);
+    expect(d.steps.map((s) => s.inner.map((i) => i.label))).toEqual([[], ["CI", "Review"], [], [], [], ["Go live"]]);
     expect(d.end).toBe("Live");
-    expect(d.steps[3].inner[0].id).toBe("ship__rebase");
+  });
+
+  test("what CI and the reviewer find, and a merge conflict, go back to the session; a rejection, silent CI and a refused merge stop", () => {
+    const side = (i: number) => flowDiagram(change).steps[i].side.map((r) => [r.tone, r.outcome, r.leadsTo]);
+    expect(side(2)).toEqual([
+      ["out", "pushed after this round", "Branch moved"], ["stop", "Branch keeps moving", null], ["stop", "Rejected", null], ["out", "CI never reported", "CI"], ["out", "no verdict this round", "Review"], ["stop", "CI never reported", null],
+      ["out", "every failure is main's", "Wait for main"], ["stop", "Main stayed red", null], ["out", "it edits CI", "Why a person"], ["stop", "Needs a person", null], ["stop", "Found work", null],
+      ["back", "conflicts with main", "this session"], ["back", "CI red, changes asked or no verdict", "this session"], ["stop", "No verdicts", null],
+    ]);
+    expect(side(3)).toEqual([["back", "conflict", "this session"], ["out", "retest", "Retest"], ["stop", "Main keeps moving", null], ["stop", "Not merged", null]]);
+  });
+
+  test("the quick change line reads as its four segments, each holding its own steps, ending at Live", () => {
+    const d = flowDiagram(quick);
+    expect(d.steps.map((s) => s.label)).toEqual(["Check", "Review", "Land", "Deploy"]);
+    expect(d.steps.map((s) => s.inner.map((i) => i.label))).toEqual([["Verify"], ["Review"], ["Rebase", "Land"], ["Go live"]]);
+    expect(d.end).toBe("Live");
+    expect(d.steps[2].inner[0].id).toBe("ship__rebase");
   });
 
   test("routes off the path say where they go: a stop, a loop back, a way out", () => {
-    const ship = flowDiagram(change).steps[3];
+    const ship = flowDiagram(quick).steps[2];
     const rebase = ship.inner[0].side.map((r) => [r.tone, r.outcome, r.leadsTo]);
     const shipStep = ship.inner[1].side.map((r) => [r.tone, r.outcome, r.leadsTo]);
     expect(rebase).toEqual([["out", "Already landed", null], ["back", "Conflict", "this session"]]);
@@ -26,25 +44,24 @@ describe("a flow as a diagram", () => {
   });
 
   test("a stage's findings go back to the session the change came from, said once; true stops still stop", () => {
-    const routes = (i: number) => { const s = flowDiagram(change).steps[i]; return [...s.side, ...s.inner.flatMap((x) => x.side)].map((r) => [r.tone, r.outcome, r.leadsTo]); };
+    const routes = (i: number) => { const s = flowDiagram(quick).steps[i]; return [...s.side, ...s.inner.flatMap((x) => x.side)].map((r) => [r.tone, r.outcome, r.leadsTo]); };
     expect(routes(0)).toEqual([["back", "Checks failed", "this session"], ["stop", "Not checked here", null]]);
     expect(routes(1)).toEqual([["back", "Changes asked", "this session"], ["stop", "Rejected", null]]);
-    expect(routes(2)).toEqual([["back", "Revise", "this session"], ["stop", "Dropped", null]]);
-    expect(routes(4)).toEqual([["stop", "Deploy failed", null]]);
+    expect(routes(3)).toEqual([["stop", "Not merged", null], ["stop", "Deploy stuck", null], ["stop", "Deploy failed", null]]);
   });
 
   test("a segment's plain end is not a route off its last step", () => {
-    const review = flowDiagram(change).steps[1].inner[0];
+    const review = flowDiagram(quick).steps[1].inner[0];
     expect(review.side.map((r) => r.outcome)).toEqual(["Changes asked", "Rejected"]);
   });
 
   test("a run lights the steps it passed, stands at its current step, and marks where it stopped", () => {
-    const d = flowDiagram(change);
+    const d = flowDiagram(quick);
     const running = stepStates(d, { status: "running", current_node_id: "review__review", node_statuses: [{ node_id: "check", status: "completed" }, { node_id: "check__verify", status: "completed" }, { node_id: "review", status: "completed" }] });
     expect(running.get("check")).toBe("done");
     expect(running.get("check__verify")).toBe("done");
     expect(running.get("review__review")).toBe("current");
-    expect(running.get("decide")).toBe("idle");
+    expect(running.get("ship")).toBe("idle");
     const stopped = stepStates(d, { status: "failed", current_node_id: "check__failed", node_statuses: [{ node_id: "check__verify", status: "failed" }] });
     expect(stopped.get("check")).toBe("stopped");
     expect(runReached({ status: "failed", current_node_id: "check__failed" }, "check__failed")).toBe(true);
@@ -64,6 +81,8 @@ describe("a route in words", () => {
 describe("what a flow asks a person", () => {
   test("a gate is said by its own options", () => {
     const { flowAsks } = require("../flowDiagram");
+    expect(flowAsks(flowBySlug(pool, "decide")!)).toEqual(["Ship, revise or drop it"]);
+    // The change line asks a person only about a change to CI.
     expect(flowAsks(change)).toEqual(["Ship, revise or drop it"]);
   });
 });
@@ -75,17 +94,17 @@ describe("a run in words", () => {
     expect(flowRunState({ status: "failed", current_node_id: "failed", fail_reason: "Stopped: The project's check failed: 1 fail" }, check)).toEqual({ tone: "stopped", words: "Checks failed", why: "The project's check failed: 1 fail" });
   });
   test("a live run says where it is, a segment's step under the segment's name", () => {
-    expect(flowRunState({ status: "running", current_node_id: "review__review" }, change).words).toBe("At Review");
-    expect(flowRunState({ status: "running", current_node_id: "ship__rebase" }, change).words).toBe("At Land: Rebase");
+    expect(flowRunState({ status: "running", current_node_id: "review" }, change).words).toBe("At Review");
+    expect(flowRunState({ status: "running", current_node_id: "ship__rebase" }, quick).words).toBe("At Land: Rebase");
   });
   test("a run stopped at a station waiting on a person names the step, never its id", () => {
-    expect(flowRunState({ status: "failed", current_node_id: "fix_check", fail_reason: "Stopped: fix_check is waiting on a person" }, change).why).toBe("Fix check is waiting on a person");
+    expect(flowRunState({ status: "failed", current_node_id: "brief", fail_reason: "Stopped: brief is waiting on a person" }, change).why).toBe("Fix findings is waiting on a person");
   });
 });
 
 describe("the pool", () => {
   test("holds the shipped flows, and a pushed one by its slug, reading its kind from its source", () => {
-    expect(pool.filter((f) => f.kind === "segment").map((f) => f.slug).sort()).toEqual(["check", "decide", "deploy", "eval", "judge", "prove-implement", "review", "ship"]);
+    expect(pool.filter((f) => f.kind === "segment").map((f) => f.slug).sort()).toEqual(["check", "decide", "deploy", "eval", "intent", "judge", "prove-implement", "review", "ship"]);
     const pushed = pushedFlow({
       _id: "w1", slug: "polish", name: "polish",
       source: 'digraph polish { graph [kind="segment", label="Polish", description="Critique then fix"] }',
@@ -100,7 +119,7 @@ describe("the pool", () => {
 
 describe("the fence and the command", () => {
   test("a flow fence names a flow or a run", () => {
-    expect(readFlowFence('{"flow":"change"}')).toEqual({ ok: true, spec: { flow: "change", run: null, title: null } });
+    expect(readFlowFence('{"flow":"change"}')).toEqual({ ok: true, spec: { flow: "change", run: null, title: null, edit: null, pipeline: null } });
     expect(readFlowFence('{"run":"th7abc"}').ok).toBe(true);
     expect(readFlowFence("{}").ok).toBe(false);
   });

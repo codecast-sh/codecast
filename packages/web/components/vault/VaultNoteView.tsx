@@ -3,7 +3,7 @@
 // images. Link behavior (resolution, navigation, embeds, tags) comes from the
 // shared useVaultLinkCtx hook so hover-preview cards behave identically.
 
-import { lazy, memo, Suspense, useMemo } from "react";
+import { memo, Suspense, useMemo } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { BookOpen, FileText, Pencil } from "lucide-react";
 import { noteDisplayName } from "./VaultExplorer";
@@ -19,15 +19,14 @@ import { headingSlugs } from "../../lib/vault/parseNote";
 import { VaultProperties } from "./VaultProperties";
 import { useVaultEntryState } from "./useVaultEntry";
 import type { VaultViewMode } from "../../lib/vault/viewMode";
+import { lazyNamed } from "../../lib/lazyNamed";
 
 // Compat re-export: several vault modules import this from here.
 export { splitFrontmatter };
 
 // CodeMirror and the markdown grammar are ~100kB that reading a note never
 // needs; the editor loads the first time someone actually edits.
-const VaultEditor = lazy(() =>
-  import("./VaultEditor").then((m) => ({ default: m.VaultEditor })),
-);
+const VaultEditor = lazyNamed(() => import("./VaultEditor"), "VaultEditor");
 
 // Per-note scroll positions, session-lived. Restored when a note reopens;
 // a search-hit targetLine wins over memory.

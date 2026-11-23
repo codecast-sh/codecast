@@ -399,6 +399,21 @@ describe("orgLine admission (LE6)", () => {
       expect(next.started).toEqual([expect.objectContaining({ task_id: "tasks_c0", place: { device: "h1", user: HOST, project_path: "/home/ubuntu/h1/growth" } })]);
     });
 
+    // cast flow run --device (ct-98920): a machine named outright takes the whole run, in its checkout, past the pool.
+    test("a run placed on a named machine goes there with its change, never to the pool; an offline one is refused", async () => {
+      const { tables, ctx } = await handStart([laptop, host("h1", 1), host("box", 0, { cli_version: "1.1.255", git_plane: [{ root: "/home/me/growth", origin: "https://github.com/acme/growth", origin_ok: true }], line_slots: [] })]);
+      const { createFromCli } = await import("./workflow_runs");
+      const change = { source: "session", branch: "codecast/line-ct-c0", worktree: "line-ct-c0", tip: "abc", base: "abc", paths: ["a.ts"], shared: [], held: [], pushed: true };
+      const placed = (device: string) => (createFromCli as any)._handler(ctx, { api_token: TOKEN, workflow_name: "line", task_id: "ct-c0", project_path: "/Users/me/growth", detach: true, run_on_device: "dev-laptop", place_device: device, place_origin: "git@github.com:Acme/Growth.git", placed_change: change });
+      const out = await placed("box");
+      expect(out).toMatchObject({ runner_device: "box", project_path: "/home/me/growth" });
+      expect(tables.workflow_runs.find((r) => r._id === out.run_id)).toMatchObject({ runner_device: "box", project_path: "/home/me/growth", placed_change: change });
+      expect(tables.daemon_commands.at(-1)!.target_device_id).toBe("box");
+      tables.devices.find((d: any) => d.device_id === "box")!.last_seen = NOW - 60 * 60_000;
+      await expect(placed("box")).rejects.toThrow(/ct-c1|ct-c0 did not start: .* is offline/);
+      await expect(placed("someone-elses")).rejects.toThrow(/not one of your machines/);
+    });
+
     test("Start a fix on the web takes the same admission", async () => {
       const { startLineCauseCore } = await import("./lineCause");
       const free = await handStart([laptop, host("h1", 1)]);

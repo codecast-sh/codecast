@@ -20,7 +20,7 @@ import path from "node:path";
 import { spawnSync } from "./proc.js";
 import { graphExtends, graphHash, graphNodeHashes, parseWorkflowFile, validateWorkflow, type ReadFile } from "./workflow/parser.js";
 import type { WorkflowGraph } from "./workflow/types.js";
-import { findNodeStmt, nodeAttrRaw, setNodeAttr } from "./repoLine.js";
+import { findNodeStmt, nodeAttrRaw, setNodeAttr, upsertNodeAttrs } from "./repoLine.js";
 
 export class LineGraphError extends Error {}
 
@@ -87,7 +87,7 @@ function declaringFile(castAbs: string, node: string, field: GraphField, read: R
   return null;
 }
 
-const readDisk = (abs: string) => (fs.existsSync(abs) ? fs.readFileSync(abs, "utf8") : null);
+const readDisk = (abs: string) => (fs.existsSync(abs) && fs.statSync(abs).isFile() ? fs.readFileSync(abs, "utf8") : null);
 
 /**
  * What a push of the graph in `castFile` records about where it lives, or
@@ -168,13 +168,21 @@ export function planGraphEdit(castAbs: string, args: Pick<LineGraphEditArgs, "no
     throw new LineGraphError(`${node}'s ${field} in this checkout differs from the text you edited, so saving would overwrite it; bring the checkout up to date (or push it) and edit again`);
   }
 
-  // The step's text is written where it is declared: in this graph, or in the base it extends (every line on that base reads the edit).
-  const at = declaringFile(castAbs, node, field, read);
+  // The step's text is written where it is declared in this graph. A variant's edit of a step it inherits (one of its
+  // base's, or a segment's station) is the variant's own: a line in its file naming a file beside it, so the backbone
+  // and every other flow on it stay as they are (pipeline.md PL3).
+  const own = read(castAbs)!;
+  const inherited = graphExtends(own) !== undefined && !(findNodeStmt(own, node) && nodeAttrRaw(own, node, field) !== null);
+  const at = inherited ? { file: castAbs, source: own } : declaringFile(castAbs, node, field, read);
   if (!at) throw new LineGraphError(`${node}'s ${field} is written in no graph file this one reads`);
-  const ref = refOf(nodeAttrRaw(at.source, node, field));
+  const ref = inherited ? `${path.basename(castAbs, ".cast")}/${node}.${field === "script" ? "sh" : "md"}` : refOf(nodeAttrRaw(at.source, node, field));
   const overrides = new Map<string, string>();
   let target = at.file;
-  if (ref) {
+  if (inherited) {
+    target = path.resolve(path.dirname(castAbs), ref!);
+    overrides.set(target, args.text);
+    overrides.set(castAbs, upsertNodeAttrs(own, node, { [field]: dotQuote(`@${ref}`) }));
+  } else if (ref) {
     target = path.resolve(path.dirname(at.file), ref);
     if (!inside(opts.root, target)) throw new LineGraphError(`${node} reads its ${field} from ${ref}, outside the checkout`);
     const parts = [...(read(target) ?? "").matchAll(/^@include[ \t]+(\S+)[ \t]*$/gm)].map((m) => m[1]);
@@ -186,6 +194,9 @@ export function planGraphEdit(castAbs: string, args: Pick<LineGraphEditArgs, "no
   const after = parseGraphWith(castAbs, (abs) => (overrides.has(abs) ? overrides.get(abs)! : read(abs)));
   const errors = validateWorkflow(after);
   if (errors.length) throw new LineGraphError(`the graph would not run: ${errors.join("; ")}`);
+  if (after.nodes.get(node)?.[field] !== args.text) {
+    throw new LineGraphError(`${node}'s ${field} is its base's with this project's guidance added (guide=), so the text you edited is not what it reads; edit the guidance file, or replace the whole ${field} with cast flow edit <flow> ${field === "script" ? "run" : "prompt"} ${node}`);
+  }
   const graph_hash = graphHash(after);
   const node_hash = graphNodeHashes(after).find((n) => n.id === node)?.h ?? "";
   const changed = current !== args.text;

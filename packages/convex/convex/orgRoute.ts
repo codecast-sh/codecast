@@ -21,6 +21,7 @@ import { parseRouterReply, routerDecision, routerRequest, type RouterRoster } fr
 import { routeWork, type RouteLanding } from "@codecast/shared/contracts/orgRoute";
 import { isWholeWorkspaceRole, type OwnedWork } from "@codecast/shared/contracts/orgLead";
 import { parseStandingSection } from "@codecast/shared/contracts/briefStanding";
+import { roleCharterOf } from "./lib/roleCharter";
 
 type Boundary = { team_id?: Id<"teams">; scope_user_id?: Id<"users"> };
 
@@ -59,7 +60,6 @@ export async function routerRoster(ctx: { db: any }, viewerId: Id<"users">, boun
     const areas: RouterRoster["roles"][number]["areas"] = [];
     for (const id of role.scope?.project_ids ?? []) { const p = await ctx.db.get(id); if (p && (await judge("projects", p))) areas.push({ kind: "project", title: p.title, goal: p.goal ?? undefined }); }
     for (const id of role.scope?.plan_ids ?? []) { const p = await ctx.db.get(id); if (p && (await judge("plans", p))) areas.push({ kind: "plan", title: p.title, goal: p.goal ?? undefined }); }
-    const charterDoc = role.charter_doc_id ? await ctx.db.get(role.charter_doc_id) : null;
     const briefDoc = role.brief_doc_id ? await ctx.db.get(role.brief_doc_id) : null;
     const standing = parseStandingSection(briefDoc?.content).sort((a, b) => (b.written_at ?? 0) - (a.written_at ?? 0)).map((l) => `${l.project}: ${l.text}${l.written_on ? ` (${l.written_on})` : ""}`);
     const held: any[] = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id)).order("desc").take(HOLDING_MAX * 3);
@@ -75,7 +75,7 @@ export async function routerRoster(ctx: { db: any }, viewerId: Id<"users">, boun
       handle: role.handle,
       name: role.name,
       given_name: role.given_name ?? undefined,
-      charter: (charterDoc?.content ?? role.charter ?? "").trim() || undefined,
+      charter: (await roleCharterOf(ctx, role)) || undefined,
       areas,
       standing,
       holding,

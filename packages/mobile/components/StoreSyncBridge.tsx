@@ -4,6 +4,7 @@ import { useSyncCore } from '@codecast/web/hooks/useSyncCore';
 import { usePendingMessageCoverage } from '@codecast/web/hooks/usePendingMessageCoverage';
 import { useAdoptTimezone } from '@codecast/web/hooks/useAdoptTimezone';
 import { useSessionCommandResults } from '@codecast/web/hooks/useSessionCommands';
+import { useSyncLandedReach } from '@codecast/web/hooks/useSessionShipState';
 import { useSyncDevices } from '@codecast/web/hooks/useSyncDevices';
 import { useRecentProjectsFeed } from '@codecast/web/hooks/useRecentProjectsFeed';
 import { setTriggerFeedArgs, useSyncTriggers } from '@codecast/web/hooks/useSyncTriggers';
@@ -86,6 +87,8 @@ function StoreSyncBridgeInner() {
   // Settles the daemon commands this phone asked for (restart, device move),
   // as web's DashboardLayout does for each window.
   useSessionCommandResults();
+  // How far each session's landed change has gone toward production: its card's "Not live yet" or "Live".
+  useSyncLandedReach();
   // What the inbox and the New Session sheet draw beyond sessions: the machine
   // roster, my recent folders and my triggers. Fed here, ahead of any screen,
   // so the sheet opens with its machines and folders already in the store.

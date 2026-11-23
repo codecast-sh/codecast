@@ -9,7 +9,7 @@ Run `cast guide tasks` for the commands and flags. The guide ships inside the bi
 
 ## Referencing objects
 
-Every codecast object has a short ID. Written anywhere (messages, summaries, task comments, doc bodies, trigger prompts), it renders as a live reference: title, current state, and a link.
+Every codecast object has a short ID. Written anywhere (a message, comment, doc or prompt), it renders as a live reference: title, state and a link.
 
 | Object  | Short ID  | Where to find it |
 |---------|-----------|------------------|
@@ -20,6 +20,7 @@ Every codecast object has a short ID. Written anywhere (messages, summaries, tas
 | Doc     | `doc:<id>` | `cast doc ls`, `cast doc search` |
 | Call    | `cl-42`   | `cast calls` |
 | Flow    | `flow:change` | `cast flow ls` |
+| Deploy  | `dp-1972` | `cast line deploy targets` |
 
 Write the bare ID by default (`Filed under ct-4102.`); it reads as a sentence and renders in full. A flow ID alone on a line draws the flow, each step open to its prompt. Write `@[Title id]` (`@[Fix the auth race ct-4102]`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as a blob, and every command takes the short one.
 <!-- cast @VERSION@ -->

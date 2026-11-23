@@ -35,6 +35,7 @@ describe("workflow/runResume (a run outlives its runner)", () => {
   let origDir: string | undefined;
   let calls: Array<{ route: string; body: any }>;
   let hangOn: string | null;
+  let hangHand: string;
   let gateAnswer: string | null;
   let handRow: (id: string) => any;
   let spawned: number;
@@ -50,6 +51,7 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     console.log = () => {};
     calls = [];
     hangOn = null;
+    hangHand = "conv_build_2";
     gateAnswer = null;
     spawned = 0;
     runId = `run-resume-${Math.random().toString(36).slice(2, 10)}`;
@@ -59,7 +61,7 @@ describe("workflow/runResume (a run outlives its runner)", () => {
       const body = JSON.parse(init?.body || "{}");
       calls.push({ route, body });
       const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
-      if (hangOn && route === hangOn && (route !== "/cli/inbox" || body.session_ids?.[0] === "conv_build_2")) return new Promise<Response>(() => {});
+      if (hangOn && route === hangOn && (route !== "/cli/inbox" || body.session_ids?.[0] === hangHand)) return new Promise<Response>(() => {});
       if (route === "/cli/spawn") {
         spawned++;
         const node = String(body.title).toLowerCase();
@@ -406,6 +408,68 @@ describe("workflow/runResume (a run outlives its runner)", () => {
     // It settled on the revived hand's own done (its sixth read), not on a dead read.
     const settle = calls.findIndex((c) => c.route === "/cli/sessions/state/get");
     expect(calls.slice(0, settle).filter((c) => c.route === "/cli/inbox" && c.body.session_ids?.[0] === "conv_build_2").length).toBeGreaterThanOrEqual(6);
+  }, 30000);
+
+  // Union's change line: CI (a script) and Review (a session) side by side, joined at Read, which routes on CI's JSON.
+  // A daemon restart mid-review resumed the run at Review alone: CI never ran, and Read sent the session a brief
+  // for a CI it had not read (ct-98869, 2026-11-21).
+  const fanout = () => parseWorkflowSource(`digraph line {
+    start [shape=Mdiamond]
+    checks [label="CI and review", shape=component]
+    ci [label="CI", shape=parallelogram, script="mkdir -p $run_dir && echo ran >> $run_dir/ci.log && echo '{\\"green\\":true}'"]
+    review [label="Review", backend=session, agent=claude, prompt="review it"]
+    read [label="Read", shape=tripleoctagon]
+    brief [label="Brief", shape=parallelogram, script="mkdir -p $run_dir && echo briefed >> $run_dir/route.log"]
+    merge [label="Merge", shape=parallelogram, script="mkdir -p $run_dir && echo merged >> $run_dir/route.log"]
+    exit [shape=Msquare]
+    start -> checks
+    checks -> ci
+    checks -> review
+    ci -> read
+    review -> read
+    read -> brief [condition="ci.json.green != true"]
+    read -> merge [condition="ci.json.green = true"]
+    brief -> exit
+    merge -> exit
+  }`);
+
+  test("a run whose row stands at a fanout branch resumes at the fanout, keeping what finished and waiting on the branch's hand", () => {
+    const at = { node_statuses: [{ node_id: "start", status: "completed", outcome: "success", completed_at: 1 }, { node_id: "review", status: "running", session_id: "jxreview1" }] };
+    const checkpoint = { run_id: runId, node_id: "checks", started: true, visit_counts: { start: 1, checks: 1 }, completed: ["start"], node_outcomes: { start: "success" as const }, context: { "review.conversation_id": "conv_review_1", "checks.finished": "ci", "ci.json": "{\"green\":true}" }, at: 1000 };
+    const resumed = resumePoint(fanout(), { status: "running", current_node_id: "review", ...at }, checkpoint)!;
+    expect(resumed.node_id).toBe("checks");
+    expect(resumed.hands).toEqual({ review: "conv_review_1" });
+    expect(resumed.finished).toEqual(["ci"]);
+    expect(resumed.context["ci.json"]).toBe("{\"green\":true}");
+    expect(resumed.visit_counts.checks ?? 0).toBe(0);
+    // With no checkpoint on this machine the row alone still puts it at the fanout.
+    expect(resumePoint(fanout(), { status: "running", current_node_id: "review", ...at }, null)!.node_id).toBe("checks");
+  });
+
+  test("a run killed mid-fanout runs only the branch that had not finished, reattached to its live hand, and the join reads them all", async () => {
+    hangOn = "/cli/inbox";
+    hangHand = "conv_review_1";
+    void runWorkflow(fanout(), options());
+    const runDir = lineRunDir(tmpDir, `line-${runId}`);
+    await until(() => readCheckpoint(runDir, runId)?.context["review.conversation_id"] === "conv_review_1"
+      && readCheckpoint(runDir, runId)?.context["checks.finished"] === "ci"
+      && calls.some((c) => c.route === "/cli/inbox" && c.body.session_ids?.[0] === "conv_review_1"));
+    // The branch reported its own node running, but left the run standing at its fanout.
+    expect(progress().some((c) => c.body.node_id === "review" && c.body.node_status === "running" && c.body.current_node_id === "checks")).toBe(true);
+    expect(progress().some((c) => c.body.current_node_id === "review")).toBe(false);
+    calls.length = 0;
+    hangOn = null;
+    handRow = (id) => (id === "conv_review_1" ? { id, work_state: "done", is_live: true } : { id, work_state: "done", is_live: false });
+
+    // A row an older runner left at the branch.
+    const outcome = await runWorkflow(fanout(), options({ resume: row({ current_node_id: "review", node_statuses: [{ node_id: "start", status: "completed", outcome: "success", completed_at: 1 }, { node_id: "review", status: "running", session_id: "jxreview1" }] }) }));
+    expect(outcome).toBe("completed");
+    expect(calls.some((c) => c.route === "/cli/spawn")).toBe(false);
+    // CI finished green before the kill: kept, not run again, and its JSON still routes the join.
+    expect(fs.readFileSync(path.join(runDir, "ci.log"), "utf-8")).toBe("ran\n");
+    expect(progress().some((c) => c.body.node_id === "ci")).toBe(false);
+    expect(progress().some((c) => c.body.node_id === "review" && c.body.node_status === "completed" && c.body.session_id === "jxreview1")).toBe(true);
+    expect(fs.readFileSync(path.join(runDir, "route.log"), "utf-8")).toBe("merged\n");
   }, 30000);
 
   test("a run a live runner holds is not driven a second time", async () => {

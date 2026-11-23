@@ -140,6 +140,11 @@ describe("a role whose check does not run", () => {
     expect(checkFaultOf(check({ status: "completed", last_run_failed: true }))).toEqual({ status: "off", label: "check off", reason: "its check was cancelled" });
   });
 
+  // ADV10: a kill stores the check as completed too, but nobody chose to stop it.
+  test("a check stopped by killing its session is down, not off", () => {
+    expect(checkFaultOf(check({ status: "completed", canceled_on_kill: true }))).toEqual({ status: "down", label: "check stopped", reason: "its check stopped when its session was killed" });
+  });
+
   test("a running or paused check is neither", () => {
     expect(checkFaultOf(check({}))).toBeNull();
     expect(checkFaultOf(check({ status: "paused" }))).toBeNull();

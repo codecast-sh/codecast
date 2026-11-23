@@ -239,6 +239,13 @@ export function applyDispatchFailure(action: string, error: unknown, args?: unkn
       useInboxStore.getState().rollbackWait(args[0], args[1].id);
       offerRollbackToHost(action, "tasks", "waits", before);
     }
+    // A refused "Send now" has no lock to roll back either: the rows it let
+    // go return to the line, here and on the host.
+    if (action === "releaseQueued" && Array.isArray(args) && typeof args[0] === "string") {
+      const before = useInboxStore.getState().pendingMessageStatus;
+      useInboxStore.getState().rollbackRelease(args[0]);
+      offerRollbackToHost(action, "pendingMessageStatus", "inflight", before);
+    }
     // A refused daemon command has no echo coming: its painted row ends failed.
     if (SESSION_COMMAND_ACTIONS.has(action) && Array.isArray(args) && typeof args[0] === "string") {
       recordSessionCommandDispatchError(args[0], error);

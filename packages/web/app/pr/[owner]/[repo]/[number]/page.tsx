@@ -494,6 +494,7 @@ export function PRContent({
         repository={repository}
         number={number}
         openComments={openComments}
+        authed={isAuthenticated}
         reviews={reviews}
         linkedSessionIds={pr.linked_session_ids ?? []}
         checksHref={prViewHref(repository, number, "checks", family)}

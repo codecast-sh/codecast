@@ -7,7 +7,9 @@
  *   - Headless mode by default; non-headless available for visual debugging
  *
  * Design choices:
- *   - We do NOT bundle a Chromium binary. We discover the system's Chrome by
+ *   - We do NOT bundle a Chromium binary. On macOS we run codecast's own
+ *     Chrome for Testing, downloaded on first need (automationChromeBinary);
+ *     elsewhere, and until it lands, we discover the system's Chrome by
  *     probing well-known paths and the PATH env. Users on machines without
  *     Chrome get a clear error.
  *   - The launched process is detached so it survives a daemon restart, but we
@@ -96,6 +98,105 @@ export function findChromeBinary(): string | null {
   return null;
 }
 
+const CFT_EXECUTABLE = "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing";
+const CFT_RETRY_MS = 6 * 60 * 60 * 1000;
+
+/** Where codecast keeps its own Chrome for Testing, one directory per version. */
+export function chromeForTestingDir(home: string = os.homedir()): string {
+  return path.join(home, ".codecast", "chrome-for-testing");
+}
+
+/** A Chrome app bundle's major version, from its Info.plist; 0 when unreadable. */
+function bundleMajor(binary: string): number {
+  const app = binary.indexOf(".app/");
+  if (app < 0) return 0;
+  try {
+    const plist = fs.readFileSync(binary.slice(0, app + 5) + "Contents/Info.plist", "utf-8");
+    return Number(plist.match(/<key>CFBundleShortVersionString<\/key>\s*<string>(\d+)/)?.[1]) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+/**
+ * The Chrome codecast launches for itself without a window and with a fresh
+ * profile (a workspace's, a publish thumbnail's). On macOS every process
+ * started from Google Chrome.app registers with LaunchServices as
+ * com.google.Chrome, headless or not, and macOS hands a link the human clicks
+ * in another app to any running instance: with workspace Chromes up, "Open
+ * page" in the desktop app went to a headless one, which took focus with no
+ * window to show and stayed in the app switcher as a second Chrome
+ * (2026-11-21). Chrome for Testing registers under its own bundle id, so the
+ * human's links never reach it. Codecast keeps its own copy and starts a
+ * background download of the current stable one whenever none is installed or
+ * it is a major version behind the human's Chrome; until the first download
+ * lands, the human's Chrome is used and stderr says so. An explicit
+ * CODECAST_CHROMIUM or CHROME_PATH still wins. Not for a headless `cast
+ * browser`: its profile is cloned from the human's Chrome, whose cookies are
+ * sealed with Google Chrome's keychain key, which Chrome for Testing cannot
+ * open, and it empties the cookie store on its first start.
+ */
+export function automationChromeBinary(opts: {
+  home?: string;
+  platform?: NodeJS.Platform;
+  install?: (dir: string, platformName: string) => void;
+} = {}): string | null {
+  if ((opts.platform ?? process.platform) !== "darwin" || process.env.CODECAST_CHROMIUM || process.env.CHROME_PATH) return findChromeBinary();
+  const dir = chromeForTestingDir(opts.home);
+  const platformName = process.arch === "arm64" ? "mac-arm64" : "mac-x64";
+  let versions: string[] = [];
+  try {
+    versions = fs.readdirSync(dir).filter((v) => /^\d/.test(v)).sort((a, b) => b.localeCompare(a, undefined, { numeric: true }));
+  } catch {}
+  const installed = versions
+    .map((v) => ({ major: parseInt(v, 10), binary: path.join(dir, v, `chrome-${platformName}`, CFT_EXECUTABLE) }))
+    .find((c) => fs.existsSync(c.binary));
+  const human = findChromeBinary();
+  if (!installed || (human && installed.major < bundleMajor(human))) (opts.install ?? installChromeForTesting)(dir, platformName);
+  if (installed) return installed.binary;
+  process.stderr.write(`Until Chrome for Testing is in ${dir}, this headless Chrome runs as Google Chrome and can catch links you open.\n`);
+  return human;
+}
+
+/**
+ * Download the current stable Chrome for Testing into `dir/<version>` in a
+ * detached shell, at most once per CFT_RETRY_MS, and say so on stderr. The
+ * build is unsigned, so HTTPS from Google's own bucket is its only check (as
+ * for `npx @puppeteer/browsers`). The newest two versions are kept, so a
+ * Chrome still running from the previous one keeps its files.
+ */
+export function installChromeForTesting(dir: string, platformName: string): void {
+  const stamp = path.join(dir, ".attempted");
+  try {
+    if (Date.now() - fs.statSync(stamp).mtimeMs < CFT_RETRY_MS) return;
+  } catch {}
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(stamp, "");
+  } catch {
+    return;
+  }
+  const script = `set -e
+cd "$1"
+v=$(curl -fsSL https://googlechromelabs.github.io/chrome-for-testing/LATEST_RELEASE_STABLE)
+case "$v" in [0-9]*.*) ;; *) exit 1 ;; esac
+[ -d "$v" ] && exit 0
+partial=".partial-$v-$$"
+trap 'rm -rf "$partial"' EXIT
+mkdir "$partial"
+curl -fsSL "https://storage.googleapis.com/chrome-for-testing-public/$v/$2/chrome-$2.zip" -o "$partial/cft.zip"
+ditto -x -k "$partial/cft.zip" "$partial"
+rm "$partial/cft.zip"
+[ -d "$v" ] || mv "$partial" "$v"
+ls | grep '^[0-9]' | sort -t. -k1,1nr -k2,2nr -k3,3nr -k4,4nr | tail -n +3 | while read -r old; do rm -rf "$old"; done`;
+  try {
+    const child = spawn("/bin/sh", ["-c", script, "chrome-for-testing", dir, platformName], { stdio: "ignore", detached: true });
+    child.on("error", () => {});
+    child.unref();
+    process.stderr.write(`Downloading the current Chrome for Testing (about 150 MB) to ${dir} in the background.\n`);
+  } catch {}
+}
+
 /** Probe list (in priority order). Exported for error reporting. */
 export function chromeBinaryProbes(): string[] {
   const probes: string[] = [];
@@ -166,7 +267,7 @@ function defaultArgs(opts: LaunchChromeOptions): string[] {
  * Spawn Chromium and wait until its CDP endpoint is reachable.
  */
 export async function launchChrome(opts: LaunchChromeOptions): Promise<ChromeInstance> {
-  const binaryPath = opts.binaryPath ?? findChromeBinary();
+  const binaryPath = opts.binaryPath ?? automationChromeBinary();
   if (!binaryPath) {
     throw new ChromeNotFoundError(chromeBinaryProbes());
   }

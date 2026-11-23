@@ -22,7 +22,8 @@
 // against its merge base with origin's default branch, less any leading
 // commits the tree already holds, and prints the one line that goes on the task.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { majorityOf, repPassed } from "../packages/evals/src/adapters/replay";
 
@@ -122,8 +123,8 @@ function evalBranch(): void {
   process.exit(r.status ?? 1);
 }
 
-function git(cwd: string, args: string[], input?: string): { ok: boolean; out: string; err: string } {
-  const r = spawnSync("git", args, { cwd, encoding: "utf8", input, maxBuffer: 64 * 1024 * 1024 });
+function git(cwd: string, args: string[], input?: string, env?: Record<string, string>): { ok: boolean; out: string; err: string } {
+  const r = spawnSync("git", args, { cwd, encoding: "utf8", input, maxBuffer: 64 * 1024 * 1024, env: env && { ...process.env, ...env } });
   return { ok: r.status === 0, out: r.stdout ?? "", err: (r.stderr ?? "").trim() };
 }
 
@@ -149,16 +150,17 @@ function ship(): void {
   if (!patch.trim()) { console.log("nothing to land: the branch has no change against its base"); return; }
   const stat = git(cwd, ["diff", "--shortstat", range]).out.trim();
   const files = git(cwd, ["diff", "--name-only", "--no-renames", range]).out.split("\n").filter(Boolean);
+  const base = range.split("..")[0];
   // A change made from a session's own edits was committed from this tree,
   // and flowChange.ts leaves the edits there: the tree already holds it.
   if (git(tree, ["apply", "--check", "-R", "-"], patch).ok) {
-    refuseUnreviewed(cwd, tree, files, "HEAD");
+    refuseUnreviewed(cwd, tree, files, base, "HEAD");
     console.log(`already in the working tree at ${tree}: ${stat}`);
     return;
   }
   const check = git(tree, ["apply", "--check", "-"], patch);
   if (check.ok) {
-    refuseUnreviewed(cwd, tree, files, range.split("..")[0]);
+    refuseUnreviewed(cwd, tree, files, base, base);
     const applied = git(tree, ["apply", "-"], patch);
     if (!applied.ok) fail(`applying to ${tree} failed: ${applied.err.split("\n")[0]}`);
     console.log(`applied to the working tree at ${tree}: ${stat}`);
@@ -168,7 +170,7 @@ function ship(): void {
   // branch's first commits and not the rest: land only the rest.
   const held = heldPrefix(cwd, tree, range);
   if (!held) fail(`the change does not apply to ${tree} as it stands: ${check.err.split("\n")[0]}`);
-  refuseUnreviewed(cwd, tree, files, held.commit);
+  refuseUnreviewed(cwd, tree, files, base, held.commit);
   const rest = git(cwd, ["diff", "--binary", `${held.commit}..HEAD`]).out;
   const restCheck = git(tree, ["apply", "--check", "-"], rest);
   if (!restCheck.ok) fail(`the tree holds the first ${held.count} of ${held.total} commits, and the rest does not apply to ${tree}: ${restCheck.err.split("\n")[0]}`);
@@ -181,23 +183,38 @@ function ship(): void {
  * The tree's copy of a file the change touches can hold edits made after the
  * branch was cut (a session that kept working once its change went to
  * review). The tree is what gets committed, so landing there would ship code
- * no review saw: every touched file must read, in the tree, as `rev` has it
- * (the point the branch lands from), and nothing is written otherwise.
+ * no review saw: what the tree commits for each touched file, its change
+ * against its own HEAD, must be the branch's change from `base` to `rev` (the
+ * point the branch lands from), and nothing is written otherwise. The tree's
+ * HEAD can lag `base` (the rebase station puts the branch on origin), so the
+ * file is held against the tree's HEAD with that change applied, never
+ * against `rev` itself, which carries upstream commits the tree lacks.
  */
-export function unreviewedEdits(cwd: string, tree: string, files: string[], rev: string): string[] {
-  return files.filter((file) => {
-    const want = git(cwd, ["rev-parse", "-q", "--verify", `${rev}:${file}`]);
-    const onDisk = existsSync(path.join(tree, file));
-    if (!want.ok || !onDisk) return want.ok !== onDisk;
-    return git(tree, ["hash-object", "--", file]).out.trim() !== want.out.trim();
-  });
+export function unreviewedEdits(cwd: string, tree: string, files: string[], base: string, rev: string): string[] {
+  const dir = mkdtempSync(path.join(tmpdir(), "line-reviewed-"));
+  try {
+    // A scratch index of the tree's HEAD with the reviewed change applied.
+    const env = { GIT_INDEX_FILE: path.join(dir, "index") };
+    const patch = git(cwd, ["diff", "--binary", base, rev]).out;
+    const built = git(tree, ["read-tree", "HEAD"], undefined, env).ok
+      && (!patch.trim() || git(tree, ["apply", "--cached", "-"], patch, env).ok);
+    return files.filter((file) => {
+      // When the change does not apply to the tree's HEAD, only `rev`'s own copy counts as reviewed.
+      const want = built ? git(tree, ["rev-parse", "-q", "--verify", `:${file}`], undefined, env) : git(cwd, ["rev-parse", "-q", "--verify", `${rev}:${file}`]);
+      const onDisk = existsSync(path.join(tree, file));
+      if (!want.ok || !onDisk) return want.ok !== onDisk;
+      return git(tree, ["hash-object", "--", file]).out.trim() !== want.out.trim();
+    });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
-function refuseUnreviewed(cwd: string, tree: string, files: string[], rev: string): void {
-  const edited = unreviewedEdits(cwd, tree, files, rev);
+function refuseUnreviewed(cwd: string, tree: string, files: string[], base: string, rev: string): void {
+  const edited = unreviewedEdits(cwd, tree, files, base, rev);
   if (!edited.length) return;
-  const sha = git(cwd, ["rev-parse", "--short", rev]).out.trim();
-  fail(`the working tree at ${tree} holds edits the reviewed branch does not, in ${edited.join(", ")}; landing there would ship them unreviewed, so nothing was written (\`git diff ${sha} -- ${edited.join(" ")}\` in the tree shows them)`);
+  const short = (r: string) => git(cwd, ["rev-parse", "--short", r]).out.trim();
+  fail(`the working tree at ${tree} holds edits the reviewed branch does not, in ${edited.join(", ")}; landing there would ship them unreviewed, so nothing was written (\`git diff HEAD -- ${edited.join(" ")}\` in the tree shows what it would commit, \`git diff ${short(base)} ${short(rev)} -- ${edited.join(" ")}\` what review saw)`);
 }
 
 /** The longest run of the branch's leading commits the tree already holds, short of all of them; null when it holds none. */

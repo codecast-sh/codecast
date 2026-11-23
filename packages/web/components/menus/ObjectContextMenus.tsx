@@ -23,7 +23,7 @@ import {
   Smile,
   Pin,
   PinOff,
-  Square,
+  X,
   Star,
   Tag,
   Trash2,
@@ -34,6 +34,7 @@ import {
   RefreshCw,
   Hourglass,
   Link2,
+  Lock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { CtxItem, CtxHeader, CtxSeparator, CtxSub, CtxSubTrigger, CtxSubContent } from "../ui/context-menu";
@@ -56,8 +57,9 @@ import {
   type DocItem,
 } from "../../store/inboxStore";
 import { setTaskParent, updateTasksAsOne } from "../../lib/taskActions";
-import { animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../../store/undoActions";
+import { animatedCloseSessions, animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../../store/undoActions";
 import { gestureToast } from "../../store/undoStack";
+import { hideFromTeam } from "../../hooks/useTeamShareActions";
 import { counted } from "../../store/undo/labels";
 import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
 import { openForwardToChat } from "../../lib/forwardToChat";
@@ -65,6 +67,7 @@ import { useTeamFeature } from "../../lib/teamFeatures";
 import { getLabelColor } from "../../lib/labelColors";
 import { canControlModel } from "../../lib/modelSwitch";
 import { isSessionKilled, isSessionSetAside } from "../../lib/sessionRetirement";
+import { KillSelection } from "../BulkMoveSessions";
 import { teamMembersOf } from "../../lib/activeTeam";
 
 // Menu CONTENT per object type — the items every right-click surface renders
@@ -414,6 +417,7 @@ export function SessionMenuItems({
   isForeign,
   onOpen,
   onKill,
+  onClose,
   onStash,
   onDefer,
   onRename,
@@ -428,6 +432,7 @@ export function SessionMenuItems({
   onOpen?: () => void;
   /** Overrides so cards keep their slide-out animations and trigger notices. */
   onKill?: () => void;
+  onClose?: () => void;
   onStash?: () => void;
   onDefer?: () => void;
   onRename?: () => void;
@@ -557,6 +562,9 @@ export function SessionMenuItems({
       </CtxItem>
       <CtxItem icon={LinkIcon} shortcut="conv.copyLink" onSelect={copyLink}>Copy link</CtxItem>
       <ForwardCtxItem url={`${shareOrigin()}/conversation/${id}`} label="session" />
+      {session.is_private === false && !!session.team_id && (
+        <CtxItem icon={Lock} onSelect={() => hideFromTeam(id)}>Hide from team</CtxItem>
+      )}
       <CtxSeparator />
       {isSessionSetAside(session) ? (
         <CtxItem icon={RefreshCw} onSelect={() => { useInboxStore.getState().restoreSession(id); toast.success("Restored to inbox"); }}>
@@ -614,10 +622,13 @@ export function SessionMenuItems({
           </CtxItem>
         </>
       )}
-      {onKill && !isSessionKilled(session) && (
-        <CtxItem danger icon={Square} shortcut="session.kill" onSelect={onKill}>
-          Kill session
+      {!isSessionSetAside(session) && (
+        <CtxItem icon={X} shortcut="session.close" onSelect={onClose ?? (() => { void animatedCloseSessions([id]); })}>
+          Close
         </CtxItem>
+      )}
+      {onKill && !isSessionKilled(session) && (
+        <KillSelection sessions={[session]} onKill={onKill} onClear={() => {}} item label="Kill session" />
       )}
       {!session.persistent && (
         <CtxItem danger icon={Trash2} onSelect={() => openPaletteMode([session], "session", "session_delete")}>

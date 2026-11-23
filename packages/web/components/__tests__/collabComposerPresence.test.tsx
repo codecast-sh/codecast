@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { composerPresenceEnabled, presenceMember, typingRows } from "../../lib/composerPresence";
+import { composerPresenceEnabled, hasCoOwner, presenceMember, typingRows } from "../../lib/composerPresence";
 
 const row = (user_id: string, user_name: string, draft_text?: string) => ({ user_id, user_name, user_color: "#000", draft_text });
 
@@ -8,6 +8,15 @@ describe("composer presence rules", () => {
     expect(composerPresenceEnabled({ _id: "jx7abcdefghijklmnopqrstuvwxyz012" })).toBe(true);
     expect(composerPresenceEnabled({ _id: "3f2504e0-4f89-11d3-9a0c-0305e82c3301" })).toBe(false);
     expect(composerPresenceEnabled(null)).toBe(false);
+  });
+
+  test("a co-owner: anyone else in the owner set, or the account it runs on; never only me", () => {
+    expect(hasCoOwner(["a", "b"], "a", "a")).toBe(true);
+    expect(hasCoOwner(["b"], "a", "b")).toBe(true);
+    expect(hasCoOwner(["a"], "a", "a")).toBe(false);
+    expect(hasCoOwner([], "a", "a")).toBe(false);
+    // Before I am known, nothing counts: a sole owner's session writes no rows.
+    expect(hasCoOwner(["a"], "a", null)).toBe(false);
   });
 
   test("only rows with words count as typing; whitespace is silence", () => {

@@ -12,7 +12,7 @@
 // signal yet" for a surface that shipped.
 
 import { v } from "convex/values";
-import { mutation } from "./functions";
+import { mutation, query } from "./functions";
 import { Id } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
 import { isTeamMember, requireTeamMembership } from "./lib/access";
@@ -21,9 +21,19 @@ import { recordExternalEvent } from "./externalEvents";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { parseOwnerRepo } from "@codecast/shared/contracts";
 import { recordDeployMarker } from "./deploys";
+import { latestLiveDeploy } from "./lib/deployRows";
+import { recordDevPush } from "./lib/devPushes";
+import { adderOf, targetPushes } from "./lib/droppedWork";
+import { sameSha } from "./deployCarries";
+import { devPushedOver } from "./deployTargetsState";
+import { normalizeDeployTarget, type AddedBy } from "@codecast/shared/contracts/deploys";
 
 const SURFACE = /^[a-z][a-z0-9-]{0,31}$/;
 const SHA = /^[0-9a-f]{7,40}$/;
+/** Names a push may report it added or dropped, and names one lookup may ask about. */
+const NAMES_MAX = 500;
+/** How far back through a target's deploys, and through its dev pushes, a name's adder is looked for. */
+const ADDED_BY_SCAN = 200;
 
 /**
  * The team a repository's deploy belongs to, among the caller's teams. The
@@ -99,6 +109,17 @@ export const markDeploy = mutation({
     dirty: v.optional(v.number()),
     // The deploy (dp-N) this mark finishes: a deploy codecast asked for, whose path now says what went out.
     deploy: v.optional(v.string()),
+    // The hostname of the machine that pushed.
+    machine: v.optional(v.string()),
+    // Which push path sent it. A dev watcher's push is recorded as a dev push, not a deploy (deploys.recordDevPush).
+    via: v.optional(v.union(v.literal("deploy.sh"), v.literal("dev watcher"))),
+    // Names the push put on the surface and took off it (`fn:`, `http:`, `index:`, `table:`); deploys.ts caps them. Both
+    // are sent, possibly empty, exactly when the push's diff ran, and both left out when it did not.
+    adds: v.optional(v.array(v.string())),
+    drops: v.optional(v.array(v.string())),
+    // How long before this call the push's diff read prod (ms, by the pusher's clock): a deploy keeping a name proves it
+    // committed only for pushes before then. An age, not a time, so the pusher's clock never meets the server's.
+    changes_read_age_ms: v.optional(v.number()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUserOrToken(ctx, args.api_token);
@@ -112,13 +133,46 @@ export const markDeploy = mutation({
 
     if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
     const teamId = args.team_id ?? (await deployTeamFor(ctx, userId, repository));
+    const user = await ctx.db.get(userId);
+    const startedBy = { kind: "person" as const, name: user?.name ?? user?.github_username ?? "someone", user_id: userId };
+
+    // A dev watcher's push is not a deploy: a dev push, and nothing else (no event, no deploy, no trigger).
+    if (args.via === "dev watcher") {
+      // The watcher pushes once as it starts: a committed tree whose diff found nothing, at the sha of the clean deploy
+      // the target runs with no dev push on top, changed nothing, and is not recorded.
+      if (!args.dirty && Array.isArray(args.adds) && Array.isArray(args.drops) && !args.adds.length && !args.drops.length) {
+        const live = await latestLiveDeploy(ctx, `team:${teamId}`, surface, repository);
+        if (live && !live.dirty && sameSha(live.sha, sha) && !(await devPushedOver(ctx, live))) {
+          return { ok: true as const, dev_push: false as const, noop: true as const, event_id: null, team_id: teamId, repository, surface, sha, version: version ?? null, deploy: null };
+        }
+      }
+      await recordDevPush(ctx, {
+        workspace: `team:${teamId}`,
+        team_id: teamId,
+        target: surface,
+        repository,
+        sha,
+        ...(args.machine?.trim() ? { machine: args.machine.trim() } : {}),
+        started_by: startedBy,
+        ...(args.dirty ? { dirty: args.dirty } : {}),
+        ...(args.adds ? { adds: args.adds } : {}),
+        ...(args.drops ? { drops: args.drops } : {}),
+        at: Date.now(),
+      });
+      return { ok: true as const, dev_push: true as const, event_id: null, team_id: teamId, repository, surface, sha, version: version ?? null, deploy: null };
+    }
 
     // The surface already runs this sha (a retried deploy.sh, a redeploy of
     // the same commit): one marker. A rollback to an earlier sha is a change
     // of what runs, so it gets a marker of its own.
     const previous = await latestDeploy(ctx, teamId, repository, surface);
-    // A deploy of the same commit with uncommitted files is a different deploy.
-    if (previous?.sha === sha && !args.deploy && !args.dirty) {
+    const live = await latestLiveDeploy(ctx, `team:${teamId}`, surface, repository);
+    // A deploy of the same commit with uncommitted files is a different deploy, and one that changed what runs is news.
+    // So is a clean deploy of a sha whose live deploy went out dirty: the tree it ran was not the sha's. So is one of a
+    // sha the target no longer runs (a workflow run rolled it back since this repository's last marker), and one over a
+    // dev push: it put the committed tree back.
+    if (previous?.sha === sha && !args.deploy && !args.dirty && !args.adds?.length && !args.drops?.length
+      && (!live || (!live.dirty && sameSha(live.sha, sha) && !(await devPushedOver(ctx, live))))) {
       return { ok: true as const, event_id: previous._id, team_id: teamId, repository, surface, sha, version: version ?? null };
     }
 
@@ -138,7 +192,6 @@ export const markDeploy = mutation({
     });
     // The marker is a deploy object too (deploys.md DP1): it finishes the
     // line's deploy on this surface, or records one of its own.
-    const user = await ctx.db.get(userId);
     const deploy = await recordDeployMarker(ctx, {
       workspace: `team:${teamId}`,
       team_id: teamId,
@@ -147,12 +200,67 @@ export const markDeploy = mutation({
       ...(version ? { version } : {}),
       repository,
       source: "cast ship mark",
+      push: true,
       event_id: eventId,
       ...(args.dirty ? { dirty: args.dirty } : {}),
       ...(args.deploy ? { deploy: args.deploy } : {}),
-      started_by: { kind: "person", name: user?.name ?? user?.github_username ?? "someone", user_id: userId },
+      ...(args.machine?.trim() ? { machine: args.machine.trim() } : {}),
+      ...(args.via ? { pushed_via: args.via } : {}),
+      // Sent exactly when the push's diff ran, empty or not: a deploy whose diff ran is evidence of what its tree held.
+      ...(args.adds ? { adds: args.adds } : {}),
+      ...(args.drops ? { drops: args.drops } : {}),
+      ...(args.changes_read_age_ms != null ? { changes_read_at: now - Math.max(0, args.changes_read_age_ms) } : {}),
+      started_by: startedBy,
       at: now,
     });
-    return { ok: true as const, event_id: eventId, team_id: teamId, repository, surface, sha, version: version ?? null, deploy };
+    return { ok: true as const, dev_push: false as const, event_id: eventId, team_id: teamId, repository, surface, sha, version: version ?? null, deploy };
+  },
+});
+
+/**
+ * For each name, the push of the repository's surface active last (among its
+ * latest ADDED_BY_SCAN deploys and dev pushes) whose adds hold it: who put it
+ * there, from which machine and path, and the deploy that showed it committed
+ * (deploys.adderOf). Names no push added are left out.
+ */
+export const addedBy = query({
+  args: {
+    api_token: v.optional(v.string()),
+    repository: v.string(),
+    surface: v.string(),
+    names: v.array(v.string()),
+    team_id: v.optional(v.id("teams")),
+  },
+  handler: async (ctx, args): Promise<{ found: AddedBy[] }> => {
+    const userId = await requireUserOrToken(ctx, args.api_token);
+    const repository = parseOwnerRepo(args.repository);
+    if (!repository) throw new Error(`"${args.repository}" is not an owner/name repository.`);
+    const surface = args.surface.trim().toLowerCase();
+    if (!SURFACE.test(surface)) throw new Error(`"${args.surface}" is not a surface name (lowercase letters, digits and dashes).`);
+    if (args.names.length > NAMES_MAX) throw new Error(`Ask about at most ${NAMES_MAX} names at once.`);
+    const target = normalizeDeployTarget(surface);
+    if (!target) return { found: [] };
+
+    if (args.team_id) await requireTeamMembership(ctx, userId, args.team_id);
+    const teamId = args.team_id ?? (await deployTeamFor(ctx, userId, repository));
+    const pushes = await targetPushes(ctx, `team:${teamId}`, target, normalizeRepository(repository), ADDED_BY_SCAN);
+    const found: AddedBy[] = [];
+    for (const name of new Set(args.names)) {
+      const hit = adderOf(pushes, name);
+      if (!hit) continue;
+      const { adder } = hit;
+      found.push({
+        name,
+        deploy: adder.kind === "deploy" ? adder.row.short_id : null,
+        dev_push: adder.kind === "dev_push",
+        by: adder.row.started_by?.name ?? null,
+        machine: adder.row.machine ?? null,
+        via: adder.kind === "deploy" ? adder.row.pushed_via ?? null : "dev watcher",
+        at: adder.at,
+        dirty: adder.row.dirty ?? 0,
+        ...(hit.committed_in ? { committed_in: hit.committed_in.short_id } : {}),
+      });
+    }
+    return { found };
   },
 });

@@ -22,6 +22,7 @@ import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useSyncOrgProposal } from "../../hooks/useSyncOrgProposals";
 import { useSwitchWorkspace } from "../../hooks/useSwitchWorkspace";
+import { useNavClose } from "../../hooks/useNavTrail";
 import { useEventListener } from "../../hooks/useEventListener";
 import { RevealInBandCtx } from "../../lib/revealHost";
 import { hasOpenModal, isEditableTarget } from "../../shortcuts";
@@ -213,10 +214,14 @@ export function OrgChart() {
     if (useInboxStore.getState().clientState.ui?.org_panel === "closed") useInboxStore.getState().updateClientUI({ org_panel: undefined });
     router.push(panelHref(t));
   }, [router]);
+  // Closing a proposal or a session returns to where the person came from (a
+  // conversation whose chip opened it), else to the chart with the Head of
+  // People; only closing that home drawer itself keeps it closed.
+  const navClose = useNavClose("/org");
   const closePanel = useCallback(() => {
-    useInboxStore.getState().updateClientUI({ org_panel: "closed" });
-    if (target.kind !== "home") router.push("/org");
-  }, [router, target.kind]);
+    if (target.kind !== "home") navClose();
+    else useInboxStore.getState().updateClientUI({ org_panel: "closed" });
+  }, [navClose, target.kind]);
 
   // The proposal open in the drawer: its changes drawn on the chart when it belongs to the workspace on screen.
   const proposalRef = target.kind === "proposal" ? target.ref : null;

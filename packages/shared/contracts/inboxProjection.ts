@@ -131,7 +131,9 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // v27: a process that exits while a standing trigger or loop owns its next
 // wake files under dormant, not needs_input (isExitBeforeArmedWake): a
 // trigger-run session ends its turn this way and the trigger resumes it.
-export const INBOX_PROJECTION_VERSION = 27 as const;
+// v28: the first row past the fold's gap folds with everything older. It used
+// to stay shown, so filing the oldest shown row surfaced the next older one.
+export const INBOX_PROJECTION_VERSION = 28 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -1093,14 +1095,15 @@ export function isFoldExempt(row: WorkingSetRow): boolean {
 
 // The per-row half of the fold, given the cut: exempt rows never fold, queued
 // work (has_pending_messages) is about to move so it never folds either, and
-// everything else folds when its activity is under the cut. A cutoff of 0
-// means no fold. The shared loop below and the server's per-row flag
-// (convex belowFoldFor) both call this, so the two cannot diverge.
+// everything else folds when its activity is at or under the cut, the newest
+// activity on the old side of the gap. A cutoff of 0 means no fold. The
+// shared loop below and the server's per-row flag (convex belowFoldFor) both
+// call this, so the two cannot diverge.
 export function isBelowFoldAt(row: WorkingSetRow, cutoff: number): boolean {
   if (cutoff <= 0) return false;
   if (isFoldExempt(row)) return false;
   if (row.has_pending_messages) return false;
-  return row.updated_at < cutoff;
+  return row.updated_at <= cutoff;
 }
 
 // Deterministic 12h gap cut by updated_at over members NOT filed on purpose

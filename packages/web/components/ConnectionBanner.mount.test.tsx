@@ -71,18 +71,18 @@ describe("ConnectionBanner", () => {
   test("a dropped socket with OS online publishes no card; OS offline does", async () => {
     const t = await mountBanner({ online: true, wsConnected: false });
 
-    expect(document.body.textContent).not.toContain("Reconnecting");
+    expect(document.body.textContent).not.toContain("Server unreachable");
     expect(t.notices().size).toBe(0);
 
     await t.advance(t.DISCONNECT_GRACE_MS + 50);
-    expect(document.body.textContent).not.toContain("Reconnecting");
+    expect(document.body.textContent).not.toContain("Server unreachable");
     expect(t.notices().has("connection")).toBe(false);
 
     await t.setOnline(false);
     await t.advance(t.DISCONNECT_GRACE_MS + 50);
     expect(document.body.textContent).toContain("Offline");
     expect(document.body.textContent).toMatch(/cached/i);
-    expect(document.body.textContent).not.toContain("Reconnecting");
+    expect(document.body.textContent).not.toContain("Server unreachable");
 
     await t.unmount();
   });

@@ -151,6 +151,7 @@ export default function DownloadPage() {
 
   const [platform, setPlatform] = useState<VisitorPlatform>("other");
   const isMac = platform === "mac";
+  const macBuildFits = platform !== "windows" && platform !== "linux";
   const [version, setVersion] = useState<string | null>(null);
 
   useMountEffect(() => {
@@ -208,10 +209,12 @@ export default function DownloadPage() {
             </div>
             <p className="mb-3 text-sm text-[#657b83]">
               <Link href="/signup" className="font-medium text-[#b58900] hover:text-[#cb4b16]">Open Codecast in your browser</Link>
-              {" "}· also on Mac and iPhone:
+              {/* The desktop app is a Mac build only: a Windows or Linux visitor offered
+                  the dmg downloads a file that cannot run there. */}
+              {macBuildFits ? " · also on Mac and iPhone:" : " · also on iPhone:"}
             </p>
             <div className="flex flex-wrap justify-center gap-3">
-              <AppBadge app="mac" direct tone="light" location="download_page_button" />
+              {macBuildFits && <AppBadge app="mac" direct tone="light" location="download_page_button" />}
               <AppBadge app="ios" tone="light" location="download_page" />
             </div>
           </>

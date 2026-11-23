@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo, useSyncExternalStore } from "react";
+import { useState, useRef, useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import type { ScrollProgressSignal } from "./conversation/scrollProgressSignal";
 import { createPortal } from "react-dom";
 import { useShallow } from "zustand/react/shallow";
 import { MessagePromptPreview } from "./MessagePromptPreview";
+import { MachineKindIcon, MachineSourceLabel, AuthorFace, AuthorTag, HoverPreview } from "./MessageNavPreview";
 import { AvatarImg } from "../lib/avatarCache";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
@@ -17,47 +18,21 @@ import {
   activeTickIndex,
   navigatorHeaderLabels,
   countCommentsByMessage,
-  navigatorRowBody,
   mergeNavigatorSources,
   MACHINE_KIND_LABEL,
-  type HiddenKind,
+  resolveNavigatorAuthors,
+  authorToneColor,
+  possessive,
   type NavigatorRow,
+  type NavigatorAuthorship,
 } from "../lib/messageNavigator";
+import type { SenderContext } from "../lib/messageSender";
 import { resolveSessionTitle } from "../lib/sessionTitle";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { isConvexId, useInboxStore } from "../store/inboxStore";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { useConversationCommentSummary } from "../hooks/useConversationCommentsSync";
-
-const SHORT_ID_RE = /^[a-z0-9]{7}$/;
-
-// Source label for a machine-delivered row. A session source that the store
-// couldn't resolve (sender pruned/dismissed locally) still renders as a bare
-// short id here — resolve it server-side the same way EntityIdPill does.
-export function MachineSourceLabel({ kind, source }: { kind: HiddenKind; source: string }) {
-  const needsLookup = kind === "session" && SHORT_ID_RE.test(source);
-  const resolved = useQueryNoThrow(api.conversations.webGet, needsLookup ? { short_id: source } : "skip").data;
-  return <>{(needsLookup && resolved?.title) || source}</>;
-}
-
-export function MachineKindIcon({ kind }: { kind: HiddenKind }) {
-  const d =
-    kind === "schedule"
-      ? "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
-      : kind === "session"
-      ? "M13 7l5 5m0 0l-5 5m5-5H6"
-      : kind === "continue"
-      ? "M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-      : kind === "chat"
-      ? "M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z"
-      : "M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z";
-  return (
-    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={d} />
-    </svg>
-  );
-}
 
 type CommentEntry = {
   _id: string;
@@ -67,114 +42,9 @@ type CommentEntry = {
   user: { name?: string; github_username?: string; github_avatar_url?: string };
 };
 
-// Hover card for one navigator row. The row carries a server snippet (capped
-// at NAV_ROW_SNIPPET_CHARS); the card resolves the full body on demand — the
-// loaded message page first, then one `messages.webGet` — and truncates by
-// viewport height instead of by character count: collapsed it fills up to
-// 60% of the window with a fade, expanded it takes the whole window height
-// and scrolls. The card shifts up when its anchor would push it off screen.
-function HoverPreview({ message, conversationId, rect, onMouseEnter, onMouseLeave, onDropdownEnter, onDropdownLeave }: { message: NavigatorRow; conversationId: string; rect: DOMRect; onMouseEnter: () => void; onMouseLeave: () => void; onDropdownEnter: () => void; onDropdownLeave: () => void }) {
-  "use no memo"; // formatTimeAgo() reads the clock as this renders; compiled, the time shown would stop moving.
-  const [expanded, setExpanded] = useState(false);
-  const [overflows, setOverflows] = useState(false);
-  const [top, setTop] = useState(() => Math.max(8, rect.top - 20));
-  const cardRef = useRef<HTMLDivElement>(null);
-  const bodyRef = useRef<HTMLDivElement>(null);
-
-  const pageContent = useInboxStore((s) =>
-    message.clipped ? s.messages[conversationId]?.find((m) => m._id === message._id)?.content : undefined
-  );
-  const { data: fetched } = useQueryNoThrow(
-    api.messages.webGet,
-    message.clipped && pageContent === undefined && isConvexId(conversationId)
-      ? { id: message._id, ...shareTokenArg(conversationId) }
-      : "skip",
-  );
-  const fullContent = message.clipped ? pageContent ?? fetched?.message?.content : undefined;
-  const loadingBody = message.clipped && fullContent === undefined;
-  const body = useMemo(() => {
-    const text = navigatorRowBody(message, fullContent, resolveSessionTitle);
-    return loadingBody && text === message.display ? `${text}\u2026` : text;
-  }, [message, fullContent, loadingBody]);
-
-  const previewWidth = Math.min(expanded ? 760 : 420, window.innerWidth - 16);
-  const bridgePad = 20;
-  const left = Math.max(8, rect.left - previewWidth - bridgePad);
-  const maxHeight = expanded ? window.innerHeight - 16 : Math.round(window.innerHeight * 0.6);
-
-  useLayoutEffect(() => {
-    const card = cardRef.current;
-    const bodyEl = bodyRef.current;
-    if (!card || !bodyEl) return;
-    setOverflows(bodyEl.scrollHeight > bodyEl.clientHeight + 1);
-    const anchored = Math.max(8, rect.top - 20);
-    setTop(Math.max(8, Math.min(anchored, window.innerHeight - card.offsetHeight - 8)));
-  }, [body, message.images, expanded, previewWidth, rect.top]);
-
-  const showFooter = expanded || overflows || loadingBody;
-
-  return createPortal(
-    <div
-      className="fixed z-[10000]"
-      style={{ top, left, width: previewWidth + bridgePad, paddingRight: bridgePad }}
-      onMouseEnter={() => { onMouseEnter(); onDropdownEnter(); }}
-      onMouseLeave={() => { onMouseLeave(); onDropdownLeave(); }}
-    >
-      <div
-        ref={cardRef}
-        className="bg-sol-bg border border-sol-border/40 rounded-lg shadow-2xl flex flex-col"
-        style={{ width: previewWidth, maxHeight }}
-      >
-        <div className="flex items-center gap-2 p-3 pb-1 flex-shrink-0">
-          {message.kind === "user" ? (
-            <span className="text-meta text-sol-text-dim tabular-nums">#{message.originalIndex + 1}</span>
-          ) : (
-            <span className="text-meta text-sol-violet/80 flex items-center gap-1">
-              <MachineKindIcon kind={message.kind} />
-              {message.source && <MachineSourceLabel kind={message.kind} source={message.source} />}
-            </span>
-          )}
-          <span className="text-sol-text-dim/30">·</span>
-          <span className="text-sol-text-dim text-meta">{formatTimeAgo(message.timestamp)}</span>
-          {message.commentCount > 0 && (
-            <span className="text-meta text-sol-cyan flex items-center gap-0.5">
-              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-              </svg>
-              {message.commentCount}
-            </span>
-          )}
-        </div>
-        <div className="relative flex-1 min-h-0 flex flex-col">
-          <div ref={bodyRef} className={`px-3 pb-3 flex-1 min-h-0 ${expanded ? "overflow-y-auto" : "overflow-hidden"}`}>
-            <MessagePromptPreview content={body} images={message.images} messageId={message._id} variant="preview" textClassName="text-[13px] text-sol-text whitespace-pre-wrap leading-relaxed" />
-          </div>
-          {!expanded && overflows && (
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-sol-bg to-transparent" />
-          )}
-        </div>
-        {showFooter && (
-          <div className="flex-shrink-0 border-t border-sol-border/30 px-3 py-1.5 flex items-center justify-between gap-2">
-            <span className="text-meta text-sol-text-dim">{loadingBody ? "Loading full message" : `${body.length.toLocaleString()} chars`}</span>
-            {(expanded || overflows) && (
-              <button
-                type="button"
-                className="text-meta text-sol-cyan hover:text-sol-text transition-colors"
-                onClick={(e) => { e.stopPropagation(); setExpanded((v) => !v); }}
-              >
-                {expanded ? "Show less" : "Show more"}
-              </button>
-            )}
-          </div>
-        )}
-      </div>
-    </div>,
-    document.body
-  );
-}
-
 function NavDropdown({
   messages,
+  authorship,
   comments,
   conversationId,
   currentMessageId,
@@ -189,6 +59,7 @@ function NavDropdown({
   onTabChange,
 }: {
   messages: NavigatorRow[];
+  authorship: NavigatorAuthorship;
   comments: CommentEntry[];
   conversationId: string;
   currentMessageId: string | null;
@@ -209,6 +80,8 @@ function NavDropdown({
   // start hidden — the list is primarily a human-message navigator; the chip
   // reveals them on demand.
   const [showMachine, setShowMachine] = useState(false);
+  // One person's rows only (their key), from the faces beside the search.
+  const [authorKey, setAuthorKey] = useState<string | null>(null);
   const [focusIndex, setFocusIndex] = useState(-1);
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [hoveredRect, setHoveredRect] = useState<DOMRect | null>(null);
@@ -246,9 +119,11 @@ function NavDropdown({
   }, [mounted, currentMessageId]);
 
   const { humanCount, hiddenCount: machineCount, chipLabel } = navigatorHeaderLabels(messages);
-  const filtered = filterNavigatorRows(messages, { search, showHidden: showMachine });
+  const attributed = authorship.attributed;
+  const onlyAuthor = attributed && authorKey ? authorship.authors.find((a) => a.key === authorKey) ?? null : null;
+  const filtered = filterNavigatorRows(messages, { search, showHidden: showMachine, authors: authorship, authorKey: onlyAuthor?.key });
 
-  useEffect(() => { setFocusIndex(-1); }, [search]);
+  useEffect(() => { setFocusIndex(-1); }, [search, authorKey]);
 
   const navigateToMessage = useCallback((m: NavigatorRow) => {
     onPin();
@@ -346,10 +221,10 @@ function NavDropdown({
               type="text"
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder={`Search ${humanCount} messages...`}
+              placeholder={onlyAuthor ? `Search ${possessive(onlyAuthor)} ${onlyAuthor.count} message${onlyAuthor.count === 1 ? "" : "s"}...` : `Search ${humanCount} messages...`}
               className="flex-1 min-w-0 bg-sol-bg-alt/60 border border-sol-border/20 rounded-lg px-3 py-1.5 text-[12px] text-sol-text placeholder:text-sol-text-dim/40 outline-none focus:border-sol-cyan/40 transition-colors"
             />
-            {machineCount > 0 && (
+            {machineCount > 0 && !onlyAuthor && (
               <button
                 onClick={(e) => { e.stopPropagation(); setShowMachine(v => !v); }}
                 aria-pressed={showMachine}
@@ -368,6 +243,35 @@ function NavDropdown({
                 </span>
               </button>
             )}
+          </div>
+        )}
+        {tab === "messages" && attributed && (
+          // Who wrote in this thread, and a way to read one person's
+          // messages alone. The face and color match each row and rail tick.
+          <div className="px-3 pb-2 flex flex-wrap items-center gap-1" role="group" aria-label="Show one person's messages">
+            {authorship.authors.map((a) => {
+              const on = onlyAuthor?.key === a.key;
+              return (
+                <button
+                  key={a.key}
+                  type="button"
+                  onClick={(e) => { e.stopPropagation(); setAuthorKey(on ? null : a.key); }}
+                  aria-pressed={on}
+                  title={on ? "Show everyone\u2019s messages" : `Show only ${possessive(a)} messages${a.label === a.name || a.label === "You" ? "" : ` (${a.name})`}`}
+                  className={`flex items-center gap-1.5 h-6 pl-1 pr-2 rounded-md border text-meta transition-colors max-w-[11rem] ${
+                    on
+                      ? "bg-sol-cyan/10 border-sol-cyan/50 text-sol-text"
+                      : onlyAuthor
+                      ? "border-transparent text-sol-text-dim/60 hover:text-sol-text-muted"
+                      : "border-sol-border/30 text-sol-text-muted hover:text-sol-text hover:border-sol-border/60"
+                  }`}
+                >
+                  <span className={`flex ${onlyAuthor && !on ? "opacity-50" : ""}`}><AuthorFace author={a} size={16} /></span>
+                  <span className="truncate font-medium">{a.label}</span>
+                  <span className="tabular-nums text-sol-text-dim">{a.count}</span>
+                </button>
+              );
+            })}
           </div>
         )}
         {hasComments && (
@@ -398,7 +302,7 @@ function NavDropdown({
           {tab === "messages" ? (
             filtered.length === 0 ? (
               <div className="px-3 py-6 text-center text-[12px] text-sol-text-dim/50">
-                {search ? "No matching messages" : "No messages"}
+                {search ? "No matching messages" : onlyAuthor ? `No messages from ${onlyAuthor.label === "You" ? "you" : onlyAuthor.label}` : "No messages"}
               </div>
             ) : (
             filtered.map((m, filterIdx) => {
@@ -463,6 +367,18 @@ function NavDropdown({
                   </div>
                 );
               }
+              const author = attributed ? authorship.byRow.get(m._id) : undefined;
+              const commentBadge = m.commentCount > 0 && (
+                <>
+                  <span className="text-sol-text-dim/20">·</span>
+                  <span className="text-meta text-sol-cyan flex items-center gap-0.5">
+                    <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+                    </svg>
+                    {m.commentCount}
+                  </span>
+                </>
+              );
               return (
                 <div
                   key={m._id}
@@ -486,25 +402,27 @@ function NavDropdown({
                       {m.originalIndex + 1}
                     </span>
                     <div className="flex-1 min-w-0">
+                      {/* With more than one sender the row opens like a chat
+                          line: who and when, then what they said. */}
+                      {author && (
+                        <div className="flex items-center gap-1.5 mb-0.5">
+                          <AuthorTag author={author} strong={isActive || isCurrent} />
+                          <span className="text-sol-text-dim/30">·</span>
+                          <span className="text-meta text-sol-text-dim/60 tabular-nums flex-shrink-0">{formatTimeAgo(m.timestamp)}</span>
+                          {commentBadge}
+                        </div>
+                      )}
                       <MessagePromptPreview content={m.display} images={m.images} messageId={m._id} textClassName={`text-[12px] leading-snug line-clamp-2 ${
                         isActive || isCurrent ? "text-sol-text" : "text-sol-text-secondary"
                       } ${m.isCmd ? "font-mono" : ""} ${isCurrent ? "font-medium" : ""}`} />
-                      <div className="flex items-center gap-1.5 mt-1">
-                        <span className="text-meta text-sol-text-dim/50 tabular-nums">
-                          {formatTimeAgo(m.timestamp)}
-                        </span>
-                        {m.commentCount > 0 && (
-                          <>
-                            <span className="text-sol-text-dim/20">·</span>
-                            <span className="text-meta text-sol-cyan flex items-center gap-0.5">
-                              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
-                              </svg>
-                              {m.commentCount}
-                            </span>
-                          </>
-                        )}
-                      </div>
+                      {!author && (
+                        <div className="flex items-center gap-1.5 mt-1">
+                          <span className="text-meta text-sol-text-dim/50 tabular-nums">
+                            {formatTimeAgo(m.timestamp)}
+                          </span>
+                          {commentBadge}
+                        </div>
+                      )}
                     </div>
                   </div>
                 </div>
@@ -557,7 +475,7 @@ function NavDropdown({
         </div>
       </div>
       {previewMsg && hoveredRect && (
-        <HoverPreview key={previewMsg._id} message={previewMsg} conversationId={conversationId} rect={hoveredRect} onMouseEnter={cancelDismissPreview} onMouseLeave={dismissPreview} onDropdownEnter={onMouseEnter} onDropdownLeave={onMouseLeave} />
+        <HoverPreview key={previewMsg._id} message={previewMsg} author={attributed ? authorship.byRow.get(previewMsg._id) : undefined} conversationId={conversationId} rect={hoveredRect} onMouseEnter={cancelDismissPreview} onMouseLeave={dismissPreview} onDropdownEnter={onMouseEnter} onDropdownLeave={onMouseLeave} />
       )}
     </>,
     document.body
@@ -571,12 +489,15 @@ const NO_PROGRESS = (): (() => void) => () => {};
 
 export function MessageNavButton({
   conversationId,
+  senders,
   currentMessageId,
   scrollProgress,
   onScrollToMessage,
   loadedMessages,
 }: {
   conversationId: string;
+  /** Who sent what: the transcript's sender context (lib/messageSender). */
+  senders: SenderContext;
   currentMessageId: string | null;
   /** The transcript's scroll position (1 when absent). Read through a
    *  subscription, so a scroll frame redraws the rail only when it moves the
@@ -652,6 +573,10 @@ export function MessageNavButton({
   const processed: NavigatorRow[] = messages
     ? buildNavigatorRows(messages, commentsByMessage, resolveSessionTitle, loadedImages)
     : [];
+
+  // Who sent each row: the transcript's own sender context, so a row and its
+  // bubble name the same person.
+  const authorship = resolveNavigatorAuthors(processed, senders);
 
   const total = processed.length;
   const humanTotal = processed.filter((m) => m.kind === "user").length;
@@ -741,7 +666,7 @@ export function MessageNavButton({
         className={`flex flex-col gap-[3px] items-end justify-center px-2 py-1.5 rounded transition-colors relative ${
           open ? "text-sol-cyan" : "text-sol-text-dim hover:text-sol-text-secondary"
         }`}
-        title={`${humanTotal} message${humanTotal !== 1 ? "s" : ""}${machineTotal > 0 ? ` / ${machineTotal} ${hiddenRowsNoun(processed.filter((m) => m.kind !== "user"))}` : ""}${hasComments ? ` / ${topLevelComments.length} comment${topLevelComments.length !== 1 ? "s" : ""}` : ""}`}
+        title={`${humanTotal} message${humanTotal !== 1 ? "s" : ""}${authorship.attributed ? ` (${authorship.authors.map((a) => `${a.count} ${a.label === "You" ? "yours" : `from ${a.label}`}`).join(", ")})` : ""}${machineTotal > 0 ? ` / ${machineTotal} ${hiddenRowsNoun(processed.filter((m) => m.kind !== "user"))}` : ""}${hasComments ? ` / ${topLevelComments.length} comment${topLevelComments.length !== 1 ? "s" : ""}` : ""}`}
       >
         {(() => {
           const ticks = sampleTicks(processed, MAX_BARS, activeIndex);
@@ -750,14 +675,19 @@ export function MessageNavButton({
             const hasComment = msg.commentCount > 0;
             const isMachine = msg.kind !== "user";
             const isNear = here >= 0 && Math.abs(i - here) === 1;
+            // Someone besides the owner sent it: the tick wears their color.
+            const tone = authorship.attributed && !isActive ? authorToneColor(authorship.byRow.get(msg._id)?.tone ?? 0) : undefined;
             return (
               <span
                 key={i}
+                style={tone ? { backgroundColor: tone } : undefined}
                 className={`cc-rail-tick block rounded-full ${
                   isActive
                     ? "cc-rail-here"
                     : isNear
                     ? `${hasComment ? "bg-sol-cyan h-[2px]" : "bg-current h-px"} cc-rail-near`
+                    : tone
+                    ? `w-3 ${hasComment ? "h-[2px]" : "h-[1.5px]"} opacity-90`
                     : hasComment
                     ? "bg-sol-cyan w-3.5 h-[2px] opacity-70"
                     : isMachine
@@ -772,6 +702,7 @@ export function MessageNavButton({
       {open && triggerRect && (
         <NavDropdown
           messages={processed}
+          authorship={authorship}
           comments={topLevelComments}
           conversationId={conversationId}
           currentMessageId={effectiveId}

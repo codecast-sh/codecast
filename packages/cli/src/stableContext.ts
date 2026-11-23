@@ -72,7 +72,7 @@ export interface BuiltStableContext {
 interface StableReads {
   feed: any | null;
   mods: string | null;
-  pool: { rows: PushedPoolRow[]; flowsOn?: boolean } | null;
+  pool: { rows: PushedPoolRow[]; flowsOn?: boolean; defaultFlow?: string | null } | null;
   /** Where a session in this scope sits in the org; its session fields are filled per start. */
   where: OrgWhere | null;
 }
@@ -184,6 +184,8 @@ async function liveStableReads(
     within(fetchModsGuide(siteUrl, config.auth_token, opts.cwd), budgetMs),
     within(fetchDirectoryPool(siteUrl, config.auth_token, opts.cwd), budgetMs),
     within(fetchOrgWhere(siteUrl, config.auth_token, opts.session), budgetMs),
+    // Nothing read back: this checkout's own flows go up when they changed, for the web's Ship picker.
+    within(sendRepoFlows(siteUrl, config.auth_token, opts.cwd), budgetMs),
   ]);
   return { feed: feedResult, mods, pool, where };
 }
@@ -416,7 +418,7 @@ export async function buildStableContext(
     // Its instructions give way to fit the budget beside the org, mods and
     // flows; the whole text stays one command away (cast project show).
     const project = reads.where?.project_context;
-    const rest = `${reads.mods ?? ""}${!reads.pool || reads.pool.flowsOn === false ? "" : await flowsLine(opts.cwd, reads.pool.rows)}`;
+    const rest = `${reads.mods ?? ""}${!reads.pool || reads.pool.flowsOn === false ? "" : await flowsLine(opts.cwd, reads.pool.rows, reads.pool.defaultFlow)}`;
     let projectBlock = "";
     if (project && !restoresTaskContext(opts.start?.source)) {
       projectBlock = `\n\n${fitProjectContextBlock(project, STABLE_CONTEXT_BUDGET - PROJECT_FEED_RESERVE - Buffer.byteLength(orgBlock + rest))}`;
@@ -487,30 +489,48 @@ async function fetchOrgWhere(siteUrl: string, apiToken: string, session?: string
  * One line naming the flows a change made here can run through (docs/architecture/flows.md FL7), read from this
  * checkout's pool with no network. Kept to one line: it rides the same 9000-byte budget the feed gives way to.
  */
-export async function flowsLine(cwd?: string, pushed: ReadonlyArray<PushedPoolRow> = []): Promise<string> {
+export async function flowsLine(cwd?: string, pushed: ReadonlyArray<PushedPoolRow> = [], defaultFlow?: string | null): Promise<string> {
   try {
     // The pool's parser and templates load only here, so the CLI and the daemon don't carry them on every start.
-    const [{ poolFlows }, { flowPathWords }] = await Promise.all([import("./workflow/flowPool.js"), import("@codecast/shared/contracts/flowPool")]);
+    const [{ poolFlows, workspaceDefaultFlow }, { flowPathWords }] = await Promise.all([import("./workflow/flowPool.js"), import("@codecast/shared/contracts/flowPool")]);
     const pool = poolFlows(cwd ?? process.cwd(), null, pushed).filter((f) => f.takes.includes("branch") && !f.errors.length);
-    if (!pool.length) return "";
-    const lead = pool.find((f) => f.slug === "change") ?? pool[0];
+    // The flow a nameless `cast flow run` runs, by the same rule.
+    const lead = workspaceDefaultFlow(pool, defaultFlow);
+    if (!lead) return "";
     const segments = pool.filter((f) => f !== lead && f.kind === "segment").map((f) => f.slug);
     const lines = pool.filter((f) => f !== lead && f.kind === "line").map((f) => f.slug);
     const parts = [
-      `the standard one is ${lead.slug} (${flowPathWords(lead).path})`,
+      `the default is ${lead.slug} (${flowPathWords(lead).path})`,
       ...(segments.length ? [`the segments ${segments.join(", ")} each run one part of a change`] : []),
       ...(lines.length ? [`${lines.join(", ")} ${lines.length === 1 ? "is another whole line" : "are other whole lines"}`] : []),
     ];
-    return `\n\n<flows>A finished change goes through a flow from the pool before it ships: ${parts.join("; ")}. \`cast flow run <flow>\` sends this session's own edits through one, and \`cast flow show <flow>\` says what each step does.</flows>`;
+    return `\n\n<flows>A finished change goes through a flow from the pool before it ships: ${parts.join("; ")}. \`cast flow run\` sends this session's own edits through the default (\`--task ct-N\` a task's branch), \`cast flow run <flow>\` through another, and \`cast flow show <flow>\` says what each step does.</flows>`;
   } catch {
     return "";
   }
 }
 
+/** Report this checkout's own flows (workflow/repoFlowsReport.ts) when they changed since this machine last did. */
+async function sendRepoFlows(siteUrl: string, apiToken: string, cwd?: string): Promise<null> {
+  // The parser loads only here, as for flowsLine.
+  const { reportRepoFlows } = await import("./workflow/repoFlowsReport.js");
+  await reportRepoFlows(cwd ?? process.cwd(), async (report) => {
+    const response = await fetch(`${siteUrl}/cli/repo-flows/report`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_token: apiToken, ...report }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const result = (await response.json().catch(() => null)) as { ok?: boolean } | null;
+    return response.ok && !!result?.ok;
+  }, path.join(defaultConfigDir(), "repo-flows"));
+  return null;
+}
+
 /** The team pool's published flows for a directory: its mapped team's, else none (session start reads no other
  *  team's). `flowsOn` says whether that workspace has the Flows feature on; undefined when the read failed or the
- *  server predates the flag, which leaves the line as it was. */
-async function fetchDirectoryPool(siteUrl: string, apiToken: string, cwd?: string): Promise<{ rows: PushedPoolRow[]; flowsOn?: boolean } | null> {
+ *  server predates the flag, which leaves the line as it was. `defaultFlow` is the default flow that team set. */
+async function fetchDirectoryPool(siteUrl: string, apiToken: string, cwd?: string): Promise<{ rows: PushedPoolRow[]; flowsOn?: boolean; defaultFlow?: string | null } | null> {
   const team = teamForDirectory(await fetchMappedProjects(siteUrl, apiToken), cwd ?? process.cwd());
   const response = await fetch(`${siteUrl}/cli/workflows/pool`, {
     method: "POST",
@@ -518,9 +538,9 @@ async function fetchDirectoryPool(siteUrl: string, apiToken: string, cwd?: strin
     body: JSON.stringify({ api_token: apiToken, ...(team ? { team_id: team } : {}) }),
     signal: AbortSignal.timeout(10_000),
   });
-  const data = (await response.json()) as { flows?: PushedPoolRow[]; flows_on?: boolean };
+  const data = (await response.json()) as { flows?: PushedPoolRow[]; flows_on?: boolean; default_flow?: string | null };
   if (!response.ok) return null;
-  return { rows: team ? data.flows ?? [] : [], flowsOn: typeof data.flows_on === "boolean" ? data.flows_on : undefined };
+  return { rows: team ? data.flows ?? [] : [], flowsOn: typeof data.flows_on === "boolean" ? data.flows_on : undefined, defaultFlow: team ? data.default_flow ?? null : null };
 }
 
 /**

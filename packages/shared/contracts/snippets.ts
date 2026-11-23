@@ -980,7 +980,7 @@ export const REFERENCES_SNIPPET_END = "<!-- /codecast-references -->";
 export const REFERENCES_SNIPPET = `
 ## Referencing objects
 
-Every codecast object has a short ID. Written anywhere (messages, summaries, task comments, doc bodies, trigger prompts), it renders as a live reference: title, current state, and a link.
+Every codecast object has a short ID. Written anywhere (a message, comment, doc or prompt), it renders as a live reference: title, state and a link.
 
 | Object  | Short ID  | Where to find it |
 |---------|-----------|------------------|
@@ -991,6 +991,7 @@ Every codecast object has a short ID. Written anywhere (messages, summaries, tas
 | Doc     | \`doc:<id>\` | \`cast doc ls\`, \`cast doc search\` |
 | Call    | \`cl-42\`   | \`cast calls\` |
 | Flow    | \`flow:change\` | \`cast flow ls\` |
+| Deploy  | \`dp-1972\` | \`cast line deploy targets\` |
 
 Write the bare ID by default (\`Filed under ct-4102.\`); it reads as a sentence and renders in full. A flow ID alone on a line draws the flow, each step open to its prompt. Write \`@[Title id]\` (\`@[Fix the auth race ct-4102]\`) when the sentence needs the name. Never paste a 32-character internal ID: it renders as a blob, and every command takes the short one.
 ${REFERENCES_SNIPPET_END}
@@ -1062,7 +1063,7 @@ cast chat send --channel <#name|id> [--thread <root_id>] "<text>"
 cast chat search "<query>"
 \`\`\`
 
-Post facts other people need (a decision, a release, a blocker): one line per event, in a thread rather than a new root, never an acknowledgment. An agent is capped at 30 lines and 5 new threads per channel per day, and routine narration trains people to mute the channel. Mentions use @handles: \`@<role handle>\` wakes that role's standing session and \`@<session short id>\` delivers the line into that session, so mention them only when you need them to act. Edits and reactions wake nobody: to reach someone you missed, post a new line. If you are the workspace's agent answering a wake, \`cast guide chat\` covers \`cast chat reply\` and \`cast anchor say\`.
+Post facts other people need (a decision, a release, a blocker): one line per event, in a thread rather than a new root, never an acknowledgment. An agent gets 30 lines and 5 threads a day per channel (a DM: since a person wrote), and routine narration trains people to mute the channel. Mentions use @handles: \`@<role handle>\` wakes that role's standing session and \`@<session short id>\` delivers the line into that session, so mention them only when you need them to act. Edits and reactions wake nobody: to reach someone you missed, post a new line. If you are the workspace's agent answering a wake, \`cast guide chat\` covers \`cast chat reply\` and \`cast anchor say\`.
 ${CHAT_SNIPPET_END}
 `;
 
@@ -1160,15 +1161,9 @@ export const DECIDE_SNIPPET_END = "<!-- /codecast-decide -->";
 export const DECIDE_SNIPPET = `
 ## Asking for a decision
 
-\`cast decide\` puts a question in a queue the human clears in one sitting, so unlike asking inline (in prose or through your harness's question tool) it does not stop them mid-thought, and the bar is lower. If you would have picked a direction and mentioned it in passing, queue it instead. Queue one before you:
+\`cast decide\` queues a question, so unlike an inline ask it does not stop the human mid-thought. Each still costs an answer, so ask only when it is theirs: intent nothing written settles, a fact only they hold, money beyond the run's budget, or an irreversible change whose mistake hits many. Decide the rest and say what you chose. Never a card: what reading answers, a status update, a probe or test, or deleting disposable or rebuildable data.
 
-- pick between approaches that are hard to reverse (a schema, a data model, a protocol),
-- spend real money or their quota, or touch billing, auth, or anything user-facing in prod,
-- delete or migrate data, or drop something recoverable only from a backup,
-- settle a tradeoff by taste rather than evidence,
-- proceed on a guess about what they want the product to do.
-
-Never queue what reading more code answers, a status update, or a probe or test sample: every ask reaches the human's real queue and phone at once.
+Never re-ask what an earlier card (\`cast decide ls\`), ruling or project instruction answered. When the answer deploys, spends, changes access or messages outside the team, pass \`--category production|billing|data|access|external|product|limit\`: the card is then a person's alone, else (outside a run) \`review\`, open to a granted role.
 
 \`\`\`bash
 cast decide "<one question>" \\

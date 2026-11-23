@@ -97,8 +97,10 @@ export interface FileDiffLayoutProps {
   // callback here is called with the file's ORIGINAL path.
   lineThreads?: FileLineThreads;
   // External "open this file" request (raw pre-strip path, e.g. from a comment
-  // rail jump). Honored whenever the value changes to a file in the list.
+  // rail jump or a file link in a shared session). Honored whenever the value
+  // or its nonce changes to a file in the list.
   focusFile?: string | null;
+  focusNonce?: number;
   // Where a file's own page is, when the surface has one (a commit at its sha,
   // a pull request at its head). The name in each file header becomes a link
   // there. Called with the file's ORIGINAL path.
@@ -478,6 +480,8 @@ function UnifiedDiffView({
   fileHref,
   fileMarks,
   onToggleViewed,
+  focusFile,
+  focusNonce,
   inHand,
 }: {
   files: DiffFile[];
@@ -488,6 +492,8 @@ function UnifiedDiffView({
   fileHref?: FileDiffLayoutProps["fileHref"];
   fileMarks?: FileDiffLayoutProps["fileMarks"];
   onToggleViewed?: FileDiffLayoutProps["onToggleViewed"];
+  focusFile?: string | null;
+  focusNonce?: number;
   inHand: InHand;
 }) {
   const pathOf = (f: DiffFile) => f.originalFilename ?? f.filename;
@@ -495,6 +501,11 @@ function UnifiedDiffView({
   // face down; a click on the chevron wins either way until the mark moves.
   const [folded, setFolded] = useState<Map<string, boolean>>(new Map());
   const isFolded = (path: string) => folded.get(path) ?? !!fileMarks?.(path)?.viewed;
+  useWatchEffect(() => {
+    if (focusFile && (folded.get(focusFile) ?? !!fileMarks?.(focusFile)?.viewed)) {
+      setFolded((prev) => new Map(prev).set(focusFile, false));
+    }
+  }, [focusFile, focusNonce]);
   const toggleViewed = onToggleViewed
     ? (path: string) => {
         setFolded((prev) => { const next = new Map(prev); next.delete(path); return next; });
@@ -961,6 +972,7 @@ export function FileDiffLayout({
   commentContextFor,
   lineThreads,
   focusFile,
+  focusNonce,
   fileHref,
   fileMarks,
   onToggleViewed,
@@ -1018,8 +1030,8 @@ export function FileDiffLayout({
     }
   }, [strippedFiles, selectedFile]);
 
-  // External focus (e.g. a comment-rail jump): select the file in split view
-  // and scroll to its card in unified view.
+  // External focus (e.g. a comment-rail jump or a file link): select the file
+  // in split view and scroll to its card in unified view.
   useWatchEffect(() => {
     if (!focusFile) return;
     const index = strippedFiles.findIndex(
@@ -1028,8 +1040,11 @@ export function FileDiffLayout({
     if (index < 0) return;
     setSelectedFile(strippedFiles[index].filename);
     setCurrentFileIndex(index);
-    document.getElementById(`file-${index}`)?.scrollIntoView({ block: "start" });
-  }, [focusFile, strippedFiles]);
+    const scroll = () => document.getElementById(`file-${index}`)?.scrollIntoView({ block: "start" });
+    scroll();
+    const raf = typeof requestAnimationFrame === "function" ? requestAnimationFrame(scroll) : 0;
+    return () => { if (raf && typeof cancelAnimationFrame === "function") cancelAnimationFrame(raf); };
+  }, [focusFile, focusNonce, strippedFiles]);
 
   useWatchEffect(() => {
     const index = strippedFiles.findIndex((f) => f.filename === selectedFile);
@@ -1301,6 +1316,8 @@ export function FileDiffLayout({
            
             fileMarks={fileMarks}
             onToggleViewed={onToggleViewed}
+            focusFile={focusFile}
+            focusNonce={focusNonce}
             inHand={inHand}
           />
         </div>

@@ -1,4 +1,9 @@
 import React, { useState, useCallback, useRef, useEffect, useContext, useMemo } from "react";
+import { useChangesRepository, useMentionedChange } from "../hooks/useMentionedChange";
+import { UnlistedBranch } from "./changes/UnlistedBranch";
+import { ChangeChip } from "./changes/ChangeChip";
+import { changeRowOf } from "../lib/changes/rows";
+import { useChangeReach, type RepoChange } from "../hooks/useRepoChanges";
 import { repoObjectDeepHref } from "../lib/repoView";
 import { ShortId } from "./ShortId";
 import Link from "next/link";
@@ -51,6 +56,7 @@ import {
   MESSAGE_REF_PREFIX,
   CONTEXTUAL_PR_REF_PREFIX,
   parseContextualPrRef,
+  parseDeployRunRef,
   pullRequestRepository,
   parseRepoObjectId,
   parseCallRef,
@@ -64,7 +70,7 @@ import {
 } from "../lib/entityLinks";
 import { isOnThreadRoute, openSessionAtMessage } from "../lib/openSessionAtMessage";
 import { SharedMessageCard, SharedMessagePill } from "./SharedMessageCard";
-import { AuthorAvatar, DiffStat, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
+import { AuthorAvatar, DottedRow, TaskPeople, type DottedPart } from "./entityDisplay";
 import { taskPriorityBadge } from "../lib/taskPriority";
 import {
   STATUS_COLOR,
@@ -74,7 +80,7 @@ import {
   taskProject,
   useEntityResolution,
 } from "../lib/entityDisplay";
-import { prState, repoObjectRefOf } from "../lib/repoObjects";
+import { repoObjectRefOf } from "../lib/repoObjects";
 import { githubLocationHref } from "../lib/repoNavigation";
 import { loopbackLinkUrl } from "../lib/browserPaneLinks";
 import { inAppPath } from "../lib/openIntent";
@@ -109,6 +115,14 @@ import { ProviderIcon, SOURCE_PROVIDER_LABEL, SOURCE_STATE, sourceFacts } from "
 import { replayFacts, replayTitle } from "./ops/opsModel";
 import { ModPaneEmbed } from "./mods/ModPaneEmbed";
 import { OBJECT_REF_PREFIX } from "@codecast/shared/contracts/mods";
+import { actionsRunKey } from "@codecast/shared/contracts/deploys";
+import { DeployPillSuffix } from "./deploys/deployRefLook";
+import { DeployHoverContent, ProductionReach } from "./deploys/DeployHoverContent";
+import { RefChangeSegment } from "./changes/RefChangeSegment";
+import { CommitHoverContent, PullRequestHoverContent, RepoObjectUnknownHoverContent } from "./RepoObjectHoverContent";
+import { deployLook } from "../lib/deploys/deployLook";
+import { deployPillSuffix, runRefKey } from "../lib/deploys/deployPill";
+import { prStateKey } from "../lib/prView";
 
 export { SessionHoverContent };
 
@@ -497,165 +511,6 @@ function TriggerHoverContent({ trigger }: { trigger: any }) {
   );
 }
 
-// A pull request reference answers: what it is, whether it is open, merged or
-// closed, who opened it, which branch goes where, and how big it is.
-function PullRequestHoverContent({ pr }: { pr: any }) {
-  const state = prState(pr.state);
-  const when = relativeTime(pr.merged_at ?? pr.updated_at);
-  return (
-    <div className="space-y-2">
-      <div className="flex items-start gap-2">
-        <GitPullRequest className={`w-3.5 h-3.5 flex-shrink-0 mt-0.5 ${state.color}`} />
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-sol-text leading-snug">{pr.title || `#${pr.number}`}</div>
-          <div className="flex items-center gap-2 mt-1 text-meta">
-            <span className={`font-medium ${state.color}`}>{state.label}</span>
-            {pr.author_github_username && (
-              <>
-                <span className="text-sol-text-dim/60">·</span>
-                <span className="text-sol-text-muted truncate">{pr.author_github_username}</span>
-              </>
-            )}
-            {when && (
-              <>
-                <span className="text-sol-text-dim/60">·</span>
-                <span className="text-sol-text-muted">{when}</span>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {pr.body && (
-        <p className="text-meta text-sol-text-muted line-clamp-2 leading-relaxed pl-[22px]">
-          {stripMarkdown(pr.body).slice(0, 200)}
-        </p>
-      )}
-
-      {/* Where the review stands, in the three words a reader wants before
-          opening it: the verdict, the checks, and what is still open. */}
-      {(pr.review_decision || pr.checks_state || pr.unresolved_review_count) && (
-        <div className="flex items-center gap-2 pl-[22px] text-meta min-w-0 flex-wrap">
-          {pr.review_decision && pr.review_decision !== "none" && (
-            <span className={pr.review_decision === "approved" ? "text-sol-green" : pr.review_decision === "changes_requested" ? "text-sol-red" : "text-sol-yellow"}>
-              {pr.review_decision === "approved" ? "approved" : pr.review_decision === "changes_requested" ? "changes requested" : "review needed"}
-            </span>
-          )}
-          {pr.checks_state && pr.checks_state !== "none" && (
-            <span className={pr.checks_state === "success" ? "text-sol-green" : pr.checks_state === "failure" ? "text-sol-red" : "text-sol-yellow"}>
-              checks {pr.checks_state === "success" ? "green" : pr.checks_state === "failure" ? "failing" : "running"}
-            </span>
-          )}
-          {!!pr.unresolved_review_count && (
-            <span className="text-sol-cyan">{pr.unresolved_review_count} open {pr.unresolved_review_count === 1 ? "thread" : "threads"}</span>
-          )}
-        </div>
-      )}
-
-      {(pr.head_ref || pr.additions != null || pr.changed_files != null) && (
-        <div className="flex items-center gap-2 pl-[22px] text-meta font-mono text-sol-text-dim min-w-0">
-          {pr.head_ref && (
-            <span className="truncate">
-              <span className="text-sol-green">{pr.head_ref}</span>
-              {pr.base_ref && (
-                <>
-                  <span className="text-sol-text-dim/60"> → </span>
-                  <span className="text-sol-blue">{pr.base_ref}</span>
-                </>
-              )}
-            </span>
-          )}
-          <DiffStat additions={pr.additions} deletions={pr.deletions} files={pr.changed_files} className="ml-auto" />
-        </div>
-      )}
-
-      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
-        <span className="text-meta text-sol-text-dim font-mono truncate">{repoObjectRefOf("pr", pr)}</span>
-        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5 flex-shrink-0">
-          Open <ArrowUpRight className="w-2.5 h-2.5" />
-        </span>
-      </div>
-    </div>
-  );
-}
-
-// A pull request or commit codecast holds no row for: the reference itself
-// (number or sha, repository), whether the lookup is still running or came
-// back empty, and why it can be empty. The band below the content offers
-// GitHub, which always has the object.
-function RepoObjectUnknownHoverContent({ rawId, served }: { rawId: string; served: boolean }) {
-  const ref = parseRepoObjectId(rawId);
-  const Icon = ref?.type === "commit" ? GitCommitHorizontal : GitPullRequest;
-  const name = ref ? (ref.type === "pr" ? `#${ref.number}` : ref.sha.slice(0, 7)) : rawId;
-  const what = ref?.type === "commit" ? "commit" : "pull request";
-  return (
-    <div className="space-y-2">
-      <div className="flex items-start gap-2">
-        <Icon className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-text-muted" />
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-sol-text leading-snug">{name}</div>
-          {ref && <div className="mt-1 text-meta font-mono text-sol-text-muted truncate">{ref.repository}</div>}
-        </div>
-      </div>
-      <p className="text-meta text-sol-text-muted leading-relaxed pl-[22px]">
-        {served
-          ? `Not in codecast. This ${what} is in a repository the GitHub App is not installed on, or it has not synced yet.`
-          : `Looking this ${what} up…`}
-      </p>
-    </div>
-  );
-}
-
-// A commit reference answers: its subject, who wrote it and when, the branch
-// it landed on, and the body when the message has one.
-function CommitHoverContent({ commit }: { commit: any }) {
-  const lines = String(commit.message ?? "").split("\n");
-  const subject = lines[0]?.trim();
-  const body = lines.slice(1).join("\n").trim();
-  const when = relativeTime(commit.timestamp);
-  return (
-    <div className="space-y-2">
-      <div className="flex items-start gap-2">
-        <GitCommitHorizontal className="w-3.5 h-3.5 flex-shrink-0 mt-0.5 text-sol-yellow" />
-        <div className="min-w-0 flex-1">
-          <div className="text-xs font-medium text-sol-text leading-snug">{subject || commit.sha.slice(0, 7)}</div>
-          <div className="flex items-center gap-2 mt-1 text-meta min-w-0">
-            {commit.author_name && <span className="text-sol-text-muted truncate">{commit.author_name}</span>}
-            {when && (
-              <>
-                <span className="text-sol-text-dim/60">·</span>
-                <span className="text-sol-text-muted">{when}</span>
-              </>
-            )}
-            {commit.branch && (
-              <>
-                <span className="text-sol-text-dim/60">·</span>
-                <span className="text-sol-text-muted font-mono truncate">{commit.branch}</span>
-              </>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {body && (
-        <p className="text-meta text-sol-text-muted line-clamp-3 leading-relaxed pl-[22px] whitespace-pre-line">
-          {body.slice(0, 220)}
-        </p>
-      )}
-
-      <div className="flex items-center justify-between pt-1 border-t border-sol-border/40">
-        <span className="text-meta text-sol-text-dim font-mono inline-flex items-center gap-2 min-w-0">
-          <span className="truncate">{commit.repository ? `${commit.repository}@` : ""}{commit.sha.slice(0, 7)}</span>
-          <DiffStat additions={commit.insertions} deletions={commit.deletions} files={commit.files_changed} />
-        </span>
-        <span className="text-meta text-sol-text-dim inline-flex items-center gap-0.5 flex-shrink-0">
-          Open <ArrowUpRight className="w-2.5 h-2.5" />
-        </span>
-      </div>
-    </div>
-  );
-}
-
 const MENTION_RE = entityMentionRegex();
 
 function MentionPill({ name, entityId }: { name: string; entityId?: string }) {
@@ -726,19 +581,33 @@ function takeMentionProps(props: any): { mention: MentionInfo; rest: any } {
   };
 }
 
+/** A change a message names, its reach fed while drawn. */
+function MentionedChange({ change, label }: { change: RepoChange; label: string }) {
+  useChangeReach(change.reach_ref);
+  const row = changeRowOf(change);
+  return <ChangeChip lifecycle={row.lifecycle} label={label} links={row.links} writers={row.writers} />;
+}
+
 export function EntityAwareCode({ children, className, ...allProps }: any) {
   const text = String(children);
   const worktrees = useKnownWorktrees();
   const { mention: mentionInfo, rest: props } = takeMentionProps(allProps);
+  const entity = !className && isEntityId(text);
+  // A worktree named by its folder or by the branch it has checked out. Checked
+  // before the file link, which would otherwise claim the folder as a path.
+  const worktree = className || entity || !worktrees ? null : worktreeRefOfCode(text, worktrees.checkouts);
+  // A branch on its way to live draws as its change (changes.md CH4), whether a worktree, a pull request or a push
+  // carries it. Asked before any return: a streaming span's text can turn into an entity id between renders.
+  const change = useMentionedChange(className || entity ? "" : text, !!worktree && worktree.worktree.branch === text);
+  const changesRepo = useChangesRepository();
   // The fallback keeps a non-entity Convex-shaped string (message id, hash)
   // rendered as the inline code it was written as.
-  if (!className && isEntityId(text)) {
+  if (entity) {
     return <EntityIdPill shortId={text} mention={mentionInfo} fallback={<code className={className} {...props}>{children}</code>} />;
   }
   const code = <code className={className} {...props}>{children}</code>;
-  // A worktree named by its folder or by the branch it has checked out. Checked
-  // before the file link, which would otherwise claim the folder as a path.
-  const worktree = className || !worktrees ? null : worktreeRefOfCode(text, worktrees.checkouts);
+  if (change === "unlisted" && !worktree) return <UnlistedBranch repository={changesRepo!} name={text}>{code}</UnlistedBranch>;
+  if (change && change !== "unlisted") return <MentionedChange change={change} label={text} />;
   if (worktree) return <WorktreePill repository={worktrees!.repository} path={worktree.worktree.path}>{text}</WorktreePill>;
   // `lib/foo.ts:38` in backticks — the commonest way an agent names a file.
   // The code span keeps its look; the link wraps it.
@@ -873,6 +742,8 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
       if (kind === "artifact") return <PublishedPageEmbed slug={id} caption={caption} />;
       if (kind === "link") {
         const url = parseLinkPreviewUrl(safeDecode(id));
+        // A GitHub Actions run that carries a deploy is that deploy; any other run keeps its preview.
+        if (url && actionsRunKey(url)) return <div><EntityIdPill type="deploy" id={url} fallback={<LinkPreviewCard url={url} caption={caption} />} /></div>;
         if (url) return <LinkPreviewCard url={url} caption={caption} />;
       } else {
         return <ClaudeArtifactEmbed id={id} caption={caption} />;
@@ -891,6 +762,8 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
       const pr = contextualPrReference(ref, pathCtx, mention);
       if (pr !== null) return pr;
     }
+    const run = parseDeployRunRef(ref);
+    if (run) return <EntityIdPill type="deploy" id={run.id} mention={mention} fallback={<>{run.label}</>} />;
     return <EntityIdPill shortId={ref} mention={mention} />;
   }
   // A file mention remarkEntityIds turned into a /files?path= link: re-resolve
@@ -936,6 +809,11 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
   if (text.startsWith(CONTEXTUAL_PR_REF_PREFIX)) {
     const pr = contextualPrReference(text, pathCtx, mention);
     if (pr !== null) return pr;
+  }
+  // A run named by its bare id (`deployrun:<id>|<as written>`): the deploy it carried, else the words as written.
+  {
+    const run = parseDeployRunRef(text);
+    if (run) return <EntityIdPill type="deploy" id={run.id} mention={mention} fallback={<>{run.label}</>} />;
   }
   if (isEntityId(text)) {
     // Fallback preserves the original link for a Convex-shaped id that turns
@@ -990,6 +868,12 @@ export function EntityAwareLink({ href, children, ...allProps }: any) {
         to={repoObject ? repoObjectDeepHref(href) ?? undefined : entityRef.to}
       />
     );
+  }
+  // A GitHub Actions run that carries a deploy reads as the deploy's pill and
+  // opens its page (the hover keeps the run's link). Most runs are CI, not
+  // deploys: those, and any run before codecast answers, stay the link.
+  if (actionsRunKey(href)) {
+    return <EntityIdPill type="deploy" id={href} mention={mention} fallback={<a href={href} target="_blank" rel="noopener noreferrer" {...props}>{children}</a>} />;
   }
   // A publish URL inside a sentence: a compact titled pill. The block-embed
   // case (URL alone on its line) never reaches here — remarkEntityIds hoists
@@ -1175,6 +1059,8 @@ export function EntityIdPill({
   label: labelProp,
   to,
   wide = false,
+  bare = false,
+  idLabel,
 }: {
   shortId?: string;
   type?: EntityType;
@@ -1199,6 +1085,11 @@ export function EntityIdPill({
    *  object (a pull request's file view, a line in it) rather than the
    *  object itself. */
   to?: string;
+  /** The pill without the state it says on the line ("not live yet"): a surface whose row already says where the
+   *  object stands (a Deploys queue). Its hover card still says it. */
+  bare?: boolean;
+  /** Read as this ID whatever the object is titled or whoever the session is (a column of IDs); the hover card says the rest. */
+  idLabel?: string;
 }) {
   // All resolution — type sniffing/server resolve, webGet queries, the
   // local-first store seed, label and route — is the shared hook.
@@ -1248,6 +1139,15 @@ export function EntityIdPill({
   const taskV = taskVisual(status);
   const decisionV = DECISION_STATE[status ?? "pending"] ?? DECISION_STATE.pending;
   const decisionSettled = type === "decision" && (status ?? "pending") !== "pending";
+  // A deploy wears its state: glyph and chrome say live, going out or failed before a word is read.
+  const deployV = type === "deploy" && entity ? deployLook(entity, Date.now()) : null;
+  // A merged pull request or a commit carries how far it has gone toward production.
+  const cardReach = entity && ((isPr && entity.state === "merged") || isCommit) ? repoObjectRefOf(type!, entity, 40) : null;
+  // A bare pill keeps its reach for the hover card only.
+  const reachRef = bare ? null : cardReach;
+  // Every other pull request says its state: open, draft or closed (a bare pill says none).
+  const prState = !bare && isPr && entity && !reachRef ? prStateKey(entity) : null;
+  const saysState = !!reachRef || !!prState;
 
   // Who a session IS (session-characters.md S3): once a session wears a
   // character or a role, the reference reads as that person — the face in
@@ -1257,7 +1157,7 @@ export function EntityIdPill({
   const prefs = useIdentityPrefs();
   const identity = isSession && entity ? sessionIdentity(entity, prefs) : null;
   const persona = identity && identity.kind !== "plain" ? identity : null;
-  const pillLabel = persona ? persona.name : wide ? fullLabel : refLabel;
+  const pillLabel = idLabel ?? (persona ? persona.name : wide ? fullLabel : refLabel);
   const Icon = isSession
     ? MessageSquare
     : isPlan
@@ -1286,6 +1186,8 @@ export function EntityIdPill({
               ? Film
             : type === "flow"
               ? Workflow
+            : deployV
+              ? deployV.Icon
             : isPr
               ? GitPullRequest
               : isCommit
@@ -1328,8 +1230,11 @@ export function EntityIdPill({
             // A flow wears the cyan of plans: both say the way the work goes, step by step.
             : type === "flow"
               ? "bg-sol-cyan/[0.08] text-sol-cyan hover:bg-sol-cyan/[0.16]"
+            : deployV
+              ? deployV.chrome
+            // Merged is violet, as the pull request's own card and chip say it.
             : isPr
-              ? "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
+              ? entity?.state === "merged" ? "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]" : "bg-sol-green/[0.08] text-sol-green hover:bg-sol-green/[0.16]"
               : isCommit
                 ? "bg-sol-yellow/[0.08] text-sol-yellow hover:bg-sol-yellow/[0.16]"
                 : "bg-sol-violet/[0.08] text-sol-violet hover:bg-sol-violet/[0.16]";
@@ -1394,15 +1299,27 @@ export function EntityIdPill({
   // reference (a URL, a number in a repository bound conversation) is exempt:
   // it pills and opens the codecast page, which handles a missing row itself.
   if ((isPr || isCommit) && !entity && !certain) return fallback !== undefined ? <>{fallback}</> : <span className="modern:font-mono">{rawId}</span>;
+  // A GitHub Actions run is a deploy only once codecast says so; until then, and for every CI run, it stays its link.
+  if (type === "deploy" && !entity && runRefKey(rawId)) return <>{fallback}</>;
 
   // Quiet chrome: the reference sits IN the sentence — same size as the
   // prose, no border, a faint tint of the type's color, the way a mention
   // reads in chat. The icon and the color say "this is an object"; the box
   // that used to say it was what turned a paragraph with four references
   // into a row of stamps.
+  // A deploy's state is part of its name for a reader who cannot see the color.
+  // A pill with a caret keeps it on its line: the caret never starts one.
+  const KeepWithCaret = canReveal ? "span" : React.Fragment;
+  // A plain reference (no state segment, not a full-width row) flows as
+  // words do: its title wraps at the column edge like the prose around it,
+  // instead of a box that jumps to a line of its own or stacks two lines
+  // tall inside the sentence (ct-87448). `.entity-ref--flow` in globals.css.
+  const flows = !wide && !saysState && !deployV;
+  const linkTitle = deployV ? `${fullLabel} · ${deployPillSuffix(entity, Date.now())}` : wide || saysState || fullLabel !== pillLabel ? fullLabel : undefined;
   return (
     <>
     <Popover open={hoverOpen} onOpenChange={setHoverOpen}>
+      <KeepWithCaret {...(canReveal ? { className: "whitespace-nowrap" } : {})}>
       <PopoverAnchor asChild>
         <Link
           ref={linkRef}
@@ -1413,10 +1330,11 @@ export function EntityIdPill({
           onMouseEnter={revealOpen ? closeNow : openSoon}
           onMouseLeave={closeSoon}
           data-reveal-open={revealOpen ? "" : undefined}
-          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""} inline-flex items-center gap-[0.2em] px-[0.2em] rounded-[0.2em] text-[1em] font-medium leading-none ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
-          title={wide || fullLabel !== pillLabel ? fullLabel : undefined}
+          className={`not-prose entity-ref${compact ? " entity-ref-compact" : ""}${canReveal ? " entity-ref--split" : ""}${flows ? " entity-ref--flow" : " whitespace-normal inline-flex items-center gap-[0.2em] leading-none"} px-[0.2em] rounded-[0.2em] text-[1em] font-medium ${revealOpen ? "underline" : "no-underline"} ${colors}${decisionSettled ? " opacity-60" : ""}${wide ? " min-w-0 max-w-full" : saysState ? (canReveal ? " max-w-[calc(100%-1.3em)]" : " max-w-full") : ""} transition-colors cursor-pointer align-baseline hover:underline decoration-current/40 underline-offset-2`}
+          title={linkTitle}
+          aria-label={deployV ? linkTitle : undefined}
         >
-          <span className="relative flex-shrink-0 opacity-80 inline-flex items-center">
+          <span className="entity-ref__icon relative flex-shrink-0 opacity-80 inline-flex items-center">
             {persona && entity ? (
               <SessionFace row={entity} size="1em" />
             ) : type === "role" && entity?.handle ? (
@@ -1426,7 +1344,7 @@ export function EntityIdPill({
             ) : isSession && (entity?.author_name || entity?.author_avatar) ? (
               <AuthorAvatar name={entity.author_name} avatar={entity.author_avatar} size="1em" />
             ) : (
-              <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : type === "source" && status === "error" ? "text-sol-red" : ""}`} />
+              <Icon className={`w-[1em] h-[1em] block ${isTask ? taskV.color : type === "source" && status === "error" ? "text-sol-red" : deployV?.iconClass ?? ""}`} />
             )}
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
@@ -1434,7 +1352,11 @@ export function EntityIdPill({
           </span>
           {/* The label, not the icon, gives the pill its baseline, so the
               text sits on the line with the words around it. */}
-          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : "self-baseline"}>{pillLabel}</span>
+          {/* A pill that carries its state cuts its title, so the state stays on the line with it. */}
+          <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : saysState ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : flows ? "entity-ref__label" : "self-baseline"}>{pillLabel}</span>
+          {deployV && <DeployPillSuffix deploy={entity} />}
+          {/* A pull request or commit says where it stands as its change: the Branches page's track and word. */}
+          {(isPr || isCommit) && entity ? <RefChangeSegment type={isPr ? "pr" : "commit"} entity={entity} /> : null}
         </Link>
       </PopoverAnchor>
       {/* The other half of the pill: the caret opens the full page in a band
@@ -1452,8 +1374,9 @@ export function EntityIdPill({
           <ChevronDown aria-hidden className="entity-ref__caret" />
         </button>
       )}
+      </KeepWithCaret>
       <PopoverContent
-        className={`${type === "doc" ? "w-96" : "w-80"} max-w-[calc(100vw-16px)] bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
+        className={`${type === "doc" || cardReach ? "w-96" : "w-80"} max-w-[calc(100vw-16px)] bg-sol-bg border border-sol-border shadow-xl p-0 relative`}
         side="top"
         align="start"
         sideOffset={6}
@@ -1469,7 +1392,14 @@ export function EntityIdPill({
         <HoverCardClose.Provider value={closeNow}>
         {/* A role's card is the one every place that names a role shows, a
             link of its own, so it is not wrapped in a second one. */}
-        {type === "role" && entity ? <RoleHoverContent role={entity} onOpen={handleOpen} /> : type === "person" && entity ? <PersonHoverContent person={{ userId: entity._id ? String(entity._id) : null, handle: entity.github_username || entity.username || null, name: entity.name, image: entity.image ?? entity.github_avatar_url }} onOpen={handleOpen} /> : type === "initiative" && entity ? <GoalHoverContent goal={entity} onOpen={handleOpen} /> : <Link
+        {type === "role" && entity ? <RoleHoverContent role={entity} onOpen={handleOpen} /> : type === "deploy" && entity ? <DeployHoverContent deploy={entity} href={href} onOpen={handleOpen} showOpen={!canReveal} /> : (isPr || isCommit) && entity ? (
+          // Its production rows are links of their own, so the card is links around them rather than inside one.
+          <div className="p-3">
+            {isPr
+              ? <PullRequestHoverContent pr={entity} href={href} onOpen={handleOpen} production={cardReach ? <ProductionReach refId={cardReach} /> : null} showOpen={!canReveal} />
+              : <CommitHoverContent commit={entity} href={href} onOpen={handleOpen} production={cardReach ? <ProductionReach refId={cardReach} /> : null} showOpen={!canReveal} />}
+          </div>
+        ) : type === "person" && entity ? <PersonHoverContent person={{ userId: entity._id ? String(entity._id) : null, handle: entity.github_username || entity.username || null, name: entity.name, image: entity.image ?? entity.github_avatar_url }} onOpen={handleOpen} /> : type === "initiative" && entity ? <GoalHoverContent goal={entity} onOpen={handleOpen} /> : <Link
           href={href}
           onClick={handleOpen}
           className="block p-3 no-underline cursor-pointer"
@@ -1485,8 +1415,6 @@ export function EntityIdPill({
             : type === "source" ? <SourceHoverContent source={entity} />
             : type === "replay" ? <ReplayHoverContent replay={entity} rawId={rawId} />
             : type === "flow" ? <FlowHoverContent flow={entity} />
-            : isPr ? <PullRequestHoverContent pr={entity} />
-            : isCommit ? <CommitHoverContent commit={entity} />
             : <GenericHoverContent entity={entity} type={type} />
           ) : (isPr || isCommit) ? (
             <RepoObjectUnknownHoverContent rawId={rawId} served={served} />

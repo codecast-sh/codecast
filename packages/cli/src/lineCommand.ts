@@ -75,7 +75,8 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
       else for (const r of out) console.log(r.error ? `${r.task}: ${r.error}` : r.queued);
       if (out.some((r) => r.error)) process.exitCode = 1;
     });
-  line
+  // Under `cast flow`, `merge` is the change flow's Merge station (flowStations.ts): the role's merge is `cast line merge`.
+  if (line.name() === "line") line
     .command("merge")
     .description("Merge an approved run's branch into the default branch when the role's flow allows it (the Standard steps' merge node)")
     .requiredOption("--run <id>", "The workflow run")
@@ -175,13 +176,24 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
       const { formatTargets, checkoutTargets } = await import("./lineDeploy.js");
       const { readLocalGitContext } = await import("./prCommand.js");
       const root = process.env.CODECAST_CWD || process.cwd();
+      try {
+        const { readDeployTargetEntries, deployTargetWarnings } = await import("./workspace/deployTargetsFile.js");
+        const { shipSpec } = await import("./land/shipCheckout.js");
+        for (const w of deployTargetWarnings(readDeployTargetEntries(root, shipSpec(root).deploy))) console.error(`! ${w}`);
+      } catch {
+        // An unreadable file fails below, with its own words.
+      }
       const repository = readLocalGitContext(root).repository;
       if (!repository) { console.error("No GitHub repository here: run inside a checkout with a GitHub origin"); process.exit(1); }
       if (options.publish) {
         const { publishDeployTargets } = await import("./lineProfileCommand.js");
         const r = await publishDeployTargets(deps, root, await checkoutTargets(root), options.team);
-        if (!options.json) console.log(`Published ${r.targets.length} target${r.targets.length === 1 ? "" : "s"} of ${r.repository}: ${r.targets.map((t: any) => t.name).join(", ")}`);
-        await apiPost(deps, "/cli/deploys/targets/poll", { team_id: r.team_id }, { exitOnError: false }).catch(() => null);
+        const notPublished = r.skipped ?? r.refused;
+        if (notPublished) console.error(`Not published: ${notPublished}`);
+        else {
+          if (!options.json) console.log(`Published ${r.targets.length} target${r.targets.length === 1 ? "" : "s"} of ${r.repository}: ${r.targets.map((t: any) => t.name).join(", ")}`);
+          await apiPost(deps, "/cli/deploys/targets/poll", { team_id: r.team_id }, { exitOnError: false }).catch(() => null);
+        }
       }
       const view = await apiPost(deps, "/cli/deploys/targets", { repository, ...(options.team ? { team_id: options.team } : {}), ...(options.target ? { target: String(options.target).toLowerCase() } : {}) }, { read: true });
       console.log(options.json ? JSON.stringify(view, null, 2) : formatTargets(view));

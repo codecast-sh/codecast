@@ -293,7 +293,8 @@ test("Ask first: an agent's read files one decision for the session, Approve let
   expect(decision.context_md).toStartWith("Why: refund order 123\n\n");
   expect(decision.options.map((o: any) => o.label)).toEqual(["Approve for this session", "Deny"]);
   expect(decision.conversation_id).toBe(conv);
-  // Proposed as access; a keyword may pin another protected category. Either way only a person holds it.
+  // Proposed as access, which only a person holds.
+  expect(decision.category).toBe("access");
   expect(isHumanOnlyCategory(decision.category)).toBe(true);
 
   // A repeat while it is open reuses the decision; no read is recorded and no value leaves.

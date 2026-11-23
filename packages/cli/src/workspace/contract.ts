@@ -24,6 +24,7 @@ import type {
   ContractResult,
   Workspace,
   WorkspaceManifest,
+  WorkspacePurpose,
   WorkspaceState,
 } from "./types.js";
 
@@ -45,7 +46,7 @@ export interface PersistedWorkspaceState {
   updatedAt: string;
   /** Last contract result, if available. */
   contract?: ContractResult;
-  /** Chrome process bound to this workspace, when browser.enabled. */
+  /** Chrome process bound to this workspace while one started on demand runs. */
   chrome?: ChromeBinding;
   /** The ref/commit the worktree branch was created at (a cloud seed's hidden ref). */
   startPoint?: string;
@@ -53,6 +54,8 @@ export interface PersistedWorkspaceState {
   seedBase?: string;
   /** Session uuids that acquired or attached to this workspace (recordWorkspaceSession). */
   sessions?: string[];
+  /** Set only on a workspace a tool made for itself (Workspace.purpose). */
+  purpose?: WorkspacePurpose;
 }
 
 /** Canonical projection of persisted state back into a Workspace. */
@@ -71,6 +74,7 @@ export function stateToWorkspace(s: PersistedWorkspaceState): Workspace {
     chrome: s.chrome,
     ...(s.startPoint ? { startPoint: s.startPoint } : {}),
     ...(s.seedBase ? { seedBase: s.seedBase } : {}),
+    ...(s.purpose ? { purpose: s.purpose } : {}),
   };
 }
 

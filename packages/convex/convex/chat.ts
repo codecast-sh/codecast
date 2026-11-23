@@ -32,6 +32,7 @@ import { canOwnerOrTeamAccess, isConversationOwner, isTeamAdmin, isTeamMember } 
 import { activeTeamMembershipFor } from "./lib/access";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
 import { canAccessChannel, canReadChannelAnonymously, channelAgentRows, channelMemberIds, chatReadOriginArgs, isChannelMember, isCommunity, isRestricted, sessionChatScope, sessionDmRefusal, sessionMayReadChannel, primeSessionListing, grantSessionRoom, grantTargetOf, type ChatReadOrigin, type SessionChatScope } from "./chatAccess";
+import { dmAnchorFor, dmExchange, dmSessionLineAnswered } from "./chatDm";
 import {
   dmKeyFor,
   isAgentTurnInFlight,
@@ -52,7 +53,7 @@ import {
 import { HUDDLE_DIGEST_CLIENT_ID_PREFIX, isHostedAgentType, parseRoomKey } from "@codecast/shared/contracts";
 import { RateLimitError, checkRateLimit } from "./rateLimit";
 import { matchHandle, resolveChatMentions, teamRoster } from "./lib/mentionResolve";
-import { AGENT_POSTS_PER_CHANNEL_DAY, AGENT_ROOTS_PER_CHANNEL_DAY, agentPosterKey, dayBucket, hourBucket, mentionWakeQuotas, reserveQuotas, takeQuota, takeQuotas } from "./lib/chatQuota";
+import { agentPosterKey, hourBucket, mentionWakeQuotas, reserveQuotas, takeAgentPostQuota, takeQuotas } from "./lib/chatQuota";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
 import { displayName } from "./lib/displayNames";
 import { purgeUserTeam, touchThread } from "./threadReads";
@@ -85,7 +86,7 @@ import {
   notifyLevelAllows,
   oneLine,
   plainPreview,
-  searchSnippet, holdsQueryPhrases, emailLocalHandle, memberHandle } from "./chatText";
+  searchSnippet, holdsQueryPhrases, emailLocalHandle, memberHandle, sessionLineTitle } from "./chatText";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { parseQueryTerms } from "@codecast/shared/search";
 import { chatMentionClientId, chatRelayClientId, parseChatMentionClientId, parseChatRelayClientId } from "./lib/chatWakeIds";
@@ -2351,8 +2352,11 @@ export const sendMessage = mutation({
     let relay: RelayResult = { delivered: false, skipped: null, session_short_id: null, conversation_id: null };
     if (message) {
       try {
+        // A line at the top of a DM that answers a session's line there goes
+        // to that session, as a reply on that line would.
+        const answered = root ? null : await dmSessionLineAnswered(ctx, channel, message);
         relay = await maybeRelayToOriginSession(ctx, {
-          channel, message, root, senderId: userId, senderName: actorName,
+          channel, message, root: root ?? answered, senderId: userId, senderName: actorName, inline: !!answered,
         });
       } catch (error) {
         relay = {
@@ -2573,7 +2577,7 @@ export async function postChatMessage(
     if (conv) {
       originSession = {
         id: conv._id.toString(),
-        title: conv.title ? oneLine(conv.title, 80) : undefined,
+        title: sessionLineTitle(conv.title),
         agent_type: conv.agent_type,
       };
     }
@@ -2766,7 +2770,7 @@ export const repairMissingOriginSession = internalMutation({
     );
     if (!conversation) throw new Error("Session is not owned by the message author");
     const sessionId = conversation._id.toString();
-    const title = conversation.title ? oneLine(conversation.title, 80) : undefined;
+    const title = sessionLineTitle(conversation.title);
     if (
       message.origin_session_id === sessionId
       && message.origin_session_title === title
@@ -3745,25 +3749,6 @@ export async function resolveChannelAnchor(
   return anchor?.status === "active" ? anchor : null;
 }
 
-// The anchor that is a member of a DM room, if any. Shared by wake routing and
-// by access (the anchor's host may read the rooms its anchor is in).
-export async function dmAnchorFor(
-  ctx: ReadCtx,
-  channel: Doc<"chat_channels">,
-): Promise<Doc<"anchors"> | null> {
-  if (channel.kind !== "dm") return null;
-  for (const memberId of await channelMemberIds(ctx, channel._id)) {
-    const member = await ctx.db.get(memberId);
-    if (!member?.is_bot) continue;
-    const anchor = await ctx.db
-      .query("anchors")
-      .withIndex("by_bot_user", (q: any) => q.eq("bot_user_id", memberId))
-      .first();
-    if (anchor && anchor.status === "active") return anchor;
-  }
-  return null;
-}
-
 // Does the anchor follow this thread — i.e. does a plain reply here reach it?
 //
 //  - Naming it once arms the thread (`anchor_follow: true`). From then on EVERY
@@ -3848,6 +3833,9 @@ async function maybeRelayToOriginSession(
     /** A session that posted in this thread without starting it: a person's
      *  reply reaches it too (threadPosters), as a participant. */
     participant?: string;
+    /** The line is at the top of a DM and answers `root` there
+     *  (dmSessionLineAnswered): the session answers at the top too. */
+    inline?: boolean;
   },
 ): Promise<RelayResult> {
   const no = (skipped: string | null) => ({ delivered: false, skipped, session_short_id: null, conversation_id: null });
@@ -3931,15 +3919,20 @@ async function maybeRelayToOriginSession(
   await wakeCaps?.();
 
   const nonce = crypto.randomUUID().replace(/-/g, "").slice(0, 12);
-  const { entries, channelEntries } = await collectChatExcerpt(ctx, {
-    channel: opts.channel,
-    root,
-    message: opts.message,
-    senderName: opts.senderName,
-    threadRootId: root._id,
-    // The session's own earlier lines read as its own words.
-    isSelf: (row) => !!row.origin_session_id && row.origin_session_id === String(conversation._id),
-  });
+  // The session's own earlier lines read as its own words.
+  const isSelf = (row: Doc<"chat_messages">) => !!row.origin_session_id && row.origin_session_id === String(conversation._id);
+  const { entries, channelEntries } = opts.inline
+    // An answer at the top of a DM quotes the exchange alone: the session's
+    // line and the person's lines since, which were all addressed to it.
+    ? { entries: await dmExchange(ctx, opts.channel, root, opts.message, isSelf, opts.senderName), channelEntries: [] }
+    : await collectChatExcerpt(ctx, {
+      channel: opts.channel,
+      root,
+      message: opts.message,
+      senderName: opts.senderName,
+      threadRootId: root._id,
+      isSelf,
+    });
   // A DM the session is not part of opens to it one thread at a time
   // (chatAccess): the wake carries the thread, never the room's other lines.
   const roomOpen = opts.channel.kind !== "dm" || await sessionMayReadChannel(
@@ -3965,10 +3958,17 @@ async function maybeRelayToOriginSession(
       // A relay to the thread's starter opens the thread (openSessionReply
       // below); an answer to a mention the session made opens nothing.
       threadOpen: roomOpen || !mentionReply,
+      inline: opts.inline,
     }),
     client_id: key,
   });
-  await openSessionReply(ctx, { channel: opts.channel, threadRootId: root._id, wakeId, grant: mentionReply ? false : "thread" });
+  await openSessionReply(ctx, {
+    channel: opts.channel,
+    threadRootId: opts.inline ? undefined : root._id,
+    grantThreadId: root._id,
+    wakeId,
+    grant: mentionReply ? false : "thread",
+  });
   return {
     delivered: true,
     skipped: null,
@@ -4275,7 +4275,7 @@ async function wakeAnchorTurn(
 
 // ── Agent noise rules (docs/architecture/agent-channels.md C2/C3) ────────────
 
-// Refuse the line when this poster is over its daily cap in this channel.
+// Refuse the line when this poster is over its cap in this channel (C3).
 // Counted before the insert; the mutation rolls back as a whole on a throw, so
 // a refused line does not spend the count it was refused for.
 async function enforceAgentPostQuota(
@@ -4284,24 +4284,8 @@ async function enforceAgentPostQuota(
   posterKey: string,
   isRoot: boolean,
 ): Promise<void> {
-  const day = dayBucket();
-  const where = channel.kind === "dm" ? "this conversation" : `#${channel.name}`;
-  if (isRoot) {
-    const roots = await takeQuota(ctx, `root:${channel._id}:${posterKey}`, day, AGENT_ROOTS_PER_CHANNEL_DAY);
-    if (!roots.ok) {
-      chatFail(
-        "RATE_LIMITED",
-        `An agent may start at most ${AGENT_ROOTS_PER_CHANNEL_DAY} threads per day in ${where}; reply in an existing thread instead (--thread <root>)`,
-      );
-    }
-  }
-  const posts = await takeQuota(ctx, `post:${channel._id}:${posterKey}`, day, AGENT_POSTS_PER_CHANNEL_DAY);
-  if (!posts.ok) {
-    chatFail(
-      "RATE_LIMITED",
-      `An agent may post at most ${AGENT_POSTS_PER_CHANNEL_DAY} lines per day in ${where}; the cap resets at midnight UTC`,
-    );
-  }
+  const refusal = await takeAgentPostQuota(ctx, channel, posterKey, isRoot);
+  if (refusal) chatFail("RATE_LIMITED", refusal);
 }
 
 type MentionWakeResult = { roles: number; sessions: number; folded: number; skipped: string[] };

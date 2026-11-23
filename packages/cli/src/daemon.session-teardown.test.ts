@@ -64,7 +64,8 @@ describe("isConversationRetired", () => {
   test("a live conversation still reconstitutes (the crash-recovery case)", () => {
     expect(isConversationRetired(authoritative(), STRICT)).toBe(false);
     expect(isConversationRetired(authoritative({ inboxKilledAt: null }), STRICT)).toBe(false);
-    // Hidden from the inbox is NOT retired: a stashed/dismissed agent keeps running.
+    // Hidden from the inbox is NOT retired: a stashed or otherwise dismissed
+    // agent (bulk tidy, a linked child) keeps running and reconstitutes.
     expect(isConversationRetired(authoritative({ inboxStashedAt: 1, inboxDismissedAt: 1 }), STRICT)).toBe(false);
   });
 
@@ -710,7 +711,7 @@ describe("getConversationLifecycle routing", () => {
       return { status: "completed" };
     });
     const got = await svc.getConversationLifecycle("conv-1", "sess-1");
-    expect(got).toEqual({ status: "completed", hideStateKnown: false, source: "status-fallback" });
+    expect(got).toEqual({ status: "completed", closed: false, hideStateKnown: false, source: "status-fallback" });
     expect(calls[calls.length - 1].name).toBe(DEVICES);
   });
 

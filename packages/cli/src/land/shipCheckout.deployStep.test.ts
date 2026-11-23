@@ -1,0 +1,54 @@
+import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import { runDeployStep } from "./shipCheckout";
+
+// A deploy step can say what its push did to its target; the ship carries
+// that onto the deploy it records (packages/convex/deploy.sh writes it).
+
+describe("a ship's deploy step", () => {
+  test("a step that writes its changes reports them with this machine", async () => {
+    let seen = "";
+    const r = await runDeployStep(async (env) => {
+      seen = env.CAST_PUSH_CHANGES_FILE!;
+      fs.writeFileSync(seen, JSON.stringify({ adds: ["fn:a:b"], drops: ["index:voiceprints.by_user", 3], tree_ms: 1 }));
+      return { code: 0, output: "" };
+    });
+    expect(r.changes).toMatchObject({ machine: os.hostname(), via: "deploy.sh", adds: ["fn:a:b"], drops: ["index:voiceprints.by_user"] });
+    expect(r.changes.pushed_at).toBeGreaterThan(0);
+    // The file is the step's to fill and the ship's to clean up.
+    expect(fs.existsSync(seen)).toBe(false);
+  });
+
+  test("when its diff read prod rides along with the lists", async () => {
+    const r = await runDeployStep(async (env) => { fs.writeFileSync(env.CAST_PUSH_CHANGES_FILE!, JSON.stringify({ adds: [], drops: ["fn:x:y"], read_at: 1_700_000_000_000 })); return { code: 0, output: "" }; });
+    expect(r.changes).toMatchObject({ machine: os.hostname(), via: "deploy.sh", adds: [], drops: ["fn:x:y"], changes_read_at: 1_700_000_000_000 });
+    // Without the lists (the diff failed), a read time alone says nothing.
+    const bare = await runDeployStep(async (env) => { fs.writeFileSync(env.CAST_PUSH_CHANGES_FILE!, JSON.stringify({ read_at: 5 })); return { code: 0, output: "" }; });
+    expect(bare.changes).toMatchObject({ machine: os.hostname(), via: "deploy.sh" });
+    expect(bare.changes).not.toHaveProperty("changes_read_at");
+  });
+
+  test("a step that writes nothing reports nothing", async () => {
+    const r = await runDeployStep(async () => ({ code: 0, output: "ok" }));
+    expect(r).toEqual({ code: 0, output: "ok", changes: {} });
+  });
+
+  test("garbage in the file reports nothing rather than failing the ship", async () => {
+    const r = await runDeployStep(async (env) => { fs.writeFileSync(env.CAST_PUSH_CHANGES_FILE!, "{not json"); return { code: 0, output: "" }; });
+    expect(r.changes).toEqual({});
+  });
+
+  test("a diff that found nothing still says it ran", async () => {
+    const r = await runDeployStep(async (env) => { fs.writeFileSync(env.CAST_PUSH_CHANGES_FILE!, JSON.stringify({ adds: [], drops: [] })); return { code: 0, output: "" }; });
+    expect(r.changes).toMatchObject({ machine: os.hostname(), via: "deploy.sh", adds: [], drops: [] });
+  });
+});
+
+describe("a ship's deploy step whose diff failed", () => {
+  test("still says where the push came from, and sends no lists", async () => {
+    const r = await runDeployStep(async (env) => { fs.writeFileSync(env.CAST_PUSH_CHANGES_FILE!, "{}"); return { code: 0, output: "" }; });
+    expect(r.changes).toMatchObject({ machine: os.hostname(), via: "deploy.sh" });
+    expect(r.changes).not.toHaveProperty("adds");
+  });
+});

@@ -118,7 +118,7 @@ describe("the fold", () => {
     }
   });
 
-  it("the cut sits at a gap wider than 12h and nothing at or above the cut folds", () => {
+  it("the cut sits at a gap wider than 12h and nothing above the cut folds", () => {
     for (const seed of SEEDS) {
       const rows = genProjectableRows(seed, 100, EPOCH);
       const { members } = selectWorkingSet(rows, EPOCH);
@@ -128,9 +128,9 @@ describe("the fold", () => {
         continue;
       }
       const recentOnly = [...members.values()].filter((m) => !isFoldExempt(m.row));
-      // The cutoff is the activity time of the row AT the gap (it never folds
-      // itself); the nearest recent-only activity strictly above it is more
-      // than 12h away.
+      // The cutoff is the activity time of the first row past the gap (it
+      // folds with everything older); the nearest recent-only activity
+      // strictly above it is more than 12h away.
       expect(recentOnly.some((m) => m.row.updated_at === cutoff)).toBe(true);
       const above = recentOnly.filter((m) => m.row.updated_at > cutoff).map((m) => m.row.updated_at).sort((a, b) => a - b);
       expect(above[0] - cutoff).toBeGreaterThan(12 * GEN_HOUR);
@@ -141,7 +141,7 @@ describe("the fold", () => {
         const row = members.get(id)!.row;
         const lead = rollupParentIdOf(row);
         if (lead && members.has(lead)) expect(belowFold.has(lead)).toBe(true);
-        else expect(row.updated_at).toBeLessThan(cutoff);
+        else expect(row.updated_at).toBeLessThanOrEqual(cutoff);
       }
     }
   });

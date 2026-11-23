@@ -6,6 +6,9 @@ import { parseWorkflowFile } from "./parser.js";
 import { recordNodeOutput, expandScriptVars, expandPromptVars } from "./runner.js";
 
 describe("evalCondition: every condition the shipped workflows use", () => {
+  const INTENT_CLEAR = "outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.session and read.json.quote and read.json.line > 0";
+  const INTENT_DECLINED = "outcome = success and read.json.why and (read.json.ship != true or read.json.in_scope != true)";
+  const INTENT_CLEAR_CARD = "outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.card and read.json.quote";
   // Each row: a condition string found in templates/, packages/cli/workflows
   // or the repo's workflows/, a context, and what the old evaluator returned.
   const cases: Array<[string, Record<string, string>, boolean]> = [
@@ -147,6 +150,24 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["mode.json.mode != line", { "mode.json.mode": "line" }, false],
     ["outcome = failure and ship.exit_code != 3", { outcome: "failure", "ship.exit_code": "1" }, true],
     ["outcome = failure and ship.exit_code != 3", { outcome: "failure", "ship.exit_code": "3" }, false],
+    // line.cast: exit 7 is CI red, back to the builder for three rounds a run (ship.sh counts them in its JSON).
+    ["outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category != line", { outcome: "failure", "ship.exit_code": "7", "ship.json": '{"ci_red_rounds":3}', category: "code" }, true],
+    ["outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category != line", { outcome: "failure", "ship.exit_code": "7", "ship.json": '{"ci_red_rounds":4}', category: "code" }, false],
+    ["outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category = line", { outcome: "failure", "ship.exit_code": "7", "ship.json": '{"ci_red_rounds":1}', category: "line" }, true],
+    ["outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds <= 3 and category = line", { outcome: "failure", "ship.exit_code": "7", "ship.json": '{"ci_red_rounds":1}', category: "code" }, false],
+    ["outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds > 3", { outcome: "failure", "ship.exit_code": "7", "ship.json": '{"ci_red_rounds":4}' }, true],
+    ["outcome = failure and ship.exit_code = 7 and ship.json.ci_red_rounds > 3", { outcome: "failure", "ship.exit_code": "7", "ship.json": '{"ci_red_rounds":3}' }, false],
+    ["outcome = failure and ship.exit_code != 3 and ship.exit_code != 7", { outcome: "failure", "ship.exit_code": "1" }, true],
+    ["outcome = failure and ship.exit_code != 3 and ship.exit_code != 7", { outcome: "failure", "ship.exit_code": "7" }, false],
+    // line.cast: once Decide was answered Ship, an approved fix round goes to rebase; before it (or after a Revise), to the card.
+    ["review_verdict = approve and human.gate.selected = S", { review_verdict: "approve", "human.gate.selected": "S" }, true],
+    ["review_verdict = approve and human.gate.selected = S", { review_verdict: "approve" }, false],
+    ["review_verdict = approve and human.gate.selected = S", { review_verdict: "approve", "human.gate.selected": "R" }, false],
+    ["review_verdict = approve and human.gate.selected = S", { review_verdict: "changes", "human.gate.selected": "S" }, false],
+    ["review_verdict = approve and human.gate.selected != S", { review_verdict: "approve" }, true],
+    ["review_verdict = approve and human.gate.selected != S", { review_verdict: "approve", "human.gate.selected": "R" }, true],
+    ["review_verdict = approve and human.gate.selected != S", { review_verdict: "approve", "human.gate.selected": "S" }, false],
+    ["review_verdict = approve and human.gate.selected != S", { review_verdict: "reject" }, false],
     // check.cast: exit 2 from verify means the check could not judge, not that it failed.
     ["outcome = failure and verify.exit_code != 2", { outcome: "failure", "verify.exit_code": "1" }, true],
     ["outcome = failure and verify.exit_code != 2", { outcome: "failure", "verify.exit_code": "2" }, false],
@@ -179,6 +200,101 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and check__failed.json.exit = unjudged", { outcome: "failure", "check__failed.json.exit": "failed" }, false],
     ["outcome = failure and check__unjudged.json.exit != unjudged", { outcome: "failure", "check__unjudged.json.exit": "unjudged" }, false],
     ["outcome = failure and check__unjudged.json.exit = unjudged", { outcome: "failure", "check__unjudged.json.exit": "unjudged" }, true],
+    // The deploy segment's wait (deploys.md): exit 4 merged nothing, exit 5 is stuck past a deadline, anything else failed.
+    ["outcome = failure and wait.exit_code = 4", { outcome: "failure", "wait.exit_code": "4" }, true],
+    ["outcome = failure and wait.exit_code = 4", { outcome: "failure", "wait.exit_code": "1" }, false],
+    ["outcome = failure and wait.exit_code = 5", { outcome: "failure", "wait.exit_code": "5" }, true],
+    ["outcome = failure and wait.exit_code = 5", { outcome: "failure", "wait.exit_code": "4" }, false],
+    ["outcome = failure and wait.exit_code != 4 and wait.exit_code != 5", { outcome: "failure", "wait.exit_code": "1" }, true],
+    ["outcome = failure and wait.exit_code != 4 and wait.exit_code != 5", { outcome: "failure", "wait.exit_code": "5" }, false],
+    ["outcome = failure and deploy__wait.exit_code = 4", { outcome: "failure", "deploy__wait.exit_code": "4" }, true],
+    ["outcome = failure and deploy__wait.exit_code = 4", { outcome: "failure", "deploy__wait.exit_code": "5" }, false],
+    ["outcome = failure and deploy__wait.exit_code = 5", { outcome: "failure", "deploy__wait.exit_code": "5" }, true],
+    ["outcome = failure and deploy__wait.exit_code = 5", { outcome: "success", "deploy__wait.exit_code": "5" }, false],
+    ["outcome = failure and deploy__wait.exit_code != 4 and deploy__wait.exit_code != 5", { outcome: "failure", "deploy__wait.exit_code": "1" }, true],
+    ["outcome = failure and deploy__wait.exit_code != 4 and deploy__wait.exit_code != 5", { outcome: "failure", "deploy__wait.exit_code": "4" }, false],
+    // The change flow (flows.md FL4): Verdicts names the next station, and each station's exit code routes it.
+    ["verdicts.json.next = new_round and moved.visits < 3", { "verdicts.json.next": "new_round", "moved.visits": "2" }, true],
+    ["verdicts.json.next = new_round and moved.visits < 3", { "verdicts.json.next": "new_round", "moved.visits": "3" }, false],
+    ["verdicts.json.next = new_round", { "verdicts.json.next": "new_round" }, true],
+    ["verdicts.json.next = new_round", { "verdicts.json.next": "merge" }, false],
+    ["verdicts.json.next = merge", { "verdicts.json.next": "merge" }, true],
+    ["verdicts.json.next = merge", { "verdicts.json.next": "brief" }, false],
+    ["verdicts.json.next = rejected", { "verdicts.json.next": "rejected" }, true],
+    ["verdicts.json.next = rejected", { "verdicts.json.next": "merge" }, false],
+    ["verdicts.json.next = rerun_ci", { "verdicts.json.next": "rerun_ci" }, true],
+    ["verdicts.json.next = rerun_ci", { "verdicts.json.next": "rerun_review" }, false],
+    ["verdicts.json.next = rerun_review", { "verdicts.json.next": "rerun_review" }, true],
+    ["verdicts.json.next = rerun_review", { "verdicts.json.next": "rerun_ci" }, false],
+    ["verdicts.json.next = no_ci", { "verdicts.json.next": "no_ci" }, true],
+    ["verdicts.json.next = no_ci", { "verdicts.json.next": "merge" }, false],
+    ["verdicts.json.next = wait_main and wait_main.visits < 2", { "verdicts.json.next": "wait_main", "wait_main.visits": "1" }, true],
+    ["verdicts.json.next = wait_main and wait_main.visits < 2", { "verdicts.json.next": "wait_main", "wait_main.visits": "2" }, false],
+    ["verdicts.json.next = wait_main", { "verdicts.json.next": "wait_main" }, true],
+    ["verdicts.json.next = wait_main", { "verdicts.json.next": "brief" }, false],
+    ["verdicts.json.next = decide and change_conversation", { "verdicts.json.next": "decide", change_conversation: "conv_1" }, true],
+    ["verdicts.json.next = decide and change_conversation", { "verdicts.json.next": "decide", change_conversation: "" }, false],
+    ["verdicts.json.next = decide", { "verdicts.json.next": "decide" }, true],
+    ["verdicts.json.next = decide", { "verdicts.json.next": "merge" }, false],
+    ["(verdicts.json.next = brief or verdicts.json.next = conflict) and not change_conversation", { "verdicts.json.next": "conflict", change_conversation: "" }, true],
+    ["(verdicts.json.next = brief or verdicts.json.next = conflict) and not change_conversation", { "verdicts.json.next": "brief", change_conversation: "conv_1" }, false],
+    ["verdicts.json.next = conflict", { "verdicts.json.next": "conflict" }, true],
+    ["verdicts.json.next = conflict", { "verdicts.json.next": "brief" }, false],
+    ["verdicts.json.next = brief", { "verdicts.json.next": "brief" }, true],
+    ["verdicts.json.next = brief", { "verdicts.json.next": "conflict" }, false],
+    ["outcome = success and merge.json.sha", { outcome: "success", "merge.json.sha": "5ca1ab1e" }, true],
+    ["outcome = success and merge.json.sha", { outcome: "success", "merge.json.sha": "" }, false],
+    ["outcome = failure and merge.exit_code = 1 and (merge.output contains \" conflicts with \" or merge.output contains \"rebuild the change on\") and change_conversation", { outcome: "failure", "merge.exit_code": "1", "merge.output": "a.txt conflicts with main", change_conversation: "conv_1" }, true],
+    ["outcome = failure and merge.exit_code = 1 and (merge.output contains \" conflicts with \" or merge.output contains \"rebuild the change on\") and change_conversation", { outcome: "failure", "merge.exit_code": "1", "merge.output": "station crashed", change_conversation: "conv_1" }, false],
+    ["outcome = failure and merge.exit_code = 3 and retest.visits < 3", { outcome: "failure", "merge.exit_code": "3", "retest.visits": "0" }, true],
+    ["outcome = failure and merge.exit_code = 3 and retest.visits < 3", { outcome: "failure", "merge.exit_code": "3", "retest.visits": "3" }, false],
+    ["outcome = failure and merge.exit_code = 3", { outcome: "failure", "merge.exit_code": "3" }, true],
+    ["outcome = failure and merge.exit_code = 3", { outcome: "failure", "merge.exit_code": "2" }, false],
+    ["outcome = failure and retest.exit_code = 4", { outcome: "failure", "retest.exit_code": "4" }, true],
+    ["outcome = failure and retest.exit_code = 4", { outcome: "failure", "retest.exit_code": "1" }, false],
+    ["outcome = failure and onto_main.exit_code = 4", { outcome: "failure", "onto_main.exit_code": "4" }, true],
+    ["outcome = failure and onto_main.exit_code = 4", { outcome: "failure", "onto_main.exit_code": "1" }, false],
+    // intent.cast (flows.md FL4): only a read that ships, in scope, citing a session, a line and a quote, goes on to Verify.
+    ...[INTENT_CLEAR].flatMap((cond): Array<[string, Record<string, string>, boolean]> => {
+      const read = "read.json";
+      const answer = (over: Record<string, unknown>) => ({ outcome: "success", [read]: JSON.stringify({ ship: true, in_scope: true, session: "jx7b0m0", line: 115, quote: "ship it", ...over }) });
+      return [
+        [cond, answer({}), true],
+        [cond, answer({ ship: false }), false],
+        [cond, answer({ in_scope: false }), false],
+        [cond, answer({ quote: "" }), false],
+        [cond, answer({ quote: undefined }), false],
+        [cond, answer({ session: "" }), false],
+        [cond, answer({ line: 0 }), false],
+        [cond, { outcome: "success" }, false],
+        [cond, { ...answer({}), outcome: "failure" }, false],
+      ];
+    }),
+    // intent.cast: a read the model answered no to says its why on the task; any other answer that cannot clear is unusable.
+    ...[INTENT_DECLINED].flatMap((cond): Array<[string, Record<string, string>, boolean]> => {
+      const read = "read.json";
+      const answer = (over: Record<string, unknown>) => ({ outcome: "success", [read]: JSON.stringify({ ship: true, in_scope: true, session: "jx7b0m0", line: 115, quote: "ship it", why: "they said ship", ...over }) });
+      return [
+        [cond, answer({ ship: false }), true],
+        [cond, answer({ in_scope: false }), true],
+        [cond, answer({}), false],
+        [cond, answer({ ship: false, why: "" }), false],
+        [cond, { outcome: "success" }, false],
+      ];
+    }),
+    // intent.cast: an answer citing a card goes to Verify card; one with no card does not.
+    ...[INTENT_CLEAR_CARD].flatMap((cond): Array<[string, Record<string, string>, boolean]> => {
+      const read = "read.json";
+      const answer = (over: Record<string, unknown>) => ({ outcome: "success", [read]: JSON.stringify({ ship: true, in_scope: true, session: "", line: 0, card: "sd-4235", quote: "Ship both together", ...over }) });
+      return [
+        [cond, answer({}), true],
+        [cond, answer({ card: "" }), false],
+        [cond, answer({ card: undefined }), false],
+        [cond, answer({ quote: "" }), false],
+        [cond, answer({ ship: false }), false],
+        [cond, answer({ in_scope: false }), false],
+      ];
+    }),
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {
@@ -230,6 +346,27 @@ describe("evalCondition: the language", () => {
     expect(evalCondition("count = 10.0", ctx)).toBe(true);
     expect(evalCondition("'b' > 'a'", ctx)).toBe(false); // ordering needs numbers
     expect(evalCondition("outcome > 0", ctx)).toBe(false);
+  });
+
+  test("touches: a changed path matches a glob (a station's when=)", () => {
+    const files = { ...ctx, change_files: "landing/index.html packages/web/app.tsx README.md" };
+    expect(evalCondition('change_files touches "landing/**"', files)).toBe(true);
+    expect(evalCondition('change_files touches "backend/**, docs/*.md"', files)).toBe(false);
+    expect(evalCondition('change_files touches "backend/**, *.md"', files)).toBe(true);
+    expect(evalCondition('change_files touches "packages/web/"', files)).toBe(true);
+    expect(evalCondition('change_files touches "packages/web"', files)).toBe(true);
+    expect(evalCondition('change_files touches "packages/we"', files)).toBe(false);
+    expect(evalCondition('not change_files touches "backend/**"', files)).toBe(true);
+    expect(evalCondition('(outcome = success) and change_files touches "**/*.tsx"', files)).toBe(true);
+    // An empty list is a change whose files nobody read (a branch run before they are filled): unknown, so it runs.
+    expect(evalCondition('change_files touches "landing/**"', { ...ctx, change_files: "" })).toBe(true);
+    expect(evalCondition('not change_files touches "landing/**"', { ...ctx, change_files: "" })).toBe(false);
+    expect(evalCondition('change_files touches "{a,b}/**"', { ...ctx, change_files: "b/x.ts" })).toBe(true);
+    expect(evalCondition('change_files touches "{a,b}/**, docs/"', { ...ctx, change_files: "c/x.ts" })).toBe(false);
+    // No change files known: the gated station runs rather than passing unseen.
+    expect(evalCondition('change_files touches "landing/**"', ctx)).toBe(true);
+    expect(evalCondition('not change_files touches "landing/**"', ctx)).toBe(false);
+    expect(conditionError('change_files touches "a/**"')).toBeNull();
   });
 
   test("a station that has not run in this attempt counts 0 visits", () => {

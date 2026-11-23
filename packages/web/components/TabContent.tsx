@@ -151,13 +151,15 @@ function TabStage({ tabs, storeActiveTabId }: { tabs: AppTab[]; storeActiveTabId
     entryRef.current = null;
     if (!url) return;
     const store = useInboxStore.getState();
-    if (!store.activeTabId) return;
-    const active = store.tabs.find((t: AppTab) => t.id === store.activeTabId);
+    // The tab the render showed the entry in: the stored active one, else (missing or stale) the first, as above.
+    // Adopting into it before it becomes active matters: switching first would hand the address to its old path
+    // (a link opened after visiting /flows landed on /flows).
+    const active = store.tabs.find((t: AppTab) => t.id === store.activeTabId) ?? store.tabs[0];
+    if (!active) return;
     // The title comes along: the stored one named the old path, so a tab
     // entered at /line would otherwise keep reading "Inbox".
-    if (active && active.path !== url) {
-      store.updateTab(store.activeTabId, { path: url, title: pathLabel(url) });
-    }
+    if (active.path !== url) store.updateTab(active.id, { path: url, title: pathLabel(url) });
+    if (store.activeTabId !== active.id) store.switchTab(active.id);
   });
   // Every location this instance saw counts as entered, so a later remount at
   // it (history moved while mounted, then the layout changed) adopts nothing.

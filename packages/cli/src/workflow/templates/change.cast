@@ -1,70 +1,153 @@
-// A line for a change made in a session (flows.md FL4): checked, reviewed by an
-// independent session, decided by the person who answers for it, landed, then
-// deployed: the repository's release targets the change touches are sent
-// (deploys.md DP15), and the run waits until it is live on every target it touches.
-// Each station is a segment from the pool, so a fix to one reaches every flow
-// that uses it. Check is a slot: a flow that extends this one may prove its
-// change with steps of its own (subgraph check { ... }); the project's checks
-// run when nothing fills it. A question typed at Decide goes back to the
-// reviewer, whose verdict note the card is made from, and Decide asks again.
+// A line for a change made in a session (flows.md FL4): the change goes up as
+// a pull request, CI runs on it beside an independent reviewer, and once CI is
+// green and the reviewer says ship it merges and goes out. No person is asked
+// on the way: what the repository sends with a release goes out with it
+// (deploys.md DP15), and the run waits until the change is live on every
+// target it touches.
 //
-// The session the change came from is the run's subject. What a stage finds
-// for the change comes back to that session as a message in its own thread: a
-// failed check with its output, the reviewer's findings, the person's Revise
-// note, a rebase conflict. The session fixes it in its own checkout and ends
-// its turn; the run freezes the session's change again and takes it through
-// Check, then every stage after, so what ships is the snapshot Review approved
-// and Decide accepted. Deploy then sends the release targets the change
-// touches and waits, holding no slot and no session, for the deploy that
-// carries the landed commit, and the session hears the dp-N
-// it went live in, or that the deploy failed. Each way back runs at most three times; the fourth ends
-// the run, and the session hears why. A task, branch or pull request named from
-// inside a session has that session as its subject; named from a plain shell it
-// has none, and stops at the first finding. A check this machine could not run
-// stops at Not checked here: the machine's to fix, not the session's.
+// Each round starts at PR, which clears the last round's verdict files from
+// the run's directory, pushes the change branch and opens its pull request or
+// updates the open one, with a fresh nonce for the round (pr.json). CI and
+// Review then run at once: CI leaves ci.json (the head it judged, green, and
+// each failure with its file, line and excerpt; a failure that also fails on
+// main is preexisting and not the change's), and the reviewer pins its verdict
+// (ship, changes or rejected, its findings, and the round's nonce). Verdicts
+// counts the pin only with this round's nonce, never a file, and only green CI
+// on the pushed head and a ship merge. A rejection ends the run; CI that never
+// reports or judged another head, and a review that never arrived, each run
+// once more in the round. When every CI failure also fails on main, the run
+// waits (parked, up to 4h, twice at most) for main's own CI to go green, puts
+// the change onto the new main and runs CI again. A change that edits CI, with
+// nothing in it failing and the reviewer saying ship, goes to a person's Ship
+// card. Anything else is one brief to the session.
+//
+// The session the change came from is the run's subject. What CI and the
+// reviewer found comes back to it as one message in its own thread; it fixes
+// the change in its own checkout and ends its turn, and the run freezes its
+// change again and takes it back to PR, so what merges is exactly the commit
+// CI and the reviewer passed. Merge prints the sha it put on main, and Deploy
+// starts only from that sha: no other way reaches it. A merge that conflicts
+// goes back to the session the same way; one that main moved under, where the
+// two interact, runs CI again, at most three times. Each way back to the
+// session runs at most three times; the fourth ends the run, and the session
+// hears why. A task, branch or pull request named from inside a session has
+// that session as its subject; named from a plain shell it has none, and stops
+// at the first finding, saying what CI and the reviewer found.
 //
 //   cast flow run change            # this session's own edits
 //   cast flow run change --task ct-N
 digraph change {
-  graph [kind="line", label="Change", description="Check, review, decide, land, deploy, with the session fixing what each stage finds", takes="task,branch", goal="$task_title", on_failure=stop]
+  graph [kind="line", label="Ship", description="Pull request, CI beside an independent review, merge on green, deploy; the session fixes what they find, and you are asked only if it edits CI", takes="task,branch", goal="$task_title", on_failure=stop, fix="brief"]
   rankdir=LR
   start [shape=Mdiamond]
-  check  [flow="check", slot="Prove the change does what it should"]
-  review [flow="review"]
-  decide [flow="decide", answerer="review__review"]
-  ship   [flow="ship", label="Land"]
-  deploy [flow="deploy", send="release"]
+  pr [label="PR", shape=parallelogram, timeout=600,
+    script="cast flow pr --branch \"$branch\" --base \"$default_branch\" --dir \"$run_dir\" --title \"$task_title\" --body \"Opened by the change flow for $task_id.\""]
+  // A branch that dies fails the fan-out, which goes on to Verdicts (joined's failure edge): Verdicts asks again for what
+  // never came, CI or the review.
+  checks [label="CI and review", shape=component]
+  // cast flow ci always exits 0 with ci.json; its progress lines go to the card's CI station. The head it waits for
+  // is pr.json's on disk, which a retest moves to the rebased branch.
+  ci [label="CI", shape=parallelogram, timeout=5400,
+    script="d=\"$run_dir\"; rm -f \"$d/ci.json\"; prhead=$(sed -n 's/.*\"head_sha\": *\"\\([^\"]*\\)\".*/\\1/p' \"$d/pr.json\"); cast flow ci --pr \"$pr.json.number\" --head \"$prhead\" --dir \"$d\" --run \"$run_id\" --node ci"]
+  review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@change/review.md"]
+  joined [label="Both done", shape=tripleoctagon]
+  // The reviewer's verdict is what its session pinned, never a file: Verdicts counts it only with this round's nonce.
+  verdicts [label="Verdicts", shape=parallelogram, timeout=60, fold=true, script="cast flow verdicts --dir \"$run_dir\" --review \"$review.json\""]
+  // On success stdout is merge.json alone, so the run reads $merge.json.sha; a merge with no sha on main refuses (exit 2).
+  merge [label="Merge", shape=parallelogram, timeout=3600,
+    script="d=\"$run_dir\"; rm -f \"$d/merge.json\"; cast flow merge --pr \"$pr.json.number\" --branch \"$branch\" --dir \"$d\" > \"$d/merge.out\" 2> \"$d/merge.log\"; code=$?; if [ \"$code\" -eq 0 ]; then cat \"$d/merge.log\" \"$d/merge.out\" >&2; cat \"$d/merge.json\" || exit 2; else cat \"$d/merge.log\" \"$d/merge.out\"; fi; exit \"$code\""]
+  // Someone pushed to the branch after this round pushed it: a new round reviews what is there, three times at most.
+  moved [label="Branch moved", shape=parallelogram, timeout=60, script="echo \"$verdicts.json.why\""]
+  // Merge pushed the branch rebased onto a moved main (rebase.json): CI judges that head under the same review. A head
+  // anyone else pushed exits 4, and a new round at PR reviews it.
+  retest [label="Retest", shape=parallelogram, timeout=120, script="cast flow pr --refresh --dir \"$run_dir\""]
+  // Every CI failure also fails on main: the run parks until main's own CI is green, then CI tests the change on it.
+  wait_main [label="Wait for main", shape=parallelogram, parks=true, timeout=15000,
+    script="cast flow wait-main --base \"$default_branch\" --deadline 4h --run \"$run_id\" --node wait_main"]
+  onto_main [label="Onto main", shape=parallelogram, timeout=600, script="cast flow pr --rebase --base \"$default_branch\" --dir \"$run_dir\" --run \"$run_id\""]
+  // CI cannot vouch for a change to CI itself: the card the person answers says so beside the reviewer's note.
+  ci_card [label="Why a person", shape=parallelogram, timeout=120,
+    script="cast task comment \"$task_id\" \"This change edits CI, so CI can't vouch for it: a person decides whether it ships.\" -t review >/dev/null; echo \"$verdicts.json.why\""]
+  // A question typed at the Ship card goes to the reviewer, who has read the change.
+  decide [flow="decide", answerer="review", asks_if="it edits CI"]
+  // Named for the runner (runner.ts, the run's end): a stop past here tells the session its change is on main.
+  landed [label="Merged", shape=parallelogram, timeout=60, fold=true, script="echo \"$merge.json.sha\""]
+  deploy [flow="deploy"]
   exit [shape=Msquare, label="Live"]
 
-  fix_check [label="Fix check", backend=subject, max_visits=3,
-    prompt="@change/fix_check.md"]
-  fix_review [label="Address review", backend=subject, max_visits=3,
-    prompt="@change/fix_review.md"]
-  revise [label="Revise", backend=subject, max_visits=3,
-    prompt="@change/revise.md"]
+  brief [label="Fix findings", backend=subject, max_visits=3,
+    prompt="@change/brief.md"]
+  // GitHub runs no CI on a pull request that conflicts with its base: CI says so, and the session brings it up to date.
+  ci_conflict [label="Resolve conflict", backend=subject, max_visits=3,
+    prompt="@change/ci_conflict.md"]
   fix_conflict [label="Resolve conflict", backend=subject, max_visits=3,
-    prompt="@change/fix_conflict.md"]
+    prompt="@change/conflict.md"]
 
-  unchecked [shape=Msquare, label="Not checked here", machine=true, stop="$stop_reason"]
-  rejected  [shape=Msquare, label="Rejected", stop="The reviewer rejected the change. $review_note"]
+  nopr      [shape=Msquare, label="No pull request", stop="$pr.output"]
+  rejected  [shape=Msquare, label="Rejected", stop="The reviewer rejected the change: $verdicts.json.why"]
+  found     [shape=Msquare, label="Found work", stop="CI or the reviewer found work, and no session made this change to fix it: $verdicts.json.why"]
+  verdictless [shape=Msquare, label="No verdicts", machine=true, stop="Verdicts could not read the round: $verdicts.output"]
+  unreviewed [shape=Msquare, label="Review never finished", machine=true, stop="The review never finished, also when asked again: $last_error"]
+  noci      [shape=Msquare, label="CI never reported", machine=true, stop="CI never reported on the pushed head, also after running it again: $verdicts.json.why"]
+  moving    [shape=Msquare, label="Main keeps moving", stop="Main keeps moving under this change: CI ran again 3 times and main moved again each time. $merge.output"]
+  lost      [shape=Msquare, label="Pull request lost", stop="$retest.output"]
+  moving_branch [shape=Msquare, label="Branch keeps moving", stop="The branch keeps moving: 3 pushes during review or CI, and a 4th: $verdicts.json.why"]
+  mainred   [shape=Msquare, label="Main stayed red", stop="$wait_main.output"]
+  mainred_again [shape=Msquare, label="Main stayed red", stop="Main CI went red under this change again after two waits for it: $verdicts.json.why"]
+  unrebased [shape=Msquare, label="Not onto main", stop="$onto_main.output"]
+  nobody    [shape=Msquare, label="Needs a person", stop="This change edits CI, so CI can't vouch for it, and no session is behind the run to take it to a person."]
   dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]
-  unshipped [shape=Msquare, label="Not shipped", stop="$stop_reason"]
+  unshipped [shape=Msquare, label="Not merged", stop="$merge.output"]
 
-  start -> check
-  check -> review
-  check -> fix_check [condition="outcome = failure and check.exit != unjudged", label="check failed"]
-  check -> unchecked [condition="outcome = failure and check.exit = unjudged", label="not checked here"]
-  review -> decide
-  review -> fix_review [condition="outcome = failure and review.exit = changes", label="changes asked"]
-  review -> rejected   [condition="outcome = failure and review.exit = rejected", label="rejected"]
-  decide -> ship
-  decide -> revise  [condition="outcome = failure and decide.exit = revise", label="revise"]
+  start -> pr
+  pr -> checks [condition="outcome = success"]
+  pr -> nopr   [condition="outcome = failure", label="no pull request"]
+  checks -> ci
+  checks -> review
+  // The fan-out continues at the first target of each branch's first edge, so ci -> joined comes first.
+  ci -> joined     [condition="outcome = success"]
+  ci -> verdicts   [condition="outcome = failure"]
+  review -> joined     [condition="outcome = success"]
+  review -> unreviewed [condition="outcome = failure", label="review never finished"]
+  // A branch that died fails the fan-out, and Verdicts says what comes next: CI asked again, the review asked again.
+  joined -> verdicts [condition="outcome = failure"]
+  joined -> verdicts
+  verdicts -> moved    [condition="verdicts.json.next = new_round and moved.visits < 3", label="pushed after this round"]
+  verdicts -> moving_branch [condition="verdicts.json.next = new_round", label="branch keeps moving"]
+  verdicts -> merge    [condition="verdicts.json.next = merge"]
+  verdicts -> rejected [condition="verdicts.json.next = rejected", label="rejected"]
+  verdicts -> ci       [condition="verdicts.json.next = rerun_ci", label="CI never reported"]
+  verdicts -> review   [condition="verdicts.json.next = rerun_review", label="no verdict this round"]
+  verdicts -> noci     [condition="verdicts.json.next = no_ci", label="CI never reported again"]
+  verdicts -> wait_main     [condition="verdicts.json.next = wait_main and wait_main.visits < 2", label="every failure is main's"]
+  verdicts -> mainred_again [condition="verdicts.json.next = wait_main", label="main red again"]
+  verdicts -> ci_card       [condition="verdicts.json.next = decide and change_conversation", label="it edits CI"]
+  verdicts -> nobody        [condition="verdicts.json.next = decide", label="it edits CI, no session"]
+  verdicts -> found    [condition="(verdicts.json.next = brief or verdicts.json.next = conflict) and not change_conversation", label="found work, no session"]
+  verdicts -> ci_conflict [condition="verdicts.json.next = conflict", label="conflicts with main"]
+  verdicts -> brief    [condition="verdicts.json.next = brief", label="CI red, changes asked or no verdict"]
+  verdicts -> verdictless [label="no verdicts"]
+  merge -> landed       [condition="outcome = success and merge.json.sha"]
+  merge -> fix_conflict [condition="outcome = failure and merge.exit_code = 1 and (merge.output contains \" conflicts with \" or merge.output contains \"rebuild the change on\") and change_conversation", label="conflict"]
+  merge -> retest       [condition="outcome = failure and merge.exit_code = 3 and retest.visits < 3", label="retest"]
+  merge -> moving       [condition="outcome = failure and merge.exit_code = 3", label="main keeps moving"]
+  merge -> unshipped    [label="not merged"]
+  retest -> ci   [condition="outcome = success"]
+  retest -> pr   [condition="outcome = failure and retest.exit_code = 4", label="pushed after review"]
+  retest -> lost [condition="outcome = failure"]
+  wait_main -> onto_main [condition="outcome = success"]
+  wait_main -> mainred [condition="outcome = failure", label="main stayed red"]
+  onto_main -> ci        [condition="outcome = success"]
+  onto_main -> pr        [condition="outcome = failure and onto_main.exit_code = 4", label="pushed after review"]
+  onto_main -> unrebased [condition="outcome = failure", label="not onto main"]
+  ci_card -> decide
+  decide -> merge
+  decide -> brief   [condition="outcome = failure and decide.exit = revise", label="revise"]
   decide -> dropped [condition="outcome = failure and decide.exit = dropped", label="dropped"]
-  ship -> deploy -> exit
-  ship -> fix_conflict [condition="outcome = failure and ship.exit = conflict", label="conflict"]
-  ship -> unshipped    [condition="outcome = failure and ship.exit = unshipped", label="not shipped"]
-  fix_check -> check
-  fix_review -> check
-  revise -> check
-  fix_conflict -> check
+  landed -> deploy
+  deploy -> exit
+  brief -> pr
+  fix_conflict -> pr
+  ci_conflict -> pr
+  moved -> pr
 }

@@ -18,7 +18,7 @@ export type StationView = {
   who: FlowStationKind;
   /** Settings in a few words each: the agent, the model, effort, limits. */
   facts: string[];
-  texts: { kind: "prompt" | "system" | "script" | "doc"; text: string }[];
+  texts: { kind: "prompt" | "guide" | "system" | "script" | "doc"; text: string }[];
   routes: StationRoute[];
 };
 
@@ -41,13 +41,15 @@ export function stationView(flow: { nodes: ReadonlyArray<FlowNodeIn>; edges: Rea
   if (d.isolated) facts.push("own worktree");
   if (d.timeout) facts.push(`${d.timeout}s limit`);
   const visits = d.max_visits ?? node.max_visits;
-  if (visits) facts.push(`at most ${visits} ${visits === 1 ? "visit" : "visits"}`);
+  if (visits) facts.push(`runs at most ${visits} ${visits === 1 ? "time" : "times"}`);
   if (d.max_retries) facts.push(`${d.max_retries} retries`);
   if (d.parks) facts.push("waits without a slot");
   if (d.output) facts.push(`answers ${d.output}`);
   const texts: StationView["texts"] = [];
   if (d.system) texts.push({ kind: "system", text: d.system });
   if (d.prompt) texts.push({ kind: "prompt", text: d.prompt });
+  // The project's guidance reads apart from the prompt it inherits.
+  if (d.guide) texts.push({ kind: "guide", text: d.guide });
   if (d.script) texts.push({ kind: "script", text: d.script });
   if (d.doc) texts.push({ kind: "doc", text: d.doc });
   // A segment frame's routes leave from its steps; a step's from itself.

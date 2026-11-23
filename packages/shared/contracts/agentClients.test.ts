@@ -6,9 +6,6 @@ import {
   HostedAgentClientError,
   isHostedAgentType,
   localAgentClient,
-  pinnedAgentIds,
-  pinnedLaunchOptions,
-  pinnedPickerOptions,
   AGENT_PICKER_OPTIONS,
   agentDisplayName,
   isPinnableAgentId,
@@ -27,6 +24,7 @@ import {
   type AgentClientId,
   type CapabilityKindSupport,
 } from "./agentClients";
+import { pinnedAgentIds, pinnableAgentIds, pinnedLaunchOptions, pinnedPickerOptions } from "./agentPins";
 import { CAPABILITY_KINDS, type CapabilityKind } from "./capabilities";
 
 // fromConvexAgentType is the single convex-spelling -> daemon-spelling translation.
@@ -48,6 +46,7 @@ describe("fromConvexAgentType", () => {
     expect(fromConvexAgentType("pi")).toBe("pi");
     expect(fromConvexAgentType("grok")).toBe("grok");
     expect(fromConvexAgentType("muse")).toBe("muse");
+    expect(fromConvexAgentType("antigravity")).toBe("antigravity");
   });
 
   it("normalizes cowork, unknown, null and undefined to claude", () => {
@@ -68,6 +67,7 @@ describe("toConvexAgentType", () => {
     expect(toConvexAgentType("pi")).toBe("pi");
     expect(toConvexAgentType("grok")).toBe("grok");
     expect(toConvexAgentType("muse")).toBe("muse");
+    expect(toConvexAgentType("antigravity")).toBe("antigravity");
   });
 });
 
@@ -83,6 +83,7 @@ describe("parseExecutionAgentClientId", () => {
     expect(parseExecutionAgentClientId("pi")).toBe("pi");
     expect(parseExecutionAgentClientId("grok")).toBe("grok");
     expect(parseExecutionAgentClientId("muse")).toBe("muse");
+    expect(parseExecutionAgentClientId("antigravity")).toBe("antigravity");
   });
 
   it("fails closed for unknown, nullish, and non-string execution values", () => {
@@ -115,6 +116,7 @@ describe("print mode", () => {
     expect(AGENT_CLIENTS.codex.printMode).toEqual({ kind: "subcommand", token: "exec" });
     expect(AGENT_CLIENTS.opencode.printMode).toEqual({ kind: "subcommand", token: "run" });
     expect(AGENT_CLIENTS.muse.printMode).toEqual({ kind: "subcommand", token: "exec" });
+    expect(AGENT_CLIENTS.antigravity.printMode).toEqual({ kind: "flag", token: "-p", promptAsValue: true });
   });
 });
 
@@ -128,6 +130,7 @@ describe("fenced execution transports", () => {
     expect(AGENT_CLIENTS.pi.executionTransports).toEqual(["tmux"]);
     expect(AGENT_CLIENTS.grok.executionTransports).toEqual(["tmux"]);
     expect(AGENT_CLIENTS.muse.executionTransports).toEqual(["tmux"]);
+    expect(AGENT_CLIENTS.antigravity.executionTransports).toEqual(["tmux"]);
   });
 
   it("rejects unsupported app-server and external routing without fallback", () => {
@@ -290,6 +293,18 @@ describe("capabilitySupport", () => {
       plugin: "unsupported",
       hook: "unsupported",
     },
+    // Verified 2026-11-22 (agy 1.5.14, planted files): a project AGENTS.md and
+    // a user ~/.gemini/GEMINI.md both reached `agy -p`. Skills, MCP, hooks and
+    // plugins appear only in agy's bundled docs, so they stay unsupported.
+    antigravity: {
+      snippet: "write",
+      skill: "unsupported",
+      command: "unsupported",
+      subagent: "unsupported",
+      mcp: "unsupported",
+      plugin: "unsupported",
+      hook: "unsupported",
+    },
     // The hosted assistant runs in codecast's backend and reads no file on
     // any machine: every kind is honestly unsupported.
     codecast: {
@@ -353,7 +368,7 @@ describe("agentFileTargets path templates", () => {
   const withTargets = Object.values(AGENT_CLIENTS).filter((d) => d.agentFileTargets);
 
   it("declares targets for exactly the verified clients", () => {
-    expect(withTargets.map((d) => d.id).sort()).toEqual(["claude", "codex", "cursor", "grok", "muse"]);
+    expect(withTargets.map((d) => d.id).sort()).toEqual(["antigravity", "claude", "codex", "cursor", "grok", "muse"]);
   });
 
   // The cross-client `.agents/skills` project dir is read by cursor (via
@@ -507,8 +522,18 @@ describe("pinned agents", () => {
   });
 
   it("a user's list wins, in registry order, dropping unknown ids", () => {
-    expect(pinnedAgentIds(["gemini", "nope", "claude"])).toEqual(["claude", "gemini"]);
-    expect(pinnedAgentIds([])).toEqual([]);
+    const known = pinnableAgentIds();
+    expect(pinnedAgentIds(["gemini", "nope", "claude"], known)).toEqual(["claude", "gemini"]);
+    expect(pinnedAgentIds([], known)).toEqual([]);
+  });
+
+  it("a client added after the list was saved follows its own default", () => {
+    const known = pinnableAgentIds().filter((id) => id !== "antigravity");
+    expect(pinnedAgentIds(["claude"], known)).toEqual(["claude", "antigravity"]);
+    // A list saved before the known set was recorded predates antigravity.
+    expect(pinnedAgentIds(["claude"])).toEqual(["claude", "antigravity"]);
+    // Once the list records antigravity, unpinning it holds.
+    expect(pinnedAgentIds(["claude"], pinnableAgentIds())).toEqual(["claude"]);
   });
 
   it("a picker keeps the agent a session already runs", () => {
@@ -518,7 +543,7 @@ describe("pinned agents", () => {
 
   it("the hosted assistant is pinnable but unpinned by default", () => {
     expect(pinnedAgentIds(undefined)).not.toContain("codecast");
-    expect(pinnedAgentIds(["codecast", "claude"])).toEqual(["claude", "codecast"]);
+    expect(pinnedAgentIds(["codecast", "claude"], pinnableAgentIds())).toEqual(["claude", "codecast"]);
     expect(isPinnableAgentId("codecast")).toBe(true);
     expect(isPinnableAgentId("claude")).toBe(true);
     expect(isPinnableAgentId("claude_code")).toBe(false);
@@ -547,9 +572,9 @@ describe("picker options vs launch options", () => {
   });
 
   it("a picker shows the hosted assistant when kept or pinned", () => {
-    expect(pinnedPickerOptions(["claude"], null).map((o) => o.id)).toEqual(["claude"]);
-    expect(pinnedPickerOptions(["claude"], "codecast").map((o) => o.id)).toEqual(["claude", "codecast"]);
-    expect(pinnedPickerOptions(["codecast", "codex"]).map((o) => o.id)).toEqual(["codex", "codecast"]);
+    expect(pinnedPickerOptions(["claude"], null, pinnableAgentIds()).map((o) => o.id)).toEqual(["claude"]);
+    expect(pinnedPickerOptions(["claude"], "codecast", pinnableAgentIds()).map((o) => o.id)).toEqual(["claude", "codecast"]);
+    expect(pinnedPickerOptions(["codecast", "codex"], null, pinnableAgentIds()).map((o) => o.id)).toEqual(["codex", "codecast"]);
   });
 });
 
@@ -595,5 +620,36 @@ describe("the hosted codecast client", () => {
     expect(agentSupportsFork("codecast")).toBe(false);
     expect(agentForksNatively("codecast")).toBe(false);
     expect(capabilitySupport("skill", "codecast")).toBe("unsupported");
+  });
+});
+
+// Antigravity CLI (agy 1.5.14): the facts measured on a live pane and install.
+describe("antigravity descriptor", () => {
+  const agy = AGENT_CLIENTS.antigravity;
+
+  it("launches agy and resumes a conversation by id", () => {
+    expect(agy.binary).toBe("agy");
+    expect(agy.resumeCmd("42733a6f-f5ef-48ca-9f08-d571bd62efdd")).toBe("agy --conversation 42733a6f-f5ef-48ca-9f08-d571bd62efdd");
+    expect(agy.transcriptRoots).toEqual(["~/.gemini/antigravity-cli/brain"]);
+    expect(agy.tmuxPrefix).toBe("ag");
+  });
+
+  it("reads the composer under its rule, never the trust dialog or a shell continuation", () => {
+    const idle = "────────────────\n> Auto mode: edits & safe commands auto-approved (shift+tab to cycle)\n────────────────\n? for shortcuts      auto · Gemini 4 Argon · high";
+    const empty = "────────────────\n>\n────────────────";
+    const trust = "Do you trust the contents of this project?\nAntigravity CLI requires permission to read, edit, and execute files here.\n> Yes, I trust this folder\n  No, exit\n  ↑/↓ Navigate · enter Confirm";
+    const shell = "$ echo 'unterminated\n> ";
+    expect(agy.promptReadyPattern.test(idle)).toBe(true);
+    expect(agy.promptReadyPattern.test(empty)).toBe(true);
+    expect(agy.promptReadyPattern.test(trust)).toBe(false);
+    expect(agy.promptReadyPattern.test(shell)).toBe(false);
+    expect(agy.paneReadiness?.frameCompleteAfter?.test(idle)).toBe(true);
+    expect(agy.paneReadiness?.frameCompleteAfter?.test(trust)).toBe(false);
+  });
+
+  it("forks and reconstitutes nothing, so moves into it are refused up front", () => {
+    expect(agy.capabilities.fork).toBeFalsy();
+    expect(agy.capabilities.reconstitute).toBeFalsy();
+    expect(agy.forkCmd).toBeUndefined();
   });
 });

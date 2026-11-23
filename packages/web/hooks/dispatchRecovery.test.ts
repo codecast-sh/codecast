@@ -104,4 +104,28 @@ describe("browser dispatch self-heal", () => {
     cleanup();
     expect(clears).toBe(1);
   });
+
+  test("an anonymous socket gets no recovery drains: the outbox is not replayed signed out", () => {
+    const browser = makeBrowserHarness();
+    let authenticated = false;
+    let drains = 0;
+    installBrowserDispatchSelfHeal({
+      bindDispatch: () => true,
+      isDispatchWired: () => true,
+      drainOutbox: () => { drains++; },
+      canDrain: () => authenticated,
+      clearDispatch: () => {},
+      browserWindow: browser.browserWindow,
+      browserDocument: browser.browserDocument,
+    });
+
+    browser.getIntervalCallback()?.();
+    browser.windowListeners.get("online")?.();
+    browser.documentListeners.get("visibilitychange")?.();
+    expect(drains).toBe(0);
+
+    authenticated = true;
+    browser.getIntervalCallback()?.();
+    expect(drains).toBe(1);
+  });
 });

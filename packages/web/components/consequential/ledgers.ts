@@ -259,81 +259,6 @@ export function startTheseAgainLedger(r: { name?: string; cause: string; count: 
   };
 }
 
-/** A pull request merged into its base branch: one act, undone only by a revert.
- *  `bypass` is a merge past the branch's protection, under the person's own
- *  GitHub account: what it skips and whose name it goes out under lead the review. */
-export function prMergeLedger(r: { title: string; number: number; base: string; head?: string; headSha?: string; method: string; deleteBranch: boolean; files?: number; additions?: number; deletions?: number; checks?: string; blockedBy?: string; bypass?: { skips: string; as: string } }): SwitchLedger {
-  const alert = r.bypass ? "Bypasses branch protection"
-    : r.checks === "failure" ? "Checks failing" : r.blockedBy ? `GitHub: ${r.blockedBy}` : r.checks === "pending" ? "Checks still running" : undefined;
-  return {
-    name: r.bypass ? `Bypass and merge #${r.number}` : `Merge #${r.number}`,
-    subject: r.title,
-    shift: ["Open", "Merged"],
-    alert,
-    figures: [
-      ...(r.files != null ? [{ value: String(r.files), label: r.files === 1 ? "file" : "files" }] : []),
-      ...(r.additions != null ? [{ value: `+${r.additions}`, label: `−${r.deletions ?? 0} lines` }] : []),
-      { value: r.base, label: "lands on", tone: "warn" as const },
-    ],
-    rows: [
-      ...(r.bypass ? [{ k: "Skips", v: r.bypass.skips, tone: "warn" as const }, { k: "As", v: r.bypass.as }] : []),
-      { k: "Method", v: r.method },
-      ...(r.checks === "success" ? [{ k: "Checks", v: "Passing", tone: "ok" as const }] : []),
-      ...headRow(r.headSha),
-      { k: "Branch", v: r.deleteBranch ? "Deleted after" : "Kept" },
-      { k: "Then", v: `Deploys from ${r.base}` },
-      { k: "To undo", v: "Revert PR" },
-    ],
-    confirm: r.bypass ? "Bypass and merge" : alert ? "Merge anyway" : `Merge into ${r.base}`,
-    keep: "Not now",
-  };
-}
-
-/** The head the press is pinned to: GitHub refuses if the branch moves first. */
-function headRow(sha?: string): { k: string; v: string }[] {
-  return sha ? [{ k: "Head", v: `${sha.slice(0, 7)}, refused if it moves` }] : [];
-}
-
-/** GitHub merges the pull request on its own once required checks and reviews pass. */
-export function prAutoMergeLedger(r: { title: string; number: number; base: string; headSha?: string; method: string; checks?: string }): SwitchLedger {
-  return {
-    name: `Auto-merge #${r.number}`,
-    subject: r.title,
-    shift: ["Manual", "Auto-merge"],
-    figures: [{ value: r.base, label: "lands on", tone: "warn" }],
-    rows: [
-      { k: "Merges when", v: "Required checks and reviews pass" },
-      { k: "Method", v: r.method },
-      ...(r.checks ? [{ k: "Checks now", v: r.checks, tone: r.checks === "failure" ? ("warn" as const) : undefined }] : []),
-      ...headRow(r.headSha),
-    ],
-    stop: "Turn it off",
-    confirm: "Turn on auto-merge",
-    keep: "Not now",
-  };
-}
-
-/** The base branch merged into the pull request's branch, as a new commit on it. */
-export function prUpdateBranchLedger(r: { title: string; number: number; base: string; head?: string; headSha?: string; behindBy?: number }): SwitchLedger {
-  return {
-    name: `Update #${r.number}`,
-    subject: r.title,
-    shift: null,
-    figures: [
-      ...(r.behindBy != null ? [{ value: String(r.behindBy), label: r.behindBy === 1 ? "commit behind" : "commits behind" }] : []),
-      { value: r.head ?? "branch", label: "gets a merge commit", tone: "warn" as const },
-    ],
-    rows: [
-      { k: "From", v: r.base },
-      ...headRow(r.headSha),
-      { k: "Then", v: "Checks run again" },
-      { k: "Agents on it", v: "Must pull before pushing" },
-    ],
-    confirm: `Merge ${r.base} into it`,
-    keep: "Not now",
-  };
-}
-
 /** An agent's permission mode set to skip every prompt, for every session it starts from here. */
 export function agentFullAccessLedger(r: { agent: string; label: string; from: string; sandbox: boolean }): SwitchLedger {
   return {
@@ -403,22 +328,34 @@ export function answerRaiseLedger(r: { label: string; from: number; to: number; 
   };
 }
 
-/** A selection of sessions ended, some of them mid-turn. */
-export function killSessionsLedger(r: { total: number; working: string[] }): SwitchLedger {
+/** Sessions killed: some in flight, or with triggers and queued messages the
+ *  kill cancels. `working` names the sessions in flight and `lost` what the
+ *  kill cuts off in them (a live turn by default); `queued` counts the
+ *  sessions holding queued messages; `subject` names the one session. */
+export function killSessionsLedger(r: { total: number; working: string[]; lost?: string[]; triggers?: string[]; queued?: number; subject?: string }): SwitchLedger {
   const w = r.working.length;
+  const triggers = r.triggers ?? [];
+  const t = triggers.length;
+  const q = r.queued ?? 0;
+  const few = (xs: string[]) => xs.slice(0, 4).concat(xs.length > 4 ? [`+${xs.length - 4} more`] : []);
+  const one = r.total === 1;
   return {
-    name: `Kill ${r.total} sessions`,
-    subject: `${w} working now`,
+    name: one ? "Kill session" : `Kill ${r.total} sessions`,
+    subject: r.subject ?? (w ? `${w} working now` : `${r.total} sessions`),
     shift: ["Running", "Ended"],
-    figures: [{ value: String(w), label: "cut off mid-turn", tone: "warn" }, { value: String(r.total), label: "end" }],
-    rows: [
-      { k: "Working", v: plural(w, "session"), list: r.working.slice(0, 4).concat(w > 4 ? [`+${w - 4} more`] : []), tone: "warn" },
-      { k: "Lost", v: "Unfinished turns", tone: "warn" },
-      { k: "Triggers", v: "Canceled" },
-      { k: "To undo", v: "Restore · turn lost" },
+    figures: [
+      ...(w ? [{ value: String(w), label: "cut off", tone: "warn" as const }] : []),
+      ...(t ? [{ value: String(t), label: t === 1 ? "trigger canceled" : "triggers canceled", tone: "warn" as const }] : []),
+      ...(one ? [] : [{ value: String(r.total), label: "end" }]),
     ],
-    confirm: `Kill ${r.total}`,
-    keep: "Keep running",
+    rows: [
+      ...(w ? [{ k: "Working", v: plural(w, "session"), list: few(r.working), tone: "warn" as const }, { k: "Lost", v: (r.lost?.length ? r.lost : ["Unfinished turns"]).join(" · "), tone: "warn" as const }] : []),
+      ...(t ? [{ k: "Triggers", v: `${plural(t, "trigger")} canceled`, list: few(triggers), tone: "warn" as const }] : []),
+      ...(q ? [{ k: "Queued", v: one ? "Messages dropped" : `Dropped in ${plural(q, "session")}`, tone: "warn" as const }] : []),
+      { k: "To undo", v: w ? "Restore · that work lost" : "Restore · triggers re-arm" },
+    ],
+    confirm: one ? "Kill it" : `Kill ${r.total}`,
+    keep: w ? "Keep running" : one ? "Keep it" : "Keep them",
   };
 }
 
@@ -427,26 +364,42 @@ export function killSessionsLedger(r: { total: number; working: string[] }): Swi
  *  a command that only looks, an automatic step runs one that acts (a rebase, a ship), and a person's step is a
  *  question in their queue. */
 /** Shipping a session's change through a flow: what starts, what comes back to the session, what is asked of you, where it ends. */
-export function flowRunLedger(r: { flow: string; session: string; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; ends: ReadonlyArray<string> }): SwitchLedger {
+/**
+ * `stations`: the passing path's stations by name (a fan-out's branches each count), when the caller knows them;
+ * `drawn`: the confirm draws them as a lane, so no row spells them. `stops`: the stations that can end the run.
+ * `from`: where the change ships from, when that is a risk worth saying (far behind main, conflicting with it).
+ * `asks`: what a person is asked on every run; `asksIf`: what makes a run ask a person only on some runs (its `asks_if`),
+ * or "" when that route has none.
+ */
+export function flowRunLedger(r: { flow: string; session: string; count?: number; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; asksIf?: string | null; ends: ReadonlyArray<string>; stations?: ReadonlyArray<string>; stops?: ReadonlyArray<string>; drawn?: boolean; from?: string | null }): SwitchLedger {
   const by = (who: string) => r.stages.filter((s) => s.who === who).map((s) => s.label);
   const agents = by("agent");
   const backs = r.stages.filter((s) => s.loops.length).map((s) => s.label);
+  const n = r.count ?? 1, agentRuns = agents.length * n, asks = r.asks.length * n; // one run per session shipped
+  const path = r.stations ?? r.stages.map((s) => s.label);
+  const word = r.stations ? ["station", "stations"] : ["stage", "stages"];
+  const maybe = !asks && r.asksIf != null;
   return {
-    name: `Ship through ${r.flow}`,
+    // The library's flow is itself called Ship: it ships this change, never "through Ship".
+    name: r.flow === "Ship" ? (n > 1 ? "Ship these changes" : "Ship this change") : `Ship through ${r.flow}`,
     subject: r.session,
     shift: null,
     figures: [
-      { value: String(r.stages.length), label: r.stages.length === 1 ? "stage" : "stages" },
-      { value: String(agents.length), label: agents.length === 1 ? "agent session starts" : "agent sessions start", ...(agents.length ? { tone: "warn" as const } : {}) },
-      { value: String(r.asks.length), label: r.asks.length === 1 ? "question for you" : "questions for you" },
+      { value: String(path.length), label: path.length === 1 ? word[0] : word[1] },
+      ...(n > 1 ? [{ value: String(n), label: "runs start", tone: "warn" as const }] : []),
+      { value: String(agentRuns), label: agentRuns === 1 ? "agent session starts" : "agent sessions start", ...(agentRuns ? { tone: "warn" as const } : {}) },
+      maybe ? { value: n > 1 ? `0–${n}` : "0–1", label: "questions for you" } : { value: String(asks), label: asks === 1 ? "question for you" : "questions for you" },
     ],
     rows: [
-      { k: "Ships", v: "This session's change" },
-      { k: "Stages", v: r.stages.map((s) => s.label).join(" → ") },
+      ...(r.from ? [{ k: "From", v: r.from, tone: "bad" as const }] : []),
+      { k: "Ships", v: n > 1 ? `Each session's change, one run apiece` : "This session's change" },
+      ...(r.drawn ? [] : [{ k: r.stations ? "Stations" : "Stages", v: path.join(" → ") }]),
       ...(agents.length ? [{ k: "An agent", v: agents.join(", ") }] : []),
       ...r.asks.map((q) => ({ k: "You", v: q })),
-      ...(backs.length ? [{ k: "Back to this session", v: backs.join(", ") }] : []),
-      ...(r.ends.length ? [{ k: "Can stop", v: `${r.ends.length} ways`, list: [...r.ends] }] : []),
+      ...(maybe ? [{ k: "You", v: r.asksIf ? `Only if ${r.asksIf}` : "On some runs" }] : []),
+      ...(backs.length ? [{ k: "Comes back", v: `${n > 1 ? "to each session" : "to the session"} at ${backs.join(", ")}` }] : []),
+      ...(r.stops ? (r.stops.length ? [{ k: "Can stop", v: r.stops.join(", ") }] : [])
+        : r.ends.length ? [{ k: "Can stop", v: `${r.ends.length} ways`, list: [...r.ends] }] : []),
     ],
     stop: "Stop on its card",
     confirm: "Ship",
@@ -780,5 +733,25 @@ export function castTokenRevokeLedger(r: { name: string; lastRead: string }): Sw
     ],
     confirm: "Revoke",
     keep: "Keep it",
+  };
+}
+
+/** Ship on a line run's change card: the flow's ship station commits, pushes and opens a pull request, and merges
+ *  when the flow says so. `failing`: the card's red checks, which lead the review. */
+export function cardShipLedger(r: { title: string; failing: number }): SwitchLedger {
+  const alert = r.failing > 0 ? `${r.failing} ${r.failing === 1 ? "check" : "checks"} red` : undefined;
+  return {
+    name: "Ship",
+    subject: r.title,
+    shift: ["Waiting", "Shipping"],
+    alert,
+    figures: [],
+    rows: [
+      { k: "Starts", v: "The flow's ship station", list: ["Commit", "Push", "Pull request", "Merge, if the flow merges"] },
+      { k: "Decision", v: "Answered Ship" },
+      { k: "To undo", v: "Revert PR" },
+    ],
+    confirm: alert ? "Ship anyway" : "Ship",
+    keep: "Not now",
   };
 }

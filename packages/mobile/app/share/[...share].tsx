@@ -9,8 +9,7 @@ import { api } from '@codecast/convex/convex/_generated/api';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme } from '@/constants/Theme';
 import { Mono } from '@/constants/fonts';
-import { CODECAST_BASE_URL, parseSharePath, sharePath } from '@codecast/shared/entities';
-import * as WebBrowser from 'expo-web-browser';
+import { parseSharePath } from '@codecast/shared/entities';
 import { setShareTokenScope } from '@codecast/web/lib/shareTokenScope';
 import { useAuth } from '@/lib/auth';
 
@@ -63,7 +62,7 @@ export default function ShareLinkScreen() {
 
   // undefined = still resolving, null = dead link, else the destination.
   const target = useMemo(():
-    | { path: string; conversationId?: string; web?: boolean }
+    | { path: string; conversationId?: string }
     | null
     | undefined => {
     if (!parsed) return null;
@@ -88,7 +87,7 @@ export default function ShareLinkScreen() {
         return plan?.short_id ? { path: `/plan/${plan.short_id}?share=${token}` } : null;
       }
       default:
-        return kind && token ? { path: `${CODECAST_BASE_URL}${sharePath(kind, token)}`, web: true } : null;
+        return null;
     }
   }, [parsed, kind, token, conv, msg, doc, plan]);
 
@@ -96,10 +95,6 @@ export default function ShareLinkScreen() {
     // Signed out, AuthGate is about to bounce this path through login and
     // restore it afterwards — navigating from here too would race it.
     if (!isAuthenticated || !target) return;
-    if (target.web) {
-      void WebBrowser.openBrowserAsync(target.path).finally(() => router.back());
-      return;
-    }
     if (token && target.conversationId) setShareTokenScope(target.conversationId, token);
     router.replace(target.path as any);
   }, [isAuthenticated, target?.path]);

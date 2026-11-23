@@ -37,13 +37,10 @@ export const PREFERENCE_MAP: Record<string, string> = {
   chat_dm: "mention",
   chat_added: "chat_activity",
   chat_post: "chat_activity",
-  // A frozen daemon delays deliveries and echoes, which is what session_error
-  // already means to a reader. Riding that key keeps the alert under a mute
-  // switch that exists rather than inventing one with no settings row.
-  daemon_overloaded: "session_error",
-  // An overloaded laptop slows every agent on it: the same news to a reader
-  // as a session error, under the switch that already exists.
-  machine_overloaded: "session_error",
+  // A machine under load has its own switch: muting it must not also mute the
+  // session errors (signed out, usage limit) a person does have to act on.
+  daemon_overloaded: "machine_alerts",
+  machine_overloaded: "machine_alerts",
   // The digest says the same thing its members say, so it rides the same
   // switch: muting "session idle" mutes the fold-up too.
   sessions_need_input: "session_idle",
@@ -57,12 +54,17 @@ export const PREFERENCE_MAP: Record<string, string> = {
   card_waiting: "task_activity",
   change_shipped: "task_activity",
   cause_reopened: "task_activity",
+  // A deploy took off what the person's own push put live: addressed to them
+  // by name, a mention's class.
+  deploy_dropped_work: "mention",
   // Someone acted on a question addressed to you by name: a mention's class.
   decision_answered_for_you: "mention",
   // A decision handed to you by name, with a note: a mention's class too.
   decision_passed: "mention",
   decision_escalated: "mention",
   decision_assigned: "mention",
+  // A card waiting on you (lib/decisionPush.ts, which applies this switch itself).
+  decision_waiting: "mention",
   // A comment on a decision you own or discuss: a reply's class.
   decision_comment: "mention",
   // Someone asking into your team (yours to decide), and being let into one:

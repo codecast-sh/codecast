@@ -877,7 +877,7 @@ export function CastCommandBlock({ tool, result, images, globalImageMap, convers
   // a one-line status + headline instead of the generic body render.
   // `cast flow`: a run draws the run it started, live (flows.md FL6).
   if (cat === "flow") {
-    return <CastFlowBlock subcommand={subcommand} args={args} rawCmd={cast.raw} output={output} isError={!!isError} />;
+    return <CastFlowBlock subcommand={subcommand} args={args} rawCmd={cast.raw} output={output} isError={!!isError} conversationId={conversationId ? String(conversationId) : null} toolId={tool.id} />;
   }
   if (cat === "state") {
     return <CastStateBlock subcommand={subcommand} args={args} rawCmd={cast.raw} output={output} isError={!!isError} />;

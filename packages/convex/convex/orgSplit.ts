@@ -15,6 +15,7 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { performCreateRole, performProvisionRole, performRetireRole, resolveScopeRef, standingConversationOf } from "./orgRoles";
 import { beginAreaHandoff, type AreaMove } from "./orgHandoff";
 import { EMPTY_SCOPE } from "./lib/orgScope";
+import { roleCharterOf } from "./lib/roleCharter";
 
 export type SplitHalf = { name: string; handle: string; avatar?: string; refs: string[] };
 export type SplitArgs = {
@@ -89,7 +90,7 @@ export async function performSplitRole(ctx: any, userId: Id<"users">, args: Spli
       team_id: role.team_id ?? undefined,
       scope: scopes[i],
       reports_to: role.reports_to,
-      charter: role.charter ?? undefined,
+      charter: (await roleCharterOf(ctx, role)) || undefined,
       review_backend: role.review_backend ?? undefined,
       avatar: h.avatar,
       host_user_id: role.host_user_id,

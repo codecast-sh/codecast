@@ -4,12 +4,12 @@
 // hands this same element to satori). So it keeps to what satori lays out:
 // inline styles, flex boxes, literal colors, no hooks, no classes.
 import {
-  DEVICE_KIND_LABEL,
   WEEK_CARD_H,
   WEEK_CARD_INSTALL,
   WEEK_CARD_W,
   WEEK_DAY_NAMES,
   formatCount,
+  weekCardFigures,
   weekRangeLabel,
   type WeekCardStats,
 } from "@codecast/shared/contracts/weeklyCard";
@@ -51,21 +51,7 @@ function initials(name: string | null | undefined): string {
 }
 
 export function WeekCardView({ stats, name }: { stats: WeekCardStats; name: string | null }) {
-  const maxHours = Math.max(1, ...stats.days.map((d) => d.hours));
-  const totalAgentSessions = stats.agents.reduce((t, a) => t + a.sessions, 0) || 1;
-  const agents = stats.agents.slice(0, 5);
-  const otherAgents = stats.agents.slice(5).reduce((t, a) => t + a.sessions, 0);
-  const shares = otherAgents ? [...agents, { name: "Other", sessions: otherAgents }] : agents;
-  const busiest = stats.busiest_day >= 0 ? stats.days[stats.busiest_day] : null;
-  const machines = stats.machines.kinds.map((k) => `${k.count} ${DEVICE_KIND_LABEL[k.kind]}${k.count === 1 || k.kind === "linux" ? "" : "s"}`).join(" · ");
-  const pct = (n: number) => {
-    const p = (n / totalAgentSessions) * 100;
-    return p > 0 && p < 1 ? "<1%" : `${Math.round(p)}%`;
-  };
-  const extras: Array<[string, string]> = [];
-  if (busiest) extras.push(["busiest day", `${WEEK_DAY_NAMES[stats.busiest_day]} · ${busiest.hours}h`]);
-  if (stats.active_days > 0) extras.push(["per active day", `${Math.round((stats.agent_hours / stats.active_days) * 10) / 10}h`]);
-  if (stats.tokens !== null) extras.push(["tokens", formatCount(stats.tokens)]);
+  const { maxHours, shares, pct, fraction, machines, extras } = weekCardFigures(stats);
 
   return (
     <div
@@ -152,7 +138,7 @@ export function WeekCardView({ stats, name }: { stats: WeekCardStats; name: stri
       <div style={col({ marginTop: 26, gap: 10 })}>
         <div style={row({ height: 14, borderRadius: 7, overflow: "hidden", backgroundColor: C.line })}>
           {shares.map((a, i) => (
-            <div key={a.name} style={{ display: "flex", width: `${(a.sessions / totalAgentSessions) * 100}%`, height: "100%", backgroundColor: AGENT_COLORS[i % AGENT_COLORS.length] }} />
+            <div key={a.name} style={{ display: "flex", width: `${fraction(a.sessions) * 100}%`, height: "100%", backgroundColor: AGENT_COLORS[i % AGENT_COLORS.length] }} />
           ))}
         </div>
         <div style={row({ gap: 26, flexWrap: "wrap" })}>

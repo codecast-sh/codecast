@@ -71,10 +71,10 @@ describe('card-write prompt', () => {
     expect(prompt).toContain(presenterBase.trim().split('\n')[0]!);
     expect(prompt).toContain(`cast task context ${snap.task.short_id}`);
     expect(prompt).toContain(`git diff main...${branchOf(snap.task.short_id)}`);
-    expect(prompt).toContain(`path ${worktreeOf(snap.task.short_id)}`);
+    expect(prompt).toMatch(new RegExp(`path\\s+${worktreeOf(snap.task.short_id)}`));
     expect(prompt).toContain('/r/present/');
     expect(prompt).toContain(`"task":"${snap.task.short_id}"`);
-    expect(prompt).not.toMatch(/\$(card|task_id|default_branch|branch|worktree|run_dir)\b/);
+    expect(prompt).not.toMatch(/\$(card|task_id|default_branch|diff_base|branch|worktree|run_dir)\b/);
   });
 
   test('a finished card loses exactly the words its author wrote', () => {

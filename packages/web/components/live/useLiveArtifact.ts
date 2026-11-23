@@ -19,7 +19,9 @@
 import { useCallback, useMemo, useRef, useState, useSyncExternalStore, type MutableRefObject } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useAction, useMutation } from "convex/react";
-import { nanoid } from "nanoid";
+// Ids that only name writes and threads, never secrets: the non-secure
+// generator needs no crypto, which the phone's Hermes runtime lacks.
+import { nanoid } from "nanoid/non-secure";
 import { toast } from "sonner";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {

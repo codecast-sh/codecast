@@ -112,3 +112,53 @@ describe("kill all in a set aside bucket", () => {
     expect(killAllIds([stashed("x", "y"), stashed("y", "x")])).toEqual(["x"]);
   });
 });
+
+// A parent's stash writes no stamp on its nested children: each files with the
+// row it rides at read time, so a restore brings it back and a parent that
+// left the viewer's scope leaves no card behind.
+describe("children of a stashed parent", () => {
+  const sub = (id: string, parentId: string, over: Partial<InboxSession> = {}) =>
+    row(id, { parent_conversation_id: parentId, is_subagent: true, ...over });
+  const stashedParent = row("parent", { inbox_stashed_at: now });
+
+  it("files an unstamped child into Stashed, nested under its parent", () => {
+    const placed = place([stashedParent, sub("child", "parent")]);
+    expect(ids(placed.stashed).sort()).toEqual(["child", "parent"]);
+    expect(placed.sorted).toEqual([]);
+    const { topLevel, subsByTop } = hiddenBucketTree(placed.stashed);
+    expect(ids(topLevel)).toEqual(["parent"]);
+    expect(ids(subsByTop.get("parent") ?? [])).toEqual(["child"]);
+  });
+
+  it("nests a grandchild under the stashed root", () => {
+    const placed = place([stashedParent, sub("kid", "parent"), sub("grandkid", "kid")]);
+    const { topLevel, subsByTop } = hiddenBucketTree(placed.stashed);
+    expect(ids(topLevel)).toEqual(["parent"]);
+    expect(ids(subsByTop.get("parent") ?? []).sort()).toEqual(["grandkid", "kid"]);
+  });
+
+  it("leaves a killed child out of Stashed", () => {
+    const placed = place([stashedParent, sub("child", "parent", { inbox_killed_at: now })]);
+    expect(ids(placed.stashed)).toEqual(["parent"]);
+  });
+
+  it("draws no card for a child whose parent is outside the store, legacy stamp or not", () => {
+    for (const over of [{}, { inbox_stashed_at: now }]) {
+      const placed = place([sub("child", "moved-away", over), row("other")]);
+      expect(ids(placed.sorted)).toEqual(["other"]);
+      expect([...placed.stashed, ...placed.dismissed, ...placed.snoozed]).toEqual([]);
+      expect(placed.subsByParent.size).toBe(0);
+    }
+  });
+
+  it("keeps a stashed workflow sub with no parent pointer on its own card", () => {
+    const placed = place([row("wf", { is_workflow_sub: true, inbox_stashed_at: now })]);
+    expect(ids(placed.stashed)).toEqual(["wf"]);
+    expect(placed.sorted).toEqual([]);
+  });
+
+  it("kill all sends only the parent for its derived children", () => {
+    const placed = place([stashedParent, sub("kid", "parent"), sub("kid2", "parent")]);
+    expect(killAllIds(placed.stashed)).toEqual(["parent"]);
+  });
+});

@@ -1,5 +1,14 @@
 /** Feeds that answer for one team and take `{ team_id }`. */
-export const TEAM_SCOPED_SETTINGS = new Set(["teamMembers", "githubInstallations", "team", "teamBudget", "managedDevices"]);
+/** Settings feeds that no longer exist. Their rows still on disk are dropped at
+ *  boot (cacheRetention), since nothing feeds them again. The team roster lives
+ *  only in the store's teamMembers (lib/activeTeam teamMembersOf). */
+export const RETIRED_SETTINGS = new Set(["teamMembers"]);
+
+export function isRetiredSettingsKey(id: string): boolean {
+  return RETIRED_SETTINGS.has(id.slice(id.lastIndexOf(":") + 1));
+}
+
+export const TEAM_SCOPED_SETTINGS = new Set(["githubInstallations", "team", "teamBudget", "managedDevices", "teamReadKeys"]);
 
 export function settingsDataKey(name: string, userId?: string | null, teamId?: string | null): string | null {
   if (!userId) return null;

@@ -38,6 +38,7 @@ import { BLAME_ALGORITHM_VERSION, contentLinesToMatch, overlapLinesBySha } from 
 import { WORKTREES_KIND, mergeWorktreesPayload, type WorktreesPayload } from "@codecast/shared/contracts";
 import { localCommitFiles } from "./lib/localCommitFiles";
 import { markCommitDirty } from "./lib/changesDirty";
+import { teamRepositories } from "./lib/teamRepositories";
 
 const MINUTE = 60 * 1000;
 const TTL: Record<string, number> = {
@@ -224,17 +225,11 @@ async function repositoriesForUser(ctx: { db: any }, userId: Id<"users">) {
 
     // An installation with access to every repository lists none, so the
     // repositories we actually know about are the ones activity has named.
-    const prs = await ctx.db
-      .query("pull_requests")
-      .withIndex("by_team_id", (q: any) => q.eq("team_id", membership.team_id))
-      .take(500);
-    const commits = await ctx.db
-      .query("commits")
-      .withIndex("by_team_timestamp", (q: any) => q.eq("team_id", membership.team_id))
-      .order("desc")
-      .take(500);
-
-    for (const row of [...prs, ...commits]) add(row.repository, membership.team_id, false);
+    for (const table of ["pull_requests", "commits"] as const) {
+      for (const repository of await teamRepositories(ctx, table, membership.team_id)) {
+        add(repository, membership.team_id, false);
+      }
+    }
   }
   return [...found.values()].sort((a, b) => a.repository.localeCompare(b.repository));
 }

@@ -10,7 +10,7 @@ import { Check, Link2, RefreshCw, X } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { sharePath } from "@codecast/shared/entities";
 import { localTimeZone } from "@codecast/shared/time";
-import { weekBounds, weekRangeLabel, weeklyCardAllowed, type WeekCardStats, type WeekWhich } from "@codecast/shared/contracts/weeklyCard";
+import { weekBounds, publicWeekCard, weekCardShareText, weekRangeLabel, weeklyCardAllowed, type WeekCardStats, type WeekWhich } from "@codecast/shared/contracts/weeklyCard";
 import { useSearchParams } from "next/navigation";
 import { useInboxStore } from "../../store/inboxStore";
 import { useCurrentUser } from "../../hooks/useCurrentUser";
@@ -142,7 +142,7 @@ function CardPanel({ card, name, which }: { card: CardRow; name: string | null; 
   const { state, build } = useBuild(which, card.stats.tz);
   const published = !!card.share_token;
   const opts = { show_projects: !!card.show_projects, show_tokens: !!card.show_tokens };
-  const shown: WeekCardStats = { ...card.stats, projects: opts.show_projects ? card.stats.projects : [], tokens: opts.show_tokens ? card.stats.tokens : null };
+  const shown = publicWeekCard(card.stats, opts);
   const setOpt = (patch: Partial<typeof opts>) => useInboxStore.getState().setWeeklyCardOptions(card._id, patch);
   const publish = () => {
     useInboxStore.getState().setObjectShareLink("card", card._id, crypto.randomUUID());
@@ -200,11 +200,6 @@ function Toggle({ label, on, disabled, onChange }: { label: string; on: boolean;
   );
 }
 
-function shareText(s: WeekCardStats): string {
-  const agents = s.agents.slice(0, 3).map((a) => a.name).join(", ");
-  return `My week with coding agents: ${s.sessions} sessions, ${s.agent_hours}h with agents working${agents ? ` (${agents})` : ""}`;
-}
-
 const TARGETS = [
   { id: "x", label: "Post to X", href: (url: string, text: string) => `https://x.com/intent/post?text=${encodeURIComponent(text)}&url=${encodeURIComponent(url)}` },
   { id: "bluesky", label: "Bluesky", href: (url: string, text: string) => `https://bsky.app/intent/compose?text=${encodeURIComponent(`${text} ${url}`)}` },
@@ -213,7 +208,7 @@ const TARGETS = [
 
 function ShareRow({ token, stats }: { token: string; stats: WeekCardStats }) {
   const url = `${shareOrigin()}${sharePath("card", token)}`;
-  const text = shareText(stats);
+  const text = weekCardShareText(stats);
   // The shared copy hook says Copied only when the clipboard took it, and Copy failed when it refused.
   const { state: copyState, copy } = useCopy();
   return (

@@ -1,4 +1,4 @@
-import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, type PendingMessages } from "./pendingMessageJournal";
+import { importLegacyQueuedMessages, queuedMessagesFromPending, applyPendingMessageWrite, pendingMessageWrites, pendingMessagesFromRecords, retireStalePendingRecords, type PendingMessages } from "./pendingMessageJournal";
 import { clearPendingMessageJournal, readPendingMessageJournal, writePendingMessageJournal } from "./pendingMessageJournal";
 import Dexie from "dexie";
 import { captureException } from "@sentry/react";
@@ -18,6 +18,10 @@ import { storableActionArgs } from "../lib/tabSafePath";
 import { DOCS_SHOTS } from "../lib/docsShots/flag";
 import { recordCacheEvent } from "./cacheEvents";
 import { createCacheOwnership } from "./cacheOwnership";
+import { deleteDatabaseWithTimeout, readV2LegacyOutbox } from "./idbV2Salvage";
+import { connectLivenessLane, flushLivenessWrites, holdLiveMeta, holdLivenessRows, holdLivenessSyncMeta, resetLivenessLane } from "./idbLivenessLane";
+import { retryOutboxPut } from "./outboxPutRetry";
+export { flushLivenessWrites, LIVENESS_FLUSH_MS } from "./idbLivenessLane";
 
 export type OutboxEntry = {
   id: string;
@@ -49,9 +53,9 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined" && !DOCS_SHOT
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 104;
+export const CACHE_SCHEMA_VERSION = 111;
 export const CACHE_SCHEMA_SIGNATURE =
-  "accountPool:_id|agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|callDetails:_id|callList:_id|capabilityBindings:_id|capabilityState:_id|changeEditions:_id, team_id, repository, scope, date|changeLive:_id, team_id, repository, surface|changeStories:_id, team_id, repository, date, area|changeStorySessions:_id, team_id, story_id|changeWorks:_id, team_id, kind|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|composerSuggestions:_id|conversationPages:_id|dataResults:_id, doc_id|decisionComments:_id, decision_id, created_at|decisionDetails:_id|decisionStacks:_id|decisionThreads:_id|deployTargets:_id, workspace|docDetails:_id|docs:_id|envStandings:_id|expectationsOverview:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|flowMaps:_id|foreignTriggers:_id|guestSuggestions:_id, conversation_id|handledDecisions:_id|harnessChanges:_id|initiativeUpdates:_id, initiative_id|initiatives:_id, short_id|issueSyncSources:_id, project_id|lineCards:_id, project_id|lineDeploys:_id, project_id|lineDispatch:_id|lineGraphEditability:_id|lineGraphVersions:_id, workflow_id|lineLabels:_id, run_id|lineOccurrences:_id, project_id|lineReviews:_id|lineStages:_id|lineTimeline:_id, at|lineTries:_id, project_id|liveElements:_id, doc_id|liveFlows:_id, team_id|liveHeads:_id|liveVersions:_id, doc_id|machineResources:_id|managedSessions:_id|meetingBotSettings:_id|meetingBots:_id|meetingCalendarEvents:_id|messageFeed:_id, timestamp|modObjects:_id|modState:_id|mods:_id|mySends:_id, timestamp|notifications:_id|opsAppCalls:_id, source_id|opsApps:_id|opsCiRuns:_id|opsEvents:_id|opsGroups:_id, source_id|opsReplayTallies:_id|opsReplayTimelines:_id|opsReplays:_id|opsSamples:_id, group_id|opsSources:_id|opsWatchSeries:_id|opsWatches:_id|orgLog:_id|orgLogRows:_id, batch|orgProposalChanges:_id, proposal_id|orgProposals:_id|orgTemplateInstances:_id|pageEmbeds:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|permissionRules:_id|plans:_id|prGuides:_id|projectExpectations:_id|projectOutputs:_id|projectTeammateSources:_id|projectUpdates:_id, project_id|projects:_id|pullRequestDetails:_id|pullRequestSessions:_id, conversation_id|pullRequests:_id|quoteDrafts:_id, conversation_id, client_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|savedViews:_id|secretHistory:_id|secrets:_id, name|sessionCommands:_id|sessionDecisions:_id|sessionFlows:_id, graph_hash|sessionGoals:_id|sessionIndex:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|shipTargets:_id|sideAnswers:_id, conversation_id|signals:_id|stationInputs:_id|taskComments:_id|taskEvidence:_id|tasks:_id|teamDeploys:_id, workspace|teamKitItems:_id|teamPrompts:_id, team_id, date|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|trialCards:_id, project_id|trialProjects:_id|trialRuns:_id, project_id|trialSpend:_id|viewerRoles:_id|weeklyCards:_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "accountPool:_id|agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|callDetails:_id|callList:_id|capabilityBindings:_id|capabilityState:_id|changeEditions:_id, team_id, repository, scope, date|changeLive:_id, team_id, repository, surface|changeStories:_id, team_id, repository, date, area|changeStorySessions:_id, team_id, story_id|changeWorks:_id, team_id, kind|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|checkouts:_id, workspace|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|composerSuggestions:_id|conversationPages:_id|dataResults:_id, doc_id|decisionComments:_id, decision_id, created_at|decisionDetails:_id|decisionStacks:_id|decisionThreads:_id|deployDetails:_id|deployReach:_id|deployTargets:_id, workspace|docDetails:_id|docs:_id|envStandings:_id|expectationsOverview:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|flowMaps:_id|foreignTriggers:_id|guestSuggestions:_id, conversation_id|handledDecisions:_id|harnessChanges:_id|initiativeUpdates:_id, initiative_id|initiatives:_id, short_id|issueSyncSources:_id, project_id|lineCards:_id, project_id|lineDeploys:_id, project_id|lineDispatch:_id|lineGraphEditability:_id|lineGraphVersions:_id, workflow_id|lineLabels:_id, run_id|lineOccurrences:_id, project_id|lineReviews:_id|lineStages:_id|lineTimeline:_id, at|lineTries:_id, project_id|liveElements:_id, doc_id|liveFlows:_id, team_id|liveHeads:_id|liveVersions:_id, doc_id|machineResources:_id|managedSessions:_id|meetingBotSettings:_id|meetingBots:_id|meetingCalendarEvents:_id|messageFeed:_id, timestamp|modObjects:_id|modState:_id|mods:_id|mySends:_id, timestamp|notifications:_id|opsAppCalls:_id, source_id|opsApps:_id|opsCiRuns:_id|opsEvents:_id|opsGroups:_id, source_id|opsReplayTallies:_id|opsReplayTimelines:_id|opsReplays:_id|opsSamples:_id, group_id|opsSources:_id|opsWatchSeries:_id|opsWatches:_id|orgLog:_id|orgLogRows:_id, batch|orgProposalChanges:_id, proposal_id|orgProposals:_id|orgTemplateInstances:_id|pageEmbeds:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|permissionRules:_id|pipelines:_id, workspace|plans:_id|prGuides:_id|projectExpectations:_id|projectOutputs:_id|projectTeammateSources:_id|projectUpdates:_id, project_id|projects:_id|pullRequestDetails:_id|pullRequestSessions:_id, conversation_id|pullRequests:_id|quoteDrafts:_id, conversation_id, client_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|repoFlows:_id, root, repository|runGraphs:_id|savedViews:_id|secretHistory:_id|secrets:_id, name|sessionCommands:_id|sessionDecisions:_id|sessionFlows:_id, graph_hash|sessionGoals:_id|sessionIndex:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|shipTargets:_id|sideAnswers:_id, conversation_id|signals:_id|stationInputs:_id|taskComments:_id|taskEvidence:_id|tasks:_id|teamDeploys:_id, workspace|teamKitItems:_id|teamPrompts:_id, team_id, date|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|trialCards:_id, project_id|trialProjects:_id|trialRuns:_id, project_id|trialSpend:_id|viewerRoles:_id|weeklyCards:_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
@@ -171,6 +175,13 @@ if (MISSING_COLLECTION_TABLES.length > 0) {
 
 const META_KEYS = new Set<string>(META_STORE_KEYS);
 
+// Meta keys the registry no longer names. Nothing reads them and nothing
+// deleted them: the desktop app still held a 12 MB `messages` blob from
+// before conversationMessages (2026-11-21). Dropped at boot; a key leaving
+// the registry joins this list.
+export const RETIRED_META_KEYS = ["messages", "pagination", "sidePanelOpen", "sidePanelUserClosed", "teamUnreadCount"];
+let retiredMetaSwept = false;
+
 let _hydrating = false;
 
 // What each collection table currently holds on disk, by id → row reference.
@@ -268,7 +279,9 @@ async function loadPendingInput(ownerId?: string): Promise<PendingMessages> {
       await db.meta.delete("queuedMessages");
     }
     const rows = await db.meta.where("key").startsWith(`${PENDING_INPUT_PREFIX}${ownerId}:`).toArray();
-    return pendingMessagesFromRecords(rows.map(row => row.value));
+    const { kept, retired } = retireStalePendingRecords(rows.map(row => row.value), Date.now());
+    for (const row of retired) await db.meta.put({ key: pendingInputKey(ownerId, row.id), value: row });
+    return pendingMessagesFromRecords(kept);
   });
 }
 
@@ -283,9 +296,21 @@ const { persistenceOwned, writeOwnerStamp } = ownershipApi;
 export const { ensureCacheOwnership, _cacheOwnerForTests } = ownershipApi;
 
 const metaWriter = createCoalescedWriter((key, value) => { db.meta.put({ key, value }).catch(() => {}); }, 250);
+connectLivenessLane({
+  db,
+  tables: COLLECTION_TABLES,
+  lastPersisted,
+  writable: () => !_hydrating && persistenceOwned(),
+  flushMeta: () => metaWriter.flush(),
+});
+
 if (typeof window !== "undefined") {
-  window.addEventListener("pagehide", () => metaWriter.flush());
-  window.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") metaWriter.flush(); });
+  window.addEventListener("pagehide", () => { metaWriter.flush(); flushLivenessWrites(); });
+  window.addEventListener("visibilitychange", () => {
+    if (document.visibilityState !== "hidden") return;
+    metaWriter.flush();
+    flushLivenessWrites();
+  });
 }
 
 // A boot retention pass can shed most of a table at once: the first boot with
@@ -332,7 +357,8 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
         // The patches name the rows this write touched, so only those are compared: a write
         // of a few rows into a big collection costs the rows. A whole-collection replace,
         // or snapshot drops only a full diff can find, take the full diff.
-        const ids = prevShadow && !hasSnapshotDrops(key) ? patchedIds(patches, key) : null;
+        // A row whose change is only liveness fields waits for the liveness lane's flush.
+        const ids = holdLivenessRows(key, prevShadow, prevShadow && !hasSnapshotDrops(key) ? patchedIds(patches, key) : null, data, state);
         let puts: any[];
         let deletes: string[];
         if (prevShadow && ids) {
@@ -358,7 +384,10 @@ export function writePatchesToIDB(patches: Patch[], state: any) {
       // waited for a quiet spell was lost with a page killed in between, and the reload showed a stale push
       // over its own parked write. (A big write plants a few hundred locks, never one per field it touches.)
       db.meta.put({ key, value: state[key] }).catch(() => {});
+    } else if (key === "syncMeta") {
+      holdLivenessSyncMeta(state);
     } else if (META_KEYS.has(key)) {
+      if (holdLiveMeta(key, state)) continue;
       // Any other meta blob: its latest value once per quiet spell, never once per action. Page hide flushes it.
       metaWriter.write(key, state[key]);
     }
@@ -415,6 +444,10 @@ export async function loadCache(
       Promise.all(collectionEntries.map(([, table]) => table.toArray())),
       db.meta.bulkGet(metaKeys),
     ]);
+    if (!retiredMetaSwept) {
+      retiredMetaSwept = true;
+      void db.meta.bulkDelete(RETIRED_META_KEYS).catch(() => {});
+    }
 
     // Meta lookup first — the sessions retention pass below needs
     // liveInboxIdList and lastFocusedConversationId from the same snapshot.
@@ -734,7 +767,8 @@ export function enqueueDispatch(entry: OutboxEntry): Promise<void> {
   // Docs shots keep nothing, their outbox included.
   if (!persistenceOwned() || DOCS_SHOTS) return Promise.resolve();
   // The engine hands over the args as the caller passed them; a tab address in them is stored in its safe form (lib/tabSafePath).
-  return db.dispatchOutbox.put({ ...entry, args: storableActionArgs(entry.action, entry.args) }).then(() => {});
+  const row = { ...entry, args: storableActionArgs(entry.action, entry.args) };
+  return retryOutboxPut(() => db.dispatchOutbox.put(row));
 }
 
 export function removeDispatch(id: string): Promise<void> {
@@ -786,42 +820,6 @@ export async function salvageLocalFirstV2Data(): Promise<number> {
   return salvaged;
 }
 
-function readV2LegacyOutbox(name: string): Promise<unknown[]> {
-  return new Promise((resolve) => {
-    const req = indexedDB.open(name);
-    // A database wedged by the very failure mode that retired v2 must not
-    // wedge boot: give up quietly and let deletion (or the next boot) win.
-    const timer = setTimeout(() => resolve([]), 10_000);
-    req.onerror = () => { clearTimeout(timer); resolve([]); };
-    req.onsuccess = () => {
-      const vdb = req.result;
-      try {
-        if (!vdb.objectStoreNames.contains("legacyOutbox")) {
-          clearTimeout(timer); vdb.close(); resolve([]); return;
-        }
-        const get = vdb.transaction("legacyOutbox", "readonly").objectStore("legacyOutbox").getAll();
-        get.onsuccess = () => { clearTimeout(timer); vdb.close(); resolve(get.result ?? []); };
-        get.onerror = () => { clearTimeout(timer); vdb.close(); resolve([]); };
-      } catch {
-        clearTimeout(timer); vdb.close(); resolve([]);
-      }
-    };
-  });
-}
-
-function deleteDatabaseWithTimeout(name: string): Promise<void> {
-  return new Promise((resolve) => {
-    const req = indexedDB.deleteDatabase(name);
-    // deleteDatabase blocks while another tab holds a connection; don't let
-    // that stall boot — the next boot retries.
-    const timer = setTimeout(() => resolve(), 10_000);
-    const done = () => { clearTimeout(timer); resolve(); };
-    req.onsuccess = done;
-    req.onerror = done;
-    req.onblocked = () => { /* keep waiting until timeout */ };
-  });
-}
-
 // Sign-out purge: drop every locally persisted row (collections, messages,
 // meta, parked outbox). The caller owns navigation/reload afterwards.
 /** Dexie writes only the diffed rows and lands them itself; nothing is held
@@ -861,6 +859,7 @@ async function purgeLocalCacheSteps(keepPendingInputFor: string | null): Promise
   _pendingMsgWrites.clear();
   // A meta value still waiting to be written belongs to the cache being purged.
   metaWriter.drop();
+  resetLivenessLane();
   lastPersisted.clear();
   // A cache purged from under a signed-in principal (someone else's rows were
   // on disk) keeps that principal's own pending input: keyed by owner, it was

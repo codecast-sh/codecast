@@ -1901,6 +1901,7 @@ async function probeModel(
   bearerToken: string,
   model: string,
   fetchImpl: typeof fetch = fetch,
+  system?: string,
 ): Promise<{ status: number; fp: RateLimitFingerprint; scoped: CcUsageWindow | null; windowed: boolean; body: () => Promise<string> }> {
   const res = await fetchImpl(CC_MESSAGES_URL, {
     method: "POST",
@@ -1911,7 +1912,7 @@ async function probeModel(
       "content-type": "application/json",
       "user-agent": "codecast-account-probe",
     },
-    body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "hi" }] }),
+    body: JSON.stringify({ model, max_tokens: 1, messages: [{ role: "user", content: "hi" }], ...(system && { system }) }),
     signal: AbortSignal.timeout(20000),
   });
   const fp = parseRateLimitFingerprint(res.headers);
@@ -1934,7 +1935,13 @@ export async function fetchRateLimitFingerprint(bearerToken: string, fetchImpl?:
 
 // The model whose own weekly window the usage endpoint reports as
 // `weekly_scoped` (the /usage screen's third bar).
-const CC_SCOPED_PROBE_MODEL = process.env.CODECAST_CC_SCOPED_PROBE_MODEL || "claude-fable-5-1";
+const CC_SCOPED_PROBE_MODEL = process.env.CODECAST_CC_SCOPED_PROBE_MODEL || "claude-fable-5-2";
+// A subscription token reaches the scoped model only as Claude Code. Asked
+// bare, the API answers an empty 429 whatever the window holds; with Claude
+// Code's system line it answers with the model's own window headers. Without
+// it six token accounts read no Fable meter while every one was at 100%, and
+// auto-switch hopped a Fable session across all of them (2026-11-21).
+export const CC_SCOPED_PROBE_SYSTEM = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /**
  * A usage reading for an account whose saved login is dead but whose setup
@@ -1981,7 +1988,7 @@ export async function fetchTokenUsageSnapshot(
     if (prevScoped) snap.weekly_scoped = prevScoped;
     return snap;
   }
-  const scoped = await probeModel(token, CC_SCOPED_PROBE_MODEL, opts.fetchImpl);
+  const scoped = await probeModel(token, CC_SCOPED_PROBE_MODEL, opts.fetchImpl, CC_SCOPED_PROBE_SYSTEM);
   const label = prevScoped?.label ?? "Fable";
   const liveReset = prevScoped?.resets_at && prevScoped.resets_at > now ? prevScoped.resets_at : undefined;
   if (scoped.scoped) {

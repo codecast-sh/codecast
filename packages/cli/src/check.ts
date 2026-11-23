@@ -53,6 +53,7 @@ import { CHECK_HEAP_ENV, TSC_HEAP_MB, heapCapMb, heapDeath, isHeapFatal, isNativ
 import { CheckFailure, deathKind, phantomErrors, type ModuleResolver } from "./checkOutcome.js";
 import { peakOfPids, recordPeak, type Peak } from "./watcherMemory.js";
 import { repoOf, startWhenSlotFrees } from "./checkCapacity.js";
+import { tscFileVersion } from "./tscFileVersion.js";
 export * from "./checkCapacity.js";
 
 /** One program to check: its name (a path segment of the state dir) and its tsconfig, relative to the tree root. */
@@ -228,43 +229,6 @@ export function projectsTouching(root: string, projects: CheckProject[], changed
 // Whether a pass checked the files on disk
 // ---------------------------------------------------------------------------
 
-const SOURCE_MAP_COMMENT = /^\/\/[@#] source[M]appingURL=(.+)\r?\n?$/;
-
-/** The text as tsc reads a file: a byte order mark names the encoding and is dropped. */
-function textAsTscReads(bytes: Buffer): string {
-  if (bytes.length >= 2 && bytes[0] === 0xfe && bytes[1] === 0xff) return Buffer.from(bytes.subarray(0, bytes.length & ~1)).swap16().toString("utf16le", 2);
-  if (bytes.length >= 2 && bytes[0] === 0xff && bytes[1] === 0xfe) return bytes.toString("utf16le", 2);
-  if (bytes.length >= 3 && bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return bytes.toString("utf8", 3);
-  return bytes.toString("utf8");
-}
-
-/** The text without its last source map comment and the blank or `//#` lines after it, which tsc leaves out of a file's version. */
-function withoutSourceMapComment(text: string): string {
-  let lineEnd = text.length;
-  let lineStart = lineEnd;
-  for (let pos = lineEnd - 1; pos >= 0; pos--) {
-    const ch = text.charCodeAt(pos);
-    if (ch === 10 || ch === 13) {
-      if (ch === 10 && pos && text.charCodeAt(pos - 1) === 13) pos--;
-    } else if (ch < 127 || (ch !== 0x2028 && ch !== 0x2029)) {
-      lineStart = pos;
-      continue;
-    }
-    const line = text.substring(lineStart, lineEnd);
-    if (SOURCE_MAP_COMMENT.test(line)) return text.substring(0, lineStart);
-    if (!/^\s*(\/\/[@#] .*)?$/.test(line)) return text;
-    lineEnd = lineStart;
-  }
-  return text;
-}
-
-/** The version tsc records for a file's content: the sha256 of its text, source map comment aside (tsc's getSourceFileVersionAsHashFromText). */
-export function tscFileVersion(bytes: Buffer): string {
-  let text = textAsTscReads(bytes);
-  if (/\/\/[@#] source[M]appingURL=(.+)\r?\n?$/.test(text)) text = withoutSourceMapComment(text);
-  return createHash("sha256").update(text).digest("hex");
-}
-
 /** Each file's stat and version when last read, so an unchanged file is not hashed on every ask. */
 type DiskVersions = Record<string, [mtimeMs: number, size: number, ino: number, version: string]>;
 const diskVersionsPath = (dir: string): string => path.join(dir, "disk-versions.json");
@@ -422,19 +386,35 @@ export interface WatchState {
 }
 
 export const IDLE_EXIT_MS = 45 * 60_000;
+/** How long a pass nobody asks about may run before its watcher gives it up. */
+export const STUCK_PASS_MS = 30 * 60_000;
 
 /**
- * Exit when nobody has asked in IDLE_EXIT_MS, measured from the later of the
- * last ask and the first finished pass. A pass in flight never counts as
- * idle: on a loaded machine a first pass can outlive the idle window, and a
- * watcher that quit then threw the whole build away (seen 2026-09-17). Later
- * passes do not count: an agent editing the tree triggers them without anyone
- * asking, and two such watchers burned 150% CPU for nobody (2026-10-14).
+ * Why a watcher should exit now, or null.
+ *
+ * gone: its tree or tsconfig no longer exists (a scratch dir, a removed
+ * worktree), so nobody can ask about it again.
+ *
+ * idle: nobody has asked in IDLE_EXIT_MS, measured from the later of the
+ * last ask and the first finished pass. Later passes do not count: an agent
+ * editing the tree triggers them without anyone asking, and two such
+ * watchers burned 150% CPU for nobody (2026-10-14).
+ *
+ * stuck: a pass in flight, unasked for IDLE_EXIT_MS and running longer than
+ * STUCK_PASS_MS. A pass someone waits on is never given up: on a loaded
+ * machine a first pass can outlive the idle window, and a watcher that quit
+ * then threw the whole build away (2026-09-17). A waiting asker refreshes
+ * askedAt every ASK_HEARTBEAT_MS, so only a pass nobody asks about qualifies;
+ * watchers stuck "checking" for hours held memory for nobody (2026-11-21).
+ * Last ask is the only measure of interest: an Agent-tool subagent works in
+ * a worktree with no process of its own there.
  */
-export function shouldIdleExit(state: Pick<WatchState, "inProgress" | "askedAt" | "firstFinishedAt" | "startedAt">, now = Date.now()): boolean {
-  if (state.inProgress) return false;
+export function watcherExit(state: Pick<WatchState, "inProgress" | "askedAt" | "firstFinishedAt" | "startedAt" | "passStartedAt">, treeExists: boolean, now = Date.now()): "gone" | "idle" | "stuck" | null {
+  if (!treeExists) return "gone";
   const last = Math.max(state.askedAt ?? 0, state.firstFinishedAt ?? 0, state.startedAt);
-  return now - last > IDLE_EXIT_MS;
+  if (now - last <= IDLE_EXIT_MS) return null;
+  if (!state.inProgress) return "idle";
+  return now - (state.passStartedAt ?? state.startedAt) > STUCK_PASS_MS ? "stuck" : null;
 }
 /**
  * How long a pass that did not check the tree on disk may wait for tsc to
@@ -747,8 +727,9 @@ export async function runWatcher(root: string, project: string, tsconfig: string
       recordPeak(repo, project, { at: Date.now(), bytes: state.peakRssBytes, outcome: "clean", root });
     },
   });
-  // footprint's figure is a lifetime peak, so a sparse sample misses nothing; RSS (off macOS) is sampled the same way.
-  const sampler = setInterval(() => { if (state.inProgress) sample(); }, 5_000);
+  // footprint's figure is a lifetime peak, so the sample at the pass's end (onDone) misses nothing; one a minute keeps a
+  // long pass's peak current for admission. RSS (off macOS) is a figure of the moment, so it is sampled more often.
+  const sampler = setInterval(() => { if (state.inProgress) sample(); }, process.platform === "darwin" ? 60_000 : 5_000);
   if (seedBuildInfo(root, project)) console.log(`seeded the first pass from ${mainCheckoutOf(root)}`);
   // Incremental: a restarted watcher (the slot cap stops idle ones) and a
   // seeded worktree re-check only what changed since the recorded pass.
@@ -789,11 +770,13 @@ export async function runWatcher(root: string, project: string, tsconfig: string
   child.stdout?.on("data", onData);
   child.stderr?.on("data", onData);
   const idle = setInterval(() => {
-    if (shouldIdleExit(readWatchState(dir) ?? state)) {
-      logWatcherEvent("idle-exit", { project, root });
-      child.kill("SIGTERM");
-      clearInterval(idle);
-    }
+    const why = watcherExit(readWatchState(dir) ?? state, fs.existsSync(path.join(root, tsconfig)));
+    if (!why) return;
+    const detail = why === "gone" ? `its tree is gone (no ${tsconfig})` : why === "stuck" ? "a pass nobody asked about ran too long" : "";
+    console.log(`exiting: ${detail || "nobody asked"}`);
+    logWatcherEvent(why === "gone" ? "stop" : "idle-exit", { project, root }, detail);
+    child.kill("SIGTERM");
+    clearInterval(idle);
   }, 60_000);
   const stop = (): void => {
     child.kill("SIGTERM");

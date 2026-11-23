@@ -82,14 +82,16 @@ export interface VaultBinding {
 }
 
 /**
- * Per-workspace browser configuration. When enabled, a headless Chromium is
- * launched after setup completes and torn down at release. The CDP port is
- * allocated via the named-port system using `cdp_port` (default base=9222
+ * Per-workspace browser configuration. When enabled, the workspace may start
+ * a headless Chromium of its own on demand (`cast ws browser`,
+ * startWorkspaceBrowser); nothing starts it at acquire, and it stops when the
+ * flow station that started it ends, on `cast ws browser --stop` and at
+ * release (ct-98941). The CDP port comes from `cdp_port` (default base=9222
  * range=100), so workspaces at resource index 0, 1, 2 get ports 9222, 9322,
  * 9422 by default.
  */
 export interface BrowserSpec {
-  /** Whether the workspace needs its own Chromium instance. */
+  /** Whether the workspace may start its own Chromium instance on demand. */
   enabled: boolean;
   /** Run Chrome headless? Default true. */
   headless: boolean;
@@ -197,6 +199,11 @@ export interface ShipSpec {
   level: boolean;
   /** Deploy steps, each run when the shipped commits touch one of its paths. */
   deploy: ShipDeployStep[];
+  /**
+   * The flow a pass runs through (`cast flow run <flow> --checkout`), always named: shipping never takes a default flow.
+   * Set, `cast ship checkout` pushes nothing itself: the flow's stages check, land and deploy the pass.
+   */
+  flow?: string;
 }
 
 export interface ShipDeployStep {
@@ -287,7 +294,7 @@ export interface ContractResult {
  *   - All declared env vars present in env
  *   - All required services running and reachable
  */
-/** Browser process bound to a workspace, when manifest.browser.enabled=true. */
+/** Browser process bound to a workspace while one started on demand runs. */
 export interface ChromeBinding {
   /** OS process id of the spawned Chromium. */
   pid: number;
@@ -319,12 +326,22 @@ export interface Workspace {
   state: WorkspaceState;
   /** Last contract validation, when available. */
   contract?: ContractResult;
-  /** Chrome instance bound to this workspace, if browser.enabled. */
+  /** Chrome instance bound to this workspace while one runs (started on demand). */
   chrome?: ChromeBinding;
   /** The ref/commit the branch was created at (a cloud seed: refs/codecast/cloud/<name>). */
   startPoint?: string;
   /** The commit HEAD is reset to after setup (the laptop's HEAD for a seeded worktree). */
   seedBase?: string;
+  /** Set only on a workspace a tool made for itself: what its own sweep may remove. */
+  purpose?: WorkspacePurpose;
+}
+
+/** A tool's own workspace (the Merge station's scratch tree): the process that made it and when. A workspace without
+ *  one is a person's, whatever its name. */
+export interface WorkspacePurpose {
+  kind: "merge-scratch";
+  pid: number;
+  started_at: number;
 }
 
 /** Options accepted by acquire(). */
@@ -342,18 +359,14 @@ export interface AcquireOptions {
   startPoint?: string;
   /** Second branch name, tried once only when `branch` already exists (only with `startPoint`). */
   altBranch?: string;
+  /** Marks the workspace as a tool's own (Workspace.purpose). */
+  purpose?: WorkspacePurpose;
   /** Override resource index (default: auto-allocated). */
   resourceIndex?: number;
   /** Skip install/generate/migrate (assume already done). */
   skipSetup?: boolean;
   /** Skip running hooks. */
   skipHooks?: boolean;
-  /**
-   * Skip Chrome launch even if manifest.browser.enabled. Used by the warm
-   * pool: the pool pre-warms WITHOUT a browser, and Chrome is launched at
-   * claim time so it inherits the renamed workspace path.
-   */
-  skipBrowser?: boolean;
   /**
    * Skip the warm-pool fast path entirely. Used internally by the pool
    * itself during pre-warm (to avoid infinite recursion) and by callers that

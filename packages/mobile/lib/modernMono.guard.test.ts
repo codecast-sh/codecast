@@ -50,7 +50,7 @@ const LINES: Record<string, Array<[what: string, pattern: RegExp, count?: number
   "components/PlanItem.tsx": [["plan ids", /\[styles\.shortId, codeFont\]\}>\{plan\.short_id\}/g]],
   "components/decisions/QueueMeta.tsx": [["decision ids", /\[styles\.dim, codeFont,/g]],
   "components/session/FlowCard.tsx": [
-    ["a run's task id", /\[styles\.task, codeFont,/g, 2],
+    ["a run's task id and a repository's name", /\[styles\.task, codeFont,/g, 4],
     ["ids and hashes in the now line", /<CodeRuns text=\{body\} \/>/g],
   ],
   "components/session/CastCommandBlock.tsx": [["vault names, vault commands and a command's target", /\[styles\.summary(?:Text|Muted), codeFont\]/g, 3]],

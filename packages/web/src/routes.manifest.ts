@@ -1,5 +1,6 @@
 import { lazy } from "react";
 import type { LazyExoticComponent, ComponentType } from "react";
+import { lazyNamed } from "../lib/lazyNamed";
 
 /**
  * routes.manifest.ts — PROPOSED single source of truth for web routing (Wave 1 seed).
@@ -172,6 +173,7 @@ const LineTrace = lazy(() => import("@/app/line/trace/[ref]/page"));
 const LineWorkspace = lazy(() => import("@/app/line/[project]/page"));
 const Flows = lazy(() => import("@/app/flows/page"));
 const FlowSettings = lazy(() => import("@/app/flows/settings/page"));
+const FlowPipeline = lazy(() => import("@/app/flows/pipeline/page"));
 const FlowTrace = lazy(() => import("@/app/flows/trace/[ref]/page"));
 const Flow = lazy(() => import("@/app/flows/[flow]/page"));
 const DecisionDetail = lazy(() => import("@/app/decisions/[id]/page"));
@@ -244,7 +246,7 @@ const ShareDecision = lazy(() => import("@/app/share/decision/[token]/page"));
 const ShareStack = lazy(() => import("@/app/share/stack/[token]/page"));
 const ShareTrigger = lazy(() => import("@/app/share/trigger/[token]/page"));
 const ShareRun = lazy(() => import("@/app/share/run/[token]/page"));
-const ReloadOutsideApp = lazy(() => import("@/components/ReloadOutsideApp").then((m) => ({ default: m.ReloadOutsideApp })));
+const ReloadOutsideApp = lazyNamed(() => import("@/components/ReloadOutsideApp"), "ReloadOutsideApp");
 
 // Browsing a repository
 const RepoIndex = lazy(() => import("@/app/repo/page"));
@@ -412,6 +414,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "line/trace/:ref", component: cast(LineTrace), layout: "dashboardShell", tab: "/line/trace/:ref" },
   { path: "line/:project", component: cast(LineWorkspace), layout: "dashboardShell", tab: "/line/:project" },
   { path: "flows/settings", component: cast(FlowSettings), layout: "dashboardShell", tab: "/flows/settings" },
+  { path: "flows/pipeline", component: cast(FlowPipeline), layout: "dashboardShell", tab: "/flows/pipeline" },
   { path: "flows/trace/:ref", component: cast(FlowTrace), layout: "dashboardShell", tab: "/flows/trace/:ref" },
   { path: "flows/:flow", component: cast(Flow), layout: "dashboardShell", tab: "/flows/:flow" },
   { path: "decisions/stacks", component: cast(DecisionStacks), layout: "dashboardShell", tab: "/decisions/stacks" },

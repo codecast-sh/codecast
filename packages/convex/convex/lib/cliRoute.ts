@@ -6,6 +6,12 @@ import { httpAction } from "../_generated/server";
 import { internal } from "../_generated/api";
 import { cliErrorReply } from "./cliErrorStatus";
 
+const CLI_CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type",
+};
+
 export type CliRouteOptions = { forwardDeviceId?: boolean };
 
 export function registerCliRoute(
@@ -20,11 +26,7 @@ export function registerCliRoute(
   // names a different machine than the caller's is fine.
   opts?: CliRouteOptions,
 ) {
-  const corsHeaders = {
-    "Access-Control-Allow-Origin": "*",
-    "Access-Control-Allow-Methods": "POST, OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
-  };
+  const corsHeaders = CLI_CORS_HEADERS;
   http.route({
     path,
     method: "POST",
@@ -75,14 +77,12 @@ export function registerCliRoute(
       }
     }),
   });
-  http.route({
-    path,
-    method: "OPTIONS",
-    handler: httpAction(async () => {
-      return new Response(null, {
-        status: 204,
-        headers: { ...corsHeaders },
-      });
-    }),
-  });
+  registerCliPreflight(http, path);
 }
+
+/** The OPTIONS preflight a `cast` route answers: permissive CORS for POST. */
+export function registerCliPreflight(http: HttpRouter, path: string) {
+  http.route({ path, method: "OPTIONS", handler: cliPreflight });
+}
+
+const cliPreflight = httpAction(async () => new Response(null, { status: 204, headers: CLI_CORS_HEADERS }));

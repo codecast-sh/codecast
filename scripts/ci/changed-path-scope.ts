@@ -70,8 +70,10 @@ export const JOB_AREAS: Record<string, Area[]> = {
   // About 750 of 1,220 web test files reach convex and 680 reach electron.
   "test-web": ["web", "convex", "electron", "shared", "platform"],
   // Also runs the eval home's unit tests. About 160 files import convex, and
-  // about 60 reach a README under docs/ through decisionKit.ts.
-  "test-cli": ["cli", "evals", "convex", "docs", "shared", "platform"],
+  // about 60 reach a README under docs/ through decisionKit.ts. About 180
+  // reach the browser extension, which the CLI carries for cloud hosts
+  // (browser/hostExtension.ts reads packages/browser-extension/shipped.mjs).
+  "test-cli": ["cli", "evals", "convex", "docs", "shared", "platform", "extension"],
   // The mirror's own job: its package tests, and the drift check. Every other
   // job lists "platform" too, because the mirror is a dependency of all of
   // them and is its own area, not part of "shared".

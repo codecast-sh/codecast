@@ -6,7 +6,7 @@
 export const EARLY_ROUTES = [
   { path: /^\/flows\/?$/, module: "app/flows/page.tsx" },
   { path: /^\/flows\/settings\/?$/, module: "app/flows/settings/page.tsx" },
-  { path: /^\/flows\/(?!settings\/?$|trace\/)[^/]+\/?$/, module: "app/flows/[flow]/page.tsx" },
+  { path: /^\/flows\/(?!settings\/?$|pipeline\/?$|trace\/)[^/]+\/?$/, module: "app/flows/[flow]/page.tsx" },
 ] as const satisfies readonly { path: RegExp; module: string }[];
 
 export type EarlyRouteModule = (typeof EARLY_ROUTES)[number]["module"];

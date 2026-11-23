@@ -119,8 +119,8 @@ export type SessionCardViewProps = {
   ship?: SessionShip | null;
   /** A plain click opens; the panel reads the event for ⌘/shift selection gestures. */
   onSelect: (session: InboxSession, e?: React.MouseEvent) => void;
-  onDismiss?: (id: string) => void;
-  onStash?: (id: string, e: React.MouseEvent) => void;
+  /** A live card's Close (store closeSession): sets a running session aside, closes the rest. */
+  onClose?: (id: string) => void;
   onDefer?: (id: string) => void;
   onPin?: (id: string, e: React.MouseEvent) => void;
   onRestore?: (id: string) => void;

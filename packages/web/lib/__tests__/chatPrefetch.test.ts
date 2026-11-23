@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { chatPrefetchTargets, createChatPrefetcher, CHAT_PREFETCH_INTERVAL, type ChatPrefetchNotification, type ChatPrefetchTarget } from "../chatPrefetch";
+import { chatPrefetchTargets, createChatPrefetcher, offRailChatNotificationMessageIds, CHAT_PREFETCH_INTERVAL, type ChatPrefetchNotification, type ChatPrefetchTarget } from "../chatPrefetch";
 import type { ChatMessageRow, ChatRailRow } from "../../store/chatSlice";
 
 const row = (channelId: string, tip = `${channelId}-tip`, at = 1, rootId?: string): ChatRailRow => ({
@@ -197,5 +197,30 @@ describe("the prefetch worker", () => {
     expect(h.errors).toHaveLength(1);
     expect(h.calls).toHaveLength(2);
     expect(h.cache["good-tip"]).toBeDefined();
+  });
+});
+
+describe("off-rail chat notifications (personal or other-team workspace)", () => {
+  const msgA = "j17sxbc0000000000000000000000001";
+  const msgB = "j17sxbc0000000000000000000000002";
+  const msgOld = "j17sxbc0000000000000000000000003";
+
+  test("fetches fresh unread chat notifications outside the active team's rail and skips held/stale/on-rail ones", () => {
+    const now = 1_000_000;
+    const activeRail = new Set(["ch-active"]);
+    const held = new Set([msgB]);
+    const list = [
+      // Fresh DM in another workspace while in Personal/Codecast workspace -> must fetch!
+      { entity_type: "chat_channel", entity_id: "ch-littlebird-dm", chat_message_id: msgA, read: false, created_at: now - 1_000 },
+      // Duplicate notification pointing at same message -> deduped
+      { entity_type: "chat_channel", entity_id: "ch-littlebird-dm", chat_message_id: msgA, read: false, created_at: now - 500 },
+      // Already in store -> skipped
+      { entity_type: "chat_channel", entity_id: "ch-littlebird-dm", chat_message_id: msgB, read: false, created_at: now - 1_000 },
+      // Channel already on active rail (handled by rail prefetcher) -> skipped
+      { entity_type: "chat_channel", entity_id: "ch-active", chat_message_id: "j17sxbc0000000000000000000000004", read: false, created_at: now - 1_000 },
+      // Stale historical notification -> skipped so cold boot never fetches old departed rooms
+      { entity_type: "chat_channel", entity_id: "ch-departed", chat_message_id: msgOld, read: false, created_at: now - 10 * 60_000 },
+    ];
+    expect(offRailChatNotificationMessageIds(list, activeRail, id => held.has(id), now)).toEqual([msgA]);
   });
 });

@@ -243,6 +243,104 @@ describe("line.cast offline run through the session path", () => {
     expect(s.filter((x) => x.prompt.includes("keep the old flag"))).toHaveLength(1);
   }, 30000);
 
+  // The real ship script runs the profile's ship command, which exits ship[i] on its i-th call (0, landed, after the
+  // list). Rebase exits rebases[i] on its i-th call (1 is a conflict); verify fails on the calls listed in vfails.
+  const seqLine = (ship: number[], { rebases = [] as number[], vfails = [] as number[] } = {}) => {
+    if (!fs.existsSync(path.join(tmpDir, ".git"))) spawnSync("git", ["init", "-q", tmpDir]);
+    fs.mkdirSync(path.join(tmpDir, ".codecast"), { recursive: true });
+    const counter = (name: string) => {
+      const f = path.join(tmpDir, name);
+      fs.rmSync(f, { force: true });
+      return `n=$(( $(cat "${f}" 2>/dev/null || echo 0) + 1 )); echo "$n" > "${f}"`;
+    };
+    fs.writeFileSync(path.join(tmpDir, "ship-cmd.sh"), `${counter("ship-n")}\ncodes=(${ship.join(" ")})\nc=\${codes[$((n-1))]:-0}\nif [ "$c" -eq 7 ]; then echo "CI is red on PR #12: auth.test.ts expected 2, got 3"; exit 7; fi\nif [ "$c" -eq 3 ]; then echo "main moved (try $n)"; exit 3; fi\necho "merged as abc123"\n`);
+    fs.writeFileSync(path.join(tmpDir, ".codecast", "line.toml"), `[line.commands]\nship = "bash ${path.join(tmpDir, "ship-cmd.sh")}"\n`);
+    const castStub = path.join(tmpDir, "cast-stub");
+    fs.writeFileSync(castStub, `#!/bin/bash\nif [ "$1 $2" = "ws path" ]; then echo "${tmpDir}"; fi\n`, { mode: 0o755 });
+    const graph = offlineLine(tmpDir);
+    graph.nodes.get("verify")!.script = `${counter("verify-n")}; case " ${vfails.join(" ")} " in *" $n "*) echo "check failed $n"; exit 1;; esac; true`;
+    graph.nodes.get("rebase")!.script = `${counter("rebase-n")}; codes=(${rebases.join(" ")}); c=\${codes[$((n-1))]:-0}; if [ "$c" -eq 1 ]; then echo '{"rebased": false, "landed": false, "why": "conflicted"}'; exit 1; fi; echo '{"rebased": true, "landed": false, "why": "on origin/main"}'`;
+    graph.nodes.get("ship")!.script = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES.line).nodes.get("ship")!.script!.replaceAll("cast ", `${castStub} `);
+    return graph;
+  };
+  const ended = () => calls.filter((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status !== "running").map((c) => `${c.body.node_id}:${c.body.node_status}`);
+  const runEnd = () => calls.find((c) => c.route === "/cli/workflow-runs/progress" && (c.body.run_status === "failed" || c.body.run_status === "completed"))?.body;
+  const gates = () => calls.filter((c) => c.route === "/cli/workflow-runs/gate").length;
+  const shipEnds = () => ended().filter((n) => n.startsWith("ship:"));
+
+  test("one Ship answer covers the fix rounds: CI red twice goes back to the builder, each approved fix lands without a card, and green watches", async () => {
+    gateAnswers = ["S"];
+    expect(await runWorkflow(seqLine([7, 7]), opts({ runId: "run_1" }))).toBe("completed");
+    expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "review", "card_write", "implement", "review", "implement", "review"]);
+    // One card, one question, one answer.
+    expect(gates()).toBe(1);
+    expect(gateAnswers).toEqual([]);
+    expect(shipEnds()).toEqual(["ship:failed", "ship:failed", "ship:completed"]);
+    expect(ended().filter((n) => n.startsWith("card_draft:") || n.startsWith("decide:"))).toEqual(["card_draft:completed", "decide:completed"]);
+    expect(ended().slice(-2)).toEqual(["watch:completed", "exit:completed"]);
+  }, 60000);
+
+  test("CI red at ship goes back to the builder with the run's brief, three rounds a run, and a fourth red stops the run not shipped", async () => {
+    gateAnswers = ["S"];
+    expect(await runWorkflow(seqLine([7, 7, 7, 7]), opts({ runId: "run_1" }))).toBe("failed");
+    expect(stations()).toEqual(["ground", "analyze", "prove", "implement", "review", "card_write", "implement", "review", "implement", "review", "implement", "review"]);
+    expect(gates()).toBe(1);
+    const dir = lineRunDir(tmpDir, "line-ct-7");
+    const builds = spawns().filter((x) => x.station === "implement");
+    expect(builds[0].prompt).not.toContain('"ci_red_rounds"');
+    builds.slice(1).forEach((b, i) => {
+      expect(b.prompt).toContain(`Ship: {"ci_red_rounds": ${i + 1}}`);
+      expect(b.prompt).toContain(`the CI brief, the same text as the task's latest blocker comment, is \`${dir}/run_1-ci-brief.md\``);
+    });
+    expect(fs.readFileSync(path.join(dir, "run_1-ci-brief.md"), "utf-8")).toBe("CI is red on PR #12: auth.test.ts expected 2, got 3\n");
+    expect(shipEnds()).toEqual(["ship:failed", "ship:failed", "ship:failed", "ship:failed"]);
+    expect(ended().filter((n) => n.startsWith("rebase:"))).toEqual(["rebase:completed", "rebase:completed", "rebase:completed", "rebase:completed"]);
+    expect(ended().some((n) => n.startsWith("watch:"))).toBe(false);
+    expect(runEnd()?.node_id).toBe("ci_red");
+    expect(runEnd()?.fail_reason).toStartWith("Stopped: Not shipped: CI stayed red after three rounds back to the builder.");
+  }, 60000);
+
+  test("a later run on the task counts its own CI rounds: the run before it ending at ci_red takes none of them", async () => {
+    gateAnswers = ["S"];
+    expect(await runWorkflow(seqLine([7, 7, 7, 7]), opts({ runId: "run_1" }))).toBe("failed");
+    expect(runEnd()?.node_id).toBe("ci_red");
+    calls = []; spawnCount = 0; stationOf = {}; gateAnswers = ["S"];
+    task = { short_id: "ct-7", title: "Add the thing", status: "open", steps: [], assignee: "infra-lead" };
+    expect(await runWorkflow(seqLine([7, 7, 7]), opts({ runId: "run_2" }))).toBe("completed");
+    expect(shipEnds()).toEqual(["ship:failed", "ship:failed", "ship:failed", "ship:completed"]);
+    expect(spawns().filter((x) => x.station === "implement")[1].prompt).toContain('Ship: {"ci_red_rounds": 1}');
+  }, 120000);
+
+  // After a Ship answer: three red-CI rounds and three other rounds, in any order.
+  test("three red-CI rounds, each with a failed check inside it, land", async () => {
+    gateAnswers = ["S"];
+    // verify 1 is the first build's. Each CI round's first verify fails (2, 4, 6) and its second passes.
+    expect(await runWorkflow(seqLine([7, 7, 7], { vfails: [2, 4, 6] }), opts({ runId: "run_1" }))).toBe("completed");
+    expect(shipEnds()).toEqual(["ship:failed", "ship:failed", "ship:failed", "ship:completed"]);
+    expect(gates()).toBe(1);
+  }, 120000);
+
+  test.each([
+    ["a red-CI round, then three conflicts", [7], [0, 1, 1, 1]],
+    ["three conflicts, then a red-CI round", [7], [1, 1, 1]],
+  ])("%s land in either order", async (_, ship, rebases) => {
+    gateAnswers = ["S"];
+    expect(await runWorkflow(seqLine(ship, { rebases }), opts({ runId: "run_1" }))).toBe("completed");
+    expect(ended().filter((n) => n === "rebase:failed")).toHaveLength(3);
+    expect(shipEnds()).toEqual(["ship:failed", "ship:completed"]);
+    expect(gates()).toBe(1);
+  }, 120000);
+
+  test("the default branch moving three times after the Ship answer, between three red-CI rounds, still lands; a fourth time stops it", async () => {
+    gateAnswers = ["S"];
+    expect(await runWorkflow(seqLine([3, 7, 3, 7, 3, 7]), opts({ runId: "run_1" }))).toBe("completed");
+    expect(shipEnds()).toEqual(["ship:failed", "ship:failed", "ship:failed", "ship:failed", "ship:failed", "ship:failed", "ship:completed"]);
+    calls = []; spawnCount = 0; stationOf = {}; gateAnswers = ["S"];
+    task = { short_id: "ct-7", title: "Add the thing", status: "open", steps: [], assignee: "infra-lead" };
+    expect(await runWorkflow(seqLine([3, 3, 3, 3]), opts({ runId: "run_2" }))).toBe("failed");
+    expect(runEnd()?.fail_reason).toContain("max_visits=4 exceeded on rebase");
+  }, 120000);
+
   test("a cause ground parks never builds", async () => {
     effects.ground = () => { task = { ...task, ...grounded, goal_ref: "none" }; };
     const outcome = await runWorkflow(offlineLine(tmpDir), opts());
@@ -285,12 +383,14 @@ describe("line.cast offline run through the session path", () => {
     expect(calls.some((c) => c.route === "/cli/work/comment" && c.body.comment_type === "blocker")).toBe(false);
   });
 
-  test("a hand that never settles fails its node, which ends the hand, and the task returns to open", async () => {
+  // A hand that keeps working runs to its cap (handWatch.ts); one that goes quiet without settling is given up on at
+  // its quiet window, here the run's 30 ms.
+  test("a hand that goes quiet without settling fails its node, which ends the hand, and the task returns to open", async () => {
     const settle = globalThis.fetch;
     globalThis.fetch = (async (url: any, init: any) => {
       if (String(url).endsWith("/cli/inbox")) {
         calls.push({ route: "/cli/inbox", body: JSON.parse(init.body) });
-        return new Response(JSON.stringify({ sessions: [{ id: "conv_1", work_state: "working", is_live: true }] }), { status: 200 });
+        return new Response(JSON.stringify({ sessions: [{ id: "conv_1", work_state: "idle", is_live: true }] }), { status: 200 });
       }
       return settle(url, init);
     }) as typeof fetch;
@@ -298,7 +398,7 @@ describe("line.cast offline run through the session path", () => {
     expect(outcome).toBe("failed");
     expect(calls.some((c) => c.route === "/cli/workflow-runs/progress" && c.body.node_status === "failed" && c.body.session_id === "s1")).toBe(true);
     expect(calls.find((c) => c.route === "/cli/work/update")?.body).toMatchObject({ short_id: "ct-7", status: "open" });
-    expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("ran out of time");
+    expect(calls.find((c) => c.route === "/cli/work/comment")?.body.text).toContain("showed no work");
     expect(calls.filter((c) => c.route === "/cli/spawn")).toHaveLength(1);
   }, 30000);
 
@@ -310,7 +410,7 @@ describe("line.cast offline run through the session path", () => {
     globalThis.fetch = (async (url: any, init: any) => {
       if (String(url).endsWith("/cli/inbox")) {
         calls.push({ route: "/cli/inbox", body: JSON.parse(init.body) });
-        return new Response(JSON.stringify({ sessions: [{ id: "conv_1", work_state: "working", is_live: true }] }), { status: 200 });
+        return new Response(JSON.stringify({ sessions: [{ id: "conv_1", work_state: "idle", is_live: true }] }), { status: 200 });
       }
       return settle(url, init);
     }) as typeof fetch;

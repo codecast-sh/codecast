@@ -6,6 +6,23 @@ const USER = "users_me" as any;
 const LAPTOP = "laptop";
 
 describe("collectMigrationCandidates", () => {
+  // A bulk move leaves closed sessions where they are, as it does killed ones:
+  // moving one would have to resume it there. They wake on the old machine.
+  test("a closed or killed session is not a candidate, by either path", async () => {
+    const now = Date.now();
+    const closed = { user_id: USER, owner_device_id: LAPTOP, status: "active", inbox_dismissed_at: 5, inbox_closed_at: 5 };
+    const conversations = [
+      { _id: "conversations_seat", _creationTime: 1, ...closed, standing_role_id: "roles_1" },
+      { _id: "conversations_killed", _creationTime: 2, user_id: USER, owner_device_id: LAPTOP, status: "completed", inbox_dismissed_at: 5, inbox_killed_at: 5 },
+      { _id: "conversations_open", _creationTime: 3, user_id: USER, owner_device_id: LAPTOP, status: "active" },
+      { _id: "conversations_live_closed", _creationTime: 4, ...closed, owner_device_id: "elsewhere" },
+    ];
+    const managed_sessions = [{ _id: "managed_sessions_1", user_id: USER, conversation_id: "conversations_live_closed", last_heartbeat: now - 30_000 }];
+    const ctx = { db: makeFakeDb({ conversations, managed_sessions }) } as any;
+    const ids = (await collectMigrationCandidates(ctx, USER, [{ device_id: LAPTOP }])).map((c) => String(c._id));
+    expect(ids).toEqual(["conversations_open"]);
+  });
+
   // A machine that spawns workers creates hundreds of conversations a day, so a
   // session started yesterday is past the per-device creation window while it is
   // still running. The resource sheet then had nothing to judge it by.

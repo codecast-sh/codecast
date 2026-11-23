@@ -1642,7 +1642,7 @@ export function registerEngineCommands(br: Command, deps: PublishDeps): void {
   // and a clone-only verb asked for the real Chrome dies in ctxFor before a
   // tab is pinned in a browser it will then refuse.
   // `pane` offers a page to the reader over the backend and never opens a tab.
-  const NO_TAB_NEEDED = new Set(["open", "do", "viewport", "status", "tab", "tabs", "start", "stop", "reap", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane", "unsubscribe", "subscriptions", "subscription", "handoff"]);
+  const NO_TAB_NEEDED = new Set(["open", "do", "viewport", "status", "tab", "tabs", "start", "stop", "reap", "profiles", "shots", "dialogs", "audit", "target", "bridge-host", "pane", "unsubscribe", "subscriptions", "subscription", "handoff", "sync"]);
   br.option("--tab <name>", "A tab of your own under this name, for parallel workers sharing one session (or CAST_BROWSER_TAB)")
     .addOption(new Option("--session <name>", "Same as --tab").hideHelp())
     .option("--deadline <seconds>", `Give up on a verb after this long, naming what it waited on (default ${DEFAULT_DEADLINE_S}, 0 for none; or ${DEADLINE_ENV})`);

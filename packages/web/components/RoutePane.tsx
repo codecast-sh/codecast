@@ -81,6 +81,7 @@ const Decisions = lazyPage("@/app/decisions/page", () => import("@/app/decisions
 // The flows app: every flow, from a finding to a shipped, watched change (the-line-end-to-end.md LE13).
 const Flows = lazyPage("@/app/flows/page", () => import("@/app/flows/page"));
 const FlowSettings = lazyPage("@/app/flows/settings/page", () => import("@/app/flows/settings/page"));
+const FlowPipeline = lazyPage("@/app/flows/pipeline/page", () => import("@/app/flows/pipeline/page"));
 const FlowTrace = lazyPage("@/app/flows/trace/[ref]/page", () => import("@/app/flows/trace/[ref]/page"));
 // One flow's page, by its owner's handle (flows.md FL0).
 const Flow = lazyPage("@/app/flows/[flow]/page", () => import("@/app/flows/[flow]/page"));
@@ -231,6 +232,7 @@ const ROUTES: RouteEntry[] = [
   { pattern: /^\/line\/trace\/([^/]+)$/, paramNames: ["ref"], component: LineTrace },
   { pattern: /^\/line\/([^/]+)$/, paramNames: ["project"], component: LineWorkspace },
   { pattern: /^\/flows\/settings$/, paramNames: [], component: FlowSettings },
+  { pattern: /^\/flows\/pipeline$/, paramNames: [], component: FlowPipeline },
   { pattern: /^\/flows\/trace\/([^/]+)$/, paramNames: ["ref"], component: FlowTrace },
   { pattern: /^\/flows\/([^/]+)$/, paramNames: ["flow"], component: Flow },
   { pattern: /^\/threads$/, paramNames: [], component: Threads },

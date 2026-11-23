@@ -14,7 +14,9 @@
 // Same deps pattern as prCommand.ts: index.ts hands in config access, this
 // module stays importable by tests.
 
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
+import { readFileSync } from "node:fs";
+import { hostname } from "node:os";
 import { apiPost, type PublishDeps } from "./castApi.js";
 import { commandGroup } from "./commandGroups.js";
 import { gitTry } from "./gitPlane.js";
@@ -31,9 +33,19 @@ export type MarkOptions = {
   team?: string;
   dirty?: string;
   deploy?: string;
+  via?: string;
+  machine?: string;
+  changes?: string;
   dryRun?: boolean;
   json?: boolean;
 };
+
+/** What one push changed on the surface, by name (`fn:<module>:<export>`, `index:<table>.<index>`, ...), and when its
+ *  diff read prod (prod-diff's `read_at`). */
+export type PushChanges = { adds?: string[]; drops?: string[]; changes_read_at?: number };
+
+/** The pushes that put each name on the surface: `cast ship added-by`. A dev push (the dev watcher's) is no deploy, so it has no dp-N. */
+export type AddedBy = { name: string; deploy: string | null; dev_push: boolean; by: string | null; machine: string | null; via: string | null; at: number; dirty: number; committed_in?: string };
 
 /** The checkout the command stands in: its GitHub repository and HEAD. */
 export type LocalCheckout = { repository: string | null; head: string | null };
@@ -43,7 +55,7 @@ async function readCheckout(cwd: string = process.cwd()): Promise<LocalCheckout>
 }
 
 /** The body `/cli/changes/mark-deploy` takes; flags win over the checkout. */
-export function markBody(options: MarkOptions, local: LocalCheckout): { repository: string; surface: string; sha: string; version?: string; dirty?: number; deploy?: string } {
+export function markBody(options: MarkOptions, local: LocalCheckout, changes: PushChanges = {}, machine: string = hostname(), now: number = Date.now()): { repository: string; surface: string; sha: string; version?: string; dirty?: number; deploy?: string; via?: string; machine?: string; adds?: string[]; drops?: string[]; changes_read_age_ms?: number } {
   const repository = options.repo ?? local.repository;
   if (!repository) throw new Error("No GitHub repository here: run inside a checkout with a GitHub origin, or pass --repo <owner/name>.");
   const sha = options.sha ?? local.head;
@@ -54,7 +66,38 @@ export function markBody(options: MarkOptions, local: LocalCheckout): { reposito
     ...(options.version ? { version: options.version } : {}),
     ...(dirty > 0 ? { dirty } : {}),
     ...(options.deploy ? { deploy: options.deploy } : {}),
+    // A push's own record (deploy.sh, the dev watcher) names the machine it came from.
+    ...(options.via ? { via: options.via } : {}),
+    ...(options.via || options.machine ? { machine: options.machine ?? machine } : {}),
+    // Both lists go exactly when the diff ran, empty or not: the server reads their presence as "this push's changes are known".
+    // How long ago the diff read prod, not when: the server dates it on its own clock, so a laptop's skew cannot.
+    ...(changes.adds && changes.drops ? { adds: changes.adds, drops: changes.drops, ...(changes.changes_read_at ? { changes_read_age_ms: readAge(changes.changes_read_at, now) } : {}) } : {}),
   };
+}
+
+/** Milliseconds since a diff read prod, by this machine's clock (never negative). */
+export const readAge = (readAt: number, now: number = Date.now()): number => Math.max(0, Math.round(now - readAt));
+
+/** `--changes <file>`: the JSON prod-diff writes, `{ adds, drops, read_at }`. */
+export function readChanges(path: string | undefined): PushChanges {
+  if (!path) return {};
+  // An unreadable file loses the lists, never the mark: the push went out and is still recorded.
+  let raw: any;
+  try { raw = JSON.parse(readFileSync(path, "utf-8")); } catch { return {}; }
+  const names = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : undefined);
+  const adds = names(raw?.adds), drops = names(raw?.drops);
+  const readAt = typeof raw?.read_at === "number" && Number.isFinite(raw.read_at) ? raw.read_at : undefined;
+  return adds && drops ? { adds, drops, ...(readAt ? { changes_read_at: readAt } : {}) } : {};
+}
+
+/** Each name with the push that put it there, a line each. */
+export function formatAddedBy(found: AddedBy[]): string {
+  return found.map((f) => {
+    const how = f.dev_push ? "dev watcher push" : f.dirty > 0 ? `push with ${f.dirty} uncommitted file${f.dirty === 1 ? "" : "s"}` : "push of a commit";
+    const who = [f.by, f.machine ? `on ${f.machine}` : null].filter(Boolean).join(" ");
+    const since = f.committed_in ? `; committed since (${f.committed_in} carried it)` : "";
+    return `${f.name}  ${f.deploy && !f.dev_push ? `${f.deploy} ` : ""}${how}${who ? ` by ${who}` : ""}, ${new Date(f.at).toLocaleString()}${since}`;
+  }).join("\n");
 }
 
 /** The plan as the popover says it: what, where, then each step. */
@@ -134,6 +177,9 @@ Configure it in .codecast/workspace.toml:
   check = "cast check"     # run in the checkout before anything leaves; "" skips
   tests = true             # also run the test files the ship changes
   level = true             # the daemon keeps this checkout level with upstream
+  flow = "change"          # run each pass through this named flow instead (cast flow run change --checkout);
+                           # it plans, checks, lands and deploys, so --plan, --hold, --only, --commits-only,
+                           # --message, --no-check, --no-push, --no-deploy and --no-fetch are refused
 
   [[ship.deploy]]
   name = "convex"
@@ -163,7 +209,7 @@ A push that upstream rejected because it moved is replayed and retried on its ow
     .action(async (options: import("./land/shipCheckoutCli.js").CheckoutOptions) => {
       const { runCheckoutCommand } = await import("./land/shipCheckoutCli.js");
       try {
-        await runCheckoutCommand(options, (body) => apiPost(deps, "/cli/deploys/ship-pass", body, { exitOnError: false }));
+        await runCheckoutCommand(options, (body) => apiPost(deps, "/cli/deploys/ship-pass", body, { exitOnError: false }), undefined, (path, body) => apiPost(deps, path, body, { exitOnError: false }));
       } catch (err) {
         console.error(String((err as Error)?.message ?? err));
         process.exit(1);
@@ -179,10 +225,13 @@ A push that upstream rejected because it moved is replayed and retried on its ow
     .option("--team <name|id>", "The team, when more than one of yours works on the repository")
     .option("--dirty <n>", "Files under the surface's sources that went out uncommitted with the sha")
     .option("--deploy <dp-N>", "The deploy this finishes: one codecast asked for, whose path now says what went out")
+    .addOption(new Option("--via <path>", "What pushed it (records the machine too)").choices(["deploy.sh", "dev watcher"]))
+    .option("--machine <name>", "The machine it was pushed from (default: this one's hostname, with --via)")
+    .option("--changes <file>", "JSON { adds, drops, read_at }: what the push put on the surface and took off it, by name, and when that was read")
     .option("--dry-run", "Print the marker without recording it")
     .option("--json", "Machine-readable output")
     .action(async (options: MarkOptions) => {
-      const body = markBody(options, await (deps.checkout ?? readCheckout)());
+      const body = markBody(options, await (deps.checkout ?? readCheckout)(), readChanges(options.changes));
       const label = `${body.surface}${body.version ? ` ${body.version}` : ""} at ${body.sha.slice(0, 7)} on ${body.repository}`;
       if (options.dryRun) {
         console.log(options.json ? JSON.stringify({ dry_run: true, ...body }, null, 2) : `Would mark ${label}`);
@@ -197,5 +246,23 @@ A push that upstream rejected because it moved is replayed and retried on its ow
       }
       const result = await apiPost(deps, "/cli/changes/mark-deploy", { ...body, ...(team_id ? { team_id } : {}) });
       console.log(options.json ? JSON.stringify(result, null, 2) : `${c.green}✓${c.reset} Marked ${label}`);
+    });
+
+  ship.command("added-by")
+    .description("For each name a push would take off a surface, the recorded push that put it there")
+    .requiredOption("--surface <name>", "The surface: backend, web, ...")
+    .option("--names <file>", "JSON { drops } or a JSON array of names (default: the names given as arguments)")
+    .option("--repo <owner/name>", "The repository (default: this checkout's GitHub origin)")
+    .option("--json", "Machine-readable output")
+    .argument("[names...]", "Names such as index:voiceprints.by_user or fn:apiTokens:createToken")
+    .action(async (names: string[], options: { surface: string; names?: string; repo?: string; json?: boolean }) => {
+      const fromFile = options.names ? JSON.parse(readFileSync(options.names, "utf-8")) : null;
+      const asked = [...names, ...(Array.isArray(fromFile) ? fromFile : fromFile?.drops ?? [])].filter((n): n is string => typeof n === "string");
+      const repository = options.repo ?? (await (deps.checkout ?? readCheckout)()).repository;
+      if (!repository) throw new Error("No GitHub repository here: run inside a checkout with a GitHub origin, or pass --repo <owner/name>.");
+      const result = asked.length
+        ? (await apiPost(deps, "/cli/deploys/added-by", { repository, surface: options.surface, names: asked }, { read: true })) as { found: AddedBy[] }
+        : { found: [] };
+      console.log(options.json ? JSON.stringify(result, null, 2) : formatAddedBy(result.found ?? []));
     });
 }

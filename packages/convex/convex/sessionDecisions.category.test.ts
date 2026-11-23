@@ -1,54 +1,59 @@
 import { describe, expect, test } from "bun:test";
-import { assignCategory, pinnedCategory } from "./lib/decisionCategory";
-
-const twoOptions = [
-  { label: "Keep vendored", description: "no change" },
-  { label: "Switch to upstream", description: "one afternoon of work" },
-];
+import { adoptedCategory, assignCategory, categoryFor, isHumanOnlyCategory } from "./lib/decisionCategory";
 
 describe("category assignment", () => {
-  test("an option naming a deploy to production pins the protected category", () => {
-    const { category, pinned } = assignCategory(
-      { question: "How do we ship the fix?", options: [{ label: "Deploy to production now" }, { label: "Wait for the batch" }] },
-      "approach",
-    );
-    expect(category).toBe("production");
-    expect(pinned).toBe(true);
+  test("the asker's proposal stands, open or protected", () => {
+    expect(assignCategory("approach")).toBe("approach");
+    expect(assignCategory("production")).toBe("production");
+    expect(isHumanOnlyCategory(assignCategory("data"))).toBe(true);
   });
 
-  test("an open proposal stands when nothing pins", () => {
-    expect(assignCategory({ question: "Which parser?", options: twoOptions }, "approach")).toEqual({ category: "approach", pinned: false });
+  test("no proposal is review, which a role may answer under a grant", () => {
+    expect(assignCategory(undefined)).toBe("review");
+    expect(isHumanOnlyCategory(assignCategory(undefined))).toBe(false);
   });
 
-  test("no proposal and nothing pinned is unknown (human held)", () => {
-    expect(assignCategory({ question: "Which parser?", options: twoOptions }, undefined).category).toBe("unknown");
+  test("a proposal outside the vocabulary is a person's, never an open category", () => {
+    expect(assignCategory("deploy")).toBe("unknown");
+    expect(assignCategory("security")).toBe("unknown");
+    expect(isHumanOnlyCategory(assignCategory("money"))).toBe(true);
+  });
+});
+
+describe("categoryFor", () => {
+  const fresh = { current: null, runDeclares: false, runs: false };
+  test("a new agent card: the proposal, else review", () => {
+    expect(categoryFor(undefined, fresh)).toBe("review");
+    expect(categoryFor("billing", fresh)).toBe("billing");
   });
 
-  test("a proposal outside the vocabulary is ignored", () => {
-    expect(assignCategory({ question: "Which parser?", options: twoOptions }, "whatever").category).toBe("unknown");
+  test("the run's own ask takes the flow's word, else a person", () => {
+    expect(categoryFor(undefined, { current: null, runDeclares: true, runs: true })).toBe("unknown");
+    expect(categoryFor("review", { current: null, runDeclares: true, runs: true })).toBe("review");
   });
 
-  test("option cost and risk strings are not scanned: a priced approach decision stays approach", () => {
-    const r = assignCategory(
-      {
-        question: "Which parser?",
-        options: [
-          { label: "Keep vendored", cost: "$0", risk: "drift" },
-          { label: "Switch to upstream", cost: "$2k and one afternoon", risk: "purchase a support plan later" },
-        ],
-      },
-      "approach",
-    );
-    expect(r).toEqual({ category: "approach", pinned: false });
-    // The same words in a label still pin.
-    expect(pinnedCategory({ question: "Which parser?", options: [{ label: "Purchase the pro parser" }, { label: "Keep" }] })).toBe("billing");
+  test("a station's new card is a person's unless it proposes a person's category", () => {
+    const station = { current: null, runDeclares: false, runs: true };
+    expect(categoryFor(undefined, station)).toBe("unknown");
+    expect(categoryFor("review", station)).toBe("unknown");
+    expect(categoryFor("access", station)).toBe("access");
   });
 
-  test("deletion, purchase, access and external messages each pin their category", () => {
-    expect(pinnedCategory({ question: "Clean up?", options: [{ label: "Delete the old rows" }, { label: "Keep" }] })).toBe("data");
-    expect(pinnedCategory({ question: "Tooling?", options: [{ label: "Buy the pro plan" }, { label: "Stay free" }] })).toBe("billing");
-    expect(pinnedCategory({ question: "Onboarding?", options: [{ label: "Grant access to the repo" }, { label: "Wait" }] })).toBe("access");
-    expect(pinnedCategory({ question: "Customer?", options: [{ label: "Send the email today" }, { label: "Hold" }] })).toBe("external");
-    expect(pinnedCategory({ question: "Cap?", options: [{ label: "Raise the limit to 500" }, { label: "Keep 100" }] })).toBe("limit");
+  test("a re-ask or edit keeps the category without a proposal; on a run's card a proposal only tightens", () => {
+    expect(categoryFor(undefined, { current: "production", runDeclares: false, runs: false })).toBe("production");
+    expect(categoryFor("scope", { current: "production", runDeclares: false, runs: false })).toBe("scope");
+    expect(categoryFor("review", { current: "unknown", runDeclares: false, runs: true })).toBe("unknown");
+    expect(categoryFor("production", { current: "review", runDeclares: false, runs: true })).toBe("production");
+    // A row from before categories keeps a person's hold.
+    expect(categoryFor(undefined, { current: undefined, runDeclares: false, runs: false })).toBe("unknown");
+  });
+});
+
+describe("adoptedCategory", () => {
+  test("a gate keeps a person's category the station named, and otherwise sets its own, else a person's", () => {
+    expect(adoptedCategory("production", "review")).toBe("production");
+    expect(adoptedCategory("unknown", "review")).toBe("review");
+    expect(adoptedCategory("unknown", undefined)).toBe("unknown");
+    expect(adoptedCategory("approach", "data")).toBe("data");
   });
 });

@@ -11,6 +11,7 @@ export * from "./daemonCommands";
 export * from "./rewindFiles";
 export * from "./sshAttach";
 export * from "./agentClients";
+export * from "./agentPins";
 export * from "./executionBinding";
 export * from "./modelOptions";
 export * from "./agentDefinitions";
@@ -25,6 +26,7 @@ export * from "./liveActivity";
 // so web, mobile and the CLI light the same cards.
 export * from "./sessionRead";
 export * from "./loopState";
+export * from "./closedSession";
 export * from "./taskStats";
 export * from "./threadState";
 export * from "./subagentFleet";

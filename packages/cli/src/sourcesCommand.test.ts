@@ -5,7 +5,7 @@ import { SCOPE, SITE, useCliHarness } from "./externalDataCli.testHarness.js";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { formatSourceDetail, formatSourceList, recordInCodecastJson, sourceAddBody, testBatch, type SourceRow } from "./sourcesCommand.js";
+import { formatSourceDetail, formatSourceList, promoteList, recordInCodecastJson, sourceAddBody, testBatch, type SourceRow } from "./sourcesCommand.js";
 import { codecastJsonPath, committedIngestKey, writeCodecastJson } from "./codecastJson.js";
 
 describe("sourceAddBody", () => {
@@ -27,6 +27,14 @@ describe("sourceAddBody", () => {
       fingerprint_prefix: "union",
       promote: ["new", "spike"],
     });
+  });
+
+  test("--promote none is an explicit empty list; an absent flag leaves the default to the server", () => {
+    expect(sourceAddBody("sentry", "web", { promote: "none" })).toMatchObject({ promote: [] });
+    expect(sourceAddBody("sentry", "web", { promote: " None " })).toMatchObject({ promote: [] });
+    expect(sourceAddBody("sentry", "web", {})).not.toHaveProperty("promote");
+    expect(promoteList(undefined)).toBeUndefined();
+    expect(promoteList("new, regressed")).toEqual(["new", "regressed"]);
   });
 
   test("a setting for another provider is refused; where a vendor source reads is its connection's, so there is no --host", () => {

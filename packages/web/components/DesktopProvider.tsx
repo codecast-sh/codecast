@@ -207,7 +207,9 @@ export function DesktopProvider() {
         const body = cleanNotificationBody(n.message) || n.message;
         // The same click target the bell computes: a chat banner lands on the
         // message, a task banner on the task — not just "the app, focused".
-        const route = notificationRoute(n.entity_type, n.entity_id, n.chat_message_id) ?? undefined;
+        // A notification's own in-app link wins, as it does in the bell (notificationHref); an absolute
+        // link (an artifact page, a trigger on the web) is not a route the desktop router can take.
+        const route = (n.link?.startsWith("/") ? n.link : undefined) ?? notificationRoute(n.entity_type, n.entity_id, n.chat_message_id) ?? undefined;
         // Chat's "already on screen" rule is channel + thread, not path. The
         // shell only sees `/chat/<id>`, so a thread reply while you sit on the
         // channel floor used to look like you were already reading it and the

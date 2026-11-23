@@ -1,0 +1,118 @@
+// The offload review's commands, with no web-only dependency so the phone's
+// offload screen runs the same ones: preflight is the read-only
+// resourceOffload.preflight query whose checks tighten the planner's readiness;
+// rehearse, start, retry, cancel and background priority are the store's
+// local-first actions. The caller says how a failure reaches the person.
+import { useMemo, useState } from "react";
+import { useConvex } from "convex/react";
+import { api as _api } from "@codecast/convex/convex/_generated/api";
+import type { ResourceOffloadIntent } from "@codecast/shared/contracts/resourceOffloadIntent";
+import { useInboxStore } from "../store/inboxStore";
+import type { MigrationBatch } from "../lib/migrationPlan";
+import type { OffloadPlan, OffloadSelection, ResourceActions, ResourceSession } from "../components/resources/types";
+import { applyRehearsals, type RehearsalRow } from "../lib/resourceOffload";
+
+const api = _api as any;
+
+export type Check = { session_id: string; destination_id: string; blockers: string[]; pending: string[]; passed: string[]; unconfirmed: string[] };
+export type Preflight = { at: number; checks: Check[] };
+
+/** The most sessions one server call checks or rehearses (resourceOffload.preflight, moveRehearsals.request). */
+const SERVER_CHUNK = 50;
+const inChunks = <T,>(all: T[]) => Array.from({ length: Math.ceil(all.length / SERVER_CHUNK) }, (_, i) => all.slice(i * SERVER_CHUNK, (i + 1) * SERVER_CHUNK));
+
+/** A dry run is evidence for a few minutes; after that the planner's view stands alone. */
+const PREFLIGHT_TTL_MS = 5 * 60_000;
+const union = (a: string[], b: string[]) => [...new Set([...a, ...b])];
+
+/**
+ * Overlay a server dry run on the latest plan. Conservative both ways: a
+ * blocker or pending item from either side stays, so a newer planner blocker
+ * is never hidden by an older preflight.
+ */
+export function applyPreflight(plan: OffloadPlan, pre: Preflight | undefined, now: number): OffloadPlan {
+  if (!pre || now - pre.at > PREFLIGHT_TTL_MS || !pre.checks.length) return plan;
+  return {
+    ...plan,
+    candidates: plan.candidates.map((c) => {
+      const mine = pre.checks.filter((k) => k.session_id === c.sessionId && c.perDestination[k.destination_id]);
+      if (!mine.length) return c;
+      const perDestination = { ...c.perDestination };
+      for (const k of mine) {
+        const was = perDestination[k.destination_id];
+        const blockers = union(was.blockers, k.blockers);
+        const pending = union(was.pending, k.pending);
+        perDestination[k.destination_id] = {
+          ...was,
+          readiness: blockers.length ? "blocked" : pending.length ? "preflight_required" : "ready",
+          blockers, pending,
+          passed: union(was.passed ?? [], k.passed).filter((p) => !pending.includes(p)),
+        };
+      }
+      return { ...c, perDestination };
+    }),
+  };
+}
+
+const rehearsalRequestId = () => `rh_${crypto.randomUUID().replace(/-/g, "").slice(0, 20)}`;
+
+const clientBatchId = () => `rb_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
+
+/** `fail` gets every failure with the surface it came from; `notice` a plain message. */
+export type OffloadCommandReporting = { fail: (surface: string) => (e: unknown) => void; notice: (text: string) => void };
+
+type OffloadCommands = Pick<ResourceActions, "onPreflight" | "onRehearse" | "onStartOffload" | "onRetry" | "onCancel" | "onSetBackground">;
+
+export function useOffloadCommands(sessions: ResourceSession[], plans: OffloadPlan[], batches: MigrationBatch[], now: number, rehearsals: RehearsalRow[], { fail, notice }: OffloadCommandReporting) {
+  const convex = useConvex();
+  const [preflight, setPreflight] = useState<Record<string, Preflight>>({});
+  const byId = useMemo(() => new Map(sessions.map((s) => [s.sessionId, s])), [sessions]);
+
+  const toServer = (sel: OffloadSelection[]) => sel.flatMap((s) => {
+    const conv = byId.get(s.sessionId)?.conversationId;
+    return conv ? [{ conversation_id: conv, session_id: s.sessionId, destination_id: s.destinationId, attested: s.attested, ...(s.bring?.length ? { bring: s.bring } : {}) }] : [];
+  });
+  const sourceOf = (sel: OffloadSelection[]) => byId.get(sel[0]?.sessionId)?.deviceId;
+  const start = (intent: ResourceOffloadIntent) => {
+    useInboxStore.getState().startResourceOffload(intent)
+      .then((res: { error?: string } | undefined) => { if (res?.error) notice(res.error); })
+      .catch(fail("resources.start"));
+  };
+
+  const commands: OffloadCommands = {
+    onPreflight: (sel) => {
+      const source = sourceOf(sel);
+      if (!source) return;
+      // A busy machine offers more sessions than one call checks.
+      Promise.all(inChunks(toServer(sel)).map((selections) => convex.query(api.resourceOffload.preflight, { source_device_id: source, selections, wait_for_idle_ms: 10 * 60_000 })))
+        .then((res: Array<{ checks: Check[] }>) => setPreflight((m) => ({ ...m, [source]: { at: Date.now(), checks: res.flatMap((r) => r.checks) } })))
+        .catch(fail("resources.preflight"));
+    },
+    // The machine holding the sessions rehearses each move; its answers arrive through the store.
+    onRehearse: (sel) => {
+      const source = sourceOf(sel);
+      const asked = toServer(sel).map(({ conversation_id, session_id, destination_id }) => ({ conversation_id, session_id, destination_id }));
+      if (!source) return;
+      for (const selections of inChunks(asked)) useInboxStore.getState().requestMoveRehearsals({ request_id: rehearsalRequestId(), source_device_id: source, selections }).catch(fail("resources.rehearse"));
+    },
+    onStartOffload: (sel, { waitForTurnMs }) => {
+      const source = sourceOf(sel);
+      const selections = toServer(sel);
+      if (!source || !selections.length) { notice("These sessions are not reporting which machine they run on yet; try again in a moment"); return undefined; }
+      const id = clientBatchId();
+      start({ client_batch_id: id, source_device_id: source, selections, wait_for_idle_ms: waitForTurnMs });
+      return id;
+    },
+    onRetry: (batchId, sessionId) => {
+      const intent = batches.find((b) => b.batch_id === batchId)?.resource_offload;
+      const selections = intent?.selections.filter((s) => s.session_id === sessionId || s.conversation_id === sessionId) ?? [];
+      if (!intent || !selections.length) { notice("This move was not started from Resources; retry it from Settings → Migration"); return; }
+      start({ ...intent, client_batch_id: clientBatchId(), selections });
+    },
+    onCancel: (batchId) => { useInboxStore.getState().cancelResourceOffload(batchId).catch(fail("resources.cancel")); },
+    onSetBackground: (deviceId, sessionId, background) => { useInboxStore.getState().setSessionBackground(deviceId, sessionId, background).catch(fail("resources.background")); },
+  };
+
+  const checkedPlans = useMemo(() => plans.map((p) => applyRehearsals(applyPreflight(p, preflight[p.deviceId], now), rehearsals)), [plans, preflight, now, rehearsals]);
+  return { commands, plans: checkedPlans, byId };
+}

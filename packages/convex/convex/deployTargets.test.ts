@@ -95,6 +95,29 @@ describe("publishing targets (DP10)", () => {
   });
 });
 
+describe("the newest commit's targets stand (DP10, pipeline.md PL5)", () => {
+  const pub = (ctx: any, targets: any[], head?: { sha: string; at: number }, device = "ana-mac") =>
+    (publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, targets, device_id: device, root: "/repo", ...(head ? { head_sha: head.sha, head_at: head.at } : {}) });
+
+  test("a fresher checkout's set retires what it no longer declares; an older commit's set is refused and changes nothing", async () => {
+    const t = await seed();
+    const ctx = ctxFor(t);
+    // Published before any commit was named: four targets, as an old clone declares them.
+    await pub(ctx, TARGETS);
+    const fresh = await pub(ctx, TARGETS.slice(0, 2), { sha: sha(9), at: 9_000 });
+    expect(fresh.refused).toBeUndefined();
+    expect(t.deploy_targets.filter((r) => !r.retired_at).map((r) => r.name)).toEqual(["backend", "web"]);
+    expect(t.deploy_targets.find((r) => r.name === "backend")).toMatchObject({ head_sha: sha(9), head_at: 9_000 });
+    const stale = await pub(ctx, TARGETS, { sha: sha(3), at: 3_000 }, "old-mac");
+    expect(stale.refused).toContain("newer commit");
+    expect(t.deploy_targets.filter((r) => !r.retired_at).map((r) => [r.name, r.device_id])).toEqual([["backend", "ana-mac"], ["web", "ana-mac"]]);
+    expect((await pub(ctx, TARGETS)).refused).toContain("newer commit");
+    expect((await pub(ctx, TARGETS.slice(0, 2), { sha: sha(9), at: 9_000 })).refused).toBeUndefined();
+    expect((await pub(ctx, TARGETS, { sha: sha(12), at: 12_000 })).refused).toBeUndefined();
+    expect(t.deploy_targets.filter((r) => !r.retired_at).map((r) => r.name)).toEqual(["backend", "web", "cli"]);
+  });
+});
+
 describe("the waiting queue (DP12)", () => {
   test("the commits on main after the live sha that touch a target wait for it, by session, each with its CI", async () => {
     const { t, ctx } = await published();
@@ -238,6 +261,34 @@ describe("deploying a target from codecast (DP13)", () => {
     expect(JSON.parse(t.daemon_commands[0].args)).toEqual({ deploy: "dp-1", root: "/repo" });
     expect(t.daemon_commands[0]).toMatchObject({ command: "line_deploy", target_device_id: "ana-mac" });
     await expect((request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend" })).rejects.toThrow(/already going out/);
+  });
+
+  test("a deploy names the commit it makes live: on the default branch, after the live one, and its commits stop there", async () => {
+    const { t, ctx } = await published();
+    t.deploy_targets.find((r) => r.name === "backend").command = "./deploy-api.sh --sha $sha";
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }], NOW - 30_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(1), repository: REPO, source: "m", at: NOW - 25_000 });
+    await pushMain(t, ctx, [{ n: 2, files: ["api/b.ts"], conv: "conv_api_work" }], NOW - 20_000);
+    await pushMain(t, ctx, [{ n: 3, files: ["api/c.ts"] }], NOW - 10_000);
+    const r = await (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend", sha: sha(2).slice(0, 9) });
+    expect(r).toMatchObject({ action: "deploy", sha: sha(2), commits: 1 });
+    expect(t.deploys.find((d) => d.short_id === r.short_id)).toMatchObject({ status: "requested", sha: sha(2), previous_sha: sha(1) });
+    expect(t.deploys.find((d) => d.short_id === r.short_id).commits.map((c: any) => c.sha)).toEqual([sha(2)]);
+  });
+
+  test("a named commit that is not on main, not after the live one, or that the command cannot send is refused, saying why", async () => {
+    const { t, ctx } = await published();
+    t.deploy_targets.find((r) => r.name === "backend").command = "./deploy-api.sh --sha $sha";
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts", "cli/a.ts"] }, { n: 2, files: ["api/b.ts", "cli/b.ts"] }], NOW - 30_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "backend", sha: sha(2), repository: REPO, source: "m", at: NOW - 25_000 });
+    const ask = (more: Record<string, unknown>) => (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend", ...more });
+    await expect(ask({ sha: "f".repeat(40) })).rejects.toThrow(`is not a commit on ${REPO}'s default branch as codecast has read it`);
+    await expect(ask({ sha: sha(2) })).rejects.toThrow("is already live on backend");
+    await expect(ask({ sha: sha(1) })).rejects.toThrow("is older than what is live on backend");
+    await expect(ask({ sha: sha(2), action: "rollback" })).rejects.toThrow("sha names the commit of a deploy");
+    // The cli target's command sends the tree it runs in (no $sha): only main's head can be pinned.
+    await expect((request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "cli", sha: sha(1) })).rejects.toThrow(`cli's command sends the tree it runs in, not a sha, so it ships main's head (${sha(2).slice(0, 10)}), not ${sha(1).slice(0, 10)}`);
+    expect(await (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "cli", sha: sha(2) })).toMatchObject({ sha: sha(2) });
   });
 
   test("a target that deploys on push has nothing to send; a tree-sending command cannot redeploy a sha; no rollback, no rollback", async () => {

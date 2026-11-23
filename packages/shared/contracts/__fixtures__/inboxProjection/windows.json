@@ -189,7 +189,7 @@
         "questions": 0,
         "pinned": 3,
         "new": 0,
-        "needs_input": 6,
+        "needs_input": 5,
         "done": 0,
         "dormant": 0,
         "working": 0,
@@ -203,7 +203,7 @@
         "questions": 0,
         "pinned": 0,
         "new": 0,
-        "needs_input": 0,
+        "needs_input": 1,
         "done": 0,
         "dormant": 0,
         "working": 0,
@@ -214,7 +214,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "6319bed1ec4be5d3",
+    "set_digest": "6419c06471b2058e",
     "placements": {
       "dismissedoldrowz1500000000000000": [
         "dismissed",
@@ -234,7 +234,7 @@
       "horizonedgeinz130000000000000000": [
         "needs_input",
         "needs_input",
-        false
+        true
       ],
       "killeddismissedpinnedz2100000000": [
         "dismissed",

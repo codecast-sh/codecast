@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { orderTargets, rebuiltOnly, rollbackTarget, sessionTargets, targetNow, targetTone, teamRowOfView, type DeployTargetRow, type TeamDeployRow } from "../targets";
+import { isMineCommit, mineOnly, orderTargets, prOfSubject, rebuiltOnly, rollbackTarget, sessionTargets, targetNow, targetTone, teamRowOfView, type DeployTargetRow, type TeamDeployRow } from "../targets";
 
 const target = (name: string, over: Partial<DeployTargetRow> = {}, groups: DeployTargetRow["queue"]["groups"] = []): DeployTargetRow => ({
   _id: `r#${name}`, workspace: "team:t", team_id: "t", name, repository: "o/r", runs: "here", policy: "press", command: "x", rollback: null, paths: [],
@@ -21,6 +21,12 @@ describe("targetNow", () => {
     expect(n.failed?._id).toBe("dp-3");
     expect(n.open).toBeNull();
     expect(n.history.map((x) => x._id)).toEqual(["dp-3", "dp-2", "dp-1"]);
+  });
+  test("a deploy asked for before the live one is not going out: a newer deploy superseded it", () => {
+    const d = [dp("dp-1969", "web", "requested", 1), dp("dp-2299", "web", "live", 5)];
+    expect(targetNow(target("web"), d).open).toBeNull();
+    const after = [...d, dp("dp-2400", "web", "running", 9)];
+    expect(targetNow(target("web"), after).open?._id).toBe("dp-2400");
   });
   test("roll back goes to the newest earlier live deploy on another sha", () => {
     const d = [dp("dp-1", "web", "live", 1), dp("dp-2", "web", "live", 2, { sha: "sha-dp-1" }), dp("dp-3", "web", "live", 3)];
@@ -72,6 +78,13 @@ describe("a deploy alone", () => {
     const row = teamRowOfView(view as any, "team:x");
     expect(row).toMatchObject({ workspace: "team:x", short_id: "dp-28", action: "deploy", started_by: "Ada", commits: 3, sessions: [{ conversation_id: "conv1" }], tasks: [{ short_id: "ct-1", title: "Fix it" }] });
     expect(row.commit_rows?.map((c) => c.sha)).toEqual(["c1", "c2", "c3"]);
+    // A view without a push record reads as a clean row.
+    expect(row).toMatchObject({ dirty: null, machine: null, pushed_via: null, adds_count: 0, drops_count: 0 });
+  });
+  test("carries how the push got there as counts, never the names", () => {
+    const row = teamRowOfView({ ...view, dirty: 3, machine: "ana-mac", pushed_via: "deploy.sh", adds: ["fn:a:b"], drops: ["index:t.i", "table:t"] } as any, "team:x");
+    expect(row).toMatchObject({ dirty: 3, machine: "ana-mac", pushed_via: "deploy.sh", adds_count: 1, drops_count: 2 });
+    expect(row).not.toHaveProperty("drops");
   });
   test("is a rebuild only when it sent the sha already live", () => {
     const base = { status: "live" as const, action: "deploy" as const, commits: 0 };
@@ -79,5 +92,33 @@ describe("a deploy alone", () => {
     expect(rebuiltOnly({ ...base, sha: "b", previous_sha: null })).toBe(true);
     expect(rebuiltOnly({ ...base, sha: "b", previous_sha: "a" })).toBe(false);
     expect(rebuiltOnly({ ...base, commits: 2, sha: "a", previous_sha: "a" })).toBe(false);
+    // Uncommitted files went out: something new, even on the same sha.
+    expect(rebuiltOnly({ ...base, sha: "a", previous_sha: "a", dirty: 3 })).toBe(false);
+  });
+});
+
+describe("the viewer's pull requests in the queue", () => {
+  test("a squash merge's trailing (#N) becomes the PR number and leaves the subject", () => {
+    expect(prOfSubject("Gate reuses a floor pass (sd-4131) (#4431)")).toEqual({ pr: 4431, subject: "Gate reuses a floor pass (sd-4131)" });
+    expect(prOfSubject("Give the production broker web search")).toEqual({ pr: null, subject: "Give the production broker web search" });
+    expect(prOfSubject("Fix (#12) in the middle")).toEqual({ pr: null, subject: "Fix (#12) in the middle" });
+    expect(prOfSubject("Merge pull request #12 from a/b")).toEqual({ pr: 12, subject: "Merge pull request #12 from a/b" });
+  });
+  test("a commit is mine by GitHub login or name, ignoring case", () => {
+    const me = { login: "JasonBenn", name: "Jason Benn" };
+    expect(isMineCommit("jasonbenn", me)).toBe(true);
+    expect(isMineCommit("Jason Benn", me)).toBe(true);
+    expect(isMineCommit("Ashot Petrosian", me)).toBe(false);
+    expect(isMineCommit(null, me)).toBe(false);
+    expect(isMineCommit("x", { login: null, name: null })).toBe(false);
+  });
+  test("mine keeps only my commits, drops groups without any, and recomputes the group's CI", () => {
+    const c = (sha: string, author: string, ci: "passed" | "failed") => ({ sha, subject: "s", at: 1, author, session: null, tasks: [], ci, ci_url: null });
+    const groups = [
+      { key: "s:a", session: null, ci: "failed" as const, commits: [c("1", "JasonBenn", "passed"), c("2", "Ashot", "failed")] },
+      { key: "s:b", session: null, ci: "passed" as const, commits: [c("3", "Ashot", "passed")] },
+    ];
+    const out = mineOnly(groups, { login: "JasonBenn", name: null });
+    expect(out.map((g: any) => [g.key, g.commits.map((x: any) => x.sha), g.ci])).toEqual([["s:a", ["1"], "passed"]]);
   });
 });

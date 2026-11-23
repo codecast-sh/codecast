@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { computeCoverage, computeUnplaced, withUnplaced, type CoverageInputs, type UnplacedInputs } from "./orgCoverage";
+import { computeCoverage, computeUnplaced, unplacedOrUnread, withUnplaced, type CoverageInputs, type UnplacedInputs } from "./orgCoverage";
 
 // Coverage (docs/architecture/initiatives-projects-role-page.md I1, I2): pure
 // over rows, so the before count the analyzer states, the work outside any
@@ -207,9 +207,9 @@ describe("unplaced work (ct-95900)", () => {
     ...over,
   });
 
-  test("lists open plans with no project from their own counts, newest activity first, an old empty draft left out", () => {
+  test("lists open plans with no project from their own counts, those with open work first then newest, an old empty draft left out", () => {
     const u = computeUnplaced(inputs());
-    expect(u.plans.map((p) => p.short_id)).toEqual(["pl-1043", "pl-6", "pl-792"]);
+    expect(u.plans.map((p) => p.short_id)).toEqual(["pl-1043", "pl-792", "pl-6"]);
     expect(u.plans[0]).toEqual({ short_id: "pl-1043", title: "Onboarding conversion", status: "active", open_tasks: 9, done_tasks: 7, created_at: NOW - 5 * D, age_days: 5, last_activity_at: NOW - D, driver: s("jx1") });
   });
 
@@ -239,5 +239,31 @@ describe("unplaced work (ct-95900)", () => {
     const c = withUnplaced(computeCoverage(base()), computeUnplaced(inputs()));
     expect(c.outside.plans).toEqual([{ short_id: "pl-1043", title: "Onboarding conversion", open_tasks: 9 }, { short_id: "pl-792", title: "WhatsApp channel", open_tasks: 2 }]);
     expect(c.unplaced?.projects[0].title).toBe("Trade budget allocation");
+  });
+});
+
+describe("unplaced: the cap never drops a plan with open work for newer empty ones (review finding 5)", () => {
+  test("one older plan with open tasks survives 45 newer empty plans, and reaches outside.plans", () => {
+    const NOW = 1_800_000_000_000;
+    const D = 86_400_000;
+    const empty = Array.from({ length: 45 }, (_, i) => ({ short_id: `pl-e${i}`, title: `Empty ${i}`, status: "draft", created_at: NOW - D, updated_at: NOW - i * 1000, tasks: { open: 0, done: 0, last_at: null }, driver: null }));
+    const working = { short_id: "pl-old", title: "Old with work", status: "active", created_at: NOW - 20 * D, updated_at: NOW - 20 * D, tasks: { open: 3, done: 1, last_at: NOW - 20 * D }, driver: null };
+    const u = computeUnplaced({ now: NOW, plans: [...empty, working], projects: [], loose_tasks: [], sessions: [] });
+    expect(u.plans[0].short_id).toBe("pl-old");
+    expect(u.truncated).toBe(true);
+    expect(withUnplaced(computeCoverage(base()), u).outside.plans).toEqual([{ short_id: "pl-old", title: "Old with work", open_tasks: 3 }]);
+  });
+});
+
+describe("a failed unplaced read never fails the answer (review finding 3)", () => {
+  test("the failure becomes unplaced_unread with its reason; coverage keeps its sampled outside.plans", async () => {
+    const read = await unplacedOrUnread(Promise.reject(new Error("Too many reads in a single function execution (limit: 4096).\nmore")));
+    expect(read).toEqual({ unread: "Too many reads in a single function execution (limit: 4096)." });
+    const before = computeCoverage(base());
+    const c = withUnplaced(before, read);
+    expect(c.unplaced).toBeUndefined();
+    expect(c.unplaced_unread).toBe("Too many reads in a single function execution (limit: 4096).");
+    expect(c.outside.plans).toEqual(before.outside.plans);
+    expect(await unplacedOrUnread(Promise.resolve(null))).toBeNull();
   });
 });

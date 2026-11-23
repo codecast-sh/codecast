@@ -23,7 +23,7 @@ import { canAccessChannel } from "./chatAccess";
 import type { VendorGate } from "./lib/vendorGuard";
 import type { AskModel, StatedGoals } from "./lib/statedGoals";
 import { goalModelAsk, readGoalCandidates, readSaid, readStatedGoals } from "./orgSaid";
-import { computeCoverage, withUnplaced } from "./lib/orgCoverage";
+import { computeCoverage, unplacedOrUnread, withUnplaced } from "./lib/orgCoverage";
 import { planDriverRefs, readUnplaced } from "./orgUnplaced";
 import { isActiveTask } from "@codecast/shared/tasks";
 import { DAILY_CAP_KEYS, type LandedCommit } from "@codecast/shared/contracts/orgCapacity";
@@ -88,6 +88,7 @@ import { mintProjectShortId } from "./lib/projectShortId";
 type Ctx = { db: any };
 
 import { ANALYSIS_WINDOW_MS, IDLE_ROLE_DAYS, WAKE_HISTORY_DAYS, ANALYSIS_CAPS, LANDING_WINDOW_MS, LONG_RUNNING_MIN_AGE_MS } from "./lib/orgAnalysisCaps";
+import { roleCharterOf } from "./lib/roleCharter";
 export { ANALYSIS_WINDOW_MS, IDLE_ROLE_DAYS, WAKE_HISTORY_DAYS, ANALYSIS_CAPS, LANDING_WINDOW_MS, LONG_RUNNING_MIN_AGE_MS } from "./lib/orgAnalysisCaps";
 
 const bump = (m: Map<string, number>, k: string, by = 1) => m.set(k, (m.get(k) ?? 0) + by);
@@ -306,7 +307,7 @@ export async function computeAnalysisOrg(ctx: Ctx, userId: Id<"users">, teamId: 
       reports_to: parent,
       scope: scopeNames,
       whole_workspace: isWholeWorkspaceRole(role),
-      charter: (role.charter ?? "").slice(0, 400) || undefined,
+      charter: (await roleCharterOf(ctx, role)).slice(0, 400) || undefined,
       standing: !!role.anchor_id,
       checked_at: role.checked_at ?? null,
       hands,
@@ -617,7 +618,7 @@ export async function computeAnalysisActivity(ctx: Ctx, userId: Id<"users">, tea
   const userNames: Record<string, string> = {};
   for (const i of initiatives) if (i.owner?.kind === "user") userNames[String(i.owner.user_id)] ??= (await ctx.db.get(i.owner.user_id))?.name ?? "";
   // The session driving each open plan a goal lists (ct-95899).
-  const drivers = await planDriverRefs(ctx, plans, initiatives);
+  const drivers = await planDriverRefs(ctx, userId, plans, initiatives);
   const coverage = computeCoverage({ projects, plans: plans.map((p: any) => ({ ...p, driver: drivers.get(String(p._id)) ?? null })), tasks, roles: scan.roles, areas: activity.areas, initiatives, userNames });
   return { activity, coverage, repos: reposFromScan(scan) };
 }
@@ -824,7 +825,7 @@ export const analysisInputs = action({
       ctx.runQuery(part, { ...args, part: "work", now }),
       ctx.runQuery(part, { ...args, part: "activity", now, tasks }),
       // What reaches no goal, from whole tables, in its own read budget (ct-95900).
-      ctx.runQuery((api as any).orgUnplaced.part, { ...args, now }),
+      unplacedOrUnread(ctx.runQuery((api as any).orgUnplaced.part, { ...args, now })),
     ]);
     if (!work) return null;
     const [org, signals, goalRead] = await Promise.all([
@@ -1192,10 +1193,11 @@ export async function applyScope(ctx: Ctx, userId: Id<"users">, boundary: Bounda
 // person's accept authorises.
 export async function applyCharterEdit(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgCharterEditChange, opts: ApplyOpts): Promise<ApplyResult> {
   const role = await liveRole(ctx, boundary, p.handle);
-  const edited = applyCharterEdits(role.charter ?? "", p.edits);
+  const current = await roleCharterOf(ctx, role);
+  const edited = applyCharterEdits(current, p.edits);
   if (edited.error !== undefined) return { status: "error", error: `@${role.handle}'s charter: ${edited.error}` };
   const charter = edited.charter;
-  if (charter === (role.charter ?? "").trim()) return { status: "applied", note: `@${role.handle}: charter unchanged`, role: roleRef(role) };
+  if (charter === current) return { status: "applied", note: `@${role.handle}: charter unchanged`, role: roleRef(role) };
   await performUpdateRole(ctx, userId, { role_id: String(role._id), charter, human_decision: opts.human_decision });
   const did = p.edits.map((e) => (e.op === "replace" ? "a passage rewritten" : e.op === "add" ? "a line added" : "a passage cut"));
   return { status: "applied", note: `@${role.handle}: charter ${did.join(", ")} (${charter.length} characters)`, role: roleRef(role) };

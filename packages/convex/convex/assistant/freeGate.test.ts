@@ -127,7 +127,10 @@ describe("the Free gate", () => {
 
     // The test cannot read the mailed code, so it sets one it knows.
     await t.run(async (ctx) => ctx.db.patch(code!._id, { code_hash: await sha256("123456") }));
-    await expect(authed.mutation(api.assistant.entry.confirmEmailProof, { code: "000000", conversation_id: conversationId })).rejects.toThrow(/not right/);
+    // A wrong code is returned, not thrown: the try it cost has to commit (lib/emailProof).
+    expect(await authed.mutation(api.assistant.entry.confirmEmailProof, { code: "000000", conversation_id: conversationId })).toEqual({ resumed: false, error: "That code is not right" });
+    expect((await t.run((ctx) => ctx.db.get(code!._id)))?.attempts).toBe(1);
+    expect((await view(t, conversationId)).conversation?.hosted_stop).toBe("verify");
     faux.setResponses([reply("Lisbon it is. Here's a plan.")]);
     const confirmed = await authed.mutation(api.assistant.entry.confirmEmailProof, { code: "123456", conversation_id: conversationId });
     expect(confirmed.resumed).toBe(true);

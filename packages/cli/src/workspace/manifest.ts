@@ -166,7 +166,7 @@ function validateSync(raw: unknown, file?: string): SyncSpec | undefined {
 function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
   if (raw === undefined) return undefined;
   if (!isPlainObject(raw)) throw new ManifestError("'ship' must be a table", file, "ship");
-  const known = new Set(["mode", "check", "tests", "level", "deploy"]);
+  const known = new Set(["mode", "check", "tests", "level", "deploy", "flow"]);
   for (const key of Object.keys(raw)) {
     if (!known.has(key)) throw new ManifestError(`unknown key in [ship]: '${key}'`, file, `ship.${key}`);
   }
@@ -177,6 +177,9 @@ function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
   for (const key of ["tests", "level"] as const) {
     if (raw[key] !== undefined && typeof raw[key] !== "boolean") throw new ManifestError(`'ship.${key}' must be true or false`, file, `ship.${key}`);
   }
+  const flow = raw["flow"];
+  if (flow !== undefined && (typeof flow !== "string" || !flow.trim())) throw new ManifestError("'ship.flow' must name a flow", file, "ship.flow");
+  if (typeof flow === "string" && flow.trim() === "default") throw new ManifestError("'ship.flow' must name the flow a pass ships through: shipping never takes a workspace's default flow", file, "ship.flow");
   const deployRaw = raw["deploy"] ?? [];
   if (!Array.isArray(deployRaw)) throw new ManifestError("'ship.deploy' must be an array of tables ([[ship.deploy]])", file, "ship.deploy");
   const deploy = deployRaw.map((step, i): ShipDeployStep => {
@@ -194,7 +197,7 @@ function validateShip(raw: unknown, file?: string): ShipSpec | undefined {
     const when = typeof step["when"] === "string" ? [step["when"]] : validateStringArray(step["when"], `${at}.when`, file);
     return { name, when, run, stage };
   });
-  return { mode, check, tests: (raw["tests"] as boolean | undefined) ?? true, level: (raw["level"] as boolean | undefined) ?? false, deploy };
+  return { mode, check, tests: (raw["tests"] as boolean | undefined) ?? true, level: (raw["level"] as boolean | undefined) ?? false, deploy, ...(flow !== undefined ? { flow: (flow as string).trim() } : {}) };
 }
 
 /** A repo-relative path or glob: no absolute paths, no `..`, nothing under .git. */

@@ -8,6 +8,7 @@ import { query } from "./_generated/server";
 import type { Doc, Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { canAccessConversation, canAccessTask, workspaceGrantsAccess } from "./lib/access";
+import { pushSummary } from "./deployTargetsState";
 
 export const whereIs = query({
   args: { ref: v.string() },
@@ -77,6 +78,8 @@ export const recentForTeam = query({
         source: d.source,
         started_by: d.started_by?.name ?? null,
         note: d.note ?? null,
+        // The targets view feeds the same store rows (teamDeploys) and a row is replaced whole: both send what the push was.
+        ...pushSummary(d),
         commits: d.commits?.length ?? 0,
         // What it took out, change by change: each commit with the session that wrote it and the tasks it names.
         commit_rows: await Promise.all((d.commits ?? []).slice(0, COMMIT_ROWS).map(async (c) => ({

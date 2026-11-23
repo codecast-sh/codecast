@@ -106,6 +106,7 @@ describe("planMigration", () => {
     const { rows, skipped } = planMigration({
       conversations: [
         { ...base, _id: "killed", owner_device_id: LAPTOP, inbox_killed_at: 1 },
+        { ...base, _id: "closed", owner_device_id: LAPTOP, inbox_dismissed_at: 1, inbox_closed_at: 1 },
         { ...base, _id: "sub", owner_device_id: LAPTOP, is_subagent: true, held: "a subagent moves with its parent" },
         { ...base, _id: "busy", owner_device_id: LAPTOP, migration: { batch_id: "mg-old" } },
         { ...base, _id: "placing", owner_device_id: BOX, cloud_placement: "pending" },
@@ -118,6 +119,8 @@ describe("planMigration", () => {
     expect(rows).toEqual([]);
     const reasons = Object.fromEntries(skipped.map((s) => [s.conversation_id, s.reason]));
     expect(reasons.killed).toContain("killed");
+    // A bulk move leaves a closed session where it is (it wakes there), as it does a killed one.
+    expect(reasons.closed).toContain("closed");
     expect(reasons.sub).toContain("subagent");
     expect(reasons.busy).toContain("mg-old");
     expect(reasons.placing).toContain("placed");
@@ -331,6 +334,16 @@ describe("beginSession — the fence", () => {
     expect(canDaemonSeePendingMessage(msg as any, conv(db, "c1"), ME as any, LAPTOP)).toBe(false);
     // ...while an unfenced sibling still delivers to its owner.
     expect(canDaemonSeePendingMessage(msg as any, conv(db, "c2"), ME as any, LAPTOP)).toBe(true);
+  });
+
+  test("a session closed after the plan fails its row and is not fenced", async () => {
+    const db = fixtures();
+    const { rows } = await startedBatch(db, ["c1"]);
+    Object.assign(conv(db, "c1"), { inbox_dismissed_at: 7, inbox_closed_at: 7 });
+    const r = await performBeginSession({ db }, ME as any, { migration_id: rows[0].migration_id as any, device_id: LAPTOP }, NOW + 1);
+    expect(r).toEqual({ ok: false, reason: "the session was closed" });
+    expect(conv(db, "c1").migration).toBeUndefined();
+    expect(rowsOf(db)[0]).toMatchObject({ status: "failed", error: "the session was closed" });
   });
 
   test("only the executor may begin a row, and only once", async () => {

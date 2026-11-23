@@ -138,7 +138,7 @@ A repo declares one in .codecast/workspace.toml: [host] data = ["~/.local/share/
   },
   {
     token: "flow",
-    description: "Flows: the team's library (ls, show, run, import, publish, validate), its live flows (show, on, off), and a flow's profile, finders, steps, trials, deploys, judges and moments",
+    description: "Flows: the team's library (ls, show, run, import, publish, validate), this repository's pipeline, its live flows (show, on, off), and a flow's profile, finders, steps, trials, deploys, judges and moments",
     load: () => Promise.all([import("./flowCommand.js"), import("./lineCommand.js"), import("./flowVersionsCommand.js")]).then(([f, l, fv]) => (program: Command, deps: GroupDeps) => {
       const flow = f.registerFlowCommands(program, deps.flow);
       l.registerLineSubcommands(flow, deps);
@@ -588,6 +588,12 @@ host and token: cast integrations connect <provider>`,
     description: "A workspace's work as major events, oldest first: tasks opened and closed, changes landed",
     hasOptions: true,
     load: () => import("./timelineCommand.js").then((m) => m.registerTimelineCommand),
+  },
+  {
+    token: "typed",
+    description: "When you typed messages into codecast sessions, on every machine and workspace: time, session and length, no text",
+    hasOptions: true,
+    load: () => import("./typedCommand.js").then((m) => m.registerTypedCommand),
   },
   {
     token: "replay",

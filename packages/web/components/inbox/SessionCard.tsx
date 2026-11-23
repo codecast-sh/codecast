@@ -27,6 +27,7 @@ import { rosterDeviceOf, deviceWakesOnUse } from "../DeviceBadge";
 import { localDeviceIdOf } from "../../hooks/useLocalDeviceId";
 import { useTipActions, checkMilestone } from "../../tips";
 import { formatIdleDuration, sessionCardTitle } from "../../lib/sessionCard";
+import { pendingAsk } from "../../lib/conversationTitle";
 import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { ModernSessionCardView } from "./ModernSessionCard";
@@ -80,7 +81,7 @@ function leadRoleOf(session: { org_role_id?: string | null; standing_role_id?: s
 // The card's name off its own store row: the hosted name rule for hosted
 // rows, the session's title otherwise.
 function liveCardTitle(s: Parameters<typeof hostedRowTitle>[0], cardId: string, hosted: boolean, session: InboxSession): string {
-  return hosted ? hostedRowTitle(s, cardId) : sessionCardTitle(s.sessions[cardId] ?? session);
+  return hosted ? hostedRowTitle(s, cardId) : sessionCardTitle(s.sessions[cardId] ?? session, pendingAsk(s.pendingMessages[cardId]));
 }
 
 // The placement the Modern card reads where no section decides its word, as
@@ -114,10 +115,9 @@ export type SessionCardProps = Pick<
   SessionCardViewProps,
   | "session" | "isActive" | "isParentActive" | "isSelected" | "isUnread" | "isFavorite" | "sessionLabel"
   | "variant" | "sectionStatus" | "forkColorKey" | "subRow" | "roleSessions" | "hiddenRunningSubagents" | "foldedSubagentId"
-  | "onSelect" | "onDismiss" | "onDefer" | "onRestore" | "onKill" | "onNavigateToSession" | "onCardContextMenu" | "onPickCharacter"
+  | "onSelect" | "onClose" | "onDefer" | "onRestore" | "onKill" | "onNavigateToSession" | "onCardContextMenu" | "onPickCharacter"
 > & {
   globalIndex: number;
-  onStash?: (id: string) => void;
   onPin?: (id: string) => void;
 };
 
@@ -125,7 +125,6 @@ export { hostedRowTitle };
 
 export const SessionCard = memo(function SessionCard({
   session: row,
-  onStash,
   onPin,
   onNavigateToSession,
   globalIndex: _globalIndex,
@@ -329,10 +328,6 @@ export const SessionCard = memo(function SessionCard({
     tipActions.whisper("session.pin", e);
     if (!isPinned) checkMilestone("m-first-pin");
   }), [onPin, tipActions, isPinned]);
-  const handleStash = useMemo(() => onStash && ((id: string, e: React.MouseEvent) => {
-    onStash(id);
-    tipActions.whisper("session.stash", e);
-  }), [onStash, tipActions]);
   const openParent = useCallback(
     (id: string) => (onNavigateToSession ?? useInboxStore.getState().navigateToSession)(id),
     [onNavigateToSession],
@@ -387,7 +382,6 @@ export const SessionCard = memo(function SessionCard({
       selecting={selecting}
       onToggleSelect={toggleSelect}
       onPin={handlePin}
-      onStash={handleStash}
       onNavigateToSession={onNavigateToSession}
       onToggleFavorite={toggleFavorite}
       onOpenLabels={openLabels}

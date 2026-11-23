@@ -173,9 +173,10 @@ describe("classifyChangedPaths", () => {
     expect(ran(["infra/convex-host/Caddyfile"])).toEqual([]);
   });
 
-  // The cli files that read the extension's manifest run in test-always.
-  test("an extension change runs build only", () => {
-    expect(ran(["packages/browser-extension/background.js"])).toEqual(["build"]);
+  // The CLI carries the extension to cloud hosts (browser/hostExtension.ts),
+  // so an extension change runs the cli tests too.
+  test("an extension change runs build and the cli tests", () => {
+    expect(ran(["packages/browser-extension/background.js"])).toEqual(["build", "test-cli"]);
   });
 
   test("the electron tests rerun for the vendored @platform/desktop they require", () => {

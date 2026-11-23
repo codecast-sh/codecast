@@ -68,6 +68,31 @@ export interface VaultTarget {
 }
 
 /**
+ * Where a path from another machine would be in this machine's checkouts. A
+ * link in a teammate's session names their checkout
+ * (`/Users/jason/code/app/docs/x.md`), which does not exist here, but this
+ * machine usually has the same repository under the same folder name
+ * (`/Users/ada/src/app`). Each vault whose folder name appears in the path
+ * yields that vault's root joined with the rest of the path, outermost folder
+ * first; the caller asks the daemon which of them exist.
+ */
+export function sameNamedCheckoutPaths(abs: string, roots: ReadonlyArray<string>): string[] {
+  const segs = abs.split("/").filter(Boolean);
+  const found: { at: number; mapped: string }[] = [];
+  for (const root of roots) {
+    const clean = root.replace(/\/+$/, "");
+    const name = clean.slice(clean.lastIndexOf("/") + 1);
+    const at = segs.indexOf(name);
+    if (!name || at < 0) continue;
+    const mapped = [clean, ...segs.slice(at + 1)].join("/");
+    if (mapped !== abs && !found.some((f) => f.mapped === mapped)) found.push({ at, mapped });
+  }
+  // The outermost folder first: in `/code/app/docs/x.md` the checkout is
+  // `app`, and a vault that happens to be called `docs` is a worse guess.
+  return found.sort((a, b) => a.at - b.at).map((f) => f.mapped);
+}
+
+/**
  * Resolve a local path against the vaults this machine offers. Absolute paths
  * pick the vault whose root is their longest prefix; `~/…` expands against the
  * home directory the roots themselves reveal (the browser has no $HOME); a

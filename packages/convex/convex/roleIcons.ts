@@ -27,6 +27,7 @@ import {
   type RoleIcon, type RoleIconAccent,
 } from "@codecast/shared/contracts/roleIcon";
 import { ROLE_ICON_EXAMPLES } from "@codecast/shared/contracts/roleIconExamples";
+import { roleCharterOf } from "./lib/roleCharter";
 
 type Ctx = { db: any; storage?: any };
 
@@ -91,11 +92,6 @@ export const setIcon = mutation({
   },
 });
 
-/** The charter a drawer reads: the doc when the role has one, else the row's short text. */
-async function charterOf(ctx: Ctx, role: any): Promise<string> {
-  const doc = role.charter_doc_id ? await ctx.db.get(role.charter_doc_id) : null;
-  return String(doc?.content ?? role.charter ?? "").trim();
-}
 
 /** Everything a drawer needs for one role, model or agent. */
 async function iconBriefOf(ctx: Ctx, role: any, hint?: string): Promise<IconBrief> {
@@ -105,7 +101,7 @@ async function iconBriefOf(ctx: Ctx, role: any, hint?: string): Promise<IconBrie
     role_id: String(role._id),
     title: role.name,
     handle: role.handle,
-    charter: (await charterOf(ctx, role)) || undefined,
+    charter: (await roleCharterOf(ctx, role)) || undefined,
     hint: hint?.trim() || undefined,
     siblings: siblings.map((s) => ({ title: s.role.name, handle: s.role.handle, icon: s.icon })),
     // The house examples, minus one titled like this role, so a drawer never copies an answer.

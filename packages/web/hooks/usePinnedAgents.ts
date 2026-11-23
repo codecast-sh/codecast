@@ -4,30 +4,40 @@ import { fromConvexAgentType, pinnedAgentIds, pinnedPickerOptions, type AgentCli
 import { useInboxStore } from "../store/inboxStore";
 import { defaultAgentType, onlyHostedAgent } from "../lib/defaultAgent";
 
-/** The viewer's own pin list (users.pinned_agents), or null when they never
- *  set one. A joined string keeps the subscription quiet across user pushes. */
+/** The viewer's own pin list (users.pinned_agents) and the registry ids it
+ *  was chosen from (users.pinned_agents_known), or null when they never set
+ *  one. A joined string keeps the subscription quiet across user pushes. */
 function usePinKey(): string | null {
   return useInboxStore((s) => {
-    const pins = (s.currentUser as { pinned_agents?: string[] } | null | undefined)?.pinned_agents;
-    return pins ? pins.join(",") : null;
+    const user = s.currentUser as { pinned_agents?: string[]; pinned_agents_known?: string[] } | null | undefined;
+    if (!user?.pinned_agents) return null;
+    return `${user.pinned_agents.join(",")}|${user.pinned_agents_known ? user.pinned_agents_known.join(",") : "-"}`;
   });
 }
 
-function splitPins(key: string | null): string[] | null {
-  return key === null ? null : key.split(",").filter(Boolean);
+function splitPins(key: string | null): { pins: string[] | null; known: string[] | null } {
+  if (key === null) return { pins: null, known: null };
+  const [pins = "", known = "-"] = key.split("|");
+  return { pins: pins.split(",").filter(Boolean), known: known === "-" ? null : known.split(",").filter(Boolean) };
 }
 
 /** The agents the viewer has pinned, in registry order. */
 export function usePinnedAgentIds(): AgentClientId[] {
   const key = usePinKey();
-  return useMemo(() => pinnedAgentIds(splitPins(key)), [key]);
+  return useMemo(() => {
+    const { pins, known } = splitPins(key);
+    return pinnedAgentIds(pins, known);
+  }, [key]);
 }
 
 /** A new-conversation picker's agent row (local and hosted): the pinned
  *  agents plus `keep`, the agent already chosen. */
 export function usePinnedPickerOptions(keep?: AgentClientId | null): AgentPickerOption[] {
   const key = usePinKey();
-  return useMemo(() => pinnedPickerOptions(splitPins(key), keep), [key, keep]);
+  return useMemo(() => {
+    const { pins, known } = splitPins(key);
+    return pinnedPickerOptions(pins, keep, known);
+  }, [key, keep]);
 }
 
 /** The viewer's default agent (lib/defaultAgent), live. */

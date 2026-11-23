@@ -43,6 +43,7 @@ import { useIsHostedConversation } from "../hooks/useConversationAgentType";
 import { LANE_COPY } from "./simple/lane";
 import { useIsModernStyle } from "../hooks/useVisualStyle";
 import { ModernDecisionDock } from "./conversation/ModernDecisionDock";
+import { registerDecisionOpener } from "../lib/decisionOpenRegistry";
 // The decision card lives INSIDE the conversation — it is how a session asks
 // its human something, so it renders wherever the session renders (inbox,
 // queue, a deep link). It has two sizes:
@@ -284,6 +285,9 @@ export function SessionDecisionCard({ item, stepper, asks, onPick, startSize, al
     else if (isOnThreadRoute()) void jumpToDecisionAsk();
   }, [canJumpToAsk, messages, item.decisionId, item.question, scrollToMessage, jumpToDecisionAsk]);
   const grow = useCallback(() => setSize("full"), []);
+  // The pinned state's `You` line names this ask ("answer the card…"); it opens
+  // the sheet through here, so the line is a way in, not a dead end.
+  useWatchEffect(() => registerDecisionOpener(item.conversationId, grow), [item.conversationId, grow]);
   // Answering in the person's own words: the text goes to the agent as the answer and the question closes.
   // "Discuss with …" on this card opens the same box, since talking it over with the session is that answer.
   const ownWords = !isInfraDialog && !richControls && !isPermissionCard;

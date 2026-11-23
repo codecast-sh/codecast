@@ -9,11 +9,9 @@ import { useCollectionRows } from "./useCollectionRows";
 import { stableRefId } from "../store/wakeSig";
 import { isViewersWorkflow } from "../store/lineWorkflowSlice";
 import { useFeederWorkspace } from "./useWorkspaceArgs";
+import { useWatchEffect } from "./useWatchEffect";
+import { cachedAt, pinDetailRows } from "../lib/detailRows";
 import { useWorkspaceCollection } from "./useWorkspaceCollection";
-import { appPool, takesSessionChange } from "../lib/line/flowPool";
-import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
-
-const graphTakesBranch = (w: { source?: string | null }) => flowGraphAttr(w?.source, "kind") === "line" && /\bbranch\b/.test(flowGraphAttr(w?.source, "takes") ?? "");
 
 const api = _api as any;
 
@@ -48,14 +46,18 @@ export function useSyncPoolFlows(workspace?: string | null, enabled = true) {
   return useSyncCollection("workflows", api.workflows.webPool, enabled ? args : "skip");
 }
 
-/** Reader: the pushed rows a workspace's pool draws from: the viewer's own
- *  workflows, then each flow published to the workspace, newest first. appPool
- *  keeps the first of a slug, so the viewer's own copy wins. */
+/** Reader: the pushed rows a workspace's pool draws from: the flows filed under
+ *  the workspace, the viewer's own first, then newest first. A row the viewer
+ *  filed under another workspace is not this one's (a personal flow stays out of
+ *  a team's pool). appPool keeps the first of a slug, so the viewer's own copy wins. */
 export function usePoolFlowRows(workspace?: string | null, enabled = true): any[] {
   useSyncPoolFlows(workspace, enabled);
-  const { workflows: own } = useWorkflows(enabled);
-  const published = useWorkspaceCollection<any>("workflows", workflowSig, workspace ?? null);
-  return useMemo(() => [...own, ...published.slice().sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))], [own, published]);
+  const viewerId = useViewerId();
+  const rows = useWorkspaceCollection<any>("workflows", workflowSig, workspace ?? null);
+  return useMemo(() => {
+    const mine = (w: any) => Number(String(w.user_id) === viewerId);
+    return rows.slice().sort((a, b) => mine(b) - mine(a) || (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  }, [rows, viewerId]);
 }
 
 /** The slug a team set as its default flow (teams.setDefaultFlow), or null when it set none or there is no team (the
@@ -190,9 +192,36 @@ export function useWorkflow(id: string | null | undefined): any | null | undefin
   return row ?? (ready ? null : undefined);
 }
 
-/** The shipped flows a session's change goes through. A session also starts runs of other flows (a deploy, a line run),
- *  which other feeds bring into the same collection; those are not its Ship. */
-const SHIPPED_SESSION_FLOWS = new Set(appPool().filter((f) => f.kind === "line" && takesSessionChange(f)).flatMap((f) => [f.slug, f.name]));
+type PinnedRun = { _id: string; workflow_id?: string | null; graph_version_id?: string | null; flow_versions?: ReadonlyArray<{ version_id: string }> | null };
+
+/** A pinned graph as the capped `runGraphs` collection holds it: stamped with when it was last fed (lib/detailRows). */
+const RUN_GRAPH_FEED = {
+  select: (row: any) => (row ? [{ ...row, _cachedAt: cachedAt((useInboxStore.getState().runGraphs as any)?.[row._id], Date.now()) }] : []),
+};
+
+/** The version a run pinned (convex lib/runGraph.ts): a library run's flow version, else its pin. */
+const pinOf = (run: PinnedRun | null | undefined) => run?.flow_versions?.[0]?.version_id ?? run?.graph_version_id ?? null;
+
+/**
+ * Reader: the workflows row a run executes. A run that pinned a version reads
+ * that version's graph (runGraphs, ct-98653), so another checkout's push of the
+ * same slug never redraws it; a run from before pins reads the row. The row's
+ * own id stays `_id`. Undefined while cold, null once the server said no.
+ */
+export function useRunWorkflow(run: PinnedRun | null | undefined): any | null | undefined {
+  const pin = pinOf(run);
+  const { ready, error } = useSyncCollection("runGraphs", api.workflow_runs.pinnedGraphOfRun, pin && run ? { run_id: run._id } : "skip", RUN_GRAPH_FEED);
+  // The card on screen holds its graph against the collection's cap.
+  useWatchEffect(() => (pin ? pinDetailRows("runGraphs", [pin]) : undefined), [pin]);
+  // A refusal answers as "no pinned graph" does: a backend without the query yet, or a version that kept no content
+  // (one from before every push kept it), draws the row.
+  const answered = ready || !!error;
+  const pinned = useInboxStore((s) => (pin ? (s.runGraphs as any)[pin] : undefined));
+  const row = useRunGraph(run?._id, pin && (pinned || !answered) ? null : run?.workflow_id);
+  const graph = useMemo(() => (pinned ? { ...pinned, _id: pinned.workflow_id, version_id: pinned._id } : null), [pinned]);
+  if (!pin) return row;
+  return graph ?? (answered ? row : undefined);
+}
 
 /** Feeder: the runs a session started for its change (convex sessionFlowRuns), live ones first. */
 export function useSyncSessionFlowRuns(conversationId: string | null | undefined) {
@@ -204,19 +233,12 @@ export function useSyncSessionFlowRuns(conversationId: string | null | undefined
 /** Reader: a session's own flow runs, newest first (undefined while cold and empty). */
 export function useSessionFlowRuns(conversationId: string | null | undefined): any[] | undefined {
   const { ready } = useSyncSessionFlowRuns(conversationId);
-  // A team's own flow counts when its graph in the store says it takes a branch:
-  // the viewer's own flows and those published to the workspace.
-  const { workflows: own } = useWorkflows();
-  const published = useWorkspaceCollection<any>("workflows", workflowSig);
-  const teamFlows = useMemo(() => {
-    const out: string[] = [];
-    for (const w of [...own, ...published]) if (graphTakesBranch(w)) out.push(w.slug, w.name);
-    return out.sort().join("|");
-  }, [own, published]);
-  const where = useMemo(() => {
-    const ok = new Set([...SHIPPED_SESSION_FLOWS, ...teamFlows.split("|").filter(Boolean)]);
-    return (r: any) => !!conversationId && String(r.spawner_conversation_id ?? "") === conversationId && r.run_kind !== "workflow" && (ok.has(r.workflow_slug ?? "") || ok.has(r.workflow_name ?? ""));
-  }, [conversationId, teamFlows]);
+  // A session also starts runs of other flows (a deploy, a line run, an eval), which other feeds bring into the same
+  // collection: only a run the server stamped as carrying a change (its flow takes a branch and lands it) is its Ship.
+  const where = useMemo(
+    () => (r: any) => !!conversationId && String(r.spawner_conversation_id ?? "") === conversationId && r.takes_change === true,
+    [conversationId],
+  );
   const rows = useWorkflowRuns(where);
   return rows.length || ready ? rows.slice().sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)) : undefined;
 }
