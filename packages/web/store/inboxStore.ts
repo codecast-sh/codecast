@@ -6568,6 +6568,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   markServerDeleted: (convId: string) => void;
   // -- Sync-log write acks (docs/architecture/sync-log-migration.md D8) --
   stampSyncAck: (patches: any, ack: Array<{ scope_key: string; position: number }>, sentAt: number, opts?: { local?: boolean; lockIds?: ReadonlySet<string> | readonly string[] }) => void;
+  releaseSettledWrite: (patches: any, sentAt: number, opts?: { local?: boolean; lockIds?: ReadonlySet<string> | readonly string[] }) => void;
   retireAckedPending: (scopeKey: string, upTo: number, opts?: { restore?: boolean }) => void;
   /** A follower's own write echoed by the host: its locks on these cells (and on every field of these rows) forget the host rows they recorded before. */
   forgetLockSeen: (keys: string[], rowPrefixes?: string[]) => void;
@@ -9437,25 +9438,18 @@ function retireAckedLockInDraft(draft: any, key: string, restore = true): void {
   else row[field] = newest;
 }
 
-function stampSyncAckInDraft(
+// Each field a dispatch sent, as `<storeKey>:<id>:<field>` with the value
+// sent, and the lock it planted when this window still holds that lock:
+// `held` is null when there is no lock, or the lock now protects a different
+// write.
+function forEachSentField(
   draft: any,
   patches: any,
-  ack: Array<{ scope_key: string; position: number }>,
   sentAt: number,
-  lockIds?: ReadonlySet<string> | readonly string[],
-): boolean {
+  lockIds: ReadonlySet<string> | readonly string[] | undefined,
+  visit: (key: string, sentValue: unknown, held: "lock" | "none" | "other", twinKey: string | undefined) => void,
+): void {
   const ids = lockIds ? new Set(lockIds) : undefined;
-  if (!patches || typeof patches !== "object" || !Array.isArray(ack) || ack.length === 0) return false;
-  const compact = ack.map((a) => ({ s: a.scope_key, p: a.position }));
-  const stamp = (key: string) => {
-    const entry = draft.pending[key] as any;
-    if (!entry) return;
-    if (compact.some((a) => (draft.syncMeta[syncLogScopeMetaKey(a.s)]?.cursor ?? 0) >= a.p)) {
-      retireAckedLockInDraft(draft, key);
-    } else {
-      entry.ack = compact;
-    }
-  };
   for (const [table, byId] of Object.entries(patches)) {
     const storeKeys = TABLE_TO_STORE_KEYS[table];
     if (!storeKeys || !byId || typeof byId !== "object") continue;
@@ -9465,13 +9459,9 @@ function stampSyncAckInDraft(
         for (const [field, sentValue] of Object.entries(fields as Record<string, any>)) {
           const key = `${storeKey}:${docId}:${field}`;
           const entry = draft.pending[key] as any;
-          if (!entry) {
-            // No lock yet: the write may still be on its way here (above).
-            // Acknowledged and delivered already, it is simply retired.
-            if (compact.some((a) => (draft.syncMeta[syncLogScopeMetaKey(a.s)]?.cursor ?? 0) >= a.p)) noteRetiredAck(key, sentAt);
-            else noteEarlyAck(key, sentValue, sentAt, compact);
-            continue;
-          }
+          const twin = storeKey === "sessions" ? ACK_DERIVED_TWINS[field] : undefined;
+          const twinKey = twin ? `${storeKey}:${docId}:${twin}` : undefined;
+          if (!entry) { visit(key, sentValue, "none", twinKey); continue; }
           // Guard by VALUE, not send-time ordering: an outbox redrive or
           // retry invokes the binding long after the write was drafted, so a
           // time guard lets an old write's ack stamp (and retire) the entry
@@ -9486,23 +9476,74 @@ function stampSyncAckInDraft(
           // while it is still in flight, and the third then lands over the
           // user's next write).
           if (ids && entry.lock !== undefined) {
-            if (!ids.has(entry.lock)) continue;
+            if (!ids.has(entry.lock)) { visit(key, sentValue, "other", twinKey); continue; }
           } else {
             const v = entry.value;
             const same = v === sentValue ||
               (v !== null && sentValue !== null &&
                typeof v === "object" && typeof sentValue === "object" &&
                JSON.stringify(v) === JSON.stringify(sentValue));
-            if (!same || (entry.ts ?? 0) > sentAt) continue;
+            if (!same || (entry.ts ?? 0) > sentAt) { visit(key, sentValue, "other", twinKey); continue; }
           }
-          stamp(key);
-          const twin = storeKey === "sessions" ? ACK_DERIVED_TWINS[field] : undefined;
-          if (twin) stamp(`${storeKey}:${docId}:${twin}`);
+          visit(key, sentValue, "lock", twinKey);
         }
       }
     }
   }
+}
+
+function stampSyncAckInDraft(
+  draft: any,
+  patches: any,
+  ack: Array<{ scope_key: string; position: number }>,
+  sentAt: number,
+  lockIds?: ReadonlySet<string> | readonly string[],
+): boolean {
+  if (!patches || typeof patches !== "object" || !Array.isArray(ack) || ack.length === 0) return false;
+  const compact = ack.map((a) => ({ s: a.scope_key, p: a.position }));
+  const delivered = () => compact.some((a) => (draft.syncMeta[syncLogScopeMetaKey(a.s)]?.cursor ?? 0) >= a.p);
+  const stamp = (key: string) => {
+    const entry = draft.pending[key] as any;
+    if (!entry) return;
+    if (delivered()) retireAckedLockInDraft(draft, key);
+    else entry.ack = compact;
+  };
+  forEachSentField(draft, patches, sentAt, lockIds, (key, sentValue, held, twinKey) => {
+    if (held === "none") {
+      // No lock yet: the write may still be on its way here (above).
+      // Acknowledged and delivered already, it is simply retired.
+      if (delivered()) noteRetiredAck(key, sentAt);
+      else noteEarlyAck(key, sentValue, sentAt, compact);
+      return;
+    }
+    if (held !== "lock") return;
+    stamp(key);
+    if (twinKey) stamp(twinKey);
+  });
   return true;
+}
+
+// A leave's own result releases the locks its paint planted. The server sends
+// a receipt only into scopes the caller still holds, and the leaver no longer
+// holds the session's: no acknowledgement ever reaches these locks, and the
+// row has left the leaver's lists, so no echo does either. The paint is the
+// server's answer (the shared rule), so the locks go with no restore. A
+// field with no lock yet (a sibling's mirror still on its way) is noted as
+// retired, so that mirror never plants.
+function releaseSettledWriteInDraft(draft: any, patches: any, sentAt: number, lockIds?: ReadonlySet<string> | readonly string[]): void {
+  if (!patches || typeof patches !== "object") return;
+  const release = (key: string) => {
+    const entry = draft.pending[key] as any;
+    if (!entry) return;
+    delete draft.pending[key];
+    noteRetiredAck(key, entry.ts);
+  };
+  forEachSentField(draft, patches, sentAt, lockIds, (key, _sentValue, held, twinKey) => {
+    if (held === "none") { noteRetiredAck(key, sentAt); return; }
+    if (held !== "lock") return;
+    release(key);
+    if (twinKey) release(twinKey);
+  });
 }
 
 /** Writes a character onto both row shapes a session has in the store
@@ -9756,6 +9797,11 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
 
   if (msg.kind === "ack") {
     stampSyncAckInDraft(draft, msg.patches, msg.ack, msg.sentAt, msg.lockIds);
+    return;
+  }
+
+  if (msg.kind === "settled") {
+    releaseSettledWriteInDraft(draft, msg.patches, msg.sentAt, msg.lockIds);
     return;
   }
 
@@ -11362,6 +11408,17 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // rows) and retire them at the same position — they have no dispatch of
   // their own to be acknowledged. `local` marks the bridged receipt, which
   // stamps and does not re-announce.
+  // A write whose own result is the last word for this window (a leave: see
+  // releaseSettledWriteInDraft). Announced on the gesture bridge like an ack,
+  // so sibling windows release the mirrors they hold for it.
+  releaseSettledWrite: sync(function (this: Draft, patches: any, sentAt: number, opts?: { local?: boolean; lockIds?: ReadonlySet<string> | readonly string[] }) {
+    releaseSettledWriteInDraft(this, patches, sentAt, opts?.lockIds);
+    if (!opts?.local) {
+      const lockIds = opts?.lockIds ? [...opts.lockIds] : undefined;
+      broadcastGesture({ kind: "settled", patches, sentAt, ts: Date.now(), ...(lockIds ? { lockIds } : {}) }, bridgeUserId(this));
+    }
+  }),
+
   stampSyncAck: sync(function (
     this: Draft,
     patches: any,

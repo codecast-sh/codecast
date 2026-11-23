@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { isForeignRow, useInboxStore } from "../inboxStore";
 import { applyUpdatesToStore } from "../syncReplication";
+import { makeDispatchBinding } from "../../lib/dispatchBinding";
 import { paintTakeOverOnSend } from "../sessionOwnersSlice";
 import { applyCollectionFeed } from "../../hooks/useSyncCollection";
 import { feedOwnerIds, selectOwnersRow } from "../../hooks/useOwners";
@@ -237,5 +238,47 @@ describe("a leave takes the session out of the inbox at once", () => {
     const row = (useInboxStore.getState().sessions as any)[LID];
     expect([row.owner_ids, row.user_id, row.owner_user_id]).toEqual([["mate"], "mate", "mate"]);
     expect(isForeignRow(row, "me")).toBe(true);
+  });
+});
+
+// The server sends a leave's receipt only into scopes the caller still holds,
+// so the leaver gets none: the leave's own result releases its locks. Without
+// that they persisted and later overrode the server (a move back onto my
+// machine left the session out of my inbox).
+describe("a leave's locks go with its own result", () => {
+  const owner = {};
+  const MID = "jx700000000000000000000000000mb1";
+  const readOf = (ids: string[], runner: string) => ({ ...read(ids), conversation_id: MID, runner: { user_id: runner, is_bot: false } });
+  const myRun = () => useInboxStore.setState({ pending: {}, syncMeta: {}, sessions: { [MID]: { _id: MID, session_id: "s-mb", user_id: "me", updated_at: Date.now(), owner_user_id: "me", owned_by_me: true, owner_ids: ["me", "mate"] } } } as any);
+  const leaveToMate = () => useInboxStore.getState().applySessionOwners(MID, { leave: { move_to_device_id: "dev-mate", runner_id: "mate", runner_is_bot: false } }, null);
+  const locks = () => Object.keys(useInboxStore.getState().pending).filter((k) => k.includes(MID));
+  const settled = async () => { for (let i = 0; i < 50 && locks().length; i++) await new Promise((r) => setTimeout(r, 5)); };
+  afterEach(() => useInboxStore.getState()._clearDispatch(owner));
+
+  test("a leave the server took, with a move: no lock left, and a later move back shows the server's row", async () => {
+    // The answer a leaver gets: no receipt in any scope they hold.
+    useInboxStore.getState()._setDispatch(makeDispatchBinding(async () => ({ __syncAckV1: [], __syncAckV2: [], result: null })), { owner });
+    myRun();
+    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerIds);
+    leaveToMate();
+    expect(locks().length).toBeGreaterThan(0);
+    await settled();
+    expect(locks()).toEqual([]);
+    // Mate leaves later and moves it back onto my machine.
+    useInboxStore.getState().syncTable("sessions", [{ _id: MID, session_id: "s-mb", user_id: "me", updated_at: Date.now() + 1000, owner_user_id: "me", owned_by_me: true, owner_ids: ["me"] }] as any);
+    const row = (useInboxStore.getState().sessions as any)[MID];
+    expect([row.user_id, row.owned_by_me, row.owner_user_id]).toEqual(["me", true, "me"]);
+    expect(isForeignRow(row, "me")).toBe(false);
+  });
+
+  test("a refused leave rolls back with its locks", async () => {
+    useInboxStore.getState()._setDispatch(makeDispatchBinding(async () => { throw new Error("Uncaught Error: no"); }), { owner });
+    myRun();
+    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerIds);
+    leaveToMate();
+    await settled();
+    expect(locks()).toEqual([]);
+    const row = (useInboxStore.getState().sessions as any)[MID];
+    expect([row.user_id, row.owned_by_me, row.owner_ids]).toEqual(["me", true, ["me", "mate"]]);
   });
 });
