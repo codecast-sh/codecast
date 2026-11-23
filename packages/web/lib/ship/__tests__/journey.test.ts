@@ -28,12 +28,13 @@ const states = (j: { stages: Array<{ label: string; state: string }> }) => j.sta
 describe("journeyStages", () => {
   test("the change flow reads in execution order, its fan-out one stage holding CI and Review", () => {
     const s = journeyStages(change);
-    expect(s.map((x) => x.label)).toEqual(["PR", "CI + Review", "Verdicts", "Merge", "Merged", "Deploy", "Live"]);
-    expect(s.map((x) => x.role)).toEqual(["step", "parallel", "step", "step", "land", "deploy", "live"]);
-    expect(s.map((x) => x.who)).toEqual(["auto", "agent", "auto", "auto", "auto", "auto", "auto"]);
+    // Verdicts and Merged are bookkeeping (scripts bounded to a minute): CI + Review holds its verdicts, Merge the sha it merged.
+    expect(s.map((x) => x.label)).toEqual(["PR", "CI + Review", "Merge", "Deploy", "Live"]);
+    expect(s.map((x) => x.role)).toEqual(["step", "parallel", "land", "deploy", "live"]);
+    expect(s.map((x) => x.who)).toEqual(["auto", "agent", "auto", "auto", "auto"]);
     expect(s[1].branches!.map((b) => [b.label, b.who])).toEqual([["CI", "auto"], ["Review", "agent"]]);
-    expect(s[2].loops).toEqual([{ id: "ci_conflict", label: "Resolve conflict", max: 3 }, { id: "brief", label: "Fix findings", max: 3 }]);
-    expect(s[3].loops.map((l) => l.id)).toEqual(["fix_conflict"]);
+    expect(s[1].loops).toEqual([{ id: "ci_conflict", label: "Resolve conflict", max: 3 }, { id: "brief", label: "Fix findings", max: 3 }]);
+    expect(s[2].loops.map((l) => l.id)).toEqual(["fix_conflict"]);
     expect(approvalOf(change)).toEqual({ kind: "if", when: "CI changes" });
   });
   test("a branching flow reads in the order a passing run takes it, Decide before Land", () => {
@@ -98,7 +99,7 @@ describe("journeyStages", () => {
     const read = (f: (typeof SHIPPED_FLOWS)[number]) => journeyStages(f as any).map((x) => (x.loops.length ? `${x.label} ↺ ${x.loops.map((l) => l.id).join(",")}` : x.label));
     const looping = SHIPPED_FLOWS.filter((f) => journeyStages(f as any).some((x) => x.loops.length));
     expect(Object.fromEntries(looping.map((f) => [f.slug, read(f)]))).toEqual({
-      change: ["PR", "CI + Review", "Verdicts ↺ ci_conflict,brief", "Merge ↺ fix_conflict", "Merged", "Deploy", "Live"],
+      change: ["PR", "CI + Review ↺ ci_conflict,brief", "Merge ↺ fix_conflict", "Deploy", "Live"],
       "quick-change": ["Check ↺ fix_check", "Review ↺ fix_review", "Land ↺ fix_conflict", "Deploy", "Live"],
     });
   });
@@ -121,8 +122,8 @@ describe("the fan-out and its verdicts", () => {
   test("a red CI and changes asked are send-backs, from Verdicts' output, not the branches' exits", () => {
     const j = journeyOf(change, run({ current_node_id: "brief", waiting_on_session: { node_id: "brief", since: 20, note: "CI red; changes asked" }, node_statuses: [...ROUND, verdicts("brief", "red", "changes"), st("brief", "running", 20, { visits: 1 })] }));
     expect(j.stages[1].branches!.map((b) => [b.label, b.state])).toEqual([["CI", "back"], ["Review", "back"]]);
-    expect(j.stages[2].state).toBe("back");
-    expect(j.now).toMatchObject({ kind: "session", stage: "Verdicts", round: 1, max: 3 });
+    expect(j.stages[1].state).toBe("back");
+    expect(j.now).toMatchObject({ kind: "session", stage: "CI + Review", round: 1, max: 3 });
     expect(journeyWords(j).words).toBe("Fixing");
     // Only CI red: the reviewer's ship is a check.
     const ciOnly = journeyOf(change, run({ current_node_id: "brief", waiting_on_session: { node_id: "brief", since: 20, note: "CI red" }, node_statuses: [...ROUND, verdicts("brief", "red", "ship"), st("brief", "running", 20)] }));
@@ -131,13 +132,21 @@ describe("the fan-out and its verdicts", () => {
   test("a CI held by main's red waits for main, and the run reads as its wait", () => {
     const j = journeyOf(change, run({ current_node_id: "wait_main", node_statuses: [...ROUND, verdicts("wait_main", "blocked_by_main", "ship"), st("wait_main", "running", 22, { visits: 1, result_preview: "Main CI is red at 9f8e7d6 (red since 1a2b3c4): test-web; looking again in 60s" })] }));
     expect(j.stages[1].branches!.map((b) => [b.label, b.state])).toEqual([["CI", "waiting"], ["Review", "done"]]);
-    expect(j.stages[2].state).toBe("active");
+    expect(j.stages[1].state).toBe("active");
     expect(journeyWords(j).words).toBe("Wait for main");
     expect(j.now).toMatchObject({ kind: "working", stage: "Wait for main", waits: [{ on: "Wait for main", since: 22, deadline: 22 + 15_000_000 }] });
   });
   test("round 2 at PR shows nothing after it from round 1", () => {
     const j = journeyOf(change, run({ current_node_id: "pr", node_statuses: [...ROUND.slice(1), verdicts("brief", "red", "changes"), st("brief", "completed", 20), st("pr", "running", 40, { visits: 2 })] }));
-    expect(states(j)).toEqual(["PR:active", "CI + Review:idle", "Verdicts:idle", "Merge:idle", "Merged:idle", "Deploy:idle", "Live:idle"]);
+    expect(states(j)).toEqual(["PR:active", "CI + Review:idle", "Merge:idle", "Deploy:idle", "Live:idle"]);
+  });
+  test("a run at Verdicts reads as CI + Review, and one at Merged as Merge", () => {
+    const atVerdicts = journeyOf(change, run({ current_node_id: "verdicts", node_statuses: [...ROUND, st("verdicts", "running", 13)] }));
+    expect(states(atVerdicts)).toEqual(["PR:done", "CI + Review:active", "Merge:idle", "Deploy:idle", "Live:idle"]);
+    expect(atVerdicts.now).toMatchObject({ kind: "working", stage: "CI + Review", waits: [{ on: "CI + Review", since: 13 }] });
+    const atMerged = journeyOf(change, run({ current_node_id: "landed", merge: { sha: "4a6e413b2c" }, node_statuses: [...GREEN, st("merge", "completed", 14), st("landed", "running", 15)] }));
+    expect(states(atMerged)).toEqual(["PR:done", "CI + Review:done", "Merge:active", "Deploy:idle", "Live:idle"]);
+    expect(atMerged.now).toMatchObject({ kind: "working", stage: "Merge", verb: "Merging" });
   });
   test("round 2 in the fan-out ignores round 1's verdicts", () => {
     const j = journeyOf(change, run({ current_node_id: "checks", node_statuses: [verdicts("brief", "red", "changes"), st("brief", "completed", 20), st("pr", "completed", 40, { visits: 2 }), st("checks", "running", 41), st("ci", "running", 41, { result_preview: "Waiting on CI for #12 at def5678: 1 of 9 jobs done, 1m" }), st("review", "completed", 10)] }));
@@ -172,11 +181,11 @@ describe("gates", () => {
   test("a card off the main path is a gate: on the stage the walk back finds, named by its own step", () => {
     const mine = gated(change, CI_CARD, "decide__decide", card());
     expect(mine.now).toMatchObject({ kind: "gate", stage: "Decide", mine: true, decisionId: "d1", prompt: "Ship ct-1? It edits CI.", since: 15 });
-    // The stage that holds it is named after the route into the card, not after Verdicts.
-    expect(mine.stages[2]).toMatchObject({ id: "verdicts", label: "CI changes", state: "waiting", who: "you" });
+    // The stage that holds it (CI + Review, whose verdicts sent the run there) is named after the route into the card.
+    expect(mine.stages[1]).toMatchObject({ id: "checks", label: "CI changes", state: "waiting", who: "you" });
     expect(journeyWords(mine)).toEqual({ words: "Your call", tone: "you" });
     const theirs = gated(change, CI_CARD, "decide__decide", card({ holder: { kind: "user", id: "u2" }, asked_user_ids: ["u2"] }));
-    expect(theirs.stages[2]).toMatchObject({ label: "CI changes", who: "person" });
+    expect(theirs.stages[1]).toMatchObject({ label: "CI changes", who: "person" });
     expect(journeyWords(theirs)).toEqual({ words: "Waiting on a person", tone: "wait" });
     expect(journeyWords(gated(change, CI_CARD, "decide__decide", null)).words).toBe("Waiting on a person");
   });
@@ -185,7 +194,7 @@ describe("gates", () => {
     expect(j.now).toMatchObject({ kind: "session", by: "the person" });
     expect(sentBackWords(j.now as any)).toBe("Sent back by the person");
     const verdictsSent = journeyOf(change, run({ current_node_id: "brief", waiting_on_session: { node_id: "brief", since: 20, note: "CI red" }, node_statuses: [...ROUND, verdicts("brief", "red", "ship"), st("brief", "running", 20)] }));
-    expect(sentBackWords(verdictsSent.now as any)).toBe("Verdicts sent it back");
+    expect(sentBackWords(verdictsSent.now as any)).toBe("CI + Review sent it back");
   });
   test("a card no stage holds still asks in the bar", () => {
     const g = { nodes: [{ id: "start", label: "start", type: "start" }, { id: "ask", label: "Ask Jason", type: "human" }, { id: "exit", label: "Done", type: "exit" }], edges: [{ from: "start", to: "ask" }, { from: "ask", to: "exit" }] } as any;
@@ -222,15 +231,15 @@ describe("stops", () => {
     ["unshipped", "Stopped: gh pr merge refused: required status check 'test-web' is failing", [...GREEN, st("merge", "failed", 14)], "Merge", "run", "Stopped at Merge"],
     ["moving", "Stopped: Main keeps moving under this change", [...GREEN, st("merge", "failed", 14)], "Merge", "run", "Stopped at Merge"],
     ["lost", "Stopped: the pull request is gone", [...GREEN, st("merge", "failed", 14), st("retest", "failed", 15)], "Merge", "run", "Stopped: pull request lost"],
-    ["mainred", "Stopped: Main CI stayed red for 4h (red since 1a2b3c4), at 9f8e7d6: test-web.", [...ROUND, verdicts("wait_main", "blocked_by_main", "ship"), st("wait_main", "failed", 22)], "Verdicts", "run", "Stopped: main stayed red"],
-    ["unrebased", "Stopped: the branch does not rebase onto main", [...ROUND, verdicts("wait_main", "blocked_by_main", "ship"), st("wait_main", "completed", 22), st("onto_main", "failed", 30)], "Verdicts", "run", "Stopped: not onto main"],
-    ["dropped", "Stopped: Dropped at the gate.", [...ROUND, verdicts("decide", "green", "ship"), st("ci_card", "completed", 14), st("decide", "completed", 15), st("decide__decide", "completed", 15), st("decide__revise", "failed", 16)], "Verdicts", "run", "Stopped: dropped"],
-    ["rejected", "Stopped: The reviewer rejected the change: wrong approach", [...ROUND, verdicts("rejected", "green", "rejected")], "Verdicts", "run", "Stopped at Verdicts"],
-    ["mainred_again", "Stopped: Main CI went red under this change again", [...ROUND, verdicts("wait_main", "blocked_by_main", "ship")], "Verdicts", "run", "Stopped at Verdicts"],
-    ["nobody", "Stopped: This change edits CI, and no session is behind the run", [...ROUND, verdicts("decide", "green", "ship")], "Verdicts", "run", "Stopped at Verdicts"],
-    ["found", "Stopped: CI or the reviewer found work, and no session made this change", [...ROUND, verdicts("brief", "red", "ship")], "Verdicts", "run", "Stopped at Verdicts"],
+    ["mainred", "Stopped: Main CI stayed red for 4h (red since 1a2b3c4), at 9f8e7d6: test-web.", [...ROUND, verdicts("wait_main", "blocked_by_main", "ship"), st("wait_main", "failed", 22)], "CI + Review", "run", "Stopped: main stayed red"],
+    ["unrebased", "Stopped: the branch does not rebase onto main", [...ROUND, verdicts("wait_main", "blocked_by_main", "ship"), st("wait_main", "completed", 22), st("onto_main", "failed", 30)], "CI + Review", "run", "Stopped: not onto main"],
+    ["dropped", "Stopped: Dropped at the gate.", [...ROUND, verdicts("decide", "green", "ship"), st("ci_card", "completed", 14), st("decide", "completed", 15), st("decide__decide", "completed", 15), st("decide__revise", "failed", 16)], "CI + Review", "run", "Stopped: dropped"],
+    ["rejected", "Stopped: The reviewer rejected the change: wrong approach", [...ROUND, verdicts("rejected", "green", "rejected")], "CI + Review", "run", "Stopped at CI + Review"],
+    ["mainred_again", "Stopped: Main CI went red under this change again", [...ROUND, verdicts("wait_main", "blocked_by_main", "ship")], "CI + Review", "run", "Stopped at CI + Review"],
+    ["nobody", "Stopped: This change edits CI, and no session is behind the run", [...ROUND, verdicts("decide", "green", "ship")], "CI + Review", "run", "Stopped at CI + Review"],
+    ["found", "Stopped: CI or the reviewer found work, and no session made this change", [...ROUND, verdicts("brief", "red", "ship")], "CI + Review", "run", "Stopped at CI + Review"],
     ["nopr", "Stopped: gh pr create failed", [st("pr", "failed", 1)], "PR", "run", "Stopped at PR"],
-    ["noci", "Stopped: CI never reported on the pushed head", [...ROUND, verdicts("no_ci", "green", "ship")], "Verdicts", "again", "Stopped at Verdicts"],
+    ["noci", "Stopped: CI never reported on the pushed head", [...ROUND, verdicts("no_ci", "green", "ship")], "CI + Review", "again", "Stopped at CI + Review"],
   ] as const)("the %s exit stops at its stage with the action that can work", (exit, why, statuses, stage, fix, words) => {
     const j = stop(change, exit, why, [...statuses]);
     expect(j.now).toMatchObject({ kind: "stopped", stage, fix });
@@ -239,11 +248,11 @@ describe("stops", () => {
   });
   test("a merge refusal draws Merge stopped and nothing else red", () => {
     const j = stop(change, "unshipped", "Stopped: merge guard refused", [...GREEN, st("merge", "failed", 14)]);
-    expect(states(j)).toEqual(["PR:done", "CI + Review:done", "Verdicts:done", "Merge:stopped", "Merged:idle", "Deploy:idle", "Live:idle"]);
+    expect(states(j)).toEqual(["PR:done", "CI + Review:done", "Merge:stopped", "Deploy:idle", "Live:idle"]);
   });
-  test("main stayed red: Verdicts stops, and nothing went back to the session", () => {
+  test("main stayed red: CI + Review stops, and nothing went back to the session", () => {
     const j = stop(change, "mainred", "Stopped: Main CI stayed red for 4h", [...ROUND, verdicts("wait_main", "blocked_by_main", "ship"), st("wait_main", "failed", 22)]);
-    expect(j.stages.find((s) => s.label === "Verdicts")!.who).not.toBe("session");
+    expect(j.stages.find((s) => s.label === "CI + Review")!.who).not.toBe("session");
     expect(j.stages.some((s) => s.state === "back")).toBe(false);
   });
   test("Land's refusal two steps off the main path stops at Land and opens the run", () => {
@@ -253,7 +262,7 @@ describe("stops", () => {
   });
   test("a session out of rounds stops at the stage that sent it back, and says when the brief went", () => {
     const j = journeyOf(change, run({ status: "failed", current_node_id: "brief", spawner_conversation_id: "c1", fail_reason: "Stopped: Verdicts sent the change back 3 times", node_statuses: [...ROUND, verdicts("brief", "red", "changes"), st("brief", "failed", 90, { visits: 4 })] }));
-    expect(j.now).toMatchObject({ kind: "stopped", stage: "Verdicts", fix: "session", session: "c1", briefAt: 90 });
+    expect(j.now).toMatchObject({ kind: "stopped", stage: "CI + Review", fix: "session", session: "c1", briefAt: 90 });
   });
   test("a deploy that missed its deadline opens the deploy; a runner crash runs again", () => {
     expect(journeyOf(change, run({ status: "failed", current_node_id: "deploy__failed", merge: { sha: "4a6e413b2c" }, fail_reason: "Stopped: Deploy stuck: cli is not live with 4a6e413 after 45m.", node_statuses: [...MERGED, st("deploy__wait", "failed", 16)] })).now).toMatchObject({ stage: "Deploy", fix: "deploy" });
@@ -338,7 +347,7 @@ test("the render gallery's run cards read as the states they stand for", () => {
   expect(read(GALLERY_FLOW.shipCiCard, { user_id: ME })).toMatchObject({ kind: "gate", words: "Your call" });
   expect(read(GALLERY_FLOW.shipCiWait)).toMatchObject({ kind: "working", words: "In CI and review", branches: ["active", "active"] });
   expect(read(GALLERY_FLOW.shipMainRed)).toMatchObject({ kind: "working", words: "Wait for main", branches: ["waiting", "done"] });
-  expect(read(GALLERY_FLOW.shipRefused)).toMatchObject({ kind: "stopped", words: "Stopped at Merge", states: ["done", "done", "done", "stopped", "idle", "idle", "idle"] });
+  expect(read(GALLERY_FLOW.shipRefused)).toMatchObject({ kind: "stopped", words: "Stopped at Merge", states: ["done", "done", "stopped", "idle", "idle"] });
 });
 
 test("targetsFromLine reads the Deploy stage's line, old and new", () => {

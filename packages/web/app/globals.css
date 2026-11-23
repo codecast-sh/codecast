@@ -161,6 +161,10 @@
   min-width: 0;
   justify-content: flex-end;
 }
+/* Ship is never what gives way: in the narrowest pane its chip moves to the
+   end of the cluster, before the session menu, where nothing clips it. */
+[data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] > [data-run-through] { order: 1; }
+[data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] > [aria-label="Session menu"] { order: 2; }
 /* The in-conversation search box sizes to the header, not the window: a
    narrow pane in a wide window keeps the narrow box. */
 [data-sv-convhead] [data-cc-conv-search-input] { width: 6rem; }

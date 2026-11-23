@@ -39,16 +39,10 @@
 .sj-stage[data-state="routed"] .sj-node { border-color: var(--sol-text-dim); color: var(--sol-text-muted); }
 .sj-stage[data-state="skipped"] .sj-node { border-style: dashed; border-color: var(--sj-rule); }
 .sj-stage[data-state="skipped"] .sj-label { color: var(--sol-text-dim); }
-.sj-branch[data-state="back"] .sj-branch-mark { border-color: var(--sj-session); color: var(--sj-session); }
-.sj-branches { display: flex; flex-direction: column; align-items: flex-start; gap: 1px; margin-top: 3px; max-width: 100%; }
-.sj-branch { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; font-weight: 600; line-height: 1.25; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.sj-branch[data-state="idle"] { color: var(--sol-text-muted); }
-.sj-branch-mark { width: 12px; height: 12px; flex: none; display: grid; place-items: center; border-radius: 999px; border: 1px solid var(--sj-rule); color: var(--sol-text-dim); }
-.sj-branch-mark svg { width: 8px; height: 8px; }
-.sj-branch-mark .sj-pulse, .sj-branch-mark .sj-wait { width: 6px; height: 6px; }
-.sj-branch[data-state="done"] .sj-branch-mark { background: var(--sj-ok); border-color: var(--sj-ok); color: #fff; }
-.sj-branch[data-state="stopped"] .sj-branch-mark { background: var(--sj-bad); border-color: var(--sj-bad); color: #fff; }
-.sj-branch[data-state="active"] .sj-branch-mark { border-color: var(--sol-blue); }
+/* A fan-out's one name: a branch that sent work back, stopped or waits takes that state's color. */
+.sj-branch[data-state="back"] { color: var(--sj-session); }
+.sj-branch[data-state="stopped"] { color: var(--sj-bad); }
+.sj-branch[data-state="waiting"] { color: var(--sj-wait); }
 .sj-stage { --sj-who-c: var(--sj-auto); }
 .sj-stage[data-who="agent"] { --sj-who-c: var(--sj-agent); }
 .sj-stage[data-who="you"] { --sj-who-c: var(--sj-you); }
@@ -121,6 +115,14 @@
 .shp-foot { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--sj-rule-2); }
 .shp-flowname { font-size: 12.5px; font-weight: 600; margin-right: auto; }
 .shp-foot .sj-btn { padding: 5px 16px; font-size: 12.5px; }
+
+/* On a phone the panel is a sheet from the bottom: clear of the home indicator, every press at least 44px tall, and a
+   flow's approval and path on a line under its name. */
+.shp-sheet { padding-bottom: env(safe-area-inset-bottom); }
+.shp-sheet .shp-flow { min-height: 44px; grid-template-columns: 14px minmax(0, 1fr); row-gap: 2px; }
+.shp-sheet .shp-path { grid-column: 2; justify-self: start; }
+.shp-sheet .sj-btn, .shp-sheet .shp-link { min-height: 44px; display: inline-flex; align-items: center; }
+.shp-sheet .shp-foot .sj-btn { padding: 0 24px; }
 
 /* Where the landed change is on each target. */
 .sj-targets { list-style: none; margin: 0; padding: 8px 12px 10px; display: flex; flex-wrap: wrap; gap: 6px; border-top: 1px solid var(--sj-rule-2); background: var(--sj-sunk); }

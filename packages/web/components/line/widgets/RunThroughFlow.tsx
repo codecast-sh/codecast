@@ -25,6 +25,8 @@ import { sessionIdleAt } from "../../../lib/liveness";
 import { formatElapsed } from "../../../lib/taskLine";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
+import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../../ui/sheet";
+import { BELOW_SM, useMediaQuery } from "../../../hooks/useIsPhone";
 import { JourneyView } from "../../ship/Journey";
 import { HEADER_CHIP } from "../../../lib/headerChip";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
@@ -63,6 +65,7 @@ const openMessage = (conversationId: string, messageId: string) => useInboxStore
 
 function ShipButton({ conversationId, sessionTitle }: { conversationId: string; sessionTitle: string }) {
   const [open, setOpen] = useState(false);
+  const phone = useMediaQuery(BELOW_SM);
   // The flow under review: held here, so the review outlives the popover that picked it.
   const [reviewing, setReviewing] = useState<AppFlow | null>(null);
   // Picking a new flow after a run ended: the panel shows the picker instead of the last run.
@@ -90,26 +93,41 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   };
   const showRun = !!run && !!runFlow && !again && !starting;
   const notice = declined && press ? <PressNotice press={press} onRead={() => { setOpen(false); openMessage(conversationId, press.reply!.id); }} /> : null;
+  const onOpenChange = (o: boolean) => { setOpen(o); if (!o) setAgain(false); };
+  // The chip stays in the header at every width (the squeeze sheds its words, never the chip): Ship is one press away.
+  const trigger = (
+    <button type="button" className={`${HEADER_CHIP} shp-chip`} aria-label={chip.words} title={chip.words} data-tone={chip.tone} data-run-through data-ship-state={journey?.now.kind ?? "none"}>
+      {chip.tone === "idle" ? <Rocket className="w-3 h-3" /> : <i className="shp-chip-dot" aria-hidden />}
+      <span className="cq-sq2">{chip.words}</span>
+    </button>
+  );
+  const panel = showRun ? (
+    <RunPanel run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
+  ) : starting && !again ? (
+    <Starting press={press!} onOpen={() => { setOpen(false); openMessage(conversationId, press!.id); }} />
+  ) : (
+    // Mounted only while open: the pool's feed is read when someone looks, never by every header.
+    <>{again ? null : notice}<PoolPicker conversationId={conversationId} session={sessionTitle} onRun={(flow) => { setOpen(false); setReviewing(flow); }} /></>
+  );
   return (
     <>
-      <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setAgain(false); }}>
-        <PopoverTrigger asChild>
-          <button type="button" className={`cq-sq6 ${HEADER_CHIP} shp-chip`} data-tone={chip.tone} data-run-through data-ship-state={journey?.now.kind ?? "none"}>
-            {chip.tone === "idle" ? <Rocket className="w-3 h-3" /> : <i className="shp-chip-dot" aria-hidden />}
-            <span className="cq-sq2">{chip.words}</span>
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-[600px] max-w-[calc(100vw-2rem)] p-0 border-sol-border bg-sol-bg overflow-hidden" data-run-through-pool>
-          {showRun ? (
-            <RunPanel run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
-          ) : starting && !again ? (
-            <Starting press={press!} onOpen={() => { setOpen(false); openMessage(conversationId, press!.id); }} />
-          ) : (
-            // Mounted only while open: the pool's feed is read when someone looks, never by every header.
-            <>{again ? null : notice}<PoolPicker conversationId={conversationId} session={sessionTitle} onRun={(flow) => { setOpen(false); setReviewing(flow); }} /></>
-          )}
-        </PopoverContent>
-      </Popover>
+      {phone ? (
+        // A phone opens it as a sheet from the bottom, the width of the screen.
+        <Sheet open={open} onOpenChange={onOpenChange}>
+          <SheetTrigger asChild>{trigger}</SheetTrigger>
+          <SheetContent side="bottom" hideClose aria-describedby={undefined} className="p-0 border-sol-border bg-sol-bg shp-sheet" data-run-through-pool>
+            <SheetTitle className="sr-only">Ship</SheetTitle>
+            {panel}
+          </SheetContent>
+        </Sheet>
+      ) : (
+        <Popover open={open} onOpenChange={onOpenChange}>
+          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+          <PopoverContent align="end" className="w-[600px] max-w-[calc(100vw-2rem)] p-0 border-sol-border bg-sol-bg overflow-hidden" data-run-through-pool>
+            {panel}
+          </PopoverContent>
+        </Popover>
+      )}
       {reviewing ? <SwitchReview ledger={shipLedgerFor(reviewing, sessionTitle)} onClose={() => setReviewing(null)} onConfirm={() => send(reviewing)} /> : null}
     </>
   );

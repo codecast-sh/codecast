@@ -148,7 +148,7 @@ const STAGE_WORDS: Record<string, string> = { ship: "Land" };
 /** The runner's own landing steps (runner.ts): a run that passes one has landed its change. */
 const LANDING_STEP = /(^|__)(shipped|landed)$/;
 
-type Base = Omit<JourneyStage, "state" | "round" | "steps" | "branches"> & { members: string[]; kind: string; branches?: Base[] };
+type Base = Omit<JourneyStage, "state" | "round" | "steps" | "branches"> & { members: string[]; kind: string; branches?: Base[]; /** Bookkeeping steps the stage holds after its own work (its verdicts, the sha it merged). */ tail?: string[] };
 
 const isSubject = (n: FlowNodeIn | undefined) => n?.backend === "subject";
 const inGroup = (stageId: string, nodeId: string) => nodeId === stageId || nodeId.startsWith(`${stageId}${SEGMENT_SEP}`);
@@ -168,6 +168,10 @@ const WHO_RANK: StageWho[] = ["person", "agent", "session", "auto"];
 
 /** Whether a station is the flow's Deploy stage (the deploy segment: it waits for the change to go live). */
 const isDeployStage = (n: FlowNodeIn | undefined) => n?.segment_flow === "deploy" || n?.id === "deploy";
+
+/** The longest a script may be bounded to and still be bookkeeping: a step that reads what the stage before it left
+ *  (its verdicts, the sha it merged) and routes on it, which nobody waits on. */
+const BOOKKEEPING_TIMEOUT_S = 60;
 
 /** The flow's stages on its main path, in the order a passing run reaches them, then Deploy and Live. */
 function planOf(graph: Graph, withTargets = false): Base[] {
@@ -214,11 +218,24 @@ function planOf(graph: Graph, withTargets = false): Base[] {
   const labelOf = (id: string) => STAGE_WORDS[byId.get(id)?.segment_flow ?? station.get(id)?.flow ?? ""] ?? station.get(id)?.label ?? id;
   const stages: Base[] = [];
   const taken = new Set<string>();
+  // A script on the main path bounded to a minute is the stage before it finishing its work, not a stage of its own.
+  const bookkeeping = (id: string) => {
+    const s = station.get(id);
+    const timeout = byId.get(id)?.timeout ?? graph.stationDetails?.[id]?.timeout;
+    return s?.kind === "script" && !s.flow && !isDeployStage(byId.get(id)) && !!timeout && timeout <= BOOKKEEPING_TIMEOUT_S;
+  };
   for (const id of order) {
     if (taken.has(id)) continue;
     taken.add(id);
     const s = station.get(id)!;
     if (s.kind === "join") continue;
+    const prev = stages[stages.length - 1];
+    if (prev && bookkeeping(id)) {
+      prev.members.push(id);
+      prev.tail = [...(prev.tail ?? []), id];
+      prev.loops = loopsOf(prev.members);
+      continue;
+    }
     if (s.kind !== "parallel") { stages.push(stageOf([id], labelOf(id))); continue; }
     // A fan-out and its branches are one stage, through the join where they meet: what the join sends back is theirs.
     // A branch runs every station the main walk took after its first, up to the join.
@@ -252,7 +269,7 @@ function planOf(graph: Graph, withTargets = false): Base[] {
   ];
 }
 
-const strip = ({ members: _m, kind: _k, branches, ...s }: Base): Omit<JourneyStage, "state" | "round"> => ({ ...s, ...(branches ? { branches: branches.map((b) => ({ ...strip(b), state: "idle" as const, round: null })) } : {}) });
+const strip = ({ members: _m, kind: _k, tail: _t, branches, ...s }: Base): Omit<JourneyStage, "state" | "round"> => ({ ...s, ...(branches ? { branches: branches.map((b) => ({ ...strip(b), state: "idle" as const, round: null })) } : {}) });
 
 /** The flow's stages on its main path, in execution order, then its Deploy and Live. */
 export function journeyStages(graph: Graph): Omit<JourneyStage, "state" | "round">[] {
@@ -515,7 +532,8 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     const offMain = at && !stageOf(at) && !backFrom(at) ? labelOf(at) : null;
     // A fan-out waits on each branch still running; any other stage on the step it stands at.
     const fanBase = stage?.branches ? plan[stages.indexOf(stage)] : null;
-    const waits = fanBase && !offMain
+    // A step the stage holds after its branches (its verdicts) is waited on as the stage itself.
+    const waits = fanBase && !offMain && !(at && fanBase.tail?.includes(at))
       ? fanBase.branches!.filter((b) => latestOf(b)?.status === "running").map((b) => waitOf(b.label, latestOf(b)))
       : [waitOf(offMain ?? stage?.label ?? labelOf(at ?? ""), node)];
     now = { kind: "working", stage: offMain ?? stage?.label ?? (at ? labelOf(at) : "Running"), verb: verbOf(stage, offMain), role: stage?.role ?? "step", who: stage?.who ?? "auto", waits, session: node?.session ? { id: String(node.session._id), title: node.session.title ?? null } : null };

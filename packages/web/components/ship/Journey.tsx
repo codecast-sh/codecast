@@ -55,10 +55,10 @@ function StageFace({ s, finished = false }: { s: JourneyStage; finished?: boolea
   return (
     <>
       <span className="sj-node" aria-hidden><Mark state={s.state} /></span>
-      {s.branches ? (
-        // A fan-out's branches run side by side: each says its own state.
-        <span className="sj-branches" data-journey-branches>
-          {s.branches.map((b) => <span key={b.id} className="sj-branch" data-state={b.state} data-stage={b.id}><i className="sj-branch-mark" aria-hidden><Mark state={b.state} /></i>{b.label}</span>)}
+      {s.branches && s.label === s.branches.map((b) => b.label).join(" + ") ? (
+        // A fan-out is one stage under one name ("CI + Review"); a branch that sent work back, stopped or waits takes that state's color.
+        <span className="sj-label" data-journey-branches>
+          {s.branches.map((b, i) => <span key={b.id}>{i ? " + " : null}<span className="sj-branch" data-state={b.state} data-stage={b.id}>{b.label}</span></span>)}
         </span>
       ) : <span className="sj-label">{s.label}</span>}
       <span className="sj-who">

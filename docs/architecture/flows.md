@@ -739,20 +739,27 @@ the route it took, red only where it stopped.
   change is offered first. A team admin sets it with Make default on a flow's
   page in /flows, where the library marks it Default; any flow that takes a
   branch qualifies. A team that set none, or set one that left the pool, gets
-  Change (`defaultFlowOf` in `shared/contracts/flowPool.ts`). The CLI reads it
+  `change`, labeled Ship (`defaultFlowOf` in `shared/contracts/flowPool.ts`). The CLI reads it
   from `default_flow` on `/cli/workflows/pool` and resolves it by the same
   function against its own pool (FL2's, the repo's flows included): a nameless
   `cast flow run` runs it, `cast flow ls` marks it, and session start names it.
   The default is the team's only when that team was named or the directory is
-  mapped to it; an unmapped directory takes none and gets Change, as session
+  mapped to it; an unmapped directory takes none and gets `change`, as session
   start, which reads no team there, names it.
-- **On a session's header**, Flows lists the pool's flows that take a
-  branch, the team's default first and picked, then lines, each named with its
-  description; it draws the picked one, and opens the shared confirm
-  review: steps, agent sessions that start, questions for you, who does each
-  step, the ways it can end, how to stop. Confirming asks the session to run
-  its own change through it. The pool's feed is read only while the list is
-  open.
+- **On a session's header**, Ship lists the lines that take a branch from the
+  session's own pool: the library's, the session repository's, and those filed
+  under the session's workspace (its team, else the viewer's personal one), the
+  workspace's default first and picked. Each row is the flow's label (a
+  repository's flow that replaces a library one adds the repository's name,
+  "Change · union-mobile"), whether a person approves before it lands, read
+  from the graph ("You approve", "Asks if CI changes" when a person is asked
+  only on a side route, "No approval"), and its stages. The stages are the
+  journey's: a script bounded to a minute (Verdicts, Merged) is the stage
+  before it finishing, not a stage of its own. It draws the picked one and
+  opens the shared confirm review: steps, agent sessions that start, questions
+  for you, who does each step, the ways it can end, how to stop. Confirming
+  asks the session to run its own change through it. On a phone it opens as a
+  sheet from the bottom. The pool's feed is read only while the list is open.
 - **On /flows**, the landing view (G then W) lists the owned flows, one row
   each: owner, on switch, the projects it takes from, who decides, its steps,
   and what it holds now. The decisions count opens Decisions narrowed to that

@@ -34,7 +34,8 @@ describe("pipeline model on the real flows", () => {
 
   test("codecast runs the shipped change as is: every station inherited, no marks of its own", () => {
     const m = pipelineModel(codecast);
-    expect(labels(m.change.diagram.steps)).toEqual(["Check", "Review", "Decide", "Land", "Deploy"]);
+    expect(labels(m.change.diagram.steps)).toEqual(["PR", "CI and review", "Verdicts", "Merge", "Merged", "Deploy"]);
+    expect(labels(m.change.diagram.steps[1].inner)).toEqual(["CI", "Review"]);
     expect(m.change.own).toBe(0);
     expect(Object.values(m.change.marks).every((x) => x.own === null)).toBe(true);
   });
@@ -75,14 +76,14 @@ describe("pipeline model on the real flows", () => {
 describe("what is on the pipeline now", () => {
   test("a live run counts on the station it stands at; a segment's step counts on the segment", () => {
     const m = pipelineModel(codecast, [
-      run({ _id: "a", current_node_id: "review__review", project_path: "/w/codecast" }),
-      run({ _id: "b", current_node_id: "review", project_path: "/w/codecast/.codecast/worktrees/x" }),
-      run({ _id: "c", current_node_id: "check", status: "completed", project_path: "/w/codecast" }),
-      run({ _id: "d", current_node_id: "check", project_path: "/w/example-app" }),
+      run({ _id: "a", current_node_id: "deploy__wait", project_path: "/w/codecast" }),
+      run({ _id: "b", current_node_id: "deploy", project_path: "/w/codecast/.codecast/worktrees/x" }),
+      run({ _id: "c", current_node_id: "pr", status: "completed", project_path: "/w/codecast" }),
+      run({ _id: "d", current_node_id: "pr", project_path: "/w/example-app" }),
     ]);
-    expect(m.change.marks.review.here).toBe(2);
-    expect(m.change.marks.review.hereNames).toHaveLength(2);
-    expect(m.change.marks.check.here).toBeUndefined();
+    expect(m.change.marks.deploy.here).toBe(2);
+    expect(m.change.marks.deploy.hereNames).toHaveLength(2);
+    expect(m.change.marks.pr.here).toBeUndefined();
     expect(m.change.inFlight).toBe(2);
     expect(m.change.flight).toEqual({ working: 2, waiting: 0, paused: 0, elsewhere: 0 });
   });
