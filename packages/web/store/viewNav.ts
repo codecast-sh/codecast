@@ -78,7 +78,10 @@ function readFreshHomeLaunch(): boolean {
   if (nav?.type !== "navigate") return false;
   const page = window.location.pathname.replace(/\/+$/, "") || "/";
   if (page !== "/" && page !== "/inbox") return false;
-  return !new URLSearchParams(window.location.search).has("s");
+  // A compose link (lib/composeLink) opens its own composer: a landing page
+  // under it would be a second composer competing for the cursor.
+  const sp = new URLSearchParams(window.location.search);
+  return !sp.has("s") && !sp.has("compose") && !sp.has("task");
 }
 let freshHomeLaunch: boolean | null = null;
 export function freshHomeLaunchPending(): boolean {
