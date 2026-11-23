@@ -17,6 +17,10 @@ export type WorkerRow = {
   standing_role_id?: unknown;
   agent_team_name?: string;
   message_count?: number;
+  // The hide stamps a machine report reads to leave a closed worker alone (shared isClosedSession).
+  inbox_dismissed_at?: number;
+  inbox_closed_at?: number;
+  inbox_killed_at?: number;
   short_id?: string;
   title?: string;
   thread_state?: string;

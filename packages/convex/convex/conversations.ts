@@ -10272,7 +10272,7 @@ export async function buildAskingParents(
     if (alreadyAsking?.has(pid)) { asking.add(pid); continue; }
     for (const c of children) {
       const cid = c._id.toString();
-      if (c.inbox_killed_at) continue;
+      if (c.inbox_killed_at || isClosedSession(c)) continue;
       // A child's own pending `cast decide` (a spawned subagent worker posts
       // on ITS session) lifts the parent exactly as its open prompt does.
       if (alreadyAsking?.has(cid)) { asking.add(pid); break; }
@@ -10305,7 +10305,7 @@ export async function buildAskingParents(
   const askingAt = (pid: string, t: number): boolean => {
     if (alreadyAsking?.has(pid)) return true;
     return (childrenByParent.get(pid) ?? []).some((c) => {
-      if (c.inbox_killed_at || !pooledAt(c._id.toString(), t)) return false;
+      if (c.inbox_killed_at || isClosedSession(c) || !pooledAt(c._id.toString(), t)) return false;
       if (alreadyAsking?.has(c._id.toString())) return true;
       const ask = childAskAt(c, t);
       // A poll this execution never read (its parent resolved first) is not
@@ -11709,6 +11709,7 @@ export const getConversationLifecycle = query({
       inbox_killed_at: conv.inbox_killed_at ?? null,
       inbox_stashed_at: conv.inbox_stashed_at ?? null,
       inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
+      inbox_closed_at: conv.inbox_closed_at ?? null,
       inbox_pinned_at: conv.inbox_pinned_at ?? null,
       // Undelivered work is waiting for this session. The hibernation pass
       // refuses to park such a session, because parking it would trade a live

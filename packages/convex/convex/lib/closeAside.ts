@@ -3,7 +3,7 @@
 // server's own read of the row, so a close the client guessed wrong never cuts
 // a turn off or drops a wake. Both sides only gather facts and ask the shared
 // closeInFlightReason. Pure reads, no writes.
-import { closeInFlightReason, deriveLiveAt, HEARTBEAT_ALIVE_MS, isClosedSession, isLoopFresh, isOrphanOrSubagent, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts } from "@codecast/shared/contracts";
+import { cascadeTakesDownRow, closeInFlightReason, deriveLiveAt, HEARTBEAT_ALIVE_MS, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts } from "@codecast/shared/contracts";
 import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "../ccAccountsShared";
 
 // The nested group a hide of `lead` takes down with it (cleanup.ts
@@ -37,15 +37,7 @@ export function cascadeTakesDown(
   field: "inbox_dismissed_at" | "inbox_stashed_at",
   opts?: { forceKill?: boolean; close?: boolean },
 ): boolean {
-  // A stash takes only the members that are inbox rows of their own.
-  if (field === "inbox_stashed_at" && isOrphanOrSubagent(child)) return false;
-  // A quiet re-assert never re-kills.
-  if (child[field] && !opts?.forceKill) return false;
-  // A close leaves a killed member alone (it is retired, nothing of it wakes),
-  // and a closed one with nothing queued (already stopped, its wakes kept).
-  if (opts?.close && child.inbox_killed_at) return false;
-  if (opts?.close && isClosedSession(child) && !child.has_pending_messages) return false;
-  return true;
+  return cascadeTakesDownRow(child, field, { ...opts, queued: !!child.has_pending_messages });
 }
 
 /** Why a close must set this conversation aside (stash) instead of stopping
@@ -60,7 +52,7 @@ export async function closeSetsAsideOnServer(ctx: { db: any }, conv: any, now: n
   for (const child of await nestedGroupOf(ctx, conv)) {
     if (!cascadeTakesDown(child, "inbox_dismissed_at", { forceKill: opts?.forceKill, close: true })) continue;
     const row = rowInFlightFacts(child, now);
-    if (row.queued || row.loopFresh || row.limitParked) return "nested";
+    if (row.queued || row.loopFresh || row.limitParked || row.fleetQueued) return "nested";
     // Finished, nothing queued, no loop: no process, no wake, nothing to read.
     if (child.status === "completed") continue;
     if (closeInFlightReason(await inFlightFactsOnServer(ctx, child, now))) return "nested";
@@ -69,12 +61,13 @@ export async function closeSetsAsideOnServer(ctx: { db: any }, conv: any, now: n
 }
 
 // The facts a row carries itself: no reads.
-function rowInFlightFacts(conv: any, now: number): Pick<InFlightFacts, "queued" | "loopFresh" | "limitParked"> {
+function rowInFlightFacts(conv: any, now: number): Pick<InFlightFacts, "queued" | "loopFresh" | "limitParked" | "fleetQueued"> {
   return {
     queued: !!conv.has_pending_messages,
     loopFresh: !!conv.loop_state && isLoopFresh(conv.loop_state, now),
     // The pre-close row: a close is the dismissal isBlockedConversation would exclude.
     limitParked: isBlockedConversation({ ...conv, inbox_dismissed_at: undefined }) && isCurrentBlock(conv, now),
+    fleetQueued: conv.subagent_slot === "queued",
   };
 }
 
@@ -90,7 +83,7 @@ export async function hasDeliverableMessage(ctx: { db: any }, convId: any): Prom
 
 /** The shared in-flight facts of one conversation, from the database. */
 export async function inFlightFactsOnServer(ctx: { db: any }, conv: any, now: number): Promise<InFlightFacts> {
-  const { queued: flagged, loopFresh, limitParked } = rowInFlightFacts(conv, now);
+  const { queued: flagged, loopFresh, limitParked, fleetQueued } = rowInFlightFacts(conv, now);
   const queued = flagged || await hasDeliverableMessage(ctx, conv._id);
   let inProcessRun = false;
   if (conv.workflow_run_id) {
@@ -131,5 +124,5 @@ export async function inFlightFactsOnServer(ctx: { db: any }, conv: any, now: nu
       awaitingInput = !!newest && newest.role === "assistant" && !!newest.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion");
     }
   }
-  return { queued, loopFresh, inProcessRun, turnLive, awaitingInput, limitParked, openBackgroundWork };
+  return { queued, loopFresh, inProcessRun, turnLive, awaitingInput, limitParked, openBackgroundWork, fleetQueued };
 }

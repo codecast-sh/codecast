@@ -10,8 +10,8 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
-import { closeSetsAsideOnServer } from "./lib/closeAside";
-import { isClosedSession } from "@codecast/shared/contracts";
+import { closeSetsAsideOnServer, nestedGroupOf } from "./lib/closeAside";
+import { cascadeTakesDownRow, isClosedSession } from "@codecast/shared/contracts";
 
 setDefaultTimeout(60_000);
 
@@ -333,6 +333,19 @@ function countingDb(db: any) {
   return { db: wrapped, counter };
 }
 
+// What the web client sends for a close of the lead (store closeInDraft): a
+// patch for the lead and for each nested child the shared cascade rule takes
+// down, all with the one stamp.
+async function clientClosePatches(s: Awaited<ReturnType<typeof setup>>): Promise<Record<string, Record<string, unknown>>> {
+  const ts = Date.now();
+  const kids = await s.t.run(async (ctx) => nestedGroupOf(ctx, await ctx.db.get(s.ids.conv)));
+  const out: Record<string, Record<string, unknown>> = { [String(s.ids.conv)]: { inbox_dismissed_at: ts, inbox_closed_at: ts } };
+  for (const k of kids) {
+    if (cascadeTakesDownRow(k, "inbox_dismissed_at", { forceKill: true, close: true, queued: !!k.has_pending_messages })) out[String(k._id)] = { inbox_dismissed_at: ts, inbox_closed_at: ts };
+  }
+  return out;
+}
+
 describe("the aside check is cheap on a big finished group", () => {
   test("a lead with 300 finished subagents and one busy one: set aside, under 2 reads per finished child", async () => {
     const s = await setup();
@@ -386,7 +399,7 @@ describe("the aside check is cheap on a big finished group", () => {
     expect(counted.verdict).toBeNull();
     expect(counted.reads).toBeLessThan(2 * 200);
     expect(counted.reads).toBeLessThan(20);
-    await s.send("closeSession", [String(s.ids.conv)]);
+    await s.send("closeSession", [String(s.ids.conv)], await clientClosePatches(s));
     // The already-closed children are not stopped again (the finished ones are
     // hidden with the lead, as any hide does).
     for (let i = 0; i < 3; i++) {
@@ -412,6 +425,11 @@ describe("the aside check is cheap on a big finished group", () => {
     });
     expect(counted.verdict).toBeNull();
     expect(counted.reads).toBeLessThan(10);
+    const patches = await clientClosePatches(s);
+    expect(Object.keys(patches)).toEqual([String(s.ids.conv)]);
+    await s.send("closeSession", [String(s.ids.conv)], patches);
+    const killed = (await s.kills()).map((c: any) => JSON.parse(c.args).conversation_id);
+    expect(killed).toEqual([String(s.ids.conv)]);
   });
 });
 

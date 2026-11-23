@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 import { internalMutation } from "./functions";
 import { v } from "convex/values";
 import type { Id } from "./_generated/dataModel";
@@ -104,11 +105,15 @@ export async function performTellParent(
 ): Promise<{ told: number; reason?: string }> {
   const worker: WorkerRow | null = await ctx.db.get(args.conversation_id);
   if (!worker || !worker.message_count || !isSpawnedWorker(worker)) return { told: 0, reason: "not_worker" };
+  // A closed worker stopped because the person closed it: its "stopped" is the
+  // teardown, not news for its lead (closedSession.ts: machine reports treat a
+  // close like a kill).
+  if (isClosedSession(worker)) return { told: 0, reason: "closed" };
   const session = await statusOf(ctx, worker._id);
   // A newer status change owns its own check.
   if (args.status_ts !== undefined && session?.agent_status_updated_at !== args.status_ts) return { told: 0, reason: "superseded" };
   const parent = await ctx.db.get(worker.parent_conversation_id!);
-  if (!parent || String(parent.user_id) !== String(worker.user_id) || parent.inbox_killed_at) return { told: 0, reason: "no_parent" };
+  if (!parent || String(parent.user_id) !== String(worker.user_id) || parent.inbox_killed_at || isClosedSession(parent)) return { told: 0, reason: "no_parent" };
 
   const now = Date.now();
   const siblings: WorkerRow[] = await ctx.db
@@ -119,7 +124,7 @@ export async function performTellParent(
   const candidates = [worker, ...siblings.filter((s) => String(s._id) !== String(worker._id))];
   const told: Array<{ worker: WorkerRow; why: string; typed?: string }> = [];
   for (const c of candidates) {
-    if (!c.message_count || !isSpawnedWorker(c) || c.hand_wake_notified_key === episodeOf(c)) continue;
+    if (!c.message_count || !isSpawnedWorker(c) || c.hand_wake_notified_key === episodeOf(c) || isClosedSession(c)) continue;
     const status = c === worker ? session : await statusOf(ctx, c._id);
     const why = workerSettleWhy(c, status?.agent_status, now);
     if (why && !reportedItself(c, why, status?.agent_status_updated_at ?? now)) told.push({ worker: c, why });

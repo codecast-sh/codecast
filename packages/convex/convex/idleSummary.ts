@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 import { internalMutation, internalAction, internalQuery } from "./functions";
 import { routeUpWaitingSession } from "./agentTasks";
 import { v } from "convex/values";
@@ -304,6 +305,7 @@ export const classifySettle = internalMutation({
     if (!conv || !conv.message_count) return { scheduled: false, reason: "no_content" };
     if (conv.is_subagent || conv.is_workflow_sub) return { scheduled: false, reason: "subagent" };
     if (conv.inbox_killed_at) return { scheduled: false, reason: "killed" };
+    if (isClosedSession(conv)) return { scheduled: false, reason: "closed" };
     const session = await ctx.db
       .query("managed_sessions")
       .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", args.conversation_id))

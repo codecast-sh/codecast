@@ -17,7 +17,7 @@ import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, rec
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isValidBrowserStreamKey, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, canonicalSlashCommand, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
-import { materializeFileTags } from "@codecast/shared/contracts";
+import { isClosedSession, materializeFileTags } from "@codecast/shared/contracts";
 import { downloadAttachedFile } from "./attachedFileDownload.js";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
@@ -23591,7 +23591,9 @@ async function reapIdleOrphanTerminals(): Promise<void> {
       resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
     });
     if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
-    const gcWorktree = cand.kind === "stamped" && !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
+    // A closed session keeps its worktree: it wakes into its own folder.
+    const closed = !!lifecycle && isClosedSession({ inbox_closed_at: lifecycle.inboxClosedAt, inbox_dismissed_at: lifecycle.inboxDismissedAt, inbox_killed_at: lifecycle.inboxKilledAt });
+    const gcWorktree = cand.kind === "stamped" && !closed && !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
     if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours, { gcWorktree })) reaped++;
     else skips.push("busy-at-kill");
   }

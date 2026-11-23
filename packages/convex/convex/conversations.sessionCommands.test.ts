@@ -95,6 +95,7 @@ describe("getConversationLifecycle", () => {
       has_pending_messages: false,
       agent_type: null,
       closed: false,
+      inbox_closed_at: null,
     });
   });
 
@@ -109,6 +110,7 @@ describe("getConversationLifecycle", () => {
       has_pending_messages: false,
       agent_type: null,
       closed: false,
+      inbox_closed_at: null,
     });
   });
 
@@ -157,6 +159,7 @@ describe("getConversationLifecycle", () => {
         has_pending_messages: false,
         agent_type: null,
         closed: false,
+        inbox_closed_at: null,
       });
     });
 

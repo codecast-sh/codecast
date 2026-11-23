@@ -68,6 +68,7 @@ export type CloseRow = Parameters<typeof sessionLiveAt>[0] & {
   pending_api_error?: boolean | null;
   pending_api_error_kind?: string | null;
   pending_api_error_at?: number | null;
+  subagent_slot?: string | null;
 };
 
 const runLiveOf = (row: CloseRow) =>
@@ -84,6 +85,7 @@ export function inFlightFactsOfRow(row: CloseRow, now: number, pendingSend = fal
     turnLive: sessionLiveAt(row, now),
     awaitingInput: !!row.awaiting_input,
     openBackgroundWork: openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, rowHeartbeatAliveAt(row, now)),
+    fleetQueued: row.subagent_slot === "queued",
     // The pre-close row: a close is the dismissal isBlockedConversation would exclude.
     limitParked: isBlockedConversation({
       pending_api_error: row.pending_api_error === true,

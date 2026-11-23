@@ -106,6 +106,14 @@ describe("the facts of a row", () => {
     expect(Object.keys(inFlightFactsOfRow(settled, NOW)).sort()).toEqual([...IN_FLIGHT_FACT_KEYS].sort());
   });
 
+  test("a worker waiting in its fleet's queue is a wake: Close sets it, and its lead, aside", () => {
+    const q = { ...settled, message_count: 0, subagent_slot: "queued" };
+    expect(closeFactsOf(q, 0, NOW).inFlight).toBe("fleet");
+    expect(closeSetsAside(closeFactsOf(q, 0, NOW))).toBe(true);
+    expect(nestedInFlightOf([{ ...q, parent_conversation_id: "lead" }] as any, "lead", NOW)).toBe(true);
+    expect(closeFactsOf({ ...settled, subagent_slot: "running" }, 0, NOW).inFlight).toBeNull();
+  });
+
   test("open background work its daemon still vouches for is a wake: Close sets it aside", () => {
     const bg = { ...settled, agent_status: "waiting", open_tasks: [{ id: "b1", kind: "background", command: "bun run build" }], open_tasks_at: NOW - 30_000 };
     const f = closeFactsOf(bg, 0, NOW);
