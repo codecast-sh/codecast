@@ -6,6 +6,20 @@ const USER = "users_me" as any;
 const LAPTOP = "laptop";
 
 describe("collectMigrationCandidates", () => {
+  // A closed session is dormant: moving it would resume it on the destination
+  // while it stays closed. It is left where it is, as a killed one is.
+  test("a closed session is not a candidate, in the device window or as a live session", async () => {
+    const now = Date.now();
+    const conversations = [
+      { _id: "conversations_closed", _creationTime: 1, user_id: USER, owner_device_id: LAPTOP, status: "active", inbox_dismissed_at: 5, inbox_closed_at: 5 },
+      { _id: "conversations_open", _creationTime: 2, user_id: USER, owner_device_id: LAPTOP, status: "active" },
+    ];
+    const managed_sessions = [{ _id: "managed_sessions_1", user_id: USER, conversation_id: "conversations_closed", last_heartbeat: now - 30_000 }];
+    const ctx = { db: makeFakeDb({ conversations, managed_sessions }) } as any;
+    const ids = (await collectMigrationCandidates(ctx, USER, [{ device_id: LAPTOP }])).map((c) => String(c._id));
+    expect(ids).toEqual(["conversations_open"]);
+  });
+
   // A machine that spawns workers creates hundreds of conversations a day, so a
   // session started yesterday is past the per-device creation window while it is
   // still running. The resource sheet then had nothing to judge it by.

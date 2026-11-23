@@ -51,7 +51,7 @@ import { isFencedPendingMessage } from "./executionBindings";
 import { byQueueOrder, queueOrder } from "./lib/sessionQueue";
 import { standingReportsToFields } from "./lib/standingSeat";
 import { stampSeatOwners } from "./sessionOwners";
-import { enqueueKillAndResume, performSetThreadState } from "./conversations";
+import { enqueueKillAndResume, performSetThreadState, resolveRestartTarget } from "./conversations";
 import { performReparentSessionToDevice } from "./devices";
 import { ACTIVE_AGENT_STATUSES, isBootstrapPrompt, normalizeThreadState, parseThreadStateStatus } from "@codecast/shared/contracts";
 import { siteUrl } from "./lib/siteUrl";
@@ -1893,7 +1893,10 @@ export async function performRestartRole(ctx: any, userId: Id<"users">, args: { 
   const conv = await standingConversationOf(ctx, role);
   if (!conv) throw new Error("This role has no standing session yet (cast role create provisions one, or run cast role provision)");
   if (!args.fresh) {
-    await enqueueKillAndResume(ctx, conv.user_id, conv);
+    // A restart is a person's gesture: it brings a closed, stashed or killed
+    // seat back to the list the way a session's Restart does.
+    const { conv: seat } = await resolveRestartTarget(ctx, conv.user_id, conv._id, {});
+    await enqueueKillAndResume(ctx, conv.user_id, seat);
     return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id };
   }
   if (role.status === "retired") throw new Error("That role is retired");
