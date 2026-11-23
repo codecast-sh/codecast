@@ -263,8 +263,10 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
         </RNView>
         <RNView style={styles.rightMeta}>
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
+          {/* The faces are one accessible element that reads the label (each
+              owner, the driver and a paused role), not their bare names. */}
           {coOwners && (
-            <RNView style={styles.coOwners} accessibilityLabel={coOwners.title}>
+            <RNView style={styles.coOwners} accessible accessibilityLabel={coOwners.title}>
               {coOwners.faces.map((f) => f.kind === 'role'
                 ? <OwnerFace key={f.key} role={f.role} size={13} driver={f.driver} paused={f.paused} />
                 : <OwnerFace key={f.key} person={f} size={13} driver={f.driver} />)}

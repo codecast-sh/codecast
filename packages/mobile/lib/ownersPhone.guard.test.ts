@@ -53,4 +53,8 @@ describe("rows and faces", () => {
   test("a paused role wears a dashed ring, not a fade alone", () => {
     expect(src("components/owners/OwnerFace.tsx")).toMatch(/paused: \{[^}]*borderStyle: 'dashed'/);
   });
+
+  test("a row's owner faces read as one label that names each owner and the driver or paused role", () => {
+    expect(row).toContain("<RNView style={styles.coOwners} accessible accessibilityLabel={coOwners.title}>");
+  });
 });
