@@ -1,18 +1,15 @@
 "use client";
 
 /**
- * The line above a session's composer that says what sending does to who
- * drives it (convex lib/sessionTakeOver, shared takeOverBySend):
- *   - a role drives: "<role> drives · sending takes over", with Take over | Tell
- *     <role>. Tell sends the words to the role's own session and leaves the
- *     role driving; the choice holds for the session until changed.
- *   - another person drives: the same line naming them, with Take over |
- *     Tell <name>. Tell sends into the session and leaves them driving.
- *   - you drive and the role waits: "<role> paused while you drive", with
- *     Make driver to hand it back.
- * The take-over line shows while the composer is focused or holds text. It
- * leads with who drives; a phone shows only their face and name beside the
- * toggle, never a sentence cut through the name. It ends with the key that sends.
+ * The line above a session's composer that says what sending does to its
+ * role (lib/composerOwnership composerOwnerLine; convex lib/sessionTakeOver):
+ *   - the role is Active: "Sending pauses @role.", with Pause and send |
+ *     Tell @role. Tell sends the words to the role's own session and leaves
+ *     it Active; the choice holds for the session until changed. It shows
+ *     while the composer is focused or holds text, and ends with the key
+ *     that sends.
+ *   - you paused the role: "@role is paused.", with Resume.
+ * Between people there is no line: a send never takes anything over.
  */
 
 import { memo } from "react";
@@ -51,42 +48,43 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
   }, [conversationId, label, tellRole]);
 
   if (line?.kind === "paused") {
-    const paused = line.role;
     return (
       <div className={className}><div data-cc-owner-strip="paused" className={STRIP}>
-        <OwnerFace role={paused} size={16} paused />
-        <span className="flex-1 min-w-0 truncate"><b className="font-medium text-sol-text">{paused.name}</b> paused while you drive.</span>
+        <OwnerFace role={line.role} size={16} paused />
+        <span className="flex-1 min-w-0 truncate"><b className="font-medium text-sol-text">{line.tag}</b> is paused.</span>
         <Button
           type="button"
           variant="outline"
           size="xs"
           onClick={() => owners.applyChange({ driver: { kind: "role" } }, { driver: { kind: "user", user_id: me! } })}
         >
-          Make driver
+          Resume
         </Button>
       </div></div>
     );
   }
   if (!active || !line) return null;
-  const { driverName, telling } = line;
+  const { tag, telling } = line;
   return (
-    <div className={className}><div data-cc-owner-strip={line.kind} className={STRIP}>
-      {line.kind === "role" ? <OwnerFace role={line.role} size={16} driver /> : <OwnerFace person={line.person} size={16} driver />}
+    <div className={className}><div data-cc-owner-strip="active" className={STRIP}>
+      <OwnerFace role={line.role} size={16} />
+      {/* A phone keeps the role's tag beside the choice, never a sentence cut through it. */}
       <span className="flex-1 min-w-0 truncate">
-        <b className="font-medium text-sol-text">{driverName}</b>
-        <span className="max-sm:hidden">{telling ? " stays driver · your words go to them" : " drives · sending takes over"}</span>
+        <span className="max-sm:hidden">{telling ? "Goes to " : "Sending pauses "}</span>
+        <b className="font-medium text-sol-text">{tag}</b>
+        <span className="max-sm:hidden">{telling ? ", which stays active." : "."}</span>
       </span>
       <SegmentedToggle
         size="sm"
         value={telling ? "tell" : "take"}
         onChange={(key) => setComposerTell(conversationId, key === "tell")}
         items={[
-          { key: "take", label: "Take over", title: line.kind === "role" ? "Send here and drive this session; the role pauses" : `Send here and drive this session in ${driverName}'s place` },
-          { key: "tell", label: `Tell ${driverName}`, title: line.kind === "role" ? `Send to ${line.role.name}'s own session; it keeps driving` : `Send here; ${driverName} keeps driving` },
+          { key: "take", label: "Pause and send", title: `Send here; ${tag} pauses until you resume it` },
+          { key: "tell", label: `Tell ${tag}`, title: `Send to ${line.role.name}'s own session; it stays active` },
         ]}
       />
       <span className="own-strip-key inline-flex shrink-0 items-center gap-1 text-meta text-sol-text-dim max-sm:hidden" data-owner-strip-key>
-        <KeyCap size="xs">↵</KeyCap>{telling ? "tell" : "take over"}
+        <KeyCap size="xs">↵</KeyCap>{telling ? "tell" : "pause and send"}
       </span>
     </div></div>
   );

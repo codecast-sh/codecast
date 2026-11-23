@@ -10,14 +10,13 @@ import { rowEnvRoster } from '@/lib/inboxRowEnv';
 import { composerOwnerLine, setComposerTell, useComposerOwnership } from '@codecast/web/lib/composerOwnership';
 
 /**
- * The line above a session's composer that says what sending does to who
- * drives it, the phone twin of the web ComposerOwnerStrip and read by the same
+ * The line above a session's composer that says what sending does to its
+ * role, the phone twin of the web ComposerOwnerStrip and read by the same
  * rule (lib/composerOwnership composerOwnerLine):
- *   - a role drives: "Sending takes over from <role>", Take over | Tell <role>
- *   - another person drives: the same, naming them
- *   - you drive and the role waits: "<role> paused while you drive", Make driver
- * The take-over line shows once the box holds text; the send reads the choice
- * through composerSendRoute.
+ *   - the role is Active: "Sending pauses @role.", Pause and send | Tell @role
+ *   - you paused the role: "@role is paused.", Resume
+ * Between people there is no line. The Active line shows once the box holds
+ * text; the send reads the choice through composerSendRoute.
  */
 export function ComposerOwnerStrip({ conversationId, active }: { conversationId: string; active: boolean }) {
   const Theme = useTheme();
@@ -40,7 +39,7 @@ export function ComposerOwnerStrip({ conversationId, active }: { conversationId:
       <View style={styles.strip} testID="composer-owner-strip-paused">
         <OwnerFace role={line.role} size={16} paused />
         <Text style={styles.words} numberOfLines={2}>
-          <Text style={styles.name}>{line.role.name}</Text> paused while you drive
+          <Text style={styles.name}>{line.tag}</Text> is paused.
         </Text>
         <TouchableOpacity
           style={styles.button}
@@ -48,13 +47,13 @@ export function ComposerOwnerStrip({ conversationId, active }: { conversationId:
           accessibilityRole="button"
           onPress={() => { tap(); owners.applyChange({ driver: { kind: 'role' } }, { driver: { kind: 'user', user_id: me } }); }}
         >
-          <Text style={styles.buttonText}>Make driver</Text>
+          <Text style={styles.buttonText}>Resume</Text>
         </TouchableOpacity>
       </View>
     );
   }
   if (!active || !line) return null;
-  const { driverName, telling } = line;
+  const { tag, telling } = line;
   const choice = (on: boolean, label: string) => (
     <TouchableOpacity
       style={[styles.segment, on ? styles.segmentLast : styles.segmentFirst, telling === on && { backgroundColor: Theme.text, borderColor: Theme.text }]}
@@ -67,16 +66,16 @@ export function ComposerOwnerStrip({ conversationId, active }: { conversationId:
     </TouchableOpacity>
   );
   return (
-    <View style={styles.strip} testID={`composer-owner-strip-${line.kind}`}>
-      {line.kind === 'role' ? <OwnerFace role={line.role} size={16} driver /> : <OwnerFace person={line.person} size={16} driver />}
+    <View style={styles.strip} testID="composer-owner-strip-active">
+      <OwnerFace role={line.role} size={16} />
       <Text style={styles.words} numberOfLines={3}>
         {telling
-          ? <>Goes to <Text style={styles.name}>{driverName}</Text>, who stays driver</>
-          : <>Sending takes over from <Text style={styles.name}>{driverName}</Text></>}
+          ? <>Goes to <Text style={styles.name}>{tag}</Text>, which stays active.</>
+          : <>Sending pauses <Text style={styles.name}>{tag}</Text>.</>}
       </Text>
       <View style={styles.segments}>
-        {choice(false, 'Take over')}
-        {choice(true, `Tell ${driverName}`)}
+        {choice(false, 'Pause and send')}
+        {choice(true, `Tell ${tag}`)}
       </View>
     </View>
   );

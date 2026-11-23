@@ -2586,7 +2586,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     // the words leave the box only once the server has queued them.
     const route = hosted ? null : composerSendRoute(conversationId as string);
     if (route === 'tell-role') {
-      if (images.attached) { setError('Tell sends words only: take over to send files'); return; }
+      if (images.attached) { setError('Tell sends words only: pause and send to send files'); return; }
       if (!trimmedMessage || tellingRef.current) return;
       tellingRef.current = true;
       tellRoleFromComposer(conversationId as string, trimmedMessage, (words) => {

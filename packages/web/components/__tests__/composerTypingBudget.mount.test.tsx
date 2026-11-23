@@ -57,8 +57,8 @@ function syntheticSessions(n: number): Record<string, any> {
     const id = `jx7${String(i).padStart(29, "0")}`;
     out[id] = { _id: id, session_id: `s-${i}`, title: `Session ${i}`, user_id: "user_type_budget", agent_type: "claude_code", status: i % 9 ? "completed" : "active", is_idle: i % 9 !== 0, message_count: 20 + (i % 50), updated_at: now - i * 60_000, started_at: now - i * 120_000, project_path: `/src/p${i % 40}` };
   }
-  // Filed under a role that drives it, so the owner line above the box
-  // ("<role> drives · sending takes over") shows while typing and is held to the budget.
+  // Filed under an Active role, so the owner line above the box
+  // ("Sending pauses @role.") shows while typing and is held to the budget.
   out[CONV_ID] = { _id: CONV_ID, session_id: "s-typebud", title: "Typing budget", user_id: "user_type_budget", agent_type: "claude_code", status: "active", is_idle: true, message_count: 3, updated_at: now, started_at: now, org_role_id: "role_typebud" };
   return out;
 }
@@ -183,7 +183,7 @@ test("a keystroke into a box with text commits once, writes nothing to the store
     for (const r of t.layoutReads) reads.add(r);
   }
   expect(textarea.value.startsWith("hello there")).toBe(true);
-  expect(textarea.ownerDocument.querySelector("[data-cc-owner-strip]")?.textContent).toContain("sending takes over");
+  expect(textarea.ownerDocument.querySelector("[data-cc-owner-strip]")?.textContent).toContain("Sending pauses");
   expect({ worstCommitsPerKey: worstCommits }).toEqual({ worstCommitsPerKey: 1 });
   expect({ storeWritesWhileTyping: storeWrites }).toEqual({ storeWritesWhileTyping: 0 });
   expect([...outside]).toEqual([]);

@@ -23,7 +23,8 @@ const { composerSendRoute, useComposerOwnership } = await import("../../../lib/c
 const { withTeamRoster } = await import("../../../test-helpers/teamRoster");
 
 // The line above a session's composer (ComposerOwnerStrip): what sending does
-// to who drives, in each state, and the one write each control makes.
+// to the session's role, Active or Paused, and the one write each control
+// makes. People never appear on it.
 const id = "c".repeat(32);
 const me = { _id: "me", name: "Ashot" };
 const ROLE = { role_id: "role1", short_id: "or-1", handle: "evals", name: "Eval Suite lead", avatar: null };
@@ -52,63 +53,58 @@ const strip = () => container.querySelector<HTMLElement>("[data-cc-owner-strip]"
 const sendAs = () => useComposerOwnership.getState().sendAs[id] ?? null;
 const click = async (el: Element | null | undefined) => { await act(async () => { (el as HTMLElement).click(); }); };
 
-test("a role drives: the line shows only while the composer is in use, and says the send takes over", async () => {
+test("the role is Active: the line shows only while the composer is in use, and says sending pauses it", async () => {
   await setSession({ org_role_id: "role1" }, ["me"]);
   await render(false);
   expect(strip()).toBeNull();
   await render(true);
-  expect(strip()?.dataset.ccOwnerStrip).toBe("role");
-  expect(strip()!.textContent).toContain("Eval Suite drives · sending takes over");
-  // The name leads, so a narrow screen cuts the rest, and the key that sends ends the line.
-  expect(strip()!.querySelector("b")!.parentElement!.firstElementChild!.textContent).toBe("Eval Suite");
-  expect(strip()!.querySelector("[data-owner-strip-key]")!.textContent).toBe("↵take over");
-  expect([...strip()!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Take over", "Tell Eval Suite"]);
-  expect(sendAs()).toEqual({ label: "Take over", tellRole: null });
+  expect(strip()?.dataset.ccOwnerStrip).toBe("active");
+  expect(strip()!.textContent).toContain("Sending pauses @evals.");
+  // No face is ringed; the key that sends ends the line.
+  expect(strip()!.querySelector(".own-drv")).toBeNull();
+  expect(strip()!.querySelector("[data-owner-strip-key]")!.textContent).toBe("↵pause and send");
+  expect([...strip()!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Pause and send", "Tell @evals"]);
+  expect(sendAs()).toEqual({ label: "Pause and send", tellRole: null });
   expect(composerSendRoute(id)).toBe("take-over");
 });
 
-test("Tell keeps the role driving: the line, the send label and the send's route follow the choice", async () => {
+test("Tell keeps the role Active: the line, the send label and the send's route follow the choice", async () => {
   await setSession({ org_role_id: "role1" }, ["me"]);
   await render(true);
-  await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Tell Eval Suite"));
-  expect(strip()!.textContent).toContain("Eval Suite stays driver · your words go to them");
+  await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Tell @evals"));
+  expect(strip()!.textContent).toContain("@evals, which stays active.");
   expect(strip()!.querySelector("[data-owner-strip-key]")!.textContent).toBe("↵tell");
-  expect(sendAs()).toEqual({ label: "Tell Eval Suite", tellRole: "Eval Suite lead" });
+  expect(sendAs()).toEqual({ label: "Tell @evals", tellRole: "Eval Suite lead" });
   expect(composerSendRoute(id)).toBe("tell-role");
   // The choice holds for the session until changed.
   await render(true);
-  expect(strip()!.textContent).toContain("Eval Suite stays driver");
-  await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Take over"));
+  expect(strip()!.textContent).toContain("which stays active");
+  await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Pause and send"));
   expect(composerSendRoute(id)).toBe("take-over");
 });
 
-test("another person drives: the line names them; Tell sends here and leaves them driving", async () => {
+test("between people there is no line, and a send takes nothing over", async () => {
   await setSession({ driver_user_id: "jason", user_id: "jason" }, ["jason", "me"]);
   await render(true);
-  expect(strip()?.dataset.ccOwnerStrip).toBe("person");
-  expect(strip()!.textContent).toContain("Jason drives · sending takes over");
-  expect([...strip()!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Take over", "Tell Jason"]);
-  expect(sendAs()?.label).toBe("Take over");
-  await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Tell Jason"));
-  expect(strip()!.textContent).toContain("Jason stays driver");
-  expect(sendAs()).toEqual({ label: "Tell Jason", tellRole: null });
-  // Into this session, without the wheel: a person is told where they drive.
+  expect(strip()).toBeNull();
+  expect(sendAs()).toBeNull();
   expect(composerSendRoute(id)).toBe("plain");
-  await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Take over"));
 });
 
-test("you drive and the role is paused: Make driver hands it back on the session row", async () => {
+test("you paused the role: Resume puts it back on the session row", async () => {
   await setSession({ org_role_id: "role1", driver_user_id: "me" }, ["me"]);
   await render(false);
   expect(strip()?.dataset.ccOwnerStrip).toBe("paused");
-  expect(strip()!.textContent).toContain("Eval Suite lead paused while you drive.");
+  expect(strip()!.textContent).toContain("@evals is paused.");
   expect(strip()!.querySelector(".own-paused")).not.toBeNull();
   expect(sendAs()).toBeNull();
-  await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Make driver"));
+  // A paused role takes nothing over: the send is plain.
+  expect(composerSendRoute(id)).toBe("plain");
+  await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Resume"));
   expect((useInboxStore.getState() as any).conversations[id].driver_user_id ?? null).toBeNull();
 });
 
-test("nothing for the driver of an unfiled session, or for someone who neither owns nor runs it", async () => {
+test("nothing for a session with no role, or for someone who neither owns nor runs it", async () => {
   await setSession({}, ["me"]);
   await render(true);
   expect(strip()).toBeNull();
@@ -120,10 +116,10 @@ test("nothing for the driver of an unfiled session, or for someone who neither o
 test("an owners answer without the role's face names it from the session row's own snapshot", async () => {
   await setSession({ org_role_id: "role1", role: { _id: "role1", short_id: "or-1", handle: "dance", name: "Dance tutor", avatar: "fox" } }, ["me"], { role: null });
   await render(true);
-  expect(strip()!.textContent).toContain("Dance tutor drives");
+  expect(strip()!.textContent).toContain("Sending pauses @dance.");
 });
 
-test("a send that asks for the wheel paints it on the session row before the server answers; any other send paints nothing", async () => {
+test("a send that pauses the role paints it on the session row before the server answers; any other send paints nothing", async () => {
   await setSession({ org_role_id: "role1" }, ["me"]);
   await render(true);
   await act(async () => { useInboxStore.getState().sendMessage(id, "Decision: Yes", undefined, "client-0"); });

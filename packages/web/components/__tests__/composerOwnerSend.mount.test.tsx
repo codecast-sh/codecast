@@ -16,11 +16,12 @@ import "../chat/ChatMessage";
 import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 
 // The session composer's owner line decides where every way out of the box
-// goes (lib/composerOwnership composerSendRoute): Enter, ⌘↵ queue and ⇧Esc
-// Stop & send take the wheel on Take over and only then; on Tell <role> they
-// go to the role's own session (Stop & send has nothing to stop there), and
-// the words stay in the box until the server has them. A composer without
-// the line (an inline thread) never takes over.
+// goes (lib/composerOwnership composerSendRoute): while the role is Active,
+// Enter, ⌘↵ queue and ⇧Esc Stop & send pause it on Pause and send and only
+// then; on Tell @role they go to the role's own session (Stop & send has
+// nothing to stop there), and the words stay in the box until the server has
+// them. A composer without the line (an inline thread), and any send between
+// people, never takes anything over.
 // Run: bun test components/__tests__/composerOwnerSend.mount.test.tsx
 
 afterAll(() => {
@@ -90,7 +91,7 @@ const stopAndSend = (c: HTMLElement) => key(c, { key: "Escape", shiftKey: true }
 const driver = () => (useInboxStore.getState() as any).sessions[CONV_ID].driver_user_id ?? null;
 const sent = (action: string) => dispatched.filter((d) => d.action === action);
 
-test("Take over: Enter sends asking for the wheel, and the row shows the new driver at once", async () => {
+test("Pause and send: Enter sends pausing the role, and the row shows it paused at once", async () => {
   await press("I'll take it from here", true, enter);
   await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
   expect(sent("sendMessage")).toHaveLength(1);
@@ -98,20 +99,20 @@ test("Take over: Enter sends asking for the wheel, and the row shows the new dri
   expect(driver()).toBe(ME);
 });
 
-test("Take over: ⌘↵ queues asking for the wheel", async () => {
+test("Pause and send: ⌘↵ queues pausing the role", async () => {
   await press("after this turn", true, queue);
   expect(sent("queueMessage")[0]?.args[3]).toEqual({ take_over: true });
   expect(driver()).toBe(ME);
 });
 
-test("Take over: ⇧Esc stops and sends asking for the wheel", async () => {
+test("Pause and send: ⇧Esc stops and sends pausing the role", async () => {
   await press("stop, do this", true, stopAndSend);
   const stop = sent("convCommand").find((d) => d.args[1] === "stopAndSendToSession");
   expect(stop?.args[2]).toMatchObject({ content: "stop, do this", take_over: true });
   expect(driver()).toBe(ME);
 });
 
-test("Tell: Enter and ⌘↵ go to the role's own session; nothing goes in here and the role keeps driving", async () => {
+test("Tell: Enter and ⌘↵ go to the role's own session; nothing goes in here and the role stays active", async () => {
   setComposerTell(CONV_ID, true);
   expect(await press("try the other fixture", true, enter)).toBe("");
   setComposerTell(CONV_ID, true);
@@ -140,5 +141,13 @@ test("a composer without the owner line (an inline thread) never takes over", as
   await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
   expect(sent("sendMessage")).toHaveLength(1);
   expect(sent("sendMessage")[0].args[5] ?? null).toBeNull();
+  expect(driver()).toBeNull();
+});
+
+test("between people a send takes nothing over: no role, no flag", async () => {
+  useInboxStore.setState({ sessions: { [CONV_ID]: { ...(useInboxStore.getState().sessions as any)[CONV_ID], org_role_id: undefined } } } as any);
+  await press("over to you", true, enter);
+  expect(sent("sendMessage")).toHaveLength(1);
+  expect(sent("sendMessage")[0].args[5]).toBeUndefined();
   expect(driver()).toBeNull();
 });

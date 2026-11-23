@@ -1297,7 +1297,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // with an empty input is a valid send. batchSendWords is the one home for
   // the counting; its flat object under useShallow keeps re-renders quiet.
   const batchWords = useInboxStore(useShallow((s) => batchSendWords(s.reviewComments[conversationId] ?? [])));
-  // What Send does while the owner line shows (Take over, Tell <role>).
+  // What Send does while the owner line shows (Pause and send, Tell @role).
   const ownerSendAs = useComposerOwnership((s) => (ownerStrip ? s.sendAs[conversationId] ?? null : null));
   const reviewCount = batchWords.applies + batchWords.answers + batchWords.quotes;
   // Hand this composer's send to the review bridge while mounted, so a
@@ -1816,7 +1816,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const route = ownerStrip && !onGateSend ? composerSendRoute(conversationId) : null;
     if (route === "tell-role") {
       if (pastedImagesRef.current.length > 0 || fileAttach.files.length > 0) {
-        toast("Tell sends words only: take over to send files", { id: "tell-files" });
+        toast("Tell sends words only: pause and send to send files", { id: "tell-files" });
         submitRefusedRef.current = true;
         return;
       }
@@ -2179,7 +2179,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     if (!canStopAndSend || !messageRef.current.trim()) return;
     if (takeSideQuestion(messageRef.current)) return;
     if (ownerStrip && composerSendRoute(conversationId) === "tell-role") {
-      toast("Tell goes to the role's own session, so it stops nothing here: send it, or take over to stop and send", { id: "tell-stop" });
+      toast("Tell goes to the role's own session, so it stops nothing here: send it, or pause and send to stop and send", { id: "tell-stop" });
       return;
     }
     confirmStop(() => queueComposerText(true), true);
