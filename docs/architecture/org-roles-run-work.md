@@ -40,8 +40,12 @@ person's own session filed under a role (`cast task start` in its area, a drag
 on the chart) has no owner rows either and stays theirs, and so does what it
 spawns. When the role cannot be told about a role-alone session's wait, the
 person its reporting line ends at hears it, never a pool machine's account. A
-role's hand and line run take no person owner, on a pool machine too: a person
-who wants one in their inbox adds themselves from the owners menu. Owning a
+role's hand and line run take no person owner, on a pool machine too, and a
+message into one never claims it, whoever sends it: a person who wants one in
+their inbox adds themselves from the owners menu. When the role comes off a
+run it started that no person owns (a retire, a visibility change that drops
+it, the role taken off), the person its reporting line ends at takes it, else
+the person whose account runs the role (`lib/roleRelease`). Owning a
 session never takes it away from the account that runs it.
 `migrations:backfillRoleStarted` stamps sessions from before the field.
 
@@ -62,13 +66,27 @@ nothing: the person drives, and the session files and rings like any other
 
 **Who drives, and how it changes hands.** Adding a person never moves the
 wheel to them (`pinnedDriverAfterAdd`); filing a role makes the role drive.
-A person who owns the session and sends into it while the role or another
-person drives becomes the driver, and a role it takes over from is paused.
-The composer says so before the send ("Sending takes over from <role>") and
-offers **Tell <role>**, which writes to the role's own session and changes
-nothing. A paused role's own session that writes into the session is refused
-with who drives and how to reach them. **Make driver** on any owner in the
-owners menu hands the wheel on, the role included (`setSessionDriver`).
+A person who owns the session and sends into it from the session composer
+(or a collaborator's composer) while the role or another person drives becomes
+the driver, and a role it takes over from is paused. `cast send` always names
+a sender session and never takes over; from a shell the wheel is taken with
+`cast own <session> --drive me`. The composer says so before the send
+("Sending takes over from <role>") and offers **Tell <role>**, which writes to
+the role's own session and changes nothing. A paused role's own session that
+writes into the session is refused with who drives and how to reach them, and
+its chat lines (a mention, a thread reply, a room line) do not wake it. It
+may not hand itself the wheel back either: only a person who owns or runs the
+session makes the role driver again. **Make driver** on any owner in the
+owners menu hands the wheel on, the role included (`setSessionDriver`). A
+person who drives owns the session: when their owner row goes (they leave, are
+removed, or leave the team) the wheel goes back to the role, else the primary
+owner (`sessionOwners.writeDriver`, the one writer of `driver_user_id`).
+
+**A paused role hears no decisions.** While a person drives, the session's
+questions are its owners', the driver among them: no role on its ladder hears
+or holds them, and none may answer them, unless a person handed one to it.
+Every change of driver routes the open questions again
+(`sessionDecisions.routeFor`, `refreshHolder`).
 Handing a session to a teammate is adding them and making them driver
 (`cast own <session> <person> --drive <person>`). There is no team owner:
 **Select all teammates** in the owners menu gives each teammate an ordinary
@@ -79,7 +97,8 @@ owners menu, the phone, `cast disown`). A session that runs on your account
 moves first, in the same transaction, to a teammate's or a team machine
 (**Move and leave**, `cast disown --move-to <machine>`). When nobody else
 owns it, the person whose account now runs it takes a row; an agent account
-cannot, so that leave is refused.
+cannot, so that leave is refused. A run a role started is the exception: it
+needs no move and may be left with no person, and the role drives it again.
 
 **Where the rule lives.**
 - `shared/contracts/sessionOwners.ts`: the owners and driver as one pure
@@ -97,6 +116,9 @@ cannot, so that leave is refused.
 - Take-over: `pendingMessages` enqueue (`enqueuePendingMessage` calls
   `takeWheelOnSend`); the paused role's refusal: `performSessionSend` (calls
   `pausedRoleRefusal`). Both helpers are in `convex/lib/sessionTakeOver.ts`.
+- The driver: `convex/sessionOwners.ts` `writeDriver` (every owner-row
+  removal settles it); a role's unowned run when the role comes off:
+  `convex/lib/roleRelease.ts`.
 - Fields: `session_owners` rows, and on `conversations` `org_role_id`,
   `org_role_hold`, `driver_user_id` and `role_started`.
 

@@ -164,7 +164,7 @@ describe("only a send that says so takes the wheel", () => {
     expect(row("filed").driver_user_id).toBe(ME);
   });
 
-  test("a server path into a person's session (a checkout ask, a transcript route) never takes over; a person's own cast send does", async () => {
+  test("a server path into a person's session (a checkout ask, a transcript route) never takes over; a person's own send with no sender session does", async () => {
     const { ctx, row } = await world();
     await performSessionSend(ctx, ME as any, { to: "jxfiled", body: "these files conflict", intent: "request", wake: true, client_id: "k1" });
     expect(row("filed").driver_user_id).toBeUndefined();

@@ -1209,8 +1209,9 @@ export const sendSessionMessage = mutation({
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
     }
-    // A person's own send (`cast send` with no sender session, a collaborator's
-    // composer) takes the wheel when they own it; a session relaying never does.
+    // A person's own send with no sender session (a collaborator's composer)
+    // takes the wheel when they own it; a session relaying never does. The
+    // CLI always names a sender, so `cast own --drive me` is its way.
     return await performSessionSend(ctx, authUserId, { ...args, take_over: !args.from?.trim() && !args.raw });
   },
 });
