@@ -9,7 +9,7 @@
 // A leaf like accessKeys.ts: conversationVisibility.ts (patchConversationVisibility) imports
 // it at load, so nothing here may reach a module that defines functions.
 import { Id } from "../_generated/dataModel";
-import { computeWorkspaceKey } from "./accessKeys";
+import { computeWorkspaceKey, workspaceKey } from "./accessKeys";
 import { sha256Hex } from "./hash";
 
 export const AUTHORITY_EVENT_KINDS = [
@@ -35,9 +35,14 @@ export const AUTHORITY_EVENT_KINDS = [
 ] as const;
 export type AuthorityEventKind = (typeof AUTHORITY_EVENT_KINDS)[number];
 
-export type AuthorityEventInput = {
+/** Who acted: a person, or a team read key using itself. A key belongs to its
+ *  team, not to the admin who minted it, so its events are the team's. */
+type AuthorityActor =
+  | { actor_user_id: Id<"users">; actor_key_id?: never }
+  | { actor_key_id: Id<"team_read_keys">; actor_user_id?: never; team_id: Id<"teams"> };
+
+export type AuthorityEventInput = AuthorityActor & {
   kind: AuthorityEventKind;
-  actor_user_id: Id<"users">;
   actor_conversation_id?: Id<"conversations">;
   /** The conversation the event is about; its POST-change row decides the
    *  access key (a team-visible session's events are the team's, a private
@@ -63,7 +68,7 @@ export async function recordAuthorityEvent(ctx: { db: any }, ev: AuthorityEventI
   const team_id = ev.team_id ?? conv?.team_id;
   return ctx.db.insert("authority_events", {
     kind: ev.kind,
-    actor_user_id: ev.actor_user_id,
+    ...(ev.actor_user_id === undefined ? { actor_key_id: ev.actor_key_id } : { actor_user_id: ev.actor_user_id }),
     ...(ev.actor_conversation_id ? { actor_conversation_id: ev.actor_conversation_id } : {}),
     ...(conv ? { conversation_id: conv._id } : {}),
     ...(team_id ? { team_id } : {}),
@@ -72,7 +77,9 @@ export async function recordAuthorityEvent(ctx: { db: any }, ev: AuthorityEventI
     ...(ev.share_table ? { share_table: ev.share_table } : {}),
     ...(ev.share_token ? { share_token_hash: await sha256Hex(ev.share_token) } : {}),
     detail: ev.detail ?? {},
-    workspace: computeWorkspaceKey({ user_id: ev.actor_user_id, team_id }, conv),
+    workspace: ev.actor_user_id === undefined
+      ? workspaceKey({ type: "team", teamId: ev.team_id })
+      : computeWorkspaceKey({ user_id: ev.actor_user_id, team_id }, conv),
     created_at: Date.now(),
   });
 }

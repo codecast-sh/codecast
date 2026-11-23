@@ -54,6 +54,14 @@ async function requireAdmin(ctx: any, teamId: Id<"teams">): Promise<Id<"users">>
   return userId;
 }
 
+async function isAdmin(ctx: any, userId: Id<"users">, teamId: Id<"teams">): Promise<boolean> {
+  const membership = await ctx.db
+    .query("team_memberships")
+    .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", teamId))
+    .first();
+  return membership?.role === "admin";
+}
+
 function keysOf(ctx: any, teamId: Id<"teams">): Promise<Doc<"team_read_keys">[]> {
   return ctx.db.query("team_read_keys").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect();
 }
@@ -64,15 +72,18 @@ export const list = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    const membership = await ctx.db
-      .query("team_memberships")
-      .withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", args.team_id))
-      .first();
-    if (membership?.role !== "admin") return null;
+    if (!(await isAdmin(ctx, userId, args.team_id))) return null;
     const keys = await keysOf(ctx, args.team_id);
     const creators = new Map<string, string | null>();
     for (const id of new Set(keys.map((k) => String(k.created_by)))) {
       creators.set(id, (await ctx.db.get(id as Id<"users">))?.name ?? null);
+    }
+    // A key outlives its minter's admin role, so the list says which live keys'
+    // minters are no longer team admins. The live-key cap bounds these reads.
+    const now = Date.now();
+    const stillAdmin = new Map<string, boolean>();
+    for (const id of new Set(keys.filter((k) => isLive(k, now)).map((k) => k.created_by))) {
+      stillAdmin.set(String(id), await isAdmin(ctx, id, args.team_id));
     }
     return keys
       .sort((a, b) => b.created_at - a.created_at)
@@ -82,6 +93,8 @@ export const list = query({
         prefix: k.prefix,
         created_at: k.created_at,
         created_by_name: creators.get(String(k.created_by)) ?? null,
+        /** Null for an ended key, whose minter is not looked up. */
+        created_by_still_admin: stillAdmin.get(String(k.created_by)) ?? null,
         expires_at: k.expires_at,
         revoked_at: k.revoked_at ?? null,
         last_used_at: k.last_used_at ?? null,
@@ -166,8 +179,8 @@ export const keyForHash = internalQuery({
 
 /**
  * A key's use, recorded before the read it opens: last_used_at moves and a
- * team_read_key_used event names the key, with the admin who minted it as the
- * actor. Requests inside the same window record nothing.
+ * team_read_key_used event names the key as its actor. Requests inside the
+ * same window record nothing.
  */
 export const recordUse = internalMutation({
   args: { key_id: v.id("team_read_keys") },
@@ -178,7 +191,7 @@ export const recordUse = internalMutation({
     await ctx.db.patch(key._id, { last_used_at: now });
     await recordAuthorityEvent(ctx, {
       kind: "team_read_key_used",
-      actor_user_id: key.created_by,
+      actor_key_id: key._id,
       team_id: key.team_id,
       detail: { after: { key_id: key._id, name: key.name, prefix: key.prefix } },
     });

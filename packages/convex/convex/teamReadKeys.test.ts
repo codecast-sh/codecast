@@ -252,6 +252,26 @@ describe("team read keys", () => {
     await expect(as(mo).mutation(api.teamReadKeys.revoke, { team_id: team, key_id: minted.key_id })).rejects.toThrow();
   });
 
+  test("the list flags a key whose minter was demoted or left the team", async () => {
+    const { ada, mo, vi, team, as } = await setup();
+    const setRole = (by: Id<"users">, member: Id<"users">, role: "admin" | "member") =>
+      as(by).mutation(api.teams.setMemberRole, { team_id: team, member_user_id: member, role });
+    await setRole(ada, vi, "admin");
+    await setRole(ada, mo, "admin");
+    await mint(as(ada), team, "by ada");
+    const byVi = await mint(as(vi), team, "by vi");
+    const flags = async () =>
+      Object.fromEntries((await as(mo).query(api.teamReadKeys.list, { team_id: team }))!.map((k) => [k.name, k.created_by_still_admin]));
+    expect(await flags()).toEqual({ "by ada": true, "by vi": true });
+    await setRole(vi, ada, "member");
+    expect(await flags()).toEqual({ "by ada": false, "by vi": true });
+    await as(vi).mutation(api.teams.removeFromTeam, { team_id: team, user_id: vi });
+    expect(await flags()).toEqual({ "by ada": false, "by vi": false });
+    // An ended key's minter is not looked up.
+    await as(mo).mutation(api.teamReadKeys.revoke, { team_id: team, key_id: byVi.key_id });
+    expect(await flags()).toEqual({ "by ada": false, "by vi": null });
+  });
+
   test(`a team holds at most ${MAX_LIVE_TEAM_READ_KEYS} live keys; a revoked one frees a place`, async () => {
     const { ada, team, as } = await setup();
     const first = await mint(as(ada), team, "key 0");
@@ -277,8 +297,10 @@ describe("team read keys", () => {
       "team_read_key_used",
       "team_read_key_revoked",
     ]);
+    // A person mints and revokes; the key itself is the actor of its use.
+    expect(events.map((e: any) => e.actor_user_id)).toEqual([ada, undefined, undefined, ada]);
+    expect(events.map((e: any) => e.actor_key_id)).toEqual([undefined, key_id, key_id, undefined]);
     for (const e of events) {
-      expect(e.actor_user_id).toBe(ada);
       expect(e.detail.after).toMatchObject({ key_id, name: "eng site" });
       expect(JSON.stringify(e)).not.toContain(key);
     }
