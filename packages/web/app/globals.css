@@ -159,7 +159,7 @@
    first: its shrink weight dwarfs the cluster's. */
 [data-sv-convhead] [data-squeeze~="7"] .cc-panel__title { flex-shrink: 1000; }
 [data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] { min-width: max-content; flex-shrink: 0; }
-[data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] [data-dormant-what] { display: none; }
+[data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] :is([data-dormant-what], [data-dormant-sep]) { display: none; }
 [data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] {
   flex-shrink: 1;
   min-width: 0;

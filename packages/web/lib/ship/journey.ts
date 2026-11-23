@@ -702,8 +702,10 @@ export type Approval = { kind: "always" } | { kind: "if"; when: string | null } 
 export function approvalOf(graph: Graph): Approval {
   const plan = planOf(graph);
   const land = plan.findIndex((s) => s.role === "land" || s.role === "deploy");
-  if (plan.slice(0, land < 0 ? plan.length : land).some((s) => s.who === "person")) return { kind: "always" };
-  const landing = graph.nodes.filter((n) => LANDING_STEP.test(n.id)).map((n) => n.id);
+  // The landing stage counts too: a person on its passing route says yes before its landing step.
+  const upTo = land < 0 ? plan.length : plan[land].role === "land" ? land + 1 : land;
+  if (plan.slice(0, upTo).some((s) => s.who === "person")) return { kind: "always" };
+  const landing =graph.nodes.filter((n) => LANDING_STEP.test(n.id)).map((n) => n.id);
   const lands = landing.length ? landing : graph.nodes.filter((n) => n.type === "exit" && !n.stop).map((n) => n.id);
   const start = graph.nodes.filter((n) => n.type === "start").map((n) => n.id);
   // Every node a walk from `from` reaches, along edges forward or backward, never through `without`.

@@ -458,7 +458,7 @@ subject session in the run's end message, else the person whose account ran
 it, through a note posted `to_owner`.
 
 Every comment a run posts goes through the run's own primary session, so it is
-signed by the run ("Change run"), and so are its notifications
+signed by the run in its flow's label ("Ship run"), and so are its notifications
 (`lib/actor.ts` kind `run`); the stop words carry `$<station>.summary`, the
 check's failing steps in one line, and the comment links the run's page for
 the full output.

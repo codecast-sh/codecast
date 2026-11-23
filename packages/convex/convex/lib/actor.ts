@@ -38,7 +38,7 @@ async function runOfPrimary(ctx: Ctx, conversation: any): Promise<Doc<"workflow_
   return run && String(run.primary_conversation_id ?? "") === String(conversation._id) ? run : null;
 }
 
-/** How a run signs what it writes: its flow's name ("Change run"). */
+/** How a run signs what it writes: its flow's label ("Ship run"), else its name. */
 export async function runVoiceName(ctx: Ctx, run: { workflow_id?: Id<"workflows"> | null; workflow_name?: string | null }): Promise<string> {
   const flow = run.workflow_id ? await ctx.db.get(run.workflow_id) : null;
   const name = String(flow?.label || run.workflow_name || "Workflow").trim();

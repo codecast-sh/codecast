@@ -433,4 +433,13 @@ describe("approvalOf", () => {
   test("a station only a failure reaches is no stage of the passing run", () => {
     expect(journeyStages(landsThroughSegment()).map((s) => s.label)).not.toContain("Wait for a later deploy");
   });
+  test("a person asked on every run inside the landing segment approves, as the stage says", () => {
+    const seg = (id: string, label: string, type = "command") => ({ id: `land__${id}`, label, type, segment: "land" });
+    const g = {
+      nodes: [{ id: "start", label: "start", type: "start" }, { id: "check", label: "Check", type: "command" }, { id: "land", label: "Land", type: "command", segment_entry: true, segment_flow: "land" }, seg("approve", "Approve", "human"), seg("landed", "Merged"), { id: "exit", label: "Live", type: "exit" }],
+      edges: [{ from: "start", to: "check" }, { from: "check", to: "land", condition: "outcome = success" }, { from: "land", to: "land__approve" }, { from: "land__approve", to: "land__landed" }, { from: "land__landed", to: "exit" }],
+    } as any;
+    expect(journeyStages(g).find((s) => s.role === "land")).toMatchObject({ label: "Land", who: "person" });
+    expect(approvalWords(approvalOf(g))).toBe("You approve");
+  });
 });
