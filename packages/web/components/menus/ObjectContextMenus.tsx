@@ -34,6 +34,7 @@ import {
   RefreshCw,
   Hourglass,
   Link2,
+  Lock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { CtxItem, CtxHeader, CtxSeparator, CtxSub, CtxSubTrigger, CtxSubContent } from "../ui/context-menu";
@@ -58,6 +59,7 @@ import {
 import { setTaskParent, updateTasksAsOne } from "../../lib/taskActions";
 import { animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../../store/undoActions";
 import { gestureToast } from "../../store/undoStack";
+import { hideFromTeam } from "../../hooks/useTeamShareActions";
 import { counted } from "../../store/undo/labels";
 import { copyToClipboard, shareOrigin, cn } from "../../lib/utils";
 import { openForwardToChat } from "../../lib/forwardToChat";
@@ -557,6 +559,9 @@ export function SessionMenuItems({
       </CtxItem>
       <CtxItem icon={LinkIcon} shortcut="conv.copyLink" onSelect={copyLink}>Copy link</CtxItem>
       <ForwardCtxItem url={`${shareOrigin()}/conversation/${id}`} label="session" />
+      {session.is_private === false && !!session.team_id && (
+        <CtxItem icon={Lock} onSelect={() => hideFromTeam(id)}>Hide from team</CtxItem>
+      )}
       <CtxSeparator />
       {isSessionSetAside(session) ? (
         <CtxItem icon={RefreshCw} onSelect={() => { useInboxStore.getState().restoreSession(id); toast.success("Restored to inbox"); }}>
