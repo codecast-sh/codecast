@@ -12,9 +12,13 @@
  * (applySessionOwners), which paints it at once by the server's own rule.
  * Leaving a session that runs on your account first moves it to a team
  * machine, so it stays somewhere someone can see it.
+ *
+ * The arrow keys walk the owners and then the candidates; Enter adds the
+ * highlighted candidate and Shift+Enter makes the highlighted row driver. A
+ * staged change survives a stray tap outside; Escape and Cancel discard it.
  */
 
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useRef, useState, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import { Plus, Search, UserCheck, X, ChevronRight, BadgePlus } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwnerCandidates, pickRoster, snapshotsOf, type OwnersApi, type OwnerRole, type SessionDriver } from "../hooks/useOwners";
@@ -35,11 +39,13 @@ import { sessionFitsARole } from "../lib/makeRole";
 import { Button } from "./ui/button";
 import { KeyCap } from "./KeyCap";
 import { isMac } from "../shortcuts/registry";
+import { useWatchEffect } from "../hooks/useWatchEffect";
 
 const ROW = "group relative flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-none modern:min-h-control-sm modern:gap-2 modern:rounded-control modern:px-2 modern:py-1 modern:text-ui data-[highlighted]:bg-accent modern:data-[highlighted]:bg-sol-cyan/10 own-row";
 const LABEL = "px-2 py-1.5 font-semibold modern:px-2 modern:pb-1 modern:pt-2 modern:text-meta modern:font-medium modern:normal-case modern:tracking-normal modern:text-sol-text-dim text-mark uppercase tracking-wide text-sol-text-dim";
 const SEP = "-mx-1 my-1 h-px bg-muted modern:bg-sol-border/70";
 const ICON_BTN = "shrink-0 p-0.5 rounded text-sol-text-dim";
+const SHIFT_ENTER = isMac ? "⇧↵" : "Shift ↵";
 const SUGGESTED_ROLES = 3;
 
 type Person = { _id: string; name: string; image?: string };
@@ -73,6 +79,8 @@ function useOwnersView(owners: OwnersApi) {
  */
 export function OwnersSegment({ conversationId, owners, compact }: { conversationId: string; owners: OwnersApi; compact: boolean }) {
   const [open, setOpen] = useState(false);
+  // A staged change is kept from a stray outside tap; Escape still closes.
+  const [dirty, setDirty] = useState(false);
   const { seatRoleId, currentRole: parentRole } = useSessionRoleFacts(conversationId);
   const { people, role, driver } = useOwnersView(owners);
   const seat = !!seatRoleId;
@@ -96,15 +104,15 @@ export function OwnersSegment({ conversationId, owners, compact }: { conversatio
           )}
         </button>
       </PopoverTrigger>
-      <PopoverContent align="start" sideOffset={6} className="w-[23rem] max-w-[calc(100vw-2rem)] p-1" onOpenAutoFocus={(e) => e.preventDefault()}>
+      <PopoverContent align="start" sideOffset={6} className="w-[23rem] max-w-[calc(100vw-2rem)] p-1" onOpenAutoFocus={(e) => e.preventDefault()} onInteractOutside={(e) => { if (dirty) e.preventDefault(); }}>
         {/* Keyed: a staged draft belongs to the session it was opened on. */}
-        {seat ? <SeatReportsTo key={conversationId} conversationId={conversationId} owners={owners} onDone={() => setOpen(false)} /> : <OwnersMenuBody key={conversationId} conversationId={conversationId} owners={owners} onClose={() => setOpen(false)} />}
+        {seat ? <SeatReportsTo key={conversationId} conversationId={conversationId} owners={owners} onDone={() => setOpen(false)} /> : <OwnersMenuBody key={conversationId} conversationId={conversationId} owners={owners} onClose={() => { setDirty(false); setOpen(false); }} onDirty={setDirty} />}
       </PopoverContent>
     </Popover>
   );
 }
 
-function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: string; owners: OwnersApi; onClose: () => void }) {
+function OwnersMenuBody({ conversationId, owners, onClose, onDirty }: { conversationId: string; owners: OwnersApi; onClose: () => void; onDirty: (dirty: boolean) => void }) {
   // Mounted only while the menu is open: the session team's roster and the
   // org's roles are subscribed for the menu's lifetime alone.
   const serverRoster = useOwnerCandidates(conversationId, owners.currentUser);
@@ -133,7 +141,11 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
   const [query, setQuery] = useState("");
   const [moreRoles, setMoreRoles] = useState(false);
   const [leaving, setLeaving] = useState(false);
-  const [hi, setHi] = useState(0);
+  // The highlighted row of the ring (owners, then candidates); none on open.
+  const [hi, setHi] = useState(-1);
+  const [notice, setNotice] = useState<string | null>(null);
+  const menuRef = useRef<HTMLDivElement>(null);
+  const searchRef = useRef<HTMLInputElement>(null);
 
   const people = pickRoster(serverRoster, owners.selectable).filter(isPerson);
   const personById = new Map<string, Person>(initialPeople.map((p) => [p._id, p]));
@@ -168,7 +180,13 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
     return m ? presenceLabel(memberPresenceVisual(m)) : null;
   };
 
-  const add = (c: Candidate, drive = false) => setDraft((d) => (c.kind === "role" ? addRole(d, roleOwnerOf(c.role)) : addPerson(d, c.person._id, drive)));
+  // A teammate who only sees the session reads the owners: no ×, no Make
+  // driver, no candidates (the server refuses the rest anyway).
+  const readOnly = !owners.canEdit;
+  const add = (c: Candidate, drive = false) => {
+    setNotice(null);
+    setDraft((d) => (c.kind === "role" ? addRole(d, roleOwnerOf(c.role)) : addPerson(d, c.person._id, drive)));
+  };
   const makeDriver = (driver: SessionDriver) => setDraft((d) => ({ ...d, driver }));
   const leaveTo = (device: Device & { owner_user_id?: string; is_bot?: boolean }) => {
     setLeaving(false);
@@ -184,17 +202,38 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
     onClose();
   };
 
+  useWatchEffect(() => onDirty(dirty), [dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // One ring for the keyboard: the owners as listed, then the candidates.
+  const ownerKeys = [...draft.ownerIds.map((id) => `p:${id}`), ...(draft.role ? [`r:${draft.role.role_id}`] : [])];
+  const ring = ownerKeys.length + candidates.length;
+  const at = hi < ring ? hi : ring - 1;
+  // Follow the keyboard: the highlighted row stays in view.
+  useWatchEffect(() => {
+    if (at < 0) return;
+    menuRef.current?.querySelector("[data-own-hi]")?.scrollIntoView?.({ block: "nearest" });
+  }, [at]);
+  // The pointer highlights only for a mouse: a touch screen's synthetic hover
+  // must not reveal a button under the finger that is tapping the row.
+  const hover = (i: number) => (e: { pointerType: string }) => { if (e.pointerType === "mouse") setHi(i); };
+  const ownerDriverTarget = (key: string): SessionDriver | null =>
+    isDriver(draft.driver, key) ? null : key.startsWith("r:") ? { kind: "role", role_id: key.slice(2) } : { kind: "user", user_id: key.slice(2) };
+
   const onKeyDown = (e: KeyboardEvent) => {
     if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) { e.preventDefault(); save(); return; }
     if (e.key === "ArrowDown" || e.key === "ArrowUp") {
       e.preventDefault();
-      const n = candidates.length;
-      if (n) setHi((h) => (e.key === "ArrowDown" ? (h + 1) % n : (h - 1 + n) % n));
+      if (ring) setHi((h) => (e.key === "ArrowDown" ? (Math.min(h, ring - 1) + 1) % ring : (Math.max(h, 0) - 1 + ring) % ring));
       return;
     }
-    if (e.key === "Enter") {
-      const c = candidates[Math.min(hi, candidates.length - 1)];
-      if (c) { e.preventDefault(); add(c); }
+    if (e.key === "Enter" && at >= 0) {
+      e.preventDefault();
+      if (at < ownerKeys.length) {
+        const target = e.shiftKey && !readOnly ? ownerDriverTarget(ownerKeys[at]) : null;
+        if (target) makeDriver(target);
+        return;
+      }
+      add(candidates[at - ownerKeys.length], e.shiftKey);
     }
   };
 
@@ -214,43 +253,53 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
     ...(draft.moveTo ? [`Move to ${draft.moveTo.label}`] : []),
   ];
 
-  // A teammate who only sees the session reads the owners: no ×, no Make
-  // driver, no candidates (the server refuses the rest anyway).
-  const readOnly = !owners.canEdit;
   // The only owner of a session an agent box runs cannot leave it: nobody
   // would be left to own it (a person who runs it would take it over).
   const soleOwner = !!meId && draft.ownerIds.length === 1 && draft.ownerIds[0] === meId && !runsOnMine && !!owners.runner?.is_bot;
-  const ownerRow = (key: string, face: ReactNode, name: string, sub: string, onRemove: (() => void) | null, removeLabel: string, driverOf: SessionDriver | null, dim = false) => (
-    <div key={key} className={ROW} data-owner-row={key} onMouseEnter={(e) => e.currentTarget.setAttribute("data-highlighted", "")} onMouseLeave={(e) => e.currentTarget.removeAttribute("data-highlighted")}>
-      {face}
-      <span className="flex min-w-0 flex-1 flex-col leading-tight">
-        <span className="truncate">{name}</span>
-        <span className={`truncate text-meta ${dim ? "text-sol-text-dim" : "text-sol-text-muted"}`}>{sub}</span>
-      </span>
-      {driverOf && !readOnly && <Button type="button" variant="outline" size="xs" className="own-mk" onClick={() => makeDriver(driverOf)}>Make driver</Button>}
-      {!readOnly && (
-        <button type="button" onClick={onRemove ?? undefined} aria-disabled={!onRemove} title={removeLabel} aria-label={removeLabel} className={`${ICON_BTN} ${onRemove ? "hover:text-sol-red hover:bg-sol-red/10" : "opacity-40 cursor-default"}`}>
-          <X className="w-3.5 h-3.5" />
-        </button>
-      )}
-    </div>
-  );
+  const highlight = (i: number) => (i === at ? { "data-highlighted": "", "data-own-hi": "" } : {});
+  // onRemove null: the × is shown but refused, and pressing it says why.
+  const ownerRow = (key: string, face: ReactNode, name: string, sub: string, onRemove: (() => void) | null, removeLabel: string, refusal: string | null, dim = false) => {
+    const i = ownerKeys.indexOf(key);
+    const driverOf = ownerDriverTarget(key);
+    return (
+      <div key={key} className={ROW} data-owner-row={key} {...highlight(i)} onPointerEnter={hover(i)}>
+        {face}
+        <span className="flex min-w-0 flex-1 flex-col leading-tight">
+          <span className="truncate">{name}</span>
+          <span className={`truncate text-meta ${dim ? "text-sol-text-dim" : "text-sol-text-muted"}`}>{sub}</span>
+        </span>
+        {driverOf && !readOnly && <MakeDriverButton onClick={() => makeDriver(driverOf)} />}
+        {!readOnly && (
+          <button type="button" onClick={onRemove ?? (() => { setNotice(refusal); searchRef.current?.focus(); })} aria-disabled={!onRemove} title={removeLabel} aria-label={removeLabel} className={`${ICON_BTN} own-x ${onRemove ? "hover:text-sol-red hover:bg-sol-red/10" : "opacity-40 cursor-default"}`}>
+            <X className="w-3.5 h-3.5" />
+          </button>
+        )}
+      </div>
+    );
+  };
 
   return (
-    <div onKeyDown={onKeyDown} data-owners-menu>
+    <div onKeyDown={onKeyDown} data-owners-menu ref={menuRef}>
       <div className={LABEL}>Owners · whose inbox</div>
       {leaving && (
         <div className="mx-1 mb-1 rounded-md bg-sol-bg-highlight px-2 py-1.5" data-leave-box>
           <div className="text-meta text-sol-text-dim">Runs on your account. Move it to leave:</div>
           {moveTargets.length === 0 ? (
             <div className="py-1 text-meta text-sol-text-muted">No team machine to move it to</div>
-          ) : moveTargets.map((d) => (
-            <button key={d.device_id} type="button" onClick={() => leaveTo(d)} disabled={!d.online} className="flex w-full items-center gap-2 rounded px-1 py-1 text-left text-ui text-sol-text hover:bg-sol-bg-alt disabled:opacity-50">
-              <DeviceIcon d={d} className="w-3.5 h-3.5" />
-              <span className="flex-1 truncate">{deviceDisplayName(d)}</span>
-              <span className="text-meta text-sol-text-muted">{d.online ? "Move and leave" : "offline"}</span>
-            </button>
-          ))}
+          ) : moveTargets.map((d) => {
+            // Leaving puts the session on this machine's account: whose it
+            // is, face and name, is the choice.
+            const ownerId = String((d as any).owner_user_id ?? "");
+            const member = roster.find((m) => m._id === ownerId);
+            const ownerName = member ? memberName(member) : ((d as any).runner_name as string | null) ?? null;
+            return (
+              <button key={d.device_id} type="button" onClick={() => leaveTo(d)} disabled={!d.online} data-leave-target={d.device_id} className="flex w-full items-center gap-2 rounded px-1 py-1 text-left text-ui text-sol-text hover:bg-sol-bg-alt disabled:opacity-50">
+                {ownerName ? <AssigneeFace info={{ name: ownerName, image: member?.image || member?.github_avatar_url }} size={18} hover={false} /> : <DeviceIcon d={d} className="w-3.5 h-3.5" />}
+                <span className="flex-1 truncate">{machineOf(ownerName, deviceDisplayName(d))}</span>
+                <span className="text-meta text-sol-text-muted">{d.online ? "Move and leave" : "offline"}</span>
+              </button>
+            );
+          })}
         </div>
       )}
       {draft.ownerIds.length === 0 && !draft.role && <div className="px-2 py-1 text-meta text-sol-text-dim">Nobody yet</div>}
@@ -263,14 +312,14 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
         return ownerRow(`p:${id}`, <Face person={p} size={20} driver={drives} />, p.name, sub,
           mine && soleOwner ? null : mine && runsOnMine && !draft.moveTo ? () => setLeaving((v) => !v) : () => setDraft((d) => removePerson(d, id)),
           mine ? (soleOwner ? "You are its only owner: add someone before you leave" : "Leave") : `Remove ${p.name}`,
-          drives ? null : { kind: "user", user_id: id });
+          mine && soleOwner ? "Add an owner before you leave" : null);
       })}
       {draft.role && (() => {
         const drives = draft.driver?.kind === "role";
         const sub = [drives ? "Driver" : "Paused", roleChanged ? "new" : null].filter(Boolean).join(" · ");
-        return ownerRow(`r:${draft.role.role_id}`, <Face role={draft.role} size={20} driver={drives} paused={!drives} />, draft.role.name, sub, () => setDraft(removeRole), `Remove ${draft.role.name}`,
-          drives ? null : { kind: "role", role_id: draft.role.role_id }, !drives);
+        return ownerRow(`r:${draft.role.role_id}`, <Face role={draft.role} size={20} driver={drives} paused={!drives} />, draft.role.name, sub, () => setDraft(removeRole), `Remove ${draft.role.name}`, null, !drives);
       })()}
+      {notice && <div className="px-2 py-1 text-meta text-sol-yellow" role="status" data-owners-notice>{notice}</div>}
       {meId && isPerson(owners.currentUser) && !draft.ownerIds.includes(meId) && !iLeave && (
         <button type="button" data-take-ownership className={`${ROW} w-full text-sol-cyan`} onClick={() => {
           // A claim is one press: the server lets anyone who sees the session take it.
@@ -284,7 +333,7 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
       <div className={SEP} />
       <label className="flex h-8 items-center gap-2 px-2 text-sol-text-dim">
         <Search className="w-3.5 h-3.5" />
-        <input autoFocus value={query} onChange={(e) => { setQuery(e.target.value); setHi(0); }} placeholder={isStandingThread ? "Add a teammate" : "Add a role or teammate"} aria-label="Add a role or teammate" autoComplete="off" className="min-w-0 flex-1 bg-transparent text-ui text-sol-text placeholder:text-sol-text-dim outline-none" />
+        <input ref={searchRef} autoFocus value={query} onChange={(e) => { setQuery(e.target.value); setHi(e.target.value.trim() ? ownerKeys.length : -1); }} placeholder={isStandingThread ? "Add a teammate" : "Add a role or teammate"} aria-label="Add a role or teammate" autoComplete="off" className="min-w-0 flex-1 bg-transparent text-ui text-sol-text placeholder:text-sol-text-dim outline-none" />
       </label>
       <div className="max-h-[320px] overflow-y-auto" data-owner-candidates>
         {shownRoles.length > 0 && <div className={LABEL}>{q ? "Roles" : "Suggested roles"}</div>}
@@ -316,8 +365,8 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
                 aria-checked={false}
                 className={`${ROW} own-cand`}
                 data-owner-candidate={c.key}
-                {...(i === hi ? { "data-highlighted": "" } : {})}
-                onMouseEnter={() => setHi(i)}
+                {...highlight(ownerKeys.length + i)}
+                onPointerEnter={hover(ownerKeys.length + i)}
                 onClick={() => add(c)}
               >
                 {isRole ? <Face role={roleOwnerOf(c.role)} size={20} /> : <Face person={c.person} size={20} />}
@@ -333,7 +382,7 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
                     </span>
                   )}
                 </span>
-                {!isRole && <Button type="button" variant="outline" size="xs" className="own-mk" onClick={(e) => { e.stopPropagation(); add(c, true); }}>Make driver</Button>}
+                {!isRole && <MakeDriverButton onClick={(e) => { e.stopPropagation(); add(c, true); }} />}
                 <button type="button" className={`${ICON_BTN} hover:text-sol-text own-plus`} title={`Add ${name}`} aria-label={`Add ${name}`} onClick={(e) => { e.stopPropagation(); add(c); }}>
                   <Plus className="w-3.5 h-3.5" />
                 </button>
@@ -349,7 +398,7 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
         {candidates.length === 0 && <div className="px-2 py-2 text-meta text-sol-text-dim">{q ? "Nobody matches" : "Nobody else to add"}</div>}
       </div>
       <div className={SEP} />
-      <div className="flex items-center gap-2 px-1 py-1">
+      <div className="flex items-center gap-2 px-1 py-1" data-owners-foot>
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-1">
           {chips.length ? chips.map((c) => <span key={c} className="own-chip">{c}</span>) : <span className="px-1 text-meta text-sol-text-dim">No changes</span>}
         </div>
@@ -361,6 +410,23 @@ function OwnersMenuBody({ conversationId, owners, onClose }: { conversationId: s
       </>}
     </div>
   );
+}
+
+/** Make driver, with its key: Shift+Enter on the highlighted row (the cap
+ *  hides on a touch screen, which shows the button on every row). */
+function MakeDriverButton({ onClick }: { onClick: (e: MouseEvent) => void }) {
+  return (
+    <Button type="button" variant="outline" size="xs" className="own-mk" onClick={onClick}>
+      Make driver <KeyCap size="xs">{SHIFT_ENTER}</KeyCap>
+    </Button>
+  );
+}
+
+/** "<First>'s <machine>", unless the machine's name already says whose. */
+export function machineOf(ownerName: string | null, device: string): string {
+  const first = ownerName?.split(/\s+/)[0];
+  if (!first || device.toLowerCase().startsWith(first.toLowerCase())) return device;
+  return `${first}'s ${device}`;
 }
 
 /**
