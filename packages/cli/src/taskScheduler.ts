@@ -724,16 +724,16 @@ export class TaskScheduler {
     }, delaysMs[attempt]);
   }
 
+  /** One lease beat. renewTaskLease answers null when the backend did not answer: that says nothing
+   *  about the lease, so the monitor stays (after a wake the first calls time out, and stopping here
+   *  lets a live run's lease lapse and the trigger refire). Only false, the backend's "lost", stops it. */
   private async heartbeat(taskId: string): Promise<void> {
     const renewed = await this.syncService.renewTaskLease(taskId, this.daemonId);
     if (renewed === false) {
-      this.log(`Lease for task ${taskId} is no longer held, stopping monitor`);
+      this.log(`Lease for task ${taskId} lost, stopping monitor`);
       this.cleanupTask(taskId);
     } else if (renewed === null) {
-      // No answer is not a lost lease: after a wake the first calls time out,
-      // and dropping the monitor here lets the lease lapse under a live run, so
-      // the reclaim sweep fires the trigger again.
-      this.log(`Lease renewal for task ${taskId} got no answer, will retry`, "warn");
+      this.log(`Lease renewal for task ${taskId} unanswered`, "warn");
     }
 
     await this.checkTaskCompletion(taskId);

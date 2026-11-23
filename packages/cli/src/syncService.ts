@@ -2725,9 +2725,6 @@ export class SyncService {
     }
   }
 
-  /** true: renewed. false: the backend answered that this daemon no longer holds
-   *  the lease. null: no answer (offline, timed out, signed out), which says
-   *  nothing about the lease, so the caller keeps its monitor and tries again. */
   async renewTaskLease(taskId: string, daemonId: string): Promise<boolean | null> {
     if (!this.apiToken) return null;
     try {
