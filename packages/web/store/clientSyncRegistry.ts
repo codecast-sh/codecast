@@ -731,6 +731,16 @@ export const CLIENT_SYNC_REGISTRY = {
     indexes: "_id, conversation_id",
     feeds: ["sessionReads.listMine"],
   },
+  // How loudly the viewer hears each session they set one for
+  // (sessionWatch.listMine): every message, needs input, or muted. Keyed
+  // `sn:<conversation id>` on the server row and the optimistic one alike, so
+  // a set paints at once and the echo lands on the same row. A snapshot: the
+  // query returns every setting, so a cleared one drops out.
+  sessionNotify: {
+    persistence: { kind: "collection", key: "sessionNotify" },
+    localFirst: true,
+    feeds: ["sessionWatch.listMine"],
+  },
   // The server's own per-channel unread numbers (chat.listChannels' rail). A
   // small array, so a meta blob: it is the only honest count for a channel whose
   // messages this client has never loaded, and having it at boot means the rail
@@ -2300,6 +2310,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   // The viewer's read marks are the same in every window of theirs, and the
   // ack that clears a card must clear it everywhere at once.
   sessionReads: "shared",
+  sessionNotify: "shared",
   chatRail: "shared",
   threadInbox: "shared",
   threadUnread: "shared",

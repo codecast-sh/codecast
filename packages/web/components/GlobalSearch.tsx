@@ -273,6 +273,7 @@ export function GlobalSearch() {
 
       {isOpen && query.length >= 2 && (
         <div
+          data-squeeze-skip=""
           style={{ top: panelTop }}
           className="fixed left-1/2 -translate-x-1/2 w-[min(1200px,calc(100vw-2rem))] bg-sol-bg border border-sol-border rounded-xl shadow-2xl shadow-black/50 overflow-hidden z-[240] modern:rounded-card modern:bg-sol-card modern:shadow-popover"
         >

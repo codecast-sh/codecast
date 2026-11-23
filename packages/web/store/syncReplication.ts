@@ -116,6 +116,18 @@ export function replicationTransport(name: string, selfId: string): { channel: R
 // or people window running with the app closed.
 const SOLO_FALLBACK_MS = 8000;
 
+// A host with no follower diffs and posts nothing. Followers say they are
+// here every PRESENT_EVERY_MS (and when their window shows); a host that has
+// heard no hello, write or presence for HOST_QUIET_AFTER_MS stops its runtime.
+// A background tab's timers can slow to once a minute, so the quiet window is
+// several presence beats long. Each time the host starts again it does so
+// under a new hostId and says so at once: a follower still holding the old
+// one resets and takes a fresh snapshot, so nothing written while the host
+// was quiet is missed. One window alone used to post ~260 messages a minute
+// to nobody.
+const PRESENT_EVERY_MS = 30_000;
+const HOST_QUIET_AFTER_MS = 150_000;
+
 export type SyncReplicationStatus = {
   principalId: string | null;
   role: "host" | "follower";
@@ -576,6 +588,15 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
     }, SOLO_FALLBACK_MS);
   };
 
+  const sayPresent = () => {
+    if (!stopped && !elected) channel.post({ type: "present", from: selfId } as any);
+  };
+  const presentTimer = setInterval(sayPresent, PRESENT_EVERY_MS);
+  const onVisible = () => {
+    if (document.visibilityState === "visible") sayPresent();
+  };
+  if (typeof document !== "undefined") document.addEventListener("visibilitychange", onVisible);
+
   const startFollower = () => {
     (useInboxStore.getState() as any)._setIDBWrite(bootWrite);
     follower = replicationFollowerFor(selfId, channel, (synced) => {
@@ -594,12 +615,54 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
     armSoloFallback();
   };
 
+  // The host's runtime listens through hostListeners, fed by the one channel
+  // listener above, so the message that woke it reaches it too.
+  const hostListeners = new Set<(msg: any) => void>();
+  let unhearFollowers: (() => void) | null = null;
+  let quietTimer: ReturnType<typeof setInterval> | null = null;
+  let lastFollowerAt = Date.now();
+  let hostRun = 0;
+  const hostChannel: ReplicationChannel = {
+    post: (msg) => channel.post(msg),
+    onMessage: (cb) => {
+      hostListeners.add(cb);
+      return () => {
+        hostListeners.delete(cb);
+      };
+    },
+  };
+  const wakeHost = (): ReplicationHost => {
+    lastFollowerAt = Date.now();
+    const hostId = `${selfId}.${++hostRun}`;
+    host = replicationHostFor(hostId, hostChannel, () => useInboxStore.getState());
+    // "I am the host now": a follower holding another hostId resets and asks
+    // for a snapshot; one that asks later skips this (seq 0 precedes it).
+    channel.post({ type: "update", hostId, seq: 0, origin: hostId, updates: [] } as any);
+    return host;
+  };
+
   const becomeElectedHost = () => {
     if (stopped) return;
     elected = true;
     if (soloTimer) clearTimeout(soloTimer);
-    host = promoteToHost(follower, () => replicationHostFor(selfId, channel, () => useInboxStore.getState()));
+    promoteToHost(follower, () => wakeHost());
     follower = null;
+    // Hears every hello, follower write and presence: the first one wakes a
+    // quiet host, and every message goes on to the runtime (which it woke).
+    unhearFollowers = channel.onMessage((msg: any) => {
+      if (stopped) return;
+      if (msg?.type === "hello" || msg?.type === "mut" || msg?.type === "present") {
+        lastFollowerAt = Date.now();
+        if (!host) wakeHost();
+      }
+      for (const cb of [...hostListeners]) cb(msg);
+    });
+    quietTimer = setInterval(() => {
+      if (host && Date.now() - lastFollowerAt > HOST_QUIET_AFTER_MS) {
+        host.stop();
+        host = null;
+      }
+    }, PRESENT_EVERY_MS);
     const internals = useInboxStore.getState() as any;
     // The write-through tee: persist first, then broadcast the same patches.
     internals._setIDBWrite((patches: any[], state: any) => {
@@ -650,6 +713,10 @@ export function startSyncReplication(opts: { eligible: boolean; principalId: str
     if (stopped) return;
     stopped = true;
     if (soloTimer) clearTimeout(soloTimer);
+    clearInterval(presentTimer);
+    if (quietTimer) clearInterval(quietTimer);
+    unhearFollowers?.();
+    if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisible);
     follower?.stop();
     host?.stop();
     lockAbort.abort();

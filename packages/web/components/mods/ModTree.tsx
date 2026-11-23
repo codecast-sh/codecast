@@ -5,7 +5,7 @@
 // ever HTML except the Canvas element, which goes through the same sanitizer as
 // a cast-canvas block.
 
-import { createContext, memo, useContext, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { Suspense, createContext, lazy, memo, useContext, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { DynamicIcon } from "./ModIcon";
 import { Button as UIButton } from "../ui/button";
 import { Switch } from "../ui/switch";
@@ -14,10 +14,8 @@ import { ModObjectPill } from "./ModObjectPill";
 import { isObjectRef } from "../../lib/mods/objects";
 import { MarkdownRenderer } from "../tools/MarkdownRenderer";
 import { CodeBlock } from "../CodeBlock";
-import { ShadowCanvas, type CanvasEvent } from "../HtmlSnippet";
-import { sanitizeCanvasHtml } from "../../lib/canvasSanitize";
+import type { CanvasEvent } from "../HtmlSnippet";
 import { KeyCap } from "../KeyboardShortcutsHelp";
-import { hydrateCharts } from "../../lib/castChart";
 import { formatRelativeTime } from "../../lib/conversationFormat";
 import { MOD_ELEMENTS, type ModNode } from "@codecast/shared/contracts/mods";
 import { isAppPath } from "../../lib/mods/host";
@@ -453,7 +451,7 @@ function Chart({ p }: { p: Record<string, any> }) {
     inner.className = "cast-chart";
     inner.setAttribute("data-spec", spec);
     el.appendChild(inner);
-    void hydrateCharts(el, el.clientWidth || 600);
+    void import("../../lib/castChart").then((m) => m.hydrateCharts(el, el.clientWidth || 600));
   }, [spec]);
   return <div ref={ref} className="min-w-0 text-sol-text" style={{ minHeight: dim(p.height) ?? 120 }} />;
 }
@@ -541,15 +539,17 @@ function Avatar({ p }: { p: Record<string, any> }) {
  * `data-press="name"` calls `on.name` with its other data-* values; an input
  * or select marked `data-change="name"` calls it with its value too.
  */
+// The sanitizer and shadow canvas load with the first mod canvas, not with every surface.
+const SanitizedCanvas = lazy(() => import("../HtmlSnippet").then((m) => ({ default: m.SanitizedCanvas })));
+
 function ModCanvas({ p }: { p: Record<string, any> }) {
   const { invoke } = useContext(Ctx);
-  const html = useMemo(() => sanitizeCanvasHtml(str(p.html)), [p.html]);
   const on = (p.on ?? {}) as Record<string, unknown>;
   const onEvent = (e: CanvasEvent) => {
     const handler = on[e.name];
     if (isFn(handler)) invoke(handler.$fn, [e.kind === "change" ? { value: e.value, ...e.data } : e.data]);
   };
-  return <div style={{ minHeight: dim(p.height) }}><ShadowCanvas html={html} onEvent={onEvent} /></div>;
+  return <div style={{ minHeight: dim(p.height) }}><Suspense fallback={null}><SanitizedCanvas html={str(p.html)} onEvent={onEvent} /></Suspense></div>;
 }
 
 function Unknown({ t }: { t: string }) {

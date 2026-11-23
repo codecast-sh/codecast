@@ -54,6 +54,23 @@ export function askFirstOffLedger(row: SecretMeta, team: LedgerTeam): SwitchLedg
   };
 }
 
+/** Turning Touch ID off, as the confirm shows it: reveals and approvals stop asking for a passkey. */
+export function touchIdOffLedger(row: SecretMeta, team: LedgerTeam): SwitchLedger {
+  return {
+    name: "Turn off Touch ID",
+    subject: `${row.name} · ${scopeSubject(team)}`,
+    shift: ["On", "Off"],
+    figures: [],
+    rows: [
+      { k: "Reveal", v: "One press", tone: "warn" },
+      ...(row.ask_first ? [{ k: "Approve", v: "One press", tone: "warn" as const }] : []),
+      { k: "To undo", v: "Turn Touch ID on" },
+    ],
+    confirm: "Turn off Touch ID",
+    keep: "Keep it on",
+  };
+}
+
 /** Restore, as the confirm shows it: the value coming back, and where the current one goes. */
 export function restoreLedger(row: SecretMeta, version: SecretVersionMeta, team: LedgerTeam): SwitchLedger {
   return {
