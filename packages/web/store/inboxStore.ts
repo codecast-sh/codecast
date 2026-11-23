@@ -10099,6 +10099,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
       // from this window until the thread is read again.
       if (holdsUnsentComment(table[id])) continue;
       if (table[id] !== undefined) delete table[id];
+      // The host's drop of a session took its field locks with it
+      // (dropSessionInDraft); this window's go too, or one this window booted
+      // with (IndexedDB) hides the row when it comes back.
+      if (key === "sessions" || key === "conversations") dropRowFieldLocks(this, id, [key]);
     }
   }),
 
