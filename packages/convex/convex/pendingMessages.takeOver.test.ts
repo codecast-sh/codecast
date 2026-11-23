@@ -249,6 +249,21 @@ describe("a paused role may not write into the session", () => {
   });
 });
 
+describe("a paused role does not take the wheel back itself", () => {
+  test("its own session making it driver again, or taking it off, is refused; the person who owns it may", async () => {
+    const { ctx, row } = await world();
+    await composerSend(ctx, row("filed"), ME);
+    await expect(performSetSessionDriver(ctx, ME as any, { session_id: "filed", driver: { kind: "role" }, from_session: "s-seat" }))
+      .rejects.toThrow(/^Me drives jxfiled, so @growth is paused there, and only a person who owns or runs it can hand @growth the wheel back\./);
+    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "filed", change: { role: null }, from_session: "s-seat" })).rejects.toThrow(/@growth is paused there/);
+    expect(row("filed").driver_user_id).toBe(ME);
+    expect(row("filed").org_role_id).toBeTruthy();
+
+    await performSetSessionDriver(ctx, ME as any, { session_id: "filed", driver: { kind: "role" } });
+    expect(roleDrives(row("filed"))).toBe(true);
+  });
+});
+
 describe("Tell <role>", () => {
   test("sends the person's words to the role's own session, naming the session, and the role keeps driving", async () => {
     const { ctx, tables, row } = await world();

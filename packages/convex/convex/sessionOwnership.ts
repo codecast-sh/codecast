@@ -4,7 +4,7 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { addSessionOwnerRow, removeSessionOwnerRow, listSessionOwnerIds, ownersFactsOf, syncPrimaryOwnerCache, humanStarterUser, restoreOwnerRows, writeDriver, type OwnerRowSnapshot } from "./sessionOwners";
 import { isLeave, leaveMovesFirst, listedOwnerIds, pinnedDriverAfterAdd, starterOf } from "@codecast/shared/contracts/sessionOwners";
@@ -22,6 +22,8 @@ import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { findOwnableConversation, personName, roleMayHoldSession, tellSession } from "./lib/sessionTell";
 import { performReparentSessionToDevice } from "./devices";
 import { ownRunAsRoleLeaves } from "./lib/roleRelease";
+import { actsForPausedRole } from "./lib/sessionTakeOver";
+import { rolePaused } from "@codecast/shared/contracts";
 export { personName, roleMayHoldSession };
 import { labelsOf, noteOrgChange, rememberOrgRecord, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
 
@@ -544,17 +546,33 @@ async function setDriver(ctx: { db: any }, conversationId: Id<"conversations">, 
   if (await writeDriver(ctx, conversationId, userId)) await reroutePendingDecisionsForConversation(ctx, conversationId, Date.now());
 }
 
+// A paused role never takes the wheel back itself, nor swaps itself off: an
+// agent acting for it runs as a person who may edit the owners, so the
+// account check alone would let it. Only a person who owns or runs the
+// session hands the wheel back.
+async function refusePausedRoleSelf(ctx: { db: any }, authUserId: Id<"users">, conversation: any, fromSession?: string): Promise<void> {
+  const from = fromSession?.trim();
+  if (!from || !rolePaused(conversation)) return;
+  const sender = await findConversationByAnyRef(ctx, from, authUserId);
+  if (!actsForPausedRole(sender, conversation)) return;
+  const [role, driver] = await Promise.all([ctx.db.get(conversation.org_role_id), ctx.db.get(conversation.driver_user_id)]);
+  const handle = role?.handle ? `@${role.handle}` : "the role";
+  const name = personName(driver);
+  throw new Error(`${name} drives ${conversation.short_id ?? String(conversation._id).slice(0, 7)}, so ${handle} is paused there, and only a person who owns or runs it can hand ${handle} the wheel back. Ask ${name} in your own thread (cast decide reaches them).`);
+}
+
 // Hand the wheel to the filed role or to one of the people who own it. A
 // person must already own the session (or be its human starter while nobody
 // does); a role must be the one it is filed under.
 export async function performSetSessionDriver(
   ctx: { db: any },
   authUserId: Id<"users">,
-  args: { session_id: string; driver: DriverTarget },
+  args: { session_id: string; driver: DriverTarget; from_session?: string },
 ): Promise<{ ok: true; short_id: string; conversation_id: Id<"conversations">; driver: SessionDriver | null }> {
   const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
   if (!(await mayEditOwners(ctx, authUserId, conversation))) throw new Error("Only an owner of the session, or the account that runs it, can change who drives it");
+  await refusePausedRoleSelf(ctx, authUserId, conversation, args.from_session);
   if (args.driver.kind === "none") {
     await setDriver(ctx, conversation._id, null);
     const driver = driverOf({ ...conversation, driver_user_id: undefined }, await ownerIdsOrStarter(ctx, conversation));
@@ -640,12 +658,15 @@ export async function performApplyOwnersChange(
   if (change.role !== undefined) {
     const role = change.role === null ? null : await resolveOwnerRoleRef(ctx, authUserId, start, change.role);
     const before = await resolveOwnableConversation(ctx, authUserId, args.session_id);
-    if (String(before.org_role_id ?? "") !== String(role ?? "")) results.push(await run({ kind: "role", role_id: role }));
+    if (String(before.org_role_id ?? "") !== String(role ?? "")) {
+      await refusePausedRoleSelf(ctx, authUserId, before, args.from_session);
+      results.push(await run({ kind: "role", role_id: role }));
+    }
   }
   // Taking yourself out is a leave, whichever way the change says it.
   const others = (change.remove ?? []).filter((id) => id !== String(authUserId));
   if (others.length) results.push(await run({ kind: "user", owners: others, mode: "remove" }));
-  if (change.driver) await performSetSessionDriver(ctx, authUserId, { session_id: args.session_id, driver: change.driver });
+  if (change.driver) await performSetSessionDriver(ctx, authUserId, { session_id: args.session_id, driver: change.driver, from_session: args.from_session });
   if (isLeave(change, String(authUserId))) results.push(await performLeaveSession(ctx, authUserId, { session_id: args.session_id, move_to_device_id: change.leave?.move_to_device_id, from_session: args.from_session }));
   // Read by id: after a leave the caller may no longer see it.
   const conversation = await ctx.db.get(start._id);
@@ -760,9 +781,10 @@ export const setSessionDriver = mutation({
   args: {
     session_id: SESSION_REF,
     driver: DRIVER_TARGET,
+    from_session: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
-  handler: async (ctx, args) => performSetSessionDriver(ctx, await requireAuth(ctx, args.api_token), { session_id: args.session_id, driver: args.driver }),
+  handler: async (ctx, args) => performSetSessionDriver(ctx, await requireAuth(ctx, args.api_token), { session_id: args.session_id, driver: args.driver, from_session: args.from_session }),
 });
 
 // Leave a session, moving it off your account first when it runs there.

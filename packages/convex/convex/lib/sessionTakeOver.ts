@@ -5,7 +5,7 @@
 // into the session; it asks the person who drives, in its own thread.
 
 import type { Id } from "../_generated/dataModel";
-import { actsForRole } from "@codecast/shared/contracts";
+import { actsForRole, rolePaused } from "@codecast/shared/contracts";
 import { takeOverBySend } from "@codecast/shared/contracts/sessionOwners";
 import { addSessionOwnerRow, ownersFactsOf, syncPrimaryOwnerCache, writeDriver } from "../sessionOwners";
 import { personName } from "./sessionTell";
@@ -30,6 +30,13 @@ export async function takeWheelOnSend(ctx: { db: any; scheduler?: { runAfter: (d
   }
 }
 
+/** The sender acts for the role a person paused on the target: its standing
+ *  session, or a session it started and still drives. */
+export function actsForPausedRole(sender: any, target: any): boolean {
+  if (!sender || !actsForRole(sender) || !rolePaused(target)) return false;
+  return String(sender.standing_role_id ?? sender.org_role_id) === String(target.org_role_id);
+}
+
 /**
  * Why a send from a role into a session filed under it is refused: a person
  * took the wheel, so the role is paused there. The sender acts for the role
@@ -38,8 +45,7 @@ export async function takeWheelOnSend(ctx: { db: any; scheduler?: { runAfter: (d
  * into the role (`cast role wake`) is never this. Null when the send may go.
  */
 export async function pausedRoleRefusal(ctx: { db: any }, sender: any, target: any): Promise<string | null> {
-  if (!sender || !actsForRole(sender) || target.standing_role_id || !target.org_role_id || !target.driver_user_id) return null;
-  if (String(sender.standing_role_id ?? sender.org_role_id) !== String(target.org_role_id)) return null;
+  if (!actsForPausedRole(sender, target)) return null;
   if ([sender.parent_conversation_id, sender.spawned_by_conversation_id].some((id) => id && String(id) === String(target._id))) return null;
   const [role, driver] = await Promise.all([ctx.db.get(target.org_role_id), ctx.db.get(target.driver_user_id)]);
   const name = personName(driver);

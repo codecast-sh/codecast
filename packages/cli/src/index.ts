@@ -4254,7 +4254,7 @@ program
     if (opts.drive) {
       const drive = opts.drive.trim();
       if (isRoleRef(drive)) await requireFiledRole(await readOwners(sessionId), drive, sessionId);
-      await cliPost("/cli/sessions/drive", { session_id: sessionId, driver: isRoleRef(drive) ? { kind: "role" } : { kind: "user", user_id: drive } });
+      await cliPost("/cli/sessions/drive", { session_id: sessionId, driver: isRoleRef(drive) ? { kind: "role" } : { kind: "user", user_id: drive }, from_session });
     }
     const read = await readOwners(sessionId);
     const note = already && !opts.drive ? ` ${c.dim}(already an owner)${c.reset}` : "";
