@@ -1194,7 +1194,8 @@ function AssistantBlockImpl({
   // output and the setup card goes under the row.
   const renderToolBlock = (tc: ToolCall, result: ToolResult | undefined, src: { messageId: string; messageUuid?: string; timestamp: number }) => {
     const setup = result && hasAgentSetupMarker(result.content) ? extractAgentSetup(result.content) : null;
-    const row = renderToolRow(tc, setup ? { ...result!, content: setup.text } : result, src);
+    // Waiting on the person, not the agent's mistake: the card under it says what to do, so the row is not drawn as an error.
+    const row = renderToolRow(tc, setup ? { ...result!, content: setup.text, is_error: false } : result, src);
     if (!setup?.tool || !conversationId) return row;
     return (
       <Fragment key={tc.id}>

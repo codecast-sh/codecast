@@ -20,6 +20,8 @@ export const sessionTypes = new Set([
   // The hourly fold-up of sessions waiting for input. Names no conversation —
   // it opens the inbox.
   "sessions_need_input",
+  // New replies in a session the reader subscribed to every message of.
+  "session_activity",
 ]);
 
 // Which rows wear an agent's face. A row about a session does; the daemon's
@@ -114,6 +116,7 @@ export const typeLabels: Record<string, string> = {
   daemon_overloaded: "daemon under load",
   machine_overloaded: "machine overloaded",
   sessions_need_input: "waiting for you",
+  session_activity: "new messages",
   goal_stall: "focus stalled",
   device_shared: "shared a machine",
   card_waiting: "card waiting on you",
@@ -163,6 +166,7 @@ export const typeColors: Record<string, string> = {
   daemon_overloaded: "text-sol-orange",
   machine_overloaded: "text-red-400",
   sessions_need_input: "text-sol-green",
+  session_activity: "text-sol-blue",
   goal_stall: "text-sol-yellow",
   device_shared: "text-sol-cyan",
   card_waiting: "text-sol-orange",

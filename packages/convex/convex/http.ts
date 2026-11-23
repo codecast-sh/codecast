@@ -1401,6 +1401,7 @@ http.route({
           card: body.card,
           // `cast decide --run`: a cast command for a person to run (commandRun.ts).
           run: typeof body.run === "string" ? body.run : undefined,
+          run_on: typeof body.run_on === "string" ? body.run_on : undefined,
           // LM5: the expectations proposal the decision settles.
           proposal: body.proposal, ...decisionImpactOf(body),
         });

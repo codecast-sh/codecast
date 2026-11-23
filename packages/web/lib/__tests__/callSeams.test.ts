@@ -76,6 +76,9 @@ class FakeRoom {
 
 mock.module("livekit-client", () => ({ ...realLivekit, Room: FakeRoom }));
 
+// livekit-client loads before a room exists (lib/calls/livekit); these drive rooms directly.
+await (await import("../calls/livekit")).loadLivekit();
+
 const realSounds = { ...await import("../sounds") };
 afterAll(() => { mock.module("../sounds", () => realSounds); });
 const soundLog: string[] = [];
