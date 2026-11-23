@@ -9,7 +9,8 @@
 // page (packages/cli watchActions.ts), so a viewer can draw the cursor the
 // pixels never show.
 
-import { loopbackWsUrl, type TerminalEndpoint } from "./terminal/endpoint";
+import type { TerminalEndpoint } from "./terminal/endpoint";
+import { loopbackWsUrl } from "./terminal/loopbackUrl";
 import { openWebSocket } from "./openWebSocket";
 
 export interface WatchTabInfo {
