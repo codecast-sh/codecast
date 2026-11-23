@@ -109,3 +109,11 @@ export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meI
   const dirty = added.length > 0 || gone.length > 0 || roleChanged || driverChanged;
   return { added, removed, leaving, roleChanged, driverChanged, dirty, change, inverse };
 }
+
+/** The machines a leave can move a session on your account to: the team's
+ *  agent boxes that are not yours. A cloud box is left out, since the cloud
+ *  migration rail moves only within one account. */
+export function teamMoveTargets<B extends { device_id: string; is_remote?: boolean; local_project_roots?: string[] }>(own: readonly { device_id: string }[], boxes: readonly B[] | null | undefined): B[] {
+  const mine = new Set(own.map((d) => d.device_id));
+  return (boxes ?? []).filter((b) => !mine.has(b.device_id) && !b.is_remote).map((b) => ({ ...b, local_project_roots: b.local_project_roots ?? [] }));
+}

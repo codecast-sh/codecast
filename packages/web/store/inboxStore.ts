@@ -6492,7 +6492,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // sendMessage for a conversation that may still be a local stub (a session
   // started a moment ago): resolves the real id first, then sends under the
   // same client id as the optimistic bubble.
-  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
+  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string, opts?: SendTakeOver) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
   stopAndSend: (convId: string, content: string, clientId: string, opts?: SendTakeOver) => Promise<any>;
@@ -12102,13 +12102,15 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // is still on its way (parked, or fenced by a binding rewire) leaves the
   // bubble pending: the stranded-stub sweep re-creates and re-sends it under
   // the same client id. Only a refused create fails the bubble.
-  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string) => {
+  sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string, opts?: SendTakeOver) => {
+    // Only the args a send carries go on the wire: older servers read four.
+    const send = (id: string) => (opts?.take_over ? get().sendMessage(id, content, imageIds, clientId, undefined, opts) : get().sendMessage(id, content, imageIds, clientId));
     if (isConvexId(convId)) {
-      get().sendMessage(convId, content, imageIds, clientId);
+      send(convId);
       return;
     }
     void get().awaitConvexId(convId).then(
-      (realId: string) => get().sendMessage(realId, content, imageIds, clientId),
+      (realId: string) => send(realId),
       (error: unknown) => {
         if (!isRefusedDispatchError(error)) return;
         if (clientId) get().markOptimisticAsFailed(convId, clientId);

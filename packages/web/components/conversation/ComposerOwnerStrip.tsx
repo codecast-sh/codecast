@@ -18,7 +18,7 @@
 import { memo } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useInboxStore } from "../../store/inboxStore";
-import { personShortName, roleShortName, setComposerSendAs, setComposerTell, useComposerOwnership } from "../../lib/composerOwnership";
+import { composerOwnerLine, setComposerSendAs, setComposerTell, useComposerOwnership } from "../../lib/composerOwnership";
 import { useOwnersFromStore } from "../OwnersBadge";
 import { Face as OwnerFace } from "../OwnersMenu";
 import { SegmentedToggle } from "../SegmentedToggle";
@@ -39,19 +39,10 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
     const row = s.sessions?.[s.resolveLiveSessionId?.(conversationId) ?? conversationId] ?? s.conversations?.[conversationId];
     return !!row?.standing_role_id;
   });
-  const { driver, role, ownerList, displayFor, session } = owners;
+  const line = composerOwnerLine(owners, standing, tell);
+  const label = line?.label ?? null;
+  const tellRole = line?.tellRole ?? null;
   const me: string | undefined = owners.currentUser?._id?.toString?.();
-  const mine = !!me && !standing && (ownerList.includes(me) || session.runner_id === me);
-  const fromRole = mine && driver?.kind === "role" && role ? role : null;
-  const fromPerson = mine && driver?.kind === "user" && driver.user_id !== me ? displayFor(driver.user_id) : null;
-  const paused = mine && driver?.kind === "user" && driver.user_id === me && role ? role : null;
-  // Who the line names and how it says them: the role by its short name, a
-  // person by their first name.
-  const driverName = fromRole ? roleShortName(fromRole.name) : fromPerson ? personShortName(fromPerson.name) : "";
-  const telling = (!!fromRole || !!fromPerson) && tell;
-  const label = fromRole || fromPerson ? (telling ? `Tell ${driverName}` : "Take over") : null;
-  // Only a role is told in its own session; a person is told in this one.
-  const tellRole = telling && fromRole ? fromRole.name : null;
 
   // Publish what Send does to the composer's own store, for this session.
   useWatchEffect(() => {
@@ -59,7 +50,8 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
     return () => setComposerSendAs(conversationId, null);
   }, [conversationId, label, tellRole]);
 
-  if (paused) {
+  if (line?.kind === "paused") {
+    const paused = line.role;
     return (
       <div className={className}><div data-cc-owner-strip="paused" className={STRIP}>
         <OwnerFace role={paused} size={16} paused />
@@ -75,21 +67,22 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
       </div></div>
     );
   }
-  if (!active || (!fromRole && !fromPerson)) return null;
+  if (!active || !line) return null;
+  const { driverName, telling } = line;
   return (
-    <div className={className}><div data-cc-owner-strip={fromRole ? "role" : "person"} className={STRIP}>
-      {fromRole ? <OwnerFace role={fromRole} size={16} driver /> : <OwnerFace person={{ _id: driver!.kind === "user" ? driver!.user_id : "", ...fromPerson! }} size={16} driver />}
+    <div className={className}><div data-cc-owner-strip={line.kind} className={STRIP}>
+      {line.kind === "role" ? <OwnerFace role={line.role} size={16} driver /> : <OwnerFace person={line.person} size={16} driver />}
       <span className="flex-1 min-w-0 truncate">
         <b className="font-medium text-sol-text">{driverName}</b>
         <span className="max-sm:hidden">{telling ? " stays driver · your words go to them" : " drives · sending takes over"}</span>
       </span>
       <SegmentedToggle
         size="sm"
-        value={tell ? "tell" : "take"}
+        value={telling ? "tell" : "take"}
         onChange={(key) => setComposerTell(conversationId, key === "tell")}
         items={[
-          { key: "take", label: "Take over", title: fromRole ? "Send here and drive this session; the role pauses" : `Send here and drive this session in ${driverName}'s place` },
-          { key: "tell", label: `Tell ${driverName}`, title: fromRole ? `Send to ${fromRole.name}'s own session; it keeps driving` : `Send here; ${driverName} keeps driving` },
+          { key: "take", label: "Take over", title: line.kind === "role" ? "Send here and drive this session; the role pauses" : `Send here and drive this session in ${driverName}'s place` },
+          { key: "tell", label: `Tell ${driverName}`, title: line.kind === "role" ? `Send to ${line.role.name}'s own session; it keeps driving` : `Send here; ${driverName} keeps driving` },
         ]}
       />
       <span className="own-strip-key inline-flex shrink-0 items-center gap-1 text-meta text-sol-text-dim max-sm:hidden" data-owner-strip-key>

@@ -10,6 +10,7 @@ import { deviceDisplayName, useDevices, type Device } from "../components/Device
 import { requestSessionMove } from "../lib/sessionCommands";
 import { useInboxStore, isConvexId } from "../store/inboxStore";
 import { planBulkMove } from "../lib/bulkMovePlan";
+import { teamMoveTargets } from "../lib/ownersDraft";
 import { useSettingsData } from "./useSyncSettings";
 
 const api = _api as any;
@@ -25,10 +26,7 @@ export function useMoveTargets() {
   const { locals, remotes, loaded } = useDevices();
   const { data: boxes } = useSettingsData("agentBoxes");
   return useMemo(() => {
-    const own = new Set([...locals, ...remotes].map((d) => d.device_id));
-    const team = ((boxes ?? []) as any[])
-      .filter((b) => !own.has(b.device_id) && !b.is_remote)
-      .map((b) => ({ ...b, local_project_roots: b.local_project_roots ?? [] })) as Device[];
+    const team = teamMoveTargets([...locals, ...remotes], (boxes ?? []) as any[]) as Device[];
     return { locals, team, remotes, all: [...locals, ...team, ...remotes], loaded: loaded || team.length > 0 };
   }, [locals, remotes, boxes, loaded]);
 }

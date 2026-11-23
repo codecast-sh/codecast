@@ -18,6 +18,7 @@ import { GestureHandlerRootView, NativePressable } from '@/lib/gestureHandler';
 import { PulsingDot } from '@/components/SessionItem';
 import { ImageGallery } from '@/components/ImageGallery';
 import { useInboxStore, type OptimisticImage } from '@codecast/web/store/inboxStore';
+import type { SendTakeOver } from '@codecast/web/store/sessionOwnersSlice';
 import { awaitUpload, releaseUpload } from '@codecast/web/lib/pendingUploads';
 import { insertImagePlaceholder, dropImagePlaceholder } from '@codecast/web/lib/imagePlaceholder';
 import { startUpload, forgetUpload, chooseImageSource, pickImages } from '@/components/chat/chatUpload';
@@ -42,12 +43,14 @@ export type ComposerRecording = PickedRecording & { begun: BegunRecording | null
 // create lands, when this is a session started a moment ago). An image still
 // uploading rides the bubble as its local preview; the send goes out once
 // the uploads settle, the same detached path as web MessageInput.
-export function dispatchComposerSend(conversationId: string, content: string, images?: OptimisticImage[]) {
+// `opts.take_over`: the session composer's own send, whose owner line said it
+// takes the wheel (web lib/composerOwnership takeOverFor). Other callers leave it out.
+export function dispatchComposerSend(conversationId: string, content: string, images?: OptimisticImage[], opts?: SendTakeOver) {
   const store = useInboxStore.getState();
   const clientId = store.addOptimisticMessage(conversationId, content, images?.length ? images : undefined);
   if (!images?.some(img => img.uploading)) {
     const ids = images?.map(img => img.storage_id!) ?? [];
-    store.sendMessageWhenReady(conversationId, content, ids.length ? ids : undefined, clientId);
+    store.sendMessageWhenReady(conversationId, content, ids.length ? ids : undefined, clientId, opts);
     return;
   }
   void (async () => {
@@ -62,7 +65,7 @@ export function dispatchComposerSend(conversationId: string, content: string, im
       return;
     }
     s.resolvePendingUploads(conversationId, clientId, resolved);
-    s.sendMessageWhenReady(conversationId, content, resolved.length ? resolved.map(img => img.storage_id!) : undefined, clientId);
+    s.sendMessageWhenReady(conversationId, content, resolved.length ? resolved.map(img => img.storage_id!) : undefined, clientId, opts);
   })();
 }
 

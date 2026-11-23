@@ -80,6 +80,8 @@ import { openSelectText } from '@/components/SelectTextSheet';
 import { readableText } from '@/lib/markdown';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { ScreenRecordingCard } from '@/components/ScreenRecordingCard';
+import { ComposerOwnerStrip } from '@/components/session/ComposerOwnerStrip';
+import { composerSendRoute, takeOverFor } from '@codecast/web/lib/composerOwnership';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
 import { sessionLanded } from '@/lib/compose';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
@@ -2524,6 +2526,8 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     : undefined;
 
   const draftRef = useRef(seed);
+  // A Tell on its way to the role's own session (handleSend).
+  const tellingRef = useRef(false);
   // Same store path as web MessageInput: debounce setDraft / clearDraftFinal.
   // A parallel patchConversation of conversations.draft_message is the race
   // that writes the just-sent text back after the send's clear.
@@ -2577,6 +2581,39 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     if (allowanceOut) return;
     setError(null);
 
+    // The owner line decides where the words go and whether they take the
+    // wheel (web lib/composerOwnership). Tell sends to the role's own session:
+    // the words leave the box only once the server has queued them.
+    const route = hosted ? null : composerSendRoute(conversationId as string);
+    if (route === 'tell-role') {
+      if (images.attached) { setError('Tell sends words only: take over to send files'); return; }
+      if (!trimmedMessage || tellingRef.current) return;
+      const st = useInboxStore.getState() as any;
+      const to: string = (st.sessions?.[st.resolveLiveSessionId?.(conversationId) ?? conversationId] ?? st.conversations?.[conversationId])?.role?.name ?? 'the role';
+      tellingRef.current = true;
+      const sent = (words: string) => {
+        tellingRef.current = false;
+        // Words typed while it went stay in the box.
+        if (nativeComposerText(inputRef.current as { _lastNativeText?: unknown } | null, draftRef.current).trim() === trimmedMessage) {
+          clearTimeout(draftTimerRef.current);
+          draftRef.current = '';
+          clearAfterSend(trimmedMessage, { keepFocus: false });
+          useInboxStore.getState().clearDraftFinal(conversationId);
+        }
+        showNotice(words);
+      };
+      void useInboxStore.getState().tellSessionRole(conversationId as string, trimmedMessage, crypto.randomUUID()).then(
+        () => sent(`Sent to ${to}`),
+        (err: unknown) => {
+          // Parked in the outbox while offline: it goes when the app reconnects.
+          if ((err as { parked?: boolean } | null)?.parked) { sent(`Queued for ${to}`); return; }
+          tellingRef.current = false;
+          setError(err instanceof Error ? err.message : `Could not send to ${to}`);
+        },
+      );
+      return;
+    }
+
     const sendImages = images.optimisticImages();
     const content = images.withRecording(attachReviewToMessage(conversationId, trimmedMessage)) || IMAGE_ONLY_CONTENT;
 
@@ -2585,7 +2622,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     // lays out without animating, and the bubble would snap in instead of rising.
     requestAnimationFrame(() => {
       try {
-        dispatchComposerSend(conversationId, content, sendImages);
+        dispatchComposerSend(conversationId, content, sendImages, takeOverFor(route));
         // Reported only once the send is committed: a refused one is retried.
         suggestion.settleSend(trimmedMessage);
       } catch (error) {
@@ -2682,7 +2719,12 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
             if (t !== null) { setMessage(t); inputRef.current?.focus(); }
           },
         }}
-        above={hosted ? null : <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />}
+        above={hosted ? null : (
+          <>
+            {isConvexId(String(conversationId)) && <ComposerOwnerStrip conversationId={conversationId as string} active={!!message.trim()} />}
+            <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />
+          </>
+        )}
       />
     </RNView>
   );

@@ -6,6 +6,8 @@
 // and the header agree; the role's face is read live from the role rows, as
 // the header reads it. A session only you own shows nothing.
 import { driverOf } from "@codecast/shared/contracts/sessionOwners";
+import { roleDrives } from "@codecast/shared/contracts";
+import { railRowPlacement, type InboxSession } from "../store/inboxStore";
 import type { RoleLike } from "../components/org/RoleFace";
 import { roleIconSig, type RoleRows } from "./sessionIdentity";
 
@@ -69,4 +71,14 @@ export function coOwnersOf(row: Row, meId: string | null, members: readonly Memb
 /** The row's half of the co-owners as one string, for a memo key. */
 export function coOwnersSig(row: Row): string {
   return [row.user_id ?? "", row.owner_ids?.join(",") ?? "", row.org_role_id ?? "", row.driver_user_id ?? "", row.owner_user_id ?? "", row.standing_role_id ?? ""].join("|");
+}
+
+// The role a session waits on (shared roleDrives): its role drives it and its
+// own state is not working, so placement files it under Working, and the card
+// says "With <role>". The role snapshot on the row names it only when it is
+// the driving role (a standing session's snapshot is its own role).
+export function withRoleOf(session: InboxSession, t: number): string | null {
+  const role = session.role;
+  if (!roleDrives(session) || !role || String(role._id) !== String(session.org_role_id)) return null;
+  return railRowPlacement(session, t).state !== "working" ? role.name : null;
 }

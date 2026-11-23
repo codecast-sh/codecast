@@ -19,6 +19,12 @@ import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ImageViewer } from '@/components/chat/ImageViewer';
 import { IdentityPrefsOverride, useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
+import { OwnerFace } from '@/components/owners/OwnerFace';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
+import { roleRowsOf } from '@codecast/web/lib/roleRows';
+import type { RoleRows } from '@codecast/web/lib/sessionIdentity';
+import { coOwnersOf, coOwnersSig, filedRoleOf, filedRoleSig, withRoleOf } from '@codecast/web/lib/coOwners';
+import { roleShortName } from '@codecast/web/lib/composerOwnership';
 
 export type SessionData = {
   _id: string;
@@ -133,6 +139,10 @@ type InboxRowEnv = {
   projectFilter: string | null;
   /** The inbox_image_thumbs pref, stamped LWW so the toggle follows the user. */
   showImageThumb: boolean;
+  /** Who is looking, the roster and the role rows: a row's co-owner faces. */
+  meId: string | null;
+  teamMembers: any[];
+  roleRows: RoleRows;
 };
 const InboxRowEnvContext = createContext<InboxRowEnv | null>(null);
 
@@ -142,9 +152,12 @@ export function InboxRowEnvProvider({ children }: { children: ReactNode }) {
   const showImageThumb = useInboxStore((s) => resolveImageThumbs(s.clientState?.ui));
   // The faces and identity lines read this instead of each subscribing.
   const prefs = useIdentityPrefs();
+  const meId = useInboxStore((s) => (s.currentUser as any)?._id?.toString?.() ?? null) as string | null;
+  const teamMembers = useInboxStore(teamMembersOf) as any[];
+  const roleRows = useInboxStore((s) => roleRowsOf(s as never));
   const env = useMemo(
-    () => ({ projectFilter, showImageThumb }),
-    [projectFilter, showImageThumb],
+    () => ({ projectFilter, showImageThumb, meId, teamMembers, roleRows }),
+    [projectFilter, showImageThumb, meId, teamMembers, roleRows],
   );
   return (
     <IdentityPrefsOverride.Provider value={prefs}>
@@ -162,7 +175,7 @@ function useRowEnv(): InboxRowEnv {
 export function SessionItem({ session, isUnread, selected, onPress, onLongPress, reviveAt }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; onLongPress?: () => void; reviveAt?: number }) {
   if (PERF_PROBE) probeRender('SessionItem');
   const Theme = useTheme();
-  const { projectFilter, showImageThumb } = useRowEnv();
+  const { projectFilter, showImageThumb, meId, teamMembers, roleRows } = useRowEnv();
   // The project names itself on the row unless the inbox is already narrowed
   // to it (the title says it then).
   const rowProject = projectName(session);
@@ -198,6 +211,14 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
   // Handoff note starts clamped; tapping the pill body reveals the full reason.
   const [pingExpanded, setPingExpanded] = useState(false);
   const title = sessionTitle(session);
+  // Its other owners (the web card's lib/coOwners): the driver ringed, a
+  // paused role faded. A role-driven session waiting on input says "With
+  // <role>" on its meta line.
+  const filedRole = filedRoleOf(session as any, roleRows);
+  const roleSig = filedRoleSig(filedRole);
+  const ownersSig = coOwnersSig(session as any);
+  const coOwners = useMemo(() => coOwnersOf(session as any, meId, teamMembers, filedRole), [ownersSig, roleSig, meId, teamMembers]); // eslint-disable-line react-hooks/exhaustive-deps
+  const withRole = sLabel ? null : withRoleOf(session as any, Date.now());
 
   return (
     <TouchableOpacity
@@ -235,6 +256,14 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
         </RNView>
         <RNView style={styles.rightMeta}>
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
+          {coOwners && (
+            <RNView style={styles.coOwners} accessibilityLabel={coOwners.title}>
+              {coOwners.faces.map((f) => f.kind === 'role'
+                ? <OwnerFace key={f.key} role={f.role} size={13} driver={f.driver} paused={f.paused} />
+                : <OwnerFace key={f.key} person={f} size={13} driver={f.driver} />)}
+              {coOwners.more > 0 && <RNText style={styles.timeText}>+{coOwners.more}</RNText>}
+            </RNView>
+          )}
           <RNText style={styles.timeText}>
             {formatRelativeTime(session.updated_at)}
           </RNText>
@@ -302,8 +331,11 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
         </RNText>
       )}
 
-      {(project || showAuthor || blockedBadge || ship) ? (
+      {(project || showAuthor || blockedBadge || ship || withRole) ? (
       <RNView style={styles.conversationMeta}>
+        {/* The row's state word for a role-driven session waiting on input,
+            on the meta line so the title keeps the header's width. */}
+        {withRole && <RNText style={styles.withRole} numberOfLines={1}>With {roleShortName(withRole)}</RNText>}
         {ship && <ShipTag ship={ship} />}
         {project && <ProjectTag name={project} />}
         {showAuthor && (
@@ -575,6 +607,9 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.3,
   },
+  // Working's colour, as the web card's "With <role>" word.
+  withRole: { color: Theme.green, fontSize: 11, fontWeight: '600', flexShrink: 1 },
+  coOwners: { flexDirection: 'row', alignItems: 'center', gap: 1 },
   timeText: {
     fontSize: 11,
     color: Theme.textMuted0,

@@ -4,6 +4,7 @@
 import { create } from "zustand";
 import { roleDrives } from "@codecast/shared/contracts";
 import { useInboxStore } from "../store/inboxStore";
+import type { OwnerRole, OwnersApi } from "../hooks/useOwners";
 
 /** What Send does while the line shows: its words, and the role it tells. */
 export type ComposerSendAs = { label: string; tellRole: string | null };
@@ -40,3 +41,37 @@ export const roleShortName = (name: string) => name.replace(/\s+lead$/i, "") || 
 
 /** A person's name as the composer says it: their first name. */
 export const personShortName = (name: string) => name.split(/\s+/)[0] || name;
+
+/**
+ * What the line above a session's composer says (web ComposerOwnerStrip, the
+ * phone's composer strip), read off the owners: only for an owner or the
+ * runner, never in a role's own session.
+ *   role     a role drives: sending takes over from it, or Tell it
+ *   person   another person drives: sending takes over, or Tell keeps them
+ *   paused   you drive and the filed role waits
+ * `label` is what Send does while the line shows; `tellRole` the role a Tell
+ * goes to (a person is told in this session).
+ */
+export type ComposerOwnerLine =
+  | { kind: "paused"; role: OwnerRole; label: null; tellRole: null }
+  | { kind: "role"; role: OwnerRole; driverName: string; telling: boolean; label: string; tellRole: string | null }
+  | { kind: "person"; person: { _id: string; name: string; image?: string }; driverName: string; telling: boolean; label: string; tellRole: null };
+
+export function composerOwnerLine(
+  owners: Pick<OwnersApi, "driver" | "role" | "ownerList" | "displayFor" | "session" | "currentUser">,
+  standing: boolean,
+  tell: boolean,
+): ComposerOwnerLine | null {
+  const { driver, role, ownerList, displayFor, session } = owners;
+  const me: string | undefined = owners.currentUser?._id?.toString?.();
+  if (!me || standing || !(ownerList.includes(me) || session.runner_id === me) || !driver) return null;
+  if (driver.kind === "user" && driver.user_id === me) return role ? { kind: "paused", role, label: null, tellRole: null } : null;
+  if (driver.kind === "role") {
+    if (!role) return null;
+    const driverName = roleShortName(role.name);
+    return { kind: "role", role, driverName, telling: tell, label: tell ? `Tell ${driverName}` : "Take over", tellRole: tell ? role.name : null };
+  }
+  const p = displayFor(driver.user_id);
+  const driverName = personShortName(p.name);
+  return { kind: "person", person: { _id: driver.user_id, ...p }, driverName, telling: tell, label: tell ? `Tell ${driverName}` : "Take over", tellRole: null };
+}

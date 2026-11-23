@@ -1,8 +1,9 @@
 import {
   useCallback,
   useMemo,
-  useState } from 'react';
-import { Image,
+  useState,
+  type ReactNode } from 'react';
+import {
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -15,9 +16,13 @@ import { Image,
 import { Text, TextInput } from '@/components/Themed';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import * as Haptics from 'expo-haptics';
+import { showUndoToast } from '@platform/engine';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useOwners, useOwnerCandidates, pickRoster, type OwnersApi } from '@codecast/web/hooks/useOwners';
+import { useOwners, type OwnersApi } from '@codecast/web/hooks/useOwners';
 import { useStoreOwnersEnv, useSessionRoleFacts } from '@codecast/web/hooks/useOwnersStoreEnv';
+import { isDriverKey, roleOwnerOf, useOwnersMenu, useOwnersView } from '@codecast/web/hooks/useOwnersMenu';
+import { useSettingsData } from '@codecast/web/hooks/useSyncSettings';
+import { teamMoveTargets } from '@codecast/web/lib/ownersDraft';
 import { useSyncOrgTreeFeeder } from '@codecast/web/hooks/useSyncOrgTree';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { requestSessionMove } from '@codecast/web/lib/sessionCommands';
@@ -30,44 +35,20 @@ import {
   relativeSeen,
   type Device,
 } from './DevicesSection';
-import { isPerson } from '@codecast/shared/team/memberKind';
 import { teamMembersOf } from '@codecast/web/lib/activeTeam';
+import { OwnerFace } from './owners/OwnerFace';
 
 /**
  * The unified assignment control for a session — mobile twin of the web's
  * AssignmentBadge. ONE chip in the session header, ONE bottom sheet, both
  * movable ownership axes: which machine RUNS it (device) and whose inboxes it
- * lives in (owners). The axes stay independent — moving the device never
- * changes owners and vice versa — they just share a surface.
+ * lives in (owners: its people and at most one role, one of which drives).
+ * The axes stay independent — moving the device never changes owners and
+ * vice versa — they just share a surface.
  *
- * Device rows are one-shot (tap moves the session and closes the sheet), and
- * so are "Take ownership" and a role under "Move to a role"; owner rows are a
- * multi-select (tap toggles, the sheet stays open).
+ * Device rows are one-shot (tap moves the session and closes the sheet).
+ * Owner changes are staged and land together on Save, as on the web.
  */
-
-function OwnerAvatar({ name, image, size = 18 }: { name: string; image?: string; size?: number }) {
-  const Theme = useTheme();
-  if (image) {
-    return <Image source={{ uri: image }} style={{ width: size, height: size, borderRadius: size / 2 }} />;
-  }
-  const initials = name.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
-  return (
-    <View
-      style={{
-        width: size,
-        height: size,
-        borderRadius: size / 2,
-        backgroundColor: Theme.bgAlt,
-        borderWidth: StyleSheet.hairlineWidth,
-        borderColor: Theme.border,
-        alignItems: 'center',
-        justifyContent: 'center',
-      }}
-    >
-      <Text style={{ fontSize: size * 0.42, fontWeight: '600', color: Theme.textMuted }}>{initials || '?'}</Text>
-    </View>
-  );
-}
 
 export function AssignmentChip({
   conversationId,
@@ -81,7 +62,7 @@ export function AssignmentChip({
   const Theme = useTheme();
   const [sheetVisible, setSheetVisible] = useState(false);
   const insets = useSafeAreaInsets();
-  const { devices, byId, loaded } = useDevices();
+  const { byId, loaded } = useDevices();
 
   // The viewer and the roster from the persisted store (the roster is fed
   // app-wide for the active team by useSyncWorkspaceData), injected into the
@@ -89,46 +70,22 @@ export function AssignmentChip({
   const currentUser = useInboxStore((s) => s.currentUser) as any;
   const teamMembers = useInboxStore(teamMembersOf) as any[];
   const activeTeamId = useInboxStore((s) => (s.clientState.ui?.active_team_id ?? null)) as string | null;
-  // The store binding web uses: every owner change and role move rides the one
-  // reparent path, so the inbox refiles and open questions follow the owners.
+  // The store binding web uses: every owner change is one applySessionOwners.
   const owners = useOwners(conversationId ?? '', useStoreOwnersEnv(conversationId ?? '', {
     teamMembers: teamMembers as any[] | undefined,
     currentUser,
     notify: (msg) => showToast(msg),
   }));
-  const { ownerList, displayFor } = owners;
+  const { people, role, driver } = useOwnersView(owners);
+  const paused = !!role && driver?.kind === 'user';
 
   const d = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
-
-  const sortedDevices = useMemo(
-    () =>
-      [...devices].sort(
-        (a, b) =>
-          Number(a.is_remote) - Number(b.is_remote) ||
-          Number(b.online) - Number(a.online) ||
-          b.last_seen - a.last_seen,
-      ),
-    [devices],
-  );
-
-  // The shared store's move action: it paints the move's sessionCommands row
-  // (the header reads it) and dispatches it; a refusal comes back here.
-  const moveTo = useCallback(
-    (target: Device) => {
-      if (!conversationId) return;
-      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-      setSheetVisible(false);
-      const name = deviceDisplayName(target);
-      showToast(target.is_remote ? `Moving to ${name} — transferring the worktree…` : `Moving to ${name}…`);
-      requestSessionMove(conversationId, { device_id: target.device_id, is_remote: target.is_remote, label: name })
-        .catch((e: unknown) => showToast(e instanceof Error ? e.message : String(e)));
-    },
-    [conversationId, showToast],
-  );
-
   if (!conversationId) return null;
-
   const devColor = d ? deviceColor(d) : Theme.textMuted0;
+  const ownerNames = [
+    ...people.map((p) => `${p.name}${isDriverKey(driver, `p:${p._id}`) ? ' (driver)' : ''}`),
+    ...(role ? [`${role.name}${paused ? ' (paused)' : driver?.kind === 'role' ? ' (driver)' : ''}`] : []),
+  ];
 
   return (
     <>
@@ -136,7 +93,7 @@ export function AssignmentChip({
         onPress={() => setSheetVisible(true)}
         hitSlop={8}
         accessibilityRole="button"
-        accessibilityLabel={`${d ? `Runs on ${deviceDisplayName(d)}` : 'No device'}; ${ownerList.length ? `owned by ${ownerList.map((o) => displayFor(o).name).join(', ')}` : 'no owners'}`}
+        accessibilityLabel={`${d ? `Runs on ${deviceDisplayName(d)}` : 'No device'}; ${ownerNames.length ? `owners: ${ownerNames.join(', ')}` : 'no owners'}`}
       >
         <View style={styles.chipShell}>
           {loaded && (
@@ -148,19 +105,18 @@ export function AssignmentChip({
               <View style={[styles.dot, { backgroundColor: d?.online ? Theme.green : Theme.textMuted0 }]} />
             </View>
           )}
-          <View style={[styles.lobe, ownerList.length ? { backgroundColor: Theme.cyan + '14' } : null]}>
-            {ownerList.length ? (
-              // Faces only: the names are in the sheet and the label, and the
-              // row has the model and the branch to fit beside them.
+          <View style={[styles.lobe, styles.facesLobe, (people.length || role) ? { backgroundColor: Theme.cyan + '14' } : null]}>
+            {people.length || role ? (
+              // Faces in a fixed order (people as added, then the role), the
+              // driver ringed and a paused role faded; names are in the sheet.
               <View style={styles.faces}>
-                {ownerList.slice(0, 3).map((o, i) => (
-                  <View key={String(o)} style={[styles.faceRing, i > 0 && styles.faceOverlap]}>
-                    <OwnerAvatar name={displayFor(o).name} image={displayFor(o).image} size={14} />
-                  </View>
+                {people.slice(0, 3).map((p) => (
+                  <OwnerFace key={p._id} person={p} size={13} driver={isDriverKey(driver, `p:${p._id}`)} />
                 ))}
-                {ownerList.length > 3 && (
-                  <Text style={[styles.lobeText, { color: Theme.cyan, marginLeft: 3 }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>+{ownerList.length - 3}</Text>
+                {people.length > 3 && (
+                  <Text style={[styles.lobeText, { color: Theme.cyan }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>+{people.length - 3}</Text>
                 )}
+                {role && <OwnerFace role={role} size={13} driver={driver?.kind === 'role'} paused={paused} />}
               </View>
             ) : (
               <>
@@ -185,59 +141,18 @@ export function AssignmentChip({
         {/* accessible={false} on both: a Pressable defaults to accessible, which
             would flatten the whole sheet into one VoiceOver element. */}
         <Pressable style={styles.backdrop} onPress={() => setSheetVisible(false)} accessible={false}>
-          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]} onPress={() => {}} accessible={false}>
+          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 12 }]} onPress={() => {}} accessible={false}>
             <View style={styles.grabber} />
-            <ScrollView style={styles.list} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-
-            <Text style={styles.sectionLabel}>Device</Text>
-            {sortedDevices.length === 0 && (
-              <Text style={styles.emptyText}>No devices yet. Run the codecast daemon on a machine.</Text>
+            {sheetVisible && (
+              <AssignmentSheetBody
+                owners={owners}
+                conversationId={conversationId}
+                ownerDeviceId={ownerDeviceId}
+                activeTeamId={activeTeamId}
+                showToast={showToast}
+                onDone={() => setSheetVisible(false)}
+              />
             )}
-            {sortedDevices.map((dev) => {
-              const isCurrent = dev.device_id === ownerDeviceId;
-              const disabled = isCurrent || !dev.online;
-              const color = deviceColor(dev);
-              return (
-                <TouchableOpacity
-                  key={dev.device_id}
-                  style={[styles.row, disabled && !isCurrent && { opacity: 0.4 }]}
-                  activeOpacity={0.6}
-                  disabled={disabled}
-                  onPress={() => moveTo(dev)}
-                >
-                  <FontAwesome name={deviceIcon(dev)} size={14} color={color} style={{ width: 20 }} />
-                  <View style={{ flex: 1, minWidth: 0 }}>
-                    <Text style={[styles.rowLabel, isCurrent && { color }]} numberOfLines={1}>
-                      {deviceDisplayName(dev)}
-                    </Text>
-                    <Text style={styles.rowHint} numberOfLines={1}>
-                      {isCurrent
-                        ? 'Running here'
-                        : dev.online
-                          ? dev.is_remote
-                            ? 'Online · moves the worktree'
-                            : 'Online'
-                          : `Offline · ${relativeSeen(dev.last_seen)}`}
-                    </Text>
-                  </View>
-                  {isCurrent ? (
-                    <FontAwesome name="check" size={13} color={color} />
-                  ) : (
-                    <View style={[styles.dot, { backgroundColor: dev.online ? Theme.green : Theme.textMuted0 }]} />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-
-            <View style={styles.divider} />
-
-            <OwnerSheetRows
-              owners={owners}
-              conversationId={conversationId}
-              activeTeamId={activeTeamId}
-              onDone={() => setSheetVisible(false)}
-            />
-            </ScrollView>
           </Pressable>
         </Pressable>
         </KeyboardAvoidingView>
@@ -247,7 +162,7 @@ export function AssignmentChip({
 }
 
 /**
- * Feeds the roles slice while the sheet is open, so "Move to a role" can list
+ * Feeds the roles slice while the sheet is open, so the owners half can list
  * the workspace's roles. Its own component because the team pointer arrives
  * with the current user: mounting it only once that is known keeps the mirror
  * pointer, which mobile never writes, out of the subscription.
@@ -258,121 +173,278 @@ function OrgRolesFeeder({ teamId }: { teamId: string | null }) {
 }
 
 /**
- * The owners half of the sheet, mobile twin of the web OwnerMenuItems: the
- * role the session reports to, "Move to a role", "Take ownership", the roster
- * as a multi-select with an optional note, and clear-all. Mounted only while
- * the sheet is open, which bounds the roster and role subscriptions to it.
+ * The sheet's contents, mounted only while it is open (which bounds the
+ * roster, role and machine subscriptions to it): the machine that runs the
+ * session, one-shot, then its owners, staged and saved together. The owners
+ * half is the web OwnersMenu's model (hooks/useOwnersMenu) drawn for touch:
+ * every control is a visible button, nothing waits on hover.
  */
-function OwnerSheetRows({
+function AssignmentSheetBody({
   owners,
   conversationId,
+  ownerDeviceId,
   activeTeamId,
+  showToast,
   onDone,
 }: {
   owners: OwnersApi;
   conversationId: string;
+  ownerDeviceId?: string | null;
   // undefined while the current user loads; null is the personal workspace.
   activeTeamId: string | null | undefined;
+  showToast: (msg: string) => void;
   onDone: () => void;
 }) {
   const Theme = useTheme();
-  const { ownerIds, ownerList, toggle, moveToRole, clearAll, currentUser } = owners;
-  const serverRoster = useOwnerCandidates(conversationId, currentUser);
-  const selectable = pickRoster(serverRoster, owners.selectable).filter(isPerson);
-  const { liveRoles, orgRoleId, currentRole, isStandingThread } = useSessionRoleFacts(conversationId);
-  const [rolesOpen, setRolesOpen] = useState(false);
-  // Optional note, sent along with the NEXT assignment made from this sheet.
-  // It rides the notification and the assignee's "assigned to you" banner,
-  // then clears once used.
-  const [note, setNote] = useState('');
+  const { devices } = useDevices();
+  const m = useOwnersMenu(conversationId, owners);
+  // A role's own session reports to someone: its owners change by moving the
+  // role on the org chart, so the sheet only lists them here.
+  const { seatRoleId } = useSessionRoleFacts(conversationId);
+  const readOnly = m.readOnly || !!seatRoleId;
+  // A leave from your own account moves the session first, to a team machine.
+  const { data: boxes } = useSettingsData('agentBoxes');
+  const leaveTargets = useMemo(() => teamMoveTargets(devices, (boxes ?? []) as unknown as Device[]), [devices, boxes]);
   const tap = () => Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+
+  const sortedDevices = useMemo(
+    () => [...devices].sort((a, b) => Number(a.is_remote) - Number(b.is_remote) || Number(b.online) - Number(a.online) || b.last_seen - a.last_seen),
+    [devices],
+  );
+
+  // The shared store's move action: it paints the move's sessionCommands row
+  // (the header reads it) and dispatches it; a refusal comes back here.
+  const moveTo = useCallback(
+    (target: Device) => {
+      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+      onDone();
+      const name = deviceDisplayName(target);
+      showToast(target.is_remote ? `Moving to ${name} — transferring the worktree…` : `Moving to ${name}…`);
+      requestSessionMove(conversationId, { device_id: target.device_id, is_remote: target.is_remote, label: name })
+        .catch((e: unknown) => showToast(e instanceof Error ? e.message : String(e)));
+    },
+    [conversationId, showToast, onDone],
+  );
+
+  const save = () => {
+    tap();
+    if (!m.save()) return;
+    onDone();
+    // The phone has no ⌘Z: the Save's undo rides the bar (a leave has none).
+    if (m.diff.inverse) showUndoToast('Changed the owners');
+  };
+
   return (
     <>
       {activeTeamId !== undefined && <OrgRolesFeeder teamId={activeTeamId} />}
-      <Text style={styles.sectionLabel}>Owners</Text>
-      {currentRole && (
-        <>
-          <View style={styles.row}>
-            <FontAwesome name="sitemap" size={13} color={Theme.violet} style={{ width: 20 }} />
-            <Text style={[styles.rowLabel, { flex: 1 }]} numberOfLines={1}>{currentRole.name}</Text>
-            <Text style={styles.rowHint}>@{currentRole.handle}</Text>
-          </View>
-        </>
-      )}
-      {!isStandingThread && liveRoles.length > 0 && (
-        <>
-          <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); setRolesOpen((o) => !o); }}>
-            <FontAwesome name="sitemap" size={13} color={Theme.text} style={{ width: 20 }} />
-            <Text style={[styles.rowLabel, { flex: 1 }]}>Move to a role</Text>
-            <FontAwesome name={rolesOpen ? 'chevron-up' : 'chevron-down'} size={11} color={Theme.textMuted} />
-          </TouchableOpacity>
-          {rolesOpen && liveRoles.map((r) => {
-            const isCurrent = r._id === orgRoleId;
-            return (
+      <ScrollView style={styles.list} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        <Text style={styles.sectionLabel}>Device</Text>
+        {sortedDevices.length === 0 && (
+          <Text style={styles.emptyText}>No devices yet. Run the codecast daemon on a machine.</Text>
+        )}
+        {sortedDevices.map((dev) => {
+          const isCurrent = dev.device_id === ownerDeviceId;
+          const disabled = isCurrent || !dev.online;
+          const color = deviceColor(dev);
+          return (
+            <TouchableOpacity
+              key={dev.device_id}
+              style={[styles.row, disabled && !isCurrent && { opacity: 0.4 }]}
+              activeOpacity={0.6}
+              disabled={disabled}
+              onPress={() => moveTo(dev)}
+            >
+              <FontAwesome name={deviceIcon(dev)} size={14} color={color} style={{ width: 20 }} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.rowLabel, isCurrent && { color }]} numberOfLines={1}>{deviceDisplayName(dev)}</Text>
+                <Text style={styles.rowHint} numberOfLines={1}>
+                  {isCurrent ? 'Running here' : dev.online ? (dev.is_remote ? 'Online · moves the worktree' : 'Online') : `Offline · ${relativeSeen(dev.last_seen)}`}
+                </Text>
+              </View>
+              {isCurrent ? <FontAwesome name="check" size={13} color={color} /> : <View style={[styles.dot, { backgroundColor: dev.online ? Theme.green : Theme.textMuted0 }]} />}
+            </TouchableOpacity>
+          );
+        })}
+
+        <View style={styles.divider} />
+
+        <Text style={styles.sectionLabel}>Owners · whose inbox</Text>
+        {m.leaving && (
+          <View style={styles.leaveBox}>
+            <Text style={styles.rowHint}>Runs on your account. Move it to leave:</Text>
+            {leaveTargets.length === 0 ? (
+              <Text style={styles.emptyText}>No team machine to move it to</Text>
+            ) : leaveTargets.map((dev: any) => (
               <TouchableOpacity
-                key={r._id}
-                style={[styles.row, styles.nestedRow]}
+                key={dev.device_id}
+                style={[styles.row, !dev.online && { opacity: 0.4 }]}
+                disabled={!dev.online}
                 activeOpacity={0.6}
-                disabled={isCurrent}
-                onPress={() => { tap(); onDone(); void moveToRole(r._id, r.name); }}
+                onPress={() => { tap(); m.leaveTo({ device_id: dev.device_id, is_remote: !!dev.is_remote, label: deviceDisplayName(dev), runner_id: String(dev.owner_user_id ?? ''), runner_is_bot: !!dev.is_bot }); }}
               >
-                <Text style={[styles.rowLabel, { flex: 1 }, isCurrent && { color: Theme.violet }]} numberOfLines={1}>{r.name}</Text>
-                <Text style={styles.rowHint}>@{r.handle}</Text>
-                {isCurrent && <FontAwesome name="check" size={13} color={Theme.violet} />}
+                <FontAwesome name={deviceIcon(dev)} size={14} color={Theme.text} style={{ width: 20 }} />
+                <Text style={[styles.rowLabel, { flex: 1 }]} numberOfLines={1}>{deviceDisplayName(dev)}</Text>
+                <Text style={styles.rowHint}>{dev.online ? 'Move and leave' : 'offline'}</Text>
               </TouchableOpacity>
-            );
-          })}
-        </>
-      )}
-      {isPerson(currentUser) && !ownerIds.has(currentUser._id) && (
-        <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); onDone(); void toggle(currentUser._id); }}>
-          <FontAwesome name="user-plus" size={13} color={Theme.cyan} style={{ width: 20 }} />
-          <View style={{ flex: 1, minWidth: 0 }}>
-            <Text style={[styles.rowLabel, { color: Theme.cyan }]}>Take ownership</Text>
-            <Text style={styles.rowHint}>Add to your inbox; keep existing owners</Text>
+            ))}
           </View>
-        </TouchableOpacity>
-      )}
-      {selectable.length === 0 && <Text style={styles.emptyText}>No teammates</Text>}
-      {selectable.map((m: any) => {
-        const isYou = currentUser && m._id === currentUser._id;
-        const checked = ownerIds.has(m._id);
-        return (
-          <TouchableOpacity
-            key={m._id}
-            style={styles.row}
-            activeOpacity={0.6}
-            onPress={() => {
-              tap();
-              void toggle(m._id, checked ? undefined : note);
-              if (!checked) setNote('');
-            }}
-          >
-            <OwnerAvatar name={m.name || m.email || '?'} image={m.image || m.github_avatar_url} />
-            <Text style={[styles.rowLabel, { flex: 1 }, checked && { color: Theme.cyan }]} numberOfLines={1}>
-              {m.name || m.email?.split('@')[0]}
-              {isYou ? ' (you)' : ''}
-            </Text>
-            {checked && <FontAwesome name="check" size={13} color={Theme.cyan} />}
+        )}
+        {m.rows.length === 0 && <Text style={styles.emptyText}>Nobody yet</Text>}
+        {m.rows.map((r) => (
+          <View key={r.key} style={styles.row} testID={`owner-row-${r.key}`}>
+            <OwnerFace person={r.person} role={r.role} size={22} driver={r.drives} paused={r.paused} />
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={[styles.rowLabel, r.paused && { color: Theme.textMuted }]} numberOfLines={1}>{r.name}</Text>
+              <Text style={styles.rowHint} numberOfLines={1}>{r.sub}</Text>
+            </View>
+            {!readOnly && r.makeDriver && (
+              <SmallButton label="Make driver" onPress={() => { tap(); m.makeDriver(r.makeDriver!); }} />
+            )}
+            {!readOnly && (
+              <IconButton
+                icon="times"
+                label={r.removeLabel}
+                disabled={!r.onRemove}
+                onPress={() => { tap(); r.onRemove?.(); }}
+              />
+            )}
+          </View>
+        ))}
+        {m.canTakeOwnership && (
+          <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); if (m.takeOwnership()) onDone(); }}>
+            <FontAwesome name="user-plus" size={13} color={Theme.cyan} style={{ width: 22, textAlign: 'center' }} />
+            <Text style={[styles.rowLabel, { color: Theme.cyan }]}>Take ownership</Text>
           </TouchableOpacity>
-        );
-      })}
-      {selectable.some((m: any) => !currentUser || m._id !== currentUser._id) && (
-        <TextInput
-          value={note}
-          onChangeText={setNote}
-          placeholder="Add a note with the assignment…"
-          style={styles.noteInput}
-          returnKeyType="done"
-        />
-      )}
-      {ownerList.length > 0 && (
-        <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); void clearAll(); }}>
-          <FontAwesome name="times" size={13} color={Theme.textMuted} style={{ width: 20 }} />
-          <Text style={[styles.rowLabel, { color: Theme.textMuted }]}>Clear all owners</Text>
-        </TouchableOpacity>
+        )}
+
+        {!readOnly && (
+          <>
+            <View style={styles.divider} />
+            <View style={styles.search}>
+              <FontAwesome name="search" size={13} color={Theme.textMuted} />
+              <TextInput
+                value={m.query}
+                onChangeText={m.setQuery}
+                placeholder={m.isStandingThread ? 'Add a teammate' : 'Add a role or teammate'}
+                accessibilityLabel="Add a role or teammate"
+                autoCorrect={false}
+                autoCapitalize="none"
+                style={styles.searchInput}
+              />
+            </View>
+            {m.shownRoles.length > 0 && <Text style={styles.sectionLabel}>{m.q ? 'Roles' : 'Suggested roles'}</Text>}
+            {m.candidates.filter((c) => c.kind === 'role').map((c) => c.kind === 'role' && (
+              <CandidateRow
+                key={c.key}
+                face={<OwnerFace role={roleOwnerOf(c.role)} size={22} />}
+                name={c.role.name}
+                handle={c.role.handle}
+                reason={m.reasonOf(c.role)}
+                onAdd={() => { tap(); m.add(c); }}
+              />
+            ))}
+            {!m.q && !m.moreRoles && m.restRoles.length > 0 && (
+              <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); m.setMoreRoles(true); }}>
+                <FontAwesome name="chevron-down" size={11} color={Theme.textMuted} style={{ width: 22, textAlign: 'center' }} />
+                <Text style={[styles.rowLabel, { color: Theme.textMuted }]}>{m.restRoles.length} more {m.restRoles.length === 1 ? 'role' : 'roles'}</Text>
+              </TouchableOpacity>
+            )}
+            <Text style={styles.sectionLabel}>Teammates</Text>
+            {m.unselected.length > 0 && (
+              <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); m.selectAllTeammates(); }}>
+                <FontAwesome name="plus" size={12} color={Theme.textMuted} style={{ width: 22, textAlign: 'center' }} />
+                <Text style={[styles.rowLabel, { flex: 1, color: Theme.textMuted }]}>Select all teammates</Text>
+                <Text style={styles.rowHint}>{m.unselected.length}</Text>
+              </TouchableOpacity>
+            )}
+            {m.candidates.filter((c) => c.kind === 'person').map((c) => c.kind === 'person' && (
+              <CandidateRow
+                key={c.key}
+                face={<OwnerFace person={c.person} size={22} />}
+                name={c.person.name}
+                onAdd={() => { tap(); m.add(c); }}
+                onDrive={() => { tap(); m.add(c, true); }}
+              />
+            ))}
+            {m.candidates.length === 0 && <Text style={styles.emptyText}>{m.q ? 'Nobody matches' : 'Nobody else to add'}</Text>}
+          </>
+        )}
+      </ScrollView>
+      {!readOnly && (
+        <View style={styles.footer}>
+          <View style={styles.chips}>
+            {m.chips.length
+              ? m.chips.map((c) => <Text key={c} style={styles.chip} numberOfLines={1}>{c}</Text>)
+              : <Text style={styles.rowHint}>No changes</Text>}
+          </View>
+          <View style={styles.footerButtons}>
+            <TouchableOpacity style={styles.footerButton} activeOpacity={0.6} onPress={onDone} accessibilityRole="button">
+              <Text style={styles.footerButtonText}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.footerButton, styles.saveButton, !m.dirty && { opacity: 0.4 }]}
+              activeOpacity={0.6}
+              disabled={!m.dirty}
+              onPress={save}
+              accessibilityRole="button"
+              accessibilityState={{ disabled: !m.dirty }}
+            >
+              <Text style={[styles.footerButtonText, styles.saveButtonText]}>Save</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       )}
     </>
+  );
+}
+
+/** A role or teammate who could own it: tap the row (or +) to stage the add;
+ *  a teammate's Make driver stages them as the driver too. */
+function CandidateRow({ face, name, handle, reason, onAdd, onDrive }: {
+  face: ReactNode;
+  name: string;
+  handle?: string;
+  reason?: string | null;
+  onAdd: () => void;
+  onDrive?: () => void;
+}) {
+  return (
+    <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={onAdd}>
+      {face}
+      <View style={{ flex: 1, minWidth: 0 }}>
+        <Text style={styles.rowLabel} numberOfLines={1}>
+          {name}{handle ? <Text style={styles.rowHint}>  @{handle}</Text> : null}
+        </Text>
+        {reason ? <Text style={styles.rowHint} numberOfLines={1}>{reason}</Text> : null}
+      </View>
+      {onDrive && <SmallButton label="Make driver" onPress={onDrive} />}
+      <IconButton icon="plus" label={`Add ${name}`} onPress={onAdd} />
+    </TouchableOpacity>
+  );
+}
+
+function SmallButton({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity style={styles.smallButton} activeOpacity={0.6} onPress={onPress} hitSlop={{ top: 8, bottom: 8 }} accessibilityRole="button" accessibilityLabel={label}>
+      <Text style={styles.smallButtonText}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function IconButton({ icon, label, onPress, disabled = false }: { icon: 'times' | 'plus'; label: string; onPress: () => void; disabled?: boolean }) {
+  const Theme = useTheme();
+  return (
+    <TouchableOpacity
+      style={[styles.iconButton, disabled && { opacity: 0.35 }]}
+      activeOpacity={0.6}
+      disabled={disabled}
+      onPress={onPress}
+      accessibilityRole="button"
+      accessibilityLabel={label}
+      accessibilityState={{ disabled }}
+    >
+      <FontAwesome name={icon} size={14} color={Theme.textMuted} />
+    </TouchableOpacity>
   );
 }
 
@@ -493,10 +565,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   },
   lobeText: chipText,
   dot: { width: 6, height: 6, borderRadius: 3 },
-  faces: { flexDirection: 'row', alignItems: 'center' },
-  // A ring in the chip's own fill separates overlapping faces.
-  faceRing: { borderRadius: 9, borderWidth: 1.5, borderColor: Theme.bg },
-  faceOverlap: { marginLeft: -5 },
+  facesLobe: { paddingHorizontal: 4 },
+  faces: { flexDirection: 'row', alignItems: 'center', gap: 1 },
   backdrop: {
     flex: 1,
     justifyContent: 'flex-end',
@@ -535,7 +605,8 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 10,
-    paddingVertical: 9,
+    paddingVertical: 6,
+    minHeight: 44,
   },
   rowLabel: {
     fontSize: 15,
@@ -548,18 +619,69 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     color: Theme.textMuted,
     marginTop: 1,
   },
-  nestedRow: { paddingLeft: 30 },
-  noteInput: {
-    fontSize: 13,
-    marginTop: 4,
-    marginBottom: 6,
+  leaveBox: {
+    borderRadius: 8,
+    backgroundColor: Theme.bgHighlight,
     paddingHorizontal: 10,
-    paddingVertical: 8,
+    paddingTop: 8,
+    marginBottom: 4,
+  },
+  search: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    minHeight: 44,
+    paddingHorizontal: 10,
     borderRadius: 8,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.border,
     backgroundColor: Theme.bgAlt,
+    marginBottom: 4,
   },
+  // 16pt: iOS zooms the page into any smaller focused input.
+  searchInput: { flex: 1, fontSize: 16, color: Theme.text, paddingVertical: 8 },
+  smallButton: {
+    height: 30,
+    paddingHorizontal: 10,
+    borderRadius: 7,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  smallButtonText: { fontSize: 12, fontWeight: '600', color: Theme.text },
+  iconButton: { width: 44, height: 44, alignItems: 'center', justifyContent: 'center', marginRight: -12 },
+  footer: {
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: Theme.border,
+    paddingTop: 8,
+    gap: 8,
+  },
+  chips: { flexDirection: 'row', flexWrap: 'wrap', gap: 6, alignItems: 'center' },
+  chip: {
+    fontSize: 12,
+    color: Theme.textMuted,
+    backgroundColor: Theme.bgAlt,
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
+    overflow: 'hidden',
+    maxWidth: '100%',
+  },
+  footerButtons: { flexDirection: 'row', justifyContent: 'flex-end', gap: 8 },
+  footerButton: {
+    minWidth: 88,
+    height: 44,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: Theme.border,
+  },
+  footerButtonText: { fontSize: 15, fontWeight: '600', color: Theme.text },
+  saveButton: { backgroundColor: Theme.text, borderColor: Theme.text },
+  saveButtonText: { color: Theme.bg },
   divider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: Theme.border,

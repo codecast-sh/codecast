@@ -4,7 +4,7 @@ import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { toast } from "sonner";
-import { withSafetyBlock, isHostedAgentType, roleDrives } from "@codecast/shared/contracts";
+import { withSafetyBlock, isHostedAgentType } from "@codecast/shared/contracts";
 import { hostedStopOf } from "../../lib/hostedNotice";
 import { imageBytes } from "../../lib/imageByteCache";
 import { compressImage } from "../../lib/compressImage";
@@ -36,7 +36,7 @@ import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipSt
 import { sessionPullRequestsSig, titledSessionPullRequests } from "../../lib/sessionPullRequests";
 import { resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../lib/uiPrefDefaults";
 import { teamMembersOf } from "../../lib/activeTeam";
-import { coOwnersOf, coOwnersSig, filedRoleOf, filedRoleSig } from "../../lib/coOwners";
+import { coOwnersOf, coOwnersSig, filedRoleOf, filedRoleSig, withRoleOf } from "../../lib/coOwners";
 import { roleRowsOf } from "../../lib/roleRows";
 
 // The inbox session card's container: the store, the clock, the mutations and
@@ -78,16 +78,6 @@ function liveCardTitle(s: Parameters<typeof hostedRowTitle>[0], cardId: string, 
 function modernPlacementSig(session: InboxSession, t: number): string {
   const p = railRowPlacement(session, t);
   return `${p.state}|${p.bucket}`;
-}
-
-// The role a session waits on (shared roleDrives): its role drives it and its
-// own state is not working, so placement files it under Working. The role
-// snapshot on the row names it only when it is the driving role (a standing
-// session's snapshot is its own role).
-function withRoleOf(session: InboxSession, t: number): string | null {
-  const role = session.role;
-  if (!roleDrives(session) || !role || String(role._id) !== String(session.org_role_id)) return null;
-  return railRowPlacement(session, t).state !== "working" ? role.name : null;
 }
 
 // Store actions the card reaches, the same for every card.
