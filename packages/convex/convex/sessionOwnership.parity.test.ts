@@ -134,3 +134,28 @@ describe("the store's guess is the server's answer", () => {
     await parity(db, ME, { role: null, driver: { kind: "none" } });
   });
 });
+
+// A leave's own result releases its paint's locks with no restore (the leaver
+// gets no receipt), so the paint must be the server's final word on every
+// path a leave settles by, the starter row a move now writes included.
+describe("a leave by a move: the store's paint is the server's answer", () => {
+  test("the only owner of a solo session moves it to a teammate's machine and leaves", async () => {
+    const db = fixtures({ owner_device_id: "mymac" }, []);
+    db._tables.devices = [
+      { _id: "d1", user_id: ME, device_id: "mymac", label: "My Mac", last_seen: Date.now() },
+      { _id: "d2", user_id: MATE, device_id: "mini", label: "Mate's Mac mini", last_seen: Date.now() },
+    ];
+    db._tables.device_shares = [{ _id: "sh1", user_id: MATE, device_id: "mini", team_id: TEAM }];
+    db._tables.daemon_commands = [];
+    const ctx = ctxOf(db);
+    const storeFacts = ownersFactsFromRead(await performListOwners(ctx, ME as any, "sess1"), { ...conv(db) });
+    expect(listedOwnerIds(storeFacts)).toEqual([ME]);
+    const expected = applyOwnersChangeTo(storeFacts, { leave: { move_to: { runner_id: MATE, runner_is_bot: false } } }, { actor: ME, now: Date.now() });
+    await performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { leave: { move_to_device_id: "mini" } } });
+    const read = (await performListOwners(ctx, MATE as any, "sess1"))!;
+    expect(read.owner_ids).toEqual(listedOwnerIds(expected));
+    expect(read.owner_ids).toEqual([MATE]);
+    expect([String(conv(db).user_id), String(conv(db).owner_user_id ?? "") || null]).toEqual([expected.runner_id, expected.primary_id]);
+    expect(String(conv(db).driver_user_id ?? "") || null).toBe(expected.driver_user_id);
+  });
+});
