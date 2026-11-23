@@ -13,7 +13,8 @@
 // The track outlives the burst by a minute: the second press is the one that
 // has to feel instant, and getUserMedia on an already-granted device is still
 // tens of milliseconds of work.
-import { Track } from "livekit-client";
+import type { Track } from "livekit-client";
+import { LK } from "./livekit";
 import { getRoom, mediaFailureReason } from "./callManager";
 import { bindPrewarmMic } from "./roomPrewarm";
 import { micConstraints, onChosenDevice, readJoinPrefs } from "./joinPrefs";
@@ -21,7 +22,7 @@ import { micConstraints, onChosenDevice, readJoinPrefs } from "./joinPrefs";
 /** The track already published into the room this client is sitting in —
  *  hold-to-reply inside a huddle borrows it rather than opening a second. */
 export function localMicTrack(): MediaStreamTrack | null {
-  const pub = getRoom()?.localParticipant.getTrackPublication(Track.Source.Microphone);
+  const pub = getRoom()?.localParticipant.getTrackPublication(LK.Track.Source.Microphone);
   const track = pub?.track?.mediaStreamTrack;
   return track && track.readyState === "live" ? track : null;
 }

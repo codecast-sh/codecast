@@ -27,5 +27,12 @@
     "@radix-ui/react-slot": "1.2.4",
     "react": "19.1.0",
     "react-dom": "19.1.0"
+  },
+  "patchedDependencies": {
+<<<<<<< ours
+    "convex@1.36.1": "patches/convex@1.36.1.patch"
+=======
+    "cmdk@1.1.1": "patches/cmdk@1.1.1.patch"
+>>>>>>> theirs
   }
 }

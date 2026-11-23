@@ -21,6 +21,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Track } from "livekit-client";
 import { getScribeStatus, startScribe, stopScribe } from "../calls/transcription";
 
+// livekit-client loads before a room exists (lib/calls/livekit); these drive rooms directly.
+await (await import("../calls/livekit")).loadLivekit();
+
 /** Counts what a leak would leave behind: contexts made, and contexts closed. */
 class FakeAudioContext {
   static made: FakeAudioContext[] = [];

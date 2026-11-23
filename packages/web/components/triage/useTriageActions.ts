@@ -6,6 +6,7 @@ import type { UserRest } from "@codecast/shared/contracts";
 import { overlayConversationId } from "../../store/workspace";
 import {
   animatedHideSession,
+  animatedMoveSessions,
   type HideSessionOpts,
   animatedSetSessionRest,
 } from "../../store/undoActions";
@@ -63,7 +64,7 @@ export function useTriageActions(isOnInboxPage: boolean) {
     const ordered = store.visualOrder();
     const idx = ordered.findIndex((s) => s._id === id);
     const next = ordered[idx + 1] ?? ordered.find((s) => s._id !== id);
-    if (verb === "defer") store.deferSession(id);
+    if (verb === "defer") void animatedMoveSessions([id], "Deferred 1 session", (sid) => useInboxStore.getState().deferSession(sid));
     else animatedSetSessionRest(id, verb);
     if (!closeOverlayIfCurrent(id) && next) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
