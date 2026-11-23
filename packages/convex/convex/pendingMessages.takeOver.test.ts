@@ -9,7 +9,7 @@ import { formatDecisionAnswer, roleDrives, rollupParentIdOf } from "@codecast/sh
 import { dispatch } from "./dispatch";
 import { sendSessionMessage } from "./pendingMessages";
 import { stopAndSendForUser } from "./daemonCommandUtils";
-import { performApplyOwnersChange, performLeaveSession, performSetSessionDriver } from "./sessionOwnership";
+import { performApplyOwnersChange, performLeaveSession, performSetSessionDriver, applyOwnersChangeAs } from "./sessionOwnership";
 
 // One owner drives (org-roles-run-work.md R1). A person's own message into a
 // session takes the wheel from the role or person driving it; the paused role
@@ -264,6 +264,8 @@ describe("a paused role does not take the wheel back itself", () => {
     await expect(performSetSessionDriver(ctx, ME as any, { session_id: "filed", driver: { kind: "role" }, from_session: "s-seat" }))
       .rejects.toThrow(/^Me drives jxfiled, so @growth is paused there, and only a person who owns or runs it can hand @growth the wheel back\./);
     await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "filed", change: { role: null }, from_session: "s-seat" })).rejects.toThrow(/@growth is paused there/);
+    // The mutation's and the web dispatch's door (applyOwnersChangeAs) holds it too.
+    await expect(applyOwnersChangeAs(ctx, ME as any, { session_id: "filed", change: { driver: { kind: "role" } }, from_session: "s-seat" })).rejects.toThrow(/@growth is paused there/);
     expect(row("filed").driver_user_id).toBe(ME);
     expect(row("filed").org_role_id).toBeTruthy();
 
