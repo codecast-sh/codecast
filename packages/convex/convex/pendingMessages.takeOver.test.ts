@@ -172,6 +172,14 @@ describe("only a send that says so takes the wheel", () => {
     expect(row("filed").driver_user_id).toBe(ME);
   });
 
+  test("taking the wheel sends the session's open questions on to the people (the paused role hears none)", async () => {
+    const { ctx, row } = await world();
+    const scheduled: any[] = [];
+    ctx.scheduler = { runAfter: async (_ms: number, _fn: unknown, args: any) => { scheduled.push(args); } };
+    await composerSend(ctx, row("filed"), ME);
+    expect(scheduled).toContainEqual({ conversation_id: "filed" });
+  });
+
   test("taking the wheel leaves the primary owner as it was", async () => {
     const { ctx, row } = await world();
     await ctx.db.patch("shared", { driver_user_id: PEER, owner_user_id: PEER });

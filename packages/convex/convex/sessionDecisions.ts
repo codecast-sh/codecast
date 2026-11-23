@@ -22,7 +22,7 @@ import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { withDecisionFacts } from "./lib/decisionRowFacts";
 import { decisionTeamOf } from "./lib/decisionTeam";
-import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, advisoryAnswerOpen, isHostedAgentType } from "@codecast/shared/contracts";
+import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, advisoryAnswerOpen, isHostedAgentType, rolePaused } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { emitNotification } from "./notificationRouter";
 import { nextShortId } from "./counters";
@@ -327,6 +327,11 @@ export async function routeFor(ctx: Ctx, conversation: any, now: number, task?: 
 
 async function routeForSession(ctx: Ctx, conversation: any, now: number, task?: any) {
   const role = await roleOfConversation(ctx, conversation);
+  // A person took the wheel: the paused role hears nothing, and the question
+  // is the owners', the person who drives among them.
+  if (rolePaused(conversation)) {
+    return { role, ladder: { hops: [], activeRoles: [], firstPersonId: undefined }, people: await peopleFor(ctx, conversation, conversation.driver_user_id), hears: null };
+  }
   const parent = conversation.standing_role_id ? role?.reports_to : undefined;
   const first = parent ? (parent.kind === "role" ? await ctx.db.get(parent.role_id) : null) : role;
   const ladder = await buildLadder(ctx, first, now);
@@ -391,6 +396,13 @@ export async function reroutePendingDecisionsForConversation(
   }
   return { moved: openRows.length };
 }
+
+// The same, scheduled by a path that cannot import this module (a take-over
+// on send, lib/sessionTakeOver).
+export const rerouteSessionDecisions = internalMutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: (ctx, args) => reroutePendingDecisionsForConversation(ctx, args.conversation_id, Date.now()),
+});
 
 /** One open decision routed again from its asking session: its people, inbox rows, ladder and holder. */
 export async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, now: number): Promise<void> {
@@ -537,14 +549,17 @@ export async function refreshHolder(
     await ctx.db.patch(row._id, { holder: { kind, id }, holder_key: `${kind}:${id}` });
     return;
   }
+  // While a person drives the asking session, no role holds its questions.
+  const asking = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
+  const paused = !!asking && rolePaused(asking);
   const excluded = new Set((opts.excludeRoleIds ?? []).map(String));
-  const roleIds = (row.hops ?? [])
+  const roleIds = paused ? [] : (row.hops ?? [])
     // A role that passed the question up gave up its hold ("escalated" is
     // the same fact on rows from before S28).
     .filter((h) => !h.note?.startsWith("skipped") && !h.note?.startsWith("escalated") && !h.passed_at)
     .map((h) => h.role_id)
     .filter((id) => !excluded.has(String(id)));
-  const delegate = await stackDelegateRoleId(ctx, row.stack_id);
+  const delegate = paused ? null : await stackDelegateRoleId(ctx, row.stack_id);
   if (delegate && !excluded.has(String(delegate))) roleIds.push(delegate);
   const resolved = await resolveHolder(ctx, {
     people: row.asked_user_ids ?? [row.user_id],
@@ -1952,6 +1967,11 @@ async function answererFor(
     }
     const role = await roleOfConversation(ctx, conversation);
     if (!role) return { error: SESSION_CANNOT_ANSWER_AS_PERSON };
+    // A person drives the session that asked: its questions are theirs, unless they handed this one to the role.
+    const asking = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
+    if (asking && rolePaused(asking) && !(row.passed_to?.kind === "role" && row.passed_to.id === String(role._id))) {
+      return { error: `A person drives the session that asked, so ${role.name} answers none of its questions; recommend instead (cast decide recommend), or they answer it` };
+    }
     // A line run's change card: the lead on its ladder answers it when the
     // lead starts work on its own, whatever its category; the session that
     // asked it never does.

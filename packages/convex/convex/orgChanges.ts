@@ -6,6 +6,7 @@ import { workspaceGrantsAccess } from "./lib/access";
 import { roleByHandleForRead, rolesInBoundary, userCanAdminRole } from "./lib/orgAccess";
 import { checkConversationAccess } from "./privacy";
 import { personName, performReparentSession } from "./sessionOwnership";
+import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 import { performReparentRole, performSetCaps, performSetTrust, performUpdateRole } from "./orgRoles";
 import { ownerSetOf, removeSessionOwnerRow, setSessionOwnerRows, settleDriver, syncPrimaryOwnerCache } from "./sessionOwners";
 import { patchTask } from "./lib/agentTaskRows";
@@ -340,8 +341,12 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
   if (w.table === "agent_tasks") await patchTask(ctx, current, { ...patch, ...(rearm ? { run_at: Date.now() + interval, cadence_slot_at: undefined } : {}) });
   else await ctx.db.patch(w.id, patch);
   if (w.table === "conversations" && owners) await setSessionOwnerRows(ctx, current._id, owners, userId, ownerRows ?? []);
-  // A driver put back by the patch above drives only while it owns the set put back.
-  if (w.table === "conversations") await settleDriver(ctx, current._id);
+  // A driver put back by the patch above drives only while it owns the set
+  // put back, and the open questions follow the owners and driver restored.
+  if (w.table === "conversations") {
+    await settleDriver(ctx, current._id);
+    await reroutePendingDecisionsForConversation(ctx, current._id, Date.now());
+  }
   if (w.table === "tasks" && current.plan_id) await recalcPlanProgress(ctx, current.plan_id, current._id, patch.status ?? current.status);
 }
 

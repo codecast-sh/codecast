@@ -7,6 +7,7 @@ import { isTeamMember } from "../privacy";
 import { isTeamMachineFor } from "../sessionLaunch";
 import { runnerDeviceOf } from "./runnerDevice";
 import { removeSessionOwnerRow, syncPrimaryOwnerCache } from "../sessionOwners";
+import { reroutePendingDecisionsForConversation } from "../sessionDecisions";
 import { withdrawMember } from "./changesDirty";
 import { purgeChatMembership } from "../chat";
 import { removeFromTeamHosts } from "../teamHosts";
@@ -43,6 +44,8 @@ async function grantRunsThrough(ctx: { db: any }, conv: any, teamId: Id<"teams">
 export async function dropOwnerRow(ctx: { db: any }, row: any): Promise<void> {
   await removeSessionOwnerRow(ctx, row.conversation_id, row.user_id);
   await syncPrimaryOwnerCache(ctx, row.conversation_id);
+  // Its open questions leave the person who left, and reach the role again if they drove.
+  await reroutePendingDecisionsForConversation(ctx as any, row.conversation_id, Date.now());
 }
 
 // When a membership ends, drop the person's owner rows on sessions others run

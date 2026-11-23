@@ -830,6 +830,13 @@ export function roleDrives(row: { org_role_id?: unknown; driver_user_id?: unknow
   return !!row.org_role_id && !row.driver_user_id;
 }
 
+// The role is paused: a person took the wheel of a session filed under it. A
+// role's own (standing) session is never paused. A paused role hears none of
+// the session's decisions and answers none of them (sessionDecisions routeFor).
+export function rolePaused(row: { org_role_id?: unknown; driver_user_id?: unknown; standing_role_id?: unknown }): boolean {
+  return !!row.org_role_id && !!row.driver_user_id && !row.standing_role_id;
+}
+
 // The role itself acts through this session: its standing session, or a
 // session the role started and still drives. What such a session starts is
 // the role's start (role_started); what a person's session starts stays the

@@ -533,6 +533,13 @@ export async function performSetSessionOwner(
   return { ok: true, short_id: result.short_id, owner: result.owners[0] ?? null };
 }
 
+// Every driver change outside the reparent core (which reroutes as it ends):
+// the wheel moves (sessionOwners.writeDriver), and the session's open
+// questions follow it; a paused role hears none (sessionDecisions routeFor).
+async function setDriver(ctx: { db: any }, conversationId: Id<"conversations">, userId: string | null): Promise<void> {
+  if (await writeDriver(ctx, conversationId, userId)) await reroutePendingDecisionsForConversation(ctx, conversationId, Date.now());
+}
+
 // Hand the wheel to the filed role or to one of the people who own it. A
 // person must already own the session (or be its human starter while nobody
 // does); a role must be the one it is filed under.
@@ -545,13 +552,13 @@ export async function performSetSessionDriver(
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
   if (!(await mayEditOwners(ctx, authUserId, conversation))) throw new Error("Only an owner of the session, or the account that runs it, can change who drives it");
   if (args.driver.kind === "none") {
-    if (conversation.driver_user_id) await ctx.db.patch(conversation._id, { driver_user_id: undefined });
+    await setDriver(ctx, conversation._id, null);
     const driver = driverOf({ ...conversation, driver_user_id: undefined }, await ownerIdsOrStarter(ctx, conversation));
     return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: driver! };
   }
   if (args.driver.kind === "role") {
     if (!conversation.org_role_id) throw new Error(`Session ${shortId} is not filed under a role, so no role can drive it`);
-    if (conversation.driver_user_id) await ctx.db.patch(conversation._id, { driver_user_id: undefined });
+    await setDriver(ctx, conversation._id, null);
     return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "role", role_id: conversation.org_role_id } };
   }
   const ownerIds = await ownerIdsOrStarter(ctx, conversation);
@@ -561,7 +568,7 @@ export async function performSetSessionDriver(
   if (!userId && ref.trim().toLowerCase() !== "me") userId = await ownerNamed(ctx, ownerIds, ref);
   userId ??= String((await resolveOwnerRef(ctx, authUserId, conversation, ref))._id);
   if (!ownerIds.includes(userId)) throw new Error("Only an owner of the session can drive it; add them as an owner first");
-  await writeDriver(ctx, conversation._id, userId);
+  await setDriver(ctx, conversation._id, userId);
   return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "user", user_id: userId as Id<"users"> } };
 }
 
@@ -1095,7 +1102,7 @@ export async function applyHoldChange(ctx: { db: any; scheduler?: any }, convers
     await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "user", user_id: actor, mode: "add" }, note: `Its work is no longer in @${change.from.handle ?? "the role"}'s area.` });
     // With no role left, nobody is paused: the driver clears.
     const after = await ctx.db.get(conversationId);
-    if (after && !after.org_role_id && after.driver_user_id) await ctx.db.patch(conversationId, { driver_user_id: undefined });
+    if (after && !after.org_role_id && after.driver_user_id) await setDriver(ctx, conversationId, null);
     return { change: "release", role: change.from.handle };
   }
   await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "role", role_id: String(change.role._id), hold: "bound" }, note: BOUND_NOTE });
@@ -1104,7 +1111,7 @@ export async function applyHoldChange(ctx: { db: any; scheduler?: any }, convers
   // chart, a scope takeover) never comes here, so the role drives those.
   if (!c.role_started) {
     const person = await humanStarterUser(ctx, c);
-    if (person) await writeDriver(ctx, conversationId, String(person._id));
+    if (person) await setDriver(ctx, conversationId, String(person._id));
   }
   return { change: change.kind, role: change.role.handle };
 }
