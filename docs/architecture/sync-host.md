@@ -152,6 +152,25 @@ builds until each reloads, and a host from an older build never feeds a
 collection added since, so windows whose stores differ elect separate hosts.
 A window with no account (signed out, a guest share page) runs no transport.
 
+## A host with no follower
+
+The elected host runs its replication runtime (the tee's diff and the posts)
+only while a follower is there. Followers post `{ type: "present" }` every 30
+seconds and when their window becomes visible; a hello, a follower's `mut` or a
+presence wakes a quiet host, and the message that woke it is handed to the new
+runtime, so a first follower's hello is answered at once. A host that has heard
+none of them for 150 seconds (`HOST_QUIET_AFTER_MS`, several presence beats,
+since a background tab's timers can slow to once a minute) stops the runtime.
+Measured on one window alone: 258 replication posts a minute before, none
+after.
+
+Each start runs under a new hostId (`<selfId>.<n>`) and posts an empty update
+with seq 0 under it. A follower still holding another hostId resets its inbox
+and takes a fresh snapshot (`createFollowerInbox` treats a new hostId as a
+resync), so a follower that slept through the quiet, and the survivors of a
+failover, catch up at once rather than at the host's next write. A follower
+that asks later skips the seq 0 update, which precedes its snapshot.
+
 ## Account boundary
 
 Every window observes the same boundary: the JWT key changing in
