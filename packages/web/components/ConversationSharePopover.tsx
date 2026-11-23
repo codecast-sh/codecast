@@ -21,7 +21,10 @@ export function ConversationSharePopover({ conversation, canManage }: { conversa
   // conversation id grants nothing to anonymous viewers or link unfurlers
   // (issue #27).
   const withToken = (token: string) => `${pageUrl}?share=${encodeURIComponent(token)}`;
+  // data-cc-squeeze-keep: the conversation header's last squeeze level keeps
+  // Share alone of what reaches it through headerExtra (globals.css).
   return (
+    <span data-cc-squeeze-keep className="contents">
     <SharePopover
       canManage={canManage}
       isPrivate={conversation.is_private !== false}
@@ -56,5 +59,6 @@ export function ConversationSharePopover({ conversation, canManage }: { conversa
         </label>
       ) : null}
     />
+    </span>
   );
 }

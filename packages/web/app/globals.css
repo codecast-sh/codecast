@@ -124,7 +124,8 @@
    chip gives up its width beside it. Level 8 is the last: the action
    cluster sheds every pill not marked data-cc-keep or data-cc-squeeze-keep
    (the runner pill, a live huddle, an open search, Share and the session
-   menu stay), and only then gives way from its start (justify-end clips its
+   menu stay; of headerExtra only Share, not the files-changed pill), and
+   only then gives way from its start (justify-end clips its
    leftmost pills). The runner's machine and owners segments are how a
    person reaches who runs and who owns the session, so nothing squeezes
    them while anything less important is still on the row.
@@ -161,7 +162,8 @@
    never the menu at its end (see the level ladder above). */
 [data-sv-convhead] [data-squeeze~="7"] .cc-panel__title { flex-shrink: 1000; }
 [data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] { min-width: 0; flex-shrink: 1000; }
-[data-sv-convhead] [data-squeeze~="8"] [data-cc-conv-actions] > :not([data-cc-keep], [data-cc-squeeze-keep]) { display: none !important; }
+[data-sv-convhead] [data-squeeze~="8"] [data-cc-conv-actions] > :not([data-cc-keep], [data-cc-squeeze-keep], [data-cc-header-extra]),
+[data-sv-convhead] [data-squeeze~="8"] [data-cc-conv-actions] > [data-cc-header-extra] > :not([data-cc-squeeze-keep]) { display: none !important; }
 [data-sv-convhead] [data-squeeze~="8"] [data-cc-conv-actions] {
   flex-shrink: 1;
   min-width: 0;

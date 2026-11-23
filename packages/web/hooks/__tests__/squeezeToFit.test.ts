@@ -14,6 +14,7 @@ const view = readFileSync(join(web, "components/ConversationView.tsx"), "utf8");
 // by ConversationHeaderBar.
 const headerBar = readFileSync(join(web, "components/conversation/ConversationHeaderBar.tsx"), "utf8");
 const placeholder = readFileSync(join(web, "components/ConversationPlaceholder.tsx"), "utf8");
+const share = readFileSync(join(web, "components/ConversationSharePopover.tsx"), "utf8");
 
 /** A row whose content width depends on the squeeze level it carries. */
 function fakeRow(clientWidth: number, widthAtLevel: (level: number) => number) {
@@ -57,12 +58,15 @@ describe("conversation header squeeze", () => {
   // before the cluster clips, and the runner is never one of them.
   test("the last level sheds the unkept actions before it clips the runner", () => {
     const max = Number(view.match(/useSqueezeToFit\(squeezeRowRef, (\d+)\)/)?.[1]);
-    expect(css).toContain(`[data-sv-convhead] [data-squeeze~="${max}"] [data-cc-conv-actions] > :not([data-cc-keep], [data-cc-squeeze-keep]) { display: none !important; }`);
+    expect(css).toContain(`[data-sv-convhead] [data-squeeze~="${max}"] [data-cc-conv-actions] > :not([data-cc-keep], [data-cc-squeeze-keep], [data-cc-header-extra]),`);
     const clip = css.match(/\[data-squeeze~="(\d+)"\] \[data-cc-conv-actions\] \{[^}]*justify-content: flex-end/);
     expect(Number(clip?.[1])).toBe(max);
     expect(view).toMatch(/<span data-cc-runner data-cc-keep="live"/);
-    // The Share control (headerExtra) stays too: every object page carries one.
-    expect(view).toContain(`{headerExtra && <span data-cc-squeeze-keep className="contents">{headerExtra}</span>}`);
+    // Of headerExtra, only Share stays: every object page carries one, and the
+    // files-changed pill beside it would take its width out of the runner pill.
+    expect(view).toContain(`{headerExtra && <span data-cc-header-extra className="contents">{headerExtra}</span>}`);
+    expect(css).toContain(`[data-sv-convhead] [data-squeeze~="${max}"] [data-cc-conv-actions] > [data-cc-header-extra] > :not([data-cc-squeeze-keep]) { display: none !important; }`);
+    expect(share).toMatch(/<span data-cc-squeeze-keep className="contents">\s*<SharePopover/);
     // The dormant chip yields its width before the cluster does.
     expect(css).toMatch(/\[data-squeeze~="(\d)"\] \[data-dormant-wake\] \{ min-width: 0;/);
   });
