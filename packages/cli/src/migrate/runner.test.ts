@@ -461,6 +461,17 @@ test("safe offload cannot report success when no destination resume was queued",
   expect(w.calls.find(c => c[0] === "confirm")?.[2]).toBe(false);
 });
 
+test("a closed session moved without a resume is done, even on a safe offload", async () => {
+  const w = world({ statuses: ["idle"] });
+  w.batch.interrupt_on_timeout = false;
+  w.io.finish = async () => ({ ok: true, resume_command_id: null, kept_closed: true });
+  const out = await migrateRow(w.io, w.batch, row(), new SharedTreeLedger());
+  expect(out.outcome).toBe("done");
+  const confirm = w.calls.find(c => c[0] === "confirm");
+  expect(confirm?.[2]).toBe(true);
+  expect(JSON.stringify(confirm?.[3])).toContain("stays closed");
+});
+
 describe("whileReporting", () => {
   test("a long transfer re-reports its stage with the time so far, and stops once it ends", async () => {
     const reports: string[] = [];

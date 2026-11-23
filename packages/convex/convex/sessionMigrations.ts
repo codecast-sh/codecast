@@ -183,7 +183,7 @@ export async function collectMigrationCandidates(ctx: { db: any }, userId: Id<"u
       .order("desc")
       .take(300);
     for (const c of rows) {
-      if (c.status === "completed" || c.inbox_killed_at || isClosedSession(c) || c.is_subagent) continue;
+      if (c.status === "completed" || c.inbox_killed_at || c.is_subagent) continue;
       out.push(c);
     }
   }
@@ -196,7 +196,7 @@ export async function collectMigrationCandidates(ctx: { db: any }, userId: Id<"u
     if (!s.conversation_id || seen.has(String(s.conversation_id))) continue;
     seen.add(String(s.conversation_id));
     const c = await ctx.db.get(s.conversation_id);
-    if (!c || c.user_id !== userId || c.status === "completed" || c.inbox_killed_at || isClosedSession(c)) continue;
+    if (!c || c.user_id !== userId || c.status === "completed" || c.inbox_killed_at) continue;
     out.push(c);
   }
   return out;
@@ -360,6 +360,7 @@ export async function performCreateBatch(
       created_at: now,
       updated_at: now,
       ...(bring?.length ? { bring_paths: bring } : {}),
+      ...(r.resume === false ? { resume: false } : {}),
     });
     rows.push({ ...r, migration_id: migrationId.toString() });
   }
@@ -575,7 +576,6 @@ export async function performBeginSession(
   }
   if (conv.status === "completed" && row.direction === "to_cloud") return fail("the session has ended");
   if (conv.inbox_killed_at) return fail("the session was killed");
-  if (isClosedSession(conv)) return fail("the session was closed");
   if (conv.owner_device_id === row.to_device_id) return fail("already on the destination");
   if (!conv.session_id) return fail("the session has no transcript yet");
 
@@ -788,7 +788,7 @@ export async function performFinishSession(
     source_path?: string;
   },
   now = Date.now(),
-): Promise<{ ok: true; resume_command_id: string | null; owner_device_id: string } | { ok: false; reason: string }> {
+): Promise<{ ok: true; resume_command_id: string | null; owner_device_id: string; kept_closed?: boolean } | { ok: false; reason: string }> {
   const row = await ctx.db.get(args.migration_id);
   if (!row || row.user_id.toString() !== userId.toString()) return { ok: false, reason: "no such migration" };
   if (!IN_FLIGHT_STATUSES.has(row.status)) return { ok: false, reason: `row is ${row.status}` };
@@ -810,7 +810,9 @@ export async function performFinishSession(
       conversation_id: row.conversation_id,
       owner_device_id: row.to_device_id,
       project_path: args.project_path,
-      resume: true,
+      // A closed session moves without resuming (planMigration resume false):
+      // it stays closed on the destination and wakes there on its next wake.
+      resume: row.resume !== false,
       shared_with: sharedWith,
     });
   } catch (err) {
@@ -824,14 +826,14 @@ export async function performFinishSession(
   });
   await ctx.db.patch(row._id, {
     status: "resuming" as const,
-    stage: "resuming on the destination",
+    stage: row.resume === false ? "moved; stays closed until its next message" : "resuming on the destination",
     destination_path: args.project_path,
     ...(args.source_path !== undefined ? { source_path: args.source_path } : {}),
     ...(args.verification !== undefined ? { verification: args.verification } : {}),
     resume_command_id: moved.command_id ?? undefined,
     updated_at: now,
   });
-  return { ok: true, resume_command_id: moved.command_id ?? null, owner_device_id: moved.owner_device_id };
+  return { ok: true, resume_command_id: moved.command_id ?? null, owner_device_id: moved.owner_device_id, ...(row.resume === false ? { kept_closed: true } : {}) };
 }
 
 /**
@@ -894,7 +896,8 @@ export const confirmSession = mutation({
     if (TERMINAL_STATUSES.has(row.status)) return { ok: false, status: row.status };
     const now = Date.now();
     const batch = await loadBatch(ctx, userId, row.batch_id);
-    if (args.ok && batch?.interrupt_on_timeout === false) {
+    // A closed session moved without a resume: there is nothing to confirm.
+    if (args.ok && batch?.interrupt_on_timeout === false && row.resume !== false) {
       const resume = row.resume_command_id ? await ctx.db.get(row.resume_command_id) : null;
       if (!resume?.executed_at || resume.error) {
         args.ok = false;
