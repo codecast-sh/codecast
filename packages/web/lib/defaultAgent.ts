@@ -54,10 +54,11 @@ export function defaultAgentType(s: DefaultAgentState): ConvexAgentType {
 }
 
 /** The agent for a new conversation opened beside `inherit` (the agent of
- *  the conversation on screen, or a resumed draft's). The person's saved
- *  default and last hand pick come first; the conversation's own agent
- *  fills in when they have neither. */
-export function newConversationAgentType(s: DefaultAgentState, inherit?: string | null): ConvexAgentType {
+ *  the conversation on screen, or a resumed draft's). An `explicit` agent the
+ *  caller asked for (a compose link's, the first run's "Ask the assistant")
+ *  wins; then the person's saved default and last hand pick; the
+ *  conversation's own agent fills in when they have neither. */
+export function newConversationAgentType(s: DefaultAgentState, inherit?: string | null, explicit?: string | null): ConvexAgentType {
   if (onlyHostedAgent(s)) return HOSTED_AGENT_TYPE;
-  return intendedAgentType(s) ?? knownAgentType(inherit) ?? LOCAL_DEFAULT;
+  return knownAgentType(explicit) ?? intendedAgentType(s) ?? knownAgentType(inherit) ?? LOCAL_DEFAULT;
 }
