@@ -203,8 +203,7 @@ async function reparentSessionCore(
   const removed: Id<"users">[] = [];
   let owners: OwnerInfo[];
   let roleId: Id<"org_roles"> | undefined = conversation.org_role_id;
-  // The row as a role target leaves it, so a takeover of a hundred sessions
-  // reads none of them again to say whom each reports to.
+  // The row as a role target leaves it: a takeover of 100 sessions reads none again.
   let filedRow: any = null;
 
   if (args.target.kind === "user") {
@@ -411,9 +410,11 @@ async function rehomeSessions(
     result.sessions.push(shortId);
     if (openAsk) result.kept_in_front.push(shortId);
     if (opts.dry) continue;
+    // The wheel moves with it: its driver while they own it (writeDriver checks), else a bound session's starter (applyHoldChange).
+    const driver = c.driver_user_id ?? (c.org_role_hold === "bound" && !c.role_started ? (await humanStarterUser({ db: { get: batch!.read } }, c))?._id : undefined);
     const moved = await performReparentSession(ctx, authUserId, {
       session_id: c._id.toString(),
-      target: { kind: "role", role_id: role._id.toString(), hold: opts.by_rule ? "bound" : "filed" },
+      target: { kind: "role", role_id: role._id.toString(), hold: opts.by_rule ? "bound" : "filed", ...(driver ? { driver: String(driver) } : {}) },
       note: opts.note,
       from_session: opts.from_session,
     }, { batch: batch!, row: c });

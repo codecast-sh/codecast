@@ -9,7 +9,7 @@ import { formatDecisionAnswer, roleDrives, rollupParentIdOf } from "@codecast/sh
 import { dispatch } from "./dispatch";
 import { sendSessionMessage } from "./pendingMessages";
 import { stopAndSendForUser } from "./daemonCommandUtils";
-import { performApplyOwnersChange, performLeaveSession, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners, applyOwnersChangeAs } from "./sessionOwnership";
+import { performRehomeSessions, performApplyOwnersChange, performLeaveSession, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners, applyOwnersChangeAs } from "./sessionOwnership";
 
 // One owner drives (org-roles-run-work.md R1). A person's own message into a
 // session takes the wheel from the role or person driving it; the paused role
@@ -353,6 +353,29 @@ describe("a paused role changes nothing about the owners of the session it is pa
     await expect(performLeaveSession(ctx, ME as any, { session_id: "hand", ...fromSeat })).rejects.toThrow(/@growth is paused there/);
     await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "hand", change: { leave: {} }, ...fromSeat })).rejects.toThrow(/@growth is paused there/);
     expect(row("hand").driver_user_id).toBe(ME);
+  });
+});
+
+// A takeover or a retire's heir moves sessions by the ownership rule; the
+// wheel moves with them (sessionOwnership.rehomeSessions).
+describe("a session that moves to another role keeps who drives it", () => {
+  test("a taken-over session and a person's bound session keep their driver; a session nobody drove goes to the role", async () => {
+    const { ctx, tables, row } = await world();
+    const eng = await performCreateRole(ctx, ME as any, { name: "Eng lead", handle: "eng", team_id: TEAM });
+    const growth = tables.org_roles.find((r) => r.handle === "growth")._id;
+    tables.conversations.push(
+      session("bound", { org_role_id: growth, org_role_hold: "bound", driver_user_id: ME }),
+      session("bound_unstamped", { org_role_id: growth, org_role_hold: "bound" }),
+    );
+    await composerSend(ctx, row("filed"), ME);
+    const moved = ["filed", "bound", "bound_unstamped", "plain"];
+    await performRehomeSessions(ctx, ME as any, eng, moved.map((id) => ({ raw: row(id) })), { by_rule: true });
+    for (const id of moved) expect(row(id).org_role_id).toBe(eng._id);
+    expect(row("filed").driver_user_id).toBe(ME);
+    expect(row("bound").driver_user_id).toBe(ME);
+    expect(row("bound_unstamped").driver_user_id).toBe(ME);
+    expect(row("plain").driver_user_id).toBeUndefined();
+    expect(roleDrives(row("plain"))).toBe(true);
   });
 });
 
