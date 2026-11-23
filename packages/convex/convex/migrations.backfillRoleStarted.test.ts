@@ -90,6 +90,16 @@ describe("backfillRoleStarted", () => {
     expect((await db.get("conversations_hand" as any)).driver_user_id).toBe(ME);
   });
 
+  test("a stamped hand with no rows sends its open question from its runner to the role's line", async () => {
+    const db = fixtures();
+    await db.patch(ROLE as any, { reports_to: { kind: "user", user_id: "users_peer" } });
+    db._tables.users = [{ _id: ME, name: "Me" }, { _id: "users_peer", name: "Peer" }];
+    db._tables.session_decisions = [{ _id: "session_decisions_1", short_id: "sd-1", conversation_id: "conversations_hand_of_hand", user_id: ME, question: "Ship?", options: [], status: "pending", asked_user_ids: [ME], category: "approach", created_at: 1 }];
+    db._tables.decision_inbox = [{ _id: "decision_inbox_1", decision_id: "session_decisions_1", user_id: ME, status: "pending", created_at: 1 }];
+    await backfillRoleStartedPage({ db, scheduler: { runAfter: async () => {} } } as any, { dryRun: false });
+    expect(db._tables.session_decisions[0].asked_user_ids).toEqual(["users_peer"]);
+  });
+
   test("it pages through a role's sessions and hands the cursor on", async () => {
     const db = fixtures();
     const first = await backfillRoleStartedPage({ db } as any, { dryRun: false, numItems: 3 });

@@ -53,11 +53,10 @@ export async function backfillRoleStartedPage(
     if (dryRun) continue;
     await ctx.db.patch(c._id, { role_started: true });
     for (const r of retained) await removeSessionOwnerRow(ctx, c._id, r.user_id as any);
-    if (retained.length) {
-      await syncPrimaryOwnerCache(ctx, c._id);
-      // Its open questions leave the person dropped and reach the role.
-      await reroutePendingDecisionsForConversation(ctx as any, c._id, Date.now());
-    }
+    if (retained.length) await syncPrimaryOwnerCache(ctx, c._id);
+    // Its open questions leave the person they were asked of (a dropped row,
+    // or the runner as its implicit starter) and reach the role's line.
+    await reroutePendingDecisionsForConversation(ctx as any, c._id, Date.now());
   }
   const next = !page.isDone
     ? { roleIndex, cursor: page.continueCursor as string }
