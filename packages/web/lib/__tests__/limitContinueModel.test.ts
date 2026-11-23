@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { otherModelFor, parkedModelFamily } from "../limitContinue";
+import { familyStandingLabel, limitContinueTarget, otherModelFor, parkedModelFamily } from "../limitContinue";
 
 // A session parked on one model's week goes on with another model, on web's
 // park card and the phone's banner alike.
@@ -22,5 +22,42 @@ describe("parkedModelFamily", () => {
   test("Fable goes on Opus, Opus on Sonnet", () => {
     expect(otherModelFor("fable").key).toBe("opus");
     expect(otherModelFor("opus").key).toBe("sonnet");
+  });
+});
+
+// A model's week is per account: a Fable park continues on the account that
+// still has Fable, never on one whose Fable week is as spent as the one it
+// left (2026-11-22: six accounts at Fable 100%, one at 22%, and the card
+// offered only Opus).
+describe("limitContinueTarget for a model-only park", () => {
+  const now = Date.parse("2026-11-22T12:00:00Z");
+  const week = (percent: number) => ({ percent, resets_at: now + 3 * 86_400_000 });
+  const profile = (name: string, weekly: number, fable: number) => ({
+    name,
+    email: `${name}@example.com`,
+    usage: { fetched_at: now - 60_000, session: week(5), weekly: week(weekly), weekly_scoped: { ...week(fable), label: "Fable" } },
+  });
+  const device = {
+    active_email: "studio@example.com",
+    profiles: [
+      profile("studio", 88, 100),
+      profile("symmetry", 60, 100),
+      profile("frame", 62, 100),
+      profile("ada", 70, 22),
+    ],
+  };
+
+  test("a Fable park picks the account with Fable left", () => {
+    expect(limitContinueTarget(device, now, true, "fable").best?.name).toBe("ada");
+    // Ranked by the general week alone it would pick symmetry, Fable spent.
+    expect(limitContinueTarget(device, now, true).best?.name).toBe("symmetry");
+    expect(familyStandingLabel(limitContinueTarget(device, now, true, "fable").best?.usage, "fable", now)).toBe("Fable 22% used");
+  });
+
+  test("with no account holding Fable there is no account to offer", () => {
+    const spent = { ...device, profiles: device.profiles.filter((p) => p.name !== "ada") };
+    expect(limitContinueTarget(spent, now, true, "fable").best).toBeUndefined();
+    // An account-wide park still ranks by the general week.
+    expect(limitContinueTarget(spent, now, true).best?.name).toBe("symmetry");
   });
 });

@@ -11,7 +11,7 @@ import { isBlockedConversation } from '@codecast/convex/convex/ccAccountsShared'
 import { standingLabel } from '@codecast/shared/contracts';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
-import { continueOnAccount, continueOnModel, limitContinueTarget, otherModelFor, parkedModelFamily } from '@codecast/web/lib/limitContinue';
+import { continueOnAccount, continueOnModel, familyStandingLabel, limitContinueTarget, otherModelFor, parkedModelFamily } from '@codecast/web/lib/limitContinue';
 import { Text as RNText } from '@/components/Themed';
 import { showNotice } from '@/lib/undoBar';
 import { Spacing, themedStyles, useTheme } from '@/constants/Theme';
@@ -60,15 +60,31 @@ export function AccountRecoveryBanner({ conversationId }: { conversationId: stri
     );
   }
 
-  // Only one model's week is out: every account shares it, so the way on is
-  // another model, the same action as web's park card.
+  // Only one model's week is out. That week is per account: another account
+  // with room on it goes on with the same model; with none, the way on is
+  // another model. The same actions as web's park card.
   if (limitFamily) {
     const other = otherModelFor(limitFamily);
     const family = `${limitFamily.charAt(0).toUpperCase()}${limitFamily.slice(1)}`;
+    const { best: roomy } = limitContinueTarget(device, now, true, limitFamily);
+    if (roomy?.email && device?.online && !device.is_remote) {
+      return (
+        <Bar
+          icon="hourglass-half"
+          text={`${family} is out here · ${roomy.email}: ${familyStandingLabel(roomy.usage, limitFamily, now) ?? standingLabel(roomy.usage, now)}`}
+          action={`Continue on ${roomy.email}`}
+          onAction={() => {
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+            continueOnAccount(conversationId, roomy);
+          }}
+          onMore={() => router.push('/accounts')}
+        />
+      );
+    }
     return (
       <Bar
         icon="hourglass-half"
-        text={`Only ${family} is out · waits for its reset`}
+        text={`${family} is out${roomy ? '' : ' on every account'} · waits for its reset`}
         action={`Continue on ${other.label}`}
         onAction={() => {
           Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);

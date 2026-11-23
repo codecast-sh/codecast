@@ -5,7 +5,7 @@
 // recovery banner both read and act through here.
 
 import { fleetAccount, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
-import { classifyApiErrorBanner, fallbackProfiles, modelLimitFamily, pendingProposal } from "@codecast/shared/contracts";
+import { classifyApiErrorBanner, fallbackProfiles, labeledUsageWindows, livePercent, modelLimitFamily, pendingProposal } from "@codecast/shared/contracts";
 import { commitModelChange } from "./modelSwitch";
 import { useInboxStore } from "../store/inboxStore";
 import { isParkedDispatchError } from "../store/mutativeMiddleware";
@@ -13,16 +13,29 @@ import { requestAccountSwitchCommand } from "./sessionCommands";
 
 export type LimitProfile = { name: string; email?: string; usage?: CcUsage; login_expired_at?: number; setup_token?: { stored_at: number; expires_at: number } };
 
-/** The account the session ran on (fleet), and the best other one to continue on. */
-export function limitContinueTarget(device: any, now: number, live: boolean): { fleetEmail?: string; active?: LimitProfile; best?: LimitProfile } {
+/** The account the session ran on (fleet), and the best other one to continue
+ *  on. `family` is the model whose week alone parked the session ("fable"):
+ *  that week is per account, so the pick must have room on it. Ranked without
+ *  it, a Fable park pointed at an account whose Fable week was as spent as the
+ *  one it left, while the one account with Fable left went unoffered
+ *  (2026-11-22). */
+export function limitContinueTarget(device: any, now: number, live: boolean, family?: string): { fleetEmail?: string; active?: LimitProfile; best?: LimitProfile } {
   const profiles: LimitProfile[] = device?.profiles ?? [];
   const fleetEmail = fleetAccount(device, now).email;
   const active = profiles.find((p) => p.email && p.email === fleetEmail);
   // Only while the park is live: a settled session's old proposal is history.
   const proposal = live && device ? pendingProposal([device], now) : null;
-  const eligible = fallbackProfiles(profiles, fleetEmail, now);
+  const eligible = fallbackProfiles(profiles, fleetEmail, now, family ? [family] : undefined);
   const proposed = proposal?.target_email ? eligible.find((p) => p.email === proposal.target_email) : undefined;
   return { fleetEmail, active, best: proposed ?? eligible[0] };
+}
+
+/** "Fable 22% used": an account's standing on one model's week, the window
+ *  a model-only park turns on. Undefined when the account reports no such
+ *  window. */
+export function familyStandingLabel(usage: CcUsage | undefined, family: string, now: number): string | undefined {
+  const w = usage ? labeledUsageWindows(usage).find((x) => x.name.toLowerCase().includes(family)) : undefined;
+  return w ? `${w.name} ${Math.round(livePercent(w, now))}% used` : undefined;
 }
 
 /** The model family a limit-parked session's newest banner names when only
@@ -43,10 +56,10 @@ export function otherModelFor(family: string): { key: string; label: string } {
 }
 
 /**
- * Continue a session parked on one model's limit on another model. Every
- * account shares the spent model's week state, so no account switch helps.
- * The parked agent sits idle at its prompt, so /model runs before the
- * continue; both ride the outbox in order.
+ * Continue a session parked on one model's limit on another model: the way on
+ * when no other account has room on the spent model (limitContinueTarget with
+ * its family finds none). The parked agent sits idle at its prompt, so /model
+ * runs before the continue; both ride the outbox in order.
  */
 export function continueOnModel(conversationId: string, model: string, notify: (message: string) => void): void {
   const s = useInboxStore.getState();
