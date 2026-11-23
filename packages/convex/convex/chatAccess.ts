@@ -39,6 +39,51 @@ export function canReadChannelAnonymously(channel: Doc<"chat_channels"> | null):
   return !!channel && isCommunity(channel) && !channel.archived_at;
 }
 
+// Every kind but "dm", plus absent (a pre-kind public room). Keyed by kind so a
+// new kind fails the typecheck here until someone says which side it is on.
+const ROOM_KIND: Record<Exclude<NonNullable<Doc<"chat_channels">["kind"]>, "dm">, true> = {
+  public: true, private: true, agents: true, community: true,
+};
+const ROOM_KINDS = [undefined, ...Object.keys(ROOM_KIND)];
+const byName = (a: Doc<"chat_channels">, b: Doc<"chat_channels">) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+/**
+ * A team's named rooms, in name order, up to `limit`. Never a DM: a DM's name
+ * is "", so a read by name alone lists every DM first, and in a team with
+ * hundreds of them any cap filled with DMs and dropped the rooms late in the
+ * alphabet (#team, Nov 2026). The cap on named rooms (createChannel) counts
+ * these; a DM is reached through its members (teamRoomsAndDms).
+ */
+export async function teamRooms(ctx: ReadCtx, teamId: Id<"teams">, limit: number): Promise<Doc<"chat_channels">[]> {
+  const perKind = await Promise.all(ROOM_KINDS.map((kind) => ctx.db
+    .query("chat_channels")
+    .withIndex("by_team_kind_name", (q: any) => q.eq("team_id", teamId).eq("kind", kind))
+    .take(limit)));
+  return perKind.flat().sort(byName).slice(0, limit);
+}
+
+/**
+ * The rooms a person's rail draws from in one team: its named rooms, plus the
+ * person's own DMs there, read from their member rows. `memberOf` is every
+ * restricted room they are inside. Access is still the caller's to apply.
+ */
+export async function teamRoomsAndDms(
+  ctx: ReadCtx,
+  userId: Id<"users">,
+  teamId: Id<"teams">,
+  limit: number,
+): Promise<{ channels: Doc<"chat_channels">[]; memberOf: Set<string> }> {
+  const rows = await ctx.db
+    .query("chat_channel_members")
+    .withIndex("by_user", (q: any) => q.eq("user_id", userId))
+    .collect();
+  const memberOf = new Set(rows.map((r) => r.channel_id.toString()));
+  const dms = (await Promise.all([...memberOf].map((id) => ctx.db.get(id as Id<"chat_channels">))))
+    .filter((c): c is Doc<"chat_channels"> => !!c && c.kind === "dm" && c.team_id.toString() === teamId.toString());
+  const channels = [...(await teamRooms(ctx, teamId, limit)), ...dms].sort(byName);
+  return { channels, memberOf };
+}
+
 export async function isChannelMember(
   ctx: ReadCtx,
   channelId: Id<"chat_channels">,
