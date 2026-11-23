@@ -12459,6 +12459,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
       return s.createSession({
         agent_type: agentType,
         session_id: stubId,
+        ...(cur?._linkedObject?.type && cur?._linkedObject?.id ? { linked_object: cur._linkedObject } : {}),
         ...(fallback?.firstMessage
           ? { first_message: fallback.firstMessage.content, first_message_client_id: fallback.firstMessage.clientId }
           : {}),
