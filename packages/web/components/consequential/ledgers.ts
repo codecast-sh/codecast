@@ -349,7 +349,7 @@ export function killSessionsLedger(r: { total: number; working: string[]; trigge
     ],
     rows: [
       ...(w ? [{ k: "Working", v: plural(w, "session"), list: few(r.working), tone: "warn" as const }, { k: "Lost", v: "Unfinished turns", tone: "warn" as const }] : []),
-      t ? { k: "Triggers", v: `${plural(t, "trigger")} canceled`, list: few(triggers), tone: "warn" as const } : { k: "Triggers", v: "Canceled" },
+      ...(t ? [{ k: "Triggers", v: `${plural(t, "trigger")} canceled`, list: few(triggers), tone: "warn" as const }] : []),
       ...(q ? [{ k: "Queued", v: one ? "Messages dropped" : `Dropped in ${plural(q, "session")}`, tone: "warn" as const }] : []),
       { k: "To undo", v: w ? "Restore · turn lost" : "Restore · triggers re-arm" },
     ],

@@ -106,7 +106,7 @@ const KILL_NOTE = "(agent stays stopped on undo)";
 function patchVerb(ctx: UndoCtx): string {
   const fields = (ctx.args[1] ?? {}) as Record<string, unknown>;
   if ("inbox_pinned_at" in fields) return fields.inbox_pinned_at ? "Pinned" : "Unpinned";
-  if (fields.inbox_dismissed_at) return "Killed";
+  if (fields.inbox_dismissed_at) return fields.inbox_killed_at ? "Killed" : "Closed";
   if (fields.inbox_stashed_at) return "Stashed";
   if ("inbox_stashed_at" in fields || "inbox_dismissed_at" in fields) return "Restored";
   return "Edited";

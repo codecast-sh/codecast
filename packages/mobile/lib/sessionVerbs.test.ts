@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { TaskRow } from "@codecast/web/components/triggerTasks";
-import { closeDetail, killReview } from "./sessionVerbs";
+import { closeDetail, killReview, reviewedKill } from "./sessionVerbs";
 
 const NOW = 1_800_000_000_000;
 const ID = "c".repeat(32);
@@ -26,6 +26,10 @@ describe("the line under the menu's Close", () => {
     expect(closeDetail(settled, { pendingMessages: { [ID]: [{ _id: "m1", content: "hi", timestamp: NOW - 1000 }] } }, NOW)).toBe("Hides it, lets it finish");
   });
 
+  test("a session waiting on a permission prompt says it still waits on you", () => {
+    expect(closeDetail({ ...settled, awaiting_input: true }, {}, NOW)).toBe("Hides it; it still waits on you");
+  });
+
   test("a lead whose subagent is mid-turn is set aside, as the gesture does", () => {
     const sub = { _id: "s".repeat(32), message_count: 3, agent_status: "working", updated_at: NOW - 1000, last_heartbeat: NOW - 500, parent_conversation_id: ID };
     expect(closeDetail(settled, { sessions: { [sub._id]: sub } }, NOW)).toBe("Hides it, lets it finish");
@@ -46,12 +50,34 @@ describe("what Kill asks first", () => {
   });
 
   test("names the queued messages it drops", () => {
-    expect(killReview({ ...settled, has_pending: true }, [])!.message).toContain("Queued: Messages dropped");
+    const message = killReview({ ...settled, has_pending: true }, [])!.message;
+    expect(message).toContain("Queued: Messages dropped");
+    expect(message).not.toContain("Triggers");
   });
 
   test("names the turn it cuts off", () => {
     const r = killReview({ ...settled, is_idle: false }, [])!;
     expect(r.message).toContain("Lost: Unfinished turns");
     expect(r.keep).toBe("Keep running");
+  });
+});
+
+describe("one reviewed Kill for every phone surface (the menu, a Stashed row)", () => {
+  const run = (row: typeof settled & Record<string, unknown>, tasks: TaskRow[]) => {
+    const calls: string[] = [];
+    let confirm: (() => void) | null = null;
+    reviewedKill(row, tasks, { hold: (id) => calls.push(`hold ${id}`), ask: (r, c) => { calls.push(`ask ${r.title}`); confirm = c; } });
+    return { calls, confirm: () => (confirm as (() => void) | null)?.() };
+  };
+
+  test("a set-aside session mid-turn asks first, and kills only on confirm", () => {
+    const k = run({ ...settled, is_idle: false }, []);
+    expect(k.calls).toEqual(["ask Kill session: Fix the sync"]);
+    k.confirm();
+    expect(k.calls).toEqual(["ask Kill session: Fix the sync", `hold ${ID}`]);
+  });
+
+  test("a session with nothing to lose goes straight behind the undo bar", () => {
+    expect(run(settled, []).calls).toEqual([`hold ${ID}`]);
   });
 });

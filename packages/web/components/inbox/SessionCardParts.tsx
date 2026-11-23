@@ -408,7 +408,7 @@ export function CardRestoreCluster({
                 onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-red bg-sol-bg/95 shadow-sm border border-sol-border/30"
               >
-                <ActionGlyph d={CLOSE_PATH} />
+                {isStashed || isClosedSession(session) ? <Square aria-hidden data-kill-glyph className="w-3.5 h-3.5" /> : <ActionGlyph d={CLOSE_PATH} />}
               </button>
             </ShortcutTooltip>
           )}

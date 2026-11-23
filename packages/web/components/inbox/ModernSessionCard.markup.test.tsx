@@ -183,6 +183,17 @@ describe("the Modern session card", () => {
     expect(realClose.slice(realClose.indexOf("data-mc-tools")).match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Restore"', 'aria-label="Kill"']);
   });
 
+  test("a set-aside card's Kill wears the Kill mark, never the live card's Close X", () => {
+    const kill = (html: string) => { const at = html.indexOf('aria-label="Kill"'); return html.slice(at, html.indexOf("</button>", at)); };
+    const stashed = render({ _id: "c-aside" }, { variant: "stashed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined });
+    const snoozed = render({ _id: "c-snz", inbox_snoozed_until: NOW + 60 * MIN }, { variant: "snoozed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined });
+    const closed = render({ _id: "c-close3", inbox_dismissed_at: 5, inbox_closed_at: 5 } as any, { variant: "dismissed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined });
+    for (const html of [stashed, snoozed, closed]) expect(kill(html)).toContain("data-kill-glyph");
+    const live = render({ _id: "c-live" });
+    expect(live).not.toContain("data-kill-glyph");
+    expect(snoozed.slice(snoozed.indexOf("data-mc-tools")).match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Move to Needs You now"', 'aria-label="Kill"']);
+  });
+
   test("the third line: project, branch or PR, task, links, author, comments; none when there is nothing", () => {
     const html = render({
       _id: "c-chips",

@@ -2628,9 +2628,11 @@ function SessionListPanelImpl({
   // its triggers and queue (store closeSession). Undoable via the toast.
   const handleAnimatedClose = useCallback((id: string) => { void animatedCloseSessions([id]); }, []);
   const handleAnimatedCloseMany = useCallback((ids: string[]) => { void animatedCloseSessions(ids); }, []);
-  // On a stashed card the destructive slot kills (server tears the agent down
-  // on the transition) — the row moves down into Closed.
-  const handleKillStashed = killWithNotice;
+  // On a stashed or snoozed card the destructive slot is a Kill (server tears
+  // the agent down on the transition; the row moves down into Closed). It is
+  // the same reviewed Kill as everywhere: a session Close set aside mid-turn
+  // sits here, so a bare press would cut that turn off and cancel triggers.
+  const handleKillStashed = useCallback((id: string) => closedKillOf([id]), [closedKillOf]);
   // Right-click menu: ONE cursor-anchored instance serves every card in the
   // panel; cards only report the click. Verbs reuse the exact handlers the
   // hover toolbar uses, so animations and trigger notices stay identical.

@@ -30,7 +30,7 @@ import { bootMark } from '@/lib/bootProfile';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { holdKill, showNotice, useUndoBar } from '@/lib/undoBar';
 import { appAlert, appPrompt, showActionSheet, type SheetItem } from '@/lib/popups';
-import { closeDetail, killReview } from '@/lib/sessionVerbs';
+import { closeDetail, reviewedKill } from '@/lib/sessionVerbs';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
@@ -283,6 +283,20 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     ]);
   }, []);
 
+  // One Kill for every phone surface (the menu, a Stashed row): it asks first
+  // when it would cut a turn off or cancel a trigger or a queued message (the
+  // web's kill review, as an alert), else goes behind the undo bar.
+  const reviewedKillOf = useCallback((session: InboxSession) => {
+    const tasks = Object.values(useInboxStore.getState().agentTasks ?? {}) as TaskRow[];
+    reviewedKill(session as any, tasks, {
+      hold: holdKill,
+      ask: (review, confirm) => appAlert(review.title, review.message, [
+        { text: review.keep, style: 'cancel' },
+        { text: review.confirm, style: 'destructive', onPress: confirm },
+      ]),
+    });
+  }, []);
+
   const handleSessionLongPress = useCallback((session: InboxSession) => {
     const favoriteLabel = session.is_favorite ? 'Unfavorite' : 'Favorite';
     const toggleFavorite = () => useInboxStore.getState().toggleFavorite(session._id);
@@ -293,17 +307,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     // team can see it. The store action records its own Undo on the bar.
     const store = useInboxStore.getState();
     const canHide = session.is_private === false && !!session.team_id && session.user_id === store.currentUser?._id;
-    const tasks = Object.values(store.agentTasks ?? {}) as TaskRow[];
-    // Kill retires it: asks first when it would cut a turn off or cancel a
-    // trigger or a queued message (the web's kill review, as an alert).
-    const kill = () => {
-      const review = killReview(session, tasks);
-      if (!review) { holdKill(session._id); return; }
-      appAlert(review.title, review.message, [
-        { text: review.keep, style: 'cancel' },
-        { text: review.confirm, style: 'destructive', onPress: () => holdKill(session._id) },
-      ]);
-    };
+    const kill = () => reviewedKillOf(session);
     showActionSheet(sessionTitle(session), [
       { label: 'Close', detail: closeDetail(session, store as any, Date.now()), icon: 'x', onPress: () => handleClose(session._id) },
       { label: session.is_pinned ? 'Unpin' : 'Pin', icon: 'map-pin', onPress: () => handlePin(session._id) },
@@ -314,7 +318,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       { label: 'Stash', icon: 'archive', onPress: () => handleStash(session._id) },
       { label: 'Kill session', icon: 'x-octagon', destructive: true, onPress: kill },
     ]);
-  }, [handlePin, handleStash, handleClose, openLabelPicker]);
+  }, [handlePin, handleStash, handleClose, openLabelPicker, reviewedKillOf]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -573,7 +577,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
                 variant="stashed"
                 onPress={() => openSession(s._id)}
                 onRestore={() => handleRestore(s._id)}
-                onKill={() => holdKill(s._id)}
+                onKill={() => reviewedKillOf(s)}
                 held={heldKillId === s._id}
               />
             ))
@@ -601,7 +605,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         </RNView>
       )}
     </RNView>
-  ), [schedulePartition, showStashed, showKilled, filteredStashed, stashedCards, filteredKilled, openSession, handleRestore, confirmKillAllStashed, heldKillId, appearance]);
+  ), [schedulePartition, showStashed, showKilled, filteredStashed, stashedCards, filteredKilled, openSession, handleRestore, confirmKillAllStashed, heldKillId, appearance, reviewedKillOf]);
 
   // What the inbox is narrowed to, named in the title: a label or a project
   // picked in the slide-out panel. The clear mark beside it goes back to all.

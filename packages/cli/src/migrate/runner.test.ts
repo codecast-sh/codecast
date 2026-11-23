@@ -470,6 +470,8 @@ test("a closed session moved without a resume is done, even on a safe offload", 
   const confirm = w.calls.find(c => c[0] === "confirm");
   expect(confirm?.[2]).toBe(true);
   expect(JSON.stringify(confirm?.[3])).toContain("stays closed");
+  // A move notice is a send, and a send un-closes the session and wakes it there.
+  expect(w.kinds()).not.toContain("notice");
 });
 
 describe("whileReporting", () => {

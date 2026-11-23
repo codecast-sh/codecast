@@ -525,6 +525,8 @@ export async function performMoveSessionToDevice(
     status: "active" as const,
     updated_at: Date.now(),
     ...(await unparkForMove(ctx, conv, dest)),
+    // Run it there: a closed session this resumes is not closed any more.
+    ...(args.resume !== false && isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}),
   });
 
   if (priorDeviceId && priorDeviceId !== args.owner_device_id) {
@@ -709,6 +711,8 @@ export async function performReassignToDevice(
     status: "active" as const,
     updated_at: Date.now(),
     ...(await unparkForMove(ctx, conv, device)),
+    // "Run it there" resumes it: a closed session is not closed any more.
+    ...(isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}),
   });
 
   if (prevOwner && prevOwner !== args.device_id) {
@@ -906,6 +910,8 @@ export async function performReparentSessionToDevice(
     status: "active" as const,
     updated_at: Date.now(),
     ...(await unparkForMove(ctx, conv, device)),
+    // The reparent resumes it there: a closed session is not closed any more.
+    ...(isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}),
   };
   if (crossUser) {
     // Account follows device: the destination's runner now runs + bills it.

@@ -418,6 +418,40 @@ describe("a closed session moves without waking", () => {
   });
 });
 
+describe("the flip decides the resume from the session as it is then", () => {
+  const flip = async (db: any) => {
+    const { rows } = await startedBatch(db, ["c1"]);
+    const id = rows[0].migration_id as any;
+    await performBeginSession({ db }, ME as any, { migration_id: id, device_id: LAPTOP }, NOW);
+    return { id, plannedResume: rowsOf(db)[0].resume };
+  };
+
+  test("closed after the plan: it moves without a resume and stays closed", async () => {
+    const db = fixtures();
+    const { id, plannedResume } = await flip(db);
+    expect(plannedResume).toBeUndefined();
+    Object.assign(conv(db, "c1"), { inbox_dismissed_at: 7, inbox_closed_at: 7 });
+    const before = commands(db).length;
+    const fin = await performFinishSession({ db }, ME as any, { migration_id: id, project_path: "/home/ubuntu/work/a" }, NOW + 5);
+    expect(fin).toMatchObject({ ok: true, resume_command_id: null, kept_closed: true });
+    expect(commands(db).slice(before).map((x) => x.command)).not.toContain("resume_session");
+    expect(conv(db, "c1").inbox_dismissed_at).toBe(7);
+    expect(rowsOf(db)[0].resume).toBe(false);
+  });
+
+  test("woken after the plan: it resumes on the destination", async () => {
+    const db = fixtures();
+    Object.assign(conv(db, "c1"), { inbox_dismissed_at: 5, inbox_closed_at: 5 });
+    const { id, plannedResume } = await flip(db);
+    expect(plannedResume).toBe(false);
+    conv(db, "c1").inbox_dismissed_at = undefined;
+    const fin = await performFinishSession({ db }, ME as any, { migration_id: id, project_path: "/home/ubuntu/work/a" }, NOW + 5);
+    expect(fin.ok && fin.resume_command_id).toBeTruthy();
+    expect((fin as any).kept_closed).toBeUndefined();
+    expect(rowsOf(db)[0].resume).toBeUndefined();
+  });
+});
+
 describe("finishSession — the flip", () => {
   test("one transaction: owner + path flip, targeted resume, release of the old owner, fence off", async () => {
     const db = fixtures();

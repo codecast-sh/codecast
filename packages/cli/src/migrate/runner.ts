@@ -399,7 +399,9 @@ export async function migrateRow(
       source_path: transfer.sourcePath,
     });
     if (!fin.ok) return fail(`handoff refused: ${fin.reason}`);
-    const notice = io.notice(facts, transfer, outside, rehearsal);
+    // A closed session gets no notice: a send into it un-closes it and the
+    // destination would resume it. It stays closed until a real wake.
+    const notice = fin.kept_closed ? null : io.notice(facts, transfer, outside, rehearsal);
     if (notice) await io.sendNotice(facts.conversation_id, notice);
 
     // ── 5. confirm the resume landed ────────────────────────────────────────
