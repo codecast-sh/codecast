@@ -29,6 +29,7 @@ import { PATCHABLE_CONVERSATION_FIELDS, forkSeedClientId } from "@codecast/share
 import { identityFieldsOf } from "./lib/sessionIdentityFields";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import { isHotRow, splitRows } from "@codecast/shared/contracts/inboxSplit";
+import { compactNulls } from "@codecast/shared/contracts/inboxCompact";
 import {
   openTasksVouchForWaiting,
   LOOP_OVERDUE_GRACE_MS,
@@ -8179,6 +8180,9 @@ const INBOX_WINDOW_CAP = INBOX_WINDOW_CAPS.recent;
 // candidates the owner window (INBOX_WINDOW_CAP) missed. One db call; owner
 // rows are small, so the bound is on documents read, well inside a query's.
 const INBOX_OWNER_LOOKUP_CAP = 2000;
+// How many of an overflowing window's oldest rows the split form sends whole:
+// the most rows one push can let in at that edge without a whole refetch.
+const INBOX_EDGE_ROWS = 8;
 // Pinned rows are a deliberate, bounded set (INBOX_PINNED_CAP, inboxProjection.ts):
 // the window reads newest-first so the newest pins win, and the pin writers
 // refuse past the cap so the limit is enforced where the user can see it.
@@ -9176,10 +9180,15 @@ export async function scanInboxConversations(
   // Named path only: teammates of the named rows the windows would have
   // pooled, for groupPoolChildren. Never rows of their own.
   poolChildren: any[];
+  // A full window's oldest rows, which the split forms ship whole
+  // (INBOX_EDGE_ROWS).
+  edgeIds: Set<string>;
 }> {
   const dismissedCutoff = now - INBOX_DISMISSED_WINDOW_MS;
   const sessionWindowCutoff = now - INBOX_SESSION_WINDOW_MS;
   const truncated = new Set<InboxTruncation>();
+  // The oldest rows an overflowing window keeps (see INBOX_EDGE_ROWS).
+  const edgeIds = new Set<string>();
 
   // Recent window is bounded by both the row cap AND the 30d activity window:
   // the index range stops the scan at the cutoff so old sessions are never read.
@@ -9211,7 +9220,10 @@ export async function scanInboxConversations(
   ) => noWindows ? Promise.resolve([] as any[]) : Promise.all([rangeFor(undefined), rangeFor(false)])
     .then(([a, b]: [any[], any[]]) => {
       const merged = [...a, ...b].sort((x, y) => y[sortKey] - x[sortKey]);
-      if (merged.length > INBOX_WINDOW_CAP) truncated.add(kind);
+      if (merged.length > INBOX_WINDOW_CAP) {
+        truncated.add(kind);
+        for (const c of merged.slice(INBOX_WINDOW_CAP - INBOX_EDGE_ROWS, INBOX_WINDOW_CAP)) edgeIds.add(c._id.toString());
+      }
       return merged.slice(0, INBOX_WINDOW_CAP);
     });
 
@@ -9595,7 +9607,7 @@ export async function scanInboxConversations(
 
   return {
     conversations, maps, deliberateIds, clusterCutoff, selectionIds: new Set(selection.members.keys()), belowFold,
-    ownedByMeIds, myOwnerRowById, ownerRowFor, truncated, pinnedOverflowIds, recentSubagents, poolChildren,
+    ownedByMeIds, myOwnerRowById, ownerRowFor, truncated, pinnedOverflowIds, recentSubagents, poolChildren, edgeIds,
   };
 }
 
@@ -9849,7 +9861,11 @@ export async function computeInboxSessions(
   // stripped row looks cold to the split however busy the session is, and every
   // change to it (status, pending, a summary) forced every client to refetch the
   // whole list. Hotness is judged here, on the row as it was.
-  const hotIds = opts.splitHot ? new Set<string>() : undefined;
+  // A full window's oldest rows ship whole too: a row leaving the window (a
+  // stash, a kill, a pin) lets the next one in at that edge, a row no client
+  // held, and a cold-hash miss there sent every client to refetch the whole
+  // list (689KB) after every such mutation.
+  const hotIds = opts.splitHot ? new Set<string>(scan.edgeIds) : undefined;
   if (!includeLiveness) {
     for (const row of results) {
       const id = row._id.toString();
@@ -9878,6 +9894,10 @@ export const listInboxSessions = query({
     // asks for it, so a change re-sends the recent rows and a hash, not the
     // whole working set. One-shot fetches leave it off and get every row.
     split: v.optional(v.boolean()),
+    // The compact wire form (shared/contracts/inboxCompact): rows without
+    // their null fields, which were ~80% of a row's bytes and so of every
+    // echo a mutation re-sends. Hashes are over the full rows either way.
+    compact: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
@@ -9888,9 +9908,20 @@ export const listInboxSessions = query({
       fastFieldsInOverlay: args.fast_fields_in_overlay,
       splitHot: args.split,
     });
-    return args.split ? splitInboxList(result) : result;
+    const value = args.split ? splitInboxList(result) : result;
+    return args.compact ? compactInboxList(value) : value;
   },
 });
+
+/** A list result (split or whole) with its rows in the compact wire form. */
+export function compactInboxList(value: { hot: any[] } | { sessions: any[] }): Record<string, any> & { null_keys: string[] } {
+  if ("hot" in value) {
+    const { rows, null_keys } = compactNulls(value.hot);
+    return { ...value, hot: rows, null_keys };
+  }
+  const { rows, null_keys } = compactNulls(value.sessions);
+  return { ...value, sessions: rows, null_keys };
+}
 
 // The split forms. `now` is the projection epoch, as every inbox clock is, so
 // two executions inside one minute stay byte identical (sync-convergence C2).
@@ -9899,8 +9930,8 @@ export function splitInboxList(result: { sessions: any[]; hidden_count: number; 
   return { split: true as const, ids, hot: hot.map(([, r]) => r), cold_hash, hidden_count: result.hidden_count, truncated: result.truncated };
 }
 
-export function splitInboxLiveness(result: { liveness: Record<string, any>; projection?: any }) {
-  const { ids, hot, cold_hash } = splitRows(Object.entries(result.liveness), inboxEpoch(Date.now()));
+export function splitInboxLiveness(result: { liveness: Record<string, any>; projection?: any }, hotIds?: ReadonlySet<string>) {
+  const { ids, hot, cold_hash } = splitRows(Object.entries(result.liveness), inboxEpoch(Date.now()), undefined, hotIds);
   return { split: true as const, ids, hot: Object.fromEntries(hot), cold_hash, projection: result.projection };
 }
 
@@ -10672,12 +10703,22 @@ export async function computeSessionsLiveness(
   ctx: any,
   userId: Id<"users">,
   teamScope?: Id<"teams">,
+  // Filled with the rows the split form must ship whole: those whose
+  // conversation carries a recent stamp (a stash, a pin, an update: the
+  // overlay row itself carries none of them, so it looked cold and every
+  // filing gesture forced a whole refetch), and a full window's oldest rows
+  // (INBOX_EDGE_ROWS). Not part of the result, whose shape is frozen.
+  hotIdsOut?: Set<string>,
 ): Promise<{ liveness: Record<string, InboxOverlayRow>; projection: InboxProjection }> {
   // The epoch is the payload's ONLY clock: no raw Date.now() may reach the
   // result, so two executions inside one minute are byte identical (C2).
   const now = inboxEpoch(Date.now());
   const scan = await scanInboxConversations(ctx, userId, now, { includeLiveness: true, teamScope, subagentWindow: true });
   const { conversations, maps, truncated } = scan;
+  if (hotIdsOut) {
+    for (const id of scan.edgeIds) hotIdsOut.add(id);
+    for (const c of conversations) if (isHotRow(c, now)) hotIdsOut.add(c._id.toString());
+  }
   // Decisions FIRST: a parent already asking through a pending `cast decide`
   // never spends child message probes (see buildAskingParents), and a child
   // holding one joins the pool so its parent is lifted.
@@ -10856,8 +10897,9 @@ export const sessionsLiveness = query({
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return args.split ? splitInboxLiveness({ liveness: {} }) : { liveness: {} };
-    const result = await computeSessionsLiveness(ctx, userId);
-    return args.split ? splitInboxLiveness(result) : result;
+    const hotIds = new Set<string>();
+    const result = await computeSessionsLiveness(ctx, userId, undefined, hotIds);
+    return args.split ? splitInboxLiveness(result, hotIds) : result;
   },
 });
 

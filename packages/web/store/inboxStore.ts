@@ -1451,6 +1451,18 @@ export type BucketAssignmentItem = {
   updated_at: number;
 };
 
+// How loudly the viewer hears one session (sessionWatch.listMine). No row is
+// the default: the ordinary rules, and the viewer's project, folder and
+// teammate mutes.
+export type SessionNotifyLevel = "all" | "needs_input" | "muted";
+export type SessionNotifyItem = {
+  _id: string;
+  conversation_id: string;
+  level: SessionNotifyLevel;
+  updated_at: number;
+};
+export const sessionNotifyKey = (conversationId: string) => `sn:${conversationId}`;
+
 // One row per (user, conversation): where this viewer's attention stopped.
 // Unread is never stored — it is isSessionUnread(mark, session.updated_at),
 // re-derived at render so an ack and a new turn cannot disagree.
@@ -7175,6 +7187,11 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
    *  count". Local only — a session's read state never dispatches. */
   markSessionSeen: (id: string) => void;
 
+  /** The viewer's per-session notify settings, keyed sn:<conversation id>. */
+  sessionNotify: Record<string, SessionNotifyItem>;
+  /** Subscribe to every message, to needs input, mute, or go back to default. */
+  setSessionNotify: (conversationId: string, level: SessionNotifyLevel | "default") => void;
+
   // -- Session unread (server-backed, per viewer) --
   /** The viewer's read marks, keyed by row id (sessionReads.listMine). Unread
    *  is derived from these against each session's updated_at, never stored. */
@@ -7507,7 +7524,7 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   revokeDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   restoreDeviceEnrollment: (teamId: string, enrollmentId: string) => void;
   setDefaultModel: (agentClient: string, model: string | null) => void;
-  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; machine_wide_presence?: boolean }) => void;
+  updateNotificationSettings: (patch: { notifications_enabled?: boolean; notification_preferences?: Record<string, any>; muted_members?: string[]; muted_projects?: string[]; muted_folders?: string[]; machine_wide_presence?: boolean }) => void;
   setAgentPermissionModes: (modes: { claude?: string; codex?: string; gemini?: string; muse?: string }) => void;
   setClaudeBackend: (backend: "sdk" | "tmux") => void;
   setAgentDefaultParams: (agent: string, params: Record<string, string>) => void;
@@ -9208,7 +9225,7 @@ function hideSessionInDraft(
 ): HideResult {
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const stashHiddenValue = mode === "stash" && stashHidden ? true : null;
-  const sessionValues = Object.values(draft.sessions) as InboxSession[];
+  const sessionValues = Object.values(baseOf(draft).sessions) as InboxSession[];
   // The removed set must match what the card visually contains, so the sweep
   // uses the SAME nesting definition the renderer does (nestParentIdOf): Task
   // subagents (parent_conversation_id) AND agent-team teammates (spawned_by +
@@ -9313,8 +9330,28 @@ function hideSessionInDraft(
 // mode, same as j/k), not the default grouped layout's order.
 function sessionPastRemoved(draft: any, removedIds: string[]): string | null {
   if (!draft.currentSessionId || !removedIds.includes(draft.currentSessionId)) return draft.currentSessionId;
-  const next = nextSessionPastRemoved(computeVisualOrder(draft), draft.currentSessionId, new Set(removedIds));
-  return next?._id ?? null;
+  // Ordered on the state before this action: placement memoizes on its
+  // inputs, and a draft's proxies are new inputs, so ordering the draft placed
+  // every row again (most of a stash's cost). A row an earlier write in the
+  // same action hid (killSessions' loop) is skipped like a removed one.
+  const base = baseOf(draft);
+  const removed = new Set(removedIds);
+  const gone = (s: InboxSession) => {
+    if (removed.has(s._id)) return true;
+    const now = draft.sessions[s._id];
+    return !now || HIDE_STAMPS.some((f) => now[f] !== (s as any)[f]);
+  };
+  const ordered = computeVisualOrder(base);
+  const idx = ordered.findIndex((s) => s._id === draft.currentSessionId);
+  return (ordered.slice(idx + 1).find((s) => !gone(s)) ?? ordered.find((s) => !gone(s)))?._id ?? null;
+}
+
+const HIDE_STAMPS = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_snoozed_until", "inbox_killed_at"] as const;
+
+/** The state an action started from: a plain object, so reads allocate no
+ *  child drafts and memoized derivations see the inputs they cached. */
+function baseOf<T>(draft: T): T {
+  return (isDraft(draft) ? original(draft as object) : draft) as T;
 }
 
 // Move the selection after a user removed rows (stash, kill, dismiss, delete):
@@ -11148,6 +11185,13 @@ const inboxStoreConfig = (set: any, get: any) => ({
     this._seenUpToAt[id] = Date.now();
   }),
 
+  sessionNotify: {},
+  setSessionNotify: action(function (this: Draft, conversationId: string, level: SessionNotifyLevel | "default") {
+    const key = sessionNotifyKey(conversationId);
+    if (level === "default") delete this.sessionNotify[key];
+    else this.sessionNotify[key] = { _id: key, conversation_id: conversationId, level, updated_at: Date.now() };
+  }),
+
   // -- Session unread --
   sessionReads: {},
   // Plain, not an action: an action() always dispatches, and the ack fires on
@@ -11693,8 +11737,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   snoozeSession: action(function (this: Draft, id: string, until: number) {
-    const ids = [id, ...Object.values(this.sessions).filter((row) => nestParentIdOf(row) === id).map((row) => row._id)];
-    const next = nextSessionPastRemoved(computeVisualOrder(this), id, new Set(ids));
+    const base = baseOf(this);
+    const ids = [id, ...Object.values(base.sessions).filter((row) => nestParentIdOf(row) === id).map((row) => row._id)];
+    const next = ids.includes(base.currentSessionId ?? "") || ids.includes(base.sidePanelSessionId ?? "") ? nextSessionPastRemoved(computeVisualOrder(base), id, new Set(ids)) : undefined;
     if (!setSessionSnoozeInDraft(this, id, until)) return;
     for (const sid of ids.slice(1)) setSessionSnoozeInDraft(this, sid, until);
     if (ids.includes(this.currentSessionId ?? "")) {
@@ -13633,7 +13678,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   markKilling: action(function (this: Draft, id: string) {
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId === id) {
-      const next = nextSessionPastRemoved(computeVisualOrder(this), id, new Set([id]));
+      const next = nextSessionPastRemoved(computeVisualOrder(baseOf(this)), id, new Set([id]));
       newSessionId = next?._id ?? null;
     }
     delete this.sessions[id];

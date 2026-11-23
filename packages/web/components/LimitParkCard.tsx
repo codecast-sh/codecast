@@ -57,6 +57,7 @@ export function LimitParkCard({
   const windowLabel = limitWindowLabel(message);
   const printedReset = limitResetAsPrinted(message);
   const pinnedAccount = useInboxStore((s) => (conversationId ? s.sessions[conversationId]?.cc_account : undefined));
+  const sessionModel = useInboxStore((s) => (conversationId ? s.sessions[conversationId]?.model : undefined));
 
   const profiles: Profile[] = device?.profiles ?? [];
   // Only one model's week is spent ("Fable limit"). That week is per account:
@@ -66,14 +67,14 @@ export function LimitParkCard({
   // The account the session ran on (its own token pin when it has one, else
   // the machine's fleet account) and the account the button continues on: one
   // rule, shared with the phone (lib/limitContinue).
-  const { fleetEmail, active, best } = limitContinueTarget(device, now, live, limitFamily);
+  const { fleetEmail, active, best, models } = limitContinueTarget(device, now, live, limitFamily, { model: sessionModel, pinned: pinnedAccount });
   const accountLabel = accountDisplayName(profiles, pinnedAccount ?? active?.email ?? fleetEmail);
   const bestLabel = accountDisplayName(profiles, best?.email ?? best?.name);
   const exhausted = isExhaustionCurrent(device?.auto_switch_state?.exhausted_at, profiles, now);
   const proposal = live && device ? pendingProposal([device], now) : null;
   // The standing shown on the button matches the meters: "stale" when a rolled
   // window is unmeasured, never a confident green percent the switcher distrusts.
-  const bestNote = best ? (limitFamily && familyStandingLabel(best.usage, limitFamily, now)) || standingLabel(best.usage, now) : null;
+  const bestNote = best ? (limitFamily && familyStandingLabel(best.usage, limitFamily, now)) || standingLabel(best.usage, now, models) : null;
   const canSwitch = !!best && !!device && device.online && !device.is_remote && !!conversationId;
 
   const switchAndContinue = () => {

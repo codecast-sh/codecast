@@ -7,7 +7,7 @@ import { addWaitCore, removeWaitCore, type AddWaitInput } from "./taskWaits";
 import { relateCore } from "./taskLinks";
 import { normalizeCharacterFields } from "@codecast/shared/contracts/sessionCharacter";
 import type { CodeAnchorText } from "@codecast/shared/comments";
-import { answerRefusal, guardClientResolution, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
+import { answerChangeRefusal, answerRefusal, guardClientResolution, personMayResolve, reopenCore, settleClientResolution, userMayRead } from "./sessionDecisions";
 import { escalateCore, passCore, type PassTarget, unassignCore } from "./decisionHandoff";
 import { applyAreasCore } from "./decisionAreas";
 import { shareOutCore } from "./decisionShareOut";
@@ -162,7 +162,7 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
   session_decisions: {
     kind: "collection",
     ownerField: "user_id",
-    editable: new Set(["status", "answer_index", "answer_text", "answer_json", "resolved_at"]),
+    editable: new Set(["status", "answer_index", "answer_text", "answer_json", "resolved_at", "answer_revision"]),
     // First writer wins on this rail too: a resolution patch on a row a role
     // or a stack policy already resolved is dropped whole.
     beforePatch: (doc: any, safe: Record<string, any>) => guardClientResolution(doc, safe),
@@ -387,6 +387,8 @@ export async function applyPatches(
         if (table === "session_decisions") {
           const refusal = await answerRefusal(ctx as any, doc as any, { kind: "user", id: String(userId), user_id: userId, signed_in: true, presence: opts?.presence }, { status: safe.status, answer_index: safe.answer_index });
           if (refusal) throw new Error(refusal);
+          const settled = safe.status === "answered" ? await answerChangeRefusal(ctx as any, doc as any, safe.answer_revision) : null;
+          if (settled) throw new Error(settled);
         }
         const finalSafe = config.beforePatch ? config.beforePatch(doc, { ...safe }) : safe;
         // Favorite membership belongs to the conversation's runner principal,
@@ -2055,6 +2057,8 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // `grant`: the Touch ID grant string turning it off spends.
   setSecretAskFirst: async (ctx, userId, [id, askFirst, grant]: [string, boolean, string?]) =>
     liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setAskFirst, { ref: id, ask_first: askFirst, grant })),
+  setSecretTouchId: async (ctx, userId, [id, touchId, grant]: [string, boolean, string?]) =>
+    liveSecretWrite(ctx, id, () => (ctx as any).runMutation(api.secrets.setTouchId, { ref: id, touch_id: touchId, grant })),
   addIssueSyncSource: async (ctx, userId, [opts]: [any]) => {
     return await (ctx as any).runMutation(api.issueSync.addSource, {
       provider: opts.provider,
@@ -3162,6 +3166,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // currentUser first).
   updateNotificationSettings: async (ctx, _userId, [patch]: [Record<string, any>]) => {
     return await ctx.runMutation!(api.users.updateNotificationPreferences, patch as any);
+  },
+  // How loudly the viewer hears one session (store setSessionNotify paints the
+  // sessionNotify row first).
+  setSessionNotify: async (ctx, _userId, [conversationId, level]: [string, "default" | "all" | "needs_input" | "muted"]) => {
+    return await ctx.runMutation!(api.sessionWatch.setLevel, { conversation_id: conversationId, level });
   },
   setAgentPermissionModes: async (ctx, _userId, [modes]: [Record<string, any>]) => {
     return await ctx.runMutation!(api.users.updateAgentPermissionModes, modes as any);

@@ -39,6 +39,7 @@ import { useBulkMoveSessions, useMoveTargets } from "../hooks/useBulkMoveSession
 import { useInboxSelection } from "../lib/inboxSelection";
 import { useVaultStore } from "../store/vaultStore";
 import { filesHref } from "../lib/vault/vaultHref";
+import { makeCollectionSig } from "../store/wakeSig";
 import { useInboxStore, isConvexId, InboxSession, TaskItem, DocItem, BucketItem, BucketAssignmentItem, placeInboxRows, filterInboxScopeFromState, convBucketMap, sortLabels, computeChipCounts, projectOfFromState, getProjectName, RecentVisit, selectSessionRailOpen, sessionRowFromSummary } from "../store/inboxStore";
 import { projectChipLabel } from "../store/workProjects";
 import { resolveRecentVisits, visitTimeAgo, visitObjectLabel, type ResolvedVisit } from "../lib/recentVisits";
@@ -116,7 +117,7 @@ import type { WorkbenchSnapshot } from "../store/workbench";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { animatedCloseSessions, animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../store/undoActions";
+import { animatedCloseSessions, animatedHideSessions, animatedMoveSessions, animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../store/undoActions";
 import { gestureToast } from "../store/undoStack";
 import { counted } from "../store/undo/labels";
 
@@ -350,10 +351,7 @@ function palettePerson(row: TeammateWhereabouts, following: boolean, session?: {
 // The undo label of a per-session palette verb run over a selection.
 const PALETTE_SESSION_VERB: Record<string, string> = {
   session_restore: "Restored",
-  session_stash: "Stashed",
-  session_stash_hide: "Stashed and hid",
   session_unsnooze: "Woke",
-  session_defer: "Deferred",
 };
 
 const PALETTE_REST_VERDICT: Partial<Record<string, UserRest>> = {
@@ -494,8 +492,7 @@ export function ActionSubmenu({
   // everywhere its content went, so it goes through the shared review first.
   const [deleteReview, setDeleteReview] = useState(false);
   const deleteSessions = () => {
-    const store = useInboxStore.getState();
-    for (const row of targets) store.deleteSession(row._id);
+    void animatedMoveSessions(targets.map((row) => row._id), null, (id) => useInboxStore.getState().deleteSession(id), { enters: false });
     toast.success(targets.length > 1 ? `Deleted ${targets.length} sessions` : "Session deleted");
     if (targets.length > 1) useInboxSelection.getState().clear();
     onClose();
@@ -884,9 +881,7 @@ export function ActionSubmenu({
     }
     if (mode === "snooze") {
       const until = sessionSnoozeUntil(item.key as SessionSnoozeKey);
-      undoAsOne(`Snoozed ${counted(targets.length, "session")}`, () => {
-        for (const target of targets) useInboxStore.getState().snoozeSession(target._id, until);
-      });
+      void animatedMoveSessions(targets.map((t) => t._id), `Snoozed ${counted(targets.length, "session")}`, (id) => useInboxStore.getState().snoozeSession(id, until));
       toast.success(`Snoozed for ${item.label}`);
       onClose();
       return;
@@ -1552,6 +1547,25 @@ const MARKDOWN_RE = /\.(md|markdown)$/i;
 // keyed per show (app/palette). Its only prop (`standalone`) is stable, so memo
 // severs any parent cascade — combined with snapshotting session data at mount
 // (above), the palette re-renders only on its OWN state, not on session churn.
+const MEMBER_PRESENCE = new Set(["viewing_conversation_id", "viewing_since", "daemon_last_seen", "presence_input_at", "last_seen", "last_active_at"]);
+// By content: each roster push decodes fresh arrays (focus_project_ids: []),
+// so a by-reference signature flipped on every presence move.
+const teamIdentitySig = makeCollectionSig<Record<string, any>>((m) => {
+  let sig = "";
+  for (const k in m) if (!MEMBER_PRESENCE.has(k)) sig += k + ":" + JSON.stringify(m[k]) + ";";
+  return sig;
+});
+
+const NO_OWNER = "";
+const mergedRows = new WeakMap<object, Map<unknown, any>>();
+function mergedRow(base: object, with_: unknown, make: () => any): any {
+  let byWith = mergedRows.get(base);
+  if (!byWith) mergedRows.set(base, (byWith = new Map()));
+  let row = byWith.get(with_);
+  if (!row) { byWith.clear(); byWith.set(with_, (row = make())); }
+  return row;
+}
+
 function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   const [query, setQuery] = useState("");
   // The result groups rank against a deferred copy: the box shows each key at
@@ -1602,7 +1616,13 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // first, the same review the card menu shows (killReviewOf).
   const [killReview, setKillReview] = useState<{ ids: string[]; ledger: SwitchLedger } | null>(null);
   const { user: currentUser } = useCurrentUser();
-  const teamMembers = useInboxStore((s) => teamMembersOf(s).length > 0 ? teamMembersOf(s) : undefined);
+  // Who the teammates are, not where they are: presence moves several times a
+  // minute and re-rendered every row of an open palette.
+  const teamMembersSig = useInboxStore((s) => teamIdentitySig(teamMembersOf(s) as any));
+  const teamMembers = useMemo(() => {
+    const members = teamMembersOf(useInboxStore.getState());
+    return members.length > 0 ? members : undefined;
+  }, [teamMembersSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const openDm = useOpenDm();
 
   const open = standalone || paletteOpen;
@@ -1671,7 +1691,8 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     // rather than hiding a session someone may be reaching for by name.
     const state = useInboxStore.getState();
     for (const s of Object.values(filterInboxScopeFromState(state))) {
-      byId.set(s._id, { ...byId.get(s._id), ...(s as any) });
+      const prev = byId.get(s._id);
+      byId.set(s._id, prev ? mergedRow(prev, s, () => ({ ...prev, ...(s as any) })) : s);
     }
     // The session index (hooks/useSyncSessionIndex) holds every session the
     // viewer owns, past the month the sessions cache keeps, so one from
@@ -1680,7 +1701,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const meId = state.currentUser?._id;
     for (const row of Object.values(state.sessionIndex as Record<string, any>)) {
       const held = byId.get(row._id);
-      byId.set(row._id, held ? { ...held, first_prompt: held.first_prompt ?? row.first_prompt } : { ...row, user_id: meId });
+      byId.set(row._id, held
+        ? (held.first_prompt != null || row.first_prompt == null ? held : mergedRow(held, row, () => ({ ...held, first_prompt: row.first_prompt })))
+        : mergedRow(row, meId ?? NO_OWNER, () => ({ ...row, user_id: meId })));
     }
     setRecentSessions(Array.from(byId.values()).sort((a, b) => (b.updated_at || 0) - (a.updated_at || 0)));
     // Server query has landed (undefined = still loading) → freeze.
@@ -1791,19 +1814,25 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     }
     return (c: any) => byId.get(String(c._id)) ?? sessionStanding(c, meId, null);
   }, [recentPool]);
+  // A typed query ranks favorites with everything else, by how well the
+  // words name them: a favorite is not a reason to outrank a title that
+  // starts with what was typed. The Favorites group is the empty palette's.
+  const typedPool = useMemo(
+    () => (favorites?.length ? withFavorites(recentPool, favorites, pick?.exclude) : recentPool),
+    [recentPool, favorites, pick],
+  );
   const recentMatches = useMemo(() => {
     const q = rankQuery.trim().toLowerCase();
-    // A typed query ranks favorites with everything else, by how well the
-    // words name them: a favorite is not a reason to outrank a title that
-    // starts with what was typed. The Favorites group is the empty palette's.
-    const pool = q && favorites?.length ? withFavorites(recentPool, favorites, pick?.exclude) : recentPool;
+    const pool = q ? typedPool : recentPool;
     // One ranking for every session search (lib/instantSessionSearch): how
     // directly the words name it, then where it stands and how recent it is.
     return rankSessions(pool, q, standingOf, q ? RECENT_RENDER_CAP : RECENT_IDLE_CAP);
-  }, [recentPool, rankQuery, standingOf, favorites, pick]);
+  }, [recentPool, typedPool, rankQuery, standingOf]);
   // The machine most recents run on goes unsaid; a row names its machine only
   // when it runs somewhere else (a cloud host, the other laptop).
-  const machineRoster = useInboxStore((s) => (open ? s.machineRoster : EMPTY_ROSTER)) as Device[];
+  // Read at open: the roster's liveness ticks would re-render every row, and
+  // a machine's name does not change while the palette is up.
+  const machineRoster = useMemo(() => (open ? useInboxStore.getState().machineRoster : EMPTY_ROSTER), [open]) as Device[];
   const hostedFirst = useOnlyHostedAgent();
   const deviceOfRecent = useMemo(() => {
     if (machineRoster.length < 2) return () => undefined;
@@ -2124,18 +2153,21 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Pick mode: report the choice to the caller and close. Session rows go
   // through chooseSession so every session group (favorites, bookmarks,
   // recents, search) picks the same way it navigates.
+  const queryRef = useRef(query);
+  queryRef.current = query;
   const finishPick = useCallback(
     (target: PalettePickTarget) => {
       if (!pick) return;
+      const typed = queryRef.current.trim();
       if (pick.notePlaceholder) {
         // Two-step: stage the target; the confirm step completes the pick.
-        setPickChosen({ target, query: query.trim() });
+        setPickChosen({ target, query: typed });
         return;
       }
-      pick.onPick(target, { query: query.trim() });
+      pick.onPick(target, { query: typed });
       closePalette();
     },
-    [pick, query, closePalette],
+    [pick, closePalette],
   );
   const sendPick = useCallback((note?: string, attachments?: ChatAttachment[]) => {
     if (!pick || !pickChosen) return;
@@ -2167,6 +2199,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     },
     [pick, finishPick, navigate],
   );
+  const chooseTask = useCallback((t: { _id: string; title?: string }) => chooseEntity("task", t, `/tasks/${t._id}`), [chooseEntity]);
 
   // Sessions go through navigateToSession (it injects rows the store lacks);
   // the palette's own navigate closes the overlay with the move, and a chip
@@ -2306,10 +2339,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         session_restore: (id) => state.restoreSession(id),
         // The teardown rides the hide transition server side (dispatch.applyPatches);
         // the notice hook names any schedules the kill cancels.
-        session_stash: (id) => state.stashSession(id),
-        session_stash_hide: (id) => state.stashSession(id, { hidden: true }),
         session_unsnooze: (id) => state.wakeSnoozedSession(id),
-        session_defer: (id) => state.deferSession(id),
       };
       // The rest verdicts animate every row out, then file them as one undo.
       const rest = PALETTE_REST_VERDICT[actionKey];
@@ -2324,6 +2354,10 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         if (ledger) { setKillReview({ ids, ledger }); return; }
         killManyWithNotice(ids);
       }
+      // Stash and defer collapse every card out first, as the card's own
+      // buttons do, and land as one undo.
+      else if (actionKey === "session_stash" || actionKey === "session_stash_hide") void animatedHideSessions(ids, "stash", { hidden: actionKey === "session_stash_hide" });
+      else if (actionKey === "session_defer") void animatedMoveSessions(ids, `Deferred ${counted(ids.length, "session")}`, (id) => state.deferSession(id));
       else if (actionKey === "session_pin") toggleSessionsLikeFirst(ids, "pin");
       else if (actionKey === "session_favorite") toggleSessionsLikeFirst(ids, "favorite");
       else {
@@ -3185,7 +3219,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {recentMatches.length > 0 && pickAllows("session") && (
           <CommandPrimitive.Group heading={query.trim() ? "Sessions" : "Recent Sessions"} className={groupClass}>
             {recentMatches.map((conv: any) => (
-              <PaletteSessionRow key={`recent-${conv._id}`} conv={conv} bucket={labelForConv(conv._id)} standing={standingOf(conv)} device={deviceOfRecent(conv)} onSelect={() => chooseSession(conv)} />
+              <PaletteSessionRow key={`recent-${conv._id}`} conv={conv} bucket={labelForConv(conv._id)} standing={standingOf(conv)} device={deviceOfRecent(conv)} onSelect={chooseSession} />
             ))}
           </CommandPrimitive.Group>
         )}
@@ -3235,7 +3269,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
         {taskMatches.length > 0 && (
           <CommandPrimitive.Group heading="Tasks" className={groupClass}>
             {taskMatches.map((t: any) => (
-              <PaletteTaskRow key={`task-${t._id}`} task={t} status={TASK_STATUS_META[t.status]} valuePrefix={entityValuePrefix("task")} onSelect={() => chooseEntity("task", t, `/tasks/${t._id}`)} />
+              <PaletteTaskRow key={`task-${t._id}`} task={t} status={TASK_STATUS_META[t.status]} valuePrefix={entityValuePrefix("task")} onSelect={chooseTask} />
             ))}
           </CommandPrimitive.Group>
         )}

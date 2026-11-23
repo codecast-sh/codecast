@@ -199,7 +199,7 @@ export const FilePathContext = createContext<FilePathContextValue | null>(null);
  */
 export function filePathHref(path: string, line: number | undefined, ctx?: FilePathContextValue | null): string {
   const abs = resolveMentionPath(path, ctx);
-  return filesHref({ localPath: abs ?? path, line });
+  return filesHref({ localPath: abs ?? path, line, conversation: ctx?.conversationId });
 }
 
 /** Reads a mention back out of a link the plugin minted, so a component can

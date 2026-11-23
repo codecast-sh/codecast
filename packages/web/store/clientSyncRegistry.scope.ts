@@ -86,6 +86,7 @@ export const DATA_SCOPE = {
   chatSlackPeople: "team",
   chatAuthors: "entity",
   sessionReads: "viewer",
+  sessionNotify: "viewer",
   chatRail: "viewer",
   // The Threads inbox spans every workspace the viewer is in, by design.
   threadInbox: "viewer",

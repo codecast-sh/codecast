@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, memo } from "react";
 import { KEEP_DRAG_OFF_CARD } from "../../lib/keepOffCard";
 import { useLabelColor } from "../../lib/labelColors";
 import { Tag, UserCheck, CheckSquare, Square } from "lucide-react";
@@ -540,7 +540,7 @@ export function SessionProjectChip({ project, label, directory, className = "", 
  *  card (the Sub-agents and workers view option lists them), so this line is
  *  what keeps them in sight. Quiet ink; only "needs you" takes the accent, and
  *  it opens the first worker waiting. */
-export function CardWorkersLine({
+export const CardWorkersLine = memo(function CardWorkersLine({
   count,
   needsYou,
   onOpen,
@@ -572,7 +572,7 @@ export function CardWorkersLine({
       )}
     </div>
   );
-}
+});
 
 /** On a card whose subagent rows are folded away: how many of them are
  *  running now, in the subagent rows' violet and arrow. Opens the most
