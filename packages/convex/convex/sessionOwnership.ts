@@ -638,7 +638,18 @@ export async function performApplyOwnersChange(
   await refusePausedRoleEdit(ctx, authUserId, start, args.from_session);
   const run = (target: ReparentSessionTarget) => performReparentSession(ctx, authUserId, { session_id: args.session_id, target, handoff: change.note, from_session: args.from_session });
   if (change.add?.length) results.push(await run({ kind: "user", owners: change.add, mode: "add" }));
-  if (change.restore?.length) await restoreOwnerRows(ctx, start._id, change.restore);
+  if (change.restore?.length) {
+    // A restored row is an owner like an added one: the same team rule, and
+    // never an agent account. Its owner gains owner access to the session.
+    for (const r of change.restore) {
+      const user = await resolveOwnerRef(ctx, authUserId, start, r.user_id);
+      if (String(user._id) !== r.user_id) throw new Error("A restored owner must be named by their id");
+      assertHumanOwner(user);
+      const by = ctx.db.normalizeId ? ctx.db.normalizeId("users", r.added_by) : r.added_by;
+      if (!by || !(await ctx.db.get(by))) throw new Error("A restored owner row must name who added it");
+    }
+    await restoreOwnerRows(ctx, start._id, change.restore);
+  }
   if (change.role !== undefined) {
     const role = change.role === null ? null : await resolveOwnerRoleRef(ctx, authUserId, start, change.role);
     const before = await resolveOwnableConversation(ctx, authUserId, args.session_id);
@@ -803,7 +814,8 @@ export const applyOwnersChange = mutation({
 
 const isIds = (x: unknown): x is string[] => Array.isArray(x) && x.every((s) => typeof s === "string");
 const isDriverTarget = (d: any) => d?.kind === "role" || d?.kind === "none" || (d?.kind === "user" && typeof d.user_id === "string");
-const isRestoreRow = (r: any) => typeof r?.user_id === "string" && typeof r.added_by === "string" && typeof r.added_at === "number";
+const isRestoreRow = (r: any) => typeof r?.user_id === "string" && typeof r.added_by === "string" && typeof r.added_at === "number"
+  && (r.seen_at === undefined || typeof r.seen_at === "number") && (r.note === undefined || typeof r.note === "string");
 
 /** The web dispatch's owners change, held to applyOwnersChange's validator
  *  (dispatch args are untyped): the known keys only, each of its shape. */
@@ -817,7 +829,8 @@ export function ownersChangeFromDispatch(c: any): OwnersChange {
     (c.note === undefined || typeof c.note === "string");
   if (!ok) throw new Error("Invalid owners change");
   return {
-    add: c.add, remove: c.remove, restore: c.restore, role: c.role,
+    add: c.add, remove: c.remove, role: c.role,
+    restore: c.restore?.map((r: any) => ({ user_id: r.user_id, added_by: r.added_by, added_at: r.added_at, ...(r.seen_at !== undefined ? { seen_at: r.seen_at } : {}), ...(r.note !== undefined ? { note: r.note } : {}) })),
     driver: c.driver, note: c.note,
     ...(c.leave ? { leave: c.leave.move_to_device_id ? { move_to_device_id: c.leave.move_to_device_id } : {} } : {}),
   };

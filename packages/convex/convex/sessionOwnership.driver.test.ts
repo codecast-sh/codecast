@@ -1,8 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performCreateRole, performReparentSession } from "./orgRoles";
-import { performAddSessionOwner, performApplyOwnersChange, performListOwners, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners } from "./sessionOwnership";
+import { ownersChangeFromDispatch, performAddSessionOwner, performApplyOwnersChange, performListOwners, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners } from "./sessionOwnership";
 import { withLeaveRules } from "./lib/sessionOwnerRules";
+import { checkConversationAccess } from "./privacy";
 
 // A role is an owner beside the people, and exactly one owner drives
 // (schema.ts conversations.driver_user_id): the filed role while no person
@@ -374,5 +375,44 @@ describe("the reports-to line follows the driver", () => {
     await performSetSessionDriver(ctx, ME as any, { session_id: "sess1", driver: { kind: "user", user_id: ME } });
     await performSetSessionDriver(ctx, ME as any, { session_id: "sess1", driver: { kind: "role" } });
     expect(told(db).map((c: string) => c.match(/You now report to [^:(]+/)![0].trim())).toEqual(["You now report to Growth", "You now report to Me", "You now report to Growth"]);
+  });
+});
+
+// An undo's restore is an add by another name: the team rule and the human
+// rule hold, and the dispatch's check holds each field to its type. An owner
+// row is owner access (privacy.checkConversationAccess), so a stranger's row
+// would open the whole transcript to them.
+describe("restoring owner rows", () => {
+  const STRANGER = "u".repeat(31) + "x";
+  const BOT = "u".repeat(31) + "b";
+  const world = () => {
+    const db = fixtures();
+    db._tables.users.push({ _id: STRANGER, name: "Stranger", email: "s@x.ai" }, { _id: BOT, name: "Box", is_bot: true });
+    // The team's agent box is a member; it still may never own.
+    db._tables.team_memberships.push({ _id: "m3", user_id: BOT, team_id: TEAM, role: "member", joined_at: 1 });
+    return db;
+  };
+  const restore = (user_id: string, over: Record<string, any> = {}) => ({ user_id, added_by: ME, added_at: 2, ...over });
+
+  test("someone outside the team, or an agent account, is refused, and gains no access", async () => {
+    const db = world();
+    const ctx = ctxOf(db);
+    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { restore: [restore(STRANGER)] } })).rejects.toThrow(/isn't a member of this session's team/);
+    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { restore: [restore(BOT)] } })).rejects.toThrow(/agent account/);
+    expect(owners(db)).toEqual([ME]);
+    expect(await checkConversationAccess(ctx, STRANGER as any, row(db))).toBe("denied");
+  });
+
+  test("a teammate's row comes back as it was", async () => {
+    const db = world();
+    const ctx = ctxOf(db);
+    await performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { restore: [restore(MATE, { seen_at: 5, note: "yours" })] } });
+    expect(db._tables.session_owners.find((r: any) => r.user_id === MATE)).toMatchObject({ added_by: ME, added_at: 2, seen_at: 5, note: "yours" });
+  });
+
+  test("the dispatch's check refuses a note or seen_at of the wrong type, and keeps only the row's own fields", () => {
+    expect(() => ownersChangeFromDispatch({ restore: [restore(MATE, { note: { not: "a string" } })] })).toThrow("Invalid owners change");
+    expect(() => ownersChangeFromDispatch({ restore: [restore(MATE, { seen_at: "yesterday" })] })).toThrow("Invalid owners change");
+    expect(ownersChangeFromDispatch({ restore: [restore(MATE, { extra: 1 })] }).restore).toEqual([restore(MATE)]);
   });
 });
