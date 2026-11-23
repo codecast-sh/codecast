@@ -140,10 +140,7 @@ function OwnersMenuBody({ conversationId, owners, onClose, onDirty }: { conversa
       m.move(e.key === "ArrowDown" ? 1 : -1);
       return;
     }
-    if (e.key === "Enter" && highlighted >= 0) {
-      e.preventDefault();
-      m.activate(e.shiftKey);
-    }
+    if (e.key === "Enter" && (m.activate(e.shiftKey) || highlighted >= 0)) e.preventDefault();
   };
 
   const ownerRow = (r: OwnerMenuRow, i: number) => (

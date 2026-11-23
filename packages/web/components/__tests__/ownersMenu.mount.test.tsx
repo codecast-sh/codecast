@@ -110,7 +110,8 @@ test("nothing is highlighted on open; the arrows walk the owners, then the candi
 });
 
 // People are never shown driving; the role is Active or Paused, and a paused
-// role offers Resume (Shift+Enter on its row). Nothing else takes Shift+Enter.
+// role offers Resume, and Shift+Enter takes it from anywhere but another
+// owner's row. Nothing else takes Shift+Enter.
 test("people rows say nothing of driving; the paused role says Paused and offers Resume", async () => {
   await openMenu();
   const rowText = (key: string) => (w.document.querySelector(`[data-owner-row='${key}']`) as HTMLElement).textContent;
@@ -125,16 +126,22 @@ test("people rows say nothing of driving; the paused role says Paused and offers
   expect(w.document.querySelector("[data-owner-resume]")).toBeNull();
 });
 
-test("Shift+Enter resumes a paused role, and does nothing on a person or a candidate", async () => {
+test("Shift+Enter resumes a paused role the moment the menu opens, with nothing highlighted", async () => {
+  await openMenu();
+  expect(highlighted()).toEqual([]);
+  await press("Enter", true);
+  expect(chips()).toEqual(["Resume @lead"]);
+});
+
+test("Shift+Enter does nothing on a person's row, and resumes the role from a candidate's", async () => {
   await openMenu();
   await press("ArrowDown");
   await press("ArrowDown");
   await press("Enter", true);
   expect(chips()).toEqual([]);
   await press("ArrowDown");
-  await press("Enter", true);
-  expect(chips()).toEqual(["Resume @lead"]);
   await press("ArrowDown");
+  expect(highlighted()).toEqual(["p:user_sam"]);
   await press("Enter", true);
   expect(chips()).toEqual(["Resume @lead"]);
   await press("Enter");
@@ -151,15 +158,17 @@ test("a candidate has + only; adding a role replaces the current one, Active", a
   expect((w.document.querySelector("[data-owner-row='r:role_ops']") as HTMLElement).textContent).toContain("Active");
 });
 
-test("a search with no match highlights nothing, so Shift+Enter does nothing", async () => {
+test("a search with no match highlights nothing: Enter adds nobody, Shift+Enter still resumes the role", async () => {
   await openMenu();
   const input = w.document.querySelector("[data-owners-menu] input") as HTMLInputElement;
   const props = (input as any)[Object.keys(input).find((k) => k.startsWith("__reactProps$"))!];
   await act(async () => { props.onChange({ target: { value: "zzzq" } }); });
   expect(w.document.querySelector("[data-owners-menu]")!.textContent).toContain("Nobody matches");
   expect(highlighted()).toEqual([]);
-  await press("Enter", true);
+  await press("Enter");
   expect(chips()).toEqual([]);
+  await press("Enter", true);
+  expect(chips()).toEqual(["Resume @lead"]);
 });
 
 test("the search box takes focus on open with a mouse, not on a touch screen", async () => {

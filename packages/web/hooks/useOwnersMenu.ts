@@ -244,16 +244,17 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
   const move = (step: 1 | -1) => {
     if (ring) setHi((h) => (step > 0 ? (Math.min(h, ring - 1) + 1) % ring : (Math.max(h, 0) - 1 + ring) % ring));
   };
-  /** A key on the highlighted row: Enter adds a candidate, Shift+Enter
-   *  resumes a paused role. True when it did something. */
+  /** Enter adds the highlighted candidate. Shift+Enter resumes a paused role
+   *  (there is only ever one) unless the highlight is on another owner row.
+   *  True when it did something. */
   const activate = (shift: boolean) => {
-    if (highlighted < 0) return false;
-    if (highlighted < rows.length) {
-      const resumeRow = shift && !readOnly ? rows[highlighted].resume : null;
-      resumeRow?.();
-      return !!resumeRow;
+    if (shift) {
+      if (readOnly || (highlighted >= 0 && highlighted < rows.length && !rows[highlighted].resume)) return false;
+      const resumeRole = rows.find((r) => r.resume)?.resume;
+      resumeRole?.();
+      return !!resumeRole;
     }
-    if (shift) return false;
+    if (highlighted < rows.length) return false;
     add(candidates[highlighted - rows.length]);
     return true;
   };
