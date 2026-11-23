@@ -15,6 +15,7 @@ import { roleSubject, withOrgChange } from "./lib/orgChangeLog";
 import { isHandBriefing } from "./spawn";
 import { backfillRoleStartedPage } from "./lib/roleStartedBackfill";
 import { backfillBoundDriverPage } from "./lib/boundDriverBackfill";
+import { backfillMovedStarterRowsPage } from "./lib/starterRowBackfill";
 import { isOrphanOrSubagent } from "./inboxFilters";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
@@ -623,6 +624,24 @@ export const backfillBoundDriver = internalMutation({
     const res = await backfillBoundDriverPage(ctx, args);
     if (!res.dryRun && res.next) {
       await ctx.scheduler.runAfter(0, internal.migrations.backfillBoundDriver, { dryRun: false, role: args.role, numItems: args.numItems, ...res.next });
+    }
+    return res;
+  },
+});
+
+// One-time backfill: a person's session that moved to another account (a pull
+// or a device claim) before those paths wrote the starter's row lists its
+// author as owner while no row says so, so the inbox and byIds turn the
+// author away. Each such session with no owner rows gets its starter's row,
+// the row a move writes now. Role runs and agent starts have no starter and
+// are skipped. Dry by default; a real run continues itself page by page.
+//   packages/convex/run.sh migrations:backfillMovedStarterRows '{"dryRun":true}'
+export const backfillMovedStarterRows = internalMutation({
+  args: { dryRun: v.optional(v.boolean()), cursor: v.optional(v.string()), numItems: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const res = await backfillMovedStarterRowsPage(ctx, args);
+    if (!res.dryRun && res.next) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillMovedStarterRows, { dryRun: false, numItems: args.numItems, cursor: res.next });
     }
     return res;
   },

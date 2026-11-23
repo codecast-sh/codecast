@@ -1106,10 +1106,16 @@ export async function performClaimDeviceAccount(
   const skipped = rows.length - movable.length;
   const page = movable.slice(0, CLAIM_ACCOUNT_PAGE);
   for (const conv of page) {
+    // Its starter gets the row an add writes first, as a pull gives it (performReparentSessionToDevice).
+    const starter = await rowlessStarterOf(ctx, conv);
     if (!conv.author_user_id) {
       await ctx.db.patch(conv._id, { user_id: callerId, author_user_id: conv.user_id });
     } else {
       await ctx.db.patch(conv._id, { user_id: callerId });
+    }
+    if (starter) {
+      await addSessionOwnerRow(ctx, conv._id, starter as Id<"users">, starter as Id<"users">);
+      await syncPrimaryOwnerCache(ctx, conv._id);
     }
     await followNewRunner(ctx, conv._id, callerId);
     const managed = await ctx.db

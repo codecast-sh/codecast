@@ -3,6 +3,8 @@ import { makeFakeDb } from "./testDb";
 import { claimDeviceAccount, LEGACY_DEVICE_CLAIM_SUNSET_MS, performClaimDeviceAccount, registerDevice } from "./devices";
 import { hashToken } from "./apiTokens";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
+import { isSessionOwner, ownersFactsOf } from "./sessionOwners";
+import { listedOwnerIds } from "@codecast/shared/contracts/sessionOwners";
 
 const PREV = "u".repeat(31) + "p";
 const NEXT = "u".repeat(31) + "n";
@@ -65,6 +67,23 @@ describe("performClaimDeviceAccount", () => {
     expect(conv(db, "conv-other").user_id).toBe(PREV);
     expect(db._tables.managed_sessions[0].user_id).toBe(NEXT);
     expect(db._tables.daemon_commands ?? []).toEqual([]);
+  });
+
+  test("the session's starter gets an owner row, so the owner it lists is one the inbox admits", async () => {
+    const db = fixtures();
+    await performClaimDeviceAccount({ db }, NEXT as any, { previousUserId: PREV as any, deviceId: "mini" }, NOW);
+    expect(listedOwnerIds(await ownersFactsOf({ db } as any, conv(db)))).toEqual([PREV]);
+    expect(await isSessionOwner({ db } as any, "conv1" as any, PREV as any)).toBe(true);
+    expect(conv(db).owner_user_id).toBe(PREV);
+  });
+
+  test("a session with owner rows, or one a role started, gets no starter row", async () => {
+    for (const over of [{ org_role_id: "org_roles_1", role_started: true }, {}]) {
+      const db = fixtures({ conv: over });
+      db._tables.session_owners = "role_started" in over ? [] : [{ _id: "o1", conversation_id: "conv1", user_id: NEXT, added_by: PREV, added_at: 1 }];
+      await performClaimDeviceAccount({ db }, NEXT as any, { previousUserId: PREV as any, deviceId: "mini" }, NOW);
+      expect(db._tables.session_owners.filter((r: any) => r.user_id === PREV)).toEqual([]);
+    }
   });
 
   test("undelivered messages follow the session to the new account", async () => {
