@@ -29,7 +29,7 @@ import { mobileCreateErrorMessage, mobileCreateFailureDisposition } from '@/lib/
 import { bootMark } from '@/lib/bootProfile';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { holdKill, showNotice, useUndoBar } from '@/lib/undoBar';
-import { appAlert, appPrompt, showActionSheet } from '@/lib/popups';
+import { appAlert, appPrompt, showActionSheet, type SheetItem } from '@/lib/popups';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
@@ -280,11 +280,16 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     // Same verb as the web card's right-click menu, same store action, so the
     // dot the phone lights is the dot the desktop shows.
     const markUnread = () => useInboxStore.getState().markSessionUnread(session._id);
+    // The web menu's "Hide from team": only on the viewer's own session while a
+    // team can see it. The store action records its own Undo on the bar.
+    const store = useInboxStore.getState();
+    const canHide = session.is_private === false && !!session.team_id && session.user_id === store.currentUser?._id;
     showActionSheet(sessionTitle(session), [
       { label: session.is_pinned ? 'Unpin' : 'Pin', icon: 'map-pin', onPress: () => handlePin(session._id) },
       { label: favoriteLabel, icon: 'star', onPress: toggleFavorite },
       { label: 'Mark unread', icon: 'circle', onPress: markUnread },
       { label: 'Label…', icon: 'tag', onPress: () => openLabelPicker(session) },
+      ...(canHide ? [{ label: 'Hide from team', icon: 'lock', onPress: () => useInboxStore.getState().setPrivacy(session._id, true) } satisfies SheetItem] : []),
       { label: 'Stash', icon: 'archive', onPress: () => handleStash(session._id) },
       { label: 'Kill session', icon: 'x-octagon', destructive: true, onPress: () => holdKill(session._id) },
     ]);
