@@ -130,8 +130,17 @@ describe("command menu keyboard reuse", () => {
     }
   });
 
+  test("the old kill key closes: Close owns its chord, and Kill has no key of its own", () => {
+    const close = actions.find((a) => a.key === "session_close")!;
+    const kill = actions.find((a) => a.key === "session_kill")!;
+    expect(close.shortcutAction).toBe("session.close");
+    expect(kill.shortcutAction).toBeUndefined();
+    expect(kill.hotkey).toBeUndefined();
+    expect(paletteActionForKey(event({ shiftKey: true }), actions)?.key).toBe("session_close");
+  });
+
   test("duplicate Alt-letter commands no longer run", () => {
-    for (const letter of ["s", "b", "d", "q", "r", "p", "v", "l", "c"]) {
+    for (const letter of ["s", "b", "d", "k", "r", "p", "v", "l", "c"]) {
       expect(paletteActionForKey(event({ key: letter, code: `Key${letter.toUpperCase()}`, ctrlKey: false, altKey: true }), actions)).toBeUndefined();
     }
   });
