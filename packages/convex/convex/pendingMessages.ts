@@ -35,6 +35,7 @@ import {
 } from "./executionBindings";
 import { requestRemoteWake } from "./cloudWake";
 import { clearPaneRefused } from "./lib/paneRefusal";
+import { pausedRoleRefusal, takeWheelOnSend } from "./lib/sessionTakeOver";
 import { bringNestedThreadToInbox } from "./inboxFilters";
 import { hostedInputWaits } from "./assistant/input";
 import { isConversationSafetyBlocked, type ConversationSafetyState } from "./conversationSafety";
@@ -417,6 +418,11 @@ export async function enqueuePendingMessage(
     // (account-switch "continue", undeliverable receipts, model/effort slash
     // commands) that leave `origin` unset.
     human?: boolean;
+    // The person typed this into the session itself (its composer, `cast
+    // send` from a plain terminal): an owner who does not drive takes the
+    // wheel (lib/sessionTakeOver). Other person-written rails (a task
+    // comment, a decision answer) leave the driver as it is.
+    take_over?: boolean;
     // A note the session reads on its NEXT turn, never a turn of its own: the
     // row is parked as "held" (the daemon and the retry cron read "pending"
     // only) and nothing about the conversation moves, so a session whose
@@ -492,6 +498,8 @@ export async function enqueuePendingMessage(
 
   // A screen recording rides this send: from now on it is sent, and kept.
   await noteScreenRecordingSent(ctx, conversation._id, fromUserId, fields.content);
+
+  if (fields.take_over && fields.human && !fields.hold && !fields.defer) await takeWheelOnSend(ctx, conversation, fromUserId);
 
   if (fields.queue) {
     return await insertEnqueuedPendingMessage(ctx, {
@@ -824,6 +832,7 @@ export const sendMessageV2 = mutation({
           image_storage_ids: imageStorageIds,
           client_id: args.client_id,
           human: true,
+          take_over: true,
         });
       }
       const quotes = quoteClientIds
@@ -1063,6 +1072,12 @@ export async function performSessionSend(
     }
   }
 
+  // A role a person took the wheel from writes to that person, not the agent.
+  if (!roleTarget) {
+    const paused = await pausedRoleRefusal(ctx, senderConversation, target);
+    if (paused) throw new Error(paused);
+  }
+
   // Display name for the sender: the direct wrapper always carries it, and a
   // session wrapper carries it when `from` has no clickable session (the common
   // case for a link collaborator). A self-send from a session is already
@@ -1085,6 +1100,7 @@ export async function performSessionSend(
     // composer, a detached `cast send`). A raw send is the model/effort
     // picker's slash command, a gesture rather than a message.
     human: !fromRef && !args.raw,
+    take_over: !fromRef && !args.raw && !args.target,
     queue: !!args.queue && !!args.direct,
     // Only a session hands work over out of sight; a person's send always shows the session.
     quiet: !!args.quiet && !!senderConversation && !args.raw && !args.direct,

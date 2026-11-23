@@ -113,6 +113,24 @@ export function pinnedDriverAfterAdd(before: OwnersFacts, after: OwnersFacts): s
   return ids.includes(was.user_id) && !(now?.kind === "user" && now.user_id === was.user_id) ? was.user_id : null;
 }
 
+/**
+ * The facts after a person's own message into the session: an owner, or the
+ * account that runs it, who does not drive takes the wheel, and the role that
+ * drove (or the person who did) waits. The runner becomes an owner as it takes
+ * it, so a run a role started stays in the taker's inbox (and the role's
+ * hands under it nest there). Null when nothing changes: the sender already
+ * drives, may not drive, or the session is a role's own.
+ */
+export function takeOverBySend(f: OwnersFacts, sender: string, now: number): OwnersFacts | null {
+  if (f.standing_role_id || f.bots.includes(sender)) return null;
+  const ids = listedOwnerIds(f);
+  if (!ids.includes(sender) && sender !== f.runner_id) return null;
+  const driver = driverOf(f, ids);
+  if (driver?.kind === "user" && driver.user_id === sender) return null;
+  const next = ids.includes(sender) ? f : applyOwnersChangeTo(f, { add: [sender] }, { actor: sender, now });
+  return { ...next, driver_user_id: sender };
+}
+
 /** Owner rows with `removed` taken out, the driver handed back when it was one of them. */
 function withoutPeople(f: OwnersFacts, removed: string[]): OwnersFacts {
   const rows = f.rows.filter((r) => !removed.includes(r.user_id));

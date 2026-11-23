@@ -14,6 +14,9 @@ type SendIo = {
 
 /** The server's refusal of a killed target (pendingMessages.killedSendMessage). */
 const REFUSED = /^Not sent\./;
+// The server's refusal of a role writing into a session a person took over
+// (convex lib/sessionTakeOver pausedRoleRefusal).
+const PAUSED_ROLE = /is paused there\./;
 
 export function registerSessionSendCommand(program: Command, io: SendIo): void {
   program
@@ -98,6 +101,8 @@ export function registerSessionSendCommand(program: Command, io: SendIo): void {
         // The sender decides with the cost in front of it; the body waits in a
         // file so sending it after all never means typing it again.
         const kept = io.hold(sessionId, body);
+        // A killed target can be sent to after all; a paused role cannot.
+        if (PAUSED_ROLE.test(message)) throw new Error(`${message}\nYour message is kept in ${kept}`);
         const intentFlag = options.done ? " --done" : options.fyi ? " --fyi" : "";
         throw new Error(`${message}\nYour message is kept. To send it after all: cast send --wake${intentFlag} ${sessionId} - < ${kept}`);
       }

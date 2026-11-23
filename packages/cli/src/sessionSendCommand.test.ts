@@ -139,6 +139,21 @@ describe("a refused send", () => {
       .rejects.toThrow("cast send --wake --done jx7c6zk - < /tmp/held/jx7c6zk-2.txt");
   });
 
+  test("a role paused by a person's take-over keeps the body and offers no --wake", async () => {
+    const held: string[] = [];
+    const program = new Command();
+    registerSessionSendCommand(program, {
+      currentSession: () => "jx7abcd",
+      post: async () => { throw new Error("Not sent. Jason drives jx7c6zk now, so @growth is paused there. If Jason needs to hear this, ask them in your own thread."); },
+      print: () => {},
+      hold: (_target, body) => { held.push(body); return "/tmp/held/jx7c6zk-3.txt"; },
+    });
+    const err = await program.parseAsync(["send", "jx7c6zk", "status?"], { from: "user" }).then(() => null, (e) => e as Error);
+    expect(err?.message).toContain("Your message is kept in /tmp/held/jx7c6zk-3.txt");
+    expect(err?.message).not.toContain("--wake");
+    expect(held).toEqual(["status?"]);
+  });
+
   test("other failures pass through and keep nothing", async () => {
     let kept = false;
     const program = new Command();

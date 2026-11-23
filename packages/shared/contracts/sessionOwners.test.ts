@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyOwnersChangeTo, driverOf, listedOwnerIds, type OwnersFacts } from "./sessionOwners";
+import { applyOwnersChangeTo, driverOf, listedOwnerIds, takeOverBySend, type OwnersFacts } from "./sessionOwners";
 import { roleDrives } from "./inboxProjection";
 
 const base: OwnersFacts = { rows: [], author_id: null, runner_id: "me", bots: [], role_id: null, role_started: false, standing_role_id: null, driver_user_id: null, primary_id: null };
@@ -62,5 +62,42 @@ describe("session owners, as one rule for the server and the store", () => {
     const next = applyOwnersChangeTo(base, { leave: { move_to: { runner_id: "ashot", runner_is_bot: false } } }, at);
     expect(next.author_id).toBe("me");
     expect(listedOwnerIds(next)).toEqual(["ashot"]);
+  });
+});
+
+describe("a person's own send takes the wheel", () => {
+  const row = (user_id: string, added_at: number) => ({ user_id, added_at });
+
+  test("an owner sending into a session its role drives becomes driver; the role pauses", () => {
+    const f = { ...base, rows: [row("me", 1)], role_id: "r1" };
+    const next = takeOverBySend(f, "me", 100)!;
+    expect(next.driver_user_id).toBe("me");
+    expect(roleDrives({ org_role_id: next.role_id, driver_user_id: next.driver_user_id })).toBe(false);
+    expect(listedOwnerIds(next)).toEqual(["me"]);
+  });
+
+  test("another person driving: the owner who sends takes it from them", () => {
+    const f = { ...base, rows: [row("me", 1), row("ashot", 2)], driver_user_id: "ashot", primary_id: "ashot" };
+    expect(takeOverBySend(f, "me", 100)?.driver_user_id).toBe("me");
+  });
+
+  test("the driver's own send, a non-owner's send and a role's own session change nothing", () => {
+    expect(takeOverBySend({ ...base, rows: [row("me", 1)] }, "me", 100)).toBeNull();
+    expect(takeOverBySend({ ...base, rows: [row("me", 1)], role_id: "r1" }, "stranger", 100)).toBeNull();
+    expect(takeOverBySend({ ...base, role_id: "r1", standing_role_id: "r2" }, "me", 100)).toBeNull();
+  });
+
+  test("the runner of a run a role started takes it and becomes its owner, so it stays in their inbox", () => {
+    const f = { ...base, role_id: "r1", role_started: true };
+    expect(listedOwnerIds(f)).toEqual([]);
+    const next = takeOverBySend(f, "me", 100)!;
+    expect(listedOwnerIds(next)).toEqual(["me"]);
+    expect(next.driver_user_id).toBe("me");
+    expect(driverOf(next, listedOwnerIds(next))).toEqual({ kind: "user", user_id: "me" });
+  });
+
+  test("a runner who is not listed keeps the starter as an owner when it takes over", () => {
+    const f = { ...base, author_id: "ashot", runner_id: "me", role_id: "r1" };
+    expect(listedOwnerIds(takeOverBySend(f, "me", 100)!)).toEqual(["ashot", "me"]);
   });
 });

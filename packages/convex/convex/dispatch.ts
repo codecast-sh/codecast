@@ -16,6 +16,7 @@ import { createStackWithCore, removeFromStackCore, reorderStackCore } from "./de
 import { performGoalControl, performSetGoal } from "./sessionGoals";
 import { askCore as askDecisionCore, commentCore, deleteCore as deleteDecisionCommentCore, editCore as editDecisionCommentCore, resolveCore as resolveDecisionThreadCore } from "./decisionThread";
 import { sendLineChatCore } from "./lineChat";
+import { performTellSessionRole } from "./orgRoles";
 import { askCore as askSideQuestionCore } from "./sideAnswers";
 import { clearHoldCore, libraryFlowId, moveLiveFlowCore, setOnCore, startLiveFlowCore, type LibraryFlowRef } from "./liveFlows";
 import type { ThreadKind } from "./threadReads";
@@ -606,6 +607,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       session_id: conversationId,
       change: { ...change, ...(change?.leave ? { leave: change.leave.move_to_device_id ? { move_to_device_id: change.leave.move_to_device_id } : {} } : {}) },
     }),
+  // The composer's "Tell <role>": the words go to the role's own session and
+  // the role keeps driving this one.
+  tellSessionRole: async (ctx, userId, [conversationId, content, clientId]: [string, string, string]) =>
+    performTellSessionRole(ctx, userId, { session_id: conversationId, message: content, client_id: clientId }),
   // The assignee acknowledges a handoff (the banner's Got it, an inbox pill).
   ackSessionAssignment: async (ctx, _userId, [conversationId]: [string]) =>
     ctx.runMutation!((api as any).sessionOwnership.ackSessionAssignment, { session_id: conversationId }),
@@ -1307,7 +1312,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const conversation = await ctx.db.get(convId as Id<"conversations">);
     if (!conversation) throw new Error("conversation_deleted");
     if (!(await canSendProductMessage(ctx, userId, conversation))) throw new Error("Unauthorized");
-    return await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true, queue: true });
+    return await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true, take_over: true, queue: true });
   },
   releaseQueued: async (ctx, userId, [convId]: [string]) =>
     releaseQueuedForUser(ctx, userId, convId as Id<"conversations">),
@@ -1354,6 +1359,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       image_storage_ids: imageIds?.length ? (imageIds as any) : undefined,
       client_id: clientId,
       human: true,
+      take_over: true,
     });
     if (stampQuotes) await stampQuotesSent(ctx, userId, conversation._id, clientId!, stampQuotes, waiting);
     return queued;

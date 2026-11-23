@@ -47,7 +47,7 @@ import { syncRoleAgenda } from "./orgAgenda";
 import { syncInboxLook } from "./orgInbox";
 import { roleMergeAllowance } from "./lib/regretRead";
 import { announceSeating, decommissionAnchorRow, provisionStandingAgent, roleBootstrapOf, seatTitlePatch, userCanAdminAnchor, workspaceAnchorFor } from "./anchors";
-import { clearHasPendingIfQuiet, enqueuePendingMessage, formatSessionMessage, tellRole, performSessionSend } from "./pendingMessages";
+import { canSendProductMessage, clearHasPendingIfQuiet, enqueuePendingMessage, formatSessionMessage, tellRole, performSessionSend } from "./pendingMessages";
 import { isFencedPendingMessage } from "./executionBindings";
 import { byQueueOrder, queueOrder } from "./lib/sessionQueue";
 import { standingReportsToFields } from "./lib/standingSeat";
@@ -2100,13 +2100,25 @@ async function performSetAuthorityCore(ctx: any, userId: Id<"users">, args: { ro
 // standing session (org-staffing.md S25), delivered exactly as `cast send`
 // delivers it, so the role knows who wrote and can answer with `cast send`.
 // From a terminal with no session it carries the person's name.
-export async function performWakeRole(ctx: any, userId: Id<"users">, args: { role_id: string; message: string; from_session?: string }): Promise<any> {
+export async function performWakeRole(ctx: any, userId: Id<"users">, args: { role_id: string; message: string; from_session?: string; client_id?: string }): Promise<any> {
   const role = await requireRole(ctx, userId, args.role_id, "access");
   const conv = await standingConversationOf(ctx, role);
   if (!conv) throw new Error("This role has no standing session yet");
   const from = args.from_session?.trim() || undefined;
-  const sent = await performSessionSend(ctx, userId, { to: String(conv._id), target: conv, from, body: args.message, direct: !from });
+  const sent = await performSessionSend(ctx, userId, { to: String(conv._id), target: conv, from, body: args.message, direct: !from, client_id: args.client_id });
   return { role_id: role._id, conversation_id: conv._id, short_id: conv.short_id, pending_message_id: sent.message_id, ...sent };
+}
+
+// "Tell <role>" from a session's composer while the role drives it: the
+// person's words go to the role's own session, naming the session they are
+// about, and the role keeps driving.
+export async function performTellSessionRole(ctx: any, userId: Id<"users">, args: { session_id: string; message: string; client_id?: string }): Promise<any> {
+  const conversation = await ctx.db.get(args.session_id as Id<"conversations">);
+  if (!conversation) throw new Error("conversation_deleted");
+  if (!(await canSendProductMessage(ctx, userId, conversation))) throw new Error("Unauthorized");
+  if (!conversation.org_role_id) throw new Error("This session has no role to tell");
+  const short = conversation.short_id ?? String(conversation._id).slice(0, 7);
+  return await performWakeRole(ctx, userId, { role_id: String(conversation.org_role_id), message: `About ${short}: ${args.message}`, client_id: args.client_id });
 }
 
 // The role read its brief from its own session: the clock `cast brief` diffs
