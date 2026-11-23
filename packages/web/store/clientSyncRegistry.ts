@@ -1052,6 +1052,18 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true, deepFields: ["targets"] },
     feeds: ["deployReach.get", "deployReach.many"],
   },
+  // The names a push put on its target and took off it (deploys.get `adds`,
+  // `drops`, up to 500 each), keyed by the deploy's id: what an opened deploy
+  // draws. A teamDeploys row carries only their counts. A row exists only for
+  // a deploy a surface opened, fed by that surface (hooks/useDeployDetail) and
+  // capped like the detail collections (lib/detailRows). `deploys.get` is not
+  // listed as a feed: it answers a whole deploy, which pills read for more
+  // than the names.
+  deployDetails: {
+    persistence: { kind: "collection", key: "deployDetails" },
+    hydration: { phase: "deferred" },
+    sync: { isDelta: true, deepFields: ["adds", "drops"] },
+  },
   // The flows view's collections (live flows, session flows) live beside this file.
   ...FLOW_SYNC_COLLECTIONS,
   // Everything that entered a workspace's line, one row per event (convex
@@ -2305,6 +2317,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   checkouts: "shared",
   teamDeploys: "shared",
   deployReach: "local",
+  deployDetails: "local",
   liveFlows: "shared",
   sessionFlows: "shared",
   flowMaps: "shared",

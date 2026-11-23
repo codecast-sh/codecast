@@ -44,14 +44,18 @@ type Row = Record<string, any>;
 // row per merged pull request or main commit a pill named, read by the pill
 // that names it (hooks/useDeployReach), so the pill pins it and the rest age
 // out by when they were last fed.
-export const DETAIL_ROW_CAPS = { taskComments: 1500, pullRequestDetails: 12, deployReach: 300 } as const;
+//
+// `deployDetails` holds the names an opened deploy's push added and dropped
+// (up to 500 each, so a row can reach tens of KB): the deploys a person opened
+// lately, pinned by the open detail (hooks/useDeployDetail).
+export const DETAIL_ROW_CAPS = { taskComments: 1500, pullRequestDetails: 12, deployReach: 300, deployDetails: 50 } as const;
 export type DetailKey = keyof typeof DETAIL_ROW_CAPS;
 export const isDetailKey = (key: string): key is DetailKey => Object.prototype.hasOwnProperty.call(DETAIL_ROW_CAPS, key);
 
 // What is on screen in this window: each mounted reader of a detail row pins
 // it (useTaskComments, usePullRequestDetail, useSyncTaskThreads), and a
 // pinned row is never evicted, whatever the cap and whichever window asked.
-const pins: Record<DetailKey, Map<string, number>> = { taskComments: new Map(), pullRequestDetails: new Map(), deployReach: new Map() };
+const pins: Record<DetailKey, Map<string, number>> = { taskComments: new Map(), pullRequestDetails: new Map(), deployReach: new Map(), deployDetails: new Map() };
 
 /** Hold these rows while a surface shows them. Returns the release. */
 export function pinDetailRows(key: DetailKey, ids: readonly string[]): () => void {

@@ -41,7 +41,7 @@ export default function DeploysScreen() {
                   color={live ? Theme.green : Theme.textDim}
                   title={t.name}
                   meta={live ? `${short(live.sha)} · ${compactAge(Math.max(0, now - (live.live_at ?? live.created_at)))}` : 'nothing live'}
-                  onPress={() => { if (live?.short_id) router.push(`/deploy/${live.short_id}` as never); }}
+                  onPress={live?.short_id ? () => router.push(`/deploy/${live.short_id}` as never) : undefined}
                 />
                 {t.dev_push ? <RNText style={styles.devPush} testID={`deploys-dev-push-${t.name}`}>{devPushWords(t.dev_push, now)}</RNText> : null}
               </RNView>
