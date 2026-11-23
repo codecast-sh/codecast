@@ -1474,6 +1474,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       if (len > 0) {
         focus();
         textareaRef.current.setSelectionRange(len, len);
+        // Show the caret: a draft taller than the box opened at its top, and
+        // the lines under the edge were out of sight with nothing to say so.
+        textareaRef.current.scrollTop = textareaRef.current.scrollHeight;
       } else if (autoFocusInput) {
         focus();
       }

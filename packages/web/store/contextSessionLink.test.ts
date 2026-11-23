@@ -59,4 +59,24 @@ describe("ContextChat linked create intent", () => {
 
     expect(healedOpts?.linked_object).toEqual(LINKED_DOC);
   });
+
+  // A compose link's composer stamps the task on its stub (ComposeView), and
+  // the create carries it on every agent, the hosted assistant included.
+  for (const agent of ["claude_code", "codecast"]) {
+    test(`a task stamped on a compose stub reaches the ${agent} create`, async () => {
+      const task = { type: "task", id: "tasks_linked" };
+      useInboxStore.getState().syncRecord("sessions", STUB_ID, { _id: STUB_ID, session_id: STUB_ID, agent_type: agent, project_path: "/repo" });
+      useInboxStore.getState().syncRecord("sessions", STUB_ID, { _linkedObject: task });
+      const originalCreate = useInboxStore.getState().createSession;
+      let sent: Record<string, any> | undefined;
+      useInboxStore.setState({ createSession: ((opts: Record<string, any>) => { sent = opts; return Promise.resolve(REAL_ID); }) as any });
+      try {
+        await useInboxStore.getState().createSessionFromStub(STUB_ID);
+      } finally {
+        useInboxStore.setState({ createSession: originalCreate });
+      }
+      expect(sent?.agent_type).toBe(agent);
+      expect(sent?.linked_object).toEqual(task);
+    });
+  }
 });
