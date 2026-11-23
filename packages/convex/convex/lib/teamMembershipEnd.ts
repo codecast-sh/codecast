@@ -6,7 +6,7 @@ import { recordAuthorityEvent } from "./authorityEvents";
 import { isTeamMember } from "../privacy";
 import { isTeamMachineFor } from "../sessionLaunch";
 import { runnerDeviceOf } from "./runnerDevice";
-import { syncPrimaryOwnerCache } from "../sessionOwners";
+import { removeSessionOwnerRow, syncPrimaryOwnerCache } from "../sessionOwners";
 import { withdrawMember } from "./changesDirty";
 import { purgeChatMembership } from "../chat";
 import { removeFromTeamHosts } from "../teamHosts";
@@ -41,7 +41,7 @@ async function grantRunsThrough(ctx: { db: any }, conv: any, teamId: Id<"teams">
 }
 
 export async function dropOwnerRow(ctx: { db: any }, row: any): Promise<void> {
-  await ctx.db.delete(row._id);
+  await removeSessionOwnerRow(ctx, row.conversation_id, row.user_id);
   await syncPrimaryOwnerCache(ctx, row.conversation_id);
 }
 

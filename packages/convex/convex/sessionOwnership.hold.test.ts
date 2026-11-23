@@ -74,6 +74,17 @@ describe("the hold a binding gives or takes", () => {
     expect(row(db, 1).driver_user_id).toBeUndefined();
   });
 
+  test("a binding stamps its starter as driver only while they own it", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    // Mate's lead, and a session I started and handed to Mate: Mate owns it, I no longer do.
+    await performCreateRole(ctx, MATE as any, { name: "Growth", handle: "growth", team_id: TEAM, scope: { project_ids: [P as any], plan_ids: [] } });
+    db._tables.conversations.push(conv(1, { owner_user_id: MATE, active_task_id: "tasks_growth" }));
+    db._tables.session_owners.push({ _id: "so1", conversation_id: "conversations_s1", user_id: MATE, added_by: ME, added_at: 1 });
+    expect(await applyHoldChange(ctx, "conversations_s1" as any)).toEqual({ change: "file", role: "growth" });
+    expect(row(db, 1).driver_user_id).toBeUndefined();
+  });
+
   test("a role's own hand bound to work in the area keeps the role driving", async () => {
     const db = fixtures();
     const ctx = ctxOf(db);

@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { sweepStaleSessionOwners } from "./teams";
 import { endMembership } from "./lib/teamMembershipEnd";
+import { setSessionOwnerRows } from "./sessionOwners";
 
 // F26: an owner row on a session another account runs steers that account's
 // daemon. Leaving the team drops the rows no remaining shared team explains.
@@ -113,5 +114,26 @@ describe("sweepStaleSessionOwners (one-off, after deploy)", () => {
     const db = fixtures();
     expect((await run(db)).dropped).toBe(0);
     expect(owners(db)).toEqual(["o1", "o2", "o3", "o4"]);
+  });
+});
+
+// One driver, and a person who drives owns it: the row going takes the wheel
+// back to the role (sessionOwners.writeDriver).
+describe("a driver whose owner row goes stops driving", () => {
+  test("a member who took over a role's session leaves the team: the role drives again", async () => {
+    const db = fixtures();
+    db._tables.conversations.push({ _id: "c-role", user_id: BEN, owner_user_id: ANA, team_id: TEAM, org_role_id: "r1", driver_user_id: ANA });
+    db._tables.session_owners.push({ _id: "o5", conversation_id: "c-role", user_id: ANA, added_by: ANA, added_at: 1 });
+    await endMembership({ db } as any, ANA as any, TEAM as any, BEN as any);
+    expect(conv(db, "c-role").driver_user_id).toBeUndefined();
+  });
+
+  test("swapping the owner set keeps a driver who stays in it, and drops one who does not", async () => {
+    const db = fixtures();
+    await db.patch("c-box", { driver_user_id: BEN });
+    await setSessionOwnerRows({ db } as any, "c-box" as any, [BEN], BEN as any);
+    expect(conv(db, "c-box").driver_user_id).toBe(BEN);
+    await setSessionOwnerRows({ db } as any, "c-box" as any, [ANA], BEN as any);
+    expect(conv(db, "c-box").driver_user_id).toBeUndefined();
   });
 });

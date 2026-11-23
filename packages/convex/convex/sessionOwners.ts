@@ -1,4 +1,5 @@
 import { Id } from "./_generated/dataModel";
+import { listedOwnerIds, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 
 // ── Owner-set primitives (session_owners join table) ─────────────────────────
 // The join table is the canonical multi-owner store: the humans whose inboxes a
@@ -6,7 +7,7 @@ import { Id } from "./_generated/dataModel";
 // so does the denormalized conversations.owner_user_id cache (the primary
 // owner), whose one writer is syncPrimaryOwnerCache below; setSessionOwnerRows
 // and the owner mutations call it after they change rows. Kept in a
-// dependency-free leaf module (imports only Id) so both privacy.ts (access
+// leaf module (imports only Id and the pure shared owner rules) so both privacy.ts (access
 // policy) and sessionOwnership.ts (assignment workflow) can use them without an
 // import cycle.
 
@@ -143,6 +144,7 @@ export async function removeSessionOwnerRow(
     .first();
   if (!existing) return false;
   await ctx.db.delete(existing._id);
+  await settleDriver(ctx, conversationId);
   return true;
 }
 
@@ -226,11 +228,9 @@ export async function setSessionOwnerRows(
 ): Promise<boolean> {
   const keep = new Set(owners);
   let changed = false;
-  const present = new Set<string>();
-  for (const id of await listSessionOwnerIds(ctx, conversationId)) {
-    present.add(String(id));
-    if (!keep.has(String(id)) && await removeSessionOwnerRow(ctx, conversationId, id)) changed = true;
-  }
+  const before = await listSessionOwnerIds(ctx, conversationId);
+  const present = new Set(before.map(String));
+  // Adds before removes: a driver among the kept owners still owns it at every step.
   for (const id of owners) {
     if (!restore) {
       if (await addSessionOwnerRow(ctx, conversationId, id as Id<"users">, addedBy)) changed = true;
@@ -241,6 +241,9 @@ export async function setSessionOwnerRows(
     const row = restore.find((r) => r.user_id === id) ?? { user_id: id, added_by: String(addedBy), added_at: now, seen_at: now };
     await ctx.db.insert("session_owners", { conversation_id: conversationId, ...row });
     changed = true;
+  }
+  for (const id of before) {
+    if (!keep.has(String(id)) && await removeSessionOwnerRow(ctx, conversationId, id)) changed = true;
   }
   const primary = owners[0] as Id<"users"> | undefined;
   if (!changed && primary && String((await ctx.db.get(conversationId))?.owner_user_id ?? "") !== primary) changed = true;
@@ -260,4 +263,54 @@ export async function restoreOwnerRows(ctx: { db: any }, conversationId: Id<"con
     changed = true;
   }
   if (changed) await syncPrimaryOwnerCache(ctx, conversationId);
+}
+
+// A conversation's owner facts as the shared model reads them. The inbox row
+// passes the owner rows it already read and its memoized doc reader.
+export async function ownersFactsOf(
+  ctx: { db: any },
+  conversation: any,
+  loaded: { rows?: Array<{ user_id: string; added_at: number }>; getDoc?: (id: any) => Promise<any> } = {},
+): Promise<OwnersFacts> {
+  const rows = (loaded.rows ?? await ownerRowsOf(ctx, conversation._id)).map((r) => ({ user_id: r.user_id, added_at: r.added_at }));
+  const getDoc = loaded.getDoc ?? ((id: any) => ctx.db.get(id));
+  const bots: string[] = [];
+  for (const id of [conversation.author_user_id, conversation.user_id]) {
+    if (id && (await getDoc(id))?.is_bot) bots.push(String(id));
+  }
+  return {
+    rows,
+    author_id: conversation.author_user_id ? String(conversation.author_user_id) : null,
+    runner_id: String(conversation.user_id),
+    bots,
+    role_id: conversation.org_role_id ? String(conversation.org_role_id) : null,
+    role_started: !!conversation.role_started,
+    standing_role_id: conversation.standing_role_id ? String(conversation.standing_role_id) : null,
+    driver_user_id: conversation.driver_user_id ? String(conversation.driver_user_id) : null,
+    primary_id: conversation.owner_user_id ? String(conversation.owner_user_id) : null,
+  };
+}
+
+// ── The driver (shared driverOf) ─────────────────────────────────────────────
+// Exactly one owner drives, and a person who drives owns the session: one of
+// its rows, or its starter while it has none (shared listedOwnerIds). This is
+// the one writer of conversations.driver_user_id. Every removal of an owner
+// row (removeSessionOwnerRow) settles it, so a driver whose row went hands
+// the wheel back to the role, else the primary owner. Returns whether the
+// driver changed; callers that route decisions reroute on true.
+export async function writeDriver(ctx: { db: any }, conversationId: Id<"conversations">, userId: string | null): Promise<boolean> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) return false;
+  const owns = userId ? listedOwnerIds(await ownersFactsOf(ctx, conversation)).includes(userId) : false;
+  const next = owns ? userId : null;
+  if (String(conversation.driver_user_id ?? "") === String(next ?? "")) return false;
+  await ctx.db.patch(conversationId, { driver_user_id: (next ?? undefined) as Id<"users"> | undefined });
+  return true;
+}
+
+/** Keep the driver an owner after the owners changed: cleared when they no longer own it. */
+export async function settleDriver(ctx: { db: any }, conversationId: Id<"conversations">): Promise<boolean> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation?.driver_user_id) return false;
+  return writeDriver(ctx, conversationId, String(conversation.driver_user_id));
 }

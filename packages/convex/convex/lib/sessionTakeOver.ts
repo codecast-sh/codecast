@@ -7,8 +7,7 @@
 import type { Id } from "../_generated/dataModel";
 import { actsForRole } from "@codecast/shared/contracts";
 import { takeOverBySend } from "@codecast/shared/contracts/sessionOwners";
-import { addSessionOwnerRow, syncPrimaryOwnerCache } from "../sessionOwners";
-import { ownersFactsOf } from "./sessionOwnerRules";
+import { addSessionOwnerRow, ownersFactsOf, syncPrimaryOwnerCache, writeDriver } from "../sessionOwners";
 import { personName } from "./sessionTell";
 
 /** A person's own message into the session takes the wheel (takeOverBySend),
@@ -23,7 +22,7 @@ export async function takeWheelOnSend(ctx: { db: any }, conversation: any, sende
   const added = next.rows.filter((r) => !facts.rows.some((x) => x.user_id === r.user_id));
   for (const r of added) await addSessionOwnerRow(ctx, conversation._id, r.user_id as Id<"users">, (r.added_by ?? senderId) as Id<"users">);
   if (added.length) await syncPrimaryOwnerCache(ctx, conversation._id, (next.primary_id ?? undefined) as Id<"users"> | undefined);
-  await ctx.db.patch(conversation._id, { driver_user_id: senderId });
+  await writeDriver(ctx, conversation._id, String(senderId));
 }
 
 /**

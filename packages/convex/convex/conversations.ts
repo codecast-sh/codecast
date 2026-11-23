@@ -79,8 +79,7 @@ import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, 
 import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
-import { isSessionOwner, ownerRowsOf, sessionOwnerRow } from "./sessionOwners";
-import { ownersFactsOf } from "./lib/sessionOwnerRules";
+import { isSessionOwner, ownerRowsOf, ownersFactsOf, sessionOwnerRow } from "./sessionOwners";
 import { listedOwnerIds } from "@codecast/shared/contracts/sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, navPromptField, navPromptPatch, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";

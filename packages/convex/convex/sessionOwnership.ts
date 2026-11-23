@@ -6,10 +6,10 @@ import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
-import { addSessionOwnerRow, removeSessionOwnerRow, listSessionOwnerIds, syncPrimaryOwnerCache, humanStarterUser, restoreOwnerRows, type OwnerRowSnapshot } from "./sessionOwners";
+import { addSessionOwnerRow, removeSessionOwnerRow, listSessionOwnerIds, ownersFactsOf, syncPrimaryOwnerCache, humanStarterUser, restoreOwnerRows, writeDriver, type OwnerRowSnapshot } from "./sessionOwners";
 import { isLeave, listedOwnerIds, pinnedDriverAfterAdd, starterOf } from "@codecast/shared/contracts/sessionOwners";
 import {
-  assertHumanOwner, avatarOf, driverOf, listOwnerInfos, mayEditOwners, ownerIdsOrStarter, ownersFactsOf, OWNER_CANDIDATE_CAP, resolveOwnableConversation,
+  assertHumanOwner, avatarOf, driverOf, listOwnerInfos, mayEditOwners, ownerIdsOrStarter, OWNER_CANDIDATE_CAP, resolveOwnableConversation,
   ownerNamed, resolveOwnerRef, resolveOwnerRoleRef, settleLeave, teamMemberDocs, toOwnerInfo, withLeaveRules, type DriverTarget, type OwnerInfo, type OwnerMutationResult, type SessionDriver,
 } from "./lib/sessionOwnerRules";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
@@ -234,13 +234,6 @@ async function reparentSessionCore(
   const removed: Id<"users">[] = [];
   let owners: OwnerInfo[];
   let roleId: Id<"org_roles"> | undefined = conversation.org_role_id;
-  // Removing the person who drives hands the wheel back (role, else the
-  // primary owner).
-  const clearDriverIfRemoved = async () => {
-    if (conversation.driver_user_id && removed.some((id) => String(id) === String(conversation.driver_user_id))) {
-      await ctx.db.patch(conversation._id, { driver_user_id: undefined });
-    }
-  };
 
   if (args.target.kind === "user") {
     // A bare `user_id` is the chart's drop on a person: it ADDS that person
@@ -301,10 +294,9 @@ async function reparentSessionCore(
     // leaves the line to whoever remains, oldest first.
     const preferred = mode === "remove" ? undefined : desired[desired.length - 1]?._id;
     await syncPrimaryOwnerCache(ctx, conversation._id, preferred);
-    await clearDriverIfRemoved();
     if (factsBefore && mode !== "remove") {
       const pin = pinnedDriverAfterAdd(factsBefore, await ownersFactsOf(ctx, (await ctx.db.get(conversation._id)) ?? conversation));
-      if (pin && String(conversation.driver_user_id ?? "") !== pin) await ctx.db.patch(conversation._id, { driver_user_id: pin as Id<"users"> });
+      if (pin) await writeDriver(ctx, conversation._id, pin);
     }
     // A re-homing under a person (the chart's drop, a release) takes the role
     // off; adding owners from the menu keeps it, since a role is an owner too.
@@ -569,7 +561,7 @@ export async function performSetSessionDriver(
   if (!userId && ref.trim().toLowerCase() !== "me") userId = await ownerNamed(ctx, ownerIds, ref);
   userId ??= String((await resolveOwnerRef(ctx, authUserId, conversation, ref))._id);
   if (!ownerIds.includes(userId)) throw new Error("Only an owner of the session can drive it; add them as an owner first");
-  if (String(conversation.driver_user_id ?? "") !== userId) await ctx.db.patch(conversation._id, { driver_user_id: userId as Id<"users"> });
+  await writeDriver(ctx, conversation._id, userId);
   return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "user", user_id: userId as Id<"users"> } };
 }
 
@@ -1112,7 +1104,7 @@ export async function applyHoldChange(ctx: { db: any; scheduler?: any }, convers
   // chart, a scope takeover) never comes here, so the role drives those.
   if (!c.role_started) {
     const person = await humanStarterUser(ctx, c);
-    if (person) await ctx.db.patch(conversationId, { driver_user_id: person._id });
+    if (person) await writeDriver(ctx, conversationId, String(person._id));
   }
   return { change: change.kind, role: change.role.handle };
 }

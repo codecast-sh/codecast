@@ -5,8 +5,8 @@
 // reparent core and the mutations that use these.
 
 import type { Id } from "../_generated/dataModel";
-import { addSessionOwnerRow, ownerRowsOf, syncPrimaryOwnerCache } from "../sessionOwners";
-import { driverOf as sharedDriverOf, humanRunnerOf, leaveLeavesAnOwner, listedOwnerIds, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
+import { addSessionOwnerRow, ownersFactsOf, settleDriver, syncPrimaryOwnerCache } from "../sessionOwners";
+import { driverOf as sharedDriverOf, humanRunnerOf, leaveLeavesAnOwner, listedOwnerIds } from "@codecast/shared/contracts/sessionOwners";
 import { findOwnableConversation } from "./sessionTell";
 import { liveRoleByHandle, resolveRoleRef } from "./orgAccess";
 
@@ -223,32 +223,6 @@ export function driverOf(conversation: { org_role_id?: Id<"org_roles">; driver_u
   }, ownerIds) as SessionDriver | null;
 }
 
-// A conversation's owner facts as the shared model reads them. The inbox row
-// passes the owner rows it already read and its memoized doc reader.
-export async function ownersFactsOf(
-  ctx: { db: any },
-  conversation: any,
-  loaded: { rows?: Array<{ user_id: string; added_at: number }>; getDoc?: (id: any) => Promise<any> } = {},
-): Promise<OwnersFacts> {
-  const rows = (loaded.rows ?? await ownerRowsOf(ctx, conversation._id)).map((r) => ({ user_id: r.user_id, added_at: r.added_at }));
-  const getDoc = loaded.getDoc ?? ((id: any) => ctx.db.get(id));
-  const bots: string[] = [];
-  for (const id of [conversation.author_user_id, conversation.user_id]) {
-    if (id && (await getDoc(id))?.is_bot) bots.push(String(id));
-  }
-  return {
-    rows,
-    author_id: conversation.author_user_id ? String(conversation.author_user_id) : null,
-    runner_id: String(conversation.user_id),
-    bots,
-    role_id: conversation.org_role_id ? String(conversation.org_role_id) : null,
-    role_started: !!conversation.role_started,
-    standing_role_id: conversation.standing_role_id ? String(conversation.standing_role_id) : null,
-    driver_user_id: conversation.driver_user_id ? String(conversation.driver_user_id) : null,
-    primary_id: conversation.owner_user_id ? String(conversation.owner_user_id) : null,
-  };
-}
-
 // The owner set as the session shows it (shared listedOwnerIds): its owner
 // rows, else the human who started it, and nobody for a run a role started.
 export async function ownerIdsOrStarter(ctx: { db: any }, conversation: any): Promise<string[]> {
@@ -272,7 +246,6 @@ export async function mayEditOwners(ctx: { db: any }, authUserId: Id<"users">, c
 export async function settleLeave(ctx: { db: any }, authUserId: Id<"users">, conversation: any): Promise<void> {
   const me = String(authUserId);
   if (String(conversation.user_id) === me) throw new Error("It runs on your account: move it to a teammate's or a team machine to leave it");
-  if (String(conversation.driver_user_id ?? "") === me) await ctx.db.patch(conversation._id, { driver_user_id: undefined });
   const facts = await ownersFactsOf(ctx, conversation);
   const runner = humanRunnerOf(facts);
   if (facts.rows.length === 0 && runner && runner !== me) {
@@ -280,6 +253,7 @@ export async function settleLeave(ctx: { db: any }, authUserId: Id<"users">, con
     await syncPrimaryOwnerCache(ctx, conversation._id);
   }
   if (!leaveLeavesAnOwner(await ownersFactsOf(ctx, await ctx.db.get(conversation._id)), me)) throw new Error("Nobody would own it after you leave: add a teammate first");
+  await settleDriver(ctx, conversation._id);
 }
 
 // An owners edit that takes the caller out of the owners is their leave,
