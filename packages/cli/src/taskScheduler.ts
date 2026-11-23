@@ -591,15 +591,7 @@ export class TaskScheduler {
   }
 
   private track(run: TrackedRun): void {
-    const heartbeatTimer = setInterval(async () => {
-      const renewed = await this.syncService.renewTaskLease(run.taskId, this.daemonId);
-      if (!renewed) {
-        this.log(`Lease renewal failed for task ${run.taskId}, stopping monitor`);
-        this.cleanupTask(run.taskId);
-      }
-
-      await this.checkTaskCompletion(run.taskId);
-    }, HEARTBEAT_INTERVAL_MS);
+    const heartbeatTimer = setInterval(() => this.heartbeat(run.taskId), HEARTBEAT_INTERVAL_MS);
 
     this.running.set(run.taskId, { ...run, heartbeatTimer });
     // Link the run's conversation to the task as soon as it syncs (bounded
@@ -730,6 +722,16 @@ export class TaskScheduler {
       }
       this.scheduleRunLink(taskId, runSessionUuid, attempt + 1);
     }, delaysMs[attempt]);
+  }
+
+  private async heartbeat(taskId: string): Promise<void> {
+    const renewed = await this.syncService.renewTaskLease(taskId, this.daemonId);
+    if (!renewed) {
+      this.log(`Lease renewal failed for task ${taskId}, stopping monitor`);
+      this.cleanupTask(taskId);
+    }
+
+    await this.checkTaskCompletion(taskId);
   }
 
   private async checkTaskCompletion(taskId: string): Promise<void> {
