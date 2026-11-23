@@ -97,7 +97,8 @@ export function OwnersSegment({ conversationId, owners, compact }: { conversatio
         </button>
       </PopoverTrigger>
       <PopoverContent align="start" sideOffset={6} className="w-[23rem] max-w-[calc(100vw-2rem)] p-1" onOpenAutoFocus={(e) => e.preventDefault()}>
-        {seat ? <SeatReportsTo conversationId={conversationId} owners={owners} onDone={() => setOpen(false)} /> : <OwnersMenuBody conversationId={conversationId} owners={owners} onClose={() => setOpen(false)} />}
+        {/* Keyed: a staged draft belongs to the session it was opened on. */}
+        {seat ? <SeatReportsTo key={conversationId} conversationId={conversationId} owners={owners} onDone={() => setOpen(false)} /> : <OwnersMenuBody key={conversationId} conversationId={conversationId} owners={owners} onClose={() => setOpen(false)} />}
       </PopoverContent>
     </Popover>
   );

@@ -61,7 +61,7 @@ export function ConversationAssignmentBadge({ conversation, isOwner, guest, comp
     image: conversation.user.avatar_url,
   } : undefined;
   if (guest) return runner ? <RunnerBadge runner={runner} compact={compact} title="Shared session · read-only access" /> : null;
-  return <AssignmentBadge key={conversation._id} conversationId={conversation._id} ownerDeviceId={conversation.owner_device_id} runner={runner} isOwner={isOwner} compact={compact} />;
+  return <AssignmentBadge conversationId={conversation._id} ownerDeviceId={conversation.owner_device_id} runner={runner} isOwner={isOwner} compact={compact} />;
 }
 
 /**
@@ -115,7 +115,10 @@ export function AssignmentBadge({
 }) {
   const { byId, loaded } = useDevices();
   const owners = useOwnersFromStore(conversationId);
-  const [makingRole, setMakingRole] = useState(false);
+  // Not keyed by the conversation: a switch keeps the owners segment's node
+  // and remounts only the machine menu (keyed below). A dialog belongs to the
+  // conversation it was opened for.
+  const [makingRoleFor, setMakingRoleFor] = useState<string | null>(null);
   const orgOn = useWorkspaceFeature("org");
   // A session may run on a machine outside the viewer's own device list (a
   // teammate's, or the shared agent box whose daemon authenticates as the bot
@@ -160,8 +163,8 @@ export function AssignmentBadge({
 
   return (
     <>
-    {makingRole && <MakeRoleDialog conversationId={conversationId} onClose={() => setMakingRole(false)} />}
-    <DropdownMenu>
+    {makingRoleFor === conversationId && <MakeRoleDialog conversationId={conversationId} onClose={() => setMakingRoleFor(null)} />}
+    <DropdownMenu key={conversationId}>
       <DropdownMenuTrigger asChild>
         <button
           type="button"
@@ -214,7 +217,7 @@ export function AssignmentBadge({
             <MirrorMenuItems conversationId={conversationId} />
           </>
         )}
-        {orgOn && <MakeRoleMenuItem conversationId={conversationId} onMakeRole={() => setMakingRole(true)} />}
+        {orgOn && <MakeRoleMenuItem conversationId={conversationId} onMakeRole={() => setMakingRoleFor(conversationId)} />}
       </DropdownMenuContent>
     </DropdownMenu>
     <OwnersSegment conversationId={conversationId} owners={owners} compact={compact} />
