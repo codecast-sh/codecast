@@ -35,6 +35,11 @@ describe("the confirm agrees with the chip", () => {
     expect(asked(ship)).toMatchObject({ name: "Ship this change", questions: "0–1", you: ["Only if it edits CI"] });
     // Its stages are the ones the picker drew, not the pipeline's stations.
     expect(asked(ship).ledger.rows.find((r) => r.k === "Stages")?.v).toBe("PR → CI + Review → Merge → Deploy");
+    // What can stop it is the stages it can stop at, in path order: no end's own name.
+    const canStop = asked(ship).ledger.rows.find((r) => r.k === "Can stop")!;
+    expect(canStop.v).toBe("PR, CI + Review, Merge, Deploy");
+    expect(canStop.list).toBeUndefined();
+    expect(asked(ship).ledger.stop).toBe("Stop on its card");
     // Another flow keeps its name in the title.
     expect(asked(pool.find((f) => f.slug === "quick-change")!).name).toBe("Ship through Quick");
   });

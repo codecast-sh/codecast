@@ -299,6 +299,11 @@ export function journeyStages(graph: Graph): Omit<JourneyStage, "state" | "round
   return planOf(graph).map(strip);
 }
 
+/** The stages that hold any of these stations, by label, once each and in path order. */
+export function stagesHolding(graph: Graph, nodeIds: ReadonlyArray<string>): string[] {
+  return planOf(graph).filter((s) => nodeIds.some((id) => inStage(s, id))).map((s) => s.label);
+}
+
 const LIVE_STATUSES = new Set(["pending", "running", "paused"]);
 
 /** A stop reason a person can read: its leading "Stopped:" and any JSON or a trailing cut word taken off. */
