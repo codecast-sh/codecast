@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import type { TaskRow } from "@codecast/web/components/triggerTasks";
 import { closeDetail, killReview, reviewedKill } from "./sessionVerbs";
 
-const NOW = 1_800_000_000_000;
+// The real clock: a Kill review reads the session at the moment it is pressed.
+const NOW = Date.now();
 const ID = "c".repeat(32);
 const settled = { _id: ID, title: "Fix the sync", message_count: 12, agent_status: "idle", updated_at: NOW - 60 * 60_000, last_heartbeat: NOW - 1000, is_idle: true };
 const trigger = (title: string, status = "scheduled"): TaskRow =>
@@ -59,6 +60,12 @@ describe("what Kill asks first", () => {
     const r = killReview({ ...settled, is_idle: false }, [])!;
     expect(r.message).toContain("Lost: Unfinished turns");
     expect(r.keep).toBe("Keep running");
+  });
+
+  test("names what else it cuts off: a question waiting on you, background work", () => {
+    expect(killReview({ ...settled, awaiting_input: true }, [])!.message).toContain("Lost: Questions waiting on you");
+    const bg = { ...settled, open_tasks_at: NOW - 1000, open_tasks: [{ id: "b1" }], last_heartbeat: NOW - 1000 };
+    expect(killReview(bg as any, [])!.message).toContain("Lost: Background work");
   });
 });
 

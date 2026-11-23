@@ -13,23 +13,28 @@ import { useInboxStore, type InboxSession } from "../store/inboxStore";
 // additive overlay, so a shelf row can only fill or refresh a cached row,
 // never evict one.
 const KILLED_SHELF_PAGE = 25;
+/** Empty pages one click reads at most before it stops and waits for the next. */
+const KILLED_SHELF_MAX_PAGES = 8;
 
 type Page = { page: InboxSession[]; isDone: boolean; continueCursor: string | null };
 
 // A page can come back empty but not done (the query filters within a page):
-// keep paging until one yields rows or both sources are drained. A source that
-// fails stops for this click; the other keeps its rows.
+// keep paging until one yields rows or both sources are drained, at most
+// KILLED_SHELF_MAX_PAGES a click. A source that fails stops for this click; the
+// other keeps its rows. A shelf reset while it reads (a workspace switch, a
+// sign-out) wins: the stale pages are dropped.
 export async function loadMoreKilledSessions(convex: ConvexReactClient): Promise<void> {
   const shelf = useInboxStore.getState().killedShelf;
   if (shelf.loading || shelf.complete) return;
-  useInboxStore.setState({ killedShelf: { ...shelf, loading: true } });
+  const loading = { ...shelf, loading: true };
+  useInboxStore.setState({ killedShelf: loading });
   let { cursor, closedCursor, killedDone, closedDone } = shelf;
   let killedFailed = false;
   let closedFailed = false;
   const rows: InboxSession[] = [];
   const page = (fn: typeof api.conversations.listKilledSessions | typeof api.conversations.listClosedSessions, at: string | null) =>
     convex.query(fn, { paginationOpts: { numItems: KILLED_SHELF_PAGE, cursor: at } }) as Promise<Page>;
-  while (rows.length === 0 && ((!killedDone && !killedFailed) || (!closedDone && !closedFailed))) {
+  for (let pages = 0; pages < KILLED_SHELF_MAX_PAGES && rows.length === 0 && ((!killedDone && !killedFailed) || (!closedDone && !closedFailed)); pages++) {
     const [killed, closed] = await Promise.allSettled([
       killedDone || killedFailed ? null : page(api.conversations.listKilledSessions, cursor),
       closedDone || closedFailed ? null : page(api.conversations.listClosedSessions, closedCursor),
@@ -40,6 +45,7 @@ export async function loadMoreKilledSessions(convex: ConvexReactClient): Promise
     else if (closed.value) { rows.push(...closed.value.page); closedCursor = closed.value.continueCursor; closedDone = closed.value.isDone; }
   }
   const store = useInboxStore.getState();
+  if (store.killedShelf !== loading) return;
   if (rows.length) store.syncTable("sessions", rows);
   const ids = new Set(store.killedShelf.ids);
   for (const row of rows) ids.add(String(row._id));

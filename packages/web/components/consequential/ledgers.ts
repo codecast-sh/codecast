@@ -328,10 +328,11 @@ export function answerRaiseLedger(r: { label: string; from: number; to: number; 
   };
 }
 
-/** Sessions killed: some mid-turn, or with triggers and queued messages the
- *  kill cancels. `queued` counts the sessions holding queued messages;
- *  `subject` names the one session when there is one. */
-export function killSessionsLedger(r: { total: number; working: string[]; triggers?: string[]; queued?: number; subject?: string }): SwitchLedger {
+/** Sessions killed: some in flight, or with triggers and queued messages the
+ *  kill cancels. `working` names the sessions in flight and `lost` what the
+ *  kill cuts off in them (a live turn by default); `queued` counts the
+ *  sessions holding queued messages; `subject` names the one session. */
+export function killSessionsLedger(r: { total: number; working: string[]; lost?: string[]; triggers?: string[]; queued?: number; subject?: string }): SwitchLedger {
   const w = r.working.length;
   const triggers = r.triggers ?? [];
   const t = triggers.length;
@@ -343,15 +344,15 @@ export function killSessionsLedger(r: { total: number; working: string[]; trigge
     subject: r.subject ?? (w ? `${w} working now` : `${r.total} sessions`),
     shift: ["Running", "Ended"],
     figures: [
-      ...(w ? [{ value: String(w), label: "cut off mid-turn", tone: "warn" as const }] : []),
+      ...(w ? [{ value: String(w), label: "cut off", tone: "warn" as const }] : []),
       ...(t ? [{ value: String(t), label: t === 1 ? "trigger canceled" : "triggers canceled", tone: "warn" as const }] : []),
       ...(one ? [] : [{ value: String(r.total), label: "end" }]),
     ],
     rows: [
-      ...(w ? [{ k: "Working", v: plural(w, "session"), list: few(r.working), tone: "warn" as const }, { k: "Lost", v: "Unfinished turns", tone: "warn" as const }] : []),
+      ...(w ? [{ k: "Working", v: plural(w, "session"), list: few(r.working), tone: "warn" as const }, { k: "Lost", v: (r.lost?.length ? r.lost : ["Unfinished turns"]).join(" · "), tone: "warn" as const }] : []),
       ...(t ? [{ k: "Triggers", v: `${plural(t, "trigger")} canceled`, list: few(triggers), tone: "warn" as const }] : []),
       ...(q ? [{ k: "Queued", v: one ? "Messages dropped" : `Dropped in ${plural(q, "session")}`, tone: "warn" as const }] : []),
-      { k: "To undo", v: w ? "Restore · turn lost" : "Restore · triggers re-arm" },
+      { k: "To undo", v: w ? "Restore · that work lost" : "Restore · triggers re-arm" },
     ],
     confirm: one ? "Kill it" : `Kill ${r.total}`,
     keep: w ? "Keep running" : one ? "Keep it" : "Keep them",

@@ -87,6 +87,26 @@ describe("loadMoreKilledSessions", () => {
     expect(calls.map((c) => `${c.which} ${c.args.paginationOpts.cursor}`)).toEqual(["killed null", "closed null", "killed k1", "killed k2"]);
   });
 
+  it("a click reads at most 8 empty pages, then waits for the next click where it stopped", async () => {
+    const empty = (i: number) => ({ page: [], isDone: false, continueCursor: `k${i}` });
+    const { client, calls } = fakeConvex(Array.from({ length: 20 }, (_, i) => empty(i + 1)), [{ page: [], isDone: true, continueCursor: null }]);
+    await loadMoreKilledSessions(client);
+    expect(calls.filter((c) => c.which === "killed")).toHaveLength(8);
+    expect(useInboxStore.getState().killedShelf).toMatchObject({ ids: [], cursor: "k8", killedDone: false, complete: false, loading: false });
+  });
+
+  it("a shelf reset while it reads wins: the stale page is dropped", async () => {
+    const client = {
+      query: async () => {
+        useInboxStore.setState({ killedShelf: EMPTY_KILLED_SHELF } as any);
+        return { page: [killed(A)], isDone: false, continueCursor: "k1" };
+      },
+    } as any;
+    await loadMoreKilledSessions(client);
+    expect(useInboxStore.getState().killedShelf).toEqual(EMPTY_KILLED_SHELF);
+    expect(useInboxStore.getState().sessions[A]).toBeUndefined();
+  });
+
   it("one source failing leaves the other's rows and position", async () => {
     const client = {
       query: async (fn: unknown) => {

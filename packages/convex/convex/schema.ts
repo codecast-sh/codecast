@@ -1688,8 +1688,6 @@ export default defineSchema({
     source_path: v.optional(v.string()),
     destination_path: v.optional(v.string()),
     verification: v.optional(v.string()),
-    // False: a closed session, moved without resuming (it stays closed).
-    resume: v.optional(v.boolean()),
     // The resume the flip enqueued on the destination — polled to confirm the
     // session actually came up there.
     resume_command_id: v.optional(v.id("daemon_commands")),
