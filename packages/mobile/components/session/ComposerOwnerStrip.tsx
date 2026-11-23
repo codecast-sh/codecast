@@ -119,3 +119,21 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   segmentLast: { borderTopRightRadius: 7, borderBottomRightRadius: 7 },
   segmentText: { fontSize: 12, fontWeight: '600', color: Theme.text },
 }));
+
+/**
+ * The composer's Tell: the words go to the role's own session (store
+ * tellSessionRole). `sent` gets the line to show once the server has queued
+ * them, or once they are parked in the outbox offline (they go on reconnect);
+ * `failed` gets why not, and the words stay in the box.
+ */
+export function tellRoleFromComposer(conversationId: string, text: string, sent: (notice: string) => void, failed: (message: string) => void): void {
+  const st = useInboxStore.getState() as any;
+  const to: string = (st.sessions?.[st.resolveLiveSessionId?.(conversationId) ?? conversationId] ?? st.conversations?.[conversationId])?.role?.name ?? 'the role';
+  void st.tellSessionRole(conversationId, text, crypto.randomUUID()).then(
+    () => sent(`Sent to ${to}`),
+    (err: unknown) => {
+      if ((err as { parked?: boolean } | null)?.parked) sent(`Queued for ${to}`);
+      else failed(err instanceof Error ? err.message : `Could not send to ${to}`);
+    },
+  );
+}

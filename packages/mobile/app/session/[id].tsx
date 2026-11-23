@@ -80,7 +80,7 @@ import { openSelectText } from '@/components/SelectTextSheet';
 import { readableText } from '@/lib/markdown';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { ScreenRecordingCard } from '@/components/ScreenRecordingCard';
-import { ComposerOwnerStrip } from '@/components/session/ComposerOwnerStrip';
+import { ComposerOwnerStrip, tellRoleFromComposer } from '@/components/session/ComposerOwnerStrip';
 import { composerSendRoute, takeOverFor } from '@codecast/web/lib/composerOwnership';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
 import { sessionLanded } from '@/lib/compose';
@@ -2588,10 +2588,8 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     if (route === 'tell-role') {
       if (images.attached) { setError('Tell sends words only: take over to send files'); return; }
       if (!trimmedMessage || tellingRef.current) return;
-      const st = useInboxStore.getState() as any;
-      const to: string = (st.sessions?.[st.resolveLiveSessionId?.(conversationId) ?? conversationId] ?? st.conversations?.[conversationId])?.role?.name ?? 'the role';
       tellingRef.current = true;
-      const sent = (words: string) => {
+      tellRoleFromComposer(conversationId as string, trimmedMessage, (words) => {
         tellingRef.current = false;
         // Words typed while it went stay in the box.
         if (nativeComposerText(inputRef.current as { _lastNativeText?: unknown } | null, draftRef.current).trim() === trimmedMessage) {
@@ -2601,16 +2599,7 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
           useInboxStore.getState().clearDraftFinal(conversationId);
         }
         showNotice(words);
-      };
-      void useInboxStore.getState().tellSessionRole(conversationId as string, trimmedMessage, crypto.randomUUID()).then(
-        () => sent(`Sent to ${to}`),
-        (err: unknown) => {
-          // Parked in the outbox while offline: it goes when the app reconnects.
-          if ((err as { parked?: boolean } | null)?.parked) { sent(`Queued for ${to}`); return; }
-          tellingRef.current = false;
-          setError(err instanceof Error ? err.message : `Could not send to ${to}`);
-        },
-      );
+      }, (message) => { tellingRef.current = false; setError(message); });
       return;
     }
 
