@@ -154,6 +154,21 @@ test("the only owner of an agent box's session is told why they cannot leave", a
   expect(chips()).toEqual([]);
 });
 
+test("leaving a session on your own account picks a machine first, unless a role started it", async () => {
+  await openMenu();
+  await act(async () => { (w.document.querySelector(`[data-owner-row='p:${ME}'] .own-x`) as HTMLElement).click(); });
+  expect(chips()).toEqual([]);
+  expect(w.document.querySelector("[data-leave-box]")).not.toBeNull();
+  await act(async () => { root?.unmount(); });
+  host?.remove();
+
+  useInboxStore.setState({ sessionOwners: { [ID]: { ...(useInboxStore.getState() as any).sessionOwners[ID], role_started: true } } } as any);
+  await openMenu();
+  await act(async () => { (w.document.querySelector(`[data-owner-row='p:${ME}'] .own-x`) as HTMLElement).click(); });
+  expect(chips()).toEqual(["You leave"]);
+  expect(w.document.querySelector("[data-leave-box]")).toBeNull();
+});
+
 test("a machine is named with whose it is", () => {
   expect(machineOf("Ashot Petrosian", "Mac-mini")).toBe("Ashot's Mac-mini");
   expect(machineOf("Ashot Petrosian", "Ashot's Mac mini")).toBe("Ashot's Mac mini");

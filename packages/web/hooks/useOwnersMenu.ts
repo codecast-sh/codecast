@@ -24,6 +24,7 @@ import { useOwnerCandidates, pickRoster, snapshotsOf, type OwnersApi, type Owner
 import { addPeople, addPerson, addRole, diffOwners, driverKey, leave, removePerson, removeRole, type MoveTo, type OwnersDraft } from "../lib/ownersDraft";
 import { useSessionRoleFacts } from "./useOwnersStoreEnv";
 import { isPerson } from "@codecast/shared/team/memberKind";
+import { applyOwnersChangeTo, leaveMovesFirst, leaveStands, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 import type { OrgRole } from "../components/org/orgTypes";
 
 const SUGGESTED_ROLES = 3;
@@ -163,9 +164,24 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
   // A teammate who only sees the session reads the owners: no remove, no Make
   // driver, no candidates (the server refuses the rest anyway).
   const readOnly = !owners.canEdit;
-  // The only owner of a session an agent box runs cannot leave it: nobody
-  // would be left to own it (a person who runs it would take it over).
-  const soleOwner = !!meId && draft.ownerIds.length === 1 && draft.ownerIds[0] === meId && !runsOnMine && !!owners.runner?.is_bot;
+  // The staged owners as the shared leave rules read them (the server's own).
+  const facts: OwnersFacts = {
+    rows: draft.ownerIds.map((user_id, i) => ({ user_id, added_at: i })),
+    author_id: owners.row?.author_id ?? null,
+    runner_id: owners.runner?.user_id ?? owners.session.runner_id ?? "",
+    bots: owners.row?.bots ?? [],
+    role_id: draft.role?.role_id ?? null,
+    role_started: !!owners.row?.role_started,
+    standing_role_id: null,
+    driver_user_id: draft.driver?.kind === "user" ? draft.driver.user_id : null,
+    primary_id: null,
+  };
+  // Leaving a session on your own account first picks a machine to move it
+  // to, unless a role started it (leaveMovesFirst).
+  const movesFirst = !!meId && leaveMovesFirst(facts, meId);
+  // You cannot leave when nobody would be left to own it: an agent box runs
+  // it and no role started it (leaveStands; a person who runs it takes it).
+  const soleOwner = !!meId && draft.ownerIds.includes(meId) && !movesFirst && !leaveStands(applyOwnersChangeTo(facts, { leave: {} }, { actor: meId, now: draft.ownerIds.length }), meId);
 
   const rows: OwnerMenuRow[] = draft.ownerIds.map((id) => {
     const mine = id === meId;
@@ -175,8 +191,7 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
     const sub = [drives ? "Driver" : "Owner", runs ? (mine ? "runs on your account" : "runs it") : null, added.includes(id) ? "new" : null].filter(Boolean).join(" · ");
     return {
       key: `p:${id}`, person: p, name: p.name, sub, drives, paused: false, mine,
-      // Leaving a session on your own account first picks a machine to move it to.
-      onRemove: mine && soleOwner ? null : mine && runsOnMine && !draft.moveTo ? () => setLeaving((v) => !v) : () => setDraft((d) => removePerson(d, id)),
+      onRemove: mine && soleOwner ? null : mine && movesFirst && !draft.moveTo ? () => setLeaving((v) => !v) : () => setDraft((d) => removePerson(d, id)),
       removeLabel: mine ? (soleOwner ? "You are its only owner: add someone before you leave" : "Leave") : `Remove ${p.name}`,
       refusal: mine && soleOwner ? "Add an owner before you leave" : null,
       makeDriver: drives ? null : { kind: "user", user_id: id },
