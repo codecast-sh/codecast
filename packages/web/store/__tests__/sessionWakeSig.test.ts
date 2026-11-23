@@ -125,6 +125,15 @@ describe("sessionStructuralSig — real bucket/order changes flip it", () => {
     expect(sessionStructuralSig(filed)).not.toBe(sessionStructuralSig(base));
     expect(sessionStructuralSig(session("a", { org_role_id: "org_roles_infra", driver_user_id: "users_me" }))).not.toBe(sessionStructuralSig(filed));
   });
+
+  // The card draws the co-owners: a teammate added or taken off without the
+  // primary moving still has to reach it.
+  it("flips when the owners change, and not when they stay", () => {
+    const two = session("a", { owner_user_id: "users_me", owner_ids: ["users_me", "users_mate"] });
+    expect(sessionStructuralSig(two)).not.toBe(sessionStructuralSig(session("a", { owner_user_id: "users_me", owner_ids: ["users_me"] })));
+    expect(sessionStructuralSig(two)).not.toBe(sessionStructuralSig(session("a", { owner_user_id: "users_me", owner_ids: ["users_me", "users_sam"] })));
+    expect(sessionStructuralSig(two)).toBe(sessionStructuralSig(session("a", { owner_user_id: "users_me", owner_ids: ["users_me", "users_mate"] })));
+  });
 });
 
 // The "By plan" lens (groupSessionsByPlan), its switcher option (hasPlanSessions),

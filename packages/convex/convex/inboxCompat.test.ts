@@ -121,7 +121,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "last_comment_author", "last_comment_author_id", "last_comment_excerpt", "last_heartbeat", "last_model_call_at",
       "last_role_is_user", "last_turn_origin", "last_user_message", "local_mirror", "loop_state", "merge_back", "message_count", "migration_batch_id", "model",
       "open_comment_threads", "open_tasks", "open_tasks_at", "org_role_id", "owned_by_me", "owner_device_id",
-      "owner_user_id", "parent_conversation_id", "parent_message_uuid", "pending_api_error",
+      "owner_ids", "owner_user_id", "parent_conversation_id", "parent_message_uuid", "pending_api_error",
       "pending_api_error_at", "pending_api_error_kind", "permission_mode", "pr_status", "producing_until",
       "project_id", "project_path", "rewind_staged", "role", "role_alone", "session_error", "session_id", "settle_verdict", "spawned_by_conversation_id",
       "standing_role_id", "started_at", "status", "subagent_caps", "subagent_slot", "subagent_slot_at", "subagent_slot_device", "subtitle", "team_id", "team_visibility", "thread_state", "thread_state_at",
@@ -314,5 +314,35 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     expect(byId("blocked_hand").role?.handle).toBe("infra");
     expect("escalated_by_role" in byId("blocked_hand")).toBe(false);
     expect("child_live" in (liveness as any).conversations_standing).toBe(false);
+  });
+
+  // The card draws a session's co-owners off its row: owner_ids is what the
+  // owners menu lists (listOwners, the shared listedOwnerIds): the owner rows
+  // in the order added, else the person who started it, and nobody for a run
+  // a role started. Agent accounts never own.
+  test("a row names its owners as the owners menu lists them", async () => {
+    const MATE = "users_mate";
+    const BOT = "users_bot";
+    const row = (id: string, user: string, at: number) => ({ _id: `so_${id}_${user}`, conversation_id: `conversations_${id}`, user_id: user, added_by: ME, added_at: at });
+    const tables = {
+      users: [{ _id: ME, name: "Me" }, { _id: MATE, name: "Mate" }, { _id: BOT, name: "Mr Bot", is_bot: true }],
+      org_roles: [{ _id: "org_roles_infra", short_id: "or-7", name: "Infra lead", handle: "infra", avatar: "stag", status: "active" }],
+      conversations: [
+        conv("shared", { updated_at: EPOCH - MIN, owner_user_id: MATE }),
+        conv("mine", { updated_at: EPOCH - 2 * MIN }),
+        conv("filed", { updated_at: EPOCH - 3 * MIN, org_role_id: "org_roles_infra", driver_user_id: ME }),
+        conv("handed", { updated_at: EPOCH - 4 * MIN, user_id: BOT, owner_user_id: ME }),
+        conv("bot_run", { updated_at: EPOCH - 5 * MIN, user_id: BOT }),
+      ],
+      session_owners: [row("shared", MATE, EPOCH - 2 * MIN), row("shared", ME, EPOCH - 3 * MIN), row("handed", ME, EPOCH - 3 * MIN)],
+    };
+    const { sessions } = await computeInboxSessions({ db: db(tables) }, ME as any, {});
+    const ownersOf = (id: string) => sessions.find((s: any) => s._id === `conversations_${id}`)?.owner_ids;
+    expect(ownersOf("shared")).toEqual([ME, MATE]);
+    expect(ownersOf("mine")).toEqual([ME]);
+    expect(ownersOf("filed")).toEqual([ME]);
+    expect(ownersOf("handed")).toEqual([ME]);
+    const bot = await computeInboxSessions({ db: db(tables) }, BOT as any, {});
+    expect(bot.sessions.find((s: any) => s._id === "conversations_bot_run")?.owner_ids).toEqual([]);
   });
 });

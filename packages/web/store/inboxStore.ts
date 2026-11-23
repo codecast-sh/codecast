@@ -1015,6 +1015,10 @@ export type InboxSession = {
   // keep a foreign teammate row READ-ONLY — dismiss/stash/pin/kill mutate global
   // conversation fields, so acting on a teammate's card would hide it from them.
   owner_user_id?: string | null;
+  // Who owns it, people in the order added, as its owners menu lists them
+  // (the server's listedOwnerIds): the one home of a listed session's people,
+  // which applySessionOwners paints. Absent on rows from an older server.
+  owner_ids?: string[] | null;
   owned_by_me?: boolean;
   // A role started it and holds it with no person owner (the server's
   // heldByRoleAlone over the shared isHeldByRoleAlone): the role's alone, so
@@ -3448,6 +3452,8 @@ export function sessionStructuralSig(s: InboxSession): string {
     s.owner_user_id || "",
     s.owned_by_me ? 1 : 0,
     s.role_alone ? 1 : 0,
+    // The co-owners the card draws, in order.
+    s.owner_ids?.join(",") ?? "",
     // WHO DRIVES IT decides where a waiting session files (roleDrives): one its
     // role drives waits on the role, as working. Written by a reparent or a
     // take-over alone, never by a heartbeat.

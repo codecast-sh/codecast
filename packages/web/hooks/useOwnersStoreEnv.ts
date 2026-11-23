@@ -12,6 +12,7 @@
  * sonner here.
  */
 
+import { useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import { useOrgRoles } from "./useOrgRoles";
@@ -46,13 +47,15 @@ export function useStoreOwnersEnv(
     return undefined;
   })();
   const { roles } = useOrgRoles();
-  // The role, the driver and the primary owner live on the session row.
-  const [roleId, driverUserId, primaryId, runnerId] = useInboxStore(useShallow((s) => {
+  // The role, the driver and the primary owner live on the session row, and
+  // so do the people once the inbox lists them (ownerIdsHomeOf).
+  const [roleId, driverUserId, primaryId, runnerId, rowOwners] = useInboxStore(useShallow((s) => {
     const row = sessionRowOf(s, conversationId);
-    return [row?.org_role_id ?? null, row?.driver_user_id ?? null, row?.owner_user_id ?? null, row?.user_id ?? null] as const;
+    return [row?.org_role_id ?? null, row?.driver_user_id ?? null, row?.owner_user_id ?? null, row?.user_id ?? null, Array.isArray(row?.owner_ids) ? row.owner_ids.join(",") : null] as const;
   }));
+  const ownerIds = useMemo(() => (rowOwners === null ? null : rowOwners ? rowOwners.split(",") : []), [rowOwners]);
   return {
-    session: { role_id: roleId, driver_user_id: driverUserId, primary_id: primaryId, runner_id: runnerId },
+    session: { role_id: roleId, driver_user_id: driverUserId, primary_id: primaryId, runner_id: runnerId, owner_ids: ownerIds },
     teamMembers,
     currentUser,
     implicitOwnerId,

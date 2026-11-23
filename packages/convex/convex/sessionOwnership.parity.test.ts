@@ -4,6 +4,7 @@ import { performCreateRole } from "./orgRoles";
 import { performApplyOwnersChange, performListOwners } from "./sessionOwnership";
 import { ownersFactsOf } from "./lib/sessionOwnerRules";
 import { ownerRowsOf } from "./sessionOwners";
+import { collectInboxSessionsByIds } from "./conversations";
 import { applyOwnersChangeTo, driverOf, listedOwnerIds, ownersFactsFromRead, type OwnersChangeInput } from "@codecast/shared/contracts/sessionOwners";
 
 // The web store paints a Save with shared/contracts/sessionOwners before the
@@ -51,6 +52,9 @@ async function parity(db: any, actor: string, change: OwnersChangeInput & Record
   expect(String(conv(db).org_role_id ?? "") || null).toBe(expected.role_id);
   expect(String(conv(db).driver_user_id ?? "") || null).toBe(expected.driver_user_id);
   expect(read.driver).toEqual(driverOf(expected, listedOwnerIds(expected)) as any);
+  // The inbox card reads the same owners off its row.
+  const { sessions } = await collectInboxSessionsByIds(ctx, conv(db).user_id, [CONV]);
+  expect(sessions.find((r: any) => String(r._id) === CONV)?.owner_ids).toEqual(read.owner_ids);
   return read;
 }
 

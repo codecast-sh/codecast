@@ -30,6 +30,7 @@ import { badgeVariants } from "../ui/badge";
 import { AssignedPingStrip, FoldedSubagentsMark, ForkCorner, SelectTick } from "./SessionCardParts";
 import { ModernAuthorChip, ModernBranchChip, ModernCardToolbar, ModernCommentsChip, ModernFactChip, ModernLinkChip, ModernPinGlyph, ModernProjectChip, ModernFlowChip } from "./ModernCardParts";
 import { SessionStatusMark, SessionStatusWord } from "./SessionStatusMark";
+import { CoOwnerFaces } from "./CoOwnerFaces";
 import type { SessionCardViewProps } from "./SessionCardView";
 import "./modernSessionCard.css";
 
@@ -82,6 +83,7 @@ export function ModernSessionCardView({
   forkColorKey,
   subRow,
   withRole: withRoleName = null,
+  coOwners = null,
   now,
   chrome,
   liveness,
@@ -328,6 +330,7 @@ export function ModernSessionCardView({
               </button>
             )}
             {session.is_pinned && <span data-mc-pin title="Pinned" className="flex items-center text-sol-magenta"><ModernPinGlyph filled className="w-3 h-3" /></span>}
+            <CoOwnerFaces owners={coOwners} />
             {time && <span data-mc-time title={details} className="whitespace-nowrap text-meta tabular-nums text-sol-text-dim">{time}</span>}
           </span>
         </div>

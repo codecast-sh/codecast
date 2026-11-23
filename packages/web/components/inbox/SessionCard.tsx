@@ -36,6 +36,7 @@ import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipSt
 import { sessionPullRequestsSig, titledSessionPullRequests } from "../../lib/sessionPullRequests";
 import { resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../lib/uiPrefDefaults";
 import { teamMembersOf } from "../../lib/activeTeam";
+import { coOwnersOf, coOwnersSig } from "../../lib/coOwners";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -286,6 +287,9 @@ export const SessionCard = memo(function SessionCard({
     () => identity.standing_role_id && identity.role ? null : resolveSessionAuthor({ ...session, standing_role_id: identity.standing_role_id, role: identity.role }, convMeta, currentUser, teamMembers, identityPrefsOf({ show_characters: chromeSig[6] === "1" })),
     [session.user_id, session.author_name, session.author_avatar, session.acting_user_id, identity, convMeta, currentUser, teamMembers, chromeSig], // eslint-disable-line react-hooks/exhaustive-deps
   );
+  // Its other owners, read off the row with the roster's names and faces.
+  const ownersSig = coOwnersSig(session);
+  const coOwners = useMemo(() => coOwnersOf(session, meId, teamMembers), [ownersSig, meId, teamMembers]); // eslint-disable-line react-hooks/exhaustive-deps
   // An anchor's own row is marked as such — the glyph in place of the agent
   // icon, and the scope pill (Personal / team name) beside the title — so a
   // standing member never reads as just another session.
@@ -348,6 +352,7 @@ export const SessionCard = memo(function SessionCard({
       workProject={workProjectSig(st as any, cardId)}
       liveTitle={draftTitle || liveTitle || undefined}
       withRole={withRoleOf(session, coarseNow)}
+      coOwners={coOwners}
       now={coarseNow}
       chrome={chrome}
       liveness={{

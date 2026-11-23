@@ -223,12 +223,18 @@ export function driverOf(conversation: { org_role_id?: Id<"org_roles">; driver_u
   }, ownerIds) as SessionDriver | null;
 }
 
-// A conversation's owner facts as the shared model reads them.
-export async function ownersFactsOf(ctx: { db: any }, conversation: any): Promise<OwnersFacts> {
-  const rows = (await ownerRowsOf(ctx, conversation._id)).map((r) => ({ user_id: r.user_id, added_at: r.added_at }));
+// A conversation's owner facts as the shared model reads them. The inbox row
+// passes the owner rows it already read and its memoized doc reader.
+export async function ownersFactsOf(
+  ctx: { db: any },
+  conversation: any,
+  loaded: { rows?: Array<{ user_id: string; added_at: number }>; getDoc?: (id: any) => Promise<any> } = {},
+): Promise<OwnersFacts> {
+  const rows = (loaded.rows ?? await ownerRowsOf(ctx, conversation._id)).map((r) => ({ user_id: r.user_id, added_at: r.added_at }));
+  const getDoc = loaded.getDoc ?? ((id: any) => ctx.db.get(id));
   const bots: string[] = [];
   for (const id of [conversation.author_user_id, conversation.user_id]) {
-    if (id && (await ctx.db.get(id))?.is_bot) bots.push(String(id));
+    if (id && (await getDoc(id))?.is_bot) bots.push(String(id));
   }
   return {
     rows,

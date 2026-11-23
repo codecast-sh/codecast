@@ -79,7 +79,9 @@ import { AGENT_MODEL_CONFIG, AGENT_CLIENTS, modelAgentKey, fromConvexAgentType, 
 import { shouldShowInInbox, isNoiseTitle, isOrphanOrSubagent, isAdoptedChild, isRunLog, isSessionIdle, deriveSessionActivity, lastRoleIsUserOf, classifyWorkState, classifyRetirement, normalizeWorkStateFilter, trustedAgentStatus, subagentIsProducing, userRestOf, userRestStampOf, isSettleVerdictCurrent, ACTIVE_AGENT_STATUSES, SUBAGENT_PRODUCING_GRACE_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, type WorkState } from "./inboxFilters";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
-import { isSessionOwner, sessionOwnerRow } from "./sessionOwners";
+import { isSessionOwner, ownerRowsOf, sessionOwnerRow } from "./sessionOwners";
+import { ownersFactsOf } from "./lib/sessionOwnerRules";
+import { listedOwnerIds } from "@codecast/shared/contracts/sessionOwners";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, navPromptField, navPromptPatch, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
 import {
@@ -8901,9 +8903,10 @@ async function enrichInboxSessionRow(
     owner_user_id: (conv as any).owner_user_id?.toString() ?? null,
     // The person driving: with a role filed, unset means the role drives.
     driver_user_id: conv.driver_user_id?.toString() ?? null,
-    // A role started it and still holds it with no person owner: the role's
-    // alone, so a replica drops it from the runner's inbox (isForeignRow).
-    role_alone: await heldByRoleAlone(ctx, conv),
+    // The people who own it, as its owners menu lists them, and whether a
+    // role holds it with no person owner: the role's alone, so a replica
+    // drops it from the runner's inbox (isForeignRow).
+    ...(await inboxOwnerFields(ctx, conv, getDoc)),
     user_id: conv.user_id,
     acting_user_id: (conv as any).acting_user_id ?? null,
     is_anchor: !!(conv as any).anchor_id,
@@ -9532,6 +9535,18 @@ export async function heldByRoleAlone(ctx: { db: any }, conv: any, ownedByViewer
   if (ownedByViewer || !startedByRole(conv)) return false;
   const owner = await ctx.db.query("session_owners").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conv._id)).first();
   return isHeldByRoleAlone(conv, !!owner);
+}
+
+// A row's owners (owner_ids), as listOwners answers them by the one shared
+// rule (listedOwnerIds): the owner rows in the order added, else the person
+// who started it. The card draws the co-owners from them. owner_user_id
+// caches the primary exactly while rows exist (syncPrimaryOwnerCache), so only
+// a session with rows, or one a role started (role_alone reads the rows too),
+// pays the read.
+async function inboxOwnerFields(ctx: { db: any }, conv: any, getDoc: (id: any) => Promise<any>): Promise<{ owner_ids: string[]; role_alone: boolean }> {
+  const rows = conv.owner_user_id || startedByRole(conv) ? await ownerRowsOf(ctx, conv._id) : [];
+  const facts = await ownersFactsOf(ctx, conv, { rows, getDoc });
+  return { owner_ids: listedOwnerIds(facts), role_alone: isHeldByRoleAlone(conv, rows.length > 0) };
 }
 
 // Would one of the windows above have read this row? The named path asks it

@@ -139,6 +139,9 @@ export const CLIENT_SYNC_REGISTRY = {
     writtenBy: ["conversations"],
     persistence: { kind: "collection", key: "sessions" },
     localFirst: true,
+    // owner_ids changes with no scalar on the row moving (a co-owner taken
+    // off): compared by content, or the push is swallowed as a no-op.
+    sync: { deepFields: ["owner_ids"] },
     // Inbox triage gestures (dismiss/stash/pin) write the session row itself,
     // but the server-side row is the conversation. Without this mapping the
     // gesture only reached the server through the parallel write to

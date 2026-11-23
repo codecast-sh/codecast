@@ -8,6 +8,7 @@ import type { IdentityPrefs, IdentityRow } from "../../lib/sessionIdentity";
 import type { AnchorIdentity } from "../../hooks/useSyncAnchors";
 import type { SessionShip } from "../../lib/ship/sessionShip";
 import type { LinkedPr } from "../../lib/sessionPullRequests";
+import type { CoOwners } from "../../lib/coOwners";
 
 // The props of the inbox session card (SessionCardView): the row, its chrome
 // toggles, its live facts and the handlers every gesture leaves through.
@@ -90,6 +91,8 @@ export type SessionCardViewProps = {
    *  not working (shared placeInboxRow files it under Working). Drawn as
    *  "With <role>" where the card says its state; null otherwise. */
   withRole?: string | null;
+  /** The session's other owners, drawn as faces beside the time (lib/coOwners). */
+  coOwners?: CoOwners | null;
   /** The card's clock: relative ages, thread-state freshness, the blocked chip's TTL. */
   now: number;
   chrome: SessionCardChrome;

@@ -80,8 +80,10 @@ export type SessionOwnersRow = {
   can_edit: boolean;
 };
 
-/** The session row's half of the owners facts: the role, the driver, the primary. */
-export type SessionOwnerFacts = { role_id: string | null; driver_user_id: string | null; primary_id: string | null; runner_id: string | null };
+/** The session row's half of the owners facts: the role, the driver, the
+ *  primary, and the people when the inbox row lists them (null: it does not,
+ *  so they are the sessionOwners row's). */
+export type SessionOwnerFacts = { role_id: string | null; driver_user_id: string | null; primary_id: string | null; runner_id: string | null; owner_ids?: string[] | null };
 
 
 /**
@@ -212,7 +214,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   const where = useMemo(() => (r: SessionOwnersRow) => r._id === conversationId, [conversationId]);
   const row = useCollectionRows<SessionOwnersRow>("sessionOwners", { where, sig: ownersRowSig })[0] ?? null;
 
-  const ownerList: string[] = row ? row.owner_ids : implicitOwnerId ? [implicitOwnerId] : [];
+  const ownerList: string[] = env.session.owner_ids ?? (row ? row.owner_ids : implicitOwnerId ? [implicitOwnerId] : []);
   const ownerIds = useMemo(() => new Set(ownerList), [ownerList.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
   const facts = env.session;
   const role: OwnerRole | null = !facts.role_id ? null

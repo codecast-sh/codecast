@@ -167,6 +167,63 @@ describe("the Modern card, mounted", () => {
     expect(mutations).toBe(0);
   });
 
+  // The other owners sit beside the time: people in the order added, then
+  // the role; the one that drives ringed, a role a person took over greyed.
+  describe("co-owner faces", () => {
+    const ROLE = { _id: "org_roles_evals", short_id: "or-9", name: "Evals lead", handle: "evals", avatar: "otter", status: "active", tenure_kind: "standing" };
+    const roster = [{ _id: "me", name: "Me" }, { _id: "mate", name: "Mate" }, { _id: "sam", name: "Sam" }].map((m) => ({ ...m, roster_team: "t1" }));
+    const ownersEl = () => host.querySelector("[data-mc-line1] [data-card-owners]");
+    const show = async (fields: Record<string, unknown>) => {
+      await act(async () => {
+        useInboxStore.setState({ teamMembers: roster, clientState: { ...useInboxStore.getState().clientState, ui: { ...useInboxStore.getState().clientState?.ui, active_team_id: "t1" } } } as any);
+        useInboxStore.getState().syncTable("sessions", [{ ...row, owner_ids: null, org_role_id: null, driver_user_id: null, owner_user_id: null, role: null, ...fields }] as any, { isDelta: true } as any);
+        root.render(card({ session: useInboxStore.getState().sessions[ID] }));
+      });
+    };
+
+    test("none when you are the only owner", async () => {
+      await show({ owner_ids: ["me"] });
+      expect(ownersEl()).toBeNull();
+    });
+
+    test("only the other owners, the driving person ringed, everyone named", async () => {
+      await show({ owner_ids: ["me", "mate", "sam"], owner_user_id: "mate" });
+      const el = ownersEl()!;
+      expect(el.children).toHaveLength(2);
+      expect(el.querySelectorAll(".own-drv")).toHaveLength(1);
+      expect(el.getAttribute("title")).toBe("Owners: You, Mate (driver), Sam");
+      // The faces sit before the time.
+      expect(el.nextElementSibling?.hasAttribute("data-mc-time")).toBe(true);
+    });
+
+    test("a driving role is ringed", async () => {
+      await show({ owner_ids: ["me"], org_role_id: ROLE._id, role: ROLE });
+      const el = ownersEl()!;
+      expect(el.children).toHaveLength(1);
+      expect(el.querySelectorAll(".own-drv")).toHaveLength(1);
+      expect(el.querySelectorAll(".own-paused")).toHaveLength(0);
+      expect(el.getAttribute("title")).toBe("Owners: You, Evals lead (driver)");
+    });
+
+    test("a role a person took over from is greyed, and the person is ringed", async () => {
+      await show({ owner_ids: ["me", "mate"], owner_user_id: "me", org_role_id: ROLE._id, role: ROLE, driver_user_id: "mate" });
+      const el = ownersEl()!;
+      expect(el.children).toHaveLength(2);
+      expect(el.querySelectorAll(".own-paused")).toHaveLength(1);
+      expect(el.querySelectorAll(".own-drv")).toHaveLength(1);
+      expect(el.getAttribute("title")).toBe("Owners: You, Mate (driver), Evals lead (paused)");
+    });
+
+    test("an owner added without the primary moving reaches the card", async () => {
+      await show({ owner_ids: ["me", "mate"], owner_user_id: "me" });
+      expect(ownersEl()!.children).toHaveLength(1);
+      await show({ owner_ids: ["me", "mate", "sam"], owner_user_id: "me" });
+      expect(ownersEl()!.children).toHaveLength(2);
+      await show({ owner_ids: ["me"], owner_user_id: "me" });
+      expect(ownersEl()).toBeNull();
+    });
+  });
+
   test("a set-aside card offers Restore and Kill in the same row", async () => {
     await act(async () => { root.render(card({ variant: "stashed", onRestore: (id: string) => calls.push(`restore ${id}`), onKill: (id: string) => calls.push(`kill-aside ${id}`), onDismiss: undefined, onStash: undefined, onPin: undefined })); });
     const tools = host.querySelector("[data-mc-tools]")!;

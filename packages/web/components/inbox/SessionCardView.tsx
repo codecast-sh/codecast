@@ -37,6 +37,7 @@ import { ACTIVE_CARD_CLASS } from "./sessionCardTypes";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
+import { CoOwnerFaces } from "./CoOwnerFaces";
 import {
   AssignedPingStrip,
   CardHoverToolbar,
@@ -78,6 +79,7 @@ export function SessionCardView({
   forkColorKey,
   subRow,
   withRole = null,
+  coOwners = null,
   now,
   chrome,
   liveness,
@@ -736,6 +738,7 @@ export function SessionCardView({
               isPendingWorking={isPendingWorking}
               isRowRestarting={isRowRestarting}
             />
+            <CoOwnerFaces owners={coOwners} />
             {/* Every row keeps its time column, so the list scans down one
                 edge. */}
             <span data-sv-time className="flex-shrink-0 whitespace-nowrap text-meta text-sol-text-dim tabular-nums">
