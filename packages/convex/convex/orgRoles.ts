@@ -40,6 +40,7 @@ import { charterPatch } from "./lib/orgCharter";
 import { takeOverSessionsSoon, takeoverPhrase } from "./orgInit";
 import { performArchiveAll } from "./orgProposals";
 import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
+import { ownRunAsRoleLeaves } from "./lib/roleRelease";
 import { handOpenTasksUpChain } from "./tasks";
 import { EMPTY_SCOPE, isScopeless, keepsReportsInside, normalizeScope, outsideKeptArea, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
 import { areaMoves, areasOf, beginAreaHandoff, handOverAreaMoves, ownerSnapshot } from "./orgHandoff";
@@ -714,6 +715,7 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: Retire
   // An open decision follows its session (S28): the retired role leaves the
   // route, and the card goes to the people who now answer for the session.
   for (const conv of filed) {
+    await ownRunAsRoleLeaves(ctx, conv, role, userId);
     await ctx.db.patch(conv._id, { org_role_id: undefined, org_role_hold: undefined });
     await reroutePendingDecisionsForConversation(ctx, conv._id, now);
   }

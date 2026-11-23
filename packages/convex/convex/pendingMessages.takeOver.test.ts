@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
-import { performCreateRole, performProvisionRole, performTellSessionRole } from "./orgRoles";
+import { performCreateRole, performProvisionRole, performReparentSession, performRetireRole, performTellSessionRole } from "./orgRoles";
+import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { computeInboxSessions, heldByRoleAlone } from "./conversations";
 import { formatDecisionAnswer, roleDrives, rollupParentIdOf } from "@codecast/shared/contracts";
 import { dispatch } from "./dispatch";
@@ -297,5 +298,33 @@ describe("leaving a run a role started", () => {
   test("a person's own session still moves before its runner leaves", async () => {
     const { ctx } = await world();
     await expect(performLeaveSession(ctx, ME as any, { session_id: "filed" })).rejects.toThrow(/runs on your account/);
+  });
+});
+
+// When the role comes off a run it started that no person owns, the person
+// the role answers to takes it: never nobody (lib/roleRelease).
+describe("a role's pool hand never ends up owned by nobody", () => {
+  const inInbox = async (ctx: any, id: string) =>
+    (await computeInboxSessions(ctx, ME as any, { show_all: true, includeLiveness: false })).sessions.some((s: any) => s._id === id);
+
+  test("retiring the role gives its hand to the person it reported to", async () => {
+    const { ctx, row, ownersOf, roleId } = await world();
+    expect(await inInbox(ctx, "pool")).toBe(false);
+    await performRetireRole(ctx, ME as any, { role_id: String(roleId), handoff: "skip" });
+    expect(row("pool").org_role_id).toBeUndefined();
+    expect(ownersOf("pool")).toEqual([ME]);
+    expect(await inInbox(ctx, "pool")).toBe(true);
+  });
+
+  test("taking the role off it, or a visibility change that drops the role, does the same", async () => {
+    const { ctx, tables, row, ownersOf, roleId } = await world();
+    await performReparentSession(ctx, POOL as any, { session_id: "pool", target: { kind: "role", role_id: null } });
+    expect(row("pool").org_role_id).toBeUndefined();
+    expect(ownersOf("pool")).toEqual([ME]);
+
+    tables.conversations.push(session("pool2", { user_id: POOL, org_role_id: roleId, role_started: true, is_private: false, team_visibility: "full" }));
+    await patchConversationVisibility(ctx, row("pool2"), { is_private: true, team_visibility: undefined });
+    expect(row("pool2").org_role_id).toBeUndefined();
+    expect(ownersOf("pool2")).toEqual([ME]);
   });
 });

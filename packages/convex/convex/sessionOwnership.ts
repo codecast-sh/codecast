@@ -21,6 +21,7 @@ import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { findOwnableConversation, personName, roleMayHoldSession, tellSession } from "./lib/sessionTell";
 import { performReparentSessionToDevice } from "./devices";
+import { ownRunAsRoleLeaves } from "./lib/roleRelease";
 export { personName, roleMayHoldSession };
 import { labelsOf, noteOrgChange, rememberOrgRecord, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
 
@@ -306,7 +307,10 @@ async function reparentSessionCore(
     }
     owners = mode === "set" ? desired.map(toOwnerInfo) : await listOwnerInfos(ctx, conversation._id);
   } else if (!targetRole) {
-    if (roleId) await ctx.db.patch(conversation._id, { org_role_id: undefined, org_role_hold: undefined });
+    if (roleId) {
+      await ownRunAsRoleLeaves(ctx, conversation, await ctx.db.get(roleId), authUserId);
+      await ctx.db.patch(conversation._id, { org_role_id: undefined, org_role_hold: undefined });
+    }
     roleId = undefined;
     owners = await listOwnerInfos(ctx, conversation._id);
   } else {

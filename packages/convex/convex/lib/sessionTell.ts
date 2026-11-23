@@ -11,6 +11,7 @@ import { checkConversationAccess, isVisibilityShareable, teamVisibleConvTeam } f
 import { effectiveMembershipVisibility } from "../teamVisibility";
 import { enqueuePendingMessage, formatSessionMessage } from "../pendingMessages";
 import { wakeCost, wakeFieldsOf } from "../wakeCost";
+import { ownRunAsRoleLeaves } from "./roleRelease";
 
 // Runner-or-team, exactly cast send's access rule: the running account may
 // (re)assign its own sessions, and any teammate may claim/reassign a session
@@ -130,6 +131,7 @@ export async function roleDropForVisibility(
   if (!row?.org_role_id) return null;
   const role = await ctx.db.get(row.org_role_id);
   if (!role || await roleMayHoldSession(ctx, role, { ...row, ...after })) return null;
+  await ownRunAsRoleLeaves(ctx, row, role, row.user_id);
   const patch: Record<string, undefined> = { org_role_id: undefined, org_role_hold: undefined };
   const tell = async () => {
     const line = `This session is no longer visible to the team, so it left @${role.handle}.`;
