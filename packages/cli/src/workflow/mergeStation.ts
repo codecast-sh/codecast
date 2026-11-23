@@ -334,7 +334,7 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
     }
 
     if (!(await leaseHeld())) return await fail(2, lostLease("the merge"));
-    const landed = mergePullRequest(exec, at, { pr: String(pr), head, into, wait: args.wait });
+    const landed = mergePullRequest(exec, at, { pr: String(pr), branch, head, into, wait: args.wait });
     if ("reason" in landed) return await fail(2, landed.reason);
     writeMergeJson(args, url, landed.sha);
     // What the landed commit holds under a step's paths can differ from the tree it deployed (main moved after the

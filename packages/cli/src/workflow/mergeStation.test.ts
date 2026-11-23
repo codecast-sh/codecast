@@ -29,6 +29,46 @@ describe("cast flow merge", () => {
     } finally { s.done(); }
   }, T);
 
+  test("a merge deletes only origin's branch: a worktree holding the branch keeps it, and the merge is on origin's main", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("b.txt", "bee\n");
+      const held = join(s.root, "session-tree");
+      s.git(s.work, "worktree", "add", "-q", held, BRANCH);
+      s.ci(head);
+      const r = await s.run();
+      expect(r.code).toBe(0);
+      expect(s.gh().calls.find((c) => c[1] === "merge")).not.toContain("--delete-branch");
+      expect(s.git(held, "rev-parse", "--abbrev-ref", "HEAD")).toBe(BRANCH);
+      expect(s.git(s.work, "rev-parse", BRANCH)).toBe(head);
+      expect(s.originBranch()).toBe("");
+      expect(r.line).toBe(s.originMain());
+      expect(s.git(s.work, "show", "--format=", "--name-only", r.line)).toBe("b.txt");
+    } finally { s.done(); }
+  }, T);
+
+  test("a branch pushed to after the merge stays on origin", async () => {
+    const s = setup();
+    try {
+      const head = s.branch("b.txt", "bee\n");
+      s.ci(head);
+      const exec = s.exec;
+      let later = "";
+      const r = await s.run({ exec: (cmd, args, cwd, env) => {
+        if (cmd === "git" && args.includes("--delete")) {
+          s.git(s.work, "checkout", "-q", BRANCH);
+          later = s.commit("c.txt", "sea\n", "more");
+          s.git(s.work, "push", "-q", "origin", BRANCH);
+          s.git(s.work, "checkout", "-q", "main");
+        }
+        return exec(cmd, args, cwd, env);
+      } });
+      expect(r.code).toBe(0);
+      expect(later).not.toBe("");
+      expect(s.originBranch()).toBe(later);
+    } finally { s.done(); }
+  }, T);
+
   test("a push after CI tested the head: retest (exit 3) before any clearance is stamped, and nothing merges", async () => {
     const s = setup();
     try {

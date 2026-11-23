@@ -17,8 +17,8 @@
 // purpose, whose live sha is not what the change's watch should start on; it
 // still holds the targets that go after it. It runs in the run's checkout, never
 // the run's worktree: what it needs is merge.json's sha, origin and the
-// checkout's deploy targets, and Merge can take the worktree away (gh pr merge
-// --delete-branch removes the worktree holding the branch, ct-99406).
+// checkout's deploy targets, and the worktree may be gone by the time the
+// change is merged (ct-99406).
 digraph deploy {
   graph [kind="segment", label="Deploy", description="Send the merged change's release targets, and wait until it is live on every target it touches", takes="branch", params="except send=release"]
   start [shape=Mdiamond]

@@ -69,7 +69,7 @@ export function mergeBranch(args: { cwd: string; branch: string; into: string; p
     const onto = exec("git", ["rev-parse", `origin/${into}`], cwd).stdout.trim();
     const undone = onto ? undoneChanges(exec, cwd, onto, sha) : [];
     if (undone.length) return { kind: "left", reason: undoneReason(branch, into, undone) };
-    const merged = mergePullRequest(exec, cwd, { pr: args.pr_url, head: sha, into, wait: args.wait });
+    const merged = mergePullRequest(exec, cwd, { pr: args.pr_url, branch, head: sha, into, wait: args.wait });
     if ("reason" in merged) return { kind: "left", reason: merged.reason };
     return { kind: "merged", sha: merged.sha, into, via: "pr" };
   }
@@ -107,18 +107,22 @@ export function squashBody(exec: Exec, cwd: string, head: string, into: string):
   return messages.length ? messages.map((m) => `* ${m}`).join("\n\n") : null;
 }
 
-/** `gh pr merge --squash` pinned to the head that was checked (never --admin), and the sha that landed. gh deletes
- *  the branch locally as well as on GitHub, and exits non-zero when the local half fails (the branch is checked out
- *  in another worktree) after the merge went through, so a failed merge is read again before it counts as one. */
-export function mergePullRequest(exec: Exec, cwd: string, args: { pr: string; head: string; into: string; wait?: Wait }): { sha: string } | { reason: string } {
+/** `gh pr merge --squash` pinned to the head that was checked (never --admin), and the sha that landed. A gh that
+ *  exits non-zero may still have merged, so a failed merge is read again before it counts as one. Only origin's
+ *  branch is deleted, and only while it still stands at the merged head: gh's --delete-branch also deletes the local
+ *  branch, and gh 2.105 first removes any worktree that has it checked out, a person's or a session's own included
+ *  (ct-99406). A branch already gone, or moved since, stays as it is. */
+export function mergePullRequest(exec: Exec, cwd: string, args: { pr: string; branch: string; head: string; into: string; wait?: Wait }): { sha: string } | { reason: string } {
   const body = squashBody(exec, cwd, args.head, args.into);
-  const merge = exec("gh", ["pr", "merge", args.pr, "--squash", "--match-head-commit", args.head, ...(body ? ["--body", body] : []), "--delete-branch"], cwd);
+  const merge = exec("gh", ["pr", "merge", args.pr, "--squash", "--match-head-commit", args.head, ...(body ? ["--body", body] : [])], cwd);
   if (merge.status !== 0) {
     let merged = false;
     try { merged = JSON.parse(exec("gh", ["pr", "view", args.pr, "--json", "state"], cwd).stdout)?.state === "MERGED"; } catch {}
     if (!merged) return { reason: `gh pr merge failed: ${firstLine(merge)}` };
   }
-  return landedSha(exec, cwd, args.pr, args.into, args.wait);
+  const landed = landedSha(exec, cwd, args.pr, args.into, args.wait);
+  if ("sha" in landed) exec("git", ["push", `--force-with-lease=refs/heads/${args.branch}:${args.head}`, "origin", "--delete", args.branch], cwd);
+  return landed;
 }
 
 const LANDED_TRIES = 6;
