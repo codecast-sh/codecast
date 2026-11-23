@@ -20,7 +20,7 @@ import { hasGrantedSendAccess } from "./collab";
 import { ackAssignmentOnEngage, addSessionOwnerRow, conversationHasHumanStarter, listSessionOwnerIds, syncPrimaryOwnerCache } from "./sessionOwners";
 import { requireUser } from "./lib/auth";
 import { runLocalCommand } from "./localFirstCommands";
-import { insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
+import { composerChannel, insertEnqueuedPendingMessage, releaseQueuedRows, reviveConversationOnDelivery } from "./pendingMessageWrites";
 import { answeredThreadStateFields, formatUserMessage, hasThreadState, HEARTBEAT_ALIVE_MS, isHostedAgentType, isReviveClientId, isStashHidden, SETTLE_VERDICT_STATUSES, formatSessionMessage, sendArrival, sessionMessageIntentOf, trustedAgentStatus, restoreFrameTags, SESSION_MESSAGE_OPEN_TAG, type SendArrival, type SessionMessageIntent } from "@codecast/shared/contracts";
 import { autoRecoveryEnabled, listOnlineDevices } from "./ccAccountsShared";
 import { resolveOwnerDeviceView } from "./lib/ownerDevice";
@@ -417,6 +417,14 @@ export async function enqueuePendingMessage(
     // (account-switch "continue", undeliverable receipts, model/effort slash
     // commands) that leave `origin` unset.
     human?: boolean;
+    // Sent from a signed-in person's web or phone composer, never through an
+    // API token (schema pending_messages.channel). Set only through
+    // composerChannel, when the composer's own submit hands over its words;
+    // every other producer leaves it unset, which reads as a program
+    // (lib/messageProvenance.ts).
+    channel?: "composer";
+    // With channel: what the person typed in the box (composerChannel).
+    typed_text?: string;
     // A note the session reads on its NEXT turn, never a turn of its own: the
     // row is parked as "held" (the daemon and the retry cron read "pending"
     // only) and nothing about the conversation moves, so a session whose
@@ -501,6 +509,8 @@ export async function enqueuePendingMessage(
       content: fields.content,
       clientId: fields.client_id,
       human: fields.human,
+      channel: fields.channel,
+      typedText: fields.typed_text,
       createdAt: Date.now(),
       queued: true,
     });
@@ -518,6 +528,8 @@ export async function enqueuePendingMessage(
       content: fields.content,
       clientId: fields.client_id,
       human: fields.human,
+      channel: fields.channel,
+      typedText: fields.typed_text,
       createdAt: Date.now(),
       held: true,
     });
@@ -548,6 +560,8 @@ export async function enqueuePendingMessage(
     clientId: fields.client_id,
     origin: fields.origin,
     human: fields.human,
+    channel: fields.channel,
+    typedText: fields.typed_text,
     createdAt: Date.now(),
     quiet: fields.quiet,
     delivery: fenced ?? undefined,
@@ -725,6 +739,10 @@ export const sendMessageV2 = mutation({
     // The composer quotes this message carries (quoteDrafts.ts): stamped sent
     // here, in the transaction that queues it.
     quote_client_ids: v.optional(v.array(v.string())),
+    // The words the person typed, sent by the composer's own submit
+    // (composerChannel). Left out of the command fingerprint, so a redrive
+    // that lacks it still matches its receipt.
+    typed: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -819,11 +837,13 @@ export const sendMessageV2 = mutation({
 
       const waiting = await quotesWaiting(ctx, conversation._id, quoteClientIds);
       if (!existing) {
+        // Session login only (requireUser).
         await enqueuePendingMessage(ctx, conversation, userId, {
           content: args.content,
           image_storage_ids: imageStorageIds,
           client_id: args.client_id,
           human: true,
+          ...composerChannel(args.typed),
         });
       }
       const quotes = quoteClientIds
@@ -1434,6 +1454,9 @@ export async function mergeQueuedForUser(
   await ctx.db.patch(keep._id, {
     content: formatJointMessage(parts),
     ...(images.length ? { image_storage_ids: images, image_storage_id: undefined } : {}),
+    // The joint message carries both rows' words, so neither person's typed mark stands (lib/messageProvenance).
+    channel: undefined,
+    typed_text: undefined,
   });
   await ctx.db.patch(absorb._id, { status: "cancelled" as const, merged_into: keep._id });
   return "merged";
