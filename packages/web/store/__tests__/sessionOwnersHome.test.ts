@@ -285,6 +285,23 @@ describe("a leave's locks retire on its receipt", () => {
     expect(isForeignRow((useInboxStore.getState().sessions as any)[MID], "me")).toBe(false);
   });
 
+  test("an open session the re-fetch no longer returns keeps the leave painted when its delivery receipt settles", async () => {
+    // A receipt the outbox delivers: the locks carry its id, and settle with restore once the scope's cursor passes it.
+    useInboxStore.getState()._setDispatch(makeDispatchBinding(async () => ({ __syncAckV1: [], __syncAckV2: [{ id: "ob1", revision: 3, entity_type: "conversations", entity_id: MID, scope_key: SCOPE }], result: null })), { owner });
+    myRun();
+    useInboxStore.getState().navigateToSession(MID);
+    expect(useInboxStore.getState().currentSessionId).toBe(MID);
+    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerIds);
+    leaveToMate();
+    await until(() => locks().length > 0 && locks().every(([, e]) => e.ack));
+    // An older push lands under the locks, then the receipt's re-fetch omits the row: I left, and I have it open.
+    useInboxStore.getState().syncTable("sessions", [{ ...mine, updated_at: Date.now() }] as any);
+    useInboxStore.getState().pruneFeedEntities("sessions", [MID]);
+    useInboxStore.getState().retireAckedPending("outbox:ob1", 3, { restore: true });
+    expect(locks()).toEqual([]);
+    expect(facts()).toEqual(["mate", false, "mate", ["mate"]]);
+  });
+
   test("a refused leave rolls back with its locks", async () => {
     useInboxStore.getState()._setDispatch(makeDispatchBinding(async () => { throw new Error("Uncaught Error: no"); }), { owner });
     myRun();

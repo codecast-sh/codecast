@@ -9850,6 +9850,13 @@ function dropRowFieldLocks(draft: any, id: string, colls: readonly ("sessions" |
   }
 }
 
+function forgetRowLockSeen(draft: any, id: string): void {
+  const prefixes = [`sessions:${id}:`, `conversations:${id}:`];
+  for (const [key, entry] of Object.entries(draft.pending) as Array<[string, any]>) {
+    if (entry?.seen && prefixes.some((p) => key.startsWith(p))) delete entry.seen;
+  }
+}
+
 // Session ids a server-deleted prune skipped because the conversation was open;
 // retried by the subscription at the end of this module once the view moves.
 // One set per page, not per module evaluation: a hot swap keeps the store and
@@ -11301,7 +11308,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     const now = Date.now();
     for (const id of ids) {
       if (collection === "sessions") {
-        dropSessionInDraft(this, id, now);
+        // A session the window keeps (open, or a send still settling) after
+        // the server stopped serving it here (a leave): every row its locks
+        // hid predates that answer, so a later retire must not land one over
+        // the paint.
+        if (!dropSessionInDraft(this, id, now)) forgetRowLockSeen(this, id);
       } else {
         const coll = (this as any)[collection] as Record<string, any> | undefined;
         if (coll && id in coll) delete coll[id];
