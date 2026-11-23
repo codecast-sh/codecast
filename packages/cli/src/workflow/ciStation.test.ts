@@ -56,6 +56,8 @@ function fakeGh(o: {
   files?: string[];
   fail?: (a: string) => { code: number; out: string } | null;
   onLog?: (jobId: number) => void;
+  /** How gh treats --allow-escape-sequences on a log read: 2.105 refuses a log without it, a gh older than the flag rejects it. */
+  escapes?: "required" | "unknown";
 }): Gh & { calls: string[] } {
   let poll = -1;
   let attempt = 1;
@@ -88,8 +90,10 @@ function fakeGh(o: {
     if (commit) return { code: 0, out: JSON.stringify(o.mainAt?.[commit[1]!] ?? []) };
     if (a.startsWith("run list") && a.includes("--created")) return { code: 0, out: JSON.stringify(o.mainEarlier ?? []) };
     if (a.startsWith("run rerun")) { attempt++; rerunOf = JSON.stringify(current().rollup); return { code: 0, out: "" }; }
-    const log = /^api repos\/acme\/app\/actions\/jobs\/(\d+)\/logs$/.exec(a);
+    const log = /^api repos\/acme\/app\/actions\/jobs\/(\d+)\/logs( --allow-escape-sequences)?$/.exec(a);
     if (log) {
+      if (o.escapes === "required" && !log[2]) return { code: 1, out: "the response contains terminal escape sequences; pass --allow-escape-sequences to output it anyway" };
+      if (o.escapes === "unknown" && log[2]) return { code: 1, out: "unknown flag: --allow-escape-sequences\n\nUsage:  gh api <endpoint> [flags]" };
       o.onLog?.(Number(log[1]));
       return o.logs?.[Number(log[1])] !== undefined ? { code: 0, out: o.logs[Number(log[1])]! } : { code: 1, out: "HTTP 404: BlobNotFound" };
     }
@@ -765,5 +769,36 @@ describe("cast flow ci: the second verifier's probes", () => {
   test(".codecast/** is always CI, even when the base's profile lists nothing", async () => {
     const gh = fakeGh({ polls: [{ rollup: [check("lint", "SUCCESS", 1, 1)] }], logs: { 1: mergeLog(HEAD, MAIN) }, files: [".codecast/line.toml"] });
     expect((await station(gh)).result).toMatchObject({ green: true, ci_changed: true });
+  });
+});
+
+describe("cast flow ci: job logs carry terminal escapes", () => {
+  // As Actions serves it: bun's colours around the markers the parser reads.
+  const colouredLog = BUN_LOG.replace(/\(fail\)/g, "\x1b[31m(fail)\x1b[0m").replace(/error:/g, "\x1b[31merror:\x1b[0m");
+  const red = (escapes: "required" | "unknown") => fakeGh({
+    polls: [{ rollup: [check("lint", "SUCCESS", 1, 1), check("test-cli", "FAILURE", 2)] }],
+    fail: (a) => (a.startsWith("run rerun") ? { code: 1, out: "no" } : null),
+    logs: { 1: mergeLog(HEAD, MAIN), 2: colouredLog },
+    escapes,
+  });
+  const logReads = (gh: { calls: string[] }) => gh.calls.filter((c) => c.includes("/logs"));
+  const named = [expect.objectContaining({ job: "test-cli", test: BUN_TEST, file: "packages/cli/src/bench/bootGraph.guard.test.ts", line: 723 })];
+
+  test("gh 2.105, which refuses escapes without --allow-escape-sequences: the log still names the failure", async () => {
+    const gh = red("required");
+    const { result } = await station(gh);
+    expect(result.tested_main_sha).toBe(MAIN);
+    expect(result.failing).toEqual(named);
+    expect(logReads(gh).every((c) => c.endsWith(" --allow-escape-sequences"))).toBe(true);
+  });
+
+  test("a gh older than the flag rejects it: one retry without it, and no later read passes it", async () => {
+    const gh = red("unknown");
+    const { result } = await station(gh);
+    expect(result.tested_main_sha).toBe(MAIN);
+    expect(result.failing).toEqual(named);
+    const reads = logReads(gh);
+    expect(reads.filter((c) => c.endsWith(" --allow-escape-sequences"))).toHaveLength(1);
+    expect(reads.filter((c) => c.includes("jobs/2/logs") && !c.includes("--allow"))).toHaveLength(1);
   });
 });
