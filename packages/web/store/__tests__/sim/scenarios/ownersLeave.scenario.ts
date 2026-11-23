@@ -14,7 +14,7 @@ import { scenario, type ScenarioWorld } from "../dsl";
 import { HIDDEN_OVERRIDE_SETTLE_MS } from "../../../inboxOverlays";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { applyCollectionFeed } from "../../../../hooks/useSyncCollection";
-import { selectOwnersRow, feedOwnerIds } from "../../../../hooks/useOwners";
+import { selectOwnersRow, feedOwnerFacts } from "../../../../hooks/useOwners";
 import { placeInboxRows } from "../../../inboxStore";
 
 async function ownersLeave(w: ScenarioWorld): Promise<void> {
@@ -32,7 +32,7 @@ async function ownersLeave(w: ScenarioWorld): Promise<void> {
   const bf = b.followers[0]!;
   const bo = w.idOf("bo");
   const save = (win: any, id: string, change: any, inverse: any) => win.run(() => win.store.getState().applySessionOwners(id, change, inverse));
-  const mountOwners = (win: any, id: string) => win.run(() => win.mount(`owners-${id}`, api.sessionOwnership.listOwners, () => ({ session_id: id }), (d: any) => applyCollectionFeed("sessionOwners", d, selectOwnersRow, undefined, undefined, feedOwnerIds)));
+  const mountOwners = (win: any, id: string) => win.run(() => win.mount(`owners-${id}`, api.sessionOwnership.listOwners, () => ({ session_id: id }), (d: any) => applyCollectionFeed("sessionOwners", d, selectOwnersRow, undefined, undefined, feedOwnerFacts)));
   for (const id of [sid, rid]) for (const win of [a.host, b.host, bf]) await mountOwners(win, id);
   await w.settle();
   await save(a.host, sid, { add: [bo] }, { remove: [bo] });

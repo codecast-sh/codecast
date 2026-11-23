@@ -3,9 +3,10 @@
 // click by the same rule the server runs (shared/contracts/sessionOwners), in
 // the session row (sessions, else the conversation it was opened from), the
 // one home of its people (owner_ids), its role and its driver. Two feeders
-// write owner_ids there: the inbox rows and the owners read (listOwners, via
-// feedSessionOwnerIds), so the card and the header read one field and either
-// echo releases the Save. sessionOwners holds only the menu's details. The
+// write them there: the inbox rows and the owners read (listOwners, via
+// feedSessionOwners), so the card and the header read one field, either echo
+// releases the Save, and a session that left the inbox (a leave) still has a
+// live feeder wherever its header is drawn. sessionOwners holds only the menu's details. The
 // write rides `dispatch` to the side effect of the same name.
 //
 // Spread into the org slice (orgSlice createOrgSlice), so the store gains it
@@ -14,6 +15,10 @@ import { action, asyncAction, sync } from "./mutativeMiddleware";
 import { applySyncPatch } from "./syncProtocol";
 import { startedByRole } from "@codecast/shared/contracts";
 import { applyOwnersChangeTo, isLeave, listedOwnerIds, ownersFactsFromRead, takeOverBySend, type OwnerRowFact, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
+
+/** What the owners read says about the session row. The role and the driver
+ *  are absent when the server predates them (a deploy gap): the row keeps its own. */
+export type SessionOwnerFacts = { owner_ids: string[]; org_role_id?: string | null; driver_user_id?: string | null };
 
 /** Who drives a session: the role it is filed under, one of its people, or
  *  (`none`) the default, which is how an undo puts back a driver nobody chose. */
@@ -59,8 +64,8 @@ export function paintedFacts(read: any, home: any): OwnersFacts {
 export type SessionOwnersSliceActions = {
   /** `inverse` puts the Save back for undo; null when nothing can. */
   applySessionOwners: (conversationId: string, change: SessionOwnersChange, inverse?: SessionOwnersChange | null) => void;
-  /** The owners read's half of owner_ids (the inbox rows are the other). */
-  feedSessionOwnerIds: (conversationId: string, ownerIds: string[]) => void;
+  /** The owners read's half of the row's owner facts (the inbox rows are the other). */
+  feedSessionOwners: (conversationId: string, facts: SessionOwnerFacts) => void;
   /** The composer's "Tell <role>": the words go to the role's own session
    *  (dispatch tellSessionRole) and the role keeps driving this one. Resolves
    *  once the server has queued them, so the composer keeps the words until then. */
@@ -98,17 +103,20 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
     // Onto both twins it has (the inbox row and the conversation it was opened
     // from), so a Save made on either is released by this echo and neither
     // goes stale when the session enters or leaves the inbox. A partial patch:
-    // only the owner_ids lock is checked, never the row's other locks. An
+    // only the named fields' locks are checked, never the row's others. An
     // equal list keeps the row's own array.
-    feedSessionOwnerIds: sync(function (this: any, conversationId: string, ownerIds: string[]) {
+    feedSessionOwners: sync(function (this: any, conversationId: string, facts: SessionOwnerFacts) {
       for (const field of ["sessions", "conversations"] as const) {
         const row = this[field]?.[conversationId];
         if (!row) continue;
-        const { fields, pending } = applySyncPatch(field, conversationId, { owner_ids: ownerIds }, [], this.pending);
+        const { fields, pending } = applySyncPatch(field, conversationId, facts, [], this.pending);
         this.pending = pending;
         if (!sameIds(row.owner_ids, fields.owner_ids)) row.owner_ids = fields.owner_ids;
+        for (const key of ["org_role_id", "driver_user_id"] as const) {
+          if (key in fields && (row[key] ?? null) !== fields[key]) row[key] = fields[key];
+        }
       }
-    }) as SessionOwnersSliceActions["feedSessionOwnerIds"],
+    }) as SessionOwnersSliceActions["feedSessionOwners"],
     // Nothing here changes: the message lands in the role's thread, not this one.
     tellSessionRole: asyncAction(function (this: any, _conversationId: string, _content: string, _clientId: string) {}) as SessionOwnersSliceActions["tellSessionRole"],
   };

@@ -168,8 +168,8 @@ export function useOwnerCandidates(
 }
 
 // The menu's details only: who owns it, the role and the driver the server
-// also answers have their home on the session row (owner_ids goes there by
-// feedOwnerIds). A server from before these fields (a deploy gap) answers
+// also answers have their home on the session row (feedOwnerFacts puts them
+// there). A server from before these fields (a deploy gap) answers
 // only `owners`: default the rest so the header still draws, read-only.
 export const selectOwnersRow = (d: any) => {
   if (!d) return [];
@@ -179,8 +179,13 @@ export const selectOwnersRow = (d: any) => {
     ...details, _id: String(d.conversation_id), conversation_id: String(d.conversation_id),
   }];
 };
-export const feedOwnerIds = (d: any) => {
-  if (d && Array.isArray(d.owner_ids)) useInboxStore.getState().feedSessionOwnerIds(String(d.conversation_id), d.owner_ids.map(String));
+export const feedOwnerFacts = (d: any) => {
+  if (!d || !Array.isArray(d.owner_ids)) return;
+  useInboxStore.getState().feedSessionOwners(String(d.conversation_id), {
+    owner_ids: d.owner_ids.map(String),
+    ...("role_id" in d ? { org_role_id: d.role_id ?? null } : {}),
+    ...("driver_user_id" in d ? { driver_user_id: d.driver_user_id ?? null } : {}),
+  });
 };
 const ownersRowSig = (r: SessionOwnersRow) => [
   r.role?.role_id ?? "",
@@ -215,7 +220,7 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     "sessionOwners",
     api.sessionOwnership.listOwners,
     shouldQueryOwners(conversationId, currentUser) ? { session_id: conversationId } : "skip",
-    { select: selectOwnersRow, alsoFeed: feedOwnerIds },
+    { select: selectOwnersRow, alsoFeed: feedOwnerFacts },
   );
   const where = useMemo(() => (r: SessionOwnersRow) => r._id === conversationId, [conversationId]);
   const row = useCollectionRows<SessionOwnersRow>("sessionOwners", { where, sig: ownersRowSig })[0] ?? null;

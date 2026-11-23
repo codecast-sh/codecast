@@ -8,7 +8,7 @@ import { applyUpdatesToStore } from "../syncReplication";
 import { makeDispatchBinding } from "../../lib/dispatchBinding";
 import { paintTakeOverOnSend } from "../sessionOwnersSlice";
 import { applyCollectionFeed } from "../../hooks/useSyncCollection";
-import { feedOwnerIds, selectOwnersRow } from "../../hooks/useOwners";
+import { feedOwnerFacts, selectOwnersRow } from "../../hooks/useOwners";
 import { ownerIdsOnRow } from "../../hooks/useOwnersStoreEnv";
 import { coOwnersOf } from "../../lib/coOwners";
 
@@ -20,7 +20,7 @@ const read = (ids: string[]) => ({
   conversation_id: ID, owner_ids: ids, role: null, runner: { user_id: "me", is_bot: false }, author_id: null, bots: [], can_edit: true,
   owners: ids.map((user_id, i) => ({ user_id, name: user_id, email: null, added_at: i + 1 })),
 });
-const listOwnersPush = (ids: string[]) => applyCollectionFeed("sessionOwners", read(ids), selectOwnersRow, undefined, undefined, feedOwnerIds);
+const listOwnersPush = (ids: string[]) => applyCollectionFeed("sessionOwners", read(ids), selectOwnersRow, undefined, undefined, feedOwnerFacts);
 const inboxPush = (ids: string[]) => {
   const row = useInboxStore.getState().sessions[ID] as any;
   useInboxStore.getState().syncTable("sessions", [{ ...row, owner_ids: ids }] as any);
@@ -49,6 +49,15 @@ describe("one home for a session's people", () => {
     expect(s.sessionOwners[ID].owners).toHaveLength(3);
     expect("owner_ids" in s.sessionOwners[ID]).toBe(false);
     expect(header()).toEqual(["me", "mate", "sam"]);
+  });
+
+  test("the owners read feeds the role and the driver onto both twins; a server from before them leaves the row's own", () => {
+    useInboxStore.setState({ conversations: { [ID]: { _id: ID, org_role_id: null, driver_user_id: "mate" } } } as any);
+    applyCollectionFeed("sessionOwners", { ...read(["me", "mate"]), role_id: "role1", driver_user_id: null }, selectOwnersRow, undefined, undefined, feedOwnerFacts);
+    const s = useInboxStore.getState() as any;
+    for (const row of [s.sessions[ID], s.conversations[ID]]) expect([row.org_role_id, row.driver_user_id ?? null]).toEqual(["role1", null]);
+    applyCollectionFeed("sessionOwners", read(["me"]), selectOwnersRow, undefined, undefined, feedOwnerFacts);
+    expect([s.sessions[ID].org_role_id, useInboxStore.getState().sessions[ID].owner_ids]).toEqual(["role1", ["me"]]);
   });
 
   test("Mate removes Sam from an older session you have open: header and card follow the owners read", () => {
@@ -153,7 +162,7 @@ describe("a Save's dispatch carries what it painted", () => {
   beforeEach(() => {
     sent = [];
     useInboxStore.setState({ sessions: { [SID]: { _id: SID, session_id: "s-sav", user_id: "me", updated_at: 1, owner_ids: ["me", "mate"] } } } as any);
-    applyCollectionFeed("sessionOwners", { ...read(["me", "mate"]), conversation_id: SID }, selectOwnersRow, undefined, undefined, feedOwnerIds);
+    applyCollectionFeed("sessionOwners", { ...read(["me", "mate"]), conversation_id: SID }, selectOwnersRow, undefined, undefined, feedOwnerFacts);
     useInboxStore.getState()._setDispatch(((action: string, _args: any, patches: any) => { sent.push({ action, patches }); return Promise.resolve(null); }) as any, { owner });
   });
   afterEach(() => useInboxStore.getState()._clearDispatch(owner));
@@ -208,7 +217,7 @@ describe("a leave takes the session out of the inbox at once", () => {
 
   test("leaving a teammate's run you co-own", () => {
     useInboxStore.setState({ sessions: { [LID]: { _id: LID, session_id: "s-lv", user_id: "mate", updated_at: Date.now(), owner_user_id: "mate", owned_by_me: true, owner_ids: ["mate", "me"] } } } as any);
-    applyCollectionFeed("sessionOwners", readOf(["mate", "me"], "mate"), selectOwnersRow, undefined, undefined, feedOwnerIds);
+    applyCollectionFeed("sessionOwners", readOf(["mate", "me"], "mate"), selectOwnersRow, undefined, undefined, feedOwnerFacts);
     useInboxStore.getState().applySessionOwners(LID, { leave: {} }, null);
     const row = (useInboxStore.getState().sessions as any)[LID];
     expect([row.owner_ids, row.owned_by_me]).toEqual([["mate"], false]);
@@ -218,7 +227,7 @@ describe("a leave takes the session out of the inbox at once", () => {
   test("the last person leaving a hand a role started gives it back to the role, and rejoining undoes it", () => {
     // The role's seat runs on my machine; I took the hand over, so I am its one person.
     useInboxStore.setState({ sessions: { [LID]: { _id: LID, session_id: "s-lv", user_id: "me", updated_at: Date.now(), owner_user_id: "me", owned_by_me: true, owner_ids: ["me"], org_role_id: "org_roles_r", driver_user_id: "me", role_alone: false } } } as any);
-    applyCollectionFeed("sessionOwners", { ...readOf(["me"], "me"), role_started: true }, selectOwnersRow, undefined, undefined, feedOwnerIds);
+    applyCollectionFeed("sessionOwners", { ...readOf(["me"], "me"), role_started: true }, selectOwnersRow, undefined, undefined, feedOwnerFacts);
     useInboxStore.getState().applySessionOwners(LID, { leave: {} }, null);
     let row = (useInboxStore.getState().sessions as any)[LID];
     // runnerTakesLeftSession gives nobody a row: no person is painted as owner.
@@ -233,7 +242,7 @@ describe("a leave takes the session out of the inbox at once", () => {
 
   test("leaving your own run by moving it to a teammate's machine", () => {
     useInboxStore.setState({ sessions: { [LID]: { _id: LID, session_id: "s-lv", user_id: "me", updated_at: Date.now(), owner_user_id: "me", owned_by_me: true, owner_ids: ["me", "mate"] } } } as any);
-    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerIds);
+    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerFacts);
     useInboxStore.getState().applySessionOwners(LID, { leave: { move_to_device_id: "dev-mate", runner_id: "mate", runner_is_bot: false } }, null);
     const row = (useInboxStore.getState().sessions as any)[LID];
     expect([row.owner_ids, row.user_id, row.owner_user_id]).toEqual([["mate"], "mate", "mate"]);
@@ -265,7 +274,7 @@ describe("a leave's locks retire on its receipt", () => {
   test("an older row landing after the result keeps the leave painted; the cursor passing the receipt hands the row to the re-fetch", async () => {
     useInboxStore.getState()._setDispatch(makeDispatchBinding(async () => ({ __syncAckV1: [{ scope_key: SCOPE, position: 7 }], __syncAckV2: [], result: null })), { owner });
     myRun();
-    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerIds);
+    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerFacts);
     leaveToMate();
     expect(facts()).toEqual(["mate", false, "mate", ["mate"]]);
     await until(() => locks().length > 0 && locks().every(([, e]) => e.ack));
@@ -291,7 +300,7 @@ describe("a leave's locks retire on its receipt", () => {
     myRun();
     useInboxStore.getState().navigateToSession(MID);
     expect(useInboxStore.getState().currentSessionId).toBe(MID);
-    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerIds);
+    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerFacts);
     leaveToMate();
     await until(() => locks().length > 0 && locks().every(([, e]) => e.ack));
     // An older push lands under the locks, then the receipt's re-fetch omits the row: I left, and I have it open.
@@ -305,7 +314,7 @@ describe("a leave's locks retire on its receipt", () => {
   test("a refused leave rolls back with its locks", async () => {
     useInboxStore.getState()._setDispatch(makeDispatchBinding(async () => { throw new Error("Uncaught Error: no"); }), { owner });
     myRun();
-    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerIds);
+    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerFacts);
     leaveToMate();
     await until(() => locks().length === 0);
     expect(locks()).toEqual([]);

@@ -12,7 +12,7 @@ import { scenario, type ScenarioWorld } from "../dsl";
 import { HIDDEN_OVERRIDE_SETTLE_MS } from "../../../inboxOverlays";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { applyCollectionFeed } from "../../../../hooks/useSyncCollection";
-import { selectOwnersRow, feedOwnerIds } from "../../../../hooks/useOwners";
+import { selectOwnersRow, feedOwnerFacts } from "../../../../hooks/useOwners";
 
 async function ownersFollowerSave(w: ScenarioWorld): Promise<void> {
   w.team("acme", { features: { org: true } });
@@ -23,7 +23,7 @@ async function ownersFollowerSave(w: ScenarioWorld): Promise<void> {
   const c = await w.device("cy");
   const id = w.idOf(s);
   const save = (win: any, change: any, inverse: any) => win.run(() => win.store.getState().applySessionOwners(id, change, inverse));
-  const mountOwners = (win: any) => win.run(() => win.mount("owners", api.sessionOwnership.listOwners, () => ({ session_id: id }), (d: any) => applyCollectionFeed("sessionOwners", d, selectOwnersRow, undefined, undefined, feedOwnerIds)));
+  const mountOwners = (win: any) => win.run(() => win.mount("owners", api.sessionOwnership.listOwners, () => ({ session_id: id }), (d: any) => applyCollectionFeed("sessionOwners", d, selectOwnersRow, undefined, undefined, feedOwnerFacts)));
   await mountOwners(a.host); await mountOwners(af);
   await w.settle();
   await save(a.host, { add: [w.idOf("bo")] }, { remove: [w.idOf("bo")] });

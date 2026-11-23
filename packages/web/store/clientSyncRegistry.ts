@@ -137,8 +137,8 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   sessions: {
     writtenBy: ["conversations"],
-    // The inbox list feeds the rows; the owners read also feeds owner_ids
-    // (useOwners, feedSessionOwnerIds).
+    // The inbox list feeds the rows; the owners read also feeds owner_ids,
+    // org_role_id and driver_user_id (useOwners, feedSessionOwners).
     feeds: ["sessionOwnership.listOwners"],
     persistence: { kind: "collection", key: "sessions" },
     localFirst: true,
