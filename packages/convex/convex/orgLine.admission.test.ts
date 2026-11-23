@@ -540,6 +540,20 @@ describe("orgLine admission (LE6)", () => {
         expect(tables.conversations.find((c) => c._id === out.primary_conversation_id)).toMatchObject({ org_role_id: ROLE, role_started: true });
       });
 
+      test("a person's own run from a plain terminal stays theirs, though the task's lead speaks for it", async () => {
+        const { hashToken } = await import("./apiTokens");
+        const { createFromCli } = await import("./workflow_runs");
+        const { ctx, tables } = seated([seatLaptop]);
+        tables.api_tokens = [{ _id: "api_tokens_host", user_id: HOST, token_hash: await hashToken("host-token") }];
+        const hands = tables.org_roles[0].counters?.hands ?? 0;
+        const out = await (createFromCli as any)._handler(ctx, { api_token: "host-token", workflow_name: "line", task_id: "ct-c0", project_path: "/srv/growth" });
+        expect(out.spawner_conversation_id).toBe(STANDING);
+        const primary = tables.conversations.find((c) => c._id === out.primary_conversation_id)!;
+        expect(primary.role_started).toBeUndefined();
+        expect(primary.org_role_id).toBeUndefined();
+        expect(tables.org_roles[0].counters?.hands ?? 0).toBe(hands);
+      });
+
       test("keeps its own pool when its account offers one, and waits there rather than spilling onto the team's", async () => {
         const { ctx, tables } = seated([seatLaptop, host("m1", 1, { user_id: MATE }), host("h1", 4)]);
         const res = await sweepCore(ctx, NOW);

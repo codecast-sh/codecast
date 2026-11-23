@@ -915,7 +915,10 @@ export const createFromCli = mutation({
       fresh_branch: args.detach && lineRun,
       now,
     });
-    const startingRole = spawner && actsForRole(spawner) ? await roleOfConversation(ctx, spawner) : null;
+    // The run is the role's start only when the caller names a session that
+    // acts for the role. The project lead's session a plain run speaks
+    // through (projectLeadSession) starts nothing: a person's own run stays theirs.
+    const startingRole = args.spawner_session && spawner && actsForRole(spawner) ? await roleOfConversation(ctx, spawner) : null;
     if (startingRole) await recordHandStart(ctx, startingRole, primary_conversation_id);
     else await retainSessionCreator(ctx, primary_conversation_id, userId, host);
     // A placed run names its machine from the start, so the pool counts it there before a runner claims it.
