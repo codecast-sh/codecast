@@ -175,6 +175,9 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "meta", key: "conversations" },
     localFirst: true,
     dispatchTable: { table: "conversations", kind: "collection" },
+    // owner_ids lands here too (feedSessionOwnerIds, a Save outside the
+    // inbox), and a whole-row push that changes only it must still apply.
+    sync: { deepFields: ["owner_ids"] },
     // The daemon rewrites peer_transfer every few seconds, so a lock on it
     // would never see its echo and would freeze the strip.
     unprotectedFields: ["peer_transfer"],

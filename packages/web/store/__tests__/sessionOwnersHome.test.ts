@@ -162,3 +162,11 @@ describe("a Save's dispatch carries what it painted", () => {
     expect(sent[0].patches.conversations[SID]).toEqual({ owner_ids: ["me", "mate", "sam"], org_role_id: "roleR", driver_user_id: "mate" });
   });
 });
+
+// A follower takes its host's rows through syncTable, and a conversation row
+// that changed only its owner_ids must not read as a no-op.
+test("a whole-row push that changes only owner_ids applies to the conversation row", () => {
+  useInboxStore.setState({ pending: {}, sessions: {}, conversations: { [ID]: { _id: ID, user_id: "me", updated_at: 1, owner_ids: ["me"] } } } as any);
+  useInboxStore.getState().syncTable("conversations", [{ _id: ID, user_id: "me", updated_at: 1, owner_ids: ["me", "mate"] }] as any);
+  expect((useInboxStore.getState().conversations as any)[ID].owner_ids).toEqual(["me", "mate"]);
+});
