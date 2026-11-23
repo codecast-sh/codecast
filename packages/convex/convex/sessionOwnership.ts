@@ -410,8 +410,7 @@ async function rehomeSessions(
     result.sessions.push(shortId);
     if (openAsk) result.kept_in_front.push(shortId);
     if (opts.dry) continue;
-    // The wheel moves with it: its stored driver while they own it (writeDriver
-    // checks). A session nobody drives stays the role's: a move never picks a driver.
+    // The wheel moves with it: its stored driver while they own it (writeDriver checks); a move never picks one.
     const driver = c.driver_user_id;
     const moved = await performReparentSession(ctx, authUserId, {
       session_id: c._id.toString(),

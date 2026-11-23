@@ -23,7 +23,7 @@ import {
 import { activeTokenProfile } from "./ccAccountsShared";
 import { bucketTs } from "./presenceState";
 import { checkConversationAccess, isTeamAdmin, isTeamMember, shareATeam } from "./privacy";
-import { addSessionOwnerRow, isSessionOwner, rowlessStarterOf, syncPrimaryOwnerCache } from "./sessionOwners";
+import { isSessionOwner, rowlessStarterOf, writeStarterRow } from "./sessionOwners";
 import { navPromptField } from "./userMessagesFilter";
 import { localAgentTypeOf, findModelOption, deviceDisplayName, formatMachineSwitchNotice, type DeviceNameSource,
   checkoutInUseMessage,
@@ -914,10 +914,7 @@ export async function performReparentSessionToDevice(
     patch.user_id = runnerId;
   }
   await ctx.db.patch(conv._id, patch);
-  if (starter) {
-    await addSessionOwnerRow(ctx, conv._id, starter as Id<"users">, starter as Id<"users">);
-    await syncPrimaryOwnerCache(ctx, conv._id);
-  }
+  await writeStarterRow(ctx, conv._id, starter);
   if (crossUser) await followNewRunner(ctx, conv._id, runnerId);
   // The prompts written so far keep their author once user_id names someone else.
   if (crossUser) await stampPriorOwnerPage(ctx, { conversation_id: conv._id, user_id: previousConversation.user_id, until: patch.updated_at });
@@ -1113,10 +1110,7 @@ export async function performClaimDeviceAccount(
     } else {
       await ctx.db.patch(conv._id, { user_id: callerId });
     }
-    if (starter) {
-      await addSessionOwnerRow(ctx, conv._id, starter as Id<"users">, starter as Id<"users">);
-      await syncPrimaryOwnerCache(ctx, conv._id);
-    }
+    await writeStarterRow(ctx, conv._id, starter);
     await followNewRunner(ctx, conv._id, callerId);
     const managed = await ctx.db
       .query("managed_sessions")

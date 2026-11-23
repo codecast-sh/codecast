@@ -299,6 +299,14 @@ export async function rowlessStarterOf(ctx: { db: any }, conversation: any): Pro
   return facts.rows.length ? null : starterOf(facts);
 }
 
+/** Writes the row that starter (rowlessStarterOf, read before the move) owned
+ *  the session by, once it moves to another account; nothing for null. */
+export async function writeStarterRow(ctx: { db: any }, conversationId: Id<"conversations">, starter: string | null): Promise<void> {
+  if (!starter) return;
+  await addSessionOwnerRow(ctx, conversationId, starter as Id<"users">, starter as Id<"users">);
+  await syncPrimaryOwnerCache(ctx, conversationId);
+}
+
 // ── The driver (shared driverOf) ─────────────────────────────────────────────
 // Exactly one owner drives, and a person who drives owns the session: one of
 // its rows, or its starter while it has none (shared listedOwnerIds). This is
