@@ -1,9 +1,9 @@
-import { StyleSheet, RefreshControl, TouchableOpacity, View as RNView, ScrollView } from 'react-native';
+import { StyleSheet, RefreshControl, TouchableOpacity, View as RNView, FlatList, type ListRenderItem } from 'react-native';
 import { probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { TextInput, Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
-import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect, startTransition } from 'react';
+import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme, useAppearanceKey } from '@/constants/Theme';
@@ -69,6 +69,16 @@ export default function InboxScreen() {
 
 // Rows that fill a phone screen with some to spare, mounted with the list.
 const FIRST_PAINT_ROWS = 14;
+
+/** One line of the inbox list: a section's heading, a session row, or a whole
+ *  state (the skeleton, an empty inbox). The list is virtualized, so only the
+ *  lines near the screen are mounted, whatever the account holds. */
+type InboxListItem =
+  | { kind: 'header'; key: string; section: string; label: string; color?: string; count: number; collapsed: boolean }
+  | { kind: 'row'; key: string; session: InboxSession }
+  | { kind: 'node'; key: string; node: ReactNode };
+
+const inboxItemKey = (item: InboxListItem) => item.key;
 
 /** The inbox list. The tab shows it whole; a conversation's slide-out panel
  *  shows it as `panel`, where a row opens in place of the conversation
@@ -293,17 +303,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     [unreadSig],
   );
 
-  // Mounting every row at once (the inbox's first paint, a conversation's
-  // panel opening) held the screen for a second or more on a long inbox. The
-  // first screenful mounts with the list and the rest in a transition right
-  // after, which a tap interrupts. listData hands each section what is left.
-  const [rowBudget, setRowBudget] = useState(FIRST_PAINT_ROWS);
-  useEffect(() => {
-    const frame = requestAnimationFrame(() => startTransition(() => setRowBudget(Infinity)));
-    return () => cancelAnimationFrame(frame);
-  }, []);
-  const rowsLeft = useRef(Infinity);
-
   // A row's times read in minutes ("2m ago"), so rows re-render once a
   // minute; placement itself re-runs on the finer clock.
   const rowMinute = Math.floor(coarseNow / 60_000);
@@ -341,33 +340,37 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // `count` is the chokepoint's section count (flat cards plus members nested
   // under a same-bucket lead) — the header number web, the tally and the CLI
   // agree on; items.length is only the flat cards.
-  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number) => {
-    if (items.length === 0) return null;
+  const renderSection = useCallback((label: string, items: InboxSession[], color?: string, collapseKey?: string, count?: number): InboxListItem[] => {
+    if (items.length === 0) return [];
     const key = collapseKey ?? label;
     const collapsed = !!collapsedSections?.[key];
-    const shown = collapsed ? [] : items.slice(0, Math.max(0, rowsLeft.current));
-    rowsLeft.current -= shown.length;
-    const rows = collapsed ? null : shown.map((row) => renderSessionItem(row));
-    // One heading for every lens: sentence case in the interface face, muted
-    // ink, the count beside it, and a dot in the section's colour.
+    const out: InboxListItem[] = [{ kind: 'header', key: `h:${key}`, section: key, label, color, count: count ?? items.length, collapsed }];
+    if (!collapsed) for (const session of items) out.push({ kind: 'row', key: `${key}:${session._id}`, session });
+    return out;
+  }, [collapsedSections]);
+
+  // One heading for every lens: sentence case in the interface face, muted
+  // ink, the count beside it, and a dot in the section's colour.
+  const renderListItem = useCallback<ListRenderItem<InboxListItem>>(({ item }) => {
+    if (item.kind === 'row') return renderSessionItem(item.session);
+    if (item.kind === 'node') return <>{item.node}</>;
+    const { section, label, color, count, collapsed } = item;
     return (
-      <RNView key={key}>
-        <TouchableOpacity
-          style={styles.sectionHeader}
-          onPress={() => { void Haptics.selectionAsync(); toggleCollapsedSection(key); }}
-          activeOpacity={0.6}
-          accessibilityRole="header"
-          accessibilityState={{ expanded: !collapsed }}
-        >
-          {color ? <RNView style={[styles.sectionDot, { backgroundColor: color }]} /> : null}
-          <RNText style={styles.sectionTitle}>{label}</RNText>
-          <RNText style={styles.sectionCount}>{count ?? items.length}</RNText>
-          <Feather name={collapsed ? "chevron-right" : "chevron-down"} size={15} color={Theme.textMuted0} style={{ marginLeft: 'auto' }} />
-        </TouchableOpacity>
-        {rows}
-      </RNView>
+      <TouchableOpacity
+        style={styles.sectionHeader}
+        onPress={() => { void Haptics.selectionAsync(); toggleCollapsedSection(section); }}
+        activeOpacity={0.6}
+        accessibilityRole="header"
+        accessibilityState={{ expanded: !collapsed }}
+      >
+        {color ? <RNView style={[styles.sectionDot, { backgroundColor: color }]} /> : null}
+        <RNText style={styles.sectionTitle}>{label}</RNText>
+        <RNText style={styles.sectionCount}>{count}</RNText>
+        <Feather name={collapsed ? "chevron-right" : "chevron-down"} size={15} color={Theme.textMuted0} style={{ marginLeft: 'auto' }} />
+      </TouchableOpacity>
     );
-  }, [renderSessionItem, collapsedSections, toggleCollapsedSection]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- appearance re-reads the palette baked into the heading
+  }, [renderSessionItem, toggleCollapsedSection, appearance]);
 
   const filteredPinned = useMemo(() => chipFilter(pinned), [chipFilter, pinned]);
   const filteredNew = useMemo(() => chipFilter(newSessions), [chipFilter, newSessions]);
@@ -411,9 +414,8 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const statusDormant = filteredDormant;
   const statusWorking = filteredWorking;
 
-  const listData = useMemo(() => {
-    rowsLeft.current = rowBudget;
-    const sections: React.ReactNode[] = [];
+  const listData = useMemo((): InboxListItem[] => {
+    const sections: InboxListItem[][] = [];
     if (Object.keys(sessions).length === 0) {
       // Skeletons only for a genuinely cold cache: hydration has landed with
       // no rows AND the live subscription hasn't delivered its first payload
@@ -422,24 +424,24 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       // taken. Once the live payload has arrived, an empty collection is a
       // real empty account — not an eternal skeleton.
       if (!hydrated || sessionsFirstLoad !== false) {
-        return [<SessionListSkeleton key="skeleton" />];
+        return [{ kind: 'node', key: 'skeleton', node: <SessionListSkeleton /> }];
       }
-      return [(
-        <RNView key="empty" style={styles.emptyInbox}>
+      return [{ kind: 'node', key: 'empty', node: (
+        <RNView style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
           <RNText style={styles.emptyText}>No sessions yet</RNText>
           <RNText style={styles.emptySubtext}>Sessions you run with the codecast CLI will appear here</RNText>
         </RNView>
-      )];
+      ) }];
     }
     if (activeSessions.length === 0) {
-      return [(
-        <RNView key="empty" style={styles.emptyInbox}>
+      return [{ kind: 'node', key: 'empty', node: (
+        <RNView style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
           <RNText style={styles.emptyText}>Inbox zero</RNText>
           <RNText style={styles.emptySubtext}>All sessions stashed, killed, or idle</RNText>
         </RNView>
-      )];
+      ) }];
     }
     const countOf = (shown: InboxSession[], full: InboxSession[], n: number) =>
       sectionHeaderCount(shown, full, n, showSubagents);
@@ -454,7 +456,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         manualOrder: useInboxStore.getState().clientState?.ui?.inbox_manual_order,
         chipMatches,
       });
-      return [renderSection("All", flat, Theme.cyan, "all")].filter(Boolean);
+      return renderSection("All", flat, Theme.cyan, "all");
     }
     // Label / plan lenses: pinned stays its own top section (pin is urgency,
     // not theme); the active set regroups by label or plan, with unfiled
@@ -476,7 +478,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         for (const { name, items } of projectGroups)
           sections.push(renderSection(name, items, name === "other" ? Theme.textMuted0 : labelHexColor(name), `planproj_${name}`));
       }
-      return sections.filter(Boolean);
+      return sections.flat();
     }
     // Questions lead: a session that asked you something is your move before
     // anything else, pinned or not — same order as the web panel.
@@ -492,9 +494,9 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     sections.push(renderSection("Done", statusDone, Theme.cyan, undefined, countOf(statusDone, done, placed.counts.done)));
     sections.push(renderSection("Working", statusWorking, Theme.greenBright, undefined, countOf(statusWorking, working, placed.counts.working)));
     sections.push(renderSection('Dormant', statusDormant, Theme.blue, "Dormant", countOf(statusDormant, dormant, placed.counts.dormant)));
-    return sections.filter(Boolean);
+    return sections.flat();
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
-  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, rowBudget, planRows, placed]);
+  }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
 
   // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
@@ -591,12 +593,12 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // its first section, so a short pull shows it and a longer one refreshes.
   const SEARCH_REVEAL_HEIGHT = 44;
   const [listHeight, setListHeight] = useState(0);
-  const listRef = useRef<ScrollView>(null);
+  const listRef = useRef<FlatList<InboxListItem>>(null);
   // contentOffset applies only at mount, before the list is measured, so a
   // short list would open with the search row showing. Tuck it once the list
   // has a height, and again whenever a new filter replaces the rows.
   useEffect(() => {
-    if (listHeight > 0 && !searchOpen) listRef.current?.scrollTo({ y: SEARCH_REVEAL_HEIGHT, animated: false });
+    if (listHeight > 0 && !searchOpen) listRef.current?.scrollToOffset({ offset: SEARCH_REVEAL_HEIGHT, animated: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- re-tuck on measure and on a filter change only
   }, [listHeight > 0, activeProjectFilter, activeBucketFilter]);
 
@@ -700,8 +702,14 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           />
         </SearchErrorBoundary>
       ) : (
-        <ScrollView
+        <FlatList
           ref={listRef}
+          data={listData}
+          keyExtractor={inboxItemKey}
+          renderItem={renderListItem}
+          initialNumToRender={FIRST_PAINT_ROWS}
+          maxToRenderPerBatch={10}
+          windowSize={7}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -715,16 +723,14 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           contentContainerStyle={[activeSessions.length === 0 ? styles.emptyList : styles.listContent, { minHeight: listHeight + SEARCH_REVEAL_HEIGHT }]}
           contentOffset={searchOpen ? undefined : { x: 0, y: SEARCH_REVEAL_HEIGHT }}
           showsVerticalScrollIndicator={false}
-        >
-          {!searchOpen && (
+          ListHeaderComponent={searchOpen ? null : (
             <TouchableOpacity style={styles.searchReveal} onPress={() => setSearchOpen(true)} activeOpacity={0.7}>
               <FontAwesome name="search" size={13} color={Theme.textMuted0} />
               <RNText style={styles.searchRevealText}>Search all conversations</RNText>
             </TouchableOpacity>
           )}
-          {listData}
-          {ListFooter}
-        </ScrollView>
+          ListFooterComponent={ListFooter}
+        />
       )}
       {panel && <AreaBar />}
 

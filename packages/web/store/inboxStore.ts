@@ -1708,7 +1708,24 @@ const sessionUnreadMaps = new WeakMap<
 // One row's verdict, kept while the row ref, its winning mark and its local
 // viewed time hold: a heartbeat hands back a new sessions map in which every
 // other row keeps its ref, so the rebuild re-judges only the rows that moved.
-const sessionUnreadByRow = new WeakMap<InboxSession, { mark: SessionReadItem | undefined; viewed: number | undefined; unread: boolean }>();
+type UnreadVerdict = { mark: SessionReadItem | undefined; viewed: number | undefined; unread: boolean; a: number; b: number };
+const sessionUnreadByRow = new WeakMap<InboxSession, UnreadVerdict>();
+// One row's unread verdict against its read mark and local view stamp, cached
+// on the row; it carries two hashes of the id so the set's digest is a sum.
+function unreadVerdictOf(session: InboxSession, id: string, mark: SessionReadItem | undefined, viewed: number | undefined): UnreadVerdict {
+  let verdict = sessionUnreadByRow.get(session);
+  if (!verdict || verdict.mark !== mark || verdict.viewed !== viewed) {
+    let a = 0x811c9dc5, b = 5381;
+    for (let i = 0; i < id.length; i++) {
+      const c = id.charCodeAt(i);
+      a = Math.imul(a ^ c, 0x01000193);
+      b = (Math.imul(b, 33) + c) | 0;
+    }
+    verdict = { mark, viewed, unread: isSessionUnread({ ...sessionActivityFacts(session), mark, localViewedAt: viewed }), a, b };
+    sessionUnreadByRow.set(session, verdict);
+  }
+  return verdict;
+}
 
 /** Which sessions are lit for this viewer, derived from the marks, the rows'
  *  own updated_at, and the local "last opened" record as the fallback for a
@@ -1731,14 +1748,7 @@ export function sessionUnreadMap(state: {
   for (const id in state.sessions) {
     const session = state.sessions[id];
     if (!session) continue;
-    const mark = marks[id];
-    const viewed = state._lastViewedAt[id];
-    let verdict = sessionUnreadByRow.get(session);
-    if (!verdict || verdict.mark !== mark || verdict.viewed !== viewed) {
-      verdict = { mark, viewed, unread: isSessionUnread({ ...sessionActivityFacts(session), mark, localViewedAt: viewed }) };
-      sessionUnreadByRow.set(session, verdict);
-    }
-    if (verdict.unread) out[id] = true;
+    if (unreadVerdictOf(session, id, marks[id], state._lastViewedAt[id]).unread) out[id] = true;
   }
   byViewed.set(state._lastViewedAt, out);
   return out;
@@ -1770,11 +1780,38 @@ export function sessionUnreadWakeSig(state: {
   sessionReads: Record<string, SessionReadItem>;
   _lastViewedAt: Record<string, number>;
 }): string {
-  return unreadSetSig(sessionUnreadMap(state));
+  let byReads = sessionUnreadSigs.get(state.sessions);
+  if (!byReads) sessionUnreadSigs.set(state.sessions, byReads = new WeakMap());
+  let byViewed = byReads.get(state.sessionReads);
+  if (!byViewed) byReads.set(state.sessionReads, byViewed = new WeakMap());
+  const cached = byViewed.get(state._lastViewedAt);
+  if (cached !== undefined) return cached;
+  // A digest of the lit set, summed from the per-row verdicts: a write that
+  // moves one row costs one verdict, and no map of the set is built for it.
+  // When the map for these inputs is already built, its ids are the set.
+  let a = 0, b = 0, n = 0;
+  const add = (verdict: UnreadVerdict) => {
+    a = (a + verdict.a) | 0;
+    b = (b + verdict.b) | 0;
+    n++;
+  };
+  const built = sessionUnreadMaps.get(state.sessions)?.get(state.sessionReads)?.get(state._lastViewedAt);
+  if (built) {
+    for (const id in built) add(sessionUnreadByRow.get(state.sessions[id])!);
+  } else {
+    const marks = sessionReadMap(state.sessionReads);
+    for (const id in state.sessions) {
+      const session = state.sessions[id];
+      if (!session) continue;
+      const verdict = unreadVerdictOf(session, id, marks[id], state._lastViewedAt[id]);
+      if (verdict.unread) add(verdict);
+    }
+  }
+  const sig = `${n}.${(a >>> 0).toString(36)}.${(b >>> 0).toString(36)}`;
+  byViewed.set(state._lastViewedAt, sig);
+  return sig;
 }
-// A digest of the lit set (makeCollectionSig over the unread map), so the
-// signature is short whatever the number of unread sessions.
-const unreadSetSig = makeCollectionSig<boolean>(() => "");
+const sessionUnreadSigs = new WeakMap<object, WeakMap<object, WeakMap<object, string>>>();
 
 // Close the open subtree under a parent in the draft — the optimistic mirror
 // of the server's cascadeClose, so a "close subtasks too" choice renders
@@ -2968,8 +3005,21 @@ const REST_RANK: Record<SessionRestState, number> = { needs_input: 0, done: 1, d
 export function rankVerdictOf(s: InboxSession, placement?: { work_state: WorkState } | null): SessionVerdict {
   return placement ? verdictOfWorkState(placement.work_state) : classifySession(s);
 }
-function sessionSortRank(s: InboxSession, placement?: { work_state: WorkState } | null): [number, number, number, number, number, number, number] {
-  const c = rankVerdictOf(s, placement);
+type SortRank = [number, number, number, number, number, number, number];
+// A row's rank reads only its own fields and the class it sorts by, so it is
+// cached on the row object (the sync layer keeps the ref while no field
+// changes) and keyed by that class: placing again after one row moved builds
+// one tuple, not one per row.
+const _sortRankCache = new WeakMap<object, { work_state: WorkState; rank: SortRank }>();
+function sessionSortRank(s: InboxSession, placement?: { work_state: WorkState } | null): SortRank {
+  const work_state = sortWorkStateOf(s, placement);
+  const hit = _sortRankCache.get(s);
+  if (hit && hit.work_state === work_state) return hit.rank;
+  const rank = buildSortRank(s, verdictOfWorkState(work_state));
+  _sortRankCache.set(s, { work_state, rank });
+  return rank;
+}
+function buildSortRank(s: InboxSession, c: SessionVerdict): SortRank {
   return [
     s.is_pinned ? 0 : 1,                              // pinned first
     s.is_deferred ? 1 : 0,                            // deferred last
