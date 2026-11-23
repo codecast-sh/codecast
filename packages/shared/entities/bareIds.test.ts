@@ -41,10 +41,10 @@ describe("bare ids in prose", () => {
 
 describe("a flow, named by its slug", () => {
   test("flow:<slug> scans in prose, types as a flow and routes to the library", () => {
-    const text = "Run it through flow:change, or flow:quick-change. Not overflow:x, flow:-bad or flow:bad-";
-    expect([...text.matchAll(bareEntityIdRegex())].map((m) => m[0])).toEqual(["flow:change", "flow:quick-change"]);
+    const text = "Run it through flow:change, or flow:prove-implement. Not overflow:x, flow:-bad or flow:bad-";
+    expect([...text.matchAll(bareEntityIdRegex())].map((m) => m[0])).toEqual(["flow:change", "flow:prove-implement"]);
     expect(entityTypeFromId("flow:change")).toBe("flow");
     expect(flowSlugOf("Flow:Change")).toBe("change");
-    expect(entityRoute("flow", "flow:quick-change")).toBe("/flows?view=flows&item=quick-change");
+    expect(entityRoute("flow", "flow:prove-implement")).toBe("/flows?view=flows&item=prove-implement");
   });
 });

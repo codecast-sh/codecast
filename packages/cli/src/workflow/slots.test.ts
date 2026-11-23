@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { emptySlots, graphSlots, parseWorkflowFile, parseWorkflowSource, validateWorkflow } from "./parser";
 import { foldFlow } from "@codecast/shared/contracts/flowPool";
 
@@ -83,8 +86,30 @@ describe("a backbone with a slot", () => {
     expect(run(`subgraph implement { }`)).toThrow(/is empty/);
   });
 
-  test("extends by a name the pool lacks says so", () => {
+  test("extends by a name the pool lacks says so, and by a retired one names what replaced it", () => {
     expect(() => parseWorkflowFile("/r/v.cast", { read: files({ "/r/v.cast": `digraph v { graph [extends="nope"] }` }) })).toThrow(/no flow of that name in the pool/);
+    // A flow the library retired names what replaced it.
+    expect(() => parseWorkflowFile("/r/v.cast", { read: files({ "/r/v.cast": `digraph v { graph [extends="quick-change"] }` }) }))
+      .toThrow('/r/v.cast: extends="quick-change": quick-change is no longer in the library: use change (Ship), which asks a person only when the change edits CI');
+  });
+
+  test("a stale entry for a retired flow in this machine's index of team flows still names what replaced it", () => {
+    const cache = fs.mkdtempSync(path.join(os.tmpdir(), "retired-index-"));
+    const saved = process.env.CODECAST_FLOWS_CACHE;
+    process.env.CODECAST_FLOWS_CACHE = cache;
+    try {
+      const stale = path.join(cache, "k57quick", "quick-change.cast");
+      fs.mkdirSync(path.dirname(stale), { recursive: true });
+      fs.writeFileSync(stale, `digraph quick_change { graph [kind="line"] start [shape=Mdiamond] exit [shape=Msquare] start -> exit }`);
+      fs.writeFileSync(path.join(cache, "index.json"), JSON.stringify({ "quick-change": stale }));
+      const read = (p: string) => (p === "/r/v.cast" ? `digraph v { graph [extends="quick-change"] }` : fs.existsSync(p) ? fs.readFileSync(p, "utf-8") : null);
+      expect(() => parseWorkflowFile("/r/v.cast", { read }))
+        .toThrow('/r/v.cast: extends="quick-change": quick-change is no longer in the library: use change (Ship), which asks a person only when the change edits CI');
+    } finally {
+      if (saved === undefined) delete process.env.CODECAST_FLOWS_CACHE;
+      else process.env.CODECAST_FLOWS_CACHE = saved;
+      fs.rmSync(cache, { recursive: true, force: true });
+    }
   });
 
   test("a flow with no base may fill its own nodes in place", () => {

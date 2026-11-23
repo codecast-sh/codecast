@@ -4,6 +4,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { spawnSync } from "./proc.js";
 import { notFoundLine } from "./argChecks.js";
+import { retiredFlowLine } from "@codecast/shared/contracts/flowPool";
 import { describeFlow, poolFlows, workspaceDefaultFlow, type PoolFlow, type PushedPoolRow } from "./workflow/flowPool.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
 import type { Workspace } from "./resolveWorkspace.js";
@@ -73,7 +74,8 @@ export async function findFlow(slug: string, deps: FlowDeps, pool?: PoolFlow[]):
   }
   const f = (pool ?? (await readPool(deps, poolWorkspace(deps))).flows).find((p) => p.slug === slug.replace(/\.cast$/, ""));
   if (!f) {
-    console.error(notFoundLine("flow", slug, "cast flow ls"));
+    const retired = retiredFlowLine(slug.replace(/\.cast$/, ""));
+    console.error(retired ? `✗ ${retired}` : notFoundLine("flow", slug, "cast flow ls"));
     process.exit(1);
   }
   return { ...f, source: f.file ? fs.readFileSync(f.file, "utf-8") : BUILTIN_WORKFLOW_TEMPLATES[f.slug] };

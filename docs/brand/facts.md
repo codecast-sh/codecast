@@ -50,7 +50,7 @@ Each has a page at codecast.sh/features/<slug> (`packages/web/app/(marketing)/fe
 | Memory | Search and ask across every past session; `cast blame` traces a line of code to the conversation that wrote it | /features/memory |
 | Spawn and fork | Delegate to a new session, branch a conversation, switch agent or model mid-session | /features/agents |
 | Triggers | Work that runs later: on a schedule, on a PR comment, on an event | /features/triggers |
-| Flows | Every change takes the same path: check, review, decide, land, deploy | /features/flows |
+| Flows | Every change takes the same path: pull request, CI and review, merge, deploy; it asks a person only when the change edits CI | /features/flows |
 | Decisions | One queue for the calls only a person can make, answerable from the phone | /features/decisions |
 | Pull requests | A PR is owned by the session that opened it; review comments and red checks wake it | /features/pull-requests |
 | Browser | Agents drive your own Chrome in a background tab | /features/browser |

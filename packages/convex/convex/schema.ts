@@ -5745,7 +5745,9 @@ export default defineSchema({
       v.literal("team_read_key_revoked"),
       v.literal("team_read_key_used"),
     ),
-    actor_user_id: v.id("users"),
+    // One of the two: the person who acted, or the team read key that was used.
+    actor_user_id: v.optional(v.id("users")),
+    actor_key_id: v.optional(v.id("team_read_keys")),
     actor_conversation_id: v.optional(v.id("conversations")),
     conversation_id: v.optional(v.id("conversations")),
     team_id: v.optional(v.id("teams")),

@@ -10502,7 +10502,8 @@ program
         .filter(Boolean).join(" ");
     for (const r of rows) {
       const change = r.detail?.after ? ` ${c.dim}${JSON.stringify(r.detail.after)}${c.reset}` : "";
-      console.log(`${c.dim}${formatRelativeTime(r.created_at)}${c.reset}  ${c.cyan}${r.kind}${c.reset}  by ${String(r.actor_user_id).slice(0, 8)}  ${subject(r)}${change}`);
+      const actor = r.actor_key_id ? `key ${String(r.actor_key_id).slice(0, 8)}` : String(r.actor_user_id).slice(0, 8);
+      console.log(`${c.dim}${formatRelativeTime(r.created_at)}${c.reset}  ${c.cyan}${r.kind}${c.reset}  by ${actor}  ${subject(r)}${change}`);
     }
   });
 
@@ -22427,6 +22428,12 @@ workflow
     // else one of the caller's own pushed workflows by slug (L2).
     let resolved = "resolved" in choice ? choice.resolved : resolveWorkflowSource(file);
     if (!resolved) {
+      const { retiredFlowLine } = await import("@codecast/shared/contracts/flowPool");
+      const retired = retiredFlowLine(file);
+      if (retired) {
+        console.error(`✗ ${retired}`);
+        process.exit(1);
+      }
       const own = (await cliPost("/cli/workflows/list", {}).catch(() => null))?.workflows?.find((w: any) => w.slug === file && w.source);
       if (own) resolved = { source: own.source, label: `workflow:${own.slug}` };
     }

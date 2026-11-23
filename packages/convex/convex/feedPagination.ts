@@ -29,15 +29,19 @@ export async function batchScanConversations(opts: {
       exhausted = true;
       break;
     }
+    // A scan that reaches `want` mid-batch has not examined the rest of it,
+    // so a short batch is the end of the index only when read to its end.
+    let examined = 0;
     for (const c of batch) {
+      examined++;
       if (accept(c)) {
         rows.push(c);
         if (rows.length >= want) break;
       }
     }
-    cursor = batch[batch.length - 1].updated_at;
+    cursor = batch[examined - 1].updated_at;
     oldestSeen = cursor;
-    if (batch.length < batchSize) {
+    if (examined === batch.length && batch.length < batchSize) {
       exhausted = true;
       break;
     }
@@ -107,6 +111,8 @@ export async function paginateTeamFeed(opts: {
   maxBatches?: number;
 }): Promise<{ rows: any[]; nextCursor: string | null }> {
   const { memberIds, limit, fetchPage, accept, perMemberFetch, perMemberWant, maxBatches = 4 } = opts;
+  // No member to read (everyone hidden) is the end, not an empty page to repeat.
+  if (memberIds.length === 0) return { rows: [], nextCursor: null };
   const { legacy, members } = parseFeedCursor(opts.cursor);
   const boundOf = (id: string): MemberBound => (members ? members[id] : legacy ?? undefined);
 

@@ -205,6 +205,11 @@ describe("orgRoles.setLine (L2)", () => {
     expect(lineSlugOf({})).toBe("line");
     expect(lineSlugOf({ line_workflow_slug: "feature" })).toBe("feature");
   });
+
+  test("refuses a retired flow, naming what replaced it", async () => {
+    const { ctx } = fixtures();
+    await expect(performSetLine(ctx, HOST as any, { role_id: "or-1", slug: "quick-change", human_decision: "yes" })).rejects.toThrow(/no longer in the library: use change/);
+  });
 });
 
 // line-map.md LX6: "Start now" on a line cause starts the project lead's line
@@ -220,6 +225,14 @@ describe("startLineCauseCore (LX6)", () => {
     expect(tables.workflow_runs[0]).toMatchObject({ task_id: "tasks_1", user_id: HOST, workflow_name: "line" });
     expect(tables.tasks[0].status).toBe("in_progress");
     await expect(startLineCauseCore(ctx, HOST as any, "tasks_1" as any)).rejects.toThrow(/already has a live run/);
+  });
+
+  test("refuses a lead whose line names a retired flow, starting nothing", async () => {
+    const { startLineCauseCore } = await import("./lineCause");
+    const { ctx, tables } = fixtures({ role: { trust: "propose", line_workflow_slug: "quick-change" }, task: { assignee: undefined, source: "signal", category: "line" } });
+    await expect(startLineCauseCore(ctx, HOST as any, "tasks_1" as any)).rejects.toThrow(/@growth's line runs a retired flow: quick-change is no longer in the library/);
+    expect(tables.workflow_runs).toHaveLength(0);
+    expect(tables.tasks[0].status).toBe("open");
   });
 
   // LX4: a card answered Ship whose run then reports nothing has no runner;

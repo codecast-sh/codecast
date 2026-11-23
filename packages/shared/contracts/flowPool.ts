@@ -249,6 +249,15 @@ export function flowPathWords(f: Pick<FoldedFlow, "stations">): { path: string; 
 /** The flow a workspace's sessions ship through when it has set none. */
 export const CHANGE_FLOW_SLUG = "change";
 
+/** Flows the library no longer ships, each with what replaced it: a run or a variant naming one is pointed there. */
+const RETIRED_FLOWS: Readonly<Record<string, string>> = {
+  "quick-change": `${CHANGE_FLOW_SLUG} (Ship), which asks a person only when the change edits CI`,
+};
+
+/** Why a flow name no longer resolves, in one line naming its replacement; null for a name the library never retired. */
+export const retiredFlowLine = (slug: string): string | null =>
+  Object.prototype.hasOwnProperty.call(RETIRED_FLOWS, slug) ? `${slug} is no longer in the library: use ${RETIRED_FLOWS[slug]}` : null;
+
 /** Can a session's own change run through it? A flow that takes a branch can (the run freezes the session's edits onto one). */
 export const takesSessionChange = (flow: { takes: ReadonlyArray<string> }) => flow.takes.includes("branch");
 

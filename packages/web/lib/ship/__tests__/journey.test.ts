@@ -95,12 +95,11 @@ describe("journeyStages", () => {
     expect(j.now).toMatchObject({ kind: "session", stage: "CI + Review", round: 2, max: 3 });
     expect(journeyWords(j).words).toBe("Fixing");
   });
-  test("among the shipped flows only change and quick-change go back to the session, from the stages they always did", () => {
+  test("among the shipped flows only change goes back to the session, from the stages it always did", () => {
     const read = (f: (typeof SHIPPED_FLOWS)[number]) => journeyStages(f as any).map((x) => (x.loops.length ? `${x.label} ↺ ${x.loops.map((l) => l.id).join(",")}` : x.label));
     const looping = SHIPPED_FLOWS.filter((f) => journeyStages(f as any).some((x) => x.loops.length));
     expect(Object.fromEntries(looping.map((f) => [f.slug, read(f)]))).toEqual({
       change: ["PR", "CI + Review ↺ ci_conflict,brief", "Merge ↺ fix_conflict", "Deploy", "Live"],
-      "quick-change": ["Check ↺ fix_check", "Review ↺ fix_review", "Land ↺ fix_conflict", "Deploy", "Live"],
     });
   });
 });
@@ -387,7 +386,7 @@ test("readableWhy cuts long reasons at a word", () => {
 describe("approvalOf", () => {
   test("each shipped line says from its graph whether a person approves", () => {
     const lines = SHIPPED_FLOWS.filter((f) => f.kind === "line").map((f) => [f.slug, approvalWords(approvalOf(f as any))]);
-    expect(lines).toEqual([["line", "Asks you every time"], ["change", "Asks you if it edits CI"], ["quick-change", "No approval"], ["climb", "Sometimes asks you"]]);
+    expect(lines).toEqual([["line", "Asks you every time"], ["change", "Asks you if it edits CI"], ["climb", "Sometimes asks you"]]);
   });
   test("a gate on a side route asks only on that route; one reached only past landing asks nobody", () => {
     const g = (turn: { label?: string }, gateAfterLand = false, asks_if?: string) => ({

@@ -22,6 +22,8 @@ import { commitSignal, normalizeSignal } from "./signals";
 import { admitRoleRun, requeueForSweep, startLineRun } from "./orgLine";
 import { cancelCore, liveRunRefusal } from "./workflow_runs";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
+import { retiredFlowLine } from "@codecast/shared/contracts/flowPool";
+import { lineSlugOf } from "@codecast/shared/contracts/lineSlug";
 
 export const LINE_SUBJECT_PREFIX = "line:";
 
@@ -82,6 +84,8 @@ export async function startLineCauseCore(ctx: any, userId: Id<"users">, taskId: 
   const role = await leadRoleOf(ctx, project);
   if (!role) throw new ConvexError("No role leads this project yet, so no flow runs its problems. Name a lead on the project's page.");
   if (role.status !== "active") throw new ConvexError(`@${role.handle} is paused, so its flow starts nothing`);
+  const retired = retiredFlowLine(lineSlugOf(role));
+  if (retired) throw new ConvexError(`@${role.handle}'s line runs a retired flow: ${retired}`);
   if (!(await userCanAccessRole(ctx, userId, role))) throw new ConvexError("You cannot start this project's flow");
   await endStalledRun(ctx, task);
   // Started by hand, the run takes the sweep's admission (LE6): a free slot where the role's runs work, else the
