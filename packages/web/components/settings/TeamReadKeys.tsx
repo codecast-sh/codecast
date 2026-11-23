@@ -220,9 +220,12 @@ function MintedKey({ minted, onDone }: { minted: Minted; onDone: (fromKeyboard: 
 function KeyLine({ teamId, row, now }: { teamId: Id<"teams">; row: KeyRow; now: number }) {
   const ended = row.revoked_at ? "Revoked" : row.expires_at <= now ? "Expired" : null;
   const daysLeft = Math.ceil((row.expires_at - now) / DAY_MS);
+  // A live key whose minter left the team or lost the admin role: the remaining admins decide whether to revoke it.
+  const orphaned = !ended && !row.created_by_still_admin;
+  const creator = orphaned ? `by ${row.created_by_name ?? "someone"}, no longer an admin` : row.created_by_name && `by ${row.created_by_name}`;
   const details = [
     `${row.prefix}…`,
-    row.created_by_name && `by ${row.created_by_name}`,
+    creator,
     row.last_used_at ? `Used ${relativeTime(row.last_used_at)}` : ended ? "Never used" : "Not used yet",
     ended ? null : daysLeft === 1 ? "1 day left" : `${daysLeft} days left`,
   ].filter((d): d is string => !!d);
@@ -236,7 +239,7 @@ function KeyLine({ teamId, row, now }: { teamId: Id<"teams">; row: KeyRow; now: 
         <div className="overflow-hidden text-xs text-sol-text-dim">
           <div className="-ml-3 flex flex-wrap">
             {details.map((d, i) => (
-              <span key={i} className={`relative whitespace-nowrap pl-3 before:absolute before:left-0 before:w-3 before:text-center before:content-['·'] ${i === 0 ? "font-mono" : ""}`}>{d}</span>
+              <span key={i} className={`relative whitespace-nowrap pl-3 before:absolute before:left-0 before:w-3 before:text-center before:content-['·'] ${i === 0 ? "font-mono" : ""} ${orphaned && d === creator ? "text-sol-orange before:text-sol-text-dim" : ""}`}>{d}</span>
             ))}
           </div>
         </div>
