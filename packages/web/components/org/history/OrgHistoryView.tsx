@@ -15,7 +15,7 @@
 import { useState, type ReactNode } from "react";
 import { FileText, Flag, FolderKanban, History, Network, Redo2, Settings2, Terminal, Undo2 } from "lucide-react";
 import { leftAloneLine, orgLogEffectLines, orgLogEntryLine, orgLogLine, type OrgLogDoor, type OrgLogEntry, type OrgLogRow, type OrgUndoPreview } from "@codecast/shared/contracts/orgChange";
-import { groupOrgLogByDay, orgLogClock, orgLogDoorWords, orgUndoCannotLine } from "@codecast/shared/contracts/orgLog";
+import { groupOrgLogByDay, orgLogClock, orgLogDoorWords, orgUndoCannotLine, orgUndoReleasedLine } from "@codecast/shared/contracts/orgLog";
 import { cn } from "../../../lib/utils";
 import { OrgButton } from "../OrgButton";
 import { ORG_LOG_FOLD_ROWS } from "../../../lib/orgHistoryView";
@@ -211,10 +211,12 @@ function PreviewPart({ name, title, tone, children }: { name: string; title: str
  * the undo does not happen, and what cannot be taken back at all. `preview`
  * undefined is the server still working; null is a server that cannot say.
  */
-export function OrgUndoPreviewCard({ entry, redo, preview, onConfirm, onCancel }: {
+export function OrgUndoPreviewCard({ entry, redo, preview, onConfirm, onCancel, nameOf = () => "a teammate" }: {
   entry: OrgLogEntry;
   redo: boolean;
   preview: OrgUndoPreview | null | undefined;
+  /** A person's name, for the owners a retire gave its hands. */
+  nameOf?: (userId: string) => string;
   onConfirm: (withBatches: string[]) => void;
   onCancel: () => void;
 }) {
@@ -225,6 +227,7 @@ export function OrgUndoPreviewCard({ entry, redo, preview, onConfirm, onCancel }
   const shown = all ? will : will.slice(0, ORG_LOG_FOLD_ROWS);
   const left = preview?.left_alone ?? [];
   const depends = preview?.depends ?? [];
+  const released = preview?.released_owners ?? [];
   const nothing = !!preview && !refused && will.length === 0;
 
   return (
@@ -240,6 +243,7 @@ export function OrgUndoPreviewCard({ entry, redo, preview, onConfirm, onCancel }
                 {!all && will.length > shown.length && (
                   <button type="button" onClick={() => setAll(true)} className="mt-1.5 text-meta text-sol-violet hover:underline underline-offset-2" data-undo-will-all>Show all {will.length}</button>
                 )}
+                {released.length > 0 && <p className="mt-1.5 text-[12px] leading-snug" style={{ color: "var(--sol-text-muted)" }} data-undo-released>{orgUndoReleasedLine(released, nameOf)}.</p>}
               </>
             )}
           </PreviewPart>

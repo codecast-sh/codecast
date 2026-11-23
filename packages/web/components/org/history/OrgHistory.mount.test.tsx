@@ -30,6 +30,9 @@ mock.module("../../../hooks/useSyncOrgLog", () => ({
 mockInboxStore(() => ({
   undoOrgChange: (...args: unknown[]) => writes.push(["undo", ...args]),
   redoOrgChange: (...args: unknown[]) => writes.push(["redo", ...args]),
+  // The roster the preview names a retire's released owners from.
+  clientState: { ui: { active_team_id: "team_t" } },
+  teamMembers: [{ _id: "user_ana", name: "Ana", roster_team: "team_t" }, { _id: "user_bo", name: "Bo", roster_team: "team_t" }],
 }));
 const { createRoot } = await import("react-dom/client");
 const { OrgHistory } = await import("./OrgHistory");
@@ -86,6 +89,22 @@ describe("Org History", () => {
     assert.equal((writes[0] as any[])[1], "b-ask");
     assert.deepEqual((writes[0] as any[])[2].with, ["b-budget"]);
     assert.equal(q("[data-undo-preview]"), null);
+  });
+
+  // A retire's undo takes back the owner rows its departure gave the hands
+  // (released_owners): the preview names them, and says nothing without them.
+  it("names the owners a retire gave its hands, and nothing when it gave none", async () => {
+    preview = { ...fixture.previews["b-ask"], released_owners: [
+      { conversation_id: "c1", user_id: "user_ana" }, { conversation_id: "c1", user_id: "user_bo" },
+      { conversation_id: "c2", user_id: "user_ana" }, { conversation_id: "c3", user_id: "user_bo" },
+    ] };
+    await mount(<OrgHistory />);
+    await click('[data-org-history-entry="b-ask"] [data-org-history-act]');
+    assert.equal(q("[data-undo-released]")!.textContent, "Removes owners Ana, Bo from 3 hands.");
+    preview = fixture.previews["b-ask"];
+    await mount(<OrgHistory />);
+    await click('[data-org-history-entry="b-ask"] [data-org-history-act]');
+    assert.equal(q("[data-undo-released]"), null);
   });
 
   it("keeps the undone entry in place and routes redo through its own store action", async () => {

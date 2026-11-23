@@ -11,6 +11,7 @@
 import { useCallback, useMemo } from "react";
 import { orgLogEntryLine, type OrgLogEntry, type OrgLogRow } from "@codecast/shared/contracts/orgChange";
 import { useInboxStore } from "../../../store/inboxStore";
+import { teamMembersOf } from "../../../lib/activeTeam";
 import { useWorkspaceCollection } from "../../../hooks/useWorkspaceCollection";
 import { useCollectionRows } from "../../../hooks/useCollectionRows";
 import { useOrgUndoPreview, useSyncOrgLog, useSyncOrgLogEntry } from "../../../hooks/useSyncOrgLog";
@@ -31,6 +32,12 @@ function ConnectedRows({ entry }: { entry: OrgLogEntry }) {
 
 function ConnectedPreview({ entry, redo, close }: { entry: OrgLogEntry; redo: boolean; close: () => void }) {
   const { preview, error } = useOrgUndoPreview(entry._id);
+  // The owners a retire gave its hands, by name (the preview carries ids).
+  const roster = useInboxStore(teamMembersOf) as Array<{ _id: string; name?: string; email?: string }>;
+  const nameOf = useCallback((id: string) => {
+    const m = roster.find((x) => x._id === id);
+    return m?.name || m?.email?.split("@")[0] || "a teammate";
+  }, [roster]);
   const confirm = useCallback((withBatches: string[]) => {
     const opts = { with: withBatches, line: orgLogEntryLine(entry) };
     const store = useInboxStore.getState();
@@ -38,7 +45,7 @@ function ConnectedPreview({ entry, redo, close }: { entry: OrgLogEntry; redo: bo
     else store.undoOrgChange(entry._id, opts);
     close();
   }, [entry, redo, close]);
-  return <OrgUndoPreviewCard entry={entry} redo={redo} preview={error ? null : preview} onConfirm={confirm} onCancel={close} />;
+  return <OrgUndoPreviewCard entry={entry} redo={redo} preview={error ? null : preview} onConfirm={confirm} onCancel={close} nameOf={nameOf} />;
 }
 
 export function OrgHistory({ roleId, projectId, limit, onMore }: { roleId?: string; projectId?: string; limit?: number; onMore?: () => void }) {

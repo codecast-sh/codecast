@@ -28,6 +28,14 @@ export function orgLogDoorWords(entry: Pick<OrgLogEntry, "door" | "actor">): str
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
+/** The owner rows a retire gave its hands, which its undo takes back:
+ *  "Removes owners Ana, Bo from 3 hands". */
+export function orgUndoReleasedLine(released: NonNullable<OrgUndoPreview["released_owners"]>, nameOf: (userId: string) => string): string {
+  const people = [...new Set(released.map((r) => r.user_id))];
+  const hands = new Set(released.map((r) => r.conversation_id)).size;
+  return `Removes ${people.length === 1 ? "owner" : "owners"} ${people.map(nameOf).join(", ")} from ${plural(hands, "hand")}`;
+}
+
 /** What an undo cannot take back, said once in the preview (S21). */
 export function orgUndoCannotLine(c: OrgUndoPreview["cannot_take_back"][number]): string {
   switch (c.kind) {
