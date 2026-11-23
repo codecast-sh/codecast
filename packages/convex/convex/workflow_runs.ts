@@ -86,11 +86,11 @@ export async function canReadRun(ctx: Ctx, userId: Id<"users">, run: any): Promi
  * becomes in_review) and leaves every other status, such as a review
  * reject's open, where its station put it. Null leaves it.
  *
- * Any other graph (quick-change, change, a review segment) that completes
+ * Any other graph (change, a review segment) that completes
  * after its own reviewer approved makes the task done: the approve held the
  * task in review while the run went on (tasks.update), and only the run's
- * own end says the stations after it (Land, Deploy) passed. A run that stops
- * at a stop end (Not shipped, Rejected) fails, so it never gets here.
+ * own end says the stations after it (Merge, Deploy) passed. A run that stops
+ * at a stop end (Not merged, Rejected) fails, so it never gets here.
  */
 export function runEndStatus(
   taskStatus: string,

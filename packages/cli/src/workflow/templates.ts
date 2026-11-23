@@ -31,7 +31,6 @@ import shipCast from "./templates/ship.cast" with { type: "text" };
 import deployCast from "./templates/deploy.cast" with { type: "text" };
 import proveImplementCast from "./templates/prove-implement.cast" with { type: "text" };
 import changeCast from "./templates/change.cast" with { type: "text" };
-import quickChangeCast from "./templates/quick-change.cast" with { type: "text" };
 import judgeCast from "./templates/judge.cast" with { type: "text" };
 import judgeRisk from "./templates/judge/risk.md" with { type: "text" };
 import intentCast from "./templates/intent.cast" with { type: "text" };
@@ -43,9 +42,6 @@ import climbReview from "./templates/climb/review.md" with { type: "text" };
 import climbPromote from "./templates/climb/promote.md" with { type: "text" };
 import climbPromoteLine from "./templates/climb/promote_line.md" with { type: "text" };
 import climbRecord from "./templates/climb/record.sh" with { type: "text" };
-import changeFixCheck from "./templates/change/fix_check.md" with { type: "text" };
-import changeFixReview from "./templates/change/fix_review.md" with { type: "text" };
-import changeFixConflict from "./templates/change/fix_conflict.md" with { type: "text" };
 import changeReview from "./templates/change/review.md" with { type: "text" };
 import changeBrief from "./templates/change/brief.md" with { type: "text" };
 import changeConflict from "./templates/change/conflict.md" with { type: "text" };
@@ -83,10 +79,7 @@ export const LINE_TEMPLATE_FILES: Readonly<Record<string, string>> = {
   // (judge-review.cast, learning-loop.md LL11).
   "line/diagnose.md": lineDiagnose,
   "line/unproven.sh": lineUnproven,
-  // What the change flows send back to the session a change came from (flows.md FL4).
-  "change/fix_check.md": changeFixCheck,
-  "change/fix_review.md": changeFixReview,
-  "change/fix_conflict.md": changeFixConflict,
+  // The change flow's reviewer, and what it sends back to the session a change came from (flows.md FL4).
   "change/review.md": changeReview,
   "change/brief.md": changeBrief,
   "change/conflict.md": changeConflict,
@@ -141,7 +134,6 @@ export const BUILTIN_WORKFLOW_TEMPLATES: Readonly<Record<string, string>> = {
   deploy: deployCast,
   "prove-implement": inlineTemplateFiles(proveImplementCast, LINE_TEMPLATE_FILES),
   change: inlineTemplateFiles(changeCast, LINE_TEMPLATE_FILES),
-  "quick-change": inlineTemplateFiles(quickChangeCast, LINE_TEMPLATE_FILES),
   // Hill-climbing one goal metric through its environments (flows.md FL10).
   climb: inlineTemplateFiles(climbCast, LINE_TEMPLATE_FILES),
   feature: featureCast,

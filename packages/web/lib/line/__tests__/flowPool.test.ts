@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { appPool } from "../flowPool";
 import { CHANGE_FLOW_SLUG, defaultFlowOf } from "@codecast/shared/contracts/flowPool";
+import quickRun from "./quickChangeRun.fixture.json";
 
 const row = (over: Record<string, unknown>) => ({
   _id: String(over.slug), slug: "x", name: "x",
@@ -41,5 +42,13 @@ describe("defaultFlowOf (flows.md FL4)", () => {
     expect(defaultFlowOf(pool, null)?.slug).toBe(CHANGE_FLOW_SLUG);
     expect(defaultFlowOf(pool, "deleted")?.slug).toBe(CHANGE_FLOW_SLUG);
     expect(defaultFlowOf(pool, "triage")?.slug).toBe(CHANGE_FLOW_SLUG);
+  });
+  test("Change for a team that set Quick, which the library retired", () => {
+    expect(defaultFlowOf(pool, "quick-change")?.slug).toBe(CHANGE_FLOW_SLUG);
+  });
+  test("a stored Quick row, left by a run of it before it retired, never joins the pool or stands in as the default", () => {
+    const stored = appPool([{ ...quickRun, workspace: "user:u1" }]);
+    expect(stored.some((f) => f.slug === "quick-change")).toBe(false);
+    expect(defaultFlowOf(stored, "quick-change")?.slug).toBe(CHANGE_FLOW_SLUG);
   });
 });

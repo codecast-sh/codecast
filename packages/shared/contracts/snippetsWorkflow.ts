@@ -99,16 +99,13 @@ digraph change {
 }
 \`\`\`
 
-A backbone leaves part of itself to the flow that extends it: a node marked \`slot="<what it must do>"\`, with \`flow=\` for the steps it runs when nothing fills it. A flow naming it by \`extends="<flow>"\` fills the slot with \`subgraph <slot> { ... }\`, whose steps run in its place as a segment's would: written as a chain they start at the first and leave by the slot's own routes after the last, or they name their own start and exit. A subgraph fills only a slot or a node of its own flow, so the backbone's other stations stay as the team keeps them, and a backbone with an empty slot does not run. \`cast flow run -\` and \`cast flow validate -\` read the graph from stdin, keep it in \`.codecast/session-flows/\` (outside git) as this session's draft, and check it, slots included, before anything starts. \`quick-change\` leaves its Check as a slot.
+A backbone leaves part of itself to the flow that extends it: a node marked \`slot="<what it must do>"\`, with \`flow=\` for the steps it runs when nothing fills it. A flow naming it by \`extends="<flow>"\` fills the slot with \`subgraph <slot> { ... }\`, whose steps run in its place as a segment's would: written as a chain they start at the first and leave by the slot's own routes after the last, or they name their own start and exit. A subgraph fills only a slot or a node of its own flow, so the backbone's other stations stay as the team keeps them, and a backbone with an empty slot does not run. \`cast flow run -\` and \`cast flow validate -\` read the graph from stdin, keep it in \`.codecast/session-flows/\` (outside git) as this session's draft, and check it, slots included, before anything starts. A flow written for one change extends a library flow that leaves no slot the same way, placing its own steps with \`after=\`:
 
 \`\`\`dot
 digraph flaky_fix {
-  graph [extends="quick-change", label="Quick, flaky test"]
-  subgraph check {
-    reproduce [prompt="Run the flaky test until it fails and name the race"]
-    prove [shape=parallelogram, script="bun test --rerun-each 20"]
-    reproduce -> prove
-  }
+  graph [extends="change", label="Ship, flaky test"]
+  reproduce [after="pr", prompt="Run the flaky test until it fails and name the race"]
+  prove     [after="reproduce", shape=parallelogram, script="bun test --rerun-each 20"]
 }
 \`\`\`
 `;

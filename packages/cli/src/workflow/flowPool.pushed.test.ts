@@ -82,3 +82,24 @@ describe("a published flow as a segment", () => {
     }
   });
 });
+
+describe("a retired flow's stored row", () => {
+  // A run of quick-change before the library retired it left a workflows row of that name in its runner's pool.
+  const quick = () => row({ _id: "k57quick", slug: "quick-change", name: "quick-change", workspace: "user:u1", mine: true, source: SOURCE.replace("review_pass", "quick_change").replace('kind="segment"', 'kind="line"') });
+
+  test("never joins the pool or this machine's index of team flows", () => {
+    const cache = mkdtemp();
+    const pool = poolFlows(mkdtemp(), null, [quick(), row()], cache);
+    expect(pool.some((f) => f.slug === "quick-change")).toBe(false);
+    expect(pool.some((f) => f.slug === "review-pass")).toBe(true);
+    expect(Object.keys(JSON.parse(fs.readFileSync(path.join(cache, "index.json"), "utf-8")))).toEqual(["review-pass"]);
+  });
+});
+
+test("a plain file an older CLI left where a station folder goes is replaced by the folder", () => {
+  const cache = mkdtemp();
+  fs.mkdirSync(path.join(cache, "k57abc", ".codecast", "flows"), { recursive: true });
+  fs.writeFileSync(path.join(cache, "k57abc", ".codecast", "flows", "review_pass"), "a base written at its bare slug");
+  const file = materializePushedFlow(row(), cache);
+  expect(parseWorkflowFile(file).nodes.get("review")?.prompt).toBe("Read the diff on $branch.");
+});

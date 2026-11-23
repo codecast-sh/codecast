@@ -191,7 +191,7 @@ describe("a merge no role is behind", () => {
   const check = (ctx: any) => checkMergeCore(ctx, HOST as any, "workflow_runs_1");
   const clear = (ctx: any, why = "founder-intent read: ship", head_sha = HEAD) => clearForMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", why, head_sha }, NOW + 1);
 
-  // A quick-change run: no role behind it, no Ship card, no clear stamp. Its observed landing authorizes nothing, so it records.
+  // A run with no role behind it, no Ship card and no clear stamp. Its observed landing authorizes nothing, so it records.
   test("a run nothing authorizes may still record an observed landing", async () => {
     const { ctx, run } = solo();
     await expect(check(ctx)).rejects.toThrow("nothing authorizes the merge");
@@ -219,7 +219,7 @@ describe("a merge no role is behind", () => {
     Object.assign(agent.run(), { current_node_id: "implement", node_statuses: [{ node_id: "implement", status: "running", session_id: "impl" }] });
     await expect(clear(agent.ctx)).rejects.toThrow("implement is not a script station of the run's graph");
     // A fix station hands work back to the change's own session: the runner reports it running with no session of
-    // its own, waiting on that session. In quick-change (no Decide) a stamp from there would land unasked.
+    // its own, waiting on that session. In a flow with no Decide, a stamp from there would land unasked.
     const fix = solo();
     Object.assign(fix.run(), { current_node_id: "fix_review", waiting_on_session: { node_id: "fix_review", conversation_id: "conversations_hand", since: NOW, note: "Address the review" },
       node_statuses: [{ node_id: "fix_review", status: "running" }] });

@@ -546,7 +546,7 @@ const CASES: Case[] = [
   // A charter edited in place (S7): the charter doc's text before and after is the write, so the undo restores the words.
   { kind: "charter_edit", setup: async (f) => { const r = await f.role(); await f.db.patch(r.charter_doc_id, { content: "Keeps paid acquisition on budget and pointed at the funnel." }); }, change: { kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "on budget", after: "under budget" }, { op: "add", line: "Reports spend every Monday." }] } },
   // A role's own settings, each through its own setter: the rename, the switches, the line and the pause all go back.
-  { kind: "role_edit", setup: (f) => f.role(), change: { kind: "role_edit", handle: "growth", name: "Head of Funnel", new_handle: "head-of-funnel", given_name: "Rosa", line: "quick-change", hires_freely: true, keeps_reports_inside: true, paused: true } },
+  { kind: "role_edit", setup: (f) => f.role(), change: { kind: "role_edit", handle: "growth", name: "Head of Funnel", new_handle: "head-of-funnel", given_name: "Rosa", line: "climb", hires_freely: true, keeps_reports_inside: true, paused: true } },
   { kind: "adopt", setup: (f) => f.role(), change: { kind: "adopt", handle: "growth", conversation: "jx70001" } },
   { kind: "file", change: { kind: "file", plan: "pl-1", project: "pr-1" } },
   { kind: "plan_status", change: { kind: "plan_status", plan: "pl-1", status: "done", reason: "finished" } },

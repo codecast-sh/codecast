@@ -1,11 +1,11 @@
 // What a failed station's output comes to on a task (ct-85594): a check's
-// failing steps in one line, never its JSON; and the shipped change flows send a
+// failing steps in one line, never its JSON; and a flow on the check segment sends a
 // check the machine could not run to a stop of the machine's, not to the session.
 import { describe, expect, test } from "bun:test";
 import { evalCondition } from "./condition";
 import { parseWorkflowSource } from "./parser";
 import { outputSummary, taskStopCard } from "./runFailure";
-import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
+import { SEGMENTED_FLOW } from "./segmentedFlow.testkit";
 import type { WorkflowRunState } from "./types";
 
 // The check output Jason's laptop printed on ct-85594 (Nov 13), trimmed.
@@ -36,22 +36,20 @@ describe("outputSummary", () => {
   });
 });
 
-describe("the shipped quick-change flow routes a check the machine could not run to the machine's stop", () => {
-  for (const name of ["quick-change"]) {
-    test(name, () => {
-      const graph = parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[name]);
-      const route = (from: string, ctx: Record<string, string>) =>
-        graph.edges.filter((e) => e.from === from && (!e.condition || evalCondition(e.condition, ctx))).map((e) => e.to);
-      // The check's command: exit 2 is the machine's, any other failure is the change's.
-      expect(route("check__verify", { outcome: "failure", "check__verify.exit_code": "2" })).toEqual(["check__unjudged"]);
-      expect(route("check__verify", { outcome: "failure", "check__verify.exit_code": "1" })).toEqual(["check__failed"]);
-      expect(route("check__unjudged", { outcome: "failure", "check__unjudged.json": JSON.stringify({ exit: "unjudged" }) })).toEqual(["unchecked"]);
-      expect(route("check__failed", { outcome: "failure", "check__failed.json": JSON.stringify({ exit: "failed" }) })).toEqual(["fix_check"]);
-      expect(graph.nodes.get("unchecked")?.machine).toBe(true);
-      expect(graph.nodes.get("check__failed")?.stop).toContain("$check__verify.summary");
-      expect(graph.nodes.get("check__unjudged")?.stop).toContain("$check__verify.summary");
-    });
-  }
+describe("a flow built on the shipped check segment routes a check the machine could not run to the machine's stop", () => {
+  test("check's exits read through the flow's own routes", () => {
+    const graph = parseWorkflowSource(SEGMENTED_FLOW);
+    const route = (from: string, ctx: Record<string, string>) =>
+      graph.edges.filter((e) => e.from === from && (!e.condition || evalCondition(e.condition, ctx))).map((e) => e.to);
+    // The check's command: exit 2 is the machine's, any other failure is the change's.
+    expect(route("check__verify", { outcome: "failure", "check__verify.exit_code": "2" })).toEqual(["check__unjudged"]);
+    expect(route("check__verify", { outcome: "failure", "check__verify.exit_code": "1" })).toEqual(["check__failed"]);
+    expect(route("check__unjudged", { outcome: "failure", "check__unjudged.json": JSON.stringify({ exit: "unjudged" }) })).toEqual(["unchecked"]);
+    expect(route("check__failed", { outcome: "failure", "check__failed.json": JSON.stringify({ exit: "failed" }) })).toEqual(["fix_check"]);
+    expect(graph.nodes.get("unchecked")?.machine).toBe(true);
+    expect(graph.nodes.get("check__failed")?.stop).toContain("$check__verify.summary");
+    expect(graph.nodes.get("check__unjudged")?.stop).toContain("$check__verify.summary");
+  });
 });
 
 describe("taskStopCard", () => {

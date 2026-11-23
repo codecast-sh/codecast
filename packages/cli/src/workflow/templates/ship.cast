@@ -2,7 +2,7 @@
 // the default branch and checked there, then the project's ship command lands
 // it, or Ship opens the pull request (docs/architecture/ship.md).
 digraph ship {
-  graph [kind="segment", label="Ship", description="Rebase on the default branch, check, and land the change", takes="task,branch"]
+  graph [kind="segment", label="Land", description="Rebase on the default branch, check, and land the change", takes="task,branch"]
   start [shape=Mdiamond]
   rebase [label="Rebase", shape=parallelogram, max_visits=3, timeout=3600, script="@line/rebase.sh"]
   // Quiet by design: ship.sh prints once the change has landed, after its CI.

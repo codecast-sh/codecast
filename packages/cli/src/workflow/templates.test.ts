@@ -68,7 +68,7 @@ describe("line.cast template", () => {
     }
     // The line's own files, the diagnosis graph it runs beside its causes (LL11), the change flows' briefs (flows.md FL4)
     // the blind judge's and the intent read's prompts, read as each segment run alone writes them, and the climb's stations (FL10).
-    const shipped = [graph, ...[JUDGE_REVIEW_GRAPH, "change", "quick-change", "judge", "intent", "climb"].map((t) => parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[t]))];
+    const shipped = [graph, ...[JUDGE_REVIEW_GRAPH, "change", "judge", "intent", "climb"].map((t) => parseWorkflowSource(BUILTIN_WORKFLOW_TEMPLATES[t]))];
     const used = new Set(shipped.flatMap((g) => [...g.nodes.values()].flatMap((n) => [n.prompt, n.script])));
     for (const [ref, text] of Object.entries(LINE_TEMPLATE_FILES)) expect(used.has(withTemplateIncludes(text, ref, LINE_TEMPLATE_FILES))).toBe(true);
   });

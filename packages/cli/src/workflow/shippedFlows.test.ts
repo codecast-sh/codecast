@@ -17,9 +17,10 @@ describe("the web's snapshot of the shipped pool", () => {
   test("carries each station's words once, by the expanded node id the graph draws", () => {
     const { texts, flows } = shippedFlowStationsSnapshot();
     expect(new Set(texts).size).toBe(texts.length);
-    const graph = shippedFlowsSnapshot().find((f) => f.slug === "quick-change")!;
-    const reviewer = graph.nodes.find((n) => n.segment === "review" && n.type !== "exit" && flows["quick-change"][n.id as string]?.prompt !== undefined)!;
-    expect(texts[flows["quick-change"][reviewer.id as string].prompt as number]).toContain("review");
+    const graph = shippedFlowsSnapshot().find((f) => f.slug === "change")!;
+    const asker = graph.nodes.find((n) => n.segment === "decide" && n.type !== "exit" && flows.change[n.id as string]?.prompt !== undefined)!;
+    expect(asker.id).toBe("decide__decide");
+    expect(texts[flows.change[asker.id as string].prompt as number]).toBe("$review_question");
     expect(flows.review.review.backend).toBe("session");
   });
 

@@ -22,6 +22,7 @@ import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from
 import { READY_LIST_LIMIT, buildTaskClaimBody, buildTaskStartBody, foldStaleTasks, groupTasksByAssignee, readyCountLine, startedLines, taskHintBody, unclaimedLine } from "./taskClaim.js";
 import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 import { usedOf } from "@codecast/shared/contracts/orgCapacity";
+import { retiredFlowLine } from "@codecast/shared/contracts/flowPool";
 import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
 import { AUTONOMY_LABEL, autonomyOn, autonomySentence, lineStartsOn, switchFromStageWord } from "@codecast/shared/contracts/roleAutonomy";
 import open from "open";
@@ -22428,6 +22429,11 @@ workflow
     // else one of the caller's own pushed workflows by slug (L2).
     let resolved = "resolved" in choice ? choice.resolved : resolveWorkflowSource(file);
     if (!resolved) {
+      const retired = retiredFlowLine(file);
+      if (retired) {
+        console.error(`✗ ${retired}`);
+        process.exit(1);
+      }
       const own = (await cliPost("/cli/workflows/list", {}).catch(() => null))?.workflows?.find((w: any) => w.slug === file && w.source);
       if (own) resolved = { source: own.source, label: `workflow:${own.slug}` };
     }

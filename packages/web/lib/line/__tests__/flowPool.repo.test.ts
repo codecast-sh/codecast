@@ -48,7 +48,7 @@ describe("a repository's own flows in the pool", () => {
     expect(pool[0]).toBe(changes[0]);
     expect(changes[0].takes).toContain("branch");
     // Every other shipped flow is still there.
-    expect(pool.some((f) => f.slug === "quick-change" && f.where === "shipped")).toBe(true);
+    expect(pool.some((f) => f.slug === "climb" && f.where === "shipped")).toBe(true);
   });
 
   test("a published flow of the repository's slug stays out; one of another slug still joins", () => {
@@ -76,7 +76,7 @@ describe("the session's pool", () => {
     const named = namedForRepo(appPool([], [repoChange, hotfix]), "acme/union-mobile");
     expect(named.find((f) => f.slug === "change")!.label).toBe("Change · union-mobile");
     expect(named.find((f) => f.slug === "hotfix")!.label).toBe("Hotfix");
-    expect(named.find((f) => f.slug === "quick-change")!.label).toBe("Quick");
+    expect(named.find((f) => f.slug === "climb")!.label).toBe("Climb");
     // With the library's own change, nothing is renamed: it reads Ship.
     expect(namedForRepo(appPool([], []), "acme/union-mobile").find((f) => f.slug === "change")!.label).toBe("Ship");
   });

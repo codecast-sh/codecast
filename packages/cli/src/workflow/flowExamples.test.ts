@@ -4,7 +4,7 @@ import { WORKFLOW_REFERENCE } from "@codecast/shared/contracts";
 import { FLOW_HELP } from "../flowCommand";
 import { emptySlots, parseWorkflowSource, validateWorkflow } from "./parser";
 
-/** A graph that extends a library flow and fills its slot: it parses, and nothing is left empty. */
+/** A graph that extends a library flow with steps of its own: it parses, and no slot is left empty. */
 function runsAsWritten(src: string) {
   const graph = parseWorkflowSource(src);
   expect(validateWorkflow(graph)).toEqual([]);
@@ -22,7 +22,7 @@ describe("the flow examples people and agents copy", () => {
   test("cast flow --help's backbone example", () => {
     const example = /(digraph flaky_fix \{[\s\S]*?\n {2}\})/.exec(FLOW_HELP)?.[1];
     expect(example).toBeDefined();
-    // The help aligns a note after the subgraph line; the graph is what precedes it.
-    runsAsWritten(example!.replace(/\s{2,}steps that fill.*$/m, "").replace(/subgraph check \{ reproduce -> prove \}/, "subgraph check { reproduce [prompt=\"Reproduce it\"] prove [shape=parallelogram, script=\"true\"] reproduce -> prove }"));
+    // The help aligns a note after each step's line; the graph is what precedes it.
+    runsAsWritten(example!.replace(/(\])[ \t]{2,}\S.*$/gm, "$1"));
   });
 });

@@ -51,7 +51,16 @@ describe("the confirm agrees with the chip", () => {
     expect(canStop.v).toBe("PR, CI + Review, Merge, Deploy");
     expect(canStop.list).toBeUndefined();
     expect(asked(ship).ledger.stop).toBe("Stop on its card");
-    // Another flow keeps its name in the title.
-    expect(asked(pool.find((f) => f.slug === "quick-change")!).name).toBe("Ship through Quick");
+  });
+
+  test("a flow that never asks keeps its name in the title, and asks nothing in both places", () => {
+    const n = (id: string, label: string, type: string, shape: string) => ({ id, label, type, shape });
+    const hotfix = pushedFlow({
+      _id: "w2", slug: "hotfix", name: "hotfix", source: 'digraph hotfix { graph [kind="line", label="Hotfix", takes="task,branch"] }',
+      nodes: [n("start", "start", "start", "Mdiamond"), n("merge", "Merge", "command", "parallelogram"), n("landed", "Merged", "command", "parallelogram"), n("exit", "Live", "exit", "Msquare")],
+      edges: [{ from: "start", to: "merge" }, { from: "merge", to: "landed", condition: "outcome = success" }, { from: "landed", to: "exit" }],
+    });
+    expect(approvalWords(approvalOf(hotfix))).toBe("No approval");
+    expect(asked(hotfix)).toMatchObject({ name: "Ship through Hotfix", questions: "0", you: [] });
   });
 });

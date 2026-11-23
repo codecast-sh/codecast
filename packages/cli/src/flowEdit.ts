@@ -78,7 +78,7 @@ function parse(file: string, read: ReadFile): WorkflowGraph {
 
 /** The plan for one edit of `flow` in the checkout at `root`. */
 export function planFlowEdit(root: string, flow: string, req: FlowEditRequest, read: ReadFile = readDisk): FlowEditPlan {
-  if (!/^[\w-]+$/.test(flow)) throw new FlowEditError(`"${flow}" is not a flow's name: name one from cast flow ls (change, quick-change, ...)`);
+  if (!/^[\w-]+$/.test(flow)) throw new FlowEditError(`"${flow}" is not a flow's name: name one from cast flow ls (change, line, ...)`);
   const file = repoFlowFile(root, flow);
   const dir = path.dirname(file);
   const existing = read(file);

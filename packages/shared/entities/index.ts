@@ -294,7 +294,7 @@ export function buildEntityUrl(type: string, id: string, base: string = CODECAST
 /**
  * A flow of the pool has no short id: it is named by its slug, the name every
  * run, `cast flow show` and the .cast file already use. `flow:<slug>` is its
- * reference (`flow:change`, `flow:quick-change`), the way `doc:<id>` names a
+ * reference (`flow:change`, `flow:prove-implement`), the way `doc:<id>` names a
  * doc. A slug is lowercase letters, digits and inner hyphens (lineSlug.ts).
  */
 export const FLOW_REF_SOURCE = "flow:[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?";
