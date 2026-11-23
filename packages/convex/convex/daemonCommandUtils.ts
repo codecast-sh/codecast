@@ -1,5 +1,5 @@
 import type { Doc, Id } from "./_generated/dataModel";
-import { ACTIVE_AGENT_STATUSES, MID_TURN_AGENT_STATUSES, commandsSession, localAgentTypeOf } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, MID_TURN_AGENT_STATUSES, commandsSession, isClosedSession, localAgentTypeOf } from "@codecast/shared/contracts";
 import { enqueuePendingMessage, releaseQueuedForUser, resetConversationPendingMessages } from "./pendingMessages";
 import { parkOnCloudHost } from "./cloudPlacement";
 
@@ -326,6 +326,11 @@ export async function resumeConversationSession(
   if ((conversation.message_count ?? 0) === 0) {
     return { skipped: true, reason: "fresh_session_no_messages" };
   }
+
+  // A person's resume is a wake: a closed session it runs is not closed any
+  // more (every machine reader would otherwise treat the live session as torn
+  // down). Ending the dismissal ends the close (shared isClosedSession).
+  if (isClosedSession(conversation)) await ctx.db.patch(conversation._id, { inbox_dismissed_at: undefined });
 
   const { deduplicated, command_id } = await enqueueResumeSession(ctx, conversation);
 

@@ -70,6 +70,9 @@ export type PlannedRow = {
   /** The executor is offline: the row waits in its queue and starts when that
    *  machine's daemon checks in (reissueWaitingMigrations). Its label. */
   waits_for?: string;
+  /** A closed session moves without resuming: it stays closed, bound to the
+   *  destination, and wakes there on its next real wake (closedSession.ts). */
+  resume?: false;
 };
 
 export type SkippedRow = { conversation_id: string; short_id?: string; title?: string; reason: string };
@@ -99,7 +102,6 @@ export function planMigration(opts: {
     // An ended session can still come home: its files and transcript are on the host.
     if (c.status === "completed" && target.is_remote) { skip("the session has ended"); continue; }
     if (c.inbox_killed_at) { skip("the session was killed"); continue; }
-    if (isClosedSession(c)) { skip("the session was closed"); continue; }
     if (c.held) { skip(c.held); continue; }
     if (c.migration) { skip(`already migrating (${c.migration.batch_id})`); continue; }
     if (c.cloud_placement === "pending") { skip("still being placed on the cloud host"); continue; }
@@ -118,6 +120,7 @@ export function planMigration(opts: {
         conversation_id: c._id, session_id: c.session_id, title: c.title, short_id: c.short_id,
         direction: "to_cloud", from_device_id: c.owner_device_id, to_device_id: target.device_id, executor_device_id: executor.device_id,
         ...(online(executor) ? {} : { waits_for: executor.label ?? "its machine" }),
+        ...(isClosedSession(c) ? { resume: false as const } : {}),
       });
     } else {
       if (!owner?.is_remote) { skip("only sessions on a cloud host can be brought back (use Run on this device for a laptop-to-laptop move)"); continue; }
@@ -128,6 +131,7 @@ export function planMigration(opts: {
         conversation_id: c._id, session_id: c.session_id, title: c.title, short_id: c.short_id,
         direction: "to_local", from_device_id: c.owner_device_id, to_device_id: target.device_id, executor_device_id: target.device_id,
         ...(online(target) ? {} : { waits_for: target.label ?? "the destination" }),
+        ...(isClosedSession(c) ? { resume: false as const } : {}),
       });
     }
   }

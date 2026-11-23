@@ -106,7 +106,6 @@ describe("planMigration", () => {
     const { rows, skipped } = planMigration({
       conversations: [
         { ...base, _id: "killed", owner_device_id: LAPTOP, inbox_killed_at: 1 },
-        { ...base, _id: "closed", owner_device_id: LAPTOP, inbox_dismissed_at: 5, inbox_closed_at: 5 },
         { ...base, _id: "sub", owner_device_id: LAPTOP, is_subagent: true, held: "a subagent moves with its parent" },
         { ...base, _id: "busy", owner_device_id: LAPTOP, migration: { batch_id: "mg-old" } },
         { ...base, _id: "placing", owner_device_id: BOX, cloud_placement: "pending" },
@@ -119,7 +118,6 @@ describe("planMigration", () => {
     expect(rows).toEqual([]);
     const reasons = Object.fromEntries(skipped.map((s) => [s.conversation_id, s.reason]));
     expect(reasons.killed).toContain("killed");
-    expect(reasons.closed).toContain("closed");
     expect(reasons.sub).toContain("subagent");
     expect(reasons.busy).toContain("mg-old");
     expect(reasons.placing).toContain("placed");
@@ -386,6 +384,37 @@ describe("quiesce target", () => {
     await performBeginSession({ db }, ME as any, { migration_id: up.rows[0].migration_id as any, device_id: LAPTOP }, NOW);
     const q2 = await performEnqueueQuiesce({ db }, ME as any, { migration_id: up.rows[0].migration_id as any, mode: "force" }, NOW);
     expect(q2.target_device_id).toBe(LAPTOP);
+  });
+});
+
+describe("a closed session moves without waking", () => {
+  test("it is planned like any session, with resume false", () => {
+    const devices = [{ device_id: LAPTOP, last_seen: ONLINE, label: "MacBook" }, { device_id: BOX, is_remote: true, last_seen: ONLINE, label: "Linux box" }];
+    const base = { session_id: "s", agent_type: "claude_code", status: "active" };
+    const { rows, skipped } = planMigration({
+      conversations: [{ ...base, _id: "closed", owner_device_id: LAPTOP, inbox_dismissed_at: 5, inbox_closed_at: 5 }, { ...base, _id: "open", owner_device_id: LAPTOP }],
+      devices, targetDeviceId: BOX, now: NOW,
+    });
+    expect(skipped).toEqual([]);
+    expect(rows.find((r) => r.conversation_id === "closed")!.resume).toBe(false);
+    expect(rows.find((r) => r.conversation_id === "open")!.resume).toBeUndefined();
+  });
+
+  test("the flip binds it to the destination, queues no resume, and leaves it closed", async () => {
+    const db = fixtures();
+    Object.assign(conv(db, "c1"), { inbox_dismissed_at: 5, inbox_closed_at: 5 });
+    const { rows } = await startedBatch(db, ["c1"]);
+    const id = rows[0].migration_id as any;
+    expect(rowsOf(db)[0].resume).toBe(false);
+    await performBeginSession({ db }, ME as any, { migration_id: id, device_id: LAPTOP }, NOW);
+    const before = commands(db).length;
+    const fin = await performFinishSession({ db }, ME as any, { migration_id: id, project_path: "/home/ubuntu/work/a" }, NOW + 5);
+    expect(fin).toMatchObject({ ok: true, resume_command_id: null, kept_closed: true });
+    expect(commands(db).slice(before).map((x) => x.command)).not.toContain("resume_session");
+    const c = conv(db, "c1");
+    expect(c.owner_device_id).toBe(BOX);
+    expect(c.inbox_dismissed_at).toBe(5);
+    expect(c.inbox_closed_at).toBe(5);
   });
 });
 
