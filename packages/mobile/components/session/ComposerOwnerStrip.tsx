@@ -43,7 +43,6 @@ export function ComposerOwnerStrip({ conversationId, active }: { conversationId:
         <TouchableOpacity
           style={styles.button}
           activeOpacity={0.6}
-          hitSlop={{ top: 8, bottom: 8 }}
           accessibilityRole="button"
           onPress={() => { tap(); owners.applyChange({ driver: { kind: 'role' } }, { driver: { kind: 'user', user_id: me } }); }}
         >
@@ -56,9 +55,8 @@ export function ComposerOwnerStrip({ conversationId, active }: { conversationId:
   const { driverName, telling } = line;
   const choice = (on: boolean, label: string) => (
     <TouchableOpacity
-      style={[styles.segment, telling === on && { backgroundColor: Theme.text }]}
+      style={[styles.segment, on ? styles.segmentLast : styles.segmentFirst, telling === on && { backgroundColor: Theme.text, borderColor: Theme.text }]}
       activeOpacity={0.6}
-      hitSlop={{ top: 8, bottom: 8 }}
       accessibilityRole="button"
       accessibilityState={{ selected: telling === on }}
       onPress={() => { tap(); setComposerTell(conversationId, on); }}
@@ -89,7 +87,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     gap: 8,
     marginBottom: 6,
     paddingHorizontal: 10,
-    paddingVertical: 6,
+    paddingVertical: 4,
     borderRadius: 10,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.border,
@@ -98,7 +96,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   words: { flex: 1, minWidth: 0, fontSize: 13, color: Theme.textMuted },
   name: { fontWeight: '600', color: Theme.text },
   button: {
-    height: 30,
+    minHeight: 44,
     paddingHorizontal: 10,
     borderRadius: 7,
     borderWidth: StyleSheet.hairlineWidth,
@@ -106,13 +104,18 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     justifyContent: 'center',
   },
   buttonText: { fontSize: 12, fontWeight: '600', color: Theme.text },
-  segments: {
-    flexDirection: 'row',
-    borderRadius: 7,
+  // Nothing here clips: a clipping parent refuses touches outside its
+  // bounds on the new architecture, so each segment is a full 44pt target and
+  // rounds its own outer corners.
+  segments: { flexDirection: 'row' },
+  segment: {
+    minHeight: 44,
+    paddingHorizontal: 9,
+    justifyContent: 'center',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: Theme.border,
-    overflow: 'hidden',
   },
-  segment: { height: 30, paddingHorizontal: 9, justifyContent: 'center' },
+  segmentFirst: { borderTopLeftRadius: 7, borderBottomLeftRadius: 7, borderRightWidth: 0 },
+  segmentLast: { borderTopRightRadius: 7, borderBottomRightRadius: 7 },
   segmentText: { fontSize: 12, fontWeight: '600', color: Theme.text },
 }));
