@@ -204,6 +204,8 @@ export type OrgUndoPreview = {
   /** Later entries that depend on this one: undone together, or not at all. */
   depends: OrgLogEntry[];
   cannot_take_back: Array<{ kind: "message_sent" | "wake_ran" | "session_worked"; count: number }>;
+  /** Owner rows a role's departure gave (a retire's hands), taken back as the role comes back. */
+  released_owners?: Array<{ conversation_id: string; user_id: string }>;
   /** Set when undo is not possible at all, with the reason. */
   refused?: string;
 };

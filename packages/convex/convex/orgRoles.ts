@@ -730,14 +730,6 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: Retire
     .collect();
   // An open decision follows its session (S28): the retired role leaves the
   // route, and the card goes to the people who now answer for the session.
-  // Its live hands no person owns go to the person it answered to: the
-  // first RETIRE_RELEASE_BATCH here, the rest in scheduled batches, so a
-  // role with many hands stays inside one transaction's write limit.
-  const toGive = filed.filter(releasedRunNeedsOwner).map((c: any) => c._id);
-  for (const id of toGive.slice(0, RETIRE_RELEASE_BATCH)) await giveReleasedRun(ctx, id, role, userId);
-  if (toGive.length > RETIRE_RELEASE_BATCH) {
-    await ctx.scheduler.runAfter(0, internal.orgRoles.giveReleasedRuns, { role_id: role._id, conversation_ids: toGive.slice(RETIRE_RELEASE_BATCH), added_by: userId });
-  }
   for (const conv of filed) {
     await ctx.db.patch(conv._id, { org_role_id: undefined, org_role_hold: undefined });
     await reroutePendingDecisionsForConversation(ctx, conv._id, now);
@@ -770,6 +762,18 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: Retire
     if (!owned.length) continue;
     await performRehomeSessions(ctx, userId, heir, owned, { note: RETIRE_FALLBACK_NOTE, by_rule: true });
     pool = pool.filter((e) => !owned.includes(e));
+  }
+  // Its live hands no person owns, and no heir took, go to the person it
+  // answered to: the first RETIRE_RELEASE_BATCH here, the rest in scheduled
+  // batches, so a role with many hands stays inside one transaction's write
+  // limit. Every batch judges each hand as it then is (giveReleasedRun).
+  const toGive = filed.filter(releasedRunNeedsOwner).map((c: any) => c._id);
+  for (const id of toGive.slice(0, RETIRE_RELEASE_BATCH)) {
+    await giveReleasedRun(ctx, id, role, userId);
+    await reroutePendingDecisionsForConversation(ctx, id, now);
+  }
+  if (toGive.length > RETIRE_RELEASE_BATCH) {
+    await ctx.scheduler.runAfter(0, internal.orgRoles.giveReleasedRuns, { role_id: role._id, conversation_ids: toGive.slice(RETIRE_RELEASE_BATCH), added_by: userId });
   }
   const stopped: any[] = [];
   for (const t of liveRoutines) if ((await ctx.db.get(t._id))?.status === "cancelled") stopped.push({ agent_task_id: String(t._id), title: t.title });

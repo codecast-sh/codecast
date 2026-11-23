@@ -10,6 +10,7 @@ import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
 import { performReparentRole, performSetCaps, performSetTrust, performUpdateRole } from "./orgRoles";
 import { ownerSetOf, removeSessionOwnerRow, setSessionOwnerRows, settleDriver, syncPrimaryOwnerCache } from "./sessionOwners";
 import { patchTask } from "./lib/agentTaskRows";
+import { releasedRowsOf, returnReleasedRows } from "./lib/roleRelease";
 import { recalcPlanProgress } from "./tasks";
 import { setTaskStatus } from "./orgInit";
 import { outsideKeptArea, scopeIds } from "./lib/orgScope";
@@ -283,6 +284,9 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
     for (const w of writes) {
       virtual.set(w.id, { ...(await read(w.id)), ...patchOf(w.before) });
       if (w.table === "conversations") sessions.add(w.id);
+      if (w.table === "conversations" && w.before.org_role_id) {
+        for (const r of await releasedRowsOf(ctx, w.id as Id<"conversations">, w.before.org_role_id)) (preview.released_owners ??= []).push({ conversation_id: w.id, user_id: String(r.user_id) });
+      }
     }
     const inverse = inverseFor(row, writes, parent);
     steps.push({ row, inverse, writes, parent });
@@ -319,6 +323,8 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
       for (const id of (await sessionParent(ctx, current)).owner_user_ids) await removeSessionOwnerRow(ctx, current._id, id as Id<"users">);
       await syncPrimaryOwnerCache(ctx, current._id);
     }
+    // The role is back: the rows its departure gave go (a retire's later batches).
+    if (patch.org_role_id) await returnReleasedRows(ctx, current._id, patch.org_role_id);
   }
   // A charter's text goes back the way every body write goes (lib/docBody), so an open editor remounts on it.
   if (w.table === "docs" && "content" in patch) {

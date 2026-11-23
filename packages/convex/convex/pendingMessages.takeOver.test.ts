@@ -3,6 +3,7 @@ import { makeFakeDb } from "./testDb";
 import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
 import { giveReleasedRuns, performCreateRole, performProvisionRole, performReparentSession, performRetireRole, performTellSessionRole } from "./orgRoles";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
+import { planUndo, performUndo } from "./orgChanges";
 import { wakeMentionedParties } from "./chat";
 import { computeInboxSessions, heldByRoleAlone } from "./conversations";
 import { formatDecisionAnswer, roleDrives, rollupParentIdOf } from "@codecast/shared/contracts";
@@ -476,6 +477,41 @@ describe("a role's pool hand never ends up owned by nobody", () => {
     expect(batch.conversation_ids).toHaveLength(4);
     await (giveReleasedRuns as any)._handler(ctx, batch);
     expect(tables.conversations.filter((c) => c.role_started && ownersOf(c._id).length)).toHaveLength(104);
+  });
+
+  test("undoing the retire takes back every row its release gave, the batched ones too, and the preview names them", async () => {
+    const { ctx, tables, ownersOf, roleId, row } = await world();
+    for (let i = 0; i < 101; i++) tables.conversations.push(session(`live${i}`, { user_id: POOL, org_role_id: roleId, role_started: true }));
+    const scheduled: any[] = [];
+    ctx.scheduler = { runAfter: async (_ms: number, _fn: unknown, args: any) => { scheduled.push(args); } };
+    await performRetireRole(ctx, ME as any, { role_id: String(roleId), handoff: "skip" });
+    await (giveReleasedRuns as any)._handler(ctx, scheduled.find((a) => a.conversation_ids));
+    const hands = tables.conversations.filter((c) => c.role_started);
+    expect(hands.every((c) => ownersOf(c._id).length === 1)).toBe(true);
+    const retire = tables.org_changes.find((r: any) => r.kind === "retire");
+    const batch = { _id: retire.batch };
+    const preview = await planUndo(ctx, ME as any, String(batch._id));
+    expect(preview.preview.refused).toBeUndefined();
+    expect(preview.preview.released_owners).toHaveLength(hands.length);
+    await performUndo(ctx, ME as any, { batch: String(batch._id) });
+    for (const c of hands) {
+      expect(row(c._id).org_role_id).toBe(roleId);
+      expect(ownersOf(c._id)).toEqual([]);
+    }
+  });
+
+  test("a batch gives no row to a hand an heir took since, or one that finished", async () => {
+    const { ctx, tables, ownersOf, roleId } = await world();
+    const eng = await performCreateRole(ctx, ME as any, { name: "Eng lead", handle: "eng", team_id: TEAM });
+    tables.conversations.push(
+      session("taken", { user_id: POOL, org_role_id: eng._id, role_started: true }),
+      session("finished", { user_id: POOL, role_started: true, status: "completed" }),
+      session("waiting", { user_id: POOL, role_started: true }),
+    );
+    await (giveReleasedRuns as any)._handler(ctx, { role_id: roleId, conversation_ids: ["taken", "finished", "waiting"], added_by: ME });
+    expect(ownersOf("taken")).toEqual([]);
+    expect(ownersOf("finished")).toEqual([]);
+    expect(ownersOf("waiting")).toEqual([ME]);
   });
 
   test("taking the role off it, or a visibility change that drops the role, does the same", async () => {

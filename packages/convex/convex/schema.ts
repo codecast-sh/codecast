@@ -700,6 +700,9 @@ export default defineSchema({
     added_at: v.number(),
     note: v.optional(v.string()), // assigner's optional handoff message
     seen_at: v.optional(v.number()), // when the assignee acknowledged the handoff
+    // The role whose departure gave this row (lib/roleRelease): an undo that
+    // puts that role back takes the row back.
+    released_from: v.optional(v.id("org_roles")),
   })
     // Powers the owner's inbox merge: newest-first owner rows for a user, then
     // hydrate the conversations and filter by the activity window in JS.
