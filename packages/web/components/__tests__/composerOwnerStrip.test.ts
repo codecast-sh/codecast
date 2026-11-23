@@ -15,10 +15,9 @@ test("the composer owner line in each driver state", async () => {
     });
     const stderr = await readFile(join(dir, "stderr"), "utf8");
     // The child run passing is the point; the exact count moves whenever a case
-  // is added to the fixture.
-  expect(stderr).toContain("0 fail");
-  expect(stderr).toMatch(/[1-9]\d* pass/);
-    expect(stderr).toContain("0 fail");
+    // is added to the fixture.
+    expect(stderr).toContain(" 0 fail");
+    expect(stderr).toMatch(/[1-9]\d* pass/);
     expect(error).toBeNull();
   } finally {
     await rm(dir, { recursive: true, force: true });

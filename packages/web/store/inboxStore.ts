@@ -46,7 +46,7 @@ import {
   bindUndoStore,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
-import { paintTakeOverOnSend } from "./sessionOwnersSlice";
+import { paintTakeOverOnSend, type SendTakeOver } from "./sessionOwnersSlice";
 import { afterCommit, rekeyUndoIds, sameShape, withoutUndo } from "@platform/engine";
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
@@ -6474,19 +6474,21 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // force: "Send anyway" on a message held for a dialog (delivery_force).
   retryPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string; force?: boolean }) => Promise<string>;
   cancelPendingMessage: (convId: string, ref: { messageId?: string; clientId?: string }) => Promise<string>;
-  queueMessage: (convId: string, content: string, clientId: string) => void;
+  // `opts.take_over`: the session composer's own send, whose owner line said
+  // it takes the wheel (paintTakeOverOnSend). Every other caller leaves it out.
+  queueMessage: (convId: string, content: string, clientId: string, opts?: SendTakeOver) => void;
   releaseQueued: (convId: string) => void;
   reorderQueued: (convId: string, messageId: string, beforeId: string | null) => void;
   mergeQueued: (convId: string, messageId: string, intoId: string) => void;
   /** `quoteIds`: the composer quotes this message carries, stamped sent by the server (quoteDrafts.ts). */
-  sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string, quoteIds?: string[]) => void;
+  sendMessage: (convId: string, content: string, imageIds?: string[], clientId?: string, quoteIds?: string[], opts?: SendTakeOver) => void;
   // sendMessage for a conversation that may still be a local stub (a session
   // started a moment ago): resolves the real id first, then sends under the
   // same client id as the optimistic bubble.
   sendMessageWhenReady: (convId: string, content: string, imageIds?: string[], clientId?: string) => void;
   resumeSession: (convId: string) => Promise<any>;
   sendEscape: (convId: string) => Promise<any>;
-  stopAndSend: (convId: string, content: string, clientId: string) => Promise<any>;
+  stopAndSend: (convId: string, content: string, clientId: string, opts?: SendTakeOver) => Promise<any>;
   startResourceOffload: (args: ResourceOffloadIntent) => Promise<any>;
   requestMoveRehearsals: (args: { request_id: string; source_device_id: string; selections: Array<{ conversation_id: string; session_id: string; destination_id: string }> }) => Promise<any>;
   cancelResourceOffload: (batchId: string) => Promise<any>;
@@ -12033,9 +12035,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // agent's turn, in the session's shared queue for everyone in it. The
   // server releases the row when the turn ends
   // (managedSessions.applyAgentStatus), or now via releaseQueued.
-  queueMessage: action(function (this: Draft, convId: string, content: string, clientId: string) {
+  queueMessage: action(function (this: Draft, convId: string, content: string, clientId: string, opts?: SendTakeOver) {
     draftQueuedRow(this, convId, content, clientId);
-    paintTakeOverOnSend(this, convId);
+    if (opts?.take_over) paintTakeOverOnSend(this, convId);
   }),
 
   releaseQueued: action(function (this: Draft, convId: string) {
@@ -12053,7 +12055,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (row?.inflight) row.inflight = mergeQueueRows(row.inflight, messageId, intoId);
   }),
 
-  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string, _quoteIds?: string[]) {
+  sendMessage: action(function (this: Draft, _convId: string, _content: string, _imageIds?: string[], _clientId?: string, _quoteIds?: string[], opts?: SendTakeOver) {
     clearSessionSnoozeInDraft(this, _convId);
     notePendingMessageSendRequested(_clientId);
     // A message into a session that is asking you something IS the answer —
@@ -12080,9 +12082,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
     for (const target of [row, this.conversations[_convId]]) {
       if (target && hasThreadState(target)) Object.assign(target, answeredThreadStateFields());
     }
-    // An owner who does not drive takes the wheel with this message, as the
-    // server's enqueue does (the composer strip said so before the send).
-    paintTakeOverOnSend(this, _convId);
+    // The session composer's own send takes the wheel when its owner line said
+    // so, as the server's enqueue will; no other surface on this rail does.
+    if (opts?.take_over) paintTakeOverOnSend(this, _convId);
     // No other local mutation: durability for the visible message comes from
     // the persisted pendingMessages map. The middleware dispatches the args to
     // the server and queues them in the outbox.
@@ -12117,7 +12119,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   sendEscape: (convId: string) => get().convCommand(convId, "sendEscapeToSession", { pressed_at: Date.now(), request_id: crypto.randomUUID() }),
   // Stop the running turn and deliver this message once it has stopped
   // (conversations.stopAndSendToSession): the press and the queue row in one.
-  stopAndSend: (convId: string, content: string, clientId: string) => get().convCommand(convId, "stopAndSendToSession", { content, client_id: clientId, pressed_at: Date.now(), request_id: crypto.randomUUID() }),
+  stopAndSend: (convId: string, content: string, clientId: string, opts?: SendTakeOver) => get().convCommand(convId, "stopAndSendToSession", { content, client_id: clientId, pressed_at: Date.now(), request_id: crypto.randomUUID(), ...(opts?.take_over ? { take_over: true } : {}) }),
 
   // Generic local-first session daemon-command. Routes any api.conversations.*
   // command (kill/restart/repair/reconfigure/rewind/fork/sendKeys/sendEscape)
@@ -12219,7 +12221,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
     if (command === "sendEscapeToSession" || command === "stopAndSendToSession") {
       if (extraArgs?.request_id) stampSessionCommand(this, { _id: extraArgs.request_id, conversation_id: convId, command: "escape", kind: "interrupt" });
       // Stop and send: the message waits in the shared queue until the stop lands.
-      if (command === "stopAndSendToSession") draftQueuedRow(this, convId, extraArgs!.content, extraArgs!.client_id);
+      if (command === "stopAndSendToSession") {
+        draftQueuedRow(this, convId, extraArgs!.content, extraArgs!.client_id);
+        if (extraArgs!.take_over) paintTakeOverOnSend(this, convId);
+      }
       // The interruption line paints off whichever row the view holds. The
       // sessions row is the inbox's windowed copy and is absent for a subagent
       // or stashed conversation the user is looking at; the conversations row

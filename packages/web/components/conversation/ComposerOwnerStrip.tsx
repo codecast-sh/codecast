@@ -6,7 +6,8 @@
  *   - a role drives: "Sending takes over from <role>", with Take over | Tell
  *     <role>. Tell sends the words to the role's own session and leaves the
  *     role driving; the choice holds for the session until changed.
- *   - another person drives: the same line naming them; a send takes over.
+ *   - another person drives: the same line naming them, with Take over |
+ *     Tell <name>. Tell sends into the session and leaves them driving.
  *   - you drive and the role waits: "<role> paused while you drive", with
  *     Make driver to hand it back.
  * The take-over line shows while the composer is focused or holds text.
@@ -14,7 +15,7 @@
 
 import { memo, useEffect } from "react";
 import { useInboxStore } from "../../store/inboxStore";
-import { roleShortName, setComposerSendAs, setComposerTell, useComposerOwnership } from "../../lib/composerOwnership";
+import { personShortName, roleShortName, setComposerSendAs, setComposerTell, useComposerOwnership } from "../../lib/composerOwnership";
 import { useOwnersFromStore } from "../OwnersBadge";
 import { Face as OwnerFace } from "../OwnersMenu";
 import { SegmentedToggle } from "../SegmentedToggle";
@@ -40,9 +41,13 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
   const fromRole = mine && driver?.kind === "role" && role ? role : null;
   const fromPerson = mine && driver?.kind === "user" && driver.user_id !== me ? displayFor(driver.user_id) : null;
   const paused = mine && driver?.kind === "user" && driver.user_id === me && role ? role : null;
-  const telling = !!fromRole && tell;
-  const label = fromRole ? (telling ? `Tell ${roleShortName(fromRole.name)}` : "Take over") : fromPerson ? "Take over" : null;
-  const tellRole = telling ? fromRole!.name : null;
+  // Who the line names and how it says them: the role by its short name, a
+  // person by their first name.
+  const driverName = fromRole ? roleShortName(fromRole.name) : fromPerson ? personShortName(fromPerson.name) : "";
+  const telling = (!!fromRole || !!fromPerson) && tell;
+  const label = fromRole || fromPerson ? (telling ? `Tell ${driverName}` : "Take over") : null;
+  // Only a role is told in its own session; a person is told in this one.
+  const tellRole = telling && fromRole ? fromRole.name : null;
 
   useEffect(() => {
     setComposerSendAs(conversationId, label ? { label, tellRole } : null);
@@ -71,20 +76,18 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
       {fromRole ? <OwnerFace role={fromRole} size={16} driver /> : <OwnerFace person={{ _id: driver!.kind === "user" ? driver!.user_id : "", ...fromPerson! }} size={16} driver />}
       <span className="flex-1 min-w-0 truncate">
         {telling
-          ? <>Goes to <b className="font-medium text-sol-text">{roleShortName(fromRole!.name)}</b>, who stays driver.</>
-          : <>Sending takes over from <b className="font-medium text-sol-text">{fromRole ? roleShortName(fromRole.name) : fromPerson!.name}</b>.</>}
+          ? <>Goes to <b className="font-medium text-sol-text">{driverName}</b>, who stays driver.</>
+          : <>Sending takes over from <b className="font-medium text-sol-text">{driverName}</b>.</>}
       </span>
-      {fromRole && (
-        <SegmentedToggle
-          size="sm"
-          value={tell ? "tell" : "take"}
-          onChange={(key) => setComposerTell(conversationId, key === "tell")}
-          items={[
-            { key: "take", label: "Take over", title: "Send here and drive this session; the role pauses" },
-            { key: "tell", label: `Tell ${roleShortName(fromRole.name)}`, title: `Send to ${fromRole.name}'s own session; it keeps driving` },
-          ]}
-        />
-      )}
+      <SegmentedToggle
+        size="sm"
+        value={tell ? "tell" : "take"}
+        onChange={(key) => setComposerTell(conversationId, key === "tell")}
+        items={[
+          { key: "take", label: "Take over", title: fromRole ? "Send here and drive this session; the role pauses" : `Send here and drive this session in ${driverName}'s place` },
+          { key: "tell", label: `Tell ${driverName}`, title: fromRole ? `Send to ${fromRole.name}'s own session; it keeps driving` : `Send here; ${driverName} keeps driving` },
+        ]}
+      />
     </div></div>
   );
 });

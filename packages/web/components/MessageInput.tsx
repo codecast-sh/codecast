@@ -86,7 +86,7 @@ import { ComposerCatch } from "./secrets/ComposerCatch";
 import { runningSubagents } from "../lib/runningSubagents";
 import { StopConfirm, type StopRequest } from "./conversation/StopConfirm";
 import { ComposerOwnerStrip } from "./conversation/ComposerOwnerStrip";
-import { composerTellsRole, useComposerOwnership } from "../lib/composerOwnership";
+import { composerSendRoute, takeOverFor, useComposerOwnership } from "../lib/composerOwnership";
 import { stopNeedsConfirm } from "../lib/stopNeedsConfirm";
 
 const api = _typedApi as any;
@@ -1758,6 +1758,32 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     return true;
   };
 
+  // Tell <role>: the words go to the role's own session, and this session and
+  // who drives it stay as they are. They leave the box only once the server
+  // has queued them, so a refusal keeps them.
+  const tellRoleFromComposer = async (text: string) => {
+    if (!text || sendingRef.current) return;
+    const to = useComposerOwnership.getState().sendAs[conversationId]?.tellRole ?? "the role";
+    sendingRef.current = true;
+    try {
+      await useInboxStore.getState().tellSessionRole(conversationId, text, crypto.randomUUID());
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : `Could not send to ${to}`);
+      submitRefusedRef.current = true;
+      return;
+    } finally {
+      sendingRef.current = false;
+    }
+    if (messageRef.current.trim() === text) {
+      cancelPendingDraft();
+      setMessage("");
+      messageRef.current = "";
+      if (composeMode) { composeRef.current?.clear(); setComposeMode(false); setComposeHasContent(false); }
+      useInboxStore.getState().clearDraftFinal(conversationId);
+    }
+    toast(`Sent to ${to}`, { id: `tell-${conversationId}` });
+  };
+
   const handleSubmit = async (e: React.FormEvent, forkTail = false) => {
     e.preventDefault();
     if (allowanceOut) return false;
@@ -1785,26 +1811,16 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // What the person typed, before quotes and joint parts fold in: the
     // suggestion outcome is reported against it once the send is committed.
     const typed = message;
-    if (ownerStrip && !onGateSend && composerTellsRole(conversationId)) {
-      // Tell <role>: the words go to the role's own session; this one, and
-      // who drives it, stay as they are.
-      const text = message.trim();
-      if (!text) return;
+    // The session composer's owner line decides where the words go and
+    // whether they take the wheel (lib/composerOwnership).
+    const route = ownerStrip && !onGateSend ? composerSendRoute(conversationId) : null;
+    if (route === "tell-role") {
       if (pastedImagesRef.current.length > 0 || fileAttach.files.length > 0) {
         toast("Tell sends words only: take over to send files", { id: "tell-files" });
         submitRefusedRef.current = true;
         return;
       }
-      sendingRef.current = true;
-      cancelPendingDraft();
-      setMessage("");
-      messageRef.current = "";
-      if (composeMode) { composeRef.current?.clear(); setComposeMode(false); setComposeHasContent(false); }
-      useInboxStore.getState().clearDraftFinal(conversationId);
-      sendingRef.current = false;
-      const to = useComposerOwnership.getState().sendAs[conversationId]?.tellRole ?? "the role";
-      useInboxStore.getState().tellSessionRole(conversationId, text, crypto.randomUUID());
-      toast(`Sent to ${to}`, { id: `tell-${conversationId}` });
+      await tellRoleFromComposer(message.trim());
       return;
     }
     if (onGateSend) {
@@ -1981,7 +1997,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             useInboxStore.getState().stampPendingDispatchContent(resolvedId, clientId, expandedContent);
           }
         }
-        if (quoteIds.length > 0) sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId, quoteIds);
+        // Only the args a send carries go on the wire: older servers read four.
+        const takeOver = takeOverFor(route);
+        if (takeOver) sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId, quoteIds.length > 0 ? quoteIds : undefined, takeOver);
+        else if (quoteIds.length > 0) sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId, quoteIds);
         else sendMessage(resolvedId, expandedContent, ids.length > 0 ? ids : undefined, clientId);
         // Hand the resolved id + the send's clientId to the popup so it can paint
         // this same message optimistically in the MAIN window (send & open) without
@@ -2077,7 +2096,11 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
             useInboxStore.getState().stampPendingDispatchContent(resolvedId, clientId, expanded);
           }
         }
-        sendMessage(resolvedId, expanded, undefined, clientId);
+        // The composer's own words held while the session was busy: they take
+        // the wheel as a direct send would (Tell never queues here).
+        const takeOver = takeOverFor(ownerStrip ? composerSendRoute(queueTargetConvId) : null);
+        if (takeOver) sendMessage(resolvedId, expanded, undefined, clientId, undefined, takeOver);
+        else sendMessage(resolvedId, expanded, undefined, clientId);
         setSentAt(Date.now());
         sentContentRef.current = next;
         setShowStuckBanner(false);
@@ -2150,10 +2173,15 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const interruptTurn = () => confirmStop(() => onSendEscape?.());
   // Stop & send (⇧Esc): stop the running turn, then deliver the text once it
   // has stopped. A plain send still lands mid-turn.
-  const canStopAndSend = turnRunning && canQueryServer && pastedImages.length === 0;
+  // Tell goes to the role's own session: there is no turn here for it to stop.
+  const canStopAndSend = turnRunning && canQueryServer && pastedImages.length === 0 && !ownerSendAs?.tellRole;
   const stopAndSendComposerText = () => {
     if (!canStopAndSend || !messageRef.current.trim()) return;
     if (takeSideQuestion(messageRef.current)) return;
+    if (ownerStrip && composerSendRoute(conversationId) === "tell-role") {
+      toast("Tell goes to the role's own session, so it stops nothing here: send it, or take over to stop and send", { id: "tell-stop" });
+      return;
+    }
     confirmStop(() => queueComposerText(true), true);
   };
 
@@ -2162,6 +2190,9 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   const queueComposerText = (stop = false) => {
     const text = messageRef.current.trim();
     if (!text || takeSideQuestion(text)) return;
+    const route = ownerStrip ? composerSendRoute(conversationId) : null;
+    // Tell has no turn to wait behind: the words go to the role now.
+    if (route === "tell-role") { if (!stop) void tellRoleFromComposer(text); return; }
     sendingRef.current = true;
     try {
       // A real session queues on the server, in the line everyone in it
@@ -2170,9 +2201,13 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
       // queue in this window.
       const clientId = `queued_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       if (stop) {
-        void useInboxStore.getState().stopAndSend(conversationId, text, clientId).catch((err) => toast.error(err instanceof Error ? err.message : "Could not stop and send"));
+        void useInboxStore.getState().stopAndSend(conversationId, text, clientId, takeOverFor(route)).catch((err) => toast.error(err instanceof Error ? err.message : "Could not stop and send"));
         onMessageSent?.();
-      } else if (canQueryServer && !hostedConversation) useInboxStore.getState().queueMessage(conversationId, text, clientId);
+      } else if (canQueryServer && !hostedConversation) {
+        const takeOver = takeOverFor(route);
+        if (takeOver) useInboxStore.getState().queueMessage(conversationId, text, clientId, takeOver);
+        else useInboxStore.getState().queueMessage(conversationId, text, clientId);
+      }
       else setQueuedMessages(prev => [...prev, text]);
     } catch (error) {
       captureException(error);

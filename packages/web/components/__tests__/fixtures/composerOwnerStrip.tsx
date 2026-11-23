@@ -19,7 +19,7 @@ mock.module("convex/react", () => ({
 }));
 const { useInboxStore } = await import("../../../store/inboxStore");
 const { ComposerOwnerStrip } = await import("../../conversation/ComposerOwnerStrip");
-const { composerTellsRole, useComposerOwnership } = await import("../../../lib/composerOwnership");
+const { composerSendRoute, useComposerOwnership } = await import("../../../lib/composerOwnership");
 const { withTeamRoster } = await import("../../../test-helpers/teamRoster");
 
 // The line above a session's composer (ComposerOwnerStrip): what sending does
@@ -61,7 +61,7 @@ test("a role drives: the line shows only while the composer is in use, and says 
   expect(strip()!.textContent).toContain("Sending takes over from Eval Suite.");
   expect([...strip()!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Take over", "Tell Eval Suite"]);
   expect(sendAs()).toEqual({ label: "Take over", tellRole: null });
-  expect(composerTellsRole(id)).toBe(false);
+  expect(composerSendRoute(id)).toBe("take-over");
 });
 
 test("Tell keeps the role driving: the line, the send label and the send's route follow the choice", async () => {
@@ -70,21 +70,27 @@ test("Tell keeps the role driving: the line, the send label and the send's route
   await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Tell Eval Suite"));
   expect(strip()!.textContent).toContain("Goes to Eval Suite, who stays driver.");
   expect(sendAs()).toEqual({ label: "Tell Eval Suite", tellRole: "Eval Suite lead" });
-  expect(composerTellsRole(id)).toBe(true);
+  expect(composerSendRoute(id)).toBe("tell-role");
   // The choice holds for the session until changed.
   await render(true);
   expect(strip()!.textContent).toContain("Goes to Eval Suite");
   await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Take over"));
-  expect(composerTellsRole(id)).toBe(false);
+  expect(composerSendRoute(id)).toBe("take-over");
 });
 
-test("another person drives: the line names them, and there is nothing to tell a person", async () => {
+test("another person drives: the line names them; Tell sends here and leaves them driving", async () => {
   await setSession({ driver_user_id: "jason", user_id: "jason" }, ["jason", "me"]);
   await render(true);
   expect(strip()?.dataset.ccOwnerStrip).toBe("person");
   expect(strip()!.textContent).toContain("Sending takes over from Jason.");
-  expect(strip()!.querySelectorAll("button")).toHaveLength(0);
+  expect([...strip()!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Take over", "Tell Jason"]);
   expect(sendAs()?.label).toBe("Take over");
+  await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Tell Jason"));
+  expect(strip()!.textContent).toContain("Goes to Jason, who stays driver.");
+  expect(sendAs()).toEqual({ label: "Tell Jason", tellRole: null });
+  // Into this session, without the wheel: a person is told where they drive.
+  expect(composerSendRoute(id)).toBe("plain");
+  await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Take over"));
 });
 
 test("you drive and the role is paused: Make driver hands it back on the session row", async () => {
@@ -113,10 +119,12 @@ test("an owners answer without the role's face names it from the session row's o
   expect(strip()!.textContent).toContain("Sending takes over from Dance tutor.");
 });
 
-test("sending paints the take-over on the session row before the server answers", async () => {
+test("a send that asks for the wheel paints it on the session row before the server answers; any other send paints nothing", async () => {
   await setSession({ org_role_id: "role1" }, ["me"]);
   await render(true);
-  await act(async () => { useInboxStore.getState().sendMessage(id, "I'll take it from here", undefined, "client-1"); });
+  await act(async () => { useInboxStore.getState().sendMessage(id, "Decision: Yes", undefined, "client-0"); });
+  expect((useInboxStore.getState() as any).conversations[id].driver_user_id ?? null).toBeNull();
+  await act(async () => { useInboxStore.getState().sendMessage(id, "I'll take it from here", undefined, "client-1", undefined, { take_over: true }); });
   expect((useInboxStore.getState() as any).conversations[id].driver_user_id).toBe("me");
   expect(strip()?.dataset.ccOwnerStrip).toBe("paused");
 });

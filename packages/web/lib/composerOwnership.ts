@@ -14,15 +14,29 @@ export const useComposerOwnership = create<{ tell: Record<string, boolean>; send
 
 export const setComposerTell = (id: string, on: boolean) => useComposerOwnership.setState((s) => ({ tell: { ...s.tell, [id]: on } }));
 export const setComposerSendAs = (id: string, v: ComposerSendAs | null) =>
-  useComposerOwnership.setState((s) => (s.sendAs[id]?.label === v?.label ? s : { sendAs: { ...s.sendAs, [id]: v } }));
+  useComposerOwnership.setState((s) => (s.sendAs[id]?.label === v?.label && s.sendAs[id]?.tellRole === v?.tellRole ? s : { sendAs: { ...s.sendAs, [id]: v } }));
 
-/** Read at the send: the words go to the role's own session, not this one. */
-export function composerTellsRole(conversationId: string): boolean {
-  if (!useComposerOwnership.getState().tell[conversationId]) return false;
+/**
+ * Where the session composer's send goes, read at the send:
+ *   tell-role  Tell chosen while the role drives: to the role's own session
+ *   plain      Tell chosen while a person drives: into the session, the
+ *              driver unchanged
+ *   take-over  into the session, taking the wheel (a no-op for its driver)
+ */
+export type ComposerSendRoute = "tell-role" | "plain" | "take-over";
+
+export function composerSendRoute(conversationId: string): ComposerSendRoute {
+  if (!useComposerOwnership.getState().tell[conversationId]) return "take-over";
   const s = useInboxStore.getState() as any;
   const row = s.sessions?.[s.resolveLiveSessionId?.(conversationId) ?? conversationId] ?? s.conversations?.[conversationId];
-  return !!row && !row.standing_role_id && roleDrives(row);
+  return row && !row.standing_role_id && roleDrives(row) ? "tell-role" : "plain";
 }
+
+/** The send's flag for the server and the store: only a take-over route asks. */
+export const takeOverFor = (route: ComposerSendRoute | null) => (route === "take-over" ? { take_over: true } : undefined);
 
 /** A role's name as the composer says it: "Growth lead" reads "Growth". */
 export const roleShortName = (name: string) => name.replace(/\s+lead$/i, "") || name;
+
+/** A person's name as the composer says it: their first name. */
+export const personShortName = (name: string) => name.split(/\s+/)[0] || name;

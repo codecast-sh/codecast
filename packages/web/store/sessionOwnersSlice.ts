@@ -10,7 +10,7 @@
 //
 // Spread into the org slice (orgSlice createOrgSlice), so the store gains it
 // without a line of its own.
-import { action, sync } from "./mutativeMiddleware";
+import { action, asyncAction, sync } from "./mutativeMiddleware";
 import { applySyncPatch } from "./syncProtocol";
 import { applyOwnersChangeTo, listedOwnerIds, ownersFactsFromRead, takeOverBySend, type OwnerRowFact, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 
@@ -61,8 +61,9 @@ export type SessionOwnersSliceActions = {
   /** The owners read's half of owner_ids (the inbox rows are the other). */
   feedSessionOwnerIds: (conversationId: string, ownerIds: string[]) => void;
   /** The composer's "Tell <role>": the words go to the role's own session
-   *  (dispatch tellSessionRole) and the role keeps driving this one. */
-  tellSessionRole: (conversationId: string, content: string, clientId: string) => void;
+   *  (dispatch tellSessionRole) and the role keeps driving this one. Resolves
+   *  once the server has queued them, so the composer keeps the words until then. */
+  tellSessionRole: (conversationId: string, content: string, clientId: string) => Promise<unknown>;
 };
 
 export function createSessionOwnersSlice(): SessionOwnersSliceActions {
@@ -93,30 +94,31 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       }
     }) as SessionOwnersSliceActions["feedSessionOwnerIds"],
     // Nothing here changes: the message lands in the role's thread, not this one.
-    tellSessionRole: action(function (this: any, _conversationId: string, _content: string, _clientId: string) {}) as SessionOwnersSliceActions["tellSessionRole"],
+    tellSessionRole: asyncAction(function (this: any, _conversationId: string, _content: string, _clientId: string) {}) as SessionOwnersSliceActions["tellSessionRole"],
   };
 }
 
+/** A send that takes the wheel: only the session composer whose owner line
+ *  said so passes it (convex lib/sessionTakeOver). */
+export type SendTakeOver = { take_over?: boolean };
+
 /**
- * A person's own message takes the wheel (convex lib/sessionTakeOver): run on
- * the send's draft, so the composer strip and the header change with the
- * bubble. Without the people row (the header never mounted) only the runner,
- * whom the server always lets take it, is painted; anyone else waits for the
- * echo rather than paint a guess the server may not make.
+ * The session composer's own send takes the wheel (convex lib/sessionTakeOver),
+ * painted on the send's draft so the owner line and the header change with
+ * the bubble. It reads and writes the owners exactly where applySessionOwners
+ * does, so the two move together. Without the people row (the header never
+ * mounted) only the runner, whom the server always lets take it, is painted;
+ * anyone else waits for the echo rather than paint a guess the server may not
+ * make.
  */
 export function paintTakeOverOnSend(draft: any, conversationId: string): void {
   const me = String(draft.currentUser?._id ?? "");
-  const rows = [draft.sessions?.[conversationId], draft.conversations?.[conversationId]].filter(Boolean);
-  if (!me || rows.length === 0) return;
   const people = draft.sessionOwners?.[conversationId];
-  if (!people && String(rows[0].user_id ?? "") !== me) return;
-  const next = takeOverBySend(paintedFacts(people, rows[0]), me, Date.now());
+  const home = draft.sessions?.[conversationId] ?? draft.conversations?.[conversationId];
+  if (!me || !home || (!people && String(home.user_id ?? "") !== me)) return;
+  const next = takeOverBySend(paintedFacts(people, home), me, Date.now());
   if (!next) return;
-  // The people live on the row (owner_ids), on both twins as the read feeds them.
   const ownerIds = listedOwnerIds(next);
-  for (const row of rows) {
-    if (!sameIds(row.owner_ids, ownerIds)) row.owner_ids = ownerIds;
-    if ((row.driver_user_id ?? null) !== next.driver_user_id) row.driver_user_id = next.driver_user_id;
-  }
+  if (!sameIds(home.owner_ids, ownerIds)) home.owner_ids = ownerIds;
+  if ((home.driver_user_id ?? null) !== next.driver_user_id) home.driver_user_id = next.driver_user_id;
 }
-
