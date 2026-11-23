@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
+  ACK_ONLY_CONVERSATION_FIELDS,
   CONVERSATION_FIELD_TWINS,
   DISPATCHABLE_CONVERSATION_FIELDS,
   PATCHABLE_CONVERSATION_FIELDS,
@@ -113,6 +114,12 @@ describe("conversation field manifest", () => {
       inbox_deferred_at: "is_deferred",
       inbox_rest_at: "user_rest",
     });
+  });
+
+  test("ack-only fields stay off the server's write allowlists", () => {
+    expect([...ACK_ONLY_CONVERSATION_FIELDS].sort()).toEqual(["driver_user_id", "org_role_id", "owner_ids"]);
+    const writable = new Set<string>([...DISPATCHABLE_CONVERSATION_FIELDS, ...PATCHABLE_CONVERSATION_FIELDS]);
+    expect(ACK_ONLY_CONVERSATION_FIELDS.filter((f) => writable.has(f))).toEqual([]);
   });
 
   test("every dispatchable field is also sendable, or its twin is", () => {

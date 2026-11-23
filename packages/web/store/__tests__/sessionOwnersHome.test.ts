@@ -138,3 +138,27 @@ describe("the owners read touches only owner_ids", () => {
     expect(header()).toEqual(["me", "sam"]);
   });
 });
+
+// The three owner fields are server-written, but a Save's patch carries the
+// paint so the Save's sync receipt retires their locks (the server's gate
+// drops them). Without it a Save the server answered differently froze them
+// (sim ownersTwoEditors).
+describe("a Save's dispatch carries what it painted", () => {
+  const owner = {};
+  const SID = "jx700000000000000000000000000sav";
+  let sent: any[] = [];
+  beforeEach(() => {
+    sent = [];
+    useInboxStore.setState({ sessions: { [SID]: { _id: SID, session_id: "s-sav", user_id: "me", updated_at: 1, owner_ids: ["me", "mate"] } } } as any);
+    applyCollectionFeed("sessionOwners", { ...read(["me", "mate"]), conversation_id: SID }, selectOwnersRow, undefined, undefined, feedOwnerIds);
+    useInboxStore.getState()._setDispatch(((action: string, _args: any, patches: any) => { sent.push({ action, patches }); return Promise.resolve(null); }) as any, { owner });
+  });
+  afterEach(() => useInboxStore.getState()._clearDispatch(owner));
+
+  test("owner_ids, the role and the driver ride the sessions patch", async () => {
+    useInboxStore.getState().applySessionOwners(SID, { add: ["sam"], role: "roleR", driver: { kind: "user", user_id: "mate" } });
+    for (let i = 0; i < 50 && !sent.length; i++) await new Promise((r) => setTimeout(r, 5));
+    expect(sent[0].action).toBe("applySessionOwners");
+    expect(sent[0].patches.conversations[SID]).toEqual({ owner_ids: ["me", "mate", "sam"], org_role_id: "roleR", driver_user_id: "mate" });
+  });
+});

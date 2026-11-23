@@ -790,18 +790,45 @@ export const applyOwnersChange = mutation({
     from_session: v.optional(v.string()),
     api_token: v.optional(v.string()),
   },
-  handler: async (ctx, args) => {
-    const authUserId = await requireAuth(ctx, args.api_token);
-    const out = await withOrgChange(ctx, authUserId, { kind: "session", door: args.from_session ? "cli" : "chart", gesture: args.from_session ? "command" : "drag" }, () =>
-      performApplyOwnersChange(ctx, authUserId, { session_id: args.session_id, change: args.change, from_session: args.from_session }));
-    for (const r of out.results) {
-      await notifySessionAssigned(ctx, r.conversation_id, r.added, authUserId, args.change.note?.trim());
-      await notifySessionOwnershipChanged(ctx, r.conversation_id, r, authUserId);
-    }
-    const last = out.results[out.results.length - 1];
-    return { told: out.results.reduce((t, r) => ({ sessions: t.sessions + r.told.sessions, roles: t.roles + r.told.roles, deferred: (t.deferred ?? 0) + (r.told.deferred ?? 0) }), { sessions: 0, roles: 0, deferred: 0 }), reports_to: last?.reports_to ?? null, short_id: last?.short_id ?? null, driver: out.driver };
-  },
+  handler: async (ctx, args) => applyOwnersChangeAs(ctx, await requireAuth(ctx, args.api_token), args),
 });
+
+const isIds = (x: unknown): x is string[] => Array.isArray(x) && x.every((s) => typeof s === "string");
+const isDriverTarget = (d: any) => d?.kind === "role" || d?.kind === "none" || (d?.kind === "user" && typeof d.user_id === "string");
+const isRestoreRow = (r: any) => typeof r?.user_id === "string" && typeof r.added_by === "string" && typeof r.added_at === "number";
+
+/** The web dispatch's owners change, held to applyOwnersChange's validator
+ *  (dispatch args are untyped): the known keys only, each of its shape. */
+export function ownersChangeFromDispatch(c: any): OwnersChange {
+  const ok = !!c && typeof c === "object" &&
+    (c.add === undefined || isIds(c.add)) && (c.remove === undefined || isIds(c.remove)) &&
+    (c.restore === undefined || (Array.isArray(c.restore) && c.restore.every(isRestoreRow))) &&
+    (c.role === undefined || c.role === null || typeof c.role === "string") &&
+    (c.driver === undefined || isDriverTarget(c.driver)) &&
+    (c.leave === undefined || (typeof c.leave === "object" && (c.leave.move_to_device_id === undefined || typeof c.leave.move_to_device_id === "string"))) &&
+    (c.note === undefined || typeof c.note === "string");
+  if (!ok) throw new Error("Invalid owners change");
+  return {
+    add: c.add, remove: c.remove, restore: c.restore, role: c.role,
+    driver: c.driver, note: c.note,
+    ...(c.leave ? { leave: c.leave.move_to_device_id ? { move_to_device_id: c.leave.move_to_device_id } : {} } : {}),
+  };
+}
+
+/** applyOwnersChange for a signed-in person, in the caller's transaction. The
+ *  web's dispatch calls it in its own ctx (never through ctx.runMutation,
+ *  whose sub-mutation collects its own sync receipts), so the Save's receipt
+ *  reaches the client and retires the locks its paint holds. */
+export async function applyOwnersChangeAs(ctx: any, authUserId: Id<"users">, args: { session_id: string; change: any; from_session?: string }) {
+  const out = await withOrgChange(ctx, authUserId, { kind: "session", door: args.from_session ? "cli" : "chart", gesture: args.from_session ? "command" : "drag" }, () =>
+    performApplyOwnersChange(ctx, authUserId, { session_id: args.session_id, change: args.change, from_session: args.from_session }));
+  for (const r of out.results) {
+    await notifySessionAssigned(ctx, r.conversation_id, r.added, authUserId, args.change.note?.trim());
+    await notifySessionOwnershipChanged(ctx, r.conversation_id, r, authUserId);
+  }
+  const last = out.results[out.results.length - 1];
+  return { told: out.results.reduce((t, r) => ({ sessions: t.sessions + r.told.sessions, roles: t.roles + r.told.roles, deferred: (t.deferred ?? 0) + (r.told.deferred ?? 0) }), { sessions: 0, roles: 0, deferred: 0 }), reports_to: last?.reports_to ?? null, short_id: last?.short_id ?? null, driver: out.driver };
+}
 
 // Remove one owner, leaving the rest (`cast disown`).
 export const removeSessionOwner = mutation({

@@ -85,6 +85,7 @@ import { advanceLocalViewRevision, runLocalCommand } from "./localFirstCommands"
 import { RECEIPT_OWNS_SERVER_WRITE, hasReceiptCommandId, receiptCommandId, receiptLocalResult, receiptOrLegacyCommandId, runReceiptBackedCreate, validatedCreateContinuation } from "./dispatchReceipts";
 import { deleteRecordingRun } from "./callRecordings";
 import { isSessionOwner } from "./sessionOwners";
+import { applyOwnersChangeAs, ownersChangeFromDispatch } from "./sessionOwnership";
 import { hideConversationForViewer, unhideConversationForViewer } from "./inboxHides";
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { getComment } from "./commentStore";
@@ -602,11 +603,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // and removed, the role, and who drives, in one transaction.
   // The store's change also names the move's account (for its own paint);
   // the server takes the device and finds the account itself.
-  applySessionOwners: async (ctx, _userId, [conversationId, change]: [string, any]) =>
-    ctx.runMutation!((api as any).sessionOwnership.applyOwnersChange, {
-      session_id: conversationId,
-      change: { ...change, ...(change?.leave ? { leave: change.leave.move_to_device_id ? { move_to_device_id: change.leave.move_to_device_id } : {} } : {}) },
-    }),
+  // In this ctx, not ctx.runMutation: the Save's sync receipt must come back
+  // with this dispatch to retire the locks the store's paint holds.
+  applySessionOwners: async (ctx, userId, [conversationId, change]: [string, any]) =>
+    applyOwnersChangeAs(ctx, userId, { session_id: conversationId, change: ownersChangeFromDispatch(change) }),
   // The composer's "Tell <role>": the words go to the role's own session and
   // the role keeps driving this one.
   tellSessionRole: async (ctx, userId, [conversationId, content, clientId]: [string, string, string]) =>

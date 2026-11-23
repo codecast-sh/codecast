@@ -78,6 +78,16 @@ describe("applyPatches conversation owner gate", () => {
 
   const stashPatch = { conversations: { [CONV]: { inbox_stashed_at: 111 } } };
 
+  // The sessions rail carries an owners Save's paint (owner_ids, org_role_id,
+  // driver_user_id) only so its receipt retires the locks; the side effect
+  // writes them, and the gate drops them from the patch.
+  test("ack-only owner fields never land through the patch", async () => {
+    const db = fixtures();
+    await applyPatches({ db } as any, RUNNER as any, { conversations: { [CONV]: { owner_ids: [OUTSIDER], org_role_id: "org_roles_x", driver_user_id: OUTSIDER } } });
+    const row = db._tables.conversations[0];
+    expect([row.owner_ids, row.org_role_id, row.driver_user_id]).toEqual([undefined, undefined, undefined]);
+  });
+
   test("secondary owner's triage patch lands via the canonical owner set", async () => {
     const db = fixtures();
     await applyPatches({ db } as any, SECONDARY as any, stashPatch);

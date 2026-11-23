@@ -1,4 +1,4 @@
-import { DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
+import { ACK_ONLY_CONVERSATION_FIELDS, DISPATCHABLE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
 import { CHAT_SYNC_COLLECTIONS } from "./clientSyncRegistry.chat";
 import { FLOW_SYNC_COLLECTIONS } from "./clientSyncRegistry.flows";
 import { OPS_SYNC_COLLECTIONS } from "./clientSyncRegistry.ops";
@@ -164,7 +164,10 @@ export const CLIENT_SYNC_REGISTRY = {
       kind: "collection",
       // The manifest is the single source shared with the server's patch gate
       // (contracts/conversationFields), so the two allowlists cannot disagree.
-      fields: [...DISPATCHABLE_CONVERSATION_FIELDS],
+      // The ack-only fields (owner_ids, org_role_id, driver_user_id) ride
+      // along so an owners Save's ack retires their locks; the server's gate
+      // drops them, and its side effect writes them.
+      fields: [...DISPATCHABLE_CONVERSATION_FIELDS, ...ACK_ONLY_CONVERSATION_FIELDS],
     },
   },
   conversations: {

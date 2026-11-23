@@ -33,6 +33,11 @@ export type ConversationFieldSpec = {
   /** The client's local-first sync rail may write it (the sessions
    *  dispatchTable in store/clientSyncRegistry.ts). */
   dispatch?: boolean;
+  /** Server-written (a side effect writes it), but the client's sessions rail
+   *  carries the painted value in the dispatched patch so the write's sync
+   *  ack retires its field lock. The server's patch gate never accepts it:
+   *  it stays out of DISPATCHABLE_CONVERSATION_FIELDS. */
+  ack?: boolean;
   /** The explicit conversations.patchConversation mutation accepts it. */
   patch?: boolean;
   /** A triage stamp: an in-flight write to it makes the row overlay-affected,
@@ -81,9 +86,14 @@ export const CONVERSATION_FIELDS = {
   drawn_icon: { send: true },
   // Org pointers are server-owned (immutable on the rail) but the row carries
   // them so a session can resolve its identity to the role it belongs to.
-  org_role_id: { send: true },
+  org_role_id: { send: true, ack: true },
   standing_role_id: { send: true },
   is_favorite: { send: true, dispatch: true },
+  // A session's people and its driver, written by the owners Save
+  // (sessionOwnership.applyOwnersChange) and a take-over send, painted by the
+  // client beside org_role_id.
+  owner_ids: { ack: true },
+  driver_user_id: { ack: true },
   // Per-user and delivered on its own path, so it is writable but never part
   // of the shared row.
   draft_message: { patch: true },
@@ -105,6 +115,9 @@ export const SENDABLE_CONVERSATION_FIELDS = withFlag("send");
 
 /** The client sync rail's write allowlist. */
 export const DISPATCHABLE_CONVERSATION_FIELDS = withFlag("dispatch");
+
+/** Fields the client rail carries for their ack only (see `ack`). */
+export const ACK_ONLY_CONVERSATION_FIELDS = withFlag("ack");
 
 /** The explicit patchConversation mutation's write allowlist. */
 export const PATCHABLE_CONVERSATION_FIELDS = withFlag("patch");
