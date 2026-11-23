@@ -8,11 +8,12 @@ import { wakeMentionedParties } from "./chat";
 import { computeInboxSessions, heldByRoleAlone } from "./conversations";
 import { endMembership } from "./lib/teamMembershipEnd";
 import { backfillBoundDriverPage } from "./lib/boundDriverBackfill";
+import { ownersFactsFromRead, takeOverBySend } from "@codecast/shared/contracts/sessionOwners";
 import { formatDecisionAnswer, roleDrives, rollupParentIdOf, SEND_REFUSED, SEND_REFUSED_PAUSED_ROLE } from "@codecast/shared/contracts";
 import { dispatch } from "./dispatch";
 import { sendSessionMessage } from "./pendingMessages";
 import { stopAndSendForUser } from "./daemonCommandUtils";
-import { performPauseSessionRole, performRehomeSessions, performApplyOwnersChange, performLeaveSession, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners, applyOwnersChangeAs } from "./sessionOwnership";
+import { performListOwners, performPauseSessionRole, performRehomeSessions, performApplyOwnersChange, performLeaveSession, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners, applyOwnersChangeAs } from "./sessionOwnership";
 
 // One owner drives (org-roles-run-work.md R1). A person's own message into a
 // session takes the wheel from the role or person driving it; the paused role
@@ -447,6 +448,24 @@ describe("the bound-driver backfill", () => {
 
 // `cast own <s> --pause @role` is the composer's take-over without a message.
 describe("pausing the role from the owners", () => {
+  // `cast own --pause`, the composer's take-over send, and the web's paint of
+  // that send (shared takeOverBySend over what the store holds) end alike.
+  test("the pause route, the composer's take-over and the store's paint agree", async () => {
+    for (const id of ["hand", "filed"]) {
+      const viaPause = await world();
+      const facts = ownersFactsFromRead(await performListOwners(viaPause.ctx, ME as any, id), { ...viaPause.row(id) });
+      const painted = takeOverBySend(facts, ME, Date.now())!;
+      await performPauseSessionRole(viaPause.ctx, ME as any, { session_id: id });
+      const viaSend = await world();
+      await composerSend(viaSend.ctx, viaSend.row(id), ME);
+      for (const w of [viaPause, viaSend]) {
+        expect(w.ownersOf(id)).toEqual(painted.rows.map((r) => r.user_id));
+        expect(String(w.row(id).driver_user_id ?? "")).toBe(String(painted.driver_user_id));
+        expect(String(w.row(id).org_role_id)).toBe(String(painted.role_id));
+      }
+    }
+  });
+
   test("the account that runs a role's hand pauses it, and becomes an owner first", async () => {
     const { ctx, row, ownersOf } = await world();
     expect(ownersOf("hand")).toEqual([]);
