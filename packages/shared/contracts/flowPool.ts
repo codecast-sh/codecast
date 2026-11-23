@@ -87,6 +87,13 @@ export function flowGraphAttr(source: string | null | undefined, key: string): s
   return m ? (m[1] ?? m[2] ?? null) : null;
 }
 
+/** The flows a DOT source composes as segments (`flow="<slug>"` on a node), by slug, each once, for a reader holding no parser. */
+export function flowSegmentSlugs(source: string | null | undefined): string[] {
+  const out = new Set<string>();
+  for (const m of (source ?? "").matchAll(/(?:^|[\s,;[])flow\s*=\s*(?:"([\w.-]+)"|([\w.-]+))/g)) out.add((m[1] ?? m[2]!).replace(/\.cast$/, ""));
+  return [...out];
+}
+
 /**
  * Whether a flow's source takes a session's change, for a reader holding no parser: it takes a branch and is either a
  * whole flow (`kind="line"`) or lands the branch itself (a station runs the ship segment), as a flow a session writes

@@ -1,7 +1,8 @@
 // Flows live in the library (ct-70169): a flow in library mode runs its
 // current version on every machine; only a save changes it; each run records
 // the versions it executes, a variant's base at its current version; restore
-// is one step; a flow with no mode resolves as before. Through the real
+// is one step; a flow with no mode resolves as before; a segment the library
+// holds is pinned at the save and recorded by the run. Through the real
 // mutations under convex-test.
 import { describe, expect, test } from "bun:test";
 import { convexTest } from "convex-test";
@@ -242,5 +243,106 @@ describe("a flow in the library", () => {
     await upsert(push("spine", "bbbbbbbbbbbbbbbb", "New.", { save: true, library: true }));
     await expect(t.mutation(api.flowVersions.fromCli, { api_token: TOKEN, op: "restore", flow: "spine", version: "v1" })).rejects.toThrow(/before versions held their content/);
     await expect(t.mutation(api.flowVersions.fromCli, { api_token: TOKEN, op: "restore", flow: "spine", version: "v9" })).rejects.toThrow(/no version v9/);
+  });
+});
+
+describe("a library flow's segments", () => {
+  const composing = (slug: string, hash: string, segment: string, extra: Record<string, any> = {}) => {
+    const body = push(slug, hash, `${slug} fix.`, { save: true, library: true, ...extra });
+    body.source = `digraph ${slug} {\n  fix [prompt="@${slug}/fix.md"]\n  ${segment} [flow="${segment}"]\n  fix -> ${segment}\n}\n`;
+    return body;
+  };
+  const pinned = (t: any, id: string) => t.run(async (ctx: any) => ((await ctx.db.get(id)) as any)?.segments ?? null);
+
+  test("a save pins each segment's current version; a run records it and its runner gets it, until a later save moves the pin", async () => {
+    const { t, upsert, run, versions } = await setup();
+    await upsert(push("land", "aaaaaaaaaaaaaaaa", "Land v1.", { save: true, library: true }));
+    await upsert(composing("onefix", "bbbbbbbbbbbbbbbb", "land"));
+    const land1 = (await versions("land")).versions[0].id;
+    const onefix1 = (await versions("onefix")).versions[0].id;
+    expect((await pinned(t, onefix1)).map((p: any) => [p.slug, String(p.version_id)])).toEqual([["land", String(land1)]]);
+
+    const first = await run("onefix");
+    expect(first.recorded.map((x: any) => String(x.version_id))).toEqual([String(onefix1), String(land1)]);
+    expect(first.got.workflow.library.versions.map((x: any) => [x.slug, x.snapshot.nodes[1].prompt])).toEqual([["onefix", "onefix fix."], ["land", "Land v1."]]);
+
+    // A save of the segment reaches no version saved before it.
+    await upsert(push("land", "cccccccccccccccc", "Land v2.", { save: true }));
+    const land2 = (await versions("land")).versions[0].id;
+    expect((await run("onefix")).got.workflow.library.versions[1].snapshot.nodes[1].prompt).toBe("Land v1.");
+    // Saving the same graph again is a new version that pins the segment as it is now; the first keeps its pin.
+    await upsert(composing("onefix", "bbbbbbbbbbbbbbbb", "land"));
+    const vs = (await versions("onefix")).versions;
+    expect(vs).toHaveLength(2);
+    expect((await pinned(t, vs[0].id)).map((p: any) => String(p.version_id))).toEqual([String(land2)]);
+    expect((await pinned(t, onefix1)).map((p: any) => String(p.version_id))).toEqual([String(land1)]);
+    expect((await run("onefix")).got.workflow.library.versions[1].snapshot.nodes[1].prompt).toBe("Land v2.");
+    // The same graph with the same pins is the same version.
+    await upsert(composing("onefix", "bbbbbbbbbbbbbbbb", "land"));
+    expect((await versions("onefix")).versions).toHaveLength(2);
+    // A resume reads what the run started on.
+    const resumed = await t.mutation(api.workflow_runs.getForDaemon, { api_token: TOKEN, run_id: first.runId });
+    expect(resumed.workflow.library.versions[1].snapshot.nodes[1].prompt).toBe("Land v1.");
+  });
+
+  test("a segment that composes another pins it too, and a run records each once", async () => {
+    const { run } = await setup().then(async (s) => {
+      await s.upsert(push("gate", "aaaaaaaaaaaaaaaa", "Gate.", { save: true, library: true }));
+      await s.upsert(composing("land", "bbbbbbbbbbbbbbbb", "gate"));
+      const both = composing("onefix", "cccccccccccccccc", "land");
+      both.source = both.source.replace("}\n", `  gate [flow="gate"]\n}\n`);
+      await s.upsert(both);
+      return s;
+    });
+    const r = await run("onefix");
+    expect(r.got.workflow.library.versions.map((x: any) => x.slug)).toEqual(["onefix", "land", "gate"]);
+  });
+
+  test("a segment nobody published, and a version saved before pins, record only the flow: its runner resolves the segment as before", async () => {
+    const { t, upsert, run, versions } = await setup();
+    // Pushed from a file by a run, never published: its graph says no kind, so no pool lists it.
+    await upsert(push("land", "aaaaaaaaaaaaaaaa", "Land from a file."));
+    await upsert(composing("onefix", "bbbbbbbbbbbbbbbb", "land"));
+    expect(await pinned(t, (await versions("onefix")).versions[0].id)).toBeNull();
+    expect((await run("onefix")).got.workflow.library.versions.map((x: any) => x.slug)).toEqual(["onefix"]);
+
+    // land joins the library; onefix's version from before pins still records only itself.
+    await upsert(push("land", "cccccccccccccccc", "Land, saved.", { save: true, library: true }));
+    expect((await run("onefix")).got.workflow.library.versions.map((x: any) => x.slug)).toEqual(["onefix"]);
+    // Published again, unchanged, it pins land.
+    await upsert(composing("onefix", "bbbbbbbbbbbbbbbb", "land"));
+    expect((await run("onefix")).got.workflow.library.versions.map((x: any) => x.slug)).toEqual(["onefix", "land"]);
+  });
+
+  test("a segment published to the pool outside the library pins the version it stands at, and the runner gets its graph", async () => {
+    const { t, upsert, run, versions } = await setup();
+    const published = (hash: string, text: string) => {
+      const body = push("land", hash, text);
+      body.source = `digraph land {\n  graph [kind="segment", label="Land"]\n  fix [prompt="@land/fix.md"]\n}\n`;
+      return body;
+    };
+    await upsert(published("aaaaaaaaaaaaaaaa", "Published land."));
+    await upsert(composing("onefix", "bbbbbbbbbbbbbbbb", "land"));
+    const land1 = (await versions("land")).versions[0].id;
+    expect((await pinned(t, (await versions("onefix")).versions[0].id)).map((p: any) => String(p.version_id))).toEqual([String(land1)]);
+    const first = await run("onefix");
+    expect(first.got.workflow.library.versions.map((x: any) => [x.slug, x.snapshot.nodes[1].prompt, x.snapshot.file])).toEqual([["onefix", "onefix fix.", "outreach/line/onefix.cast"], ["land", "Published land.", "outreach/line/land.cast"]]);
+    // A later push of the segment moves its row, never the pin a saved version holds.
+    await upsert(published("cccccccccccccccc", "Land, pushed again."));
+    expect((await run("onefix")).got.workflow.library.versions[1].snapshot.nodes[1].prompt).toBe("Published land.");
+  });
+
+  test("a teammate's library segment in the flow's workspace is pinned when the owner has none", async () => {
+    const { t, owner, upsert, run } = await setup();
+    await upsert(composing("onefix", "bbbbbbbbbbbbbbbb", "land"));
+    const ws = (await t.run(async (ctx) => (await ctx.db.query("workflows").collect())[0] as any)).workspace;
+    await t.run(async (ctx) => {
+      const mate = await ctx.db.insert("users", { name: "Mate" } as any);
+      const w = await ctx.db.insert("workflows", { user_id: mate, workspace: ws, name: "land", slug: "land", source: "digraph land {}", nodes: nodes("Mate's land."), edges, runs_from: "library", created_at: T0, updated_at: T0 } as any);
+      await ctx.db.insert("workflow_versions", { workflow_id: w, graph_hash: "dddddddddddddddd", nodes: [], changed: [], by: mate, at: T0, line: "library", seq: 1, snapshot: { name: "land", source: "digraph land {}", nodes: nodes("Mate's land."), edges, file: "land.cast", files: [] } } as any);
+      void owner;
+    });
+    await upsert(composing("onefix", "bbbbbbbbbbbbbbbb", "land"));
+    expect((await run("onefix")).got.workflow.library.versions.map((x: any) => [x.slug, x.snapshot.nodes[1].prompt])).toEqual([["onefix", "onefix fix."], ["land", "Mate's land."]]);
   });
 });

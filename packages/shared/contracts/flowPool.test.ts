@@ -2,7 +2,7 @@
 // attributes rewritten with every other byte kept, and a flow's base read the
 // same way whether a save named it or the graph extends a file.
 import { expect, test } from "bun:test";
-import { flowBase, flowGraphAttr, flowPathWords, foldFlow, publishableFlowSource, sourceTakesSessionChange, withGraphAttrs } from "./flowPool";
+import { flowBase, flowGraphAttr, flowSegmentSlugs, flowPathWords, foldFlow, publishableFlowSource, sourceTakesSessionChange, withGraphAttrs } from "./flowPool";
 import { flowEditWords, type FlowEditChange } from "./flowEdit";
 
 test("withGraphAttrs sets and drops graph attributes, quotes and the rest of the source kept", () => {
@@ -112,4 +112,16 @@ test("a fan-out reads as its own name when the graph gives it one, else as its b
   const nodes = (fanLabel: string) => [n("start", "start"), n("checks", "parallel_fanout", fanLabel), n("ci", "command", "CI"), n("review", "agent", "Review"), n("read", "parallel_fanin", "Read"), n("exit", "exit", "Live")] as unknown as Parameters<typeof foldFlow>[0];
   expect(flowPathWords(foldFlow(nodes("CI and review"), edges)).path).toBe("CI and review");
   expect(flowPathWords(foldFlow(nodes("checks"), edges)).path).toBe("CI + Review");
+});
+
+test("flowSegmentSlugs names each composed segment once, quoted or bare, and no segment_flow mark", () => {
+  const src = `digraph onefix {
+  graph [kind="line", label="Onefix"]
+  land [flow="land", answerer=ship]
+  check [label="Check", flow=check.cast]
+  again [flow="land"]
+  seen [segment_flow="ghost", subflow="nope"]
+}`;
+  expect(flowSegmentSlugs(src)).toEqual(["land", "check"]);
+  expect(flowSegmentSlugs(null)).toEqual([]);
 });
