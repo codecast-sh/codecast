@@ -167,17 +167,31 @@ describe("ask: people, inbox, ladder, holder", () => {
     expect(tables.decision_inbox.map((i: any) => i.user_id)).toEqual([BOSS]);
   });
 
-  test("a standing session asks its owners, not the runner or the role parent", async () => {
+  test("a standing sub-lead asks its owners and the person its line ends at, not the runner", async () => {
     const { ctx, tables } = seed();
     const r = await askApproach(ctx, "sess-standing");
     expect(r.error).toBeUndefined();
     const row = tables.session_decisions[0];
-    expect(row.asked_user_ids).toEqual([OWNER2]);
+    expect(row.asked_user_ids).toEqual([OWNER2, BOSS]);
     expect(row.holder).toEqual({ kind: "user", id: OWNER2 });
-    expect(tables.decision_inbox.map((i) => i.user_id)).toEqual([OWNER2]);
+    expect(tables.decision_inbox.map((i) => i.user_id)).toEqual([OWNER2, BOSS]);
     expect((await listForUserCore(ctx, HOST, NOW)).map((d) => d._id)).toEqual([]);
     expect((await listForUserCore(ctx, OWNER2, NOW)).map((d) => d._id)).toEqual([row._id]);
-    expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d._id)).toEqual([]);
+    expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d._id)).toEqual([row._id]);
+  });
+
+  test("a sub-lead seat nobody owns asks the person its line ends at, never whoever started it", async () => {
+    const { ctx, tables } = seed();
+    await ctx.db.patch("conversations_standing", { owner_user_id: undefined, author_user_id: OWNER2 });
+    for (const row of await ctx.db.query("session_owners").withIndex("by_conversation", (q: any) => q.eq("conversation_id", "conversations_standing")).collect()) {
+      await ctx.db.delete(row._id);
+    }
+    const r = await askApproach(ctx, "sess-standing");
+    expect(r.error).toBeUndefined();
+    const row = tables.session_decisions[0];
+    expect(row.asked_user_ids).toEqual([BOSS]);
+    expect(row.hops.map((h: any) => h.role_id)).toEqual(["org_roles_head"]);
+    expect((await listForUserCore(ctx, OWNER2, NOW)).map((d) => d._id)).toEqual([]);
   });
 
   test("a stale owner_user_id cache does not keep a standing session's questions on the runner", async () => {
@@ -185,8 +199,8 @@ describe("ask: people, inbox, ladder, holder", () => {
     await ctx.db.patch("conversations_standing", { owner_user_id: HOST });
     const r = await askApproach(ctx, "sess-standing");
     expect(r.error).toBeUndefined();
-    expect(tables.session_decisions[0].asked_user_ids).toEqual([OWNER2]);
-    expect(tables.decision_inbox.map((i) => i.user_id)).toEqual([OWNER2]);
+    expect(tables.session_decisions[0].asked_user_ids).toEqual([OWNER2, BOSS]);
+    expect(tables.decision_inbox.map((i) => i.user_id)).toEqual([OWNER2, BOSS]);
     expect((await listForUserCore(ctx, HOST, NOW)).map((d) => d._id)).toEqual([]);
   });
 
@@ -200,7 +214,7 @@ describe("ask: people, inbox, ladder, holder", () => {
     expect((await listForUserCore(ctx, OWNER2, NOW)).map((d) => d._id)).toEqual([id]);
   });
 
-  test("assigning a standing session moves questions off the runner and the role parent", async () => {
+  test("assigning a standing session moves questions off the runner, and the line's person keeps them", async () => {
     const { ctx, tables } = seed();
     await ctx.db.patch("conversations_standing", { owner_user_id: HOST });
     for (const row of await ctx.db.query("session_owners").withIndex("by_conversation", (q: any) => q.eq("conversation_id", "conversations_standing")).collect()) {
@@ -210,7 +224,7 @@ describe("ask: people, inbox, ladder, holder", () => {
     const r = await askApproach(ctx, "sess-standing");
     expect(r.error).toBeUndefined();
     const id = tables.session_decisions[0]._id;
-    expect(tables.session_decisions[0].asked_user_ids).toEqual([HOST]);
+    expect(tables.session_decisions[0].asked_user_ids).toEqual([HOST, BOSS]);
     expect((await listForUserCore(ctx, HOST, NOW)).map((d) => d._id)).toEqual([id]);
 
     await ctx.db.patch("conversations_standing", { owner_user_id: OWNER2 });
@@ -220,10 +234,10 @@ describe("ask: people, inbox, ladder, holder", () => {
     await ctx.db.insert("session_owners", { _id: "so_stand_new", conversation_id: "conversations_standing", user_id: OWNER2, added_by: HOST, added_at: NOW });
     const moved = await reroutePendingDecisionsForConversation(ctx, "conversations_standing" as any, NOW);
     expect(moved.moved).toBe(1);
-    expect(tables.session_decisions[0].asked_user_ids).toEqual([OWNER2]);
-    expect(tables.decision_inbox.map((i) => i.user_id)).toEqual([OWNER2]);
+    expect(tables.session_decisions[0].asked_user_ids).toEqual([OWNER2, BOSS]);
+    expect(tables.decision_inbox.map((i) => i.user_id).sort()).toEqual([BOSS, OWNER2].sort());
     expect((await listForUserCore(ctx, HOST, NOW)).map((d) => d._id)).toEqual([]);
-    expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d._id)).toEqual([]);
+    expect((await listForUserCore(ctx, BOSS, NOW)).map((d) => d._id)).toEqual([id]);
     expect((await listForUserCore(ctx, OWNER2, NOW)).map((d) => d._id)).toEqual([id]);
   });
 
