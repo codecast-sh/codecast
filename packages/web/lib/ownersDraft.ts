@@ -66,7 +66,9 @@ export type OwnersDiff = {
   driverChanged: boolean;
   dirty: boolean;
   change: SessionOwnersChange;
-  /** The change that puts it back; null for a leave, which nobody here can undo. */
+  /** The change that puts it back. A leave alone is undone by rejoining (the
+   *  session stays where the leave moved it); a leave with other changes has
+   *  none, since a person who left may no longer edit the rest. */
   inverse: SessionOwnersChange | null;
 };
 
@@ -99,7 +101,8 @@ export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meI
     : initial.role && initial.driver?.kind === "role" ? { kind: "role" } : { kind: "none" };
   const restore = (opts.snapshots ?? []).filter((r) => removed.includes(r.user_id));
   const readd = removed.filter((id) => !restore.some((r) => r.user_id === id));
-  const inverse: SessionOwnersChange | null = leaving ? null : {
+  const leaveOnly = leaving && !added.length && !removed.length && !roleChanged && !driverChanged;
+  const inverse: SessionOwnersChange | null = leaveOnly ? { add: [opts.meId!] } : leaving ? null : {
     ...(restore.length ? { restore } : {}),
     ...(readd.length ? { add: readd } : {}),
     ...(added.length ? { remove: added } : {}),

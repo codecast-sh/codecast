@@ -879,10 +879,12 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   reparentOrgSession: org(reparentSessionLabel),
   // The owners menu's Save carries the change that puts it back (args[2]),
   // built from the owners it was opened on: undo replays that, and its own
-  // inverse is the Save again. A leave has none: nothing here moves it back.
+  // inverse is the Save again. A leave on its own is undone by rejoining (an
+  // add of yourself, which the server lets anyone who sees the session make);
+  // the machine it moved to stays.
   applySessionOwners: {
     spec: {
-      label: (ctx) => `Changed the owners of ${sessionTitle(ctx.before, ctx.args[0] as string)}`,
+      label: (ctx) => `${(ctx.args[1] as { leave?: unknown } | undefined)?.leave ? "Left" : "Changed the owners of"} ${sessionTitle(ctx.before, ctx.args[0] as string)}`,
       inverse: (ctx) => (ctx.args[2] ? [call("applySessionOwners", ctx.args[0], ctx.args[2], ctx.args[1])] : null),
     },
   },
