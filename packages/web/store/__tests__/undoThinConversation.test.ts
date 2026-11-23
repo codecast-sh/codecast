@@ -150,12 +150,12 @@ describe("undo of a gesture on a row whose conversation meta is not loaded", () 
     expect(conv().is_favorite).toBe(true);
   });
 
-  test("a dismissal through patchConversation is named Closed on the undo bar; a kill stays Killed", () => {
+  test("a close through patchConversation is named Closed on the undo bar; a bare dismissal is a Kill", () => {
     const sent = captureUndoPatches();
     try {
-      state().patchConversation(ID, { inbox_dismissed_at: 9 });
+      state().patchConversation(ID, { inbox_dismissed_at: 9, inbox_closed_at: 9 } as any);
       expect(getUndoHistory().items[0]!.label).toStartWith("Closed");
-      state().patchConversation(ID, { inbox_dismissed_at: 10, inbox_killed_at: 10 } as any);
+      state().patchConversation(ID, { inbox_dismissed_at: 10 });
       expect(getUndoHistory().items[0]!.label).toStartWith("Killed");
     } finally {
       sent.stop();

@@ -116,7 +116,7 @@ export interface RunnerIo {
   report(migrationId: string, patch: { status?: "waiting_idle" | "quiescing" | "transferring" | "switching" | "resuming"; stage?: string }): Promise<void>;
   enqueueQuiesce(migrationId: string, mode: "idle" | "force"): Promise<{ command_id: string | null; target_device_id: string | null }>;
   commandStatus(commandId: string): Promise<CommandStatus | null>;
-  finish(migrationId: string, args: { project_path: string; git_root?: string; verification?: string; source_path?: string }): Promise<{ ok: true; resume_command_id: string | null; kept_closed?: boolean } | { ok: false; reason: string }>;
+  finish(migrationId: string, args: { project_path: string; git_root?: string; verification?: string; source_path?: string }): Promise<{ ok: true; resume_command_id: string | null } | { ok: false; reason: string }>;
   confirm(migrationId: string, ok: boolean, detail?: { error?: string; stage?: string }): Promise<void>;
   fail(migrationId: string, error: string, cancelled?: boolean, restore?: boolean): Promise<void>;
   sendNotice(conversationId: string, text: string): Promise<void>;
@@ -399,9 +399,7 @@ export async function migrateRow(
       source_path: transfer.sourcePath,
     });
     if (!fin.ok) return fail(`handoff refused: ${fin.reason}`);
-    // A closed session gets no notice: a send into it un-closes it and the
-    // destination would resume it. It stays closed until a real wake.
-    const notice = fin.kept_closed ? null : io.notice(facts, transfer, outside, rehearsal);
+    const notice = io.notice(facts, transfer, outside, rehearsal);
     if (notice) await io.sendNotice(facts.conversation_id, notice);
 
     // ── 5. confirm the resume landed ────────────────────────────────────────
@@ -422,10 +420,6 @@ export async function migrateRow(
         ? (forced ? `running on ${facts.to_label ?? "the destination"} (its turn was interrupted to move it)` : `running on ${facts.to_label ?? "the destination"}`)
         : `moved to ${facts.to_label ?? "the destination"}; its daemon has not confirmed the resume yet`;
       await io.confirm(id, true, { stage });
-    } else if (fin.kept_closed) {
-      // A closed session moves without resuming: it stays closed there and
-      // wakes on its next real wake.
-      await io.confirm(id, true, { stage: `moved to ${facts.to_label ?? "the destination"}; stays closed until its next message` });
     } else {
       if (batch.interrupt_on_timeout === false) {
         const detail = "The session moved, but no destination resume was queued. Open it on the destination before retrying.";

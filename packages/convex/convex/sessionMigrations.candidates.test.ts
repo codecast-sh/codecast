@@ -6,36 +6,21 @@ const USER = "users_me" as any;
 const LAPTOP = "laptop";
 
 describe("collectMigrationCandidates", () => {
-  // A person picking machines to move off includes the closed sessions that
-  // still have a wake to keep there (a role seat, a persistent anchor, an armed
-  // trigger): a closed role seat must not stay on a machine the person left.
-  // They move without resuming (planMigration resume false). A closed session
-  // with no wake left is done with, as a killed one is, and stays out.
-  test("a closed session with a wake to keep is a candidate; one with none, or a killed one, is not", async () => {
+  // A bulk move leaves closed sessions where they are, as it does killed ones:
+  // moving one would have to resume it there. They wake on the old machine.
+  test("a closed or killed session is not a candidate, by either path", async () => {
+    const now = Date.now();
     const closed = { user_id: USER, owner_device_id: LAPTOP, status: "active", inbox_dismissed_at: 5, inbox_closed_at: 5 };
     const conversations = [
       { _id: "conversations_seat", _creationTime: 1, ...closed, standing_role_id: "roles_1" },
-      { _id: "conversations_anchor", _creationTime: 2, ...closed, persistent: true },
-      { _id: "conversations_armed", _creationTime: 3, ...closed, armed_trigger_kind: "standing" },
-      { _id: "conversations_done", _creationTime: 4, ...closed, armed_trigger_kind: "none" },
-      { _id: "conversations_killed", _creationTime: 5, user_id: USER, owner_device_id: LAPTOP, status: "completed", inbox_dismissed_at: 5, inbox_killed_at: 5 },
-      { _id: "conversations_open", _creationTime: 6, user_id: USER, owner_device_id: LAPTOP, status: "active" },
+      { _id: "conversations_killed", _creationTime: 2, user_id: USER, owner_device_id: LAPTOP, status: "completed", inbox_dismissed_at: 5, inbox_killed_at: 5 },
+      { _id: "conversations_open", _creationTime: 3, user_id: USER, owner_device_id: LAPTOP, status: "active" },
+      { _id: "conversations_live_closed", _creationTime: 4, ...closed, owner_device_id: "elsewhere" },
     ];
-    const ctx = { db: makeFakeDb({ conversations, managed_sessions: [] }) } as any;
-    const ids = (await collectMigrationCandidates(ctx, USER, [{ device_id: LAPTOP }])).map((c) => String(c._id)).sort();
-    expect(ids).toEqual(["conversations_anchor", "conversations_armed", "conversations_open", "conversations_seat"]);
-  });
-
-  test("a closed session found through a lingering live row is held to the same rule", async () => {
-    const now = Date.now();
-    const conversations = [
-      ...Array.from({ length: 300 }, (_, i) => ({ _id: `conversations_${i}`, _creationTime: 100 + i, user_id: USER, owner_device_id: LAPTOP, status: "active" })),
-      { _id: "conversations_closed_old", _creationTime: 1, user_id: USER, owner_device_id: LAPTOP, status: "active", inbox_dismissed_at: 5, inbox_closed_at: 5 },
-    ];
-    const managed_sessions = [{ _id: "managed_sessions_1", user_id: USER, conversation_id: "conversations_closed_old", last_heartbeat: now - 30_000 }];
+    const managed_sessions = [{ _id: "managed_sessions_1", user_id: USER, conversation_id: "conversations_live_closed", last_heartbeat: now - 30_000 }];
     const ctx = { db: makeFakeDb({ conversations, managed_sessions }) } as any;
     const ids = (await collectMigrationCandidates(ctx, USER, [{ device_id: LAPTOP }])).map((c) => String(c._id));
-    expect(ids).not.toContain("conversations_closed_old");
+    expect(ids).toEqual(["conversations_open"]);
   });
 
   // A machine that spawns workers creates hundreds of conversations a day, so a

@@ -37,6 +37,22 @@ describe("killReviewOf", () => {
     expect(l.rows.find((r) => r.k === "Triggers")).toBeUndefined();
   });
 
+  // Any reason a Close would set it aside (shared closeInFlightReason) is
+  // something a Kill cuts off, and the review names it.
+  test("whatever it has in flight asks first, named as what the kill cuts off", () => {
+    const now = 1_800_000_000_000;
+    const lost = (extra: Partial<InboxSession>) => killReviewOf([s("a", extra)], [], now)?.rows.find((r) => r.k === "Lost")?.v;
+    expect(lost({ awaiting_input: true } as any)).toBe("Questions waiting on you");
+    expect(lost({ loop_state: { status: "waiting", wakeup_at: now + 60_000, event_at: now - 1000 } } as any)).toBe("Running /loops");
+    expect(lost({ workflow_run_id: "w1", workflow_run_status: "running", workflow_run_kind: "workflow" } as any)).toBe("Workflow runs");
+    expect(lost({ subagent_slot: "queued" } as any)).toBe("Queued starts");
+    expect(lost({ is_idle: false })).toBe("Unfinished turns");
+    const two = killReviewOf([s("a", { is_idle: false }), s("b", { awaiting_input: true } as any)], [], now)!;
+    expect(two.rows.find((r) => r.k === "Working")?.list).toEqual(["Row a", "Row b"]);
+    expect(two.rows.find((r) => r.k === "Lost")?.v).toBe("Unfinished turns · Questions waiting on you");
+    assertGlance(two);
+  });
+
   test("queued messages ask first", () => {
     const l = killReviewOf([s("a", { has_pending: true })], [])!;
     expect(l.rows.find((r) => r.k === "Queued")?.v).toBe("Messages dropped");
