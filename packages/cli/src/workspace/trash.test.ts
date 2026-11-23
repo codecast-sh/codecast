@@ -2,7 +2,7 @@ import { afterEach, beforeEach, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { TRASH_GRACE_MS, moveToTrash, sweepTrash } from "./trash.js";
+import { TRASH_GRACE_MS, lowPriorityRemove, moveToTrash, sweepTrash, sweepTrashAtLowPriority } from "./trash.js";
 
 let dir: string;
 beforeEach(() => {
@@ -58,4 +58,29 @@ test("the sweep deletes trash past the grace period and nothing else", async () 
 
 test("the sweep is quiet about a directory that does not exist", async () => {
   expect(await sweepTrash(path.join(dir, "nope"))).toEqual([]);
+});
+
+test("the low priority sweep removes due trash in one process at the lowest IO and CPU priority", async () => {
+  const old = moveToTrash(makeTree("alpha"));
+  const recent = moveToTrash(makeTree("beta"));
+  const past = new Date(Date.now() - TRASH_GRACE_MS - 60_000);
+  fs.utimesSync(old, past, past);
+  const calls: string[][] = [];
+  const r = await sweepTrashAtLowPriority(dir, async (file, args) => {
+    calls.push([file, ...args]);
+    fs.rmSync(old, { recursive: true, force: true });
+  });
+  expect(calls).toEqual([[...lowPriorityRemove([old]).flat()]]);
+  expect(r).toEqual({ swept: [old], young: [recent] });
+  expect(lowPriorityRemove(["/t"], "linux")).toEqual(["ionice", ["-c", "2", "-n", "7", "nice", "-n", "19", "rm", "-rf", "--", "/t"]]);
+  expect(lowPriorityRemove(["/t"], "darwin")).toEqual(["taskpolicy", ["-b", "rm", "-rf", "--", "/t"]]);
+});
+
+test("without the priority tool the sweep still deletes due trash", async () => {
+  const old = moveToTrash(makeTree("alpha"));
+  const past = new Date(Date.now() - TRASH_GRACE_MS - 60_000);
+  fs.utimesSync(old, past, past);
+  const missing = Object.assign(new Error("spawn ionice ENOENT"), { code: "ENOENT" });
+  expect(await sweepTrashAtLowPriority(dir, async () => { throw missing; })).toEqual({ swept: [old], young: [] });
+  expect(fs.existsSync(old)).toBe(false);
 });

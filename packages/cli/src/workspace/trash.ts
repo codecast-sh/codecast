@@ -12,6 +12,7 @@
 import { randomUUID } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { execFileAsync } from "../proc.js";
 
 export const TRASH_PREFIX = "_trash-";
 
@@ -33,21 +34,31 @@ export function moveToTrash(target: string): string {
   return trashPath;
 }
 
-/** Delete trash siblings in `dir` that are older than the grace period. */
-export async function sweepTrash(dir: string): Promise<string[]> {
-  const now = Date.now();
+function trashIn(dir: string, now = Date.now()): { due: string[]; young: string[] } {
+  const found = { due: [] as string[], young: [] as string[] };
   let entries: string[];
   try {
     entries = fs.readdirSync(dir);
   } catch {
-    return [];
+    return found;
   }
-  const swept: string[] = [];
   for (const entry of entries) {
     if (!entry.startsWith(TRASH_PREFIX)) continue;
     const full = path.join(dir, entry);
     try {
-      if (now - fs.statSync(full).mtimeMs < TRASH_GRACE_MS) continue;
+      (now - fs.statSync(full).mtimeMs < TRASH_GRACE_MS ? found.young : found.due).push(full);
+    } catch {
+      /* gone meanwhile */
+    }
+  }
+  return found;
+}
+
+/** Delete trash siblings in `dir` that are older than the grace period. */
+export async function sweepTrash(dir: string): Promise<string[]> {
+  const swept: string[] = [];
+  for (const full of trashIn(dir).due) {
+    try {
       await fs.promises.rm(full, { recursive: true, force: true });
       swept.push(full);
     } catch {
@@ -55,4 +66,26 @@ export async function sweepTrash(dir: string): Promise<string[]> {
     }
   }
   return swept;
+}
+
+type Run = (file: string, args: string[], opts: { timeout: number }) => Promise<unknown>;
+
+export function lowPriorityRemove(dirs: readonly string[], platform = process.platform): [string, string[]] {
+  return platform === "darwin"
+    ? ["taskpolicy", ["-b", "rm", "-rf", "--", ...dirs]]
+    : ["ionice", ["-c", "2", "-n", "7", "nice", "-n", "19", "rm", "-rf", "--", ...dirs]];
+}
+
+export async function sweepTrashAtLowPriority(dir: string, run: Run = (file, args, opts) => execFileAsync(file, args, opts)): Promise<{ swept: string[]; young: string[] }> {
+  const { due, young } = trashIn(dir);
+  if (!due.length) return { swept: [], young };
+  const [cmd, args] = lowPriorityRemove(due);
+  try {
+    await run(cmd, args, { timeout: 60 * 60_000 });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      for (const full of due) await fs.promises.rm(full, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  return { swept: due.filter((full) => !fs.existsSync(full)), young };
 }
