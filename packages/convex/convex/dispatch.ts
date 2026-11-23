@@ -439,7 +439,7 @@ export async function applyPatches(
         // nested group, by the shared closeInFlightReason) is set aside
         // instead: a stash, so nothing is stopped. The client's paint was the
         // guess; this write's echo corrects it.
-        if (close && (finalSafe as any).inbox_dismissed_at && await closeSetsAsideOnServer(ctx, doc, Date.now())) {
+        if (close && (finalSafe as any).inbox_dismissed_at && await closeSetsAsideOnServer(ctx, doc, Date.now(), { forceKill: opts?.forceKill })) {
           (finalSafe as any).inbox_stashed_at = (finalSafe as any).inbox_dismissed_at;
           delete (finalSafe as any).inbox_dismissed_at;
           delete (finalSafe as any).inbox_closed_at;

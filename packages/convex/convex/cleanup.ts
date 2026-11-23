@@ -8,8 +8,7 @@ import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./lib/agentTaskRows";
 import { cancelQueuedMessagesOnKill } from "./pendingMessages";
 import { releaseSubagentSlot, subagentEnded } from "./subagentFleet";
-import { nestedGroupOf } from "./lib/closeAside";
-import { isOrphanOrSubagent } from "./inboxFilters";
+import { cascadeTakesDown, nestedGroupOf } from "./lib/closeAside";
 
 // ---------------------------------------------------------------------------
 // Abandoned empty-conversation GC.
@@ -469,8 +468,8 @@ export async function cascadeHideToNestedChildren(
   const childIds: string[] = [];
   for (const child of await nestedGroupOf(ctx, lead)) {
     const idStr = child._id.toString();
-    if (field === "inbox_stashed_at" && isOrphanOrSubagent(child)) continue;
-    if (child[field] && !opts?.forceKill) continue; // quiet re-assert — never re-kill
+    // The one per-child rule the close's aside check scans by (lib/closeAside).
+    if (!cascadeTakesDown(child, field, opts)) continue;
     if (hideTxnState(ctx).decided.has(idStr)) continue; // its own patch decides it
     childIds.push(idStr);
   }
