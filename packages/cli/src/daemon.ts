@@ -22,7 +22,7 @@ import { downloadAttachedFile } from "./attachedFileDownload.js";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
 import { typedMenuReply, typedPollAnswer } from "./typedPollAnswer.js";
-import { closeOwnCommandPanel, mayOpenPanel, paneDialogQuestion, rememberCommandPanel } from "./commandPanel.js";
+import { closeOwnCommandPanel, confirmModelSwitch, mayOpenPanel, paneDialogQuestion, rememberCommandPanel } from "./commandPanel.js";
 import { codexTurnErrorMessage } from "./codexTurnError.js";
 import { INGEST_CLIENTS, INGEST_WINDOW_ROWS, type IngestJob } from "./workers/ingestTypes.js";
 import { TranscriptRetryOwner, transcriptFailureLog, type TranscriptRetrySource } from "./workers/ingestRetryOwner.js";
@@ -19417,8 +19417,13 @@ async function injectViaTmuxInner(target: string, content: string, agentType?: A
   if (verify.outcome === "delivered") delivery?.journal.advance(opts!.delivery!.messageId, "verified");
   // The panel will not echo the command until it closes, so it is delivered now.
   if (verify.evidence === "command_panel") {
-    const question = paneDialogQuestion(await captureTmuxComposerPane(tmuxExec, target, captureLines).catch(() => ""));
-    if (question !== null) rememberCommandPanel(target, question);
+    const panel = await captureTmuxComposerPane(tmuxExec, target, captureLines).catch(() => "");
+    if (await confirmModelSwitch(target, sanitized, panel, tmuxExec)) {
+      log(`Confirmed the model switch "${sanitized}" asked about in ${target}`);
+    } else {
+      const question = paneDialogQuestion(panel);
+      if (question !== null) rememberCommandPanel(target, question);
+    }
     if (opts?.delivery && syncServiceRef) await syncServiceRef.updateMessageStatus({ messageId: opts.delivery.messageId, status: "delivered", deliveredAt: Date.now() }).catch(logConvexFailure);
   }
   if (verify.outcome === "exited") {
