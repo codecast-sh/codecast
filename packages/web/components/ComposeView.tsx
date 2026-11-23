@@ -16,7 +16,7 @@ import { resolveSessionSkills } from "../lib/sessionSkills";
 import { broadcastComposeOptimistic } from "../lib/composeBridge";
 import { agentDisplayName, isHostedAgentType } from "@codecast/shared/contracts";
 import { newConversationAgentType } from "../lib/defaultAgent";
-import { composeDraftContent, findKeptComposeDraft, type ComposeContext, type ComposeInstance } from "../store/composeSlice";
+import { bindComposeTask, composeDraftContent, findKeptComposeDraft, type ComposeContext, type ComposeInstance } from "../store/composeSlice";
 import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import { settleHostedStart } from "../lib/startHostedConversation";
 import { useOnlyHostedAgent } from "../hooks/usePinnedAgents";
@@ -144,7 +144,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     // A resumed draft keeps its agent; otherwise the caller's agent, then the
     // conversation on screen's, carries over, and the default
     // (lib/defaultAgent: the hosted assistant with no machine) fills in.
-    const agentType = resumed?.agent_type || newConversationAgentType(store, context?.agentType ?? ctx.agentType);
+    const agentType = resumed?.agent_type || newConversationAgentType(store, ctx.agentType, context?.agentType);
 
     // Shared optimistic-create path — see store.beginOptimisticSession.
     // deferCreate: opening the popup seeds ONLY a local stub (so the null-state
@@ -170,6 +170,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     if (instance) store.bindComposeStub(instance.id, sid);
 
     if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
+    if (context?.linkedTask && sid !== resumeStubId) bindComposeTask(store, sid, context.linkedTask);
     setSessionId(sid);
     setRestored(sid === resumeStubId);
     setSkillCtx({ projectPath: (sid === resumeStubId ? resumed?.project_path : path) || undefined, agentType });
@@ -213,7 +214,14 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
       // refs) expects typing to append, but focus() alone leaves the caret at 0.
       ta.setSelectionRange(ta.value.length, ta.value.length);
     };
-    const t = setTimeout(focusInput, 60);
+    // A seeded draft taller than the box would open at its top, the lines
+    // under the edge out of sight of the person about to press Enter (a
+    // compose link's untrusted text above all): show the caret's end.
+    const showCaret = () => {
+      const ta = initialQuery ? rootRef.current?.querySelector<HTMLTextAreaElement>("textarea") : null;
+      if (ta) ta.scrollTop = ta.scrollHeight;
+    };
+    const t = setTimeout(() => { focusInput(); showCaret(); }, 60);
     window.addEventListener("focus", focusInput);
     return () => {
       clearTimeout(t);
