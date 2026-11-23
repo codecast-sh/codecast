@@ -89,6 +89,17 @@ test("the stage is an ordinary window: no float, no click-through, resizable", (
   });
 });
 
+test("the stage floats over the app's windows only while the app is in front", () => {
+  assert.deepEqual(callWindowChrome("panel", { appActive: true }), {
+    alwaysOnTop: true,
+    level: "floating",
+    visibleOnAllWorkspaces: false,
+    clickThrough: false,
+    resizable: true,
+  });
+  assert.equal(callWindowChrome("panel", { appActive: false }).alwaysOnTop, false);
+});
+
 test("the float is above the work, on every desktop, and lets the mouse through", () => {
   assert.deepEqual(callWindowChrome("float"), {
     alwaysOnTop: true,
