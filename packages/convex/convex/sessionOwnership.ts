@@ -4,12 +4,12 @@ import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
-import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { addSessionOwnerRow, removeSessionOwnerRow, listSessionOwnerIds, ownersFactsOf, settleDriver, syncPrimaryOwnerCache, humanStarterUser, restoreOwnerRows, writeDriver, type OwnerRowSnapshot } from "./sessionOwners";
 import { isLeave, leaveMovesFirst, listedOwnerIds, pinnedDriverAfterAdd, starterOf } from "@codecast/shared/contracts/sessionOwners";
 import {
-  assertHumanOwner, avatarOf, driverOf, listOwnerInfos, mayEditOwners, ownerIdsOrStarter, OWNER_CANDIDATE_CAP, resolveOwnableConversation,
+  assertHumanOwner, assertRestorableRows, avatarOf, driverOf, listOwnerInfos, mayEditOwners, ownerIdsOrStarter, OWNER_CANDIDATE_CAP, resolveOwnableConversation,
   LEAVE_MOVE_REFUSAL, ownerNamed, resolveOwnerRef, resolveOwnerRoleRef, settleLeave, teamMemberDocs, toOwnerInfo, withLeaveRules, type DriverTarget, type OwnerInfo, type OwnerMutationResult, type SessionDriver,
 } from "./lib/sessionOwnerRules";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
@@ -23,8 +23,7 @@ import { findOwnableConversation, personName, roleMayHoldSession, tellSession } 
 import { performReparentSessionToDevice } from "./devices";
 import { ownRunAsRoleLeaves } from "./lib/roleRelease";
 import { reportsToKey, reportsToLine, reportsToOf, tellReportsToChange, type ReportsTo } from "./lib/reportsTo";
-import { actsForPausedRole } from "./lib/sessionTakeOver";
-import { rolePaused } from "@codecast/shared/contracts";
+import { refusePausedRoleEdit } from "./lib/sessionTakeOver";
 export { personName, roleMayHoldSession };
 import { labelsOf, noteOrgChange, rememberOrgRecord, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
 
@@ -525,24 +524,6 @@ async function setDriver(ctx: { db: any }, actorId: Id<"users">, conversationId:
   await reroutePendingDecisionsForConversation(ctx, conversationId, Date.now());
 }
 
-// A paused role changes nothing about the session it is paused on: not its
-// owners (an add, a remove, a set, a leave, a restore), not its role, not who
-// drives. An agent acting for it runs as a person who may edit the owners, so
-// the account check alone would let it take the wheel back by any of those.
-// The reparent core runs this for every owners and role edit, and the driver
-// and restore paths, which bypass the core, run it themselves. Only a person
-// who owns or runs the session changes them.
-async function refusePausedRoleEdit(ctx: { db: any }, authUserId: Id<"users">, conversation: any, fromSession?: string): Promise<void> {
-  const from = fromSession?.trim();
-  if (!from || !rolePaused(conversation)) return;
-  const sender = await findConversationByAnyRef(ctx, from, authUserId);
-  if (!actsForPausedRole(sender, conversation)) return;
-  const [role, driver] = await Promise.all([ctx.db.get(conversation.org_role_id), ctx.db.get(conversation.driver_user_id)]);
-  const handle = role?.handle ? `@${role.handle}` : "the role";
-  const name = personName(driver);
-  throw new Error(`${name} drives ${conversation.short_id ?? String(conversation._id).slice(0, 7)}, so ${handle} is paused there, and only a person who owns or runs it changes its owners or who drives. Ask ${name} in your own thread (cast decide reaches them).`);
-}
-
 // Hand the wheel to the filed role or to one of the people who own it. A
 // person must already own the session (or be its human starter while nobody
 // does); a role must be the one it is filed under.
@@ -639,15 +620,7 @@ export async function performApplyOwnersChange(
   const run = (target: ReparentSessionTarget) => performReparentSession(ctx, authUserId, { session_id: args.session_id, target, handoff: change.note, from_session: args.from_session });
   if (change.add?.length) results.push(await run({ kind: "user", owners: change.add, mode: "add" }));
   if (change.restore?.length) {
-    // A restored row is an owner like an added one: the same team rule, and
-    // never an agent account. Its owner gains owner access to the session.
-    for (const r of change.restore) {
-      const user = await resolveOwnerRef(ctx, authUserId, start, r.user_id);
-      if (String(user._id) !== r.user_id) throw new Error("A restored owner must be named by their id");
-      assertHumanOwner(user);
-      const by = ctx.db.normalizeId ? ctx.db.normalizeId("users", r.added_by) : r.added_by;
-      if (!by || !(await ctx.db.get(by))) throw new Error("A restored owner row must name who added it");
-    }
+    await assertRestorableRows(ctx, authUserId, start, change.restore);
     await restoreOwnerRows(ctx, start._id, change.restore);
   }
   if (change.role !== undefined) {

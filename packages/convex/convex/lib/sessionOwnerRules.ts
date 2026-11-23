@@ -180,6 +180,19 @@ export function assertHumanOwner(ownerUser: any): void {
   }
 }
 
+// A restored row (an undo of a remove) is an owner like an added one: the
+// same team rule, never an agent account, and who added it is a real person.
+// Its owner gains owner access to the session.
+export async function assertRestorableRows(ctx: { db: any }, authUserId: Id<"users">, conversation: any, rows: Array<{ user_id: string; added_by: string }>): Promise<void> {
+  for (const r of rows) {
+    const user = await resolveOwnerRef(ctx, authUserId, conversation, r.user_id);
+    if (String(user._id) !== r.user_id) throw new Error("A restored owner must be named by their id");
+    assertHumanOwner(user);
+    const by = ctx.db.normalizeId ? ctx.db.normalizeId("users", r.added_by) : r.added_by;
+    if (!by || !(await ctx.db.get(by))) throw new Error("A restored owner row must name who added it");
+  }
+}
+
 export async function listOwnerInfos(
   ctx: { db: any },
   conversationId: Id<"conversations">,

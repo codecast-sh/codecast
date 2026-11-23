@@ -9,6 +9,7 @@ import { actsForRole, rolePaused } from "@codecast/shared/contracts";
 import { takeOverBySend } from "@codecast/shared/contracts/sessionOwners";
 import { addSessionOwnerRow, ownersFactsOf, syncPrimaryOwnerCache, writeDriver } from "../sessionOwners";
 import { personName } from "./sessionTell";
+import { findConversationByAnyRef } from "../conversationSessionLookup";
 import { internal } from "../_generated/api";
 import { reportsToOf, tellReportsToChange } from "./reportsTo";
 
@@ -70,4 +71,22 @@ export async function pausedRoleRefusal(ctx: { db: any }, sender: any, target: a
     return `Not sent. ${name} drives ${short}: it is their session, filed under ${handle} by its task. Ask them in your own thread (cast decide reaches them).`;
   }
   return `Not sent. ${name} drives ${short} now, so ${handle} is paused there. If ${name} needs to hear this, ask them in your own thread (cast decide reaches them); they can make ${handle} driver again from the session's owners.`;
+}
+
+// A paused role changes nothing about the session it is paused on: not its
+// owners (an add, a remove, a set, a leave, a restore), not its role, not who
+// drives. An agent acting for it runs as a person who may edit the owners, so
+// the account check alone would let it take the wheel back by any of those.
+// The reparent core runs this for every owners and role edit, and the driver
+// and restore paths, which bypass the core, run it themselves. Only a person
+// who owns or runs the session changes them.
+export async function refusePausedRoleEdit(ctx: { db: any }, authUserId: Id<"users">, conversation: any, fromSession?: string): Promise<void> {
+  const from = fromSession?.trim();
+  if (!from || !rolePaused(conversation)) return;
+  const sender = await findConversationByAnyRef(ctx, from, authUserId);
+  if (!actsForPausedRole(sender, conversation)) return;
+  const [role, driver] = await Promise.all([ctx.db.get(conversation.org_role_id), ctx.db.get(conversation.driver_user_id)]);
+  const handle = role?.handle ? `@${role.handle}` : "the role";
+  const name = personName(driver);
+  throw new Error(`${name} drives ${conversation.short_id ?? String(conversation._id).slice(0, 7)}, so ${handle} is paused there, and only a person who owns or runs it changes its owners or who drives. Ask ${name} in your own thread (cast decide reaches them).`);
 }
