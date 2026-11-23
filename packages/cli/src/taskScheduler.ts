@@ -726,9 +726,14 @@ export class TaskScheduler {
 
   private async heartbeat(taskId: string): Promise<void> {
     const renewed = await this.syncService.renewTaskLease(taskId, this.daemonId);
-    if (!renewed) {
-      this.log(`Lease renewal failed for task ${taskId}, stopping monitor`);
+    if (renewed === false) {
+      this.log(`Lease for task ${taskId} is no longer held, stopping monitor`);
       this.cleanupTask(taskId);
+    } else if (renewed === null) {
+      // No answer is not a lost lease: after a wake the first calls time out,
+      // and dropping the monitor here lets the lease lapse under a live run, so
+      // the reclaim sweep fires the trigger again.
+      this.log(`Lease renewal for task ${taskId} got no answer, will retry`, "warn");
     }
 
     await this.checkTaskCompletion(taskId);

@@ -789,3 +789,39 @@ describe("runs already going never hold due triggers (ct-92447)", () => {
     expect(lines.some((l) => l.includes("Poll error") && l.includes("timed out"))).toBe(true);
   });
 });
+
+describe("a run's lease renewal", () => {
+  const trackOne = (scheduler: any) => {
+    scheduler.track({ taskId: "t1", tmuxSession: "ct-claude-renew", startedAt: Date.now(), maxRuntimeMs: 600_000 });
+    // The tmux probe is not under test: a beat here is only about the renewal.
+    scheduler.checkTaskCompletion = async () => {};
+  };
+
+  it("keeps watching the run when the backend cannot be reached, and renews on the next beat", async () => {
+    const { scheduler } = makeScheduler([]);
+    const answers: Array<boolean | null> = [null, true];
+    scheduler.syncService.renewTaskLease = async () => answers.shift();
+    trackOne(scheduler);
+    try {
+      await scheduler.heartbeat("t1");
+      expect(scheduler.running.has("t1")).toBe(true);
+      await scheduler.heartbeat("t1");
+      expect(answers).toEqual([]);
+      expect(scheduler.running.has("t1")).toBe(true);
+    } finally {
+      scheduler.stop();
+    }
+  });
+
+  it("stops watching the run when the backend answers that the lease is no longer held", async () => {
+    const { scheduler } = makeScheduler([]);
+    scheduler.syncService.renewTaskLease = async () => false;
+    trackOne(scheduler);
+    try {
+      await scheduler.heartbeat("t1");
+      expect(scheduler.running.has("t1")).toBe(false);
+    } finally {
+      scheduler.stop();
+    }
+  });
+});

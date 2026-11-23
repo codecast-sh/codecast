@@ -432,3 +432,22 @@ describe("SyncService mutation queue bypass (skipQueue)", () => {
     expect(direct[0]).toContain("skipQueue: true");
   });
 });
+
+describe("SyncService.renewTaskLease", () => {
+  const serviceWith = (mutate: () => Promise<unknown>) => {
+    const svc = new SyncService({ convexUrl: "http://localhost:0", userId: "u", authToken: "t" }) as any;
+    svc.apiToken = "token";
+    svc.mutate = mutate;
+    return svc as SyncService;
+  };
+
+  it("answers null, not false, when the backend cannot be reached", async () => {
+    const svc = serviceWith(async () => { throw new Error("The operation timed out."); });
+    expect(await svc.renewTaskLease("t1", "daemon")).toBeNull();
+  });
+
+  it("passes the backend's answer through", async () => {
+    expect(await serviceWith(async () => true).renewTaskLease("t1", "daemon")).toBe(true);
+    expect(await serviceWith(async () => false).renewTaskLease("t1", "daemon")).toBe(false);
+  });
+});
