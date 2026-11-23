@@ -27,7 +27,7 @@
 
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
-import { X, RotateCw, Radio } from "lucide-react";
+import { X, RotateCw, Radio, Copy, Check } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -69,10 +69,11 @@ export function ConversationTerminalSplit({ convKey, tmuxSession }: { convKey: s
   return <SplitBody convKey={convKey} split={split} tmuxSession={tmuxSession ?? null} />;
 }
 
-// The pane's name is the attach command's handle: clicking it copies the
-// command (or says why there is none), the way the header pill's copy button
-// used to.
-function AttachTitle({ target, convKey }: { target: string; convKey: string }) {
+// The pane's name is the attach command's handle, with the machine it runs
+// on: clicking it copies the command (or says why there is none), the way the
+// header pill's copy button used to. The copy icon always shows, so a touch
+// screen, which never hovers, still says the title copies.
+function AttachTitle({ target, convKey, machineName }: { target: string; convKey: string; machineName: string | null }) {
   const { attach, copyAttach } = useAttachCopy(target, convKey);
   const [copied, setCopied] = useState(false);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -81,6 +82,7 @@ function AttachTitle({ target, convKey }: { target: string; convKey: string }) {
       type="button"
       data-terminal-attach
       title={attach ? `Copy ${attach}` : undefined}
+      aria-label={attach ? `Copy ${attach}` : target}
       onClick={() => {
         copyAttach();
         if (!attach) return;
@@ -88,10 +90,10 @@ function AttachTitle({ target, convKey }: { target: string; convKey: string }) {
         if (timer.current) clearTimeout(timer.current);
         timer.current = setTimeout(() => setCopied(false), 1500);
       }}
-      className="group/attach inline-flex min-w-0 items-center gap-1.5 text-meta font-mono text-sol-text-muted hover:text-sol-text"
+      className="inline-flex min-w-0 items-center gap-1.5 text-meta font-mono text-sol-text-muted hover:text-sol-text"
     >
-      <span className="truncate">{target}</span>
-      <span className={`shrink-0 ${copied ? "text-sol-green" : "hidden text-sol-text-dim group-hover/attach:inline"}`}>{copied ? "Copied" : "Copy attach"}</span>
+      <span className="truncate">{target}{machineName ? <span className="text-sol-text-dim"> · {machineName}</span> : null}</span>
+      {copied ? <Check className="w-3 h-3 shrink-0 text-sol-green" aria-hidden /> : <Copy className="w-3 h-3 shrink-0 text-sol-text-dim" aria-hidden />}
     </button>
   );
 }
@@ -277,7 +279,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
             status === "open" && !inst?.state.reconnecting ? "bg-sol-violet" : isConnecting || inst?.state.reconnecting ? "bg-sol-yellow animate-pulse" : "bg-sol-text-dim/40"
           }`}
         />
-        <AttachTitle target={target} convKey={convKey} />
+        <AttachTitle target={target} convKey={convKey} machineName={machineName} />
         {inst && status === "open" && <TerminalSeat tab={inst.state} />}
         {isRemote && (
           <span
@@ -285,7 +287,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
             title={`Relayed from ${machineName ?? "another machine"}. Typing works, but every keystroke makes a round trip — expect a moment before it shows up.`}
           >
             <Radio className="w-2.5 h-2.5" />
-            {machineName ?? "remote"}
+            relayed
           </span>
         )}
         {stale && (
