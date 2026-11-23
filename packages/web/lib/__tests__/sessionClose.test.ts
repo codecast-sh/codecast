@@ -8,12 +8,21 @@ const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ inFlight: null, ro
 // One row per line of the brief's table: what Close does, and the words its tooltip says.
 describe("what Close does to a session", () => {
   test("a session in flight is set aside and keeps running", () => {
-    for (const inFlight of ["live", "awaiting", "queued", "workflow", "nested"] as const) {
+    for (const inFlight of ["live", "queued", "workflow", "nested"] as const) {
       const f = facts({ inFlight, role: true, triggers: 2, waitingOnRun: true });
       expect(closeKindOf(f)).toBe("aside");
       expect(closeSetsAside(f)).toBe(true);
       expect(closeTooltip(f)).toBe("Close: hides it, lets it finish");
     }
+  });
+
+  test("a session waiting on a permission prompt or poll is set aside, and its tooltip says it still waits on you", () => {
+    const f = facts({ inFlight: "awaiting", triggers: 2 });
+    expect(closeKindOf(f)).toBe("awaiting");
+    expect(closeSetsAside(f)).toBe(true);
+    expect(closeTooltip(f)).toBe("Close: hides it; it still waits on you");
+    const prompted = { message_count: 12, agent_status: "working", updated_at: NOW - 1000, last_heartbeat: NOW - 500, awaiting_input: true };
+    expect(closeTooltip(closeFactsOf(prompted as any, 0, NOW))).toBe("Close: hides it; it still waits on you");
   });
 
   test("a fresh /loop and a usage-limit park are set aside with their own words", () => {
@@ -40,7 +49,7 @@ describe("what Close does to a session", () => {
   });
 
   test("no tooltip names the old gestures", () => {
-    for (const f of [facts({ inFlight: "live" }), facts({ inFlight: "loop" }), facts({ inFlight: "limit" }), facts({ role: true }), facts({ triggers: 2 }), facts({ waitingOnRun: true }), facts()]) {
+    for (const f of [facts({ inFlight: "live" }), facts({ inFlight: "awaiting" }), facts({ inFlight: "loop" }), facts({ inFlight: "limit" }), facts({ role: true }), facts({ triggers: 2 }), facts({ waitingOnRun: true }), facts()]) {
       expect(closeTooltip(f)).not.toMatch(/kill|hibernat|stash/i);
     }
   });

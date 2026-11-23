@@ -85,10 +85,10 @@ export const PARK_VERBS: TriageVerb[] = [
     label: "Close",
     done: "Closed",
     icon: X,
-    blurb: "Done with it. Stops the agent unless it is mid-turn; its triggers stay, and it comes back when one fires.",
-    hover: "hover:text-sol-red hover:bg-sol-red/10",
-    text: "text-sol-red",
-    bg: "bg-sol-red/10",
+    blurb: "Done with it. It comes back if something wakes it.",
+    hover: "hover:text-sol-text hover:bg-sol-bg-alt",
+    text: "text-sol-text",
+    bg: "bg-sol-bg-alt",
   },
 ];
 

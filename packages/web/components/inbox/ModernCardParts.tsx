@@ -1,6 +1,6 @@
 import type React from "react";
 import Link from "next/link";
-import { CornerUpLeft, ArrowRight, GitBranch, GitPullRequest, MessageSquare, Tag, Users, Workflow } from "lucide-react";
+import { CornerUpLeft, ArrowRight, GitBranch, GitPullRequest, MessageSquare, Square, Tag, Users, Workflow } from "lucide-react";
 import { runHref } from "../../lib/decisionLinks";
 import { badgeVariants } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -260,7 +260,8 @@ export function ModernCardToolbar({ session, onPin, onLabel, onClose, onRestore,
       {onKill && (
         <ShortcutTooltip label={killLabel}>
           <Button variant="ghost" size="icon-xs" aria-label={killLabel} onClick={(e) => { stop(e); onKill(); }} className={`${TOOL} hover:text-sol-red`}>
-            <Glyph d={CLOSE_PATH} />
+            {/* A Kill wears the menus' Kill mark, never the live card's Close X: the reflex must not carry over. */}
+            {killLabel === "Kill" ? <Square aria-hidden data-kill-glyph className="w-3.5 h-3.5" /> : <Glyph d={CLOSE_PATH} />}
           </Button>
         </ShortcutTooltip>
       )}

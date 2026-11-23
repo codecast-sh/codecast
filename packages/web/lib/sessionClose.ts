@@ -23,9 +23,10 @@ export type CloseFacts = {
   waitingOnRun: boolean;
 };
 
-export type CloseKind = "aside" | "keeps_background" | "keeps_loop" | "keeps_limit" | "keeps_triggers" | "waits_on_run" | "clears";
+export type CloseKind = "aside" | "awaiting" | "keeps_background" | "keeps_loop" | "keeps_limit" | "keeps_triggers" | "waits_on_run" | "clears";
 
 export function closeKindOf(f: CloseFacts): CloseKind {
+  if (f.inFlight === "awaiting") return "awaiting";
   if (f.inFlight === "background") return "keeps_background";
   if (f.inFlight === "loop") return "keeps_loop";
   if (f.inFlight === "limit") return "keeps_limit";
@@ -41,6 +42,7 @@ export const closeSetsAside = (f: CloseFacts) => f.inFlight !== null;
 export function closeTooltip(f: CloseFacts): string {
   switch (closeKindOf(f)) {
     case "aside": return "Close: hides it, lets it finish";
+    case "awaiting": return "Close: hides it; it still waits on you";
     case "keeps_background": return "Close: hides it, lets its background work finish";
     case "keeps_loop": return "Close: hides it, keeps its loop running";
     case "keeps_limit": return "Close: hides it, picks up when its limit resets";

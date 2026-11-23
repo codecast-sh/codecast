@@ -33,7 +33,8 @@ describe("killReviewOf", () => {
     expect(killReviewOf([s("a", { standing_role_id: "r1", is_idle: false, has_pending: true })], [armed("t", "a")])).toBeNull();
     const l = killReviewOf([s("a", { standing_role_id: "r1" }), s("b", { has_pending: true }), s("c")], [armed("t", "a")])!;
     expect(l.name).toBe("Kill 2 sessions");
-    expect(l.rows.find((r) => r.k === "Triggers")?.v).toBe("Canceled");
+    // Nothing armed to cancel: no Triggers row at all, rather than a bare "Canceled".
+    expect(l.rows.find((r) => r.k === "Triggers")).toBeUndefined();
   });
 
   test("queued messages ask first", () => {

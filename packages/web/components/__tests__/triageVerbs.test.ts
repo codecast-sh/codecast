@@ -45,6 +45,12 @@ describe("triage verb catalog", () => {
     for (const v of SECONDARY_VERBS) expect(PRIMARY_VERBS).not.toContain(v);
   });
 
+  test("Close is everyday, not destructive: it wears no red, and its blurb is short", () => {
+    const close = TRIAGE_VERBS.find((v) => v.id === "close")!;
+    expect(`${close.hover} ${close.text} ${close.bg}`).not.toContain("sol-red");
+    expect(close.blurb.length).toBeLessThanOrEqual(60);
+  });
+
   test("every verb carries a label, a past tense, and a blurb", () => {
     for (const verb of TRIAGE_VERBS) {
       expect(verb.label.length).toBeGreaterThan(0);

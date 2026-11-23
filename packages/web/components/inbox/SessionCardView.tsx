@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from "react";
 import { SessionWorkProject } from "../projects/SessionWorkProject";
 import { SessionTaskChip } from "../work/SessionTaskChip";
-import { Pin, Star, Clock, EyeOff, Workflow } from "lucide-react";
+import { Pin, Star, Clock, EyeOff, Square, Workflow } from "lucide-react";
 import { runHref } from "../../lib/decisionLinks";
 import Link from "next/link";
 import { withSafetyBlock, isClosedSession, isStashHidden, type UserRest } from "@codecast/shared/contracts";
@@ -377,9 +377,11 @@ export function SessionCardView({
                 onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
                 className="p-0.5 rounded text-sol-text-dim hover:text-sol-red transition-colors"
               >
-                <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
-                </svg>
+                {isStashed || isClosedSession(session) ? <Square aria-hidden data-kill-glyph className="w-3 h-3" /> : (
+                  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                )}
               </button>
             )}
             {onRestore && (

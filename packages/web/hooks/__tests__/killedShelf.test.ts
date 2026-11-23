@@ -75,6 +75,29 @@ describe("loadMoreKilledSessions", () => {
     expect(useInboxStore.getState().killedShelf.ids).toEqual([D]);
   });
 
+  it("an empty page that is not done pages on in the same click, until one yields rows", async () => {
+    const { client, calls } = fakeConvex(
+      [{ page: [], isDone: false, continueCursor: "k1" }, { page: [], isDone: false, continueCursor: "k2" }, { page: [killed(A)], isDone: false, continueCursor: "k3" }],
+      [{ page: [], isDone: true, continueCursor: null }],
+    );
+    await loadMoreKilledSessions(client);
+    const shelf = useInboxStore.getState().killedShelf;
+    expect(shelf.ids).toEqual([A]);
+    expect(shelf.cursor).toBe("k3");
+    expect(calls.map((c) => `${c.which} ${c.args.paginationOpts.cursor}`)).toEqual(["killed null", "closed null", "killed k1", "killed k2"]);
+  });
+
+  it("one source failing leaves the other's rows and position", async () => {
+    const client = {
+      query: async (fn: unknown) => {
+        if (getFunctionName(fn as any).endsWith("listKilledSessions")) throw new Error("Could not find public function");
+        return { page: [closed(B)], isDone: false, continueCursor: "c1" };
+      },
+    } as any;
+    await loadMoreKilledSessions(client);
+    expect(useInboxStore.getState().killedShelf).toEqual({ ids: [B], cursor: null, closedCursor: "c1", killedDone: false, closedDone: false, complete: false, loading: false });
+  });
+
   it("a failed page leaves the position untouched and clears loading", async () => {
     const client = { query: async () => { throw new Error("Could not find public function"); } } as any;
     await loadMoreKilledSessions(client);

@@ -26,3 +26,17 @@ export function killReview(row: Row, tasks: TaskRow[]): KillReview | null {
   const lines = l.rows.map((r) => `${r.k}: ${r.v}${r.list?.length ? ` (${r.list.join(', ')})` : ''}`);
   return { title: `${l.name}: ${l.subject}`, message: lines.join('\n'), keep: l.keep ?? 'Keep it', confirm: l.confirm };
 }
+
+/** A Kill from any phone surface (the menu, a Stashed row's button): it ends
+ *  at once when it cancels nothing, else asks first with the web's review.
+ *  `hold` is the kill itself (the undo bar's holdKill); `ask` shows the alert
+ *  and runs `confirm` on its destructive button. */
+export function reviewedKill(
+  row: Row,
+  tasks: TaskRow[],
+  io: { hold: (id: string) => void; ask: (review: KillReview, confirm: () => void) => void },
+): void {
+  const review = killReview(row, tasks);
+  if (!review) { io.hold(row._id); return; }
+  io.ask(review, () => io.hold(row._id));
+}

@@ -80,8 +80,9 @@ export type InFlightReason = "queued" | "fleet" | "loop" | "workflow" | "live" |
 
 /** Why a close must set this session aside, or null when stopping it loses nothing. */
 export function closeInFlightReason(f: InFlightFacts): InFlightReason | null {
-  if (f.turnLive) return "live";
+  // A turn stopped on a permission prompt or poll waits on the person, whatever its status says.
   if (f.awaitingInput) return "awaiting";
+  if (f.turnLive) return "live";
   if (f.queued) return "queued";
   if (f.inProcessRun) return "workflow";
   if (f.openBackgroundWork) return "background";
