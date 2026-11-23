@@ -133,6 +133,29 @@ const dispatchSend = (ctx: any, convId: string, content: string, clientId: strin
     { action: "sendMessage", args: [convId, content, undefined, clientId, undefined, ...(opts ? [opts] : [])] },
   );
 
+// Where the web's dispatch meets the owners rules: the store's leave paint
+// rides the sessions rail as ack-only fields, and the side effect applies the
+// leave by the shared runnerTakesLeftSession.
+describe("the last person leaving a hand a role started, through the web's dispatch", () => {
+  test("nobody is given a row, the role drives again, and the painted fields never land", async () => {
+    const { ctx, row, ownersOf } = await world();
+    await dispatchSend(ctx, "hand", "I'll take it from here", "t1", { take_over: true });
+    expect([ownersOf("hand"), row("hand").driver_user_id]).toEqual([[ME], ME]);
+    await (dispatch as any)._handler(
+      { ...ctx, auth: { getUserIdentity: async () => ({ subject: `${ME}|session` }) } },
+      {
+        action: "applySessionOwners",
+        args: ["hand", { leave: {} }],
+        patches: { conversations: { hand: { owner_ids: [], owned_by_me: false, owner_user_id: null, role_alone: true, driver_user_id: null } } },
+      },
+    );
+    expect(ownersOf("hand")).toEqual([]);
+    expect(roleDrives(row("hand"))).toBe(true);
+    expect(await heldByRoleAlone(ctx, row("hand"))).toBe(true);
+    expect("role_alone" in row("hand") || "owned_by_me" in row("hand")).toBe(false);
+  });
+});
+
 describe("only a send that says so takes the wheel", () => {
   test("a decision answer, a /model command and an inline thread's reply leave the driver alone", async () => {
     const { ctx, row, ownersOf, tables } = await world();

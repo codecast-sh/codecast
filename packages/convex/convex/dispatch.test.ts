@@ -83,9 +83,9 @@ describe("applyPatches conversation owner gate", () => {
   // writes them, and the gate drops them from the patch.
   test("ack-only owner fields never land through the patch", async () => {
     const db = fixtures();
-    await applyPatches({ db } as any, RUNNER as any, { conversations: { [CONV]: { owner_ids: [OUTSIDER], org_role_id: "org_roles_x", driver_user_id: OUTSIDER, user_id: OUTSIDER, owner_user_id: OUTSIDER, owned_by_me: true } } });
+    await applyPatches({ db } as any, RUNNER as any, { conversations: { [CONV]: { owner_ids: [OUTSIDER], org_role_id: "org_roles_x", driver_user_id: OUTSIDER, user_id: OUTSIDER, owner_user_id: OUTSIDER, owned_by_me: true, role_alone: true } } });
     const row = db._tables.conversations[0];
-    expect([row.owner_ids, row.org_role_id, row.driver_user_id, row.owned_by_me]).toEqual([undefined, undefined, undefined, undefined]);
+    expect([row.owner_ids, row.org_role_id, row.driver_user_id, row.owned_by_me, row.role_alone]).toEqual([undefined, undefined, undefined, undefined, undefined]);
     expect([row.user_id, row.owner_user_id]).toEqual([RUNNER, PRIMARY]);
   });
 
