@@ -118,7 +118,7 @@ describe("team read keys", () => {
   test("rows are the team floor at each member's level, metadata only, without child sessions", async () => {
     const { t, ada, mo, hal, team, other, as } = await setup();
     await session(t, ada, { team_id: team, title: "Ada shared", subtitle: "Ada summary", updated_at: NOW - HOUR });
-    await session(t, mo, { team_id: team, title: "Mo work", subtitle: "Mo summary", updated_at: NOW - 2 * HOUR });
+    await session(t, mo, { team_id: team, title: "Mo work", subtitle: "Mo summary", updated_at: NOW - 2 * HOUR, message_count: 42 });
     await session(t, hal, { team_id: team, title: "Hal hidden" });
     await session(t, ada, { team_id: other, title: "Ada other team" });
     await session(t, ada, { title: "Ada personal", is_private: true });
@@ -140,11 +140,13 @@ describe("team read keys", () => {
         title: "Ada shared",
         summary: "Ada summary",
         sharing: "full",
+        transcript_messages: 1,
         work_state: expect.any(String),
         started_at: new Date(NOW - 2 * HOUR).toISOString(),
         updated_at: new Date(NOW - HOUR).toISOString(),
       },
-      expect.objectContaining({ title: "Mo work", summary: "Mo summary", sharing: "summary", owner: expect.objectContaining({ name: "Mo" }) }),
+      // The team feed shows a summary share's message count too.
+      expect.objectContaining({ title: "Mo work", summary: "Mo summary", sharing: "summary", transcript_messages: 42, owner: expect.objectContaining({ name: "Mo" }) }),
       expect.objectContaining({ title: "Assigned to Mo", sharing: "full", owner: expect.objectContaining({ id: String(mo) }), repo: null }),
     ]);
     for (const leak of SECRETS) expect(raw).not.toContain(leak);

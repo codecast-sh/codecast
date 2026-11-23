@@ -14,6 +14,10 @@
 // and a known key is charged before its parameters are read. Both limiters
 // fail closed.
 //
+// Each session carries transcript_messages: the count of every message in its
+// transcript, so the person's prompts, the agent's replies and tool results
+// all add to it. The team feed shows the same count at every sharing level.
+//
 // Answers 200 { sessions, next_cursor }; 400 for a bad parameter or cursor;
 // 401 for a missing, unknown, revoked or expired key; 429 over a limit.
 import { httpAction } from "../_generated/server";
