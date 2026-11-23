@@ -1,0 +1,38 @@
+diff --git a/dist/cjs/react/queries_observer.js b/dist/cjs/react/queries_observer.js
+index ff43421..47db106 100644
+--- a/dist/cjs/react/queries_observer.js
++++ b/dist/cjs/react/queries_observer.js
+@@ -93,6 +93,14 @@ class QueriesObserver {
+       }
+       result[identifier] = value;
+     }
++    const last = this.lastLocalResults;
++    if (last !== void 0) {
++      const keys = Object.keys(result);
++      if (keys.length === Object.keys(last).length && keys.every((key) => key in last && last[key] === result[key])) {
++        return last;
++      }
++    }
++    this.lastLocalResults = result;
+     return result;
+   }
+   setCreateWatch(createWatch) {
+diff --git a/dist/esm/react/queries_observer.js b/dist/esm/react/queries_observer.js
+index c69e6fd..2e90232 100644
+--- a/dist/esm/react/queries_observer.js
++++ b/dist/esm/react/queries_observer.js
+@@ -72,6 +72,14 @@ export class QueriesObserver {
+       }
+       result[identifier] = value;
+     }
++    const last = this.lastLocalResults;
++    if (last !== void 0) {
++      const keys = Object.keys(result);
++      if (keys.length === Object.keys(last).length && keys.every((key) => key in last && last[key] === result[key])) {
++        return last;
++      }
++    }
++    this.lastLocalResults = result;
+     return result;
+   }
+   setCreateWatch(createWatch) {

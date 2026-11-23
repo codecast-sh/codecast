@@ -5,7 +5,7 @@
 // it. `mine` adds the viewer's own queue from every workspace, which is what
 // Mine reads.
 import { useMemo } from "react";
-import type { SessionDecisionItem } from "../store/inboxStore";
+import { useInboxStore, type SessionDecisionItem } from "../store/inboxStore";
 import { useCollectionRows } from "./useCollectionRows";
 import { useActiveWorkspaceKey } from "./useWorkspaceCollection";
 import { inViewerQueue } from "../lib/decisionQueue";
@@ -28,4 +28,21 @@ export function useDecisionRows(): { workspace: SessionDecisionItem[]; mine: Ses
   const where = useMemo(() => (d: SessionDecisionItem) => listed(d) && (inWorkspaceList(d, key) || inViewerQueue(d)), [key]);
   const rows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where, sig: decisionRowSig });
   return useMemo(() => ({ workspace: rows.filter((d) => inWorkspaceList(d, key)), mine: rows, workspaceKey: key }), [rows, key]);
+}
+
+const decidedSig = (d: SessionDecisionItem): string => [
+  d.status, d.question, d.resolved_at, d.answer_index, d.answer_text, JSON.stringify(d.answer_json ?? null), d.answer_revision,
+  d.answered_by ? `${d.answered_by.kind}:${d.answered_by.id}:${d.answered_by.via ?? ""}` : "", d.session_title, d.team_workspace, d.kind,
+  (d.asked_user_ids ?? []).join(","), d.options.map((o) => o.label).join("\u0001"),
+].join("\u0002");
+
+/** Settled decisions (answered or dismissed) the viewer may revisit, newest settled first: the active workspace's
+ *  and the viewer's own from any workspace, as far back as the store holds them. */
+export function useDecidedRows(): SessionDecisionItem[] {
+  const me = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
+  const key = useActiveWorkspaceKey();
+  const where = useMemo(() => (d: SessionDecisionItem) => listed(d) && (d.status === "answered" || d.status === "dismissed")
+    && (inWorkspaceList(d, key) || (!!me && (String(d.user_id) === me || (d.asked_user_ids ?? []).some((id) => String(id) === me)))), [key, me]);
+  const rows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where, sig: decidedSig });
+  return useMemo(() => [...rows].sort((a, b) => (b.resolved_at ?? 0) - (a.resolved_at ?? 0)), [rows]);
 }

@@ -899,10 +899,14 @@ function RunningBadge({ label }: { label: string }) {
   );
 }
 
-const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId, onOpen, onOpenSession }: {
+const NO_TRIGGER_ROWS: TriggerRow[] = [];
+const NO_SESSIONS: InboxSession[] = [];
+const sameTriggerRow = (a: TriggerRow, b: TriggerRow) => a.task === b.task && a.openId === b.openId && a.unread === b.unread && a.kind === b.kind;
+
+const CardBarStrip = memo(function CardBarStrip({ session, rows, isActive, onOpen, onOpenSession }: {
   session: InboxSession;
   rows: TriggerRow[];
-  activeSessionId?: string | null;
+  isActive: boolean;
   onOpen: (row: TriggerRow) => void;
   onOpenSession: (session: InboxSession) => void;
 }) {
@@ -912,7 +916,6 @@ const CardBarStrip = memo(function CardBarStrip({ session, rows, activeSessionId
   const openWorkflow = useOpenWorkflowRun(session);
   if (rows.length === 0 && !workflow && watching.length === 0) return null;
   const primary = rows.length > 0 ? primaryTriggerRow(rows) : null;
-  const isActive = session._id === activeSessionId;
   // A card whose only bars are paused schedules rests dimmer; anything live
   // (a workflow, a watch) keeps the strip at full presence.
   const paused = !!primary && rows.every((r) => r.task.status === "paused") && !workflow && watching.length === 0;
@@ -1220,7 +1223,10 @@ function RetryStoppedButton({ rows }: { rows: InboxSession[] }) {
   );
 }
 
-function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, onOpenSchedule }: {
+// A switch moves activeSessionId on every card, but only the two cards whose
+// isActive flips draw differently; "full" mode alone shows rows that compare
+// the id itself (TriggerRowItem's run list).
+const CardBars = memo(function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, onOpenSchedule }: {
   session: InboxSession;
   mode: CardBarsMode;
   scheduleRows: TriggerRow[];
@@ -1235,7 +1241,7 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
   onOpenSchedule: (row: TriggerRow) => void;
 }) {
   const isActive = session._id === activeSessionId;
-  const bound = scheduleRows.map((r) => ({ ...r, openId: session._id }));
+  const bound = useMemo(() => scheduleRows.map((r) => ({ ...r, openId: session._id })), [scheduleRows, session._id]);
   // A parked card always says what wakes it, in one line, whatever the mode.
   if (wake === "parked") {
     return <DormantWakeRow session={session} rows={bound} isActive={isActive} onOpen={onOpen} onOpenSchedule={onOpenSchedule} />;
@@ -1252,7 +1258,7 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
   if (mode === "strip") {
     return (
       <>
-        <CardBarStrip session={session} rows={bound} activeSessionId={activeSessionId} onOpen={onOpenSchedule} onOpenSession={onOpen} />
+        <CardBarStrip session={session} rows={bound} isActive={isActive} onOpen={onOpenSchedule} onOpenSession={onOpen} />
         {dormantRow}
       </>
     );
@@ -1267,7 +1273,12 @@ function CardBars({ session, mode, scheduleRows, activeSessionId, wake, onOpen, 
       {dormantRow}
     </>
   );
-}
+}, (a, b) => {
+  const keys = new Set([...Object.keys(a), ...Object.keys(b)]) as Set<keyof typeof a>;
+  for (const k of keys) if (k !== "activeSessionId" && a[k] !== b[k]) return false;
+  if (a.wake !== "parked" && a.mode !== "strip" && a.mode !== "hidden") return a.activeSessionId === b.activeSessionId;
+  return (a.session._id === a.activeSessionId) === (b.session._id === b.activeSessionId);
+});
 
 // The TRIGGERS section. Expanded: one TriggerRowItem per armed schedule.
 // Collapsed: the header itself is the briefing — count, soonest next fire, and
@@ -2106,22 +2117,37 @@ function SessionListPanelImpl({
   // ones it originates (inject, any type), the spawn triggers it created
   // (attribution, not routing), plus, for a run card, the schedule that
   // spawned it. Keyed off partition.rows so bars share the unread state.
-  const scheduleBarRowsFor = useCallback((sess: InboxSession): TriggerRow[] => {
-    const rows = schedulePartitionRef.current.rows;
-    const out: TriggerRow[] = [];
-    for (const r of rows) {
+  // Each card's rows keep their array identity while their content holds, so
+  // the memoized bars under a card skip the partition's recomputes (every
+  // switch moves focusedId).
+  const scheduleBarCache = useRef(new Map<string, TriggerRow[]>());
+  const scheduleBarIndex = useMemo(() => {
+    const byConv = new Map<string, number[]>();
+    const byTask = new Map<string, number>();
+    schedulePartition.rows.forEach((r, i) => {
       // Loop rows attach like inject triggers — they name this card's
       // standing intent.
-      if (
-        r.task.originating_conversation_id === sess._id ||
-        r.task.created_by_conversation_id === sess._id ||
-        (!!sess.agent_task_id && r.task._id === sess.agent_task_id)
-      ) {
-        out.push(r);
+      for (const id of new Set([r.task.originating_conversation_id, r.task.created_by_conversation_id])) {
+        if (!id) continue;
+        const at = byConv.get(id);
+        if (at) at.push(i); else byConv.set(id, [i]);
       }
-    }
-    return out;
-  }, []);
+      byTask.set(r.task._id, i);
+    });
+    return { rows: schedulePartition.rows, byConv, byTask };
+  }, [schedulePartition]);
+  const scheduleBarRowsFor = useCallback((sess: InboxSession): TriggerRow[] => {
+    const { rows, byConv, byTask } = scheduleBarIndex;
+    const at = byConv.get(sess._id) ?? [];
+    const spawned = sess.agent_task_id ? byTask.get(sess.agent_task_id) : undefined;
+    const picked = spawned === undefined || at.includes(spawned) ? at : [...at, spawned].sort((a, b) => a - b);
+    const out = picked.map((i) => rows[i]);
+    const prev = scheduleBarCache.current.get(sess._id);
+    if (prev && prev.length === out.length && prev.every((r, i) => sameTriggerRow(r, out[i]))) return prev;
+    const next = out.length ? out : NO_TRIGGER_ROWS;
+    scheduleBarCache.current.set(sess._id, next);
+    return next;
+  }, [scheduleBarIndex]);
   const filteredDismissed = useMemo(() => {
     // Only surface dismissed sessions ACTIVE within the window — keyed on last
     // activity (updated_at), NOT when they were dismissed. A bulk cleanup dismisses
@@ -2467,10 +2493,11 @@ function SessionListPanelImpl({
 
   // The groupings offered as tabs, published so Ctrl+, cycles exactly these.
   const showViewTabs = !favoritesView;
-  const viewModes = useMemo(
-    () => inboxViewModes({ hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0, hasMachines: namedMachineCounts.length > 1 }),
-    [visibleBuckets.length, hasPlanSessions, orgLenses, scheduleRowsView.length, namedMachineCounts.length],
-  );
+  // Held by content: orgLenses is rebuilt on every render, and a new list
+  // re-rendered the view picker on each session switch.
+  const viewModesNow = inboxViewModes({ hasLabels: visibleBuckets.length > 0, hasPlans: hasPlanSessions, orgLenses, hasTriggers: scheduleRowsView.length > 0, hasMachines: namedMachineCounts.length > 1 });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const viewModes = useMemo(() => viewModesNow, [viewModesNow.join(",")]);
   const viewModesKey = showViewTabs ? viewModes.join(",") : "";
   useWatchEffect(() => {
     if (!viewModesKey) return;
@@ -2855,7 +2882,7 @@ function SessionListPanelImpl({
                 {(!showSubagents || workersNeedingYouByParent.has(session._id)) && (
                   <CardWorkersLine
                     count={workerCountByParent.get(session._id) ?? 0}
-                    needsYou={workersNeedingYouByParent.get(session._id) ?? []}
+                    needsYou={workersNeedingYouByParent.get(session._id) ?? NO_SESSIONS}
                     onOpen={handleSelect}
                   />
                 )}
@@ -3112,7 +3139,7 @@ function SessionListPanelImpl({
                 <CardBars
                   session={session}
                   mode={cardBars}
-                  scheduleRows={viewMode !== "trigger" || key === "dormant" ? scheduleBarRowsFor(session) : []}
+                  scheduleRows={viewMode !== "trigger" || key === "dormant" ? scheduleBarRowsFor(session) : NO_TRIGGER_ROWS}
                   activeSessionId={activeSessionId}
                   wake={key === "dormant" ? "parked" : key === "needs_input" ? "claim" : undefined}
                   onOpen={handleSelect}

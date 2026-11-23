@@ -480,13 +480,12 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       }
       return sections.flat();
     }
-    // Questions lead: a session that asked you something is your move before
-    // anything else, pinned or not — same order as the web panel.
-    sections.push(renderSection('Decisions', filteredQuestions, Theme.violet, "questions"));
     // The header number is the section COUNT while no chip narrows the list
     // and the nested rows are on screen; shared sectionHeaderCount, so this
     // inbox and the web panel can't drift.
     sections.push(renderSection("Pinned", filteredPinned, Theme.magenta, undefined, countOf(filteredPinned, pinned, placed.counts.pinned)));
+    // Pinned leads, then Decisions — same order as the web panel.
+    sections.push(renderSection('Decisions', filteredQuestions, Theme.violet, "questions"));
     sections.push(renderSection('New', filteredNew, Theme.blue, "New", countOf(filteredNew, newSessions, placed.counts.newSessions)));
     // Top-down "who acts next": you (Needs You, Done to review), the agent
     // (Working), a machine (Dormant) — same order as the web panel.
