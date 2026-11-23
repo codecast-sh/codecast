@@ -38,7 +38,7 @@ export function FilePathLink({
     (e: React.MouseEvent<HTMLAnchorElement>) => {
       onClick?.(e);
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-      if ((ctx?.foreign || useVaultStore.getState().connection === "no-daemon") && openSessionChangedPath(path, ctx)) {
+      if ((ctx?.foreign || useVaultStore.getState()?.connection === "no-daemon") && openSessionChangedPath(path, ctx)) {
         e.preventDefault();
         return;
       }

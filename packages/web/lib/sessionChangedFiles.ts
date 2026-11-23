@@ -12,7 +12,7 @@ export function openSessionChangedPath(path: string, ctx: FilePathContextValue |
   if (dv.conversationId !== ctx.conversationId || dv.changes.length === 0) return false;
   const hit = matchSessionChangedFile(path, dv.changes, ctx);
   if (!hit) return false;
-  if (useInboxStore.getState().clientState.ui?.diff_base?.[ctx.conversationId]) {
+  if (useInboxStore.getState()?.clientState?.ui?.diff_base?.[ctx.conversationId]) {
     dv.setDiffBase(ctx.conversationId, "session");
   } else {
     dv.clearSelection();
