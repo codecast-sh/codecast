@@ -10,7 +10,7 @@ import { addSessionOwnerRow, removeSessionOwnerRow, listSessionOwnerIds, syncPri
 import { isLeave, listedOwnerIds, pinnedDriverAfterAdd, starterOf } from "@codecast/shared/contracts/sessionOwners";
 import {
   assertHumanOwner, avatarOf, driverOf, listOwnerInfos, mayEditOwners, ownerIdsOrStarter, ownersFactsOf, OWNER_CANDIDATE_CAP, resolveOwnableConversation,
-  resolveOwnerRef, settleLeave, teamMemberDocs, toOwnerInfo, withLeaveRules, type DriverTarget, type OwnerInfo, type OwnerMutationResult, type SessionDriver,
+  resolveOwnerRef, resolveOwnerRoleRef, settleLeave, teamMemberDocs, toOwnerInfo, withLeaveRules, type DriverTarget, type OwnerInfo, type OwnerMutationResult, type SessionDriver,
 } from "./lib/sessionOwnerRules";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { routeUpWaitingSession } from "./agentTasks";
@@ -538,7 +538,9 @@ export async function performSetSessionDriver(
     return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "role", role_id: conversation.org_role_id } };
   }
   const ownerIds = await ownerIdsOrStarter(ctx, conversation);
-  const userId = args.driver.user_id;
+  // The web passes an owner's id; `cast own --drive` passes a person as typed.
+  const ref = args.driver.user_id;
+  const userId = ownerIds.includes(ref) ? ref : String((await resolveOwnerRef(ctx, authUserId, conversation, ref))._id);
   if (!ownerIds.includes(userId)) throw new Error("Only an owner of the session can drive it; add them as an owner first");
   if (String(conversation.driver_user_id ?? "") !== userId) await ctx.db.patch(conversation._id, { driver_user_id: userId as Id<"users"> });
   return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "user", user_id: userId as Id<"users"> } };
@@ -608,8 +610,9 @@ export async function performApplyOwnersChange(
   if (change.add?.length) results.push(await run({ kind: "user", owners: change.add, mode: "add" }));
   if (change.restore?.length) await restoreOwnerRows(ctx, start._id, change.restore);
   if (change.role !== undefined) {
+    const role = change.role === null ? null : await resolveOwnerRoleRef(ctx, authUserId, start, change.role);
     const before = await resolveOwnableConversation(ctx, authUserId, args.session_id);
-    if (String(before.org_role_id ?? "") !== String(change.role ?? "")) results.push(await run({ kind: "role", role_id: change.role }));
+    if (String(before.org_role_id ?? "") !== String(role ?? "")) results.push(await run({ kind: "role", role_id: role }));
   }
   // Taking yourself out is a leave, whichever way the change says it.
   const others = (change.remove ?? []).filter((id) => id !== String(authUserId));

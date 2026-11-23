@@ -240,6 +240,7 @@ import {
 } from "./vault/vaultCli.js";
 import { buildMatcher, contextWindow, matchingLines, resolveLineRange } from "./textView.js";
 import { resolveOwnTarget } from "./ownTarget.js";
+import { describeOwners, isRoleRef, namesFiledRole, ownersLine } from "./ownersView.js";
 import { resolveCurrentConversationId } from "./linkResolve.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { readLocalConversationMap } from "./localConversationMap.js";
@@ -4184,72 +4185,142 @@ function resolveOwnerTarget(
   return { sessionId: r.sessionId, member: r.member };
 }
 
+// The owners read every `own`/`disown`/`owners` prints from.
+async function readOwners(sessionId: string): Promise<any> {
+  const result = await cliPost("/cli/sessions/owners", { session_id: sessionId });
+  if (!result) {
+    console.error(notFoundLine("session", sessionId, SESSION_ID_HINT));
+    process.exit(1);
+  }
+  return result;
+}
+
+// A role named on `own --drive`/`disown` must be the one the session is filed under.
+function requireFiledRole(read: any, ref: string, sessionId: string): void {
+  if (namesFiledRole(read, ref)) return;
+  const filed = read.role ? `it is filed under @${read.role.handle}` : "it is filed under no role";
+  console.error(`${c.red}✗${c.reset} ${c.cyan}${read.short_id || sessionId}${c.reset} ${ref} is not its role: ${filed}`);
+  process.exit(1);
+}
+
 program
   .command("own")
   .description(
-    "Add an owner to a session — a team member responsible for steering it\n\n" +
-    "A session has a SET of owners: it can sit in several teammates' inboxes at\n" +
-    "once, and each owner gets a notification when they're added. `own` ADDS an\n" +
-    "owner without displacing the existing ones (use `disown` to remove one).\n\n" +
-    "An owner is distinct from whose account RUNS the session, and from which\n" +
-    "DEVICE it runs on — all three move independently. An agent account (e.g. a\n" +
-    "bot on a shared machine) can park a session on a human reviewer; it then\n" +
-    "surfaces in the OWNER's inbox (web NEEDS YOU + cast sessions/feed) marked\n" +
-    "with who runs it. Owners reply with cast send or the web composer.\n\n" +
-    "Ownership decides whose inbox it is in. A session you run but own no part\n" +
-    "of leaves your inbox and stops notifying you, whatever state it is in; name\n" +
-    "its id to read it anyway. An owned session stays in the owner's inbox with\n" +
-    "no recency limit, and a handoff clears a dismiss, stash or snooze so it\n" +
-    "lands where they can see it.\n\n" +
-    "You can own any session you can see in the feed (your own, or one shared\n" +
-    "with a team you're in). Scripts should pass an exact email.\n\n" +
+    "Add an owner to a session: a teammate, or one role\n\n" +
+    "A session's owners are whose inbox it sits in: people, and at most one\n" +
+    "role. Exactly one owner drives it, the one the agent works for: the role\n" +
+    "while one is filed, else the person who drives. A person who owns a\n" +
+    "session its role drives takes over by sending into it, and the role is\n" +
+    "paused until someone makes it driver again.\n\n" +
+    "Naming a person ADDS them without displacing anyone and notifies them;\n" +
+    "adding someone never moves the wheel to them. Naming a role (@handle)\n" +
+    "files the session under it, replacing any other role, and the role drives.\n" +
+    "--drive hands the wheel to an owner or to the filed role. Only an owner,\n" +
+    "or the account that runs the session, may change its owners or driver.\n\n" +
+    "To hand a session to a teammate, add them and make them driver.\n\n" +
+    "Owning is separate from whose account runs the session and which machine\n" +
+    "it runs on. A session is in the inbox of each person who owns it and of\n" +
+    "the account that runs it, except one a role started that no person owns.\n\n" +
     "Examples:\n" +
-    "  cast own jx7c6zk jason@example.com   # hand off to a teammate (notifies them)\n" +
-    "  cast own jason@example.com           # …hand off the CURRENT session\n" +
+    "  cast own jx7c6zk ashot@example.com --drive ashot@example.com  # hand it to a teammate\n" +
+    "  cast own jx7c6zk ashot@example.com   # add a teammate as an owner\n" +
+    "  cast own ashot@example.com           # ...on the CURRENT session\n" +
+    "  cast own jx7c6zk @growth             # file it under @growth, which drives\n" +
+    "  cast own jx7c6zk --drive me          # take the wheel yourself\n" +
+    "  cast own jx7c6zk --drive @growth     # hand it back to its role\n" +
     "  cast own jx7c6zk                     # claim it yourself\n" +
-    "  cast owners jx7c6zk                  # who owns it\n" +
-    "  cast disown jx7c6zk                  # step off it yourself\n" +
-    "  cast disown jx7c6zk --all            # clear every owner"
+    "  cast owners jx7c6zk                  # who owns it, who drives, who runs it\n" +
+    "  cast disown jx7c6zk @growth          # take the role off"
   )
-  .argument("<session_or_member>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or a member email/name, to use the CURRENT session")
-  .argument("[member]", "Team member email (exact) or name; defaults to you")
-  .action(async (first: string, second: string | undefined) => {
+  .argument("<session_or_owner>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or an owner, to use the CURRENT session")
+  .argument("[owner]", "A teammate (exact email, or name) or a role (@handle or or-N); defaults to you")
+  .option("--drive <who>", "Make this owner the driver: me, a teammate who owns it, or the filed role (@handle)")
+  .action(async (first: string, second: string | undefined, opts: { drive?: string }) => {
     const { sessionId, member } = resolveOwnerTarget(first, second, "own");
-    const result = await cliPost("/cli/sessions/own", {
-      session_id: sessionId,
-      owner: member?.trim() || "me",
-      from_session: callingSession(),
-    });
-    const added = result.added?.length > 0;
-    const note = added ? "" : ` ${c.dim}(already an owner)${c.reset}`;
+    const who = member?.trim();
+    const from_session = callingSession();
+    let told: any = null;
+    let already = false;
+    if (who && isRoleRef(who)) {
+      told = (await cliPost("/cli/sessions/owners/change", { session_id: sessionId, change: { role: who }, from_session })).told;
+    } else if (who || !opts.drive) {
+      const result = await cliPost("/cli/sessions/own", { session_id: sessionId, owner: who || "me", from_session });
+      already = !(result.added?.length > 0);
+      told = result.told;
+    }
+    if (opts.drive) {
+      const drive = opts.drive.trim();
+      if (isRoleRef(drive)) requireFiledRole(await readOwners(sessionId), drive, sessionId);
+      await cliPost("/cli/sessions/drive", { session_id: sessionId, driver: isRoleRef(drive) ? { kind: "role" } : { kind: "user", user_id: drive } });
+    }
+    const read = await readOwners(sessionId);
+    const note = already && !opts.drive ? ` ${c.dim}(already an owner)${c.reset}` : "";
     console.log(
-      `${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
-      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}${note}${toldSuffix(result.told)}`
+      `${c.green}✓${c.reset} ${c.cyan}${read.short_id || sessionId}${c.reset} ` +
+      `${c.dim}owners →${c.reset} ${c.magenta}${ownersLine(read)}${c.reset}${note}${toldSuffix(told)}`
     );
   });
 
 program
   .command("disown")
-  .description("Remove an owner from a session — defaults to you (see: cast own)")
-  .argument("<session_or_member>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or a member email/name, to use the CURRENT session")
-  .argument("[member]", "Team member email (exact) or name; defaults to you")
-  .option("--all", "Clear EVERY owner, not just one")
-  .action(async (first: string, second: string | undefined, opts: { all?: boolean }) => {
+  .description(
+    "Remove an owner from a session — defaults to you (see: cast own)\n\n" +
+    "Removing yourself is leaving. Leaving a session that runs on your account\n" +
+    "means moving it first: --move-to names the teammate's or team machine it\n" +
+    "moves to. Naming the role (@handle) takes the role off.\n\n" +
+    "Examples:\n" +
+    "  cast disown jx7c6zk                  # leave it\n" +
+    "  cast disown jx7c6zk --move-to nose   # move it to a team machine, then leave\n" +
+    "  cast disown jx7c6zk ashot@example.com\n" +
+    "  cast disown jx7c6zk @growth          # take the role off"
+  )
+  .argument("<session_or_owner>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or an owner, to use the CURRENT session")
+  .argument("[owner]", "A teammate (exact email, or name) or the role (@handle); defaults to you")
+  .option("--all", "Clear every person who owns it, not just one")
+  .option("--move-to <machine>", "Leave a session that runs on your account: the team machine to move it to first")
+  .action(async (first: string, second: string | undefined, opts: { all?: boolean; moveTo?: string }) => {
     const { sessionId, member } = resolveOwnerTarget(first, second, "disown");
-    const result = opts.all
-      ? await cliPost("/cli/sessions/owners/set", { session_id: sessionId, owners: [], from_session: callingSession() })
-      : await cliPost("/cli/sessions/disown", {
-          session_id: sessionId,
-          owner: member?.trim() || "me",
-          from_session: callingSession(),
-        });
+    const who = member?.trim();
+    const from_session = callingSession();
+    if (who && isRoleRef(who)) {
+      requireFiledRole(await readOwners(sessionId), who, sessionId);
+      await cliPost("/cli/sessions/owners/change", { session_id: sessionId, change: { role: null }, from_session });
+      const read = await readOwners(sessionId);
+      console.log(`${c.green}✓${c.reset} ${c.cyan}${read.short_id || sessionId}${c.reset} ${c.dim}owners →${c.reset} ${c.magenta}${ownersLine(read)}${c.reset}`);
+      return;
+    }
+    if (opts.moveTo) {
+      if (who && who !== "me") {
+        console.error("--move-to moves a session you leave; it does not apply to removing someone else");
+        process.exit(1);
+      }
+      const { convexClient } = await import("./remote/cli.js");
+      const { pickDevice } = await import("./migrate/pickDevice.js");
+      const { client, token, api } = await convexClient();
+      const machines: any[] = await client.query(api.devices.listAgentBoxes, { api_token: token });
+      const machine = pickDevice(machines, opts.moveTo, "--move-to");
+      const result = await cliPost("/cli/sessions/leave", { session_id: sessionId, move_to_device_id: machine.device_id, from_session });
+      console.log(`${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}moved to${c.reset} ${machine.label || machine.device_id}${c.dim}, and you left it${c.reset}`);
+      return;
+    }
+    let result: any;
+    try {
+      result = opts.all
+        ? await cliPost("/cli/sessions/owners/set", { session_id: sessionId, owners: [], from_session }, { throwOnError: true })
+        : await cliPost("/cli/sessions/disown", { session_id: sessionId, owner: who || "me", from_session }, { throwOnError: true });
+    } catch (err) {
+      const message = (err as Error).message;
+      console.error(`Error: ${message}`);
+      if (/runs on your account/.test(message)) console.error(`${c.dim}Move it as you leave: cast disown ${sessionId} --move-to <machine> (a teammate's or a team machine)${c.reset}`);
+      process.exit(1);
+    }
     // Owners are a set, so "remove the owner" is ambiguous — you name the one you
     // mean. When the named target (or you, by default) isn't actually an owner,
     // nothing is removed; a green ✓ there hid a no-op (e.g. a bot disowning a
     // session it parked on someone else). Fail loudly and name the current
     // owners so the fix is just re-running with the right target.
     if (!opts.all && !(result.removed?.length > 0)) {
-      const target = member?.trim() ? `"${member.trim()}"` : "you are";
+      const target = who ? `"${who}"` : "you are";
       console.error(
         `${c.red}✗${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
         `${target} not an owner — nothing removed. ` +
@@ -4266,18 +4337,15 @@ program
 
 program
   .command("owners")
-  .description("List a session's owners — whose inboxes it sits in (see: cast own)")
+  .description("List a session's owners: the people and the role, who drives, and who runs it (see: cast own)")
   .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
   .action(async (sessionId: string) => {
-    const result = await cliPost("/cli/sessions/owners", { session_id: sessionId });
-    if (!result) {
-      console.error(notFoundLine("session", sessionId, SESSION_ID_HINT));
-      process.exit(1);
-    }
-    console.log(
-      `${c.cyan}${result.short_id || sessionId}${c.reset} ` +
-      `${c.dim}owners:${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}`
-    );
+    const read = await readOwners(sessionId);
+    const d = describeOwners(read);
+    console.log(`${c.cyan}${read.short_id || sessionId}${c.reset}`);
+    console.log(`  ${c.dim}owners${c.reset}   ${c.magenta}${d.people}${c.reset}`);
+    if (d.role) console.log(`  ${c.dim}role${c.reset}     ${c.magenta}${d.role}${c.reset}`);
+    if (d.runner) console.log(`  ${c.dim}runs on${c.reset}  ${d.runner}`);
   });
 
 program

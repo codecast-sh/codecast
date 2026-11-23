@@ -293,4 +293,28 @@ describe("who may change the owners and the driver", () => {
     await performSetSessionDriver(ctx, ME as any, { session_id: "sess1", driver: { kind: "none" } });
     expect(row(db).driver_user_id).toBeUndefined();
   });
+
+  // `cast own` passes owners as a person types them.
+  test("cast own @handle files the role, which drives; the same role again changes nothing", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    await performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { role: "@growth" } });
+    expect(row(db).org_role_id).toBe(role._id);
+    expect(await driver(ctx)).toEqual({ kind: "role", role_id: role._id });
+    await performSetSessionDriver(ctx, ME as any, { session_id: "sess1", driver: { kind: "user", user_id: "me" } });
+    await performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { role: role.short_id } });
+    expect(await driver(ctx)).toEqual({ kind: "user", user_id: ME });
+    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { role: "@nobody" } })).rejects.toThrow(/No role @nobody/);
+  });
+
+  test("cast own --drive takes a teammate by email once they own it", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    await expect(performSetSessionDriver(ctx, ME as any, { session_id: "sess1", driver: { kind: "user", user_id: "mate@x.ai" } })).rejects.toThrow(/add them as an owner first/);
+    await performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { add: ["mate@x.ai"] } });
+    await performSetSessionDriver(ctx, ME as any, { session_id: "sess1", driver: { kind: "user", user_id: "mate@x.ai" } });
+    expect(row(db).driver_user_id).toBe(MATE);
+    expect(await driver(ctx)).toEqual({ kind: "user", user_id: MATE });
+  });
 });

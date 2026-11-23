@@ -4318,12 +4318,6 @@ cliRoute("/cli/read/ask", async (ctx, body) => ctx.runAction(internal.sessionAsk
   question: body.question,
 }));
 
-// Session OWNERS (cast own / disown / owners, or scripts routing an agent-run
-// session into a human's inbox). A session has a SET of owners — it can sit in
-// several teammates' inboxes at once — so `own` ADDS and `disown` REMOVES one,
-// leaving the others alone. `owners/set` replaces the set wholesale (the web
-// multi-select, and `cast disown --all`).
-// body: { api_token, session_id, owner: "<email|name>" | "me" }.
 // Inbox visibility (cast dismiss / undismiss / kill): hide a session from the
 // user's inbox (agent keeps running), restore it, or retire it (teardown +
 // Killed bucket). One mutation, action pinned per route so the URLs stay
@@ -4500,9 +4494,19 @@ cliRoute("/cli/pr/notes", async (ctx, body) => {
 // `cast ship mark`: a deploy marker for the Changes page (changesDeploy.ts).
 cliRoute("/cli/changes/mark-deploy", async (ctx, body) => ctx.runMutation((api as any).changesDeploy.markDeploy, body));
 
+// Session OWNERS (cast own / disown / owners, or scripts routing an agent-run
+// session into a human's inbox). A session's owners are people plus at most
+// one role, and exactly one of them drives. `own` ADDS a person and `disown`
+// REMOVES one (yourself: a leave); `owners/set` replaces the people wholesale
+// (`cast disown --all`); `owners/change` is the owners menu's Save (a role
+// filed or taken off); `drive` hands the wheel; `leave` moves the session off
+// your account first. body: { api_token, session_id, owner: "<email|name>" | "me" }.
 cliRoute("/cli/sessions/own", async (ctx, body) => ctx.runMutation(api.sessionOwnership.addSessionOwner, body));
 cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessionOwnership.removeSessionOwner, body));
 cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));
+cliRoute("/cli/sessions/owners/change", async (ctx, body) => ctx.runMutation(api.sessionOwnership.applyOwnersChange, body));
+cliRoute("/cli/sessions/drive", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionDriver, body));
+cliRoute("/cli/sessions/leave", async (ctx, body) => ctx.runMutation(api.sessionOwnership.leaveSession, body));
 cliRoute("/cli/sessions/owners", async (ctx, body) => ctx.runQuery(api.sessionOwnership.listOwners, body));
 
 // Cross-user device reparent (cast pull): pull a session you run or own — or a

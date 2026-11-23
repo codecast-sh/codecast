@@ -25,6 +25,11 @@ describe("looksLikeMember", () => {
     expect(looksLikeMember("Jason Benn")).toBe(true);
   });
 
+  test("a role is an owner too", () => {
+    expect(looksLikeMember("@growth")).toBe(true);
+    expect(looksLikeMember("or-7")).toBe(true);
+  });
+
   test("session references are not", () => {
     expect(looksLikeMember("jx7c6zk")).toBe(false);
     expect(looksLikeMember("jx71s6ayvgf9qh98zzm555agm58caknb")).toBe(false);

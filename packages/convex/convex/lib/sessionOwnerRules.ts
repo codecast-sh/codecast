@@ -8,6 +8,7 @@ import type { Id } from "../_generated/dataModel";
 import { addSessionOwnerRow, ownerRowsOf, syncPrimaryOwnerCache } from "../sessionOwners";
 import { driverOf as sharedDriverOf, humanRunnerOf, leaveLeavesAnOwner, listedOwnerIds, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 import { findOwnableConversation } from "./sessionTell";
+import { liveRoleByHandle, resolveRoleRef } from "./orgAccess";
 
 export type OwnerInfo = {
   user_id: string;
@@ -142,6 +143,18 @@ export async function resolveOwnerRef(
   }
   if (!ownerUser) throw new Error(`No team member found matching "${ownerRef}"`);
   return ownerUser;
+}
+
+// A role as `cast own` names it, as its id: `@handle` among the roles of the
+// session's team (the caller's own roles for a session with no team), or a
+// short id (or-N). The reparent core still checks the caller may file under it.
+export async function resolveOwnerRoleRef(ctx: { db: any }, authUserId: Id<"users">, conversation: any, roleRef: string): Promise<string> {
+  const ref = roleRef.trim();
+  const role = ref.startsWith("@")
+    ? await liveRoleByHandle(ctx, conversation.team_id ? { team_id: conversation.team_id } : { scope_user_id: authUserId }, ref)
+    : await resolveRoleRef(ctx, ref);
+  if (!role) throw new Error(`No role ${ref} in this session's workspace`);
+  return String(role._id);
 }
 
 // Bots may CALL these mutations to park a session on a human (the Aivery flow),
