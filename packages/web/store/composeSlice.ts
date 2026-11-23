@@ -20,8 +20,14 @@ import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import { isConvexId } from "../lib/entityLinks";
 
 /** `agentType` starts the composer on that agent rather than the default
- *  (the empty inbox's "Ask the assistant" start). */
-export type ComposeContext = { projectPath?: string; gitRoot?: string; agentType?: string };
+ *  (the empty inbox's "Ask the assistant" start). `linkedTask` binds the
+ *  session it creates to that task (a compose link, hooks/useComposeLink). */
+export type ComposeContext = {
+  projectPath?: string;
+  gitRoot?: string;
+  agentType?: string;
+  linkedTask?: { _id: string; short_id: string; title?: string; status?: string };
+};
 export type ComposeInstance = {
   id: number;
   mode: "modal" | "dock";
