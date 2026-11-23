@@ -52,6 +52,7 @@ import {
   SelectTick,
   UnreadDot,
 } from "./SessionCardParts";
+import { SessionCloseTip } from "./SessionCloseTip";
 
 const NO_PRS: readonly LinkedPr[] = [];
 
@@ -96,8 +97,7 @@ export function SessionCardView({
   hiddenRunningSubagents = 0,
   foldedSubagentId = null,
   onSelect,
-  onDismiss,
-  onStash,
+  onClose,
   onDefer,
   onPin,
   onRestore,
@@ -208,7 +208,7 @@ export function SessionCardView({
   // Stashed/killed rows don't animate at all: their restore cluster sits at
   // the title line, stacked above the thumb, and both stay clickable as-is.
   const thumbHoverShift =
-    !isForeignSession && !(onRestore || onKill) && (onDismiss || onStash || onDefer || onPin)
+    !isForeignSession && !(onRestore || onKill) && (onClose || onDefer || onPin)
       ? "group-hover:-translate-x-[14px]"
       : "";
   const { isDragOver, isDraggingCard, props: dragProps } = useSessionCardDrag({
@@ -351,19 +351,20 @@ export function SessionCardView({
             </div>
           )}
         </div>
-        {!isForeignSession && (onDismiss || onDefer || onPin) && (
+        {!isForeignSession && (onClose || onDefer || onPin) && (
           <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex items-center gap-1 py-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity pl-8 pr-2 bg-gradient-to-r from-transparent to-sol-bg-alt`}>
-            {onDismiss && (
+            {onClose && (
+              <ShortcutTooltip label={<SessionCloseTip session={session} />} action="session.close" side="left">
               <button
-                aria-label="Kill Session"
-                title="Kill Session"
-                onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-                className="p-0.5 rounded text-sol-text-dim hover:text-sol-red transition-colors"
+                aria-label="Close"
+                onClick={(e) => { e.stopPropagation(); onClose(session._id); }}
+                className="p-0.5 rounded text-sol-text-dim hover:text-sol-text transition-colors"
               >
                 <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                 </svg>
               </button>
+              </ShortcutTooltip>
             )}
           </div>
         )}
@@ -766,8 +767,8 @@ export function SessionCardView({
         <ImageLightbox src={thumbSrc} onClose={() => setThumbZoom(false)} />
       )}
       </div>
-      {!isForeignSession && (onDismiss || onStash || onDefer || onPin) && (
-        <CardHoverToolbar session={session} labels fadeGround={fadeGround} onPin={onPin} onDismiss={onDismiss} onOpenLabels={onOpenLabels} onStash={onStash} />
+      {!isForeignSession && (onClose || onDefer || onPin) && (
+        <CardHoverToolbar session={session} labels fadeGround={fadeGround} onPin={onPin} onOpenLabels={onOpenLabels} onClose={onClose} />
       )}
       {!isForeignSession && (onRestore || onKill) && (
         <CardRestoreCluster session={session} variant={variant} isStashed={isStashed} onKill={onKill} onRestore={onRestore} />

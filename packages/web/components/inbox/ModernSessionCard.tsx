@@ -99,8 +99,7 @@ export function ModernSessionCardView({
   hiddenRunningSubagents = 0,
   foldedSubagentId = null,
   onSelect,
-  onDismiss,
-  onStash,
+  onClose,
   onPin,
   onRestore,
   onKill,
@@ -376,9 +375,8 @@ export function ModernSessionCardView({
           <ModernCardToolbar
             session={session}
             onPin={pinnable && onPin ? (e) => onPin(session._id, e) : undefined}
-            onKill={onDismiss && (() => onDismiss(session._id))}
             onLabel={!nested && onOpenLabels ? () => onOpenLabels(session) : undefined}
-            onStash={onStash && ((e) => onStash(session._id, e))}
+            onClose={onClose && (() => onClose(session._id))}
           />
         )
       )}

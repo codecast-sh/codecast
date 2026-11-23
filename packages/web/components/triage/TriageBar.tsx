@@ -18,7 +18,7 @@ import { isTriageBarCompact, toggleTriageBarCompact } from "./graduation";
 
 import { useMountEffect } from "../../hooks/useMountEffect";
 // The triage bar: one quiet row under the composer, in the composer's own
-// column. At rest it says three words — Defer, Stash, Kill — the verbs that
+// column. At rest it says three words — Defer, Stash, Close — the verbs that
 // settle nearly every card. Nothing else is printed: the chord and the
 // meaning of each verb live in its hover tooltip, and the rest of the
 // vocabulary (dormant, hide, pin, label) sits one click away behind the
@@ -133,7 +133,7 @@ export function TriageBar() {
   const run = (verb: TriageVerb) => {
     if (!activeId) return;
     if (verb.id === "defer" || verb.id === "dormant") triage.park(activeId, verb.id, "button");
-    else if (verb.id === "stash" || verb.id === "kill") triage.hide(activeId, verb.id, "button");
+    else if (verb.id === "stash" || verb.id === "close") triage.hide(activeId, verb.id, "button");
     else if (verb.id === "hide") triage.hide(activeId, "stash", "button", { hidden: true });
     else if (verb.id === "pin") triage.pin(activeId);
     else if (verb.id === "label") triage.label(activeId);

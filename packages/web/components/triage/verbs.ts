@@ -1,4 +1,4 @@
-import { Archive, Clock, EyeOff, Moon, Pin, Square, Tag, type LucideIcon } from "lucide-react";
+import { Archive, Clock, EyeOff, Moon, Pin, Tag, X, type LucideIcon } from "lucide-react";
 import type { ShortcutAction } from "../../shortcuts/registry";
 
 // The triage vocabulary, in one place. The bar, the intro tour, and any
@@ -7,7 +7,7 @@ import type { ShortcutAction } from "../../shortcuts/registry";
 // accents match the ones the session context menu and the card hover toolbar
 // already established (menus/ObjectContextMenus.tsx, GlobalSessionPanel.tsx).
 
-export type TriageVerbId = "defer" | "dormant" | "stash" | "hide" | "kill" | "pin" | "label";
+export type TriageVerbId = "defer" | "dormant" | "stash" | "hide" | "close" | "pin" | "label";
 
 export interface TriageVerb {
   id: TriageVerbId;
@@ -80,16 +80,15 @@ export const PARK_VERBS: TriageVerb[] = [
     bg: "bg-sol-violet/10",
   },
   {
-    id: "kill",
-    action: "session.kill",
-    label: "Kill",
-    done: "Killed",
-    icon: Square,
-    blurb: "Done with it. Tears the agent down; the transcript stays.",
+    id: "close",
+    action: "session.close",
+    label: "Close",
+    done: "Closed",
+    icon: X,
+    blurb: "Done with it. Stops the agent unless it is mid-turn; its triggers stay, and it comes back when one fires.",
     hover: "hover:text-sol-red hover:bg-sol-red/10",
     text: "text-sol-red",
     bg: "bg-sol-red/10",
-    danger: true,
   },
 ];
 
@@ -128,6 +127,6 @@ export const TRIAGE_VERBS: TriageVerb[] = [...PARK_VERBS, ...FILE_VERBS];
  * session menu every right-click opens, chords included.
  */
 export const PRIMARY_VERBS: TriageVerb[] = TRIAGE_VERBS.filter((v) =>
-  v.id === "defer" || v.id === "stash" || v.id === "kill",
+  v.id === "defer" || v.id === "stash" || v.id === "close",
 );
 export const SECONDARY_VERBS: TriageVerb[] = TRIAGE_VERBS.filter((v) => !PRIMARY_VERBS.includes(v));

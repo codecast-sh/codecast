@@ -118,7 +118,7 @@ describe("command menu keyboard reuse", () => {
 
   test("lifecycle commands use the registered backspace family", () => {
     expect(paletteActionForKey(event(), actions)?.key).toBe("session_stash");
-    expect(paletteActionForKey(event({ shiftKey: true }), actions)?.key).toBe("session_kill");
+    expect(paletteActionForKey(event({ shiftKey: true }), actions)?.key).toBe("session_close");
     expect(paletteActionForKey(event({ altKey: true }), actions)?.key).toBe("session_stash_hide");
     expect(paletteActionForKey(event({ ctrlKey: false, shiftKey: true }), actions)?.key).toBe("session_defer");
     expect(paletteActionForKey(event({ ctrlKey: false, altKey: true, shiftKey: true }), actions)?.key).toBe("session_dormant");
@@ -131,7 +131,7 @@ describe("command menu keyboard reuse", () => {
   });
 
   test("duplicate Alt-letter commands no longer run", () => {
-    for (const letter of ["s", "b", "d", "k", "r", "p", "v", "l", "c"]) {
+    for (const letter of ["s", "b", "d", "q", "r", "p", "v", "l", "c"]) {
       expect(paletteActionForKey(event({ key: letter, code: `Key${letter.toUpperCase()}`, ctrlKey: false, altKey: true }), actions)).toBeUndefined();
     }
   });

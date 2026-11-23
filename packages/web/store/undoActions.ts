@@ -151,6 +151,23 @@ export async function animatedHideSessions(ids: string[], mode: HideSessionMode,
   return list;
 }
 
+/** Close a selection as one gesture: every card collapses out, then each is
+ *  set aside (mid-turn) or closed (store closeSessions), as one undo. A role's
+ *  own session closes like any other; nothing asks to retire it. */
+export async function animatedCloseSessions(ids: string[]): Promise<void> {
+  if (ids.length === 0) return;
+  await afterSessionExits(ids, () => {
+    const store = useInboxStore.getState();
+    if (ids.length === 1) store.closeSession(ids[0]!);
+    else if (ids.length <= KILL_DISPATCH_ROWS) store.closeSessions(ids);
+    else {
+      undoAsOne(`Closed ${counted(ids.length, "session")}`, () => {
+        for (let i = 0; i < ids.length; i += KILL_DISPATCH_ROWS) store.closeSessions(ids.slice(i, i + KILL_DISPATCH_ROWS));
+      });
+    }
+  });
+}
+
 /** File sessions under a rest verdict the way stash moves them: each card
  *  collapses out of its section, and once every collapse has ended they are
  *  filed together (one undo) and grow into the section they land in. Dormant

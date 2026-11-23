@@ -51,7 +51,7 @@ type DemoCard = { id: string; title: string; sub: string; state: CardState; sugg
 const DEMO_CARDS: DemoCard[] = [
   { id: "c1", title: "Fix the flaky auth test", state: "needs-input", sub: "Asked: pin the seed, or quarantine the test?", suggest: "defer" },
   { id: "c2", title: "Nightly dependency audit", state: "working", sub: "Scanning 214 packages, no findings yet", suggest: "stash" },
-  { id: "c3", title: "Write the release notes", state: "done", sub: "Draft delivered and published", suggest: "kill" },
+  { id: "c3", title: "Write the release notes", state: "done", sub: "Draft delivered and published", suggest: "close" },
 ];
 
 function MiniCard({ card, focused, cleared, clearedBy }: {
@@ -108,7 +108,7 @@ const ARRIVAL_CARDS: DemoCard[] = [
   { id: "a1", title: "Fix the flaky auth test", state: "needs-input", sub: "Asked: pin the seed, or quarantine the test?", suggest: "defer" },
   { id: "a2", title: "Port the importer to bun", state: "working", sub: "Rewriting the stream reader", suggest: "stash" },
   { id: "a3", title: "Nightly dependency audit", state: "dormant", sub: "Wakes at 02:00 by trigger", suggest: "dormant" },
-  { id: "a4", title: "Write the release notes", state: "done", sub: "Draft delivered and published", suggest: "kill" },
+  { id: "a4", title: "Write the release notes", state: "done", sub: "Draft delivered and published", suggest: "close" },
 ];
 
 function StepInbox() {

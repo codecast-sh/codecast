@@ -10,6 +10,7 @@ import { cleanTitle } from "../../lib/conversationProcessor";
 import type { InboxSession } from "../../store/inboxStore";
 import { AuthErrorBadge } from "../AuthErrorBadge";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
+import { SessionCloseTip } from "./SessionCloseTip";
 
 // The pieces of the full inbox card (SessionCardView) that stand on their own:
 // each draws from the row and the few facts handed to it, and every gesture
@@ -300,7 +301,6 @@ function ActionGlyph({ d }: { d: string }) {
 }
 
 const CLOSE_PATH = "M6 18L18 6M6 6l12 12";
-const STASH_PATH = "M7 7l10 10M17 17h-6m6 0v-6";
 const RESTORE_PATH = "M17 17L7 7M7 7h6M7 7v6";
 
 /** A pinned session's pin, beside its time on the meta row: it says the row
@@ -322,26 +322,23 @@ export function CardPinMark({ session, onPin }: { session: InboxSession; onPin?:
   );
 }
 
-/** The hover toolbar on a live card: pin, kill, label, stash. A card too
- *  short for the four in one column (most cards: 92px of buttons on a 72 to
- *  76px card) wraps them into a second column, so Stash is never clipped. */
+/** The hover toolbar on a live card: pin, label, close. A card too short for
+ *  them in one column wraps them into a second, so Close is never clipped. */
 export function CardHoverToolbar({
   session,
   labels,
   fadeGround,
   onPin,
-  onDismiss,
   onOpenLabels,
-  onStash,
+  onClose,
 }: {
   session: InboxSession;
   /** Whether the Labels action shows. */
   labels: boolean;
   fadeGround: string | null;
   onPin?: (id: string, e: React.MouseEvent) => void;
-  onDismiss?: (id: string) => void;
   onOpenLabels?: (session: InboxSession) => void;
-  onStash?: (id: string, e: React.MouseEvent) => void;
+  onClose?: (id: string) => void;
 }) {
   return (
         <div data-sv-fade className={`absolute top-0 bottom-0 right-0 flex flex-col flex-wrap-reverse content-start items-center justify-between py-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity pl-10 pr-2 pointer-events-none ${fadeGround ? '' : 'bg-gradient-to-r from-transparent via-[color-mix(in_srgb,var(--sol-bg-alt)_50%,transparent)] to-[color-mix(in_srgb,var(--sol-bg-alt)_85%,transparent)]'}`} style={fadeGround ? { background: `linear-gradient(to right, transparent, color-mix(in srgb, ${fadeGround} 50%, transparent), color-mix(in srgb, ${fadeGround} 85%, transparent))` } : undefined}>
@@ -355,19 +352,6 @@ export function CardHoverToolbar({
                 className={`p-1 rounded transition-colors pointer-events-auto ${session.is_pinned ? "text-sol-magenta hover:opacity-70" : "text-sol-text-dim hover:text-sol-magenta"}`}
               >
                 <PinGlyph filled={!!session.is_pinned} />
-              </button>
-            </ShortcutTooltip>
-          )}
-          {/* Kill — the PRIMARY remove: done with it, clears to the Killed
-              group and tears the (usually idle) agent down. Undoable. */}
-          {onDismiss && (
-            <ShortcutTooltip label="Kill: stops the agent and its schedules, keeps the conversation" action="session.kill" side="left">
-              <button
-                aria-label="Kill Session"
-                onClick={(e) => { e.stopPropagation(); onDismiss(session._id); }}
-                className="p-1 rounded text-sol-text-dim hover:text-sol-red hover:bg-sol-red/10 transition-colors pointer-events-auto"
-              >
-                <ActionGlyph d={CLOSE_PATH} />
               </button>
             </ShortcutTooltip>
           )}
@@ -385,15 +369,15 @@ export function CardHoverToolbar({
               </button>
             </ShortcutTooltip>
           )}
-          {/* Stash — the SECONDARY remove: set aside, agent keeps running. */}
-          {onStash && (
-            <ShortcutTooltip label="Stash: set aside, keeps running" action="session.stash" side="left">
+          {/* Close last: done looking at it. Its tooltip says what it does to this session. */}
+          {onClose && (
+            <ShortcutTooltip label={<SessionCloseTip session={session} />} action="session.close" side="left">
               <button
-                aria-label="Stash"
-                onClick={(e) => { e.stopPropagation(); onStash(session._id, e); }}
-                className="p-1 rounded text-sol-text-dim hover:text-sol-yellow transition-colors pointer-events-auto"
+                aria-label="Close"
+                onClick={(e) => { e.stopPropagation(); onClose(session._id); }}
+                className="p-1 rounded text-sol-text-dim hover:text-sol-text hover:bg-sol-bg-highlight transition-colors pointer-events-auto"
               >
-                <ActionGlyph d={STASH_PATH} />
+                <ActionGlyph d={CLOSE_PATH} />
               </button>
             </ShortcutTooltip>
           )}
@@ -418,7 +402,7 @@ export function CardRestoreCluster({
   return (
         <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity z-[4]">
           {onKill && (
-            <ShortcutTooltip label={isStashed ? "Kill" : "Remove from list"} action={isStashed ? "session.kill" : undefined} side="left">
+            <ShortcutTooltip label={isStashed ? "Kill" : "Remove from list"} side="left">
               <button
                 aria-label={isStashed ? "Kill" : "Remove from list"}
                 onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
