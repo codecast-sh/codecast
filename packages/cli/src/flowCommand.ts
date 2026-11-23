@@ -24,7 +24,7 @@ import { registerFlowEditCommand } from "./flowEditCommand.js";
 import { registerFlowAwaitDeployCommand } from "./flowAwaitDeployCommand.js";
 import { baseOf, graphOf, printVariantChanges } from "./flowBase.js";
 import { findFlow, poolWorkspace, readPool, shortSessionId, type FoundFlow, type PoolAt } from "./flowFind.js";
-import { acquireFailureLine } from "./flowAcquire.js";
+import { acquireFailureLine, castResult } from "./flowAcquire.js";
 
 export interface FlowDeps {
   cliPost: (urlPath: string, body: Record<string, any>, opts?: { timeoutMs?: number; throwOnError?: boolean }) => Promise<any>;
@@ -105,8 +105,7 @@ async function boundOpenTask(agentSession: string | undefined, deps: Pick<FlowDe
 async function cast(args: string[], cwd: string): Promise<{ code: number; out: string; err: string }> {
   const { resolveCastInvocation } = await import("./castInvocation.js");
   const { cmd, prefixArgs } = resolveCastInvocation();
-  const r = spawnSync(cmd, [...prefixArgs, ...args], { cwd, encoding: "utf-8", env: process.env });
-  return { code: r.status ?? 1, out: r.stdout ?? "", err: r.stderr ?? "" };
+  return castResult(spawnSync(cmd, [...prefixArgs, ...args], { cwd, encoding: "utf-8", env: process.env }));
 }
 
 /** When each way of putting work in a flow fits: what `cast flow --help` says after the verbs. */
