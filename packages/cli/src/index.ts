@@ -4261,7 +4261,8 @@ program
     if (roleRef) {
       await requireFiledRole(await readOwners(sessionId), roleRef, sessionId);
       // Paused: the person pausing it is who the agent works for. Resumed: the role is.
-      await cliPost("/cli/sessions/drive", { session_id: sessionId, driver: opts.pause ? { kind: "user", user_id: "me" } : { kind: "role" }, from_session });
+      if (opts.pause) await cliPost("/cli/sessions/pause", { session_id: sessionId, from_session });
+      else await cliPost("/cli/sessions/drive", { session_id: sessionId, driver: { kind: "role" }, from_session });
     }
     const read = await readOwners(sessionId);
     const note = already && !roleRef ? ` ${c.dim}(already an owner)${c.reset}` : "";

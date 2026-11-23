@@ -12,7 +12,7 @@ import { formatDecisionAnswer, roleDrives, rollupParentIdOf, SEND_REFUSED, SEND_
 import { dispatch } from "./dispatch";
 import { sendSessionMessage } from "./pendingMessages";
 import { stopAndSendForUser } from "./daemonCommandUtils";
-import { performRehomeSessions, performApplyOwnersChange, performLeaveSession, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners, applyOwnersChangeAs } from "./sessionOwnership";
+import { performPauseSessionRole, performRehomeSessions, performApplyOwnersChange, performLeaveSession, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners, applyOwnersChangeAs } from "./sessionOwnership";
 
 // One owner drives (org-roles-run-work.md R1). A person's own message into a
 // session takes the wheel from the role or person driving it; the paused role
@@ -442,6 +442,33 @@ describe("the bound-driver backfill", () => {
     expect((await run(true)).rows).toEqual([]);
     await run(false);
     expect(roleDrives(row("shared"))).toBe(true);
+  });
+});
+
+// `cast own <s> --pause @role` is the composer's take-over without a message.
+describe("pausing the role from the owners", () => {
+  test("the account that runs a role's hand pauses it, and becomes an owner first", async () => {
+    const { ctx, row, ownersOf } = await world();
+    expect(ownersOf("hand")).toEqual([]);
+    const out = await performPauseSessionRole(ctx, ME as any, { session_id: "hand" });
+    expect(ownersOf("hand")).toEqual([ME]);
+    expect(row("hand").driver_user_id).toBe(ME);
+    expect(out.driver).toEqual({ kind: "user", user_id: ME });
+  });
+
+  test("a role another person already paused stays as it is: no new driver, no question moves", async () => {
+    const { ctx, tables, row } = await world();
+    const growth = tables.org_roles.find((r) => r.handle === "growth")._id;
+    await ctx.db.patch("shared", { org_role_id: growth, org_role_hold: "filed" });
+    await composerSend(ctx, row("shared"), PEER);
+    expect(row("shared").driver_user_id).toBe(PEER);
+    const scheduled: any[] = [];
+    ctx.scheduler = { runAfter: async (_ms: number, _fn: unknown, args: any) => { scheduled.push(args); } };
+    const told = tables.pending_messages.length;
+    await performPauseSessionRole(ctx, ME as any, { session_id: "shared" });
+    expect(row("shared").driver_user_id).toBe(PEER);
+    expect(scheduled).toEqual([]);
+    expect(tables.pending_messages).toHaveLength(told);
   });
 });
 

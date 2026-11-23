@@ -23,7 +23,8 @@ import { findOwnableConversation, personName, roleMayHoldSession, tellSession } 
 import { performReparentSessionToDevice } from "./devices";
 import { ownRunAsRoleLeaves } from "./lib/roleRelease";
 import { reportsToKey, reportsToLine, reportsToOf, tellReportsToChange, type ReportsTo } from "./lib/reportsTo";
-import { refusePausedRoleEdit } from "./lib/sessionTakeOver";
+import { refusePausedRoleEdit, takeWheelOnSend } from "./lib/sessionTakeOver";
+import { rolePaused } from "@codecast/shared/contracts";
 export { personName, roleMayHoldSession };
 import { labelsOf, noteOrgChange, rememberOrgRecord, roleSubject, sessionParent, sessionSubject, whereOfRole, whereOfSession, withOrgChange } from "./lib/orgChangeLog";
 
@@ -558,6 +559,26 @@ export async function performSetSessionDriver(
   return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "user", user_id: userId as Id<"users"> } };
 }
 
+// `cast own <s> --pause @role`: the caller works in the session and its role
+// pauses, the composer's take-over (takeWheelOnSend) without a message, so the
+// account that runs it becomes an owner first when it is not one. A role a
+// person already paused stays as it is: the wheel never moves between people
+// here, and no question moves.
+export async function performPauseSessionRole(
+  ctx: { db: any; scheduler?: any },
+  authUserId: Id<"users">,
+  args: { session_id: string; from_session?: string },
+): Promise<{ ok: true; short_id: string; conversation_id: Id<"conversations">; driver: SessionDriver | null }> {
+  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+  const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
+  if (!(await mayEditOwners(ctx, authUserId, conversation))) throw new Error("Only an owner of the session, or the account that runs it, can pause or resume its role");
+  await refusePausedRoleEdit(ctx, authUserId, conversation, args.from_session);
+  if (!conversation.org_role_id) throw new Error(`Session ${shortId} is not filed under a role, so it has no role to pause`);
+  if (!rolePaused(conversation)) await takeWheelOnSend(ctx, conversation, authUserId);
+  const after = await ctx.db.get(conversation._id);
+  return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: driverOf(after, await ownerIdsOrStarter(ctx, after)) };
+}
+
 // Leave a session: take yourself out of its owners. A session that runs on
 // your account moves first, to a machine another account runs (a teammate's
 // shared machine or an agent box), in the same transaction, so nobody is left
@@ -753,6 +774,12 @@ export const setSessionDriver = mutation({
     api_token: v.optional(v.string()),
   },
   handler: async (ctx, args) => performSetSessionDriver(ctx, await requireAuth(ctx, args.api_token), { session_id: args.session_id, driver: args.driver, from_session: args.from_session }),
+});
+
+// Pause the filed role: the caller works in the session (performPauseSessionRole).
+export const pauseSessionRole = mutation({
+  args: { session_id: SESSION_REF, from_session: v.optional(v.string()), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => performPauseSessionRole(ctx, await requireAuth(ctx, args.api_token), { session_id: args.session_id, from_session: args.from_session }),
 });
 
 // Leave a session, moving it off your account first when it runs there.

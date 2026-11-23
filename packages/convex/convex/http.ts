@@ -4506,6 +4506,7 @@ cliRoute("/cli/sessions/disown", async (ctx, body) => ctx.runMutation(api.sessio
 cliRoute("/cli/sessions/owners/set", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionOwners, body));
 cliRoute("/cli/sessions/owners/change", async (ctx, body) => ctx.runMutation(api.sessionOwnership.applyOwnersChange, body));
 cliRoute("/cli/sessions/drive", async (ctx, body) => ctx.runMutation(api.sessionOwnership.setSessionDriver, body));
+cliRoute("/cli/sessions/pause", async (ctx, body) => ctx.runMutation(api.sessionOwnership.pauseSessionRole, body));
 cliRoute("/cli/sessions/leave", async (ctx, body) => ctx.runMutation(api.sessionOwnership.leaveSession, body));
 cliRoute("/cli/sessions/owners", async (ctx, body) => ctx.runQuery(api.sessionOwnership.listOwners, body));
 
