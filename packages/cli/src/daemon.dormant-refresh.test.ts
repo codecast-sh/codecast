@@ -103,7 +103,7 @@ describe("dormant background task refresh", () => {
   test("a verified background wait stays dormant beyond the two-hour claim expiry while its daemon heartbeats", () => {
     const end = START + DORMANT_CLAIM_TTL_MS + 60 * 60_000;
     for (let now = START; now <= end; now += 90_000) {
-      expect(paneReconcileTarget("idle", "dormant")).toBe("idle");
+      expect(paneReconcileTarget("idle", "dormant", false)).toBe("idle");
       expect(reconciledStatusWithTasks("dormant", "idle", true, "dormant")).toBeNull();
       // The report is never re-sent: the heartbeat alone keeps it standing.
       expect(placeProjectableRow(dormant(START, now - 30_000), false, now)).toEqual({ bucket: "dormant", work_state: "dormant" });
@@ -136,7 +136,7 @@ describe("dormant background task refresh", () => {
     for (const block of [{ awaiting_input: true }, { pending_api_error: true }, { agent_status: "permission_blocked" }, { thread_state_status: "blocked", agent_status: "idle" }]) {
       expect(placeProjectableRow({ ...dormant(now), ...block }, true, now).work_state).toBe("needs_input");
     }
-    expect(paneReconcileTarget("busy", "dormant")).toBe("working");
+    expect(paneReconcileTarget("busy", "dormant", true)).toBe("working");
     expect(reconciledStatusWithTasks("dormant", "active", true)).toBe("working");
   });
 });

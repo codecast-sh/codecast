@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { isTitledRule } from "./interactivePrompt.js";
 import { tmuxComposerHoldsPayload, tmuxComposerText, autoContinueArmedOnPane, inputGuard, classifyStartedPane, parsePermissionModeFooter, stepPermissionMode, clearUnresolvablePane, extractTmuxLiveRegion, limitDialogOnPane, noteUnresolvablePane, paneContentAfterLaunchEcho, parseInteractivePrompt, planHighlightStep, planTrustPromptStep, selectRowHasLabel } from "./daemon.js";
 import { classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, composerScrolledPastCaret, GROK_TRUST_PANE_CAPTURE_LINES, isClaudeIdleResumeDialog, isClaudeRewindDialog, isGrokTrustDialog, isIdleResumeOptionRow } from "./tmuxPaneState.js";
@@ -402,6 +404,8 @@ ${box}`;
   });
 });
 
+const claudePane = (name: string) => fs.readFileSync(path.join(import.meta.dir, "__fixtures__", "claude-panes", name), "utf8");
+
 // Real capture from cc-claude-gkvbs98a3t3m (2026-07-06): six named teammates
 // split the daemon's default 80x24 window into 55x3 agent panes, squeezing the
 // lead pane to 24 columns. At that width the footer truncates mid-word — the
@@ -449,9 +453,41 @@ describe("teammate panel (in-process agents)", () => {
     expect(region).toContain("◯ navigator");
   });
 
-  test("lead pane with teammate chips classifies busy — never idle (truncated footer hides the busy marker, and an idle-paste's leading Escape would interrupt the lead's turn)", () => {
+  test("a squeezed lead mid-turn classifies busy by its status line, though the footer lost its busy marker", () => {
     const region = extractTmuxLiveRegion(TEAMMATE_SPLIT_PANE);
     expect(classifyTmuxLiveState(region)).toBe("busy");
+  });
+
+  // Real captures (2026-11-23) of leads whose turn had ended while their
+  // background agents stayed listed under the footer, running, waiting or
+  // finished. Each read busy, and the pane reconcile promoted the lead's
+  // dormant or done declaration to working: 157c9d08 sat "working" for six
+  // hours at an empty prompt. Prose, agent names, task titles and numbers are
+  // replaced with neutral text; every line keeps its captured shape.
+  test.each([
+    "lead-idle-finished-agent-chip.txt",
+    "lead-idle-running-agent-chips.txt",
+    "lead-idle-agent-chip-tokens.txt",
+    "lead-idle-agent-chips-background-tasks.txt",
+    "idle-background-shell.txt",
+  ])("a lead whose turn ended reads idle under its background work: %s", (name) => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(claudePane(name)))).toBe("idle");
+  });
+
+  test("the same chip panel under a running turn still reads busy", () => {
+    expect(classifyTmuxLiveState(extractTmuxLiveRegion(claudePane("lead-busy-agent-chips.txt")))).toBe("busy");
+  });
+
+  test("a question raised under the chip panel is still a menu", () => {
+    const region = `${"─".repeat(80)}
+ Which branch should land first?
+
+ ❯ 1. integrate-w1
+   2. integrate-w2
+
+  ⏺ main
+  ◯ integrate-w1  Integrate wave 1`;
+    expect(classifyTmuxLiveState(region)).toBe("menu");
   });
 
   test("the exact chips-only region that froze jx77h6jcsa0s classifies busy, not unknown", () => {

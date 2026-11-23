@@ -11,6 +11,7 @@ import {
   derivedPaneNamesForConversation,
   isConversationRetired,
   killLocalPanesForConversation,
+  paneTeardownBlock,
   parseReapCandidateRow,
   paneAgentExited,
   deadPaneReapBlock,
@@ -353,6 +354,27 @@ describe("reapPaneEligibility: a hidden session that is waiting on something kee
 // transcript's mtime about hourly with no new content, and the gate was reading
 // mtime. The newest real message is the clock; mtime only when no message
 // carries a timestamp.
+// A lead whose turn ended reads idle while its teammate panel lists background
+// agents. They run inside the lead's process and write nothing to its
+// transcript, so a lead quiet for 5h with an agent working since the last
+// daemon restart passed every other gate. Reaping it kills the agent mid-work.
+describe("paneTeardownBlock", () => {
+  const claudePane = (name: string) => fs.readFileSync(path.join(import.meta.dir, "__fixtures__", "claude-panes", name), "utf8");
+
+  test("an idle lead still listing background agents is not reaped", () => {
+    expect(paneTeardownBlock("claude", claudePane("lead-idle-running-agent-chips.txt"))).toBe("background-agents-listed");
+  });
+
+  test("a plain idle pane is still reapable", () => {
+    const rule = "─".repeat(80);
+    expect(paneTeardownBlock("claude", `⏺ Done.\n\n${rule}\n❯\n${rule}\n  ⏵⏵ bypass permissions on (shift+tab to cycle)\n`)).toBeNull();
+  });
+
+  test("a pane that is not idle names its state", () => {
+    expect(paneTeardownBlock("claude", claudePane("lead-busy-agent-chips.txt"))).toBe("pane=busy");
+  });
+});
+
 describe("transcriptIdleMs", () => {
   const H = 3600_000;
   const now = 1_800_000_000_000;
