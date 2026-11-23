@@ -2967,10 +2967,12 @@ const REST_RANK: Record<SessionRestState, number> = { needs_input: 0, done: 1, d
 // ct-47520 class: the legacy per-row classifier filed a staleness-swept row
 // as needs_input while the chokepoint placed it Done. Rows with no placement
 // (create stubs, children riding their parent) keep the legacy verdict.
-export function rankVerdictOf(s: InboxSession, placement?: { work_state: WorkState } | null): SessionVerdict {
-  return placement ? verdictOfWorkState(placement.work_state) : classifySession(s);
+// A role-driven wait ranks as the person reads it: working (personWorkState).
+type RankPlacement = { bucket: InboxBucket; work_state: WorkState };
+export function rankVerdictOf(s: InboxSession, placement?: RankPlacement | null): SessionVerdict {
+  return placement ? verdictOfWorkState(personWorkState(s, placement)) : classifySession(s);
 }
-function sessionSortRank(s: InboxSession, placement?: { work_state: WorkState } | null): [number, number, number, number, number, number, number] {
+function sessionSortRank(s: InboxSession, placement?: RankPlacement | null): [number, number, number, number, number, number, number] {
   const c = rankVerdictOf(s, placement);
   return [
     s.is_pinned ? 0 : 1,                              // pinned first
@@ -2991,8 +2993,8 @@ function sessionSortRank(s: InboxSession, placement?: { work_state: WorkState } 
 // legacy verdict read back as a work state. The exact inverse of
 // verdictOfWorkState, so the class the order uses is the class the section
 // files under.
-function sortWorkStateOf(s: InboxSession, placement?: { work_state: WorkState } | null): WorkState {
-  if (placement) return placement.work_state;
+function sortWorkStateOf(s: InboxSession, placement?: RankPlacement | null): WorkState {
+  if (placement) return personWorkState(s, placement);
   const c = rankVerdictOf(s, null);
   return c.waiting ? c.rest : c.idle ? "idle" : "working";
 }
@@ -3005,7 +3007,7 @@ function sortWorkStateOf(s: InboxSession, placement?: { work_state: WorkState } 
 // grace reads.
 type SortKeyEntry = { work_state: WorkState; epoch: number; time: InboxSortTime };
 const _sortKeyCache = new WeakMap<object, SortKeyEntry>();
-function sessionSortTime(s: InboxSession, placement: { work_state: WorkState } | null, now: number): InboxSortTime {
+function sessionSortTime(s: InboxSession, placement: RankPlacement | null, now: number): InboxSortTime {
   const work_state = sortWorkStateOf(s, placement);
   // The clock at minute grain: the only time term is the 5-minute creation
   // grace, so a per-render `now` would cost a recompute for nothing.
@@ -3016,7 +3018,7 @@ function sessionSortTime(s: InboxSession, placement: { work_state: WorkState } |
   _sortKeyCache.set(s, { work_state, epoch, time });
   return time;
 }
-const sessionSortKey = (s: InboxSession, placement: { work_state: WorkState } | null, now: number) =>
+const sessionSortKey = (s: InboxSession, placement: RankPlacement | null, now: number) =>
   sessionSortTime(s, placement, now).key;
 
 // A session paired with its precomputed sort rank and its in-bucket sort key.
@@ -4199,9 +4201,10 @@ export function placeInboxRows(
   const placeRowWithOverlays = (s: InboxSession): InboxRowPlacement => {
     const base = sharedPlacementOf(s, deriveLiveAt(liveFactsOf(s), now), askingOf(s), epoch);
     let bucket = base.bucket;
-    // What the person reads: a session its role drives that files under
-    // working is working here too (the sort, plan groups, the walks).
-    let work_state = personWorkState(s, base);
+    // The shared placement as the server stamps it: a role-driven wait keeps
+    // its raw work state here, and the sort and plan groups read it through
+    // personWorkState.
+    let work_state = base.work_state;
     if ((bucket === "needs_input" || bucket === "done" || bucket === "dormant") && !s.inbox_snoozed_until && inFlight(s._id)) {
       bucket = "working";
       work_state = "working";
@@ -5158,7 +5161,7 @@ export function groupSessionsByPlan(
   const memberOf = (sess: InboxSession): PlanMember => {
     const placed = opts.placements?.get(sess._id);
     // An open `cast decide` files the row under questions: that waits on a person too.
-    let work_state: WorkState = placed?.bucket === "questions" ? "needs_input" : placed?.work_state ?? personWorkState(sess, sessionPlacement(sess, now));
+    let work_state: WorkState = placed?.bucket === "questions" ? "needs_input" : personWorkState(sess, placed ?? sessionPlacement(sess, now));
     const quiet = placed ? QUIET_BUCKETS.has(placed.bucket) : !!(sess.inbox_stashed_at || sess.is_anchor || sess.standing_role_id);
     if (work_state === "needs_input" && quiet) work_state = "done";
     return { id: sess._id, work_state, at: inboxSortTimeOfRow(sess, work_state, inboxEpoch(now)).at };

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import type { InboxSession, SessionDecisionItem } from "../inboxStore";
+import { rankVerdictOf, type InboxSession, type SessionDecisionItem } from "../inboxStore";
 import { placeSections } from "./placeTestHarness";
 
 // The QUESTIONS bucket at the chokepoint (sync-convergence C3/C5). The former
@@ -288,8 +288,10 @@ describe("the questions bucket", () => {
     );
     expect(ids(mine.questions)).toEqual(["r2"]);
     expect(ids(mine.working)).toEqual(["r1"]);
-    // A person reads it as working everywhere: the sort, the plan groups, the walks.
-    expect(mine.placements.get("r1")?.work_state).toBe("working");
+    // The placement is the server's stamp (raw needs_input, for watchers);
+    // the person reads it as working: the sort ranks it so.
+    expect(mine.placements.get("r1")?.work_state).toBe("needs_input");
+    expect(rankVerdictOf(driven, mine.placements.get("r1")).waiting).toBe(false);
     expect(ids(mine.sorted)).not.toContain("r3");
   });
 
