@@ -87,10 +87,14 @@ export async function teamRoomsAndDms(
   rows ??= await roomMemberships(ctx, userId);
   const memberOf = new Set(rows.map((r) => r.channel_id.toString()));
   // Reads stay bounded however many DMs a person has ever been in: only their
-  // newest memberships are opened, and past `limit` only the DMs with the
-  // newest lines reach railFor, which reads deep into each. A channel row is
-  // not stamped per line, hence the read per DM.
-  const opened = [...new Set(rows.slice(-DM_MEMBERSHIPS_OPENED).map((r) => r.channel_id.toString()))];
+  // newest memberships and the rooms they read most recently are opened (an
+  // old DM between two people is still read daily; a session's room is not),
+  // and past `limit` only the DMs with the newest lines reach railFor, which
+  // reads deep into each. A channel row is not stamped per line, hence the read.
+  const reads = await ctx.db.query("chat_reads").withIndex("by_user_channel", (q: any) => q.eq("user_id", userId)).collect();
+  const recentlyRead = reads.sort((a, b) => b.last_read_at - a.last_read_at).slice(0, DM_MEMBERSHIPS_OPENED);
+  const opened = [...new Set([...rows.slice(-DM_MEMBERSHIPS_OPENED), ...recentlyRead].map((r) => r.channel_id.toString()))]
+    .filter((id) => memberOf.has(id));
   let dms = (await Promise.all(opened.map((id) => ctx.db.get(id as Id<"chat_channels">))))
     .filter((c): c is Doc<"chat_channels"> => !!c && c.kind === "dm" && c.team_id.toString() === teamId.toString());
   if (dms.length > limit) {
