@@ -89,7 +89,7 @@ import { hideConversationForViewer, unhideConversationForViewer } from "./inboxH
 import { patchCommentWithRevision } from "./commentViewWrites";
 import { getComment } from "./commentStore";
 import type { CommentId } from "./lib/conversationCommentRows";
-import { canAccessConversation, canAccessProject, requireTeamMembership } from "./lib/access";
+import { canAccessConversation, canAccessProject, canAccessTask, requireTeamMembership } from "./lib/access";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { enqueueConfigCommand } from "./users";
 import { patchConversationThroughFavoriteView } from "./favoriteViewWrites";
@@ -1008,6 +1008,15 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         firstMessage: opts.first_message,
         first_message_client_id: opts.first_message_client_id,
       });
+      // A hosted session started for a task or doc (a compose link, a context
+      // chat) is linked to it the same way a machine session is below.
+      if (opts.linked_object?.id) {
+        await linkConversationToObject(ctx, userId, opts.linked_object.type, opts.linked_object.id, started.conversation_id);
+        // Born bound to a task a lead owns: the lead's, as below (S35).
+        if (opts.linked_object.type === "task") {
+          await (ctx as any).scheduler?.runAfter(0, internal.sessionOwnership.reconcileHold, { conversation_id: started.conversation_id });
+        }
+      }
       return started.conversation_id;
     }
     const sessionId = opts.session_id || crypto.randomUUID();
@@ -1087,12 +1096,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         linkedTask = await ctx.db.get(opts.linked_object.id as Id<"tasks">);
       } catch { linkedTask = null; }
       if (linkedTask) {
-        const hasAccess = linkedTask.user_id.toString() === userId.toString()
-          || (linkedTask.team_id && !!(await ctx.db
-              .query("team_memberships")
-              .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", linkedTask.team_id))
-              .first()));
-        if (!hasAccess) {
+        if (!(await canAccessTask(ctx as any, userId, linkedTask))) {
           linkedTask = null;
         } else {
           // Resolve project_path/git_root/git_remote_url from the task. Shared

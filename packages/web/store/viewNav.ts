@@ -13,6 +13,8 @@
 // Every attempt — allowed or blocked — lands in a ring buffer persisted to
 // localStorage, so one console call after a jump names the culprit:
 //   __navLog()           // in any build, dev or prod
+import { parseComposeLink } from "../lib/composeLink";
+
 export type ViewNavSource =
   | "gesture" // a click/keypress in this window — always allowed
   | "boot-restore" // hydration putting the client back on its own last position
@@ -78,7 +80,10 @@ function readFreshHomeLaunch(): boolean {
   if (nav?.type !== "navigate") return false;
   const page = window.location.pathname.replace(/\/+$/, "") || "/";
   if (page !== "/" && page !== "/inbox") return false;
-  return !new URLSearchParams(window.location.search).has("s");
+  // A compose link opens its own composer: a landing page under it would be
+  // a second composer competing for the cursor.
+  const sp = new URLSearchParams(window.location.search);
+  return !sp.has("s") && !parseComposeLink(sp);
 }
 let freshHomeLaunch: boolean | null = null;
 export function freshHomeLaunchPending(): boolean {
