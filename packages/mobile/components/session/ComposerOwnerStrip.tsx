@@ -6,7 +6,7 @@ import { OwnerFace } from '@/components/owners/OwnerFace';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useOwners } from '@codecast/web/hooks/useOwners';
 import { useStoreOwnersEnv } from '@codecast/web/hooks/useOwnersStoreEnv';
-import { teamMembersOf } from '@codecast/web/lib/activeTeam';
+import { rowEnvRoster } from '@/lib/inboxRowEnv';
 import { composerOwnerLine, setComposerTell, useComposerOwnership } from '@codecast/web/lib/composerOwnership';
 
 /**
@@ -22,7 +22,9 @@ import { composerOwnerLine, setComposerTell, useComposerOwnership } from '@codec
 export function ComposerOwnerStrip({ conversationId, active }: { conversationId: string; active: boolean }) {
   const Theme = useTheme();
   const currentUser = useInboxStore((s) => s.currentUser) as any;
-  const teamMembers = useInboxStore(teamMembersOf) as any[];
+  // The roster's identity fields only: every teammate presence beat hands the
+  // store a new roster array, and this line is mounted while a session is open.
+  const teamMembers = useInboxStore(rowEnvRoster) as any[];
   const owners = useOwners(conversationId, useStoreOwnersEnv(conversationId, { teamMembers, currentUser, notify: () => {} }));
   const tell = useComposerOwnership((s) => !!s.tell[conversationId]);
   const standing = useInboxStore((s: any) => {

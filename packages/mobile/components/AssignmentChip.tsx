@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useEffect,
   useMemo,
   useState,
   type ReactNode } from 'react';
@@ -22,7 +23,7 @@ import { useOwners, type OwnersApi } from '@codecast/web/hooks/useOwners';
 import { useStoreOwnersEnv, useSessionRoleFacts } from '@codecast/web/hooks/useOwnersStoreEnv';
 import { isDriverKey, roleOwnerOf, useOwnersMenu, useOwnersView } from '@codecast/web/hooks/useOwnersMenu';
 import { useSettingsData } from '@codecast/web/hooks/useSyncSettings';
-import { teamMoveTargets } from '@codecast/web/lib/ownersDraft';
+import { machineOf, teamMoveTargets } from '@codecast/web/lib/ownersDraft';
 import { useSyncOrgTreeFeeder } from '@codecast/web/hooks/useSyncOrgTree';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { requestSessionMove } from '@codecast/web/lib/sessionCommands';
@@ -35,7 +36,7 @@ import {
   relativeSeen,
   type Device,
 } from './DevicesSection';
-import { teamMembersOf } from '@codecast/web/lib/activeTeam';
+import { rowEnvRoster } from '@/lib/inboxRowEnv';
 import { OwnerFace } from './owners/OwnerFace';
 
 /**
@@ -61,6 +62,10 @@ export function AssignmentChip({
 }) {
   const Theme = useTheme();
   const [sheetVisible, setSheetVisible] = useState(false);
+  // A staged owners change survives a stray tap on the backdrop, as web's
+  // menu does on an outside tap; Cancel and the system back still close.
+  const [dirty, setDirty] = useState(false);
+  const close = () => { setDirty(false); setSheetVisible(false); };
   const insets = useSafeAreaInsets();
   const { byId, loaded } = useDevices();
 
@@ -68,7 +73,9 @@ export function AssignmentChip({
   // app-wide for the active team by useSyncWorkspaceData), injected into the
   // shared owners hook so the sheet opens with every name already drawn.
   const currentUser = useInboxStore((s) => s.currentUser) as any;
-  const teamMembers = useInboxStore(teamMembersOf) as any[];
+  // The roster's identity fields only: a teammate's presence beat hands the
+  // store a new roster array, which would re-render the open session's chip.
+  const teamMembers = useInboxStore(rowEnvRoster) as any[];
   const activeTeamId = useInboxStore((s) => (s.clientState.ui?.active_team_id ?? null)) as string | null;
   // The store binding web uses: every owner change is one applySessionOwners.
   const owners = useOwners(conversationId ?? '', useStoreOwnersEnv(conversationId ?? '', {
@@ -91,7 +98,8 @@ export function AssignmentChip({
     <>
       <Pressable
         onPress={() => setSheetVisible(true)}
-        hitSlop={8}
+        hitSlop={{ left: 8, right: 8 }}
+        style={styles.chipTarget}
         accessibilityRole="button"
         accessibilityLabel={`${d ? `Runs on ${deviceDisplayName(d)}` : 'No device'}; ${ownerNames.length ? `owners: ${ownerNames.join(', ')}` : 'no owners'}`}
       >
@@ -134,13 +142,13 @@ export function AssignmentChip({
         visible={sheetVisible}
         transparent
         animationType="slide"
-        onRequestClose={() => setSheetVisible(false)}
+        onRequestClose={close}
         supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
       >
         <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         {/* accessible={false} on both: a Pressable defaults to accessible, which
             would flatten the whole sheet into one VoiceOver element. */}
-        <Pressable style={styles.backdrop} onPress={() => setSheetVisible(false)} accessible={false}>
+        <Pressable style={styles.backdrop} onPress={() => { if (!dirty) close(); }} accessible={false} testID="assignment-backdrop">
           <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 12 }]} onPress={() => {}} accessible={false}>
             <View style={styles.grabber} />
             {sheetVisible && (
@@ -150,7 +158,8 @@ export function AssignmentChip({
                 ownerDeviceId={ownerDeviceId}
                 activeTeamId={activeTeamId}
                 showToast={showToast}
-                onDone={() => setSheetVisible(false)}
+                onDone={close}
+                onDirty={setDirty}
               />
             )}
           </Pressable>
@@ -186,6 +195,7 @@ function AssignmentSheetBody({
   activeTeamId,
   showToast,
   onDone,
+  onDirty,
 }: {
   owners: OwnersApi;
   conversationId: string;
@@ -194,10 +204,19 @@ function AssignmentSheetBody({
   activeTeamId: string | null | undefined;
   showToast: (msg: string) => void;
   onDone: () => void;
+  onDirty: (dirty: boolean) => void;
 }) {
   const Theme = useTheme();
   const { devices } = useDevices();
   const m = useOwnersMenu(conversationId, owners);
+  useEffect(() => onDirty(m.dirty), [m.dirty]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Leaving puts the session on the machine's account: whose it is, face and
+  // name, is the choice (web OwnersMenu's leave box).
+  const roster = useInboxStore(rowEnvRoster) as any[];
+  const ownerOf = (dev: any): { name: string | null; image?: string } => {
+    const member = roster.find((x) => x._id === String(dev.owner_user_id ?? ''));
+    return member ? { name: member.name || member.email?.split('@')[0] || null, image: member.image || member.github_avatar_url } : { name: dev.runner_name ?? null };
+  };
   // A role's own session reports to someone (a role, else a person), which is
   // whose inbox it is in: it changes by moving the role on the org chart, so
   // the sheet says who and offers no owner edits.
@@ -231,44 +250,15 @@ function AssignmentSheetBody({
     tap();
     if (!m.save()) return;
     onDone();
-    // The phone has no ⌘Z: the Save's undo rides the bar (a leave has none).
-    if (m.diff.inverse) showUndoToast('Changed the owners');
+    // The phone has no ⌘Z: the Save's undo rides the bar. A leave on its own
+    // is undone by rejoining; a leave with other changes has none.
+    if (m.diff.inverse) showUndoToast(m.diff.leaving ? 'You left' : 'Changed the owners');
   };
 
   return (
     <>
       {activeTeamId !== undefined && <OrgRolesFeeder teamId={activeTeamId} />}
       <ScrollView style={styles.list} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
-        <Text style={styles.sectionLabel}>Device</Text>
-        {sortedDevices.length === 0 && (
-          <Text style={styles.emptyText}>No devices yet. Run the codecast daemon on a machine.</Text>
-        )}
-        {sortedDevices.map((dev) => {
-          const isCurrent = dev.device_id === ownerDeviceId;
-          const disabled = isCurrent || !dev.online;
-          const color = deviceColor(dev);
-          return (
-            <TouchableOpacity
-              key={dev.device_id}
-              style={[styles.row, disabled && !isCurrent && { opacity: 0.4 }]}
-              activeOpacity={0.6}
-              disabled={disabled}
-              onPress={() => moveTo(dev)}
-            >
-              <FontAwesome name={deviceIcon(dev)} size={14} color={color} style={{ width: 20 }} />
-              <View style={{ flex: 1, minWidth: 0 }}>
-                <Text style={[styles.rowLabel, isCurrent && { color }]} numberOfLines={1}>{deviceDisplayName(dev)}</Text>
-                <Text style={styles.rowHint} numberOfLines={1}>
-                  {isCurrent ? 'Running here' : dev.online ? (dev.is_remote ? 'Online · moves the worktree' : 'Online') : `Offline · ${relativeSeen(dev.last_seen)}`}
-                </Text>
-              </View>
-              {isCurrent ? <FontAwesome name="check" size={13} color={color} /> : <View style={[styles.dot, { backgroundColor: dev.online ? Theme.green : Theme.textMuted0 }]} />}
-            </TouchableOpacity>
-          );
-        })}
-
-        <View style={styles.divider} />
-
         <Text style={styles.sectionLabel}>{seatRoleId ? 'Reports to · whose inbox' : 'Owners · whose inbox'}</Text>
         {seatRoleId && (parentRole || m.rows[0]?.person) && (
           <View style={styles.row} testID="seat-reports-to">
@@ -281,19 +271,25 @@ function AssignmentSheetBody({
             <Text style={styles.rowHint}>Runs on your account. Move it to leave:</Text>
             {leaveTargets.length === 0 ? (
               <Text style={styles.emptyText}>No team machine to move it to</Text>
-            ) : leaveTargets.map((dev: any) => (
-              <TouchableOpacity
-                key={dev.device_id}
-                style={[styles.row, !dev.online && { opacity: 0.4 }]}
-                disabled={!dev.online}
-                activeOpacity={0.6}
-                onPress={() => { tap(); m.leaveTo({ device_id: dev.device_id, is_remote: !!dev.is_remote, label: deviceDisplayName(dev), runner_id: String(dev.owner_user_id ?? ''), runner_is_bot: !!dev.is_bot }); }}
-              >
-                <FontAwesome name={deviceIcon(dev)} size={14} color={Theme.text} style={{ width: 20 }} />
-                <Text style={[styles.rowLabel, { flex: 1 }]} numberOfLines={1}>{deviceDisplayName(dev)}</Text>
-                <Text style={styles.rowHint}>{dev.online ? 'Move and leave' : 'offline'}</Text>
-              </TouchableOpacity>
-            ))}
+            ) : leaveTargets.map((dev: any) => {
+              const owner = ownerOf(dev);
+              return (
+                <TouchableOpacity
+                  key={dev.device_id}
+                  style={[styles.row, !dev.online && { opacity: 0.4 }]}
+                  disabled={!dev.online}
+                  activeOpacity={0.6}
+                  testID={`leave-target-${dev.device_id}`}
+                  onPress={() => { tap(); m.leaveTo({ device_id: dev.device_id, is_remote: !!dev.is_remote, label: deviceDisplayName(dev), runner_id: String(dev.owner_user_id ?? ''), runner_is_bot: !!dev.is_bot }); }}
+                >
+                  {owner.name
+                    ? <OwnerFace person={{ name: owner.name, image: owner.image }} size={18} />
+                    : <FontAwesome name={deviceIcon(dev)} size={14} color={Theme.text} style={{ width: 20 }} />}
+                  <Text style={[styles.rowLabel, { flex: 1 }]} numberOfLines={1}>{machineOf(owner.name, deviceDisplayName(dev))}</Text>
+                  <Text style={styles.rowHint}>{dev.online ? 'Move and leave' : 'offline'}</Text>
+                </TouchableOpacity>
+              );
+            })}
           </View>
         )}
         {!seatRoleId && m.rows.length === 0 && <Text style={styles.emptyText}>Nobody yet</Text>}
@@ -377,6 +373,37 @@ function AssignmentSheetBody({
             {m.candidates.length === 0 && <Text style={styles.emptyText}>{m.q ? 'Nobody matches' : 'Nobody else to add'}</Text>}
           </>
         )}
+
+        {/* The machine after the owners: the sheet opens on whose it is, and
+            the device list (often long) no longer pushes the owners off. */}
+        <View style={styles.divider} />
+        <Text style={styles.sectionLabel}>Device</Text>
+        {sortedDevices.length === 0 && (
+          <Text style={styles.emptyText}>No devices yet. Run the codecast daemon on a machine.</Text>
+        )}
+        {sortedDevices.map((dev) => {
+          const isCurrent = dev.device_id === ownerDeviceId;
+          const disabled = isCurrent || !dev.online;
+          const color = deviceColor(dev);
+          return (
+            <TouchableOpacity
+              key={dev.device_id}
+              style={[styles.row, disabled && !isCurrent && { opacity: 0.4 }]}
+              activeOpacity={0.6}
+              disabled={disabled}
+              onPress={() => moveTo(dev)}
+            >
+              <FontAwesome name={deviceIcon(dev)} size={14} color={color} style={{ width: 20 }} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={[styles.rowLabel, isCurrent && { color }]} numberOfLines={1}>{deviceDisplayName(dev)}</Text>
+                <Text style={styles.rowHint} numberOfLines={1}>
+                  {isCurrent ? 'Running here' : dev.online ? (dev.is_remote ? 'Online · moves the worktree' : 'Online') : `Offline · ${relativeSeen(dev.last_seen)}`}
+                </Text>
+              </View>
+              {isCurrent ? <FontAwesome name="check" size={13} color={color} /> : <View style={[styles.dot, { backgroundColor: dev.online ? Theme.green : Theme.textMuted0 }]} />}
+            </TouchableOpacity>
+          );
+        })}
       </ScrollView>
       {!readOnly && (
         <View style={styles.footer}>
@@ -553,6 +580,15 @@ const bannerStyles = themedStyles((Theme) => StyleSheet.create({
 }));
 
 const styles = themedStyles((Theme) => StyleSheet.create({
+  // The chip is the way into the owners sheet: a 44pt touch target around the
+  // short chip, made of real layout (a negative margin gives the height back
+  // to the header row) rather than hitSlop, which can miss outside a short
+  // parent on Fabric.
+  chipTarget: {
+    minHeight: 44,
+    justifyContent: 'center',
+    marginVertical: -(44 - CHIP_HEIGHT) / 2,
+  },
   // Segmented twin of the shared chipShell: same height/radius/border, but the
   // horizontal padding lives in the lobes so their tints meet edge to edge.
   chipShell: {
