@@ -1,4 +1,4 @@
-import { forwardRef } from "react";
+import { forwardRef, memo } from "react";
 import { CalendarPlus, Check, ChevronDown, FolderKanban, History, Laptop, List, Network, Tag, Target, Workflow, Zap } from "lucide-react";
 import type { InboxViewMode } from "../store/inboxStore";
 import { ShortcutTooltip } from "./KeyboardShortcutsHelp";
@@ -49,7 +49,7 @@ export function InboxViewPickerStill({ value }: { value: InboxViewMode }) {
 // The inbox's grouping as one control at the start of the rail header: it
 // names the current grouping and opens the list of the others. `modes` is the
 // panel's list, the same one Ctrl+, cycles through (setInboxViewModesShown).
-export function InboxViewPicker({ value, onChange, modes }: {
+export const InboxViewPicker = memo(function InboxViewPicker({ value, onChange, modes }: {
   value: InboxViewMode;
   onChange: (value: InboxViewMode) => void;
   modes: readonly InboxViewMode[];
@@ -80,4 +80,4 @@ export function InboxViewPicker({ value, onChange, modes }: {
       </DropdownMenuContent>
     </DropdownMenu>
   );
-}
+});

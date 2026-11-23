@@ -35,6 +35,8 @@ function defer<T>(): Deferred<T> {
 // files' tests, wherever they sit in the alphabet. Each one below therefore
 // spreads the real module and overrides only what this file drives.
 
+// livekit-client loads before a room exists (lib/calls/livekit); these drive rooms directly.
+await (await import("../calls/livekit")).loadLivekit();
 const realCallManager = { ...await import("../calls/callManager") };
 afterAll(() => { mock.module("../calls/callManager", () => realCallManager); });
 const realAsrPipe = { ...await import("../calls/asrPipe") };

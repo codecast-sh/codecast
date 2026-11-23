@@ -20,6 +20,7 @@ import { SharedQueue } from "./conversation/SharedQueue";
 import { KeyCap } from "./KeyCap";
 import { isMac } from "../shortcuts";
 import { useJointComposer } from "../hooks/useJointComposer";
+import { FIELD_SIZING_STYLE, FIELD_SIZING_SUPPORTED } from "./composerLayout";
 import { armJointSend, composeJointTurn } from "../lib/jointSend";
 import { parseSideQuestion } from "../lib/builtinCommands";
 import { toast } from "sonner";
@@ -295,6 +296,7 @@ export const CollabComposer = memo(function CollabComposer({
   const convKey = conversation._id.toString();
   const hasBatch = useInboxStore((s) => (s.reviewComments[convKey]?.length ?? 0) > 0);
   useWatchEffect(() => {
+    if (FIELD_SIZING_SUPPORTED) return;
     const el = textareaRef.current;
     if (el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
   }, [message]);
@@ -509,6 +511,7 @@ export const CollabComposer = memo(function CollabComposer({
               disabled={busy}
               placeholder={canSend ? (steering ? `Suggest to ${steeringName}…` : `Message ${target}…`) : "Write together…"}
               rows={1}
+              style={FIELD_SIZING_STYLE}
               className="[grid-area:1/1] w-full bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-hidden leading-relaxed py-1 text-sol-text"
             />
             {shared.active && <SharedCarets inputRef={textareaRef} text={message} rows={shared.others} editors={shared.editors} />}

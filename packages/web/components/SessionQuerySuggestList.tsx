@@ -44,6 +44,7 @@ export function SessionQuerySuggestList({
     <div
       role="listbox"
       aria-label="Filter suggestions"
+      data-squeeze-skip=""
       className={`absolute left-0 right-0 top-full mt-1.5 ${className} rounded-xl border border-sol-border/70 bg-sol-bg shadow-xl shadow-black/20 py-1 overflow-hidden`}
     >
       {suggestions.map((s, i) => (

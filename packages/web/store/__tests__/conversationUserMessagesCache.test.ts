@@ -1,7 +1,7 @@
 import Dexie from "dexie";
 import "fake-indexeddb/auto";
 import { stampCacheOwner } from "./fixtures/signedInPrincipal";
-import { indexedDB, IDBKeyRange } from "fake-indexeddb";
+import { indexedDB, IDBKeyRange, IDBObjectStore } from "fake-indexeddb";
 import { describe, it, expect } from "bun:test";
 import {
   loadConversationMessages,
@@ -54,5 +54,51 @@ describe("conversation user-message cache", () => {
     expect(cached?.messages.length).toBe(1);
     expect(cached?.userMessages).toBeUndefined();
     expect(await loadConversationMessages(cid(4))).toBeNull();
+  });
+});
+
+describe("the cache tells no other tab about its writes", () => {
+  it("writes post nothing on Dexie's cross-tab channel", async () => {
+    const proto = BroadcastChannel.prototype as any;
+    const orig = proto.postMessage;
+    const posted: string[] = [];
+    proto.postMessage = function (this: BroadcastChannel, ...args: any[]) {
+      posted.push(this.name);
+      return orig.apply(this, args);
+    };
+    try {
+      const conv = cid(4242);
+      writeConversationMessages(conv, [{ _id: "q1", role: "assistant", content: "x", timestamp: 1 }], { hasMoreAbove: false });
+      writeConversationUserMessages(conv, [um("u9", 1)]);
+      flushConversationMessages();
+      expect((await loadConversationMessages(conv))?.messages.map((m) => m._id)).toEqual(["q1"]);
+      expect(posted.filter((n) => n.startsWith("x-storagemutated"))).toEqual([]);
+    } finally {
+      proto.postMessage = orig;
+    }
+  });
+});
+
+describe("conversation cache misses", () => {
+  it("reads IDB once for a conversation it does not hold, again after this window writes it", async () => {
+    const conv = cid(777);
+    const proto = (IDBObjectStore as any).prototype;
+    const orig = proto.get;
+    let reads = 0;
+    proto.get = function (...args: any[]) {
+      if (this.name === "conversationMessages") reads++;
+      return orig.apply(this, args);
+    };
+    try {
+      expect(await loadConversationMessages(conv)).toBeNull();
+      expect(reads).toBe(1);
+      expect(await loadConversationMessages(conv)).toBeNull();
+      expect(reads).toBe(1);
+      writeConversationMessages(conv, [{ _id: "m9", role: "assistant", content: "x", timestamp: 1 }], { hasMoreAbove: false });
+      flushConversationMessages();
+      expect((await loadConversationMessages(conv))?.messages.map((m) => m._id)).toEqual(["m9"]);
+    } finally {
+      proto.get = orig;
+    }
   });
 });

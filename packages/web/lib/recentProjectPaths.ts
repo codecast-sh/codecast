@@ -35,6 +35,24 @@ export function recentProjectSessionKey(session: ProjectSession): string {
   ]);
 }
 
+const keyOfRow = new WeakMap<object, string>();
+let keysFor: Record<string, ProjectSession> | null = null;
+let keysOut: string[] = [];
+
+/** Every loaded session's key, recomputed only when the collection changed and only for the rows that did: the picker's selector runs on every store write. */
+export function recentProjectSessionKeys(sessions: Record<string, ProjectSession>): string[] {
+  if (sessions === keysFor) return keysOut;
+  const out: string[] = [];
+  for (const row of Object.values(sessions)) {
+    let key = keyOfRow.get(row);
+    if (key === undefined) keyOfRow.set(row, (key = recentProjectSessionKey(row)));
+    out.push(key);
+  }
+  keysFor = sessions;
+  keysOut = out;
+  return out;
+}
+
 export function recentProjectPathsFromSessionKeys(
   keys: string[],
   currentUserId: string | null | undefined,

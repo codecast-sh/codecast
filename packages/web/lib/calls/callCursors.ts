@@ -20,8 +20,8 @@
 // over whatever the capture covers (electron shareCursors.js). The presenter
 // is looking at their screen, not at their own tile.
 
-import type { Room, RemoteParticipant } from "livekit-client";
-import { RoomEvent, Track } from "livekit-client";
+import type { RemoteParticipant, Room, RoomEvent, Track } from "livekit-client";
+import { LK } from "./livekit";
 import { GHOST_IDLE_MS } from "../browserGhost";
 import { sendShareCursors, type ShareCursor } from "../desktop";
 import { callSpeakerName } from "@codecast/shared/contracts";
@@ -180,7 +180,7 @@ let forwardedAny = false;
 // Tell the shell which cursors point at my own share. An empty list goes out
 // once, when the last one leaves or the share stops, and then stays quiet.
 function forwardShareCursors() {
-  const sid = boundRoom?.localParticipant?.getTrackPublication(Track.Source.ScreenShare)?.trackSid;
+  const sid = boundRoom?.localParticipant?.getTrackPublication(LK.Track.Source.ScreenShare)?.trackSid;
   const list = cursorsOnShare(state, sid);
   if (!list.length && !forwardedAny) return;
   forwardedAny = list.length > 0;
@@ -191,7 +191,7 @@ function forwardShareCursors() {
  *  room handlers are attached; the handlers die with the room. */
 export function bindCallCursors(room: Room): void {
   boundRoom = room;
-  room.on(RoomEvent.DataReceived, (payload: Uint8Array, participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
+  room.on(LK.RoomEvent.DataReceived, (payload: Uint8Array, participant?: RemoteParticipant, _kind?: unknown, topic?: string) => {
     if (topic !== CURSOR_TOPIC || !participant) return;
     const msg = decodeCursorMessage(payload);
     if (!msg) return;
@@ -201,9 +201,9 @@ export function bindCallCursors(room: Room): void {
     setState(applyCursorMessage(state, participant.identity, callSpeakerName(participant.identity, participant.name), msg, Date.now()));
   });
   // My share starting or stopping changes which cursors are mine to show.
-  room.on(RoomEvent.LocalTrackPublished, forwardShareCursors);
-  room.on(RoomEvent.LocalTrackUnpublished, forwardShareCursors);
-  room.on(RoomEvent.Disconnected, () => {
+  room.on(LK.RoomEvent.LocalTrackPublished, forwardShareCursors);
+  room.on(LK.RoomEvent.LocalTrackUnpublished, forwardShareCursors);
+  room.on(LK.RoomEvent.Disconnected, () => {
     resetCallCursors();
     if (boundRoom === room) boundRoom = null;
   });
