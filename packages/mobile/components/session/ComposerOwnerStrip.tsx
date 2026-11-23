@@ -66,9 +66,9 @@ export function ComposerOwnerStrip({ conversationId, active }: { conversationId:
     </TouchableOpacity>
   );
   return (
-    <View style={styles.strip} testID="composer-owner-strip-active">
+    <View style={[styles.strip, styles.wrap]} testID="composer-owner-strip-active">
       <OwnerFace role={line.role} size={16} />
-      <Text style={styles.words} numberOfLines={3}>
+      <Text style={[styles.words, styles.wordsWrap]}>
         {telling
           ? <>Goes to <Text style={styles.name}>{tag}</Text>, which stays active.</>
           : <>Sending pauses <Text style={styles.name}>{tag}</Text>.</>}
@@ -95,6 +95,10 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     backgroundColor: Theme.bgAlt,
   },
   words: { flex: 1, minWidth: 0, fontSize: 13, color: Theme.textMuted },
+  // On a phone the sentence and the two segments do not fit one row without
+  // cutting the role's handle, so the segments wrap to a row of their own.
+  wrap: { flexWrap: 'wrap', rowGap: 4 },
+  wordsWrap: { flexBasis: 170 },
   name: { fontWeight: '600', color: Theme.text },
   button: {
     minHeight: 44,
@@ -108,7 +112,7 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   // Nothing here clips: a clipping parent refuses touches outside its
   // bounds on the new architecture, so each segment is a full 44pt target and
   // rounds its own outer corners.
-  segments: { flexDirection: 'row' },
+  segments: { flexDirection: 'row', marginLeft: 'auto' },
   segment: {
     minHeight: 44,
     paddingHorizontal: 9,
