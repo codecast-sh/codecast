@@ -177,32 +177,38 @@ export function useSwapPending(id: string): boolean {
   return useInboxStore((s) => !!((s as any).secretHistory?.[`events:${id}`]?.rows as object[] | undefined)?.some(isStaged));
 }
 
-/** Ask first's field lock while the server has not echoed a press: its value is the one pressed. */
-export function useAskFirstLock(id: string): { value?: unknown; ts: number } | undefined {
-  return useInboxStore((s) => s.pending[`secrets:${id}:ask_first`] as { value?: unknown; ts: number } | undefined);
+/** A guard's field lock while the server has not echoed a press: its value is the one pressed. */
+export function useAskFirstLock(id: string, field: "ask_first" | "touch_id" = "ask_first"): { value?: unknown; ts: number } | undefined {
+  return useInboxStore((s) => s.pending[`secrets:${id}:${field}`] as { value?: unknown; ts: number } | undefined);
 }
 
 /**
  * A secret's one-press writes: edit its name, env vars, sites or note, remove
- * it (`only: "requested"` is a decline), and switch Ask first, which takes
- * Touch ID to turn off (lib/passkeyPresence). The store's local-first actions,
- * or the sample's.
+ * it (`only: "requested"` is a decline), and switch Ask first and Touch ID.
+ * Turning Touch ID off, or Ask first off on a Touch ID secret, confirms with a
+ * passkey first (lib/passkeyPresence). The store's local-first actions, or the
+ * sample's.
  */
 export function useVaultActions() {
   const sample = useSampleVault();
   const updateSecretMeta = useInboxStore((s) => s.updateSecretMeta);
   const removeSecret = useInboxStore((s) => s.removeSecret);
   const setSecretAskFirst = useInboxStore((s) => s.setSecretAskFirst);
+  const setSecretTouchId = useInboxStore((s) => s.setSecretTouchId);
   const confirm = usePresence();
   return useMemo(
     () =>
       sample
-        ? { updateMeta: sample.updateMeta, remove: sample.remove, setAskFirst: sample.setAskFirst }
+        ? { updateMeta: sample.updateMeta, remove: sample.remove, setAskFirst: sample.setAskFirst, setTouchId: sample.setTouchId }
         : {
             updateMeta: updateSecretMeta,
             remove: removeSecret,
-            setAskFirst: (id: string, on: boolean) => (on ? setSecretAskFirst(id, true) : void confirm("ask_first_off", id).then((grant) => grant && setSecretAskFirst(id, false, grant))),
+            setAskFirst: (id: string, on: boolean) =>
+              on || !useInboxStore.getState().secrets[id]?.touch_id
+                ? setSecretAskFirst(id, on)
+                : void confirm("ask_first_off", id).then((grant) => grant && setSecretAskFirst(id, false, grant)),
+            setTouchId: (id: string, on: boolean) => (on ? setSecretTouchId(id, true) : void confirm("touch_id_off", id).then((grant) => grant && setSecretTouchId(id, false, grant))),
           },
-    [sample, updateSecretMeta, removeSecret, setSecretAskFirst, confirm],
+    [sample, updateSecretMeta, removeSecret, setSecretAskFirst, setSecretTouchId, confirm],
   );
 }

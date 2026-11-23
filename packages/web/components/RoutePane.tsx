@@ -8,11 +8,11 @@
 // reuse it without a cycle; the lazy registry itself stays in lib/tabLazyPages
 // (the Fast Refresh boundary rule).
 
-import { Suspense, useMemo } from "react";
+import { Suspense, useCallback, useMemo, useRef } from "react";
 import { lazyPage } from "../lib/tabLazyPages";
 import { isFullWidthRoute, PageShell } from "../lib/pageLayout";
 import { RouteFallback } from "./RouteFallback";
-import { TabParamsCtx, parseTabLocation } from "../lib/tabParams";
+import { TabPaneCtx, TabParamsCtx, parseTabLocation } from "../lib/tabParams";
 
 const Tasks = lazyPage("@/app/tasks/page", () => import("@/app/tasks/page"));
 const Docs = lazyPage("@/app/docs/page", () => import("@/app/docs/page"));
@@ -280,7 +280,16 @@ export function usePaneScope({ tabId, path, isActive, isVisible, navigate, leafI
       leafId,
     };
   }, [tabId, path, matched, isActive, isVisible, navigate, leafId]);
-  return { matched, ctxValue };
+  // The pane's path for a handler to read when it runs, without re-rendering
+  // the reader on every navigation inside the pane.
+  const pathRef = useRef(path);
+  pathRef.current = path;
+  const getPath = useCallback(() => parseTabLocation(pathRef.current).pathname, []);
+  const paneValue = useMemo(
+    () => ({ tabId, isActive, isVisible: isVisible ?? isActive, navigate, leafId, getPath }),
+    [tabId, isActive, isVisible, navigate, leafId, getPath],
+  );
+  return { matched, ctxValue, paneValue };
 }
 
 /**
@@ -289,17 +298,19 @@ export function usePaneScope({ tabId, path, isActive, isVisible, navigate, leafI
  * this pane instead of moving the tab.
  */
 export function RoutePane(props: PaneScope) {
-  const { matched, ctxValue } = usePaneScope(props);
+  const { matched, ctxValue, paneValue } = usePaneScope(props);
 
   if (!matched) return null;
   const Component = matched.component;
 
   const page = (
+    <TabPaneCtx.Provider value={paneValue}>
     <TabParamsCtx.Provider value={ctxValue}>
       <Suspense fallback={<RouteFallback />}>
         <Component />
       </Suspense>
     </TabParamsCtx.Provider>
+    </TabPaneCtx.Provider>
   );
 
   // Full-width pages own their scroll/padding; everything else gets the shared
