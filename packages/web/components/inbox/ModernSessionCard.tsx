@@ -337,7 +337,7 @@ export function ModernSessionCardView({
         <div data-mc-line2 className={`mt-0.5 flex min-w-0 items-start gap-2 ${hasThumb ? "pr-11" : ""}`}>
           <span className="flex h-[18px] w-5 shrink-0 items-center justify-center"><SessionStatusMark status={status} /></span>
           <p title={lineTitle} className={`min-w-0 flex-1 ${nested ? "text-meta" : "text-ui"} ${expanded ? "line-clamp-2" : "truncate"}`}>
-            <SessionStatusWord status={status} word={word} title={withRole ? `Waiting on ${withRoleName}, which drives this session` : meta.meaning} className="font-medium" />
+            <SessionStatusWord status={status} word={word} title={withRole ? `Handled by ${withRoleName}, active in this session` : meta.meaning} className="font-medium" />
             {line.reason && <span className={meta.text}><span aria-hidden className="text-sol-text-dim"> · </span>{line.reason}</span>}
             {line.text && (
               <span className="text-sol-text-muted">

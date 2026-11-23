@@ -181,6 +181,7 @@ test("each of a role's sessions is its own card; a waiting one its role drives i
   // The waiting session waits on the role that drives it.
   expect(sectionOf(m.host, WAITING)).toBe("working");
   expect(wordOf(m.host, WAITING)).toBe("With Growth lead");
+  expect(cardOf(m.host, WAITING)!.querySelector("[data-status-word]")?.getAttribute("title")).toBe("Handled by Growth lead, active in this session");
   expect(sectionOf(m.host, WORKING)).toBe("working");
   expect(wordOf(m.host, WORKING)).toBe("Working");
   expect(headerCount(m.host, "working")).toBe("2");
@@ -214,7 +215,9 @@ test("the classic card says With <role> too", async () => {
   seed([standing(), hand(WAITING, "Pricing page copy")]);
   const m = await mountInbox(null, "classic");
   expect(sectionOf(m.host, WAITING)).toBe("working");
-  expect(cardOf(m.host, WAITING)!.querySelector("[data-sv-with-role]")?.textContent).toBe("With Growth lead");
+  const withRole = cardOf(m.host, WAITING)!.querySelector("[data-sv-with-role]")!;
+  expect(withRole.textContent).toBe("With Growth lead");
+  expect(withRole.getAttribute("title")).toBe("Handled by Growth lead, active in this session");
   await m.unmount();
 });
 
