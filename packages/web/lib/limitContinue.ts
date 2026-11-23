@@ -25,7 +25,10 @@ export function limitContinueTarget(device: any, now: number, live: boolean, fam
   const active = profiles.find((p) => p.email && p.email === fleetEmail);
   // Only while the park is live: a settled session's old proposal is history.
   const proposal = live && device ? pendingProposal([device], now) : null;
-  const eligible = fallbackProfiles(profiles, fleetEmail, now, family ? [family] : undefined);
+  // A model's room counts only where its meter proves it: an account that
+  // reports no such window is unproven, never room (the switcher's rule too).
+  const eligible = fallbackProfiles(profiles, fleetEmail, now, family ? [family] : undefined)
+    .filter((p) => !family || familyStandingLabel(p.usage ?? undefined, family, now) !== undefined);
   const proposed = proposal?.target_email ? eligible.find((p) => p.email === proposal.target_email) : undefined;
   return { fleetEmail, active, best: proposed ?? eligible[0] };
 }

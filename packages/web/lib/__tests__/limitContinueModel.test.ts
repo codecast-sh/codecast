@@ -54,6 +54,11 @@ describe("limitContinueTarget for a model-only park", () => {
     expect(familyStandingLabel(limitContinueTarget(device, now, true, "fable").best?.usage, "fable", now)).toBe("Fable 22% used");
   });
 
+  test("an account with no Fable meter is unproven, not room", () => {
+    const unmetered = { ...device, profiles: [...device.profiles.filter((p) => p.name !== "ada"), { name: "blind", email: "blind@example.com", usage: { fetched_at: now - 60_000, session: week(1), weekly: week(5) } }] };
+    expect(limitContinueTarget(unmetered, now, true, "fable").best).toBeUndefined();
+  });
+
   test("with no account holding Fable there is no account to offer", () => {
     const spent = { ...device, profiles: device.profiles.filter((p) => p.name !== "ada") };
     expect(limitContinueTarget(spent, now, true, "fable").best).toBeUndefined();
