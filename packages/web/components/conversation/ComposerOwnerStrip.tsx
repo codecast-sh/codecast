@@ -13,7 +13,8 @@
  * The take-over line shows while the composer is focused or holds text.
  */
 
-import { memo, useEffect } from "react";
+import { memo } from "react";
+import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useInboxStore } from "../../store/inboxStore";
 import { personShortName, roleShortName, setComposerSendAs, setComposerTell, useComposerOwnership } from "../../lib/composerOwnership";
 import { useOwnersFromStore } from "../OwnersBadge";
@@ -49,7 +50,8 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
   // Only a role is told in its own session; a person is told in this one.
   const tellRole = telling && fromRole ? fromRole.name : null;
 
-  useEffect(() => {
+  // Publish what Send does to the composer's own store, for this session.
+  useWatchEffect(() => {
     setComposerSendAs(conversationId, label ? { label, tellRole } : null);
     return () => setComposerSendAs(conversationId, null);
   }, [conversationId, label, tellRole]);
