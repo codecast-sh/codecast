@@ -16,7 +16,6 @@ import { recordSessionCommandDispatchError, SESSION_COMMAND_ACTIONS } from "./se
 import { deadRecordingPress } from "./calls/recordingPress";
 import { storableActionArgs } from "./tabSafePath";
 import { getWriteLog, recordWrite } from "../store/writeLog";
-import { isLeave } from "@codecast/shared/contracts/sessionOwners";
 import { captureError } from "./analytics";
 import { featureOffMessage } from "@platform/flags";
 import { TEAM_FEATURE_CATALOG } from "./teamFeatureRule";
@@ -60,16 +59,8 @@ export function makeDispatchBinding(
     const dead = deadRecordingPress(action, args);
     if (dead) return Promise.reject(dead);
     const settle = recordWrite(action, args, patches);
-    const sentAt = Date.now();
     return send(action, args, patches, result, lockIds).then(
-      (res) => {
-        settle({ ok: true });
-        // A leave the server took: no receipt will ever reach the leaver, so
-        // its own result releases what the paint locked. A refused one rolls
-        // back through the engine, which takes its locks with it.
-        if (patches && isOwnLeave(action, args)) useInboxStore.getState().releaseSettledWrite(patches, sentAt, { lockIds });
-        return res;
-      },
+      (res) => { settle({ ok: true }); return res; },
       (err) => { settle({ err }); throw err; },
     );
   };
@@ -287,12 +278,4 @@ export function applyDispatchFailure(action: string, error: unknown, args?: unkn
       useInboxStore.getState().markChatSendFailed(clientId, humanizeConvexError(error, ""));
     }
   }
-}
-
-/** An owners Save in which the signed-in person leaves (shared isLeave). */
-function isOwnLeave(action: string, args: unknown): boolean {
-  if (action !== "applySessionOwners" || !Array.isArray(args)) return false;
-  const me = useInboxStore.getState().currentUser?._id?.toString?.();
-  const change = args[1] as { leave?: unknown; remove?: string[] } | undefined;
-  return !!me && !!change && isLeave(change, me);
 }

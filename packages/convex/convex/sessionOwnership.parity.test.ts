@@ -135,9 +135,9 @@ describe("the store's guess is the server's answer", () => {
   });
 });
 
-// A leave's own result releases its paint's locks with no restore (the leaver
-// gets no receipt), so the paint must be the server's final word on every
-// path a leave settles by, the starter row a move now writes included.
+// A leave's paint is what the leaver sees until its receipt in their own
+// scope retires the locks, so it must be the server's answer on every path a
+// leave settles by, the starter row a move now writes included.
 describe("a leave by a move: the store's paint is the server's answer", () => {
   test("the only owner of a solo session moves it to a teammate's machine and leaves", async () => {
     const db = fixtures({ owner_device_id: "mymac" }, []);

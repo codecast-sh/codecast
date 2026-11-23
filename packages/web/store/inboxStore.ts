@@ -6569,7 +6569,6 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   markServerDeleted: (convId: string) => void;
   // -- Sync-log write acks (docs/architecture/sync-log-migration.md D8) --
   stampSyncAck: (patches: any, ack: Array<{ scope_key: string; position: number }>, sentAt: number, opts?: { local?: boolean; lockIds?: ReadonlySet<string> | readonly string[] }) => void;
-  releaseSettledWrite: (patches: any, sentAt: number, opts?: { local?: boolean; lockIds?: ReadonlySet<string> | readonly string[] }) => void;
   retireAckedPending: (scopeKey: string, upTo: number, opts?: { restore?: boolean }) => void;
   /** A follower's own write echoed by the host: its locks on these cells (and on every field of these rows) forget the host rows they recorded before. */
   forgetLockSeen: (keys: string[], rowPrefixes?: string[]) => void;
@@ -9531,29 +9530,6 @@ function stampSyncAckInDraft(
   return true;
 }
 
-// A leave's own result releases the locks its paint planted. The server sends
-// a receipt only into scopes the caller still holds, and the leaver no longer
-// holds the session's: no acknowledgement ever reaches these locks, and the
-// row has left the leaver's lists, so no echo does either. The paint is the
-// server's answer (the shared rule), so the locks go with no restore. A
-// field with no lock yet (a sibling's mirror still on its way) is noted as
-// retired, so that mirror never plants.
-function releaseSettledWriteInDraft(draft: any, patches: any, sentAt: number, lockIds?: ReadonlySet<string> | readonly string[]): void {
-  if (!patches || typeof patches !== "object") return;
-  const release = (key: string) => {
-    const entry = draft.pending[key] as any;
-    if (!entry) return;
-    delete draft.pending[key];
-    noteRetiredAck(key, entry.ts);
-  };
-  forEachSentField(draft, patches, sentAt, lockIds, (key, _sentValue, held, twinKey) => {
-    if (held === "none") { noteRetiredAck(key, sentAt); return; }
-    if (held !== "lock") return;
-    release(key);
-    if (twinKey) release(twinKey);
-  });
-}
-
 /** Writes a character onto both row shapes a session has in the store
  *  (docs/architecture/session-characters.md S2). A key absent from `next` is
  *  left alone; an explicit null clears it, which the dispatch rail sends as a
@@ -9805,11 +9781,6 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
 
   if (msg.kind === "ack") {
     stampSyncAckInDraft(draft, msg.patches, msg.ack, msg.sentAt, msg.lockIds, true);
-    return;
-  }
-
-  if (msg.kind === "settled") {
-    releaseSettledWriteInDraft(draft, msg.patches, msg.sentAt, msg.lockIds);
     return;
   }
 
@@ -11416,17 +11387,6 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // rows) and retire them at the same position — they have no dispatch of
   // their own to be acknowledged. `local` marks the bridged receipt, which
   // stamps and does not re-announce.
-  // A write whose own result is the last word for this window (a leave: see
-  // releaseSettledWriteInDraft). Announced on the gesture bridge like an ack,
-  // so sibling windows release the mirrors they hold for it.
-  releaseSettledWrite: sync(function (this: Draft, patches: any, sentAt: number, opts?: { local?: boolean; lockIds?: ReadonlySet<string> | readonly string[] }) {
-    releaseSettledWriteInDraft(this, patches, sentAt, opts?.lockIds);
-    if (!opts?.local) {
-      const lockIds = opts?.lockIds ? [...opts.lockIds] : undefined;
-      broadcastGesture({ kind: "settled", patches, sentAt, ts: Date.now(), ...(lockIds ? { lockIds } : {}) }, bridgeUserId(this));
-    }
-  }),
-
   stampSyncAck: sync(function (
     this: Draft,
     patches: any,

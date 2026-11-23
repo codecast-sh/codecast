@@ -2,10 +2,11 @@
 // answer, and leaves no lock behind for the person who left. ada runs s and a
 // run r her lead role started, and adds bo to both. bo's follower leaves s and
 // bo's host leaves r (the last person on it, so r is the role's alone again).
-// The server sends a receipt only into scopes the caller still holds, and the
-// leaver holds neither session's any more, so no acknowledgement reaches the
-// leave's locks: the leave's own result releases them, in the window that
-// sent it and, over the gesture bridge, in its siblings (INV-pending-locks).
+// The leave takes bo's scope out of the session's fan-out, so the server gives
+// it a receipt in bo's own user scope: the leave's locks retire when that
+// scope's cursor passes it, in the window that sent it and in its siblings,
+// after every older row in flight (INV-pending-locks). The receipt carries no
+// row, so the host re-fetches it, and that answer is what the row settles on.
 // Then bo rejoins s (the leave's undo) and ada adds bo back to r: bo's rows
 // take the server's owners and claim again, with no stale lock overriding them.
 
@@ -69,4 +70,4 @@ async function ownersLeave(w: ScenarioWorld): Promise<void> {
   }
 }
 
-scenario({ name: "ownersLeave", seeds: 4 }, ownersLeave);
+scenario({ name: "ownersLeave", seeds: 24 }, ownersLeave);

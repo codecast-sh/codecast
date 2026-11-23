@@ -104,11 +104,7 @@ export type GestureMessage =
   // replicated rows — and retire them at the same position the sender does,
   // instead of waiting for a value echo that a later remote write may never
   // deliver (a restore right after a kill).
-  | { kind: "ack"; patches: Record<string, unknown>; ack: Array<{ scope_key: string; position: number }>; sentAt: number; ts: number; lockIds?: string[] }
-  // A write whose own result settles it for good in the sender's window (a
-  // leave: the leaver gets no receipt). Siblings release the mirrored locks
-  // they hold for it, as the sender does (releaseSettledWrite).
-  | { kind: "settled"; patches: Record<string, unknown>; sentAt: number; ts: number; lockIds?: string[] };
+  | { kind: "ack"; patches: Record<string, unknown>; ack: Array<{ scope_key: string; position: number }>; sentAt: number; ts: number; lockIds?: string[] };
 
 type Envelope = GestureMessage & {
   v: 1;
@@ -229,9 +225,6 @@ function isGestureMessage(data: unknown): data is Envelope {
   if (e.kind === "ack") {
     return !!e.patches && typeof e.patches === "object" && typeof e.sentAt === "number" &&
       Array.isArray(e.ack) && e.ack.every((a) => a && typeof a.scope_key === "string" && typeof a.position === "number");
-  }
-  if (e.kind === "settled") {
-    return !!e.patches && typeof e.patches === "object" && typeof e.sentAt === "number";
   }
   return false;
 }
