@@ -205,6 +205,11 @@ describe("orgRoles.setLine (L2)", () => {
     expect(lineSlugOf({})).toBe("line");
     expect(lineSlugOf({ line_workflow_slug: "feature" })).toBe("feature");
   });
+
+  test("refuses a retired flow, naming what replaced it", async () => {
+    const { ctx } = fixtures();
+    await expect(performSetLine(ctx, HOST as any, { role_id: "or-1", slug: "quick-change", human_decision: "yes" })).rejects.toThrow(/no longer in the library: use change/);
+  });
 });
 
 // line-map.md LX6: "Start now" on a line cause starts the project lead's line

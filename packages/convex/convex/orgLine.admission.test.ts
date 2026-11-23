@@ -354,6 +354,10 @@ describe("orgLine admission (LE6)", () => {
       tables.workflow_runs.push(...working(2, { runner_device: "h1" }).map((r, n) => ({ ...r, _id: `workflow_runs_h${n}` })));
       expect(await startPlanned(ctx, plan.started[1], NOW)).toBeNull();
       tables.workflow_runs.length = 0;
+      // A role whose line names a retired flow (Quick) starts nothing.
+      tables.org_roles[0].line_workflow_slug = "quick-change";
+      expect(await startPlanned(ctx, plan.started[1], NOW)).toBeNull();
+      delete tables.org_roles[0].line_workflow_slug;
       expect(await startPlanned(ctx, plan.started[1], NOW)).toBeTruthy();
       expect(tables.workflow_runs[0]).toMatchObject({ runner_device: "h1", project_path: "/home/ubuntu/h1/growth" });
       // A role out of hands starts nothing, whatever the plan said.
