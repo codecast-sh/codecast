@@ -348,3 +348,31 @@ describe("who may change the owners and the driver", () => {
     expect(await driver(ctx)).toEqual({ kind: "user", user_id: MATE });
   });
 });
+
+// The agent reports to whoever drives (lib/reportsTo), never to the primary
+// owner the chart files it by, which follows the person last added.
+describe("the reports-to line follows the driver", () => {
+  const told = (db: any) => db._tables.pending_messages.map((m: any) => String(m.content)).filter((c: string) => c.includes("You now report to"));
+
+  test("adding a teammate tells nothing new; making them driver tells the agent it reports to them", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "user", owners: [MATE], mode: "add" } });
+    expect(row(db).owner_user_id).toBe(MATE);
+    expect(await driver(ctx)).toEqual({ kind: "user", user_id: ME });
+    expect(told(db)).toEqual([]);
+    await performSetSessionDriver(ctx, ME as any, { session_id: "sess1", driver: { kind: "user", user_id: MATE } });
+    expect(told(db)).toHaveLength(1);
+    expect(told(db)[0]).toContain("You now report to Mate: your questions and decisions go to them.");
+  });
+
+  test("filing a role tells the role; a person taking the wheel back tells them, and handing it to the role tells the role again", async () => {
+    const db = fixtures();
+    const ctx = ctxOf(db);
+    const role = await performCreateRole(ctx, ME as any, { name: "Growth", handle: "growth", team_id: TEAM });
+    await performReparentSession(ctx, ME as any, { session_id: "sess1", target: { kind: "role", role_id: role._id } });
+    await performSetSessionDriver(ctx, ME as any, { session_id: "sess1", driver: { kind: "user", user_id: ME } });
+    await performSetSessionDriver(ctx, ME as any, { session_id: "sess1", driver: { kind: "role" } });
+    expect(told(db).map((c: string) => c.match(/You now report to [^:(]+/)![0].trim())).toEqual(["You now report to Growth", "You now report to Me", "You now report to Growth"]);
+  });
+});

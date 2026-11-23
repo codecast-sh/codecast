@@ -183,6 +183,13 @@ describe("only a send that says so takes the wheel", () => {
     expect(scheduled).toContainEqual({ conversation_id: "filed" });
   });
 
+  test("taking the wheel tells the agent it reports to the person now driving", async () => {
+    const { ctx, row, tables } = await world();
+    await composerSend(ctx, row("filed"), ME);
+    const lines = tables.pending_messages.filter((m) => m.conversation_id === "filed").map((m) => String(m.content));
+    expect(lines.some((c) => c.includes("You now report to Me: your questions and decisions go to them."))).toBe(true);
+  });
+
   test("taking the wheel leaves the primary owner as it was", async () => {
     const { ctx, row } = await world();
     await ctx.db.patch("shared", { driver_user_id: PEER, owner_user_id: PEER });

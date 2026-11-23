@@ -79,7 +79,9 @@ export async function tellSession(
   const fromShortId = sender ? (sender.short_id ?? sender._id.toString().slice(0, 7)) : "unknown";
   return sayIntoSession(ctx, authUserId, conversation, {
     content: formatSessionMessage(fromShortId, body, { name: personName(actor) }),
-    client_id: `reparent:${conversation._id}:${moveKey}:${Date.now()}`,
+    // Unique per tell: one transaction can tell the same session twice (a
+    // role, then a person, then the role again), and a shared id would dedupe.
+    client_id: `reparent:${conversation._id}:${moveKey}:${Date.now()}:${crypto.randomUUID().slice(0, 8)}`,
     sender,
     human: !sender,
   });

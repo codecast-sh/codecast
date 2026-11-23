@@ -22,6 +22,7 @@ import { movedFields } from "@codecast/shared/contracts/orgChange";
 import { findOwnableConversation, personName, roleMayHoldSession, tellSession } from "./lib/sessionTell";
 import { performReparentSessionToDevice } from "./devices";
 import { ownRunAsRoleLeaves } from "./lib/roleRelease";
+import { reportsToKey, reportsToLine, reportsToOf, tellReportsToChange, type ReportsTo } from "./lib/reportsTo";
 import { actsForPausedRole } from "./lib/sessionTakeOver";
 import { rolePaused } from "@codecast/shared/contracts";
 export { personName, roleMayHoldSession };
@@ -76,11 +77,9 @@ export type ReparentSessionTarget =
   // rule moved it for the work it is bound to, so a binding may move it
   // again; `filed` (default), a person or role put it there, so only a
   // person or role moves it. `role_id: null` removes the role.
-  | { kind: "role"; role_id: string | null; hold?: "bound" | "filed" };
-
-export type ReportsTo =
-  | { kind: "user"; user_id: Id<"users">; name: string }
-  | { kind: "role"; role_id: Id<"org_roles">; short_id: string; handle: string; name: string };
+  // `driver` keeps a person at the wheel as the role is filed (a binding of
+  // their own session); without it the role drives.
+  | { kind: "role"; role_id: string | null; hold?: "bound" | "filed"; driver?: string };
 
 export type ReparentSessionResult = OwnerMutationResult & {
   org_role_id: Id<"org_roles"> | null;
@@ -91,39 +90,6 @@ export type ReparentSessionResult = OwnerMutationResult & {
   // web says it in one toast.
   told: { sessions: number; roles: number; deferred?: number };
 };
-
-// The line every reparent delivers (org-staffing.md S11). It says what the
-// move changes for the agent: under a role, how to reach it; under a person,
-// that their questions now go to them. `note` is written to the agent; a
-// `handoff` note was written to the new owner (the ownership menu, `cast own`)
-// and is quoted as theirs, so the agent does not read it as its own orders.
-export function reportsToLine(to: ReportsTo, opts: { note?: string; handoff?: string } = {}): string {
-  const head = to.kind === "role"
-    ? `You now report to ${to.name} (@${to.handle}): what you need from a person goes to it first, and \`cast send @${to.handle}\` reaches it.`
-    : `You now report to ${to.name}: your questions and decisions go to them.`;
-  const note = opts.note?.trim();
-  const handoff = opts.handoff?.trim();
-  return [head, note, handoff && `Note handed to ${to.name} with this session: "${handoff}"`].filter(Boolean).join(" ");
-}
-
-// Who a session reports to: its role, else its primary owner (the
-// owner_user_id cache, which the chart files by; syncPrimaryOwnerCache is its
-// one writer).
-// `read` is the doc read (a batch passes its memo, so a hundred sessions of
-// one host read that host once); `row` is the conversation when the caller
-// already holds it as it stands.
-async function reportsToOf(ctx: { db: any }, conversationId: Id<"conversations">, roleId: Id<"org_roles"> | undefined, known: { read?: (id: any) => Promise<any>; row?: any } = {}): Promise<ReportsTo | null> {
-  const read = known.read ?? ((id: any) => ctx.db.get(id));
-  if (roleId) {
-    const role = await read(roleId);
-    if (role) return { kind: "role", role_id: role._id, short_id: role.short_id, handle: role.handle, name: role.name };
-  }
-  const primary = (known.row ?? await ctx.db.get(conversationId))?.owner_user_id;
-  const user = primary ? await read(primary) : null;
-  return user ? { kind: "user", user_id: user._id, name: personName(user) } : null;
-}
-
-const reportsToKey = (r: ReportsTo | null): string => !r ? "" : r.kind === "role" ? `role:${r.role_id}` : `user:${r.user_id}`;
 
 // Take the previous holder's triage off a row that is being put in front of
 // someone: a handoff to a new owner. Only a stamp that
@@ -230,13 +196,16 @@ async function reparentSessionCore(
   }
   rememberOrgRecord(ctx, conversation);
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
-  const before = await reportsToOf(ctx, conversation._id, conversation.org_role_id, { read: known?.batch.read, row: conversation });
+  const before = await reportsToOf(ctx, conversation._id, { read: known?.batch.read, row: conversation });
   const parentBefore = await sessionParent(ctx, conversation);
 
   const added: Id<"users">[] = [];
   const removed: Id<"users">[] = [];
   let owners: OwnerInfo[];
   let roleId: Id<"org_roles"> | undefined = conversation.org_role_id;
+  // The row as a role target leaves it, so a takeover of a hundred sessions
+  // reads none of them again to say whom each reports to.
+  let filedRow: any = null;
 
   if (args.target.kind === "user") {
     // A bare `user_id` is the chart's drop on a person: it ADDS that person
@@ -324,11 +293,13 @@ async function reparentSessionCore(
     }
     // One role at a time, and the role it is filed under drives.
     await ctx.db.patch(conversation._id, { org_role_id: targetRole._id, org_role_hold: args.target.hold ?? "filed", driver_user_id: undefined });
+    const kept = !!args.target.driver && await writeDriver(ctx, conversation._id, args.target.driver);
     roleId = targetRole._id;
+    filedRow = { ...conversation, org_role_id: targetRole._id, driver_user_id: kept ? args.target.driver : undefined };
     owners = await listOwnerInfos(ctx, conversation._id);
   }
 
-  const after = await reportsToOf(ctx, conversation._id, roleId, { read: known?.batch.read });
+  const after = await reportsToOf(ctx, conversation._id, { read: known?.batch.read, ...(filedRow ? { row: filedRow } : {}) });
   const told: { sessions: number; roles: number; deferred?: number } = { sessions: 0, roles: 0 };
   if (after && reportsToKey(after) !== reportsToKey(before)) {
     const how = await tellSession(ctx, authUserId, conversation, reportsToLine(after, { note, handoff }), args.from_session, reportsToKey(after), known?.batch);
@@ -539,11 +510,15 @@ export async function performSetSessionOwner(
   return { ok: true, short_id: result.short_id, owner: result.owners[0] ?? null };
 }
 
-// Every driver change outside the reparent core (which reroutes as it ends):
-// the wheel moves (sessionOwners.writeDriver), and the session's open
-// questions follow it; a paused role hears none (sessionDecisions routeFor).
-async function setDriver(ctx: { db: any }, conversationId: Id<"conversations">, userId: string | null): Promise<void> {
-  if (await writeDriver(ctx, conversationId, userId)) await reroutePendingDecisionsForConversation(ctx, conversationId, Date.now());
+// Every driver change outside the reparent core (which tells and reroutes as
+// it ends): the wheel moves (sessionOwners.writeDriver), the agent hears whom
+// it reports to now (lib/reportsTo), and the session's open questions follow
+// it; a paused role hears none (sessionDecisions routeFor).
+async function setDriver(ctx: { db: any }, actorId: Id<"users">, conversationId: Id<"conversations">, userId: string | null, fromSession?: string): Promise<void> {
+  const before = await reportsToOf(ctx, conversationId);
+  if (!(await writeDriver(ctx, conversationId, userId))) return;
+  await tellReportsToChange(ctx, actorId, conversationId, before, fromSession);
+  await reroutePendingDecisionsForConversation(ctx, conversationId, Date.now());
 }
 
 // A paused role never takes the wheel back itself, nor swaps itself off: an
@@ -574,13 +549,13 @@ export async function performSetSessionDriver(
   if (!(await mayEditOwners(ctx, authUserId, conversation))) throw new Error("Only an owner of the session, or the account that runs it, can change who drives it");
   await refusePausedRoleSelf(ctx, authUserId, conversation, args.from_session);
   if (args.driver.kind === "none") {
-    await setDriver(ctx, conversation._id, null);
+    await setDriver(ctx, authUserId, conversation._id, null, args.from_session);
     const driver = driverOf({ ...conversation, driver_user_id: undefined }, await ownerIdsOrStarter(ctx, conversation));
     return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: driver! };
   }
   if (args.driver.kind === "role") {
     if (!conversation.org_role_id) throw new Error(`Session ${shortId} is not filed under a role, so no role can drive it`);
-    await setDriver(ctx, conversation._id, null);
+    await setDriver(ctx, authUserId, conversation._id, null, args.from_session);
     return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "role", role_id: conversation.org_role_id } };
   }
   const ownerIds = await ownerIdsOrStarter(ctx, conversation);
@@ -590,7 +565,7 @@ export async function performSetSessionDriver(
   if (!userId && ref.trim().toLowerCase() !== "me") userId = await ownerNamed(ctx, ownerIds, ref);
   userId ??= String((await resolveOwnerRef(ctx, authUserId, conversation, ref))._id);
   if (!ownerIds.includes(userId)) throw new Error("Only an owner of the session can drive it; add them as an owner first");
-  await setDriver(ctx, conversation._id, userId);
+  await setDriver(ctx, authUserId, conversation._id, userId, args.from_session);
   return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "user", user_id: userId as Id<"users"> } };
 }
 
@@ -1126,17 +1101,15 @@ export async function applyHoldChange(ctx: { db: any; scheduler?: any }, convers
     await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "user", user_id: actor, mode: "add" }, note: `Its work is no longer in @${change.from.handle ?? "the role"}'s area.` });
     // With no role left, nobody is paused: the driver clears.
     const after = await ctx.db.get(conversationId);
-    if (after && !after.org_role_id && after.driver_user_id) await setDriver(ctx, conversationId, null);
+    if (after && !after.org_role_id && after.driver_user_id) await setDriver(ctx, actor, conversationId, null);
     return { change: "release", role: change.from.handle };
   }
-  await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "role", role_id: String(change.role._id), hold: "bound" }, note: BOUND_NOTE });
   // A binding is implicit: the person who started the session keeps driving
-  // it (org-roles-run-work.md R1). Deliberate filing (the owners menu, the
-  // chart, a scope takeover) never comes here, so the role drives those.
-  if (!c.role_started) {
-    const person = await humanStarterUser(ctx, c);
-    if (person) await setDriver(ctx, conversationId, String(person._id));
-  }
+  // it (org-roles-run-work.md R1), so it goes on reporting to them. Deliberate
+  // filing (the owners menu, the chart, a scope takeover) never comes here, so
+  // the role drives those.
+  const person = c.role_started ? null : await humanStarterUser(ctx, c);
+  await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "role", role_id: String(change.role._id), hold: "bound", ...(person ? { driver: String(person._id) } : {}) }, note: BOUND_NOTE });
   return { change: change.kind, role: change.role.handle };
 }
 

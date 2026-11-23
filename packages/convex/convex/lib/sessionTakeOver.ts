@@ -10,6 +10,7 @@ import { takeOverBySend } from "@codecast/shared/contracts/sessionOwners";
 import { addSessionOwnerRow, ownersFactsOf, syncPrimaryOwnerCache, writeDriver } from "../sessionOwners";
 import { personName } from "./sessionTell";
 import { internal } from "../_generated/api";
+import { reportsToOf, tellReportsToChange } from "./reportsTo";
 
 /** A person's own message into the session takes the wheel (takeOverBySend),
  *  in the transaction that queues it. The web store paints the same rule. */
@@ -20,12 +21,14 @@ export async function takeWheelOnSend(ctx: { db: any; scheduler?: { runAfter: (d
   const facts = await ownersFactsOf(ctx, conversation);
   const next = takeOverBySend(facts, String(senderId), Date.now());
   if (!next) return;
+  const before = await reportsToOf(ctx, conversation._id, { row: conversation });
   const added = next.rows.filter((r) => !facts.rows.some((x) => x.user_id === r.user_id));
   for (const r of added) await addSessionOwnerRow(ctx, conversation._id, r.user_id as Id<"users">, (r.added_by ?? senderId) as Id<"users">);
   if (added.length) await syncPrimaryOwnerCache(ctx, conversation._id, (next.primary_id ?? undefined) as Id<"users"> | undefined);
   // The paused role hears none of its open questions now (sessionDecisions
   // routeFor). Scheduled: the send path cannot import the decision module.
   if (await writeDriver(ctx, conversation._id, String(senderId))) {
+    await tellReportsToChange(ctx, senderId, conversation._id, before);
     await ctx.scheduler?.runAfter(0, internal.sessionDecisions.rerouteSessionDecisions, { conversation_id: conversation._id });
   }
 }
