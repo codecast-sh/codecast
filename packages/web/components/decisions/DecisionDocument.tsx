@@ -84,15 +84,17 @@ function DocumentBody({ decision, detail, answerable, pager }: { decision: Sessi
   const body = hasWords && !restated ? <DecisionBody decision={decision} detail={detail} report={false} /> : null;
 
   return (
-    <div className="h-full overflow-y-auto decision-doc" data-main-scroll>
+    <div className={`h-full overflow-y-auto decision-doc${pager ? " decision-doc-nav" : ""}`} data-main-scroll>
       {/* One measure for every decision: a change card stacks its proof over its examples, so it needs no wider page. */}
       <div className="max-w-4xl mx-auto px-4 sm:px-6 lg:px-8 pt-6 pb-16">
-        <div className="flex items-center gap-3">
-          <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
-            <ArrowLeft className="w-3 h-3" /> The queue
-          </Link>
-          {pager && <span className="ml-auto"><DecisionPager step={step} /></span>}
-        </div>
+        {pager && (
+          <nav className="decision-nav flex items-center gap-3" data-decision-nav>
+            <Link href="/decisions" className="inline-flex items-center gap-1 text-meta text-sol-text-dim hover:text-sol-text transition-colors no-underline">
+              <ArrowLeft className="w-3 h-3" /> All decisions
+            </Link>
+            <span className="ml-auto"><DecisionPager step={step} /></span>
+          </nav>
+        )}
 
         {/* ── Header ── */}
         <header className="mt-4">
@@ -262,7 +264,7 @@ function DecisionNext({ decisionId, step, openSession }: { decisionId: string; s
   // The list's next, else the first decision still waiting in the queue.
   const queue = useDecisionQueue();
   const queued = queue.find((q) => q.decisionId && q.decisionId !== decisionId);
-  const next = step.pos?.next ?? (queued ? queued.shortId ?? queued.decisionId ?? null : null);
+  const next = step.pos.next ?? (queued ? queued.shortId ?? queued.decisionId ?? null : null);
   return (
     // Pinned to the bottom of the page's scroll, so the next step shows where the answer was given.
     <div className="decision-next-bar mt-4 flex items-center gap-2.5 flex-wrap" data-decision-next>

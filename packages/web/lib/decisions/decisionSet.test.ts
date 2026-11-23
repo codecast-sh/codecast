@@ -1,5 +1,5 @@
 import { expect, test } from "bun:test";
-import { decisionSetHref, flowDecisionsHref, parseDecisionSet, setPosition } from "./decisionSet";
+import { decisionNav, decisionSetHref, flowDecisionsHref, parseDecisionSet, setPosition } from "./decisionSet";
 
 test("a set reads from the address once each, lowercased", () => {
   expect(parseDecisionSet("sd-3, SD-1,sd-3,,sd-2")).toEqual(["sd-3", "sd-1", "sd-2"]);
@@ -31,4 +31,33 @@ test("a line's or a flow's count opens exactly the decisions it counted", () => 
   expect(flowDecisionsHref({}, scoped)).toBe("/decisions/sd-4?set=sd-4,sd-2,d7");
   expect(flowDecisionsHref({}, [n("sd-5")])).toBe("/decisions/sd-5");
   expect(flowDecisionsHref({}, [])).toBe("/decisions?tab=team&source=flows");
+});
+
+const queue = ["sd-1", "sd-2", "sd-3", "sd-4"];
+
+test("a decision in the queue flips through the whole queue, whatever the list's view holds", () => {
+  const nav = decisionNav({ named: [], list: ["sd-2", "sd-9"], queue }, ["sd-2"], null);
+  expect(nav).toMatchObject({ src: "queue", at: 1, prev: "sd-1", next: "sd-3" });
+  expect(nav.set.length).toBe(4);
+});
+
+test("one outside the queue flips through the list it was opened from, and a named set wins over both", () => {
+  expect(decisionNav({ named: [], list: ["sd-8", "sd-9"], queue }, ["sd-9"], null)).toMatchObject({ src: "list", at: 1, prev: "sd-8", next: null });
+  expect(decisionNav({ named: ["sd-2", "sd-7"], list: queue, queue }, ["sd-2"], null)).toMatchObject({ src: "named", at: 0, next: "sd-7" });
+});
+
+test("one in no set still offers the queue", () => {
+  expect(decisionNav({ named: [], list: [], queue }, ["sd-50"], null)).toMatchObject({ src: "queue", at: -1, prev: null, next: "sd-1" });
+});
+
+test("an answered decision keeps its slot, so next is the one that slid into it", () => {
+  const before = decisionNav({ named: [], list: [], queue }, ["sd-2"], null);
+  const after = decisionNav({ named: [], list: [], queue: ["sd-1", "sd-3", "sd-4"] }, ["sd-2"], before.slot);
+  expect(after).toMatchObject({ at: -1, prev: "sd-1", next: "sd-3" });
+  expect(after.set.length).toBe(3);
+});
+
+test("the last decision answered has no next", () => {
+  const before = decisionNav({ named: [], list: [], queue: ["sd-1"] }, ["sd-1"], null);
+  expect(decisionNav({ named: [], list: [], queue: [] }, ["sd-1"], before.slot)).toMatchObject({ next: null, prev: null });
 });

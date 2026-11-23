@@ -58,3 +58,27 @@ export function flowDecisionsHref(sel: { who?: string | null; need?: string | nu
   }
   return `/decisions?${sel.who === "me" ? "" : "tab=team&"}source=flows`;
 }
+
+export type DecisionSetSource = "named" | "queue" | "list";
+export type DecisionSlot = { key: string; at: number; src: DecisionSetSource };
+
+/** Which set a decision page flips through, and where in it: the named set, else the viewer's queue (the sidebar's
+ *  count) when it holds the decision, else the list's order when that does, else the queue; a decision that left its
+ *  set (answered) keeps the slot it had. */
+export function decisionNav(
+  sets: Record<DecisionSetSource, readonly string[]>,
+  ids: readonly (string | undefined)[],
+  last: DecisionSlot | null,
+): { src: DecisionSetSource; set: readonly string[]; at: number; prev: string | null; next: string | null; slot: DecisionSlot | null } {
+  const key = ids.filter(Boolean).join("|");
+  const kept = last?.key === key ? last : null;
+  const src: DecisionSetSource = sets.named.length > 1 ? "named"
+    : setPosition(sets.queue, ids) ? "queue"
+    : setPosition(sets.list, ids) ? "list"
+    : kept?.src ?? "queue";
+  const set = sets[src];
+  const pos = setPosition(set, ids);
+  if (pos) return { src, set, ...pos, slot: { key, at: pos.at, src } };
+  const at = kept ? Math.min(kept.at, set.length) : 0;
+  return { src, set, at: -1, prev: at > 0 ? set[at - 1] : null, next: at < set.length ? set[at] : null, slot: kept };
+}
