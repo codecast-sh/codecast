@@ -1,13 +1,14 @@
 import { useState } from "react";
 import { captureException } from "@sentry/react";
-import { useConvex, useConvexConnectionState } from "convex/react";
+import { useConvex } from "convex/react";
+import { useWsConnected } from "./useWsConnected";
 import { useInboxStore } from "../store/inboxStore";
 import { getTerminalEndpoint, isOverrideEndpoint } from "../lib/terminal/endpoint";
 import { useWatchEffect } from "./useWatchEffect";
 
 export function useLocalDeviceId(ready: boolean): string | null {
   const convex = useConvex();
-  const { isWebSocketConnected } = useConvexConnectionState();
+  const isWebSocketConnected = useWsConnected();
   const viewer = useInboxStore((s) => s.currentUser?._id);
   const [local, setLocal] = useState<{ viewer: string; deviceId: string } | null>(null);
 
