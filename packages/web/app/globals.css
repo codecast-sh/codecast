@@ -120,10 +120,12 @@
    header's width, the query container on [data-sv-convhead]) so it still
    holds a readable run of words. Level 6 folds the chips the overflow menu
    already repeats (the parent link and the branch map). Level 7 is the last:
-   the title drops its floor and gives up its last words first, and then the
-   action cluster gives way from its start (justify-end clips its leftmost
-   live pills), so share and the session menu, which repeats what the row
-   sheds, stay on screen in the narrowest pane.
+   the title drops its floor and gives up its last words first, the status's
+   wake line (what wakes a dormant session) keeps only its arrow and when,
+   and then the action cluster gives way from its start
+   (justify-end clips its leftmost live pills), so Ship, share and the session
+   menu, which repeats what the row sheds, stay on screen in the narrowest
+   pane.
 
    The row NEVER wraps. A header that grows to two lines is a bug, not a
    fallback: it moves the whole transcript down, and it reads as a broken
@@ -156,11 +158,17 @@
    menu at its end (see the level ladder above). The title still yields
    first: its shrink weight dwarfs the cluster's. */
 [data-sv-convhead] [data-squeeze~="7"] .cc-panel__title { flex-shrink: 1000; }
+[data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] { min-width: max-content; flex-shrink: 0; }
+[data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] :is([data-dormant-what], [data-dormant-sep]) { display: none; }
 [data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] {
   flex-shrink: 1;
   min-width: 0;
   justify-content: flex-end;
 }
+/* Ship is never what gives way: in the narrowest pane its chip moves to the
+   end of the cluster, before the session menu, where nothing clips it. */
+[data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] > [data-run-through] { order: 1; }
+[data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] > [aria-label="Session menu"] { order: 2; }
 /* The in-conversation search box sizes to the header, not the window: a
    narrow pane in a wide window keeps the narrow box. */
 [data-sv-convhead] [data-cc-conv-search-input] { width: 6rem; }

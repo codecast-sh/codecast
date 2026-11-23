@@ -10,7 +10,7 @@ const label = (flow = codecast.change) => (id: string) => flow.stations.find((s)
 const path = (flow = codecast.change) => flowDiagram(drawnFlow(flow)).steps.map((s) => s.label);
 
 const EDITS: PipelineEdit[] = [
-  { op: "add", id: "lint", label: "Lint", at: "after", station: "check", does: "run", body: "bun run lint --changed", when: "packages/web/**, packages/shared/**" },
+  { op: "add", id: "lint", label: "Lint", at: "after", station: "pr", does: "run", body: "bun run lint --changed", when: "packages/web/**, packages/shared/**" },
   { op: "add", id: "smoke", label: "Smoke test", at: "before", station: "deploy", does: "agent", body: "Open the app and say \"what\" broke; check $HOME" },
   { op: "guide", station: "review", text: "Also check the migrations." },
   { op: "prompt", station: "review", text: "Review it." },
@@ -26,13 +26,13 @@ describe("an edit as its command", () => {
   });
 
   test("the command is the CLI's own syntax, quoted for a shell", () => {
-    expect(editCommand("change", EDITS[0])).toBe('cast flow edit change add lint --after check --run "bun run lint --changed" --label Lint --when "packages/web/**, packages/shared/**"');
+    expect(editCommand("change", EDITS[0])).toBe('cast flow edit change add lint --after pr --run "bun run lint --changed" --label Lint --when "packages/web/**, packages/shared/**"');
     expect(editCommand("change", { op: "skip", station: "decide" })).toBe("cast flow edit change skip decide");
     expect(shellWord('say "hi" to $HOME')).toBe('"say \\"hi\\" to \\$HOME"');
   });
 
   test("a session's first message opens with the commands and asks to ship them through the flow", () => {
-    const msg = editSessionMessage({ slug: "change", label: "Change" }, [editCommand("change", EDITS[0]), editCommand("change", EDITS[2])], "Add Lint after Check");
+    const msg = editSessionMessage({ slug: "change", label: "Change" }, [editCommand("change", EDITS[0]), editCommand("change", EDITS[2])], "Add Lint after PR");
     expect(msg.split("\n")[0]).toStartWith("cast flow edit change add lint");
     expect(msg).toContain("cast flow run change --title");
     expect(editsOfMessage(msg).map((x) => x.edit)).toEqual([EDITS[0], EDITS[2]]);
@@ -41,10 +41,10 @@ describe("an edit as its command", () => {
 });
 
 describe("the flow with the edit drawn in", () => {
-  test("a station added after Check sits on the passing path between Check and Review", () => {
-    expect(path()).toEqual(["Check", "Review", "Decide", "Land", "Deploy"]);
+  test("a station added after PR sits on the passing path between PR and CI and review", () => {
+    expect(path()).toEqual(["PR", "CI and review", "Verdicts", "Merge", "Merged", "Deploy"]);
     const after = applyEdit(codecast.change, EDITS[0]);
-    expect(path(after)).toEqual(["Check", "Lint", "Review", "Decide", "Land", "Deploy"]);
+    expect(path(after)).toEqual(["PR", "Lint", "CI and review", "Verdicts", "Merge", "Merged", "Deploy"]);
     expect(after.stations.find((s) => s.id === "lint")).toMatchObject({ own: "added", runs: "bun run lint --changed", when: ["packages/web/**", "packages/shared/**"] });
   });
 
@@ -63,7 +63,7 @@ describe("the flow with the edit drawn in", () => {
     const guided = applyEdit(codecast.change, EDITS[2]);
     expect(guided.stations.find((s) => s.id === "review")).toMatchObject({ own: "changed", changed: ["guide"], guide: "Also check the migrations." });
     expect(applyEdit(codecast.change, EDITS[7]).removed).toContain("Decide");
-    expect(editWords(EDITS[0], label())).toBe("Add Lint after Check (a command), only when a change touches packages/web/**, packages/shared/**");
+    expect(editWords(EDITS[0], label())).toBe("Add Lint after PR (a command), only when a change touches packages/web/**, packages/shared/**");
   });
 
   test("an edit is live once the published flow holds it", () => {
@@ -85,7 +85,7 @@ describe("what it would have run on", () => {
 
 describe("a proposed edit drawn as a ghost until it is live", () => {
   test("a session in the repo whose first message opens with the edit puts a ghost station on its lane", () => {
-    const msg = editSessionMessage({ slug: "change", label: "Change" }, [editCommand("change", EDITS[0])], "Add Lint after Check");
+    const msg = editSessionMessage({ slug: "change", label: "Change" }, [editCommand("change", EDITS[0])], "Add Lint after PR");
     const sessions = [
       { id: "s1", title: "Add a lint check", project_path: "/w/codecast" },
       { id: "s2", title: "Elsewhere", project_path: "/w/union-mobile" },

@@ -257,7 +257,7 @@ describe("variant edits on the shipped change flow", () => {
     expect(g.nodes.get("review")!.prompt).toBe(`${reviewPrompt.replace(/\s+$/, "")}\n\nAlso check X.`);
     const t = 'change_files touches \\"landing/**, backend/src/routes/**\\"';
     const written = handWritten((s) => {
-      s = swap(s, `  decide [flow="decide", answerer="review"]\n`, `  lint [label="Lint", shape=parallelogram, script="bun run lint"]\n  e2e [label="E2E", shape=parallelogram, script="bun run e2e"]\n`);
+      s = swap(s, `  decide [flow="decide", answerer="review", asks_if="it edits CI"]\n`, `  lint [label="Lint", shape=parallelogram, script="bun run lint"]\n  e2e [label="E2E", shape=parallelogram, script="bun run e2e"]\n`);
       s = swap(s, `  dropped   [shape=Msquare, label="Dropped", stop="$stop_reason"]\n`, "");
       s = swap(s, `  pr -> checks [condition="outcome = success"]\n`, `  pr -> lint [condition="outcome = success"]\n`);
       // PR has no way back of its own, so a failed lint or e2e goes where the backbone's graph [fix="brief"] names.

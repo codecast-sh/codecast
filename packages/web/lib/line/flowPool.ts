@@ -52,6 +52,8 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
   const backends = flowNodeAttrOf(row.source, "backend");
   const maxVisits = flowNodeAttrOf(row.source, "max_visits");
   const machine = flowNodeAttrOf(row.source, "machine");
+  const fold = flowNodeAttrOf(row.source, "fold");
+  const asksIf = flowNodeAttrOf(row.source, "asks_if");
   const stops = flowNodeAttrOf(row.source, "stop");
   const nodes: FlowNodeIn[] = row.nodes.map((n) => {
     const top = segmentTopOf(n.id);
@@ -65,6 +67,8 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
       ...(backends[n.id] ? { backend: backends[n.id] } : {}),
       ...(Number(maxVisits[n.id]) > 0 ? { max_visits: Number(maxVisits[n.id]) } : {}),
       ...(machine[n.id] === "true" ? { machine: true } : {}),
+      ...(fold[n.id] === "true" ? { fold: true } : {}),
+      ...(asksIf[n.id] ? { asks_if: asksIf[n.id] } : {}),
       ...(stops[n.id] ? { stop: stops[n.id] } : {}),
       ...(top !== n.id ? { segment: top } : {}),
       ...(exit ? { segment_exit: exit } : {}),
@@ -126,6 +130,14 @@ function buildPool(pushed: ReadonlyArray<PushedFlowRow>, repo: ReadonlyArray<Rep
     if (base) p.flow.takes = base.takes;
   }
   return all;
+}
+
+/** A repository's flow that replaces a library flow of its slug, named with the repository's short name ("Change ·
+ *  union-mobile"), so it never reads as the library's own. `repository` is the session's, as its remote names it. */
+export function namedForRepo(pool: ReadonlyArray<AppFlow>, repository: string | null): AppFlow[] {
+  const name = repository?.split("/").pop();
+  if (!name) return pool.slice();
+  return pool.map((f) => (f.where === "repo" && SHIPPED_FLOWS.some((s) => s.slug === f.slug) ? { ...f, label: `${f.label} · ${name}` } : f));
 }
 
 export const flowBySlug = (pool: ReadonlyArray<AppFlow>, slug: string | null | undefined) => (slug ? pool.find((f) => f.slug === slug) ?? null : null);

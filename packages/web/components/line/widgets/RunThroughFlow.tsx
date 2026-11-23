@@ -6,17 +6,17 @@
 // picked: the session is the run's subject, so what a stage finds comes back
 // to it. While a run is in flight, or once one has ended, the chip says where
 // the change is and the panel shows that run, with the person's part in it.
-import { useMemo, useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 import Link from "next/link";
-import { Rocket } from "lucide-react";
+import { Rocket, X } from "lucide-react";
 import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useInboxStore } from "../../../store/inboxStore";
 import { usePoolFlowRows, useSessionFlowRuns, useTeamDefaultFlowSlug } from "../../../hooks/useSyncWorkflows";
 import { useRunFlow } from "../../../hooks/useFlowObject";
-import { repositoryOfRemote, sessionRemoteOf, sessionRootOf, useRepoFlows } from "../../../hooks/useRepoFlows";
-import { appPool, linesFirst, type AppFlow } from "../../../lib/line/flowPool";
+import { repositoryOfRemote, sessionRemoteOf, sessionRootOf, sessionWorkspaceOf, useRepoFlows } from "../../../hooks/useRepoFlows";
+import { appPool, linesFirst, namedForRepo, type AppFlow } from "../../../lib/line/flowPool";
 import { defaultFlowOf, takesSessionChange } from "@codecast/shared/contracts/flowPool";
-import { asksBeforeLand, journeyOf, journeyStages, journeyWords, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
+import { approvalOf, approvalWords, journeyOf, journeyStages, journeyWords, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
 import { landedSha, reachShip, reachTargets } from "../../../lib/ship/sessionShip";
 import { useDeployReach, type DeployReachRow } from "../../../hooks/useDeployReach";
 import { shipLedgerFor } from "../../consequential/shipLedger";
@@ -25,6 +25,8 @@ import { sessionIdleAt } from "../../../lib/liveness";
 import { formatElapsed } from "../../../lib/taskLine";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
+import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from "../../ui/sheet";
+import { BELOW_SM, useMediaQuery } from "../../../hooks/useIsPhone";
 import { JourneyView } from "../../ship/Journey";
 import { HEADER_CHIP } from "../../../lib/headerChip";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
@@ -63,6 +65,7 @@ const openMessage = (conversationId: string, messageId: string) => useInboxStore
 
 function ShipButton({ conversationId, sessionTitle }: { conversationId: string; sessionTitle: string }) {
   const [open, setOpen] = useState(false);
+  const phone = useMediaQuery(BELOW_SM);
   // The flow under review: held here, so the review outlives the popover that picked it.
   const [reviewing, setReviewing] = useState<AppFlow | null>(null);
   // Picking a new flow after a run ended: the panel shows the picker instead of the last run.
@@ -90,31 +93,53 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   };
   const showRun = !!run && !!runFlow && !again && !starting;
   const notice = declined && press ? <PressNotice press={press} onRead={() => { setOpen(false); openMessage(conversationId, press.reply!.id); }} /> : null;
+  const onOpenChange = (o: boolean) => { setOpen(o); if (!o) setAgain(false); };
+  // The chip stays in the header at every width (the squeeze sheds its words, never the chip): Ship is one press away.
+  const trigger = (
+    <button type="button" className={`${HEADER_CHIP} shp-chip`} aria-label={chip.words} title={chip.words} data-tone={chip.tone} data-run-through data-ship-state={journey?.now.kind ?? "none"}>
+      {chip.tone === "idle" ? <Rocket className="w-3 h-3" /> : <i className="shp-chip-dot" aria-hidden />}
+      <span className="cq-sq2">{chip.words}</span>
+    </button>
+  );
+  const panel = showRun ? (
+    <RunPanel run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
+  ) : starting && !again ? (
+    <Starting press={press!} onOpen={() => { setOpen(false); openMessage(conversationId, press!.id); }} />
+  ) : (
+    // Mounted only while open: the pool's feed is read when someone looks, never by every header.
+    <>{again ? null : notice}<PoolPicker conversationId={conversationId} session={sessionTitle} onRun={(flow) => { setOpen(false); setReviewing(flow); }} /></>
+  );
   return (
     <>
-      <Popover open={open} onOpenChange={(o) => { setOpen(o); if (!o) setAgain(false); }}>
-        <PopoverTrigger asChild>
-          <button type="button" className={`cq-sq6 ${HEADER_CHIP} shp-chip`} data-tone={chip.tone} data-run-through data-ship-state={journey?.now.kind ?? "none"}>
-            {chip.tone === "idle" ? <Rocket className="w-3 h-3" /> : <i className="shp-chip-dot" aria-hidden />}
-            <span className="cq-sq2">{chip.words}</span>
-          </button>
-        </PopoverTrigger>
-        <PopoverContent align="end" className="w-[600px] max-w-[calc(100vw-2rem)] p-0 border-sol-border bg-sol-bg overflow-hidden" data-run-through-pool>
-          {showRun ? (
-            <RunPanel run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
-          ) : starting && !again ? (
-            <Starting press={press!} onOpen={() => { setOpen(false); openMessage(conversationId, press!.id); }} />
-          ) : (
-            // Mounted only while open: the pool's feed is read when someone looks, never by every header.
-            <>{again ? null : notice}<PoolPicker conversationId={conversationId} session={sessionTitle} onRun={(flow) => { setOpen(false); setReviewing(flow); }} /></>
-          )}
-        </PopoverContent>
-      </Popover>
+      {phone ? (
+        // A phone opens it as a sheet from the bottom, the width of the screen.
+        <Sheet open={open} onOpenChange={onOpenChange}>
+          <SheetTrigger asChild>{trigger}</SheetTrigger>
+          <SheetContent side="bottom" hideClose aria-describedby={undefined} className="p-0 border-sol-border bg-sol-bg shp-sheet" data-run-through-pool>
+            <SheetTitle className="sr-only">Ship</SheetTitle>
+            <InSheet.Provider value={true}>{panel}</InSheet.Provider>
+          </SheetContent>
+        </Sheet>
+      ) : (
+        <Popover open={open} onOpenChange={onOpenChange}>
+          <PopoverTrigger asChild>{trigger}</PopoverTrigger>
+          <PopoverContent align="end" className="w-[600px] max-w-[calc(100vw-2rem)] p-0 border-sol-border bg-sol-bg overflow-hidden" data-run-through-pool>
+            {panel}
+          </PopoverContent>
+        </Popover>
+      )}
       {reviewing ? <SwitchReview ledger={shipLedgerFor(reviewing, sessionTitle)} onClose={() => setReviewing(null)} onConfirm={() => send(reviewing)} /> : null}
     </>
   );
 }
 
+/** Whether the panel is in the phone's sheet, which has no corner close of its own: each panel's head carries one. */
+const InSheet = createContext(false);
+function SheetCloser() {
+  return useContext(InSheet) ? (
+    <SheetClose className="shp-close" aria-label="Close Ship"><X className="w-4 h-4" aria-hidden /></SheetClose>
+  ) : null;
+}
 
 /** A press the session has not answered with a run yet: how long ago it went, and the message itself a press away. */
 function Starting({ press, onOpen }: { press: Press; onOpen: () => void }) {
@@ -125,6 +150,7 @@ function Starting({ press, onOpen }: { press: Press; onOpen: () => void }) {
         <b>Starting</b>
         <span className="shp-sub">asked {formatElapsed(press.at, now)} ago · no run yet</span>
         <button type="button" className="shp-link" onClick={onOpen} data-ship-press-open>Open message</button>
+        <SheetCloser />
       </header>
     </div>
   );
@@ -153,6 +179,7 @@ function RunPanel({ run, flow, journey, targets, notice, onAgain }: { run: any; 
         {run.task_short_id ? <Link className="shp-task" href={`/tasks/${run.task_short_id}`}>{run.task_short_id}</Link> : null}
         <span className="shp-sub">{run.task_title ?? ""}</span>
         <Link className="shp-link" href={`/workflows/runs/${run._id}`}>Open run</Link>
+        <SheetCloser />
       </header>
       {notice}
       <JourneyView journey={journey} run={run} now_ms={now} targets={targets}
@@ -177,47 +204,50 @@ export function ShipAgainButton({ flow, conversationId, sessionTitle, primary }:
 }
 
 function PoolPicker({ conversationId, session, onRun }: { conversationId: string; session: string; onRun: (flow: AppFlow) => void }) {
-  const workflows = usePoolFlowRows();
-  const teamSlug = useTeamDefaultFlowSlug();
+  // The session's workspace, not the active one: the pool `cast flow run` reads where the session runs.
+  const workspace = useInboxStore((s) => sessionWorkspaceOf(s as any, conversationId));
+  const workflows = usePoolFlowRows(workspace);
+  const teamSlug = useTeamDefaultFlowSlug(workspace ? (workspace.startsWith("team:") ? workspace.slice(5) : null) : undefined);
   // The session's checkout's own flows come first, as `cast flow run` takes them there.
   const remote = useInboxStore((s) => sessionRemoteOf(s as any, conversationId));
   const root = useInboxStore((s) => sessionRootOf(s as any, conversationId));
-  const repoFlows = useRepoFlows(root, repositoryOfRemote(remote));
+  const repository = repositoryOfRemote(remote);
+  const repoFlows = useRepoFlows(root, repository);
   const { pool, fallback } = useMemo(() => {
     // Flows only: a segment runs one part of a change, never the change to live.
-    const all = linesFirst(appPool(workflows, repoFlows).filter((f) => f.kind === "line" && takesSessionChange(f)));
+    const all = namedForRepo(linesFirst(appPool(workflows, repoFlows).filter((f) => f.kind === "line" && takesSessionChange(f))), repository);
     const d = defaultFlowOf(all, teamSlug);
     return { pool: d ? [d, ...all.filter((f) => f !== d)] : all, fallback: d };
-  }, [workflows, repoFlows, teamSlug]);
+  }, [workflows, repoFlows, repository, teamSlug]);
   const [picked, setPicked] = useState<string | null>(null);
   const flow = pool.find((f) => f.slug === picked) ?? fallback ?? pool[0];
   const journey = useMemo(() => (flow ? journeyOf(flow, null) : null), [flow]);
   if (!flow || !journey) return null;
   return (
     <div className="shp" data-ship-picker>
-      <header className="shp-head"><b>Ship</b><span className="shp-session" title={session}>{session}</span></header>
+      <header className="shp-head"><b>Ship</b><span className="shp-session" title={session}>{session}</span><SheetCloser /></header>
       {pool.length > 1 ? (
-        <ul className="shp-flows" role="listbox" aria-label="Flows">
-          {pool.map((f) => (
-            <li key={f.slug}>
-              <button type="button" role="option" aria-selected={f.slug === flow.slug} className="shp-flow" onClick={() => setPicked(f.slug)} onDoubleClick={() => onRun(f)} data-run-through-flow={f.slug}>
-                <i className="shp-radio" aria-hidden />
-                <b>{f.label}{f === fallback ? <span className="shp-default" data-run-through-default="">Default</span> : f.base ? <span className="shp-base">on {f.base}</span> : null}</b>
-                <span className="shp-path">
-                  <span className="shp-asks" data-asks={asksBeforeLand(journeyStages(f)) ? "" : undefined}>{asksBeforeLand(journeyStages(f)) ? "You approve" : "No approval"}</span>
-                  {journeyStages(f).map((s) => s.label).join(" → ")}
-                </span>
-              </button>
-            </li>
-          ))}
-        </ul>
+        // A native radio group: one tab stop, arrow keys move the pick, Enter ships the picked flow.
+        <div className="shp-flows" role="radiogroup" aria-label="Flows">
+          {pool.map((f) => { const approval = approvalOf(f); return (
+            <label key={f.slug} className="shp-flow" onDoubleClick={() => onRun(f)} data-run-through-flow={f.slug}>
+              <input type="radio" className="shp-radio" name={`ship-flow-${conversationId}`} value={f.slug} checked={f.slug === flow.slug}
+                onChange={() => setPicked(f.slug)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onRun(f); } }} />
+              <b>{f.label}{f === fallback ? <span className="shp-default" data-run-through-default=""><span className="sr-only"> </span>Default</span> : f.base ? <span className="shp-base">on {f.base}</span> : null}</b>
+              <span className="shp-path">
+                <span className="shp-asks" data-asks={approval.kind === "never" ? undefined : approval.kind}>{approvalWords(approval)}</span>
+                {journeyStages(f).map((s) => s.label).join(" → ")}
+              </span>
+            </label>
+          ); })}
+        </div>
       ) : null}
       <div className="shp-preview" data-flow={flow.slug}>
         <JourneyView journey={journey} now_ms={0} />
       </div>
       <footer className="shp-foot">
         <span className="shp-flowname">{pool.length > 1 ? null : <>{flow.label}{flow === fallback ? <span className="shp-default">Default</span> : null}</>}</span>
-        <button type="button" className="sj-btn" data-primary onClick={() => onRun(flow)} data-run-through-go={flow.slug}>Ship</button>
+        <button type="button" className="sj-btn" data-primary onClick={() => onRun(flow)} aria-label={pool.length > 1 ? (flow.label === "Ship" ? "Ship this change" : `Ship through ${flow.label}`) : undefined} data-run-through-go={flow.slug}>Ship</button>
       </footer>
     </div>
   );

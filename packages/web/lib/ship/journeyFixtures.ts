@@ -56,6 +56,9 @@ export const FANOUT_FLOW: FixtureFlowRow = {
   source: `digraph change {
   graph [kind="line", label="Change", takes="task,branch"]
   review [backend=session]
+  verdicts [fold=true]
+  landed [fold=true]
+  decide [asks_if="it edits CI"]
   brief [backend=subject, max_visits=3]
   fix_conflict [backend=subject, max_visits=3]
   nopr [stop="$pr.output"]
@@ -109,7 +112,7 @@ export const FANOUT_FLOW: FixtureFlowRow = {
     { from: "verdicts", to: "rerun_ci", label: "CI never reported", condition: "verdicts.json.next = rerun_ci and rerun_ci.visits < 1" },
     { from: "verdicts", to: "noci", label: "CI never reported again", condition: "verdicts.json.next = rerun_ci" },
     { from: "verdicts", to: "wait_main", label: "every failure is main's", condition: "verdicts.json.next = wait_main and wait_main.visits < 2" },
-    { from: "verdicts", to: "ci_card", label: "edits CI", condition: "verdicts.json.next = decide and change_conversation" },
+    { from: "verdicts", to: "ci_card", label: "it edits CI", condition: "verdicts.json.next = decide and change_conversation" },
     { from: "wait_main", to: "rebase", condition: "outcome = success" },
     { from: "wait_main", to: "mainred", label: "main stayed red", condition: "outcome = failure" },
     { from: "rebase", to: "ci", condition: "outcome = success" },

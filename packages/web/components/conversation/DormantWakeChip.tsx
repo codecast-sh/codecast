@@ -41,9 +41,9 @@ function DormantWakeChipBody({ session }: { session: InboxSession }) {
   const body = (
     <>
       <span className="flex items-center shrink-0 -mt-[3px]"><SchedChildArrow label="What wakes this session" className="text-sol-text-dim/70" /></span>
-      <span className={`truncate min-w-0 flex-1 ${tone}`}>{what}</span>
+      <span data-dormant-what className={`truncate min-w-0 flex-1 ${tone}`}>{what}</span>
       <span className={`shrink-0 whitespace-nowrap tabular-nums ${tone}`}>
-        {typeof when === "string" ? "· " : null}<WakeWhen when={when} />
+        {typeof when === "string" ? <span data-dormant-sep>· </span> : null}<WakeWhen when={when} />
       </span>
     </>
   );
