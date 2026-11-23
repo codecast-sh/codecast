@@ -64,8 +64,15 @@ describe("isConversationRetired", () => {
   test("a live conversation still reconstitutes (the crash-recovery case)", () => {
     expect(isConversationRetired(authoritative(), STRICT)).toBe(false);
     expect(isConversationRetired(authoritative({ inboxKilledAt: null }), STRICT)).toBe(false);
-    // Hidden from the inbox is NOT retired: a stashed/dismissed agent keeps running.
-    expect(isConversationRetired(authoritative({ inboxStashedAt: 1, inboxDismissedAt: 1 }), STRICT)).toBe(false);
+    // Stashed is set aside, not stopped: a stashed agent keeps running.
+    expect(isConversationRetired(authoritative({ inboxStashedAt: 1 }), STRICT)).toBe(false);
+  });
+
+  test("a closed conversation (dismissed, no retirement marker) is not brought back on its own", () => {
+    // Close stops the agent and stamps only inbox_dismissed_at; a message or a
+    // trigger reaching it clears the stamp before the daemon resumes it.
+    expect(isConversationRetired(authoritative({ inboxDismissedAt: 1 }), STRICT)).toBe(true);
+    expect(isConversationRetired(authoritative({ inboxDismissedAt: null }), STRICT)).toBe(false);
   });
 
   test("unknown lifecycle fails OPEN — a Convex blip can't strand a live session", () => {

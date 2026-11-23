@@ -65,6 +65,25 @@ describe("closeSessions", () => {
     expect(Object.values<any>(close?.patches.conversations ?? {}).some((f) => !!f.inbox_dismissed_at)).toBe(false);
   });
 
+  test("an armed /loop or a queued message is in flight: the session is set aside, not stopped", () => {
+    const LOOP = "e".repeat(32);
+    const QUEUED = "f".repeat(32);
+    useInboxStore.setState((s: any) => ({
+      sessions: {
+        ...s.sessions,
+        [LOOP]: row(LOOP, { loop_state: { status: "armed", wakeup_at: NOW + 600_000, armed_at: NOW, event_at: NOW } }),
+        [QUEUED]: row(QUEUED, { has_pending: true }),
+      },
+    }));
+    const out = useInboxStore.getState().closeSessions([LOOP, QUEUED, IDLE]);
+    expect(out?.aside.sort()).toEqual([LOOP, QUEUED].sort());
+    for (const id of [LOOP, QUEUED]) {
+      expect(get(id).inbox_stashed_at).toBeGreaterThan(0);
+      expect(get(id).inbox_dismissed_at ?? null).toBeNull();
+    }
+    expect(get(IDLE).inbox_dismissed_at).toBeGreaterThan(0);
+  });
+
   test("it goes out as one closeSessions dispatch naming the session it set aside", () => {
     useInboxStore.getState().closeSessions([IDLE, BUSY]);
     const close = sent.find((s) => s.action === "closeSessions");

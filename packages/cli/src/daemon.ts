@@ -21441,7 +21441,7 @@ async function rehydratePersistedAppServerThreads(requestedConversations: Readon
           service.getConversationOwnerInfo(conversationId),
         ]);
         if (!lifecycle?.hideStateKnown || !owner) throw new Error("Codex recovery is waiting to verify the conversation owner and lifecycle");
-        if (lifecycle.inboxKilledAt || lifecycle.status === "completed" || owner.ownerDeviceId !== deviceId()) {
+        if (isConversationRetired(lifecycle, { trustStatusFallback: false }) || owner.ownerDeviceId !== deviceId()) {
           forgetPersistedAppServerConversation(conversationId);
           continue;
         }
@@ -24570,7 +24570,10 @@ async function heartbeatHealthCheck(sessionId: string, reverse?: Readonly<Record
 // status=completed with inbox_killed_at stamped, resurrected on every pass).
 // The verdict is this pure function; "killed" and "completed" are equivalent
 // here, since killSession stamps both and a completed conversation is finished
-// either way.
+// either way. A CLOSED conversation (the web's Close: inbox_dismissed_at with
+// teardown, no retirement marker) is not retired, but it is not to come back
+// on its own either: only a message or trigger reaching it does, and that
+// enqueue clears the stamp before the daemon resumes it.
 export function isConversationRetired(
   lifecycle: ConversationLifecycle | null | undefined,
   opts: { trustStatusFallback: boolean },
@@ -24587,7 +24590,7 @@ export function isConversationRetired(
   // Every other path (delivery, warm pool, resume repair) requires the real
   // conversation-id-resolved query and otherwise proceeds.
   if (!lifecycle.hideStateKnown && !opts.trustStatusFallback) return false;
-  return !!lifecycle.inboxKilledAt || lifecycle.status === "completed";
+  return !!lifecycle.inboxKilledAt || !!lifecycle.inboxDismissedAt || lifecycle.status === "completed";
 }
 
 export type ResumeOptions = {

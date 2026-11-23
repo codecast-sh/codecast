@@ -356,9 +356,18 @@ export async function applyHideTransition(
     // re-kill re-runs the teardown but must not rewrite that history, or the
     // row's honest "killed at" jumps forward every time a resurrection is
     // stamped out (and the cascade below claims exactly this for its children).
+    //
+    // A close stamps neither: inbox_killed_at and status completed are the
+    // retirement markers (cast send refuses a retired session, a worker's
+    // report skips a retired lead, a role drops a retired seat, the daemon
+    // never resumes one). A closed session keeps only inbox_dismissed_at,
+    // which every one of those readers treats as alive, and the daemon reads
+    // as "do not bring it back on your own" (cli daemon isConversationRetired).
     const killPatch: Record<string, any> = {};
-    if (!doc?.inbox_killed_at) killPatch.inbox_killed_at = Date.now();
-    if (!doc?.persistent) killPatch.status = "completed";
+    if (!opts?.close) {
+      if (!doc?.inbox_killed_at) killPatch.inbox_killed_at = Date.now();
+      if (!doc?.persistent) killPatch.status = "completed";
+    }
     if (Object.keys(killPatch).length > 0) await ctx.db.patch(doc._id, killPatch);
     // A killed worker frees its fleet slot and keeps its worktree.
     if (!doc?.persistent) await subagentEnded(ctx, doc, "killed");

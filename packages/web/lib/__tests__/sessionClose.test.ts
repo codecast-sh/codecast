@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { closeFactsOf, closeKindOf, closeSetsAside, closeTooltip, nestedRunningOf, type CloseFacts } from "../sessionClose";
 
 const NOW = 1_800_000_000_000;
-const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ running: false, role: false, triggers: 0, waitingOnRun: false, ...f });
+const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ running: false, loop: false, role: false, triggers: 0, waitingOnRun: false, ...f });
 
 // One row per line of the brief's table: what Close does, and the words its tooltip says.
 describe("what Close does to a session", () => {
@@ -30,7 +30,7 @@ describe("what Close does to a session", () => {
   });
 
   test("no tooltip names the old gestures", () => {
-    for (const f of [facts({ running: true }), facts({ role: true }), facts({ triggers: 2 }), facts({ waitingOnRun: true }), facts()]) {
+    for (const f of [facts({ running: true }), facts({ loop: true }), facts({ role: true }), facts({ triggers: 2 }), facts({ waitingOnRun: true }), facts()]) {
       expect(closeTooltip(f)).not.toMatch(/kill|hibernat|stash/i);
     }
   });
@@ -69,15 +69,35 @@ describe("the facts of a row", () => {
     expect(closeFactsOf(settled, 0, NOW).role).toBe(false);
   });
 
-  test("triggers count the roster, a /loop, and the row's own armed flag before the roster loads", () => {
+  test("triggers count the roster and the row's own armed flag before the roster loads, never a /loop", () => {
     expect(closeFactsOf(settled, 2, NOW).triggers).toBe(2);
-    expect(closeFactsOf({ ...settled, loop_state: { status: "armed" } }, 2, NOW).triggers).toBe(3);
+    expect(closeFactsOf({ ...settled, loop_state: { status: "armed", wakeup_at: NOW + 60_000, event_at: NOW - 1000 } }, 2, NOW).triggers).toBe(2);
     expect(closeFactsOf({ ...settled, armed_trigger_kind: "standing" }, 0, NOW).triggers).toBe(1);
   });
 
-  test("a running workflow run the session started is a wake; a sub of one is not", () => {
-    expect(closeFactsOf({ ...settled, workflow_run_id: "w1", workflow_run_status: "running" }, 0, NOW).waitingOnRun).toBe(true);
-    expect(closeFactsOf({ ...settled, workflow_run_id: "w1", workflow_run_status: "completed" }, 0, NOW).waitingOnRun).toBe(false);
-    expect(closeFactsOf({ ...settled, workflow_run_id: "w1", workflow_run_status: "running", is_workflow_sub: true }, 0, NOW).waitingOnRun).toBe(false);
+  test("a fresh armed /loop lives in the agent process, so Close sets it aside; a long-overdue one does not hold it", () => {
+    const loop = closeFactsOf({ ...settled, loop_state: { status: "armed", wakeup_at: NOW + 60_000, event_at: NOW - 1000 } }, 3, NOW);
+    expect(loop.loop).toBe(true);
+    expect(closeSetsAside(loop)).toBe(true);
+    expect(closeTooltip(loop)).toBe("Close: hides it, keeps its loop running");
+    const stale = closeFactsOf({ ...settled, loop_state: { status: "armed", wakeup_at: NOW - 60 * 60_000, event_at: NOW - 2 * 60 * 60_000 } }, 0, NOW);
+    expect(stale.loop).toBe(false);
+  });
+
+  test("a queued message or a question it asked is in flight: Close sets it aside", () => {
+    expect(closeSetsAside(closeFactsOf({ ...settled, has_pending: true }, 0, NOW))).toBe(true);
+    expect(closeSetsAside(closeFactsOf({ ...settled, awaiting_input: true }, 0, NOW))).toBe(true);
+  });
+
+  test("a codecast flow run it started is a wake it comes back on; a Workflow-tool run runs inside it, so it is set aside", () => {
+    const flow = { ...settled, workflow_run_id: "w1", workflow_run_status: "running" };
+    expect(closeFactsOf(flow, 0, NOW).waitingOnRun).toBe(true);
+    expect(closeTooltip(closeFactsOf(flow, 0, NOW))).toBe("Close: stops it, comes back when its run reports");
+    const tool = closeFactsOf({ ...flow, workflow_run_kind: "workflow" }, 0, NOW);
+    expect(tool.waitingOnRun).toBe(false);
+    expect(tool.running).toBe(true);
+    expect(closeTooltip(tool)).toBe("Close: hides it, lets it finish");
+    expect(closeFactsOf({ ...flow, workflow_run_status: "completed" }, 0, NOW).waitingOnRun).toBe(false);
+    expect(closeFactsOf({ ...flow, is_workflow_sub: true }, 0, NOW).waitingOnRun).toBe(false);
   });
 });

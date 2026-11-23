@@ -125,10 +125,8 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
         row("session_done", "Mark done", CheckCircle2, "e"),
         row("session_needs_input", "Mark needs you", CircleDot, "g"),
       ]),
-      ...(!isSessionKilled(target) ? [
-        row("session_close", many(`Close ${noun}`, `Close # ${nouns}`), X, undefined, "session.close"),
-        row("session_kill", many(`Kill ${noun}`, `Kill # ${nouns}`), Square),
-      ] : []),
+      ...(!isSessionSetAside(target) ? [row("session_close", many(`Close ${noun}`, `Close # ${nouns}`), X, undefined, "session.close")] : []),
+      ...(!isSessionKilled(target) ? [row("session_kill", many(`Kill ${noun}`, `Kill # ${nouns}`), Square)] : []),
       ...(!target.persistent ? [row("session_delete", many(`Delete ${noun}…`, `Delete # ${nouns}…`), Trash2, "x")] : []),
       ...(single && target.parent_conversation_id ? [row("session_parent", "View parent conversation", GitBranch)] : []),
       ...(single && target.git_branch ? [row("session_branch", "Copy branch name", GitBranch)] : []),

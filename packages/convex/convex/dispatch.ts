@@ -52,6 +52,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
   recordingPressStaleWords,
 } from "@codecast/shared/contracts";
 import { applyHideTransition, hideBudgetLeft } from "./cleanup";
+import { closeSetsAsideOnServer } from "./lib/closeAside";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
 import { performCancelPeerTransfer, performDismissPeerTransfer } from "./peerTransfers";
 import { writeObjectShareLink } from "./publicShare";
@@ -423,6 +424,18 @@ export async function applyPatches(
         if (table === "conversations" && await pinCapExceeded(ctx, userId, doc as any, finalSafe)) {
           console.warn(`[dispatch] ${PIN_CAP_ERROR} (dropped pin on ${docKey})`);
           delete (finalSafe as any).inbox_pinned_at;
+        }
+        // The server decides a close. A row the client closed that is in flight
+        // by the server's own read (mid-turn, a queued message, an armed /loop,
+        // an in-process Workflow run, a busy nested session) is set aside
+        // instead: a stash, so nothing is stopped. The client's paint was the
+        // guess; this write's echo corrects it.
+        if (
+          table === "conversations" && opts?.close && (finalSafe as any).inbox_dismissed_at
+          && await closeSetsAsideOnServer(ctx, doc, Date.now())
+        ) {
+          (finalSafe as any).inbox_stashed_at = (finalSafe as any).inbox_dismissed_at;
+          delete (finalSafe as any).inbox_dismissed_at;
         }
         if (Object.keys(finalSafe).length === 0) continue;
         // Capture the PRE-patch hide state. The un-kill mirror below decides on
