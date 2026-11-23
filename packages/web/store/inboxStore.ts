@@ -93,7 +93,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, answerChangeable, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
@@ -1494,7 +1494,8 @@ export type DecisionKind = "single" | "multi" | "rank" | "form";
 // list of indexes (multi / rank) or a key→value map (form), or a dismissal.
 // `presence`: the Touch ID grant string an Ask first Approve spends; it rides
 // the dispatch's arguments to the server's gate and is written to no row.
-export type DecisionAnswerInput = { index?: number; text?: string; json?: any; presence?: string } | { dismiss: true };
+// `change`: a person confirmed replacing a settled answer (an advisory one takes a new pick without it).
+export type DecisionAnswerInput = { index?: number; text?: string; json?: any; presence?: string; change?: boolean } | { dismiss: true };
 export type DecisionFormField = { key: string; label: string; type: "text" | "number" | "select" | "bool"; options?: string[] };
 export type DecisionHop = { role_id: string; recommendation?: number; note?: string; at: number; passed_at?: number };
 // `via`: the session that carried a person's answer at their word (cast decide answer --for-human).
@@ -1562,6 +1563,10 @@ export type SessionDecisionItem = {
   grant_id?: string;
   scope_keys?: string[];
   reopened_from?: { grant_id: string; answer_index?: number; at: number };
+  // Each change bumps it; the dispatch guard takes a change only as the next revision.
+  answer_revision?: number;
+  // Answers a person replaced, oldest first (convex recordChangedAnswer).
+  answer_history?: Array<{ status: string; answer_index?: number; answer_text?: string; answer_json?: unknown; answered_by?: DecisionParty; resolved_at?: number; replaced_at: number; replaced_by: string }>;
   created_at: number;
   // conversation.message_count at ask time; live count minus this is
   // "messages since the ask", correct beyond the loaded window.
@@ -9189,7 +9194,7 @@ function hideSessionInDraft(
 ): HideResult {
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const stashHiddenValue = mode === "stash" && stashHidden ? true : null;
-  const sessionValues = Object.values(draft.sessions) as InboxSession[];
+  const sessionValues = Object.values(baseOf(draft).sessions) as InboxSession[];
   // The removed set must match what the card visually contains, so the sweep
   // uses the SAME nesting definition the renderer does (nestParentIdOf): Task
   // subagents (parent_conversation_id) AND agent-team teammates (spawned_by +
@@ -9292,8 +9297,28 @@ function hideSessionInDraft(
 // mode, same as j/k), not the default grouped layout's order.
 function sessionPastRemoved(draft: any, removedIds: string[]): string | null {
   if (!draft.currentSessionId || !removedIds.includes(draft.currentSessionId)) return draft.currentSessionId;
-  const next = nextSessionPastRemoved(computeVisualOrder(draft), draft.currentSessionId, new Set(removedIds));
-  return next?._id ?? null;
+  // Ordered on the state before this action: placement memoizes on its
+  // inputs, and a draft's proxies are new inputs, so ordering the draft placed
+  // every row again (most of a stash's cost). A row an earlier write in the
+  // same action hid (killSessions' loop) is skipped like a removed one.
+  const base = baseOf(draft);
+  const removed = new Set(removedIds);
+  const gone = (s: InboxSession) => {
+    if (removed.has(s._id)) return true;
+    const now = draft.sessions[s._id];
+    return !now || HIDE_STAMPS.some((f) => now[f] !== (s as any)[f]);
+  };
+  const ordered = computeVisualOrder(base);
+  const idx = ordered.findIndex((s) => s._id === draft.currentSessionId);
+  return (ordered.slice(idx + 1).find((s) => !gone(s)) ?? ordered.find((s) => !gone(s)))?._id ?? null;
+}
+
+const HIDE_STAMPS = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_snoozed_until", "inbox_killed_at"] as const;
+
+/** The state an action started from: a plain object, so reads allocate no
+ *  child drafts and memoized derivations see the inputs they cached. */
+function baseOf<T>(draft: T): T {
+  return (isDraft(draft) ? original(draft as object) : draft) as T;
 }
 
 // Move the selection after a user removed rows (stash, kill, dismiss, delete):
@@ -11619,8 +11644,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   snoozeSession: action(function (this: Draft, id: string, until: number) {
-    const ids = [id, ...Object.values(this.sessions).filter((row) => nestParentIdOf(row) === id).map((row) => row._id)];
-    const next = nextSessionPastRemoved(computeVisualOrder(this), id, new Set(ids));
+    const base = baseOf(this);
+    const ids = [id, ...Object.values(base.sessions).filter((row) => nestParentIdOf(row) === id).map((row) => row._id)];
+    const next = ids.includes(base.currentSessionId ?? "") || ids.includes(base.sidePanelSessionId ?? "") ? nextSessionPastRemoved(computeVisualOrder(base), id, new Set(ids)) : undefined;
     if (!setSessionSnoozeInDraft(this, id, until)) return;
     for (const sid of ids.slice(1)) setSessionSnoozeInDraft(this, sid, until);
     if (ids.includes(this.currentSessionId ?? "")) {
@@ -13556,7 +13582,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   markKilling: action(function (this: Draft, id: string) {
     let newSessionId = this.currentSessionId;
     if (this.currentSessionId === id) {
-      const next = nextSessionPastRemoved(computeVisualOrder(this), id, new Set([id]));
+      const next = nextSessionPastRemoved(computeVisualOrder(baseOf(this)), id, new Set([id]));
       newSessionId = next?._id ?? null;
     }
     delete this.sessions[id];
@@ -16339,9 +16365,13 @@ function adoptDecisionDraft(draft: Draft, decisionId: string): void {
 
 function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionAnswerInput): void {
   const row = draft.sessionDecisions[decisionId];
-  // Pending, or an advisory answer a person is changing (advisoryAnswerOpen):
-  // the agent went ahead on its default, so a new pick is one more message.
-  if (!row || (row.status !== "pending" && ("dismiss" in answer || !advisoryAnswerOpen(row)))) return;
+  // Pending, or a settled answer a person is changing (answerChangeable): the
+  // agent is already on the old course, so the new pick is one more message
+  // that names the answer it replaces. Only a confirmed change replaces a
+  // blocking answer, so a second press of the same card sends nothing.
+  if (!row || (row.status !== "pending" && ("dismiss" in answer || !answerChangeable(row) || (!answer.change && row.blocking !== false)))) return;
+  const replaced = row.status === "answered" ? decisionAnswerLabel(row, row) : row.status === "dismissed" ? "dismissed" : null;
+  if (row.status !== "pending") row.answer_revision = (row.answer_revision ?? 0) + 1;
   // A typed answer still waiting for its pause must not write the draft back.
   cancelDraftWrite(decisionDraftKey(decisionId));
   dropDraft(draft, decisionDraftKey(decisionId));
@@ -16370,7 +16400,8 @@ function answerDecisionDraft(draft: Draft, decisionId: string, answer: DecisionA
   // against its ask and link back to the `cast decide` call.
   // A silent card (a staffing proposal's pointer, org-staffing.md S4) is
   // cleared by the answer and delivers nothing: the author is not woken.
-  const content = answerText && !row.silent ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText }) : undefined;
+  const detail = replaced ? `This changes the earlier answer (${replaced}). Redo anything that depended on it.` : undefined;
+  const content = answerText && !row.silent ? formatDecisionAnswer({ id: decisionId, question: row.question, answer: answerText, detail }) : undefined;
   const convId = row.conversation_id;
   // A Run on a `cast decide --run` card (commandRun.ts) is the server's to
   // deliver, with the command's output, once the machine has run it.

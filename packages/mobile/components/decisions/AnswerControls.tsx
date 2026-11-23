@@ -100,6 +100,7 @@ export function AnswerControls({
   look,
   proceedingWith,
   guarded,
+  onRecord,
 }: {
   decisionId: string;
   decision: Pick<SessionDecisionItem, 'options' | 'form' | 'kind'>;
@@ -109,6 +110,8 @@ export function AnswerControls({
   proceedingWith?: number;
   /** Options that take Touch ID before they answer; they carry a lock. */
   guarded?: (index: number) => boolean;
+  /** A single's answer on record, when a person is changing it: tagged, and not a new answer. */
+  onRecord?: number;
 }) {
   const [draft, patchDraft] = useDecisionDraft<AnswerDraft>(decisionId);
   const [error, setError] = useState<string | null>(null);
@@ -131,7 +134,7 @@ export function AnswerControls({
           const o = options[i];
           if (!o) return null;
           const picked = kind === 'multi' && view.picked.includes(i);
-          const onPress = kind === 'single' ? () => onAnswer({ index: i })
+          const onPress = kind === 'single' ? (onRecord === i ? undefined : () => onAnswer({ index: i }))
             : kind === 'multi' ? () => { void Haptics.selectionAsync().catch(() => {}); setError(null); patchDraft((cur) => togglePicked(cur, i)); }
             : undefined;
           return (
@@ -168,6 +171,7 @@ export function AnswerControls({
                 </View>
                 {o.description ? <Text style={[styles.optionDesc, { color: look.muted }]}>{o.description}</Text> : null}
                 {proceedingWith === i ? <Text style={[styles.tag, { color: look.faint }]}>{ANSWER_WORDS.proceeding}</Text> : null}
+                {kind === 'single' && onRecord === i ? <Text style={[styles.tag, { color: look.picked }]}>Current answer</Text> : null}
                 {o.page_slug ? (
                   <Press look={look} accessibilityRole="link" onPress={() => openLink(pageUrl(o.page_slug!))} hitSlop={6} style={styles.linkRow}>
                     <Text style={[styles.link, { color: look.accent }]}>{ANSWER_WORDS.openPage}</Text>
