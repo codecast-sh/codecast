@@ -117,7 +117,7 @@ describe("conversation field manifest", () => {
   });
 
   test("ack-only fields stay off the server's write allowlists", () => {
-    expect([...ACK_ONLY_CONVERSATION_FIELDS].sort()).toEqual(["driver_user_id", "org_role_id", "owned_by_me", "owner_ids", "owner_user_id", "user_id"]);
+    expect([...ACK_ONLY_CONVERSATION_FIELDS].sort()).toEqual(["driver_user_id", "org_role_id", "owned_by_me", "owner_ids", "owner_user_id", "role_alone", "user_id"]);
     const writable = new Set<string>([...DISPATCHABLE_CONVERSATION_FIELDS, ...PATCHABLE_CONVERSATION_FIELDS]);
     expect(ACK_ONLY_CONVERSATION_FIELDS.filter((f) => writable.has(f))).toEqual([]);
   });

@@ -100,6 +100,9 @@ export const CONVERSATION_FIELDS = {
   user_id: { ack: true },
   owner_user_id: { ack: true },
   owned_by_me: { ack: true },
+  // And whether the role holds it alone (role_alone, from heldByRoleAlone):
+  // the last person leaving a hand a role started hands it back to the role.
+  role_alone: { ack: true },
   // Per-user and delivered on its own path, so it is writable but never part
   // of the shared row.
   draft_message: { patch: true },

@@ -12,6 +12,7 @@
 // without a line of its own.
 import { action, asyncAction, sync } from "./mutativeMiddleware";
 import { applySyncPatch } from "./syncProtocol";
+import { startedByRole } from "@codecast/shared/contracts";
 import { applyOwnersChangeTo, isLeave, listedOwnerIds, ownersFactsFromRead, takeOverBySend, type OwnerRowFact, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 
 /** Who drives a session: the role it is filed under, one of its people, or
@@ -85,7 +86,14 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
         if (home.owned_by_me) home.owned_by_me = false;
         if (next.runner_id !== before.runner_id) home.user_id = next.runner_id;
         if ((home.owner_user_id ?? null) !== next.primary_id) home.owner_user_id = next.primary_id;
+      } else if (actor && (change.add ?? []).includes(actor) && !home.owned_by_me) {
+        // Rejoining (a leave's undo) puts the claim back.
+        home.owned_by_me = true;
       }
+      // A run a role started with no person left is the role's alone again
+      // (runnerTakesLeftSession gave nobody a row): out of the runner's inbox.
+      const alone = next.rows.length === 0 && startedByRole({ org_role_id: next.role_id, role_started: next.role_started, standing_role_id: next.standing_role_id });
+      if (!!home.role_alone !== alone) home.role_alone = alone;
     }) as SessionOwnersSliceActions["applySessionOwners"],
     // Onto both twins it has (the inbox row and the conversation it was opened
     // from), so a Save made on either is released by this echo and neither

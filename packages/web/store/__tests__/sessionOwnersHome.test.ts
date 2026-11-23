@@ -214,6 +214,22 @@ describe("a leave takes the session out of the inbox at once", () => {
     expect(isForeignRow(row, "me")).toBe(true);
   });
 
+  test("the last person leaving a hand a role started gives it back to the role, and rejoining undoes it", () => {
+    // The role's seat runs on my machine; I took the hand over, so I am its one person.
+    useInboxStore.setState({ sessions: { [LID]: { _id: LID, session_id: "s-lv", user_id: "me", updated_at: Date.now(), owner_user_id: "me", owned_by_me: true, owner_ids: ["me"], org_role_id: "org_roles_r", driver_user_id: "me", role_alone: false } } } as any);
+    applyCollectionFeed("sessionOwners", { ...readOf(["me"], "me"), role_started: true }, selectOwnersRow, undefined, undefined, feedOwnerIds);
+    useInboxStore.getState().applySessionOwners(LID, { leave: {} }, null);
+    let row = (useInboxStore.getState().sessions as any)[LID];
+    // runnerTakesLeftSession gives nobody a row: no person is painted as owner.
+    expect([row.owner_ids, row.owner_user_id, row.owned_by_me, row.role_alone, row.driver_user_id]).toEqual([[], null, false, true, null]);
+    expect(isForeignRow(row, "me")).toBe(true);
+
+    useInboxStore.getState().applySessionOwners(LID, { add: ["me"] }, null);
+    row = (useInboxStore.getState().sessions as any)[LID];
+    expect([row.owner_ids, row.owned_by_me, row.role_alone]).toEqual([["me"], true, false]);
+    expect(isForeignRow(row, "me")).toBe(false);
+  });
+
   test("leaving your own run by moving it to a teammate's machine", () => {
     useInboxStore.setState({ sessions: { [LID]: { _id: LID, session_id: "s-lv", user_id: "me", updated_at: Date.now(), owner_user_id: "me", owned_by_me: true, owner_ids: ["me", "mate"] } } } as any);
     applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerIds);
