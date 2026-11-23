@@ -208,6 +208,46 @@ test.skipIf(!Bun.which("tmux"))("a verification the server never acknowledged is
   }
 }, 120_000);
 
+// 2026-11-23 (b5790d19): a "continue" was verified in a pane that an account
+// switch killed a second later, before the agent wrote the turn. The kill put
+// the message back to pending, and the auto-resume's inject into the new pane
+// returned on the dead pane's verified receipt: "Injected" in the log, nothing
+// at the prompt, and the person typed it by hand.
+test.skipIf(!Bun.which("tmux"))("a verification in a torn-down pane is not delivery into the pane that replaced it", async () => {
+  const cwd = mkdtempSync(join(tmpdir(), "codecast-replaced-verify-"));
+  const oldState = join(cwd, "old.json");
+  const newState = join(cwd, "new.json");
+  const fixture = fileURLToPath(new URL("./test-helpers/codexQueuedTui.ts", import.meta.url));
+  const spawn = (statePath: string) => spawnHarness({ cwd: mkdtempSync(join(cwd, "pane-")), jsonlPath: statePath,
+    command: `exec bun ${[fixture, statePath, join(cwd, "finish"), "claude"].map(shellQuote).join(" ")}` });
+  let pane = spawn(oldState);
+  const journal = new TmuxDeliveryJournal(join(cwd, "delivery.sqlite"));
+  const delivery = { messageId: "replaced-verify", conversationId: "fixture-replaced-verify" };
+  const queued = () => JSON.parse(readFileSync(newState, "utf8")).queued;
+  try {
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    const exec = async (args: string[]) => ({ stdout: tmuxRun(args).stdout });
+    const prepared = await prepareTmuxDelivery(`${pane.tmuxSession}:0.0`, delivery, exec, async () => false, journal);
+    journal.begin(delivery, prepared.generation, "continue");
+    journal.advance(delivery.messageId, "verified");
+    pane.tearDown();
+    pane = spawn(newState);
+    const target = `${pane.tmuxSession}:0.0`;
+    await waitFor(() => pane.capturePane().includes("shift+tab"));
+    // A live redelivery inside the echo window holds rather than reporting it in.
+    await expect(injectViaTmux(target, "continue", "claude", { delivery, journal, gateBudgetMs: 500 })).rejects.toThrow("replaced");
+    expect(queued()).toEqual(["Existing worker report."]);
+    // The auto-resume settles the old receipt at once: nothing echoed, so it writes it here.
+    await injectViaTmux(target, "continue", "claude", { delivery, journal, gateBudgetMs: 5_000, receiptSettleMs: 0, readTranscript: async () => "" });
+    expect(queued()).toEqual(["Existing worker report.", "continue"]);
+    expect(journal.get(delivery.messageId)?.phase).toBe("verified");
+  } finally {
+    journal.close();
+    pane.tearDown();
+    rmSync(cwd, { recursive: true, force: true });
+  }
+}, 120_000);
+
 
 test.skipIf(!Bun.which("tmux")).each(["submit", "verified"] as const)("an idle pane with a %s receipt and an unsynced transcript never repeats the send", async phase => {
   const cwd = mkdtempSync(join(tmpdir(), "codecast-unsynced-delivery-"));

@@ -305,5 +305,16 @@ async function prepareDelivery(
       prior = null;
     }
   }
+  // A verification vouches only for the pane it was made in. The same message
+  // coming round again for a different pane means that pane was torn down and
+  // the server put back what it held (switch_account's recycle, kill_session),
+  // and its agent can die before writing the turn. Taking the receipt as
+  // delivery here reported a "continue" injected that never reached the
+  // resumed session (b5790d19, 2026-11-23). Inside the echo window it holds
+  // like a submit; once settled the caller reads the transcript and the old
+  // pane's receipt is released above, so the message is written again.
+  if (prior?.phase === "verified" && prior.generation !== generation && !settled && !(await isDelivered(identity.messageId))) {
+    throw new TmuxDeliveryUncertainError("the earlier write was verified in a pane that has since been replaced, and its echo window is still open");
+  }
   return { journal, generation, prior, unacknowledged };
 }

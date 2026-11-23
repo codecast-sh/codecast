@@ -26867,7 +26867,11 @@ async function autoResumeSessionInner(sessionId: string, content: string, titleC
 
     // Inject the message (skip if empty — resume-only mode)
     if (content) {
-      await injectViaTmux(tmuxSession + ":0.0", content, agentType, { delivery: opts?.delivery });
+      // No agent held this session before the launch, so an earlier pane's
+      // receipt for this message has nothing left to echo: settle it now and
+      // let the transcript decide (receiptSettleMs 0), instead of holding the
+      // resume's message for the whole echo window.
+      await injectViaTmux(tmuxSession + ":0.0", content, agentType, { delivery: opts?.delivery, receiptSettleMs: 0 });
       log(`Injected message to auto-resumed ${agentType} session ${shortId}`);
     } else {
       log(`Auto-resumed ${agentType} session ${shortId} (no message to inject)`);

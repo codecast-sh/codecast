@@ -115,6 +115,19 @@ test("a submit into a pane that is definitively gone replays once the echo windo
   expect(store.begin(identity, settled.generation, "continue").fresh).toBe(true);
 });
 
+test("a verification in a pane that is gone vouches for nothing in its replacement", async () => {
+  const store = open();
+  store.begin(identity, generation, "continue");
+  store.advance(identity.messageId, "verified");
+  const restarted = async () => ({ stdout: "101|/socket|%2|201|301" });
+  await expect(prepareTmuxDelivery("new", identity, restarted, async () => false, store)).rejects.toThrow("replaced");
+  // The server has its echo: the old pane's verification was right after all.
+  expect((await prepareTmuxDelivery("new", identity, restarted, async () => true, store)).prior?.phase).toBe("verified");
+  const settled = await prepareTmuxDelivery("new", identity, restarted, async () => false, store, { settleMs: 0 });
+  expect(settled.prior).toBeNull();
+  expect(store.begin(identity, settled.generation, "continue").fresh).toBe(true);
+});
+
 test("a message that can never be delivered again stops guarding its pane", async () => {
   const lookup = (answer: string | Error) => ({ getPendingMessageStatus: async () => { if (answer instanceof Error) throw answer; return answer; } });
   expect(await pendingMessageFinished(lookup("delivered"), "m")).toBe(true);
