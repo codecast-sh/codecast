@@ -95,7 +95,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
 import { type AgentStatus, ACTIVE_AGENT_STATUSES, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
-import { closeFactsOf, closeSetsAside, nestedRunningOf } from "../lib/sessionClose";
+import { closeFactsOf, closeSetsAside, nestedInFlightOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
 // Membership on this replica is the SAME selection the server scan runs.
@@ -9597,22 +9597,23 @@ function writeCharacterInDraft(draft: Draft, id: string, next: { avatar?: string
   }
 }
 
-// Shared body of closeSession/closeSessions: a session running a turn is set
-// aside like a stash and keeps running; every other one is hidden like a kill.
-// The server tells the two gestures apart by the action name (dispatch.ts
-// EXPLICIT_CLOSE_ACTIONS): a close stops the agent but keeps its triggers and
-// queue, and a role's own session closes without the retire question. The ids
-// set aside are the action's result, which the server side effect reads for a
-// teammate's row it can only hide for this viewer.
+// Shared body of closeSession/closeSessions: a session in flight (shared
+// closeInFlightReason) is set aside like a stash and keeps running; every
+// other one is hidden like a kill, with inbox_closed_at written equal to its
+// dismissed stamp, which is what makes it a close on any rail (dispatch.ts):
+// the agent stops but keeps its triggers and queue, and a role's own session
+// closes without the retire question. The ids set aside are the action's
+// result, which the server side effect reads for a teammate's row it can only
+// hide for this viewer.
 function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
   const now = Date.now();
-  // A lead whose subagent or teammate is mid-turn is set aside whole: a close
-  // of it would take the nested group down with it (hideSessionInDraft and
-  // the server's cascade), cutting that turn off.
+  // A lead any member of whose nested group is in flight is set aside whole: a
+  // close of it would take the group down with it (hideSessionInDraft and the
+  // server's cascade), killing that member's turn or wake.
   const rows = Object.values(draft.sessions) as InboxSession[];
   const aside = ids.filter((id) => {
     const row = draft.sessions[id] ?? draft.conversations[id];
-    return !!row && closeSetsAside(closeFactsOf(row, 0, now, convHasPendingSend(draft.pendingMessages?.[id], now), nestedRunningOf(rows, id, now)));
+    return !!row && closeSetsAside(closeFactsOf(row, 0, now, convHasPendingSend(draft.pendingMessages?.[id], now), nestedInFlightOf(rows, id, now)));
   });
   const merge = (mode: "stash" | "kill", list: string[]) => {
     const merged: HideResult = { hidden: [], forgotten: [], writes: {}, ts: now };
@@ -9621,6 +9622,12 @@ function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
       merged.hidden.push(...r.hidden);
       merged.forgotten.push(...r.forgotten);
       Object.assign(merged.writes, r.writes);
+      if (mode === "kill") {
+        for (const sid of r.hidden) {
+          if (draft.sessions[sid]) draft.sessions[sid].inbox_closed_at = now;
+          if (draft.conversations[sid]) draft.conversations[sid].inbox_closed_at = now;
+        }
+      }
     }
     announceHide(draft, mode, merged);
   };

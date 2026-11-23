@@ -51,8 +51,9 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
   recordingPressStale,
   recordingPressStaleWords,
 } from "@codecast/shared/contracts";
-import { applyHideTransition, hideBudgetLeft } from "./cleanup";
+import { applyHideTransition, hideBudgetLeft, noteGestureRows } from "./cleanup";
 import { closeSetsAsideOnServer } from "./lib/closeAside";
+import { isClosePatch } from "@codecast/shared/contracts";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
 import { performCancelPeerTransfer, performDismissPeerTransfer } from "./peerTransfers";
 import { writeObjectShareLink } from "./publicShare";
@@ -313,6 +314,9 @@ export async function applyPatches(
   opts?: { forceKill?: boolean; close?: boolean; cause?: string; presence?: string }
 ) {
   let bucketViewChanged = false;
+  // Every row this gesture names decides for itself: a lead's cascade never
+  // writes over one, whatever order the rows come in (cleanup.ts).
+  if (patches.conversations) noteGestureRows(ctx, Object.keys(patches.conversations));
   // A gesture on a lead patches every row of its group, and each conversation
   // row runs its hide or un-kill teardown here. A lead with 175 subagents did
   // all of that in one transaction and passed Convex's 4096-read cap, so it
@@ -425,17 +429,20 @@ export async function applyPatches(
           console.warn(`[dispatch] ${PIN_CAP_ERROR} (dropped pin on ${docKey})`);
           delete (finalSafe as any).inbox_pinned_at;
         }
+        // A close is a close by its fields (inbox_closed_at written equal to
+        // the dismissed stamp) on any rail: a stub re-key flush or a deferred
+        // batch carries no close action name. The action name still marks a
+        // close whose client sent only the stamp.
+        const close = table === "conversations" && (!!opts?.close || isClosePatch(finalSafe as any));
         // The server decides a close. A row the client closed that is in flight
-        // by the server's own read (mid-turn, a queued message, an armed /loop,
-        // an in-process Workflow run, a busy nested session) is set aside
+        // by the server's own read (lib/closeAside: itself or a member of its
+        // nested group, by the shared closeInFlightReason) is set aside
         // instead: a stash, so nothing is stopped. The client's paint was the
         // guess; this write's echo corrects it.
-        if (
-          table === "conversations" && opts?.close && (finalSafe as any).inbox_dismissed_at
-          && await closeSetsAsideOnServer(ctx, doc, Date.now())
-        ) {
+        if (close && (finalSafe as any).inbox_dismissed_at && await closeSetsAsideOnServer(ctx, doc, Date.now())) {
           (finalSafe as any).inbox_stashed_at = (finalSafe as any).inbox_dismissed_at;
           delete (finalSafe as any).inbox_dismissed_at;
+          delete (finalSafe as any).inbox_closed_at;
         }
         if (Object.keys(finalSafe).length === 0) continue;
         // Capture the PRE-patch hide state. The un-kill mirror below decides on
@@ -460,7 +467,7 @@ export async function applyPatches(
         // dismiss/stash path funnels through here — the inbox shortcuts, the
         // palette, the /sessions toggle (patchConversation), and any future one.
         if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
-          await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill, close: opts?.close, cause: opts?.cause });
+          await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill, close, cause: opts?.cause });
         }
         // The un-kill mirror: a patch CLEARING either hide stamp on a row that
         // had it is the restore/undo gesture (web restoreSession, the /sessions

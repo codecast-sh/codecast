@@ -4,7 +4,7 @@
 // menu line (mobile lib/sessionVerbs) both read through here, so they say what
 // the gesture (store closeInDraft) does. Relative imports only: the phone
 // bundles this file.
-import { closeFactsOf, nestedRunningOf, type CloseFacts, type CloseRow } from "./sessionClose";
+import { closeFactsOf, nestedInFlightOf, type CloseFacts, type CloseRow } from "./sessionClose";
 import { armedInjectTasksFor, type TaskRow } from "../components/triggerTasks";
 import { convHasPendingSend } from "../store/inboxOverlays";
 
@@ -20,6 +20,6 @@ export function closeFactsInStore(st: CloseStore, row: CloseRow & { _id: string 
     armedInjectTasksFor(Object.values(st.agentTasks ?? {}) as TaskRow[], row._id).length,
     now,
     convHasPendingSend(st.pendingMessages?.[row._id], now),
-    nestedRunningOf(Object.values(st.sessions ?? {}), row._id, now),
+    nestedInFlightOf(Object.values(st.sessions ?? {}), row._id, now),
   );
 }

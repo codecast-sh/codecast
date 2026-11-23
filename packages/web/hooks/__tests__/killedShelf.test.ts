@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "bun:test";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { useInboxStore, EMPTY_KILLED_SHELF } from "../../store/inboxStore";
 import { loadMoreKilledSessions } from "../killedShelf";
@@ -29,8 +29,17 @@ function fakeConvex(kills: Page[], closes: Page[]) {
   };
 }
 
+// The store is a process singleton: start each test from an empty shelf, and
+// hand the next file back exactly the state this one found.
+const found = { killedShelf: useInboxStore.getState().killedShelf, sessions: useInboxStore.getState().sessions };
+beforeEach(() => {
+  useInboxStore.setState({ killedShelf: EMPTY_KILLED_SHELF, sessions: {} } as any);
+});
 afterEach(() => {
   useInboxStore.setState({ killedShelf: EMPTY_KILLED_SHELF, sessions: {} } as any);
+});
+afterAll(() => {
+  useInboxStore.setState(found as any);
 });
 
 describe("loadMoreKilledSessions", () => {
