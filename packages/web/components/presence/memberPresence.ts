@@ -34,7 +34,8 @@ export const PRESENCE_META: Record<
     glyph: "" | "moon" | "minus";
   }
 > = {
-  active: { label: "Active", badge: "pres-active", text: "text-sol-cyan", avatar: "", glyph: "" },
+  // "Online", never "Active": that word is a session role's state (owners).
+  active: { label: "Online", badge: "pres-active", text: "text-sol-cyan", avatar: "", glyph: "" },
   idle: { label: "Idle", badge: "pres-idle", text: "text-sol-yellow", avatar: "", glyph: "" },
   away: { label: "Away", badge: "pres-away", text: "text-sol-text-muted", avatar: "pres-av-away", glyph: "moon" },
   offline: { label: "Offline", badge: "", text: "text-sol-text-dim", avatar: "pres-av-offline", glyph: "" },
@@ -204,7 +205,7 @@ export function compactDuration(ms: number): string {
 export function presenceLine(member: any, now: number): string {
   const state = memberPresenceVisual(member);
   if (state === "busy") return "Busy";
-  if (state === "active") return "Active now";
+  if (state === "active") return "Online";
   if (state === "idle") {
     const at = member.presence_input_at;
     return typeof at === "number"

@@ -20,7 +20,7 @@ import { isInHuddle } from "../../lib/faces/faceRow";
  * an ACTIVITY, not a presence, so it keeps its violet and stays out of the
  * badge's corner rather than competing for the same eight pixels.
  *
- * `title` defaults to "Ann · Active". Pass "" where the surface already says
+ * `title` defaults to "Ann · Online". Pass "" where the surface already says
  * both (a roster row, the header bar's hover card) and a browser balloon on
  * the face, its presence dot or its huddle chip would only repeat it.
  */

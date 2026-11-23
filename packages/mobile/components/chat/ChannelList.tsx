@@ -40,7 +40,7 @@ function useRailKnown(): boolean {
 /** Every row's leading tile: a face, or a glyph in a square of the same size. */
 const FACE = 44;
 
-const PRESENCE_LINE: Record<string, string> = { active: 'Active now', idle: 'Idle', away: 'Away' };
+const PRESENCE_LINE: Record<string, string> = { active: 'Online', idle: 'Idle', away: 'Away' };
 
 function presenceColor(state: string | undefined, Theme: any): string | null {
   return state === 'active' ? Theme.green : state === 'idle' ? Theme.accent : null;

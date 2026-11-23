@@ -99,7 +99,7 @@ describe("the encoding", () => {
   });
 
   it("names each state in one word", () => {
-    expect(presenceLabel("active")).toBe("Active");
+    expect(presenceLabel("active")).toBe("Online");
     expect(presenceLabel("busy")).toBe("Busy");
   });
 

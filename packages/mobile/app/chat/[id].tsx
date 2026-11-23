@@ -373,7 +373,7 @@ export default function ChatChannelScreen() {
   const presenceColor =
     presence === 'active' ? Theme.green : presence === 'idle' ? Theme.accent : Theme.textMuted0;
   const presenceLabel =
-    presence === 'active' ? 'Active now' : presence === 'idle' ? 'Idle' : presence === 'away' ? 'Away' : 'Offline';
+    presence === 'active' ? 'Online' : presence === 'idle' ? 'Idle' : presence === 'away' ? 'Away' : 'Offline';
 
   const nameOf = useCallback((uid: string) => {
     const m = memberById.get(uid);

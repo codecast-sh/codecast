@@ -148,6 +148,14 @@ test("Shift+Enter does nothing on a person's row, and resumes the role from a ca
   expect(chips()).toEqual(["+ Samvit Rao", "Resume @lead"]);
 });
 
+test("a teammate here now reads Online: Active is only ever the role's state", async () => {
+  useInboxStore.setState({ teamMembers: [member(ME, "Me Person"), member("user_ashot", "Ashot Petrosian"), { ...member("user_sam", "Samvit Rao"), presence_state: "active" }] } as any);
+  await openMenu();
+  const sam = (w.document.querySelector("[data-owner-candidate='p:user_sam']") as HTMLElement).textContent;
+  expect(sam).toContain("Online");
+  expect(sam).not.toContain("Active");
+});
+
 test("a candidate has + only; adding a role replaces the current one, Active", async () => {
   useInboxStore.setState({ orgTree: { workspace: { kind: "team", id: TEAM }, roles: [ROLE, { ...ROLE, _id: "role_ops", short_id: "or-2", handle: "ops", name: "Ops lead" }], anchors: [], people: [] } } as any);
   await openMenu();

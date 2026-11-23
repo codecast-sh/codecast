@@ -114,7 +114,7 @@ export default function NewMessageScreen() {
           const on = picked.includes(id);
           const presence = m.presence_state as string | undefined;
           const dotColor = presence === 'active' ? Theme.green : presence === 'idle' ? Theme.accent : null;
-          const line = presence === 'active' ? 'Active now' : presence === 'idle' ? 'Idle' : presence === 'away' ? 'Away' : 'Offline';
+          const line = presence === 'active' ? 'Online' : presence === 'idle' ? 'Idle' : presence === 'away' ? 'Away' : 'Offline';
           return (
             <TouchableOpacity
               style={[styles.row, on && styles.rowOn]}

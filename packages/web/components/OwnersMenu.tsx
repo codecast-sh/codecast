@@ -236,7 +236,7 @@ function OwnersMenuBody({ conversationId, owners, onClose, onDirty }: { conversa
                   {isRole && m.reasonOf(c.role) && <span className="truncate text-meta text-sol-text-dim" data-role-reason>{m.reasonOf(c.role)}</span>}
                   {presence && (
                     <span className="inline-flex items-center gap-1.5 text-meta text-sol-text-dim">
-                      <span className={`inline-flex h-1.5 w-1.5 rounded-full ${presence === "Active" ? "bg-sol-green" : "bg-sol-text-dim"}`} />{presence}
+                      <span className={`inline-flex h-1.5 w-1.5 rounded-full ${presence === "Online" ? "bg-sol-green" : "bg-sol-text-dim"}`} />{presence}
                     </span>
                   )}
                 </span>
