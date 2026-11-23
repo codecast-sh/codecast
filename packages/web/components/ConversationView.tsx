@@ -4562,7 +4562,10 @@ const ConversationViewInner = (
                     project's files live in the share popover (headerExtra) and
                     in the menu below, not as bare icons: share and the menu are
                     the row's only plain actions. */}
-                {headerExtra}
+                {/* Kept at the last squeeze level (an object page carries its
+                    Share), but not by data-cc-keep, which the Minimal style
+                    also reads to keep a control. */}
+                {headerExtra && <span data-cc-squeeze-keep className="contents">{headerExtra}</span>}
 
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>

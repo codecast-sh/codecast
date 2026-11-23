@@ -57,10 +57,12 @@ describe("conversation header squeeze", () => {
   // before the cluster clips, and the runner is never one of them.
   test("the last level sheds the unkept actions before it clips the runner", () => {
     const max = Number(view.match(/useSqueezeToFit\(squeezeRowRef, (\d+)\)/)?.[1]);
-    expect(css).toContain(`[data-sv-convhead] [data-squeeze~="${max}"] [data-cc-conv-actions] > :not([data-cc-keep]) { display: none !important; }`);
+    expect(css).toContain(`[data-sv-convhead] [data-squeeze~="${max}"] [data-cc-conv-actions] > :not([data-cc-keep], [data-cc-squeeze-keep]) { display: none !important; }`);
     const clip = css.match(/\[data-squeeze~="(\d+)"\] \[data-cc-conv-actions\] \{[^}]*justify-content: flex-end/);
     expect(Number(clip?.[1])).toBe(max);
     expect(view).toMatch(/<span data-cc-runner data-cc-keep="live"/);
+    // The Share control (headerExtra) stays too: every object page carries one.
+    expect(view).toContain(`{headerExtra && <span data-cc-squeeze-keep className="contents">{headerExtra}</span>}`);
     // The dormant chip yields its width before the cluster does.
     expect(css).toMatch(/\[data-squeeze~="(\d)"\] \[data-dormant-wake\] \{ min-width: 0;/);
   });
