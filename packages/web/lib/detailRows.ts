@@ -48,14 +48,17 @@ type Row = Record<string, any>;
 // `runGraphs` is held the same way: a pinned run's graph (up to ~30 KB), one
 // row per version a run card opened, pinned by the card that draws it
 // (hooks/useSyncWorkflows useRunWorkflow).
-export const DETAIL_ROW_CAPS = { taskComments: 1500, pullRequestDetails: 12, deployReach: 300, runGraphs: 40 } as const;
+// `deployDetails` holds the names an opened deploy's push added and dropped
+// (up to 500 each, so a row can reach tens of KB): the deploys a person opened
+// lately, pinned by the open detail (hooks/useDeployDetail).
+export const DETAIL_ROW_CAPS = { taskComments: 1500, pullRequestDetails: 12, deployReach: 300, runGraphs: 40, deployDetails: 50 } as const;
 export type DetailKey = keyof typeof DETAIL_ROW_CAPS;
 export const isDetailKey = (key: string): key is DetailKey => Object.prototype.hasOwnProperty.call(DETAIL_ROW_CAPS, key);
 
 // What is on screen in this window: each mounted reader of a detail row pins
 // it (useTaskComments, usePullRequestDetail, useSyncTaskThreads), and a
 // pinned row is never evicted, whatever the cap and whichever window asked.
-const pins: Record<DetailKey, Map<string, number>> = { taskComments: new Map(), pullRequestDetails: new Map(), deployReach: new Map(), runGraphs: new Map() };
+const pins: Record<DetailKey, Map<string, number>> = { taskComments: new Map(), pullRequestDetails: new Map(), deployReach: new Map(), runGraphs: new Map(), deployDetails: new Map() };
 
 /** Hold these rows while a surface shows them. Returns the release. */
 export function pinDetailRows(key: DetailKey, ids: readonly string[]): () => void {

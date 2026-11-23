@@ -172,17 +172,21 @@ export function SessionsBlock({ sessions }: { sessions: SessionData[] }) {
   );
 }
 
-/** A row that opens another object: a glyph, its title, and a fact on the right. */
-export function LinkRow({ icon, color, title, meta, onPress, testID }: { icon: IconName; color: string; title: string; meta?: string; onPress: () => void; testID?: string }) {
+/** A row that opens another object: a glyph, its title, and a fact on the right.
+ *  Without `onPress` it has nothing to open: a plain row, no caret. */
+export function LinkRow({ icon, color, title, meta, onPress, testID }: { icon: IconName; color: string; title: string; meta?: string; onPress?: () => void; testID?: string }) {
   const Theme = useTheme();
-  return (
-    <TouchableOpacity style={styles.linkRow} onPress={onPress} activeOpacity={0.6} testID={testID}>
+  const body = (
+    <>
       <FontAwesome name={icon} size={13} color={color} style={styles.linkIcon} />
       <RNText style={styles.linkTitle} numberOfLines={2}>{title}</RNText>
       {meta ? <RNText maxFontSizeMultiplier={CHROME_FONT_CAP} style={styles.linkMeta} numberOfLines={1}>{meta}</RNText> : null}
-      <FontAwesome name="angle-right" size={14} color={Theme.textDim} />
-    </TouchableOpacity>
+      {onPress ? <FontAwesome name="angle-right" size={14} color={Theme.textDim} /> : null}
+    </>
   );
+  return onPress
+    ? <TouchableOpacity style={styles.linkRow} onPress={onPress} activeOpacity={0.6} testID={testID}>{body}</TouchableOpacity>
+    : <RNView style={styles.linkRow} testID={testID}>{body}</RNView>;
 }
 
 /** The fold under a list cut short: "12 more", then "Show fewer". Nothing when nothing is hidden. */

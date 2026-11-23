@@ -114,6 +114,7 @@ export const DATA_SCOPE = {
   checkouts: "workspace",
   teamDeploys: "workspace",
   deployReach: "entity",
+  deployDetails: "entity",
   liveFlows: "workspace",
   sessionFlows: "workspace",
   flowMaps: "workspace",

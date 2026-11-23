@@ -329,6 +329,7 @@ export const COLLECTION_RETENTION: Record<string, (rows: any[], now: number) => 
   pullRequestDetails: detailRetention(MAX_CACHED_PULL_REQUEST_DETAILS),
   deployReach: detailRetention(DETAIL_ROW_CAPS.deployReach),
   runGraphs: detailRetention(DETAIL_ROW_CAPS.runGraphs),
+  deployDetails: detailRetention(DETAIL_ROW_CAPS.deployDetails),
   externalEvents: partitionExternalEventRetention,
   settingsData: (rows) => {
     const keep: any[] = [];

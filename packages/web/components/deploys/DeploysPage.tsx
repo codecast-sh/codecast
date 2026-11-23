@@ -22,6 +22,7 @@ import { ageShort } from "../../lib/lineFlow";
 import { DEPLOY_LABELS, FOCUS_PARAMS, commitMatches, deployMatches, filterParams, focusRef, focusRepository, focusSettled, focusTarget, focusWord, pickTarget, reachAnyDeploy, reachDeployOn, targetKey, type DeployFilters, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
 import type { ChangeGroupId, ChangeViewer } from "../../lib/changes/rows";
 import { useDeployReach } from "../../hooks/useDeployReach";
+import { useDeployDetail, useSyncDeployDetail } from "../../hooks/useDeployDetail";
 import type { DeployReach } from "@codecast/shared/contracts/deployReach";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { changeGroups, devPushWords, hasChangeNames, originWords, shownNames, type ChangeGroup } from "./deployRecord";
@@ -327,18 +328,19 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
 }
 
 /** One deploy whole: every session it carried, its steps, who sent it, and its own log. */
-function DeployDetail({ d, now }: { d: TeamDeployRow; now: number }) {
+export function DeployDetail({ d, now }: { d: TeamDeployRow; now: number }) {
   const ss = sessionsOf(d);
-  // The row counts what a push added and dropped; the names come with the deploy itself.
-  const view = useQueryNoThrow(api.deploys.get, d.short_id && hasChangeNames(d) ? { ref: d.short_id } : "skip").data;
-  const origin = originWords(d, view);
+  // The row counts what a push added and dropped; the names come with the deploy itself, held in deployDetails.
+  useSyncDeployDetail(hasChangeNames(d) ? d.short_id : null);
+  const names = useDeployDetail(d._id);
+  const origin = originWords(d);
   return (
     <div className="dpp-detail" data-deploy-detail={d.short_id}>
       <dl>
         <dt>Sent</dt><dd><code>{short(d.previous_sha)}</code> → <code>{short(d.sha)}</code>{d.version && !(d.sha ?? "").startsWith(d.version.slice(0, 7)) ? <span className="dpp-ver"> {d.version}</span> : null}</dd>
         <dt>By</dt><dd>{d.started_by ?? sourceWord(d)} · {new Date(d.created_at).toLocaleString(undefined, { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" })}{d.live_at && d.live_at - d.created_at >= 60_000 ? ` · live after ${ageShort(d.live_at - d.created_at)}` : ""}</dd>
         {origin ? <><dt>From</dt><dd data-deploy-origin>{origin}</dd></> : null}
-        {changeGroups(d, view).map((g) => <DeployNames key={g.kind} g={g} />)}
+        {changeGroups(d, names).map((g) => <DeployNames key={g.kind} g={g} />)}
         {d.note ? <><dt>Note</dt><dd>{d.note}</dd></> : null}
         {d.steps?.length ? <><dt>Steps</dt><dd><ol className="dpp-steps">{d.steps.map((s) => <li key={s.id} data-status={s.status}>{s.id}</li>)}</ol></dd></> : null}
         {d.tasks?.some((x) => x.short_id) ? <><dt>Tasks</dt><dd><ul className="dpp-detail-sessions">{d.tasks.filter((x) => x.short_id).map((x) => <li key={x.short_id!}><Link className="dpp-detail-task" href={`/tasks/${x.short_id}`}>{x.short_id}<span>{x.title}</span></Link></li>)}</ul></dd></> : null}
