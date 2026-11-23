@@ -17,6 +17,7 @@ import { useShallow } from "zustand/react/shallow";
 import { useInboxStore } from "../store/inboxStore";
 import { useOrgRoles } from "./useOrgRoles";
 import type { OwnersEnv } from "./useOwners";
+import type { OrgRole } from "../components/org/orgTypes";
 
 /** The session row a conversation id names: the live session, else the
  *  conversation it was opened from. */
@@ -81,6 +82,19 @@ export function useStoreOwnersEnv(
   };
 }
 
+/** The viewer's personal roles (no team) among viewerRoles, with a
+ *  signature of what the menu draws; memoized by the collection. */
+const personalRolesMemo = new WeakMap<object, { roles: OrgRole[]; sig: string }>();
+function personalRolesOf(viewerRoles: Record<string, any> | undefined): { roles: OrgRole[]; sig: string } {
+  if (!viewerRoles) return { roles: [], sig: "" };
+  const hit = personalRolesMemo.get(viewerRoles);
+  if (hit) return hit;
+  const roles = Object.values(viewerRoles).filter((r: any) => !r.team_id && r.status !== "retired") as OrgRole[];
+  const out = { roles, sig: roles.map((r: any) => `${r._id}:${r.short_id}:${r.handle}:${r.name}:${r.avatar ?? ""}`).join("|") };
+  personalRolesMemo.set(viewerRoles, out);
+  return out;
+}
+
 /**
  * What the ownership menu reads about a session's reporting line to a role:
  * the roles it can be filed under, the one it reports to now, and whether the
@@ -97,9 +111,16 @@ export function useSessionRoleFacts(conversationId: string) {
     const row = sessionRowOf(s, conversationId);
     return row ? ((row.team_id as string | undefined) ?? null) : undefined;
   });
-  const liveRoles = roles.filter(
-    (r) => r.status !== "retired" && (sessionTeamId === undefined || !r.team_id || r.team_id === sessionTeamId),
-  );
+  // A personal session takes the viewer's own roles, which the window's org
+  // tree lacks while a team workspace is active: those come from viewerRoles
+  // (every role the viewer can see), joined to the tree's.
+  const ownRolesSig = useInboxStore((s) => (sessionTeamId === null ? personalRolesOf((s as any).viewerRoles).sig : ""));
+  const liveRoles = useMemo(() => {
+    const fit = roles.filter((r) => r.status !== "retired" && (sessionTeamId === undefined || !r.team_id || r.team_id === sessionTeamId));
+    if (sessionTeamId !== null) return fit;
+    const have = new Set(fit.map((r) => r._id));
+    return [...fit, ...personalRolesOf((useInboxStore.getState() as any).viewerRoles).roles.filter((r) => !have.has(r._id))];
+  }, [roles, sessionTeamId, ownRolesSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const orgRoleId = useInboxStore((s) => {
     const live = (s as any).resolveLiveSessionId?.(conversationId) ?? conversationId;
     return ((s.sessions as any)?.[live]?.org_role_id ?? (s.conversations as any)?.[conversationId]?.org_role_id) as string | undefined;

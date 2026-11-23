@@ -158,3 +158,17 @@ test("a machine is named with whose it is", () => {
   expect(machineOf("Ashot Petrosian", "Ashot's Mac mini")).toBe("Ashot's Mac mini");
   expect(machineOf(null, "Mac-mini")).toBe("Mac-mini");
 });
+
+test("a personal session offers the viewer's own roles while a team workspace is active", async () => {
+  const MINE = { _id: "role_mine", short_id: "or-9", handle: "resourcing", name: "Resourcing", status: "active", team_id: null, avatar: "fox" };
+  useInboxStore.setState({
+    viewerRoles: { [MINE._id]: MINE, [ROLE._id]: ROLE } as any,
+    teamMembers: [member(ME, "Me Person")] as any,
+    sessions: { [ID]: { ...(useInboxStore.getState().sessions as any)[ID], team_id: null, owner_ids: [ME], org_role_id: null, driver_user_id: null } },
+    sessionOwners: { [ID]: { ...(useInboxStore.getState() as any).sessionOwners[ID], role: null, owners: [{ user_id: ME, name: "Me Person", added_at: 1 }] } },
+  } as any);
+  await openMenu();
+  const candidates = [...w.document.querySelectorAll("[data-owner-candidate]")].map((e: any) => e.getAttribute("data-owner-candidate"));
+  expect(candidates).toEqual(["r:role_mine"]);
+  expect(w.document.querySelector("[data-owners-menu]")!.textContent).not.toContain("Nobody else to add");
+});
