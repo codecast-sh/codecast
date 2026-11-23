@@ -50,10 +50,11 @@ export function knownPathsKeyOf(messages: readonly Message[], home: string | und
   return [...out].sort().join("\n");
 }
 
-export function useToolResultMaps({ conversation, codeRepository, pullRequestIds }: {
+export function useToolResultMaps({ conversation, codeRepository, pullRequestIds, foreign }: {
   conversation: ConversationData | null | undefined;
   codeRepository: string | null;
   pullRequestIds?: ReadonlySet<string>;
+  foreign?: boolean;
 }) {
   // Each map keeps its identity across a pass that changed nothing in it: every
   // AssistantBlock takes the image and file maps (and, condensed, the result
@@ -119,6 +120,8 @@ export function useToolResultMaps({ conversation, codeRepository, pullRequestIds
     () => knownPathsKeyOf(conversation?.messages ?? [], home, knownPathsMemo),
     [conversation?.messages, home, knownPathsMemo],
   );
+  const convId = conversation?._id ? String(conversation._id) : null;
+  const isForeign = !!foreign;
   const filePathCtx = useMemo(
     () => ({
       base: filePathBase,
@@ -127,8 +130,10 @@ export function useToolResultMaps({ conversation, codeRepository, pullRequestIds
       pullRequestIds,
       gitRoot,
       knownPaths: knownPathsKey ? knownPathsKey.split("\n") : [],
+      conversationId: convId,
+      foreign: isForeign,
     }),
-    [filePathBase, home, codeRepository, pullRequestIds, gitRoot, knownPathsKey],
+    [filePathBase, home, codeRepository, pullRequestIds, gitRoot, knownPathsKey, convId, isForeign],
   );
 
   return { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx };

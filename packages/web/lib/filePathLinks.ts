@@ -28,6 +28,8 @@ const HOME = String.raw`~(?:/${SEG})+/?`;
 const REL = String.raw`(?:\.{1,2}/)?${SEG}(?:/${SEG})+/?`;
 // A trailing `:12` or `:12:4` / `:12-20` — the editor convention for "this line".
 const LINE = String.raw`(?::(\d+)(?:[-:]\d+)?)?`;
+// A GitHub / Antigravity `#L12` or `#L12-L20` line fragment on a file link.
+const HASH_LINE = String.raw`(?:#L(\d+)(?:-L?\d+)?)?`;
 
 // Not mid-word, not the tail of a URL or dotted host (preceded by `/` or `.`),
 // not the continuation of another path.
@@ -39,7 +41,8 @@ const TOKEN = String.raw`(${ABS}|${HOME}|${REL})${LINE}`;
 /** Global scanner for text nodes (mdast-util-find-and-replace wants a /g regex). */
 export const FILE_PATH_SCAN_RE = new RegExp(`${BEFORE}${TOKEN}${AFTER}`, "g");
 const WHOLE_RE = new RegExp(`^${TOKEN}$`);
-const ABS_HREF_RE = new RegExp(String.raw`^(/(?:${ABS_ROOTS})(?:/[^?#\r\n]*?)?)${LINE}$`);
+const ABS_HREF_RE = new RegExp(String.raw`^(/(?:${ABS_ROOTS})(?:/[^?#\r\n]*?)?)${LINE}${HASH_LINE}$`);
+const FILE_URI_RE = new RegExp(String.raw`^file://(?:localhost)?(/(?:${ABS_ROOTS})(?:/[^?#\r\n]*?)?)${LINE}${HASH_LINE}$`, "i");
 
 const TRAILING_PUNCT = /[.,;:!?]+$/;
 const EXTENSION = /\.[A-Za-z][A-Za-z0-9]{0,9}$/;
@@ -123,6 +126,12 @@ export interface FilePathContextValue {
    *  path relative to somewhere other than their working directory (a sibling
    *  repo, the parent of the checkout); these say where it really is. */
   knownPaths?: readonly string[];
+  /** The conversation this link sits in, and whether it belongs to another
+   *  person or guest view (`foreign`), so a file the session itself wrote or
+   *  edited opens from the session's own diff instead of failing on a local
+   *  checkout this machine does not have. */
+  conversationId?: string | null;
+  foreign?: boolean;
 }
 
 /** The absolute and `~/` paths named anywhere in these tool call inputs
@@ -190,18 +199,18 @@ export const FilePathContext = createContext<FilePathContextValue | null>(null);
  */
 export function filePathHref(path: string, line: number | undefined, ctx?: FilePathContextValue | null): string {
   const abs = resolveMentionPath(path, ctx);
-  return filesHref({ localPath: abs ?? path, line });
+  return filesHref({ localPath: abs ?? path, line, conversation: ctx?.conversationId });
 }
 
 /** Reads a mention back out of a link the plugin minted, so a component can
  *  re-resolve it with context it has and the parser did not. */
 export function parseFilePathHref(href: string | undefined): { path: string; line?: number } | null {
   if (!href) return null;
-  const absolute = ABS_HREF_RE.exec(href);
+  const absolute = ABS_HREF_RE.exec(href) ?? FILE_URI_RE.exec(href);
   if (absolute) {
     const encoded = absolute[1].replace(/\+/g, "%2B").replace(/&/g, "%26");
     const path = new URLSearchParams(`path=${encoded}`).get("path")!;
-    const line = Number(absolute[2]);
+    const line = Number(absolute[2] ?? absolute[3]);
     return { path, ...(Number.isSafeInteger(line) && line > 0 ? { line } : {}) };
   }
   if (!href.startsWith("/files?") && !href.startsWith("/vault?")) return null;
@@ -211,4 +220,35 @@ export function parseFilePathHref(href: string | undefined): { path: string; lin
   const l = params.get("l");
   const line = l ? parseInt(l, 10) : undefined;
   return { path, ...(line ? { line } : {}) };
+}
+
+/**
+ * Match a linked path against the files this session wrote or edited. A shared
+ * session's artifacts (`~/.gemini/antigravity-cli/brain/…/perf-scorecard.md`)
+ * and isolated worktrees live only on the author's machine, while their text
+ * is already materialized in the session's own changes.
+ */
+export function matchSessionChangedFile(
+  rawPath: string,
+  changes: ReadonlyArray<{ filePath: string; changeType?: string }>,
+  ctx?: FilePathContextValue | null,
+): { kind: "file"; filePath: string } | { kind: "dir" } | null {
+  const fileChanges = changes.filter((c) => c.changeType !== "commit" && !!c.filePath);
+  if (fileChanges.length === 0) return null;
+  const resolved = (resolveMentionPath(rawPath, ctx) ?? rawPath).replace(/\/+$/, "");
+  if (!resolved) return null;
+  const exact = fileChanges.find((c) => c.filePath === resolved);
+  if (exact) return { kind: "file", filePath: exact.filePath };
+  if (!rawPath.startsWith("/") && !rawPath.startsWith("~")) {
+    const cleanRel = rawPath.trim().replace(/^\.\//, "").replace(/\/+$/, "");
+    if (cleanRel) {
+      const hits = [...new Set(fileChanges.filter((c) => c.filePath.endsWith(`/${cleanRel}`)).map((c) => c.filePath))];
+      if (hits.length === 1) return { kind: "file", filePath: hits[0] };
+    }
+  }
+  const dirPrefix = `${resolved}/`;
+  if (fileChanges.some((c) => c.filePath.startsWith(dirPrefix))) {
+    return { kind: "dir" };
+  }
+  return null;
 }
