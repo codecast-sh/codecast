@@ -16,8 +16,9 @@ import { backfillMovedStarterRowsPage } from "./lib/starterRowBackfill";
 // actsForRole, the rule a new spawn reads): the role's standing session, or a
 // session the role started and still drives. The starter is the row's
 // `spawned_by_conversation_id`, or for a run's own session the run's spawner;
-// a starter is judged by the same rule, up to 8 links. A session a task
-// binding filed (`org_role_hold` "bound") is a person's and never stamped. A
+// a starter is judged by the same rule, up to 8 links (roleStartJudge). The
+// hold says nothing about who started it: releaseFolderHeld stamped "bound"
+// on a role's own hands bound to its task, and those are stamped here. A
 // stamped session loses the owner row the old spawn rules gave the person
 // whose account ran its starter (that person added themselves), since a run a
 // role started takes no person owner; each row names what it drops. It
@@ -46,7 +47,7 @@ export const backfillRoleStarted = internalMutation({
 // One-time backfill, run once when driver_user_id ships: a person's session a
 // task binding filed under a role before the field existed gets its person as
 // driver, the rule applyHoldChange writes for a new binding (held as bound, not
-// a role's start, its human starter still owns it). A move never picks a driver
+// a role's start by roleStartJudge, its human starter still owns it). A move never picks a driver
 // (sessionOwnership.rehomeSessions), so without this they stay the role's. A
 // takeover by the rule held sessions as bound too and cannot be told apart.
 // Run only once: a later run would undo a "make the role drive" on a bound

@@ -7,6 +7,34 @@ import { reroutePendingDecisionsForConversation } from "../sessionDecisions";
 // The spawn wrote its row in the transaction that made the session.
 const SPAWN_ROW_WINDOW_MS = 60_000;
 
+// Whether a session is a role's start, judged by who started it and never by
+// its hold: the session that spawned it (`spawned_by_conversation_id`, or for
+// a run's own session the run's spawner) acts for a role (shared actsForRole),
+// that starter judged by the same rule, up to 8 links. A role's hand bound to
+// its own task was stamped "bound" by releaseFolderHeld; it is still the
+// role's. One judge per transaction: it caches what it read. The three
+// owner backfills all read it, so none depends on another having run.
+export function roleStartJudge(ctx: { db: any }) {
+  const started = new Map<string, boolean>();
+  const spawnerOf = async (c: any): Promise<any> => {
+    const run = !c.spawned_by_conversation_id && c.is_workflow_primary && c.workflow_run_id ? await ctx.db.get(c.workflow_run_id) : null;
+    const starterId = c.spawned_by_conversation_id ?? run?.spawner_conversation_id;
+    return starterId ? ctx.db.get(starterId) : null;
+  };
+  const startedOf = async (c: any, depth = 0): Promise<boolean> => {
+    if (c.role_started) return true;
+    if (!c.org_role_id || c.standing_role_id || c.anchor_id || depth > 8) return false;
+    const key = String(c._id);
+    if (started.has(key)) return started.get(key)!;
+    started.set(key, false); // a cycle starts nothing
+    const starter = await spawnerOf(c);
+    const yes = !!starter && actsForRole({ ...starter, role_started: await startedOf(starter, depth + 1) });
+    started.set(key, yes);
+    return yes;
+  };
+  return { spawnerOf, startedOf };
+}
+
 export async function backfillRoleStartedPage(
   ctx: { db: any },
   args: { dryRun?: boolean; role?: string; roleIndex?: number; cursor?: string; numItems?: number },
@@ -19,23 +47,7 @@ export async function backfillRoleStartedPage(
   if (!role) return { dryRun, stamped: 0, rows: [], next: null };
   const page = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id))
     .paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 100 });
-  const started = new Map<string, boolean>();
-  const spawnerOf = async (c: any): Promise<any> => {
-    const run = !c.spawned_by_conversation_id && c.is_workflow_primary && c.workflow_run_id ? await ctx.db.get(c.workflow_run_id) : null;
-    const starterId = c.spawned_by_conversation_id ?? run?.spawner_conversation_id;
-    return starterId ? ctx.db.get(starterId) : null;
-  };
-  const startedOf = async (c: any, depth: number): Promise<boolean> => {
-    if (c.role_started) return true;
-    if (!c.org_role_id || c.standing_role_id || c.anchor_id || c.org_role_hold === "bound" || depth > 8) return false;
-    const key = String(c._id);
-    if (started.has(key)) return started.get(key)!;
-    started.set(key, false); // a cycle starts nothing
-    const starter = await spawnerOf(c);
-    const yes = !!starter && actsForRole({ ...starter, role_started: await startedOf(starter, depth + 1) });
-    started.set(key, yes);
-    return yes;
-  };
+  const { spawnerOf, startedOf } = roleStartJudge(ctx);
   const rows: Array<{ role: string; session: string; dropped_owners: string[] }> = [];
   for (const c of page.page as any[]) {
     if (c.role_started || !(await startedOf(c, 0))) continue;

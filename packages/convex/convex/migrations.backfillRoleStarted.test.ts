@@ -32,7 +32,9 @@ function fixtures() {
       conv("taken_over", { org_role_id: ROLE, role_started: true, driver_user_id: ME, spawned_by_conversation_id: "conversations_standing" }),
       conv("worker_of_taken_over", { org_role_id: ROLE, org_role_hold: "filed", spawned_by_conversation_id: "conversations_taken_over" }),
       // A person's session a task binding filed under the role, and the worker it spawned.
-      conv("person_bound", { org_role_id: ROLE, org_role_hold: "bound", spawned_by_conversation_id: "conversations_standing" }),
+      conv("person_bound", { org_role_id: ROLE, org_role_hold: "bound" }),
+      // The role's hand bound to the role's own task (releaseFolderHeld stamped it "bound"): still the role's start.
+      conv("hand_bound", { org_role_id: ROLE, org_role_hold: "bound", spawned_by_conversation_id: "conversations_standing" }),
       conv("worker_of_bound", { org_role_id: ROLE, org_role_hold: "filed", spawned_by_conversation_id: "conversations_person_bound" }),
       conv("person_run", { org_role_id: ROLE, workflow_run_id: "workflow_runs_person", is_workflow_primary: true }),
     ],
@@ -48,7 +50,7 @@ function fixtures() {
   });
 }
 
-const STARTED = ["hand", "hand_of_hand", "line_run", "station"];
+const STARTED = ["hand", "hand_of_hand", "line_run", "station", "hand_bound"];
 
 describe("backfillRoleStarted", () => {
   test("a dry run names each session a role started and writes nothing", async () => {

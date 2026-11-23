@@ -5,6 +5,7 @@ import { listedOwnerIds } from "@codecast/shared/contracts/sessionOwners";
 import { humanStarterUser, ownersFactsOf, writeDriver } from "../sessionOwners";
 import { reroutePendingDecisionsForConversation } from "../sessionDecisions";
 import { isBoundSession } from "./orgOwnership";
+import { roleStartJudge } from "./roleStartedBackfill";
 
 export async function backfillBoundDriverPage(
   ctx: { db: any },
@@ -18,9 +19,12 @@ export async function backfillBoundDriverPage(
   if (!role) return { dryRun, stamped: 0, rows: [], next: null };
   const page = await ctx.db.query("conversations").withIndex("by_org_role", (q: any) => q.eq("org_role_id", role._id))
     .paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 100 });
+  const { startedOf } = roleStartJudge(ctx);
   const rows: Array<{ role: string; session: string; driver: string }> = [];
   for (const c of page.page as any[]) {
     if (c.org_role_hold !== "bound" || c.driver_user_id || c.role_started || c.standing_role_id || c.anchor_id || !isBoundSession(c)) continue;
+    // A role's own hand bound to its task is the role's to drive.
+    if (await startedOf(c)) continue;
     const person = await humanStarterUser(ctx, c);
     // A starter who no longer owns it does not take the wheel (writeDriver's rule).
     if (!person || !listedOwnerIds(await ownersFactsOf(ctx, c)).includes(String(person._id))) continue;
