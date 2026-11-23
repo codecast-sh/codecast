@@ -24,7 +24,7 @@ import { roleRowsOf } from '@codecast/web/lib/roleRows';
 import { rowEnvMeId, rowEnvRolesSig, rowEnvRoster } from '@/lib/inboxRowEnv';
 import type { RoleRows } from '@codecast/web/lib/sessionIdentity';
 import { coOwnersOf, coOwnersSig, filedRoleOf, filedRoleSig, withRoleOf } from '@codecast/web/lib/coOwners';
-import { roleShortName } from '@codecast/web/lib/composerOwnership';
+import { useNowWhen } from '@codecast/web/hooks/useCoarseNow';
 
 export type SessionData = {
   _id: string;
@@ -221,7 +221,11 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
   const roleSig = filedRoleSig(filedRole);
   const ownersSig = coOwnersSig(session as any);
   const coOwners = useMemo(() => coOwnersOf(session as any, meId, teamMembers, filedRole), [ownersSig, roleSig, meId, teamMembers]); // eslint-disable-line react-hooks/exhaustive-deps
-  const withRole = sLabel ? null : withRoleOf(session as any, Date.now());
+  // Whether it waits on its role turns with time too (liveness going stale),
+  // so the line rides a coarse clock that re-renders the row only when the
+  // answer changes, as the web card's does.
+  const roleNow = useNowWhen((t) => withRoleOf(session as any, t) ?? '', 30_000);
+  const withRole = sLabel ? null : withRoleOf(session as any, roleNow);
 
   return (
     <TouchableOpacity
@@ -338,7 +342,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
       <RNView style={styles.conversationMeta}>
         {/* The row's state word for a role-driven session waiting on input,
             on the meta line so the title keeps the header's width. */}
-        {withRole && <RNText style={styles.withRole} numberOfLines={1}>With {roleShortName(withRole)}</RNText>}
+        {withRole && <RNText style={styles.withRole} numberOfLines={1}>With {withRole}</RNText>}
         {ship && <ShipTag ship={ship} />}
         {project && <ProjectTag name={project} />}
         {showAuthor && (

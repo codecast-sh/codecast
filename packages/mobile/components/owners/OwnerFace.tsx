@@ -26,7 +26,8 @@ type FaceRole = { _id?: string; role_id?: string; short_id?: string; handle: str
 /**
  * One owner's face as the owners chip, the sheet, the composer line and an
  * inbox row draw it (the web's .own-drv / .own-paused): the driver wears a
- * ring in the text colour, a paused role is faded. Both read without colour.
+ * ring in the text colour, a paused role a dashed ring and a fade. Both read
+ * without colour, the dashed ring on a grayscale screen too.
  */
 export function OwnerFace({ person, role, size = 18, driver = false, paused = false }: {
   person?: { name: string; image?: string | null };
@@ -40,7 +41,7 @@ export function OwnerFace({ person, role, size = 18, driver = false, paused = fa
     <View
       style={[
         styles.ring,
-        { borderRadius: size / 2 + 3, borderColor: driver ? Theme.text : 'transparent' },
+        { borderRadius: size / 2 + 3, borderColor: driver ? Theme.text : paused ? Theme.textMuted : 'transparent' },
         paused && styles.paused,
       ]}
     >
@@ -58,5 +59,5 @@ export function OwnerFace({ person, role, size = 18, driver = false, paused = fa
 
 const styles = StyleSheet.create({
   ring: { borderWidth: 1.5, padding: 1 },
-  paused: { opacity: 0.4 },
+  paused: { opacity: 0.6, borderStyle: 'dashed' },
 });
