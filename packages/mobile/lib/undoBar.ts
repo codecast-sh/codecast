@@ -5,7 +5,7 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 
 // The app's one undo bar (components/UndoBar, mounted at the root). It is the
 // mobile notifier for the shared undo engine: every gesture the engine records
-// with a toast (stash, kill-all, restore) shows here with its own Undo, as
+// with a toast (close, stash, kill-all, restore) shows here with its own Undo, as
 // sonner shows it on web (web/store/undoStack.ts).
 //
 // A single kill does not run straight away. Undoing a kill brings the row back

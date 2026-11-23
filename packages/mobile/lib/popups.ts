@@ -17,6 +17,8 @@ import { create } from 'zustand';
 
 export type SheetItem = {
   label: string;
+  /** A short line under the label: what choosing it does. */
+  detail?: string;
   /** A Feather glyph before the label. Give every row of a sheet one, or none. */
   icon?: ComponentProps<typeof Feather>['name'];
   onPress: () => void;

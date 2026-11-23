@@ -66,3 +66,20 @@ test("a stale key does not take down a newer bar", () => {
   dismissUndoBar(first);
   expect(bar()?.title).toBe("Stashed “Second”");
 });
+
+test("a close runs at once and shows Closed with its own Undo, which puts the row back", () => {
+  useInboxStore.getState().closeSession(A);
+  expect(row(A).inbox_dismissed_at).toBeTruthy();
+  expect(useUndoBar.getState().heldKillId).toBe(null);
+  expect(bar()?.title).toBe("Closed “First”");
+  expect(bar()?.note).toBeUndefined();
+  bar()!.onUndo!();
+  expect(row(A).inbox_dismissed_at ?? null).toBe(null);
+});
+
+test("a close runs a held kill first", () => {
+  holdKill(A);
+  useInboxStore.getState().closeSession(B);
+  expect(row(A).inbox_dismissed_at).toBeTruthy();
+  expect(bar()?.title).toBe("Closed “Second”");
+});
