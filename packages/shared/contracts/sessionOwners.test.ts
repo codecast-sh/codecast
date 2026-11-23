@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { applyOwnersChangeTo, driverOf, listedOwnerIds, takeOverBySend, type OwnersFacts } from "./sessionOwners";
+import { applyOwnersChangeTo, driverOf, leaveMovesFirst, leaveStands, listedOwnerIds, takeOverBySend, type OwnersFacts } from "./sessionOwners";
 import { roleDrives } from "./inboxProjection";
 
 const base: OwnersFacts = { rows: [], author_id: null, runner_id: "me", bots: [], role_id: null, role_started: false, standing_role_id: null, driver_user_id: null, primary_id: null };
@@ -51,6 +51,17 @@ describe("session owners, as one rule for the server and the store", () => {
     // Released from its role, it is the runner's again; a person's own session filed under a role stays theirs.
     expect(listedOwnerIds({ ...run, role_id: null })).toEqual(["me"]);
     expect(listedOwnerIds({ ...base, role_id: "r1" })).toEqual(["me"]);
+  });
+
+  test("leaving a run a role started needs no move and may leave no person: the role drives it again", () => {
+    const run = { ...base, role_id: "r1", role_started: true, rows: [{ user_id: "me", added_at: 1 }], driver_user_id: "me" };
+    expect(leaveMovesFirst(run, "me")).toBe(false);
+    const left = applyOwnersChangeTo(run, { leave: {} }, at);
+    expect(leaveStands(left, "me")).toBe(true);
+    expect(driverOf(left, listedOwnerIds(left))).toEqual({ kind: "role", role_id: "r1" });
+    // A person's own session still moves first, and keeps an owner.
+    expect(leaveMovesFirst({ ...base, role_id: "r1" }, "me")).toBe(true);
+    expect(leaveStands({ ...base, runner_id: "bot", bots: ["bot"] }, "me")).toBe(false);
   });
 
   test("a restored row goes back to its place", () => {

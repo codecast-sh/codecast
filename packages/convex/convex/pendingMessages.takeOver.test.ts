@@ -7,6 +7,7 @@ import { formatDecisionAnswer, roleDrives, rollupParentIdOf } from "@codecast/sh
 import { dispatch } from "./dispatch";
 import { sendSessionMessage } from "./pendingMessages";
 import { stopAndSendForUser } from "./daemonCommandUtils";
+import { performApplyOwnersChange, performLeaveSession, performSetSessionDriver } from "./sessionOwnership";
 
 // One owner drives (org-roles-run-work.md R1). A person's own message into a
 // session takes the wheel from the role or person driving it; the paused role
@@ -265,5 +266,36 @@ describe("Tell <role>", () => {
   test("refused for someone who may not write into the session", async () => {
     const { ctx } = await world();
     await expect(performTellSessionRole(ctx, STRANGER as any, { session_id: "filed", message: "hi" })).rejects.toThrow("Unauthorized");
+  });
+});
+
+// A run a role started is the role's when no person owns it (R1): leaving one
+// you took needs no move and leaves nobody, and the role drives it again.
+describe("leaving a run a role started", () => {
+  test("the runner who took over its hand leaves without a move: the role drives and it leaves their inbox", async () => {
+    const { ctx, row, ownersOf } = await world();
+    await composerSend(ctx, row("hand"), ME);
+    expect(ownersOf("hand")).toEqual([ME]);
+    await performLeaveSession(ctx, ME as any, { session_id: "hand" });
+    expect(ownersOf("hand")).toEqual([]);
+    expect(row("hand").driver_user_id).toBeUndefined();
+    expect(roleDrives(row("hand"))).toBe(true);
+    const inbox = await computeInboxSessions(ctx, ME as any, { show_all: true, includeLiveness: false });
+    expect(inbox.sessions.map((s: any) => s._id)).not.toContain("hand");
+  });
+
+  test("an owner of a pool hand who made the role driver again leaves it to the role", async () => {
+    const { ctx, row, ownersOf } = await world();
+    await performApplyOwnersChange(ctx, ME as any, { session_id: "pool", change: { add: [ME] } });
+    await performSetSessionDriver(ctx, ME as any, { session_id: "pool", driver: { kind: "user", user_id: ME } });
+    await performSetSessionDriver(ctx, ME as any, { session_id: "pool", driver: { kind: "role" } });
+    await performApplyOwnersChange(ctx, ME as any, { session_id: "pool", change: { leave: {} } });
+    expect(ownersOf("pool")).toEqual([]);
+    expect(roleDrives(row("pool"))).toBe(true);
+  });
+
+  test("a person's own session still moves before its runner leaves", async () => {
+    const { ctx } = await world();
+    await expect(performLeaveSession(ctx, ME as any, { session_id: "filed" })).rejects.toThrow(/runs on your account/);
   });
 });

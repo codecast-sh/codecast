@@ -6,7 +6,7 @@
 
 import type { Id } from "../_generated/dataModel";
 import { addSessionOwnerRow, ownersFactsOf, settleDriver, syncPrimaryOwnerCache } from "../sessionOwners";
-import { driverOf as sharedDriverOf, humanRunnerOf, leaveLeavesAnOwner, listedOwnerIds } from "@codecast/shared/contracts/sessionOwners";
+import { driverOf as sharedDriverOf, humanRunnerOf, leaveMovesFirst, leaveStands, listedOwnerIds } from "@codecast/shared/contracts/sessionOwners";
 import { findOwnableConversation } from "./sessionTell";
 import { liveRoleByHandle, resolveRoleRef } from "./orgAccess";
 
@@ -242,17 +242,19 @@ export async function mayEditOwners(ctx: { db: any }, authUserId: Id<"users">, c
 
 // What a leave leaves behind, checked after the caller's row is gone: it no
 // longer runs on their account, they no longer drive, and someone still owns
-// it (the person whose account runs it takes a row when nobody else does).
+// it (the person whose account runs it takes a row when nobody else does). A
+// run a role started needs neither: with no person left it is the role's.
+export const LEAVE_MOVE_REFUSAL = "It runs on your account: move it to a teammate's or a team machine to leave it";
 export async function settleLeave(ctx: { db: any }, authUserId: Id<"users">, conversation: any): Promise<void> {
   const me = String(authUserId);
-  if (String(conversation.user_id) === me) throw new Error("It runs on your account: move it to a teammate's or a team machine to leave it");
   const facts = await ownersFactsOf(ctx, conversation);
+  if (leaveMovesFirst(facts, me)) throw new Error(LEAVE_MOVE_REFUSAL);
   const runner = humanRunnerOf(facts);
   if (facts.rows.length === 0 && runner && runner !== me) {
     await addSessionOwnerRow(ctx, conversation._id, runner as Id<"users">, authUserId);
     await syncPrimaryOwnerCache(ctx, conversation._id);
   }
-  if (!leaveLeavesAnOwner(await ownersFactsOf(ctx, await ctx.db.get(conversation._id)), me)) throw new Error("Nobody would own it after you leave: add a teammate first");
+  if (!leaveStands(await ownersFactsOf(ctx, await ctx.db.get(conversation._id)), me)) throw new Error("Nobody would own it after you leave: add a teammate first");
   await settleDriver(ctx, conversation._id);
 }
 

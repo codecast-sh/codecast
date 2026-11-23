@@ -7,10 +7,10 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
 import { addSessionOwnerRow, removeSessionOwnerRow, listSessionOwnerIds, ownersFactsOf, syncPrimaryOwnerCache, humanStarterUser, restoreOwnerRows, writeDriver, type OwnerRowSnapshot } from "./sessionOwners";
-import { isLeave, listedOwnerIds, pinnedDriverAfterAdd, starterOf } from "@codecast/shared/contracts/sessionOwners";
+import { isLeave, leaveMovesFirst, listedOwnerIds, pinnedDriverAfterAdd, starterOf } from "@codecast/shared/contracts/sessionOwners";
 import {
   assertHumanOwner, avatarOf, driverOf, listOwnerInfos, mayEditOwners, ownerIdsOrStarter, OWNER_CANDIDATE_CAP, resolveOwnableConversation,
-  ownerNamed, resolveOwnerRef, resolveOwnerRoleRef, settleLeave, teamMemberDocs, toOwnerInfo, withLeaveRules, type DriverTarget, type OwnerInfo, type OwnerMutationResult, type SessionDriver,
+  LEAVE_MOVE_REFUSAL, ownerNamed, resolveOwnerRef, resolveOwnerRoleRef, settleLeave, teamMemberDocs, toOwnerInfo, withLeaveRules, type DriverTarget, type OwnerInfo, type OwnerMutationResult, type SessionDriver,
 } from "./lib/sessionOwnerRules";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { routeUpWaitingSession } from "./agentTasks";
@@ -588,9 +588,7 @@ export async function performLeaveSession(
   const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   const me = String(authUserId);
   if (!(await ownerIdsOrStarter(ctx, conversation)).includes(me)) throw new Error("You are not one of its owners");
-  if (String(conversation.user_id) === me && !args.move_to_device_id) {
-    throw new Error("It runs on your account: move it to a teammate's or a team machine to leave it");
-  }
+  if (!args.move_to_device_id && leaveMovesFirst(await ownersFactsOf(ctx, conversation), me)) throw new Error(LEAVE_MOVE_REFUSAL);
   if (args.move_to_device_id) {
     const moved = await performReparentSessionToDevice(ctx, authUserId, { session_id: String(conversation._id), device_id: args.move_to_device_id });
     if (!moved.cross_user) throw new Error("That machine runs on your account: pick a teammate's or a team machine to leave it");

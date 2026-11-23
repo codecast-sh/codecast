@@ -72,7 +72,7 @@ export function sortedRows(rows: OwnerRowFact[]): OwnerRowFact[] {
 /** The person who started it: the author, else the runner, never an agent,
  *  and nobody when a role started it. */
 export function starterOf(f: Pick<OwnersFacts, "author_id" | "runner_id" | "bots" | "role_id" | "role_started" | "standing_role_id">): string | null {
-  if (startedByRole({ org_role_id: f.role_id, role_started: f.role_started, standing_role_id: f.standing_role_id })) return null;
+  if (startedByRole(roleFactsOf(f))) return null;
   for (const id of [f.author_id, f.runner_id]) if (id && !f.bots.includes(id)) return id;
   return null;
 }
@@ -154,10 +154,21 @@ export function isLeave(change: { leave?: unknown; remove?: string[] }, actor: s
   return !!change.leave || (change.remove ?? []).includes(actor);
 }
 
-/** Whether a leave leaves someone other than the leaver owning the session. */
-export function leaveLeavesAnOwner(after: OwnersFacts, actor: string): boolean {
-  return listedOwnerIds(after).some((id) => id !== actor);
+/** Whether a leave may stand: someone other than the leaver still owns the
+ *  session, or a role started it, which with no person left is simply the
+ *  role's again (the driver cleared, the role drives). */
+export function leaveStands(after: OwnersFacts, actor: string): boolean {
+  return startedByRole(roleFactsOf(after)) || listedOwnerIds(after).some((id) => id !== actor);
 }
+
+/** A leave from a session that runs on the leaver's account moves it to
+ *  another account first, unless a role started it: that run is the role's,
+ *  wherever it runs. */
+export function leaveMovesFirst(f: OwnersFacts, actor: string): boolean {
+  return f.runner_id === actor && !startedByRole(roleFactsOf(f));
+}
+
+const roleFactsOf = (f: Pick<OwnersFacts, "role_id" | "role_started" | "standing_role_id">) => ({ org_role_id: f.role_id, role_started: f.role_started, standing_role_id: f.standing_role_id });
 
 /**
  * The facts after one Save, in the order the server applies it: adds, then
