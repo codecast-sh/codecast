@@ -21441,7 +21441,7 @@ async function rehydratePersistedAppServerThreads(requestedConversations: Readon
           service.getConversationOwnerInfo(conversationId),
         ]);
         if (!lifecycle?.hideStateKnown || !owner) throw new Error("Codex recovery is waiting to verify the conversation owner and lifecycle");
-        if (isConversationRetired(lifecycle, { trustStatusFallback: false }) || owner.ownerDeviceId !== deviceId()) {
+        if (lifecycle.inboxKilledAt || lifecycle.closed || lifecycle.status === "completed" || owner.ownerDeviceId !== deviceId()) {
           forgetPersistedAppServerConversation(conversationId);
           continue;
         }

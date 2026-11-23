@@ -342,7 +342,9 @@ describe("command groups stay off the boot graph", () => {
     // parser.ts the way museTranscript.ts is).
     // 373 the same day: contracts/agentPins.ts, the pinned-agents helpers (out
     // of agentClients.ts for its max-lines pin), carried by the contracts barrel.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(373);
+    // 374 (2026-11-23): contracts/closedSession.ts, the shared Close verdict
+    // (isClosedSession, closeInFlightReason), carried by the contracts barrel.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(374);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -521,7 +523,9 @@ describe("command groups stay off the boot graph", () => {
     // 4845 the same day: antigravityTranscript.ts maps agy's tool calls onto
     // Bash/Read/Edit/Write/WebSearch/Agent (+3), and contracts/agentPins.ts,
     // pin lists that let a newer client through (+1).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4845);
+    // 4851 (2026-11-23): contracts/closedSession.ts, the shared Close verdict,
+    // and the daemon's close-aware lifecycle reads (+6).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4851);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -750,7 +754,8 @@ describe("command groups stay off the boot graph", () => {
     // 623 the same day: antigravityLocal.ts loads only when an agy pane
     // launches or resumes.
     // 624 the same day: contracts/agentPins.ts, as on index.ts's graph above.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(624);
+    // 625 (2026-11-23): contracts/closedSession.ts, as on index.ts's graph above.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(625);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

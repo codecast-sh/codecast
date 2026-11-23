@@ -454,9 +454,7 @@ export const resolveConversationBySession = query({
       project_path: conv.project_path ?? null,
       status: conv.status,
       title: conv.title ?? null,
-      // The daemon's status-only fallback reads this too: a closed session
-      // is not brought back on its own (closedSession.ts).
-      closed: isClosedSession(conv),
+      closed: isClosedSession(conv), // the daemon's fallback: a closed session is not brought back on its own
     };
   },
 });
@@ -525,8 +523,7 @@ export async function performMoveSessionToDevice(
     status: "active" as const,
     updated_at: Date.now(),
     ...(await unparkForMove(ctx, conv, dest)),
-    // Run it there: a closed session this resumes is not closed any more.
-    ...(args.resume !== false && isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}),
+    ...(args.resume !== false && isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}), // run it there: no longer closed
   });
 
   if (priorDeviceId && priorDeviceId !== args.owner_device_id) {
@@ -711,8 +708,7 @@ export async function performReassignToDevice(
     status: "active" as const,
     updated_at: Date.now(),
     ...(await unparkForMove(ctx, conv, device)),
-    // "Run it there" resumes it: a closed session is not closed any more.
-    ...(isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}),
+    ...(isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}), // run it there: no longer closed
   });
 
   if (prevOwner && prevOwner !== args.device_id) {
@@ -910,8 +906,7 @@ export async function performReparentSessionToDevice(
     status: "active" as const,
     updated_at: Date.now(),
     ...(await unparkForMove(ctx, conv, device)),
-    // The reparent resumes it there: a closed session is not closed any more.
-    ...(isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}),
+    ...(isClosedSession(conv) ? { inbox_dismissed_at: undefined } : {}), // the reparent resumes it: no longer closed
   };
   if (crossUser) {
     // Account follows device: the destination's runner now runs + bills it.
