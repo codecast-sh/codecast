@@ -58,7 +58,10 @@ test("a role drives: the line shows only while the composer is in use, and says 
   expect(strip()).toBeNull();
   await render(true);
   expect(strip()?.dataset.ccOwnerStrip).toBe("role");
-  expect(strip()!.textContent).toContain("Sending takes over from Eval Suite.");
+  expect(strip()!.textContent).toContain("Eval Suite drives · sending takes over");
+  // The name leads, so a narrow screen cuts the rest, and the key that sends ends the line.
+  expect(strip()!.querySelector("b")!.parentElement!.firstElementChild!.textContent).toBe("Eval Suite");
+  expect(strip()!.querySelector("[data-owner-strip-key]")!.textContent).toBe("↵take over");
   expect([...strip()!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Take over", "Tell Eval Suite"]);
   expect(sendAs()).toEqual({ label: "Take over", tellRole: null });
   expect(composerSendRoute(id)).toBe("take-over");
@@ -68,12 +71,13 @@ test("Tell keeps the role driving: the line, the send label and the send's route
   await setSession({ org_role_id: "role1" }, ["me"]);
   await render(true);
   await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Tell Eval Suite"));
-  expect(strip()!.textContent).toContain("Goes to Eval Suite, who stays driver.");
+  expect(strip()!.textContent).toContain("Eval Suite stays driver · your words go to them");
+  expect(strip()!.querySelector("[data-owner-strip-key]")!.textContent).toBe("↵tell");
   expect(sendAs()).toEqual({ label: "Tell Eval Suite", tellRole: "Eval Suite lead" });
   expect(composerSendRoute(id)).toBe("tell-role");
   // The choice holds for the session until changed.
   await render(true);
-  expect(strip()!.textContent).toContain("Goes to Eval Suite");
+  expect(strip()!.textContent).toContain("Eval Suite stays driver");
   await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Take over"));
   expect(composerSendRoute(id)).toBe("take-over");
 });
@@ -82,11 +86,11 @@ test("another person drives: the line names them; Tell sends here and leaves the
   await setSession({ driver_user_id: "jason", user_id: "jason" }, ["jason", "me"]);
   await render(true);
   expect(strip()?.dataset.ccOwnerStrip).toBe("person");
-  expect(strip()!.textContent).toContain("Sending takes over from Jason.");
+  expect(strip()!.textContent).toContain("Jason drives · sending takes over");
   expect([...strip()!.querySelectorAll("button")].map((b) => b.textContent)).toEqual(["Take over", "Tell Jason"]);
   expect(sendAs()?.label).toBe("Take over");
   await click([...strip()!.querySelectorAll("button")].find((b) => b.textContent === "Tell Jason"));
-  expect(strip()!.textContent).toContain("Goes to Jason, who stays driver.");
+  expect(strip()!.textContent).toContain("Jason stays driver");
   expect(sendAs()).toEqual({ label: "Tell Jason", tellRole: null });
   // Into this session, without the wheel: a person is told where they drive.
   expect(composerSendRoute(id)).toBe("plain");
@@ -116,7 +120,7 @@ test("nothing for the driver of an unfiled session, or for someone who neither o
 test("an owners answer without the role's face names it from the session row's own snapshot", async () => {
   await setSession({ org_role_id: "role1", role: { _id: "role1", short_id: "or-1", handle: "dance", name: "Dance tutor", avatar: "fox" } }, ["me"], { role: null });
   await render(true);
-  expect(strip()!.textContent).toContain("Sending takes over from Dance tutor.");
+  expect(strip()!.textContent).toContain("Dance tutor drives");
 });
 
 test("a send that asks for the wheel paints it on the session row before the server answers; any other send paints nothing", async () => {

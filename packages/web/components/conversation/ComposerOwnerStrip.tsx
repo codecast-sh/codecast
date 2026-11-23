@@ -3,14 +3,16 @@
 /**
  * The line above a session's composer that says what sending does to who
  * drives it (convex lib/sessionTakeOver, shared takeOverBySend):
- *   - a role drives: "Sending takes over from <role>", with Take over | Tell
+ *   - a role drives: "<role> drives · sending takes over", with Take over | Tell
  *     <role>. Tell sends the words to the role's own session and leaves the
  *     role driving; the choice holds for the session until changed.
  *   - another person drives: the same line naming them, with Take over |
  *     Tell <name>. Tell sends into the session and leaves them driving.
  *   - you drive and the role waits: "<role> paused while you drive", with
  *     Make driver to hand it back.
- * The take-over line shows while the composer is focused or holds text.
+ * The take-over line shows while the composer is focused or holds text. It
+ * leads with who drives, so a narrow screen cuts the rest, never the name,
+ * and ends with the key that sends.
  */
 
 import { memo } from "react";
@@ -21,6 +23,7 @@ import { useOwnersFromStore } from "../OwnersBadge";
 import { Face as OwnerFace } from "../OwnersMenu";
 import { SegmentedToggle } from "../SegmentedToggle";
 import { Button } from "../ui/button";
+import { KeyCap } from "../KeyCap";
 
 const STRIP = "flex items-center gap-2 rounded-lg border border-sol-border/60 bg-sol-bg-alt px-3 py-1.5 text-ui text-sol-text-muted";
 
@@ -77,9 +80,9 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
     <div className={className}><div data-cc-owner-strip={fromRole ? "role" : "person"} className={STRIP}>
       {fromRole ? <OwnerFace role={fromRole} size={16} driver /> : <OwnerFace person={{ _id: driver!.kind === "user" ? driver!.user_id : "", ...fromPerson! }} size={16} driver />}
       <span className="flex-1 min-w-0 truncate">
-        {telling
-          ? <>Goes to <b className="font-medium text-sol-text">{driverName}</b>, who stays driver.</>
-          : <>Sending takes over from <b className="font-medium text-sol-text">{driverName}</b>.</>}
+        <b className="font-medium text-sol-text">{driverName}</b>
+        {telling ? " stays driver" : " drives"}
+        <span className="max-sm:hidden">{telling ? " · your words go to them" : " · sending takes over"}</span>
       </span>
       <SegmentedToggle
         size="sm"
@@ -90,6 +93,9 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
           { key: "tell", label: `Tell ${driverName}`, title: fromRole ? `Send to ${fromRole.name}'s own session; it keeps driving` : `Send here; ${driverName} keeps driving` },
         ]}
       />
+      <span className="own-strip-key inline-flex shrink-0 items-center gap-1 text-meta text-sol-text-dim max-sm:hidden" data-owner-strip-key>
+        <KeyCap size="xs">↵</KeyCap>{telling ? "tell" : "take over"}
+      </span>
     </div></div>
   );
 });
