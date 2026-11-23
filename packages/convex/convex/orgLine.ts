@@ -509,7 +509,7 @@ export async function planSweep(ctx: Ctx, now = Date.now(), o: { loads?: boolean
   }
   for (const role of roles) {
     if (result.started.length >= MAX_STARTS_PER_SWEEP) break;
-    if (role.status !== "active" || !lineStartsOn(role)) continue;
+    if (role.status !== "active" || !lineStartsOn(role) || retiredFlowLine(lineSlugOf(role))) continue;
     if (role.team_id && flowTeams.has(String(role.team_id))) continue;
     if (!(await linesRunIn(ctx, role, featureOn))) continue;
     const before = loads.size;

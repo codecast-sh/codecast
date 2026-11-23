@@ -227,6 +227,14 @@ describe("startLineCauseCore (LX6)", () => {
     await expect(startLineCauseCore(ctx, HOST as any, "tasks_1" as any)).rejects.toThrow(/already has a live run/);
   });
 
+  test("refuses a lead whose line names a retired flow, starting nothing", async () => {
+    const { startLineCauseCore } = await import("./lineCause");
+    const { ctx, tables } = fixtures({ role: { trust: "propose", line_workflow_slug: "quick-change" }, task: { assignee: undefined, source: "signal", category: "line" } });
+    await expect(startLineCauseCore(ctx, HOST as any, "tasks_1" as any)).rejects.toThrow(/@growth's line runs a retired flow: quick-change is no longer in the library/);
+    expect(tables.workflow_runs).toHaveLength(0);
+    expect(tables.tasks[0].status).toBe("open");
+  });
+
   // LX4: a card answered Ship whose run then reports nothing has no runner;
   // starting the cause again ends that run instead of refusing.
   test("ends a run stalled at the card gate and starts the cause again", async () => {

@@ -344,6 +344,10 @@ describe("orgLine admission (LE6)", () => {
         role: caps({ hands_per_day: 100 }),
         extra: { initiatives, tasks: causes(4), devices: [laptop, host("h1", 2)] },
       });
+      // A role whose line names a retired flow (Quick) is never planned, so it takes no start from the roles after it.
+      tables.org_roles[0].line_workflow_slug = "quick-change";
+      expect((await planSweep(ctx, NOW)).started).toEqual([]);
+      delete tables.org_roles[0].line_workflow_slug;
       const plan = await planSweep(ctx, NOW);
       expect(plan.started.map((s) => s.place?.device)).toEqual(["h1", "h1"]);
       expect(tables.workflow_runs).toHaveLength(0);
