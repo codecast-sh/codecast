@@ -33,9 +33,8 @@ const ALLOWED: Record<string, string> = {
   "changesQueries.ts::inTheWorks": "sourceless external_events are team GitHub PR events; access is team membership (changesReader), as for pull requests",
   "externalEvents.ts::listForContainer": "every row goes through filterReadable -> canReadEvent, the events table's own key check",
   "chat.ts::createChannel": "name-uniqueness lookup inside the caller's team; returns no other channel",
-  "chat.ts::listChannels": "chat's access rule is channel membership: restricted rooms are filtered by chat_channel_members",
+  "chatAccess.ts::teamRooms": "a helper, not a listing: every caller applies chat's own access rule (listChannels filters restricted rooms by membership, orgInit/orgSaid/digest call canAccessChannel, orgWhere returns default-room names, orgHealth counts role mentions only, createChannel only counts); a new caller must too",
   "orgChannels.ts::resolveChannel": "by-name lookup; the channel then goes through loadChannel's access check",
-  "orgWhere.ts::chatRoomsFor": "finds the team's default rooms to name to a session of that team; returns room names only, each re-checked against the team",
   "orgUnplaced.ts::readOpenPlans": "the team index only bounds the read by status; each row is kept only when its stored workspace equals the caller's key (p.workspace === key)",
   "slackSync.ts::adoptSlackName":"name-collision check while syncing a channel's Slack name; returns no row",
 };

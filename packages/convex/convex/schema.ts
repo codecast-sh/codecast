@@ -9345,8 +9345,11 @@ export default defineSchema({
     .index("by_team_name", ["team_id", "name"])
     .index("by_client_id", ["client_id"])
     .index("by_dm_key", ["dm_key"])
+    // A team's named rooms without its DMs (chatAccess.teamRooms): by name
+    // alone every DM ("") sorts first and fills any cap.
+    .index("by_team_kind_name", ["team_id", "kind", "name"])
     // The community rail: every channel the public can read, with no team to
-    // key on. Nothing else queries by kind.
+    // key on.
     .index("by_kind_name", ["kind", "name"]),
 
   // Who is inside a private channel or DM — the session_owners shape: one row

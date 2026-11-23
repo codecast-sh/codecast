@@ -39,6 +39,74 @@ export function canReadChannelAnonymously(channel: Doc<"chat_channels"> | null):
   return !!channel && isCommunity(channel) && !channel.archived_at;
 }
 
+// Every kind but "dm", plus absent (a pre-kind public room). Keyed by kind so a
+// new kind fails the typecheck here until someone says which side it is on.
+const ROOM_KIND: Record<Exclude<NonNullable<Doc<"chat_channels">["kind"]>, "dm">, true> = {
+  public: true, private: true, agents: true, community: true,
+};
+const ROOM_KINDS = [undefined, ...Object.keys(ROOM_KIND)];
+const byName = (a: Doc<"chat_channels">, b: Doc<"chat_channels">) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+
+/**
+ * A team's named rooms, in name order, up to `limit`. Never a DM: a DM's name
+ * is "", so a read by name alone lists every DM first, and in a team with
+ * hundreds of them any cap filled with DMs and dropped the rooms late in the
+ * alphabet (#team, Nov 2026). The cap on named rooms (createChannel) counts
+ * these; a DM is reached through its members (teamRoomsAndDms).
+ */
+export async function teamRooms(ctx: ReadCtx, teamId: Id<"teams">, limit: number): Promise<Doc<"chat_channels">[]> {
+  const perKind = await Promise.all(ROOM_KINDS.map((kind) => ctx.db
+    .query("chat_channels")
+    .withIndex("by_team_kind_name", (q: any) => q.eq("team_id", teamId).eq("kind", kind))
+    .take(limit)));
+  return perKind.flat().sort(byName).slice(0, limit);
+}
+
+/**
+ * A person's room memberships and every DM among them, in any team. Each
+ * membership is opened, one small read apiece, so no DM is ever dropped
+ * unseen: a window over memberships or read marks hid the DMs nobody had
+ * opened lately (ct-99762). Read once per person when one call covers several
+ * teams (the digest). Grows with DMs ever joined; past ~1,000 the right fix is
+ * a per-member recency stamp, not a window.
+ */
+export async function myRooms(ctx: ReadCtx, userId: Id<"users">): Promise<{ rows: Doc<"chat_channel_members">[]; dms: Doc<"chat_channels">[] }> {
+  const rows = await ctx.db.query("chat_channel_members").withIndex("by_user", (q: any) => q.eq("user_id", userId)).collect();
+  const ids = [...new Set(rows.map((r) => r.channel_id.toString()))];
+  const dms = (await Promise.all(ids.map((id) => ctx.db.get(id as Id<"chat_channels">))))
+    .filter((c): c is Doc<"chat_channels"> => !!c && c.kind === "dm");
+  return { rows, dms };
+}
+
+/**
+ * The rooms a person's rail draws from in one team: its named rooms, plus the
+ * person's own DMs there (myRooms). `memberOf` is every restricted room they
+ * are inside. Access is still the caller's to apply.
+ */
+export async function teamRoomsAndDms(
+  ctx: ReadCtx,
+  userId: Id<"users">,
+  teamId: Id<"teams">,
+  limit: number,
+  mine?: { rows: Doc<"chat_channel_members">[]; dms: Doc<"chat_channels">[] },
+): Promise<{ channels: Doc<"chat_channels">[]; memberOf: Set<string> }> {
+  const { rows, dms: allDms } = mine ?? await myRooms(ctx, userId);
+  const memberOf = new Set(rows.map((r) => r.channel_id.toString()));
+  let dms = allDms.filter((c) => c.team_id.toString() === teamId.toString());
+  // Past `limit`, the DMs with the newest lines: railFor reads deep into each.
+  // A channel row is not stamped per line, hence the read per DM.
+  if (dms.length > limit) {
+    const newest = new Map(await Promise.all(dms.map(async (c) => [c._id.toString(), (await ctx.db
+      .query("chat_messages")
+      .withIndex("by_channel_created", (q: any) => q.eq("channel_id", c._id))
+      .order("desc")
+      .first())?.created_at ?? c.created_at] as const)));
+    dms = dms.sort((a, b) => newest.get(b._id.toString())! - newest.get(a._id.toString())!).slice(0, limit);
+  }
+  const channels = [...(await teamRooms(ctx, teamId, limit)), ...dms].sort(byName);
+  return { channels, memberOf };
+}
+
 export async function isChannelMember(
   ctx: ReadCtx,
   channelId: Id<"chat_channels">,

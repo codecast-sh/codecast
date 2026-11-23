@@ -1,7 +1,7 @@
 import { Id } from "./_generated/dataModel";
 import { scopedFetch } from "./data";
 import { namedTextOf, namesRecord, recordWords } from "./lib/orgActivity";
-import { canAccessChannel } from "./chatAccess";
+import { canAccessChannel, teamRooms } from "./chatAccess";
 import { userMayRead } from "./lib/decisionAccess";
 import { callModel } from "./lib/anthropic";
 import type { VendorGate } from "./lib/vendorGuard";
@@ -224,7 +224,7 @@ export async function readGoalCandidates(ctx: Ctx, userId: Id<"users">, teamId: 
   // Every person written line of the window's channels.
   const { nameOf, isPerson } = chatAuthors(ctx);
   const written: GoalCandidate[] = [];
-  const channels: any[] = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", teamId)).take(ANALYSIS_CAPS.channels);
+  const channels: any[] = await teamRooms(ctx, teamId, ANALYSIS_CAPS.channels);
   for (const ch of channels) {
     if (!ch.name || ch.archived_at || ch.kind === "dm" || !(await canAccessChannel(ctx as any, userId, ch))) continue;
     const msgs: any[] = await ctx.db.query("chat_messages").withIndex("by_channel_created", (q: any) => q.eq("channel_id", ch._id).gte("created_at", cutoff)).order("desc").take(ANALYSIS_CAPS.goal_messages_per_channel);

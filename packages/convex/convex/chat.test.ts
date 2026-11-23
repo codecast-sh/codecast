@@ -1,6 +1,6 @@
 import { describe, expect, setSystemTime, test } from "bun:test";
 import { getFunctionName } from "convex/server";
-import { makeFakeDb } from "./testDb";
+import { makeFakeDb, schemaIndexes, type FakeDbOptions } from "./testDb";
 import {
   addChannelMembers,
   appendVoiceTranscript,
@@ -132,7 +132,7 @@ function readRow(userId: string, level: "all" | "mentions" | "none", channelId =
   };
 }
 
-function context(authenticatedUser: string | null, seed: Record<string, any[]> = {}) {
+function context(authenticatedUser: string | null, seed: Record<string, any[]> = {}, dbOpts: FakeDbOptions = {}) {
   const db = makeFakeDb({
     users: users(),
     teams: teams(),
@@ -152,7 +152,7 @@ function context(authenticatedUser: string | null, seed: Record<string, any[]> =
     pending_messages: [],
     conversations: [],
     ...seed,
-  });
+  }, dbOpts);
   const emitted: Array<{ reference: unknown; args: any }> = [];
   const scheduled: Array<{ delay: number; reference: unknown; args: any }> = [];
   // run*/dispatch: a threads.* reference runs the real handler over this same
@@ -841,6 +841,67 @@ describe("createChannel", () => {
     const ctx = context(ALICE, { chat_channels: full });
     await expect(call(createChannel, ctx, { team_id: TEAM, name: "one-too-many" }))
       .rejects.toThrow("at most 200 channels");
+  });
+});
+
+describe("a team with hundreds of DMs", () => {
+  // A DM's name is "", so by name every DM sorts ahead of every room. Union
+  // held 190 DMs: the rail's first 200 rows by name ended in the g's, #team
+  // vanished for everyone, and no one could create a channel (Nov 2026). Read
+  // in the schema's real index order, since order is the whole bug.
+  const dms = Array.from({ length: 250 }, (_, i) => ({
+    _id: `dm-${i}`, team_id: TEAM, name: "", kind: "dm", dm_key: `dm:${i}`,
+    created_by: BOB, created_at: 1, updated_at: 1,
+  }));
+  const seed = () => ({
+    chat_channels: [
+      ...channels(),
+      ...dms,
+      { _id: "room-team", team_id: TEAM, name: "team", created_by: BOB, created_at: 1, updated_at: 1 },
+      { _id: "room-zz", team_id: TEAM, name: "zz-private", kind: "private", created_by: BOB, created_at: 1, updated_at: 1 },
+      { _id: "dm-elsewhere", team_id: OTHER_TEAM, name: "", kind: "dm", dm_key: "dm:x", created_by: ALICE, created_at: 1, updated_at: 1 },
+    ],
+    chat_channel_members: [
+      { _id: "cm-1", channel_id: "dm-249", user_id: ALICE, added_by: BOB, added_at: 1 },
+      { _id: "cm-2", channel_id: "dm-elsewhere", user_id: ALICE, added_by: ALICE, added_at: 1 },
+    ],
+  });
+  const indexed = { indexes: schemaIndexes(schema as any) };
+
+  test("the rail lists every room, the caller's own DMs, and nobody else's", async () => {
+    const ids = (await call(listChannels, context(ALICE, seed(), indexed), { team_id: TEAM })).channels.map((c: any) => c._id);
+    expect(ids).toEqual(expect.arrayContaining([CHANNEL, OTHER_CHANNEL, "room-team", "dm-249"]));
+    expect(ids).toHaveLength(4);
+  });
+
+  test("past the cap, the rail keeps the caller's DMs with the newest lines", async () => {
+    const s = seed();
+    s.chat_channel_members = dms.map((d, i) => ({ _id: `cm-all-${i}`, channel_id: d._id, user_id: ALICE, added_by: BOB, added_at: 1 }));
+    // The 200 with lines are every even DM and the odd ones below 150: no
+    // slice of the member rows from either end, so only ranking finds them.
+    const lined = dms.map((d) => Number(d._id.slice(3))).filter((i) => i % 2 === 0 || i < 150);
+    const lines = lined.map((i) => ({ _id: `line-${i}`, channel_id: `dm-${i}`, user_id: BOB, content: "hi", created_at: 10_000 + i }));
+    const ids = (await call(listChannels, context(ALICE, { ...s, chat_messages: lines }, indexed), { team_id: TEAM })).channels
+      .filter((c: any) => c.kind === "dm").map((c: any) => c._id);
+    expect(ids.sort()).toEqual(lined.map((i) => `dm-${i}`).sort());
+  });
+
+  test("an old DM the caller never opened outlasts hundreds of newer rooms", async () => {
+    const many = Array.from({ length: 520 }, (_, i) => ({ ...dms[0], _id: `dm-${i}`, dm_key: `dm:${i}` }));
+    const ctx = context(ALICE, {
+      ...seed(),
+      chat_channels: [...channels(), ...many],
+      chat_channel_members: many.map((d, i) => ({ _id: `cm-${i}`, channel_id: d._id, user_id: ALICE, added_by: BOB, added_at: i, _creationTime: i })),
+      chat_messages: [{ _id: "line-0", channel_id: "dm-0", user_id: BOB, content: "still here", created_at: 49_000 }],
+    }, indexed);
+    const ids = (await call(listChannels, ctx, { team_id: TEAM })).channels.map((c: any) => c._id);
+    expect(ids).toContain("dm-0");
+  });
+
+  test("DMs never count against the cap on named rooms", async () => {
+    const ctx = context(BOB, seed(), indexed);
+    const made = await call(createChannel, ctx, { team_id: TEAM, name: "deals" });
+    expect(made.created).toBe(true);
   });
 });
 
