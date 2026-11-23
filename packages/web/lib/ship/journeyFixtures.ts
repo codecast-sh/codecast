@@ -1,4 +1,4 @@
-// Two change flows as their pushed workflows rows (nodes, edges, and the source
+// Three change flows as their pushed workflows rows (nodes, edges, and the source
 // pushedFlow reads backends, visit limits, stops and graph attributes from), for
 // the journey presenter's tests and the render gallery's run cards:
 //
@@ -9,6 +9,14 @@
 //   non-zero to ask a person (the ask route) or clears the change to Land with
 //   no card (the cleared route), Decide, Land (whose refusal goes through a
 //   script off the main path before it stops), Deploy.
+// - LAND_FLOW: Union's change (outreach/line/change.cast and land.cast, Nov 23):
+//   one segment, Land (PR, CI beside Review joined at Read, Merge), whose side
+//   routes send findings back to the session, run CI again when main moved,
+//   wait for a green main, or ask a person's card on Merge's exit 6. As a
+//   pushed row it has no `asks_if`: land.cast writes it on the card, and a row
+//   stores neither land.cast's source nor that attribute. LAND_REPO_FLOW is
+//   the same graph as Union's checkout reports it (repoFlows, parsed), which
+//   the Ship picker reads there: the card's gate carries it.
 //
 // Hand-written, so a flow rewritten in the library does not move what they show.
 // Pure and free of the `@/` alias: the phone's bundle imports the gallery.
@@ -206,4 +214,132 @@ export const BRANCHING_FLOW: FixtureFlowRow = {
     { from: "fix_review", to: "check" },
     { from: "revise", to: "check" },
   ],
+};
+
+// Land's stations as the parser names them inside the flow that uses it (land__<station>), its card's decide segment
+// one level further in (land__card__<station>).
+const inLand = (id: string, label: string, type: string, extra: Partial<Node> = {}) => node(`land__${id}`, label, type, extra);
+// Land's stops, each routed by the composing flow to the session's fix for it, or to its own stop.
+const LAND_STOPS: Array<[string, string]> = [
+  ["changes", "Changes asked"], ["conflict", "Conflict"], ["revise", "Revise"], ["dropped", "Dropped"], ["unpushed", "No pull request"],
+  ["unread", "CI unread"], ["unreviewed", "No review"], ["rejected", "Rejected"], ["unmerged", "Not merged"], ["red_main", "Not rebased"],
+];
+
+export const LAND_FLOW: FixtureFlowRow = {
+  slug: "gallery-change-land",
+  name: "gallery-change-land",
+  label: "Change",
+  kind: "line",
+  source: `digraph change {
+  graph [kind="line", label="Change", takes="task,branch"]
+  land [flow="land"]
+  fix [label="Fix findings", backend=subject, max_visits=3]
+  fix_conflict [label="Resolve conflict", backend=subject, max_visits=3]
+  revise [label="Revise", backend=subject, max_visits=3]
+  stopped [shape=Msquare, label="Not landed", stop="$stop_reason"]
+}`,
+  nodes: [
+    node("start", "start", "start"),
+    node("fix", "Fix findings", "agent"),
+    node("fix_conflict", "Resolve conflict", "agent"),
+    node("revise", "Revise", "agent"),
+    node("exit", "Merged", "exit"),
+    node("stopped", "Not landed", "exit"),
+    inLand("pr", "PR", "command", { timeout: 600 }),
+    inLand("checks", "CI and review", "parallel_fanout"),
+    inLand("ci", "CI", "command", { timeout: 3_600 }),
+    inLand("review", "Review", "agent", { timeout: 5_400 }),
+    inLand("read", "Read", "parallel_fanin"),
+    inLand("ci_alone", "CI", "command", { timeout: 3_600 }),
+    inLand("brief", "Brief", "command", { timeout: 300 }),
+    inLand("merge", "Merge", "command", { timeout: 1_800 }),
+    inLand("retest", "CI again, main moved", "command", { timeout: 3_600 }),
+    inLand("wait_main", "Wait for green main", "command", { timeout: 90_000 }),
+    inLand("why_card", "Why a person", "command", { timeout: 120 }),
+    inLand("approved", "Person said Ship", "command", { timeout: 60 }),
+    inLand("landed", "Merged", "command"),
+    inLand("conflicted", "Does not fit main", "command", { timeout: 60 }),
+    ...LAND_STOPS.map(([id, label]) => inLand(id, label, "command")),
+    inLand("card__decide", "Decide", "human"),
+    inLand("card__ship", "Ship", "command"),
+    inLand("card__revise", "Revise", "command"),
+    inLand("card__dropped", "Dropped", "command"),
+    inLand("card", "Decide", "conditional"),
+    node("land", "Land", "conditional"),
+  ],
+  edges: [
+    { from: "start", to: "land" },
+    { from: "fix", to: "land" },
+    { from: "fix_conflict", to: "land" },
+    { from: "revise", to: "land" },
+    { from: "land__landed", to: "exit", condition: "outcome = success" },
+    ...LAND_STOPS.flatMap(([id]) => [
+      { from: `land__${id}`, to: "fix", label: "changes asked", condition: `outcome = failure and land__${id}.json.exit = changes` },
+      { from: `land__${id}`, to: "fix_conflict", label: "conflict", condition: `outcome = failure and land__${id}.json.exit = conflict` },
+      { from: `land__${id}`, to: "revise", label: "revise", condition: `outcome = failure and land__${id}.json.exit = revise` },
+      { from: `land__${id}`, to: "stopped", condition: "outcome = failure" },
+    ]),
+    { from: "land", to: "land__pr" },
+    { from: "land__pr", to: "land__checks", condition: `outcome = success and "on" != "off"` },
+    { from: "land__pr", to: "land__ci_alone", label: "review off", condition: `outcome = success and "on" = "off"` },
+    { from: "land__pr", to: "land__unpushed" },
+    { from: "land__checks", to: "land__ci" },
+    { from: "land__checks", to: "land__review" },
+    { from: "land__ci", to: "land__read" },
+    { from: "land__review", to: "land__read" },
+    { from: "land__read", to: "land__unread", label: "CI unread", condition: "land__ci.json.error" },
+    { from: "land__read", to: "land__unreviewed", label: "no verdict", condition: "land__review.json.verdict != ship and land__review.json.verdict != changes and land__review.json.verdict != rejected" },
+    { from: "land__read", to: "land__rejected", label: "rejected", condition: "land__review.json.verdict = rejected" },
+    { from: "land__read", to: "land__brief", label: "findings", condition: "land__review.json.verdict = changes or (land__ci.json.green != true and land__ci.json.blocked_by_main != true)" },
+    { from: "land__read", to: "land__wait_main", label: "main is red", condition: "land__ci.json.blocked_by_main = true" },
+    { from: "land__read", to: "land__merge", label: "green, approved", condition: "land__ci.json.green = true" },
+    { from: "land__read", to: "land__unreviewed" },
+    { from: "land__ci_alone", to: "land__unread", label: "CI unread", condition: "land__ci_alone.json.error" },
+    { from: "land__ci_alone", to: "land__wait_main", label: "main is red", condition: "land__ci_alone.json.blocked_by_main = true" },
+    { from: "land__ci_alone", to: "land__merge", label: "green", condition: "land__ci_alone.json.green = true" },
+    { from: "land__ci_alone", to: "land__brief" },
+    { from: "land__brief", to: "land__merge", label: "nothing to fix", condition: "land__brief.exit_code = 10" },
+    { from: "land__brief", to: "land__changes" },
+    { from: "land__why_card", to: "land__card" },
+    { from: "land__approved", to: "land__merge" },
+    { from: "land__merge", to: "land__landed", condition: "outcome = success" },
+    { from: "land__merge", to: "land__retest", label: "main moved", condition: "land__merge.exit_code = 3" },
+    { from: "land__merge", to: "land__conflicted", label: "conflict", condition: "land__merge.exit_code = 4" },
+    { from: "land__merge", to: "land__pr", label: "head moved", condition: "land__merge.exit_code = 5" },
+    { from: "land__merge", to: "land__why_card", label: "edits what judges it", condition: "land__merge.exit_code = 6" },
+    { from: "land__merge", to: "land__unmerged" },
+    { from: "land__retest", to: "land__unread", label: "CI unread", condition: "land__retest.json.error" },
+    { from: "land__retest", to: "land__wait_main", label: "main is red", condition: "land__retest.json.blocked_by_main = true" },
+    { from: "land__retest", to: "land__merge", label: "green", condition: "land__retest.json.green = true" },
+    { from: "land__retest", to: "land__brief" },
+    { from: "land__wait_main", to: "land__retest", condition: "outcome = success" },
+    { from: "land__wait_main", to: "land__conflicted", label: "conflict", condition: "land__wait_main.exit_code = 4" },
+    { from: "land__conflicted", to: "land__conflict" },
+    { from: "land__wait_main", to: "land__red_main" },
+    { from: "land__card__ship", to: "land__approved" },
+    { from: "land__card__revise", to: "land__revise", label: "revise", condition: "outcome = failure and land__card__revise.json.exit = revise" },
+    { from: "land__card__revise", to: "land__dropped", label: "dropped", condition: "outcome = failure and land__card__revise.json.exit = dropped" },
+    { from: "land__card__dropped", to: "land__revise", label: "revise", condition: "outcome = failure and land__card__dropped.json.exit = revise" },
+    { from: "land__card__dropped", to: "land__dropped", label: "dropped", condition: "outcome = failure and land__card__dropped.json.exit = dropped" },
+    { from: "land__card", to: "land__card__decide" },
+    { from: "land__card__decide", to: "land__card__ship", label: "[S] Ship :: Lands it on the main branch" },
+    { from: "land__card__decide", to: "land__card__revise", label: "[R] Revise :: Your note goes to the session that made it; the change comes back through review" },
+    { from: "land__card__decide", to: "land__card__dropped", label: "[D] Drop :: Closes it unlanded; the session hears your reason" },
+  ],
+};
+
+/** What makes Union's Land ask a person: the `asks_if` on its card (land.cast). */
+export const LAND_ASKS = "it edits CI or the flow, or touches consent, bulk sends or bulk changes to people's records";
+
+/** LAND_FLOW as Union's checkout reports it (cli repoFlowsReport, parsed): the session's fix stations its own, Land's
+ *  steps marked as the segment's, and the card's gate holding the `asks_if` the parser copies onto it. */
+export const LAND_REPO_FLOW = {
+  slug: "change", name: "change", kind: "line" as const, label: "Change", description: null, takes: ["task", "branch"],
+  nodes: LAND_FLOW.nodes.map((n) => ({
+    ...n,
+    ...(["fix", "fix_conflict", "revise"].includes(n.id) ? { backend: "subject", max_visits: 3 } : {}),
+    ...(n.id === "land" ? { segment: "land", segment_entry: true, segment_flow: "land" } : n.id.startsWith("land__") ? { segment: "land" } : {}),
+    ...(n.id === "land__card__decide" ? { asks_if: LAND_ASKS } : {}),
+  })),
+  edges: LAND_FLOW.edges,
 };

@@ -19,7 +19,7 @@ import { type AppFlow } from '@codecast/web/lib/line/flowPool';
 import { flowDiagram, routeTail, runReached, stepStates, type DiagramStep, type SideRoute, type StepState } from '@codecast/web/lib/line/flowDiagram';
 import { flowRunState, type FlowRunTone } from '@codecast/web/lib/line/flowFence';
 import { takesSessionChange } from '@codecast/shared/contracts/flowPool';
-import { gateWaitWords, holdWords, journeyOf, sentBackWords, stopWords, waitWords, WHO_WORDS, type JourneyNow, type JourneyStage, type JourneyWait, type StageState } from '@codecast/web/lib/ship/journey';
+import { gateWaitWords, holdWords, insideWords, journeyOf, sentBackWords, stopWords, waitWords, WHO_WORDS, type JourneyNow, type JourneyStage, type JourneyWait, type StageState } from '@codecast/web/lib/ship/journey';
 import type { FlowEdit } from '@codecast/shared/contracts/flowEdit';
 import { asGitDiff, editDrawing, editLines, editRun, liveDeploy, type EditMark } from '@codecast/web/lib/line/flowEditCard';
 import { CastDiff } from '@/components/CastDiff';
@@ -83,6 +83,8 @@ function ShipBody({ flow, run }: { flow: AppFlow; run: RunRow }) {
               <RNText style={[styles.stepName, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.label}</RNText>
               <RNText style={[styles.who, { color: s.state === 'back' ? Theme.violet : Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{whoWords(s)}</RNText>
             </RNView>
+            {/* A segment's inside, in a few words: the steps a passing run takes through it. */}
+            {s.inside ? <RNText style={[styles.who, { marginLeft: 20, color: Theme.textDim }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{insideWords(s.inside)}</RNText> : null}
             {/* A fan-out's branches run side by side: each with its own state. */}
             {s.branches?.map((b) => (
               <RNView key={b.id} style={[styles.step, { marginLeft: 20, opacity: b.state === 'idle' ? 0.55 : 1 }]}>

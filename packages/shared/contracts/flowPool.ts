@@ -160,14 +160,14 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
     if (t === n.id) top.set(t, n);
     else if (!n.segment_exit && n.type !== "exit") steps.set(t, (steps.get(t) ?? 0) + 1);
   }
-  const outOf = new Map<string, Array<{ to: string; when: string | null; score: number }>>();
+  const outOf = new Map<string, Array<{ to: string; when: string | null; score: number; success: boolean }>>();
   for (const e of edges) {
     const from = segmentTopOf(e.from);
     const to = segmentTopOf(e.to);
     if (from === to) continue;
     const list = outOf.get(from) ?? [];
     const when = edgeWhen(e);
-    if (!list.some((x) => x.to === to && x.when === when)) list.push({ to, when, score: passScore(e) });
+    if (!list.some((x) => x.to === to && x.when === when)) list.push({ to, when, score: passScore(e), success: /\boutcome\s*=\s*success\b/.test(e.condition ?? "") });
     outOf.set(from, list);
   }
   const start = [...top.values()].find((n) => n.type === "start");
@@ -186,7 +186,14 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
   const main = new Set<string>();
   const path: string[] = [];
   // The subject's own stations (backend=subject: the session the change came from fixes what a stage found) are a way back, never the way on.
-  const rank = (x: { to: string; score: number }) => x.score - (top.get(x.to)?.type === "exit" ? 10 : 0) - (top.get(x.to)?.backend === "subject" ? 20 : 0);
+  // An end comes after any station, unless its edge is the station's only `outcome = success`: a station only another
+  // outcome reaches never outranks where a success goes.
+  const exit = (id: string) => top.get(id)?.type === "exit";
+  const best = (list: ReadonlyArray<{ to: string; score: number; success: boolean }>) => {
+    const ends = !list.some((x) => x.success && !exit(x.to));
+    const rank = (x: (typeof list)[number]) => x.score - (exit(x.to) && !(ends && x.success) ? 10 : 0) - (top.get(x.to)?.backend === "subject" ? 20 : 0);
+    return [...list].sort((a, b) => rank(b) - rank(a))[0]?.to;
+  };
   for (let at = start?.id; at && !main.has(at); ) {
     main.add(at);
     path.push(at);
@@ -198,13 +205,13 @@ export function foldFlow(nodes: ReadonlyArray<FlowNodeIn>, edges: ReadonlyArray<
           if (top.get(b)?.type === "parallel_fanin") { join ??= b; break; }
           main.add(b);
           path.push(b);
-          b = [...(outOf.get(b) ?? [])].filter((x) => !main.has(x.to)).sort((x, y) => rank(y) - rank(x))[0]?.to;
+          b = best((outOf.get(b) ?? []).filter((x) => !main.has(x.to)));
         }
       }
       at = join;
       continue;
     }
-    at = [...(outOf.get(at) ?? [])].filter((x) => !main.has(x.to)).sort((a, b) => rank(b) - rank(a))[0]?.to;
+    at = best((outOf.get(at) ?? []).filter((x) => !main.has(x.to)));
   }
   const label = (id: string) => top.get(id)?.label ?? id;
   const stations: FlowStation[] = [];

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { approvalOf, approvalWords, canAnswer, deployHold, journeyOf, journeyStages, journeyWords, landedSha, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
-import { BRANCHING_FLOW, FANOUT_FLOW } from "../journeyFixtures";
-import { pushedFlow } from "../../line/flowPool";
+import { approvalOf, approvalWords, canAnswer, deployHold, insideWords, journeyOf, journeyStages, journeyWords, landedSha, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { BRANCHING_FLOW, FANOUT_FLOW, LAND_ASKS, LAND_FLOW, LAND_REPO_FLOW } from "../journeyFixtures";
+import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
 import { SHIPPED_FLOWS } from "../../line/shippedFlows.generated";
 import { GALLERY_FLOW, renderGalleryRecords } from "../../renderGallery";
 // The library change flow, parsed with its segments expanded (bun packages/cli/scripts/gen-change-graph-fixture.ts).
@@ -444,5 +444,89 @@ describe("approvalOf", () => {
     } as any;
     expect(journeyStages(g).find((s) => s.role === "land")).toMatchObject({ label: "Land", who: "person" });
     expect(approvalWords(approvalOf(g))).toBe("Asks you every time");
+  });
+});
+
+// Union's change: one segment, Land, as Union's checkout reports it (the card's gate holds land.cast's asks_if).
+describe("a segment's inside", () => {
+  // As the Ship picker reads it in Union's checkout: the repository's own flow, folded into the pool.
+  const land = flowBySlug(appPool([], [LAND_REPO_FLOW]), "change")!;
+  const ASKS = LAND_ASKS;
+  const stage = () => journeyStages(land)[0];
+  test("the stage holds its passing path, read from the graph: PR, CI beside Review, Merge, then the segment's end", () => {
+    const s = stage();
+    expect(journeyStages(land).map((x) => [x.label, x.who])).toEqual([["Land", "agent"]]);
+    expect(s.inside!.path.map((p) => [p.id, p.label, p.branches?.map((b) => b.label) ?? null])).toEqual([
+      ["land__pr", "PR", null], ["land__checks", "CI + Review", ["CI", "Review"]], ["land__merge", "Merge", null],
+    ]);
+    expect(insideWords(s.inside!)).toBe("PR · CI + Review · Merge");
+    expect(s.inside!.end).toBe("Merged");
+  });
+  test("each side route leaves the step it turns off, by its edge's label, and says where it goes back to", () => {
+    const routes = stage().inside!.routes.map((r) => [r.from, r.label, r.steps.map((x) => x.label).join(" → "), r.to.kind === "step" ? r.to.label : r.to.kind]);
+    expect(routes).toEqual([
+      ["land__checks", "findings", "Brief", "session"],
+      ["land__checks", "main is red", "Wait for green main → CI again, main moved", "Merge"],
+      ["land__merge", "main moved", "CI again, main moved", "Merge"],
+      ["land__merge", "conflict", "Does not fit main", "session"],
+      ["land__merge", "head moved", "", "PR"],
+      ["land__merge", "edits what judges it", "Why a person → Decide → Person said Ship", "Merge"],
+    ]);
+    // A route whose condition the parser decided false (the review left on) is no route.
+    expect(routes.some(([, label]) => label === "review off")).toBe(false);
+  });
+  test("the person's card is a route of its own that asks only then, in its card's words; the chip says so and the stage is no person's", () => {
+    const card = stage().inside!.routes.find((r) => r.asks)!;
+    expect(card.steps.map((x) => [x.label, x.who])).toEqual([["Why a person", "auto"], ["Decide", "person"], ["Person said Ship", "auto"]]);
+    expect(card.asks).toEqual({ when: ASKS });
+    expect(stage().inside!.routes.filter((r) => r.asks)).toHaveLength(1);
+    expect(approvalOf(land)).toEqual({ kind: "if", when: ASKS });
+    expect(approvalWords(approvalOf(land))).toBe(`Asks you if ${ASKS}`);
+  });
+  test("asks_if is read from the gate, else the segment holding it, out to the flow's own segment node", () => {
+    const at = (id: string | null) => ({ ...land, nodes: land.nodes.map(({ asks_if: _a, ...n }) => (n.id === id ? { ...n, asks_if: "it is Tuesday" } : n)) });
+    expect(approvalOf(at("land__card"))).toEqual({ kind: "if", when: "it is Tuesday" });
+    expect(approvalOf(at("land"))).toEqual({ kind: "if", when: "it is Tuesday" });
+    expect(approvalOf(at(null))).toEqual({ kind: "if", when: null });
+    // A pushed row stores no asks_if, and its source (change.cast) does not name the card: it can only say "sometimes".
+    expect(approvalWords(approvalOf(pushedFlow({ _id: "wf_land", ...LAND_FLOW })))).toBe("Sometimes asks you");
+  });
+  test("who sent it back: Land's own findings are not the card's, though both sit in Land; a Revise at the card is the person's", () => {
+    let t = 1000;
+    const at = (id: string, status = "completed") => st(id, status, (t += 10));
+    const upTo = [at("land"), at("land__pr"), at("land__checks"), at("land__ci"), at("land__review"), at("land__read")];
+    const back = (node: string, steps: any[]) => journeyOf(land, run({ current_node_id: node, waiting_on_session: { node_id: node, since: t, note: "" }, node_statuses: [...steps, at(node, "running")] })).now;
+    expect(back("fix", [...upTo, at("land__brief"), at("land__changes", "failed")])).toMatchObject({ kind: "session", by: null });
+    expect(back("revise", [...upTo, at("land__merge", "failed"), at("land__why_card"), at("land__card"), at("land__card__decide"), at("land__card__revise", "failed"), at("land__revise", "failed")])).toMatchObject({ kind: "session", by: "the person" });
+  });
+  test("round 2 back at PR: nothing inside reads as last round's", () => {
+    let t = 1000;
+    const at = (id: string, status = "completed", visits = 1) => st(id, status, (t += 10), { visits });
+    const round1 = [at("land"), at("land__pr"), at("land__checks"), at("land__ci"), at("land__review"), at("land__read"), at("land__merge", "failed"), at("land__retest"), at("land__brief"), at("land__changes", "failed"), at("fix")];
+    const j = journeyOf(land, run({ current_node_id: "land__pr", node_statuses: [...round1, at("land__pr", "running", 2)] }), [], { id: ME, decision: null });
+    expect([j.stages[0].state, j.stages[0].round]).toEqual(["active", 2]);
+    expect(j.stages[0].inside!.path.map((p) => p.state)).toEqual(["active", "idle", "idle"]);
+    expect(j.stages[0].inside!.routes.every((r) => r.state === "idle" && r.steps.every((s) => s.state === "idle"))).toBe(true);
+  });
+  test("a segment whose inside is one step, nothing off it, draws none", () => {
+    expect(journeyStages(branching).some((s) => s.inside)).toBe(false);
+    expect(journeyStages(change).some((s) => s.inside)).toBe(false);
+  });
+  test("on a run: the route that sent the work back reads back; the card a person must answer waits, theirs to answer", () => {
+    const records = renderGalleryRecords(1_790_000_000_000, ME, "team:t1");
+    const read = (id: string, decision: unknown = null) => {
+      const r: any = records.workflowRuns.find((x: any) => x._id === id)!;
+      return journeyOf(land, r, [], { id: ME, decision: decision as any });
+    };
+    const back = read(GALLERY_FLOW.shipLandBack);
+    expect(back.stages[0].state).toBe("back");
+    expect(back.stages[0].inside!.path.map((p) => p.state)).toEqual(["done", "done", "idle"]);
+    expect(back.stages[0].inside!.routes.map((r) => r.state)).toEqual(["back", "idle", "idle", "idle", "idle", "idle"]);
+    const atCard = read(GALLERY_FLOW.shipLandCard, card());
+    expect(journeyWords(atCard).words).toBe("Your call");
+    expect(atCard.stages[0].inside!.path.map((p) => p.state)).toEqual(["done", "done", "routed"]);
+    const route = atCard.stages[0].inside!.routes.find((r) => r.asks)!;
+    expect(route.state).toBe("waiting");
+    expect(route.steps.map((x) => [x.label, x.state, x.who])).toEqual([["Why a person", "done", "auto"], ["Decide", "waiting", "you"], ["Person said Ship", "idle", "auto"]]);
   });
 });

@@ -203,6 +203,12 @@ export function ShipAgainButton({ flow, conversationId, sessionTitle, primary }:
   );
 }
 
+/** Whether a flow asks the person before the change lands, as a chip. */
+function Asks({ flow }: { flow: AppFlow }) {
+  const approval = approvalOf(flow);
+  return <span className="shp-asks" data-asks={approval.kind === "never" ? undefined : approval.kind}>{approvalWords(approval)}</span>;
+}
+
 function PoolPicker({ conversationId, session, onRun }: { conversationId: string; session: string; onRun: (flow: AppFlow) => void }) {
   // The session's workspace, not the active one: the pool `cast flow run` reads where the session runs.
   const workspace = useInboxStore((s) => sessionWorkspaceOf(s as any, conversationId));
@@ -229,24 +235,23 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
       {pool.length > 1 ? (
         // A native radio group: one tab stop, arrow keys move the pick, Enter ships the picked flow.
         <div className="shp-flows" role="radiogroup" aria-label="Flows">
-          {pool.map((f) => { const approval = approvalOf(f); return (
+          {pool.map((f) => (
             <label key={f.slug} className="shp-flow" onDoubleClick={() => onRun(f)} data-run-through-flow={f.slug}>
               <input type="radio" className="shp-radio" name={`ship-flow-${conversationId}`} value={f.slug} checked={f.slug === flow.slug}
                 onChange={() => setPicked(f.slug)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onRun(f); } }} />
               <b>{f.label}{f === fallback ? <span className="shp-default" data-run-through-default=""><span className="sr-only"> </span>Default</span> : f.base ? <span className="shp-base">on {f.base}</span> : null}</b>
-              <span className="shp-path">
-                <span className="shp-asks" data-asks={approval.kind === "never" ? undefined : approval.kind}>{approvalWords(approval)}</span>
-                {journeyStages(f).map((s) => s.label).join(" → ")}
-              </span>
+              <span className="shp-path">{journeyStages(f).map((s) => s.label).join(" → ")}</span>
+              <Asks flow={f} />
             </label>
-          ); })}
+          ))}
         </div>
       ) : null}
       <div className="shp-preview" data-flow={flow.slug}>
         <JourneyView journey={journey} now_ms={0} />
       </div>
       <footer className="shp-foot">
-        <span className="shp-flowname">{pool.length > 1 ? null : <>{flow.label}{flow === fallback ? <span className="shp-default">Default</span> : null}</>}</span>
+        {/* A lone flow has no list row, so its name and whether it asks the person sit here. */}
+        <span className="shp-flowname">{pool.length > 1 ? null : <>{flow.label}{flow === fallback ? <span className="shp-default">Default</span> : null}<Asks flow={flow} /></>}</span>
         <button type="button" className="sj-btn" data-primary onClick={() => onRun(flow)} aria-label={pool.length > 1 ? (flow.label === "Ship" ? "Ship this change" : `Ship through ${flow.label}`) : undefined} data-run-through-go={flow.slug}>Ship</button>
       </footer>
     </div>
