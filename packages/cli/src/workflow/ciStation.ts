@@ -225,6 +225,7 @@ class Station {
   private logs = new Map<string, { code: number; out: string }>();
   private jobs = new Map<number, Job[]>();
   private mainRuns = new Map<string, MainRun[]>();
+  private allowEscapes = true;
   /** After the wait, every gh call must start before this. */
   private limit = Infinity;
 
@@ -418,9 +419,21 @@ class Station {
     return out;
   }
 
+  /**
+   * gh 2.105 refuses to print a response with terminal escape sequences unless told to, and every Actions log has
+   * them (the parser strips them). A gh older than the flag rejects it, so it is dropped for the rest of the run.
+   */
   private log(jobId: string | number): { code: number; out: string } {
     const key = String(jobId);
-    if (!this.logs.has(key)) this.logs.set(key, this.call(["api", `repos/${this.repo}/actions/jobs/${key}/logs`]));
+    if (!this.logs.has(key)) {
+      const read = () => this.call(["api", `repos/${this.repo}/actions/jobs/${key}/logs`, ...(this.allowEscapes ? ["--allow-escape-sequences"] : [])]);
+      let r = read();
+      if (this.allowEscapes && r.code !== 0 && /unknown flag: --allow-escape-sequences/.test(r.out)) {
+        this.allowEscapes = false;
+        r = read();
+      }
+      this.logs.set(key, r);
+    }
     return this.logs.get(key)!;
   }
 

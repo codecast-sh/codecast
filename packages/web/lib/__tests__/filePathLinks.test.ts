@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import React from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ReactMarkdown from "react-markdown";
-import { filePathMention, filePathHref, parseFilePathHref, FILE_PATH_SCAN_RE, mentionFromMatch, namedAbsolutePaths, resolveMentionPath } from "../filePathLinks";
+import { filePathMention, filePathHref, parseFilePathHref, matchSessionChangedFile, FILE_PATH_SCAN_RE, mentionFromMatch, namedAbsolutePaths, resolveMentionPath } from "../filePathLinks";
 import { entityRemarkPlugins } from "../remarkEntityIds";
 import { resolveVaultTarget, filesHref } from "../vault/vaultHref";
 
@@ -77,6 +77,12 @@ describe("hrefs", () => {
     expect(parseFilePathHref("/home/ashot/project/main.ts:12:4")).toEqual({ path: "/home/ashot/project/main.ts", line: 12 });
     expect(parseFilePathHref("/tmp/report.md:12-20")).toEqual({ path: "/tmp/report.md", line: 12 });
     expect(parseFilePathHref("/Users/ashot/.codex/AGENTS.md")).toEqual({ path: "/Users/ashot/.codex/AGENTS.md" });
+    expect(parseFilePathHref("file:///Users/alexandergreen/.gemini/antigravity-cli/brain/997582c1/perf-scorecard.md")).toEqual({
+      path: "/Users/alexandergreen/.gemini/antigravity-cli/brain/997582c1/perf-scorecard.md",
+    });
+    expect(parseFilePathHref("file:///Users/ashot/My%20Project/Message.tsx#L123-L145")).toEqual({
+      path: "/Users/ashot/My Project/Message.tsx", line: 123,
+    });
   });
 
   test("file destinations decode spaces once and preserve filename characters", () => {
@@ -181,10 +187,36 @@ describe("remark integration", () => {
     expect(html).not.toContain("tasks%2F");
   });
 
-  test("inline code and existing links are left to the component layer", () => {
-    const html = render("run `lib/x.ts` and [doc](lib/y.ts)");
+  test("inline code and existing links are left to the component layer, while file:// links rewrite to /files?path=", () => {
+    const html = render("run `lib/x.ts` and [doc](lib/y.ts) and [perf-scorecard.md](file:///Users/alexandergreen/.gemini/antigravity-cli/brain/997582c1/perf-scorecard.md#L10-L20)");
     expect(html).toContain("<code>lib/x.ts</code>");
     expect(html).toContain('href="lib/y.ts"');
     expect(html).not.toContain("path=lib%2Fx.ts");
+    expect(html).toContain('href="/files?path=%2FUsers%2Falexandergreen%2F.gemini%2Fantigravity-cli%2Fbrain%2F997582c1%2Fperf-scorecard.md&amp;l=10"');
+    expect(html).toContain(">perf-scorecard.md</a>");
+  });
+});
+
+describe("matchSessionChangedFile", () => {
+  const changes = [
+    { filePath: "/Users/alex/Posix/littlebird-perf-hillclimb/apps/desktop/src/Message.tsx", changeType: "edit" },
+    { filePath: "/Users/alex/.gemini/antigravity-cli/brain/997582c1/perf-scorecard.md", changeType: "write" },
+    { filePath: "abc1234", changeType: "commit" },
+  ];
+  const ctx = { base: "/Users/alex/Posix/littlebird", home: "/Users/alex" };
+
+  test("matches exact artifact and worktree files, relative suffixes, and worktree directories", () => {
+    expect(matchSessionChangedFile("/Users/alex/.gemini/antigravity-cli/brain/997582c1/perf-scorecard.md", changes, ctx)).toEqual({
+      kind: "file",
+      filePath: "/Users/alex/.gemini/antigravity-cli/brain/997582c1/perf-scorecard.md",
+    });
+    expect(matchSessionChangedFile("apps/desktop/src/Message.tsx", changes, ctx)).toEqual({
+      kind: "file",
+      filePath: "/Users/alex/Posix/littlebird-perf-hillclimb/apps/desktop/src/Message.tsx",
+    });
+    expect(matchSessionChangedFile("/Users/alex/Posix/littlebird-perf-hillclimb", changes, ctx)).toEqual({
+      kind: "dir",
+    });
+    expect(matchSessionChangedFile("/Users/alex/Posix/untouched.ts", changes, ctx)).toBeNull();
   });
 });

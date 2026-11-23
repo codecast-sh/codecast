@@ -278,7 +278,10 @@ describe("mergeBranch", () => {
     const view = { state: "OPEN", mergeable: "MERGEABLE", statusCheckRollup: [{ name: "ci", conclusion: "SUCCESS" }], mergeCommit: { oid: "squashed" } };
     const green = scripted({ "git rev-parse": { stdout: "abc\n" }, "gh pr view": { stdout: JSON.stringify(view) } });
     expect(mergeBranch({ cwd: "/repo", branch: "b", into: "main", pr_url: pr, exec: green.exec })).toEqual({ kind: "merged", sha: "squashed", into: "main", via: "pr" });
-    expect(green.calls.find((c) => c.args[0] === "pr" && c.args[1] === "merge")?.args).toEqual(["pr", "merge", pr, "--squash", "--match-head-commit", "abc", "--delete-branch"]);
+    expect(green.calls.find((c) => c.args[0] === "pr" && c.args[1] === "merge")?.args).toEqual(["pr", "merge", pr, "--squash", "--match-head-commit", "abc"]);
+    // Only origin's branch goes, and only while it stands at the merged head: gh's --delete-branch would also take
+    // the local branch and any worktree holding it.
+    expect(green.calls.at(-1)?.args).toEqual(["push", "--force-with-lease=refs/heads/b:abc", "origin", "--delete", "b"]);
     expect(green.calls.some((c) => c.args.join(" ") === "merge-base --is-ancestor squashed origin/main")).toBe(true);
 
     // gh calls it merged, but main does not hold the commit: nothing landed.
@@ -294,11 +297,15 @@ describe("mergeBranch", () => {
     expect(landedSha(lagging, "/repo", pr, "main", () => {})).toEqual({ sha: "squashed" });
     expect(reads).toBe(3);
 
-    // gh exits 1 after merging when it cannot delete the local branch: the PR reads merged, so it counts.
-    const localHalf = scripted({ "gh pr merge": { status: 1, stderr: "failed to delete local branch b" }, "gh pr view": { stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: "squashed" } }) } });
-    expect(mergePullRequest(localHalf.exec, "/repo", { pr, head: "abc", into: "main" })).toEqual({ sha: "squashed" });
+    // gh can exit 1 after the merge went through: the PR reads merged, so it counts.
+    const afterMerge = scripted({ "gh pr merge": { status: 1, stderr: "connection reset" }, "gh pr view": { stdout: JSON.stringify({ state: "MERGED", mergeCommit: { oid: "squashed" } }) } });
+    expect(mergePullRequest(afterMerge.exec, "/repo", { pr, branch: "b", head: "abc", into: "main" })).toEqual({ sha: "squashed" });
+    // A branch GitHub already deleted: the push fails and the merge still stands.
+    const gone = scripted({ "gh pr view": { stdout: JSON.stringify(view) }, "git push": { status: 1, stderr: "error: unable to delete 'b': remote ref does not exist" } });
+    expect(mergePullRequest(gone.exec, "/repo", { pr, branch: "b", head: "abc", into: "main" })).toEqual({ sha: "squashed" });
     const refused = scripted({ "gh pr merge": { status: 1, stderr: "Head branch was modified" }, "gh pr view": { stdout: JSON.stringify({ state: "OPEN" }) } });
-    expect(mergePullRequest(refused.exec, "/repo", { pr, head: "abc", into: "main" })).toEqual({ reason: "gh pr merge failed: Head branch was modified" });
+    expect(mergePullRequest(refused.exec, "/repo", { pr, branch: "b", head: "abc", into: "main" })).toEqual({ reason: "gh pr merge failed: Head branch was modified" });
+    expect(refused.calls.some((c) => c.args[0] === "push")).toBe(false);
   });
 });
 

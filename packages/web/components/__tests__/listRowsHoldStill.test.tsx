@@ -85,15 +85,14 @@ const modernCard = (session: any, props: Record<string, unknown> = {}, live: Rec
       anchorIdentity={null}
       onSelect={noop}
       onPin={noop}
-      onDismiss={noop}
-      onStash={noop}
+      onClose={noop}
       {...props}
     />
   </MemoryRouter>,
 );
 
 test("a Modern card holds still in every state, mid-send, mid-restart and nested", () => {
-  const aside = { onRestore: noop, onKill: noop, onDismiss: undefined, onStash: undefined, onPin: undefined };
+  const aside = { onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined };
   const cards: Array<[string, string]> = [
     ["working", modernCard(settled({ is_idle: false, agent_status: "working" }), { variant: "working" }, { isLive: true })],
     ["needs_you", modernCard(settled(), { sectionStatus: "blocked" })],

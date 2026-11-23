@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 /**
  * Parking a session on the cloud host: the leaf every creator goes through.
  *
@@ -464,7 +465,7 @@ export async function reissueStrandedCloudSpawns(ctx: Ctx, userId: Id<"users">, 
       if (!conv.cloud_placement_token) continue;
       if (conv.cloud_placement_failed_at) continue;
       if (!conv.project_path && !conv.git_root) continue;
-      if (conv.inbox_killed_at || conv.status === "completed") continue;
+      if (conv.inbox_killed_at || isClosedSession(conv) || conv.status === "completed") continue;
       if (await liveCloudSpawnFor(ctx, userId, conv._id)) continue;
       await enqueueCloudSpawn(ctx, userId, {
         conversationId: conv._id,

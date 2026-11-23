@@ -9,7 +9,7 @@
 // record: "You" only for an open card the viewer may answer, landed only with a
 // merged sha on the run. Pure, with relative imports only: the web's Ship panel
 // and run card, the inbox card and the phone's run card all read a run here.
-import { foldFlow, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
+import { foldFlow, passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 
 /** `you`: an open card on the stage the viewer may answer; `person`: a person answers there, the viewer or not. */
 export type StageWho = "session" | "agent" | "you" | "person" | "auto";
@@ -148,17 +148,18 @@ const STAGE_WORDS: Record<string, string> = { ship: "Land" };
 /** The runner's own landing steps (runner.ts): a run that passes one has landed its change. */
 const LANDING_STEP = /(^|__)(shipped|landed)$/;
 
-type Base = Omit<JourneyStage, "state" | "round" | "steps" | "branches"> & { members: string[]; kind: string; branches?: Base[] };
+type Base = Omit<JourneyStage, "state" | "round" | "steps" | "branches"> & { members: string[]; kind: string; branches?: Base[]; /** Bookkeeping steps the stage holds after its own work (its verdicts, the sha it merged). */ tail?: string[] };
 
 const isSubject = (n: FlowNodeIn | undefined) => n?.backend === "subject";
 const inGroup = (stageId: string, nodeId: string) => nodeId === stageId || nodeId.startsWith(`${stageId}${SEGMENT_SEP}`);
 const inStage = (s: Pick<Base, "members">, nodeId: string) => s.members.some((m) => inGroup(m, nodeId));
 
-/** Who does a station: a person when any step in it asks one, an agent when any step is a session, else it runs by itself. */
+/** Who does a station: a person when a passing run is asked there, an agent when any step is a session, else it runs by itself. */
 function whoOf(graph: Graph, ids: string[]): StageWho {
   const steps = graph.nodes.filter((n) => ids.some((id) => inGroup(id, n.id)) && n.type !== "exit" && n.type !== "start" && !n.segment_exit);
   const own = steps.length ? steps : graph.nodes.filter((n) => ids.includes(n.id));
-  if (own.some((n) => n.type === "human")) return "person";
+  // A person only when one is asked on the way a passing run goes through it, never on a side route inside it.
+  if (ids.some((id) => passingSteps(graph, id).some((n) => n.type === "human"))) return "person";
   if (own.some(isSubject)) return "session";
   if (own.some((n) => n.type === "agent" || n.type === "prompt" || n.type === "codergen" || (!!n.backend && n.type !== "command" && !n.segment_entry))) return "agent";
   return "auto";
@@ -169,12 +170,43 @@ const WHO_RANK: StageWho[] = ["person", "agent", "session", "auto"];
 /** Whether a station is the flow's Deploy stage (the deploy segment: it waits for the change to go live). */
 const isDeployStage = (n: FlowNodeIn | undefined) => n?.segment_flow === "deploy" || n?.id === "deploy";
 
+/** A route a run takes when a step failed: never the way a passing run goes on. */
+const failureRoute = (e: FlowEdgeIn) => /\boutcome\s*(=\s*failure|!=\s*success)\b/.test(e.condition ?? "");
+
+/**
+ * The steps a passing run takes through a station: the station alone, or for a segment its entry and then, step by
+ * step, the route that passes (as foldFlow ranks them), never into an exit or a stop. A card a segment reaches only on
+ * a side route is not on it.
+ */
+function passingSteps(graph: Graph, id: string): FlowNodeIn[] {
+  const byId = new Map(graph.nodes.map((n) => [n.id, n]));
+  const walked: FlowNodeIn[] = [];
+  const seen = new Set<string>();
+  for (let cur: string | undefined = id; cur && !seen.has(cur); ) {
+    seen.add(cur);
+    const n = byId.get(cur);
+    if (n) walked.push(n);
+    const from: string = cur;
+    cur = graph.edges
+      .filter((e) => e.from === from && e.to !== id && inGroup(id, e.to) && !seen.has(e.to) && byId.get(e.to)?.type !== "exit" && byId.get(e.to)?.segment_exit !== "stop")
+      .sort((a, b) => passScore(b) - passScore(a))[0]?.to;
+  }
+  return walked;
+}
+
 /** The flow's stages on its main path, in the order a passing run reaches them, then Deploy and Live. */
 function planOf(graph: Graph, withTargets = false): Base[] {
   const folded = foldFlow(graph.nodes, graph.edges);
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   const station = new Map(folded.stations.map((s) => [s.id, s]));
-  const order = (folded.path ?? folded.stations.filter((s) => s.main).map((s) => s.id)).filter((id) => station.has(id) && !isSubject(byId.get(id)));
+  const walk = (folded.path ?? folded.stations.filter((s) => s.main).map((s) => s.id)).filter((id) => station.has(id) && !isSubject(byId.get(id)));
+  // The walk ends before a station only a failure reaches (a later deploy after a failed one): a passing run never goes there.
+  const failedInto = (id: string, i: number) => {
+    const into = graph.edges.filter((e) => segmentTopOf(e.to) === id && walk.slice(0, i).includes(segmentTopOf(e.from)));
+    return into.length > 0 && into.every(failureRoute);
+  };
+  const end = walk.findIndex((id, i) => i > 0 && failedInto(id, i));
+  const order = end < 0 ? walk : walk.slice(0, end);
   const at = new Map(order.map((id, i) => [id, i]));
   const onPath = new Set(folded.path ?? order);
   // A stage's ways back to the session: the subject stations its edges reach, directly or through side steps on no
@@ -219,6 +251,14 @@ function planOf(graph: Graph, withTargets = false): Base[] {
     taken.add(id);
     const s = station.get(id)!;
     if (s.kind === "join") continue;
+    const prev = stages[stages.length - 1];
+    // Bookkeeping (`fold=true`) is the stage before it finishing its work, not a stage of its own.
+    if (prev && byId.get(id)?.fold) {
+      prev.members.push(id);
+      prev.tail = [...(prev.tail ?? []), id];
+      prev.loops = loopsOf(prev.members);
+      continue;
+    }
     if (s.kind !== "parallel") { stages.push(stageOf([id], labelOf(id))); continue; }
     // A fan-out and its branches are one stage, through the join where they meet: what the join sends back is theirs.
     // A branch runs every station the main walk took after its first, up to the join.
@@ -252,11 +292,16 @@ function planOf(graph: Graph, withTargets = false): Base[] {
   ];
 }
 
-const strip = ({ members: _m, kind: _k, branches, ...s }: Base): Omit<JourneyStage, "state" | "round"> => ({ ...s, ...(branches ? { branches: branches.map((b) => ({ ...strip(b), state: "idle" as const, round: null })) } : {}) });
+const strip = ({ members: _m, kind: _k, tail: _t, branches, ...s }: Base): Omit<JourneyStage, "state" | "round"> => ({ ...s, ...(branches ? { branches: branches.map((b) => ({ ...strip(b), state: "idle" as const, round: null })) } : {}) });
 
 /** The flow's stages on its main path, in execution order, then its Deploy and Live. */
 export function journeyStages(graph: Graph): Omit<JourneyStage, "state" | "round">[] {
   return planOf(graph).map(strip);
+}
+
+/** The stages that hold any of these stations, by label, once each and in path order. */
+export function stagesHolding(graph: Graph, nodeIds: ReadonlyArray<string>): string[] {
+  return planOf(graph).filter((s) => nodeIds.some((id) => inStage(s, id))).map((s) => s.label);
 }
 
 const LIVE_STATUSES = new Set(["pending", "running", "paused"]);
@@ -352,7 +397,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     for (let cur = nodeId; cur && !out.includes(cur) && !stageOf(cur); cur = routedFrom(cur, new Set(out))?.node_id ?? null) out.push(cur);
     return out;
   };
-  // What the run did off the main path, in its own words: the label of the route a stage took into it ("edits CI"),
+  // What the run did off the main path, in its own words: the label of the route a stage took into it ("It edits CI"),
   // else the first off-path step's own label.
   const offPathLabel = (nodeId: string): string | null => {
     const first = chain(nodeId).filter((id) => byId.get(id)?.type !== "exit").pop();
@@ -365,13 +410,16 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const backStage = live ? (backFrom(waitingOn?.node_id ?? null) ?? backFrom(at))?.id ?? null : null;
   const atBase = stageFor(at);
   const atStage = live ? atBase?.id ?? null : null;
-  const stopStage = failed ? atBase?.id ?? null : null;
+  // A stop in the landing stage's bookkeeping after the merge was recorded is past the landing: the change is on main,
+  // so the stop is the next stage's, before anything went out.
+  const pastLanding = failed && !!sha && atBase?.role === "land" && !!at && !!atBase.tail?.includes(at);
+  const stopStage = failed ? (pastLanding ? plan[plan.indexOf(atBase!) + 1]?.id ?? atBase!.id : atBase?.id ?? null) : null;
   // An open card is a gate wherever its node sits: on a stage when the walk back finds one, else in the bar alone.
   const open = live && gateOpen(run);
   const gateNode = open ? run.gate_node_id ?? at : null;
   const gateStage = open ? stageFor(gateNode)?.id ?? null : null;
   const gateMine = open && canAnswer(viewer?.decision, viewer?.id);
-  // A card off the main path names the stage that holds it after the route into it ("Edits CI"), not the stage's own name.
+  // A card off the main path names the stage that holds it after the route into it ("It edits CI"), not the stage's own name.
   const gateOff = gateNode && !stageOf(gateNode) ? offPathLabel(gateNode) : null;
   // Where the run stands: stages after it hold only what earlier rounds left, which is not this round's state.
   const current = plan.findIndex((s) => s.id === (backStage ?? gateStage ?? atStage ?? stopStage));
@@ -418,10 +466,13 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     if (b.id === gateStage) return "waiting";
     if (b.id === stopStage) return "stopped";
     if (!passed && current >= 0 && index > current) return "idle";
-    if (live && b.id === atStage && !b.branches) return run.status === "paused" ? "waiting" : "active";
+    // A fan-out's own state comes from its branches, except while the run stands at a step it holds after them.
+    if (live && b.id === atStage && (!b.branches || (!!at && !!b.tail?.includes(at)))) return run.status === "paused" ? "waiting" : "active";
     const last = latestOf(b);
     if (!last) return passed ? "skipped" : "idle";
     if (last.status === "running" || last.status === "pending") return live ? "active" : "idle";
+    // A landing stage with the merge recorded landed, whatever its bookkeeping did after.
+    if (b.role === "land" && sha) return "done";
     if (last.status === "failed") return "routed";
     // A landing stage that went on with no merged sha recorded did not land anything.
     if (b.role === "land" && !sha) return "routed";
@@ -467,7 +518,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     }
     const has = (s: StageState) => branches.some((br) => br.state === s);
     const ran = !later && statuses.some((n) => inStage(b, n.node_id) && (n.started_at ?? 0) >= fanStart);
-    const state: StageState = own === "waiting" || own === "stopped" || later ? own
+    const state: StageState = own === "waiting" || own === "stopped" || later || (own === "active" && !!at && !!b.tail?.includes(at)) ? own
       : has("stopped") ? "stopped"
       : own === "back" || has("back") ? "back"
       : branches.every((br) => br.state === "done") ? "done"
@@ -515,8 +566,10 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     const offMain = at && !stageOf(at) && !backFrom(at) ? labelOf(at) : null;
     // A fan-out waits on each branch still running; any other stage on the step it stands at.
     const fanBase = stage?.branches ? plan[stages.indexOf(stage)] : null;
+    // A step the stage holds after its branches (its verdicts) is waited on as the branches it reads.
+    const atTail = !!at && !!fanBase?.tail?.includes(at);
     const waits = fanBase && !offMain
-      ? fanBase.branches!.filter((b) => latestOf(b)?.status === "running").map((b) => waitOf(b.label, latestOf(b)))
+      ? atTail ? fanBase.branches!.map((b) => waitOf(b.label, node)) : fanBase.branches!.filter((b) => latestOf(b)?.status === "running").map((b) => waitOf(b.label, latestOf(b)))
       : [waitOf(offMain ?? stage?.label ?? labelOf(at ?? ""), node)];
     now = { kind: "working", stage: offMain ?? stage?.label ?? (at ? labelOf(at) : "Running"), verb: verbOf(stage, offMain), role: stage?.role ?? "step", who: stage?.who ?? "auto", waits, session: node?.session ? { id: String(node.session._id), title: node.session.title ?? null } : null };
   } else if (failed) {
@@ -641,8 +694,52 @@ export function journeyWords(j: Journey | null): { words: string; tone: JourneyT
   }
 }
 
-/** Whether a person approves the change before it lands: a stage of a person's before the one that lands it. */
-export function asksBeforeLand(stages: ReadonlyArray<Pick<JourneyStage, "role" | "who">>): boolean {
-  const land = stages.findIndex((s) => s.role === "land" || s.role === "deploy");
-  return stages.slice(0, land < 0 ? stages.length : land).some((s) => s.who === "person" || s.who === "you");
+/** Whether a person approves the change before it lands: on every run, only on a side route (`when`: what makes a run
+ *  ask, as the person's step says it with `asks_if`, else unknown), or never. */
+export type Approval = { kind: "always" } | { kind: "if"; when: string | null } | { kind: "never" };
+
+/**
+ * Who says yes before the change lands, read from the graph. A person's stage on the passing path before the one that
+ * lands it asks on every run. Otherwise a person's step (a segment's own included) that a run can reach before the
+ * change lands, at the runner's landing step or else an exit that is no stop, asks only when a run turns off toward it
+ * from a step that still lands without it: `when` is that step's `asks_if` (on it or on the segment that holds it),
+ * never a route's label, which names the route and is not written to finish a sentence. Anything else asks nobody.
+ */
+export function approvalOf(graph: Graph): Approval {
+  const plan = planOf(graph);
+  const land = plan.findIndex((s) => s.role === "land" || s.role === "deploy");
+  // The landing stage counts too: a person on its passing route says yes before its landing step.
+  const upTo = land < 0 ? plan.length : plan[land].role === "land" ? land + 1 : land;
+  if (plan.slice(0, upTo).some((s) => s.who === "person")) return { kind: "always" };
+  const landing = graph.nodes.filter((n) => LANDING_STEP.test(n.id)).map((n) => n.id);
+  const lands = landing.length ? landing : graph.nodes.filter((n) => n.type === "exit" && !n.stop).map((n) => n.id);
+  const start = graph.nodes.filter((n) => n.type === "start").map((n) => n.id);
+  // Every node a walk from `from` reaches, along edges forward or backward, never through `without`.
+  const reach = (from: string[], back: boolean, without?: string) => {
+    const seen = new Set(from.filter((id) => id !== without));
+    for (let frontier = [...seen]; frontier.length; ) {
+      const next = graph.edges.filter((e) => frontier.includes(back ? e.to : e.from)).map((e) => (back ? e.from : e.to)).filter((id) => id !== without && !seen.has(id));
+      for (const id of next) seen.add(id);
+      frontier = [...new Set(next)];
+    }
+    return seen;
+  };
+  const fromStart = reach(start, false);
+  const toLand = reach(lands, true);
+  const asks = graph.nodes.filter((n) => n.type === "human" && fromStart.has(n.id) && toLand.has(n.id)).map((n) => n.id);
+  for (const h of asks) {
+    // The steps that still reach landing without this person, and the turn from one of them toward the person.
+    const passing = reach(lands, true, h);
+    const towards = reach([h], true);
+    const turn = graph.edges.find((e) => passing.has(e.from) && fromStart.has(e.from) && !passing.has(e.to) && towards.has(e.to));
+    if (turn) {
+      const step = graph.nodes.find((n) => n.id === h);
+      const top = graph.nodes.find((n) => n.id === segmentTopOf(h));
+      return { kind: "if", when: step?.asks_if ?? top?.asks_if ?? null };
+    }
+  }
+  return { kind: "never" };
 }
+
+/** An approval in a chip's words. */
+export const approvalWords = (a: Approval): string => (a.kind === "always" ? "Asks you every time" : a.kind === "if" ? (a.when ? `Asks you if ${a.when}` : "Sometimes asks you") : "No approval");

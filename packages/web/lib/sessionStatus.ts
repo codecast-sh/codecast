@@ -63,7 +63,7 @@ export const SESSION_STATUS: Record<SessionStatus, SessionStatusMeta> = {
   dormant: { word: "Dormant", text: "text-[color:color-mix(in_srgb,var(--sol-class-blue)_55%,var(--sol-text-dim))]", color: DORMANT_COLOR, mark: "moon", meaning: "Parked until something wakes it" },
   idle: { word: "Idle", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "ring", meaning: "Nothing running, nothing asked" },
   stashed: { word: "Stashed", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "aside", meaning: "Set aside; the agent may still run" },
-  killed: { word: "Killed", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "cross", meaning: "Stopped and filed away" },
+  killed: { word: "Closed", text: "text-sol-text-dim", color: "var(--sol-text-dim)", mark: "cross", meaning: "Stopped and filed away" },
 };
 
 /** A plan's derived state (shared derivePlanState) in the session vocabulary:

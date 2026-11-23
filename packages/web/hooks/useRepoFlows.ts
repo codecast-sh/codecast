@@ -29,6 +29,15 @@ export function sessionRootOf(s: SessionRows, id: string): string | null {
   return s.sessions?.[id]?.git_root ?? s.conversations?.[id]?.git_root ?? null;
 }
 
+/** The workspace whose pool a session's flows come from: the team the session is routed to (its directory's team, the
+ *  one `cast flow run` there reads), else the viewer's personal one. Null while the session or the viewer is unknown. */
+export function sessionWorkspaceOf(s: SessionRows & { currentUser?: { _id?: unknown } | null }, id: string): string | null {
+  if (!s.sessions?.[id] && !s.conversations?.[id]) return null;
+  const team = s.sessions?.[id]?.team_id ?? s.conversations?.[id]?.team_id;
+  if (team) return `team:${team}`;
+  return s.currentUser?._id ? `user:${s.currentUser._id}` : null;
+}
+
 /** Of the rows held for a checkout and its repository: the checkout's own, else the repository's newest report. */
 export function checkoutRow(rows: ReadonlyArray<RepoFlowsRow>, root: string | null): RepoFlowsRow | null {
   return rows.find((r) => r.root === root) ?? [...rows].sort((a, b) => b.updated_at - a.updated_at)[0] ?? null;

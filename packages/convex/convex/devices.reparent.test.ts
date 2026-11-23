@@ -569,3 +569,12 @@ describe("a move that stops a turn queues the continue", () => {
     expect(moveContinues(db)).toHaveLength(0);
   });
 });
+
+describe("a cross-account pull of a closed session", () => {
+  test("resumes it on the new runner's machine, so the close ends", async () => {
+    const db = fixtures({ inbox_dismissed_at: 50, inbox_closed_at: 50 });
+    await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+    expect(conv(db).inbox_dismissed_at).toBeUndefined();
+    expect(commands(db).map((c: any) => c.command)).toContain("resume_session");
+  });
+});

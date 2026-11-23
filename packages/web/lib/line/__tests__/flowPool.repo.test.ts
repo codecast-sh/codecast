@@ -3,7 +3,9 @@
 // Ship picker draws the flow its press runs.
 import { describe, expect, test } from "bun:test";
 import type { RepoFlow } from "@codecast/shared/contracts/repoFlows";
-import { appPool } from "../flowPool";
+import { appPool, namedForRepo } from "../flowPool";
+import { sessionWorkspaceOf } from "../../../hooks/useRepoFlows";
+import { workspaceRows } from "../../../hooks/useWorkspaceCollection";
 
 // A repository's `change`: PR, then CI and a review side by side, then merge, with the session fixing what they find.
 const repoChange: RepoFlow = {
@@ -65,5 +67,36 @@ describe("a repository's own flows in the pool", () => {
     const rows = [team("hotfix")];
     expect(appPool(rows, [repoChange])).toBe(appPool(rows, [repoChange]));
     expect(appPool(rows, [repoChange])).not.toBe(appPool(rows, []));
+  });
+});
+
+describe("the session's pool", () => {
+  test("a repository flow that replaces a library flow carries the repository's name; the rest keep theirs", () => {
+    const hotfix: RepoFlow = { ...repoChange, slug: "hotfix", name: "hotfix", label: "Hotfix" };
+    const named = namedForRepo(appPool([], [repoChange, hotfix]), "acme/union-mobile");
+    expect(named.find((f) => f.slug === "change")!.label).toBe("Change · union-mobile");
+    expect(named.find((f) => f.slug === "hotfix")!.label).toBe("Hotfix");
+    expect(named.find((f) => f.slug === "quick-change")!.label).toBe("Quick");
+    // With the library's own change, nothing is renamed: it reads Ship.
+    expect(namedForRepo(appPool([], []), "acme/union-mobile").find((f) => f.slug === "change")!.label).toBe("Ship");
+  });
+
+  test("a personal flow is in a personal session's pool and out of a team session's", () => {
+    const shipNow = { ...team("ship-now"), _id: "w-ship-now", user_id: "u1", workspace: "user:u1" };
+    const teamFlow = { ...team("hotfix"), user_id: "u2" };
+    const store = {
+      currentUser: { _id: "u1" },
+      conversations: { cTeam: { team_id: "t1" }, cMine: {} },
+      workflows: { [shipNow._id]: shipNow, [teamFlow._id]: teamFlow },
+    };
+    const poolOf = (conversation: string) => appPool(workspaceRows("workflows", store.workflows as any, sessionWorkspaceOf(store, conversation))).map((f) => f.slug);
+    expect(sessionWorkspaceOf(store, "cTeam")).toBe("team:t1");
+    expect(sessionWorkspaceOf(store, "cMine")).toBe("user:u1");
+    expect(poolOf("cTeam")).toContain("hotfix");
+    expect(poolOf("cTeam")).not.toContain("ship-now");
+    expect(poolOf("cMine")).toContain("ship-now");
+    expect(poolOf("cMine")).not.toContain("hotfix");
+    // An unknown session names no workspace, and the reader falls back to the active one.
+    expect(sessionWorkspaceOf(store, "nope")).toBeNull();
   });
 });

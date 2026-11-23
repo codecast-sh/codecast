@@ -55,18 +55,33 @@ function StageFace({ s, finished = false }: { s: JourneyStage; finished?: boolea
   return (
     <>
       <span className="sj-node" aria-hidden><Mark state={s.state} /></span>
-      {s.branches ? (
-        // A fan-out's branches run side by side: each says its own state.
-        <span className="sj-branches" data-journey-branches>
-          {s.branches.map((b) => <span key={b.id} className="sj-branch" data-state={b.state} data-stage={b.id}><i className="sj-branch-mark" aria-hidden><Mark state={b.state} /></i>{b.label}</span>)}
+      {s.branches && s.label === s.branches.map((b) => b.label).join(" + ") ? (
+        // A fan-out is one stage under one name ("CI + Review"); a branch that sent work back, stopped or waits says so
+        // in a glyph and in words for a screen reader, never in its color alone (a grayscale screen shows no color).
+        <span className="sj-label" data-journey-branches>
+          {s.branches.map((b, i) => <span key={b.id}>{i ? " + " : null}<span className="sj-branch" data-state={b.state} data-stage={b.id}>{b.label}{BRANCH_FLAG[b.state] ? <><i className="sj-branch-flag" aria-hidden>{BRANCH_FLAG[b.state]!.glyph}</i><span className="sr-only"> ({BRANCH_FLAG[b.state]!.words})</span></> : null}</span></span>)}
+          <StateWords state={s.state} />
         </span>
-      ) : <span className="sj-label">{s.label}</span>}
+      ) : <span className="sj-label">{s.label}<StateWords state={s.state} /></span>}
       <span className="sj-who">
         {finished ? (s.round ? `round ${s.round}` : "") : s.state === "back" ? "This session" : s.role === "live" || s.state === "skipped" ? "" : WHO_WORDS[s.who]}
         {!finished && s.round ? <span className="sj-round">· round {s.round}</span> : null}
       </span>
     </>
   );
+}
+
+/** A fan-out branch's state where it needs a reader's notice, as a glyph and as words. */
+const BRANCH_FLAG: Partial<Record<JourneyStage["state"], { glyph: string; words: string }>> = {
+  stopped: { glyph: "✕", words: "stopped" },
+  back: { glyph: "↩", words: "sent back" },
+  waiting: { glyph: "…", words: "waiting" },
+};
+
+/** A stage's state in words for a screen reader: its node, which shows it, is hidden from one. */
+const STATE_WORDS: Partial<Record<JourneyStage["state"], string>> = { done: "done", active: "current", waiting: "waiting", back: "sent back", stopped: "stopped", routed: "went another way", skipped: "skipped" };
+function StateWords({ state }: { state: JourneyStage["state"] }) {
+  return STATE_WORDS[state] ? <span className="sr-only">, {STATE_WORDS[state]}</span> : null;
 }
 
 /** What one stage did on the run: each of its steps with its words, rounds and the session that did it. */

@@ -35,6 +35,8 @@ export const BRIDGED_FIELDS = [
   "inbox_dismissed_at",
   "inbox_stashed_at",
   "inbox_stash_hidden",
+  // A Close: written with its dismissed stamp (shared isClosedSession).
+  "inbox_closed_at",
   "inbox_pinned_at",
   "is_pinned",
 ] as const;

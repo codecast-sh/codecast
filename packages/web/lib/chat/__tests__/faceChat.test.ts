@@ -4,6 +4,7 @@ import {
   __resetFaceChat,
   clearFaceUnseen,
   deliverChatToFace,
+  faceBarOnScreen,
   noteFaceContextRead,
   faceBubbleFailed,
   faceBubbleShown,
@@ -214,5 +215,20 @@ describe("chat from the face", () => {
     expect(toasted).toBe(1);
     expect(getFaceChat().bubble).toBeNull();
     expect(unseen("sam")).toEqual([]);
+  });
+
+  test("a zen-hidden or translated-offscreen header refuses face bubbles so the caller toasts", () => {
+    const rect = (top: number, bottom: number) => ({ top, bottom, height: bottom - top, left: 0, right: 200, width: 200 });
+    const bar = (opts: { zenHidden?: boolean; top: number; bottom: number }) =>
+      ({
+        getClientRects: () => [rect(opts.top, opts.bottom)],
+        getBoundingClientRect: () => rect(opts.top, opts.bottom),
+        closest: (sel: string) => (sel === "[data-zen-bar-hidden]" && opts.zenHidden ? {} : null),
+      }) as unknown as HTMLElement;
+
+    expect(faceBarOnScreen(null)).toBe(false);
+    expect(faceBarOnScreen(bar({ zenHidden: true, top: 0, bottom: 40 }))).toBe(false);
+    expect(faceBarOnScreen(bar({ top: -44, bottom: 0 }))).toBe(false);
+    expect(faceBarOnScreen(bar({ top: 0, bottom: 40 }))).toBe(true);
   });
 });

@@ -31,7 +31,7 @@ describe("shortcuts help covers the whole catalog", () => {
 // muscle memory only collides when there is something to delete. These bindings
 // must never carry skipInputCheck: true (unconditional bypass).
 const DESTRUCTIVE_ACTIONS: ShortcutAction[] = [
-  "session.kill",
+  "session.close",
   "session.stash",
   "session.deferAdvance",
   // Not destructive, but it rides the same backspace family and advances the
@@ -113,7 +113,7 @@ describe("worksInModal is restricted to app-chrome shortcuts", () => {
 
   test("background-acting shortcuts are never flagged", () => {
     const background: ShortcutAction[] = [
-      "session.next", "session.kill", "session.stash", "compose.focus",
+      "session.next", "session.close", "session.stash", "compose.focus",
       "permission.approve", "permission.deny", "msg.sendAdvance",
     ];
     for (const def of SHORTCUTS.filter((s) => background.includes(s.action))) {

@@ -1036,6 +1036,10 @@ export default defineSchema({
     // cleared), so a clear of the stamp needs no companion clear here.
     inbox_stash_hidden: v.optional(v.boolean()),
     inbox_killed_at: v.optional(v.number()),
+    // A Close (web/phone): equal to the inbox_dismissed_at it stamped while the
+    // row stays closed (shared isClosedSession). Never cleared: an un-hide clears
+    // the dismissed stamp, which ends the equality.
+    inbox_closed_at: v.optional(v.number()),
     pending_kill_generation: v.optional(v.number()),
     inbox_deferred_at: v.optional(v.number()),
     // The user's own rest verdict — where they filed the row (Needs You,
@@ -1543,6 +1547,8 @@ export default defineSchema({
     // on demand — the inbox scan excludes killed rows, so this is their one
     // server channel.
     .index("by_user_killed", ["user_id", "inbox_killed_at"])
+    // The Closed shelf's closes (listClosedSessions), newest-first.
+    .index("by_user_closed", ["user_id", "inbox_closed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
     // A device's live rows (cloud.hostSessions): a host that has run thousands
     // of stations reads only the ones still active, not its whole history.

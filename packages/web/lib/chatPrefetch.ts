@@ -16,6 +16,7 @@
 // opened is not worth that standing cost.
 
 import type { ChatMessageRow, ChatRailRow } from "../store/chatSlice";
+import { isConvexId } from "./entityLinks";
 
 export type ChatPrefetchTarget = {
   kind: "channel" | "thread" | "message";
@@ -184,4 +185,37 @@ export function createChatPrefetcher(options: {
       nextStart.clear();
     },
   };
+}
+
+/** Fresh unread chat notifications whose channel is not on the active team's
+ *  rail (e.g. while working in the personal workspace or another team) still
+ *  need their message row in the store so DesktopProvider and useChatToasts
+ *  can show the banner/toast instead of waiting forever on a rail that won't
+ *  load it. Covers both BANNER_FRESH_MS and NOTIF_FRESH_MS. */
+export const NOTIF_PREFETCH_FRESH_MS = 5 * 60_000;
+
+export function offRailChatNotificationMessageIds(
+  notifications: Iterable<{
+    read?: boolean;
+    entity_type?: string;
+    entity_id?: string;
+    chat_message_id?: string;
+    created_at?: number;
+  }>,
+  activeRailChannelIds: ReadonlySet<string>,
+  hasMessage: (id: string) => boolean,
+  now = Date.now(),
+): string[] {
+  const ids: string[] = [];
+  const seen = new Set<string>();
+  for (const n of notifications) {
+    if (!n || n.read || n.entity_type !== "chat_channel") continue;
+    const msgId = n.chat_message_id ? String(n.chat_message_id) : "";
+    if (!msgId || !isConvexId(msgId) || seen.has(msgId) || hasMessage(msgId)) continue;
+    if (typeof n.created_at !== "number" || now - n.created_at > NOTIF_PREFETCH_FRESH_MS) continue;
+    if (n.entity_id && activeRailChannelIds.has(String(n.entity_id))) continue;
+    seen.add(msgId);
+    ids.push(msgId);
+  }
+  return ids;
 }

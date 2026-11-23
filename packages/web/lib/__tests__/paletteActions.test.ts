@@ -118,7 +118,7 @@ describe("command menu keyboard reuse", () => {
 
   test("lifecycle commands use the registered backspace family", () => {
     expect(paletteActionForKey(event(), actions)?.key).toBe("session_stash");
-    expect(paletteActionForKey(event({ shiftKey: true }), actions)?.key).toBe("session_kill");
+    expect(paletteActionForKey(event({ shiftKey: true }), actions)?.key).toBe("session_close");
     expect(paletteActionForKey(event({ altKey: true }), actions)?.key).toBe("session_stash_hide");
     expect(paletteActionForKey(event({ ctrlKey: false, shiftKey: true }), actions)?.key).toBe("session_defer");
     expect(paletteActionForKey(event({ ctrlKey: false, altKey: true, shiftKey: true }), actions)?.key).toBe("session_dormant");
@@ -128,6 +128,15 @@ describe("command menu keyboard reuse", () => {
     for (const modifiers of [{}, { shiftKey: true }, { altKey: true }, { ctrlKey: false, shiftKey: true }, { ctrlKey: false, altKey: true, shiftKey: true }]) {
       expect(paletteActionForKey(event({ ...modifiers, target: { tagName: "INPUT", value: "find a session" } }), actions)).toBeUndefined();
     }
+  });
+
+  test("the old kill key closes: Close owns its chord, and Kill has no key of its own", () => {
+    const close = actions.find((a) => a.key === "session_close")!;
+    const kill = actions.find((a) => a.key === "session_kill")!;
+    expect(close.shortcutAction).toBe("session.close");
+    expect(kill.shortcutAction).toBeUndefined();
+    expect(kill.hotkey).toBeUndefined();
+    expect(paletteActionForKey(event({ shiftKey: true }), actions)?.key).toBe("session_close");
   });
 
   test("duplicate Alt-letter commands no longer run", () => {

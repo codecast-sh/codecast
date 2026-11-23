@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 // Cast machines (sd-3042): a person with no CLI starts a session and it runs
 // on a cloud machine of their own, in codecast's AWS account, with pi on our
 // model key. This backend launches the machine (RunInstances from a fixed
@@ -241,7 +242,7 @@ export const startHeld = internalMutation({
     await ctx.db.patch(row._id, { held_conversation_ids: [], updated_at: Date.now() });
     for (const conversationId of row.held_conversation_ids) {
       const conv = await ctx.db.get(conversationId);
-      if (!conv || conv.inbox_killed_at) continue;
+      if (!conv || conv.inbox_killed_at || isClosedSession(conv)) continue;
       await startPiOn(ctx, row.user_id, conversationId, row.device_id);
     }
   },

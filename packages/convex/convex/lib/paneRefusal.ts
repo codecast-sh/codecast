@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 import { Id } from "../_generated/dataModel";
 
 // A daemon wrote a message into a session's terminal TMUX_PASTE_WRITE_CAP
@@ -21,11 +22,11 @@ export const PANE_REFUSED_ERROR = "Its terminal is not taking input, and a resta
 export type PaneRefusalPlan = { kind: "recover" } | { kind: "give_up"; markError: boolean };
 
 export function planPaneRefusal(
-  conv: { standing_role_id?: unknown; anchor_id?: unknown; inbox_killed_at?: number; pane_recovered_at?: number },
+  conv: { standing_role_id?: unknown; anchor_id?: unknown; inbox_killed_at?: number; inbox_closed_at?: number; inbox_dismissed_at?: number; pane_recovered_at?: number },
   now: number,
 ): PaneRefusalPlan {
   const unattended = !!(conv.standing_role_id || conv.anchor_id);
-  if (!unattended || conv.inbox_killed_at) return { kind: "give_up", markError: false };
+  if (!unattended || conv.inbox_killed_at || isClosedSession(conv)) return { kind: "give_up", markError: false };
   if (conv.pane_recovered_at && now - conv.pane_recovered_at < PANE_RECOVERY_WINDOW_MS) return { kind: "give_up", markError: true };
   return { kind: "recover" };
 }

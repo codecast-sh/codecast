@@ -6,12 +6,12 @@ import {
   SessionData, sessionTitle, agentLabel, agentColor, formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
 
-// Stashed/Killed bucket row — the web SessionCard's hidden variants. Tap opens
+// Stashed/Closed bucket row — the web SessionCard's hidden variants. Tap opens
 // the session; explicit buttons restore (both) and kill (stashed only — a
-// killed session's agent is already torn down).
+// closed session's agent is already stopped).
 export function HiddenSessionRow({ session, variant, onPress, onRestore, onKill, held }: {
   session: SessionData;
-  variant: "stashed" | "killed";
+  variant: "stashed" | "closed";
   onPress: () => void;
   onRestore: () => void;
   onKill?: () => void;
@@ -45,8 +45,9 @@ export function HiddenSessionRow({ session, variant, onPress, onRestore, onKill,
             <FontAwesome name="level-up" size={13} color={Theme.cyan} />
           </TouchableOpacity>
           {onKill && (
-            <TouchableOpacity onPress={onKill} hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }} activeOpacity={0.6}>
-              <FontAwesome name="times" size={13} color={Theme.red} />
+            <TouchableOpacity onPress={onKill} accessibilityLabel="Kill" hitSlop={{ top: 10, bottom: 10, left: 8, right: 8 }} activeOpacity={0.6}>
+              {/* The web's Kill mark (a square), never a Close X: the reflex must not carry over. */}
+              <FontAwesome name="square-o" size={13} color={Theme.red} />
             </TouchableOpacity>
           )}
         </RNView>

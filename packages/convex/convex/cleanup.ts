@@ -7,9 +7,8 @@ import { internal } from "./_generated/api";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./lib/agentTaskRows";
 import { cancelQueuedMessagesOnKill } from "./pendingMessages";
-import { subagentEnded } from "./subagentFleet";
-import { nestParentIdOf } from "./ccAccountsShared";
-import { isOrphanOrSubagent } from "./inboxFilters";
+import { releaseSubagentSlot, subagentEnded } from "./subagentFleet";
+import { cascadeTakesDown, nestedGroupOf } from "./lib/closeAside";
 
 // ---------------------------------------------------------------------------
 // Abandoned empty-conversation GC.
@@ -186,6 +185,8 @@ export async function enqueueKillSessionCommand(
   conv: { _id: any; user_id: any; session_id?: string },
   now: number = Date.now(),
   cause?: string,
+  // A close keeps the worktree: the session wakes into its own folder.
+  opts?: { keepWorkspace?: boolean },
 ): Promise<boolean> {
   const pending = await ctx.db
     .query("daemon_commands")
@@ -203,7 +204,7 @@ export async function enqueueKillSessionCommand(
     command: "kill_session" as const,
     // session_id rides along (mirrors conversations.killSession) so the daemon
     // can still tear the backend down when its conversation mapping is gone.
-    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id, ...(cause ? { cause } : {}) }),
+    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id, ...(cause ? { cause } : {}), ...(opts?.keepWorkspace ? { keep_workspace: true } : {}) }),
     created_at: now,
   });
   return true;
@@ -275,6 +276,11 @@ export function classifyHideTransition(
 // killSession/killSessions actions) rather than a patch that merely happens to
 // carry the flag.
 //
+// `close` marks the web's Close gesture (closeSession/closeSessions): the same
+// forced teardown, but "done looking at it", not retirement. It skips the seat
+// refusal and both retirement sweeps, so the session's triggers stay armed and
+// its queue stays put, and the next one that reaches it brings it back.
+//
 // One transaction shares one teardown budget. The patch-row cap and the
 // cascade's per-lead batch multiplied (25 rows x 20 children each), so a web
 // kill of a few leads ran hundreds of teardowns inline, passed the 3s mutation
@@ -283,22 +289,31 @@ export function classifyHideTransition(
 // lead and its children together, so a row the cascade already tore down in
 // this transaction is not torn down again.
 const HIDE_TEARDOWNS_INLINE = 20;
-type HideTxnState = { spent: number; done: Set<string> };
+// `decided`: rows this transaction's own gesture names (applyPatches notes them
+// first). A cascade never writes over one, whatever order the rows come in:
+// the row's own patch is its decision.
+type HideTxnState = { spent: number; done: Set<string>; decided: Set<string> };
 const hideTxnStates = new WeakMap<object, HideTxnState>();
 function hideTxnState(ctx: { db: any }): HideTxnState {
   let state = hideTxnStates.get(ctx);
-  if (!state) hideTxnStates.set(ctx, (state = { spent: 0, done: new Set() }));
+  if (!state) hideTxnStates.set(ctx, (state = { spent: 0, done: new Set(), decided: new Set() }));
   return state;
 }
 export function hideBudgetLeft(ctx: { db: any }): number {
   return Math.max(0, HIDE_TEARDOWNS_INLINE - hideTxnState(ctx).spent);
+}
+/** The conversation rows a gesture's own patch names, noted before any of them
+ *  applies, so no lead's cascade overrides one of them. */
+export function noteGestureRows(ctx: { db: any }, ids: Iterable<string>): void {
+  const decided = hideTxnState(ctx).decided;
+  for (const id of ids) decided.add(String(id));
 }
 
 export async function applyHideTransition(
   ctx: { db: any },
   doc: any,
   patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
-  opts?: { cascade?: boolean; forceKill?: boolean; cause?: string },
+  opts?: { cascade?: boolean; forceKill?: boolean; close?: boolean; cause?: string },
 ): Promise<{
   action: "reap" | "kill" | "none";
   canceledSchedules: number;
@@ -308,7 +323,7 @@ export async function applyHideTransition(
 }> {
   // An explicit kill naming a role's own session is refused (lib/seatKill);
   // a cascade from a parent never reaches a seat, and internal reaps carry no forceKill.
-  if (opts?.forceKill && opts.cascade !== false && patch.inbox_dismissed_at) await refuseSeatKill(ctx, doc);
+  if (opts?.forceKill && !opts.close && opts.cascade !== false && patch.inbox_dismissed_at) await refuseSeatKill(ctx, doc);
   const txn = hideTxnState(ctx);
   const docKey = String(doc?._id);
   if (txn.done.has(docKey)) {
@@ -344,19 +359,34 @@ export async function applyHideTransition(
     // holds either way, so callers report which it was instead of piling on a
     // duplicate command. A kill the daemon already executed leaves no pending
     // row, so the re-kill that matters — the resurrection case — always inserts.
-    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc, Date.now(), opts?.cause ?? "hide");
+    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc, Date.now(), opts?.cause ?? "hide", { keepWorkspace: opts?.close });
     // A persistent anchor never auto-completes on a dismiss/kill — it goes
     // dormant, not retired (only decommissionAnchor clears `persistent`).
     // inbox_killed_at records when the session was FIRST killed: a forced
     // re-kill re-runs the teardown but must not rewrite that history, or the
     // row's honest "killed at" jumps forward every time a resurrection is
     // stamped out (and the cascade below claims exactly this for its children).
+    //
+    // A close stamps neither: inbox_killed_at and status completed are the
+    // retirement markers (cast send refuses a retired session, a worker's
+    // report skips a retired lead, a role drops a retired seat, the daemon
+    // never resumes one). A close stamps inbox_closed_at equal to its
+    // dismissed stamp instead (shared isClosedSession), which those readers
+    // treat as alive and the daemon reads as "do not bring it back on your
+    // own" (getConversationLifecycle `closed`).
     const killPatch: Record<string, any> = {};
-    if (!doc?.inbox_killed_at) killPatch.inbox_killed_at = Date.now();
-    if (!doc?.persistent) killPatch.status = "completed";
+    if (opts?.close) {
+      killPatch.inbox_closed_at = patch.inbox_dismissed_at;
+    } else {
+      if (!doc?.inbox_killed_at) killPatch.inbox_killed_at = Date.now();
+      if (!doc?.persistent) killPatch.status = "completed";
+    }
     if (Object.keys(killPatch).length > 0) await ctx.db.patch(doc._id, killPatch);
-    // A killed worker frees its fleet slot and keeps its worktree.
-    if (!doc?.persistent) await subagentEnded(ctx, doc, "killed");
+    // A killed worker frees its fleet slot and keeps its worktree. A closed one
+    // only frees its slot: it has not ended, so its lead hears nothing (a
+    // settle note would revive the lead the person just closed).
+    if (opts?.close) await releaseSubagentSlot(ctx, doc);
+    else if (!doc?.persistent) await subagentEnded(ctx, doc, "killed");
     // Dismiss retires the session — a standing schedule that injects
     // into it must die with it, or its next fire would silently
     // resurrect a session the user just retired. User gestures only:
@@ -378,7 +408,9 @@ export async function applyHideTransition(
     // scheduled/running/paused tasks, so a second pass over already-canceled
     // ones is a no-op — and a schedule re-armed since the first kill SHOULD die
     // again with it.)
-    if (!doc?.persistent) {
+    //
+    // A close is not a retirement either: it keeps both, for every session.
+    if (!doc?.persistent && !opts?.close) {
       canceledSchedules = await cancelTasksBoundToConversation(ctx, doc.user_id, doc._id);
       canceledMessages = await cancelQueuedMessagesOnKill(ctx, doc._id);
     }
@@ -391,7 +423,7 @@ export async function applyHideTransition(
   // per-child transition call opts out to stay single-level.
   let cascaded = 0;
   if (opts?.cascade !== false && (patch.inbox_dismissed_at || patch.inbox_stashed_at)) {
-    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch, { forceKill: action === "kill" && opts?.forceKill, cause: opts?.cause });
+    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch, { forceKill: action === "kill" && opts?.forceKill, close: opts?.close, cause: opts?.cause });
   }
   return { action, canceledSchedules, canceledMessages, cascaded, teardownEnqueued };
 }
@@ -427,31 +459,18 @@ export async function cascadeHideToNestedChildren(
   ctx: { db: any },
   lead: any,
   patch: { inbox_dismissed_at?: number; inbox_stashed_at?: number },
-  opts?: { forceKill?: boolean; cause?: string },
+  opts?: { forceKill?: boolean; close?: boolean; cause?: string },
 ): Promise<number> {
   const field = patch.inbox_dismissed_at ? ("inbox_dismissed_at" as const) : ("inbox_stashed_at" as const);
   const stamp = patch[field];
   if (!stamp) return 0;
-  const leadId = lead._id.toString();
-  const [taskSubs, spawned] = await Promise.all([
-    ctx.db
-      .query("conversations")
-      .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", lead._id))
-      .take(200),
-    ctx.db
-      .query("conversations")
-      .withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", lead._id))
-      .take(200),
-  ]);
-  const seen = new Set<string>();
+  // The same group a close's aside check reads (lib/closeAside nestedGroupOf).
   const childIds: string[] = [];
-  for (const child of [...taskSubs, ...spawned]) {
+  for (const child of await nestedGroupOf(ctx, lead)) {
     const idStr = child._id.toString();
-    if (idStr === leadId || seen.has(idStr)) continue;
-    seen.add(idStr);
-    if (nestParentIdOf(child) !== leadId) continue;
-    if (field === "inbox_stashed_at" && isOrphanOrSubagent(child)) continue;
-    if (child[field] && !opts?.forceKill) continue; // quiet re-assert — never re-kill
+    // The one per-child rule the close's aside check scans by (lib/closeAside).
+    if (!cascadeTakesDown(child, field, opts)) continue;
+    if (hideTxnState(ctx).decided.has(idStr)) continue; // its own patch decides it
     childIds.push(idStr);
   }
   await hideNestedChildren(ctx, lead._id, field, stamp, childIds, opts);
@@ -470,10 +489,15 @@ async function hideNestedChildren(
   field: "inbox_dismissed_at" | "inbox_stashed_at",
   stamp: number,
   childIds: string[],
-  opts?: { forceKill?: boolean; cause?: string },
+  opts?: { forceKill?: boolean; close?: boolean; cause?: string },
 ): Promise<void> {
   const now = ctx.scheduler ? childIds.slice(0, Math.min(CASCADE_BATCH, hideBudgetLeft(ctx))) : childIds;
+  const txn = hideTxnState(ctx);
   for (const id of now) {
+    // A child this transaction already decided (torn down, or named by the
+    // same gesture's own patch: set aside, closed or killed) keeps that
+    // decision, whichever of the two rows came first.
+    if (txn.done.has(String(id)) || txn.decided.has(String(id))) continue;
     // A copy: applyHideTransition classifies on the PRE-patch row.
     const found = await ctx.db.get(id);
     if (!found) continue;
@@ -482,12 +506,12 @@ async function hideNestedChildren(
     if (alreadyHidden && !opts?.forceKill) continue;
     const childPatch = { [field]: alreadyHidden ? child[field] : stamp };
     if (!alreadyHidden) await ctx.db.patch(child._id, childPatch);
-    await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill, cause: `cascade<-${opts?.cause ?? "hide"}` });
+    await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill, close: opts?.close, cause: `cascade<-${opts?.cause ?? "hide"}` });
   }
   const rest = childIds.slice(now.length);
   if (rest.length) {
     await ctx.scheduler.runAfter(0, internal.cleanup.continueCascadeHide, {
-      lead_id: leadId, field, stamp, child_ids: rest, force_kill: opts?.forceKill, cause: opts?.cause,
+      lead_id: leadId, field, stamp, child_ids: rest, force_kill: opts?.forceKill, close: opts?.close, cause: opts?.cause,
     });
   }
 }
@@ -499,13 +523,14 @@ export const continueCascadeHide = internalMutation({
     stamp: v.number(),
     child_ids: v.array(v.string()),
     force_kill: v.optional(v.boolean()),
+    close: v.optional(v.boolean()),
     cause: v.optional(v.string()),
   },
-  handler: async (ctx, { lead_id, field, stamp, child_ids, force_kill, cause }) => {
+  handler: async (ctx, { lead_id, field, stamp, child_ids, force_kill, close, cause }) => {
     const lead = await ctx.db.get(lead_id);
     if (!lead || !(lead as any)[field]) return;
     if (cause) noteWriteCause(ctx, cause);
-    await hideNestedChildren(ctx, lead_id, field, stamp, child_ids, { forceKill: force_kill, cause });
+    await hideNestedChildren(ctx, lead_id, field, stamp, child_ids, { forceKill: force_kill, close, cause });
   },
 });
 

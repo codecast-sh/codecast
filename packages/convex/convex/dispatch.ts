@@ -51,7 +51,9 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
   recordingPressStale,
   recordingPressStaleWords,
 } from "@codecast/shared/contracts";
-import { applyHideTransition, hideBudgetLeft } from "./cleanup";
+import { applyHideTransition, hideBudgetLeft, noteGestureRows } from "./cleanup";
+import { closeSetsAsideOnServer } from "./lib/closeAside";
+import { isClosePatch } from "@codecast/shared/contracts";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
 import { performCancelPeerTransfer, performDismissPeerTransfer } from "./peerTransfers";
 import { writeObjectShareLink } from "./publicShare";
@@ -239,7 +241,8 @@ export const dispatch = mutation({
       typeof patches === "object" &&
       !(hasReceiptCommandId(result) && RECEIPT_OWNS_SERVER_WRITE.has(action))
     ) {
-      await applyPatches(ctx, userId, patches, { forceKill: EXPLICIT_KILL_ACTIONS.has(action), cause: `web:${action}`, presence: answerPresence(action, actionArgs) });
+      const close = EXPLICIT_CLOSE_ACTIONS.has(action);
+      await applyPatches(ctx, userId, patches, { forceKill: close || EXPLICIT_KILL_ACTIONS.has(action), close, cause: `web:${action}`, presence: answerPresence(action, actionArgs) });
     }
 
     const out = sideEffect ? await sideEffect(ctx, userId, actionArgs, result) : undefined;
@@ -279,6 +282,11 @@ async function hideForViewerByClientId(ctx: any, userId: Id<"users">, convId: st
 // set (see applyHideTransition's forceKill). Every other action patching
 // inbox_dismissed_at stays transition-gated.
 const EXPLICIT_KILL_ACTIONS = new Set(["killSession", "killSessions"]);
+// The web's Close (inboxStore closeSession / closeSessions): forced teardown
+// like a kill, without the retirement (applyHideTransition's `close`). The
+// patch a close sends is shaped exactly like a kill's, so only this name tells
+// the server to leave the session's triggers and queue alone.
+const EXPLICIT_CLOSE_ACTIONS = new Set(["closeSession", "closeSessions"]);
 
 // Rows one applyPatches transaction applies before it schedules the rest.
 const PATCH_ROWS_INLINE = 25;
@@ -289,11 +297,12 @@ export const applyDeferredPatches = internalMutation({
     user_id: v.id("users"),
     patches: v.any(),
     force_kill: v.optional(v.boolean()),
+    close: v.optional(v.boolean()),
     cause: v.optional(v.string()),
   },
-  handler: async (ctx, { user_id, patches, force_kill, cause }) => {
+  handler: async (ctx, { user_id, patches, force_kill, close, cause }) => {
     if (cause) noteWriteCause(ctx, cause);
-    await applyPatches(ctx, user_id, patches, { forceKill: force_kill, cause });
+    await applyPatches(ctx, user_id, patches, { forceKill: force_kill, close, cause });
   },
 });
 
@@ -302,9 +311,12 @@ export async function applyPatches(
   ctx: HandlerCtx,
   userId: Id<"users">,
   patches: Record<string, Record<string, Record<string, any>>>,
-  opts?: { forceKill?: boolean; cause?: string; presence?: string }
+  opts?: { forceKill?: boolean; close?: boolean; cause?: string; presence?: string }
 ) {
   let bucketViewChanged = false;
+  // Every row this gesture names decides for itself: a lead's cascade never
+  // writes over one, whatever order the rows come in (cleanup.ts).
+  if (patches.conversations) noteGestureRows(ctx, Object.keys(patches.conversations));
   // A gesture on a lead patches every row of its group, and each conversation
   // row runs its hide or un-kill teardown here. A lead with 175 subagents did
   // all of that in one transaction and passed Convex's 4096-read cap, so it
@@ -417,6 +429,23 @@ export async function applyPatches(
           console.warn(`[dispatch] ${PIN_CAP_ERROR} (dropped pin on ${docKey})`);
           delete (finalSafe as any).inbox_pinned_at;
         }
+        // A close is a close by its fields (inbox_closed_at written equal to
+        // the dismissed stamp) on any rail: a stub re-key flush or a deferred
+        // batch carries no close action name. The action name still marks a
+        // close whose client sent only the stamp.
+        const close = table === "conversations" && (!!opts?.close || isClosePatch(finalSafe as any));
+        // The server decides a close. A row the client closed that is in flight
+        // by the server's own read (lib/closeAside: itself or a member of its
+        // nested group, by the shared closeInFlightReason) is set aside
+        // instead: a stash, so nothing is stopped. The client's paint was the
+        // guess; this write's echo corrects it.
+        if (close && (finalSafe as any).inbox_dismissed_at && await closeSetsAsideOnServer(ctx, doc, Date.now(), { forceKill: opts?.forceKill })) {
+          (finalSafe as any).inbox_stashed_at = (finalSafe as any).inbox_dismissed_at;
+          delete (finalSafe as any).inbox_dismissed_at;
+          // inbox_closed_at stays: with no dismissed stamp it is inert (not a close),
+          // and it is the cell the close's undo finds to clear this stash with.
+          if ((finalSafe as any).inbox_closed_at == null) (finalSafe as any).inbox_closed_at = (finalSafe as any).inbox_stashed_at;
+        }
         if (Object.keys(finalSafe).length === 0) continue;
         // Capture the PRE-patch hide state. The un-kill mirror below decides on
         // what the row looked like BEFORE this write, and reading it afterwards
@@ -440,7 +469,7 @@ export async function applyPatches(
         // dismiss/stash path funnels through here — the inbox shortcuts, the
         // palette, the /sessions toggle (patchConversation), and any future one.
         if (table === "conversations" && ((finalSafe as any).inbox_dismissed_at || (finalSafe as any).inbox_stashed_at)) {
-          await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill, cause: opts?.cause });
+          await applyHideTransition(ctx, doc, finalSafe as any, { forceKill: opts?.forceKill, close, cause: opts?.cause });
         }
         // The un-kill mirror: a patch CLEARING either hide stamp on a row that
         // had it is the restore/undo gesture (web restoreSession, the /sessions
@@ -514,7 +543,7 @@ export async function applyPatches(
   }
   if (deferred) {
     await scheduler.runAfter(0, internal.dispatch.applyDeferredPatches, {
-      user_id: userId, patches: deferred, force_kill: opts?.forceKill, cause: opts?.cause,
+      user_id: userId, patches: deferred, force_kill: opts?.forceKill, close: opts?.close, cause: opts?.cause,
     });
   }
   if (bucketViewChanged) {
@@ -1490,6 +1519,14 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   },
   killSessions: async (ctx, userId, [convIds]: [string[]]) => {
     for (const convId of convIds ?? []) await hideForViewerByClientId(ctx, userId, convId, "dismiss");
+  },
+  // A close sets a session that is mid-turn aside and closes the rest; the
+  // action's result names the ones it set aside (inboxStore closeSessions).
+  closeSession: async (ctx, userId, [convId]: [string], result?: { aside?: string[] }) => {
+    await hideForViewerByClientId(ctx, userId, convId, result?.aside?.includes(convId) ? "stash" : "dismiss");
+  },
+  closeSessions: async (ctx, userId, [convIds]: [string[]], result?: { aside?: string[] }) => {
+    for (const convId of convIds ?? []) await hideForViewerByClientId(ctx, userId, convId, result?.aside?.includes(convId) ? "stash" : "dismiss");
   },
   deleteSession: async (ctx, userId, [convId]: [string]) => {
     const id = ctx.db.normalizeId("conversations", convId);

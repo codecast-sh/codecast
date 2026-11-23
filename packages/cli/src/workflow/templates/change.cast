@@ -37,7 +37,7 @@
 //   cast flow run change            # this session's own edits
 //   cast flow run change --task ct-N
 digraph change {
-  graph [kind="line", label="Change", description="Pull request, CI beside an independent review, merge on green, deploy, with the session fixing what CI and the reviewer find", takes="task,branch", goal="$task_title", on_failure=stop, fix="brief"]
+  graph [kind="line", label="Ship", description="Pull request, CI beside an independent review, merge on green, deploy; the session fixes what they find, and you are asked only if it edits CI", takes="task,branch", goal="$task_title", on_failure=stop, fix="brief"]
   rankdir=LR
   start [shape=Mdiamond]
   pr [label="PR", shape=parallelogram, timeout=600,
@@ -52,7 +52,7 @@ digraph change {
   review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@change/review.md"]
   joined [label="Both done", shape=tripleoctagon]
   // The reviewer's verdict is what its session pinned, never a file: Verdicts counts it only with this round's nonce.
-  verdicts [label="Verdicts", shape=parallelogram, timeout=60, script="cast flow verdicts --dir \"$run_dir\" --review \"$review.json\""]
+  verdicts [label="Verdicts", shape=parallelogram, timeout=60, fold=true, script="cast flow verdicts --dir \"$run_dir\" --review \"$review.json\""]
   // On success stdout is merge.json alone, so the run reads $merge.json.sha; a merge with no sha on main refuses (exit 2).
   merge [label="Merge", shape=parallelogram, timeout=3600,
     script="d=\"$run_dir\"; rm -f \"$d/merge.json\"; cast flow merge --pr \"$pr.json.number\" --branch \"$branch\" --dir \"$d\" > \"$d/merge.out\" 2> \"$d/merge.log\"; code=$?; if [ \"$code\" -eq 0 ]; then cat \"$d/merge.log\" \"$d/merge.out\" >&2; cat \"$d/merge.json\" || exit 2; else cat \"$d/merge.log\" \"$d/merge.out\"; fi; exit \"$code\""]
@@ -69,9 +69,9 @@ digraph change {
   ci_card [label="Why a person", shape=parallelogram, timeout=120,
     script="cast task comment \"$task_id\" \"This change edits CI, so CI can't vouch for it: a person decides whether it ships.\" -t review >/dev/null; echo \"$verdicts.json.why\""]
   // A question typed at the Ship card goes to the reviewer, who has read the change.
-  decide [flow="decide", answerer="review"]
+  decide [flow="decide", answerer="review", asks_if="it edits CI"]
   // Named for the runner (runner.ts, the run's end): a stop past here tells the session its change is on main.
-  landed [label="Merged", shape=parallelogram, timeout=60, script="echo \"$merge.json.sha\""]
+  landed [label="Merged", shape=parallelogram, timeout=60, fold=true, script="echo \"$merge.json.sha\""]
   deploy [flow="deploy"]
   exit [shape=Msquare, label="Live"]
 
@@ -121,8 +121,8 @@ digraph change {
   verdicts -> noci     [condition="verdicts.json.next = no_ci", label="CI never reported again"]
   verdicts -> wait_main     [condition="verdicts.json.next = wait_main and wait_main.visits < 2", label="every failure is main's"]
   verdicts -> mainred_again [condition="verdicts.json.next = wait_main", label="main red again"]
-  verdicts -> ci_card       [condition="verdicts.json.next = decide and change_conversation", label="edits CI"]
-  verdicts -> nobody        [condition="verdicts.json.next = decide", label="edits CI, no session"]
+  verdicts -> ci_card       [condition="verdicts.json.next = decide and change_conversation", label="it edits CI"]
+  verdicts -> nobody        [condition="verdicts.json.next = decide", label="it edits CI, no session"]
   verdicts -> found    [condition="(verdicts.json.next = brief or verdicts.json.next = conflict) and not change_conversation", label="found work, no session"]
   verdicts -> ci_conflict [condition="verdicts.json.next = conflict", label="conflicts with main"]
   verdicts -> brief    [condition="verdicts.json.next = brief", label="CI red, changes asked or no verdict"]

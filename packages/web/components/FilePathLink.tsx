@@ -13,8 +13,10 @@
 import { useCallback, useContext, type ReactNode } from "react";
 import Link from "next/link";
 import { FilePathContext, filePathHref } from "../lib/filePathLinks";
+import { openSessionChangedPath } from "../lib/sessionChangedFiles";
 import { canOpenFilesBeside, openFilesBeside } from "../lib/filesPane";
 import { requestFilePathMenu } from "../lib/filePathMenu";
+import { useVaultStore } from "../store/vaultStore";
 
 export function FilePathLink({
   path,
@@ -36,11 +38,15 @@ export function FilePathLink({
     (e: React.MouseEvent<HTMLAnchorElement>) => {
       onClick?.(e);
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+      if ((ctx?.foreign || useVaultStore.getState()?.connection === "no-daemon") && openSessionChangedPath(path, ctx)) {
+        e.preventDefault();
+        return;
+      }
       if (!canOpenFilesBeside()) return; // the Link takes the tab there
       e.preventDefault();
       openFilesBeside(href);
     },
-    [href, onClick],
+    [href, onClick, path, ctx],
   );
 
   const handleContextMenu = useCallback(

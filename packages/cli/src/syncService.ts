@@ -253,7 +253,12 @@ export interface ConversationLifecycle {
   inboxKilledAt?: number | null;
   inboxStashedAt?: number | null;
   inboxDismissedAt?: number | null;
+  /** A Close's marker: the session is closed while it equals inboxDismissedAt (shared isClosedSession). */
+  inboxClosedAt?: number | null;
   inboxPinnedAt?: number | null;
+  /** The person closed it and no message waits for it: the daemon does not
+   *  bring it back on its own (the server computes it; lifecycle source only). */
+  closed?: boolean;
   /** Undelivered messages are queued for this conversation. Only the lifecycle
    *  source carries it; the status fallback leaves it undefined. */
   hasPendingMessages?: boolean;
@@ -1919,7 +1924,9 @@ export class SyncService {
             inboxKilledAt: res.inbox_killed_at ?? null,
             inboxStashedAt: res.inbox_stashed_at ?? null,
             inboxDismissedAt: res.inbox_dismissed_at ?? null,
+            inboxClosedAt: res.inbox_closed_at ?? null,
             inboxPinnedAt: res.inbox_pinned_at ?? null,
+            closed: res.closed === true,
             hasPendingMessages: res.has_pending_messages ?? undefined,
             agentType: res.agent_type ?? null,
             hideStateKnown: true,
@@ -1949,7 +1956,9 @@ export class SyncService {
         api_token: this.apiToken,
         session_id: sessionId,
       });
-      return res ? { status: res.status ?? null, hideStateKnown: false, source: "status-fallback" } : null;
+      // `closed` rides the fallback so a degraded read never revives a closed
+      // session (isConversationRetired).
+      return res ? { status: res.status ?? null, closed: res.closed === true, hideStateKnown: false, source: "status-fallback" } : null;
     } catch (err) {
       if (opts.strict) throw err;
       return null;

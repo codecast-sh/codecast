@@ -28,9 +28,10 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
+import { useKillWithReview } from "../hooks/useKillWithReview";
 import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
-import { withSafetyBlock } from "@codecast/shared/contracts";
+import { isClosedSession, withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
 import { USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionLiveAt } from "../lib/liveness";
@@ -59,7 +60,7 @@ import { isUnderRole } from "@codecast/shared/contracts";
 import { AuthErrorBadge } from "./AuthErrorBadge";
 import { toast } from "sonner";
 import { toastWriteError } from "../lib/dispatchBinding";
-import { animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
+import { animatedCloseSessions, animatedHideSessions, fileSessionsAsRest } from "../store/undoActions";
 
 import { soundKill } from "../lib/sounds";
 import { latestSessionCommand, requestAccountSwitchCommand, switchPending } from "../lib/sessionCommands";
@@ -2128,12 +2129,12 @@ function SessionListPanelImpl({
     // thousands of stale sessions all at once (dismissed_at = today), so filtering
     // by dismissal time would still show them all; filtering by recency hides that
     // old noise while keeping things you recently worked on but set aside. Hidden
-    // ones stay searchable and reachable by direct link. A KILL is exempt: it is
+    // ones stay searchable and reachable by direct link. A KILL or a CLOSE is exempt: it is
     // the user's own act, never bulk noise, and the shelf pages old kills in on
     // purpose — an activity window would hide exactly what "Load more" fetched.
     const cutoff = Date.now() - DISMISSED_VISIBLE_MS;
     const filtered = filterByChip(dismissedList).filter(
-      (sess) => !!sess.inbox_killed_at || (sess.updated_at ?? 0) >= cutoff,
+      (sess) => !!sess.inbox_killed_at || isClosedSession(sess) || (sess.updated_at ?? 0) >= cutoff,
     );
     const retiredAt = (sess: InboxSession) => sess.inbox_dismissed_at || sess.inbox_killed_at || sess.dismissed_at || sess.updated_at || 0;
     return filtered.sort((a, b) => retiredAt(b) - retiredAt(a));
@@ -2605,7 +2606,7 @@ function SessionListPanelImpl({
         armed.length === 1
           ? `Stashed — schedule "${armed[0].title}" stays armed`
           : `Stashed — ${armed.length} schedules stay armed`,
-        { description: "It keeps firing here quietly — the session comes back to your queue only if a run flags needs-attention. Dismiss or kill would cancel it.", duration: 8000 },
+        { description: "It keeps firing here quietly — the session comes back to your queue only if a run flags needs-attention. Kill would cancel it.", duration: 8000 },
       );
     }
   }, []);
@@ -2615,14 +2616,23 @@ function SessionListPanelImpl({
   // hook surfaces both side effects; the same hook backs the palette and the
   // keyboard chords, so every kill surface says the same thing.
   const { killWithNotice, killManyWithNotice, restoreWithNotice } = useTriggerKillNotice();
-  // Dismiss: "done with it" — clears the session from the inbox into the Dismissed
-  // group. The server tears the (usually idle) agent down on the inbox_dismissed_at
-  // transition, so this is codecast's kill gesture, surfaced as the PRIMARY remove
-  // action. Undoable via the toast.
-  const handleAnimatedDismiss = killWithNotice;
-  // On a stashed card the destructive slot kills (server tears the agent down
-  // on the transition) — the row moves down into Killed.
-  const handleKillStashed = killWithNotice;
+  const closedKill = useKillWithReview(killManyWithNotice);
+  const closedKillOf = closedKill.kill;
+  const handleCloseShelfX = useCallback((id: string) => {
+    const row = useInboxStore.getState().sessions[id];
+    if (row && isClosedSession(row)) closedKillOf([id]);
+    else handleKillDismissed(id);
+  }, [closedKillOf, handleKillDismissed]);
+  // Close: "done looking at it", the card's one remove. A session mid-turn is
+  // set aside and finishes; any other stops and files under Closed, keeping
+  // its triggers and queue (store closeSession). Undoable via the toast.
+  const handleAnimatedClose = useCallback((id: string) => { void animatedCloseSessions([id]); }, []);
+  const handleAnimatedCloseMany = useCallback((ids: string[]) => { void animatedCloseSessions(ids); }, []);
+  // On a stashed or snoozed card the destructive slot is a Kill (server tears
+  // the agent down on the transition; the row moves down into Closed). It is
+  // the same reviewed Kill as everywhere: a session Close set aside mid-turn
+  // sits here, so a bare press would cut that turn off and cancel triggers.
+  const handleKillStashed = useCallback((id: string) => closedKillOf([id]), [closedKillOf]);
   // Right-click menu: ONE cursor-anchored instance serves every card in the
   // panel; cards only report the click. Verbs reuse the exact handlers the
   // hover toolbar uses, so animations and trigger notices stay identical.
@@ -3085,8 +3095,7 @@ function SessionListPanelImpl({
                   onSelect={opts?.onSelect ?? handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
-                  onDismiss={handleAnimatedDismiss}
-                  onStash={handleAnimatedStash}
+                  onClose={handleAnimatedClose}
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
                   variant={sectionVariant || "default"}
@@ -3129,8 +3138,7 @@ function SessionListPanelImpl({
                     onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
-                    onDismiss={handleAnimatedDismiss}
-                    onStash={handleAnimatedStash}
+                    onClose={handleAnimatedClose}
                     variant={sectionVariant || "default"}
                     subRow={subRowOf(sub)}
                     sessionLabel={labelByConv[sub._id] ?? null}
@@ -3528,8 +3536,7 @@ function SessionListPanelImpl({
                   onSelect={handleSelect}
                   onCardContextMenu={handleCardContextMenu}
                   onPickCharacter={handlePickCharacter}
-                  onDismiss={handleAnimatedDismiss}
-                  onStash={handleAnimatedStash}
+                  onClose={handleAnimatedClose}
                   onDefer={s.deferSession}
                   onPin={s.pinSession}
                   forkColorKey={forkColorKeyOf(session)}
@@ -3641,35 +3648,34 @@ function SessionListPanelImpl({
           ),
         })}
         {renderHiddenBucket({
-          // "Killed" is honest for what dominates this bucket. It is keyed on
-          // inbox_dismissed_at, and both real kill surfaces write that stamp:
-          // the web's kill action optimistically (hideSessionInDraft mode
-          // "kill"), and `cast kill` durably (cliSetSessionVisibility, which
-          // patches inbox_dismissed_at and then stamps inbox_killed_at via
-          // applyHideTransition). The dismissed reconcile crawl
-          // (collectHiddenSessionsLite) has no shouldShowInInbox filter, so a
-          // `cast kill`ed row keeps arriving here. The non-kill dismissals that
-          // also land here (agentTasks' auto-tidy, dismissStaleInboxSessions)
-          // are the minority — and renaming this to "Dismissed" would mean
-          // pressing Kill, reading a "Killed" toast, and watching the row drop
-          // into "Dismissed". See inboxFilters.ts on why conflating the two
-          // loses the one difference that matters operationally.
-          label: "Killed",
+          // "Closed" names the card's own gesture, Close, which files the
+          // rows here; a Kill (the menu, `cast kill`) lands here too. The
+          // bucket is keyed on inbox_dismissed_at, which both write: the web
+          // optimistically (hideSessionInDraft mode "kill"), and `cast kill`
+          // durably (cliSetSessionVisibility, which patches inbox_dismissed_at
+          // and then stamps inbox_killed_at via applyHideTransition). The
+          // dismissed reconcile crawl (collectHiddenSessionsLite) has no
+          // shouldShowInInbox filter, so a `cast kill`ed row keeps arriving
+          // here. See inboxFilters.ts on why conflating the stashed and the
+          // closed loses the one difference that matters operationally.
+          label: "Closed",
           items: filteredDismissed,
           expanded: openBuckets.dismissed,
           onToggle: () => setOpenBuckets((o) => ({ ...o, dismissed: !o.dismissed })),
           variant: "dismissed",
-          onKill: handleKillDismissed,
+          // A closed row's X is a Kill like the menu's (its review, a role seat's retire
+          // question); a killed row's X only takes it off the list, as before.
+          onKill: handleCloseShelfX,
           // The rows above are this replica's cached kills (recent by kill time)
           // plus what the shelf already paged in; older or never-cached kills
           // are one click away. Chip filters apply to shelf rows like any other.
           // For an account no machine has connected to yet, the list waits for
-          // something to hold: an empty "Killed" under a newcomer's first
+          // something to hold: an empty "Closed" under a newcomer's first
           // screen offers nothing, and neither does an empty one under a chip
           // (a project's page): older kills page in for the whole inbox.
           footer: (noMachineYet && filteredDismissed.length === 0 && s.killedShelf.ids.length === 0) || (chipMatchesId && filteredDismissed.length === 0) ? undefined : s.killedShelf.complete ? (
             s.killedShelf.ids.length > 0 && (
-              <div className="w-full px-3 py-1.5 text-meta text-sol-text-dim/60 border-b border-sol-border/30">No older kills</div>
+              <div className="w-full px-3 py-1.5 text-meta text-sol-text-dim/60 border-b border-sol-border/30">No older closed sessions</div>
             )
           ) : (
             <button
@@ -3677,7 +3683,7 @@ function SessionListPanelImpl({
               disabled={s.killedShelf.loading}
               className="w-full px-3 py-1.5 text-meta font-medium text-sol-text-dim hover:text-sol-cyan disabled:hover:text-sol-text-dim disabled:opacity-60 transition-colors text-left border-b border-sol-border/30"
             >
-              {s.killedShelf.loading ? "Loading older kills…" : "Load older kills"}
+              {s.killedShelf.loading ? "Loading older…" : "Load older closed sessions"}
             </button>
           ),
         })}
@@ -3715,11 +3721,13 @@ function SessionListPanelImpl({
       <CursorPopover state={characterPicker}>
         {(rows) => <CharacterPicker rows={rows} onDone={closeCharacterPicker} />}
       </CursorPopover>
+      {closedKill.dialog}
       <ContextMenu state={sessionCtxMenu}>
         {({ session, isForeign, sessions }) => sessions.length > 1 ? (
           <BulkSessionMenuItems
             sessions={sessions}
             onStash={handleAnimatedStashMany}
+            onClose={handleAnimatedCloseMany}
             onKill={killManyWithNotice}
             onClear={clearSelection}
           />
@@ -3729,7 +3737,8 @@ function SessionListPanelImpl({
             isForeign={isForeign}
             onOpen={() => handleSelect(session)}
             onStash={() => handleAnimatedStash(session._id)}
-            onKill={() => handleAnimatedDismiss(session._id)}
+            onClose={() => handleAnimatedClose(session._id)}
+            onKill={() => killWithNotice(session._id)}
             onPickCharacter={() => {
               // Hand off under the cursor: close the menu, open the picker where
               // the menu stood, on the same targets the menu was acting on.

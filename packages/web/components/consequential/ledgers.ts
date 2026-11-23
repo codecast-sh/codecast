@@ -328,22 +328,34 @@ export function answerRaiseLedger(r: { label: string; from: number; to: number; 
   };
 }
 
-/** A selection of sessions ended, some of them mid-turn. */
-export function killSessionsLedger(r: { total: number; working: string[] }): SwitchLedger {
+/** Sessions killed: some in flight, or with triggers and queued messages the
+ *  kill cancels. `working` names the sessions in flight and `lost` what the
+ *  kill cuts off in them (a live turn by default); `queued` counts the
+ *  sessions holding queued messages; `subject` names the one session. */
+export function killSessionsLedger(r: { total: number; working: string[]; lost?: string[]; triggers?: string[]; queued?: number; subject?: string }): SwitchLedger {
   const w = r.working.length;
+  const triggers = r.triggers ?? [];
+  const t = triggers.length;
+  const q = r.queued ?? 0;
+  const few = (xs: string[]) => xs.slice(0, 4).concat(xs.length > 4 ? [`+${xs.length - 4} more`] : []);
+  const one = r.total === 1;
   return {
-    name: `Kill ${r.total} sessions`,
-    subject: `${w} working now`,
+    name: one ? "Kill session" : `Kill ${r.total} sessions`,
+    subject: r.subject ?? (w ? `${w} working now` : `${r.total} sessions`),
     shift: ["Running", "Ended"],
-    figures: [{ value: String(w), label: "cut off mid-turn", tone: "warn" }, { value: String(r.total), label: "end" }],
-    rows: [
-      { k: "Working", v: plural(w, "session"), list: r.working.slice(0, 4).concat(w > 4 ? [`+${w - 4} more`] : []), tone: "warn" },
-      { k: "Lost", v: "Unfinished turns", tone: "warn" },
-      { k: "Triggers", v: "Canceled" },
-      { k: "To undo", v: "Restore · turn lost" },
+    figures: [
+      ...(w ? [{ value: String(w), label: "cut off", tone: "warn" as const }] : []),
+      ...(t ? [{ value: String(t), label: t === 1 ? "trigger canceled" : "triggers canceled", tone: "warn" as const }] : []),
+      ...(one ? [] : [{ value: String(r.total), label: "end" }]),
     ],
-    confirm: `Kill ${r.total}`,
-    keep: "Keep running",
+    rows: [
+      ...(w ? [{ k: "Working", v: plural(w, "session"), list: few(r.working), tone: "warn" as const }, { k: "Lost", v: (r.lost?.length ? r.lost : ["Unfinished turns"]).join(" · "), tone: "warn" as const }] : []),
+      ...(t ? [{ k: "Triggers", v: `${plural(t, "trigger")} canceled`, list: few(triggers), tone: "warn" as const }] : []),
+      ...(q ? [{ k: "Queued", v: one ? "Messages dropped" : `Dropped in ${plural(q, "session")}`, tone: "warn" as const }] : []),
+      { k: "To undo", v: w ? "Restore · that work lost" : "Restore · triggers re-arm" },
+    ],
+    confirm: one ? "Kill it" : `Kill ${r.total}`,
+    keep: w ? "Keep running" : one ? "Keep it" : "Keep them",
   };
 }
 
@@ -356,23 +368,27 @@ export function killSessionsLedger(r: { total: number; working: string[] }): Swi
  * `stations`: the passing path's stations by name (a fan-out's branches each count), when the caller knows them;
  * `drawn`: the confirm draws them as a lane, so no row spells them. `stops`: the stations that can end the run.
  * `from`: where the change ships from, when that is a risk worth saying (far behind main, conflicting with it).
+ * `asks`: what a person is asked on every run; `asksIf`: what makes a run ask a person only on some runs (its `asks_if`),
+ * or "" when that route has none.
  */
-export function flowRunLedger(r: { flow: string; session: string; count?: number; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; ends: ReadonlyArray<string>; stations?: ReadonlyArray<string>; stops?: ReadonlyArray<string>; drawn?: boolean; from?: string | null }): SwitchLedger {
+export function flowRunLedger(r: { flow: string; session: string; count?: number; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; asksIf?: string | null; ends: ReadonlyArray<string>; stations?: ReadonlyArray<string>; stops?: ReadonlyArray<string>; drawn?: boolean; from?: string | null }): SwitchLedger {
   const by = (who: string) => r.stages.filter((s) => s.who === who).map((s) => s.label);
   const agents = by("agent");
   const backs = r.stages.filter((s) => s.loops.length).map((s) => s.label);
   const n = r.count ?? 1, agentRuns = agents.length * n, asks = r.asks.length * n; // one run per session shipped
   const path = r.stations ?? r.stages.map((s) => s.label);
   const word = r.stations ? ["station", "stations"] : ["stage", "stages"];
+  const maybe = !asks && r.asksIf != null;
   return {
-    name: `Ship through ${r.flow}`,
+    // The library's flow is itself called Ship: it ships this change, never "through Ship".
+    name: r.flow === "Ship" ? (n > 1 ? "Ship these changes" : "Ship this change") : `Ship through ${r.flow}`,
     subject: r.session,
     shift: null,
     figures: [
       { value: String(path.length), label: path.length === 1 ? word[0] : word[1] },
       ...(n > 1 ? [{ value: String(n), label: "runs start", tone: "warn" as const }] : []),
       { value: String(agentRuns), label: agentRuns === 1 ? "agent session starts" : "agent sessions start", ...(agentRuns ? { tone: "warn" as const } : {}) },
-      { value: String(asks), label: asks === 1 ? "question for you" : "questions for you" },
+      maybe ? { value: n > 1 ? `0–${n}` : "0–1", label: "questions for you" } : { value: String(asks), label: asks === 1 ? "question for you" : "questions for you" },
     ],
     rows: [
       ...(r.from ? [{ k: "From", v: r.from, tone: "bad" as const }] : []),
@@ -380,6 +396,7 @@ export function flowRunLedger(r: { flow: string; session: string; count?: number
       ...(r.drawn ? [] : [{ k: r.stations ? "Stations" : "Stages", v: path.join(" → ") }]),
       ...(agents.length ? [{ k: "An agent", v: agents.join(", ") }] : []),
       ...r.asks.map((q) => ({ k: "You", v: q })),
+      ...(maybe ? [{ k: "You", v: r.asksIf ? `Only if ${r.asksIf}` : "On some runs" }] : []),
       ...(backs.length ? [{ k: "Comes back", v: `${n > 1 ? "to each session" : "to the session"} at ${backs.join(", ")}` }] : []),
       ...(r.stops ? (r.stops.length ? [{ k: "Can stop", v: r.stops.join(", ") }] : [])
         : r.ends.length ? [{ k: "Can stop", v: `${r.ends.length} ways`, list: [...r.ends] }] : []),

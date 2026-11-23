@@ -115,6 +115,37 @@ describe("workflow/parser", () => {
     expect(impl.goal_gate).toBe(true);
   });
 
+  test("fold=true marks a station as bookkeeping; it is otherwise a station like any other", () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      verdicts [shape=parallelogram, script="echo ok", fold=true]
+      merge [shape=parallelogram, script="echo ok"]
+      exit [shape=Msquare]
+      start -> verdicts -> merge -> exit
+    }`);
+    expect(g.nodes.get("verdicts")).toMatchObject({ type: "command", script: "echo ok", fold: true });
+    expect(g.nodes.get("merge")!.fold).toBeUndefined();
+  });
+
+  test("asks_if says what makes a run ask, on a gate and on the gates of a segment it names", () => {
+    const plain = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      ask [shape=hexagon, label="Ask", asks_if="it edits CI"]
+      exit [shape=Msquare]
+      start -> ask -> exit
+    }`);
+    expect(plain.nodes.get("ask")!.asks_if).toBe("it edits CI");
+    const seg = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      decide [flow="decide", asks_if="it edits CI"]
+      exit [shape=Msquare]
+      start -> decide -> exit
+    }`);
+    const gates = [...seg.nodes.values()].filter((n) => n.type === "human");
+    expect(gates.length).toBeGreaterThan(0);
+    expect(gates.every((n) => n.asks_if === "it edits CI")).toBe(true);
+  });
+
   test("auto-creates placeholder nodes referenced only in edges", () => {
     const src = `digraph g {
       start [shape=Mdiamond]

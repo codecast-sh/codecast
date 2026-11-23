@@ -17,7 +17,7 @@ export type FileChangeEntry = Omit<FileChangeRef, "oldBytes" | "newBytes"> &
   Partial<FileChangeBody>;
 
 const getInitialDiffPanelOpen = () => {
-  return useInboxStore.getState().clientState.ui?.diff_panel_open ?? false;
+  return useInboxStore.getState()?.clientState?.ui?.diff_panel_open ?? false;
 };
 
 interface DiffViewerState {
@@ -37,6 +37,7 @@ interface DiffViewerState {
    *  files cannot fold and are not waited on. */
   missingBodies: Record<string, true>;
   selectedFile: string | null;
+  focusNonce: number;
   diffPanelOpen: boolean;
 
   selectChange: (index: number) => void;
@@ -73,6 +74,7 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
   bodies: {},
   missingBodies: {},
   selectedFile: null,
+  focusNonce: 0,
   diffPanelOpen: getInitialDiffPanelOpen(),
 
   selectChange: (index) =>
@@ -110,20 +112,20 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
 
   toggleDiffPanel: () => set((state) => {
     const newValue = !state.diffPanelOpen;
-    useInboxStore.getState().updateClientUI({ diff_panel_open: newValue });
+    useInboxStore.getState()?.updateClientUI?.({ diff_panel_open: newValue });
     return { diffPanelOpen: newValue };
   }),
 
   setDiffPanelOpen: (open) => {
-    useInboxStore.getState().updateClientUI({ diff_panel_open: open });
+    useInboxStore.getState()?.updateClientUI?.({ diff_panel_open: open });
     set({ diffPanelOpen: open });
   },
 
   setDiffBase: (conversationId, base) => {
     const inbox = useInboxStore.getState();
-    const all = inbox.clientState.ui?.diff_base ?? {};
+    const all = inbox?.clientState?.ui?.diff_base ?? {};
     const { [conversationId]: _old, ...rest } = all;
-    inbox.updateClientUI({ diff_base: base === 'session' ? rest : { ...rest, [conversationId]: base } });
+    inbox?.updateClientUI?.({ diff_base: base === 'session' ? rest : { ...rest, [conversationId]: base } });
     set({ selectedChangeIndex: null, rangeStart: null, rangeEnd: null });
   },
 
@@ -157,7 +159,7 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
       return { bodies, missingBodies };
     }),
 
-  selectFile: (filePath) => set({ selectedFile: filePath }),
+  selectFile: (filePath) => set((state) => ({ selectedFile: filePath, focusNonce: state.focusNonce + 1 })),
 
   nextChange: () => {
     const { selectedChangeIndex, changes } = get();

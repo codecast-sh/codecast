@@ -5,6 +5,7 @@ import { ArrowUpRight } from "lucide-react";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { useInboxStore } from "../../store/inboxStore";
 import {
+  faceBarOnScreen,
   faceBubbleFailed,
   faceBubbleShown,
   holdFaceBubble,
@@ -37,9 +38,11 @@ const BUBBLE_W = 320;
 type Anchor = { x: number; y: number };
 
 function seatIn(bar: HTMLElement | null, id: string): HTMLElement | null {
-  if (!bar) return null;
-  const seat = bar.querySelector<HTMLElement>(`[data-face-id="${CSS.escape(id)}"]`);
-  return seat && seat.getClientRects().length > 0 && !seat.dataset.stacked && !seat.dataset.folded ? seat : null;
+  if (!faceBarOnScreen(bar)) return null;
+  const seat = bar!.querySelector<HTMLElement>(`[data-face-id="${CSS.escape(id)}"]`);
+  if (!seat || seat.getClientRects().length === 0 || seat.dataset.stacked || seat.dataset.folded) return null;
+  const r = seat.getBoundingClientRect();
+  return r.height === 0 || (r.bottom > 0 && r.top < window.innerHeight) ? seat : null;
 }
 
 function anchorOf(seat: HTMLElement): Anchor {
@@ -95,7 +98,7 @@ export function FaceChatLayer({ barRef }: { barRef: RefObject<HTMLElement | null
       registerFaceChatLayer({
         canShow: (id) => {
           const bar = barRef.current;
-          if (!bar || bar.getClientRects().length === 0) return false;
+          if (!faceBarOnScreen(bar)) return false;
           const s: any = useInboxStore.getState();
           if (String(s.currentUser?._id ?? "") === id) return false;
           return peopleOf(teamMembersOf(s)).some((m: any) => String(m._id) === id);

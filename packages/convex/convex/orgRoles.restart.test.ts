@@ -380,4 +380,14 @@ describe("cast role restart --fresh", () => {
     expect(tables.anchors.find((a) => a._id === anchorId)!.status).not.toBe("decommissioned");
     expect(tables.org_roles[0].previous_standing_conversation_id).toBeUndefined();
   });
+
+  test("plain restart of a closed seat brings it back to the list, as a session's Restart does", async () => {
+    const { ctx, tables } = world();
+    const role = await lead(ctx);
+    const seat = tables.conversations.find((c) => c._id === "mine")!;
+    Object.assign(seat, { inbox_dismissed_at: NOW - 1000, inbox_closed_at: NOW - 1000 });
+    await performRestartRole(ctx, ME as any, { role_id: String(role._id) });
+    expect(seat.inbox_dismissed_at).toBeUndefined();
+    expect(tables.daemon_commands.some((c) => c.command === "resume_session" || String(c.args ?? "").includes("mine"))).toBe(true);
+  });
 });

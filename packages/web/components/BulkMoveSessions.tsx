@@ -17,7 +17,7 @@
 
 import React from "react";
 import { toast } from "sonner";
-import { ArrowRightLeft, Archive, CheckCircle2, CircleDot, Moon, Square, Tag } from "lucide-react";
+import { ArrowRightLeft, Archive, CheckCircle2, CircleDot, Moon, Square, Tag, X } from "lucide-react";
 import { DeviceDot, DeviceIcon, RUNNING_HERE_ROW, RunningHereTag, deviceDisplayName, deviceWakesOnUse } from "./DeviceBadge";
 import { useBulkMoveSessions, useMoveTargets } from "../hooks/useBulkMoveSessions";
 import { CtxHeader, CtxItem, CtxSeparator, CtxSub, CtxSubContent, CtxSubTrigger } from "./ui/context-menu";
@@ -26,7 +26,8 @@ import { getLabelColor } from "../lib/labelColors";
 import { labelSessions } from "../lib/labelSessions";
 import { fileSessionsAsRest } from "../store/undoActions";
 import { SwitchReview } from "./consequential/ConsequentialSwitch";
-import { killSessionsLedger } from "./consequential/ledgers";
+import { killReviewOf } from "./consequential/killReview";
+import type { TaskRow } from "./triggerTasks";
 
 /** The device rows of a "Move to…" submenu: laptops, team machines, then cloud hosts. */
 export function MoveToDeviceItems({ sessions, onDone }: { sessions: any[]; onDone?: () => void }) {
@@ -107,11 +108,13 @@ export function MoveToDeviceSubmenu({ sessions, label }: { sessions: any[]; labe
 export function BulkSessionMenuItems({
   sessions,
   onStash,
+  onClose,
   onKill,
   onClear,
 }: {
   sessions: InboxSession[];
   onStash?: (ids: string[]) => void;
+  onClose?: (ids: string[]) => void;
   onKill?: (ids: string[]) => void;
   onClear?: () => void;
 }) {
@@ -146,6 +149,11 @@ export function BulkSessionMenuItems({
       {onStash && (
         <CtxItem icon={Archive} onSelect={() => { onStash(sessions.map((s) => s._id)); onClear?.(); }}>
           Stash {n} sessions
+        </CtxItem>
+      )}
+      {onClose && (
+        <CtxItem icon={X} shortcut="session.close" onSelect={() => { onClose(sessions.map((s) => s._id)); onClear?.(); }}>
+          Close {n} sessions
         </CtxItem>
       )}
       {onKill && (
@@ -225,29 +233,40 @@ export function InboxSelectionBar({
   );
 }
 
-/** The selection's sessions that are mid-turn, by title: killing them loses that turn. */
-function workingTitles(sessions: InboxSession[]): string[] {
-  return sessions.filter((s) => s.is_idle === false).map((s) => (s as { title?: string }).title || "Untitled session");
-}
-
-/** Kill for a selection: idle sessions end at once (restore brings them back); a selection holding working ones opens the review first. */
-function KillSelection({ sessions, onKill, onClear, item }: { sessions: InboxSession[]; onKill: (ids: string[]) => void; onClear: () => void; /** Drawn as a context menu item, which stays open behind the review. */ item?: boolean }) {
+/** Kill for one session or a selection: it ends at once (restore brings it
+ *  back) unless it would cut a turn off or cancel a trigger or a queued
+ *  message, which opens the review first (killReviewOf). */
+export function KillSelection({ sessions, onKill, onClear, item, label }: {
+  sessions: InboxSession[];
+  onKill: (ids: string[]) => void;
+  onClear: () => void;
+  /** Drawn as a context menu item, which stays open behind the review. */
+  item?: boolean;
+  label?: string;
+}) {
   const [reviewing, setReviewing] = React.useState(false);
   const kill = () => { setReviewing(false); onKill(sessions.map((s) => s._id)); onClear(); };
-  const working = workingTitles(sessions);
+  const review = killReviewOf(sessions, Object.values(useInboxStore.getState().agentTasks ?? {}) as TaskRow[]);
+  const asks = !!review;
   return (
     <>
       {item ? (
         // Keeping the menu open while the review shows keeps this item, and the review it owns, mounted.
-        <CtxItem danger icon={Square} onSelect={(e) => { if (working.length) { e.preventDefault(); setReviewing(true); } else kill(); }} data-bulk-kill>
-          Kill {sessions.length} sessions
+        <CtxItem danger icon={Square} onSelect={(e) => { if (asks) { e.preventDefault(); setReviewing(true); } else kill(); }} data-bulk-kill>
+          {label ?? `Kill ${sessions.length} sessions`}
         </CtxItem>
       ) : (
-        <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-red hover:bg-sol-bg-highlight" onClick={() => (working.length ? setReviewing(true) : kill())} aria-haspopup={working.length ? "dialog" : undefined} data-bulk-kill>
+        <button type="button" className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-sol-red hover:bg-sol-bg-highlight" onClick={() => (asks ? setReviewing(true) : kill())} aria-haspopup={asks ? "dialog" : undefined} data-bulk-kill>
           <Square className="h-3 w-3" /> Kill
         </button>
       )}
-      {reviewing && <SwitchReview ledger={killSessionsLedger({ total: sessions.length, working })} onClose={() => setReviewing(false)} onConfirm={kill} />}
+      {reviewing && review && (
+        <SwitchReview
+          ledger={review}
+          onClose={() => setReviewing(false)}
+          onConfirm={kill}
+        />
+      )}
     </>
   );
 }

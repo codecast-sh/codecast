@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 // Claude Code account switching + mass-continue for limit-blocked sessions.
 //
 // The daemon owns the actual swap (the credential lives in the machine's
@@ -2521,7 +2522,7 @@ export const reclassifyParkedApiErrorFlags = internalMutation({
     let skippedSettled = 0;
     for (const conv of page.page) {
       // A killed or completed row is the human saying they are done with it.
-      if (conv.status !== "active" || conv.inbox_killed_at != null) {
+      if (conv.status !== "active" || conv.inbox_killed_at != null || isClosedSession(conv)) {
         skippedSettled++;
         continue;
       }
