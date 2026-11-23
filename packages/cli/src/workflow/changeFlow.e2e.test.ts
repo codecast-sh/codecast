@@ -476,7 +476,7 @@ describe("the shipped change flow", () => {
     expect(fs.readFileSync(path.join(process.env.FAKE_STATE!, "deploy-cwd"), "utf-8").trim()).toBe(w.root);
     const deploy = fs.readFileSync(path.join(process.env.FAKE_STATE!, "calls.log"), "utf-8").split("\n").find((l) => l.startsWith("flow await-deploy "))!;
     expect(deploy).toContain(`--merge ${w.runDir}/merge.json`);
-    expect(s.sent().at(-1).body).toContain("The Change run on ct-9 is over: Live.");
+    expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
   }, 120_000);
 
   test("a deploy that fails after the merge tells the session its change landed but did not go live", async () => {
