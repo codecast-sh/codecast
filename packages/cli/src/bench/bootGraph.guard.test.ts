@@ -340,7 +340,9 @@ describe("command groups stay off the boot graph", () => {
     // antigravityClient.ts, its registry descriptor (out of agentClients.ts for
     // its max-lines pin), and antigravityTranscript.ts, its parser (out of
     // parser.ts the way museTranscript.ts is).
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(372);
+    // 373 the same day: contracts/agentPins.ts, the pinned-agents helpers (out
+    // of agentClients.ts for its max-lines pin), carried by the contracts barrel.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(373);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -516,7 +518,10 @@ describe("command groups stay off the boot graph", () => {
     // process and scan branches +3; main had shrunk by 16 since the last pin.
     // 4841 the same day: `cast typed`'s command-group line (+1); its body
     // loads on demand (typedCommand.ts).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4841);
+    // 4845 the same day: antigravityTranscript.ts maps agy's tool calls onto
+    // Bash/Read/Edit/Write/WebSearch/Agent (+3), and contracts/agentPins.ts,
+    // pin lists that let a newer client through (+1).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4845);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -744,7 +749,8 @@ describe("command groups stay off the boot graph", () => {
     // trust and the conversation's cwd from agy's own files).
     // 623 the same day: antigravityLocal.ts loads only when an agy pane
     // launches or resumes.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(623);
+    // 624 the same day: contracts/agentPins.ts, as on index.ts's graph above.
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(624);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {
