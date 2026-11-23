@@ -20,8 +20,8 @@ import { ImageViewer } from '@/components/chat/ImageViewer';
 import { IdentityPrefsOverride, useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 import { OwnerFace } from '@/components/owners/OwnerFace';
-import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 import { roleRowsOf } from '@codecast/web/lib/roleRows';
+import { rowEnvMeId, rowEnvRolesSig, rowEnvRoster } from '@/lib/inboxRowEnv';
 import type { RoleRows } from '@codecast/web/lib/sessionIdentity';
 import { coOwnersOf, coOwnersSig, filedRoleOf, filedRoleSig, withRoleOf } from '@codecast/web/lib/coOwners';
 import { roleShortName } from '@codecast/web/lib/composerOwnership';
@@ -141,7 +141,7 @@ type InboxRowEnv = {
   showImageThumb: boolean;
   /** Who is looking, the roster and the role rows: a row's co-owner faces. */
   meId: string | null;
-  teamMembers: any[];
+  teamMembers: readonly { _id: string; name?: string; email?: string; image?: string; github_avatar_url?: string }[];
   roleRows: RoleRows;
 };
 const InboxRowEnvContext = createContext<InboxRowEnv | null>(null);
@@ -152,9 +152,12 @@ export function InboxRowEnvProvider({ children }: { children: ReactNode }) {
   const showImageThumb = useInboxStore((s) => resolveImageThumbs(s.clientState?.ui));
   // The faces and identity lines read this instead of each subscribing.
   const prefs = useIdentityPrefs();
-  const meId = useInboxStore((s) => (s.currentUser as any)?._id?.toString?.() ?? null) as string | null;
-  const teamMembers = useInboxStore(teamMembersOf) as any[];
-  const roleRows = useInboxStore((s) => roleRowsOf(s as never));
+  // Each holds still across heartbeats (lib/inboxRowEnv): a new env value
+  // re-renders every mounted row.
+  const meId = useInboxStore(rowEnvMeId);
+  const teamMembers = useInboxStore(rowEnvRoster);
+  const rolesSig = useInboxStore(rowEnvRolesSig);
+  const roleRows = useMemo(() => roleRowsOf(useInboxStore.getState() as never), [rolesSig]); // eslint-disable-line react-hooks/exhaustive-deps
   const env = useMemo(
     () => ({ projectFilter, showImageThumb, meId, teamMembers, roleRows }),
     [projectFilter, showImageThumb, meId, teamMembers, roleRows],
