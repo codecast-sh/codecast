@@ -103,6 +103,9 @@ export interface WorkflowNode {
   // its verdicts, records the sha it merged), so a person sees it as part of
   // that stage, never as a stage of its own. It runs like any other station.
   fold?: boolean;
+  // A person's step a run reaches only on a side route (flows.md FL6): what
+  // makes a run ask, as words that finish "Asks you if …" ("it edits CI").
+  asks_if?: string;
   // A station that came from a segment (flows.md FL3): the node that named the
   // segment, the segment's name and slug, and for its entry and exits which one.
   segment?: string;

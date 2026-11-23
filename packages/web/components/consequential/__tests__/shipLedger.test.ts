@@ -2,7 +2,7 @@
 import { describe, expect, test } from "bun:test";
 import { shipLedgerFor } from "../shipLedger";
 import { SHIPPED_FLOWS } from "../../../lib/line/shippedFlows.generated";
-import { appPool } from "../../../lib/line/flowPool";
+import { appPool, pushedFlow } from "../../../lib/line/flowPool";
 import { approvalOf, approvalWords } from "../../../lib/ship/journey";
 
 const pool = appPool();
@@ -21,12 +21,23 @@ describe("the confirm agrees with the chip", () => {
         expect(you.every((v) => !v.startsWith("Only"))).toBe(true);
       } else if (a.kind === "if") {
         expect(questions).toBe("0–1");
-        expect(you).toEqual([a.when ? `Only if ${a.when}` : "Only on some runs"]);
+        expect(you).toEqual([a.when ? `Only if ${a.when}` : "On some runs"]);
       } else {
         expect(questions).toBe("0");
         expect(you).toEqual([]);
       }
     }
+  });
+
+  test("a side-route card with no asks_if: the chip sometimes asks, and the confirm asks on some runs, never quoting the route", () => {
+    const n = (id: string, label: string, type: string, shape: string) => ({ id, label, type, shape });
+    const flow = pushedFlow({
+      _id: "w1", slug: "change", name: "change", source: 'digraph change { graph [kind="line", label="Change", takes="task,branch"] }',
+      nodes: [n("start", "start", "start", "Mdiamond"), n("land", "Land", "conditional", "diamond"), n("land__merge", "Merge", "command", "parallelogram"), n("land__why", "Why a person", "command", "parallelogram"), n("land__card", "Card", "human", "hexagon"), n("land__landed", "Merged", "command", "parallelogram"), n("exit", "Live", "exit", "Msquare")],
+      edges: [{ from: "start", to: "land" }, { from: "land", to: "land__merge" }, { from: "land__merge", to: "land__landed", condition: "outcome = success" }, { from: "land__merge", to: "land__why", condition: "merge.exit_code = 6", label: "needs a person" }, { from: "land__why", to: "land__card" }, { from: "land__card", to: "land__merge" }, { from: "land__landed", to: "exit" }],
+    });
+    expect(approvalWords(approvalOf(flow))).toBe("Sometimes asks you");
+    expect(asked(flow)).toMatchObject({ questions: "0–1", you: ["On some runs"] });
   });
 
   test("the library's Ship asks only if it edits CI, and its confirm says so and ships this change", () => {

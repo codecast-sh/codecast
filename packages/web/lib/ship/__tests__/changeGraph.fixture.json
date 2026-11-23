@@ -241,7 +241,8 @@
       "shape": "hexagon",
       "type": "human",
       "segment": "decide",
-      "segment_flow": "decide"
+      "segment_flow": "decide",
+      "asks_if": "it edits CI"
     },
     {
       "id": "decide__ship",

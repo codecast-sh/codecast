@@ -324,6 +324,8 @@ function expandFlows(raw: RawGraph, dir: string | undefined, read: ReadFile, res
       for (const f of ID_FIELDS) if (typeof copy[f] === "string" && inner.includes(String(copy[f]))) copy[f] = rename(String(copy[f]));
       // The graph that composes the segment knows which of its stations answers the segment's gates.
       if (attrs.answerer && shapeOf(a) === "hexagon" && !copy.asker && !copy.answerer) copy.answerer = attrs.answerer;
+      // What makes a run ask, said where the graph names the segment, is its gates'.
+      if (attrs.asks_if && shapeOf(a) === "hexagon" && !copy.asks_if) copy.asks_if = attrs.asks_if;
       if (shapeOf(a) === "Msquare" && !(isStopExit(a) && !routesFailure)) {
         // An exit the node's own edges leave from: a step that says which exit it took.
         const failing = isStopExit(a);

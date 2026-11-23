@@ -34,6 +34,8 @@ export type FlowNodeIn = {
   machine?: boolean;
   /** Bookkeeping that finishes the stage before it (`fold=true`): drawn as part of that stage. */
   fold?: boolean;
+  /** A side-route person's step: what makes a run ask, finishing "Asks you if …" (`asks_if="it edits CI"`). */
+  asks_if?: string;
 };
 export type FlowEdgeIn = { from: string; to: string; label?: string; condition?: string };
 

@@ -53,6 +53,7 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
   const maxVisits = flowNodeAttrOf(row.source, "max_visits");
   const machine = flowNodeAttrOf(row.source, "machine");
   const fold = flowNodeAttrOf(row.source, "fold");
+  const asksIf = flowNodeAttrOf(row.source, "asks_if");
   const stops = flowNodeAttrOf(row.source, "stop");
   const nodes: FlowNodeIn[] = row.nodes.map((n) => {
     const top = segmentTopOf(n.id);
@@ -67,6 +68,7 @@ export function pushedFlow(row: PushedFlowRow): AppFlow {
       ...(Number(maxVisits[n.id]) > 0 ? { max_visits: Number(maxVisits[n.id]) } : {}),
       ...(machine[n.id] === "true" ? { machine: true } : {}),
       ...(fold[n.id] === "true" ? { fold: true } : {}),
+      ...(asksIf[n.id] ? { asks_if: asksIf[n.id] } : {}),
       ...(stops[n.id] ? { stop: stops[n.id] } : {}),
       ...(top !== n.id ? { segment: top } : {}),
       ...(exit ? { segment_exit: exit } : {}),

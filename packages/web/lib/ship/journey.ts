@@ -694,15 +694,16 @@ export function journeyWords(j: Journey | null): { words: string; tone: JourneyT
   }
 }
 
-/** Whether a person approves the change before it lands: on every run, only on a side route (`when`: the words of the
- *  route that turns onto it), or never. */
+/** Whether a person approves the change before it lands: on every run, only on a side route (`when`: what makes a run
+ *  ask, as the person's step says it with `asks_if`, else unknown), or never. */
 export type Approval = { kind: "always" } | { kind: "if"; when: string | null } | { kind: "never" };
 
 /**
  * Who says yes before the change lands, read from the graph. A person's stage on the passing path before the one that
  * lands it asks on every run. Otherwise a person's step (a segment's own included) that a run can reach before the
  * change lands, at the runner's landing step or else an exit that is no stop, asks only when a run turns off toward it
- * from a step that still lands without it: `when` is the words of that turn. Anything else asks nobody.
+ * from a step that still lands without it: `when` is that step's `asks_if` (on it or on the segment that holds it),
+ * never a route's label, which names the route and is not written to finish a sentence. Anything else asks nobody.
  */
 export function approvalOf(graph: Graph): Approval {
   const plan = planOf(graph);
@@ -710,7 +711,7 @@ export function approvalOf(graph: Graph): Approval {
   // The landing stage counts too: a person on its passing route says yes before its landing step.
   const upTo = land < 0 ? plan.length : plan[land].role === "land" ? land + 1 : land;
   if (plan.slice(0, upTo).some((s) => s.who === "person")) return { kind: "always" };
-  const landing =graph.nodes.filter((n) => LANDING_STEP.test(n.id)).map((n) => n.id);
+  const landing = graph.nodes.filter((n) => LANDING_STEP.test(n.id)).map((n) => n.id);
   const lands = landing.length ? landing : graph.nodes.filter((n) => n.type === "exit" && !n.stop).map((n) => n.id);
   const start = graph.nodes.filter((n) => n.type === "start").map((n) => n.id);
   // Every node a walk from `from` reaches, along edges forward or backward, never through `without`.
@@ -731,7 +732,11 @@ export function approvalOf(graph: Graph): Approval {
     const passing = reach(lands, true, h);
     const towards = reach([h], true);
     const turn = graph.edges.find((e) => passing.has(e.from) && fromStart.has(e.from) && !passing.has(e.to) && towards.has(e.to));
-    if (turn) return { kind: "if", when: turn.label ?? null };
+    if (turn) {
+      const step = graph.nodes.find((n) => n.id === h);
+      const top = graph.nodes.find((n) => n.id === segmentTopOf(h));
+      return { kind: "if", when: step?.asks_if ?? top?.asks_if ?? null };
+    }
   }
   return { kind: "never" };
 }

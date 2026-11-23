@@ -752,9 +752,13 @@ the route it took, red only where it stopped.
   workspace's default first and picked. Each row is the flow's label (a
   repository's flow that replaces a library one adds the repository's name,
   "Change · union-mobile"), whether a person approves before it lands, read
-  from the graph ("Asks you every time", "Asks you if it edits CI" when a person is asked
-  only on a side route, worded from that route's label, "No approval"), and its stages. The
-  confirm after it says the same: a question every run, "Only if it edits CI", or none. The stages are the
+  from the graph ("Asks you every time"; "Asks you if it edits CI" when a person is
+  asked only on a side route and that person's step says what makes a run ask
+  with `asks_if="it edits CI"`, words that finish "Asks you if …", set on the gate
+  or on the segment node that holds it, as change's `decide` does; "Sometimes asks
+  you" when it says nothing, never the route's label, which names the route; "No
+  approval"), and its stages. The confirm after it says the same: a question every
+  run, "Only if it edits CI" (else "On some runs"), or none. The stages are the
   journey's: the stations a passing run takes, never one only a failure
   reaches (a later deploy after a failed one), and a station marked
   `fold=true` is bookkeeping, drawn as part of the stage before it (change's

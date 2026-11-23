@@ -16,7 +16,7 @@ import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 
 export const SHIPPED_FLOWS_SNAPSHOT_PATH = "packages/web/lib/line/shippedFlows.generated.ts";
 
-const NODE_FIELDS = ["id", "label", "shape", "type", "backend", "agent", "segment", "segment_label", "segment_flow", "segment_entry", "segment_exit", "slot", "segment_generated", "stop", "max_visits", "timeout", "machine", "fold"] as const;
+const NODE_FIELDS = ["id", "label", "shape", "type", "backend", "agent", "segment", "segment_label", "segment_flow", "segment_entry", "segment_exit", "slot", "segment_generated", "stop", "max_visits", "timeout", "machine", "fold", "asks_if"] as const;
 
 /** One flow as the web reads it with no parser: what the pool lists, and its graph with segments and `extends` expanded.
  *  A repo's flow names its file, so its `extends` and `@file` stations resolve beside it. */

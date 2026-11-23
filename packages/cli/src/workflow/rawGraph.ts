@@ -291,6 +291,7 @@ export class Parser {
     if (attrs.definition) node.definition = String(attrs.definition);
     if (attrs.isolated !== undefined) node.isolated = attrs.isolated === true || attrs.isolated === "true";
     for (const k of ["parks", "machine", "fold"] as const) if (attrs[k] === true || attrs[k] === "true") node[k] = true;
+    if (attrs.asks_if) node.asks_if = String(attrs.asks_if);
     if (attrs.refresh !== undefined) node.refresh = attrs.refresh === true || attrs.refresh === "true";
     if (attrs.reviewer !== undefined) node.reviewer = attrs.reviewer === true || attrs.reviewer === "true";
     if (attrs.temperature !== undefined) node.temperature = attrs.temperature as number;

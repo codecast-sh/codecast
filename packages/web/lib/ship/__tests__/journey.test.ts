@@ -390,18 +390,20 @@ describe("approvalOf", () => {
     expect(lines).toEqual([["line", "Asks you every time"], ["change", "Asks you if it edits CI"], ["quick-change", "No approval"], ["climb", "Sometimes asks you"]]);
   });
   test("a gate on a side route asks only on that route; one reached only past landing asks nobody", () => {
-    const g = (turn: { label?: string }, gateAfterLand = false) => ({
-      nodes: [{ id: "start", label: "start", type: "start" }, { id: "check", label: "Check", type: "command" }, { id: "why", label: "Why", type: "command" }, { id: "ask", label: "Ask", type: "human" }, { id: "landed", label: "Merged", type: "command" }, { id: "exit", label: "Live", type: "exit" }],
+    const g = (turn: { label?: string }, gateAfterLand = false, asks_if?: string) => ({
+      nodes: [{ id: "start", label: "start", type: "start" }, { id: "check", label: "Check", type: "command" }, { id: "why", label: "Why", type: "command" }, { id: "ask", label: "Ask", type: "human", ...(asks_if ? { asks_if } : {}) }, { id: "landed", label: "Merged", type: "command" }, { id: "exit", label: "Live", type: "exit" }],
       edges: gateAfterLand
         ? [{ from: "start", to: "check" }, { from: "check", to: "landed" }, { from: "landed", to: "exit", condition: "outcome = success" }, { from: "landed", to: "ask", condition: "outcome = failure", ...turn }, { from: "ask", to: "exit" }]
         : [{ from: "start", to: "check" }, { from: "check", to: "landed", condition: "outcome = success" }, { from: "check", to: "why", condition: "outcome = failure", ...turn }, { from: "why", to: "ask" }, { from: "ask", to: "landed" }, { from: "landed", to: "exit" }],
     }) as any;
-    expect(approvalOf(g({ label: "risky" }))).toEqual({ kind: "if", when: "risky" });
-    expect(approvalWords(approvalOf(g({})))).toBe("Sometimes asks you");
+    // The gate says what makes a run ask; the route's own label never stands in for it.
+    expect(approvalOf(g({ label: "risky" }, false, "it touches billing"))).toEqual({ kind: "if", when: "it touches billing" });
+    expect(approvalWords(approvalOf(g({ label: "risky" }, false, "it touches billing")))).toBe("Asks you if it touches billing");
+    expect(approvalWords(approvalOf(g({ label: "risky" })))).toBe("Sometimes asks you");
     expect(approvalOf(g({ label: "risky" }, true))).toEqual({ kind: "never" });
   });
-  // The shape of a repository's change that lands through one segment (Union's): a card inside Land only when the change
-  // edits what judges it, and a later deploy only when the deploy failed.
+  // A change that lands through one segment: a card inside Land on a side route its merge turns onto, its route a plain
+  // name with no asks_if, and a later deploy only when the deploy failed.
   const landsThroughSegment = () => {
     const seg = (id: string, label: string, type = "command") => ({ id: `land__${id}`, label, type, segment: "land" });
     return {
@@ -415,7 +417,7 @@ describe("approvalOf", () => {
       edges: [
         { from: "start", to: "land" }, { from: "land", to: "land__merge" },
         { from: "land__merge", to: "land__landed", condition: "outcome = success" },
-        { from: "land__merge", to: "land__why", condition: "merge.exit_code = 6", label: "edits what judges it" },
+        { from: "land__merge", to: "land__why", condition: "merge.exit_code = 6", label: "needs a person" },
         { from: "land__why", to: "land__card" }, { from: "land__card", to: "land__merge" },
         { from: "land__landed", to: "deploy" }, { from: "deploy", to: "deploy__wait" },
         { from: "deploy__wait", to: "exit", condition: "outcome = success" },
@@ -425,10 +427,12 @@ describe("approvalOf", () => {
       ],
     } as any;
   };
-  test("a card a segment reaches only on a side route makes its stage no person's, and asks only on that route", () => {
+  test("a card a segment reaches only on a side route makes its stage no person's, and never reads its route's label as a reason", () => {
     const g = landsThroughSegment();
     expect(journeyStages(g).map((s) => [s.label, s.who])).toEqual([["Land", "auto"], ["Deploy", "auto"], ["Live", "auto"]]);
-    expect(approvalOf(g)).toEqual({ kind: "if", when: "edits what judges it" });
+    // Its route's label names the route, not what makes a run ask: with no asks_if the chip says only that it sometimes asks.
+    expect(approvalOf(g)).toEqual({ kind: "if", when: null });
+    expect(approvalWords(approvalOf(g))).toBe("Sometimes asks you");
   });
   test("a station only a failure reaches is no stage of the passing run", () => {
     expect(journeyStages(landsThroughSegment()).map((s) => s.label)).not.toContain("Wait for a later deploy");

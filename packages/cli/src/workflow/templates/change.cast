@@ -69,7 +69,7 @@ digraph change {
   ci_card [label="Why a person", shape=parallelogram, timeout=120,
     script="cast task comment \"$task_id\" \"This change edits CI, so CI can't vouch for it: a person decides whether it ships.\" -t review >/dev/null; echo \"$verdicts.json.why\""]
   // A question typed at the Ship card goes to the reviewer, who has read the change.
-  decide [flow="decide", answerer="review"]
+  decide [flow="decide", answerer="review", asks_if="it edits CI"]
   // Named for the runner (runner.ts, the run's end): a stop past here tells the session its change is on main.
   landed [label="Merged", shape=parallelogram, timeout=60, fold=true, script="echo \"$merge.json.sha\""]
   deploy [flow="deploy"]

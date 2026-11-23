@@ -58,6 +58,7 @@ export const FANOUT_FLOW: FixtureFlowRow = {
   review [backend=session]
   verdicts [fold=true]
   landed [fold=true]
+  decide [asks_if="it edits CI"]
   brief [backend=subject, max_visits=3]
   fix_conflict [backend=subject, max_visits=3]
   nopr [stop="$pr.output"]
