@@ -31,16 +31,21 @@ function entryBesideThisModule(ext: string): string | null {
   return fs.existsSync(candidate) ? candidate : null;
 }
 
-export function resolveCastInvocation(): { cmd: string; prefixArgs: string[] } {
-  const argv1 = process.argv[1] || "";
+function isCompiledEntry(argv1: string): boolean {
+  return argv1.startsWith("/$bunfs/") || argv1.includes("~BUN/");
+}
+
+export function resolveCastInvocation(argv: readonly string[] = process.argv, execPath = process.execPath): { cmd: string; prefixArgs: string[] } {
+  const argv1 = argv[1] || "";
+  if (isCompiledEntry(argv1)) return { cmd: fs.existsSync(execPath) ? execPath : "cast", prefixArgs: [] };
   if (argv1.endsWith(".ts") || argv1.endsWith(".js")) {
     const ext = argv1.endsWith(".ts") ? ".ts" : ".js";
     // The argv-derived path stays as the fallback: it is right whenever argv[1]
     // IS the entry, and a wrong guess now fails loudly at the spawn rather than
     // silently.
     const entry = entryBesideThisModule(ext) ?? path.join(path.dirname(argv1), `main${ext}`);
-    return { cmd: process.argv[0], prefixArgs: [entry] };
+    return { cmd: argv[0], prefixArgs: [entry] };
   }
-  if (!argv1.includes("/")) return { cmd: process.execPath, prefixArgs: [] };
+  if (!argv1.includes("/")) return { cmd: execPath, prefixArgs: [] };
   return { cmd: "cast", prefixArgs: [] };
 }
