@@ -58,3 +58,25 @@ describe("rows and faces", () => {
     expect(row).toContain("<RNView style={styles.coOwners} accessible accessibilityLabel={coOwners.title}>");
   });
 });
+
+// People are never shown driving: owners are people plus an optional role,
+// and the role is Active or Paused. A paused role offers Resume; nothing
+// offers Make driver, and no face is ringed.
+describe("active and paused, never a driver", () => {
+  test("the sheet and the composer line say Resume, never Make driver, and keep the person-drives line out", () => {
+    for (const file of ["components/AssignmentChip.tsx", "components/session/ComposerOwnerStrip.tsx"]) {
+      const s = src(file);
+      expect(s).not.toContain("Make driver");
+      expect(s).toContain("Resume");
+    }
+    const strip = src("components/session/ComposerOwnerStrip.tsx");
+    expect(strip).toContain("Pause and send");
+    expect(strip).not.toContain("line.person");
+  });
+
+  test("no face carries a driver ring", () => {
+    expect(src("components/owners/OwnerFace.tsx")).not.toMatch(/driver/);
+    expect(src("components/SessionItem.tsx")).not.toMatch(/driver=\{/);
+    expect(chip).not.toMatch(/driver=\{/);
+  });
+});

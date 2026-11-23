@@ -285,33 +285,28 @@
    only its glyph and dot. */
 [data-sv-convhead] [data-cc-runner]:has([data-runner-device]) [data-tmux-pill] .cq-sq2 { display: none; }
 
-/* The owners segment (OwnersMenu): faces in the order added, the one that
-   drives ringed, a paused role greyed. */
+/* The owners segment (OwnersMenu): faces in the order added, a paused role
+   greyed. No face is ringed: people are never shown driving. */
 [data-cc-runner] [data-owners-seg] { cursor: pointer; transition: background-color .12s; }
 [data-cc-runner] [data-owners-seg]:hover,
 [data-cc-runner] [data-owners-seg].is-open { background: color-mix(in srgb, var(--sol-text) 7%, transparent); }
 .own-stack { display: inline-flex; align-items: center; gap: 5px; }
-.own-drv { outline: 1.5px solid var(--sol-text); outline-offset: 1px; }
 /* A paused role: grey, and a dashed ring, which still reads on a grayscale
    screen where opacity alone does not. */
 .own-paused { filter: grayscale(1); opacity: .6; outline: 1.5px dashed var(--sol-text-muted); outline-offset: 1px; }
-/* "Make driver" shows on the row under the pointer or the keyboard; a touch
-   screen never hovers, so there it always shows. */
-[data-owners-menu] .own-mk { display: none; height: 24px; padding: 0 8px; gap: 6px; font-size: var(--fs-meta); }
-[data-owners-menu] .own-row[data-highlighted] .own-mk,
-[data-owners-menu] .own-row:focus-within .own-mk { display: inline-flex; }
+/* A paused role's Resume: always shown, its key cap only where there is a keyboard. */
+[data-owners-menu] .own-resume { display: inline-flex; height: 24px; padding: 0 8px; gap: 6px; font-size: var(--fs-meta); }
 [data-owners-menu] .own-plus:hover { background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
 @media (hover: none) {
-  [data-owners-menu] .own-mk { display: inline-flex; }
-  [data-owners-menu] .own-mk kbd, [data-owner-strip-key] { display: none; }
+  [data-owners-menu] .own-resume kbd, [data-owner-strip-key] { display: none; }
 }
 /* Touch targets on a coarse pointer: 44px rows and icon buttons; a framed
    button keeps its look and takes a 44px hit area around it. */
 @media (pointer: coarse) {
   [data-owners-menu] .own-row, [data-owners-menu] [data-leave-box] button, [data-seat-reports-to] .own-row { min-height: 44px; }
   [data-owners-menu] .own-x, [data-owners-menu] .own-plus { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
-  [data-owners-menu] .own-mk, [data-owners-menu] [data-owners-foot] button, [data-cc-owner-strip] button, [data-cc-runner] [data-owners-seg] { position: relative; }
-  [data-owners-menu] .own-mk::after, [data-owners-menu] [data-owners-foot] button::after, [data-cc-owner-strip] button::after, [data-cc-runner] [data-owners-seg]::after { content: ""; position: absolute; inset: -12px -2px; }
+  [data-owners-menu] .own-resume, [data-owners-menu] [data-owners-foot] button, [data-cc-owner-strip] button, [data-cc-runner] [data-owners-seg] { position: relative; }
+  [data-owners-menu] .own-resume::after, [data-owners-menu] [data-owners-foot] button::after, [data-cc-owner-strip] button::after, [data-cc-runner] [data-owners-seg]::after { content: ""; position: absolute; inset: -12px -2px; }
   /* The terminal's copy title: its bar grows to 44px, and the title fills it
      (a hit area spilling out of a 24px bar lost its lower half to the
      terminal painted over it). */

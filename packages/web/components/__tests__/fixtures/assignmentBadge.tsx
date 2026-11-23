@@ -110,21 +110,21 @@ test("owners are faces on the chip, named on hover", async () => {
   useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: "me" } } });
   setOwners([{ user_id: "me", name: "Ashot" }]);
   await render(true);
-  expect(ownersSeg()!.title).toMatch(/Owners: Ashot/);
+  expect(ownersSeg()!.title).toMatch(/Owners: You/);
   expect(ownersSeg()!.textContent).not.toContain("Ashot");
   expect(container.textContent).not.toContain("Take ownership");
   useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: runner.id } } });
 });
 
-test("the driver is ringed and a paused role greyed", async () => {
+test("no face is ringed, and a paused role is greyed", async () => {
   // The role and the driver live on the session row; the owners row carries the role's face.
   useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: runner.id, org_role_id: "role1", driver_user_id: "me" } } });
   setOwners([{ user_id: "me", name: "Ashot" }], {
     role: { role_id: "role1", short_id: "or-1", handle: "evals", name: "Eval Suite lead", avatar: null },
   });
   await render(true);
-  expect(ownersSeg()!.title).toBe("Owners: Ashot (driver), Eval Suite lead (paused)");
-  expect(ownersSeg()!.querySelectorAll(".own-drv").length).toBe(1);
+  expect(ownersSeg()!.title).toBe("Owners: You, Eval Suite lead (paused)");
+  expect(ownersSeg()!.querySelectorAll(".own-drv").length).toBe(0);
   expect(ownersSeg()!.querySelectorAll(".own-paused").length).toBe(1);
   useInboxStore.setState({ conversations: { [id]: { _id: id, user_id: runner.id } } });
 });
@@ -181,7 +181,7 @@ test("Save sends the whole staged change once, and the faces follow at once", as
   // on the session row, pinned to Jason (adding never hands it over).
   expect((useInboxStore.getState() as any).conversations[id].owner_ids).toEqual(["jason", "me"]);
   expect((useInboxStore.getState() as any).conversations[id].driver_user_id).toBe("jason");
-  expect(ownersSeg()!.title).toBe("Owners: Jason (driver), Ashot");
+  expect(ownersSeg()!.title).toBe("Owners: Jason, You");
   // The server echoes the Save: the owners read releases the held people.
   setOwners([{ user_id: "jason", name: "Jason" }, { user_id: "me", name: "Ashot" }]);
   await render(true, false, false);

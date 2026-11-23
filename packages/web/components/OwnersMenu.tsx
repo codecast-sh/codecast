@@ -2,12 +2,12 @@
 
 /**
  * The owners segment of the header's runner pill and the menu it opens. A
- * session is in each owner's inbox: its people, and at most one role. Exactly
- * one owner drives (messages the agent): the role while it is filed and no
- * person has taken over, else that person. The segment draws the owners'
- * faces in the order added, the driver ringed and a paused role greyed.
+ * session is in each owner's inbox: its people, and at most one role, which
+ * is Active (it acts on the session) or Paused (a person's send paused it).
+ * The segment draws the owners' faces in the order added, a paused role
+ * greyed with a dashed ring; no face is ringed.
  *
- * The menu stages every change (remove, leave, add, make driver) and applies
+ * The menu stages every change (remove, leave, add, resume) and applies
  * nothing until Save, which sends the whole change in one store action
  * (applySessionOwners), which paints it at once by the server's own rule.
  * Leaving a session that runs on your account first moves it to a team
@@ -15,15 +15,16 @@
  *
  * The model (hooks/useOwnersMenu) is the phone's too, highlight included;
  * this file draws it for a keyboard and a pointer. The arrows walk the
- * owners, then the candidates; Enter adds and Shift+Enter makes driver. A
+ * owners, then the candidates; Enter adds and Shift+Enter resumes a paused role. A
  * staged change survives a stray tap outside; Escape and Cancel discard it.
  */
 
-import { useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useRef, useState, type KeyboardEvent } from "react";
 import { Plus, Search, UserCheck, X, ChevronRight, BadgePlus } from "lucide-react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwnerCandidates, pickRoster, type OwnersApi, type OwnerRole } from "../hooks/useOwners";
-import { isDriverKey as isDriver, memberName, roleOwnerOf, useOwnersMenu, useOwnersView, type OwnerMenuRow, type OwnerPerson } from "../hooks/useOwnersMenu";
+import { memberName, roleOwnerOf, useOwnersMenu, useOwnersView, type OwnerMenuRow, type OwnerPerson } from "../hooks/useOwnersMenu";
+import { ownersTitle } from "../lib/coOwners";
 import { useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
 import { useSyncOrgTreeFeeder } from "../hooks/useSyncOrgTree";
 import { useMoveTargets } from "../hooks/useBulkMoveSessions";
@@ -49,26 +50,27 @@ const SEP = "-mx-1 my-1 h-px bg-muted modern:bg-sol-border/70";
 const ICON_BTN = "shrink-0 p-0.5 rounded text-sol-text-dim";
 const SHIFT_ENTER = isMac ? "⇧↵" : "Shift ↵";
 
-export function Face({ person, role, size, driver, paused }: { person?: OwnerPerson; role?: OwnerRole; size: number; driver?: boolean; paused?: boolean }) {
-  const cls = `${driver ? "own-drv" : ""} ${paused ? "own-paused" : ""}`;
+export function Face({ person, role, size, paused }: { person?: OwnerPerson; role?: OwnerRole; size: number; paused?: boolean }) {
+  const cls = paused ? "own-paused" : "";
   if (role) return <RoleFace role={{ _id: role.role_id, short_id: role.short_id, handle: role.handle, name: role.name, avatar: role.avatar }} size={size} className={cls} title={role.name} />;
   return <AssigneeFace info={{ name: person!.name, image: person!.image }} size={size} hover={false} className={cls} />;
 }
 
 /**
  * The header segment: owners' faces in a fixed order (people as added, then
- * the role), the driver ringed, a paused role greyed. Click opens the menu.
+ * the role), a paused role greyed. Click opens the menu.
  */
 export function OwnersSegment({ conversationId, owners, compact }: { conversationId: string; owners: OwnersApi; compact: boolean }) {
   const [open, setOpen] = useState(false);
   // A staged change is kept from a stray outside tap; Escape still closes.
   const [dirty, setDirty] = useState(false);
   const { seatRoleId, currentRole: parentRole } = useSessionRoleFacts(conversationId);
-  const { people, role, driver } = useOwnersView(owners);
+  const { meId, people, role, driver } = useOwnersView(owners);
   const seat = !!seatRoleId;
   const paused = !!role && driver?.kind === "user";
-  const names = [...people.map((p) => (isDriver(driver, `p:${p._id}`) ? `${p.name} (driver)` : p.name)), ...(role ? [`${role.name}${paused ? " (paused)" : driver?.kind === "role" ? " (driver)" : ""}`] : [])];
-  const title = seat && parentRole ? `Reports to ${parentRole.name}` : names.length ? `Owners: ${names.join(", ")}` : "No owner: click to take ownership";
+  const title = seat && parentRole ? `Reports to ${parentRole.name}`
+    : people.length || role ? ownersTitle(people.map((p) => (p._id === meId ? "You" : p.name)), role, paused)
+      : "No owner: click to take ownership";
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
@@ -79,9 +81,9 @@ export function OwnersSegment({ conversationId, owners, compact }: { conversatio
             <><UserCheck className="w-3.5 h-3.5" />{!compact && <span className="truncate cq-sq1">Take ownership</span>}</>
           ) : (
             <span className="own-stack">
-              {people.slice(0, 3).map((p) => <Face key={p._id} person={p} size={16} driver={isDriver(driver, `p:${p._id}`)} />)}
+              {people.slice(0, 3).map((p) => <Face key={p._id} person={p} size={16} />)}
               {people.length > 3 && <span className="text-meta tabular-nums">+{people.length - 3}</span>}
-              {role && <Face role={role} size={16} driver={driver?.kind === "role"} paused={paused} />}
+              {role && <Face role={role} size={16} paused={paused} />}
             </span>
           )}
         </button>
@@ -103,7 +105,7 @@ function OwnersMenuBody({ conversationId, owners, onClose, onDirty }: { conversa
   const roster = useInboxStore(teamMembersOf) as any[];
   const menuRef = useRef<HTMLDivElement>(null);
   // Focus the search only for a precise pointer: on a touch screen it raises
-  // the keyboard over the menu when the tap was for Make driver or ×.
+  // the keyboard over the menu when the tap was for Resume or ×.
   const [autoFocusSearch] = useState(() => typeof window === "undefined" || !window.matchMedia || !window.matchMedia("(pointer: coarse)").matches);
   const searchRef = useRef<HTMLInputElement>(null);
   const { candidates, q, readOnly, highlighted, rows } = m;
@@ -146,12 +148,12 @@ function OwnersMenuBody({ conversationId, owners, onClose, onDirty }: { conversa
 
   const ownerRow = (r: OwnerMenuRow, i: number) => (
     <div key={r.key} className={ROW} data-owner-row={r.key} {...highlight(i)} onPointerEnter={hover(i)}>
-      {r.role ? <Face role={r.role} size={20} driver={r.drives} paused={r.paused} /> : <Face person={r.person} size={20} driver={r.drives} />}
+      {r.role ? <Face role={r.role} size={20} paused={r.paused} /> : <Face person={r.person} size={20} />}
       <span className="flex min-w-0 flex-1 flex-col leading-tight">
         <span className="truncate">{r.name}</span>
         <span className={`truncate text-meta ${r.paused ? "text-sol-text-dim" : "text-sol-text-muted"}`}>{r.sub}</span>
       </span>
-      {r.makeDriver && !readOnly && <MakeDriverButton onClick={() => m.makeDriver(r.makeDriver!)} />}
+      {r.resume && !readOnly && <ResumeButton onClick={r.resume} />}
       {!readOnly && (
         <button type="button" onClick={r.onRemove ?? (() => { m.refuse(r); searchRef.current?.focus(); })} aria-disabled={!r.onRemove} title={r.removeLabel} aria-label={r.removeLabel} className={`${ICON_BTN} own-x ${r.onRemove ? "hover:text-sol-red hover:bg-sol-red/10" : "opacity-40 cursor-default"}`}>
           <X className="w-3.5 h-3.5" />
@@ -241,7 +243,6 @@ function OwnersMenuBody({ conversationId, owners, onClose, onDirty }: { conversa
                     </span>
                   )}
                 </span>
-                {!isRole && <MakeDriverButton onClick={(e) => { e.stopPropagation(); m.add(c, true); }} />}
                 <button type="button" className={`${ICON_BTN} hover:text-sol-text own-plus`} title={`Add ${name}`} aria-label={`Add ${name}`} onClick={(e) => { e.stopPropagation(); m.add(c); }}>
                   <Plus className="w-3.5 h-3.5" />
                 </button>
@@ -271,12 +272,12 @@ function OwnersMenuBody({ conversationId, owners, onClose, onDirty }: { conversa
   );
 }
 
-/** Make driver, with its key: Shift+Enter on the highlighted row (the cap
- *  hides on a touch screen, which shows the button on every row). */
-function MakeDriverButton({ onClick }: { onClick: (e: MouseEvent) => void }) {
+/** A paused role's Resume, with its key: Shift+Enter on the highlighted row
+ *  (the cap hides on a touch screen). */
+function ResumeButton({ onClick }: { onClick: () => void }) {
   return (
-    <Button type="button" variant="outline" size="xs" className="own-mk" onClick={onClick}>
-      Make driver <KeyCap size="xs">{SHIFT_ENTER}</KeyCap>
+    <Button type="button" variant="outline" size="xs" className="own-resume" onClick={onClick} data-owner-resume>
+      Resume <KeyCap size="xs">{SHIFT_ENTER}</KeyCap>
     </Button>
   );
 }
@@ -302,7 +303,7 @@ function SeatReportsTo({ conversationId, owners, onDone }: { conversationId: str
           const on = !orgRoleId && owners.ownerList[0] === m._id;
           return (
             <button key={m._id} type="button" className={`${ROW} w-full ${on ? "font-medium" : ""}`} onClick={() => !on && pick({ kind: "user", user_id: m._id })}>
-              <Face person={{ _id: m._id, name: memberName(m), image: m.image || m.github_avatar_url }} size={20} driver={on} />
+              <Face person={{ _id: m._id, name: memberName(m), image: m.image || m.github_avatar_url }} size={20} />
               <span className="flex-1 truncate text-left">{memberName(m)}{m._id === meId ? " (you)" : ""}</span>
             </button>
           );
@@ -311,7 +312,7 @@ function SeatReportsTo({ conversationId, owners, onDone }: { conversationId: str
           const on = orgRoleId === r._id;
           return (
             <button key={r._id} type="button" className={`${ROW} w-full ${on ? "font-medium" : ""}`} onClick={() => !on && pick({ kind: "role", role_id: r._id })}>
-              <Face role={roleOwnerOf(r)} size={20} driver={on} />
+              <Face role={roleOwnerOf(r)} size={20} />
               <span className="flex-1 truncate text-left">{r.name}</span>
               <span className="font-mono text-meta text-sol-text-dim">@{r.handle}</span>
             </button>

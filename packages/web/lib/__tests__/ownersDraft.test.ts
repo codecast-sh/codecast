@@ -32,9 +32,8 @@ describe("the owners menu's staged change", () => {
     expect(diffOwners(justMe, d).change).toEqual({ role: "r1", driver: { kind: "user", user_id: "me" } });
   });
 
-  test("adding a teammate keeps the driver; Make driver on a candidate adds and drives", () => {
+  test("adding a teammate changes who acts on nothing", () => {
     expect(diffOwners(justMe, addPerson(justMe, "ashot")).change).toEqual({ add: ["ashot"] });
-    expect(diffOwners(justMe, addPerson(justMe, "ashot", true)).change).toEqual({ add: ["ashot"], driver: { kind: "user", user_id: "ashot" } });
   });
 
   test("removing the driver hands the wheel to the role, else the first person left", () => {

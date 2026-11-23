@@ -1,6 +1,6 @@
 // The co-owners an inbox card shows beside its time: the session's OTHER
-// owners (people in the order added, then its role), the one that drives
-// ringed and a role a person took over from greyed. Read off the session row
+// owners (people in the order added, then its role), a paused role greyed
+// with a dashed ring and no face ringed. Read off the session row
 // (owner_ids, org_role_id, driver_user_id, owner_user_id) by the rule the
 // header's owners segment and the server run (shared driverOf), so the card
 // and the header agree; the role's face is read live from the role rows, as
@@ -12,8 +12,8 @@ import type { RoleLike } from "../components/org/RoleFace";
 import { roleIconSig, type RoleRows } from "./sessionIdentity";
 
 export type CoOwnerFace =
-  | { key: string; kind: "person"; name: string; image?: string; driver: boolean }
-  | { key: string; kind: "role"; role: RoleLike; driver: boolean; paused: boolean };
+  | { key: string; kind: "person"; name: string; image?: string }
+  | { key: string; kind: "role"; role: RoleLike; paused: boolean };
 
 export type CoOwners = { faces: CoOwnerFace[]; more: number; title: string };
 
@@ -44,6 +44,13 @@ export function filedRoleSig(role: RoleLike | null): string {
   return role ? `${role._id}|${role.name ?? ""}|${role.handle}|${role.avatar ?? ""}|${roleIconSig(role.icon)}` : "";
 }
 
+/** The owners as a tooltip and VoiceOver read them: "Owners: You, Ashot,
+ *  Evals lead (paused)". People are never said to drive; the role is Active
+ *  or Paused. */
+export function ownersTitle(people: string[], role: { name?: string | null; handle?: string } | null, paused: boolean): string {
+  return `Owners: ${[...people, ...(role ? [`${role.name ?? role.handle} (${paused ? "paused" : "active"})`] : [])].join(", ")}`;
+}
+
 export function coOwnersOf(row: Row, meId: string | null, members: readonly Member[], role: RoleLike | null): CoOwners | null {
   // A role's own session reports to someone; it lists no owners of its own.
   if (row.standing_role_id || !Array.isArray(row.owner_ids)) return null;
@@ -58,14 +65,9 @@ export function coOwnersOf(row: Row, meId: string | null, members: readonly Memb
     const m = members.find((x) => x._id === id);
     return { name: m?.name || m?.email?.split("@")[0] || "Teammate", image: m?.image || m?.github_avatar_url || undefined };
   };
-  const drives = (id: string) => driver?.kind === "user" && driver.user_id === id;
-  const faces: CoOwnerFace[] = others.slice(0, MAX_PEOPLE).map((id) => ({ key: id, kind: "person", ...person(id), driver: drives(id) }));
-  if (role) faces.push({ key: role._id ?? role.handle, kind: "role", role, driver: driver?.kind === "role", paused });
-  const names = [
-    ...ids.map((id) => `${id === meId ? "You" : person(id).name}${drives(id) ? " (driver)" : ""}`),
-    ...(role ? [`${role.name ?? role.handle}${paused ? " (paused)" : driver?.kind === "role" ? " (driver)" : ""}`] : []),
-  ];
-  return { faces, more: Math.max(0, others.length - MAX_PEOPLE), title: `Owners: ${names.join(", ")}` };
+  const faces: CoOwnerFace[] = others.slice(0, MAX_PEOPLE).map((id) => ({ key: id, kind: "person", ...person(id) }));
+  if (role) faces.push({ key: role._id ?? role.handle, kind: "role", role, paused });
+  return { faces, more: Math.max(0, others.length - MAX_PEOPLE), title: ownersTitle(ids.map((id) => (id === meId ? "You" : person(id).name)), role, paused) };
 }
 
 /** The row's half of the co-owners as one string, for a memo key. */

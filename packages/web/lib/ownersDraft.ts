@@ -44,9 +44,9 @@ export function addRole(d: OwnersDraft, role: OwnerRole): OwnersDraft {
   return { ...d, role, driver: { kind: "role", role_id: role.role_id } };
 }
 
-export function addPerson(d: OwnersDraft, id: string, drive = false): OwnersDraft {
-  if (d.ownerIds.includes(id)) return drive ? { ...d, driver: { kind: "user", user_id: id } } : d;
-  return { ...d, ownerIds: [...d.ownerIds, id], driver: drive ? { kind: "user", user_id: id } : d.driver };
+/** A person added is an owner, never the one who acts: that stays as it was. */
+export function addPerson(d: OwnersDraft, id: string): OwnersDraft {
+  return d.ownerIds.includes(id) ? d : { ...d, ownerIds: [...d.ownerIds, id] };
 }
 
 /** "Select all teammates": every given person not yet an owner becomes a

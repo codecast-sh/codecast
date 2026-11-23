@@ -186,46 +186,44 @@ describe("the Modern card, mounted", () => {
       expect(ownersEl()).toBeNull();
     });
 
-    test("only the other owners, the driving person ringed, everyone named", async () => {
+    test("only the other owners, no face ringed, everyone named", async () => {
       await show({ owner_ids: ["me", "mate", "sam"], owner_user_id: "mate" });
       const el = ownersEl()!;
       expect(el.children).toHaveLength(2);
-      expect(el.querySelectorAll(".own-drv")).toHaveLength(1);
-      expect(el.getAttribute("title")).toBe("Owners: You, Mate (driver), Sam");
+      expect(el.querySelectorAll(".own-paused")).toHaveLength(0);
+      expect(el.getAttribute("title")).toBe("Owners: You, Mate, Sam");
       // The faces sit before the time.
       expect(el.nextElementSibling?.hasAttribute("data-mc-time")).toBe(true);
     });
 
-    test("a driving role is ringed", async () => {
+    test("an Active role is drawn plain", async () => {
       await show({ owner_ids: ["me"], org_role_id: ROLE._id, role: ROLE });
       const el = ownersEl()!;
       expect(el.children).toHaveLength(1);
-      expect(el.querySelectorAll(".own-drv")).toHaveLength(1);
       expect(el.querySelectorAll(".own-paused")).toHaveLength(0);
-      expect(el.getAttribute("title")).toBe("Owners: You, Evals lead (driver)");
+      expect(el.getAttribute("title")).toBe("Owners: You, Evals lead (active)");
     });
 
-    test("a role a person took over from is greyed, and the person is ringed", async () => {
+    test("a Paused role is greyed with a dashed ring, and nobody is said to drive", async () => {
       await show({ owner_ids: ["me", "mate"], owner_user_id: "me", org_role_id: ROLE._id, role: ROLE, driver_user_id: "mate" });
       const el = ownersEl()!;
       expect(el.children).toHaveLength(2);
       expect(el.querySelectorAll(".own-paused")).toHaveLength(1);
-      expect(el.querySelectorAll(".own-drv")).toHaveLength(1);
-      expect(el.getAttribute("title")).toBe("Owners: You, Mate (driver), Evals lead (paused)");
+      expect(el.getAttribute("title")).toBe("Owners: You, Mate, Evals lead (paused)");
     });
 
     test("a role just filed shows its live face before the row's snapshot catches up", async () => {
       const INFRA = { _id: "org_roles_infra", short_id: "or-3", name: "Infra lead", handle: "infra", avatar: "stag", status: "active" };
       await act(async () => { useInboxStore.setState({ viewerRoles: { [INFRA._id]: INFRA } } as any); });
       await show({ owner_ids: ["me"], org_role_id: INFRA._id, role: ROLE });
-      expect(ownersEl()!.getAttribute("title")).toBe("Owners: You, Infra lead (driver)");
+      expect(ownersEl()!.getAttribute("title")).toBe("Owners: You, Infra lead (active)");
       await act(async () => { useInboxStore.setState({ viewerRoles: {} } as any); });
     });
 
     test("a session someone else owns that runs on your account shows them", async () => {
       await show({ owner_ids: ["mate"], owner_user_id: "mate" });
       expect(ownersEl()!.children).toHaveLength(1);
-      expect(ownersEl()!.getAttribute("title")).toBe("Owners: Mate (driver)");
+      expect(ownersEl()!.getAttribute("title")).toBe("Owners: Mate");
     });
 
     test("an owner added without the primary moving reaches the card", async () => {

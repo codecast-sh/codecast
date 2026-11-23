@@ -10,10 +10,16 @@
  * Each platform draws the rows and supplies what differs: the machines a
  * leave can move to, presence, keyboard focus.
  *
+ * People own a session; at most one role owns it too, and the role is Active
+ * (it acts on the session) or Paused (a person's send paused it). People are
+ * never shown driving: the server's driver_user_id is read only to say
+ * whether the role is paused. A paused role offers Resume; nothing offers
+ * Pause, since sending from the composer pauses it.
+ *
  * The highlight is the model's too: one ring of the owners, then the
  * candidates, with nothing highlighted on open and the first match while
- * searching. `activate` is what Enter does on it: a candidate is added, and
- * with `asDriver` (Shift+Enter) the row becomes the driver.
+ * searching. `activate` is what Enter does on it: Enter adds a candidate, and
+ * Shift+Enter resumes a paused role.
  *
  * MOBILE-SAFE like useOwners: bundled into the Expo app, so no DOM here.
  */
@@ -26,6 +32,7 @@ import { useSessionRoleFacts } from "./useOwnersStoreEnv";
 import { isPerson } from "@codecast/shared/team/memberKind";
 import { applyOwnersChangeTo, leaveMovesFirst, leaveStands, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 import type { OrgRole } from "../components/org/orgTypes";
+import { roleTag } from "../lib/composerOwnership";
 
 const SUGGESTED_ROLES = 3;
 
@@ -34,25 +41,26 @@ export type OwnerCandidate = { key: string; kind: "person"; person: OwnerPerson 
 
 /** One current owner as the menu lists it. `onRemove` null: it cannot go
  *  (the sole owner of an agent-run session), and `refusal` says why when its
- *  remove is pressed (`refuse`); `makeDriver` null: it drives. */
+ *  remove is pressed (`refuse`). `paused` and `resume` are the role's alone:
+ *  a paused role resumes, an active one has nothing to press. */
 export type OwnerMenuRow = {
   key: string;
   person?: OwnerPerson;
   role?: OwnerRole;
   name: string;
   sub: string;
-  drives: boolean;
   paused: boolean;
   mine: boolean;
   onRemove: (() => void) | null;
   removeLabel: string;
   refusal: string | null;
-  makeDriver: SessionDriver | null;
+  resume: (() => void) | null;
 };
 
 export const memberName = (m: any): string => m?.name || m?.email?.split("@")[0] || "Teammate";
 export const roleOwnerOf = (r: OrgRole): OwnerRole => ({ role_id: r._id, short_id: r.short_id, handle: r.handle, name: r.name, avatar: (r as any).avatar ?? null });
 export const isDriverKey = (d: SessionDriver | null, key: string) => driverKey(d) === key;
+
 
 /** The current view (people, role, driver) the segment and the menu start from. */
 export function useOwnersView(owners: OwnersApi) {
@@ -126,13 +134,16 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
     ...teammates.map((m) => ({ key: `p:${m._id}`, kind: "person" as const, person: personOf(m._id) })),
   ];
 
-  const add = (c: OwnerCandidate, drive = false) => {
+  /** Adds a candidate: a person as an owner, a role as the role (it replaces
+   *  the current one and is Active). */
+  const add = (c: OwnerCandidate) => {
     setNotice(null);
     setDraft((d) => (c.kind === "role" ? addRole(d, roleOwnerOf(c.role))
       // Adding yourself back while staged to leave takes the whole leave back.
-      : stagedLeave && c.person._id === meId ? unleave(d, meId, initial) : addPerson(d, c.person._id, drive)));
+      : stagedLeave && c.person._id === meId ? unleave(d, meId, initial) : addPerson(d, c.person._id)));
   };
-  const makeDriver = (driver: SessionDriver) => setDraft((d) => ({ ...d, driver }));
+  /** A paused role acts on the session again. */
+  const resume = () => setDraft((d) => (d.role ? { ...d, driver: { kind: "role", role_id: d.role.role_id } } : d));
   const selectAllTeammates = () => setDraft((d) => addPeople(d, unselected.map((m) => m._id)));
   const leaveTo = (moveTo: MoveTo) => {
     setLeaving(false);
@@ -150,25 +161,24 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
     return true;
   };
 
-  // One chip per change; who drives rides the chip of the owner it names
-  // when that owner is new.
-  const driverName = (d: SessionDriver) => (d.kind === "role" ? draft.role?.name ?? "Role" : d.user_id === meId ? "You" : personOf(d.user_id).name);
-  const drivesTag = (key: string) => (driverChanged && isDriverKey(draft.driver, key) ? " · driver" : "");
-  const driverOnNew = !!draft.driver && driverChanged && (draft.driver.kind === "role" ? roleChanged : added.includes(draft.driver.user_id));
+  // One chip per change. A role added is Active, so only a kept role that
+  // goes from Paused to Active says so (Resume); who among the people the
+  // server lets drive is never shown.
+  const resumed = driverChanged && !roleChanged && !!draft.role && draft.driver?.kind === "role";
   const chips: string[] = [
     // A long multi-select reads as one count, not a wall of chips.
-    ...(added.length > 3 ? [`+ ${added.length} people`] : added.map((id) => `+ ${personOf(id).name}${drivesTag(`p:${id}`)}`)),
-    ...(roleChanged && draft.role ? [`+ ${draft.role.name}${drivesTag(`r:${draft.role.role_id}`)}`] : []),
+    ...(added.length > 3 ? [`+ ${added.length} people`] : added.map((id) => `+ ${personOf(id).name}`)),
+    ...(roleChanged && draft.role ? [`+ ${draft.role.name}`] : []),
     ...removed.map((id) => `− ${personOf(id).name}`),
     // A leave that cannot be undone says so before Save.
     ...(iLeave ? [inverse ? "You leave" : "You leave · can't undo"] : []),
     ...(roleChanged && initial.role ? [`− ${initial.role.name}`] : []),
-    ...(driverChanged && draft.driver && !driverOnNew ? [`${driverName(draft.driver)} · driver`] : []),
+    ...(resumed && draft.role ? [`Resume ${roleTag(draft.role)}`] : []),
     ...(iLeave && draft.moveTo ? [`Move to ${draft.moveTo.label}`] : []),
   ];
 
-  // A teammate who only sees the session reads the owners: no remove, no Make
-  // driver, no candidates (the server refuses the rest anyway).
+  // A teammate who only sees the session reads the owners: no remove, no
+  // Resume, no candidates (the server refuses the rest anyway).
   const readOnly = !owners.canEdit;
   // The staged owners as the shared leave rules read them (the server's own).
   const facts: OwnersFacts = {
@@ -192,25 +202,24 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
   const rows: OwnerMenuRow[] = draft.ownerIds.map((id) => {
     const mine = id === meId;
     const p = mine ? { ...personOf(id), name: "You" } : personOf(id);
-    const drives = isDriverKey(draft.driver, `p:${id}`);
     const runs = owners.runner?.user_id === id;
-    const sub = [drives ? "Driver" : "Owner", runs ? (mine ? "runs on your account" : "runs it") : null, added.includes(id) ? "new" : null].filter(Boolean).join(" · ");
+    const sub = ["Owner", runs ? (mine ? "runs on your account" : "runs it") : null, added.includes(id) ? "new" : null].filter(Boolean).join(" · ");
     return {
-      key: `p:${id}`, person: p, name: p.name, sub, drives, paused: false, mine,
+      key: `p:${id}`, person: p, name: p.name, sub, paused: false, mine,
       onRemove: mine && soleOwner ? null : mine && movesFirst && !draft.moveTo ? () => setLeaving((v) => !v) : () => setDraft((d) => removePerson(d, id)),
       removeLabel: mine ? (soleOwner ? "You are its only owner: add someone before you leave" : "Leave") : `Remove ${p.name}`,
       refusal: mine && soleOwner ? "Add an owner before you leave" : null,
-      makeDriver: drives ? null : { kind: "user", user_id: id },
+      resume: null,
     };
   });
   if (draft.role) {
-    const drives = draft.driver?.kind === "role";
+    const paused = draft.driver?.kind !== "role";
     rows.push({
       key: `r:${draft.role.role_id}`, role: draft.role, name: draft.role.name,
-      sub: [drives ? "Driver" : "Paused", roleChanged ? "new" : null].filter(Boolean).join(" · "),
-      drives, paused: !drives, mine: false,
+      sub: [paused ? "Paused" : "Active", roleChanged ? "new" : null].filter(Boolean).join(" · "),
+      paused, mine: false,
       onRemove: () => setDraft(removeRole), removeLabel: `Remove ${draft.role.name}`, refusal: null,
-      makeDriver: drives ? null : { kind: "role", role_id: draft.role.role_id },
+      resume: paused ? resume : null,
     });
   }
 
@@ -230,21 +239,22 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
   const ring = rows.length + candidates.length;
   // A highlight past the end lands on the last candidate, never back on an
   // owner row: with no candidate (a search with no match) nothing is
-  // highlighted, so Shift+Enter cannot hand an owner the wheel unseen.
+  // highlighted, so a key never acts on a row nobody sees.
   const highlighted = hi < ring ? hi : candidates.length ? ring - 1 : -1;
   const move = (step: 1 | -1) => {
     if (ring) setHi((h) => (step > 0 ? (Math.min(h, ring - 1) + 1) % ring : (Math.max(h, 0) - 1 + ring) % ring));
   };
-  /** Enter on the highlighted row: add a candidate (as driver with
-   *  `asDriver`), or with `asDriver` make an owner the driver. */
-  const activate = (asDriver: boolean) => {
+  /** A key on the highlighted row: Enter adds a candidate, Shift+Enter
+   *  resumes a paused role. True when it did something. */
+  const activate = (shift: boolean) => {
     if (highlighted < 0) return false;
     if (highlighted < rows.length) {
-      const target = asDriver && !readOnly ? rows[highlighted].makeDriver : null;
-      if (target) makeDriver(target);
-      return !!target;
+      const resumeRow = shift && !readOnly ? rows[highlighted].resume : null;
+      resumeRow?.();
+      return !!resumeRow;
     }
-    add(candidates[highlighted - rows.length], asDriver);
+    if (shift) return false;
+    add(candidates[highlighted - rows.length]);
     return true;
   };
   // Typing highlights the first match; clearing the search highlights nothing.
@@ -258,7 +268,7 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
     meId, runsOnMine, highlighted, setHighlighted: setHi, move, activate, notice, refuse, draft, initial, rows, readOnly, soleOwner, isStandingThread,
     query, setQuery, q, moreRoles, setMoreRoles, leaving, setLeaving,
     reasonOf, shownRoles, restRoles, unselected, teammates, candidates,
-    add, makeDriver, selectAllTeammates, leaveTo, canTakeOwnership, takeOwnership,
+    add, resume, selectAllTeammates, leaveTo, canTakeOwnership, takeOwnership,
     diff, chips, dirty, save,
   };
 }

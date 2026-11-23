@@ -56,7 +56,7 @@ describe("one home for a session's people", () => {
     // No inbox push comes for an out-of-window row; the read does.
     listOwnersPush(["me", "mate"]);
     expect(header()).toEqual(["me", "mate"]);
-    expect(card()).toBe("Owners: You (driver), Mate");
+    expect(card()).toBe("Owners: You, Mate");
   });
 
   test("your Save, its echo, then a different refresh: the Save does not freeze the field", () => {
@@ -64,13 +64,13 @@ describe("one home for a session's people", () => {
     useInboxStore.getState().applySessionOwners(ID, { add: ["pat"] });
     expect(header()).toEqual(["me", "mate", "sam", "pat"]);
     // Adding never moves the wheel: you still drive.
-    expect(card()).toBe("Owners: You (driver), Mate, Sam, Pat");
+    expect(card()).toBe("Owners: You, Mate, Sam, Pat");
     // The owners read echoes the Save and releases it ...
     listOwnersPush(["me", "mate", "sam", "pat"]);
     // ... so a later answer from the inbox lands.
     inboxPush(["me", "mate", "pat"]);
     expect(header()).toEqual(["me", "mate", "pat"]);
-    expect(card()).toBe("Owners: You (driver), Mate, Pat");
+    expect(card()).toBe("Owners: You, Mate, Pat");
   });
 
   test("a stale inbox answer cannot override a Save the server has not echoed", () => {

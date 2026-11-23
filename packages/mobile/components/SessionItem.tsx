@@ -214,9 +214,9 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
   // Handoff note starts clamped; tapping the pill body reveals the full reason.
   const [pingExpanded, setPingExpanded] = useState(false);
   const title = sessionTitle(session);
-  // Its other owners (the web card's lib/coOwners): the driver ringed, a
-  // paused role faded. A role-driven session waiting on input says "With
-  // <role>" on its meta line.
+  // Its other owners (the web card's lib/coOwners): no face ringed, a paused
+  // role faded with a dashed ring. A session whose active role it waits on
+  // says "With <role>" on its meta line.
   const filedRole = filedRoleOf(session as any, roleRows);
   const roleSig = filedRoleSig(filedRole);
   const ownersSig = coOwnersSig(session as any);
@@ -264,12 +264,12 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
         <RNView style={styles.rightMeta}>
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
           {/* The faces are one accessible element that reads the label (each
-              owner, the driver and a paused role), not their bare names. */}
+              owner and whether the role is active or paused), not their bare names. */}
           {coOwners && (
             <RNView style={styles.coOwners} accessible accessibilityLabel={coOwners.title}>
               {coOwners.faces.map((f) => f.kind === 'role'
-                ? <OwnerFace key={f.key} role={f.role} size={13} driver={f.driver} paused={f.paused} />
-                : <OwnerFace key={f.key} person={f} size={13} driver={f.driver} />)}
+                ? <OwnerFace key={f.key} role={f.role} size={13} paused={f.paused} />
+                : <OwnerFace key={f.key} person={f} size={13} />)}
               {coOwners.more > 0 && <RNText style={styles.timeText}>+{coOwners.more}</RNText>}
             </RNView>
           )}

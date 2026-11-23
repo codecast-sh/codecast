@@ -15,11 +15,11 @@ import { useOwnersFromStore } from "../OwnersBadge";
 import { OwnersSegment } from "../OwnersMenu";
 import { machineOf } from "../../lib/ownersDraft";
 
-// The owners menu by keyboard and by touch (round 1 web findings 1-3, 8, 10,
-// 12): nothing is highlighted on open; the arrows walk the owners and then
-// the candidates, keeping the highlighted row in view; Shift+Enter makes the
-// highlighted row driver; a touch's synthetic hover highlights nothing; the
-// only owner's × says why it cannot leave; an outside tap keeps a staged change.
+// The owners menu by keyboard and by touch: nothing is highlighted on open;
+// the arrows walk the owners and then the candidates, keeping the highlighted
+// row in view; Shift+Enter resumes a paused role; a touch's synthetic hover
+// highlights nothing; the only owner's × says why it cannot leave; an outside
+// tap keeps a staged change.
 // Run: bun test components/__tests__/ownersMenu.mount.test.tsx
 
 afterAll(() => {
@@ -109,19 +109,49 @@ test("nothing is highlighted on open; the arrows walk the owners, then the candi
   expect(highlighted()).toEqual([`r:${ROLE._id}`]);
 });
 
-test("Shift+Enter makes the highlighted owner driver, and adds a candidate as driver", async () => {
+// People are never shown driving; the role is Active or Paused, and a paused
+// role offers Resume (Shift+Enter on its row). Nothing else takes Shift+Enter.
+test("people rows say nothing of driving; the paused role says Paused and offers Resume", async () => {
+  await openMenu();
+  const rowText = (key: string) => (w.document.querySelector(`[data-owner-row='${key}']`) as HTMLElement).textContent;
+  expect(rowText(`p:${ME}`)).not.toMatch(/driv/i);
+  expect(rowText("p:user_ashot")).not.toMatch(/driv/i);
+  expect(rowText(`r:${ROLE._id}`)).toContain("Paused");
+  expect([...w.document.querySelectorAll("[data-owner-resume]")].map((e: any) => e.closest("[data-owner-row]").getAttribute("data-owner-row"))).toEqual([`r:${ROLE._id}`]);
+  expect(w.document.querySelector("[data-owners-menu]")!.textContent).not.toMatch(/driver/i);
+  await act(async () => { (w.document.querySelector("[data-owner-resume]") as HTMLElement).click(); });
+  expect(chips()).toEqual(["Resume @lead"]);
+  expect(rowText(`r:${ROLE._id}`)).toContain("Active");
+  expect(w.document.querySelector("[data-owner-resume]")).toBeNull();
+});
+
+test("Shift+Enter resumes a paused role, and does nothing on a person or a candidate", async () => {
   await openMenu();
   await press("ArrowDown");
   await press("ArrowDown");
+  await press("Enter", true);
+  expect(chips()).toEqual([]);
   await press("ArrowDown");
   await press("Enter", true);
-  expect(chips()).toEqual(["Resourcing lead · driver"]);
+  expect(chips()).toEqual(["Resume @lead"]);
   await press("ArrowDown");
   await press("Enter", true);
-  expect(chips()).toEqual(["+ Samvit Rao · driver"]);
+  expect(chips()).toEqual(["Resume @lead"]);
+  await press("Enter");
+  expect(chips()).toEqual(["+ Samvit Rao", "Resume @lead"]);
 });
 
-test("a search with no match highlights nothing, so Shift+Enter makes nobody driver", async () => {
+test("a candidate has + only; adding a role replaces the current one, Active", async () => {
+  useInboxStore.setState({ orgTree: { workspace: { kind: "team", id: TEAM }, roles: [ROLE, { ...ROLE, _id: "role_ops", short_id: "or-2", handle: "ops", name: "Ops lead" }], anchors: [], people: [] } } as any);
+  await openMenu();
+  expect(w.document.querySelector("[data-owner-candidate] [data-owner-resume]")).toBeNull();
+  expect(w.document.querySelector("[data-owner-candidates]")!.textContent).not.toMatch(/driver/i);
+  await act(async () => { (w.document.querySelector("[data-owner-candidate='r:role_ops'] .own-plus") as HTMLElement).click(); });
+  expect(chips()).toEqual(["+ Ops lead", "− Resourcing lead"]);
+  expect((w.document.querySelector("[data-owner-row='r:role_ops']") as HTMLElement).textContent).toContain("Active");
+});
+
+test("a search with no match highlights nothing, so Shift+Enter does nothing", async () => {
   await openMenu();
   const input = w.document.querySelector("[data-owners-menu] input") as HTMLInputElement;
   const props = (input as any)[Object.keys(input).find((k) => k.startsWith("__reactProps$"))!];
@@ -227,12 +257,12 @@ test("leaving keeps you out of the candidates, and its chips say where it goes a
   await openMenu();
   await act(async () => { (w.document.querySelector(`[data-owner-row='p:${ME}'] .own-x`) as HTMLElement).click(); });
   await act(async () => { (w.document.querySelector("[data-leave-target='box1']") as HTMLElement).click(); });
-  expect(chips()).toEqual(["You leave · can't undo", "Ashot Petrosian · driver", "Move to Aivery's Mac-mini"]);
+  expect(chips()).toEqual(["You leave · can't undo", "Move to Aivery's Mac-mini"]);
   const candidates = [...w.document.querySelectorAll("[data-owner-candidate]")].map((e: any) => e.getAttribute("data-owner-candidate"));
   expect(candidates).not.toContain(`p:${ME}`);
   // Select all teammates adds the others, never you: the leave stands.
   await act(async () => { (w.document.querySelector("[data-select-all-teammates]") as HTMLElement).click(); });
-  expect(chips()).toEqual(["+ Samvit Rao", "You leave · can't undo", "Ashot Petrosian · driver", "Move to Aivery's Mac-mini"]);
+  expect(chips()).toEqual(["+ Samvit Rao", "You leave · can't undo", "Move to Aivery's Mac-mini"]);
 });
 
 test("a leave that can be undone (a teammate's run the team shares) needs no warning", async () => {

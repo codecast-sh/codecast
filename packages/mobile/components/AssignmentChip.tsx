@@ -21,7 +21,8 @@ import { showUndoToast } from '@platform/engine';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useOwners, type OwnersApi } from '@codecast/web/hooks/useOwners';
 import { useStoreOwnersEnv, useSessionRoleFacts } from '@codecast/web/hooks/useOwnersStoreEnv';
-import { isDriverKey, roleOwnerOf, useOwnersMenu, useOwnersView } from '@codecast/web/hooks/useOwnersMenu';
+import { roleOwnerOf, useOwnersMenu, useOwnersView } from '@codecast/web/hooks/useOwnersMenu';
+import { ownersTitle } from '@codecast/web/lib/coOwners';
 import { useSettingsData } from '@codecast/web/hooks/useSyncSettings';
 import { machineOf, teamMoveTargets } from '@codecast/web/lib/ownersDraft';
 import { useSyncOrgTreeFeeder } from '@codecast/web/hooks/useSyncOrgTree';
@@ -83,16 +84,13 @@ export function AssignmentChip({
     currentUser,
     notify: (msg) => showToast(msg),
   }));
-  const { people, role, driver } = useOwnersView(owners);
+  const { meId, people, role, driver } = useOwnersView(owners);
   const paused = !!role && driver?.kind === 'user';
 
   const d = ownerDeviceId ? byId.get(ownerDeviceId) : undefined;
   if (!conversationId) return null;
   const devColor = d ? deviceColor(d) : Theme.textMuted0;
-  const ownerNames = [
-    ...people.map((p) => `${p.name}${isDriverKey(driver, `p:${p._id}`) ? ' (driver)' : ''}`),
-    ...(role ? [`${role.name}${paused ? ' (paused)' : driver?.kind === 'role' ? ' (driver)' : ''}`] : []),
-  ];
+  const owned = people.length > 0 || !!role;
 
   return (
     <>
@@ -101,7 +99,7 @@ export function AssignmentChip({
         hitSlop={{ left: 8, right: 8 }}
         style={styles.chipTarget}
         accessibilityRole="button"
-        accessibilityLabel={`${d ? `Runs on ${deviceDisplayName(d)}` : 'No device'}; ${ownerNames.length ? `owners: ${ownerNames.join(', ')}` : 'no owners'}`}
+        accessibilityLabel={`${d ? `Runs on ${deviceDisplayName(d)}` : 'No device'}; ${owned ? ownersTitle(people.map((p) => (p._id === meId ? 'You' : p.name)), role, paused) : 'No owners'}`}
       >
         <View style={styles.chipShell}>
           {loaded && (
@@ -115,16 +113,16 @@ export function AssignmentChip({
           )}
           <View style={[styles.lobe, styles.facesLobe, (people.length || role) ? { backgroundColor: Theme.cyan + '14' } : null]}>
             {people.length || role ? (
-              // Faces in a fixed order (people as added, then the role), the
-              // driver ringed and a paused role faded; names are in the sheet.
+              // Faces in a fixed order (people as added, then the role), a
+              // paused role faded with a dashed ring; names are in the sheet.
               <View style={styles.faces}>
                 {people.slice(0, 3).map((p) => (
-                  <OwnerFace key={p._id} person={p} size={13} driver={isDriverKey(driver, `p:${p._id}`)} />
+                  <OwnerFace key={p._id} person={p} size={13} />
                 ))}
                 {people.length > 3 && (
                   <Text style={[styles.lobeText, { color: Theme.cyan }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>+{people.length - 3}</Text>
                 )}
-                {role && <OwnerFace role={role} size={13} driver={driver?.kind === 'role'} paused={paused} />}
+                {role && <OwnerFace role={role} size={13} paused={paused} />}
               </View>
             ) : (
               <>
@@ -295,13 +293,13 @@ function AssignmentSheetBody({
         {!seatRoleId && m.rows.length === 0 && <Text style={styles.emptyText}>Nobody yet</Text>}
         {!seatRoleId && m.rows.map((r) => (
           <View key={r.key} style={styles.row} testID={`owner-row-${r.key}`}>
-            <OwnerFace person={r.person} role={r.role} size={22} driver={r.drives} paused={r.paused} />
+            <OwnerFace person={r.person} role={r.role} size={22} paused={r.paused} />
             <View style={{ flex: 1, minWidth: 0 }}>
               <Text style={[styles.rowLabel, r.paused && { color: Theme.textMuted }]} numberOfLines={1}>{r.name}</Text>
               <Text style={styles.rowHint} numberOfLines={1}>{r.sub}</Text>
             </View>
-            {!readOnly && r.makeDriver && (
-              <SmallButton label="Make driver" onPress={() => { tap(); m.makeDriver(r.makeDriver!); }} />
+            {!readOnly && r.resume && (
+              <SmallButton label="Resume" onPress={() => { tap(); r.resume!(); }} />
             )}
             {!readOnly && (
               <IconButton
@@ -367,7 +365,6 @@ function AssignmentSheetBody({
                 face={<OwnerFace person={c.person} size={22} />}
                 name={c.person.name}
                 onAdd={() => { tap(); m.add(c); }}
-                onDrive={() => { tap(); m.add(c, true); }}
               />
             ))}
             {m.candidates.length === 0 && <Text style={styles.emptyText}>{m.q ? 'Nobody matches' : 'Nobody else to add'}</Text>}
@@ -433,15 +430,14 @@ function AssignmentSheetBody({
   );
 }
 
-/** A role or teammate who could own it: tap the row (or +) to stage the add;
- *  a teammate's Make driver stages them as the driver too. */
-function CandidateRow({ face, name, handle, reason, onAdd, onDrive }: {
+/** A role or teammate who could own it: tap the row (or +) to stage the add.
+ *  A role added replaces any current role and is Active. */
+function CandidateRow({ face, name, handle, reason, onAdd }: {
   face: ReactNode;
   name: string;
   handle?: string;
   reason?: string | null;
   onAdd: () => void;
-  onDrive?: () => void;
 }) {
   return (
     <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={onAdd}>
@@ -452,7 +448,6 @@ function CandidateRow({ face, name, handle, reason, onAdd, onDrive }: {
         </Text>
         {reason ? <Text style={styles.rowHint} numberOfLines={1}>{reason}</Text> : null}
       </View>
-      {onDrive && <SmallButton label="Make driver" onPress={onDrive} />}
       <IconButton icon="plus" label={`Add ${name}`} onPress={onAdd} />
     </TouchableOpacity>
   );
