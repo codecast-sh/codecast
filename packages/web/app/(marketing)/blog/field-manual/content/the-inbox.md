@@ -110,14 +110,14 @@ Three things about a session move independently: whose *account* runs it, which 
 
 The owners sit in the session's header, between the machine and the terminal. Click them to open the owners menu: the current owners first, then suggested roles and your teammates, with a search box. A session can have several people and one role as owners, and it sits in each of their inboxes. **Select all teammates** adds the whole team.
 
-One owner drives: the one the agent works for. Its face is ringed in the header. When a role is an owner, the role drives until a person takes over. Sending into a session its role drives makes you the driver and pauses the role; the composer says so before you send and offers **Tell** the role instead, which passes your words to the role without taking over. **Make driver** on any owner in the menu hands the session on, back to the role included. A session its role drives that is waiting on input files under Working, and its card reads **With** and the role's name (**With Growth**) where the status goes: the role reads it first and raises in its own conversation what needs you.
+A role that owns a session is **Active** or **Paused**. While it is active the agent works for the role. Sending into the session yourself pauses it: the composer says so before you send and offers **Tell** the role instead, which passes your words to the role without pausing it. **Resume** on the role in the menu makes it active again. A session whose role is active that is waiting on input files under Working, and its card reads **With** and the role's name (**With Growth**) where the status goes: the role reads it first and raises in its own conversation what needs you.
 
 - An owned session stays in the owner's inbox with no age limit and no status gate. A handoff nobody has opened in six weeks is exactly the one that must not age out.
 - Adding an owner clears the previous holder's stash and snooze, so the session lands where the new owner can see it. A kill is left alone; that session is retired.
 - A bot account on a shared machine can park a session on a human reviewer: it shows in the reviewer's Needs You marked with who runs it.
 - To leave a session, remove yourself in the owners menu. One that runs on your account has to move first, and the menu lists your team's machines under **Move and leave**.
 
-Handing a session to a teammate is adding them as an owner and making them driver. A good handoff does more: the agent pins a "blocked" state line written for someone who has not read the thread, hands the session over, and leaves them one note. Agents do it with `cast own <session> <teammate> --drive <teammate>`.
+Handing a session to a teammate is adding them as an owner. A good handoff does more: the agent pins a "blocked" state line written for someone who has not read the thread, hands the session over, and leaves them one note. Agents do it with `cast own <session> <teammate>`.
 
 ### Team feed vs. your inbox
 

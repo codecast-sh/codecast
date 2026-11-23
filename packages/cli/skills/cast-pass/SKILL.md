@@ -1,6 +1,6 @@
 ---
 name: cast-pass
-description: Hand this session to a teammate so it lands in their inbox with everything they need. Pins where the work stands and what is next, adds them as an owner who drives, and sends them the brief. Use when work should continue under someone else, when a decision is theirs, or when asked to pass, hand over, or assign a session.
+description: Hand this session to a teammate so it lands in their inbox with everything they need. Pins where the work stands and what is next, adds them as an owner, and sends them the brief. Use when work should continue under someone else, when a decision is theirs, or when asked to pass, hand over, or assign a session.
 argument-hint: "<member> [note]"
 ---
 
@@ -17,12 +17,11 @@ id in the pin.
 
 ## Own
 
-Passing is adding them as an owner and making them the driver, the one
-owner the agent works for:
+Passing is adding them as an owner:
 
 ```bash
-cast own <member> --drive <member>            # this session
-cast own <session> <member> --drive <member>  # a different session of yours
+cast own <member>            # this session
+cast own <session> <member>  # a different session of yours
 ```
 
 They get a notification and the session sits in their inbox. You stay an

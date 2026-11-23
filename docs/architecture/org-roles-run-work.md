@@ -21,10 +21,10 @@ under their own.
 
 **A role is one of a session's owners.** A session filed under a role
 (`conversations.org_role_id`, with `org_role_hold`) has the role among its
-owners, beside the people in `session_owners`. Exactly one owner drives it,
-the one who messages the agent: with the role filed and
-`conversations.driver_user_id` unset the role drives; with `driver_user_id`
-set that person drives and the role is paused.
+owners, beside the people in `session_owners`. The role is **active** (the
+agent works for it) or **paused** (a person who owns the session is working
+in it). Internally `conversations.driver_user_id` stores who the agent works
+for: unset, the filed role; set, that person, and the role is paused.
 
 **Whose inbox it is in.** A session is in the inbox of each person who owns
 it and of the account that runs it (`user_id`), except a session a role
@@ -34,11 +34,11 @@ reads the owner rows themselves and stamps `role_alone` on the row, which the
 web scope filter reads). "Started by a role" is provenance,
 `conversations.role_started`, written by `spawn.recordHandStart` for a line
 run's sessions and for a hand whose spawner acts for the role (shared
-`actsForRole`: the role's standing session, or a session the role started and
-still drives); a role's standing session under another role counts too. A
-person's own session filed under a role (`cast task start` in its area, a drag
-on the chart) has no owner rows either and stays theirs, and so does what it
-spawns. When the role cannot be told about a role-alone session's wait, the
+`actsForRole`: the role's standing session, or a session the role started
+while it is active); a role's standing session under another role counts too.
+A person's own session filed under a role (`cast task start` in its area, a
+drag on the chart) has no owner rows either and stays theirs, and so does what
+it spawns. When the role cannot be told about a role-alone session's wait, the
 person its reporting line ends at hears it, never a pool machine's account. A
 role's hand and line run take no person owner, on a pool machine too, and a
 message into one never claims it, whoever sends it: a person who wants one in
@@ -50,47 +50,46 @@ session never takes it away from the account that runs it.
 `migrations:backfillRoleStarted` stamps sessions from before the field.
 
 **Where it sits.** A session a person started that a task binding filed
-under a role (`sessionOwnership.applyHoldChange`, hold `bound`) is driven by
-that person (`driver_user_id`), so it waits on them like any of their
-sessions, and a worker it spawns is a plain worker of it, not the role's
-hand. Every session files by its own state. Nothing rides a
-role's standing session, which stays hidden on its own facts until it needs a
-person (org-staffing.md S28). A session its role drives that is waiting on
-input (a settled turn, an open question or prompt) files under Working, and
-its card says **With <role>** where the status word goes: the role reads it
-first (its needs-input trigger, `agentTasks.routeUpWaitingSession`) and raises
-in its own thread what needs a person. It does not count toward the person's
-needs input and its settle rings nobody (`under_role`). A paused role changes
-nothing: the person drives, and the session files and rings like any other
-(`roleDrives`, `placeInboxRow`, projection version 29).
+under a role (`sessionOwnership.applyHoldChange`, hold `bound`) has its role
+paused for that person, so it waits on them like any of their sessions, and a
+worker it spawns is a plain worker of it, not the role's hand. Every session
+files by its own state. Nothing rides a role's standing session, which stays
+hidden on its own facts until it needs a person (org-staffing.md S28). A
+session whose role is active that is waiting on input (a settled turn, an
+open question or prompt) files under Working, and its card says
+**With <role>** where the status word goes: the role reads it first (its
+needs-input trigger, `agentTasks.routeUpWaitingSession`) and raises in its own
+thread what needs a person. It does not count toward the person's needs input
+and its settle rings nobody (`under_role`). A session whose role is paused
+files and rings like any other (`roleDrives`, `placeInboxRow`, projection
+version 29).
 
-**Who drives, and how it changes hands.** Adding a person never moves the
-wheel to them (`pinnedDriverAfterAdd`); filing a role makes the role drive.
-A person who owns the session and sends into it from the session composer
-(or a collaborator's composer) while the role or another person drives becomes
-the driver, and a role it takes over from is paused. `cast send` always names
-a sender session and never takes over; from a shell the wheel is taken with
-`cast own <session> --drive me`. The composer says so before the send
-("Sending takes over from <role>") and offers **Tell <role>**, which writes to
-the role's own session and changes nothing. A paused role's own session that
-writes into the session is refused with who drives and how to reach them, and
-its chat lines (a mention, a thread reply, a room line) do not wake it. It
-may not hand itself the wheel back either: only a person who owns or runs the
-session makes the role driver again. **Make driver** on any owner in the
-owners menu hands the wheel on, the role included (`setSessionDriver`). A
-person who drives owns the session: when their owner row goes (they leave, are
-removed, or leave the team) the wheel goes back to the role, else the primary
-owner (`sessionOwners.writeDriver`, the one writer of `driver_user_id`).
+**Pausing and resuming the role.** Adding a person never pauses the role;
+filing a role makes it active. A person who owns the session, or whose account
+runs it, and sends into it from the session composer (or a collaborator's
+composer) while its role is active pauses the role, and the agent works for
+them. `cast send` always names a sender session and never pauses anything;
+from a shell, `cast own <session> --pause @role` pauses it. The composer says
+so before the send ("Sending pauses <role>") and offers **Tell <role>**, which
+writes to the role's own session and changes nothing. **Resume** on the role
+in the owners menu (`cast own <session> --resume @role`) makes it active again
+(`setSessionDriver`). A paused role's own session that writes into the
+session is refused with "@role is paused on this session: <name> is working
+in it" and where to ask, and its chat lines (a mention, a thread reply, a room
+line) do not wake it. It may not resume itself or change the owners either:
+only a person who owns or runs the session does. When the person working in
+it stops owning it (they leave, are removed, or leave the team) the role is
+active again (`sessionOwners.writeDriver`, the one writer of
+`driver_user_id`).
 
-**A paused role hears no decisions.** While a person drives, the session's
-questions are its owners', the driver among them: no role on its ladder hears
-or holds them, and none may answer them, unless a person handed one to it.
-Every change of driver routes the open questions again
-(`sessionDecisions.routeFor`, `refreshHolder`).
-Handing a session to a teammate is adding them and making them driver
-(`cast own <session> <person> --drive <person>`). There is no team owner:
-**Select all teammates** in the owners menu gives each teammate an ordinary
-owner row on Save, never the wheel.
+**A paused role hears no decisions.** While the role is paused the session's
+questions are its owners': no role on its ladder hears or holds them, and none
+may answer them, unless a person handed one to it. Every pause and resume
+routes the open questions again (`sessionDecisions.routeFor`, `refreshHolder`).
+Handing a session to a teammate is adding them as an owner
+(`cast own <session> <person>`). There is no team owner: **Select all
+teammates** in the owners menu gives each teammate an ordinary owner row on
+Save.
 
 **Leaving.** Taking yourself out is a leave, whichever door it comes by (the
 owners menu, the phone, `cast disown`). A session that runs on your account
@@ -98,27 +97,26 @@ moves first, in the same transaction, to a teammate's or a team machine
 (**Move and leave**, `cast disown --move-to <machine>`). When nobody else
 owns it, the person whose account now runs it takes a row; an agent account
 cannot, so that leave is refused. A run a role started is the exception: it
-needs no move and may be left with no person, and the role drives it again.
+needs no move and may be left with no person, and its role is active again.
 
 **Where the rule lives.**
-- `shared/contracts/sessionOwners.ts`: the owners and driver as one pure
-  model (`listedOwnerIds`, `driverOf`, `pinnedDriverAfterAdd`,
+- `shared/contracts/sessionOwners.ts`: the owners and the role's state as one
+  pure model (`listedOwnerIds`, `driverOf`, `pinnedDriverAfterAdd`,
   `applyOwnersChangeTo`, the leave check). The convex mutations and the web
   store's `applySessionOwners` run it, so a Save paints what the server will
   answer (`sessionOwnership.parity.test.ts`).
-- `shared/contracts/inboxProjection.ts`: `roleDrives`, `startedByRole`,
-  `isHeldByRoleAlone` and `actsForRole`, which inbox membership and
-  placement read.
+- `shared/contracts/inboxProjection.ts`: `roleDrives`, `rolePaused`,
+  `startedByRole`, `isHeldByRoleAlone` and `actsForRole`, which inbox
+  membership and placement read.
 - `convex/sessionOwnership.ts`: the reparent core and the mutations
   (`applyOwnersChange`, `setSessionDriver`, `leaveSession`, `listOwners`,
   `applyHoldChange`); `convex/lib/sessionOwnerRules.ts` resolves owner refs
   and keeps the leave rules.
-- Take-over: `pendingMessages` enqueue (`enqueuePendingMessage` calls
+- Pausing on send: `pendingMessages` enqueue (`enqueuePendingMessage` calls
   `takeWheelOnSend`); the paused role's refusal: `performSessionSend` (calls
   `pausedRoleRefusal`). Both helpers are in `convex/lib/sessionTakeOver.ts`.
-- The driver: `convex/sessionOwners.ts` `writeDriver` (every owner-row
-  removal settles it); a role's unowned run when the role comes off:
-  `convex/lib/roleRelease.ts`.
+- `convex/sessionOwners.ts` `writeDriver` (every owner-row removal settles
+  it); a role's unowned run when the role comes off: `convex/lib/roleRelease.ts`.
 - Fields: `session_owners` rows, and on `conversations` `org_role_id`,
   `org_role_hold`, `driver_user_id` and `role_started`.
 

@@ -54,7 +54,6 @@ Record any decision the doc names with `cast decisions add "<title>" --reason
 - `spawn`: `cast spawn -` with a self contained brief that opens with the doc
   id; the new session has none of this context.
 - A session id: `cast send <id>` the doc id and the first step, one message.
-- A member: `cast own <session> <member> --drive <member>` on this session
-  makes them an owner who drives; `cast send` is not needed, the state pin
-  tells them where it stands.
+- A member: `cast own <session> <member>` on this session makes them an
+  owner; `cast send` is not needed, the state pin tells them where it stands.
 - No argument: the doc and the pin are the handoff. Stop.

@@ -20,7 +20,7 @@ seat's `anchors` row, org-roles-standing.md T1).
 Every session already reports to a person through `session_owners`. This slice
 adds one optional pointer, `conversations.org_role_id`, meaning "this session
 reports to this role". The role is one of the session's owners, beside the
-people, and one owner drives (org-roles-run-work.md R1); on the chart the role
+people, active or paused (org-roles-run-work.md R1); on the chart the role
 sits between the session and the person.
 
 ## S2. Table `org_roles`
@@ -178,12 +178,12 @@ orgRoles.reparentSession({ conversation_id, target, note?, from_session? })
    The one reparent core (sessionOwnership.performReparentSession), which the
    owners menu and `cast own`/`cast disown` also call.
    owners target: the owner rows change and the role stays (a role is an owner
-   beside the people); `add` makes the added person the primary owner but never
-   the driver. A bare `user_id` (a chart drop on a person) re-homes the session
+   beside the people); `add` makes the added person the primary owner and never
+   pauses the role. A bare `user_id` (a chart drop on a person) re-homes the session
    under that person and takes the role off. A `remove` leaves the reporting
    line to whoever remains.
-   role target: set org_role_id, replacing any role, and clear driver_user_id
-   so the role drives; `null` takes the role off. The caller must be an owner
+   role target: set org_role_id, replacing any role, active (driver_user_id
+   cleared); `null` takes the role off. The caller must be an owner
    of the conversation (a person target: the ownership rule, any teammate who
    can see it) or able to reshape the target role.
    Every move that changes the reporting line tells the session once
