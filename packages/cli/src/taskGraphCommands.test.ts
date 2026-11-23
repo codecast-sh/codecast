@@ -4,7 +4,6 @@ import {
   createPlanSteps,
   depAddedLine,
   offFrontierLines,
-  parkAfterBlocking,
   planStepBase,
   planTemplate,
   planWorkspace,
@@ -19,6 +18,7 @@ import {
   waitBody,
   type GraphDeps,
 } from "./taskGraphCommands";
+import { parkAfterBlocking } from "./taskParkHint";
 
 const NOW = Date.UTC(2026, 9, 8, 12);
 
@@ -106,10 +106,44 @@ describe("parkAfterBlocking", () => {
     expect(parkAfterBlocking("s1", "ct-5", open, { task: "CT-005", started: true })).toMatch(/^Until it clears, run cast state --status dormant "Waiting on PR #42"/);
   });
 
-  test("a session holding another task is told nothing wakes it", () => {
+  test("a session holding another task is woken by a wait the server recorded it as setter of", () => {
+    const line = `This session is woken when ct-5 is unblocked or closed, or if a wait it set fails or is removed. Until then, run cast state --status dormant "Waiting on PR #42" and end your turn.`;
+    expect(parkAfterBlocking("s1", "ct-5", open, { task: "ct-6", started: true }, open)).toBe(line);
+    expect(parkAfterBlocking("s1", "ct-5", [{ kind: "task", ref: "ct-2", status: "open" }, ...open], { task: "ct-6", started: true }, open)).toBe(line);
+  });
+
+  // The setter is told when the wait clears or fails, and its own task waits
+  // on the task closing (TG2): the hint names both, and promises the held
+  // task's wake only when the server says this session owns it.
+  test("a setter whose held task waits on the task's close is told both wakes", () => {
+    const pulse = { task: "ct-6", started: true };
+    expect(parkAfterBlocking("s1", "ct-5", open, pulse, open, { kind: "close", owns: true })).toBe(
+      "ct-6 still waits for ct-5 to close: you are told when ct-5 is unblocked or this wait fails, and woken as ct-6's owner when ct-6 is unblocked. Pin dormant naming ct-5 and end your turn.",
+    );
+    expect(parkAfterBlocking("s1", "ct-5", open, pulse, open, { kind: "close", owns: false })).toBe(
+      "ct-6 still waits for ct-5 to close: you are told when ct-5 is unblocked or this wait fails, and ct-6's owning session is woken when ct-6 is unblocked. Pin dormant naming ct-5 and end your turn.",
+    );
+  });
+
+  // A joiner of another session's wait: the wait tells it nothing.
+  test("a session that joined another's wait is promised no notice", () => {
+    expect(parkAfterBlocking("s1", "ct-5", open, { task: "ct-8", started: true }, open, { kind: "held", owns: true })).toBe(
+      "ct-8 still waits for ct-5 to close; you are woken as ct-8's owner when ct-8 is unblocked. Pin dormant naming ct-5 and end your turn.",
+    );
+    expect(parkAfterBlocking("s1", "ct-5", open, { task: "ct-8", started: true }, open, { kind: "held", owns: false })).toBe(
+      "ct-8 still waits for ct-5 to close; ct-8's owning session is woken when ct-8 is unblocked. Pin dormant naming ct-5 and end your turn.",
+    );
+  });
+
+  test("a session holding another task is told nothing wakes it unless the server says it parked", () => {
     const line = "This session does not hold ct-5, so nothing wakes it when this clears (cast task start ct-5 to hold it).";
+    const task = { kind: "task", ref: "ct-2", status: "open" } as const;
+    // Another session's wait the held task does not wait on, or an older
+    // server that never says parked. (A held task that waits on ct-5 gets
+    // parked: "close" even on a joined wait: the close line, tested above.)
     expect(parkAfterBlocking("s1", "ct-5", open, { task: "ct-6", started: true })).toBe(line);
-    expect(parkAfterBlocking("s1", "ct-5", [...open, { kind: "task", ref: "ct-2", status: "open" }], { task: "ct-6", started: true })).toMatch(/when these clear/);
+    expect(parkAfterBlocking("s1", "ct-5", [task], { task: "ct-6", started: true })).toBe(line);
+    expect(parkAfterBlocking("s1", "ct-5", [task, { ...task, ref: "ct-3" }], { task: "ct-6", started: true })).toMatch(/when these clear/);
   });
 
   test("a session holding no task is wiring the graph: no hint", () => {

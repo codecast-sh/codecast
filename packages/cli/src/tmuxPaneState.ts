@@ -274,9 +274,9 @@ export const TURN_SPINNER_OR_INTERRUPT = /⠋|⠙|⠹|⠸|⠼|⠴|⠦|⠧|⠇|�
 // Whether the pane shows a turn running now, by the marks only a running turn
 // draws. Narrower than classifyTmuxLiveState's "busy", which also reads two
 // idle shapes as busy because typing into them is safe either way: the
-// overpainted rule an idle compaction leaves (for hours), and a lead's
-// teammate panel. A slash command held for a turn's end is not safe either
-// way: on those shapes it would wait for a turn that is not running.
+// overpainted rule an idle compaction leaves (for hours), and a lead squeezed
+// to its teammate chip list. A slash command held for a turn's end is not
+// safe either way: on those shapes it would wait for a turn that is not running.
 export function claudeTurnRunningOnPane(region: string): boolean {
   return TURN_SPINNER_OR_INTERRUPT.test(region) || CLAUDE_TURN_STATUS_LINE.test(region);
 }
@@ -339,6 +339,16 @@ export function composerScrolledPastCaret(pane: string): boolean {
   if (start === -1) return false;
   const above = pane.slice(0, start).replace(/\n$/, "");
   return CLAUDE_COMPOSER_SCROLLED_ABOVE.test(above.slice(above.lastIndexOf("\n") + 1));
+}
+
+// Claude Code's teammate panel: the chip list (⏺ main, ◯ name · state, "↓ N
+// more") a lead draws under its footer while it has background agents. A
+// panel signature (⏺ main, a second chip, or the overflow marker) keeps one
+// stray ◯ line from claiming the pane. An idle lead showing it still holds
+// agents in its process, which a teardown of the pane would kill mid-work.
+export function backgroundAgentPanelOnPane(text: string): boolean {
+  const chipLines = text.split("\n").filter((l) => /^\s*◯\s+\S+/.test(l)).length;
+  return chipLines >= 2 || (chipLines >= 1 && /(?:^\s*⏺\s+main\s*$|↓\s*\d+\s*more)/m.test(text));
 }
 
 // Classifies the live region only. Ordering matters: more-specific dialogs are
@@ -408,22 +418,6 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   if (/·\s*esc not now\s*$/im.test(dialogText)) return "offer_dialog";
   if (/Esc to cancel|❯\s*\(current\)/i.test(dialogText)) return "rewind";
   if (/What should Claude do instead\?/i.test(region)) return "interrupted";
-  // Teammate panel: a lead session with in-process agents renders a chip list
-  // (⏺ main, ◯ name · state, "↓ N more") below its footer. Teammate panes split
-  // the window, and a squeezed lead pane truncates the footer's "esc to
-  // interrupt" marker — or, squeezed further, leaves the chip list as the ONLY
-  // content the scraper sees (the jx77h6jcsa0s freeze). Either way the pane is a
-  // live Claude Code TUI whose input box takes type-ahead, so classify busy:
-  // the paste path skips the leading Escape (never interrupts a mid-turn lead)
-  // and paste+Enter still submits when the lead is actually idle. Checked
-  // before the prompt-visible idle rule because chips + visible ❯ says nothing
-  // about whether the lead is generating. Requires a panel signature (⏺ main
-  // header, a second chip, or the overflow marker) so one stray ◯ line in a
-  // no-separator fallback region can't hijack the classification.
-  const chipLines = region.split("\n").filter((l) => /^\s*◯\s+\S+/.test(l)).length;
-  if (chipLines >= 2 || (chipLines >= 1 && /(?:^\s*⏺\s+main\s*$|↓\s*\d+\s*more)/m.test(region))) {
-    return "busy";
-  }
   // Input prompt visible = no blocking modal. Real warnings ("Press enter to
   // continue", weekly-limit popup) replace the input box, so the prompt glyph
   // disappears while they're up. Persistent footer banners — "Update available!
@@ -491,6 +485,18 @@ export function classifyTmuxLiveState(region: string): TmuxLiveState {
   // up (2026-11-13, jx7eahf).
   const promptVisible = /^\s?[❯›]/m.test(region);
   if (promptVisible) return "idle";
+  // Teammate panel: a lead with background agents lists them under its footer
+  // (⏺ main, ◯ name · state, "↓ N more") for as long as each stays addressable,
+  // finished ones included ("◯ integrate-w1 … idle"). The chips say what the
+  // agents do, never whether the lead's own turn runs: its spinner, "esc to
+  // interrupt" and status line, checked above, say that. Read as busy under a
+  // visible composer, every lead parked on its agents had its dormant or done
+  // declaration promoted to working, and 157c9d08 sat "working" at an empty
+  // prompt for six hours (2026-11-23). The chips decide only when no composer
+  // is in view: a lead squeezed by teammate splits to the chip list alone (the
+  // jx77h6jcsa0s freeze) is a live TUI taking type-ahead, and busy keeps the
+  // paste from leading with Escape.
+  if (backgroundAgentPanelOnPane(region)) return "busy";
   if (/Press enter to continue|Update available|weekly limit|recorded with model|⚠/i.test(region)) return "warning";
   return "unknown";
 }

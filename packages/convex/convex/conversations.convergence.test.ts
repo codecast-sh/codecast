@@ -17,12 +17,12 @@ import {
   digestProjection,
   inboxEpoch,
   isUnderRole,
-  projectInbox,
   rollupParentIdOf,
   selectWorkingSet,
   trustedStatusAt,
   type ProjectableInboxRow,
 } from "@codecast/shared/contracts";
+import { projectInbox } from "@codecast/shared/contracts/inboxPlacement";
 import { GEN_DAY, GEN_HOUR, convexIdFor, genWorld, makeRng, type GenWorld } from "@codecast/shared/contracts/__fixtures__/inboxProjectionGen";
 import { makeFakeDb, schemaIndexes } from "./testDb";
 import schema from "./schema";

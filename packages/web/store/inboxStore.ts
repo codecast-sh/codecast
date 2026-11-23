@@ -93,7 +93,15 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, cascadeTakesDownRow, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, cascadeTakesDownRow, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import {
+  rowLiveDeadlines,
+  projectInbox,
+  placeProjectableRow,
+  rowArmedHomes,
+  rowVerifiedWake,
+  rowPinPredatesTurn,
+} from "@codecast/shared/contracts/inboxPlacement";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
 import { closeFactsOf, closeSetsAside, nestedInFlightOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
@@ -105,9 +113,7 @@ import {
   inboxEpoch,
   selectWorkingSet,
   computeFold,
-  projectInbox,
   digestProjection,
-  placeProjectableRow,
   inboxSortTimeOfRow,
   rowLastTurnAllowsPark,
   emptyInboxTally,
@@ -120,7 +126,6 @@ import {
   roleLeadIdsOf,
   isUnderRole,
   isHardBlocked,
-  rowArmedHomes,
   DEAD_AGENT_STATUSES,
   fnv1a32Update,
   FNV1A32_OFFSET,
@@ -932,6 +937,17 @@ export type InboxSession = {
   // the shared classifier's structural-dormancy input (placeProjectableRow),
   // read off the row instead of agent_tasks. Absent reads as "none".
   armed_trigger_kind?: string | null;
+  // Denormalized server-seen wake ("none" | "run" | "blocker" | "wait"): a
+  // live workflow run the session spawned, an open task blocker on the task it
+  // holds, or only waits (on that task, or set elsewhere). A verified wake in
+  // placeProjectableRow (rowParkedWakeLive). Absent reads as "none".
+  parked_wake_kind?: string | null;
+  // When the latest turn of any origin opened (conversations.last_turn_at). A
+  // pin older than it parks nothing (rowPinPredatesTurn).
+  last_turn_at?: number | null;
+  // That rule's fallback with no last_turn_at, answered by the server
+  // (pinPredatesUserMessage): a bit, not the churning timestamp.
+  pin_predates_user_message?: boolean | null;
   // The pull request this session shepherds, folded onto the row by the server
   // so a card can show its state without reading pull_requests. `state` is the
   // shepherd state (review_pending, ci_red, behind, approved, merged, ...).
@@ -3284,7 +3300,7 @@ export function isSessionEffectivelyIdle(session: InboxSession): boolean {
 // attention. No pinned exemption: placement of pinned rows is the caller's
 // concern (they never leave the Pinned group).
 export function isSessionHardBlocked(
-  session: AgentStatusFacts & Pick<InboxSession, "_id" | "message_count" | "awaiting_input" | "is_unresponsive" | "pending_api_error" | "inbox_killed_at" | "thread_state_status" | "armed_trigger_kind" | "loop_state" | "agent_type" | "last_user_message" | "last_turn_allows_park">,
+  session: AgentStatusFacts & Pick<InboxSession, "_id" | "message_count" | "awaiting_input" | "is_unresponsive" | "pending_api_error" | "inbox_killed_at" | "thread_state_status" | "thread_state_at" | "last_turn_at" | "pin_predates_user_message" | "parked_wake_kind" | "producing_until" | "armed_trigger_kind" | "loop_state" | "agent_type" | "last_user_message" | "last_turn_allows_park">,
   sessionsWithQueuedMessages?: Set<string>,
   now = Date.now(),
 ): boolean {
@@ -3299,6 +3315,18 @@ export function isSessionHardBlocked(
     declaredStatus: session.thread_state_status ?? null,
     // A row with queued messages already returned above.
     hasPending: false,
+    verifiedWake: rowVerifiedWake({
+      armed_trigger_kind: session.armed_trigger_kind ?? null,
+      agent_type: session.agent_type,
+      parked_wake_kind: session.parked_wake_kind ?? null,
+      updated_at: session.updated_at ?? 0,
+      producing_until: session.producing_until ?? null,
+      loop_state: session.loop_state ?? null,
+      open_tasks: session.open_tasks ?? null,
+      open_tasks_at: session.open_tasks_at ?? null,
+      last_heartbeat: session.last_heartbeat ?? null,
+    }, now),
+    pinPredatesTurn: rowPinPredatesTurn(session),
     ...rowArmedHomes({
       armed_trigger_kind: session.armed_trigger_kind ?? null,
       loop_state: session.loop_state ?? null,
@@ -3515,6 +3543,13 @@ export function sessionStructuralSig(s: InboxSession): string {
     // row as DORMANT in the shared placement (placeInboxRows). Both change on
     // rare data writes (arm/cancel, a new turn), never on heartbeats.
     s.armed_trigger_kind || "",
+    // A server-seen wake (a run, blocker or wait) keeps a pinned dormant
+    // parked unless a turn opened after the pin, and a fresh pin speaks over a
+    // settled idle. Bits, not the stamps: each flips at most once per turn,
+    // never on heartbeats. The fresh bit flips when last_turn_at first lands.
+    s.parked_wake_kind || "",
+    rowPinPredatesTurn(s) ? 1 : 0,
+    s.last_turn_at != null && !rowPinPredatesTurn(s) ? 1 : 0,
     // The PR chip on the card: its state is what the reader acts on, so a
     // change of state must wake the card. The rest of pr_status cannot change
     // without it (a new PR carries a new number and a new state).
@@ -3761,6 +3796,10 @@ function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow
     inbox_rest_at: s.inbox_rest_at ?? (s.user_rest ? (s.updated_at || 1) : null),
     anchor_id: s.is_anchor ? s._id : null,
     armed_trigger_kind: s.armed_trigger_kind ?? null,
+    parked_wake_kind: s.parked_wake_kind ?? null,
+    last_turn_at: s.last_turn_at ?? null,
+    pin_predates_user_message: s.pin_predates_user_message ?? null,
+    thread_state_at: s.thread_state_at ?? null,
     loop_state: s.loop_state ?? null,
     settle_verdict: s.settle_verdict ?? null,
     settle_verdict_at: s.settle_verdict ? (s.updated_at || 1) : null,
@@ -3769,6 +3808,8 @@ function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow
     session_error: s.session_error ?? null,
     last_user_message: s.last_user_message ?? null,
     agent_status: live.agent_status,
+    // The daemon's own status, for the pin backstop (pinSpeaks).
+    raw_agent_status: s.agent_status ?? null,
     is_idle: live.is_idle,
     is_unresponsive: live.is_unresponsive,
     awaiting_input: live.awaiting_input,

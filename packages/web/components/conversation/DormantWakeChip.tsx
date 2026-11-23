@@ -8,7 +8,6 @@ import { useTriggers } from "../../hooks/useSyncTriggers";
 import type { TaskRow } from "../triggerTasks";
 import { SchedChildArrow } from "../TriggerRow";
 import { useDormantWake, useSessionTriggerRows } from "../../hooks/useDormantWake";
-import { DORMANT_CLAIM_TITLE } from "../inbox/dormantWake";
 import { WakeWhen } from "../inbox/DormantWakeRows";
 
 const LIVENESS_FIELDS = new Set(["updated_at", "last_heartbeat", "last_metrics_at", "last_active_at", "last_message_at"]);
@@ -48,7 +47,7 @@ function DormantWakeChipBody({ session }: { session: InboxSession }) {
     </>
   );
   const className = "flex items-center gap-1 min-w-[16rem] max-w-[28rem] shrink overflow-hidden text-meta";
-  const title = warn ? DORMANT_CLAIM_TITLE : what;
+  const title = warn ?? what;
   return openTrigger ? (
     <button type="button" data-dormant-wake={wake.kind} onClick={openTrigger} title={title} className={`${className} rounded px-1 hover:bg-sol-blue/[0.08] transition-colors`}>
       {body}

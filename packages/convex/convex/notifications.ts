@@ -9,6 +9,7 @@ import {
   summarizeIdleDigest,
   isHostedAgentType,
 } from "@codecast/shared/contracts";
+import { rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
 import { v } from "convex/values";
 import { commentIdValidator } from "./lib/conversationCommentRows";
 import { internal } from "./_generated/api";
@@ -26,7 +27,7 @@ import {
   classifyWorkState,
   type WorkState,
   needsInputKind,
-  subagentIsProducing,
+  childProducingNow,
   userRestOf,
   isSettleVerdictCurrent,
   HEARTBEAT_ALIVE_MS,
@@ -628,38 +629,8 @@ export async function deriveConversationVerdict(
   }
 
   // An idle parent whose subagent child is still producing is parked on it
-  // (classifyWorkState's childProducing) — don't push mid-orchestration. Cheap
-  // recent-output arm first; the child's managed session is read only when
-  // that arm fails.
-  let childProducing = false;
-  if (isIdle && !awaitingInput) {
-    const children = await ctx.db
-      .query("conversations")
-      .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conv._id))
-      .take(20);
-    for (const c of children) {
-      if (!c.is_subagent || c.status !== "active") continue;
-      if (subagentIsProducing({
-        isSubagent: true, convStatus: c.status, updatedAt: c.updated_at,
-        isLive: false, agentStatus: undefined, now,
-      })) {
-        childProducing = true;
-        break;
-      }
-      const childSession = await ctx.db
-        .query("managed_sessions")
-        .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id))
-        .first();
-      const childAlive = !!childSession?.last_heartbeat && now - childSession.last_heartbeat < HEARTBEAT_ALIVE_MS;
-      if (childAlive && subagentIsProducing({
-        isSubagent: true, convStatus: c.status, updatedAt: c.updated_at,
-        isLive: true, agentStatus: trustedAgentStatus(childSession?.agent_status, c.updated_at, now), now,
-      })) {
-        childProducing = true;
-        break;
-      }
-    }
-  }
+  // (classifyWorkState's childProducing) — don't push mid-orchestration.
+  const childProducing = isIdle && !awaitingInput && (await childProducingNow(ctx, conv, now));
 
   const armedHomes = await loadArmedTriggerHomes(ctx, conv.user_id);
   const state = classifyWorkState({
@@ -677,6 +648,10 @@ export async function deriveConversationVerdict(
     childProducing,
     settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
     declaredStatus: conv.thread_state_status ?? null,
+    ...rowWakeInputs({
+      ...conv,
+      open_tasks: session?.open_tasks, open_tasks_at: session?.open_tasks_at, last_heartbeat: session?.last_heartbeat,
+    }, { trusted: agentStatus, raw: session?.agent_status }, now, childProducing),
     sessionBoundary: boundary,
   });
   return { state, agentStatus, activity, isIdle, awaitingInput, hasPending, lastMsg, boundary };

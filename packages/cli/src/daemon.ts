@@ -417,7 +417,7 @@ import { setBackgroundSessions, setGovernorBackground, holdForDelivery, isDelive
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { followsCredentialStore, orcaPaneKeyOf, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
 import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
-import { CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, claudeTurnRunningOnPane, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState, agentAtLoginScreen } from "./tmuxPaneState.js";
+import { backgroundAgentPanelOnPane, CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, claudeTurnRunningOnPane, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState, agentAtLoginScreen } from "./tmuxPaneState.js";
 import {
   fetchExport,
   hasResumableMessages,
@@ -16620,6 +16620,7 @@ async function answerResumeCwdPicker(target: string, paneText: string): Promise<
 export function paneReconcileTarget(
   state: TmuxLiveState,
   stored: AgentStatus | undefined,
+  turnRunning: boolean,
 ): AgentStatus | null {
   if (state === "idle") {
     // "hibernated" is here as a backstop: the pane exists, so the park is over
@@ -16637,12 +16638,15 @@ export function paneReconcileTarget(
     return stored === undefined || staleActive || stored === "waiting" || stored === "dormant" || stored === "idle" ? "idle" : null;
   }
   if (state === "busy") {
-    // The settle verdicts count as quiet too: a busy pane over a parked
-    // ("waiting" / "dormant" / "done") session is the wake whose activity hook
-    // was lost — promote it, or the row stays filed as parked while it works.
-    const quiet = stored === undefined || stored === "idle" || stored === "connected" || stored === "permission_blocked"
-      || stored === "waiting" || stored === "dormant" || stored === "done" || stored === "hibernated";
-    return quiet ? "working" : null;
+    const quiet = stored === undefined || stored === "idle" || stored === "connected" || stored === "permission_blocked" || stored === "hibernated";
+    // A parked declaration ("waiting" / "dormant" / "done") is the agent's own
+    // word, overridden only by a turn the pane shows running: the wake whose
+    // activity hook was lost. "busy" also covers idle shapes that are merely
+    // safe to type into (claudeTurnRunningOnPane) and sit there for hours, and
+    // promoting on those filed parked sessions under Needs You once the server
+    // decayed the quiet "working" to idle.
+    const settled = stored === "waiting" || stored === "dormant" || stored === "done";
+    return quiet || (settled && turnRunning) ? "working" : null;
   }
   return null;
 }
@@ -16665,9 +16669,10 @@ function reconcileStatusFromPane(
   // pane is a no-op, not a gap. pi/opencode already no-op'd here ("unknown");
   // this makes the exclusion explicit and safe for glyphed liars.
   if (GLYPHLESS_PROMPT_CLIENTS.has(detectSessionAgentType(sessionId))) return;
-  const state = classifyTmuxLiveState(extractTmuxLiveRegion(paneContent));
+  const region = extractTmuxLiveRegion(paneContent);
+  const state = classifyTmuxLiveState(region);
   const stored = lastSentAgentStatus.get(sessionId);
-  let target = paneReconcileTarget(state, stored);
+  let target = paneReconcileTarget(state, stored, claudeTurnRunningOnPane(region));
   if (!target) return;
   // A pane-confirmed settle goes through the same verdict as a Stop hook, so a
   // turn whose hook was lost still lands on its declared / inferred status.
@@ -17453,9 +17458,10 @@ async function withTmuxLock<T>(target: string, fn: () => Promise<T>): Promise<T>
 //
 // `busy: true` means the agent is generating but its input box (❯) is live for
 // type-ahead — a paste lands in Claude Code's native queue and submits when the
-// turn ends. We do NOT wait for idle: that only ever served to keep the paste
-// path's mandatory leading Escape from interrupting the turn, and the caller now
-// simply skips that Escape when busy (see injectViaTmuxInner).
+// turn ends. We do NOT wait for idle, and no Escape leads a paste on any state:
+// the only Escapes left close something on screen (Claude Code's automatic
+// continue wait and a dialog or menu here, escapeOnce; an AskUserQuestion menu
+// declined for a free-text answer, pollDeclineText).
 // Detached tmux sessions default to 80x24, and Claude Code's teammate panes
 // split that window until the lead pane is too narrow for its TUI to render
 // recognizably (truncated footer markers, separators under the detection
@@ -18101,8 +18107,7 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     }
 
     // Mid-turn: inject into the live type-ahead box instead of waiting for idle.
-    // The caller skips the leading Escape on this signal so the turn isn't
-    // interrupted; Claude Code queues the pasted message and hands it to the
+    // No Escape precedes the paste, so the turn isn't interrupted; Claude Code queues the pasted message and hands it to the
     // model with the next tool result (a queued_command attachment), or when
     // the turn ends if no tool call comes. verifyTmuxSubmitAfterPaste confirms
     // it reached the queue. A queued slash command never runs, so the caller
@@ -23379,6 +23384,16 @@ export function transcriptIdleMs(input: { mtimeMs: number; lastRealTimestampMs: 
   return input.now - input.lastRealTimestampMs;
 }
 
+// Why the pane itself forbids a teardown, or null: only an agent idle at its
+// prompt may go, and not a lead whose teammate panel still lists background
+// agents. Those run inside the lead's process and write nothing to its
+// transcript, so after a daemon restart nothing else here knows they are alive.
+export function paneTeardownBlock(agentType: AgentClientId, pane: string): string | null {
+  const live = classifyLivePaneFor(agentType, pane);
+  if (live !== "idle") return `pane=${live}`;
+  return backgroundAgentPanelOnPane(pane) ? "background-agents-listed" : null;
+}
+
 // The reason a terminal is NOT safe to reap, or null if it passed every gate.
 // On success returns the resolved transcript path + idle age so the caller need
 // not re-scan. Cheapest gates first (idle-age before the pane/tail reads).
@@ -23404,8 +23419,8 @@ async function reapBlockReason(
   let pane: string;
   try { ({ stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 })); }
   catch { return { reason: "pane-capture-failed" }; }
-  const live = classifyLivePaneFor(file.agentType, pane);
-  if (live !== "idle") return { reason: `pane=${live}` };
+  const paneBlock = paneTeardownBlock(file.agentType, pane);
+  if (paneBlock) return { reason: paneBlock };
   if (tail === null) {
     try { tail = readFileTailSync(file.path); } catch { return { reason: "tail-read-failed" }; }
   }
@@ -23462,8 +23477,7 @@ async function reapOneTerminal(
   // kill. False here means the pane survived, so no caller may count or report a kill.
   const recheck = opts.stillReapable ?? (async () => {
     const { stdout: pane } = await tmuxExec(["capture-pane", "-p", "-J", "-t", tmux + ":0.0", "-S", "-25"], { timeout: 4000 });
-    const live = classifyLivePaneFor(detectSessionAgentType(sessionId), pane);
-    return live === "idle" ? null : `pane became "${live}"`;
+    return paneTeardownBlock(detectSessionAgentType(sessionId), pane);
   });
   try {
     const why = await recheck();
@@ -23937,7 +23951,7 @@ export async function parkPlanRefusal(plan: Awaited<ReturnType<typeof tmuxSessio
 async function parkHibernationTerminal(sessionId: string, tmux: string, convId: string | undefined, idleHours: number, boundary: HibernationBoundary): Promise<boolean> {
   const { target } = boundary;
   const { stdout: pane } = await boundary.terminal(["capture-pane", "-p", "-J", "-t", target.pane, "-S", "-25"]);
-  if (classifyLivePaneFor(detectSessionAgentType(sessionId), pane) !== "idle") return false;
+  if (paneTeardownBlock(detectSessionAgentType(sessionId), pane)) return false;
   // What the session started, read while the pane still roots it: once the
   // pane is gone its tool shells, MCP servers and the tmux sessions its agent
   // opened have no parent left to find them by. Stopped only once parked, and

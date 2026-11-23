@@ -48,17 +48,32 @@ export function genUpdatedAt(rng: Rng, epoch: number): number {
 
 const AGENT_STATUSES = [undefined, undefined, "working", "idle", "idle", "done", "dormant", "waiting", "stopped", "permission_blocked"] as const;
 
+function tagRng(tag: string): Rng {
+  let h = 2166136261;
+  for (const ch of tag) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
+  return makeRng(h >>> 0);
+}
+
 // The user's rest verdict (inbox_rest / inbox_rest_at), drawn from a stream
 // seeded by the row's own tag rather than the world rng: added after the
 // seeded worlds were pinned by the convergence suite, so the existing worlds
 // keep every row they had and only gain this field. Current 70% of the time.
 function genUserRest(tag: string, updated_at: number, row: Record<string, unknown>): void {
-  let h = 2166136261;
-  for (const ch of tag) h = Math.imul(h ^ ch.charCodeAt(0), 16777619);
-  const rng = makeRng(h >>> 0);
+  const rng = tagRng(tag);
   if (!chance(rng, 0.06)) return;
   row.inbox_rest = pick(rng, ["needs_input", "done", "dormant"]);
   row.inbox_rest_at = updated_at + (chance(rng, 0.7) ? 1 : -1);
+}
+
+// The server-seen wake, and when the pin and the latest turn were written,
+// from its own per-tag stream for the same reason.
+function genParkedWake(tag: string, row: Record<string, unknown>, updated_at: number): void {
+  const rng = tagRng(`park:${tag}`);
+  if (chance(rng, 0.08)) row.parked_wake_kind = pick(rng, ["run", "blocker", "wait", "none"]);
+  if (chance(rng, 0.2)) {
+    row.thread_state_at = updated_at - GEN_HOUR;
+    row.last_turn_at = updated_at - (chance(rng, 0.5) ? 2 * GEN_HOUR : 0);
+  }
 }
 
 // ── Shared-module rows (facts already on the row) ───────────────────────────
@@ -91,11 +106,12 @@ export function genProjectableRow(rng: Rng, epoch: number, tag: string, leadTag?
   if (chance(rng, 0.08)) row.armed_trigger_kind = pick(rng, ["standing", "once", "none"]);
   if (chance(rng, 0.05)) row.loop_state = { status: "armed", wakeup_at: epoch + (chance(rng, 0.5) ? GEN_HOUR : -GEN_HOUR), event_at: epoch - GEN_HOUR };
   if (chance(rng, 0.08)) { row.settle_verdict = "done"; row.settle_verdict_at = updated_at + (chance(rng, 0.7) ? 1 : -1); }
-  if (chance(rng, 0.06)) row.thread_state_status = pick(rng, ["done", "blocked", "working"]);
+  if (chance(rng, 0.06)) row.thread_state_status = pick(rng, ["done", "blocked", "working", "dormant"]);
   if (chance(rng, 0.05)) row.pending_api_error = true;
   if (chance(rng, 0.05)) row.inbox_dormant_at = updated_at + (chance(rng, 0.7) ? 1 : -1);
   genUserRest(tag, updated_at, row);
   if (chance(rng, 0.3)) row.last_turn_allows_park = chance(rng, 0.6);
+  genParkedWake(tag, row, updated_at);
   return row;
 }
 

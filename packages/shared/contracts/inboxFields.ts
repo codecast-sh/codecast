@@ -83,7 +83,7 @@ export const INBOX_ROW_FIELDS = [
   "has_pending", "last_user_message", "pending_api_error", "pending_api_error_at", "pending_api_error_kind", "session_error", "hosted_stop",
   "idle_summary", "thread_state", "thread_state_at", "thread_state_msg_count", "thread_state_status",
   "open_comment_threads", "last_comment_at", "last_comment_author", "last_comment_author_id", "last_comment_excerpt",
-  "active_plan", "active_task", "agent_task_id", "armed_trigger_kind", "loop_state", "pr_status",
+  "active_plan", "active_task", "agent_task_id", "armed_trigger_kind", "parked_wake_kind", "last_turn_at", "pin_predates_user_message", "loop_state", "pr_status",
   "workflow_run_id", "workflow_run_name", "workflow_run_status", "workflow_run_kind", "workflow_run_started_at",
   "workflow_run_activity", "workflow_run_agents_done", "workflow_run_agents_total",
   // An adopted flow station's flow (enrichInboxSessionRow).

@@ -179,6 +179,39 @@ describe("placeSections rest sections", () => {
     expect(ids(cat({ armed }).dormant)).toEqual(["armed"]);
   });
 
+  it("a daemon-less dormant pin parks on a server-seen wake only while no later turn opened", () => {
+    // The replica carries last_turn_at and thread_state_at into the shared
+    // placement, so it files a stale pin the way the server does.
+    const pin = { thread_state_status: "dormant", parked_wake_kind: "blocker", agent_status: undefined };
+    const current = mk("current", { ...pin, thread_state_at: BASE - 2_000, last_turn_at: BASE - 3_000 });
+    const stale = mk("stale", { ...pin, thread_state_at: BASE - 60_000, last_turn_at: BASE - 2_000 });
+    const { dormant, needsInput } = cat({ current, stale });
+    expect(ids(dormant)).toEqual(["current"]);
+    expect(ids(needsInput)).toEqual(["stale"]);
+  });
+
+  it("a fresh pin speaks over a working the trust rule decayed, never over a daemon idle", () => {
+    // The replica hands the raw status beside the trusted one (projectableRowOf).
+    const quiet = NOW - 2 * 3_600_000;
+    const pin = { thread_state_status: "done", thread_state_at: quiet, last_turn_at: quiet - 60_000, updated_at: quiet, agent_status_updated_at: quiet, last_heartbeat: NOW - 5_000 };
+    const decayed = mk("decayed", { ...pin, agent_status: "working" });
+    const reported = mk("reported", { ...pin, agent_status: "idle" });
+    const { done, needsInput } = cat({ decayed, reported });
+    expect(ids(done)).toEqual(["decayed"]);
+    expect(ids(needsInput)).toEqual(["reported"]);
+  });
+
+  it("a legacy pin (no last_turn_at) the server judged older than the newest user message parks nothing", () => {
+    // The replica carries the server's answer (pin_predates_user_message), not
+    // last_user_message_at, which moves on every tool call.
+    const pin = { thread_state_status: "dormant", parked_wake_kind: "blocker", agent_status: undefined, thread_state_at: BASE - 3_600_000 };
+    const current = mk("current", { ...pin, pin_predates_user_message: false });
+    const legacy = mk("legacy", { ...pin, pin_predates_user_message: true });
+    const { dormant, needsInput } = cat({ current, legacy });
+    expect(ids(dormant)).toEqual(["current"]);
+    expect(ids(needsInput)).toEqual(["legacy"]);
+  });
+
   it("pinned rows never enter the rest sections", () => {
     const { pinned, done, dormant } = cat({
       p: mk("p", { is_pinned: true, inbox_pinned_at: 1, agent_status: "done" }),

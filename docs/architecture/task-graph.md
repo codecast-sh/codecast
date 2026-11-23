@@ -70,14 +70,42 @@ the row and have exactly one home. Each entry: `id` (stable within the task),
 `kind`, its target (`repository` + `pr_number`, `decision`, or `at`),
 `state` (`waiting | met | failed`), `created_at`, `created_by`, `settled_at`,
 and a short `note` written when it settles ("merged", "answered: Ship it",
-"closed without merging"). A met or failed wait stays on the row as history
+"closed without merging"). `created_in` is the conversation `_id` of the
+session that set the wait while holding another task (its own session, not
+one it can merely read): that session parks on the wait and is woken by it.
+A session holding this task, one holding no task (wiring the graph), one
+reviewing the task it holds, and a task's create leave it unset. A session that adds a wait already set becomes
+its setter when the wait has no setter yet and can still wake it: it is
+waiting, or it is met, not yet told, and the task is still blocked. The add
+answers `parked` when the caller is the setter of a wait that can still wake it,
+and then adds the task to the caller's `conversations.parked_on_task_ids`
+(newest last, at most ten), so while any wait on a listed task still owes it
+a wake the session carries `parked_wake_kind` "wait", which files it Dormant
+under a dormant pin or claim. A setter whose held task lists the task in
+`blocked_by` gets `parked: "close"` and `owns` (whether it is that task's
+owning session, which its unblocking wakes). A caller that is not the setter
+(it joins a wait another session set) but whose held task lists the task gets
+`parked: "held"`: its own blocker stamp parks it, and the wait tells it
+nothing. The recompute
+drops a task from the list once nothing there is owed. A "wait" stamp, which
+rests on a webhook or a job that can be lost, files Dormant for 72 hours of
+quiet at most; a "blocker" stamp (an open task in the held task's
+`blocked_by` that a live session holds) is recomputed on every task write, so
+it has no such limit. An open blocker task nobody holds is closed only by a
+person or a webhook that can be lost, so it stamps "wait", with the 72 hours
+(a later binding of it does not restamp, which errs toward surfacing; a
+holder that leaves it, is killed or turns to review it restamps the dependents stamped
+"blocker", so none stays exact once its blocker task is unheld). `setter_told_at` marks that the met wait's setter was
+dealt with: told, or passed over (killed, refusing messages, a done pin that
+answers its latest turn,
+or the owner, who heard another way). A met or failed wait stays on the row as history
 until someone removes it; a failed wait keeps blocking. Adding a wait on the
 target of a failed one replaces it, so a PR reopened after it closed is
 waited on again by adding it again.
 
 `waiting_since` (indexed, sparse) is set while any wait is `waiting` and
 cleared otherwise. It is never written directly: every change to `waits`
-goes through one helper (`writeWaits` in `convex/taskWaits.ts`) that
+goes through one helper (`writeWaits` in `convex/lib/waitWrite.ts`) that
 recomputes it and links each new wait from its target: the PR row's or the
 decision row's `waiting_task_ids`. Events find their tasks through that back
 reference, so an event reads only its own tasks, never a scan.
@@ -125,8 +153,28 @@ cascade close, an org proposal's close or an issue sync's close),
 2. If a session owns the task (`conversations.active_task_id`), that session
    gets a message saying what cleared and that the task is ready. This is how
    an agent parks: it sets a wait on its own task and ends its turn.
-3. Otherwise a `task_unblocked` notification to the assignee when the
-   assignee is a person.
+3. Every met wait on the row with a `created_in` and no `setter_told_at`
+   wakes that session, one message per session naming its waits, and is then
+   stamped, whether or not the wake reached it. A wait met while something
+   else still blocked the task is told here, by whichever change cleared the
+   last blocker, and a stamped wait wakes nobody at a later unblock. The
+   owner is not told twice, and a killed session or one whose done pin
+   answers its latest turn is not woken (a done pin older than that turn
+   answered an earlier one, so that session is woken). A wait met the moment its own setter sets it is
+   stamped then. A setter whose own held task still lists this task in
+   `blocked_by` is told what still holds that task, since nothing may close
+   it (a PR merged outside a flow closes none): with an owning session, ask it
+   to close the task when its work is done (that owner is told to continue at
+   the same moment) and pin dormant; with none, close a finished task itself,
+   or pin blocked so a person moves it. Its held task unblocking wakes it as
+   that task's owner. A setter whose held task is held back by anything else
+   (another open task, a waiting wait) is told what it still waits for, and to
+   pin dormant naming it, rather than to continue. Either way it is promised
+   the held task's wake only when it owns that task; otherwise the text says
+   the session holding it is woken.
+4. Unless the owner was woken, a `task_unblocked` notification to the
+   assignee when the assignee is a person. A setter's wake does not count:
+   the setter continues its own work, not this task.
 
 A closing task finds its dependents as supersede does (`dependentRefs`): its
 `blocks` mirror, then any plan mate whose `blocked_by` names it, so a row
@@ -136,8 +184,36 @@ A change someone made themselves neither rings their bell nor wakes the
 session that made it. The wake is keyed on what cleared the task, so the
 same event is delivered once.
 
-A failed wait posts a `blocker` comment instead and wakes the owner the same
-way, because someone has to re-plan.
+A failed wait posts a `blocker` comment instead and wakes the owner and its
+setter the same way, because someone has to re-plan: the owner is told how to
+remove or replace the wait, and the setter to replan its own work and leave
+the task's blockers to its owner, or, with no owning session, that nobody else
+will replan it (when its held task still waits on this one closing: to replan
+with this task's owning session or drop the dependency, and with no owning
+session, to close a finished task or pin blocked; and when anything else holds
+its held task back, what that is, beside the replan and with no order to pin
+dormant). Setters of the task's met waits are not
+told: the task may still unblock once the owner replaces the failed wait, and
+the "wait" stamp's 72 hours bound one that never does. A task closed while a
+wait on it is still owed to its setter tells that setter once that the wait
+will not wake it (closed as done: check whether its work can go ahead;
+otherwise: replan), unless the setter closed it, and stamps the wait. A
+setter whose own held task still lists the task in `blocked_by` is passed
+over on a close: when nothing else blocks its held task, the close releases
+that task and wakes it as the owner in the same call, and otherwise it is
+woken when the held task's last blocker clears; a removal tells it the wait is
+gone and that the held task still waits for this one to close: with an owning
+session, it pins dormant naming the task and ends its turn; with none, it
+closes a finished task or pins blocked. Removing a wait whose setter
+was still owed (waiting, or met and not stamped) tells that setter the wait
+is gone, unblocked or not, unless the setter removed it, or owns the task and
+heard of the unblock. A setter told both of a removal and of the unblock it
+caused gets one message, and a setter of several waits that fail together
+gets one message. Re-adding a met checks
+wait keeps the replaced wait's setter when it was still owed, whoever
+re-adds it (a failed wait's setter was already told to re-plan, so it is not
+carried); the caller becomes the setter only when there is none. A reopened or restated decision wakes only the
+task's owner, never a wait's setter.
 
 ## TG3. One grammar for blocker refs
 

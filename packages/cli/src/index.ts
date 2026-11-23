@@ -7181,9 +7181,15 @@ program
     "States answer WHO ACTS NEXT, matching the web inbox. NEEDS YOU = a human must unblock it\n" +
     "(open question, permission prompt, dead with output, or a finished turn nobody classified).\n" +
     "DONE = the agent delivered (`cast state --status done`); review at leisure. WORKING = the\n" +
-    "agent is producing now. DORMANT = a machine wakes it (a declared `cast state --status\n" +
-    "dormant`, an open background task/Monitor, or an armed trigger into it) — nothing is yours\n" +
-    "until then. IDLE = blank sessions. Sessions you name are listed whatever their state.\n\n" +
+    "agent is producing now. DORMANT = a machine wakes it, and nothing is yours until then. A\n" +
+    "standing trigger or open background work parks a session with no declaration. A declared\n" +
+    "`cast state --status dormant` parks while a wake the system sees stands: a trigger, a loop,\n" +
+    "open background work, a subagent still working, a blocker on its task, a wait it set (while\n" +
+    "it holds another task), or a run it started (the last only while its session's daemon\n" +
+    "reports). A park on a wait or a run comes back to you after 72h of quiet, and a pin older\n" +
+    "than the session's last turn parks nothing. A bare claim comes back to you after 2h of\n" +
+    "quiet, or at once if no daemon reports for it. IDLE = blank sessions.\n" +
+    "Sessions you name are listed whatever their state.\n\n" +
     "--json prints {counts, sessions: [{id, short_id, work_state, title, message_count, updated_at,\n" +
     "thread_state, thread_state_status, is_live, is_pinned, …}]}: the rows sit under .sessions,\n" +
     "even for one id, and work_state is the field to read.\n\n" +

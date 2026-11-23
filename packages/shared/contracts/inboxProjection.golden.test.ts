@@ -8,11 +8,11 @@ import {
   digestProjection,
   fnv1a32,
   inboxSortTimeOfRow,
-  projectInbox,
   type InboxBucket,
   type InboxTruncation,
   type ProjectableInboxRow,
 } from "./inboxProjection";
+import { projectInbox } from "./inboxPlacement";
 import { expandFixtureRows, resolveEpochRelative, type FixtureRowSpec } from "./__fixtures__/inboxProjectionGen";
 
 // GOLDEN FIXTURES for the shared inbox projection (sync-convergence C3,
@@ -112,6 +112,12 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // v28: the first row past the fold's gap folds (the edge rows in fold,
   // teammates and windows).
   28: "817c90c9dd300267",
+  // v29: a server-seen wake and a daemon-less pinned dormant with a verified
+  // wake park, unless a turn opened after the pin, and a fresh pin speaks over
+  // a settled idle; a task blocker is exact, a wait lives 72h, a run follows
+  // its heartbeat (the pinned_dormant, pinned_done and dormant_claim rows in
+  // buckets.json).
+  29: "cc88df91db5d8a97",
 };
 
 type Expected = {

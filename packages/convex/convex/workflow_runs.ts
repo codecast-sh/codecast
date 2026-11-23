@@ -8,6 +8,7 @@ import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conve
 import { killConversation } from "./conversations";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, refreshHolder, userMayRead, withdrawCore, GATE_PRESENT_AGAIN, type AnsweredBy } from "./sessionDecisions";
 import { adoptedCategory } from "./lib/decisionCategory";
+import { LIVE_RUN_STATUSES } from "./lib/parkedWake";
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, costParts, isLineRun, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
@@ -661,7 +662,7 @@ async function runCheckoutDevice(ctx: Ctx, userId: Id<"users">, runId: Id<"workf
 // daemon (the-line.md L9). One place, so a field added to runs or to the
 // primary conversation lands on both paths.
 // LE1.4: a run that has not ended. One cause holds at most one of these.
-export const LIVE_RUN_STATUSES = ["pending", "running", "paused"] as const;
+export { LIVE_RUN_STATUSES };
 export const isLiveRunStatus = (status: string | undefined): boolean =>
   (LIVE_RUN_STATUSES as readonly string[]).includes(status ?? "");
 
@@ -1261,7 +1262,8 @@ export const updateProgress = mutation({
     await ctx.db.patch(args.run_id, {
       current_node_id: args.current_node_id,
       node_statuses: nodeStatuses,
-      status: args.run_status ?? run.status,
+      // Named only when it moves, so a progress report stays off parked_wake_kind's run recompute (lib/parkedWake.ts).
+      ...(args.run_status && args.run_status !== run.status ? { status: args.run_status } : {}),
       fail_reason: args.fail_reason,
       // A runner's first report names the graph it loaded, so a restart a re-pin asked for has happened.
       ...(args.graph_hash ? { graph_hash: args.graph_hash, restart_runner_at: undefined, ...repin } : {}),

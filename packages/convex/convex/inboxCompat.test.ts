@@ -119,10 +119,11 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "is_deferred", "is_favorite", "is_idle", "is_pinned", "is_private",
       "is_subagent", "is_unresponsive", "is_workflow_primary", "is_workflow_sub", "last_comment_at",
       "last_comment_author", "last_comment_author_id", "last_comment_excerpt", "last_heartbeat", "last_model_call_at",
-      "last_role_is_user", "last_turn_origin", "last_user_message", "local_mirror", "loop_state", "merge_back", "message_count", "migration_batch_id", "model",
+      "last_role_is_user",
+      "last_turn_at", "last_turn_origin", "last_user_message", "local_mirror", "loop_state", "merge_back", "message_count", "migration_batch_id", "model",
       "open_comment_threads", "open_tasks", "open_tasks_at", "org_role_id", "owned_by_me", "owner_device_id",
-      "owner_user_id", "parent_conversation_id", "parent_message_uuid", "pending_api_error",
-      "pending_api_error_at", "pending_api_error_kind", "permission_mode", "pr_status", "producing_until",
+      "owner_user_id", "parent_conversation_id", "parent_message_uuid", "parked_wake_kind", "pending_api_error",
+      "pending_api_error_at", "pending_api_error_kind", "permission_mode", "pin_predates_user_message", "pr_status", "producing_until",
       "project_id", "project_path", "rewind_staged", "role", "session_error", "session_id", "settle_verdict", "spawned_by_conversation_id",
       "standing_role_id", "started_at", "status", "subagent_caps", "subagent_slot", "subagent_slot_at", "subagent_slot_device", "subtitle", "team_id", "team_visibility", "thread_state", "thread_state_at",
       "thread_state_msg_count", "thread_state_status", "title", "tmux_session",
@@ -332,5 +333,21 @@ describe("session identity on the row (session-characters.md S1, S6)", () => {
     expect(sessions.find((s: any) => s._id === "conversations_quiet").bucket).toBe("hidden");
     expect(sessions.find((s: any) => s._id === "conversations_finished").bucket).toBe("hidden");
     expect(sessions.some((s: any) => s._id === "conversations_nested")).toBe(true);
+  });
+});
+
+// A tool call flushes a batch that moves only churn (updated_at, message_count,
+// last_user_message_at, last_message_at, last_message_role, activity). None of
+// it may change the web's base list row, or every tool call resends the list
+// to every tab (the inboxSplit incident class). The legacy pin rule rides the
+// row as a bit (pin_predates_user_message), never as last_user_message_at.
+describe("a tool-result flush leaves the web base list row unchanged", () => {
+  const WEB = { includeLiveness: false, fastFieldsInOverlay: true, splitHot: true };
+  test("only churn moved, so the row is identical", async () => {
+    const pinned = { thread_state: "Waiting on CI", thread_state_status: "dormant", thread_state_at: EPOCH - 10 * MIN, parked_wake_kind: "blocker" };
+    const before = conv("a", { ...pinned, updated_at: EPOCH - 5 * MIN, last_user_message_at: EPOCH - 5 * MIN, last_message_at: EPOCH - 5 * MIN, last_message_role: "user" });
+    const after = { ...before, updated_at: EPOCH - MIN, message_count: before.message_count + 2, last_user_message_at: EPOCH - MIN, last_message_at: EPOCH - MIN, last_message_role: "assistant", activity: { tool: "Bash", at: EPOCH - MIN } };
+    const rowOf = async (c: any) => (await computeInboxSessions({ db: db({ conversations: [c] }) }, ME as any, WEB)).sessions.find((s: any) => s._id === "conversations_a");
+    expect(await rowOf(after)).toEqual(await rowOf(before));
   });
 });

@@ -208,21 +208,21 @@ describe("reconciledStatus", () => {
 // can't catch this (the killed-mid-tool turn reads "active"); the live pane can.
 describe("paneReconcileTarget", () => {
   test("idle pane + stale-active status -> idle (the latch fix)", () => {
-    expect(paneReconcileTarget("idle", "working")).toBe("idle");
-    expect(paneReconcileTarget("idle", "thinking")).toBe("idle");
-    expect(paneReconcileTarget("idle", "connected")).toBe("idle");
+    expect(paneReconcileTarget("idle", "working", false)).toBe("idle");
+    expect(paneReconcileTarget("idle", "thinking", false)).toBe("idle");
+    expect(paneReconcileTarget("idle", "connected", false)).toBe("idle");
   });
 
   test("idle pane + post-restart unknown status -> idle (the b09ad864 case)", () => {
     // After a daemon restart the in-memory latch is empty; the pane is the only
     // signal left, and it says idle.
-    expect(paneReconcileTarget("idle", undefined)).toBe("idle");
+    expect(paneReconcileTarget("idle", undefined, false)).toBe("idle");
   });
 
   test("busy pane + quiet/unknown status -> working (inverse: lost activity hook)", () => {
-    expect(paneReconcileTarget("busy", "idle")).toBe("working");
-    expect(paneReconcileTarget("busy", "connected")).toBe("working");
-    expect(paneReconcileTarget("busy", undefined)).toBe("working");
+    expect(paneReconcileTarget("busy", "idle", true)).toBe("working");
+    expect(paneReconcileTarget("busy", "connected", true)).toBe("working");
+    expect(paneReconcileTarget("busy", undefined, true)).toBe("working");
   });
 
   test("stored idle re-derives on an idle pane (the waiting climb-back)", () => {
@@ -230,12 +230,12 @@ describe("paneReconcileTarget", () => {
     // watchers) collapses waiting -> idle; the caller maps this "idle" through
     // resolveTurnEndStatus, which re-checks open tasks and can climb back to
     // "waiting". A no-change answer publishes nothing, so agreeing stays cheap.
-    expect(paneReconcileTarget("idle", "idle")).toBe("idle");
+    expect(paneReconcileTarget("idle", "idle", false)).toBe("idle");
   });
 
   test("no correction when a busy pane already agrees", () => {
-    expect(paneReconcileTarget("busy", "working")).toBeNull();
-    expect(paneReconcileTarget("busy", "thinking")).toBeNull();
+    expect(paneReconcileTarget("busy", "working", true)).toBeNull();
+    expect(paneReconcileTarget("busy", "thinking", true)).toBeNull();
   });
 
   // ct-56131: a spawned worker two hours into ONE turn, inside a long Bash
@@ -264,18 +264,18 @@ ${statusLine}
       for (const elapsed of ["50s", "59m 59s", "1h 0m 0s", "2h 2m 38s", "1d 3h 12m"]) {
         const state = stateOf(`✶ Clauding… (${elapsed} · ↓ 109.4k tokens)`);
         expect(state).toBe("busy");
-        expect(paneReconcileTarget(state, "working")).toBeNull();
+        expect(paneReconcileTarget(state, "working", true)).toBeNull();
       }
     });
 
     test("a session already settled by the false idle climbs back to working", () => {
-      expect(paneReconcileTarget(stateOf("✶ Clauding… (2h 2m 38s · ↓ 109.4k tokens)"), "idle")).toBe("working");
+      expect(paneReconcileTarget(stateOf("✶ Clauding… (2h 2m 38s · ↓ 109.4k tokens)"), "idle", true)).toBe("working");
     });
 
     test("the real end of that turn still settles", () => {
       const state = stateOf("✻ Churned for 2h 2m 51s · done 9:59 PM");
       expect(state).toBe("idle");
-      expect(paneReconcileTarget(state, "working")).toBe("idle");
+      expect(paneReconcileTarget(state, "working", false)).toBe("idle");
     });
   });
 
@@ -287,31 +287,31 @@ ${statusLine}
   // a live menu classifies as rewind/unknown anyway — never idle/busy — so this can
   // never clear a still-open prompt.)
   test("idle pane + permission_blocked -> idle (question answered, agent finished, resume hook lost)", () => {
-    expect(paneReconcileTarget("idle", "permission_blocked")).toBe("idle");
+    expect(paneReconcileTarget("idle", "permission_blocked", false)).toBe("idle");
   });
   test("busy pane + permission_blocked -> working (question answered, agent resumed)", () => {
-    expect(paneReconcileTarget("busy", "permission_blocked")).toBe("working");
+    expect(paneReconcileTarget("busy", "permission_blocked", true)).toBe("working");
   });
   test("a live menu (rewind/unknown pane) never clears permission_blocked", () => {
     // While the AskUserQuestion menu is up the pane never reads idle/busy, so the
     // block stays put — the agent is genuinely waiting on the user.
     for (const state of ["rewind", "interrupted", "warning", "unknown"] as const) {
-      expect(paneReconcileTarget(state, "permission_blocked")).toBeNull();
+      expect(paneReconcileTarget(state, "permission_blocked", false)).toBeNull();
     }
   });
 
   test("never overrides statuses owned by other code paths", () => {
     // resuming / a terminal "stopped" must never be stomped by the pane reconcile.
     for (const stored of ["resuming", "stopped"] as const) {
-      expect(paneReconcileTarget("idle", stored)).toBeNull();
-      expect(paneReconcileTarget("busy", stored)).toBeNull();
+      expect(paneReconcileTarget("idle", stored, false)).toBeNull();
+      expect(paneReconcileTarget("busy", stored, true)).toBeNull();
     }
   });
 
   test("defers on modal / exited / unknown panes", () => {
     for (const state of ["interrupted", "rewind", "warning", "exited", "unknown"] as const) {
-      expect(paneReconcileTarget(state, "working")).toBeNull();
-      expect(paneReconcileTarget(state, undefined)).toBeNull();
+      expect(paneReconcileTarget(state, "working", false)).toBeNull();
+      expect(paneReconcileTarget(state, undefined, false)).toBeNull();
     }
   });
 });

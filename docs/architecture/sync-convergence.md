@@ -203,8 +203,10 @@ APIs, no BigInt) imported by Convex, the web store, mobile, and the daemon. It e
   stashed, hidden (an anchor row that is not hard blocked), questions (asking), pinned,
   new (no messages), then the work state. Pinned outranks the work buckets, so Needs
   Input never counts a pinned row.
-- `inWorkingSet`, `selectWorkingSet`, `computeFold`, `projectInbox`: membership and
-  fold (C4).
+- `inWorkingSet`, `selectWorkingSet`, `computeFold`: membership and fold (C4).
+  `projectInbox`, the whole projection in one call, and `placeProjectableRow`, one
+  row's placement with its wake inputs (`rowWakeInputs`), live beside it in
+  `inboxPlacement.ts`, imported by path so the CLI's boot graph does not carry them.
 - `digestProjection(entries)`: an order independent hash over
   `(id, bucket, below_fold)` triples: FNV 1a 32 per triple folded into two 32 bit
   lanes, 16 hex characters. Fold is in the digest on purpose: with show old off, the
@@ -386,11 +388,20 @@ property tests pin all four: idempotence, replay from a shipped payload, monoton
 and constancy between adjacent deadlines. The old client only sweep (a quiet row read as settled, a frozen queue flag
 blanked) and the coverage gate around it are gone: a row with no facts at all takes the
 server's no status branch and settles by the activity grace. One rule this makes exact
-on the replica that the client could not apply before: a declared dormant home whose
-daemon is gone resurfaces as the human's, because nobody can deliver the wake it
-promised. The same idea bounds a live daemon's bare claim: a declared dormant with no
-wake the system can verify (no armed trigger or loop into the session, no daemon-checked
-open task) files needs input after `DORMANT_CLAIM_TTL_MS` of quiet. The status only
+on the replica that the client could not apply before: a dormant pin with no live
+daemon status (the managed row aged out, the session hibernated, or the process exited)
+stays parked only while a verified wake stands: an armed trigger or loop into the
+session, a child still producing, or a server-seen park (`rowParkedWakeLive`: "blocker",
+an open task in its held task's `blocked_by` that a live session holds, exact because
+every task write recomputes it; "wait", trusted for `PARKED_WAKE_TTL_MS` of quiet because a
+webhook can be lost, which covers an open blocker task nobody holds;
+"run", trusted for the same quiet and only while the session's daemon heartbeat lives:
+when its session's daemon is not reporting, the run it started no longer vouches for it),
+and only while no turn opened after the pin was written (`last_turn_at`). Otherwise it resurfaces as the
+human's, because nobody can deliver the wake it promised. The same idea bounds a live
+daemon's bare claim: a declared dormant with no verified wake (`rowVerifiedWake`: those
+wakes, a child still producing, or daemon-checked open work) files needs input after
+`DORMANT_CLAIM_TTL_MS` of quiet. The status only
 re-derives when the wake lands, so a wake that never lands would otherwise strand the
 row in Dormant. `rowLiveDeadlines` carries the expiry, so the time flip lands on both
 sides at the same instant.
