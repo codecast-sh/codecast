@@ -7,6 +7,7 @@ import { isTeamMember } from "../privacy";
 import { isTeamMachineFor } from "../sessionLaunch";
 import { runnerDeviceOf } from "./runnerDevice";
 import { removeSessionOwnerRow, syncPrimaryOwnerCache } from "../sessionOwners";
+import { giveReleasedRun } from "./roleRelease";
 import { reroutePendingDecisionsForConversation } from "../sessionDecisions";
 import { withdrawMember } from "./changesDirty";
 import { purgeChatMembership } from "../chat";
@@ -41,16 +42,23 @@ async function grantRunsThrough(ctx: { db: any }, conv: any, teamId: Id<"teams">
   return shares.some((sh: any) => String(sh.team_id) === String(teamId));
 }
 
-export async function dropOwnerRow(ctx: { db: any }, row: any): Promise<void> {
+export async function dropOwnerRow(ctx: { db: any }, row: any, addedBy: Id<"users"> = row.user_id): Promise<void> {
   await removeSessionOwnerRow(ctx, row.conversation_id, row.user_id);
   await syncPrimaryOwnerCache(ctx, row.conversation_id);
+  // A run a role released was given to this person: with no role
+  // and no owner left it would be nobody's, so it goes on by the same rule,
+  // to someone whose grant on it holds.
+  if (row.released_from) {
+    const conv = await ctx.db.get(row.conversation_id);
+    await giveReleasedRun(ctx, row.conversation_id, await ctx.db.get(row.released_from), addedBy, async (id) => !!conv && ownerGrantHolds(ctx, id, conv));
+  }
   // Its open questions leave the person who left, and reach the role again if they drove.
   await reroutePendingDecisionsForConversation(ctx as any, row.conversation_id, Date.now());
 }
 
 // When a membership ends, drop the person's owner rows on sessions others run
 // whose grant came through that team and no longer holds.
-async function releaseStrandedSessionOwnership(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">): Promise<void> {
+async function releaseStrandedSessionOwnership(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">, actor: Id<"users">): Promise<void> {
   const rows = await ctx.db
     .query("session_owners")
     .withIndex("by_user", (q: any) => q.eq("user_id", userId))
@@ -60,7 +68,7 @@ async function releaseStrandedSessionOwnership(ctx: { db: any }, userId: Id<"use
     if (!conv || String(conv.user_id) === String(userId)) continue;
     if (!(await grantRunsThrough(ctx, conv, teamId))) continue;
     if (await ownerGrantHolds(ctx, userId, conv)) continue;
-    await dropOwnerRow(ctx, row);
+    await dropOwnerRow(ctx, row, actor);
   }
 }
 
@@ -100,7 +108,7 @@ export async function endMembership(
     .collect();
   for (const dm of mappings) await ctx.db.delete(dm._id);
   await withdrawMember(ctx, userId, teamId);
-  await releaseStrandedSessionOwnership(ctx, userId, teamId);
+  await releaseStrandedSessionOwnership(ctx, userId, teamId, actor);
 
   const user = await ctx.db.get(userId);
   if (!user) return;

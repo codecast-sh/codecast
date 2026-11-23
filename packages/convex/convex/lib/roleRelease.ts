@@ -23,15 +23,17 @@ export function releasedRunNeedsOwner(conversation: any): boolean {
  *  on the row as it is now, since a retire's later batches run after other
  *  writes: still this role's or unfiled (an heir that took it keeps it), live,
  *  and owned by nobody. The row records the role, so an undo that puts the
- *  role back takes it back (returnReleasedRows). */
-export async function giveReleasedRun(ctx: { db: any }, conversationId: Id<"conversations">, role: any, addedBy: Id<"users">): Promise<void> {
+ *  role back takes it back (returnReleasedRows). `mayOwn` passes over a
+ *  person who may no longer own it (one whose team membership just ended). */
+export async function giveReleasedRun(ctx: { db: any }, conversationId: Id<"conversations">, role: any, addedBy: Id<"users">, mayOwn: (userId: Id<"users">) => Promise<boolean> = async () => true): Promise<void> {
   const row = role ? await ctx.db.get(conversationId) : null;
   if (!row || (row.org_role_id && String(row.org_role_id) !== String(role._id)) || !releasedRunNeedsOwner({ ...row, org_role_id: role._id })) return;
   if ((await listSessionOwnerIds(ctx, conversationId)).length > 0) return;
   let person: Id<"users"> | undefined = (await buildLadder(ctx, role, Date.now())).firstPersonId;
+  if (person && !(await mayOwn(person))) person = undefined;
   if (!person) {
     const runner = await roleRunner(ctx, role);
-    if (runner && !(await ctx.db.get(runner))?.is_bot) person = runner;
+    if (runner && !(await ctx.db.get(runner))?.is_bot && await mayOwn(runner)) person = runner;
   }
   if (!person) return;
   const now = Date.now();

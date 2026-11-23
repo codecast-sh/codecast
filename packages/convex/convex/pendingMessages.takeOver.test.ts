@@ -6,6 +6,7 @@ import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { planUndo, performUndo } from "./orgChanges";
 import { wakeMentionedParties } from "./chat";
 import { computeInboxSessions, heldByRoleAlone } from "./conversations";
+import { endMembership } from "./lib/teamMembershipEnd";
 import { formatDecisionAnswer, roleDrives, rollupParentIdOf } from "@codecast/shared/contracts";
 import { dispatch } from "./dispatch";
 import { sendSessionMessage } from "./pendingMessages";
@@ -543,6 +544,18 @@ describe("a role's pool hand never ends up owned by nobody", () => {
     await performUndo(tx(), ME as any, { batch: String(move.batch) });
     expect(ownersOf("pool")).toEqual([ME]);
     expect(tables.session_owners.find((o) => o.conversation_id === "pool")).toMatchObject({ user_id: ME, released_from: roleId });
+  });
+
+  test("the person a retired role's hand went to leaving the team hands it on, never to nobody", async () => {
+    const { ctx, tables, ownersOf, roleId } = await world();
+    tables.users.find((u) => u._id === POOL).team_id = TEAM;
+    tables.org_roles.find((r) => r._id === roleId).reports_to = { kind: "user", user_id: PEER };
+    await performRetireRole(ctx, ME as any, { role_id: String(roleId), handoff: "skip" });
+    expect(ownersOf("pool")).toEqual([PEER]);
+    await endMembership(ctx, PEER as any, TEAM, ME as any);
+    // The ladder's person has left, so the seat's runner takes it.
+    expect(ownersOf("pool")).toEqual([ME]);
+    expect(tables.session_owners.find((o) => o.conversation_id === "pool")).toMatchObject({ released_from: roleId, added_by: ME });
   });
 
   test("a batch gives no row to a hand an heir took since, or one that finished", async () => {
