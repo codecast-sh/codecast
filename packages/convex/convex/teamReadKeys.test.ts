@@ -275,8 +275,9 @@ describe("team read keys", () => {
       "team_read_key_used",
       "team_read_key_revoked",
     ]);
+    // A person mints and revokes; the key itself is the actor of its use.
+    expect(events.map((e: any) => e.actor_key_id ?? e.actor_user_id)).toEqual([ada, key_id, key_id, ada]);
     for (const e of events) {
-      expect(e.actor_user_id).toBe(ada);
       expect(e.detail.after).toMatchObject({ key_id, name: "eng site" });
       expect(JSON.stringify(e)).not.toContain(key);
     }

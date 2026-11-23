@@ -166,8 +166,8 @@ export const keyForHash = internalQuery({
 
 /**
  * A key's use, recorded before the read it opens: last_used_at moves and a
- * team_read_key_used event names the key, with the admin who minted it as the
- * actor. Requests inside the same window record nothing.
+ * team_read_key_used event names the key as its actor. Requests inside the
+ * same window record nothing.
  */
 export const recordUse = internalMutation({
   args: { key_id: v.id("team_read_keys") },
@@ -178,7 +178,7 @@ export const recordUse = internalMutation({
     await ctx.db.patch(key._id, { last_used_at: now });
     await recordAuthorityEvent(ctx, {
       kind: "team_read_key_used",
-      actor_user_id: key.created_by,
+      actor_key_id: key._id,
       team_id: key.team_id,
       detail: { after: { key_id: key._id, name: key.name, prefix: key.prefix } },
     });
