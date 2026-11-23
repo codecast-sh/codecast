@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 import { mutation, query, internalAction, internalMutation, internalQuery } from "./functions";
 import { deliverSessionNotification, deliverSessionNotificationToParties, idleDigestOn } from "./lib/sessionNotify";
 export { deliverSessionNotification, deliverSessionNotificationToParties, idleDigestOn };
@@ -707,6 +708,9 @@ export async function performNeedsInputCheck(
   // A killed row is retired for good — the teardown is deliberate, and its
   // frozen flags never resurface anything.
   if (conv.inbox_killed_at) return { notified: false, reason: "killed" };
+  // So is a closed one, for every machine report: its "stopped" is the
+  // teardown the person asked for, never a stall to surface or route up.
+  if (isClosedSession(conv)) return { notified: false, reason: "closed" };
   // Hidden rows (stashed, or a folded run carrying the legacy dismissed stamp)
   // do NOT return yet: the stall rule below needs the same derivation this
   // push uses. "Stash hides work, not stalls" — a hidden session may be quiet,

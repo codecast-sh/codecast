@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 import { v } from "convex/values";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { normalizeRepository } from "./lib/gitRefs";
@@ -1100,6 +1101,8 @@ export async function routeUpWaitingSession(
   conv: Doc<"conversations">,
   wait: { why: string; since: number; stuck?: boolean },
 ): Promise<"told" | "already" | "nobody" | "unreachable"> {
+  // A killed or closed session's settle is its teardown, not a wait to raise.
+  if (conv.inbox_killed_at || isClosedSession(conv)) return "nobody";
   const state = String(conv.thread_state ?? "").split("\n")[0].slice(0, 200);
   const count = conv.message_count ?? 0;
   const [toldAt, ...toldState] = String(conv.hand_wake_notified_key ?? "").split(":");

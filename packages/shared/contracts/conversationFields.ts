@@ -51,6 +51,9 @@ export const CONVERSATION_FIELDS = {
   inbox_dismissed_at: { send: true, dispatch: true, patch: true, triage: true, visibility: true },
   inbox_stashed_at: { send: true, dispatch: true, triage: true, visibility: true },
   inbox_stash_hidden: { send: true, dispatch: true, visibility: true },
+  // A Close (closedSession.ts): written with the dismissed stamp it equals, so a
+  // close is a close on any rail (a stub re-key flush, a deferred batch).
+  inbox_closed_at: { send: true, dispatch: true, triage: true },
   // Set by the kill path, never by the generic rail: the dispatch drops a
   // clear that is not itself an un-kill, so it is triage-tracked but not
   // dispatchable here.

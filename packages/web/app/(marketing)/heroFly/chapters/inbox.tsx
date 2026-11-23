@@ -197,7 +197,6 @@ function InboxListAt({ now }: PartProps) {
       onSelect={(s) => setPicked(s._id)}
       onToggleFavorite={(id) => setStarred((m) => ({ ...m, [id]: !m[id] }))}
       onPin={noop}
-      onStash={noop}
     />
   );
   const row = (i: number) => (

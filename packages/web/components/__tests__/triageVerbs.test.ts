@@ -28,7 +28,7 @@ describe("triage verb catalog", () => {
       "session.dormantAdvance",
       "session.stash",
       "session.stashHide",
-      "session.kill",
+      "session.close",
     ]);
   });
 
@@ -39,10 +39,16 @@ describe("triage verb catalog", () => {
     ]);
   });
 
-  test("the bar's top level is defer, stash, kill; the rest sits behind more", () => {
-    expect(PRIMARY_VERBS.map((v) => v.id)).toEqual(["defer", "stash", "kill"]);
+  test("the bar's top level is defer, stash, close; the rest sits behind more", () => {
+    expect(PRIMARY_VERBS.map((v) => v.id)).toEqual(["defer", "stash", "close"]);
     expect([...PRIMARY_VERBS, ...SECONDARY_VERBS].length).toBe(TRIAGE_VERBS.length);
     for (const v of SECONDARY_VERBS) expect(PRIMARY_VERBS).not.toContain(v);
+  });
+
+  test("Close is everyday, not destructive: it wears no red, and its blurb is short", () => {
+    const close = TRIAGE_VERBS.find((v) => v.id === "close")!;
+    expect(`${close.hover} ${close.text} ${close.bg}`).not.toContain("sol-red");
+    expect(close.blurb.length).toBeLessThanOrEqual(60);
   });
 
   test("every verb carries a label, a past tense, and a blurb", () => {

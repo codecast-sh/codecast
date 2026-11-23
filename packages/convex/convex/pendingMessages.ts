@@ -1,3 +1,4 @@
+import { isClosedSession } from "@codecast/shared/contracts";
 import { UNCONFIRMED_DELIVERY_REASON, isReservedDevice } from "@codecast/shared/contracts";
 import { noteScreenRecordingSent } from "./lib/screenRecordingSent";
 import { steeringOwnerFor, suggestFromTeammate } from "./teamSuggestions";
@@ -2282,7 +2283,7 @@ export async function notifyStuckSend(
   const senderConv = await ctx.db.get(msg.from_conversation_id);
   // A sender the user killed has nobody to read the receipt, and queuing it would revive the
   // killed agent just to tell it about an old send (enqueue clears the kill).
-  if (!senderConv || senderConv.inbox_killed_at || senderConv.status === "completed") {
+  if (!senderConv || senderConv.inbox_killed_at || isClosedSession(senderConv) || senderConv.status === "completed") {
     // Sender's session is gone or stopped — nowhere to report; just stop re-evaluating this row.
     await ctx.db.patch(msg._id, { sender_notified_at: Date.now() });
     if (giveUp) await patchPendingMessageStatus(ctx, msg, { status: "cancelled" as const });

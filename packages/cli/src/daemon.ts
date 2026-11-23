@@ -17,7 +17,7 @@ import { pendingMessageFinished, pendingMessageOutcome, prepareTmuxDelivery, rec
 import { ACTIVE_AGENT_STATUSES, AGENT_CLIENTS, LOCAL_AGENT_CLIENTS, RESUME_BURST_SPACING_MS, CODEX_EFFORT_LEVELS, DECLARED_VERDICT_STATUSES, HEARTBEAT_FLUSH_INTERVAL_MS, MID_TURN_AGENT_STATUSES, SETTLE_VERDICT_STATUSES, SNIPPET_CATALOG, STABLE_ENV_CONVERSATION_ID, STABLE_ENV_EXCLUDE, STABLE_ENV_MODE, agentForksNatively, agentReconstitutes, authorizesTeardown, CLOUD_SESSION_SOURCES, cloudSessionSyncOn, classifyApiErrorBanner, isCloudAgentActionName, confineToOwningDevice, findModelOption, fromConvexAgentType, modelOptionKey, isClaudeAutoContinueLine, isCodexSafetyError, isLocalCommandLine, isRecoveryContinueClientId, type ApiErrorBannerKind, isMachineDeliveredMessage, isValidPaneTarget, isValidBrowserStreamKey, isMachineSetting, MACHINE_SETTINGS, machineSettingValues, snippetBySlug, verdictFromProbe, worktreeOfPath, localAgentClient, isHostedAgentType } from "@codecast/shared/contracts";
 import { CLOUD_START_RUN_MS, canonicalSlashCommand, codePasteSignInUrl, deviceCodePrompt, isHomeDirectoryPath, stampDeliveryId, withoutDeliveryId } from "@codecast/shared/contracts";
 import { DELIVERY_FAILED_SUBTYPE, formatDeliveryFailedNotice } from "@codecast/shared/contracts/deliveryFailed";
-import { materializeFileTags } from "@codecast/shared/contracts";
+import { isClosedSession, materializeFileTags } from "@codecast/shared/contracts";
 import { downloadAttachedFile } from "./attachedFileDownload.js";
 import { mapLimit } from "@codecast/shared/async";
 import { holdConversationForPrompt, isForcedPastDialog, promptHoldRemainingMs, releasePromptHold, setForcedPastDialog, setPendingRedrive } from "./pendingPromptHold.js";
@@ -21441,7 +21441,7 @@ async function rehydratePersistedAppServerThreads(requestedConversations: Readon
           service.getConversationOwnerInfo(conversationId),
         ]);
         if (!lifecycle?.hideStateKnown || !owner) throw new Error("Codex recovery is waiting to verify the conversation owner and lifecycle");
-        if (lifecycle.inboxKilledAt || lifecycle.status === "completed" || owner.ownerDeviceId !== deviceId()) {
+        if (lifecycle.inboxKilledAt || lifecycle.closed || lifecycle.status === "completed" || owner.ownerDeviceId !== deviceId()) {
           forgetPersistedAppServerConversation(conversationId);
           continue;
         }
@@ -23591,7 +23591,9 @@ async function reapIdleOrphanTerminals(): Promise<void> {
       resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
     });
     if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
-    const gcWorktree = cand.kind === "stamped" && !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
+    // A closed session keeps its worktree: it wakes into its own folder.
+    const closed = !!lifecycle && isClosedSession({ inbox_closed_at: lifecycle.inboxClosedAt, inbox_dismissed_at: lifecycle.inboxDismissedAt, inbox_killed_at: lifecycle.inboxKilledAt });
+    const gcWorktree = cand.kind === "stamped" && !closed && !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
     if (await reapOneTerminal(sessionId, cand.tmux, convId, verdict.idleHours, { gcWorktree })) reaped++;
     else skips.push("busy-at-kill");
   }
@@ -24570,7 +24572,12 @@ async function heartbeatHealthCheck(sessionId: string, reverse?: Readonly<Record
 // status=completed with inbox_killed_at stamped, resurrected on every pass).
 // The verdict is this pure function; "killed" and "completed" are equivalent
 // here, since killSession stamps both and a completed conversation is finished
-// either way.
+// either way. A CLOSED conversation (the person's Close, shared
+// isClosedSession) is not retired, but it is not to come back on its own
+// either; the server reports `closed` only while no message waits for it, so a
+// delivery is never held back, and a message or trigger reaching it un-hides it.
+// Other dismissals (bulk tidy, a linked child) are not closes and stay
+// resumable, as they always were.
 export function isConversationRetired(
   lifecycle: ConversationLifecycle | null | undefined,
   opts: { trustStatusFallback: boolean },
@@ -24587,7 +24594,7 @@ export function isConversationRetired(
   // Every other path (delivery, warm pool, resume repair) requires the real
   // conversation-id-resolved query and otherwise proceeds.
   if (!lifecycle.hideStateKnown && !opts.trustStatusFallback) return false;
-  return !!lifecycle.inboxKilledAt || lifecycle.status === "completed";
+  return !!lifecycle.inboxKilledAt || !!lifecycle.closed || lifecycle.status === "completed";
 }
 
 export type ResumeOptions = {

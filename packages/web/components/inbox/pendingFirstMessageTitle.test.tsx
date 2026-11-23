@@ -72,7 +72,7 @@ const cardText = (id: string) => renderToStaticMarkup(
   <MemoryRouter>
     <ConvexProvider client={convex}>
       <IdentityPrefsOverride.Provider value={identityPrefsOf(UI)}>
-        <SessionCard session={sessions[id]} isActive={false} globalIndex={0} onSelect={noop} onDismiss={noop} onStash={noop} onPin={noop} sessionLabel={null} isFavorite={false} />
+        <SessionCard session={sessions[id]} isActive={false} globalIndex={0} onSelect={noop} onClose={noop} onPin={noop} sessionLabel={null} isFavorite={false} />
       </IdentityPrefsOverride.Provider>
     </ConvexProvider>
   </MemoryRouter>,

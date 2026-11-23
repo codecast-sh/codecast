@@ -50,8 +50,7 @@ const cardProps: SessionCardViewProps = {
   anchorIdentity: null,
   onSelect: noop,
   onPin: noop,
-  onDismiss: noop,
-  onStash: noop,
+  onClose: noop,
 };
 
 const render = (el: React.ReactElement) => renderToStaticMarkup(<MemoryRouter>{el}</MemoryRouter>);

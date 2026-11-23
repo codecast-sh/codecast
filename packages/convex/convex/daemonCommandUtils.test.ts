@@ -54,6 +54,21 @@ describe("resumeConversationSession", () => {
   };
   const ctxWith = (tables: Record<string, any[]>) => ({ db: makeFakeDb(tables) }) as any;
 
+  test("a person's resume of a closed session ends the close, so no machine reader treats it as torn down", async () => {
+    const closed = { ...conv, inbox_dismissed_at: 5, inbox_closed_at: 5 };
+    const tables = { conversations: [closed], daemon_commands: [], pending_messages: [] };
+    const ctx = ctxWith(tables);
+    const got = await resumeConversationSession(ctx, RUNNER, "conversations_1" as any);
+    expect("command_id" in got).toBe(true);
+    expect(tables.conversations[0].inbox_dismissed_at).toBeUndefined();
+  });
+
+  test("a resume leaves a dismissal that is not a close alone", async () => {
+    const tables = { conversations: [{ ...conv, inbox_dismissed_at: 5 }], daemon_commands: [], pending_messages: [] };
+    await resumeConversationSession(ctxWith(tables), RUNNER, "conversations_1" as any);
+    expect(tables.conversations[0].inbox_dismissed_at).toBe(5);
+  });
+
   test("the second-party owner may resume, and the command is addressed to the runner", async () => {
     const ctx = ctxWith({ conversations: [conv], daemon_commands: [], pending_messages: [] });
     const got = await resumeConversationSession(ctx, OWNER, "conversations_1" as any);

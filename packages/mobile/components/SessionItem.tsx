@@ -336,13 +336,13 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
 // only the rows whose props changed, and a heartbeat alone changes none
 // (lib/sessionRowEqual). The callbacks take the row's id (or the
 // row) so the list passes the same functions to every row.
-export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onDismiss, onLongPress, roleSessions, onOpenRole, reviveAt }: {
+export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt }: {
   session: SessionData;
   isUnread?: boolean;
   /** The row is the conversation on screen (a conversation's inbox panel). */
   selected?: boolean;
   onPress: (conversationId: string) => void;
-  onDismiss: (conversationId: string) => void;
+  onClose: (conversationId: string) => void;
   onLongPress?: (session: SessionData) => void;
   roleSessions?: number;
   /** Opens the role the row belongs to, by its short id. */
@@ -362,8 +362,8 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
 
   // Keep the latest action callbacks reachable from the once-created responder.
   const id = session._id;
-  const cb = useRef({ onDismiss: () => onDismiss(id) });
-  cb.current = { onDismiss: () => onDismiss(id) };
+  const cb = useRef({ onClose: () => onClose(id) });
+  cb.current = { onClose: () => onClose(id) };
   const press = useCallback(() => { if (!didSwipe.current) onPress(id); }, [onPress, id]);
   const longPress = useMemo(() => (onLongPress ? () => onLongPress(session) : undefined), [onLongPress, session]);
   const roleShortId = session.role?.short_id;
@@ -392,8 +392,8 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
         useNativeDriver: true,
       }).start(() => {
         if (PERF_PROBE) probeGesture();
-        cb.current.onDismiss();
-        // A stashed row usually leaves the list and unmounts. One that stays (a
+        cb.current.onClose();
+        // A closed row usually leaves the list and unmounts. One that stays (a
         // question still open keeps it under Decisions) slides back rather than
         // leaving its swipe background in the list.
         setTimeout(() => { if (mounted.current) springBack(); }, 350);
@@ -478,8 +478,8 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
   return (
     <RNView style={styles.swipeContainer}>
       <RNAnimated.View style={[styles.swipeBehind, { opacity: swipeBehindOpacity }]}>
-        <FontAwesome name="archive" size={16} color="#fff" />
-        <RNText style={styles.swipeBehindText}>Stash</RNText>
+        <FontAwesome name="times" size={16} color="#fff" />
+        <RNText style={styles.swipeBehindText}>Close</RNText>
       </RNAnimated.View>
       {panGesture ? (
         <gestureHandler.GestureDetector gesture={panGesture}>{card}</gestureHandler.GestureDetector>
@@ -492,14 +492,15 @@ export const styles = themedStyles((Theme) => StyleSheet.create({
   swipeContainer: {
     overflow: 'hidden',
   },
-  // Stash is set-aside (agent keeps running) — orange, not destructive red.
+  // Close is done looking at it (store closeSession: a turn in progress
+  // finishes, triggers stay) — neutral slate, not destructive red.
   swipeBehind: {
     position: 'absolute',
     top: 0,
     bottom: 0,
     right: 0,
     left: 0,
-    backgroundColor: Theme.orange,
+    backgroundColor: Theme.textDim,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',

@@ -93,8 +93,9 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, cascadeTakesDownRow, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
+import { closeFactsOf, closeSetsAside, nestedInFlightOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
 // Membership on this replica is the SAME selection the server scan runs.
@@ -818,6 +819,8 @@ export type InboxSession = {
   // send, Restart, undismiss) — see classifyWorkState in convex/inboxFilters.ts,
   // whose precedence the client predicates below mirror.
   inbox_killed_at?: number | null;
+  // A Close (shared isClosedSession): equal to inbox_dismissed_at while closed.
+  inbox_closed_at?: number | null;
   last_user_message?: string | null;
   // Newest image in the conversation (server-denormalized, see convex schema).
   // Presence doubles as "this session has images"; rendered as the inbox row
@@ -914,6 +917,9 @@ export type InboxSession = {
   is_workflow_sub?: boolean;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
+  // "workflow": a Workflow-tool run, inside this session's own agent process (a
+  // codecast flow run has station sessions of its own and reports back).
+  workflow_run_kind?: string | null;
   workflow_run_name?: string | null;
   workflow_run_agents_done?: number | null;
   workflow_run_agents_total?: number | null;
@@ -3690,14 +3696,19 @@ export function sectionHeaderCount(
 
 // The store-state subset the chokepoint reads. Structural (never the store
 // type itself) so tests and computeVisualOrder's narrowed state can call it.
+// The Closed bucket's paged history: kills (listKilledSessions) and closes
+// (listClosedSessions), each on its own cursor.
 export type KilledShelf = {
   ids: readonly string[];
   cursor: string | null;
-  /** True once the server reported the last page. */
+  closedCursor: string | null;
+  /** True once the server reported the last page of both. */
   complete: boolean;
+  killedDone: boolean;
+  closedDone: boolean;
   loading: boolean;
 };
-export const EMPTY_KILLED_SHELF: KilledShelf = { ids: [], cursor: null, complete: false, loading: false };
+export const EMPTY_KILLED_SHELF: KilledShelf = { ids: [], cursor: null, closedCursor: null, complete: false, killedDone: false, closedDone: false, loading: false };
 
 // How far back the Killed bucket lists kills from THIS replica's cache on its
 // own. A kill is a working-set nonmember on every replica (inWorkingSet mirrors
@@ -4346,7 +4357,7 @@ export function placeInboxRows(
   // Subagent children keep nesting under their parent as everywhere else.
   const listedDismissed = new Set(dismissed.map((s) => s._id));
   const listKilled = (s: InboxSession | undefined) => {
-    if (!s?.inbox_killed_at || listedDismissed.has(s._id) || isOrphanOrSubagent(s)) return;
+    if (!s || !(s.inbox_killed_at || isClosedSession(s)) || listedDismissed.has(s._id) || isOrphanOrSubagent(s)) return;
     listedDismissed.add(s._id);
     dismissed.push(s);
   };
@@ -6499,6 +6510,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   killSession: (id: string) => void;
   deleteSession: (id: string) => void;
   killSessions: (ids: string[]) => void;
+  closeSession: (id: string) => { aside: string[] } | undefined;
+  closeSessions: (ids: string[]) => { aside: string[] } | undefined;
   markSessionsDismissed: (ids: string[]) => void;
   markBlockedAcknowledged: (ids: string[]) => void;
   markBlockedReviveRequested: (ids: string[]) => void;
@@ -9188,6 +9201,10 @@ function hideSessionInDraft(
   mode: "stash" | "kill",
   now: number = Date.now(),
   stashHidden = false,
+  // A close: the cascade takes only the children the server's would
+  // (shared cascadeTakesDownRow), so an already-closed or killed child is
+  // neither re-stamped nor torn down again.
+  close = false,
 ): HideResult {
   const field = mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
   const stashHiddenValue = mode === "stash" && stashHidden ? true : null;
@@ -9207,7 +9224,9 @@ function hideSessionInDraft(
   // brings them back with it. A kill still takes every child down.
   const childIds = mode === "stash"
     ? groupIds.filter((cid) => !isOrphanOrSubagent(draft.sessions[cid]))
-    : groupIds;
+    : close
+      ? groupIds.filter((cid) => cascadeTakesDownRow(draft.sessions[cid], field, { forceKill: true, close: true, queued: !!draft.sessions[cid]?.has_pending }))
+      : groupIds;
   const allIds = [id, ...childIds];
   // The viewer. A session whose user_id isn't ours was injected into this cache
   // by viewing/searching a TEAMMATE's session — we can't durably hide it.
@@ -9584,6 +9603,49 @@ function writeCharacterInDraft(draft: Draft, id: string, next: { avatar?: string
   }
 }
 
+// Shared body of closeSession/closeSessions: a session in flight (shared
+// closeInFlightReason) is set aside like a stash and keeps running; every
+// other one is hidden like a kill, with inbox_closed_at written equal to its
+// dismissed stamp, which is what makes it a close on any rail (dispatch.ts):
+// the agent stops but keeps its triggers and queue, and a role's own session
+// closes without the retire question. The ids set aside are the action's
+// result, which the server side effect reads for a teammate's row it can only
+// hide for this viewer.
+function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
+  const now = Date.now();
+  // A lead any member of whose nested group is in flight is set aside whole: a
+  // close of it would take the group down with it (hideSessionInDraft and the
+  // server's cascade), killing that member's turn or wake.
+  const rows = Object.values(draft.sessions) as InboxSession[];
+  const aside = ids.filter((id) => {
+    const row = draft.sessions[id] ?? draft.conversations[id];
+    return !!row && closeSetsAside(closeFactsOf(row, 0, now, convHasPendingSend(draft.pendingMessages?.[id], now), nestedInFlightOf(rows, id, now)));
+  });
+  const merge = (mode: "stash" | "kill", list: string[]) => {
+    const merged: HideResult = { hidden: [], forgotten: [], writes: {}, ts: now };
+    for (const id of list) {
+      const r = hideSessionInDraft(draft, id, mode, now, false, mode === "kill");
+      merged.hidden.push(...r.hidden);
+      merged.forgotten.push(...r.forgotten);
+      Object.assign(merged.writes, r.writes);
+      if (mode === "kill") {
+        for (const sid of r.hidden) {
+          if (draft.sessions[sid]) draft.sessions[sid].inbox_closed_at = now;
+          if (draft.conversations[sid]) draft.conversations[sid].inbox_closed_at = now;
+          // Sibling windows see a close as a close (gestureBridge BRIDGED_FIELDS).
+          if (r.writes[sid]) r.writes[sid].inbox_closed_at = now;
+        }
+      }
+    }
+    announceHide(draft, mode, merged);
+  };
+  if (aside.length < ids.length) soundKill();
+  else soundDismiss();
+  merge("stash", aside);
+  merge("kill", ids.filter((id) => !aside.includes(id)));
+  return { aside };
+}
+
 function announceHide(
   draft: any,
   mode: "stash" | "kill",
@@ -9779,7 +9841,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
     // forget broadcast — see gestureBridge.ts.
     if (msg.forget?.length) forget(msg.forget, msg.ts);
     const field = msg.mode === "kill" ? "inbox_dismissed_at" : "inbox_stashed_at";
-    const constrained = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_pinned_at"];
+    const constrained = ["inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden", "inbox_closed_at", "inbox_pinned_at"];
     for (const sid of msg.ids) {
       const wrote = msg.writes?.[sid];
       if (wrote) {
@@ -11164,12 +11226,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // transition (dispatch.applyPatches sees inbox_dismissed_at flip), so this
   // action only has to move the rows; every kill path gets the teardown
   // without remembering to ask for it. (The persisted field keeps its
-  // historical name inbox_dismissed_at and the UI calls the bucket "Killed";
+  // historical name inbox_dismissed_at and the UI calls the bucket "Closed";
   // the server's kill transition additionally stamps inbox_killed_at, which is
   // what actually marks the row retired.)
   killSession: action(function (this: Draft, id: string) {
     soundKill();
     announceHide(this, "kill", hideSessionInDraft(this, id, "kill"));
+  }),
+
+  // Close = done looking at it (closeInDraft): never cancels a wake and never
+  // cuts a turn off. Kill stays the retirement, in the card's menu.
+  closeSession: action(function (this: Draft, id: string) {
+    return closeInDraft(this, [id]);
+  }),
+  closeSessions: action(function (this: Draft, ids: string[]) {
+    if (ids.length === 0) return;
+    return closeInDraft(this, ids);
   }),
 
   // Delete for good (sessionDelete.deleteSession, by action name): the server

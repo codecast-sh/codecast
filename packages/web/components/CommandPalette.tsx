@@ -116,7 +116,7 @@ import type { WorkbenchSnapshot } from "../store/workbench";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../store/undoActions";
+import { animatedCloseSessions, animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../store/undoActions";
 import { gestureToast } from "../store/undoStack";
 import { counted } from "../store/undo/labels";
 
@@ -218,7 +218,9 @@ import { Button } from "./ui/button";
 const api = _api as any;
 import { SESSION_SNOOZE_CHOICES, sessionSnoozeUntil, type SessionSnoozeKey } from "@codecast/shared/contracts";
 import { hoverFocus } from "../shortcuts/focusSource";
-import { SwitchReview } from "./consequential/ConsequentialSwitch";
+import { SwitchReview, type SwitchLedger } from "./consequential/ConsequentialSwitch";
+import { killReviewOf } from "./consequential/killReview";
+import type { TaskRow } from "./triggerTasks";
 import { permanentDeleteLedger, regulatedTeam, SESSION_REACHES } from "./consequential/deletionLedgers";
 import { teamMembersOf } from "../lib/activeTeam";
 
@@ -1596,6 +1598,9 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
   // Kill from the palette says what schedules died with the session, same as
   // the sidebar kill button (the webList subscription inside is deduped).
   const { killManyWithNotice } = useTriggerKillNotice();
+  // A kill that would cut a turn off or cancel what the session waits on asks
+  // first, the same review the card menu shows (killReviewOf).
+  const [killReview, setKillReview] = useState<{ ids: string[]; ledger: SwitchLedger } | null>(null);
   const { user: currentUser } = useCurrentUser();
   const teamMembers = useInboxStore((s) => teamMembersOf(s).length > 0 ? teamMembersOf(s) : undefined);
   const openDm = useOpenDm();
@@ -2313,7 +2318,12 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       // A kill waits on the cards' collapse and records its own entry then
       // (one undo, one sound, one notice), so it is never wrapped in a group
       // that closes before it lands.
-      else if (actionKey === "session_kill") killManyWithNotice(ids);
+      else if (actionKey === "session_close") void animatedCloseSessions(ids);
+      else if (actionKey === "session_kill") {
+        const ledger = killReviewOf(targets as InboxSession[], Object.values(state.agentTasks ?? {}) as TaskRow[]);
+        if (ledger) { setKillReview({ ids, ledger }); return; }
+        killManyWithNotice(ids);
+      }
       else if (actionKey === "session_pin") toggleSessionsLikeFirst(ids, "pin");
       else if (actionKey === "session_favorite") toggleSessionsLikeFirst(ids, "favorite");
       else {
@@ -3662,8 +3672,21 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     </CommandPrimitive>
   );
 
+  const killDialog = killReview && (
+    <SwitchReview
+      ledger={killReview.ledger}
+      onClose={() => setKillReview(null)}
+      onConfirm={() => {
+        killManyWithNotice(killReview.ids);
+        if (killReview.ids.length > 1) useInboxSelection.getState().clear();
+        setKillReview(null);
+        closePalette();
+      }}
+    />
+  );
+
   if (standalone) {
-    return paletteContent;
+    return <>{paletteContent}{killDialog}</>;
   }
 
   if (!open) return null;
@@ -3677,6 +3700,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       <div className="absolute inset-0 flex items-start justify-center pt-[min(20vh,160px)]">
         {paletteContent}
       </div>
+      {killDialog}
     </div>
   );
 }

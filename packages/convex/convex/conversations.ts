@@ -1,4 +1,5 @@
 import { refuseSeatKill } from "./lib/seatKill";
+import { hasDeliverableMessage } from "./lib/closeAside";
 import { sanitizeConvexObjectKeys } from "./lib/convexFieldNames";
 import { noteWriteCause } from "./lifecycleEvents";
 import { isClaudeSubagentSessionId } from "./lib/claudeSubagentSession";
@@ -45,6 +46,7 @@ import {
   BLOCKED_BANNER_KINDS,
   placeProjectableRow,
   deriveLiveAt,
+  isClosedSession,
   trustedStatusAt,
   rowLiveDeadlines,
   childAskingAt,
@@ -6906,6 +6908,35 @@ export const listKilledSessions = query({
   },
 });
 
+// The Closed shelf's other half: the user's closes newest-first, paged with
+// listKilledSessions from the Closed bucket's "Load older". A closed row is in
+// the inbox scan (it is not killed), but only inside the scan's recency window;
+// this serves the older ones. A row whose close was later undone keeps a stale
+// inbox_closed_at, which isClosedSession reads as not closed, so it is skipped.
+export const listClosedSessions = query({
+  args: { paginationOpts: paginationOptsValidator },
+  handler: async (ctx, args) => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return { page: [], isDone: true, continueCursor: "" };
+    const now = Date.now();
+    const result = await ctx.db
+      .query("conversations")
+      .withIndex("by_user_closed", (q) => q.eq("user_id", userId).gt("inbox_closed_at", 0))
+      .order("desc")
+      .paginate(args.paginationOpts);
+    const getDoc = makeMemoGet(ctx);
+    const rows: any[] = [];
+    for (const conv of result.page) {
+      if (!isClosedSession(conv) || isOrphanOrSubagent(conv) || isRunLog(conv)) continue;
+      const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, undefined, getDoc);
+      await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
+      stripInboxLiveness(row);
+      rows.push(row);
+    }
+    return { page: rows, isDone: result.isDone, continueCursor: result.continueCursor };
+  },
+});
+
 export const getMessageFeed = query({
   args: {
     filter: v.union(v.literal("my"), v.literal("team")),
@@ -8665,6 +8696,8 @@ async function enrichInboxSessionRow(
   // already in hand — zero extra reads): identity, progress, and the latest
   // running agent's "what it's doing" line.
   let workflow_run_status: string | null = null;
+  // "workflow" for a Workflow-tool run, which runs inside this session's own agent process.
+  let workflow_run_kind: string | null = null;
   let workflow_run_name: string | null = null;
   let workflow_run_agents_done: number | null = null;
   let workflow_run_agents_total: number | null = null;
@@ -8674,6 +8707,7 @@ async function enrichInboxSessionRow(
     const run = await getDoc(conv.workflow_run_id);
     if (run) {
       workflow_run_status = run.status;
+      workflow_run_kind = run.run_kind ?? null;
       workflow_run_name = run.workflow_name ?? null;
       const nodes = run.node_statuses ?? [];
       workflow_run_agents_total = run.agent_count ?? (nodes.length || null);
@@ -8781,6 +8815,7 @@ async function enrichInboxSessionRow(
     // The retired marker: classifyWorkState uses it to keep a killed row out of
     // the Working bucket no matter what stale flags it still carries.
     inbox_killed_at: conv.inbox_killed_at ?? null,
+    inbox_closed_at: conv.inbox_closed_at ?? null,
     inbox_adopted_at: conv.inbox_adopted_at ?? null,
     // The daemon's own status: every reader derives what it means at its own
     // clock (trustedStatusAt), since a verdict does not replay (ct-56054).
@@ -8837,6 +8872,7 @@ async function enrichInboxSessionRow(
     is_workflow_sub: conv.is_workflow_sub || false,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
+    workflow_run_kind,
     workflow_run_name,
     flow_name,
     flow_run_id,
@@ -8994,6 +9030,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     inbox_snoozed_until: child.inbox_snoozed_until ?? null,
     inbox_stash_hidden: child.inbox_stash_hidden ?? null,
     inbox_killed_at: child.inbox_killed_at ?? null,
+    inbox_closed_at: child.inbox_closed_at ?? null,
     inbox_adopted_at: child.inbox_adopted_at ?? null,
     // The child's own rest verdict, carried like every other stamp above (the
     // is_deferred/is_pinned twins over it are hardcoded because a child never
@@ -9042,6 +9079,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     is_workflow_sub: child.is_workflow_sub || false,
     is_workflow_primary: false,
     workflow_run_status: null,
+    workflow_run_kind: null,
     workflow_run_name: null,
     workflow_run_agents_done: null,
     workflow_run_agents_total: null,
@@ -10234,7 +10272,7 @@ export async function buildAskingParents(
     if (alreadyAsking?.has(pid)) { asking.add(pid); continue; }
     for (const c of children) {
       const cid = c._id.toString();
-      if (c.inbox_killed_at) continue;
+      if (c.inbox_killed_at || isClosedSession(c)) continue;
       // A child's own pending `cast decide` (a spawned subagent worker posts
       // on ITS session) lifts the parent exactly as its open prompt does.
       if (alreadyAsking?.has(cid)) { asking.add(pid); break; }
@@ -10267,7 +10305,7 @@ export async function buildAskingParents(
   const askingAt = (pid: string, t: number): boolean => {
     if (alreadyAsking?.has(pid)) return true;
     return (childrenByParent.get(pid) ?? []).some((c) => {
-      if (c.inbox_killed_at || !pooledAt(c._id.toString(), t)) return false;
+      if (c.inbox_killed_at || isClosedSession(c) || !pooledAt(c._id.toString(), t)) return false;
       if (alreadyAsking?.has(c._id.toString())) return true;
       const ask = childAskAt(c, t);
       // A poll this execution never read (its parent resolved first) is not
@@ -11574,6 +11612,10 @@ export const markSessionCompleted = mutation({
     // standing member that goes dormant is never flipped to "completed"; it is
     // retired only by decommissionAnchor, which clears `persistent` first.
     if (conv.persistent) return;
+    // A closed session stopped because the person closed it, not because it
+    // ended: completing it would retire it (cast send refuses a completed
+    // session, a role drops it, a worker's report to it is dropped).
+    if (isClosedSession(conv)) return;
     // A move in flight stopped this agent itself (the runner's quiesce): the
     // session is moving, not ending. Completing it here left every session
     // whose move then failed marked ended on its own machine.
@@ -11667,6 +11709,7 @@ export const getConversationLifecycle = query({
       inbox_killed_at: conv.inbox_killed_at ?? null,
       inbox_stashed_at: conv.inbox_stashed_at ?? null,
       inbox_dismissed_at: conv.inbox_dismissed_at ?? null,
+      inbox_closed_at: conv.inbox_closed_at ?? null,
       inbox_pinned_at: conv.inbox_pinned_at ?? null,
       // Undelivered work is waiting for this session. The hibernation pass
       // refuses to park such a session, because parking it would trade a live
@@ -11676,6 +11719,10 @@ export const getConversationLifecycle = query({
       // an in-place switch away from Codex (jx7dj4aq: divider landed, Codex
       // still answered). Null when the row has no stamp.
       agent_type: conv.agent_type ?? null,
+      // The person closed it (shared isClosedSession): the daemon does not
+      // bring it back on its own. A message still waiting for it is a wake, so
+      // a close never holds back its delivery, whatever has_pending_messages says.
+      closed: isClosedSession(conv) && !(await hasDeliverableMessage(ctx, conv._id)),
     };
   },
 });

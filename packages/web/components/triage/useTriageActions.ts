@@ -5,11 +5,11 @@ import { useInboxStore } from "../../store/inboxStore";
 import type { UserRest } from "@codecast/shared/contracts";
 import { overlayConversationId } from "../../store/workspace";
 import {
+  animatedCloseSessions,
   animatedHideSession,
   type HideSessionOpts,
   animatedSetSessionRest,
 } from "../../store/undoActions";
-import { useTriggerKillNotice } from "../../hooks/useTriggerKillNotice";
 import { checkMilestone } from "../../tips/useTips";
 import { noteTriageKeyUse } from "./graduation";
 
@@ -34,12 +34,10 @@ export function useTriageActions(isOnInboxPage: boolean) {
     return true;
   }, []);
 
-  // Shared body of stash/kill; the only difference is the mode. The kill
-  // itself happens SERVER-side on the hide data transition
-  // (dispatch.applyPatches), so neither caller asks for it. The kill routes
-  // through the notice hook so it names any schedules the kill cancels.
-  const { killWithNotice } = useTriggerKillNotice();
-  const hide = useCallback((id: string, mode: "stash" | "kill", source: TriageSource = "key", opts?: HideSessionOpts) => {
+  // Shared body of stash/close; the only difference is the mode. The teardown
+  // a close asks for happens SERVER-side on the hide data transition
+  // (dispatch.applyPatches), so neither caller asks for it.
+  const hide = useCallback((id: string, mode: "stash" | "close", source: TriageSource = "key", opts?: HideSessionOpts) => {
     const store = useInboxStore.getState();
     if (mode === "stash") checkMilestone("m-first-stash");
     if (!isOnInboxPage) {
@@ -49,11 +47,11 @@ export function useTriageActions(isOnInboxPage: boolean) {
         ?? ordered.find((s) => s._id !== id);
       if (next) store.selectPanelSession(next._id);
     }
-    if (mode === "kill") killWithNotice(id);
+    if (mode === "close") void animatedCloseSessions([id]);
     else animatedHideSession(id, mode, opts);
     closeOverlayIfCurrent(id);
     if (source === "key") noteTriageKeyUse();
-  }, [isOnInboxPage, killWithNotice, closeOverlayIfCurrent]);
+  }, [isOnInboxPage, closeOverlayIfCurrent]);
 
   // Defer and the rest verdicts (dormant / done / needs input) share one
   // shape: stamp the row, then advance the selection to the next row in
