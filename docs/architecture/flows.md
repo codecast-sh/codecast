@@ -762,7 +762,7 @@ the route it took, red only where it stopped.
   station. A stage reads Person only when a person is asked on its passing
   route, never for a card a segment reaches on a side route. A segment stage
   with more than one step, or a route off them, shows its inside, read from the
-  graph (`insideOf` in `lib/ship/journey.ts`): under its name a quiet line of
+  graph (`insideOf` in `lib/ship/segmentInside.ts`): under its name a quiet line of
   its passing steps ("PR · CI + Review · Merge"), and a press on it opens them
   in place down a spine that ends at the segment's end ("Merged"). Each route
   off a step hangs under that step, labelled by its edge's label, through the

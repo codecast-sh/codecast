@@ -9,7 +9,10 @@
 // record: "You" only for an open card the viewer may answer, landed only with a
 // merged sha on the run. Pure, with relative imports only: the web's Ship panel
 // and run card, the inbox card and the phone's run card all read a run here.
-import { edgeWhen, foldFlow, passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
+import { foldFlow, passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
+import { asksIfOf, insideOf, insideOnRun, type RouteBase, type StageInside } from "./segmentInside";
+
+export { insideWords, type InsideRoute, type StageInside } from "./segmentInside";
 
 /** `you`: an open card on the stage the viewer may answer; `person`: a person answers there, the viewer or not. */
 export type StageWho = "session" | "agent" | "you" | "person" | "auto";
@@ -40,24 +43,6 @@ export type JourneyStage = {
   branches?: JourneyStage[];
   /** A segment's own steps, when it has more than one or routes off them. */
   inside?: StageInside;
-};
-
-/** A segment stage's inside, read from its graph: the stages a passing run takes through it (a fan-out holding its
- *  branches), each route off them, and the end the passing path reaches. */
-export type StageInside = { path: JourneyStage[]; routes: InsideRoute[]; end: string | null };
-
-/**
- * A way a segment turns off its passing path: the path step it leaves (`from`), its edge's label, the steps it runs, and
- * where it ends: back on the path at a step, back to the session, or stopped. `asks`: a person answers on it, `when` what
- * makes a run ask (asks_if).
- */
-export type InsideRoute = {
-  from: string;
-  label: string | null;
-  steps: Array<{ id: string; label: string; who: StageWho; state: StageState }>;
-  to: { kind: "step"; id: string; label: string } | { kind: "session" } | { kind: "stop" };
-  asks: { when: string | null } | null;
-  state: StageState;
 };
 
 export type StageStep = { id: string; label: string; status: string; visits: number | null; said: string | null; session: { id: string; title: string | null } | null; at: number | null };
@@ -165,15 +150,8 @@ export const gateOpen = (run: Pick<JourneyRun, "status" | "gate_decision_id" | "
 /** The runner's own landing steps (runner.ts): a run that passes one has landed its change. */
 const LANDING_STEP = /(^|__)(shipped|landed)$/;
 
-type RouteBase = Omit<InsideRoute, "steps" | "state"> & { steps: Array<{ id: string; label: string; who: StageWho }> };
-type Base = Omit<JourneyStage, "state" | "round" | "steps" | "branches" | "inside"> & {
-  members: string[];
-  kind: string;
-  branches?: Base[];
-  /** Bookkeeping steps the stage holds after its own work (its verdicts, the sha it merged). */
-  tail?: string[];
-  inside?: { path: Base[]; routes: RouteBase[]; end: string | null };
-};
+/** `tail`: bookkeeping steps the stage holds after its own work (its verdicts, the sha it merged). */
+type Base = Omit<JourneyStage, "state" | "round" | "steps" | "branches" | "inside"> & { members: string[]; kind: string; branches?: Base[]; tail?: string[]; inside?: { path: Base[]; routes: RouteBase[]; end: string | null } };
 
 const isSubject = (n: FlowNodeIn | undefined) => n?.backend === "subject";
 const inGroup = (stageId: string, nodeId: string) => nodeId === stageId || nodeId.startsWith(`${stageId}${SEGMENT_SEP}`);
@@ -219,95 +197,6 @@ function passingSteps(graph: Graph, id: string): FlowNodeIn[] {
   return walked;
 }
 
-/** An edge whose condition compares two words the parser already wrote in (a segment's param): never taken when false. */
-const deadEdge = (e: FlowEdgeIn) =>
-  !/\bor\b/.test(e.condition ?? "") && [...(e.condition ?? "").matchAll(/"([^"]*)"\s*(!=|=)\s*"([^"]*)"/g)].some((m) => (m[1] === m[3]) === (m[2] === "!="));
-
-/** How a side route goes on from a step: by its condition alone (every route out is labelled), the passing edge first,
- *  then the step's default (no condition) before one that waits on a particular exit. */
-const routeRank = (e: FlowEdgeIn) => passScore({ condition: e.condition, label: /^\[\w+\]/.test(e.label ?? "") ? e.label : undefined }) * 2 + (e.condition ? 0 : 1);
-
-/** What makes a run ask at a person's step: its own `asks_if`, else that of the segment holding it, out to the flow's. */
-function asksIfOf(graph: Graph, id: string): string | null {
-  const parts = id.split(SEGMENT_SEP);
-  for (let i = parts.length; i > 0; i--) {
-    const said = graph.nodes.find((n) => n.id === parts.slice(0, i).join(SEGMENT_SEP))?.asks_if;
-    if (said) return said;
-  }
-  return null;
-}
-
-/** A segment's entry, as the start of its steps read as a flow of their own. */
-const ENTRY = "^";
-
-/**
- * A segment's inside, read from the graph: its steps as a flow of their own (its entry the start, a step with no way on
- * inside it an end), the stages a passing run takes through them, and every route off those stages that goes through a
- * step before it comes back to one, goes back to the session (an end the composing flow sends to a `backend=subject`
- * station) or stops. Undefined for a station that is no segment, or one whose inside is itself (one step, no route).
- */
-function insideOf(graph: Graph, id: string): Base["inside"] {
-  const pre = `${id}${SEGMENT_SEP}`;
-  const own = graph.nodes.filter((n) => n.id.startsWith(pre));
-  if (!own.length) return undefined;
-  const sub = (x: string) => (x === id ? ENTRY : x.slice(pre.length));
-  const full = (x: string) => `${pre}${x}`;
-  const edges = graph.edges.filter((e) => (e.from === id || e.from.startsWith(pre)) && e.to.startsWith(pre) && !deadEdge(e)).map((e) => ({ ...e, from: sub(e.from), to: sub(e.to) }));
-  const nodes: GraphNode[] = [{ id: ENTRY, label: "start", type: "start" }, ...own.map((n) => {
-    const s = sub(n.id);
-    // Its steps stand as a flow's own: the segment they belonged to is the flow now.
-    return { ...n, id: s, segment: undefined, segment_flow: undefined, segment_entry: own.some((x) => x.id.startsWith(`${n.id}${SEGMENT_SEP}`)), ...(n.type === "exit" || !edges.some((e) => e.from === s) ? { type: "exit" } : {}) };
-  })];
-  const g: Graph = { nodes, edges };
-  const path = planOf(g, false, true);
-  const byId = new Map(nodes.map((n) => [n.id, n]));
-  const ended = (x: string) => byId.get(x)?.type === "exit";
-  const stageAt = new Map<string, number>();
-  path.forEach((s, i) => s.members.forEach((m) => stageAt.set(m, i)));
-  const outOf = (x: string) => edges.filter((e) => segmentTopOf(e.from) === x && segmentTopOf(e.to) !== x).sort((a, b) => routeRank(b) - routeRank(a));
-  const routes: RouteBase[] = [];
-  for (const e of edges) {
-    const from = stageAt.get(segmentTopOf(e.from));
-    const first = segmentTopOf(e.to);
-    const back = stageAt.get(first);
-    // Only a turn off the path: never along it, never straight into an end.
-    if (from === undefined || ended(first) || (back !== undefined && back >= from)) continue;
-    const steps: string[] = [];
-    let to: InsideRoute["to"] = { kind: "stop" };
-    for (let cur: string | undefined = first; cur && !steps.includes(cur); cur = outOf(cur).map((x) => segmentTopOf(x.to))[0]) {
-      const on = stageAt.get(cur);
-      if (on !== undefined) { to = { kind: "step", id: full(path[on].id), label: path[on].label }; break; }
-      if (ended(cur)) {
-        const end = full(cur);
-        if (graph.edges.some((x) => x.from === end && isSubject(graph.nodes.find((n) => n.id === x.to)))) to = { kind: "session" };
-        break;
-      }
-      steps.push(cur);
-    }
-    const label = e.label ? edgeWhen(e) : null;
-    const fromId = full(path[from].id);
-    if (routes.some((r) => r.from === fromId && r.label === label && r.steps[0]?.id === (steps[0] ? full(steps[0]) : undefined))) continue;
-    const person = steps.find((s) => whoOf(g, [s]) === "person");
-    const gate = person ? passingSteps(g, person).find((n) => n.type === "human") : undefined;
-    routes.push({
-      from: fromId,
-      label,
-      steps: steps.map((s) => ({ id: full(s), label: byId.get(s)?.label ?? s, who: whoOf(g, [s]) })),
-      to,
-      asks: person ? { when: gate ? asksIfOf(graph, full(gate.id)) : null } : null,
-    });
-  }
-  if (path.length < 2 && !routes.length) return undefined;
-  // The end the passing path reaches from its last stage.
-  const last = path[path.length - 1];
-  const endId = edges.filter((e) => last?.members.includes(e.from) && ended(e.to)).sort((a, b) => passScore(b) - passScore(a))[0]?.to;
-  const lift = (b: Base): Base => ({ ...b, id: full(b.id), members: b.members.map(full), ...(b.tail ? { tail: b.tail.map(full) } : {}), ...(b.branches ? { branches: b.branches.map(lift) } : {}) });
-  return { path: path.map(lift), routes, end: endId ? byId.get(endId)?.label ?? null : null };
-}
-
-/** A segment's passing path in a few words: "PR · CI + Review · Merge". */
-export const insideWords = (inside: Pick<StageInside, "path">) => inside.path.map((s) => (s.branches ? s.branches.map((b) => b.label).join(" + ") : s.label)).join(" · ");
-
 /** The flow's stages on its main path, in the order a passing run reaches them, then Deploy and Live. `nested`: a
  *  segment's own steps, whose segments read as one step each. */
 function planOf(graph: Graph, withTargets = false, nested = false): Base[] {
@@ -347,7 +236,7 @@ function planOf(graph: Graph, withTargets = false, nested = false): Base[] {
   const stageOf = (members: string[], label: string): Base => {
     const node = byId.get(members[0]);
     const deploy = members.length === 1 && isDeployStage(node);
-    const inside = !nested && members.length === 1 ? insideOf(graph, members[0]) : undefined;
+    const inside = !nested && members.length === 1 ? insideOf(graph, members[0], INSIDE_READERS) : undefined;
     return {
       ...(inside ? { inside } : {}),
       id: members[0],
@@ -410,6 +299,9 @@ function planOf(graph: Graph, withTargets = false, nested = false): Base[] {
 }
 
 const idleStage = (b: Base): JourneyStage => ({ ...strip(b), state: "idle", round: null });
+/** What a segment's inside reads of the journey: its own stages, whose segments read as one step each, and who acts. */
+const INSIDE_READERS = { plan: (g: Graph) => planOf(g, false, true), who: whoOf, passing: passingSteps };
+
 const strip = ({ members: _m, kind: _k, tail: _t, branches, inside, ...s }: Base): Omit<JourneyStage, "state" | "round"> => ({
   ...s,
   ...(branches ? { branches: branches.map(idleStage) } : {}),
@@ -621,43 +513,11 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     if (said === "missing") return "routed";
     return passed && last ? "done" : passed ? "skipped" : "idle";
   };
-  // A segment's inside on the run, this round only (from the newest entry into its first step): each step as its visit
-  // this round left it (the card a gate holds waits, the step the run stands at is current), nothing after where the run
-  // stands, a route waiting or current with its step, and the route that last went back to the session, while the stage
-  // has sent the work back, back. A stage after where the run stands holds nothing of this round.
-  const insideOn = (b: Base, index: number): StageInside => {
-    const inside = b.inside!;
-    const later = !passed && current >= 0 && index > current;
-    const since = newest(statuses.filter((n) => inside.path[0]?.members.some((m) => inGroup(m, n.node_id))))?.started_at ?? 0;
-    const round = statuses.filter((n) => (n.started_at ?? 0) >= since);
-    const here = gateNode ?? (live ? at : null);
-    const on = (ids: string[]) => !!here && ids.some((id) => inGroup(id, here));
-    const stepAt = (p: Base) => on(p.members) || inside.routes.some((r) => r.from === p.id && on(r.steps.map((s) => s.id)));
-    const cut = inside.path.findIndex(stepAt);
-    const stepState = (ids: string[], i: number): StageState => {
-      if (later || (cut >= 0 && i > cut)) return "idle";
-      if (gateNode && on(ids)) return "waiting";
-      if (on(ids)) return run.status === "paused" ? "waiting" : "active";
-      const last = newest(round.filter((n) => ids.some((id) => inGroup(id, n.node_id))));
-      if (!last) return "idle";
-      if (last.status === "running" || last.status === "pending") return live ? "active" : "idle";
-      return last.status === "failed" ? "routed" : "done";
-    };
-    const pathOn = (i: number) => (p: Base): JourneyStage => ({ ...idleStage(p), state: stepState(p.members, i), ...(p.branches ? { branches: p.branches.map(pathOn(i)) } : {}) });
-    const fromAt = (r: RouteBase) => inside.path.findIndex((p) => p.id === r.from);
-    const visited = (r: RouteBase) => Math.max(0, ...round.filter((n) => r.steps.some((s) => inGroup(s.id, n.node_id))).map((n) => n.started_at ?? 0));
-    const back = b.id === backStage ? inside.routes.filter((r) => r.to.kind === "session" && visited(r) > 0).sort((x, y) => visited(y) - visited(x))[0] : undefined;
-    return {
-      ...inside,
-      path: inside.path.map((p, i) => pathOn(i)(p)),
-      routes: inside.routes.map((r) => {
-        const steps = r.steps.map((s) => ({ ...s, state: stepState([s.id], fromAt(r)), who: gateNode && inGroup(s.id, gateNode) ? (gateMine ? "you" as const : "person" as const) : s.who }));
-        const has = (s: StageState) => steps.some((x) => x.state === s);
-        const state: StageState = has("waiting") ? "waiting" : has("active") ? "active" : r === back ? "back" : steps.length && steps.every((x) => x.state !== "idle") ? "done" : "idle";
-        return { ...r, steps, state };
-      }),
-    };
-  };
+  // A segment's inside on the run (segmentInside.ts insideOnRun). A stage after where the run stands holds nothing of this round.
+  const insideOn = (b: Base, index: number): StageInside => insideOnRun(b.inside!, {
+    statuses, here: gateNode ?? (live ? at : null), gate: !!gateNode, paused: run.status === "paused", live,
+    later: !passed && current >= 0 && index > current, back: b.id === backStage, gateWho: gateMine ? "you" : "person",
+  }, idleStage);
   const stageOn = (b: Base, index: number): JourneyStage => {
     const mine = statuses.filter((n) => inStage(b, n.node_id));
     const rounds = Math.max(0, ...mine.map((n) => n.visits ?? 1));
