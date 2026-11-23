@@ -1308,11 +1308,13 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   mergeQueued: async (ctx, userId, [convId, messageId, intoId]: [string, string, string]) =>
     mergeQueuedForUser(ctx, userId, convId as Id<"conversations">, { messageId, intoId }),
   // The composer's "Queue for later": a row held for the end of the turn.
-  queueMessage: async (ctx, userId, [convId, content, clientId]: [string, string, string]) => {
+  // `opts.take_over`: the session composer's own send, whose line said it
+  // takes the wheel (lib/sessionTakeOver). Every other caller leaves it unset.
+  queueMessage: async (ctx, userId, [convId, content, clientId, opts]: [string, string, string, { take_over?: boolean } | undefined]) => {
     const conversation = await ctx.db.get(convId as Id<"conversations">);
     if (!conversation) throw new Error("conversation_deleted");
     if (!(await canSendProductMessage(ctx, userId, conversation))) throw new Error("Unauthorized");
-    return await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true, take_over: true, queue: true });
+    return await enqueuePendingMessage(ctx, conversation, userId, { content, client_id: clientId, human: true, take_over: opts?.take_over === true, queue: true });
   },
   releaseQueued: async (ctx, userId, [convId]: [string]) =>
     releaseQueuedForUser(ctx, userId, convId as Id<"conversations">),
@@ -1322,7 +1324,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     userId,
     // quoteIds: the composer quotes the message carries (quoteDrafts.ts), sent
     // only by builds with the quote record on. Older builds send four args.
-    [convId, content, imageIds, clientId, quoteIds]: [string, string, string[] | undefined, string | undefined, string[] | undefined],
+    // opts.take_over: the session composer's own send, whose line said it
+    // takes the wheel (lib/sessionTakeOver). Decision and poll answers, slash
+    // commands, retries and every other surface on this rail leave it unset.
+    [convId, content, imageIds, clientId, quoteIds, opts]: [string, string, string[] | undefined, string | undefined, string[] | undefined, { take_over?: boolean } | undefined],
     result,
   ) => {
     const quoteClientIds = Array.isArray(quoteIds) && quoteIds.length ? quoteIds : undefined;
@@ -1335,6 +1340,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         content,
         ...(imageIds?.length ? { image_storage_ids: imageIds as Id<"_storage">[] } : {}),
         ...(quoteClientIds ? { quote_client_ids: quoteClientIds } : {}),
+        ...(opts?.take_over === true ? { take_over: true } : {}),
       });
     }
     const conversation = await ctx.db.get(convId as Id<"conversations">);
@@ -1359,7 +1365,7 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       image_storage_ids: imageIds?.length ? (imageIds as any) : undefined,
       client_id: clientId,
       human: true,
-      take_over: true,
+      take_over: opts?.take_over === true,
     });
     if (stampQuotes) await stampQuotesSent(ctx, userId, conversation._id, clientId!, stampQuotes, waiting);
     return queued;

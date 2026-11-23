@@ -118,7 +118,7 @@ export function pinnedDriverAfterAdd(before: OwnersFacts, after: OwnersFacts): s
  * account that runs it, who does not drive takes the wheel, and the role that
  * drove (or the person who did) waits. The runner becomes an owner as it takes
  * it, so a run a role started stays in the taker's inbox (and the role's
- * hands under it nest there). Null when nothing changes: the sender already
+ * hands under it nest there). The primary owner stays who it was. Null when nothing changes: the sender already
  * drives, may not drive, or the session is a role's own.
  */
 export function takeOverBySend(f: OwnersFacts, sender: string, now: number): OwnersFacts | null {
@@ -127,8 +127,9 @@ export function takeOverBySend(f: OwnersFacts, sender: string, now: number): Own
   if (!ids.includes(sender) && sender !== f.runner_id) return null;
   const driver = driverOf(f, ids);
   if (driver?.kind === "user" && driver.user_id === sender) return null;
-  const next = ids.includes(sender) ? f : applyOwnersChangeTo(f, { add: [sender] }, { actor: sender, now });
-  return { ...next, driver_user_id: sender };
+  const added = ids.includes(sender) ? f : applyOwnersChangeTo(f, { add: [sender] }, { actor: sender, now });
+  // Taking the wheel changes who drives, never the primary owner.
+  return { ...added, primary_id: primaryAfter(added.rows, f.primary_id ?? ids[0]), driver_user_id: sender };
 }
 
 /** Owner rows with `removed` taken out, the driver handed back when it was one of them. */

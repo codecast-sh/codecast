@@ -13430,12 +13430,14 @@ export const stopAndSendToSession = mutation({
     client_id: v.string(),
     pressed_at: v.number(),
     request_id: v.optional(v.string()),
+    // The session composer's own Stop & send takes the wheel (lib/sessionTakeOver).
+    take_over: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthUserId(ctx);
     if (!userId) throw new Error("Not authenticated");
     if (args.request_id !== undefined) validateSessionCommandRequestId(args.request_id);
-    return await stopAndSendForUser(ctx, userId, args.conversation_id, args.content, args.client_id, args.pressed_at, args.request_id);
+    return await stopAndSendForUser(ctx, userId, args.conversation_id, args.content, args.client_id, args.pressed_at, args.request_id, args.take_over === true);
   },
 });
 

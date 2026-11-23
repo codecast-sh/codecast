@@ -14,9 +14,9 @@ type SendIo = {
 
 /** The server's refusal of a killed target (pendingMessages.killedSendMessage). */
 const REFUSED = /^Not sent\./;
-// The server's refusal of a role writing into a session a person took over
+// The server's refusal of a role writing into a session a person drives
 // (convex lib/sessionTakeOver pausedRoleRefusal).
-const PAUSED_ROLE = /is paused there\./;
+const PAUSED_ROLE = /^Not sent\. .+ drives \S+/;
 
 export function registerSessionSendCommand(program: Command, io: SendIo): void {
   program

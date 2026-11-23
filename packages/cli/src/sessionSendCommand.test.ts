@@ -154,6 +154,19 @@ describe("a refused send", () => {
     expect(held).toEqual(["status?"]);
   });
 
+  test("a person's own session its task filed under the role keeps the body the same way", async () => {
+    const program = new Command();
+    registerSessionSendCommand(program, {
+      currentSession: () => "jx7abcd",
+      post: async () => { throw new Error("Not sent. Jason drives jx7c6zk: it is their session, filed under @growth by its task. Ask them in your own thread."); },
+      print: () => {},
+      hold: () => "/tmp/held/jx7c6zk-4.txt",
+    });
+    const err = await program.parseAsync(["send", "jx7c6zk", "status?"], { from: "user" }).then(() => null, (e) => e as Error);
+    expect(err?.message).toContain("Your message is kept in /tmp/held/jx7c6zk-4.txt");
+    expect(err?.message).not.toContain("--wake");
+  });
+
   test("other failures pass through and keep nothing", async () => {
     let kept = false;
     const program = new Command();

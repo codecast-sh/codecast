@@ -3,7 +3,10 @@ import { makeFakeDb } from "./testDb";
 import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
 import { performCreateRole, performProvisionRole, performTellSessionRole } from "./orgRoles";
 import { computeInboxSessions, heldByRoleAlone } from "./conversations";
-import { roleDrives, rollupParentIdOf } from "@codecast/shared/contracts";
+import { formatDecisionAnswer, roleDrives, rollupParentIdOf } from "@codecast/shared/contracts";
+import { dispatch } from "./dispatch";
+import { sendSessionMessage } from "./pendingMessages";
+import { stopAndSendForUser } from "./daemonCommandUtils";
 
 // One owner drives (org-roles-run-work.md R1). A person's own message into a
 // session takes the wheel from the role or person driving it; the paused role
@@ -114,6 +117,66 @@ describe("a person's own message takes the wheel", () => {
   });
 });
 
+// The store's sendMessage rides dispatch.sendMessage for every surface: the
+// composer, decision and poll answers, /model, the limit's "continue", inline
+// threads. Only the session composer, whose line said so, asks to take over.
+const dispatchSend = (ctx: any, convId: string, content: string, clientId: string, opts?: { take_over?: boolean }) =>
+  (dispatch as any)._handler(
+    { ...ctx, auth: { getUserIdentity: async () => ({ subject: `${ME}|session` }) } },
+    { action: "sendMessage", args: [convId, content, undefined, clientId, undefined, ...(opts ? [opts] : [])] },
+  );
+
+describe("only a send that says so takes the wheel", () => {
+  test("a decision answer, a /model command and an inline thread's reply leave the driver alone", async () => {
+    const { ctx, row, ownersOf, tables } = await world();
+    await dispatchSend(ctx, "hand", formatDecisionAnswer({ id: "dc-1", question: "Ship it?", answer: "Yes" }), "a1");
+    await dispatchSend(ctx, "hand", "/model opus", "a2");
+    await dispatchSend(ctx, "filed", "a reply from the task page", "a3");
+    expect(row("hand").driver_user_id).toBeUndefined();
+    expect(row("filed").driver_user_id).toBeUndefined();
+    expect(ownersOf("hand")).toEqual([]);
+    expect(tables.pending_messages.filter((m) => ["a1", "a2", "a3"].includes(m.client_id))).toHaveLength(3);
+  });
+
+  test("the session composer's send takes over, plain and queued", async () => {
+    const { ctx, row } = await world();
+    await dispatchSend(ctx, "filed", "I'll take it from here", "c1", { take_over: true });
+    expect(row("filed").driver_user_id).toBe(ME);
+    await (dispatch as any)._handler(
+      { ...ctx, auth: { getUserIdentity: async () => ({ subject: `${ME}|session` }) } },
+      { action: "queueMessage", args: ["hand", "after this turn", "q1", { take_over: true }] },
+    );
+    expect(row("hand").driver_user_id).toBe(ME);
+  });
+
+  test("Stop & send takes over only when the composer asks", async () => {
+    const { ctx, row } = await world();
+    await stopAndSendForUser(ctx, ME as any, "filed" as any, "stop, do this", "s1", Date.now());
+    expect(row("filed").driver_user_id).toBeUndefined();
+    await stopAndSendForUser(ctx, ME as any, "filed" as any, "stop, do this", "s2", Date.now(), undefined, true);
+    expect(row("filed").driver_user_id).toBe(ME);
+  });
+
+  test("a server path into a person's session (a checkout ask, a transcript route) never takes over; a person's own cast send does", async () => {
+    const { ctx, row } = await world();
+    await performSessionSend(ctx, ME as any, { to: "jxfiled", body: "these files conflict", intent: "request", wake: true, client_id: "k1" });
+    expect(row("filed").driver_user_id).toBeUndefined();
+    await (sendSessionMessage as any)._handler(
+      { ...ctx, auth: { getUserIdentity: async () => ({ subject: `${ME}|session` }) } },
+      { to: "jxfiled", body: "status?", raw: false },
+    );
+    expect(row("filed").driver_user_id).toBe(ME);
+  });
+
+  test("taking the wheel leaves the primary owner as it was", async () => {
+    const { ctx, row } = await world();
+    await ctx.db.patch("shared", { driver_user_id: PEER, owner_user_id: PEER });
+    await composerSend(ctx, row("shared"), ME);
+    expect(row("shared").driver_user_id).toBe(ME);
+    expect(row("shared").owner_user_id).toBe(PEER);
+  });
+});
+
 describe("a paused role may not write into the session", () => {
   test("the role's own session is refused, naming who drives", async () => {
     const { ctx, row } = await world();
@@ -136,6 +199,14 @@ describe("a paused role may not write into the session", () => {
     expect(row("hand").driver_user_id).toBe(ME);
     const report = await performSessionSend(ctx, ME as any, { to: "jxhand", from: "s-child", body: "done" });
     expect(report.message_id).toBeTruthy();
+  });
+
+  test("a person's own session its task filed under the role: the refusal says it is theirs, not that the role is paused", async () => {
+    const { ctx, tables } = await world();
+    tables.conversations.push(session("bound", { org_role_id: tables.org_roles[0]._id, org_role_hold: "bound", driver_user_id: ME }));
+    const err = await performSessionSend(ctx, ME as any, { to: "jxbound", from: "s-seat", body: "status?" }).then(() => null, (e) => e as Error);
+    expect(err?.message).toMatch(/^Not sent\. Me drives jxbound: it is their session, filed under @growth by its task\./);
+    expect(err?.message).not.toContain("paused");
   });
 
   test("a send into the role itself is never refused", async () => {

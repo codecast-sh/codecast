@@ -96,8 +96,16 @@ describe("a person's own send takes the wheel", () => {
     expect(driverOf(next, listedOwnerIds(next))).toEqual({ kind: "user", user_id: "me" });
   });
 
-  test("a runner who is not listed keeps the starter as an owner when it takes over", () => {
+  test("a runner who is not listed keeps the starter as an owner, and as the primary owner, when it takes over", () => {
     const f = { ...base, author_id: "ashot", runner_id: "me", role_id: "r1" };
-    expect(listedOwnerIds(takeOverBySend(f, "me", 100)!)).toEqual(["ashot", "me"]);
+    const next = takeOverBySend(f, "me", 100)!;
+    expect(listedOwnerIds(next)).toEqual(["ashot", "me"]);
+    expect(next.primary_id).toBe("ashot");
+    expect(next.driver_user_id).toBe("me");
+  });
+
+  test("taking the wheel from another person leaves the primary owner alone", () => {
+    const f = { ...base, rows: [row("ashot", 1), row("me", 2)], primary_id: "ashot", driver_user_id: "ashot" };
+    expect(takeOverBySend(f, "me", 100)?.primary_id).toBe("ashot");
   });
 });

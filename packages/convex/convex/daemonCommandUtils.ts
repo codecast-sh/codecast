@@ -259,9 +259,10 @@ export async function stopAndSendForUser(
   clientId: string,
   pressedAt: number,
   requestId?: string,
+  takeOver = false,
 ): Promise<{ interrupted: boolean }> {
   const conv = await requireSessionCommandTarget(ctx, userId, conversationId);
-  await enqueuePendingMessage(ctx, conv, userId, { content, client_id: clientId, human: true, queue: true });
+  await enqueuePendingMessage(ctx, conv, userId, { content, client_id: clientId, human: true, queue: true, take_over: takeOver });
   const sessions: Array<{ agent_status?: string }> = await ctx.db.query("managed_sessions")
     .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId)).collect();
   const turnRunning = sessions.some((s) => ACTIVE_AGENT_STATUSES.has(s.agent_status ?? "") || MID_TURN_AGENT_STATUSES.has(s.agent_status ?? ""));

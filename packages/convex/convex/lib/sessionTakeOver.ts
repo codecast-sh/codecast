@@ -22,7 +22,7 @@ export async function takeWheelOnSend(ctx: { db: any }, conversation: any, sende
   if (!next) return;
   const added = next.rows.filter((r) => !facts.rows.some((x) => x.user_id === r.user_id));
   for (const r of added) await addSessionOwnerRow(ctx, conversation._id, r.user_id as Id<"users">, (r.added_by ?? senderId) as Id<"users">);
-  if (added.length) await syncPrimaryOwnerCache(ctx, conversation._id, senderId);
+  if (added.length) await syncPrimaryOwnerCache(ctx, conversation._id, (next.primary_id ?? undefined) as Id<"users"> | undefined);
   await ctx.db.patch(conversation._id, { driver_user_id: senderId });
 }
 
@@ -41,5 +41,10 @@ export async function pausedRoleRefusal(ctx: { db: any }, sender: any, target: a
   const name = personName(driver);
   const handle = role?.handle ? `@${role.handle}` : "the role";
   const short = target.short_id ?? String(target._id).slice(0, 7);
+  // A person's own session a task binding filed under the role was never the
+  // role's to drive; anything else the role drove until a person took it.
+  if (target.org_role_hold === "bound" && !target.role_started) {
+    return `Not sent. ${name} drives ${short}: it is their session, filed under ${handle} by its task. Ask them in your own thread (cast decide reaches them).`;
+  }
   return `Not sent. ${name} drives ${short} now, so ${handle} is paused there. If ${name} needs to hear this, ask them in your own thread (cast decide reaches them); they can make ${handle} driver again from the session's owners.`;
 }

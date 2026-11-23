@@ -733,6 +733,10 @@ export const sendMessageV2 = mutation({
     // The composer quotes this message carries (quoteDrafts.ts): stamped sent
     // here, in the transaction that queues it.
     quote_client_ids: v.optional(v.array(v.string())),
+    // The session composer's own send takes the wheel (lib/sessionTakeOver).
+    // Not part of the receipt's fingerprint: a redrive of the same command
+    // replays its receipt, and the queued row dedups on client_id.
+    take_over: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
     const userId = await requireUser(ctx);
@@ -832,7 +836,7 @@ export const sendMessageV2 = mutation({
           image_storage_ids: imageStorageIds,
           client_id: args.client_id,
           human: true,
-          take_over: true,
+          take_over: args.take_over === true,
         });
       }
       const quotes = quoteClientIds
@@ -923,7 +927,10 @@ export async function performSessionSend(
   authUserId: Id<"users">,
   // `target`: a session the caller already resolved and checked (a role's
   // standing session behind `cast role wake`); it skips the `to` lookup.
-  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; queue?: boolean; quiet?: boolean; intent?: SessionMessageIntent; image_storage_ids?: Id<"_storage">[]; target?: any }
+  // `take_over`: a person's own send, whose caller says it takes the wheel
+  // (sendSessionMessage's sends with no sender session). Server-side callers
+  // (a checkout ask, a transcript route, an approved suggestion) never do.
+  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; queue?: boolean; quiet?: boolean; intent?: SessionMessageIntent; image_storage_ids?: Id<"_storage">[]; target?: any; take_over?: boolean }
 ): Promise<{
   // null when the send waits as a suggestion for the owner (suggestion_id).
   message_id: Id<"pending_messages"> | null;
@@ -1100,7 +1107,7 @@ export async function performSessionSend(
     // composer, a detached `cast send`). A raw send is the model/effort
     // picker's slash command, a gesture rather than a message.
     human: !fromRef && !args.raw,
-    take_over: !fromRef && !args.raw && !args.target,
+    take_over: !!args.take_over && !fromRef && !args.raw && !args.target,
     queue: !!args.queue && !!args.direct,
     // Only a session hands work over out of sight; a person's send always shows the session.
     quiet: !!args.quiet && !!senderConversation && !args.raw && !args.direct,
@@ -1200,7 +1207,9 @@ export const sendSessionMessage = mutation({
     if (!authUserId) {
       throw new Error("Authentication failed: invalid token or session");
     }
-    return await performSessionSend(ctx, authUserId, args);
+    // A person's own send (`cast send` with no sender session, a collaborator's
+    // composer) takes the wheel when they own it; a session relaying never does.
+    return await performSessionSend(ctx, authUserId, { ...args, take_over: !args.from?.trim() && !args.raw });
   },
 });
 
