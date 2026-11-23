@@ -3,6 +3,7 @@ import { useConvex, type ConvexReactClient } from "convex/react";
 import { getFunctionName, type FunctionReference } from "convex/server";
 import { queryWithSignal } from "../lib/queryWithSignal";
 import { cacheRows, heldHash, rebuildRows, type SplitCache } from "@codecast/shared/contracts/inboxSplit";
+import { expandNulls } from "@codecast/shared/contracts/inboxCompact";
 import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useWatchEffect } from "./useWatchEffect";
 
@@ -93,10 +94,23 @@ async function rebuildHeld(kind: SplitKind, value: any, name: string): Promise<a
 // A server that predates the split argument rejects it; the feeder then
 // subscribes to the whole result for the rest of the page, as before.
 const unsupported = new Set<string>();
-const rejectsSplit = (e: unknown) => /split/.test(String((e as any)?.message ?? e)) && /ArgumentValidationError|extra field/i.test(String((e as any)?.message ?? e));
+const rejectsSplit = (e: unknown) => /split|compact/.test(String((e as any)?.message ?? e)) && /ArgumentValidationError|extra field/i.test(String((e as any)?.message ?? e));
+
+// The list's rows also travel in the compact wire form (shared/contracts/
+// inboxCompact: null fields dropped, restored here), asked for wherever the
+// split form is, so a server that predates either falls back to both.
+const compactArg = (kind: SplitKind) => (kind === "list" ? { compact: true } : {});
+
+/** A list value with its rows restored from the compact wire form. Other values pass through. */
+export function expandCompact(kind: SplitKind, value: any): any {
+  if (kind !== "list" || !Array.isArray(value?.null_keys)) return value;
+  const { null_keys, ...rest } = value;
+  return value.split ? { ...rest, hot: expandNulls(value.hot, null_keys) } : { ...rest, sessions: expandNulls(value.sessions ?? [], null_keys) };
+}
 
 /** The whole result a split value stands for, or null when the cache cannot vouch for its cold rows. Unsplit values pass through. Pure; unit-tested. */
 export function rebuildSplitPayload(kind: SplitKind, value: any, cache: SplitCache<any>): any | null {
+  value = expandCompact(kind, value);
   if (!value?.split) return value;
   if (kind === "list") {
     const rows = rebuildRows({ ids: value.ids, hot: value.hot.map((r: any) => [String(r._id), r]), cold_hash: value.cold_hash }, cache);
@@ -108,6 +122,7 @@ export function rebuildSplitPayload(kind: SplitKind, value: any, cache: SplitCac
 
 /** Hold the rows of a whole (unsplit) result, so the next split value can be rebuilt from them. */
 export function seedSplitCache(kind: SplitKind, whole: any, cache: SplitCache<any>): void {
+  whole = expandCompact(kind, whole);
   if (kind === "list") cacheRows(cache, (whole?.sessions ?? []).map((r: any) => [String(r._id), r]));
   else cacheRows(cache, Object.entries(whole?.liveness ?? {}));
 }
@@ -127,9 +142,9 @@ export async function querySplitWhole(
   signal: AbortSignal,
 ): Promise<any> {
   const name = getFunctionName(query);
-  const whole = () => queryWithSignal(convex, query, { ...args, _probe: Date.now() } as any, signal);
-  if (unsupported.has(name)) return whole();
-  const rebuilt = await rebuildHeld(kind, await queryWithSignal(convex, query, { ...args, split: true, _probe: Date.now() } as any, signal), name);
+  if (unsupported.has(name)) return queryWithSignal(convex, query, { ...args, _probe: Date.now() } as any, signal);
+  const whole = async () => expandCompact(kind, await queryWithSignal(convex, query, { ...args, ...compactArg(kind), _probe: Date.now() } as any, signal));
+  const rebuilt = await rebuildHeld(kind, await queryWithSignal(convex, query, { ...args, split: true, ...compactArg(kind), _probe: Date.now() } as any, signal), name);
   noteHeldChanged(name);
   if (rebuilt) return rebuilt;
   const value = await whole();
@@ -169,7 +184,7 @@ export async function settleSplitPush(
   for (let attempt = 0; attempt < 2; attempt++) {
     let whole: any;
     try {
-      whole = await convex.query(query, { ...args, _probe: Date.now() } as any);
+      whole = expandCompact(kind, await convex.query(query, { ...args, ...compactArg(kind), _probe: Date.now() } as any));
     } catch {
       return null;
     }
@@ -194,7 +209,7 @@ export function useSplitQueryNoThrow<Q extends FunctionReference<"query">>(
   const convex = useConvex();
   const [, rerender] = useState(0);
   const splitOn = args !== "skip" && !unsupported.has(name);
-  const sub = useQueryNoThrow(query, args === "skip" ? "skip" : splitOn ? ({ ...args, split: true } as any) : (args as any));
+  const sub = useQueryNoThrow(query, args === "skip" ? "skip" : splitOn ? ({ ...args, split: true, ...compactArg(kind) } as any) : (args as any));
   const [data, setData] = useState<any>(undefined);
 
   useWatchEffect(() => {

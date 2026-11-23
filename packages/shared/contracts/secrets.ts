@@ -36,6 +36,8 @@ export const SECRET_EVENT_KINDS = [
   "deleted",
   "ask_first_on",
   "ask_first_off",
+  "touch_id_on",
+  "touch_id_off",
   "approval_requested",
   "approved",
   "denied",
@@ -736,6 +738,8 @@ export type SecretMeta = {
   has_otp?: boolean;
   /** An agent's read needs a person's approval per session. */
   ask_first?: boolean;
+  /** Revealing it, approving an Ask first read of it and turning a guard off take Touch ID. */
+  touch_id?: boolean;
   /** Previous values kept for restore (`versions`). */
   version_count?: number;
 };
@@ -766,11 +770,11 @@ export function approvesSecretRead(decision: { category?: string; options: reado
 
 /**
  * What a passkey presence grant unlocks (convex/passkeys.ts): one action on
- * one target, once. The target is the secret id for reveal and ask_first_off,
+ * one target, once. The target is the secret id for reveal, ask_first_off and touch_id_off,
  * the decision id for approve, the passkey id for remove_passkey, and the
  * user's own id for add_passkey.
  */
-export const PRESENCE_ACTIONS = ["reveal", "approve", "ask_first_off", "add_passkey", "remove_passkey"] as const;
+export const PRESENCE_ACTIONS = ["reveal", "approve", "ask_first_off", "touch_id_off", "add_passkey", "remove_passkey"] as const;
 export type PresenceAction = (typeof PRESENCE_ACTIONS)[number];
 
 /** How long a presence challenge waits for its assertion, and then how long the grant it earns stays usable. */
@@ -791,9 +795,10 @@ export const PRESENCE_REQUIRED = "presence_required";
 
 /** What each action does, as a clause after "to": the refusal and the confirm page both say it. */
 export const PRESENCE_PHRASE: Record<PresenceAction, string> = {
-  reveal: "reveal an Ask first secret",
+  reveal: "reveal a Touch ID secret",
   approve: "approve this decision",
   ask_first_off: "turn Ask first off",
+  touch_id_off: "turn Touch ID off",
   add_passkey: "add another passkey",
   remove_passkey: "remove a passkey",
 };
@@ -817,7 +822,18 @@ export type PasskeyMeta = {
   name: string;
   created_at: number;
   last_used_at?: number;
+  /** A device key's credential id, so the app holding it knows it is set up; absent for a WebAuthn passkey. */
+  device_key?: string;
 };
+
+/**
+ * The bytes a device key signs for one challenge (convex/deviceKeys.ts): a
+ * fixed prefix and the purpose around the challenge's random value, so a
+ * signature means only this and the key signs nothing else.
+ */
+export function deviceKeyMessage(purpose: "register" | "presence", challenge: string): string {
+  return `codecast-device-key/v1\n${purpose}\n${challenge}`;
+}
 
 /** What the waiting client and the /confirm page read about one presence challenge. */
 export type PresenceChallengeState = {

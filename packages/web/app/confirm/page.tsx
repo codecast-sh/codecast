@@ -4,10 +4,15 @@
 // challenge id names the person and only their passkey verifies. The app that
 // opened it is watching the same challenge and goes on by itself once it is
 // granted. An agent's tab may not run it.
-import { useState } from "react";
-import { useConvex } from "convex/react";
+//
+// It starts the ceremony as soon as the challenge loads in a focused tab (or
+// when the tab first gains focus), so the person meets the system prompt, not
+// a button; a browser that wants a press first refuses quietly and the button
+// stays.
+import { useEffect, useRef, useState } from "react";
+import { useConvex, useMutation } from "convex/react";
 import { useSearchParams } from "next/navigation";
-import { Check, Clock, Fingerprint, Loader2, Lock } from "lucide-react";
+import { Check, Clock, Fingerprint, Loader2, Lock, Smartphone } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { PRESENCE_PHRASE } from "@codecast/shared/contracts/secrets";
 import { KeyCap } from "../../components/KeyCap";
@@ -37,6 +42,8 @@ export default function ConfirmPage() {
   const { data: state, error } = useQueryNoThrow(api.passkeys.challenge, id ? { challenge_id: id } : "skip");
   const agentTab = useAgentDrivenTab();
   const [busy, setBusy] = useState(false);
+  const askPhone = useMutation(api.passkeys.askPhone);
+  const [phone, setPhone] = useState<"idle" | "sent" | "none">("idle");
 
   const pending = state?.status === "pending" && "options" in state ? state : null;
   const register = state?.purpose === "register";
@@ -45,7 +52,7 @@ export default function ConfirmPage() {
     if (!pending || busy || held) return;
     setBusy(true);
     try {
-      await (register ? finishRegistration : finishPresence)(client, id, pending.options);
+      await (register ? finishRegistration(client, id, pending.options, pending.from) : finishPresence(client, id, pending.options));
     } finally {
       setBusy(false);
     }
@@ -53,6 +60,20 @@ export default function ConfirmPage() {
   useEventListener("keydown", (e: KeyboardEvent) => {
     if (e.key === "Enter") void run();
   });
+  const started = useRef(false);
+  const ready = !!pending && !held;
+  useEffect(() => {
+    if (!ready || started.current) return;
+    const go = () => {
+      if (started.current) return;
+      started.current = true;
+      void run();
+    };
+    if (document.hasFocus()) go();
+    else window.addEventListener("focus", go, { once: true });
+    return () => window.removeEventListener("focus", go);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready]);
 
   if (id && state === undefined && !error) return <Frame icon={<Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" />} title="Loading" />;
   if (!state) return <Frame icon={<Fingerprint className="h-5 w-5" />} title="Nothing to confirm" sub="Start again from Codecast" />;
@@ -63,7 +84,7 @@ export default function ConfirmPage() {
 
   const title = register ? "Set up Touch ID" : `Confirm to ${PRESENCE_PHRASE[pending.action!]}`;
   return (
-    <Frame icon={<Fingerprint className="h-5 w-5 text-sol-cyan" />} title={title} sub={pending.label}>
+    <Frame icon={<Fingerprint className="h-5 w-5 text-sol-cyan" />} title={title} sub={[pending.label, pending.from && `from ${pending.from}`].filter(Boolean).join(" · ")}>
       <Button
         type="button"
         variant="yellow"
@@ -78,6 +99,20 @@ export default function ConfirmPage() {
         {held ?? (register ? "Set up Touch ID" : "Confirm with Touch ID")}
         {!held && !busy && <KeyCap size="xs" tone="onAccent">return</KeyCap>}
       </Button>
+      {!register && !held && (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="mt-2 w-full"
+          disabled={phone !== "idle"}
+          onClick={() => void askPhone({ challenge_id: id }).then((r) => setPhone(r.sent ? "sent" : "none"), () => setPhone("none"))}
+          data-confirm-phone
+        >
+          <Smartphone className="h-4 w-4" />
+          {phone === "sent" ? "Sent: confirm on your phone" : phone === "none" ? "No phone to send to" : "Send to my phone"}
+        </Button>
+      )}
     </Frame>
   );
 }

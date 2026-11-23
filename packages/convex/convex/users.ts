@@ -1309,6 +1309,8 @@ export const updateNotificationPreferences = mutation({
       machine_alerts: v.optional(v.boolean()),
     })),
     muted_members: v.optional(v.array(v.id("users"))),
+    muted_projects: v.optional(v.array(v.id("projects"))),
+    muted_folders: v.optional(v.array(v.string())),
     machine_wide_presence: v.optional(v.boolean()),
   },
   handler: async (ctx, args) => {
@@ -1336,6 +1338,8 @@ export const updateNotificationPreferences = mutation({
     if (args.muted_members !== undefined) {
       updateData.muted_members = args.muted_members;
     }
+    if (args.muted_projects !== undefined) updateData.muted_projects = args.muted_projects;
+    if (args.muted_folders !== undefined) updateData.muted_folders = args.muted_folders;
     await ctx.db.patch(userId, updateData);
     // Flipping the Lock Screen switch ends the running activity (or starts one
     // for what is already live) on the next refresh.
