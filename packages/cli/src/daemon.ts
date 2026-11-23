@@ -242,7 +242,6 @@ import {
 } from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { claudeBannerText, extractCwd, extractGrokCwd, extractMuseCwd, extractSummaryTitle, extractTeamInfo, isGrokInternalSession, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
-import { healInteractiveMark } from "./interactiveMark.js";
 import { codexLaunchFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCodexProgramLaunch } from "./codexSessionMeta.js";
 import { headlessRunStaysOutOfInbox, inheritedConversationOfHeadless, repairLeakedHeadlessCodexRuns } from "./headlessRuns.js";
 import {
@@ -12911,7 +12910,7 @@ async function processSessionFilePass(
   }
 
   // A session recorded before the daemon marked interactive launches gains the mark its head shows (interactiveMark.ts).
-  if (conversationId) healInteractiveMark((id) => syncService.markInteractive(id), conversationId, metadata.cliFlags, log);
+  if (conversationId) void import("./interactiveMark.js").then(({ healInteractiveMark }) => healInteractiveMark((id) => syncService.markInteractive(id), conversationId, metadata.cliFlags, log));
 
   // Agent-team teammate? Link it to its lead (once, bounded attempts inside).
   // This runs on every pass, not only the create pass: a create that fell to
@@ -13966,7 +13965,7 @@ async function processCodexSessionPass(
     }
 
     // A thread recorded before the daemon marked interactive launches gains the mark its head shows (interactiveMark.ts).
-    if (conversationId) healInteractiveMark((id) => syncService.markInteractive(id), conversationId, codexLaunchFlags(codexMetadata), log);
+    if (conversationId) void import("./interactiveMark.js").then(({ healInteractiveMark }) => healInteractiveMark((id) => syncService.markInteractive(id), conversationId, codexLaunchFlags(codexMetadata), log));
 
     // Agent status tracking for Codex sessions (skip if managed by app-server)
     if (conversationId && !appServerConversations.has(conversationId)) {

@@ -350,6 +350,7 @@ import type * as lib_ingestScope from "../lib/ingestScope.js";
 import type * as lib_ingestScopeArgs from "../lib/ingestScopeArgs.js";
 import type * as lib_initiativeRef from "../lib/initiativeRef.js";
 import type * as lib_initiativeValidators from "../lib/initiativeValidators.js";
+import type * as lib_intentHttp from "../lib/intentHttp.js";
 import type * as lib_issueMapping from "../lib/issueMapping.js";
 import type * as lib_issueSyncAccess from "../lib/issueSyncAccess.js";
 import type * as lib_issueSyncDelegation from "../lib/issueSyncDelegation.js";
@@ -1180,6 +1181,7 @@ declare const fullApi: ApiFromModules<{
   "lib/ingestScopeArgs": typeof lib_ingestScopeArgs;
   "lib/initiativeRef": typeof lib_initiativeRef;
   "lib/initiativeValidators": typeof lib_initiativeValidators;
+  "lib/intentHttp": typeof lib_intentHttp;
   "lib/issueMapping": typeof lib_issueMapping;
   "lib/issueSyncAccess": typeof lib_issueSyncAccess;
   "lib/issueSyncDelegation": typeof lib_issueSyncDelegation;

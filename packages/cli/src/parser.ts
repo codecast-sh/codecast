@@ -576,10 +576,8 @@ export function detectCliFlags(content: string): string | null {
       if (parsed.permissionMode === "bypassPermissions") {
         flags.push("--dangerously-skip-permissions");
       }
-      // `claude` at a terminal, the one entrypoint where a person types the prompts: only a session marked
-      // --interactive can hold a line typed at its terminal (convex lib/messageProvenance). `claude -p`
-      // (sdk-cli) is a program's prompt with nobody at a terminal; the Agent SDK's (sdk-ts, sdk-py) and any
-      // entrypoint not named here carry neither mark and read as a program's.
+      // `claude` at a terminal is the one entrypoint where a person types (convex lib/messageProvenance reads
+      // the mark); `claude -p` (sdk-cli) is a program's; the Agent SDK and unknown entrypoints carry neither.
       if (parsed.entrypoint === "cli") flags.push("--interactive");
       else if (parsed.entrypoint === "sdk-cli") flags.push("--print");
     } catch {}
