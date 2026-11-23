@@ -1,4 +1,4 @@
-import { UNCONFIRMED_DELIVERY_REASON, isReservedDevice } from "@codecast/shared/contracts";
+import { UNCONFIRMED_DELIVERY_REASON, actsForRole, isReservedDevice, startedByRole } from "@codecast/shared/contracts";
 import { noteScreenRecordingSent } from "./lib/screenRecordingSent";
 import { steeringOwnerFor, suggestFromTeammate } from "./teamSuggestions";
 import { unreachableTerminalOf } from "@codecast/shared/contracts/deliveryHold";
@@ -1024,8 +1024,10 @@ export async function performSessionSend(
   let autoOwned = false;
   // A role's own session is owned by whom the role reports to, and has no
   // owner when it reports to a role (sessionOwners.stampSeatOwners): writing to
-  // it never claims it.
-  if (isCrossUser && !senderUser?.is_bot && !target.standing_role_id) {
+  // it never claims it. A run a role started is the role's until a person takes
+  // it (the owners menu, or the composer's take-over), and a session acting for
+  // a role steering its hands is the role, not the person it runs as.
+  if (isCrossUser && !senderUser?.is_bot && !target.standing_role_id && !startedByRole(target) && !(ownSender && actsForRole(ownSender))) {
     const existingOwners = await listSessionOwnerIds(ctx, target._id);
     if (
       existingOwners.length === 0 &&

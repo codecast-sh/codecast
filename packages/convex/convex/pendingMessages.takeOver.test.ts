@@ -16,6 +16,7 @@ import { stopAndSendForUser } from "./daemonCommandUtils";
 const ME = "u".repeat(31) + "m";
 const PEER = "u".repeat(31) + "p";
 const STRANGER = "u".repeat(31) + "s";
+const POOL = "u".repeat(31) + "b";
 const TEAM = "teams_acme" as any;
 const NOW = Date.now();
 
@@ -26,10 +27,11 @@ const session = (id: string, over: Record<string, any> = {}) => ({
 
 async function world() {
   const tables: Record<string, any[]> = {
-    users: [{ _id: ME, name: "Me", email: "me@x.ai" }, { _id: PEER, name: "Peer", email: "peer@x.ai" }, { _id: STRANGER, name: "Stranger", email: "s@x.ai" }],
+    users: [{ _id: ME, name: "Me", email: "me@x.ai" }, { _id: PEER, name: "Peer", email: "peer@x.ai" }, { _id: STRANGER, name: "Stranger", email: "s@x.ai" }, { _id: POOL, name: "Pool box", is_bot: true }],
     team_memberships: [
       { _id: "m1", user_id: ME, team_id: TEAM, role: "admin", joined_at: 1 },
       { _id: "m2", user_id: PEER, team_id: TEAM, role: "member", joined_at: 1 },
+      { _id: "m3", user_id: POOL, team_id: TEAM, role: "member", joined_at: 1, visibility: "full" },
     ],
     teams: [{ _id: TEAM, name: "Acme", features: { org: true } }],
     counters: [], org_roles: [], org_role_history: [], org_changes: [], org_proposals: [], org_proposal_changes: [],
@@ -48,6 +50,8 @@ async function world() {
     session("hand", { org_role_id: roleId, role_started: true }),
     // The role's hand the hand started before anyone took over.
     session("child", { org_role_id: roleId, role_started: true, parent_conversation_id: "hand", spawned_by_conversation_id: "hand", is_subagent: true }),
+    // A hand the role started on a bot pool account.
+    session("pool", { user_id: POOL, org_role_id: roleId, role_started: true, is_private: false, team_visibility: "full" }),
     // A session of mine I filed under the role: the role drives, I own it.
     session("filed", { org_role_id: roleId, org_role_hold: "filed" }),
     // Plain sessions of mine.
@@ -174,6 +178,24 @@ describe("only a send that says so takes the wheel", () => {
     await composerSend(ctx, row("shared"), ME);
     expect(row("shared").driver_user_id).toBe(ME);
     expect(row("shared").owner_user_id).toBe(PEER);
+  });
+});
+
+describe("a message never claims a run a role started", () => {
+  test("the role steering its pool hand from its own session gives the seat person no owner row", async () => {
+    const { ctx, ownersOf } = await world();
+    const res = await performSessionSend(ctx, ME as any, { to: "jxpool", from: "s-seat", body: "status?" });
+    expect(res.auto_owned).toBe(false);
+    expect(ownersOf("pool")).toEqual([]);
+    const inbox = await computeInboxSessions(ctx, ME as any, { show_all: true, includeLiveness: false });
+    expect(inbox.sessions.map((s: any) => s._id)).not.toContain("pool");
+  });
+
+  test("a person messaging a role's pool hand does not take it either", async () => {
+    const { ctx, ownersOf } = await world();
+    const res = await performSessionSend(ctx, PEER as any, { to: "jxpool", body: "how is it going?" });
+    expect(res.auto_owned).toBe(false);
+    expect(ownersOf("pool")).toEqual([]);
   });
 });
 
