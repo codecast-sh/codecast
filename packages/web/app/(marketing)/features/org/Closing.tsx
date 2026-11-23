@@ -26,7 +26,7 @@ const COMMANDS: [string, string][] = [
 const RELATED: { slug: string; why: string }[] = [
   { slug: "decisions", why: "Questions a role cannot settle reach you as one card with its recommendation." },
   { slug: "triggers", why: "A role's daily check and its other routines are ordinary triggers you can pause or edit." },
-  { slug: "agents", why: "Workers a role starts nest under it, on whichever agent fits the job." },
+  { slug: "agents", why: "A role starts its workers on whichever agent fits the job." },
   { slug: "memory", why: "A role's brief and every session under it stay searchable for the next agent." },
 ];
 

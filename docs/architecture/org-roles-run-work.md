@@ -94,8 +94,9 @@ cannot, so that leave is refused.
   (`applyOwnersChange`, `setSessionDriver`, `leaveSession`, `listOwners`,
   `applyHoldChange`); `convex/lib/sessionOwnerRules.ts` resolves owner refs
   and keeps the leave rules.
-- Take-over: `pendingMessages` enqueue; the paused role's refusal:
-  `performSessionSend`.
+- Take-over: `pendingMessages` enqueue (`enqueuePendingMessage` calls
+  `takeWheelOnSend`); the paused role's refusal: `performSessionSend` (calls
+  `pausedRoleRefusal`). Both helpers are in `convex/lib/sessionTakeOver.ts`.
 - Fields: `session_owners` rows, and on `conversations` `org_role_id`,
   `org_role_hold`, `driver_user_id` and `role_started`.
 
@@ -198,8 +199,8 @@ it changes nothing about how it works and gives it a place on the chart".
 
 The analyzer says which sessions it considered and did not propose, in a
 finding, so a person can name one the analyzer left out. A person can also
-do this from the session itself: the ownership menu (S11) offers "Make this a
-role" on a session that fits.
+do this from the session itself: the machine menu in its header offers
+"Make this a role" on a session that fits.
 
 ## R3. A role's scope at a glance
 

@@ -255,10 +255,10 @@ function FloodRows() {
   );
 }
 
-type CardSpec = { i: number; lead: string; rec: string; options: [string, string]; under: number };
+type CardSpec = { i: number; lead: string; rec: string; options: [string, string] };
 const CARDS: CardSpec[] = [
-  { i: SESSIONS.findIndex((s) => s.up === "asked"), lead: "eng", rec: "Ship it. Tests are green and @release read the diff.", options: ["Ship", "Hold until Monday"], under: 8 },
-  { i: SESSIONS.findIndex((s) => s.up === "lapse"), lead: "growth", rec: "Wait for the iOS review so the app link works.", options: ["After the review", "Post today"], under: 6 },
+  { i: SESSIONS.findIndex((s) => s.up === "asked"), lead: "eng", rec: "Ship it. Tests are green and @release read the diff.", options: ["Ship", "Hold until Monday"] },
+  { i: SESSIONS.findIndex((s) => s.up === "lapse"), lead: "growth", rec: "Wait for the iOS review so the app link works.", options: ["After the review", "Post today"] },
 ];
 
 function Step({ children }: { children: ReactNode }) {
@@ -276,7 +276,7 @@ function LeadCard({ c }: { c: CardSpec }) {
         <Tile k={lead.k} size={30} />
         <div className="min-w-0 flex-1">
           <div className="font-mono font-bold text-[12.5px] leading-tight truncate" style={{ color: INK }}>{lead.title}</div>
-          <div className="font-mono text-meta" style={{ color: DIM }}>{lead.handle} · {c.under} sessions</div>
+          <div className="font-mono text-meta" style={{ color: DIM }}>{lead.handle}</div>
         </div>
         <span className="rounded-full px-2 py-0.5 font-mono text-meta font-semibold shrink-0" style={{ backgroundColor: tint(SOL.yellow, 28), color: `color-mix(in srgb, ${SOL.yellow} 55%, ${INK})` }}>waiting on you</span>
       </div>

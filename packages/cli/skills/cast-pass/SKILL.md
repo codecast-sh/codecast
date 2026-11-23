@@ -26,9 +26,9 @@ cast own <session> <member> --drive <member>  # a different session of yours
 ```
 
 They get a notification and the session sits in their inbox. You stay an
-owner, and it stays in your inbox while it runs on your account. If the work
-is entirely theirs now, leave it: `cast disown --move-to <machine>` moves a
-session on your account to a teammate's or a team machine as you go.
+owner. If the work is entirely theirs now, leave it: `cast disown
+--move-to <machine>` moves a session on your account to a teammate's or a
+team machine as you go.
 
 ## Brief
 

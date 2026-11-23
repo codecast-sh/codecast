@@ -80,7 +80,7 @@ A role is a session, and it wakes the way any session does. A change in its area
 - **Its triggers.** Every role comes with two: its check ("Check <area>", daily by default; for the Head of People, the weekly Company review), and "A session under you needs input". Both sit on the Triggers page and the role's own page, where you pause, edit or cancel them like any other trigger.
 - **Messages.** You writing to it, a chat mention, a role that reports to it, or another agent asking it for something. The role always sees who is speaking.
 
-Requests travel up the line. When a session under a role stalls, asks a question or posts a decision, its role wakes. The role answers if it can. If it cannot, its own waiting wakes its manager. Only the lead that reports to you raises it with you, as one inbox card with a recommendation attached. So the only card you see for your org is a role that reports to you; the dozens of sessions under it stay folded inside it.
+Requests travel up the line. When a session under a role stalls, asks a question or posts a decision, its role wakes. The role answers if it can. If it cannot, its own waiting wakes its manager. Only the lead that reports to you raises it with you, as one inbox card with a recommendation attached. What a role starts on its own stays out of your inbox, and a session a role drives that is waiting files under Working with the role's name on its card, so it never asks for you directly.
 
 ## The role page
 
