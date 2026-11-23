@@ -1128,6 +1128,7 @@ const SHARE_HIDDEN_CONVERSATION_FIELDS = [
   "subagent_slot_device",
   "cc_account",
   "cc_account_auto",
+  "cc_account_model_pin",
   "codex_account",
   "cli_flags",
   "draft_message",

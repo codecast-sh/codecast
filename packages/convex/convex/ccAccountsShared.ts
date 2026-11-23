@@ -2,6 +2,7 @@
 // the mutations (accountSwitch.ts), and tests. No server/_generated imports.
 
 import { isWorkflowRunLog } from "./lib/runLog";
+import { hasModelRoom, type ModelPin } from "./lib/modelRoom";
 export { isWorkflowRunLog };
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
@@ -395,13 +396,19 @@ export function resumePinFor(
   conv: {
     pending_api_error?: boolean | null;
     pending_api_error_kind?: string | null;
+    pending_api_error_at?: number | null;
     cc_account?: string | null;
     cc_account_auto?: boolean | null;
+    cc_account_model_pin?: ModelPin | null;
     model?: string | null;
   },
   device: ContinueDevice | undefined,
   now: number,
 ): string | undefined {
+  // A session moved alone onto an account with room on its model
+  // (lib/modelLimitPins.ts) resumes there, not on the fleet's account.
+  const held = heldModelPin(conv, device, now);
+  if (held) return held;
   // A pin the machine chose follows the machine: after a switch (keychain or
   // token) the next resume lands on the account the fleet runs on now. A
   // pin a person chose (`--account`) is left alone below.
@@ -419,6 +426,28 @@ export function resumePinFor(
   if ((parked || pinnedSpent) && continueNeedsRestart(conv, device, now)) return continueTargetPin(device, now);
   if (!conv.cc_account && !runsPushedLogin(device)) return continueTargetPin(device, now);
   return conv.cc_account ?? undefined;
+}
+
+/** The pin a resume keeps for a model-room pin (lib/modelLimitPins.ts): the
+ *  account it placed, while the row still carries that pin, the park it was
+ *  placed for is the current one (or none is), and the account still proves
+ *  room on the model. A park that landed after the pin is evidence against
+ *  it, and the resume takes the ordinary rules. */
+export function heldModelPin(
+  conv: {
+    cc_account?: string | null;
+    cc_account_model_pin?: ModelPin | null;
+    pending_api_error?: boolean | null;
+    pending_api_error_at?: number | null;
+  },
+  device: ContinueDevice | undefined,
+  now: number,
+): string | undefined {
+  const held = conv.cc_account_model_pin;
+  if (!held || !conv.cc_account || conv.cc_account !== held.profile || runsPushedLogin(device)) return undefined;
+  if (conv.pending_api_error === true && (conv.pending_api_error_at ?? 0) > held.at) return undefined;
+  const profile = device?.cc_accounts?.profiles.find((p) => p.name === conv.cc_account);
+  return profile && profileHasToken(profile, now) && hasModelRoom(profile.usage, held.family, now) ? conv.cc_account : undefined;
 }
 
 // Auto-switch bookkeeping, stored on the primary device row. `attempts` is the

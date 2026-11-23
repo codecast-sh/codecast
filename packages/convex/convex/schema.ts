@@ -799,6 +799,18 @@ export default defineSchema({
     // (`--account`). An automatic pin follows the machine's account on the
     // next resume (resumePinFor); a chosen one never moves.
     cc_account_auto: v.optional(v.boolean()),
+    // Set when recovery moved this session ALONE onto an account with room on
+    // the model whose week parked it ("Fable limit") while the fleet runs
+    // another model (lib/modelLimitPins.ts). A resume keeps that pin while
+    // `cc_account` still names `profile` and the account proves room on
+    // `family` (resumePinFor). `tried`: the accounts it was pinned to for
+    // `family`, never picked again for it within a week.
+    cc_account_model_pin: v.optional(v.object({
+      family: v.string(),
+      profile: v.string(),
+      at: v.number(),
+      tried: v.optional(v.array(v.object({ profile: v.string(), at: v.number() }))),
+    })),
     // The Codex account profile this session's PROCESS is running on, recorded
     // by the daemon that launched it. Not a pin like cc_account: Codex reads
     // ~/.codex/auth.json once at start and holds that grant for life, so a
