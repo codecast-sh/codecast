@@ -15,12 +15,15 @@
 // holds no slot and no session. A flow that composes it may name targets the
 // change does not wait for (`except="aivery-operator"`): one held back on
 // purpose, whose live sha is not what the change's watch should start on; it
-// still holds the targets that go after it.
+// still holds the targets that go after it. It runs in the run's checkout, never
+// the run's worktree: what it needs is merge.json's sha, origin and the
+// checkout's deploy targets, and the worktree may be gone by the time the
+// change is merged (ct-99406).
 digraph deploy {
   graph [kind="segment", label="Deploy", description="Send the merged change's release targets, and wait until it is live on every target it touches", takes="branch", params="except send=release"]
   start [shape=Mdiamond]
   wait [label="Go live", shape=parallelogram, parks=true, timeout=90900,
-    script="wt=\"$(cast ws path $worktree)\"; [ -n \"$wt\" ] && cd \"$wt\" && cast flow await-deploy --merge \"$run_dir/merge.json\" --base $default_branch --branch \"$branch\" --run $run_id --node $station_id --task \"$task_id\" --files \"$change_files\" --except \"$except\" --send \"$send\""]
+    script="cast flow await-deploy --merge \"$run_dir/merge.json\" --base $default_branch --branch \"$branch\" --run $run_id --node $station_id --task \"$task_id\" --files \"$change_files\" --except \"$except\" --send \"$send\""]
   live     [shape=Msquare, label="Live"]
   unmerged [shape=Msquare, label="Not merged", stop="$wait.output"]
   stuck    [shape=Msquare, label="Deploy stuck", stop="$wait.output"]

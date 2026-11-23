@@ -16,7 +16,9 @@ export const PR_URL = `https://github.com/o/r/pull/${PR}`;
 export const T = { timeout: 60_000 };
 
 // GitHub, as far as the station sees it: `pr view` reads the PR's state from a JSON file and its head from the
-// origin; `pr merge` squashes the branch onto main in a scratch clone and pushes, unless the file says to lie.
+// origin; `pr merge` squashes the branch onto main in a scratch clone and pushes, unless the file says to lie. Given
+// --delete-branch it does what gh 2.105 does: deletes origin's branch, removes the worktree in the calling checkout
+// that has the branch checked out, and deletes the local branch.
 // `advance` lands someone else's commit on main just before the squash, as a merge racing this one would, and
 // `after` one just after it.
 const FAKE_GH = `
@@ -55,8 +57,14 @@ if (args[0] === "pr" && args[1] === "merge") {
   git(m, "merge", "-q", "--squash", "origin/${BRANCH}");
   const body = args.includes("--body") ? args[args.indexOf("--body") + 1] : "";
   git(m, "commit", "-q", "-m", "Squashed (#${PR})" + (body ? "\\n\\n" + body : ""));
-  git(m, "push", "-q", "origin", "HEAD:main", ":refs/heads/${BRANCH}");
+  git(m, "push", "-q", "origin", "HEAD:main");
   state.state = "MERGED"; state.mergeCommit = git(m, "rev-parse", "HEAD"); save();
+  if (args.includes("--delete-branch")) {
+    git(m, "push", "-q", "origin", ":refs/heads/${BRANCH}");
+    const holder = git(process.cwd(), "worktree", "list", "--porcelain").split("\\n\\n").find((w) => w.includes("\\nbranch refs/heads/${BRANCH}"));
+    if (holder) git(process.cwd(), "worktree", "remove", "--force", holder.split("\\n")[0].slice("worktree ".length));
+    git(process.cwd(), "branch", "-D", "${BRANCH}");
+  }
   if (state.after) {
     fs.writeFileSync(m + "/" + state.after.file, state.after.text);
     git(m, "add", state.after.file);
