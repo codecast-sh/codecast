@@ -1634,6 +1634,85 @@ export const admitToStation = mutation({
   },
 });
 
+/** Rows runsAtStations reads at most, across every station it is asked for; past them the answer says it is not whole. */
+export const STATION_RUNS_MAX = 2000;
+/** About as many bytes as runsAtStations reads before it stops: a run row carries its node_statuses, and a query may
+ *  read only so much (Union's live flow view failed at 100 MB on Nov 22). */
+export const STATION_BYTES_MAX = 24 * 1024 * 1024;
+
+/** A run row's rough size: its node_statuses' result previews dominate it. */
+const rowBytes = (r: any): number => 1024 + (r.node_statuses ?? []).reduce((n: number, s: any) => n + 256 + (s?.result_preview?.length ?? 0) + (s?.error?.length ?? 0), 0);
+
+/** The result a station last reported on a run, or null. */
+function lastResult(statuses: any[], node: string): string | null {
+  for (let i = statuses.length - 1; i >= 0; i--) if (statuses[i]?.node_id === node) return statuses[i].result_preview ?? null;
+  return null;
+}
+
+/**
+ * Every running run of one flow standing at the named stations, as compact rows: a line's own queue reads them to
+ * see all the runs that wait beside it and the ones it waits on. Union's onefix Queue read `cast workflow runs`,
+ * whose 200 most recently updated rows dropped the runs that had waited longest, so those were never let in
+ * (Nov 20, 2026, about 400 of 600 waiting). Each station is one index range (by_workspace_status_node); the read
+ * stops at STATION_RUNS_MAX rows or STATION_BYTES_MAX bytes and then says it is `truncated`. A station's result
+ * rides along only where it is asked for.
+ */
+export async function runsAtStations(ctx: Ctx, workspace: string, args: { workflow_name: string; stations: string[]; results?: string[]; tasks?: boolean }) {
+  const results = [...new Set(args.results ?? [])];
+  const names = new Map<string, string | undefined>();
+  const nameOf = async (r: Doc<"workflow_runs">): Promise<string | undefined> => {
+    if (r.workflow_name || !r.workflow_id) return r.workflow_name;
+    const id = String(r.workflow_id);
+    if (!names.has(id)) names.set(id, ((await ctx.db.get(r.workflow_id)) as any)?.name);
+    return names.get(id);
+  };
+  const runs = [];
+  let read = 0;
+  let bytes = 0;
+  let truncated = false;
+  stations: for (const station of [...new Set(args.stations)]) {
+    const range = ctx.db.query("workflow_runs")
+      .withIndex("by_workspace_status_node", (q: any) => q.eq("workspace", workspace).eq("status", "running").eq("current_node_id", station));
+    for await (const r of range as AsyncIterable<Doc<"workflow_runs">>) {
+      if (read >= STATION_RUNS_MAX || bytes >= STATION_BYTES_MAX) { truncated = true; break stations; }
+      read++;
+      bytes += rowBytes(r);
+      if ((await nameOf(r)) !== args.workflow_name) continue;
+      const task = args.tasks && r.task_id ? await ctx.db.get(r.task_id) : null;
+      runs.push({
+        _id: r._id,
+        task_id: r.task_id ?? null,
+        ...(args.tasks ? { task_short_id: (task as any)?.short_id ?? null } : {}),
+        current_node_id: station,
+        runner_device: r.runner_device ?? null,
+        created_at: r.created_at,
+        updated_at: r.updated_at,
+        results: Object.fromEntries(results.map((node) => [node, lastResult(r.node_statuses ?? [], node)])),
+      });
+    }
+  }
+  return { runs, truncated };
+}
+
+/** `cast flow runs <flow> --at <stations>`: runsAtStations for a member of the team. */
+export const listRunsAtStations = query({
+  args: {
+    api_token: v.string(),
+    team_id: v.id("teams"),
+    workflow_name: v.string(),
+    stations: v.array(v.string()),
+    results: v.optional(v.array(v.string())),
+    tasks: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const auth = await verifyApiToken(ctx, args.api_token, false);
+    if (!auth) return { error: "Unauthorized" };
+    const db = await createDataContext(ctx, { userId: auth.userId, workspace: "team", team_id: args.team_id });
+    const { api_token: _t, team_id: _team, ...rest } = args;
+    return runsAtStations(ctx, db.workspaceKey, rest);
+  },
+});
+
 export const liveRunsForDevice = mutation({
   args: { api_token: v.string(), device: v.string() },
   handler: async (ctx, args) => {
