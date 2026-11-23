@@ -314,6 +314,30 @@ describe("acquireWorkspace — records demand so the pool can re-arm", () => {
   }, 45000);
 });
 
+// ct-99146: an ended run's tree is released with its work committed on codecast/<name>; acquiring that name again
+// must check the branch out as it stands, not claim a slot cut from main and fail renaming it onto the branch.
+describe("acquireWorkspace: a name whose branch already exists", () => {
+  test("attaches the branch as it stands and leaves the warm slot in the pool", async () => {
+    const { acquireWorkspace, releaseWorkspace: release } = await import("../lifecycle.js");
+    const first = await acquireWorkspace(repoRoot, "run-ct-1", { skipPool: true });
+    fs.writeFileSync(path.join(first.workspace.path, "work.txt"), "the run's work\n");
+    execSync("git add -A && git commit -q -m work", { cwd: first.workspace.path });
+    const tip = execSync("git rev-parse HEAD", { cwd: first.workspace.path, encoding: "utf-8" }).trim();
+    await release(repoRoot, "run-ct-1");
+
+    await maintainPool(repoRoot, 1);
+    const ready = await waitForReadySlot(repoRoot, { timeoutMs: 15000, pollMs: 100 });
+    expect(ready).not.toBeNull();
+
+    const back = await acquireWorkspace(repoRoot, "run-ct-1");
+    expect(back.workspace.branch).toBe("codecast/run-ct-1");
+    expect(execSync("git rev-parse HEAD", { cwd: back.workspace.path, encoding: "utf-8" }).trim()).toBe(tip);
+    expect(fs.readFileSync(path.join(back.workspace.path, "work.txt"), "utf8")).toBe("the run's work\n");
+    expect(readPoolState(repoRoot)!.slots.find((s) => s.slotId === ready!.slotId)?.state).toBe("ready");
+    await release(repoRoot, "run-ct-1");
+  }, 45000);
+});
+
 describe("maintainPool — a recycled slot is checked out at the CURRENT head", () => {
   test("the re-warmed worktree is on the new commit, not the branch's old tip", async () => {
     await maintainPool(repoRoot, 1);

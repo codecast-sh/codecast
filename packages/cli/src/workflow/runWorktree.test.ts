@@ -188,9 +188,129 @@ describe("a run's end", () => {
     expect(git(repoRoot, "branch", "--list", BRANCH)).toContain(BRANCH);
   }, 60_000); // lsof alone takes seconds on a loaded machine
 
-  test("keeps the tree while it holds work main lacks", async () => {
+  test("keeps a frozen change's tree as it is: its branch is the snapshot the run checked", async () => {
     withOrigin();
-    await quiet(() => releaseEndedRunTree(repoRoot, { worktree: NAME }));
-    expect(fs.readFileSync(path.join(tree(), "outreach", "app.ts"), "utf8")).toBe("export const v = 2;\n");
+    const runDir = path.join(repoRoot, "host-state", "run");
+    fs.mkdirSync(runDir, { recursive: true });
+    const tip = git(repoRoot, "rev-parse", BRANCH);
+    fs.writeFileSync(path.join(runDir, "change.json"), JSON.stringify({ worktree: NAME, branch: BRANCH, tip }));
+    fs.writeFileSync(path.join(tree(), "outreach", "app.ts"), "export const v = 3;\n");
+    await quiet(() => releaseEndedRunTree(repoRoot, { worktree: NAME, branch: BRANCH, run_dir: runDir }));
+    expect(git(repoRoot, "rev-parse", BRANCH)).toBe(tip);
+    expect(git(tree(), "status", "--porcelain")).toBe("M outreach/app.ts");
   }, 60_000);
+
+  test("keeps a tree that is off its run's branch while it holds work main lacks, and commits nothing", async () => {
+    withOrigin();
+    git(tree(), "switch", "-q", "-c", "feature/elsewhere");
+    fs.writeFileSync(path.join(tree(), "outreach", "app.ts"), "export const v = 3;\n");
+    const tips = git(repoRoot, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/");
+    await quiet(() => releaseEndedRunTree(repoRoot, { worktree: NAME }));
+    expect(fs.readFileSync(path.join(tree(), "outreach", "app.ts"), "utf8")).toBe("export const v = 3;\n");
+    expect(git(tree(), "status", "--porcelain")).toBe("M outreach/app.ts");
+    expect(git(repoRoot, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads/")).toBe(tips);
+  }, 60_000);
+});
+
+// ct-99146: on Nov 22 the trees of a day's codecast_fix runs that ended without landing held all 40 port slots of a
+// line host, each kept for its uncommitted work, and every run after them failed with "no free port".
+describe("a run that ends without landing", () => {
+  const FIX = "codecast-fix-ct-7";
+  const fixTree = () => path.join(repoRoot, ".codecast", "worktrees", FIX);
+  const OPTS = { skipSetup: true, skipHooks: true };
+  const graphOf = (body: string) => parseWorkflowSource(`digraph codecast_fix {
+    start [shape=Mdiamond]
+    build [label="Build", backend=session, agent=claude, prompt="build it", isolated=true]
+    leave [shape=parallelogram, script="cd \\"$(git rev-parse --show-toplevel)/.codecast/worktrees/$worktree\\" && printf 'export const v = 3;\\n' > outreach/app.ts && printf 'half a note\\n' > NOTES.md"]
+    exit [shape=Msquare]
+    ${body}
+  }`);
+  const done = (node_id: string, completed_at: number) => ({ node_id, status: "completed", completed_at });
+  async function drive(graph: ReturnType<typeof parseWorkflowSource>, opts: Record<string, unknown>) {
+    const fetched = globalThis.fetch;
+    globalThis.fetch = (async () => new Response(JSON.stringify({ ok: true }), { status: 200 })) as unknown as typeof fetch;
+    const log = console.log;
+    console.log = () => {};
+    try {
+      return await runWorkflow(graph, { cwd: repoRoot, runId: "run-7", runSession: "conv_run", taskId: "ct-7", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, ...opts } as any);
+    } finally {
+      globalThis.fetch = fetched;
+      console.log = log;
+    }
+  }
+
+  beforeEach(async () => {
+    // One port in the host's range, so a tree that keeps its slot leaves none for the next run.
+    fs.mkdirSync(path.join(repoRoot, ".codecast"), { recursive: true });
+    fs.writeFileSync(path.join(repoRoot, ".codecast", "workspace.toml"), "[ports.web]\nbase = 47391\nrange = 1\n");
+    // As codecast's own checkout has it: a workspace's setup logs and state are not work.
+    fs.writeFileSync(path.join(repoRoot, ".gitignore"), ".codecast/*\n!.codecast/workspace.toml\n");
+    git(repoRoot, "add", ".gitignore", ".codecast/workspace.toml");
+    git(repoRoot, "commit", "-qm", "manifest");
+    const { acquireWorkspace } = await import("../workspace/lifecycle.js");
+    await acquireWorkspace(repoRoot, FIX, { ...OPTS, skipPool: true });
+    fs.writeFileSync(path.join(fixTree(), "outreach", "app.ts"), "export const v = 2;\n");
+    git(fixTree(), "commit", "-qam", "the built change");
+  });
+
+  test("commits what its tree left uncommitted to its own branch, frees the tree and its port slot, and `cast ws acquire` puts the same content back", async () => {
+    const { acquireWorkspace, releaseWorkspace } = await import("../workspace/lifecycle.js");
+    const { readState } = await import("../workspace/contract.js");
+    const main = git(repoRoot, "rev-parse", "main");
+    expect(readState(repoRoot, FIX)?.ports.web).toBe(47391);
+    // The run makes its change, leaves part of it uncommitted, and finishes at Exit without shipping.
+    const outcome = await drive(graphOf("start -> build -> leave -> exit"), {
+      resume: { status: "running", current_node_id: "leave", node_statuses: [done("start", 1), done("build", 2)] },
+    });
+    expect(outcome).toBe("completed");
+
+    expect(fs.existsSync(fixTree())).toBe(false);
+    expect(readState(repoRoot, FIX)).toBeNull();
+    expect(git(repoRoot, "worktree", "list")).not.toContain(FIX);
+    const branch = `codecast/${FIX}`;
+    expect(git(repoRoot, "log", "-1", "--format=%s", branch)).toBe("Left uncommitted when the run on ct-7 ended (run run-7)");
+    expect(git(repoRoot, "show", `${branch}:outreach/app.ts`)).toBe("export const v = 3;");
+    expect(git(repoRoot, "show", `${branch}:NOTES.md`)).toBe("half a note");
+    expect(git(repoRoot, "rev-parse", "main")).toBe(main);
+    // Its port slot is free: another workspace takes the host's one port.
+    const other = await acquireWorkspace(repoRoot, "another-run", { ...OPTS, skipPool: true });
+    expect(other.workspace.ports.web).toBe(47391);
+    await releaseWorkspace(repoRoot, "another-run");
+
+    // `cast ws acquire codecast-fix-ct-7`: the tree comes back on the run's branch with what it held.
+    const back = await acquireWorkspace(repoRoot, FIX, OPTS);
+    expect(back.workspace.path).toBe(fixTree());
+    expect(git(fixTree(), "rev-parse", "--abbrev-ref", "HEAD")).toBe(branch);
+    expect(git(fixTree(), "status", "--porcelain")).toBe("");
+    expect(fs.readFileSync(path.join(fixTree(), "outreach", "app.ts"), "utf8")).toBe("export const v = 3;\n");
+    expect(fs.readFileSync(path.join(fixTree(), "NOTES.md"), "utf8")).toBe("half a note\n");
+  }, 90_000);
+
+  test("parked at its gate when its runner went away, its tree is released and the resume with the answer restores the same content", async () => {
+    const graph = graphOf(`
+      decide [label="Decide", shape=hexagon]
+      ship [shape=parallelogram, script="mkdir -p $run_dir && cd \\"$(git rev-parse --show-toplevel)/.codecast/worktrees/$worktree\\" && cat outreach/app.ts NOTES.md > $run_dir/shipped.txt && git status --porcelain -uall > $run_dir/status.txt"]
+      start -> build -> leave -> decide
+      decide -> ship [label="[S] Ship"]
+      ship -> exit`);
+    // The runner goes away as the run reaches its gate (a fresh runner takes over, or it crashes): its end runs as any run's does.
+    const left = () => fs.existsSync(path.join(fixTree(), "NOTES.md")) || !fs.existsSync(fixTree());
+    await expect(drive(graph, {
+      resume: { status: "running", current_node_id: "leave", node_statuses: [done("start", 1), done("build", 2)] },
+      loadedFlowVersions: "v1",
+      pinnedFlowVersions: async () => (left() ? "v2" : "v1"),
+      continueFresh: async () => { throw new Error("the runner went away at the gate"); },
+    })).rejects.toThrow("went away");
+    expect(fs.existsSync(fixTree())).toBe(false);
+    expect(git(repoRoot, "show", `codecast/${FIX}:NOTES.md`)).toBe("half a note");
+
+    // The daemon resumes the paused run once its card is answered: the tree is back before the gate and the station after it.
+    const outcome = await drive(graph, {
+      resume: { status: "running", current_node_id: "decide", gate_node_id: "decide", gate_response: "S", node_statuses: [done("start", 1), done("build", 2), done("leave", 3)] },
+    });
+    expect(outcome).toBe("completed");
+    const runDir = lineRunDir(repoRoot, FIX);
+    expect(fs.readFileSync(path.join(runDir, "shipped.txt"), "utf8")).toBe("export const v = 3;\nhalf a note\n");
+    expect(fs.readFileSync(path.join(runDir, "status.txt"), "utf8")).toBe("");
+  }, 90_000);
 });
