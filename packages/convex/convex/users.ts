@@ -19,7 +19,7 @@ import { enqueueStartSession, getDeviceLocalRoots, getOnlineLocalRoots, ownDevic
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
 import { reissueStrandedCloudSpawns } from "./cloudPlacement";
 import { reissueWaitingMigrations, settleLateResume } from "./sessionMigrations";
-import { fromConvexAgentType, LOCAL_AGENT_CLIENTS, isPinnableAgentId, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
+import { fromConvexAgentType, LOCAL_AGENT_CLIENTS, isPinnableAgentId, pinnableAgentIds, findModelOption, CLOUD_SESSION_SOURCES, cloudSessionSyncSettings } from "@codecast/shared/contracts";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { adminChangesZones, recutChangesDays } from "./lib/changesDirty";
 import { normalizeTimezone } from "./lib/teamDay";
@@ -3931,7 +3931,7 @@ export const setPinnedAgents = mutation({
     if (!userId) throw new Error("Not authenticated");
     const unknown = args.agents.filter((id) => !isPinnableAgentId(id));
     if (unknown.length) throw new Error(`Unknown agent client: ${unknown.join(", ")}`);
-    await ctx.db.patch(userId, { pinned_agents: [...new Set(args.agents)] });
+    await ctx.db.patch(userId, { pinned_agents: [...new Set(args.agents)], pinned_agents_known: pinnableAgentIds() });
   },
 });
 

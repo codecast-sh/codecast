@@ -6,9 +6,6 @@ import {
   HostedAgentClientError,
   isHostedAgentType,
   localAgentClient,
-  pinnedAgentIds,
-  pinnedLaunchOptions,
-  pinnedPickerOptions,
   AGENT_PICKER_OPTIONS,
   agentDisplayName,
   isPinnableAgentId,
@@ -27,6 +24,7 @@ import {
   type AgentClientId,
   type CapabilityKindSupport,
 } from "./agentClients";
+import { pinnedAgentIds, pinnableAgentIds, pinnedLaunchOptions, pinnedPickerOptions } from "./agentPins";
 import { CAPABILITY_KINDS, type CapabilityKind } from "./capabilities";
 
 // fromConvexAgentType is the single convex-spelling -> daemon-spelling translation.
@@ -524,8 +522,18 @@ describe("pinned agents", () => {
   });
 
   it("a user's list wins, in registry order, dropping unknown ids", () => {
-    expect(pinnedAgentIds(["gemini", "nope", "claude"])).toEqual(["claude", "gemini"]);
-    expect(pinnedAgentIds([])).toEqual([]);
+    const known = pinnableAgentIds();
+    expect(pinnedAgentIds(["gemini", "nope", "claude"], known)).toEqual(["claude", "gemini"]);
+    expect(pinnedAgentIds([], known)).toEqual([]);
+  });
+
+  it("a client added after the list was saved follows its own default", () => {
+    const known = pinnableAgentIds().filter((id) => id !== "antigravity");
+    expect(pinnedAgentIds(["claude"], known)).toEqual(["claude", "antigravity"]);
+    // A list saved before the known set was recorded predates antigravity.
+    expect(pinnedAgentIds(["claude"])).toEqual(["claude", "antigravity"]);
+    // Once the list records antigravity, unpinning it holds.
+    expect(pinnedAgentIds(["claude"], pinnableAgentIds())).toEqual(["claude"]);
   });
 
   it("a picker keeps the agent a session already runs", () => {
@@ -535,7 +543,7 @@ describe("pinned agents", () => {
 
   it("the hosted assistant is pinnable but unpinned by default", () => {
     expect(pinnedAgentIds(undefined)).not.toContain("codecast");
-    expect(pinnedAgentIds(["codecast", "claude"])).toEqual(["claude", "codecast"]);
+    expect(pinnedAgentIds(["codecast", "claude"], pinnableAgentIds())).toEqual(["claude", "codecast"]);
     expect(isPinnableAgentId("codecast")).toBe(true);
     expect(isPinnableAgentId("claude")).toBe(true);
     expect(isPinnableAgentId("claude_code")).toBe(false);
@@ -564,9 +572,9 @@ describe("picker options vs launch options", () => {
   });
 
   it("a picker shows the hosted assistant when kept or pinned", () => {
-    expect(pinnedPickerOptions(["claude"], null).map((o) => o.id)).toEqual(["claude"]);
-    expect(pinnedPickerOptions(["claude"], "codecast").map((o) => o.id)).toEqual(["claude", "codecast"]);
-    expect(pinnedPickerOptions(["codecast", "codex"]).map((o) => o.id)).toEqual(["codex", "codecast"]);
+    expect(pinnedPickerOptions(["claude"], null, pinnableAgentIds()).map((o) => o.id)).toEqual(["claude"]);
+    expect(pinnedPickerOptions(["claude"], "codecast", pinnableAgentIds()).map((o) => o.id)).toEqual(["claude", "codecast"]);
+    expect(pinnedPickerOptions(["codecast", "codex"], null, pinnableAgentIds()).map((o) => o.id)).toEqual(["codex", "codecast"]);
   });
 });
 

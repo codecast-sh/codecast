@@ -3,7 +3,7 @@ import { planSyncChange } from "@codecast/shared/team/syncPlan";
 import { approvesCommandRun } from "@codecast/shared/contracts/commandRun";
 import { GOAL_IDLE_LIMIT_MS, GOAL_MAX_ROUNDS, GOAL_MAX_STALLS, GOAL_RESUME_RESET, goalCanPause, goalCanResume, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
 import { isHeadOfPeopleRole } from "@codecast/shared/contracts/orgLead";
-import { cleanReservationPurpose } from "@codecast/shared/contracts";
+import { cleanReservationPurpose, pinnableAgentIds } from "@codecast/shared/contracts";
 import { parseStagePinRef, stagePinRowId } from "@codecast/shared/contracts/stagePins";
 import type { InitiativeMetric } from "@codecast/shared/contracts/initiative";
 import { captureError } from "../lib/analytics";
@@ -16016,6 +16016,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   setPinnedAgents: action(function (this: Draft, agents: string[]) {
     if (!this.currentUser) return;
     (this.currentUser as any).pinned_agents = [...agents];
+    (this.currentUser as any).pinned_agents_known = pinnableAgentIds();
   }),
 
   // The room flags: draft flip, then the same-named dispatch side effect

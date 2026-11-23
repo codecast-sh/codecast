@@ -234,6 +234,9 @@ export default defineSchema({
     // The agent clients this user's pickers show (registry ids). Absent means
     // the registry default (pinnedAgentIds in shared/contracts/agentClients).
     pinned_agents: v.optional(v.array(v.string())),
+    // The registry ids pinned_agents was chosen from, written with it. A client
+    // missing here was added later and follows its own default.
+    pinned_agents_known: v.optional(v.array(v.string())),
     notification_preferences: v.optional(v.object({
       team_session_start: v.boolean(),
       mention: v.boolean(),

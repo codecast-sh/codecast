@@ -11,6 +11,7 @@ export * from "./daemonCommands";
 export * from "./rewindFiles";
 export * from "./sshAttach";
 export * from "./agentClients";
+export * from "./agentPins";
 export * from "./executionBinding";
 export * from "./modelOptions";
 export * from "./agentDefinitions";

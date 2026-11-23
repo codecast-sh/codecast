@@ -452,7 +452,7 @@ export interface AgentPaneReadiness {
 }
 
 /** What every client declares, local or hosted. */
-interface AgentClientCommon {
+export interface AgentClientCommon {
   /** Stable internal id — the daemon's agent-type spelling and the registry key. */
   id: AgentClientId;
   /** The spelling the Convex schema / wire protocol uses. */
@@ -1242,25 +1242,9 @@ export const AGENT_PICKER_OPTIONS: AgentPickerOption[] = (Object.values(AGENT_CL
   hosted: d.executionTransports.includes("hosted"),
 }));
 
-/** The agents a user has pinned: their own list (users.pinned_agents) once
- *  they have set one, else every client pinned by default. Unknown ids drop. */
-export function pinnedAgentIds(pins: readonly string[] | null | undefined): AgentClientId[] {
-  const all = Object.values(AGENT_CLIENTS) as AgentClientCommon[];
-  if (pins) return all.filter((d) => pins.includes(d.id)).map((d) => d.id);
-  return all.filter((d) => d.pinnedByDefault !== false).map((d) => d.id);
-}
-
 /** Whether `id` is a client a user may pin (users.setPinnedAgents). */
 export function isPinnableAgentId(id: string): id is AgentClientId {
   return Object.prototype.hasOwnProperty.call(AGENT_CLIENTS, id);
-}
-
-/** A new-conversation picker's row: the pinned agents plus `keep` (the agent
- *  the conversation already has, or the default) so it always names itself. */
-export function pinnedPickerOptions(pins: readonly string[] | null | undefined, keep?: AgentClientId | null): AgentPickerOption[] {
-  const shown = new Set<AgentClientId>(pinnedAgentIds(pins));
-  if (keep) shown.add(keep);
-  return AGENT_PICKER_OPTIONS.filter((o) => shown.has(o.id));
 }
 
 /** The registry's name for an agent_type in either spelling (and the legacy
@@ -1272,14 +1256,6 @@ export function agentDisplayName(agentType: string | null | undefined): string {
   if (agentType === "codex_cli") return AGENT_CLIENTS.codex.displayName;
   if (!isPinnableAgentId(agentType) && !(Object.values(CONVEX_BY_ID) as string[]).includes(agentType)) return agentType;
   return AGENT_CLIENTS[fromConvexAgentType(agentType)].displayName;
-}
-
-/** The agent row a picker shows: the pinned agents, plus `keep` (the agent a
- *  session already runs) so an unpinned one still names itself. Registry order. */
-export function pinnedLaunchOptions(pins: readonly string[] | null | undefined, keep?: AgentClientId | null): AgentLaunchOption[] {
-  const shown = new Set<AgentClientId>(pinnedAgentIds(pins));
-  if (keep) shown.add(keep);
-  return AGENT_LAUNCH_OPTIONS.filter((o) => shown.has(o.id));
 }
 
 /** The launch-time model/effort rail for a blank session: effort gains the
