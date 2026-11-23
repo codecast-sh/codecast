@@ -198,14 +198,22 @@ export async function admitSubagent(
  * slot and no pending merge, and does nothing.
  */
 export async function subagentEnded(ctx: any, conv: any, outcome: SubagentOutcome): Promise<void> {
-  if (!conv?.parent_conversation_id) return;
+  const fresh = await releaseSubagentSlot(ctx, conv);
+  if (fresh) await settleWorktree(ctx, fresh, outcome);
+}
+
+/** A worker's process stopped without the worker ending (a Close): free its
+ *  slot and start what the queue now admits, settling nothing. Returns the
+ *  fresh row, or null when it is not a worker. */
+export async function releaseSubagentSlot(ctx: any, conv: any): Promise<any | null> {
+  if (!conv?.parent_conversation_id) return null;
   const fresh = await ctx.db.get(conv._id);
-  if (!fresh) return;
+  if (!fresh) return null;
   if (fresh.subagent_slot) {
     await ctx.db.patch(fresh._id, { subagent_slot: undefined, subagent_queued_start: undefined });
     await drainFleet(ctx, fresh.user_id);
   }
-  await settleWorktree(ctx, fresh, outcome);
+  return fresh;
 }
 
 /** A row's fleet facts as the inbox carries them: its slot, what it counts

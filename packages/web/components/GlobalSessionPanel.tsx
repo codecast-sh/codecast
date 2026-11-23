@@ -30,7 +30,7 @@ import { LivePulseDot } from "./SessionActivityLine";
 import { useTriggerKillNotice } from "../hooks/useTriggerKillNotice";
 import { actedBlockedConversations, skippedBlockedWorkers, blockedHeadlineCause, isBlockedConversation, isCurrentBlock, isSubagentConversation, LOGIN_FLOW_STALE_MS, runsOwnFleet, type CcUsage } from "@codecast/convex/convex/ccAccountsShared";
 import { contextShareOf, formatShare, formatTokens, restartPlan, restartReloadsContext } from "@codecast/convex/convex/wakeCost";
-import { withSafetyBlock } from "@codecast/shared/contracts";
+import { isClosedSession, withSafetyBlock } from "@codecast/shared/contracts";
 import { contextWindowTokens, restartShareOfRemaining, formatCountdown } from "@codecast/shared/contracts";
 import { USER_RESTS, describeDecision, pendingProposal, type UserRest } from "@codecast/shared/contracts";
 import { sessionLiveAt } from "../lib/liveness";
@@ -2128,12 +2128,12 @@ function SessionListPanelImpl({
     // thousands of stale sessions all at once (dismissed_at = today), so filtering
     // by dismissal time would still show them all; filtering by recency hides that
     // old noise while keeping things you recently worked on but set aside. Hidden
-    // ones stay searchable and reachable by direct link. A KILL is exempt: it is
+    // ones stay searchable and reachable by direct link. A KILL or a CLOSE is exempt: it is
     // the user's own act, never bulk noise, and the shelf pages old kills in on
     // purpose — an activity window would hide exactly what "Load more" fetched.
     const cutoff = Date.now() - DISMISSED_VISIBLE_MS;
     const filtered = filterByChip(dismissedList).filter(
-      (sess) => !!sess.inbox_killed_at || (sess.updated_at ?? 0) >= cutoff,
+      (sess) => !!sess.inbox_killed_at || isClosedSession(sess) || (sess.updated_at ?? 0) >= cutoff,
     );
     const retiredAt = (sess: InboxSession) => sess.inbox_dismissed_at || sess.inbox_killed_at || sess.dismissed_at || sess.updated_at || 0;
     return filtered.sort((a, b) => retiredAt(b) - retiredAt(a));

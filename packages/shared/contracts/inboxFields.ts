@@ -78,7 +78,7 @@ export const INBOX_ROW_FIELDS = [
   "handed_off_from_conversation_id", "handed_off_from_details", "handed_off_to_conversation_id", "handed_off_to_details",
   "implementation_session",
   "inbox_pinned_at", "is_pinned", "inbox_dismissed_at", "inbox_stashed_at", "inbox_stash_hidden",
-  "inbox_snoozed_until", "inbox_killed_at", "inbox_adopted_at", "is_deferred", "inbox_deferred_at", "inbox_rest", "inbox_rest_at", "user_rest",
+  "inbox_snoozed_until", "inbox_killed_at", "inbox_closed_at", "inbox_adopted_at", "is_deferred", "inbox_deferred_at", "inbox_rest", "inbox_rest_at", "user_rest",
   "settle_verdict", "is_favorite",
   "has_pending", "last_user_message", "pending_api_error", "pending_api_error_at", "pending_api_error_kind", "session_error", "hosted_stop",
   "idle_summary", "thread_state", "thread_state_at", "thread_state_msg_count", "thread_state_status",

@@ -1,5 +1,6 @@
-import { closeFactsOf, closeTooltip, type CloseRow } from '@codecast/web/lib/sessionClose';
-import { armedInjectTasksFor, type TaskRow } from '@codecast/web/components/triggerTasks';
+import { closeTooltip, type CloseRow } from '@codecast/web/lib/sessionClose';
+import { closeFactsInStore, type CloseStore } from '@codecast/web/lib/closeFactsInStore';
+import type { TaskRow } from '@codecast/web/components/triggerTasks';
 import { killReviewOf } from '@codecast/web/components/consequential/killReview';
 
 // The words of a row's Close and Kill on the phone, from the same decision and
@@ -8,9 +9,10 @@ import { killReviewOf } from '@codecast/web/components/consequential/killReview'
 type Row = CloseRow & { _id: string; title?: string | null; is_idle?: boolean; has_pending?: boolean };
 
 /** What Close does to this row now: the web tooltip without its "Close: ",
- *  for the line under the menu's Close. */
-export function closeDetail(row: Row, tasks: TaskRow[], now: number, pendingSend = false): string {
-  const words = closeTooltip(closeFactsOf(row, armedInjectTasksFor(tasks, row._id).length, now, pendingSend)).replace(/^Close: /, '');
+ *  for the line under the menu's Close. Reads the store exactly as the web
+ *  tooltip does (closeFactsInStore): triggers, an unlanded send, the nested group. */
+export function closeDetail(row: Row, store: CloseStore, now: number): string {
+  const words = closeTooltip(closeFactsInStore(store, row, now)).replace(/^Close: /, '');
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 

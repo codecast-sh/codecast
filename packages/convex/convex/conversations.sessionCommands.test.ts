@@ -94,6 +94,7 @@ describe("getConversationLifecycle", () => {
       inbox_pinned_at: null, // absent stamps normalize to null, never undefined
       has_pending_messages: false,
       agent_type: null,
+      closed: false,
     });
   });
 
@@ -107,6 +108,7 @@ describe("getConversationLifecycle", () => {
       inbox_pinned_at: null,
       has_pending_messages: false,
       agent_type: null,
+      closed: false,
     });
   });
 
@@ -154,6 +156,7 @@ describe("getConversationLifecycle", () => {
         inbox_pinned_at: null,
         has_pending_messages: false,
         agent_type: null,
+        closed: false,
       });
     });
 

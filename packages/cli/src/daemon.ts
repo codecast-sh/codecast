@@ -24570,10 +24570,12 @@ async function heartbeatHealthCheck(sessionId: string, reverse?: Readonly<Record
 // status=completed with inbox_killed_at stamped, resurrected on every pass).
 // The verdict is this pure function; "killed" and "completed" are equivalent
 // here, since killSession stamps both and a completed conversation is finished
-// either way. A CLOSED conversation (the web's Close: inbox_dismissed_at with
-// teardown, no retirement marker) is not retired, but it is not to come back
-// on its own either: only a message or trigger reaching it does, and that
-// enqueue clears the stamp before the daemon resumes it.
+// either way. A CLOSED conversation (the person's Close, shared
+// isClosedSession) is not retired, but it is not to come back on its own
+// either; the server reports `closed` only while no message waits for it, so a
+// delivery is never held back, and a message or trigger reaching it un-hides it.
+// Other dismissals (bulk tidy, a linked child) are not closes and stay
+// resumable, as they always were.
 export function isConversationRetired(
   lifecycle: ConversationLifecycle | null | undefined,
   opts: { trustStatusFallback: boolean },
@@ -24590,7 +24592,7 @@ export function isConversationRetired(
   // Every other path (delivery, warm pool, resume repair) requires the real
   // conversation-id-resolved query and otherwise proceeds.
   if (!lifecycle.hideStateKnown && !opts.trustStatusFallback) return false;
-  return !!lifecycle.inboxKilledAt || !!lifecycle.inboxDismissedAt || lifecycle.status === "completed";
+  return !!lifecycle.inboxKilledAt || !!lifecycle.closed || lifecycle.status === "completed";
 }
 
 export type ResumeOptions = {

@@ -7,7 +7,7 @@ import { internal } from "./_generated/api";
 import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./lib/agentTaskRows";
 import { cancelQueuedMessagesOnKill } from "./pendingMessages";
-import { subagentEnded } from "./subagentFleet";
+import { releaseSubagentSlot, subagentEnded } from "./subagentFleet";
 import { nestParentIdOf } from "./ccAccountsShared";
 import { isOrphanOrSubagent } from "./inboxFilters";
 
@@ -186,6 +186,8 @@ export async function enqueueKillSessionCommand(
   conv: { _id: any; user_id: any; session_id?: string },
   now: number = Date.now(),
   cause?: string,
+  // A close keeps the worktree: the session wakes into its own folder.
+  opts?: { keepWorkspace?: boolean },
 ): Promise<boolean> {
   const pending = await ctx.db
     .query("daemon_commands")
@@ -203,7 +205,7 @@ export async function enqueueKillSessionCommand(
     command: "kill_session" as const,
     // session_id rides along (mirrors conversations.killSession) so the daemon
     // can still tear the backend down when its conversation mapping is gone.
-    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id, ...(cause ? { cause } : {}) }),
+    args: JSON.stringify({ conversation_id: conv._id, session_id: conv.session_id, ...(cause ? { cause } : {}), ...(opts?.keepWorkspace ? { keep_workspace: true } : {}) }),
     created_at: now,
   });
   return true;
@@ -349,7 +351,7 @@ export async function applyHideTransition(
     // holds either way, so callers report which it was instead of piling on a
     // duplicate command. A kill the daemon already executed leaves no pending
     // row, so the re-kill that matters — the resurrection case — always inserts.
-    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc, Date.now(), opts?.cause ?? "hide");
+    teardownEnqueued = await enqueueKillSessionCommand(ctx, doc, Date.now(), opts?.cause ?? "hide", { keepWorkspace: opts?.close });
     // A persistent anchor never auto-completes on a dismiss/kill — it goes
     // dormant, not retired (only decommissionAnchor clears `persistent`).
     // inbox_killed_at records when the session was FIRST killed: a forced
@@ -360,17 +362,23 @@ export async function applyHideTransition(
     // A close stamps neither: inbox_killed_at and status completed are the
     // retirement markers (cast send refuses a retired session, a worker's
     // report skips a retired lead, a role drops a retired seat, the daemon
-    // never resumes one). A closed session keeps only inbox_dismissed_at,
-    // which every one of those readers treats as alive, and the daemon reads
-    // as "do not bring it back on your own" (cli daemon isConversationRetired).
+    // never resumes one). A close stamps inbox_closed_at equal to its
+    // dismissed stamp instead (shared isClosedSession), which those readers
+    // treat as alive and the daemon reads as "do not bring it back on your
+    // own" (getConversationLifecycle `closed`).
     const killPatch: Record<string, any> = {};
-    if (!opts?.close) {
+    if (opts?.close) {
+      killPatch.inbox_closed_at = patch.inbox_dismissed_at;
+    } else {
       if (!doc?.inbox_killed_at) killPatch.inbox_killed_at = Date.now();
       if (!doc?.persistent) killPatch.status = "completed";
     }
     if (Object.keys(killPatch).length > 0) await ctx.db.patch(doc._id, killPatch);
-    // A killed worker frees its fleet slot and keeps its worktree.
-    if (!doc?.persistent) await subagentEnded(ctx, doc, "killed");
+    // A killed worker frees its fleet slot and keeps its worktree. A closed one
+    // only frees its slot: it has not ended, so its lead hears nothing (a
+    // settle note would revive the lead the person just closed).
+    if (opts?.close) await releaseSubagentSlot(ctx, doc);
+    else if (!doc?.persistent) await subagentEnded(ctx, doc, "killed");
     // Dismiss retires the session — a standing schedule that injects
     // into it must die with it, or its next fire would silently
     // resurrect a session the user just retired. User gestures only:

@@ -14,7 +14,7 @@ import {
   useInboxStore, type InboxSession, type BucketItem,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowSubagents, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels,
-  sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount, convHasPendingSend,
+  sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
 } from '@codecast/web/store/inboxStore';
 import { hiddenBucketTree, killAllIds } from '@codecast/web/store/hiddenBucketTree';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
@@ -294,7 +294,6 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     const store = useInboxStore.getState();
     const canHide = session.is_private === false && !!session.team_id && session.user_id === store.currentUser?._id;
     const tasks = Object.values(store.agentTasks ?? {}) as TaskRow[];
-    const pendingSend = convHasPendingSend(store.pendingMessages[session._id], Date.now());
     // Kill retires it: asks first when it would cut a turn off or cancel a
     // trigger or a queued message (the web's kill review, as an alert).
     const kill = () => {
@@ -306,7 +305,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       ]);
     };
     showActionSheet(sessionTitle(session), [
-      { label: 'Close', detail: closeDetail(session, tasks, Date.now(), pendingSend), icon: 'x', onPress: () => handleClose(session._id) },
+      { label: 'Close', detail: closeDetail(session, store as any, Date.now()), icon: 'x', onPress: () => handleClose(session._id) },
       { label: session.is_pinned ? 'Unpin' : 'Pin', icon: 'map-pin', onPress: () => handlePin(session._id) },
       { label: favoriteLabel, icon: 'star', onPress: toggleFavorite },
       { label: 'Mark unread', icon: 'circle', onPress: markUnread },

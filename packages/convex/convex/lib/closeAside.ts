@@ -3,15 +3,17 @@
 // server's own read of the row, so a close the client guessed wrong never cuts
 // a turn off or drops a wake. Pure reads, no writes.
 import { deriveLiveAt, HEARTBEAT_ALIVE_MS, isLoopFresh } from "@codecast/shared/contracts";
-import { nestParentIdOf } from "../ccAccountsShared";
+import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "../ccAccountsShared";
 
 const NESTED_SCAN = 50;
 
 /** Why a close must set this conversation aside (stash) instead of stopping
  *  it, or null when stopping loses nothing. */
 export async function closeSetsAsideOnServer(ctx: { db: any }, conv: any, now: number): Promise<string | null> {
-  // A queued message is about to run.
-  if (conv.has_pending_messages) return "queued";
+  // A queued message is about to run (the rows, not only the flag).
+  if (conv.has_pending_messages || await hasDeliverableMessage(ctx, conv._id)) return "queued";
+  // Parked on a usage limit: the reset or an account switch continues it.
+  if (isBlockedConversation(conv) && isCurrentBlock(conv, now)) return "usage_limit";
   // An armed /loop is a ScheduleWakeup inside the agent process.
   if (conv.loop_state && isLoopFresh(conv.loop_state, now)) return "loop";
   // A Workflow-tool run (run_kind "workflow") runs inside the host agent
@@ -24,13 +26,24 @@ export async function closeSetsAsideOnServer(ctx: { db: any }, conv: any, now: n
   // The nested group comes down with the card (cascadeHideToNestedChildren).
   const id = String(conv._id);
   const [subs, spawned] = await Promise.all([
-    ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conv._id)).take(NESTED_SCAN),
-    ctx.db.query("conversations").withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", conv._id)).take(NESTED_SCAN),
+    // Newest first: the busy children are the recent ones.
+    ctx.db.query("conversations").withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conv._id)).order("desc").take(NESTED_SCAN),
+    ctx.db.query("conversations").withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", conv._id)).order("desc").take(NESTED_SCAN),
   ]);
   for (const child of [...subs, ...spawned]) {
     if (nestParentIdOf(child) === id && await turnInFlight(ctx, child, now)) return "nested";
   }
   return null;
+}
+
+/** A message still waiting to reach this session: a wake a close never holds
+ *  back (getConversationLifecycle's `closed` reads it too). */
+export async function hasDeliverableMessage(ctx: { db: any }, convId: any): Promise<boolean> {
+  for (const status of ["pending", "injected", "failed"] as const) {
+    const row = await ctx.db.query("pending_messages").withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", convId).eq("status", status)).first();
+    if (row) return true;
+  }
+  return false;
 }
 
 // Mid-turn by the server's own facts: the shared live rule over the managed
