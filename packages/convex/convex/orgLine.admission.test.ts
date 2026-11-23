@@ -556,6 +556,24 @@ describe("orgLine admission (LE6)", () => {
         await expect(start("ct-c1")).rejects.toThrow(/is paused/);
       });
 
+      test("another role's run on the lead's problem is that role's alone: its machine, its filing, its count", async () => {
+        const { hashToken } = await import("./apiTokens");
+        const { createFromCli } = await import("./workflow_runs");
+        const { ctx, tables } = seated([seatLaptop, host("h1", 4)]);
+        const growth = tables.org_roles[0];
+        tables.org_roles.push({ ...growth, _id: "org_roles_ops", short_id: "or-ops", handle: "ops", name: "Ops", anchor_id: "anchors_ops", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE }, counters: undefined });
+        tables.anchors.push({ _id: "anchors_ops", team_id: TEAM, bot_user_id: "users_bot", host_user_id: MATE, conversation_id: "conversations_ops" });
+        tables.conversations.push({ ...tables.conversations.find((c) => c._id === STANDING)!, _id: "conversations_ops", session_id: "ops", user_id: MATE, standing_role_id: "org_roles_ops", anchor_id: "anchors_ops" });
+        tables.api_tokens = [{ _id: "api_tokens_mate", user_id: MATE, token_hash: await hashToken("mate-token") }];
+        const out = await (createFromCli as any)._handler(ctx, { api_token: "mate-token", workflow_name: "line", task_id: "ct-c0", project_path: "/srv/growth", detach: true, run_on_device: "dev-mate", spawner_session: "ops" });
+        const primary = tables.conversations.find((c) => c._id === out.primary_conversation_id)!;
+        expect(primary).toMatchObject({ org_role_id: "org_roles_ops", role_started: true });
+        expect(tables.org_roles.find((r) => r._id === "org_roles_ops")!.counters?.hands).toBe(1);
+        expect(growth.counters?.hands ?? 0).toBe(0);
+        // Admitted on ops's own pool, so the run itself is ops's too.
+        expect(tables.workflow_runs.find((r) => r._id === out.run_id)).toMatchObject({ org_role_id: "org_roles_ops" });
+      });
+
       test("a person's own run from a plain terminal stays theirs, though the task's lead speaks for it", async () => {
         const { hashToken } = await import("./apiTokens");
         const { createFromCli } = await import("./workflow_runs");

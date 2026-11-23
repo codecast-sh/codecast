@@ -34,7 +34,7 @@ import { flowAgents, missingAgentOn } from "./lib/linePlacement";
 import { actsForRole, agentDisplayName, deviceDisplayName } from "@codecast/shared/contracts";
 import { navPromptField } from "./userMessagesFilter";
 import { retainSessionCreator } from "./sessionLaunch";
-import { gateHandStart, gateRoleCaps, recordHandStart } from "./spawn";
+import { gateHandStart, recordHandStart } from "./spawn";
 import { isSessionOwner } from "./sessionOwners";
 import { withAgentSessions } from "./lib/runAgentSessions";
 import { changeSessionOf } from "./lib/taskOwner";
@@ -890,10 +890,15 @@ export const createFromCli = mutation({
     // pool machine with the most free runs, in its checkout, never the asking
     // machine. With the pool full nothing starts, and the problem goes back to
     // the line's queue for the sweep to start in rank order.
-    const lead = args.detach && lineRun && taskRow ? await projectLeadRole(ctx, taskRow) : null;
+    // One role per run: a run a role starts is admitted on that role's own
+    // pool, filed under it and counted against it, so its stations (which
+    // name the same spawner) answer to the same role.
+    const lead = args.detach && lineRun && taskRow ? startingRole ?? await projectLeadRole(ctx, taskRow) : null;
     const room = lead ? await admitRoleRun(ctx, lead, now, undefined, needs) : null;
     // The pool takes the runner's own runs, and anyone's the asking machine cannot run.
     const pooled = room?.pooled && (room.runner === String(userId) || unfit) ? room : null;
+    // The problem's queue is its lead's; another role's full pool starts nothing and queues nothing.
+    if (pooled && "waiting" in pooled && startingRole) throw new Error(`${taskRow?.short_id ?? workflowName} did not start: ${pooled.waiting}`);
     if (pooled && "waiting" in pooled) {
       const refusal = await liveRunRefusal(ctx, taskRow, args.force);
       if (refusal) throw new Error(refusal);
@@ -920,11 +925,7 @@ export const createFromCli = mutation({
       fresh_branch: args.detach && lineRun,
       now,
     });
-    // A run a place admitted for the lead is filed under the lead, and counts
-    // as its hand; the lead's caps hold too when it is not the starting role.
-    const handOf = place && startingRole ? lead : startingRole;
-    if (handOf && startingRole && String(handOf._id) !== String(startingRole._id)) await gateRoleCaps(ctx, handOf);
-    if (handOf) await recordHandStart(ctx, handOf, primary_conversation_id);
+    if (startingRole) await recordHandStart(ctx, startingRole, primary_conversation_id);
     else await retainSessionCreator(ctx, primary_conversation_id, userId, host);
     // A placed run names its machine from the start, so the pool counts it there before a runner claims it.
     if (place) await ctx.db.patch(run_id, { runner_device: place.device });
