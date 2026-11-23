@@ -232,7 +232,7 @@ export function sessionMessageIntentOf(rawContent: string | null | undefined): S
   return intent === "inform" || intent === "done" ? intent : "request";
 }
 
-export { sendArrival, sendArrivalPhrase, type SendArrival, type SendArrivalSession } from "./sendArrival";
+export { sendArrival, sendArrivalPhrase, SEND_REFUSED, SEND_REFUSED_PAUSED_ROLE, type SendArrival, type SendArrivalSession } from "./sendArrival";
 
 // Lightweight detection that a user message is actually an inbound
 // session→session message (delivered by `cast send`). Keys off the OPENING tag

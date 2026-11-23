@@ -63,3 +63,10 @@ export function sendArrivalPhrase(arrives: SendArrival): string {
     case "never": return "never: a run's log has no agent, so it stays on the run's record";
   }
 }
+
+// How `cast send` recognizes the server refusing a send (convex
+// pendingMessages.killedSendMessage, lib/sessionTakeOver pausedRoleRefusal):
+// every refusal starts "Not sent."; a role paused on its target names it as
+// "<role> is paused on <session>". The server's tests hold its wording to these.
+export const SEND_REFUSED = /^Not sent\./;
+export const SEND_REFUSED_PAUSED_ROLE = /^Not sent\. .+ is paused on \S+/;

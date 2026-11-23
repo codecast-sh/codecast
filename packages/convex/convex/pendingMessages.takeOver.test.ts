@@ -7,7 +7,7 @@ import { planUndo, performUndo } from "./orgChanges";
 import { wakeMentionedParties } from "./chat";
 import { computeInboxSessions, heldByRoleAlone } from "./conversations";
 import { endMembership } from "./lib/teamMembershipEnd";
-import { formatDecisionAnswer, roleDrives, rollupParentIdOf } from "@codecast/shared/contracts";
+import { formatDecisionAnswer, roleDrives, rollupParentIdOf, SEND_REFUSED, SEND_REFUSED_PAUSED_ROLE } from "@codecast/shared/contracts";
 import { dispatch } from "./dispatch";
 import { sendSessionMessage } from "./pendingMessages";
 import { stopAndSendForUser } from "./daemonCommandUtils";
@@ -259,6 +259,15 @@ describe("a paused role may not write into the session", () => {
     await composerSend(ctx, row("filed"), ME);
     await expect(performSessionSend(ctx, ME as any, { to: "jxfiled", from: "s-seat", body: "status?" }))
       .rejects.toThrow(/^Not sent\. @growth is paused on jxfiled: Me is working in it\./);
+  });
+
+  // `cast send` keeps the body and offers no --wake by matching this text.
+  test("the refusal is the one cast send recognizes", async () => {
+    const { ctx, row } = await world();
+    await composerSend(ctx, row("filed"), ME);
+    const refusal = await performSessionSend(ctx, ME as any, { to: "jxfiled", from: "s-seat", body: "status?" }).then(() => "", (e: Error) => e.message);
+    expect(refusal).toMatch(SEND_REFUSED);
+    expect(refusal).toMatch(SEND_REFUSED_PAUSED_ROLE);
   });
 
   test("while the role drives, its session writes in as before", async () => {

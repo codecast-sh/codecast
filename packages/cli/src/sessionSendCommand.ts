@@ -1,7 +1,7 @@
 import type { Command } from "commander";
 import { c } from "./colors.js";
 import { stdinText } from "./sendBody.js";
-import { sendArrivalPhrase, type SendArrival } from "@codecast/shared/contracts";
+import { SEND_REFUSED, SEND_REFUSED_PAUSED_ROLE, sendArrivalPhrase, type SendArrival } from "@codecast/shared/contracts";
 
 type SendOptions = { from?: string; raw?: boolean; wake?: boolean; done?: boolean; fyi?: boolean; status?: boolean };
 type SendIo = {
@@ -12,11 +12,10 @@ type SendIo = {
   hold?(target: string, body: string): string;
 };
 
-/** The server's refusal of a killed target (pendingMessages.killedSendMessage). */
-const REFUSED = /^Not sent\./;
-// The server's refusal of a role writing into a session it is paused on
-// (convex lib/sessionTakeOver pausedRoleRefusal).
-const PAUSED_ROLE = /^Not sent\. .+ is paused on \S+/;
+// The server's refusals: a killed target, and a role writing into a session
+// it is paused on (shared sendArrival SEND_REFUSED*).
+const REFUSED = SEND_REFUSED;
+const PAUSED_ROLE = SEND_REFUSED_PAUSED_ROLE;
 
 export function registerSessionSendCommand(program: Command, io: SendIo): void {
   program
