@@ -2,6 +2,10 @@
 // stamps and why): one role's sessions, judged by the shared actsForRole.
 import { actsForRole } from "@codecast/shared/contracts";
 import { ownerRowsOf, removeSessionOwnerRow, syncPrimaryOwnerCache } from "../sessionOwners";
+import { reroutePendingDecisionsForConversation } from "../sessionDecisions";
+
+// The spawn wrote its row in the transaction that made the session.
+const SPAWN_ROW_WINDOW_MS = 60_000;
 
 export async function backfillRoleStartedPage(
   ctx: { db: any },
@@ -37,15 +41,23 @@ export async function backfillRoleStartedPage(
     if (c.role_started || !(await startedOf(c, 0))) continue;
     // The spawn rules before role_started (retainSessionCreator, inheritRunOwners,
     // the line) gave the person whose account ran the spawner a row of their
-    // own. A run a role started takes no person owner, so that row goes with
-    // the stamp; a row anyone else gave or took stays.
+    // own, written as the session was made. A run a role started takes no
+    // person owner, so that row goes with the stamp. A row anyone else gave,
+    // one written later (a take-over, Take ownership), and every row of a
+    // session somebody drives stay: those are a person's choice, not the spawn's.
     const spawnerRunner = String((await spawnerOf(c))?.user_id ?? "");
-    const retained = (await ownerRowsOf(ctx, c._id)).filter((r) => r.user_id === spawnerRunner && r.added_by === spawnerRunner);
+    const madeAt = c._creationTime ?? c.started_at ?? 0;
+    const retained = c.driver_user_id ? [] : (await ownerRowsOf(ctx, c._id))
+      .filter((r) => r.user_id === spawnerRunner && r.added_by === spawnerRunner && r.added_at <= madeAt + SPAWN_ROW_WINDOW_MS);
     rows.push({ role: role.handle, session: c.short_id ?? String(c._id).slice(0, 7), dropped_owners: retained.map((r) => r.user_id) });
     if (dryRun) continue;
     await ctx.db.patch(c._id, { role_started: true });
     for (const r of retained) await removeSessionOwnerRow(ctx, c._id, r.user_id as any);
-    if (retained.length) await syncPrimaryOwnerCache(ctx, c._id);
+    if (retained.length) {
+      await syncPrimaryOwnerCache(ctx, c._id);
+      // Its open questions leave the person dropped and reach the role.
+      await reroutePendingDecisionsForConversation(ctx as any, c._id, Date.now());
+    }
   }
   const next = !page.isDone
     ? { roleIndex, cursor: page.continueCursor as string }

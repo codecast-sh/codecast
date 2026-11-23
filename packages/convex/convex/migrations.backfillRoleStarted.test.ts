@@ -11,7 +11,7 @@ const ME = "users_me";
 const ROLE = "org_roles_growth";
 
 const conv = (id: string, over: Record<string, any> = {}) => ({
-  _id: `conversations_${id}`, short_id: id, user_id: ME, status: "active", message_count: 3, updated_at: 1, ...over,
+  _id: `conversations_${id}`, short_id: id, user_id: ME, status: "active", message_count: 3, updated_at: 1, _creationTime: 1, ...over,
 });
 
 function fixtures() {
@@ -77,6 +77,17 @@ describe("backfillRoleStarted", () => {
     await backfillRoleStartedPage({ db } as any, { dryRun: false });
     expect(db._tables.session_owners.map((r: any) => r._id).sort()).toEqual(["so3", "so4"]);
     expect((await db.get("conversations_hand" as any)).owner_user_id).toBe("users_mate");
+  });
+
+  test("a row the seat person took after the spawn, or any row of a session someone drives, stays", async () => {
+    const db = fixtures();
+    // A take-over after the spawn: the same shape as the spawn's row, written later.
+    db._tables.session_owners.find((r: any) => r._id === "so2").added_at = 10 * 60_000;
+    // The seat person drives the hand.
+    await db.patch("conversations_hand", { driver_user_id: ME });
+    await backfillRoleStartedPage({ db } as any, { dryRun: false });
+    expect(db._tables.session_owners.map((r: any) => r._id).sort()).toEqual(["so1", "so2", "so3", "so4"]);
+    expect((await db.get("conversations_hand" as any)).driver_user_id).toBe(ME);
   });
 
   test("it pages through a role's sessions and hands the cursor on", async () => {
