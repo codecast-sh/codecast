@@ -1,5 +1,7 @@
 import { mutation, query, internalAction, internalMutation, internalQuery } from "./functions";
 import { deliverSessionNotification, deliverSessionNotificationToParties, idleDigestOn } from "./lib/sessionNotify";
+import { notifyNeedsInputWatchers } from "./sessionWatch";
+import { sessionNotifyLevel } from "./lib/sessionWatch";
 export { deliverSessionNotification, deliverSessionNotificationToParties, idleDigestOn };
 import { routeUpHears, routeUpWaitingSession } from "./agentTasks";
 import {
@@ -228,7 +230,7 @@ export const notifyTeamSessionStart = internalMutation({
     const now = Date.now();
 
     for (const member of teamMembers) {
-      if (member.muted_members?.includes(args.user_id)) {
+      if ((await sessionNotifyLevel(ctx, member, conversation)) === "muted") {
         continue;
       }
       if (member.notification_preferences?.team_session_start === false) {
@@ -745,6 +747,19 @@ export async function performNeedsInputCheck(
   // recheck in messages.ts) can still land on one.
   if (boundary) return { notified: false, reason: "session_boundary" };
 
+  // The session's subscribers hear every waiting episode, before any of the
+  // owner's quiet rules below (sessionWatch.notifyNeedsInputWatchers).
+  let watchersTold: Set<string> | undefined;
+  if (state === "needs_input") {
+    const watchKind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
+    watchersTold = await notifyNeedsInputWatchers(ctx, conv, {
+      kind: watchKind,
+      key: `${conv.message_count}:${watchKind}`,
+      title: sessionPushTitle(conv),
+      message: needsInputMessage(watchKind, lastMsg, conv),
+    });
+  }
+
   // The route up (org-staffing.md S28). A hand (a session that reports to a
   // role) that ends a turn needing input tells its role at once, however it
   // asks: an open prompt, a dead process, a declared block, a question in
@@ -904,17 +919,17 @@ export async function performNeedsInputCheck(
   // Mark BEFORE delivering so a conflicting retry can't double-push.
   await ctx.db.patch(conv._id, { needs_input_notified_key: key });
 
-  const title = sessionPushTitle(conv);
-  const message =
-    (kind === "awaiting_input" ? auqQuestionPreview(lastMsg) : null) ??
+  const delivered = await deliverSessionNotificationToParties(
+    ctx, conv, "session_idle", sessionPushTitle(conv), needsInputMessage(kind, lastMsg, conv), watchersTold,
+  );
+  return { notified: delivered };
+}
+
+function needsInputMessage(kind: string, lastMsg: any, conv: any): string {
+  return (kind === "awaiting_input" ? auqQuestionPreview(lastMsg) : null) ??
     (lastMsg?.role === "assistant" ? notifPreview(lastMsg.content) : null) ??
     conv.idle_summary ??
     "Waiting for your input";
-
-  const delivered = await deliverSessionNotificationToParties(
-    ctx, conv, "session_idle", title, message,
-  );
-  return { notified: delivered };
 }
 
 // Machine-authored user turns: another session's cast send and the schedule

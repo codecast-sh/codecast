@@ -4136,3 +4136,152 @@ a.ch-slack-mark:hover { color: var(--sol-text); }
 .modern-style .ch-menu-item:focus-visible,
 .modern-style .ch-search-chip:focus-visible,
 .modern-style .ch-slack-seg-item:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+
+/* Sessions a chat draft names, each one asked to reply or only mentioned
+   (components/chat/SessionReplyStrip.tsx). */
+.ch-reply-strip {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  min-width: 0;
+  flex: 0 1 auto;
+  font-size: var(--fs-meta);
+  animation: ch-reply-strip-in 160ms ease-out;
+}
+
+.ch-reply-strip-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  color: var(--sol-text-dim);
+  white-space: nowrap;
+}
+
+.ch-reply-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  max-width: 220px;
+  height: 24px;
+  padding: 0 8px 0 6px;
+  border: 1px solid color-mix(in srgb, var(--sol-border) 70%, transparent);
+  border-radius: 999px;
+  color: var(--sol-text-muted);
+  background: transparent;
+  transition: color 120ms ease, background 120ms ease, border-color 120ms ease;
+}
+
+.ch-reply-toggle:hover {
+  color: var(--sol-text);
+  border-color: var(--sol-border);
+}
+
+.ch-reply-toggle-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ch-reply-toggle-dot {
+  position: relative;
+  flex-shrink: 0;
+  width: 18px;
+  height: 10px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--sol-text-dim) 35%, transparent);
+  transition: background 140ms ease;
+}
+
+.ch-reply-toggle-dot::after {
+  content: "";
+  position: absolute;
+  top: 1px;
+  left: 1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--sol-card);
+  box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--sol-text) 25%, transparent);
+  transition: transform 140ms ease;
+}
+
+.ch-reply-toggle[aria-pressed="true"] {
+  color: var(--sol-cyan);
+  border-color: color-mix(in srgb, var(--sol-cyan) 45%, transparent);
+  background: color-mix(in srgb, var(--sol-cyan) 9%, transparent);
+}
+
+.ch-reply-toggle[aria-pressed="true"] .ch-reply-toggle-dot {
+  background: var(--sol-cyan);
+}
+
+.ch-reply-toggle[aria-pressed="true"] .ch-reply-toggle-dot::after {
+  transform: translateX(8px);
+}
+
+.ch-reply-toggle:focus-visible {
+  outline: 2px solid var(--sol-blue);
+  outline-offset: 1px;
+}
+
+.ch-reply-strip--top {
+  flex-wrap: wrap;
+  justify-content: flex-start;
+  row-gap: 4px;
+  padding: 4px 0 2px;
+}
+
+/* Too narrow to sit beside send (a thread panel): the strip takes its own row
+   above the foot's buttons, and the names get the room to be read. */
+@container ch-composer (max-width: 620px) {
+  .ch-reply-strip {
+    order: -1;
+    flex: 1 0 100%;
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    row-gap: 4px;
+    padding-top: 2px;
+  }
+  .ch-reply-toggle { max-width: 100%; }
+}
+
+@keyframes ch-reply-strip-in {
+  from { opacity: 0; transform: translateY(2px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ch-reply-strip { animation: none; }
+  .ch-reply-toggle-dot, .ch-reply-toggle-dot::after { transition: none; }
+}
+
+/* A session the line asked to reply ("@jx7abcd"), set apart from one it only
+   named: the reply mark sits before the session's own pill. */
+.ch-session-ask {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  padding: 0 1px 0 4px;
+  border-radius: 6px;
+  white-space: nowrap;
+  vertical-align: baseline;
+  background: color-mix(in srgb, var(--sol-cyan) 9%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sol-cyan) 30%, transparent);
+}
+
+.ch-session-ask > .entity-ref {
+  background: transparent;
+}
+
+.ch-session-ask > .entity-ref:hover {
+  background: color-mix(in srgb, var(--sol-cyan) 12%, transparent);
+}
+
+.ch-session-ask-mark {
+  width: 12px;
+  height: 12px;
+  color: var(--sol-cyan);
+  flex-shrink: 0;
+}

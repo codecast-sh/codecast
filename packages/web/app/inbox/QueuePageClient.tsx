@@ -26,6 +26,7 @@ import { CloudPlacementStrip } from "../../components/CloudPlacementStrip";
 import { ActivityFeed } from "../../components/ActivityFeed";
 import { EmptyState } from "../../components/EmptyState";
 import { useFirstRun } from "../../lib/firstRun";
+import { afterBootIdle } from "../../lib/bootIdle";
 import { PlanContextPanel } from "../../components/PlanContextPanel";
 import { WorkflowContextPanel } from "../../components/WorkflowContextPanel";
 import { TriggerContextPanel } from "../../components/TriggerContextPanel";
@@ -772,9 +773,11 @@ export function QueuePageClient() {
   const currentSessionIdForWarm = currentSession?._id ?? null;
   useWatchEffect(() => {
     if (currentSessionIdForWarm) ensureHydrated(currentSessionIdForWarm);
-    for (const s of sortedSessions.slice(0, 50)) {
-      if (s._id !== currentSessionIdForWarm) ensureHydrated(s._id);
-    }
+    return afterBootIdle(() => {
+      for (const s of sortedSessions.slice(0, 50)) {
+        if (s._id !== currentSessionIdForWarm) ensureHydrated(s._id);
+      }
+    });
   }, [sortedSessions, currentSessionIdForWarm]);
 
   const handleClearHighlight = useCallback(() => {

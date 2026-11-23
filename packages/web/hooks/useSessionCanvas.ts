@@ -5,7 +5,7 @@ import { useNarrowStage } from "./useNarrowStage";
 import { useInboxStore, useTrackedStore } from "../store/inboxStore";
 import { useWatchEffect } from "./useWatchEffect";
 import { usePageEmbedFeed, type PageInfo } from "./usePageInfo";
-import { useTabContext } from "../lib/tabParams";
+import { useTabPane } from "../lib/tabParams";
 import { stageHasRoom } from "../lib/stage";
 import {
   applyCanvasStep,
@@ -34,7 +34,7 @@ export const CANVAS_NO_ROOM = "No room beside this conversation: close a pane fi
  *  and the effect that keeps its tab's canvas pane in step. Only the tab's
  *  canvas owner drives the pane, and only while that tab is on screen. */
 export function useSessionCanvas(conversationId: string | null) {
-  const pane = useTabContext();
+  const pane = useTabPane();
   const activeTabId = useInboxStore((st) => st.activeTabId);
   const tabId = pane?.tabId ?? activeTabId ?? null;
   const visible = pane ? (pane.isVisible ?? pane.isActive) : true;
