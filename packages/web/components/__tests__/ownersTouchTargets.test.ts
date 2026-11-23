@@ -17,7 +17,9 @@ test("the Reports-to picker's rows are 44px tall on a coarse pointer", () => {
   expect(coarse).toMatch(/\[data-seat-reports-to\] \.own-row[^{]*\{ min-height: 44px; \}/);
 });
 
-test("the terminal's copy title gets a 44px hit area on a coarse pointer", () => {
-  expect(coarse).toMatch(/\[data-terminal-attach\]::after \{ content: ""; position: absolute; inset: -14px 0; \}/);
-  expect(coarse).toMatch(/\[data-terminal-attach\] \{ position: relative; \}/);
+test("the terminal's copy title is a 44px target in a 44px bar on a coarse pointer", () => {
+  expect(coarse).toContain("[data-terminal-bar] { height: 44px !important; }");
+  expect(coarse).toContain("[data-terminal-attach] { min-height: 44px; }");
+  const terminal = readFileSync(join(import.meta.dir, "..", "terminal/ConversationTerminal.tsx"), "utf8");
+  expect(terminal).toMatch(/<div data-terminal-bar className="flex items-center h-\[24px\]/);
 });

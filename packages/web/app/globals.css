@@ -310,10 +310,13 @@
 @media (pointer: coarse) {
   [data-owners-menu] .own-row, [data-owners-menu] [data-leave-box] button, [data-seat-reports-to] .own-row { min-height: 44px; }
   [data-owners-menu] .own-x, [data-owners-menu] .own-plus { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
-  [data-owners-menu] .own-mk, [data-owners-menu] [data-owners-foot] button, [data-cc-owner-strip] button, [data-cc-runner] [data-owners-seg], [data-terminal-attach] { position: relative; }
+  [data-owners-menu] .own-mk, [data-owners-menu] [data-owners-foot] button, [data-cc-owner-strip] button, [data-cc-runner] [data-owners-seg] { position: relative; }
   [data-owners-menu] .own-mk::after, [data-owners-menu] [data-owners-foot] button::after, [data-cc-owner-strip] button::after, [data-cc-runner] [data-owners-seg]::after { content: ""; position: absolute; inset: -12px -2px; }
-  /* The terminal's copy title sits in a 24px bar: its hit area spans 44px. */
-  [data-terminal-attach]::after { content: ""; position: absolute; inset: -14px 0; }
+  /* The terminal's copy title: its bar grows to 44px, and the title fills it
+     (a hit area spilling out of a 24px bar lost its lower half to the
+     terminal painted over it). */
+  [data-terminal-bar] { height: 44px !important; }
+  [data-terminal-attach] { min-height: 44px; }
 }
 .own-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px; border-radius: 6px; background: color-mix(in srgb, var(--sol-text) 6%, transparent); font-size: var(--fs-meta); color: var(--sol-text-muted); }
 

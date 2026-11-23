@@ -273,7 +273,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
       className={`flex-shrink-0 flex flex-col bg-sol-bg ${island.className}`}
       style={{ ...island.style, height: dragHeight ?? split.height }}
     >
-      <div className="flex items-center h-[24px] px-2 gap-1.5 flex-shrink-0 bg-sol-bg-alt/30 border-b border-sol-border/20 select-none">
+      <div data-terminal-bar className="flex items-center h-[24px] px-2 gap-1.5 flex-shrink-0 bg-sol-bg-alt/30 border-b border-sol-border/20 select-none">
         <span
           className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
             status === "open" && !inst?.state.reconnecting ? "bg-sol-violet" : isConnecting || inst?.state.reconnecting ? "bg-sol-yellow animate-pulse" : "bg-sol-text-dim/40"
