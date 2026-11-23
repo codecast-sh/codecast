@@ -2,7 +2,7 @@
 // from a session up to the one that started its line of work, and every line
 // a person typed into the sessions on it, each with its provenance
 // (lib/messageProvenance.ts). The route drives them through
-// lib/originatorChain.readOriginator. /cli/workflow-runs/clear with a cite
+// lib/originatorChain.readOriginator. /cli/intent/verify (lib/intentHttp.ts)
 // drives citeRun and typedStep through lib/originatorChain.verifyCitation.
 import { v } from "convex/values";
 import { internalMutation, internalQuery } from "./functions";
@@ -169,7 +169,7 @@ export const citeRun = internalQuery({
     const auth = await verifyApiToken(ctx, args.api_token);
     const runId = ctx.db.normalizeId("workflow_runs", args.run_id);
     const run = runId ? await ctx.db.get(runId) : null;
-    if (!auth || !run || String(run.user_id) !== String(auth.userId)) return { error: "Only the run's own runner clears it to land" };
+    if (!auth || !run || String(run.user_id) !== String(auth.userId)) return { error: "Only the run's own runner can check its asker's word" };
     const task = run.task_id ? await ctx.db.get(run.task_id) : null;
     const spawner = run.spawner_conversation_id ? await ctx.db.get(run.spawner_conversation_id) : null;
     const chain = new Map<string, { conversation_id: string; short_id: string }>();
@@ -207,7 +207,7 @@ export const citedCard = internalQuery({
     const auth = await verifyApiToken(ctx, args.api_token);
     const runId = ctx.db.normalizeId("workflow_runs", args.run_id);
     const run = runId ? await ctx.db.get(runId) : null;
-    if (!auth || !run || String(run.user_id) !== String(auth.userId)) return { error: "Only the run's own runner clears it to land" };
+    if (!auth || !run || String(run.user_id) !== String(auth.userId)) return { error: "Only the run's own runner can check its asker's word" };
     const d: any = await ctx.db.query("session_decisions").withIndex("by_short_id", (q) => q.eq("short_id", args.card)).first();
     if (!d) return null;
     return {
