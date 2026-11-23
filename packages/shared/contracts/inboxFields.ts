@@ -87,8 +87,10 @@ export const INBOX_ROW_FIELDS = [
   "anchor_id", "is_anchor", "last_turn_origin", "org_role_id", "driver_user_id", "role_alone", "standing_role_id", "role", "acting_user_id",
   "character_avatar", "character_name", "drawn_icon", "icon", "icon_color", "image_preview_url", "browser_pane_offer",
   "owner_device_id", "owner_user_id",
-  // Who owns it, in the order added (listedOwnerIds; enrichInboxSessionRow).
-  "owner_ids", "author_avatar", "local_mirror", "migration_batch_id",
+  // Who owns it, in the order added (listedOwnerIds; enrichInboxSessionRow),
+  // and the stamp of the last owner write, whose change in sync-log cargo
+  // refetches the row (web lib/syncLogCargo ENRICH_TRIGGER_FIELDS).
+  "owner_ids", "owners_changed_at", "author_avatar", "local_mirror", "migration_batch_id",
   "cloud_placement", "cloud_seed", "cloud_workspace", "cloud_context_too_large", "cloud_placement_progress",
   "subagent_slot", "subagent_slot_at", "subagent_slot_device", "subagent_caps", "merge_back",
   // The viewer stamps (stampInboxViewerFields).

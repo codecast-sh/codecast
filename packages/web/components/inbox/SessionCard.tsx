@@ -36,7 +36,8 @@ import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipSt
 import { sessionPullRequestsSig, titledSessionPullRequests } from "../../lib/sessionPullRequests";
 import { resolveImageThumbs, resolveShowBranchPill, resolveShowCharacters } from "../../lib/uiPrefDefaults";
 import { teamMembersOf } from "../../lib/activeTeam";
-import { coOwnersOf, coOwnersSig } from "../../lib/coOwners";
+import { coOwnersOf, coOwnersSig, filedRoleOf, filedRoleSig } from "../../lib/coOwners";
+import { roleRowsOf } from "../../lib/roleRows";
 
 // The inbox session card's container: the store, the clock, the mutations and
 // every action a gesture reaches. It renders SessionCardView, which draws.
@@ -189,6 +190,9 @@ export const SessionCard = memo(function SessionCard({
     // Modern only: a pending `cast decide` on this session, so the card in
     // Decisions says Needs you. Constant (false) in Classic and Minimal.
     (s) => (modern && !hosted ? awaitingOkIds(s.sessionDecisions).has(cardId) : false),
+    // The face of the role it is filed under, as a string: a role rename or a
+    // new face repaints the co-owners, a filing paints them at once.
+    (s) => filedRoleSig(filedRoleOf(session, roleRowsOf(s as never))),
   ]);
   const liveTitle = liveCardTitle(st, cardId, hosted, session);
   const prSig = sessionPullRequestsSig(st as any, cardId);
@@ -287,9 +291,11 @@ export const SessionCard = memo(function SessionCard({
     () => identity.standing_role_id && identity.role ? null : resolveSessionAuthor({ ...session, standing_role_id: identity.standing_role_id, role: identity.role }, convMeta, currentUser, teamMembers, identityPrefsOf({ show_characters: chromeSig[6] === "1" })),
     [session.user_id, session.author_name, session.author_avatar, session.acting_user_id, identity, convMeta, currentUser, teamMembers, chromeSig], // eslint-disable-line react-hooks/exhaustive-deps
   );
-  // Its other owners, read off the row with the roster's names and faces.
+  // Its other owners, read off the row with the roster's names and faces and
+  // the filed role's face from the role rows.
   const ownersSig = coOwnersSig(session);
-  const coOwners = useMemo(() => coOwnersOf(session, meId, teamMembers), [ownersSig, meId, teamMembers]); // eslint-disable-line react-hooks/exhaustive-deps
+  const roleSig = filedRoleSig(filedRoleOf(session, roleRowsOf(st as never)));
+  const coOwners = useMemo(() => coOwnersOf(session, meId, teamMembers, filedRoleOf(session, roleRowsOf(st as never))), [ownersSig, roleSig, meId, teamMembers]); // eslint-disable-line react-hooks/exhaustive-deps
   // An anchor's own row is marked as such — the glyph in place of the agent
   // icon, and the scope pill (Personal / team name) beside the title — so a
   // standing member never reads as just another session.

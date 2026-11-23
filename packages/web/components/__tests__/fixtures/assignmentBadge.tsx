@@ -177,14 +177,15 @@ test("Save sends the whole staged change once, and the faces follow at once", as
   expect(dispatched[0][1]).toEqual({ add: ["me"] });
   // Undo takes the person back off.
   expect(dispatched[0][2]).toEqual({ remove: ["me"] });
-  // Each fact in its home, by the server's own rule: the people on the owners
-  // row, and the wheel pinned to Jason on the session row (adding never hands it over).
-  expect((useInboxStore.getState() as any).sessionOwners[id].owner_ids).toEqual(["jason", "me"]);
+  // Each fact in its home, by the server's own rule: the people and the wheel
+  // on the session row, pinned to Jason (adding never hands it over).
+  expect((useInboxStore.getState() as any).conversations[id].owner_ids).toEqual(["jason", "me"]);
   expect((useInboxStore.getState() as any).conversations[id].driver_user_id).toBe("jason");
   expect(ownersSeg()!.title).toBe("Owners: Jason (driver), Ashot");
-  // The server echoes the Save: the pending view settles and goes.
+  // The server echoes the Save: the owners read releases the held people.
   setOwners([{ user_id: "jason", name: "Jason" }, { user_id: "me", name: "Ashot" }]);
   await render(true, false, false);
+  expect(Object.keys(useInboxStore.getState().pending).filter((k) => k.endsWith(":owner_ids"))).toEqual([]);
   useInboxStore.setState({ applySessionOwners: real });
 });
 

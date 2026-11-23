@@ -7,8 +7,9 @@
  * AssignmentChip.
  *
  * Local-first: listOwners FEEDS the `sessionOwners` store collection (the
- * people, one row per conversation) and this hook reads that row; the role and
- * the driver come from the session row, their one home. Every write is the
+ * menu's details, one row per conversation) and the session row's owner_ids,
+ * which the inbox rows feed too; who owns it, the role and the driver come
+ * from the session row, their one home. Every write is the
  * store's applySessionOwners action, which paints each fact in its home by the
  * rule the server runs (shared/contracts/sessionOwners) before
  * applyOwnersChange lands; a refusal rolls it back through the store's own
@@ -27,8 +28,9 @@ import { useQueryNoThrow } from "./useQueryNoThrow";
 import { useSyncCollection } from "./useSyncCollection";
 import { useCollectionRows } from "./useCollectionRows";
 import { peopleOf } from "@codecast/shared/team/memberKind";
-import type { SessionOwnersChange } from "../store/sessionOwnersSlice";
-import { driverOf, type OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
+import { driverOf, listedOwnerIds, ownersFactsFromRead, type OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
+import { useInboxStore } from "../store/inboxStore";
+import { feedSessionOwnerIds, type SessionOwnersChange } from "../store/sessionOwnersSlice";
 
 type OwnerInfo = {
   user_id: string;
@@ -60,16 +62,15 @@ export type SessionDriver = { kind: "role"; role_id: string } | { kind: "user"; 
 /** The account that runs the session, whether or not it owns it. */
 export type OwnerRunner = OwnerInfo & { is_bot: boolean };
 
-/** The `sessionOwners` row: the PEOPLE of a session, as listOwners answers,
- *  keyed by the conversation. `owner_ids` is what a Save writes; `owners`,
- *  `runner`, `author_id`, `bots` and the role's face are enrichment the server
- *  derives. The role and the driver live on the session row, their one home. */
+/** The `sessionOwners` row: the owners menu's details, as listOwners answers,
+ *  keyed by the conversation: the owners with names and stamps, the runner,
+ *  the author, the agent accounts and the role's face. Who owns it (owner_ids),
+ *  the role and the driver live on the session row, their one home. */
 export type SessionOwnersRow = {
   _id: string;
   short_id: string;
   conversation_id: string;
   owners: (OwnerInfo & { implicit?: boolean })[];
-  owner_ids: string[];
   /** The filed role's face (name, handle, avatar), for when the org tree is not loaded. */
   role: OwnerRole | null;
   runner: OwnerRunner | null;
@@ -81,8 +82,7 @@ export type SessionOwnersRow = {
 };
 
 /** The session row's half of the owners facts: the role, the driver, the
- *  primary, and the people when the inbox row lists them (null: it does not,
- *  so they are the sessionOwners row's). */
+ *  primary, the runner and the people (null: no feeder has written them yet). */
 export type SessionOwnerFacts = { role_id: string | null; driver_user_id: string | null; primary_id: string | null; runner_id: string | null; owner_ids?: string[] | null };
 
 
@@ -165,19 +165,22 @@ export function useOwnerCandidates(
   return data?.team_members;
 }
 
-// The people only: the role and the driver the server also answers have their
-// home on the session row. A server from before these fields (a deploy gap)
-// answers only `owners`: derive the rest so the header still draws, read-only.
-const selectOwnersRow = (d: any) => {
+// The menu's details only: who owns it, the role and the driver the server
+// also answers have their home on the session row (owner_ids goes there by
+// feedOwnerIds). A server from before these fields (a deploy gap) answers
+// only `owners`: default the rest so the header still draws, read-only.
+export const selectOwnersRow = (d: any) => {
   if (!d) return [];
-  const { role_id: _r, driver: _d, driver_user_id: _du, ...people } = d;
+  const { role_id: _r, driver: _d, driver_user_id: _du, owner_ids: _o, ...details } = d;
   return [{
-    owner_ids: (d.owners ?? []).map((o: OwnerInfo) => o.user_id), role: null, runner: null, author_id: null, bots: [], can_edit: false,
-    ...people, _id: String(d.conversation_id), conversation_id: String(d.conversation_id),
+    role: null, runner: null, author_id: null, bots: [], can_edit: false,
+    ...details, _id: String(d.conversation_id), conversation_id: String(d.conversation_id),
   }];
 };
+export const feedOwnerIds = (d: any) => {
+  if (d && Array.isArray(d.owner_ids)) feedSessionOwnerIds(useInboxStore.getState(), String(d.conversation_id), d.owner_ids.map(String));
+};
 const ownersRowSig = (r: SessionOwnersRow) => [
-  (r.owner_ids ?? []).join(","),
   r.role?.role_id ?? "",
   r.role?.name ?? "",
   r.runner?.user_id ?? "",
@@ -209,12 +212,16 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     "sessionOwners",
     api.sessionOwnership.listOwners,
     shouldQueryOwners(conversationId, currentUser) ? { session_id: conversationId } : "skip",
-    { select: selectOwnersRow },
+    { select: selectOwnersRow, alsoFeed: feedOwnerIds },
   );
   const where = useMemo(() => (r: SessionOwnersRow) => r._id === conversationId, [conversationId]);
   const row = useCollectionRows<SessionOwnersRow>("sessionOwners", { where, sig: ownersRowSig })[0] ?? null;
 
-  const ownerList: string[] = env.session.owner_ids ?? (row ? row.owner_ids : implicitOwnerId ? [implicitOwnerId] : []);
+  // The people off the session row; before a feeder wrote them there, by the
+  // owners rule over the read (or its starter until the read lands).
+  const ownerList: string[] = env.session.owner_ids
+    ?? (row ? listedOwnerIds(ownersFactsFromRead(row, { org_role_id: env.session.role_id, driver_user_id: env.session.driver_user_id, owner_user_id: env.session.primary_id, user_id: env.session.runner_id }))
+      : implicitOwnerId ? [implicitOwnerId] : []);
   const ownerIds = useMemo(() => new Set(ownerList), [ownerList.join(",")]); // eslint-disable-line react-hooks/exhaustive-deps
   const facts = env.session;
   const role: OwnerRole | null = !facts.role_id ? null

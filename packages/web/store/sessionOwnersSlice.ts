@@ -1,16 +1,17 @@
 // A session's owners and who drives it, as the owners menu saves them
 // (convex sessionOwnership.applyOwnersChange). One write, painted on the
 // click by the same rule the server runs (shared/contracts/sessionOwners), in
-// each fact's one home: the role and the driver on the session row, and the
-// people on the inbox row when the session is listed (its owner_ids, which
-// the card draws), else on the sessionOwners row (ownerIdsHomeOf). It rides
-// `dispatch` to the side effect of the same name, and the fields it holds
-// release on the echo.
+// the session row (sessions, else the conversation it was opened from), the
+// one home of its people (owner_ids), its role and its driver. Two feeders
+// write owner_ids there: the inbox rows and the owners read (listOwners, via
+// feedSessionOwnerIds), so the card and the header read one field and either
+// echo releases the Save. sessionOwners holds only the menu's details. The
+// write rides `dispatch` to the side effect of the same name.
 //
 // Spread into the org slice (orgSlice createOrgSlice), so the store gains it
 // without a line of its own.
 import { action } from "./mutativeMiddleware";
-import { applyOwnersChangeTo, listedOwnerIds, ownersFactsFromRead, type OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
+import { applyOwnersChangeTo, listedOwnerIds, ownersFactsFromRead, type OwnerRowFact, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 
 /** Who drives a session: the role it is filed under, one of its people, or
  *  (`none`) the default, which is how an undo puts back a driver nobody chose. */
@@ -32,12 +33,44 @@ export type SessionOwnersChange = {
   note?: string;
 };
 
-/** Where a session's people live: its inbox row once the server lists them
- *  there, else its sessionOwners row. The header reads by the same test
- *  (useStoreOwnersEnv), so the card and the header hold one answer. */
-type OwnerIdsHolder = { owner_ids?: string[] | null };
-export function ownerIdsHomeOf(home: OwnerIdsHolder, people: OwnerIdsHolder): OwnerIdsHolder {
-  return Array.isArray(home.owner_ids) ? home : people;
+type OwnersHome = { field: "sessions" | "conversations"; row: any };
+
+/** The row a session's owners live on: its inbox row, else the conversation
+ *  it was opened from. */
+export function ownersHomeOf(s: { sessions?: Record<string, any>; conversations?: Record<string, any> }, conversationId: string): OwnersHome | null {
+  const session = s.sessions?.[conversationId];
+  if (session) return { field: "sessions", row: session };
+  const conversation = s.conversations?.[conversationId];
+  return conversation ? { field: "conversations", row: conversation } : null;
+}
+
+const sameIds = (a: unknown, b: readonly string[]) => Array.isArray(a) && a.length === b.length && a.every((id, i) => id === b[i]);
+
+/** The owners read's half of owner_ids (the inbox rows are the other): onto
+ *  the session row through syncRecord, so a Save's hold on it is released by
+ *  this echo too. An equal list keeps the row's own array. */
+export function feedSessionOwnerIds(
+  store: { sessions: Record<string, any>; conversations: Record<string, any>; syncRecord: (field: string, id: string, record: any) => void },
+  conversationId: string,
+  ownerIds: string[],
+): void {
+  const home = ownersHomeOf(store, conversationId);
+  if (!home) return;
+  const held = home.row.owner_ids;
+  store.syncRecord(home.field, conversationId, { owner_ids: sameIds(held, ownerIds) ? held : ownerIds });
+}
+
+/** The people as the owners rule reads them, from what the store shows: the
+ *  read's rows, or, when a Save the server has not answered yet painted
+ *  owner_ids, those people (each keeping its stamp, new ones after), so a
+ *  second Save starts from the first. */
+export function paintedFacts(read: any, home: any): OwnersFacts {
+  const facts = ownersFactsFromRead(read, home);
+  const painted: unknown = home?.owner_ids;
+  if (!Array.isArray(painted) || sameIds(painted, listedOwnerIds(facts))) return facts;
+  let last = Math.max(0, ...facts.rows.map((r) => r.added_at));
+  const rows = (painted as string[]).map((id) => facts.rows.find((r) => r.user_id === id) ?? { user_id: id, added_at: ++last });
+  return { ...facts, rows };
 }
 
 export type SessionOwnersSliceActions = {
@@ -49,12 +82,12 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
   return {
     applySessionOwners: action(function (this: any, conversationId: string, change: SessionOwnersChange, _inverse?: SessionOwnersChange | null) {
       const people = this.sessionOwners?.[conversationId];
-      const home = this.sessions?.[conversationId] ?? this.conversations?.[conversationId];
+      const home = ownersHomeOf(this, conversationId)?.row;
       if (!people || !home || home.standing_role_id) return;
-      const before = ownersFactsFromRead(people, home);
+      const before = paintedFacts(people, home);
       const to = change.leave?.runner_id ? { runner_id: change.leave.runner_id, runner_is_bot: !!change.leave.runner_is_bot } : undefined;
       const next = applyOwnersChangeTo(before, { ...change, leave: change.leave ? { move_to: to } : undefined }, { actor: String(this.currentUser?._id ?? ""), now: Date.now() });
-      ownerIdsHomeOf(home, people).owner_ids = listedOwnerIds(next);
+      home.owner_ids = listedOwnerIds(next);
       if ((home.org_role_id ?? null) !== next.role_id) home.org_role_id = next.role_id;
       if ((home.driver_user_id ?? null) !== next.driver_user_id) home.driver_user_id = next.driver_user_id;
     }) as SessionOwnersSliceActions["applySessionOwners"],

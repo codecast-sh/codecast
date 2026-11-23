@@ -1015,10 +1015,12 @@ export type InboxSession = {
   // keep a foreign teammate row READ-ONLY — dismiss/stash/pin/kill mutate global
   // conversation fields, so acting on a teammate's card would hide it from them.
   owner_user_id?: string | null;
-  // Who owns it, people in the order added, as its owners menu lists them
-  // (the server's listedOwnerIds): the one home of a listed session's people,
-  // which applySessionOwners paints. Absent on rows from an older server.
+  // Who owns it, people in the order added (the server's listedOwnerIds): the
+  // one home of a session's people, fed by the inbox rows and the owners read
+  // and painted by applySessionOwners. Absent on rows from an older server.
   owner_ids?: string[] | null;
+  // The last owner write's stamp: its change in sync-log cargo refetches the row.
+  owners_changed_at?: number | null;
   owned_by_me?: boolean;
   // A role started it and holds it with no person owner (the server's
   // heldByRoleAlone over the shared isHeldByRoleAlone): the role's alone, so

@@ -80,6 +80,12 @@ describe("planCargoApply — sessions adapter", () => {
     }, { updated_at: 100 });
     expect(p.fields).toEqual({ title: "t", subtitle: null, settle_verdict: "done", inbox_deferred_at: 150, is_deferred: true });
   });
+  test("an owner write refetches the row: its owners are a join the cargo never carries", () => {
+    expect(planCargoApply("sessions", { patch: { owners_changed_at: 7 } }, { _id: "s1", owners_changed_at: 5 }).refetch).toBe(true);
+    expect(planCargoApply("sessions", { patch: { owners_changed_at: 5, title: "x" }, full: true }, { _id: "s1", owners_changed_at: 5 }).refetch).toBe(false);
+    expect(planCargoApply("sessions", { patch: { owners_changed_at: 7 } }, { _id: "s1", owners_changed_at: 5 }).fields.owners_changed_at).toBe(7);
+  });
+
   test("a status that byIds would omit forces the refetch that prunes it", () => {
     expect(planCargoApply("sessions", { patch: { status: "deleted" } }, {}).refetch).toBe(true);
     expect(planCargoApply("sessions", { patch: { status: "active" } }, {}).refetch).toBe(false);

@@ -111,7 +111,7 @@ describe("performSetSessionOwner", () => {
     });
     expect(result.owner).toBeNull();
     // patch with undefined removes the field in convex; the fake db assigns it
-    expect(db._patched[0].patch).toEqual({ owner_user_id: undefined });
+    expect(db._patched[0].patch).toEqual({ owner_user_id: undefined, owners_changed_at: expect.any(Number) });
   });
 
   test("current owner can reassign (owner has owner-level access)", async () => {

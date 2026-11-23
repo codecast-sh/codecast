@@ -214,6 +214,20 @@ describe("the Modern card, mounted", () => {
       expect(el.getAttribute("title")).toBe("Owners: You, Mate (driver), Evals lead (paused)");
     });
 
+    test("a role just filed shows its live face before the row's snapshot catches up", async () => {
+      const INFRA = { _id: "org_roles_infra", short_id: "or-3", name: "Infra lead", handle: "infra", avatar: "stag", status: "active" };
+      await act(async () => { useInboxStore.setState({ viewerRoles: { [INFRA._id]: INFRA } } as any); });
+      await show({ owner_ids: ["me"], org_role_id: INFRA._id, role: ROLE });
+      expect(ownersEl()!.getAttribute("title")).toBe("Owners: You, Infra lead (driver)");
+      await act(async () => { useInboxStore.setState({ viewerRoles: {} } as any); });
+    });
+
+    test("a session someone else owns that runs on your account shows them", async () => {
+      await show({ owner_ids: ["mate"], owner_user_id: "mate" });
+      expect(ownersEl()!.children).toHaveLength(1);
+      expect(ownersEl()!.getAttribute("title")).toBe("Owners: Mate (driver)");
+    });
+
     test("an owner added without the primary moving reaches the card", async () => {
       await show({ owner_ids: ["me", "mate"], owner_user_id: "me" });
       expect(ownersEl()!.children).toHaveLength(1);

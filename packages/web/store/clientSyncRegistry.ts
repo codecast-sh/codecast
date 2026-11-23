@@ -139,8 +139,9 @@ export const CLIENT_SYNC_REGISTRY = {
     writtenBy: ["conversations"],
     persistence: { kind: "collection", key: "sessions" },
     localFirst: true,
-    // owner_ids changes with no scalar on the row moving (a co-owner taken
-    // off): compared by content, or the push is swallowed as a no-op.
+    // owner_ids (fed by the inbox rows and by sessionOwnership.listOwners)
+    // changes with no scalar on the row moving (a co-owner taken off):
+    // compared by content, or the push is swallowed as a no-op.
     sync: { deepFields: ["owner_ids"] },
     // Inbox triage gestures (dismiss/stash/pin) write the session row itself,
     // but the server-side row is the conversation. Without this mapping the
@@ -356,16 +357,16 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["sessionGoals.forConversation"],
     writtenBy: ["sessionGoals"],
   },
-  // A session's people (convex sessionOwnership.listOwners): one row per
-  // conversation, keyed by its id, fed while its header is mounted, so delta.
-  // The owners in order, who runs it and who started it; the header's faces
-  // and the owners menu read it. The role and the driver live on the session
-  // row. localFirst: a Save writes owner_ids by the shared owners rule
-  // (shared/contracts/sessionOwners) before applyOwnersChange lands.
+  // The owners menu's details (convex sessionOwnership.listOwners): one row
+  // per conversation, keyed by its id, fed while its header is mounted, so
+  // delta. The owners with names and stamps, who runs it, who started it, the
+  // agent accounts and whether the viewer may edit. Who owns it (owner_ids),
+  // the role and the driver live on the session row, which the same read
+  // also feeds (useOwners). localFirst: an ack paints seen_at.
   sessionOwners: {
     persistence: { kind: "collection", key: "sessionOwners" },
     // Every field but the ids is a list or an object: compared by content.
-    sync: { isDelta: true, deepFields: ["owners", "owner_ids", "role", "runner", "bots"] },
+    sync: { isDelta: true, deepFields: ["owners", "role", "runner", "bots"] },
     localFirst: true,
     feeds: ["sessionOwnership.listOwners"],
     writtenBy: ["sessionOwnership"],

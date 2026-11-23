@@ -25,6 +25,13 @@ function sessionRowOf(s: any, conversationId: string): any {
   return s.sessions?.[live] ?? s.conversations?.[conversationId];
 }
 
+/** The people the header shows, off the session row (null: no feeder has
+ *  written them there yet). The card reads the same field. */
+export function ownerIdsOnRow(s: any, conversationId: string): string | null {
+  const row = sessionRowOf(s, conversationId);
+  return Array.isArray(row?.owner_ids) ? row.owner_ids.join(",") : null;
+}
+
 export function useStoreOwnersEnv(
   conversationId: string,
   base: Pick<OwnersEnv, "teamMembers" | "currentUser"> & { notify: NonNullable<OwnersEnv["notify"]> },
@@ -47,11 +54,10 @@ export function useStoreOwnersEnv(
     return undefined;
   })();
   const { roles } = useOrgRoles();
-  // The role, the driver and the primary owner live on the session row, and
-  // so do the people once the inbox lists them (ownerIdsHomeOf).
+  // The people, the role, the driver and the primary owner live on the session row.
   const [roleId, driverUserId, primaryId, runnerId, rowOwners] = useInboxStore(useShallow((s) => {
     const row = sessionRowOf(s, conversationId);
-    return [row?.org_role_id ?? null, row?.driver_user_id ?? null, row?.owner_user_id ?? null, row?.user_id ?? null, Array.isArray(row?.owner_ids) ? row.owner_ids.join(",") : null] as const;
+    return [row?.org_role_id ?? null, row?.driver_user_id ?? null, row?.owner_user_id ?? null, row?.user_id ?? null, ownerIdsOnRow(s, conversationId)] as const;
   }));
   const ownerIds = useMemo(() => (rowOwners === null ? null : rowOwners ? rowOwners.split(",") : []), [rowOwners]);
   return {

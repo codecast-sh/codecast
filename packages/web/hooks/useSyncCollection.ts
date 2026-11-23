@@ -81,6 +81,9 @@ export type SyncCollectionOpts<T = any> = {
    *  client id (idbCollectionDiff.durableDeletes); a Convex-keyed scope needs
    *  pruneAbsentScope. */
   dropAbsent?: (row: any) => boolean;
+  /** A field of the payload whose home is another collection: handed the
+   *  payload after its rows land, to write it there through the store. */
+  alsoFeed?: (data: T) => void;
   /** Batch a hot subscription's pushes into one trailing apply. */
   coalesceMs?: number;
   /** Circuit-break a subscription that never resolves (see useQueryNoThrow). */
@@ -110,6 +113,7 @@ export function applyCollectionFeed(
   select?: (data: any) => any,
   syncOpts?: SyncCollectionOpts["syncOpts"],
   dropAbsent?: SyncCollectionOpts["dropAbsent"],
+  alsoFeed?: SyncCollectionOpts["alsoFeed"],
 ): void {
   const rows = select ? select(data) : data;
   if (rows === undefined || rows === null) return;
@@ -121,6 +125,7 @@ export function applyCollectionFeed(
     if (gone.length) store.dropRows(key, gone);
   }
   store.syncTable(key, rows, typeof syncOpts === "function" ? syncOpts(data) : syncOpts);
+  alsoFeed?.(data);
 }
 
 export function useSyncCollection<Query extends FunctionReference<"query">>(
@@ -139,11 +144,12 @@ export function useSyncCollection<Query extends FunctionReference<"query">>(
   const select = opts?.select;
   const syncOpts = opts?.syncOpts;
   const dropAbsent = opts?.dropAbsent;
+  const alsoFeed = opts?.alsoFeed;
   useConvexSync(
     data,
     useCallback(
-      (payload: any) => applyCollectionFeed(key, payload, select, syncOpts, dropAbsent),
-      [key, select, syncOpts, dropAbsent],
+      (payload: any) => applyCollectionFeed(key, payload, select, syncOpts, dropAbsent, alsoFeed),
+      [key, select, syncOpts, dropAbsent, alsoFeed],
     ),
     opts?.coalesceMs ? { coalesceMs: opts.coalesceMs } : undefined,
   );

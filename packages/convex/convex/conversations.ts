@@ -8907,6 +8907,7 @@ async function enrichInboxSessionRow(
     // role holds it with no person owner: the role's alone, so a replica
     // drops it from the runner's inbox (isForeignRow).
     ...(await inboxOwnerFields(ctx, conv, getDoc)),
+    owners_changed_at: conv.owners_changed_at ?? null,
     user_id: conv.user_id,
     acting_user_id: (conv as any).acting_user_id ?? null,
     is_anchor: !!(conv as any).anchor_id,

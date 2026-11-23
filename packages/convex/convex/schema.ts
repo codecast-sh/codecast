@@ -1364,6 +1364,10 @@ export default defineSchema({
     // These three axes move independently: reassigning owners never moves the
     // device, and reparenting the device never changes the owners.
     owner_user_id: v.optional(v.id("users")),
+    // Stamped with owner_user_id on every owner write (syncPrimaryOwnerCache):
+    // a replica's inbox row lists the owners (owner_ids, a join the sync log
+    // never carries), so a change of this stamp makes it refetch the row.
+    owners_changed_at: v.optional(v.number()),
     // Tombstone forwarding: the id of a DELETED conversation this row replaced
     // when a kill/restart restored its session (resolveRestartTarget). Lets
     // resolveConversation heal stale links/cards that still point at the dead

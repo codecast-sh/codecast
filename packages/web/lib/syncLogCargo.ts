@@ -44,7 +44,9 @@ export const ENRICH_TRIGGER_FIELDS: Record<CargoCollection, ReadonlySet<string>>
   docs: new Set(["plan_id", "doc_type"]),
   plans: new Set([]),
   projects: new Set([]),
-  sessions: new Set(["active_plan_id", "active_task_id", "workflow_run_id"]),
+  // owners_changed_at: stamped on every owner write (syncPrimaryOwnerCache);
+  // a row's owner_ids is a join on session_owners the cargo never carries.
+  sessions: new Set(["active_plan_id", "active_task_id", "workflow_run_id", "owners_changed_at"]),
 };
 
 // Sessions rows rename three raw fields (enrichInboxSessionRow).

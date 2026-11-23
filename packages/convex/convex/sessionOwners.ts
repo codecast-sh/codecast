@@ -161,7 +161,7 @@ export async function syncPrimaryOwnerCache(
 ): Promise<Id<"users"> | undefined> {
   const owners = await listSessionOwnerIds(ctx, conversationId);
   const primary = (preferred && owners.find((id) => id.toString() === preferred.toString())) || owners[0];
-  await ctx.db.patch(conversationId, { owner_user_id: primary ?? undefined });
+  await ctx.db.patch(conversationId, { owner_user_id: primary ?? undefined, owners_changed_at: Date.now() });
   return primary;
 }
 
