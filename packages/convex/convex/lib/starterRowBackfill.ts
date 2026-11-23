@@ -1,6 +1,7 @@
 // One page of ownerMigrations:backfillMovedStarterRows (the comment there says
 // what it writes and why).
 import { addSessionOwnerRow, rowlessStarterOf, syncPrimaryOwnerCache } from "../sessionOwners";
+import { roleStartJudge } from "./roleStartedBackfill";
 
 export async function backfillMovedStarterRowsPage(
   ctx: { db: any },
@@ -8,12 +9,15 @@ export async function backfillMovedStarterRowsPage(
 ) {
   const dryRun = args.dryRun ?? true;
   const page = await ctx.db.query("conversations").paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 200 });
+  const { startedOf } = roleStartJudge(ctx);
   const rows: Array<{ session: string; starter: string }> = [];
   for (const c of page.page as any[]) {
     if (!c.author_user_id || String(c.author_user_id) === String(c.user_id)) continue;
     // A person's start only: starterOf names nobody for a role's run and never an agent.
     const starter = await rowlessStarterOf(ctx, c);
     if (!starter || starter === String(c.user_id)) continue;
+    // A role's hand not yet stamped role_started is still the role's start.
+    if (await startedOf(c)) continue;
     rows.push({ session: c.short_id ?? String(c._id).slice(0, 7), starter });
     if (dryRun) continue;
     await addSessionOwnerRow(ctx, c._id, starter as any, starter as any);

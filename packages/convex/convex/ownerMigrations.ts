@@ -2,6 +2,11 @@
 // role_started provenance, the person a task binding keeps driving, and the
 // starter's owner row a move now writes. Each is dry by default and continues
 // itself page by page on a real run.
+//
+// Run order for the ship checklist: backfillRoleStarted, then
+// backfillBoundDriver, then backfillMovedStarterRows, each to the end before
+// the next. Any order gives the same result: all three judge who started a
+// session with the one roleStartJudge, so none reads what another writes.
 import { internalMutation } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
@@ -78,8 +83,8 @@ export const backfillBoundDriver = internalMutation({
 // or a device claim) before those paths wrote the starter's row lists its
 // author as owner while no row says so, so the inbox and byIds turn the
 // author away. Each such session with no owner rows gets its starter's row,
-// the row a move writes now. Role runs and agent starts have no starter and
-// are skipped. Dry by default; a real run continues itself page by page.
+// the row a move writes now. Role runs (roleStartJudge, stamped or not) and
+// agent starts have no starter and are skipped. Dry by default; a real run continues itself page by page.
 //   packages/convex/run.sh ownerMigrations:backfillMovedStarterRows '{"dryRun":true}'
 export const backfillMovedStarterRows = internalMutation({
   args: { dryRun: v.optional(v.boolean()), cursor: v.optional(v.string()), numItems: v.optional(v.number()) },
