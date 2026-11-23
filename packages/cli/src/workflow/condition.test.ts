@@ -6,6 +6,9 @@ import { parseWorkflowFile } from "./parser.js";
 import { recordNodeOutput, expandScriptVars, expandPromptVars } from "./runner.js";
 
 describe("evalCondition: every condition the shipped workflows use", () => {
+  const INTENT_CLEAR = "outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.session and read.json.quote and read.json.line > 0";
+  const INTENT_DECLINED = "outcome = success and read.json.why and (read.json.ship != true or read.json.in_scope != true)";
+  const INTENT_CLEAR_CARD = "outcome = success and read.json.ship = true and read.json.in_scope = true and read.json.card and read.json.quote";
   // Each row: a condition string found in templates/, packages/cli/workflows
   // or the repo's workflows/, a context, and what the old evaluator returned.
   const cases: Array<[string, Record<string, string>, boolean]> = [
@@ -251,6 +254,47 @@ describe("evalCondition: every condition the shipped workflows use", () => {
     ["outcome = failure and retest.exit_code = 4", { outcome: "failure", "retest.exit_code": "1" }, false],
     ["outcome = failure and onto_main.exit_code = 4", { outcome: "failure", "onto_main.exit_code": "4" }, true],
     ["outcome = failure and onto_main.exit_code = 4", { outcome: "failure", "onto_main.exit_code": "1" }, false],
+    // intent.cast (flows.md FL4): only a read that ships, in scope, citing a session, a line and a quote, goes on to Verify.
+    ...[INTENT_CLEAR].flatMap((cond): Array<[string, Record<string, string>, boolean]> => {
+      const read = "read.json";
+      const answer = (over: Record<string, unknown>) => ({ outcome: "success", [read]: JSON.stringify({ ship: true, in_scope: true, session: "jx7b0m0", line: 115, quote: "ship it", ...over }) });
+      return [
+        [cond, answer({}), true],
+        [cond, answer({ ship: false }), false],
+        [cond, answer({ in_scope: false }), false],
+        [cond, answer({ quote: "" }), false],
+        [cond, answer({ quote: undefined }), false],
+        [cond, answer({ session: "" }), false],
+        [cond, answer({ line: 0 }), false],
+        [cond, { outcome: "success" }, false],
+        [cond, { ...answer({}), outcome: "failure" }, false],
+      ];
+    }),
+    // intent.cast: a read the model answered no to says its why on the task; any other answer that cannot clear is unusable.
+    ...[INTENT_DECLINED].flatMap((cond): Array<[string, Record<string, string>, boolean]> => {
+      const read = "read.json";
+      const answer = (over: Record<string, unknown>) => ({ outcome: "success", [read]: JSON.stringify({ ship: true, in_scope: true, session: "jx7b0m0", line: 115, quote: "ship it", why: "they said ship", ...over }) });
+      return [
+        [cond, answer({ ship: false }), true],
+        [cond, answer({ in_scope: false }), true],
+        [cond, answer({}), false],
+        [cond, answer({ ship: false, why: "" }), false],
+        [cond, { outcome: "success" }, false],
+      ];
+    }),
+    // intent.cast: an answer citing a card goes to Verify card; one with no card does not.
+    ...[INTENT_CLEAR_CARD].flatMap((cond): Array<[string, Record<string, string>, boolean]> => {
+      const read = "read.json";
+      const answer = (over: Record<string, unknown>) => ({ outcome: "success", [read]: JSON.stringify({ ship: true, in_scope: true, session: "", line: 0, card: "sd-4235", quote: "Ship both together", ...over }) });
+      return [
+        [cond, answer({}), true],
+        [cond, answer({ card: "" }), false],
+        [cond, answer({ card: undefined }), false],
+        [cond, answer({ quote: "" }), false],
+        [cond, answer({ ship: false }), false],
+        [cond, answer({ in_scope: false }), false],
+      ];
+    }),
   ];
   for (const [cond, ctx, want] of cases) {
     test(`${cond} with ${JSON.stringify(ctx)} -> ${want}`, () => {

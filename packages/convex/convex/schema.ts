@@ -2907,6 +2907,15 @@ export default defineSchema({
     // the echo can tell a person's message from one a program queued in
     // their name (a spawn brief, an account-switch "continue").
     human: v.optional(v.boolean()),
+    // "composer": a signed-in person sent this from the web or phone composer
+    // (a session login, never an API token). Server-set at those sends only;
+    // absent reads as a program (lib/messageProvenance.ts). Unlike `human`,
+    // no caller can declare it.
+    channel: v.optional(v.literal("composer")),
+    // With channel "composer": the words the person typed in the box, before
+    // the composer folded in quotes, mention context or attachments. The part
+    // of the message that is theirs (lib/messageProvenance.typedPart).
+    typed_text: v.optional(v.string()),
     status: v.union(
       v.literal("pending"),
       v.literal("injected"),
@@ -2990,6 +2999,9 @@ export default defineSchema({
     resend_of_delivery_id: v.optional(v.string()),
   })
     .index("by_conversation_id", ["conversation_id"])
+    // The rows a session's queue held around a moment (originator.queuedNear): a terminal line's words checked
+    // against what the queue sent then, without reading a long-lived session's whole queue.
+    .index("by_conversation_created", ["conversation_id", "created_at"])
     .index("by_conversation_status", ["conversation_id", "status"])
     .index("by_conversation_status_kill_generation", ["conversation_id", "status", "kill_generation"])
     .index("by_user_status", ["from_user_id", "status"])

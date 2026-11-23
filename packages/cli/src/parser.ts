@@ -576,8 +576,10 @@ export function detectCliFlags(content: string): string | null {
       if (parsed.permissionMode === "bypassPermissions") {
         flags.push("--dangerously-skip-permissions");
       }
-      // `claude -p`: a program wrote the prompt and nobody is at a terminal.
-      if (parsed.entrypoint === "sdk-cli") flags.push("--print");
+      // `claude` at a terminal is the one entrypoint where a person types (convex lib/messageProvenance reads
+      // the mark); `claude -p` (sdk-cli) is a program's; the Agent SDK and unknown entrypoints carry neither.
+      if (parsed.entrypoint === "cli") flags.push("--interactive");
+      else if (parsed.entrypoint === "sdk-cli") flags.push("--print");
     } catch {}
   }
   if (content.includes("mcp__claude-in-chrome__") || content.includes('"claude-in-chrome"')) {

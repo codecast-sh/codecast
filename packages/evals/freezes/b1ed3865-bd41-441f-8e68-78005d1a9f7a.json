@@ -1,0 +1,26 @@
+{
+  "name": "intent-read ship-then-revise",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:ship-then-revise"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "intent-read:ship-then-revise",
+    "title": "intent-read ship-then-revise"
+  },
+  "asOf": "2026-11-21T20:00:00.000Z",
+  "trigger": {
+    "type": "intent-read"
+  },
+  "meta": {
+    "surface": "intent-read",
+    "visibility": "public",
+    "snapshot": "fixtures/intent-read/ship-then-revise.json"
+  },
+  "judge": "clears only when a line the run starter typed explicitly tells this work to ship (a ship word, an accepted plan that ships it, or a /drive request), whose condition the change meets, and which no later line or card answer takes back, and only when the change stays inside what they asked for; otherwise it asks. Its why names what they asked for and why the change is or is not covered.",
+  "notes": null,
+  "tags": [],
+  "id": "b1ed3865-bd41-441f-8e68-78005d1a9f7a",
+  "createdAt": "2026-11-22T22:18:19.864Z"
+}

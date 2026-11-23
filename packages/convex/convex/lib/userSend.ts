@@ -79,7 +79,7 @@ const PASTED_BLOCK_RE = /<pasted_content(?=[\s>])[^>]*>[\s\S]*?<\/pasted_content
 // agent to a huddle, run a change through a flow, continue after a setup
 // card). The press is theirs; the words are the product's.
 const SETUP_CONTINUE_LINES = new Set(Object.values(AGENT_SETUP_CONTINUE_MESSAGE));
-function isPressedMessage(content: string): boolean {
+export function isPressedMessage(content: string): boolean {
   return isHuddleFeedNotice(content) || isFlowPressMessage(content) || SETUP_CONTINUE_LINES.has(content.trim());
 }
 

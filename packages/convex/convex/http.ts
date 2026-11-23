@@ -13,6 +13,7 @@ import { callback as connectorCallback, CONNECTOR_CALLBACK_PATH } from "./oauthC
 import { installCallbackHandler } from "./lib/githubInstallCallback";
 import { verifyLinearSignature, linearDeliveryId } from "./linearWebhooks";
 import { readConversationRange } from "./lib/conversationRead";
+import { intentVerifyRoute, originatorRoute } from "./lib/intentHttp";
 import { SHARED_CALL_VIDEO_PATH, signForCli } from "./callRecordings";
 import { SHARED_CALL_AUDIO_PATH, sharedCallAudio, sharedCallVideo } from "./lib/sharedCallMedia";
 import { VAULT_BODY_UPLOAD_PATH, uploadBody as vaultUploadBody } from "./vaultMirror";
@@ -4181,6 +4182,8 @@ cliRoute("/cli/sessions/pin", async (ctx, body) => {
 cliRoute("/cli/sessions/unpin", async (ctx, body) => {
   return await ctx.runMutation(api.conversations.unpinFromProfile, body);
 });
+cliRoute("/cli/sessions/originator", originatorRoute);
+cliRoute("/cli/intent/verify", intentVerifyRoute);
 
 cliRoute("/cli/docs/share", async (ctx, body) => await ctx.runMutation(api.docs.generateShareLink, body));
 cliRoute("/cli/docs/unshare", async (ctx, body) => await ctx.runMutation(api.docs.unshare, body));

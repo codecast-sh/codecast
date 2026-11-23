@@ -28,6 +28,7 @@ import { getAuthenticatedUserId, tellRole } from "./pendingMessages";
 import { roleOfRun } from "./lib/actor";
 import { roleMergeAllowance } from "./lib/regretRead";
 import { runWorkflowOf } from "./lib/runGraph";
+import { byPerson, cardRef, isShipAnswer, newestFirst, offersShip, verdictLabel } from "./lib/taskVerdicts";
 
 /** The pull request a handoff named in its evidence ("PR: <url>", taskClaim
  *  handoffCommentText), or null. */
@@ -121,18 +122,9 @@ async function runAndRole(ctx: any, userId: Id<"users">, runRef: string): Promis
 // Every refusal ends with these words: a flow reads them to ask at the card instead (a repo's change flow does).
 const NOTHING_AUTHORIZES = "so nothing authorizes the merge";
 
-const optionIsShip = (label: unknown): boolean => /^ship\b/i.test(String(label ?? "").trim());
-const isShipAnswer = (card: any): boolean => card.status === "answered" && optionIsShip(card.options?.[card.answer_index ?? -1]?.label);
-const offersShip = (card: any): boolean => (card.options ?? []).some((o: any) => optionIsShip(o?.label));
-const cardRef = (card: any): string => card.short_id ?? String(card._id);
 // "answered Revise on sd-N" / "dismissed sd-N": what a verdict was, for a refusal.
 const verdictWords = (card: any, ref = cardRef(card)): string =>
-  card.status === "dismissed" ? `dismissed ${ref}` : `answered ${String(card.options?.[card.answer_index ?? -1]?.label ?? card.answer_text ?? "something other than Ship").trim()} on ${ref}`;
-// A person's verdict: an answer a user gave, or a dismissal a user made (a dismissal names its person in answered_by,
-// or, on older rows, only in resolved_by). A withdrawal names nobody: the asker took its own question back.
-const byPerson = (card: any): boolean =>
-  card.answered_by ? card.answered_by.kind === "user" : card.status === "dismissed" && !!card.resolved_by;
-const newestFirst = (a: any, b: any) => (b.resolved_at ?? b.created_at ?? 0) - (a.resolved_at ?? a.created_at ?? 0);
+  card.status === "dismissed" ? `dismissed ${ref}` : `answered ${verdictLabel(card)} on ${ref}`;
 
 /** The attempt a run is on: a resume that counts as a new attempt moves it, and a cleared stamp holds only for the
  *  attempt it was written in (`run.merge_cleared.attempt`). */

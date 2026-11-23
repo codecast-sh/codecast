@@ -21,6 +21,9 @@ export type PendingMessageInsertFields = {
   origin?: "scheduler";
   // A person wrote this (see enqueuePendingMessage.human).
   human?: boolean;
+  // Sent from a signed-in composer (schema pending_messages.channel).
+  channel?: "composer";
+  typedText?: string;
   createdAt: number;
   // Park the row as "held" (a standing session's turn, released by the wake
   // rail's flush) instead of "pending".
@@ -30,6 +33,17 @@ export type PendingMessageInsertFields = {
   // Handed over out of sight (schema pending_messages.quiet).
   quiet?: boolean;
 };
+
+/**
+ * The channel a send on a session login carries: "composer", with the words
+ * the person typed, only when the composer's own submit hands those words
+ * over. Every other send through the same rail (a mod, an ask-agent brief, a
+ * limit "continue", a button's words, a joint send carrying others' drafts)
+ * leaves it unset and reads as a program.
+ */
+export function composerChannel(typed: unknown): { channel?: "composer"; typed_text?: string } {
+  return typeof typed === "string" && typed.trim() ? { channel: "composer", typed_text: typed } : {};
+}
 
 export class PendingMessageWriteError extends Error {
   constructor(readonly code: string, message: string) {
@@ -112,6 +126,7 @@ async function insertPendingMessageRow(
     client_id: fields.clientId,
     origin: fields.origin,
     human: fields.human || undefined,
+    ...(fields.channel ? { channel: fields.channel, ...(fields.typedText ? { typed_text: fields.typedText } : {}) } : {}),
     status: fields.held || fields.queued ? ("held" as const) : ("pending" as const),
     ...(fields.queued ? { queued: true } : {}),
     ...(fields.quiet ? { quiet: true } : {}),
