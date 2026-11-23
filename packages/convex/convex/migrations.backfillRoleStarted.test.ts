@@ -37,6 +37,14 @@ function fixtures() {
       conv("person_run", { org_role_id: ROLE, workflow_run_id: "workflow_runs_person", is_workflow_primary: true }),
     ],
     messages: [],
+    session_owners: [
+      // The old spawn rule's self-retained row for the seat's person, and a teammate who took the hand.
+      { _id: "so1", conversation_id: "conversations_hand", user_id: ME, added_by: ME, added_at: 1 },
+      { _id: "so2", conversation_id: "conversations_line_run", user_id: ME, added_by: ME, added_at: 1 },
+      { _id: "so3", conversation_id: "conversations_hand", user_id: "users_mate", added_by: "users_mate", added_at: 2 },
+      // A person's own session keeps its row.
+      { _id: "so4", conversation_id: "conversations_person_run", user_id: ME, added_by: ME, added_at: 1 },
+    ],
   });
 }
 
@@ -59,6 +67,16 @@ describe("backfillRoleStarted", () => {
     for (const id of ["person_bound", "worker_of_bound", "person_run", "worker_of_taken_over", "mine", "standing"]) {
       expect((await db.get(`conversations_${id}` as any)).role_started).toBeUndefined();
     }
+  });
+
+  test("a stamped run loses the row the old spawn rule gave the spawner's person; other rows stay", async () => {
+    const db = fixtures();
+    const dry = await backfillRoleStartedPage({ db } as any, {});
+    expect(dry.rows.find((r) => r.session === "hand")?.dropped_owners).toEqual([ME]);
+    expect(db._tables.session_owners).toHaveLength(4);
+    await backfillRoleStartedPage({ db } as any, { dryRun: false });
+    expect(db._tables.session_owners.map((r: any) => r._id).sort()).toEqual(["so3", "so4"]);
+    expect((await db.get("conversations_hand" as any)).owner_user_id).toBe("users_mate");
   });
 
   test("it pages through a role's sessions and hands the cursor on", async () => {

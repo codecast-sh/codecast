@@ -574,7 +574,10 @@ export async function releaseFolderHeld(ctx: { db: any; scheduler?: any }, args:
 // session the role started and still drives. The starter is the row's
 // `spawned_by_conversation_id`, or for a run's own session the run's spawner;
 // a starter is judged by the same rule, up to 8 links. A session a task
-// binding filed (`org_role_hold` "bound") is a person's and never stamped. It
+// binding filed (`org_role_hold` "bound") is a person's and never stamped. A
+// stamped session loses the owner row the old spawn rules gave the person
+// whose account ran its starter (that person added themselves), since a run a
+// role started takes no person owner; each row names what it drops. It
 // misses a hand whose starter pointer is absent (rows from before
 // spawned_by) or whose starter was deleted: those stay in their runner's
 // inbox. Dry by default; one role's page per transaction, continued by the
