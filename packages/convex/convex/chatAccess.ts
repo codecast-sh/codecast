@@ -62,41 +62,39 @@ export async function teamRooms(ctx: ReadCtx, teamId: Id<"teams">, limit: number
   return perKind.flat().sort(byName).slice(0, limit);
 }
 
-// How many of a person's newest room memberships are opened to find their DMs.
-// Membership rows are small and read whole; opening each room is what grows.
-const DM_MEMBERSHIPS_OPENED = 500;
-
-/** Every chat_channel_members row of a person, oldest first (by_user). */
-export function roomMemberships(ctx: ReadCtx, userId: Id<"users">): Promise<Doc<"chat_channel_members">[]> {
-  return ctx.db.query("chat_channel_members").withIndex("by_user", (q: any) => q.eq("user_id", userId)).collect();
+/**
+ * A person's room memberships and every DM among them, in any team. Each
+ * membership is opened, one small read apiece, so no DM is ever dropped
+ * unseen: a window over memberships or read marks hid the DMs nobody had
+ * opened lately (ct-99762). Read once per person when one call covers several
+ * teams (the digest). Grows with DMs ever joined; past ~1,000 the right fix is
+ * a per-member recency stamp, not a window.
+ */
+export async function myRooms(ctx: ReadCtx, userId: Id<"users">): Promise<{ rows: Doc<"chat_channel_members">[]; dms: Doc<"chat_channels">[] }> {
+  const rows = await ctx.db.query("chat_channel_members").withIndex("by_user", (q: any) => q.eq("user_id", userId)).collect();
+  const ids = [...new Set(rows.map((r) => r.channel_id.toString()))];
+  const dms = (await Promise.all(ids.map((id) => ctx.db.get(id as Id<"chat_channels">))))
+    .filter((c): c is Doc<"chat_channels"> => !!c && c.kind === "dm");
+  return { rows, dms };
 }
 
 /**
  * The rooms a person's rail draws from in one team: its named rooms, plus the
- * person's own DMs there, read from their member rows (pass `rows` when one
- * call covers several teams). `memberOf` is every restricted room they are
- * inside. Access is still the caller's to apply.
+ * person's own DMs there (myRooms). `memberOf` is every restricted room they
+ * are inside. Access is still the caller's to apply.
  */
 export async function teamRoomsAndDms(
   ctx: ReadCtx,
   userId: Id<"users">,
   teamId: Id<"teams">,
   limit: number,
-  rows?: Doc<"chat_channel_members">[],
+  mine?: { rows: Doc<"chat_channel_members">[]; dms: Doc<"chat_channels">[] },
 ): Promise<{ channels: Doc<"chat_channels">[]; memberOf: Set<string> }> {
-  rows ??= await roomMemberships(ctx, userId);
+  const { rows, dms: allDms } = mine ?? await myRooms(ctx, userId);
   const memberOf = new Set(rows.map((r) => r.channel_id.toString()));
-  // Reads stay bounded however many DMs a person has ever been in: only their
-  // newest memberships and the rooms they read most recently are opened (an
-  // old DM between two people is still read daily; a session's room is not),
-  // and past `limit` only the DMs with the newest lines reach railFor, which
-  // reads deep into each. A channel row is not stamped per line, hence the read.
-  const reads = await ctx.db.query("chat_reads").withIndex("by_user_channel", (q: any) => q.eq("user_id", userId)).collect();
-  const recentlyRead = reads.sort((a, b) => b.last_read_at - a.last_read_at).slice(0, DM_MEMBERSHIPS_OPENED);
-  const opened = [...new Set([...rows.slice(-DM_MEMBERSHIPS_OPENED), ...recentlyRead].map((r) => r.channel_id.toString()))]
-    .filter((id) => memberOf.has(id));
-  let dms = (await Promise.all(opened.map((id) => ctx.db.get(id as Id<"chat_channels">))))
-    .filter((c): c is Doc<"chat_channels"> => !!c && c.kind === "dm" && c.team_id.toString() === teamId.toString());
+  let dms = allDms.filter((c) => c.team_id.toString() === teamId.toString());
+  // Past `limit`, the DMs with the newest lines: railFor reads deep into each.
+  // A channel row is not stamped per line, hence the read per DM.
   if (dms.length > limit) {
     const newest = new Map(await Promise.all(dms.map(async (c) => [c._id.toString(), (await ctx.db
       .query("chat_messages")

@@ -29,7 +29,7 @@ import { internal } from "../_generated/api";
 import type { Doc, Id } from "../_generated/dataModel";
 import { internalAction, internalMutation } from "../functions";
 import { MAX_CHANNELS_PER_TEAM, UNREAD_CAP, plainPreview } from "../chatText";
-import { canAccessChannel, roomMemberships, teamRoomsAndDms } from "../chatAccess";
+import { canAccessChannel, myRooms, teamRoomsAndDms } from "../chatAccess";
 import { rewriteNotificationMessage } from "../lib/notificationActor";
 import { deliver } from "./send";
 import { notificationDigest, type DigestEntry, type DigestSection } from "./templates";
@@ -375,9 +375,9 @@ async function buildDigestForUser(
     .query("team_memberships")
     .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
-  const roomRows = await roomMemberships(ctx, userId);
+  const mine = await myRooms(ctx, userId);
   for (const membership of memberships.slice(0, 5)) {
-    const { channels } = await teamRoomsAndDms(ctx, userId, membership.team_id, MAX_CHANNELS_PER_TEAM, roomRows);
+    const { channels } = await teamRoomsAndDms(ctx, userId, membership.team_id, MAX_CHANNELS_PER_TEAM, mine);
     for (const channel of channels) {
       // Chat's own read rule: a restricted room counts only while the person
       // is still in it. A read row outlives removal, so it proves nothing.

@@ -886,13 +886,12 @@ describe("a team with hundreds of DMs", () => {
     expect(ids.sort()).toEqual(lined.map((i) => `dm-${i}`).sort());
   });
 
-  test("an old DM the caller still reads outlasts hundreds of newer rooms", async () => {
+  test("an old DM the caller never opened outlasts hundreds of newer rooms", async () => {
     const many = Array.from({ length: 520 }, (_, i) => ({ ...dms[0], _id: `dm-${i}`, dm_key: `dm:${i}` }));
     const ctx = context(ALICE, {
       ...seed(),
       chat_channels: [...channels(), ...many],
       chat_channel_members: many.map((d, i) => ({ _id: `cm-${i}`, channel_id: d._id, user_id: ALICE, added_by: BOB, added_at: i, _creationTime: i })),
-      chat_reads: [{ ...readRow(ALICE, "all", "dm-0"), last_read_at: 50_000 }],
       chat_messages: [{ _id: "line-0", channel_id: "dm-0", user_id: BOB, content: "still here", created_at: 49_000 }],
     }, indexed);
     const ids = (await call(listChannels, ctx, { team_id: TEAM })).channels.map((c: any) => c._id);
