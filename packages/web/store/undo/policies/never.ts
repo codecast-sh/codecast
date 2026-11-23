@@ -87,6 +87,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   shareChatMessageToSlack: SEND,
   retryPendingMessage: SEND,
   cancelPendingMessage: never("send: withdrawing a queued message is itself the way back from sending it"),
+  tellSessionRole: never("send: the words went to the role's own thread, like any send"),
   queueMessage: never("send: a queued message is taken back with its own remove button in the shared queue"),
   releaseQueued: never("send: what was released goes into the session, like any send"),
   reorderQueued: never("shared: the queue belongs to everyone in the session; moving it back is another move"),

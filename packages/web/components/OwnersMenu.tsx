@@ -49,7 +49,7 @@ const memberName = (m: any): string => m?.name || m?.email?.split("@")[0] || "Te
 const roleOwnerOf = (r: OrgRole): OwnerRole => ({ role_id: r._id, short_id: r.short_id, handle: r.handle, name: r.name, avatar: (r as any).avatar ?? null });
 const isDriver = (d: SessionDriver | null, key: string) => driverKey(d) === key;
 
-function Face({ person, role, size, driver, paused }: { person?: Person; role?: OwnerRole; size: number; driver?: boolean; paused?: boolean }) {
+export function Face({ person, role, size, driver, paused }: { person?: Person; role?: OwnerRole; size: number; driver?: boolean; paused?: boolean }) {
   const cls = `${driver ? "own-drv" : ""} ${paused ? "own-paused" : ""}`;
   if (role) return <RoleFace role={{ _id: role.role_id, short_id: role.short_id, handle: role.handle, name: role.name, avatar: role.avatar }} size={size} className={cls} title={role.name} />;
   return <AssigneeFace info={{ name: person!.name, image: person!.image }} size={size} hover={false} className={cls} />;

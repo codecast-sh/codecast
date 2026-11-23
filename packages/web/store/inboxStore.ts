@@ -46,6 +46,7 @@ import {
   bindUndoStore,
   type DurableCreateContinuation,
 } from "./mutativeMiddleware";
+import { paintTakeOverOnSend } from "./sessionOwnersSlice";
 import { afterCommit, rekeyUndoIds, sameShape, withoutUndo } from "@platform/engine";
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
@@ -12034,6 +12035,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // (managedSessions.applyAgentStatus), or now via releaseQueued.
   queueMessage: action(function (this: Draft, convId: string, content: string, clientId: string) {
     draftQueuedRow(this, convId, content, clientId);
+    paintTakeOverOnSend(this, convId);
   }),
 
   releaseQueued: action(function (this: Draft, convId: string) {
@@ -12078,6 +12080,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
     for (const target of [row, this.conversations[_convId]]) {
       if (target && hasThreadState(target)) Object.assign(target, answeredThreadStateFields());
     }
+    // An owner who does not drive takes the wheel with this message, as the
+    // server's enqueue does (the composer strip said so before the send).
+    paintTakeOverOnSend(this, _convId);
     // No other local mutation: durability for the visible message comes from
     // the persisted pendingMessages map. The middleware dispatches the args to
     // the server and queues them in the outbox.

@@ -12,7 +12,7 @@
 // without a line of its own.
 import { action, sync } from "./mutativeMiddleware";
 import { applySyncPatch } from "./syncProtocol";
-import { applyOwnersChangeTo, listedOwnerIds, ownersFactsFromRead, type OwnerRowFact, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
+import { applyOwnersChangeTo, listedOwnerIds, ownersFactsFromRead, takeOverBySend, type OwnerRowFact, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 
 /** Who drives a session: the role it is filed under, one of its people, or
  *  (`none`) the default, which is how an undo puts back a driver nobody chose. */
@@ -60,6 +60,9 @@ export type SessionOwnersSliceActions = {
   applySessionOwners: (conversationId: string, change: SessionOwnersChange, inverse?: SessionOwnersChange | null) => void;
   /** The owners read's half of owner_ids (the inbox rows are the other). */
   feedSessionOwnerIds: (conversationId: string, ownerIds: string[]) => void;
+  /** The composer's "Tell <role>": the words go to the role's own session
+   *  (dispatch tellSessionRole) and the role keeps driving this one. */
+  tellSessionRole: (conversationId: string, content: string, clientId: string) => void;
 };
 
 export function createSessionOwnersSlice(): SessionOwnersSliceActions {
@@ -89,5 +92,31 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
         if (!sameIds(row.owner_ids, fields.owner_ids)) row.owner_ids = fields.owner_ids;
       }
     }) as SessionOwnersSliceActions["feedSessionOwnerIds"],
+    // Nothing here changes: the message lands in the role's thread, not this one.
+    tellSessionRole: action(function (this: any, _conversationId: string, _content: string, _clientId: string) {}) as SessionOwnersSliceActions["tellSessionRole"],
   };
 }
+
+/**
+ * A person's own message takes the wheel (convex lib/sessionTakeOver): run on
+ * the send's draft, so the composer strip and the header change with the
+ * bubble. Without the people row (the header never mounted) only the runner,
+ * whom the server always lets take it, is painted; anyone else waits for the
+ * echo rather than paint a guess the server may not make.
+ */
+export function paintTakeOverOnSend(draft: any, conversationId: string): void {
+  const me = String(draft.currentUser?._id ?? "");
+  const rows = [draft.sessions?.[conversationId], draft.conversations?.[conversationId]].filter(Boolean);
+  if (!me || rows.length === 0) return;
+  const people = draft.sessionOwners?.[conversationId];
+  if (!people && String(rows[0].user_id ?? "") !== me) return;
+  const next = takeOverBySend(paintedFacts(people, rows[0]), me, Date.now());
+  if (!next) return;
+  // The people live on the row (owner_ids), on both twins as the read feeds them.
+  const ownerIds = listedOwnerIds(next);
+  for (const row of rows) {
+    if (!sameIds(row.owner_ids, ownerIds)) row.owner_ids = ownerIds;
+    if ((row.driver_user_id ?? null) !== next.driver_user_id) row.driver_user_id = next.driver_user_id;
+  }
+}
+
