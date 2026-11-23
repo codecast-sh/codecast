@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { closeFactsOf, closeKindOf, closeSetsAside, closeTooltip, type CloseFacts } from "../sessionClose";
+import { closeFactsOf, closeKindOf, closeSetsAside, closeTooltip, nestedRunningOf, type CloseFacts } from "../sessionClose";
 
 const NOW = 1_800_000_000_000;
 const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ running: false, role: false, triggers: 0, waitingOnRun: false, ...f });
@@ -43,6 +43,24 @@ describe("the facts of a row", () => {
     expect(closeFactsOf({ ...settled, agent_status: "working", updated_at: NOW - 1000 }, 0, NOW).running).toBe(true);
     expect(closeFactsOf(settled, 0, NOW).running).toBe(false);
     expect(closeFactsOf(settled, 0, NOW, true).running).toBe(true);
+  });
+
+  test("a lead whose subagent or teammate is mid-turn is running, so Close sets it aside", () => {
+    const busy = { ...settled, agent_status: "working", updated_at: NOW - 1000 };
+    const rows = [
+      { ...busy, parent_conversation_id: "lead" },
+      { ...settled, parent_conversation_id: "idle-lead" },
+      { ...busy, spawned_by_conversation_id: "team-lead", agent_team_name: "crew", agent_name: "worker" },
+      // A cast-spawn worker (spawned_by, no team) is not nested: it never comes down with its spawner.
+      { ...busy, spawned_by_conversation_id: "spawner" },
+    ];
+    expect(nestedRunningOf(rows, "lead", NOW)).toBe(true);
+    expect(nestedRunningOf(rows, "team-lead", NOW)).toBe(true);
+    expect(nestedRunningOf(rows, "idle-lead", NOW)).toBe(false);
+    expect(nestedRunningOf(rows, "spawner", NOW)).toBe(false);
+    const f = closeFactsOf(settled, 0, NOW, false, nestedRunningOf(rows, "lead", NOW));
+    expect(closeSetsAside(f)).toBe(true);
+    expect(closeTooltip(f)).toBe("Close: hides it, lets it finish");
   });
 
   test("a role is a persistent anchor or a role's own session", () => {

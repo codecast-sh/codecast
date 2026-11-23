@@ -95,7 +95,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
 import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
-import { closeFactsOf, closeSetsAside } from "../lib/sessionClose";
+import { closeFactsOf, closeSetsAside, nestedRunningOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
 // Membership on this replica is the SAME selection the server scan runs.
@@ -9596,9 +9596,13 @@ function writeCharacterInDraft(draft: Draft, id: string, next: { avatar?: string
 // teammate's row it can only hide for this viewer.
 function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
   const now = Date.now();
+  // A lead whose subagent or teammate is mid-turn is set aside whole: a close
+  // of it would take the nested group down with it (hideSessionInDraft and
+  // the server's cascade), cutting that turn off.
+  const rows = Object.values(draft.sessions) as InboxSession[];
   const aside = ids.filter((id) => {
     const row = draft.sessions[id] ?? draft.conversations[id];
-    return !!row && closeSetsAside(closeFactsOf(row, 0, now, convHasPendingSend(draft.pendingMessages?.[id], now)));
+    return !!row && closeSetsAside(closeFactsOf(row, 0, now, convHasPendingSend(draft.pendingMessages?.[id], now), nestedRunningOf(rows, id, now)));
   });
   const merge = (mode: "stash" | "kill", list: string[]) => {
     const merged: HideResult = { hidden: [], forgotten: [], writes: {}, ts: now };
