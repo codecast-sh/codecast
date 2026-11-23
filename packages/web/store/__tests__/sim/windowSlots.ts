@@ -68,6 +68,7 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "lib/navRegistry.ts:BY_ID": CONSTANT,
   "lib/navRegistry.ts:BY_PATH": CONSTANT,
   "store/inboxStore.ts:KEEP_VISIBLE_OVERLAYS": CONSTANT,
+  "store/inboxStore.ts:_verdictByState": { shared: "a lookup of verdictOfWorkState by work state, a pure function of its key: every window holds the same answers" },
   "store/inboxStore.ts:IN_FLIGHT_OVERLAYS": CONSTANT,
   "store/inboxStore.ts:EMPTY_TEAM_INBOX_IDS": CONSTANT,
   "store/inboxStore.ts:SESSIONS_STRIP_FIELD_SET": CONSTANT,
