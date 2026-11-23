@@ -16,7 +16,7 @@ import { SESSION_SHORT_ID_RE } from "@codecast/shared/chat";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
 import { utcDay } from "./lib/orgCaps";
-import { flowAgents, readOnlyPass, WORKING_RUN_STATUSES } from "./lib/linePlacement";
+import { flowAgents, flowRunsAt, readOnlyPass, WORKING_RUN_STATUSES } from "./lib/linePlacement";
 import { barWords, byStartOrder, clearsBar, startValue, type FlowBar } from "./lib/linePriority";
 import { problemSourceOf } from "./workflows";
 import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
@@ -121,6 +121,23 @@ async function judgeRouteOf(ctx: Ctx, flow: any) {
 export type LivePlanned = { role_id: string; task_id: string; place?: RunPlace; live_flow_id: string };
 
 /**
+ * How many more runs the flow's parking stations let it start, and the words for the first that is full. A station
+ * that parks (`parks=true`) holds no machine slot, so slots alone admit without end while runs pile up there
+ * (Union's onefix Queue, Nov 23: 300+ waiting, 172 started in an hour). One that declares `room=N` holds at most N of
+ * the flow's working runs: at N the flow starts nothing, below it as many as are left.
+ */
+export async function queueRoom(ctx: Ctx, flow: any, nodes: readonly any[] | null | undefined): Promise<{ left: number; words: string | null }> {
+  let left = Infinity;
+  for (const n of nodes ?? []) {
+    if (!n?.parks || !(typeof n.room === "number" && n.room > 0)) continue;
+    const at = await flowRunsAt(ctx, flow.workspace, String(flow.workflow_id), String(n.id), n.room);
+    if (at >= n.room) return { left: 0, words: `${at} run${at === 1 ? " waits" : "s wait"} at ${n.label || n.id}` };
+    left = Math.min(left, n.room - at);
+  }
+  return { left, words: null };
+}
+
+/**
  * What one sweep pass starts from a live flow: its queue in order while
  * hands are left today and `room` allows, each on its area lead's machines
  * (lineLoadFor, shared through `loads` with the rest of the pass). A problem
@@ -131,14 +148,16 @@ export type LivePlanned = { role_id: string; task_id: string; place?: RunPlace; 
 export async function planLiveFlow(ctx: Ctx, flow: any, roles: any[], now: number, room: number, loads: LineLoads): Promise<{ starts: LivePlanned[]; waiting: string | null; queue: Array<LiveCandidate & { waiting: string | null }> }> {
   const handsCap = flow.caps?.hands_per_day;
   const handsLeft = handsCap == null ? Infinity : handsCap - flowHands(flow, now);
-  const take = Math.min(room, handsLeft);
-  const hold = flowHold(flow, now);
-  const offWords = !flow.on ? "the flow is off" : hold ? holdWords(hold) : handsLeft <= 0 ? "hands cap reached" : null;
-  const candidates = await liveFlowCandidates(ctx, flow, roles, Math.max(take, 0) + 16);
   // Only machines that can start every agent the flow's stations run take its problems (linePoolFor): the stations of
   // the version its runs pin when they start (lib/runGraph.ts), never the row as another checkout last pushed it.
   const pin = await versionToPin(ctx, flow.workflow_id);
-  const needs = flowAgents((await graphOfVersion(ctx, pin))?.nodes ?? (flow.workflow_id ? (await ctx.db.get(flow.workflow_id))?.nodes : null));
+  const nodes = (await graphOfVersion(ctx, pin))?.nodes ?? (flow.workflow_id ? (await ctx.db.get(flow.workflow_id))?.nodes : null);
+  const needs = flowAgents(nodes);
+  const hold = flowHold(flow, now);
+  const full = !flow.on || hold || handsLeft <= 0 ? null : await queueRoom(ctx, flow, nodes);
+  const take = Math.min(room, handsLeft, full?.left ?? Infinity);
+  const offWords = !flow.on ? "the flow is off" : hold ? holdWords(hold) : handsLeft <= 0 ? "hands cap reached" : full?.words ?? null;
+  const candidates = await liveFlowCandidates(ctx, flow, roles, Math.max(take, 0) + 16);
   // A judge problem waits while the flow's family has no judge route (lib/flowRoute); every other problem has a graph.
   const judgeRoute = candidates.some((c) => isJudgeProblem(c.task.cause)) ? await judgeRouteOf(ctx, flow) : null;
   const starts: LivePlanned[] = [];
