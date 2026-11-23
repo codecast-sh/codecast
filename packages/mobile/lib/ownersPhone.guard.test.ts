@@ -81,6 +81,11 @@ describe("active and paused, never a driver", () => {
     expect(strip).not.toContain("line.person");
   });
 
+  test("the idle composer never says resume under a paused role's Resume", async () => {
+    const { MOBILE_COMPOSER_PLACEHOLDER } = await import("@codecast/shared/render/mobileSessionStyle");
+    expect(MOBILE_COMPOSER_PLACEHOLDER.idle).not.toMatch(/resume/i);
+  });
+
   test("no face carries a driver ring", () => {
     expect(src("components/owners/OwnerFace.tsx")).not.toMatch(/driver/);
     expect(src("components/SessionItem.tsx")).not.toMatch(/driver=\{/);

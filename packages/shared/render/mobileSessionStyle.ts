@@ -79,8 +79,9 @@ export const MOBILE_SESSION_STYLE = {
   sendButton: { minWidth: 44, height: 44, borderRadius: 22, justifyContent: "center", alignItems: "center", paddingLeft: 12, paddingRight: 12 },
 } as const;
 
-/** The composer's placeholder, live and resumable. */
-export const MOBILE_COMPOSER_PLACEHOLDER = { active: "Type a message...", idle: "Send to resume session..." } as const;
+/** The composer's placeholder, live and idle. Idle never says "resume": a
+ *  paused role's Resume sits right above the box, and a send does not resume it. */
+export const MOBILE_COMPOSER_PLACEHOLDER = { active: "Type a message...", idle: "Send to wake the session..." } as const;
 
 /**
  * Agent statuses the composer shows between its buttons, with their tint and
