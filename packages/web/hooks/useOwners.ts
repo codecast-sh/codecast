@@ -30,7 +30,7 @@ import { useCollectionRows } from "./useCollectionRows";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 import { driverOf, listedOwnerIds, ownersFactsFromRead, type OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
 import { useInboxStore } from "../store/inboxStore";
-import { feedSessionOwnerIds, type SessionOwnersChange } from "../store/sessionOwnersSlice";
+import type { SessionOwnersChange } from "../store/sessionOwnersSlice";
 
 type OwnerInfo = {
   user_id: string;
@@ -178,7 +178,7 @@ export const selectOwnersRow = (d: any) => {
   }];
 };
 export const feedOwnerIds = (d: any) => {
-  if (d && Array.isArray(d.owner_ids)) feedSessionOwnerIds(useInboxStore.getState(), String(d.conversation_id), d.owner_ids.map(String));
+  if (d && Array.isArray(d.owner_ids)) useInboxStore.getState().feedSessionOwnerIds(String(d.conversation_id), d.owner_ids.map(String));
 };
 const ownersRowSig = (r: SessionOwnersRow) => [
   r.role?.role_id ?? "",

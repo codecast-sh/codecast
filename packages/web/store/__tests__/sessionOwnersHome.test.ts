@@ -2,7 +2,7 @@
 // write it, the inbox rows and the owners read (listOwners), and a Save paints
 // it; the header (ownerIdsOnRow) and the card (coOwnersOf) both read it, so
 // they converge on whichever answer is newest and a Save never freezes it.
-import { beforeEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { useInboxStore } from "../inboxStore";
 import { applyCollectionFeed } from "../../hooks/useSyncCollection";
 import { feedOwnerIds, selectOwnersRow } from "../../hooks/useOwners";
@@ -94,5 +94,47 @@ describe("one home for a session's people", () => {
     expect(header()).toEqual(["me", "mate"]);
     useInboxStore.getState().applySessionOwners(ID, { add: ["sam"] });
     expect(header()).toEqual(["me", "mate", "sam"]);
+  });
+});
+
+describe("the owners read touches only owner_ids", () => {
+  const owner = {};
+  let settle: ((refuse: boolean) => void) | null = null;
+  beforeEach(() => {
+    useInboxStore.getState()._setDispatch(() => new Promise((resolve, reject) => {
+      settle = (refuse) => (refuse ? reject(new Error("Uncaught Error: no")) : resolve(null));
+    }), { owner });
+  });
+  afterEach(() => { settle = null; useInboxStore.getState()._clearDispatch(owner); });
+  const locks = () => Object.keys(useInboxStore.getState().pending).filter((k) => k.includes(ID));
+
+  test("a refused role change rolls back to the old role though an owners push came between", async () => {
+    useInboxStore.setState({ sessions: { [ID]: { ...(useInboxStore.getState().sessions as any)[ID], org_role_id: "roleP" } } } as any);
+    listOwnersPush(["me", "mate", "sam"]);
+    useInboxStore.getState().applySessionOwners(ID, { role: "roleR" });
+    expect((useInboxStore.getState().sessions as any)[ID].org_role_id).toBe("roleR");
+    // An unrelated push of the owners read (an ack, a teammate's change).
+    listOwnersPush(["me", "mate", "sam"]);
+    settle!(true);
+    for (let i = 0; i < 100 && locks().length; i++) await new Promise((r) => setTimeout(r, 10));
+    expect(locks()).toEqual([]);
+    expect((useInboxStore.getState().sessions as any)[ID].org_role_id).toBe("roleP");
+  });
+
+  test("a Save made outside the inbox leaves no hold behind once the session enters it", () => {
+    useInboxStore.setState({ sessions: {}, conversations: { [ID]: { _id: ID, user_id: "me" } } } as any);
+    listOwnersPush(["me", "mate"]);
+    useInboxStore.getState().applySessionOwners(ID, { add: ["sam"] });
+    expect(locks()).toContain(`conversations:${ID}:owner_ids`);
+    // Taking it puts it in the inbox, with a row from before the Save.
+    useInboxStore.getState().syncTable("sessions", [{ _id: ID, session_id: "s-own", user_id: "me", updated_at: 1, owner_ids: ["me", "mate"] }] as any);
+    // The owners read echoes the Save onto both copies.
+    listOwnersPush(["me", "mate", "sam"]);
+    expect(locks().filter((k) => k.endsWith(":owner_ids"))).toEqual([]);
+    expect(header()).toEqual(["me", "mate", "sam"]);
+    // It leaves the inbox again: the conversation's copy is the live answer.
+    useInboxStore.setState({ sessions: {} } as any);
+    listOwnersPush(["me", "sam"]);
+    expect(header()).toEqual(["me", "sam"]);
   });
 });

@@ -137,6 +137,9 @@ export const CLIENT_SYNC_REGISTRY = {
   },
   sessions: {
     writtenBy: ["conversations"],
+    // The inbox list feeds the rows; the owners read also feeds owner_ids
+    // (useOwners, feedSessionOwnerIds).
+    feeds: ["sessionOwnership.listOwners"],
     persistence: { kind: "collection", key: "sessions" },
     localFirst: true,
     // owner_ids (fed by the inbox rows and by sessionOwnership.listOwners)

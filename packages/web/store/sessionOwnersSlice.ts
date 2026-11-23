@@ -10,7 +10,8 @@
 //
 // Spread into the org slice (orgSlice createOrgSlice), so the store gains it
 // without a line of its own.
-import { action } from "./mutativeMiddleware";
+import { action, sync } from "./mutativeMiddleware";
+import { applySyncPatch } from "./syncProtocol";
 import { applyOwnersChangeTo, listedOwnerIds, ownersFactsFromRead, type OwnerRowFact, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 
 /** Who drives a session: the role it is filed under, one of its people, or
@@ -33,32 +34,13 @@ export type SessionOwnersChange = {
   note?: string;
 };
 
-type OwnersHome = { field: "sessions" | "conversations"; row: any };
-
 /** The row a session's owners live on: its inbox row, else the conversation
  *  it was opened from. */
-export function ownersHomeOf(s: { sessions?: Record<string, any>; conversations?: Record<string, any> }, conversationId: string): OwnersHome | null {
-  const session = s.sessions?.[conversationId];
-  if (session) return { field: "sessions", row: session };
-  const conversation = s.conversations?.[conversationId];
-  return conversation ? { field: "conversations", row: conversation } : null;
+function ownersHomeOf(s: { sessions?: Record<string, any>; conversations?: Record<string, any> }, conversationId: string): any | null {
+  return s.sessions?.[conversationId] ?? s.conversations?.[conversationId] ?? null;
 }
 
 const sameIds = (a: unknown, b: readonly string[]) => Array.isArray(a) && a.length === b.length && a.every((id, i) => id === b[i]);
-
-/** The owners read's half of owner_ids (the inbox rows are the other): onto
- *  the session row through syncRecord, so a Save's hold on it is released by
- *  this echo too. An equal list keeps the row's own array. */
-export function feedSessionOwnerIds(
-  store: { sessions: Record<string, any>; conversations: Record<string, any>; syncRecord: (field: string, id: string, record: any) => void },
-  conversationId: string,
-  ownerIds: string[],
-): void {
-  const home = ownersHomeOf(store, conversationId);
-  if (!home) return;
-  const held = home.row.owner_ids;
-  store.syncRecord(home.field, conversationId, { owner_ids: sameIds(held, ownerIds) ? held : ownerIds });
-}
 
 /** The people as the owners rule reads them, from what the store shows: the
  *  read's rows, or, when a Save the server has not answered yet painted
@@ -76,13 +58,15 @@ export function paintedFacts(read: any, home: any): OwnersFacts {
 export type SessionOwnersSliceActions = {
   /** `inverse` puts the Save back for undo; null when nothing can. */
   applySessionOwners: (conversationId: string, change: SessionOwnersChange, inverse?: SessionOwnersChange | null) => void;
+  /** The owners read's half of owner_ids (the inbox rows are the other). */
+  feedSessionOwnerIds: (conversationId: string, ownerIds: string[]) => void;
 };
 
 export function createSessionOwnersSlice(): SessionOwnersSliceActions {
   return {
     applySessionOwners: action(function (this: any, conversationId: string, change: SessionOwnersChange, _inverse?: SessionOwnersChange | null) {
       const people = this.sessionOwners?.[conversationId];
-      const home = ownersHomeOf(this, conversationId)?.row;
+      const home = ownersHomeOf(this, conversationId);
       if (!people || !home || home.standing_role_id) return;
       const before = paintedFacts(people, home);
       const to = change.leave?.runner_id ? { runner_id: change.leave.runner_id, runner_is_bot: !!change.leave.runner_is_bot } : undefined;
@@ -91,5 +75,19 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       if ((home.org_role_id ?? null) !== next.role_id) home.org_role_id = next.role_id;
       if ((home.driver_user_id ?? null) !== next.driver_user_id) home.driver_user_id = next.driver_user_id;
     }) as SessionOwnersSliceActions["applySessionOwners"],
+    // Onto both twins it has (the inbox row and the conversation it was opened
+    // from), so a Save made on either is released by this echo and neither
+    // goes stale when the session enters or leaves the inbox. A partial patch:
+    // only the owner_ids lock is checked, never the row's other locks. An
+    // equal list keeps the row's own array.
+    feedSessionOwnerIds: sync(function (this: any, conversationId: string, ownerIds: string[]) {
+      for (const field of ["sessions", "conversations"] as const) {
+        const row = this[field]?.[conversationId];
+        if (!row) continue;
+        const { fields, pending } = applySyncPatch(field, conversationId, { owner_ids: ownerIds }, [], this.pending);
+        this.pending = pending;
+        if (!sameIds(row.owner_ids, fields.owner_ids)) row.owner_ids = fields.owner_ids;
+      }
+    }) as SessionOwnersSliceActions["feedSessionOwnerIds"],
   };
 }
