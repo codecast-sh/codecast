@@ -48,5 +48,12 @@ describe("newConversationAgentType", () => {
 
   test("a machine-less account always starts the hosted assistant", () => {
     expect(newConversationAgentType(state({}, []), "claude_code")).toBe("codecast");
+    expect(newConversationAgentType(state({}, []), undefined, "codex")).toBe("codecast");
+  });
+
+  test("an agent the caller asked for outranks the saved default; an unknown one does not count", () => {
+    expect(newConversationAgentType(state({ default_agent: "codex" }), "gemini", "claude_code")).toBe("claude_code");
+    expect(newConversationAgentType(state({ default_agent: "codex" }), undefined, "bogus")).toBe("codex");
+    expect(newConversationAgentType(state({}), "gemini", null)).toBe("gemini");
   });
 });

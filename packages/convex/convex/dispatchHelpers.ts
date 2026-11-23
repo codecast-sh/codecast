@@ -4,6 +4,7 @@
 import type { Id } from "./_generated/dataModel";
 import { claimTaskOwnership } from "./lib/taskOwner";
 import { addConversationToWorkItem } from "./conversationLinks";
+import { canAccessTask } from "./lib/access";
 
 export type HandlerCtx = { db: any; storage?: any; runMutation?: any; runQuery?: any };
 
@@ -78,15 +79,9 @@ export async function linkConversationToObject(
 
   if (objectType === "task") {
     const task = await ctx.db.get(objectId as Id<"tasks">);
-    if (!task) return;
-    if (task.user_id.toString() !== userId.toString()) {
-      if (!task.team_id) return;
-      const membership = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", task.team_id))
-        .first();
-      if (!membership) return;
-    }
+    // Access is the task's workspace, never its team: a task private to its
+    // owner inside a team is not a teammate's to link and take.
+    if (!task || !(await canAccessTask(ctx as any, userId, task))) return;
     // The list append and the association rail (best-effort; legacy fields
     // stay authoritative) are one helper — see conversationLinks.ts.
     await addConversationToWorkItem(ctx, userId, "task", task, conversationId);

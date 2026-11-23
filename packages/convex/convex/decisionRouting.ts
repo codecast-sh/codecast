@@ -1,6 +1,9 @@
-// Sharing decisions out by area (contracts/decisionAreas). At ask time an
-// unaddressed decision's project picks the members covering it: its task's
-// project, else its role scope's, else its session's. The member with the
+// Sharing decisions out by area (contracts/decisionAreas): the fallback for a
+// decision the org chart does not route. A decision that climbs a reporting
+// line (its session is or works under a role) goes to the person that line
+// ends at, never to an area. At ask time any other unaddressed decision's
+// project picks the members covering it: its task's project, else its
+// session's. The member with the
 // fewest decisions waiting in their queue owns it; a tie goes to whoever was
 // given one longest ago (both read from decision_inbox, memberLoad); members who are away, who take no decisions, and bots are skipped.
 // No match leaves the ask on the chain it always had (sessionDecisions
@@ -64,14 +67,12 @@ export async function readLoads(ctx: Ctx, members: AreaMemberRow[]): Promise<voi
   for (const m of members) Object.assign(m, await memberLoad(ctx, m.user_id));
 }
 
-/** The projects a decision is about: its task's, else its role scope's, else its session's work. */
-export async function areaProjectsOf(ctx: Ctx, a: { task?: any; role?: { scope?: { project_ids?: Id<"projects">[] } } | null; conversation?: any }): Promise<string[]> {
+/** The projects a decision is about: its task's, else its session's work. */
+export async function areaProjectsOf(ctx: Ctx, a: { task?: any; conversation?: any }): Promise<string[]> {
   if (a.task) {
     const work = await taskWork(ctx, a.task);
     if (work.project_id) return [String(work.project_id)];
   }
-  const scope = a.role?.scope?.project_ids ?? [];
-  if (scope.length) return scope.map(String);
   const work = a.conversation ? await sessionWork(ctx, a.conversation) : {};
   return work.project_id ? [String(work.project_id)] : [];
 }
@@ -90,13 +91,14 @@ export function teamReadsDecision(conversation: any, task: any, workflowRunId: u
 export type AreaRouteArgs = {
   conversation: any;
   task: any;
-  role: any;
   category: string;
   team_id: Id<"teams"> | undefined;
   /** Asked of named people (--to). */
   addressed: boolean;
   /** A trial's decision (routeFor's trial). */
   trial: string | null;
+  /** The decision climbs a reporting line: the org chart routes it, not areas. */
+  charted: boolean;
   workflow_run_id?: unknown;
   /** A re-ask keeps its owner while they still cover its project. */
   keep?: Id<"users">;
@@ -104,12 +106,12 @@ export type AreaRouteArgs = {
 };
 
 /**
- * The person an unaddressed decision is shared out to, or null to leave it
- * on the chain it always had. A workspace with no areas set yet asks its
+ * The person an unaddressed decision off the org chart is shared out to, or
+ * null to leave it on the chain it always had. A workspace with no areas set yet asks its
  * admins who decides for which areas (decisionAreas.scheduleAreasCard) instead.
  */
 export async function routeByArea(ctx: Ctx, a: AreaRouteArgs): Promise<Id<"users"> | null> {
-  if (!a.team_id || a.addressed || a.trial || isHostedAgentType(a.conversation.agent_type) || isProtectedCategory(a.category)) return null;
+  if (!a.team_id || a.charted || a.addressed || a.trial || isHostedAgentType(a.conversation.agent_type) || isProtectedCategory(a.category)) return null;
   if (!teamReadsDecision(a.conversation, a.task, a.workflow_run_id, a.team_id)) return null;
   const members = await teamAreaMembers(ctx, a.team_id);
   if (members.length === 0) {
