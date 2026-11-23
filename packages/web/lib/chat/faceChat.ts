@@ -62,6 +62,18 @@ export type FaceChatLayer = {
   canShow: (authorId: string) => boolean;
 };
 
+/** True when the face bar is actually visible inside the viewport. Zen mode
+ *  hides the header with `-translate-y-full` rather than `display: none`, so
+ *  `getClientRects()` stays non-empty while the faces sit off-screen above the
+ *  window — claiming a chat arrival there swallows the toast and folds the
+ *  badge into a hidden bar. */
+export function faceBarOnScreen(bar: HTMLElement | null): boolean {
+  if (!bar || bar.getClientRects().length === 0) return false;
+  if (bar.closest("[data-zen-bar-hidden]")) return false;
+  const r = bar.getBoundingClientRect();
+  return r.height === 0 || (r.bottom > 0 && r.top < (typeof window === "undefined" ? Infinity : window.innerHeight));
+}
+
 const MIN_SHOW_MS = 1600;
 const RETRACT_MS = 320;
 const MAX_LINES = 3;

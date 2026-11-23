@@ -2,7 +2,7 @@ import { findAndReplace } from "mdast-util-find-and-replace";
 import remarkGfm from "remark-gfm";
 import type { Options as ReactMarkdownOptions } from "react-markdown";
 import { isConvexId, isEntityId, bareEntityIdRegex, entityMentionRegex, entityTypeFromId, parseEntityUrl, parsePublishedPageUrl, parseModPaneUrl, parseClaudeArtifactUrl, parseLinkPreviewUrl, parseMessageRefUrl, messageRefPayload, contextualPrRefRegex, contextualPrRefPayload, splitContextualPrRefs, deployRunRefRegex, splitDeployRunRef } from "./entityLinks";
-import { FILE_PATH_SCAN_RE, mentionFromMatch } from "./filePathLinks";
+import { FILE_PATH_SCAN_RE, mentionFromMatch, parseFilePathHref } from "./filePathLinks";
 import { mdastText } from "./remarkEntityCards";
 import { filesHref } from "./vault/vaultHref";
 import { isObjectRef, objectRefScanRegex } from "./mods/objects";
@@ -190,6 +190,15 @@ function promoteMessageLinks(node: any) {
   if (!Array.isArray(node.children)) return;
   node.children = node.children.map((child: any) => {
     if (child.type === "link") {
+      // `file:///path/to/file#L10` is stripped by react-markdown's default URL
+      // sanitizer before EntityAwareLink ever sees it; rewrite to `/files?path=`
+      // here so every markdown surface keeps the author's link text and line.
+      if (typeof child.url === "string" && /^file:\/\//i.test(child.url)) {
+        const file = parseFilePathHref(child.url);
+        if (file) {
+          return { ...child, url: filesHref({ localPath: file.path, line: file.line }) };
+        }
+      }
       const ref = parseMessageRefUrl(child.url);
       if (ref && isUrlLabel(mdastText(child), child.url)) {
         const payload = messageRefPayload(ref);

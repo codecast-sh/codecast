@@ -3548,7 +3548,7 @@ const ConversationViewInner = (
   if (knownPrIdsRef.current !== knownPrIdsRaw && (knownPrIdsRef.current.size !== knownPrIdsRaw.size || [...knownPrIdsRaw].some((id) => !knownPrIdsRef.current.has(id)))) {
     knownPrIdsRef.current = knownPrIdsRaw;
   }
-  const { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx } = useToolResultMaps({ conversation, codeRepository, pullRequestIds: knownPrIdsRef.current });
+  const { globalToolResultMap, globalImageMap, globalFileMap, filePathBase, filePathCtx } = useToolResultMaps({ conversation, codeRepository, pullRequestIds: knownPrIdsRef.current, foreign: !effectiveIsOwner || guest });
   // What this transcript is nested in, plus itself: the bound a reveal band
   // in it checks before showing a conversation (lib/revealHost).
   const revealAncestry = useRevealAncestryWith(conversation?._id ?? "");

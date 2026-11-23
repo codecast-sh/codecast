@@ -1370,6 +1370,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
       {appWindow && <AppWindowBar app={appWindow} />}
       <header
         data-cc-topbar
+        data-zen-bar-hidden={zenBar && !zenPeek.open ? "" : undefined}
         {...zenPeek.barProps}
         ref={headerRef}
         className={`flex-shrink-0 border-b border-black/10 bg-sol-bg z-[100] modern:border-sol-border ${desktopClass} ${appWindow ? "hidden" : ""} ${zenBar ? `fixed inset-x-0 top-0 !z-[120] transition-transform duration-200 ease-out ${zenPeek.open ? "translate-y-0 shadow-lg" : "-translate-y-full pointer-events-none"}` : "relative"}`}

@@ -37,6 +37,7 @@ interface DiffViewerState {
    *  files cannot fold and are not waited on. */
   missingBodies: Record<string, true>;
   selectedFile: string | null;
+  focusNonce: number;
   diffPanelOpen: boolean;
 
   selectChange: (index: number) => void;
@@ -73,6 +74,7 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
   bodies: {},
   missingBodies: {},
   selectedFile: null,
+  focusNonce: 0,
   diffPanelOpen: getInitialDiffPanelOpen(),
 
   selectChange: (index) =>
@@ -157,7 +159,7 @@ export const useDiffViewerStore = create<DiffViewerState>((set, get) => ({
       return { bodies, missingBodies };
     }),
 
-  selectFile: (filePath) => set({ selectedFile: filePath }),
+  selectFile: (filePath) => set((state) => ({ selectedFile: filePath, focusNonce: state.focusNonce + 1 })),
 
   nextChange: () => {
     const { selectedChangeIndex, changes } = get();

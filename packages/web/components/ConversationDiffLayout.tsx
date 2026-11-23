@@ -423,7 +423,7 @@ const BASE_EMPTY: Record<DiffBase, string> = {
 export function DiffPane({ conversation }: { conversation?: ConversationData }) {
   const conversationId = conversation?._id;
   const gitRoot = conversation?.git_root;
-  const { selectedChangeIndex, rangeStart, rangeEnd, changes, selectedFile, bodies, missingBodies, setDiffBase } = useDiffViewerStore();
+  const { selectedChangeIndex, rangeStart, rangeEnd, changes, selectedFile, focusNonce, bodies, missingBodies, setDiffBase } = useDiffViewerStore();
   const ui = useTrackedStore([
     (s) => (conversationId ? s.clientState.ui?.diff_base?.[conversationId] : undefined),
     (s) => (conversationId ? s.clientState.ui?.diff_seen_files?.[conversationId] : undefined),
@@ -565,6 +565,7 @@ export function DiffPane({ conversation }: { conversation?: ConversationData }) 
         fileMarks={fileMarks}
         onToggleViewed={onToggleViewed}
         focusFile={selectedFile}
+        focusNonce={focusNonce}
         sidebarHeader={
           <div className="px-3 py-2 border-b border-sol-border/50 bg-sol-bg-alt/30">
             <span className="text-xs text-sol-text-dim">{positionLabel}</span>

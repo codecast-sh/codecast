@@ -339,7 +339,7 @@ export function useChatToasts(): void {
       const viaSlack = !!slackAuthor || memberKind(author) === "slack";
       const isAgent = !viaSlack && (!!face.session || !!author?.is_bot || full?.author_kind === "agent" || fromRail?.author_kind === "agent");
       const isDm = n.type === "chat_dm" || st.chatChannels?.[channelId]?.kind === "dm";
-      const name = slackAuthor?.name || n.actor_name || memberName(author);
+      const name = slackAuthor?.name || n.actor_name || face.name || memberName(author);
       present(
         {
           messageId,

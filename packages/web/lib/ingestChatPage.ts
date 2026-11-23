@@ -23,6 +23,7 @@ export function ingestChatPage(data: any, convex: ConvexReactClient): ChatMessag
     ...(data.replies ?? []),
   ];
   const { syncTable } = useInboxStore.getState();
+  if (data.channel) syncTable("chatChannels", [data.channel]);
   if (messages.length) syncTable("chatMessages", messages);
   if (data.authors) syncTable("chatAuthors", data.authors);
   if (data.reactions) syncTable("chatReactions", data.reactions, chatReactionSyncOpts(messages.map(row => row._id)));

@@ -2,7 +2,7 @@ import { useRef, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../store/inboxStore";
-import { createChatPrefetcher } from "../lib/chatPrefetch";
+import { createChatPrefetcher, offRailChatNotificationMessageIds } from "../lib/chatPrefetch";
 import { captureError } from "../lib/analytics";
 import { CHAT_PAGE_SIZE, ingestChatPage } from "../lib/ingestChatPage";
 import { isChatRailLive, subscribeChatRailLive } from "../lib/chatLive";
@@ -27,6 +27,11 @@ export function useChatPrefetch(): void {
   // phone's Alerts tab draw.
   const notificationsMap = useInboxStore(s => s.notifications);
   const worker = useRef<ReturnType<typeof createChatPrefetcher> | null>(null);
+  const askedOffRailRef = useRef<Set<string>>(new Set());
+
+  useWatchEffect(() => {
+    askedOffRailRef.current.clear();
+  }, [viewerId]);
 
   useWatchEffect(() => {
     if (!ready) return;
@@ -51,12 +56,35 @@ export function useChatPrefetch(): void {
   useWatchEffect(() => {
     // The workspace's rooms only: the rail also carries the public community
     // rooms, which no notification of this viewer names.
-    const channels = useInboxStore.getState().chatChannels;
-    worker.current?.update(
-      (rail ?? []).filter(row => String(channels[row.channel_id]?.team_id) === String(teamId)),
-      Object.values(notificationsMap ?? {}) as any[],
+    const state = useInboxStore.getState();
+    const channels = state.chatChannels;
+    const teamRail = (rail ?? []).filter(row => String(channels[row.channel_id]?.team_id) === String(teamId));
+    const notifications = Object.values(notificationsMap ?? {}) as any[];
+    worker.current?.update(teamRail, notifications);
+
+    if (!viewerId || state.syncRole === "follower") return;
+    const covered = ready ? new Set(teamRail.map(r => String(r.channel_id))) : new Set<string>();
+    const missing = offRailChatNotificationMessageIds(
+      notifications,
+      covered,
+      id => !!state.chatMessages[id] || askedOffRailRef.current.has(id),
     );
-  }, [rail, notificationsMap, teamId, ready]);
+    for (const msgId of missing) {
+      askedOffRailRef.current.add(msgId);
+      void convex
+        .query(api.chat.getMessage, { message_id: msgId as any })
+        .then(data => {
+          const cur = useInboxStore.getState();
+          if (data && cur.currentUser?._id === viewerId && cur.syncRole !== "follower") {
+            ingestChatPage(data, convex);
+          }
+        })
+        .catch(error => {
+          askedOffRailRef.current.delete(msgId);
+          captureError(error instanceof Error ? error : new Error(String(error)), { operation: "chat-notif-prefetch" });
+        });
+    }
+  }, [convex, viewerId, rail, notificationsMap, teamId, ready]);
 }
 
 // Mounted on its own beside HostFeeders (and in the phone's StoreSyncBridge):
