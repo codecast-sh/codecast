@@ -877,11 +877,13 @@ describe("a team with hundreds of DMs", () => {
   test("past the cap, the rail keeps the caller's DMs with the newest lines", async () => {
     const s = seed();
     s.chat_channel_members = dms.map((d, i) => ({ _id: `cm-all-${i}`, channel_id: d._id, user_id: ALICE, added_by: BOB, added_at: 1 }));
-    const lines = [{ _id: "line-old", channel_id: "dm-249", user_id: BOB, content: "hi", created_at: 9_000 }];
+    // The 200 with lines are every even DM and the odd ones below 150: no
+    // slice of the member rows from either end, so only ranking finds them.
+    const lined = dms.map((d) => Number(d._id.slice(3))).filter((i) => i % 2 === 0 || i < 150);
+    const lines = lined.map((i) => ({ _id: `line-${i}`, channel_id: `dm-${i}`, user_id: BOB, content: "hi", created_at: 10_000 + i }));
     const ids = (await call(listChannels, context(ALICE, { ...s, chat_messages: lines }, indexed), { team_id: TEAM })).channels
       .filter((c: any) => c.kind === "dm").map((c: any) => c._id);
-    expect(ids).toHaveLength(200);
-    expect(ids).toContain("dm-249");
+    expect(ids.sort()).toEqual(lined.map((i) => `dm-${i}`).sort());
   });
 
   test("DMs never count against the cap on named rooms", async () => {

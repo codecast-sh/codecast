@@ -62,27 +62,37 @@ export async function teamRooms(ctx: ReadCtx, teamId: Id<"teams">, limit: number
   return perKind.flat().sort(byName).slice(0, limit);
 }
 
+// How many of a person's newest room memberships are opened to find their DMs.
+// Membership rows are small and read whole; opening each room is what grows.
+const DM_MEMBERSHIPS_OPENED = 500;
+
+/** Every chat_channel_members row of a person, oldest first (by_user). */
+export function roomMemberships(ctx: ReadCtx, userId: Id<"users">): Promise<Doc<"chat_channel_members">[]> {
+  return ctx.db.query("chat_channel_members").withIndex("by_user", (q: any) => q.eq("user_id", userId)).collect();
+}
+
 /**
  * The rooms a person's rail draws from in one team: its named rooms, plus the
- * person's own DMs there, read from their member rows. `memberOf` is every
- * restricted room they are inside. Access is still the caller's to apply.
+ * person's own DMs there, read from their member rows (pass `rows` when one
+ * call covers several teams). `memberOf` is every restricted room they are
+ * inside. Access is still the caller's to apply.
  */
 export async function teamRoomsAndDms(
   ctx: ReadCtx,
   userId: Id<"users">,
   teamId: Id<"teams">,
   limit: number,
+  rows?: Doc<"chat_channel_members">[],
 ): Promise<{ channels: Doc<"chat_channels">[]; memberOf: Set<string> }> {
-  const rows = await ctx.db
-    .query("chat_channel_members")
-    .withIndex("by_user", (q: any) => q.eq("user_id", userId))
-    .collect();
+  rows ??= await roomMemberships(ctx, userId);
   const memberOf = new Set(rows.map((r) => r.channel_id.toString()));
-  let dms = (await Promise.all([...memberOf].map((id) => ctx.db.get(id as Id<"chat_channels">))))
+  // Reads stay bounded however many DMs a person has ever been in: only their
+  // newest memberships are opened, and past `limit` only the DMs with the
+  // newest lines reach railFor, which reads deep into each. A channel row is
+  // not stamped per line, hence the read per DM.
+  const opened = [...new Set(rows.slice(-DM_MEMBERSHIPS_OPENED).map((r) => r.channel_id.toString()))];
+  let dms = (await Promise.all(opened.map((id) => ctx.db.get(id as Id<"chat_channels">))))
     .filter((c): c is Doc<"chat_channels"> => !!c && c.kind === "dm" && c.team_id.toString() === teamId.toString());
-  // Past `limit`, the DMs with the newest lines. The rail reads deep into each
-  // DM (railFor), so someone many sessions write to would otherwise trip the
-  // query's read limits. A channel row is not stamped per line, hence the read.
   if (dms.length > limit) {
     const newest = new Map(await Promise.all(dms.map(async (c) => [c._id.toString(), (await ctx.db
       .query("chat_messages")
