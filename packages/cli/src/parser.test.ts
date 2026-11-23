@@ -1,6 +1,6 @@
 import { describe, test, expect, mock } from "bun:test";
-import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractTeamInfo, extractSummaryTitle, claudeBannerText, type ClaudeSessionEntry } from "./parser.js";
-import { extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild } from "./codexSessionMeta.js";
+import { parseSessionLine, parseLine, parseCodexLine, extractMessages, parseSessionFile, parseCodexSessionFile, extractTeamInfo, extractSummaryTitle, claudeBannerText, detectCliFlags, type ClaudeSessionEntry } from "./parser.js";
+import { codexLaunchFlags, extractCodexForkRoot, extractCodexSessionMetadata, isCompletedStandaloneCodexReview, isCompletedNativeCodexReviewChild } from "./codexSessionMeta.js";
 import { classifyApiErrorBanner } from "@codecast/shared/contracts";
 
 describe("Parser malformed JSON handling", () => {
@@ -1330,5 +1330,24 @@ describe("extractSummaryTitle - the agent's own session name", () => {
   test("falls back to the legacy summary entry", () => {
     expect(extractSummaryTitle([user, line({ type: "summary", summary: "Old style" })].join("\n"))).toBe("Old style");
     expect(extractSummaryTitle(user)).toBeUndefined();
+  });
+});
+
+// Only a session a person runs at a terminal can hold a line typed there (convex lib/messageProvenance reads the mark).
+describe("launch marks - who types a session's prompts", () => {
+  const first = (entrypoint?: string) => JSON.stringify({ type: "user", ...(entrypoint ? { entrypoint } : {}), message: { role: "user", content: "ship it" } });
+  test("Claude Code's interactive cli is marked --interactive; -p is --print; the Agent SDK, an unknown and a missing entrypoint carry neither", () => {
+    expect(detectCliFlags(first("cli"))).toBe("--interactive");
+    expect(detectCliFlags(first("sdk-cli"))).toBe("--print");
+    for (const e of ["sdk-ts", "sdk-py", "claude-vscode", undefined]) expect(detectCliFlags(first(e))).toBeNull();
+  });
+
+  test("Codex's terminal UI and VS Code extension are marked --interactive; exec and spawned threads --print; an app-server thread neither", () => {
+    expect(codexLaunchFlags({ originator: "codex_cli_rs", source: "cli" })).toBe("--interactive");
+    expect(codexLaunchFlags({ originator: "codex_cli_rs", source: "vscode" })).toBe("--interactive");
+    expect(codexLaunchFlags({ originator: "codex_exec", source: "exec" })).toBe("--print");
+    expect(codexLaunchFlags({ originator: "codex_cli_rs", source: { subagent: "review" } })).toBe("--print");
+    expect(codexLaunchFlags({ originator: "codecast", source: "vscode" })).toBeUndefined();
+    expect(codexLaunchFlags(undefined)).toBeUndefined();
   });
 });

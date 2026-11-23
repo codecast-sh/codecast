@@ -242,7 +242,8 @@ import {
 } from "./daemonMarkers.js";
 import { agentSpawnPath } from "./agentSpawnPath.js";
 import { claudeBannerText, extractCwd, extractGrokCwd, extractMuseCwd, extractSummaryTitle, extractTeamInfo, isGrokInternalSession, parseSessionFile, parseTranscriptFor, type ParsedMessage } from "./parser.js";
-import { extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCodexProgramLaunch } from "./codexSessionMeta.js";
+import { healInteractiveMark } from "./interactiveMark.js";
+import { codexLaunchFlags, extractCodexCwd, extractCodexForkRoot, extractCodexSessionMetadata, isCodexProgramLaunch } from "./codexSessionMeta.js";
 import { headlessRunStaysOutOfInbox, inheritedConversationOfHeadless, repairLeakedHeadlessCodexRuns } from "./headlessRuns.js";
 import {
   CodexAppServer,
@@ -12909,6 +12910,9 @@ async function processSessionFilePass(
     maybeRetrySpawnLink(filePath, sessionId, "claude", conversationId, syncService, conversationCache).catch(() => {});
   }
 
+  // A session recorded before the daemon marked interactive launches gains the mark its head shows (interactiveMark.ts).
+  if (conversationId) healInteractiveMark((id) => syncService.markInteractive(id), conversationId, metadata.cliFlags, log);
+
   // Agent-team teammate? Link it to its lead (once, bounded attempts inside).
   // This runs on every pass, not only the create pass: a create that fell to
   // the retry queue (jx7akcgc, 2026-09-02: OCC conflict on sync_heads) has no
@@ -13833,7 +13837,7 @@ async function processCodexSessionPass(
             isSubagent: !!nativeParentSessionId || !!parentConversationId
               || headlessRunStaysOutOfInbox({ headless: isCodexProgramLaunch(codexMetadata), triggerRun: !!agentTaskId }) || undefined,
             // The mark the claude path stamps for `claude -p`.
-            cliFlags: isCodexProgramLaunch(codexMetadata) ? "--print" : undefined,
+            cliFlags: codexLaunchFlags(codexMetadata),
             // Same stamp as the claude path: without it every codex session
             // keys on its cwd, so a linked worktree under ~/.codex/worktrees
             // never folds into its checkout and the sharing page lists one row
@@ -13960,6 +13964,9 @@ async function processCodexSessionPass(
     if (conversationId && spawnLinkAttempts.has(sessionId)) {
       maybeRetrySpawnLink(filePath, sessionId, "codex", conversationId, syncService, conversationCache).catch(() => {});
     }
+
+    // A thread recorded before the daemon marked interactive launches gains the mark its head shows (interactiveMark.ts).
+    if (conversationId) healInteractiveMark((id) => syncService.markInteractive(id), conversationId, codexLaunchFlags(codexMetadata), log);
 
     // Agent status tracking for Codex sessions (skip if managed by app-server)
     if (conversationId && !appServerConversations.has(conversationId)) {

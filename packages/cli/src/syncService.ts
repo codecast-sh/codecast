@@ -1177,6 +1177,14 @@ export class SyncService {
     });
   }
 
+  /** Mark a session recorded before the daemon marked launches as one a person runs (interactiveMark.ts). */
+  async markInteractive(conversationId: string): Promise<void> {
+    await this.throttle();
+    return this.guarded(async () => {
+      await this.mutate("conversations:markInteractive" as any, { conversation_id: conversationId, api_token: this.apiToken });
+    });
+  }
+
   async linkSessions(parentConversationId: string, childConversationId: string, subagentDescription?: string): Promise<void> {
     await this.throttle();
     return this.guarded(async () => {
