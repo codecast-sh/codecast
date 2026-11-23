@@ -314,7 +314,8 @@ export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<
 // starts at its role. A standing session's starts at its parent, never at the
 // role that asked: a lead that reports to a person has no role above it and
 // its people are its owners and that person; a sub-lead's people are its
-// owners alone, and its parent role reads it first. `hears` is the one role
+// owners and the person its line ends at (never the seat's starter), and its
+// parent role reads it first. `hears` is the one role
 // told about the decision, the first on the ladder, when it can be told
 // (reachableRole). While a role hears, the decision enters no person's queue:
 // the role answers it under a grant, or hands it up (handUp): it recommends,
@@ -356,7 +357,12 @@ async function routeForSession(ctx: Ctx, conversation: any, now: number, task?: 
   const parent = conversation.standing_role_id ? role?.reports_to : undefined;
   const first = parent ? (parent.kind === "role" ? await ctx.db.get(parent.role_id) : null) : role;
   const ladder = await buildLadder(ctx, first, now);
-  const people = await peopleFor(ctx, conversation, parent ? (parent.kind === "user" ? parent.user_id : undefined) : ladder.firstPersonId);
+  // A sub-lead's seat has no person owner (org-staffing.md S28): the person
+  // its line ends at answers, never whoever happened to start the seat. A
+  // line that ends at no person falls to the project lead or the admins below.
+  const people = parent?.kind === "role"
+    ? (Array.from(new Set([...(await listSessionOwnerIds(ctx, conversation._id)), ...(ladder.firstPersonId ? [ladder.firstPersonId] : [])].map(String))) as Id<"users">[])
+    : await peopleFor(ctx, conversation, parent?.kind === "user" ? parent.user_id : ladder.firstPersonId);
   const hears = first && (await reachableRole(ctx, first._id)) ? first : null;
   if (people.length > 0) return { role, ladder, people, hears };
   const lead = await projectLeadRole(ctx, task);
@@ -427,14 +433,17 @@ export async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, 
   const { role, people: chain, hears, ladder, trial } = await routeFor(ctx, conversation, now, task, asStation);
   // Shared out by area (decisionRouting.ts): its owner keeps it while they still cover its project.
   const kept = row.holder?.kind === "user" ? (row.holder.id as Id<"users">) : row.asked_user_ids?.[0];
-  const areaOwner = await routeByArea(ctx, { conversation, task, role, category: row.category ?? "unknown", team_id: row.team_id, addressed: !!row.addressed, trial: trial ?? (row.trial ? "owner" : null), workflow_run_id: row.workflow_run_id, keep: kept, now });
+  const areaOwner = await routeByArea(ctx, { conversation, task, category: row.category ?? "unknown", team_id: row.team_id, addressed: !!row.addressed, trial: trial ?? (row.trial ? "owner" : null), charted: !!role || ladder.hops.length > 0 || !!row.hops?.length, workflow_run_id: row.workflow_run_id, keep: kept, now });
   const people = areaOwner ? [areaOwner] : chain;
   // A row asked with no ladder takes the one it now climbs, and its first
   // role hears; a row that has one keeps it and the recommendations on it.
   const climbs = !row.hops?.length && ladder.hops.length > 0;
+  // A card some person's queue already held was handed up (or never heard):
+  // it stays in the queue of whoever it moves to, never in nobody's.
+  const queued = !!(await ctx.db.query("decision_inbox").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first());
   await ctx.db.patch(row._id, { asked_user_ids: people, ...(climbs ? { hops: ladder.hops } : {}) });
   const woken = climbs ? await tellHearingRole(ctx, hears, row, now) : [];
-  await syncDecisionInbox(ctx, row._id, people, now, trial !== "owner" && (!hears || (climbs && woken.length === 0)));
+  await syncDecisionInbox(ctx, row._id, people, now, trial !== "owner" && (queued || !hears || (climbs && woken.length === 0)));
   const updated = await ctx.db.get(row._id);
   if (updated) await refreshHolder(ctx, updated, now);
 }
@@ -480,6 +489,36 @@ export const rerouteDecisionsHeldByAgents = internalMutation({
     }
     return { held, conversations: conversations.size, dry_run: !!args.dry_run };
   },
+});
+
+// Repair for decisions routed before the org chart came first (ct-99776):
+// every open decision whose session sits on the org chart, and whose people
+// differ from the ones its line names now, is routed again. Decisions a person
+// passed or addressed, a trial's, and a role's under a grant stay put.
+export async function rerouteChartedDecisionsCore(ctx: Ctx, dryRun: boolean, now: number): Promise<{ moved: string[]; dry_run: boolean }> {
+  const open: DecisionRow[] = await ctx.db
+    .query("session_decisions")
+    .withIndex("by_status_created", (q: any) => q.eq("status", "pending"))
+    .collect();
+  const moved: string[] = [];
+  for (const row of open) {
+    if (row.passed_to || row.addressed || row.trial || row.holder?.kind === "role") continue;
+    const conversation = await ctx.db.get(row.conversation_id);
+    if (!conversation) continue;
+    const task = row.task_id ? await ctx.db.get(row.task_id) : null;
+    const { role, people, ladder, trial } = await routeFor(ctx, conversation, now, task);
+    if (trial || (!role && !ladder.hops.length && !row.hops?.length)) continue;
+    const key = (ids: unknown[]) => ids.map(String).sort().join(",");
+    if (key(row.asked_user_ids ?? []) === key(people)) continue;
+    moved.push(row.short_id ?? String(row._id));
+    if (!dryRun) await rerouteRow(ctx, conversation, row, now);
+  }
+  return { moved, dry_run: dryRun };
+}
+
+export const rerouteChartedDecisions = internalMutation({
+  args: { dry_run: v.optional(v.boolean()) },
+  handler: (ctx, args) => rerouteChartedDecisionsCore(ctx, !!args.dry_run, Date.now()),
 });
 
 // The scope keys a grant may match for this decision: the asker's role and
@@ -1233,7 +1272,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   const teamTask = task ?? (existing?.task_id ? await ctx.db.get(existing.task_id) : null);
   const team_id = decisionTeamOf(conversation, teamTask);
   // Shared out by area (decisionRouting.ts): the member covering its project owns it; no match keeps the chain's people.
-  const areaOwner = await routeByArea(ctx, { conversation, task, role, category, team_id, addressed: !!addressed, trial: routed.trial, workflow_run_id: args.workflow_run_id, keep: existing?.asked_user_ids?.[0], now });
+  const areaOwner = await routeByArea(ctx, { conversation, task, category, team_id, addressed: !!addressed, trial: routed.trial, charted: !!routed.role || routed.ladder.hops.length > 0, workflow_run_id: args.workflow_run_id, keep: existing?.asked_user_ids?.[0], now });
   const people = areaOwner ? [areaOwner] : routedPeople;
   if (existing) {
     // A question a person gave to a teammate or escalated (decisionHandoff.ts) stays theirs when it is asked again.
