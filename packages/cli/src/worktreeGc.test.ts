@@ -336,6 +336,8 @@ function spawnSyncOk(repo: string, args: string[]): boolean {
 describe("line run worktrees: released once no live run or session works in them", () => {
   /** A run tree as a line run leaves it: its run dir, a commit not on origin, an uncommitted leftover. */
   function runTree(repo: string, name: string, runId: string): string {
+    sh(repo, "git", ["config", "user.email", "t@t"]);
+    sh(repo, "git", ["config", "user.name", "t"]);
     const wt = addWorktree(repo, name);
     commit(wt, "the run's fix", { "fix.txt": "unmerged fix\n" });
     fs.writeFileSync(path.join(wt, "scratch.log"), "left by the run");
@@ -345,14 +347,27 @@ describe("line run worktrees: released once no live run or session works in them
     return wt;
   }
 
-  test("a finished run's tree goes, its branch and commits stay", async () => {
+  test("a finished run's tree goes, its branch and commits stay, and what it left uncommitted is committed onto the branch first", async () => {
     const { repo } = makeRepo();
     const wt = runTree(repo, "agentwatch-ct-1", "run_done");
     const tip = sh(wt, "git", ["rev-parse", "HEAD"]);
     const verdict = await releaseSessionWorktree(wt, () => {}, async () => false, runTreesInUseVia(async () => new Set(["run_other"])));
     expect(verdict).toMatchObject({ action: "released" });
     expect(fs.existsSync(wt)).toBe(false);
-    expect(sh(repo, "git", ["rev-parse", "codecast/agentwatch-ct-1"])).toBe(tip);
+    expect(sh(repo, "git", ["rev-parse", "codecast/agentwatch-ct-1~1"])).toBe(tip);
+    expect(sh(repo, "git", ["show", "codecast/agentwatch-ct-1:scratch.log"])).toBe("left by the run");
+  }, 30_000);
+
+  // ct-99146: the sweep never commits to any branch but the run's own; a tree off it keeps the content rule.
+  test("a finished run's tree on another branch with uncommitted work is kept, and nothing is committed", async () => {
+    const { repo } = makeRepo();
+    const wt = runTree(repo, "agentwatch-ct-3", "run_done");
+    sh(wt, "git", ["switch", "-q", "-c", "feature/elsewhere"]);
+    const tip = sh(wt, "git", ["rev-parse", "HEAD"]);
+    const verdict = await releaseSessionWorktree(wt, () => {}, async () => false, runTreesInUseVia(async () => new Set(["run_other"])));
+    expect(verdict).toMatchObject({ action: "kept", reason: "uncommitted changes" });
+    expect(sh(wt, "git", ["rev-parse", "HEAD"])).toBe(tip);
+    expect(sh(wt, "git", ["status", "--porcelain"])).toBe("?? scratch.log");
   }, 30_000);
 
   test("kept while its run is live, while a session works in it, and when the live runs cannot be read", async () => {

@@ -54,7 +54,8 @@ import { moveToTrash } from "./workspace/trash.js";
 import { treeGitDir } from "./land/hold.js";
 import { runSide, type SnapshotResult } from "./cloud/syncSide.js";
 import { MERGED_REF_PREFIX, worktreeMatchesMergedBack } from "./mergeBack.js";
-import { runTreeNames, runTreesOf } from "./workflow/runDirs.js";
+import { lineRunsRoot, runTreeNames, runTreesOf } from "./workflow/runDirs.js";
+import { readFrozenChange } from "./workflow/flowChangeFile.js";
 
 /** The run trees of a checkout that a live run still works in, or null when that cannot be told. */
 export type RunTreesInUse = (repoRoot: string) => Promise<ReadonlySet<string> | null>;
@@ -272,6 +273,13 @@ export async function releaseSessionWorktree(
       log(`[WORKTREE-GC] kept ${wt.name}: ${reason}`);
       return { action: "kept", name: wt.name, path: worktreePath, reason };
     }
+    // What the run left uncommitted goes onto its branch first; a tree off its branch keeps today's content rule.
+    const off = await commitRunLeftovers(worktreePath, wt.name, "Left uncommitted in the run's worktree when the host swept it", path.join(lineRunsRoot(wt.repoRoot), wt.name)).catch((err) => `could not commit its leftovers: ${(err as Error).message.split("\n")[0]}`);
+    const kept = off ? await contentKeepReason(worktreePath, wt.repoRoot) : null;
+    if (kept) {
+      log(`[WORKTREE-GC] kept ${wt.name}: ${kept} (${off})`);
+      return { action: "kept", name: wt.name, path: worktreePath, reason: kept };
+    }
     return removeWorktree(wt.repoRoot, wt.name, worktreePath, log, { keepBranch: true });
   }
   const reason = await contentKeepReason(worktreePath, wt.repoRoot);
@@ -303,6 +311,31 @@ export async function contentKeepReason(worktreePath: string, repoRoot: string, 
   // A worker whose every change is already in its parent's checkout
   // (mergeBack.ts) holds nothing the parent lacks, pushed or not.
   return (await worktreeMatchesMergedBack(worktreePath).catch(() => false)) ? null : keepReason(probe);
+}
+
+/**
+ * Commit whatever a run's tree `name` holds uncommitted onto the run's own
+ * branch, `codecast/<name>`, so the tree can go with nothing lost: the branch
+ * stays, and a resume or `cast ws acquire <name>` checks it out again
+ * (workflow/runWorktree.ts restoreRunWorktree). Null once that branch holds
+ * everything the tree does; else why it cannot: the tree is on another branch
+ * or none (a rebase), a merge stands half done, or the branch is a change
+ * frozen for the run (`runDir`'s change.json, flows.md FL4), whose tip is the
+ * snapshot the run checked and ships. Never commits anywhere but the run's
+ * own branch.
+ */
+export async function commitRunLeftovers(tree: string, name: string, message: string, runDir?: string): Promise<string | null> {
+  if (readFrozenChange(runDir)) return "its branch is the change frozen for the run";
+  const own = `codecast/${name}`;
+  const head = await git(tree, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "");
+  if (head !== own) return head ? `on ${head}, not its run's branch ${own}` : `not on its run's branch ${own}`;
+  for (const ref of ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]) {
+    if (await git(tree, ["rev-parse", "-q", "--verify", ref]).then(() => true, () => false)) return `${ref} stands: an operation is half done`;
+  }
+  if (!(await git(tree, ["status", "--porcelain"]))) return null;
+  await git(tree, ["add", "-A"]);
+  await git(tree, ["commit", "-q", "--no-verify", "-m", message]);
+  return null;
 }
 
 /**

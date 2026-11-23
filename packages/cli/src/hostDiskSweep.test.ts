@@ -14,6 +14,8 @@ function world() {
   const repo = path.join(work, "repo");
   fs.mkdirSync(repo);
   git(repo, "init", "-q", "-b", "main");
+  git(repo, "config", "user.email", "t@t");
+  git(repo, "config", "user.name", "t");
   fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-qm", "base");
@@ -66,7 +68,7 @@ test("worktrees are swept in checkouts kept outside ~/work too", async () => {
   expect(r.released.concat(r.kept.map((k) => k.path))).toContain(wt);
 });
 
-test("a line run's worktree goes once no live run works in it, whatever it holds; its branch stays (2026-10-24)", async () => {
+test("a line run's worktree goes once no live run works in it; what it left uncommitted is committed onto its branch, which stays (2026-10-24, ct-99146)", async () => {
   const { work, repo } = world();
   const tree = (name: string, runId: string) => {
     const wt = path.join(repo, ".codecast", "worktrees", name);
@@ -86,6 +88,7 @@ test("a line run's worktree goes once no live run works in it, whatever it holds
   expect(r.released).toEqual([failed]);
   expect(r.kept).toEqual([{ path: live, reason: "a live run works in it" }]);
   expect(git(repo, "branch", "--list", "codecast/agentwatch-ct-1")).toContain("codecast/agentwatch-ct-1");
+  expect(git(repo, "show", "codecast/agentwatch-ct-1:scratch.log")).toBe("left over");
 });
 
 test("a destroyed worktree is deleted once its grace is over, with no git probe; a fresh one waits (line-2, 2026-11-21)", async () => {

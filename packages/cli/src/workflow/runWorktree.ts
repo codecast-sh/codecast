@@ -51,12 +51,18 @@ export async function restoreRunWorktree(cwd: string, name: string, branch: stri
 }
 
 /**
- * A run that ended takes its checkout with it once that checkout holds
- * nothing main lacks (worktreeGc.ts contentKeepReason): it made the tree, so
- * it removes it. Its branch stays, so a resume puts the tree back
- * (restoreRunWorktree). A tree a process still sits in, or with work main
- * lacks, is left to the daemon's sweep (land/sweep.ts), which shows the
- * latter to the run's task.
+ * A run that ended takes its checkout with it: it made the tree, so it
+ * removes it, and with it the tree's port slot. Whatever the tree holds
+ * uncommitted is first committed onto the run's own branch
+ * (worktreeGc.ts commitRunLeftovers), which stays, so a resume or
+ * `cast ws acquire` puts the same content back (restoreRunWorktree). On Nov 22
+ * the trees of a day's unlanded runs held all 40 port slots of a line host and
+ * every run after them failed with "no free port" (ct-99146). A tree a process
+ * still sits in is kept; so is one off its run's branch, or on a change
+ * frozen for the run, that holds work main lacks (worktreeGc.ts contentKeepReason), which the daemon's sweep shows to
+ * the run's task. A run waiting at a gate never gets here: its runner waits
+ * with it, and a runner that dies there is resumed, restoring the tree before
+ * the gate.
  */
 export async function releaseEndedRunTree(cwd: string, context: Record<string, string>): Promise<void> {
   const name = context["worktree"];
@@ -72,14 +78,16 @@ export async function releaseEndedRunTree(cwd: string, context: Record<string, s
       console.log(`${c.dim}Kept worktree ${name}: ${cwds ? "a running process sits in it" : "could not read which processes sit in it"}${c.reset}`);
       return;
     }
-    const { contentKeepReason, releaseTree } = await import("../worktreeGc.js");
-    const reason = await contentKeepReason(tree, repoRoot);
+    const { commitRunLeftovers, contentKeepReason, releaseTree } = await import("../worktreeGc.js");
+    const message = `Left uncommitted when the run${context["task_id"] ? ` on ${context["task_id"]}` : ""} ended${context["run_id"] ? ` (run ${context["run_id"]})` : ""}`;
+    const off = await commitRunLeftovers(tree, name, message, context["run_dir"]);
+    const reason = off ? await contentKeepReason(tree, repoRoot) : null;
     if (reason) {
-      console.log(`${c.dim}Kept worktree ${name}: ${reason}${c.reset}`);
+      console.log(`${c.dim}Kept worktree ${name}: ${reason} (${off})${c.reset}`);
       return;
     }
     await releaseTree(repoRoot, tree);
-    console.log(`${c.dim}Released worktree ${name}; its branch stays${c.reset}`);
+    console.log(`${c.dim}Released worktree ${name}; its branch ${off ? "stays" : `codecast/${name} holds all of it`}${c.reset}`);
   } catch (err) {
     console.error(`${c.yellow}Could not release worktree ${name}: ${(err as Error).message.split("\n")[0]}${c.reset}`);
   }
