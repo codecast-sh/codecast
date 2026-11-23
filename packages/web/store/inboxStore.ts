@@ -3308,22 +3308,33 @@ export function sessionPlacement(s: InboxSession, now = Date.now()): RowVerdict 
   _placementCache.set(s, { live: key, p });
   return p;
 }
-/** Who acts next on a session, as a person reads it (the same placement the
- *  inbox sections use): a wait its role drives is the role's work, so it
- *  reads working (personWorkState), and no count, mark or chime puts it on a
- *  person. */
+/** Who acts next on a session (the same placement the inbox sections use),
+ *  as the agent's own state: a role-driven wait still reads needs_input. The
+ *  surfaces an agent's state is for (the line's stripe, desktop windows, the
+ *  fork tree, the session map, org moves, triggers) read this. */
 export function sessionWorkState(s: InboxSession, now = Date.now()): WorkState {
-  return personWorkState(s, sessionPlacement(s, now));
+  return sessionPlacement(s, now).work_state;
 }
 const _verdictByState = new Map<WorkState, SessionVerdict>();
-export function classifySession(s: InboxSession, now = Date.now()): SessionVerdict {
-  const ws = sessionWorkState(s, now);
+function verdictOf(ws: WorkState): SessionVerdict {
   let c = _verdictByState.get(ws);
   if (!c) {
     c = verdictOfWorkState(ws);
     _verdictByState.set(ws, c);
   }
   return c;
+}
+export function classifySession(s: InboxSession, now = Date.now()): SessionVerdict {
+  return verdictOf(sessionWorkState(s, now));
+}
+/** The state a PERSON reads for a session: a wait its role drives is the
+ *  role's work, so it reads working (personWorkState). Every surface that says
+ *  "needs you" (the chime, counts, the palette) reads this, never the raw one. */
+export function personSessionWorkState(s: InboxSession, now = Date.now()): WorkState {
+  return personWorkState(s, sessionPlacement(s, now));
+}
+export function classifySessionForPerson(s: InboxSession, now = Date.now()): SessionVerdict {
+  return verdictOf(personSessionWorkState(s, now));
 }
 
 export function getSessionRenderKey(
@@ -4360,7 +4371,7 @@ export function placeInboxRows(
     if (!nestParent || !allIds.has(nestParent)) continue;
     if (nestWorkers && isSpawnedWorker(s)) {
       const own = placements.get(s._id)?.bucket ?? null;
-      const needsYou = own ? workerNeedsYou(own) : sessionWorkState(s, now) === "needs_input" || (askingOf(s) && !roleDrives(s));
+      const needsYou = own ? workerNeedsYou(own) : personSessionWorkState(s, now) === "needs_input" || (askingOf(s) && !roleDrives(s));
       const keepsOwnRow = isMemberCandidate(s) && (needsYou || own === "pinned");
       spawnedPresent.push({ s, parent: nestParent, nested: !keepsOwnRow, needsYou });
       if (keepsOwnRow) continue;

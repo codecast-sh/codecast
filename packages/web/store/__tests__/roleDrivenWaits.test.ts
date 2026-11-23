@@ -5,7 +5,8 @@
 // "needs you" on its parent row, the state mods read, the fleet board and
 // the decision queue all agree.
 import { describe, expect, it } from "bun:test";
-import { railRowPlacement, sessionPlacement, type InboxSession } from "../inboxStore";
+import { classifySession, isSessionEffectivelyIdle, railRowPlacement, sessionPlacement, sessionWorkState, type InboxSession } from "../inboxStore";
+import { handWorkState } from "../../lib/taskLine";
 import { placeSections } from "./placeTestHarness";
 import { shouldPlayWaitingSound, waitingSoundKey } from "../../hooks/useSyncInboxSessions";
 import { countsDigest } from "../../hooks/useProjectSessionCounts";
@@ -86,5 +87,14 @@ describe("a role-driven wait never reaches a person", () => {
     const queue = (s: InboxSession) => buildDecisionQueue({}, { [ID]: asking(s) }, undefined, ME).map((i) => i.conversationId);
     expect(queue(driven)).toEqual([]);
     expect(queue(paused)).toEqual([ID]);
+  });
+
+  // The agent's own state stays raw: a station or a desktop window of a hand
+  // stopped on a question shows it stopped, not busy.
+  it("agent-facing readers keep the raw state", () => {
+    const a = asking(driven);
+    expect(sessionWorkState(a)).toBe("needs_input");
+    expect(isSessionEffectivelyIdle(a)).toBe(true);
+    expect(handWorkState(classifySession(a), null)).not.toBe("working");
   });
 });

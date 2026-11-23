@@ -20,7 +20,7 @@ import type { ThreadStateStatus } from "@codecast/shared/contracts";
 import { ORG_STATE_META } from "./org/orgMeta";
 import { StatusDot } from "./StatusDot";
 import type { WorkState } from "@codecast/shared/contracts";
-import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, sessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, InboxSession, InboxViewMode, flatViewComparator, flatViewSessions, chipMatchesSession, chipFilterSection, computeManualSortKey, isConvexId, placeInboxRows, placementDecisionsSig, getProjectName, pendingSendWakeSig, freshReviveRequestIds, isSessionHidden, convBucketMap, sessionUnreadMap, sessionUnreadWakeSig, chipBucketFilters, chipFilterOpts, chipProjectFilters, passesFilterTerms, projectAxisKeys, projectOfFromState, groupSessionsForLabelView, groupSessionsByPlan, groupSessionsForOrgLens, isOrgLensMode, orgLensAvailable, orgLensSourcesOf, orgLensWakeSig, ORG_LENS_MODES, personSessionWorkState, selectFavoriteSessions, isFavoriteInStore, sortLabels, computeChipCounts, BucketItem } from "../store/inboxStore";
 import { hiddenBucketTree, killAllIds } from "../store/hiddenBucketTree";
 import { sessionsWakeSig, teamInboxIdsOf, resolveInboxViewMode, resolveShowOld, resolveShowSubagents, sectionHeaderCount, classifySession, inboxNestParentOf, isSpawnedWorker, nestsWorkers, NEW_SESSION_HOLD_MS, ensureHydrated } from "../store/inboxStore";
 import { loadMoreKilledSessions } from "../hooks/killedShelf";
@@ -2421,11 +2421,11 @@ function SessionListPanelImpl({
   // A group header's count and tallies: its rows and the rows nested under
   // them, the way a status section counts.
   const groupTally = (items: InboxSession[]) => {
-    const states: Partial<Record<ReturnType<typeof sessionWorkState>, number>> = {};
+    const states: Partial<Record<ReturnType<typeof personSessionWorkState>, number>> = {};
     let count = 0;
     for (const row of items) {
       for (const x of [row, ...(globalSubByParent.get(row._id) ?? [])]) {
-        const ws = sessionWorkState(x);
+        const ws = personSessionWorkState(x);
         states[ws] = (states[ws] ?? 0) + 1;
         count++;
       }
@@ -2912,7 +2912,7 @@ function SessionListPanelImpl({
       // The org lenses: a role's face before the label, and the group's
       // work-state tallies.
       icon?: React.ReactNode;
-      states?: Partial<Record<ReturnType<typeof sessionWorkState>, number>>;
+      states?: Partial<Record<ReturnType<typeof personSessionWorkState>, number>>;
       // A group's own facts after its count (the plan lens's wait and tasks).
       facts?: React.ReactNode;
       // The label is a thing's name (a plan title), drawn in the body face; no count.

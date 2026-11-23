@@ -17,7 +17,7 @@ import type { FunctionReturnType } from "convex/server";
 // Reuse the inbox's canonical state predicates so /sessions and /inbox never
 // disagree about what "needs input" / "idle" means.
 import {
-  classifySession,
+  classifySessionForPerson,
   type InboxSession,
 } from "../../store/inboxStore";
 import { deriveTriageFlags } from "./triageFlags";
@@ -406,7 +406,7 @@ export function SessionsView() {
         // Authoritative: reuse the inbox's own predicates verbatim. A settled
         // row's `rest` verdict picks needs_input / done / dormant, exactly as
         // the inbox sections do.
-        const c = classifySession(inbox, now);
+        const c = classifySessionForPerson(inbox, now);
         needsInput = c.waiting && c.rest === "needs_input";
         workState = c.waiting ? c.rest : c.idle ? "idle" : "working";
       } else if (s.agent_status) {

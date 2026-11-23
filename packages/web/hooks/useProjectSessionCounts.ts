@@ -6,7 +6,7 @@
 // and the digest is computed only for the projects asked about, once per
 // change of the sessions, the membership or the clock.
 import { useMemo, useRef } from "react";
-import { sessionWorkState, useInboxStore } from "../store/inboxStore";
+import { personSessionWorkState, useInboxStore } from "../store/inboxStore";
 import { workProjectsBySession } from "../store/workProjects";
 import { useCoarseNow } from "./useCoarseNow";
 import { EMPTY_COUNTS, type StateCounts } from "../components/org/orgTypes";
@@ -40,7 +40,7 @@ export function countsDigest(s: any, wantedKey: string, wanted: ReadonlySet<stri
     for (const sessionId of index.get(projectId) ?? []) {
       const row = s.sessions[sessionId];
       if (!row) continue;
-      const state = sessionWorkState(row, now);
+      const state = personSessionWorkState(row, now);
       c[state] = (c[state] ?? 0) + 1;
     }
     const body = Object.entries(c).map(([k, v]) => `${k}:${v}`).join(",");

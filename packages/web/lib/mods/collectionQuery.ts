@@ -3,7 +3,7 @@
 // facts every mod would otherwise recompute, filtered, sorted and trimmed.
 
 import { MOD_COLLECTIONS } from "@codecast/shared/contracts/mods";
-import { useInboxStore, sessionWorkState, placeInboxRows, isSub, type InboxSession } from "../../store/inboxStore";
+import { useInboxStore, personSessionWorkState, placeInboxRows, isSub, type InboxSession } from "../../store/inboxStore";
 import { WORKSPACE_SCOPED_KEYS } from "../../store/clientSyncRegistry";
 import { activeWorkspaceKeyOf, filterByWorkspace } from "../workspaceScope";
 
@@ -45,7 +45,7 @@ export function present(collection: string, row: any, inbox?: InboxView): any {
   if (collection === "sessions") {
     const s = row as any;
     let state: string | undefined;
-    try { state = sessionWorkState(s as InboxSession); } catch { state = undefined; }
+    try { state = personSessionWorkState(s as InboxSession); } catch { state = undefined; }
     const me = String((useInboxStore.getState() as any).currentUser?._id ?? "");
     // Membership is the inbox's own row set; the section is its server-stamped
     // bucket when one has arrived, else the work state it sorts by.

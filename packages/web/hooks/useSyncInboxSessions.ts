@@ -2,7 +2,7 @@ import { useRef, useCallback, useState } from "react";
 import { useMutation, useConvex, type ConvexReactClient } from "convex/react";
 import { captureError } from "../lib/analytics";
 import { api } from "@codecast/convex/convex/_generated/api";
-import { useInboxStore, InboxSession, classifySession, claimsViewer, isSub, isConvexId } from "../store/inboxStore";
+import { useInboxStore, InboxSession, classifySession, classifySessionForPerson, claimsViewer, isSub, isConvexId } from "../store/inboxStore";
 import { agentStatusAt } from "../lib/liveness";
 import { WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
 import { startWarmLoop } from "./inboxWarm";
@@ -53,7 +53,7 @@ export function waitingSoundKey(session: InboxSession, queued: Set<string>): str
   // needs_input (a delivered or parked settle is quiet) — the server's
   // needs-input push stands down on the same verdict.
   const now = Date.now();
-  const c = classifySession(session, now);
+  const c = classifySessionForPerson(session, now);
   if (!c.waiting || c.rest !== "needs_input") return null;
   const status = agentStatusAt(session, now);
   const kind = session.awaiting_input

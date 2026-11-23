@@ -3,6 +3,7 @@ import { classifyWorkState, type WorkState } from "@codecast/shared/contracts";
 import { agentStatusAt } from "../../lib/liveness";
 import {
   classifySession,
+  classifySessionForPerson,
   isSessionEffectivelyIdle,
   verdictOfWorkState,
   type InboxSession,
@@ -81,11 +82,14 @@ describe("classifySession is a thin adapter over the shared classifier (no secon
     expect(classifySession({ ...waiting, awaiting_input: false, agent_status: "running", is_idle: false }).waiting).toBe(false);
   });
 
-  // A person's view: a wait its role drives is the role's work (shared
-  // personWorkState), so the chime, the counts and every mark read it working.
-  it("a wait its role drives reads working; a paused role's wait is the person's", () => {
+  // A role-driven wait: the agent's own state still waits on input (the line,
+  // desktop windows and the fork tree read that), while a person reads it as
+  // the role's work (classifySessionForPerson: the chime, the counts).
+  it("a wait its role drives: raw for the agent's readers, working for a person's", () => {
     const roleDriven = sess({ org_role_id: "org_roles_infra", awaiting_input: true } as any);
-    expect(classifySession(roleDriven)).toEqual({ idle: false, waiting: false, rest: "needs_input" });
-    expect(classifySession({ ...roleDriven, driver_user_id: "u1" } as any).waiting).toBe(true);
+    expect(classifySession(roleDriven).waiting).toBe(true);
+    expect(isSessionEffectivelyIdle(roleDriven)).toBe(true);
+    expect(classifySessionForPerson(roleDriven)).toEqual({ idle: false, waiting: false, rest: "needs_input" });
+    expect(classifySessionForPerson({ ...roleDriven, driver_user_id: "u1" } as any).waiting).toBe(true);
   });
 });

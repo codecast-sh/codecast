@@ -14,7 +14,7 @@ import {
   type FrameToHost, type HostToFrame, type ModContext, type ModEventName, type ModManifest, type ModNode, type ModSurface,
 } from "@codecast/shared/contracts/mods";
 import { withoutUndo } from "@platform/engine";
-import { useInboxStore, sessionWorkState } from "../../store/inboxStore";
+import { useInboxStore, personSessionWorkState } from "../../store/inboxStore";
 import { baseName, CALL_LIMIT, inboxPlacements, present, queryCollection, rowsOf, type Query } from "./collectionQuery";
 import { objectByShortId } from "./objects";
 import { modIsActive } from "./active";
@@ -764,7 +764,7 @@ class ModHost {
 
   private seedSessionStates(): void {
     for (const s of rowsOf("sessions")) {
-      try { this.lastStates.set(String(s._id), sessionWorkState(s)); } catch {}
+      try { this.lastStates.set(String(s._id), personSessionWorkState(s)); } catch {}
     }
   }
 
@@ -773,7 +773,7 @@ class ModHost {
     const moves: { id: string; title?: string; from: string | null; to: string; project?: string }[] = [];
     for (const s of rowsOf("sessions")) {
       let to: string;
-      try { to = sessionWorkState(s); } catch { continue; }
+      try { to = personSessionWorkState(s); } catch { continue; }
       const id = String(s._id);
       const from = this.lastStates.get(id) ?? null;
       if (from !== to) {
