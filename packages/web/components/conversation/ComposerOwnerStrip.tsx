@@ -11,8 +11,8 @@
  *   - you drive and the role waits: "<role> paused while you drive", with
  *     Make driver to hand it back.
  * The take-over line shows while the composer is focused or holds text. It
- * leads with who drives, so a narrow screen cuts the rest, never the name,
- * and ends with the key that sends.
+ * leads with who drives; a phone shows only their face and name beside the
+ * toggle, never a sentence cut through the name. It ends with the key that sends.
  */
 
 import { memo } from "react";
@@ -81,8 +81,7 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
       {fromRole ? <OwnerFace role={fromRole} size={16} driver /> : <OwnerFace person={{ _id: driver!.kind === "user" ? driver!.user_id : "", ...fromPerson! }} size={16} driver />}
       <span className="flex-1 min-w-0 truncate">
         <b className="font-medium text-sol-text">{driverName}</b>
-        {telling ? " stays driver" : " drives"}
-        <span className="max-sm:hidden">{telling ? " · your words go to them" : " · sending takes over"}</span>
+        <span className="max-sm:hidden">{telling ? " stays driver · your words go to them" : " drives · sending takes over"}</span>
       </span>
       <SegmentedToggle
         size="sm"
