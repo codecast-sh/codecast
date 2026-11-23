@@ -31,9 +31,11 @@ import { libraryOfRun, runFlowVersions } from "./flowVersions";
 import { ingestSnapshotArgs } from "./lib/workflowGraphValidators";
 import { admitRoleRun, requeueForSweep } from "./orgLine";
 import { flowAgents, missingAgentOn } from "./lib/linePlacement";
-import { agentDisplayName, deviceDisplayName } from "@codecast/shared/contracts";
+import { actsForRole, agentDisplayName, deviceDisplayName } from "@codecast/shared/contracts";
 import { navPromptField } from "./userMessagesFilter";
 import { retainSessionCreator } from "./sessionLaunch";
+import { recordHandStart } from "./spawn";
+import { roleOfConversation } from "./lib/actor";
 import { isSessionOwner } from "./sessionOwners";
 import { withAgentSessions } from "./lib/runAgentSessions";
 import { changeSessionOf } from "./lib/taskOwner";
@@ -894,7 +896,9 @@ export const createFromCli = mutation({
     }
     const place = pooled && "place" in pooled ? pooled.place : undefined;
     if (!place && unfit) throw new Error(`${taskRow?.short_id ?? workflowName} did not start: ${unfit}, and no line machine can take it`);
-    // A place on the team's pool runs as that machine's account, and the caller owns the run (orgLine.startRoleRun).
+    // A place on the team's pool runs as that machine's account. A person
+    // calling owns the run; a session acting for a role starts the role's run,
+    // which no person owns (orgLine.startRoleRun).
     const host = (place?.user ?? userId) as Id<"users">;
 
     const { run_id, primary_conversation_id } = await createRunCore(ctx, host, {
@@ -911,7 +915,9 @@ export const createFromCli = mutation({
       fresh_branch: args.detach && lineRun,
       now,
     });
-    await retainSessionCreator(ctx, primary_conversation_id, userId, host);
+    const startingRole = spawner && actsForRole(spawner) ? await roleOfConversation(ctx, spawner) : null;
+    if (startingRole) await recordHandStart(ctx, startingRole, primary_conversation_id);
+    else await retainSessionCreator(ctx, primary_conversation_id, userId, host);
     // A placed run names its machine from the start, so the pool counts it there before a runner claims it.
     if (place) await ctx.db.patch(run_id, { runner_device: place.device });
     if (args.detach) await queueRunOnDaemon(ctx, host, run_id, { device: place?.device ?? args.run_on_device, ...(version ? { slug: version.slug } : {}), now });

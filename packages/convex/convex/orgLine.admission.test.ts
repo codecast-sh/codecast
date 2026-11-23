@@ -529,6 +529,17 @@ describe("orgLine admission (LE6)", () => {
         expect((await runnerLoad(ctx, MATE)).working).toBe(0);
       });
 
+      test("a run the role's own session starts on the pool by hand is the role's too: nobody owns it", async () => {
+        const { hashToken } = await import("./apiTokens");
+        const { createFromCli } = await import("./workflow_runs");
+        const { ctx, tables } = seated([seatLaptop, host("h1", 2)]);
+        tables.api_tokens = [{ _id: "api_tokens_mate", user_id: MATE, token_hash: await hashToken("mate-token") }];
+        const out = await (createFromCli as any)._handler(ctx, { api_token: "mate-token", workflow_name: "line", task_id: "ct-c0", project_path: "/srv/growth", detach: true, run_on_device: "dev-mate", spawner_session: "standing" });
+        expect(out).toMatchObject({ runner_device: "h1" });
+        expect(ownersOf(tables, out.primary_conversation_id)).toEqual([]);
+        expect(tables.conversations.find((c) => c._id === out.primary_conversation_id)).toMatchObject({ org_role_id: ROLE, role_started: true });
+      });
+
       test("keeps its own pool when its account offers one, and waits there rather than spilling onto the team's", async () => {
         const { ctx, tables } = seated([seatLaptop, host("m1", 1, { user_id: MATE }), host("h1", 4)]);
         const res = await sweepCore(ctx, NOW);
