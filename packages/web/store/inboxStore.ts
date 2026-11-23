@@ -95,6 +95,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
 import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
+import { closeFactsOf, closeSetsAside } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
 // Membership on this replica is the SAME selection the server scan runs.
@@ -6499,6 +6500,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   killSession: (id: string) => void;
   deleteSession: (id: string) => void;
   killSessions: (ids: string[]) => void;
+  closeSession: (id: string) => { aside: string[] } | undefined;
+  closeSessions: (ids: string[]) => { aside: string[] } | undefined;
   markSessionsDismissed: (ids: string[]) => void;
   markBlockedAcknowledged: (ids: string[]) => void;
   markBlockedReviveRequested: (ids: string[]) => void;
@@ -9584,6 +9587,36 @@ function writeCharacterInDraft(draft: Draft, id: string, next: { avatar?: string
   }
 }
 
+// Shared body of closeSession/closeSessions: a session running a turn is set
+// aside like a stash and keeps running; every other one is hidden like a kill.
+// The server tells the two gestures apart by the action name (dispatch.ts
+// EXPLICIT_CLOSE_ACTIONS): a close stops the agent but keeps its triggers and
+// queue, and a role's own session closes without the retire question. The ids
+// set aside are the action's result, which the server side effect reads for a
+// teammate's row it can only hide for this viewer.
+function closeInDraft(draft: any, ids: string[]): { aside: string[] } {
+  const now = Date.now();
+  const aside = ids.filter((id) => {
+    const row = draft.sessions[id] ?? draft.conversations[id];
+    return !!row && closeSetsAside(closeFactsOf(row, 0, now, convHasPendingSend(draft.pendingMessages?.[id], now)));
+  });
+  const merge = (mode: "stash" | "kill", list: string[]) => {
+    const merged: HideResult = { hidden: [], forgotten: [], writes: {}, ts: now };
+    for (const id of list) {
+      const r = hideSessionInDraft(draft, id, mode, now);
+      merged.hidden.push(...r.hidden);
+      merged.forgotten.push(...r.forgotten);
+      Object.assign(merged.writes, r.writes);
+    }
+    announceHide(draft, mode, merged);
+  };
+  if (aside.length < ids.length) soundKill();
+  else soundDismiss();
+  merge("stash", aside);
+  merge("kill", ids.filter((id) => !aside.includes(id)));
+  return { aside };
+}
+
 function announceHide(
   draft: any,
   mode: "stash" | "kill",
@@ -11164,12 +11197,22 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // transition (dispatch.applyPatches sees inbox_dismissed_at flip), so this
   // action only has to move the rows; every kill path gets the teardown
   // without remembering to ask for it. (The persisted field keeps its
-  // historical name inbox_dismissed_at and the UI calls the bucket "Killed";
+  // historical name inbox_dismissed_at and the UI calls the bucket "Closed";
   // the server's kill transition additionally stamps inbox_killed_at, which is
   // what actually marks the row retired.)
   killSession: action(function (this: Draft, id: string) {
     soundKill();
     announceHide(this, "kill", hideSessionInDraft(this, id, "kill"));
+  }),
+
+  // Close = done looking at it (closeInDraft): never cancels a wake and never
+  // cuts a turn off. Kill stays the retirement, in the card's menu.
+  closeSession: action(function (this: Draft, id: string) {
+    return closeInDraft(this, [id]);
+  }),
+  closeSessions: action(function (this: Draft, ids: string[]) {
+    if (ids.length === 0) return;
+    return closeInDraft(this, ids);
   }),
 
   // Delete for good (sessionDelete.deleteSession, by action name): the server

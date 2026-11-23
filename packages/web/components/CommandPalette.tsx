@@ -116,7 +116,7 @@ import type { WorkbenchSnapshot } from "../store/workbench";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { getLabelColor, DEFAULT_LABELS } from "../lib/labelColors";
 import { toast } from "sonner";
-import { animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../store/undoActions";
+import { animatedCloseSessions, animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../store/undoActions";
 import { gestureToast } from "../store/undoStack";
 import { counted } from "../store/undo/labels";
 
@@ -2313,6 +2313,7 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
       // A kill waits on the cards' collapse and records its own entry then
       // (one undo, one sound, one notice), so it is never wrapped in a group
       // that closes before it lands.
+      else if (actionKey === "session_close") void animatedCloseSessions(ids);
       else if (actionKey === "session_kill") killManyWithNotice(ids);
       else if (actionKey === "session_pin") toggleSessionsLikeFirst(ids, "pin");
       else if (actionKey === "session_favorite") toggleSessionsLikeFirst(ids, "favorite");

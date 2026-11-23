@@ -28,7 +28,7 @@ describe("triage verb catalog", () => {
       "session.dormantAdvance",
       "session.stash",
       "session.stashHide",
-      "session.kill",
+      "session.close",
     ]);
   });
 
@@ -39,8 +39,8 @@ describe("triage verb catalog", () => {
     ]);
   });
 
-  test("the bar's top level is defer, stash, kill; the rest sits behind more", () => {
-    expect(PRIMARY_VERBS.map((v) => v.id)).toEqual(["defer", "stash", "kill"]);
+  test("the bar's top level is defer, stash, close; the rest sits behind more", () => {
+    expect(PRIMARY_VERBS.map((v) => v.id)).toEqual(["defer", "stash", "close"]);
     expect([...PRIMARY_VERBS, ...SECONDARY_VERBS].length).toBe(TRIAGE_VERBS.length);
     for (const v of SECONDARY_VERBS) expect(PRIMARY_VERBS).not.toContain(v);
   });

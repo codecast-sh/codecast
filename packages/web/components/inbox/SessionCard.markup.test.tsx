@@ -93,8 +93,7 @@ function render(overrides: Partial<InboxSession>, props: Props = {}) {
         isActive={false}
         globalIndex={0}
         onSelect={noop}
-        onDismiss={noop}
-        onStash={noop}
+        onClose={noop}
         onPin={noop}
         sessionLabel={null}
         isFavorite={false}
@@ -128,8 +127,8 @@ const CASES: Array<[string, Partial<InboxSession>, Props?]> = [
   ["subagent", { _id: "c-sub", is_subagent: true, parent_conversation_id: "c-lead", agent_type: "cursor" } as Partial<InboxSession>],
   ["subagent, active, working", { _id: "c-sub2", is_subagent: true, parent_conversation_id: "c-lead", is_idle: false, updated_at: NOW - 0.5 * MIN } as Partial<InboxSession>, { isActive: true, variant: "working" }],
   ["trigger sub row", { _id: "c-trig" }, { subRow: "trigger" }],
-  ["stashed", { _id: "c-stashed" }, { variant: "stashed", onRestore: noop, onKill: noop, onDismiss: undefined, onStash: undefined, onPin: undefined }],
-  ["dismissed", { _id: "c-dismissed" }, { variant: "dismissed", onRestore: noop, onKill: noop, onDismiss: undefined, onStash: undefined, onPin: undefined }],
+  ["stashed", { _id: "c-stashed" }, { variant: "stashed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined }],
+  ["dismissed", { _id: "c-dismissed" }, { variant: "dismissed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined }],
   ["snoozed", { _id: "c-snoozed", inbox_snoozed_until: Date.UTC(2031, 0, 2, 15, 0) } as Partial<InboxSession>, { variant: "snoozed", onRestore: noop }],
   ["cloud worktree", { _id: "c-cloud", worktree_name: "cloud-d03aaa", worktree_branch: "codecast/cloud-d03aaa", owner_device_id: "cloud-linux", agent_type: "gemini" } as Partial<InboxSession>],
   ["draft", { _id: "c-draft", _hasDraft: true, message_count: 0, last_user_message: undefined }],
@@ -196,5 +195,19 @@ describe("machine icon beside the title", () => {
     } finally {
       delete UI.show_device_icon;
     }
+  });
+});
+
+describe("the live card's toolbar", () => {
+  test("Pin, Label, then Close last; no Stash or Kill", () => {
+    const html = render({ _id: "c-tools" });
+    const tools = html.slice(html.lastIndexOf("data-sv-fade"));
+    expect(tools.match(/aria-label="(Pin|Unpin|Label session|Close|Stash|Kill Session)"/g)).toEqual(['aria-label="Pin"', 'aria-label="Label session"', 'aria-label="Close"']);
+  });
+
+  test("a set-aside card keeps its remove and Restore, and offers no Close", () => {
+    const html = render({ _id: "c-aside" }, { variant: "stashed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined });
+    expect(html).not.toContain('aria-label="Close"');
+    expect(html.match(/aria-label="(Restore|Kill)"/g)).toEqual(['aria-label="Kill"', 'aria-label="Restore"']);
   });
 });

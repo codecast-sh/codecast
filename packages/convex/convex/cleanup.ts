@@ -275,6 +275,11 @@ export function classifyHideTransition(
 // killSession/killSessions actions) rather than a patch that merely happens to
 // carry the flag.
 //
+// `close` marks the web's Close gesture (closeSession/closeSessions): the same
+// forced teardown, but "done looking at it", not retirement. It skips the seat
+// refusal and both retirement sweeps, so the session's triggers stay armed and
+// its queue stays put, and the next one that reaches it brings it back.
+//
 // One transaction shares one teardown budget. The patch-row cap and the
 // cascade's per-lead batch multiplied (25 rows x 20 children each), so a web
 // kill of a few leads ran hundreds of teardowns inline, passed the 3s mutation
@@ -298,7 +303,7 @@ export async function applyHideTransition(
   ctx: { db: any },
   doc: any,
   patch: { inbox_dismissed_at?: any; inbox_stashed_at?: any },
-  opts?: { cascade?: boolean; forceKill?: boolean; cause?: string },
+  opts?: { cascade?: boolean; forceKill?: boolean; close?: boolean; cause?: string },
 ): Promise<{
   action: "reap" | "kill" | "none";
   canceledSchedules: number;
@@ -308,7 +313,7 @@ export async function applyHideTransition(
 }> {
   // An explicit kill naming a role's own session is refused (lib/seatKill);
   // a cascade from a parent never reaches a seat, and internal reaps carry no forceKill.
-  if (opts?.forceKill && opts.cascade !== false && patch.inbox_dismissed_at) await refuseSeatKill(ctx, doc);
+  if (opts?.forceKill && !opts.close && opts.cascade !== false && patch.inbox_dismissed_at) await refuseSeatKill(ctx, doc);
   const txn = hideTxnState(ctx);
   const docKey = String(doc?._id);
   if (txn.done.has(docKey)) {
@@ -378,7 +383,9 @@ export async function applyHideTransition(
     // scheduled/running/paused tasks, so a second pass over already-canceled
     // ones is a no-op — and a schedule re-armed since the first kill SHOULD die
     // again with it.)
-    if (!doc?.persistent) {
+    //
+    // A close is not a retirement either: it keeps both, for every session.
+    if (!doc?.persistent && !opts?.close) {
       canceledSchedules = await cancelTasksBoundToConversation(ctx, doc.user_id, doc._id);
       canceledMessages = await cancelQueuedMessagesOnKill(ctx, doc._id);
     }
@@ -391,7 +398,7 @@ export async function applyHideTransition(
   // per-child transition call opts out to stay single-level.
   let cascaded = 0;
   if (opts?.cascade !== false && (patch.inbox_dismissed_at || patch.inbox_stashed_at)) {
-    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch, { forceKill: action === "kill" && opts?.forceKill, cause: opts?.cause });
+    cascaded = await cascadeHideToNestedChildren(ctx, doc, patch, { forceKill: action === "kill" && opts?.forceKill, close: opts?.close, cause: opts?.cause });
   }
   return { action, canceledSchedules, canceledMessages, cascaded, teardownEnqueued };
 }
@@ -427,7 +434,7 @@ export async function cascadeHideToNestedChildren(
   ctx: { db: any },
   lead: any,
   patch: { inbox_dismissed_at?: number; inbox_stashed_at?: number },
-  opts?: { forceKill?: boolean; cause?: string },
+  opts?: { forceKill?: boolean; close?: boolean; cause?: string },
 ): Promise<number> {
   const field = patch.inbox_dismissed_at ? ("inbox_dismissed_at" as const) : ("inbox_stashed_at" as const);
   const stamp = patch[field];
@@ -470,7 +477,7 @@ async function hideNestedChildren(
   field: "inbox_dismissed_at" | "inbox_stashed_at",
   stamp: number,
   childIds: string[],
-  opts?: { forceKill?: boolean; cause?: string },
+  opts?: { forceKill?: boolean; close?: boolean; cause?: string },
 ): Promise<void> {
   const now = ctx.scheduler ? childIds.slice(0, Math.min(CASCADE_BATCH, hideBudgetLeft(ctx))) : childIds;
   for (const id of now) {
@@ -482,12 +489,12 @@ async function hideNestedChildren(
     if (alreadyHidden && !opts?.forceKill) continue;
     const childPatch = { [field]: alreadyHidden ? child[field] : stamp };
     if (!alreadyHidden) await ctx.db.patch(child._id, childPatch);
-    await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill, cause: `cascade<-${opts?.cause ?? "hide"}` });
+    await applyHideTransition(ctx, child, childPatch, { cascade: false, forceKill: opts?.forceKill, close: opts?.close, cause: `cascade<-${opts?.cause ?? "hide"}` });
   }
   const rest = childIds.slice(now.length);
   if (rest.length) {
     await ctx.scheduler.runAfter(0, internal.cleanup.continueCascadeHide, {
-      lead_id: leadId, field, stamp, child_ids: rest, force_kill: opts?.forceKill, cause: opts?.cause,
+      lead_id: leadId, field, stamp, child_ids: rest, force_kill: opts?.forceKill, close: opts?.close, cause: opts?.cause,
     });
   }
 }
@@ -499,13 +506,14 @@ export const continueCascadeHide = internalMutation({
     stamp: v.number(),
     child_ids: v.array(v.string()),
     force_kill: v.optional(v.boolean()),
+    close: v.optional(v.boolean()),
     cause: v.optional(v.string()),
   },
-  handler: async (ctx, { lead_id, field, stamp, child_ids, force_kill, cause }) => {
+  handler: async (ctx, { lead_id, field, stamp, child_ids, force_kill, close, cause }) => {
     const lead = await ctx.db.get(lead_id);
     if (!lead || !(lead as any)[field]) return;
     if (cause) noteWriteCause(ctx, cause);
-    await hideNestedChildren(ctx, lead_id, field, stamp, child_ids, { forceKill: force_kill, cause });
+    await hideNestedChildren(ctx, lead_id, field, stamp, child_ids, { forceKill: force_kill, close, cause });
   },
 });
 

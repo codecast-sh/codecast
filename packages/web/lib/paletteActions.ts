@@ -2,7 +2,7 @@ import { isArtifactDocType } from "@codecast/shared/artifacts";
 import type { ComponentType } from "react";
 import { DEFAULT_IDENTITY_PREFS, sessionIdentity, type IdentityPrefs } from "./sessionIdentity";
 import { cleanTitle } from "./conversationProcessor";
-import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, FolderKanban, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight, Hourglass, Link2 } from "lucide-react";
+import { Archive, ArrowRightLeft, ArrowUp, Bot, CheckCircle2, CircleDot, Clock, Copy, CornerDownRight, Cpu, FolderKanban, ExternalLink, EyeOff, FileText, Folder, Forward, GitBranch, Link, Moon, Pencil, Pin, PinOff, Play, RefreshCw, Square, Star, Tag, Trash2, User, CalendarDays, Plus, Smile, MessageSquare, Headphones, ArrowRight, Hourglass, Link2, X } from "lucide-react";
 import { getShortcutsForAction, inputGuardBypass, isEditableTarget, matchShortcut, type ShortcutAction } from "../shortcuts/registry";
 import { canControlModel } from "./modelSwitch";
 import { canMoveSessionToMachine, sessionMoveVerbs } from "./sessionControl";
@@ -125,7 +125,10 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
         row("session_done", "Mark done", CheckCircle2, "e"),
         row("session_needs_input", "Mark needs you", CircleDot, "g"),
       ]),
-      ...(!isSessionKilled(target) ? [row("session_kill", many(`Kill ${noun}`, `Kill # ${nouns}`), Square, "k", "session.kill")] : []),
+      ...(!isSessionKilled(target) ? [
+        row("session_close", many(`Close ${noun}`, `Close # ${nouns}`), X, "q", "session.close"),
+        row("session_kill", many(`Kill ${noun}`, `Kill # ${nouns}`), Square, "k"),
+      ] : []),
       ...(!target.persistent ? [row("session_delete", many(`Delete ${noun}…`, `Delete # ${nouns}…`), Trash2, "x")] : []),
       ...(single && target.parent_conversation_id ? [row("session_parent", "View parent conversation", GitBranch)] : []),
       ...(single && target.git_branch ? [row("session_branch", "Copy branch name", GitBranch)] : []),

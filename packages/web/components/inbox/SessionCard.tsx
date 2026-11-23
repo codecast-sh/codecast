@@ -115,10 +115,9 @@ export type SessionCardProps = Pick<
   SessionCardViewProps,
   | "session" | "isActive" | "isParentActive" | "isSelected" | "isUnread" | "isFavorite" | "sessionLabel"
   | "variant" | "sectionStatus" | "forkColorKey" | "subRow" | "roleSessions" | "hiddenRunningSubagents" | "foldedSubagentId"
-  | "onSelect" | "onDismiss" | "onDefer" | "onRestore" | "onKill" | "onNavigateToSession" | "onCardContextMenu" | "onPickCharacter"
+  | "onSelect" | "onClose" | "onDefer" | "onRestore" | "onKill" | "onNavigateToSession" | "onCardContextMenu" | "onPickCharacter"
 > & {
   globalIndex: number;
-  onStash?: (id: string) => void;
   onPin?: (id: string) => void;
 };
 
@@ -126,7 +125,6 @@ export { hostedRowTitle };
 
 export const SessionCard = memo(function SessionCard({
   session: row,
-  onStash,
   onPin,
   onNavigateToSession,
   globalIndex: _globalIndex,
@@ -330,10 +328,6 @@ export const SessionCard = memo(function SessionCard({
     tipActions.whisper("session.pin", e);
     if (!isPinned) checkMilestone("m-first-pin");
   }), [onPin, tipActions, isPinned]);
-  const handleStash = useMemo(() => onStash && ((id: string, e: React.MouseEvent) => {
-    onStash(id);
-    tipActions.whisper("session.stash", e);
-  }), [onStash, tipActions]);
   const openParent = useCallback(
     (id: string) => (onNavigateToSession ?? useInboxStore.getState().navigateToSession)(id),
     [onNavigateToSession],
@@ -388,7 +382,6 @@ export const SessionCard = memo(function SessionCard({
       selecting={selecting}
       onToggleSelect={toggleSelect}
       onPin={handlePin}
-      onStash={handleStash}
       onNavigateToSession={onNavigateToSession}
       onToggleFavorite={toggleFavorite}
       onOpenLabels={openLabels}

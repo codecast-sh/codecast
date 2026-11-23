@@ -90,8 +90,7 @@ function render(overrides: Partial<InboxSession> & Record<string, unknown>, prop
               isActive={false}
               globalIndex={0}
               onSelect={noop}
-              onDismiss={noop}
-              onStash={noop}
+              onClose={noop}
               onPin={noop}
               sessionLabel={null}
               isFavorite={false}
@@ -132,8 +131,8 @@ describe("the Modern session card", () => {
     expect(word(render({ _id: "c-n" }, { sectionStatus: "blocked" }))).toBe("Needs you");
     expect(word(render({ _id: "c-d" }, { sectionStatus: "done" }))).toBe("Done");
     expect(word(render({ _id: "c-p" }, { sectionStatus: "dormant" }))).toBe("Dormant");
-    expect(word(render({ _id: "c-s" }, { variant: "stashed", onRestore: noop, onKill: noop, onDismiss: undefined, onStash: undefined, onPin: undefined }))).toBe("Stashed");
-    expect(word(render({ _id: "c-k" }, { variant: "dismissed", onRestore: noop, onKill: noop, onDismiss: undefined, onStash: undefined, onPin: undefined }))).toBe("Killed");
+    expect(word(render({ _id: "c-s" }, { variant: "stashed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined }))).toBe("Stashed");
+    expect(word(render({ _id: "c-k" }, { variant: "dismissed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined }))).toBe("Closed");
     expect(word(render({ _id: "c-z", inbox_snoozed_until: NOW + 60 * MIN }, { variant: "snoozed", onRestore: noop }))).toBe("Dormant");
   });
 
@@ -168,14 +167,17 @@ describe("the Modern session card", () => {
     expect(active).toContain("line-clamp-2");
   });
 
-  test("the toolbar is one row: Pin, Kill, Label, Stash; a set-aside card offers Restore and Kill", () => {
+  test("the toolbar is one row: Pin, Label, then Close last; no Stash or Kill on a live card; a set-aside card offers Restore and its remove", () => {
     const html = render({ _id: "c-tools" });
     const tools = html.slice(html.indexOf("data-mc-tools"));
-    expect(tools.match(/aria-label="(Pin|Kill Session|Label session|Stash)"/g)).toEqual(['aria-label="Pin"', 'aria-label="Kill Session"', 'aria-label="Label session"', 'aria-label="Stash"']);
+    expect(tools.match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Pin"', 'aria-label="Label session"', 'aria-label="Close"']);
+    expect(tools).not.toMatch(/aria-label="(Stash|Kill|Kill Session)"/);
     expect(html.match(/data-mc-tools/g)).toHaveLength(1);
     expect(html).toMatch(/data-mc-tools[^>]*class="[^"]*flex items-center/);
-    const stashed = render({ _id: "c-aside" }, { variant: "stashed", onRestore: noop, onKill: noop, onDismiss: undefined, onStash: undefined, onPin: undefined });
-    expect(stashed.match(/aria-label="(Restore|Kill Session)"/g)).toEqual(['aria-label="Restore"', 'aria-label="Kill Session"']);
+    const stashed = render({ _id: "c-aside" }, { variant: "stashed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined });
+    expect(stashed.slice(stashed.indexOf("data-mc-tools")).match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Restore"', 'aria-label="Kill"']);
+    const closed = render({ _id: "c-closed" }, { variant: "dismissed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined });
+    expect(closed.slice(closed.indexOf("data-mc-tools")).match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Restore"', 'aria-label="Remove from list"']);
   });
 
   test("the third line: project, branch or PR, task, links, author, comments; none when there is nothing", () => {
