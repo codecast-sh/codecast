@@ -14,6 +14,7 @@ import { ownsWork } from "@codecast/shared/contracts/orgLead";
 import { roleSubject, withOrgChange } from "./lib/orgChangeLog";
 import { isHandBriefing } from "./spawn";
 import { backfillRoleStartedPage } from "./lib/roleStartedBackfill";
+import { backfillBoundDriverPage } from "./lib/boundDriverBackfill";
 import { isOrphanOrSubagent } from "./inboxFilters";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
@@ -595,6 +596,33 @@ export const backfillRoleStarted = internalMutation({
     const res = await backfillRoleStartedPage(ctx, args);
     if (!res.dryRun && res.next) {
       await ctx.scheduler.runAfter(0, internal.migrations.backfillRoleStarted, { dryRun: false, role: args.role, numItems: args.numItems, ...res.next });
+    }
+    return res;
+  },
+});
+
+// One-time backfill, run once when driver_user_id ships: a person's session a
+// task binding filed under a role before the field existed gets its person as
+// driver, the rule applyHoldChange writes for a new binding (held as bound, not
+// a role's start, its human starter still owns it). A move never picks a driver
+// (sessionOwnership.rehomeSessions), so without this they stay the role's. A
+// takeover by the rule held sessions as bound too and cannot be told apart.
+// Run only once: a later run would undo a "make the role drive" on a bound
+// session. Dry by default; one role's page per transaction, continued by the
+// scheduler on a real run. `role` (a handle) narrows it.
+//   packages/convex/run.sh migrations:backfillBoundDriver '{"dryRun":true}'
+export const backfillBoundDriver = internalMutation({
+  args: {
+    dryRun: v.optional(v.boolean()),
+    role: v.optional(v.string()),
+    roleIndex: v.optional(v.number()),
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    const res = await backfillBoundDriverPage(ctx, args);
+    if (!res.dryRun && res.next) {
+      await ctx.scheduler.runAfter(0, internal.migrations.backfillBoundDriver, { dryRun: false, role: args.role, numItems: args.numItems, ...res.next });
     }
     return res;
   },

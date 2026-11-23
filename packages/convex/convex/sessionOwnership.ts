@@ -410,8 +410,9 @@ async function rehomeSessions(
     result.sessions.push(shortId);
     if (openAsk) result.kept_in_front.push(shortId);
     if (opts.dry) continue;
-    // The wheel moves with it: its driver while they own it (writeDriver checks), else a bound session's starter (applyHoldChange).
-    const driver = c.driver_user_id ?? (c.org_role_hold === "bound" && !c.role_started ? (await humanStarterUser({ db: { get: batch!.read } }, c))?._id : undefined);
+    // The wheel moves with it: its stored driver while they own it (writeDriver
+    // checks). A session nobody drives stays the role's: a move never picks a driver.
+    const driver = c.driver_user_id;
     const moved = await performReparentSession(ctx, authUserId, {
       session_id: c._id.toString(),
       target: { kind: "role", role_id: role._id.toString(), hold: opts.by_rule ? "bound" : "filed", ...(driver ? { driver: String(driver) } : {}) },

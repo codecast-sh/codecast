@@ -360,7 +360,7 @@ describe("a paused role changes nothing about the owners of the session it is pa
 // A takeover or a retire's heir moves sessions by the ownership rule; the
 // wheel moves with them (sessionOwnership.rehomeSessions).
 describe("a session that moves to another role keeps who drives it", () => {
-  test("a taken-over session and a person's bound session keep their driver; a session nobody drove goes to the role", async () => {
+  test("a taken-over session and a person's bound session keep their driver; a session nobody drove stays the role's", async () => {
     const { ctx, tables, row } = await world();
     const eng = await performCreateRole(ctx, ME as any, { name: "Eng lead", handle: "eng", team_id: TEAM });
     const growth = tables.org_roles.find((r) => r.handle === "growth")._id;
@@ -374,9 +374,35 @@ describe("a session that moves to another role keeps who drives it", () => {
     for (const id of moved) expect(row(id).org_role_id).toBe(eng._id);
     expect(row("filed").driver_user_id).toBe(ME);
     expect(row("bound").driver_user_id).toBe(ME);
-    expect(row("bound_unstamped").driver_user_id).toBe(ME);
+    for (const id of ["bound_unstamped", "plain"]) {
+      expect(row(id).driver_user_id).toBeUndefined();
+      expect(roleDrives(row(id))).toBe(true);
+    }
+  });
+
+  test("a session a takeover filed stays the role's through a second takeover", async () => {
+    const { ctx, row } = await world();
+    const eng = await performCreateRole(ctx, ME as any, { name: "Eng lead", handle: "eng", team_id: TEAM });
+    const ops = await performCreateRole(ctx, ME as any, { name: "Ops lead", handle: "ops", team_id: TEAM });
+    await performRehomeSessions(ctx, ME as any, eng, [{ raw: row("plain") }], { by_rule: true });
+    expect(row("plain").org_role_hold).toBe("bound");
+    await performRehomeSessions(ctx, ME as any, ops, [{ raw: row("plain") }], { by_rule: true });
+    expect(row("plain").org_role_id).toBe(ops._id);
     expect(row("plain").driver_user_id).toBeUndefined();
     expect(roleDrives(row("plain"))).toBe(true);
+  });
+
+  test("a bound session its person handed to the role stays the role's after a takeover", async () => {
+    const { ctx, tables, row } = await world();
+    const eng = await performCreateRole(ctx, ME as any, { name: "Eng lead", handle: "eng", team_id: TEAM });
+    const growth = tables.org_roles.find((r) => r.handle === "growth")._id;
+    tables.conversations.push(session("bound", { org_role_id: growth, org_role_hold: "bound", driver_user_id: ME }));
+    await performSetSessionDriver(ctx, ME as any, { session_id: "bound", driver: { kind: "role" } });
+    expect(roleDrives(row("bound"))).toBe(true);
+    await performRehomeSessions(ctx, ME as any, eng, [{ raw: row("bound") }], { by_rule: true });
+    expect(row("bound").org_role_id).toBe(eng._id);
+    expect(row("bound").driver_user_id).toBeUndefined();
+    expect(roleDrives(row("bound"))).toBe(true);
   });
 });
 
