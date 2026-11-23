@@ -22428,6 +22428,12 @@ workflow
     // else one of the caller's own pushed workflows by slug (L2).
     let resolved = "resolved" in choice ? choice.resolved : resolveWorkflowSource(file);
     if (!resolved) {
+      const { retiredFlowLine } = await import("@codecast/shared/contracts/flowPool");
+      const retired = retiredFlowLine(file);
+      if (retired) {
+        console.error(`✗ ${retired}`);
+        process.exit(1);
+      }
       const own = (await cliPost("/cli/workflows/list", {}).catch(() => null))?.workflows?.find((w: any) => w.slug === file && w.source);
       if (own) resolved = { source: own.source, label: `workflow:${own.slug}` };
     }

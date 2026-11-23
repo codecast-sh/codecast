@@ -48,7 +48,7 @@ buckets (`through`):
 - **line**: it came through a run a role started (`workflow_runs.org_role_id`):
   the run's merge commit, or a commit whose session worked under the run.
 - **session_flow**: it came through a check flow a person's session ran (a
-  graph run from the pool: `change`, `quick-change`, `onefix`, `agentwatch`
+  graph run from the pool: `change`, `onefix`, `agentwatch`
   and the like) that no role started.
 - **outside**: anything else. No run, a Claude Code workflow run
   (`run_kind: "workflow"`, which checks nothing) and the sessions under it,

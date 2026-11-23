@@ -6,7 +6,7 @@
 // flows to this machine's cache.
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { defaultFlowOf, foldFlow, flowPathWords, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
+import { defaultFlowOf, foldFlow, flowPathWords, retiredFlowLine, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import { graphExtends, parseWorkflowSource, validateWorkflow } from "./parser.js";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates.js";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
@@ -59,6 +59,8 @@ export function materializePushedFlow(row: PushedPoolRow, cacheRoot = defaultFlo
     const abs = path.resolve(dir, rel);
     if (!abs.startsWith(dir + path.sep)) return null;
     if (fs.existsSync(abs) && fs.readFileSync(abs, "utf-8") === text) return abs;
+    // An older CLI wrote a base at its bare slug: a plain file where this one needs the base's station folder.
+    if (fs.statSync(path.dirname(abs), { throwIfNoEntry: false })?.isFile()) fs.rmSync(path.dirname(abs));
     fs.mkdirSync(path.dirname(abs), { recursive: true });
     fs.writeFileSync(abs, text);
     return abs;
@@ -73,8 +75,11 @@ export function materializePushedFlow(row: PushedPoolRow, cacheRoot = defaultFlo
   };
   const file = write(row.origin?.file ?? `${row.slug}.cast`, row.source) ?? write(`${row.slug}.cast`, row.source)!;
   // A variant's base sits where its `extends` reads it, with its stations' files, so the variant parses here.
+  // A base named by slug sits beside it as `<slug>.cast`, where the parser looks for it: written as the bare slug, it
+  // took the name of the base's own station folder (`change/fix.md`), and every pool read failed.
   const ext = graphExtendsOf(row.source);
-  if (base && ext && write(path.relative(dir, path.resolve(path.dirname(file), ext)), base.source)) files(base);
+  const baseFile = ext && /^[\w-]+$/.test(ext) ? `${ext}.cast` : ext;
+  if (base && baseFile && write(path.relative(dir, path.resolve(path.dirname(file), baseFile)), base.source)) files(base);
   files(row);
   return file;
 }
@@ -93,8 +98,10 @@ export function repoFlowsDir(cwd: string): string | null {
  * published ones (`pushed`) neither names, each slug once. A draft (an import its session has not made general yet)
  * is offered only to that session (`session`, its id or short id).
  */
-export function poolFlows(cwd: string, session?: string | null, pushed: ReadonlyArray<PushedPoolRow> = [], cacheRoot = defaultFlowsCache()): PoolFlow[] {
+export function poolFlows(cwd: string, session?: string | null, published: ReadonlyArray<PushedPoolRow> = [], cacheRoot = defaultFlowsCache()): PoolFlow[] {
   const out: PoolFlow[] = [];
+  // A run of a flow the library retired left a row of that name behind, which nothing shadows any more: it never joins.
+  const pushed = published.filter((row) => !retiredFlowLine(row.slug));
   const dir = repoFlowsDir(cwd);
   // Every team flow the repo and the shipped flows do not name is written and indexed before any flow is read, so a
   // flow here (or another team flow) can use one as a segment (teamFlowIndex.ts).

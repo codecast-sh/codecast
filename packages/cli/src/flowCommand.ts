@@ -114,7 +114,8 @@ export const FLOW_HELP = `
 Choosing a flow:
   A library flow that fits the work runs as it stands: it carries what the team has learned.
   A library flow that fits as a backbone, with a step this change needs done its own way, is
-  extended: name it with extends and fill its slots with steps you write. The rest stays the team's.
+  extended: name it with extends and add the steps you write, or fill its slots when it leaves
+  some. The rest stays the team's.
   A flow written whole fits only when nothing in the library has the shape of the work.
 
   cast flow run                             the workspace's default flow (cast flow ls marks it),
@@ -122,8 +123,9 @@ Choosing a flow:
   cast flow run change                      a library flow by name, on this session's own edits
   cast flow run - <<'EOF'                   a flow written here, checked before it starts
   digraph flaky_fix {
-    graph [extends="quick-change"]
-    subgraph check { reproduce -> prove }   steps that fill the backbone's check slot
+    graph [extends="change"]
+    reproduce [after="pr", prompt="Run the flaky test until it fails"]   steps of this change's own,
+    prove [after="reproduce", script="bun test --rerun-each 20"]         ahead of CI and review
   }
   EOF
 

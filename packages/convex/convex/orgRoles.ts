@@ -6,6 +6,7 @@ import { applyPause, applyReactivate, applyResume, applyRunNow, applyTaskUpdate,
 import { handRoleTriggersToRunner } from "./lib/agentTaskRows";
 import { HEAD_OF_PEOPLE_JOB } from "@codecast/shared/contracts/headOfPeoplePrompt";
 import { defaultAvatarFor, isAvatarKey } from "@codecast/shared/contracts/orgAvatars";
+import { retiredFlowLine } from "@codecast/shared/contracts/flowPool";
 import { DEFAULT_LINE_SLUG, LINE_SLUG_RE, andList, lineSlugOf, orgAuthorityGrantsError, authorityWords, orgEveryToMs, orgTenureError, type OrgAuthorityGrant } from "@codecast/shared/contracts/orgProposal";
 import { WAKE_TUNE, briefBudget, briefOverBudgetMessage, msToEvery, roleWakeOf, wakeTuneRefusal, type RoleWake } from "@codecast/shared/contracts/rolePlaybook";
 import { intervalMs } from "@codecast/shared/contracts/orgTemplateManifest";
@@ -1038,6 +1039,8 @@ export async function performSetLine(
   const role = await requireRole(ctx, userId, args.role_id, "admin");
   if (role.status === "retired") throw new Error("That role is retired");
   const slug = normalizeLineSlug(args.slug);
+  const retired = retiredFlowLine(slug);
+  if (retired) throw new Error(retired);
   const previous = lineSlugOf(role);
   const now = Date.now();
   if (slug !== previous) {

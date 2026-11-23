@@ -216,7 +216,7 @@ export function variantEdits(raw: RawGraph, own: Map<string, Record<string, Attr
     if (!paths.length) throw new Error(`${what}: name the paths the change must touch (when="src/**, docs/*.md")`);
     if (!nodes.has(id)) throw new Error(`${what}: ${baseName} has no station ${id}; its stations: ${stations()}`);
     const takes = String(raw.attrs.takes ?? "task").split(/[\s,]+/).filter(Boolean);
-    if (!takes.includes("branch")) throw new Error(`${what}: ${baseName} runs on a ${takes.join(" and a ")}, not on a change's files, so nothing tells it which paths changed; when= works on flows that take a branch (change, quick-change)`);
+    if (!takes.includes("branch")) throw new Error(`${what}: ${baseName} runs on a ${takes.join(" and a ")}, not on a change's files, so nothing tells it which paths changed; when= works on flows that take a branch, such as change`);
     notInFan(id, what, "gating it");
     const to = onePassTarget(id, what);
     const touches = `change_files touches ${JSON.stringify(paths.join(", "))}`;

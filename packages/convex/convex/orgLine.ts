@@ -25,6 +25,7 @@ import { taskWork } from "./lib/orgOwnership";
 import { ownerOf, projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import { chainHeadOf } from "@codecast/shared/contracts/orgAssignee";
 import { CARD_GATE_NODE_ID } from "@codecast/shared/contracts/changeCard";
+import { retiredFlowLine } from "@codecast/shared/contracts/flowPool";
 import { byStartOrder, startValue } from "./lib/linePriority";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { accessJudgeFor, canAccessTask } from "./lib/access";
@@ -508,7 +509,7 @@ export async function planSweep(ctx: Ctx, now = Date.now(), o: { loads?: boolean
   }
   for (const role of roles) {
     if (result.started.length >= MAX_STARTS_PER_SWEEP) break;
-    if (role.status !== "active" || !lineStartsOn(role)) continue;
+    if (role.status !== "active" || !lineStartsOn(role) || retiredFlowLine(lineSlugOf(role))) continue;
     if (role.team_id && flowTeams.has(String(role.team_id))) continue;
     if (!(await linesRunIn(ctx, role, featureOn))) continue;
     const before = loads.size;
@@ -595,6 +596,8 @@ export async function startPlanned(ctx: Ctx, p: { role_id: string; task_id: stri
   const flow = p.live_flow_id ? await ctx.db.get(p.live_flow_id) : null;
   if (p.live_flow_id ? !flowAdmits(flow, now) || role.status !== "active" : !roleMayStartHands(role, now)) return null;
   if (!(await linesRunIn(ctx, role, new Map()))) return null;
+  // A role whose line names a retired flow starts nothing; its lead sets a new line (performSetLine refuses a retired one).
+  if (retiredFlowLine(lineSlugOf(role))) return null;
   const task = await ctx.db.get(p.task_id);
   if (!task || task.status !== "open" || task.workflow_run_id || task.ephemeral) return null;
   if (p.place && !(await slotStillFree(ctx, role, p.place))) return null;

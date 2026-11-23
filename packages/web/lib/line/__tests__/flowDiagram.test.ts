@@ -3,10 +3,14 @@ import { flowDiagram, runReached, stepStates } from "../flowDiagram";
 import { appPool, flowBySlug, pushedFlow } from "../flowPool";
 import { flowRunState, readFlowFence } from "../flowFence";
 import { flowCommandTarget } from "../flowCommandOutput";
+import quickRun from "./quickChangeRun.fixture.json";
 
 const pool = appPool();
 const change = flowBySlug(pool, "change")!;
-const quick = flowBySlug(pool, "quick-change")!;
+// The graph a run of the retired quick-change pinned when it started (ct-98653), as its workflows row stores it: no
+// longer in the pool, so the run's card draws it from the row (useRunFlow). It is built from segments, which the
+// tests below read it for.
+const quick = pushedFlow(quickRun);
 
 describe("a flow as a diagram", () => {
   test("the change line reads as PR, CI beside review, Verdicts, Merge, Merged and Deploy, ending at Live", () => {
@@ -26,7 +30,8 @@ describe("a flow as a diagram", () => {
     expect(side(3)).toEqual([["back", "conflict", "this session"], ["out", "retest", "Retest"], ["stop", "Main keeps moving", null], ["stop", "Not merged", null]]);
   });
 
-  test("the quick change line reads as its four segments, each holding its own steps, ending at Live", () => {
+  test("a run pinned to the retired quick-change reads as its four segments, each holding its own steps, ending at Live", () => {
+    expect(flowBySlug(pool, "quick-change")).toBeNull();
     const d = flowDiagram(quick);
     expect(d.steps.map((s) => s.label)).toEqual(["Check", "Review", "Land", "Deploy"]);
     expect(d.steps.map((s) => s.inner.map((i) => i.label))).toEqual([["Verify"], ["Review"], ["Rebase", "Land"], ["Go live"]]);
@@ -44,10 +49,10 @@ describe("a flow as a diagram", () => {
   });
 
   test("a stage's findings go back to the session the change came from, said once; true stops still stop", () => {
-    const routes = (i: number) => { const s = flowDiagram(quick).steps[i]; return [...s.side, ...s.inner.flatMap((x) => x.side)].map((r) => [r.tone, r.outcome, r.leadsTo]); };
-    expect(routes(0)).toEqual([["back", "Checks failed", "this session"], ["stop", "Not checked here", null]]);
-    expect(routes(1)).toEqual([["back", "Changes asked", "this session"], ["stop", "Rejected", null]]);
-    expect(routes(3)).toEqual([["stop", "Not merged", null], ["stop", "Deploy stuck", null], ["stop", "Deploy failed", null]]);
+    const routes = (flow: typeof quick, i: number) => { const s = flowDiagram(flow).steps[i]; return [...s.side, ...s.inner.flatMap((x) => x.side)].map((r) => [r.tone, r.outcome, r.leadsTo]); };
+    expect(routes(quick, 0)).toEqual([["back", "Checks failed", "this session"], ["stop", "Not checked here", null]]);
+    expect(routes(quick, 1)).toEqual([["back", "Changes asked", "this session"], ["stop", "Rejected", null]]);
+    expect(routes(change, 5)).toEqual([["stop", "Not merged", null], ["stop", "Deploy stuck", null], ["stop", "Deploy failed", null]]);
   });
 
   test("a segment's plain end is not a route off its last step", () => {

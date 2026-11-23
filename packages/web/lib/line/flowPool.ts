@@ -4,7 +4,7 @@
 // teammates published to the workspace's pool, workflows.webPool). Each reads through the one fold
 // (shared/contracts/flowPool.ts) the CLI's `cast flow ls` uses, so both say
 // the same stations in the same order. Pure: no store, no React.
-import { flowBase, flowFills, flowGraphAttr as graphAttr, flowNodeAttrOf, flowPathWords, flowSlotsOf, foldFlow, publishableFlowSource, segmentTopOf, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
+import { flowBase, flowFills, flowGraphAttr as graphAttr, flowNodeAttrOf, flowPathWords, flowSlotsOf, foldFlow, publishableFlowSource, retiredFlowLine, segmentTopOf, type FlowEdgeIn, type FlowNodeIn, type PoolFlowSummary } from "@codecast/shared/contracts/flowPool";
 import type { RepoFlow } from "@codecast/shared/contracts/repoFlows";
 import { SHIPPED_FLOWS } from "./shippedFlows.generated";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
@@ -120,8 +120,9 @@ function buildPool(pushed: ReadonlyArray<PushedFlowRow>, repo: ReadonlyArray<Rep
   // The shipped template's graph names no label of its own; people read it as the Standard steps.
   const local = [...own, ...SHIPPED_FLOWS.filter((f) => !ownSlugs.has(f.slug)).map((f) => ({ ...f, ...(f.slug === DEFAULT_LINE_SLUG && f.label === "Line" ? { label: DEFAULT_STEPS_LABEL } : {}), where: "shipped" as const, workflowId: null }))];
   const names = new Set(local.map((f) => f.slug));
-  // A pushed graph joins the pool only when it says what kind of flow it is and is no session's draft, never a probe or a trial's copy.
-  const joins = pushed.filter((r) => !names.has(r.slug) && r.nodes.length && publishableFlowSource(r.source));
+  // A pushed graph joins the pool only when it says what kind of flow it is and is no session's draft, never a probe or a trial's copy,
+  // and never under a name the library retired: a run of it left a row behind, which nothing shadows any more.
+  const joins = pushed.filter((r) => !names.has(r.slug) && !retiredFlowLine(r.slug) && r.nodes.length && publishableFlowSource(r.source));
   const pushedFlows = joins.filter((r, i) => joins.findIndex((x) => x.slug === r.slug) === i).map((r) => ({ flow: pushedFlow(r), saysTakes: !!graphAttr(r.source, "takes") }));
   const all: AppFlow[] = [...local, ...pushedFlows.map((p) => p.flow)];
   // A flow that extends another and says nothing of what it takes takes what its base takes (a team's variant of Change takes a session's change).

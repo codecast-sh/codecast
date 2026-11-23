@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { graphDiff, graphHash, parseWorkflowFile, parseWorkflowSource, validateWorkflow } from "./parser";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
 import { planGraphEdit } from "../lineGraphEdit";
+import { SEGMENTED_FLOW } from "./segmentedFlow.testkit";
 
 // A line written as a base and a variant that names only how it differs
 // (parser.ts parseWorkflowSource): files held in memory, read the way a run
@@ -112,12 +113,12 @@ describe("editing a variant's step from the app", () => {
     expect(plan.writes).toEqual([{ file: "/l/live/investigate.md", content: "Find the cause, then the producer." }]);
   });
 
-  test("a segment's station edited on a variant of the shipped quick-change is the variant's line", () => {
-    const flows = { "/r/.codecast/flows/quick-change.cast": `digraph quick_change {\n  graph [extends="quick-change"]\n}\n` };
-    const plan = planGraphEdit("/r/.codecast/flows/quick-change.cast", { node: "review__review", text: "Review it hard." }, { root: "/r", read: files(flows) });
+  test("a segment's station edited on a variant of a flow built from segments is the variant's line", () => {
+    const flows = { "/r/.codecast/flows/checked.cast": SEGMENTED_FLOW, "/r/.codecast/flows/mine.cast": `digraph mine {\n  graph [extends="checked.cast"]\n}\n` };
+    const plan = planGraphEdit("/r/.codecast/flows/mine.cast", { node: "review__review", text: "Review it hard." }, { root: "/r", read: files(flows) });
     expect(plan.writes).toEqual([
-      { file: "/r/.codecast/flows/quick-change/review__review.md", content: "Review it hard." },
-      { file: "/r/.codecast/flows/quick-change.cast", content: `digraph quick_change {\n  graph [extends="quick-change"]\n  review__review [prompt="@quick-change/review__review.md"]\n}\n` },
+      { file: "/r/.codecast/flows/mine/review__review.md", content: "Review it hard." },
+      { file: "/r/.codecast/flows/mine.cast", content: `digraph mine {\n  graph [extends="checked.cast"]\n  review__review [prompt="@mine/review__review.md"]\n}\n` },
     ]);
   });
 
@@ -297,10 +298,10 @@ describe("variant edits on the shipped change flow", () => {
   });
 });
 
-// A shipped flow that keeps its stations in segments (quick-change: check and review), for edits to a segment's station.
-describe("variant edits on the shipped quick-change flow", () => {
+// A flow that keeps its stations in segments (check and review), for edits to a segment's station.
+describe("variant edits on a flow built from segments", () => {
   const ROOT = "/r/.codecast/flows";
-  const variantOf = (body: string) => parseWorkflowFile(`${ROOT}/quick-change.cast`, { read: files({ [`${ROOT}/quick-change.cast`]: `digraph quick_change {\n  graph [extends="quick-change"]\n${body}\n}` }) });
+  const variantOf = (body: string) => parseWorkflowFile(`${ROOT}/mine.cast`, { read: files({ [`${ROOT}/checked.cast`]: SEGMENTED_FLOW, [`${ROOT}/mine.cast`]: `digraph mine {\n  graph [extends="checked.cast"]\n${body}\n}` }) });
 
   test("a station of a segment is changed by its qualified id, and a missing one is named", () => {
     const g = variantOf(`  review__review [model="opus"]`);

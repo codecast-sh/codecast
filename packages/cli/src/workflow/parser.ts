@@ -4,7 +4,7 @@ import * as path from "path";
 import { createHash } from "crypto";
 import { conditionError } from "./condition";
 import { BUILTIN_WORKFLOW_TEMPLATES } from "./templates";
-import { SEGMENT_SEP, segmentTopOf } from "@codecast/shared/contracts/flowPool";
+import { SEGMENT_SEP, retiredFlowLine, segmentTopOf } from "@codecast/shared/contracts/flowPool";
 import { Parser, tokenize, inlineRef, isStopExit, mentionsFailure, shapeOf, type Attr, type RawGraph, type ReadFile } from "./rawGraph";
 import { VARIANT_KEYS, applyOverrides, variantEdits, withGuides } from "./variantEdits";
 import { teamFlowFile } from "./teamFlowIndex";
@@ -118,7 +118,7 @@ function loadRaw(src: string, dir: string | undefined, read: ReadFile, chain: st
     return bySlug && (abs === self || text === src) ? null : text;
   };
   const found: FlowSource | null = fileSrc !== null ? { src: fileSrc, dir: path.dirname(asFile!), file: asFile! } : resolve(String(ext), dir, notSelf);
-  if (!found) throw new Error(`${here}: extends="${ext}": no graph at ${asFile ?? ext}, and no flow of that name in the pool`);
+  if (!found) throw new Error(`${here}: extends="${ext}": ${(bySlug && retiredFlowLine(String(ext))) || `no graph at ${asFile ?? ext}, and no flow of that name in the pool`}`);
   const key = found.file ?? `flow:${ext}`;
   if (chain.includes(key)) throw new Error(`${here}: extends="${ext}" comes back to itself`);
   const base = loadRaw(found.src, found.dir, read, [...chain, key], resolve);
@@ -227,7 +227,9 @@ export function resolveFlowSource(slug: string, dir: string | undefined, read: R
   }
   const shipped = Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, name) ? BUILTIN_WORKFLOW_TEMPLATES[name] : undefined;
   if (shipped !== undefined) return { src: shipped };
-  // Last, a flow the team published, as this machine last read it from the pool.
+  // Last, a flow the team published, as this machine last read it from the pool: never a name the library retired,
+  // whose stale entry an older pool read may have left in this machine's index.
+  if (retiredFlowLine(name)) return null;
   const team = teamFlowFile(name);
   const text = team ? read(team) : null;
   return team && text !== null ? { src: text, dir: path.dirname(team), file: team } : null;

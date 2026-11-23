@@ -10,13 +10,13 @@ import "./autonomy.css";
 
 type Kind = "shell" | "agent" | "person";
 type Tone = "good" | "live" | "bad" | "back" | "plain" | "loop" | "warn";
-/** `cont`: a way out that carries on (a way back, a loop, Already landed in Change), so not an end of the flow. */
+/** `cont`: a way out that carries on (a way back, a loop), so not an end of the flow. */
 type End = { name: string; tone: Tone; cont?: boolean };
-type Step = { name: string; kind: Kind; sub?: string; n?: number; opt?: boolean; ends?: End[] };
+type Step = { name: string; kind: Kind; sub?: string; opt?: boolean; ends?: End[] };
 /** `ends` on a step hang under it, the way the Flows page draws them; `more` are ways out not tied to one step. */
 type LibFlow = { id: string; name: string; from?: string; steps: Step[]; exit: End; more?: End[] };
 
-const step = (kind: Kind) => (name: string, ends?: End[], o?: { sub?: string; n?: number; opt?: boolean }): Step => ({ name, kind, ends, ...o });
+const step = (kind: Kind) => (name: string, ends?: End[], o?: { sub?: string; opt?: boolean }): Step => ({ name, kind, ends, ...o });
 const S = step("shell");
 const A = step("agent");
 const P = step("person");
@@ -44,31 +44,27 @@ const LIBRARY: LibFlow[] = [
     more: [loop("no miss shown"), loop("checks failed"), loop("still red"), plain("Dissolved"), plain("Unproven"), bad("Cannot build")],
   },
   {
-    id: "change", name: "Change", from: "Session", exit: LIVE,
+    id: "change", name: "Ship", from: "Session", exit: LIVE,
     steps: [
-      S("Check", [way("Fix check")]),
-      A("Review", [way("Address review"), bad("Rejected")]),
-      P("Decide", [way("Revise"), bad("Dropped")]),
-      S("Land", [plain("Already landed", true), way("Resolve conflict"), bad("Not shipped")], { sub: "2 steps", n: 2 }),
+      S("PR", [bad("No pull request")]),
+      S("CI", [way("Fix findings"), loop("main is red")]),
+      A("Review", [way("Fix findings"), bad("Rejected")]),
+      P("Decide", [way("Revise"), bad("Dropped")], { opt: true, sub: "if it edits CI" }),
+      S("Merge", [way("Resolve conflict"), loop("main moved"), bad("Not merged")]),
       S("Deploy", [bad("Deploy failed")]),
     ],
-  },
-  {
-    id: "quick", name: "Quick", from: "Session", exit: LIVE,
-    steps: [S("Check", [way("Fix check")]), A("Review", [way("Address review"), bad("Rejected")]), S("Land", [way("Resolve conflict"), bad("Not shipped")], { sub: "2 steps", n: 2 }), S("Deploy")],
   },
   { id: "check", name: "Check", exit: good("Passed"), steps: [S("Verify", [bad("Checks failed")])] },
   { id: "review", name: "Review", exit: good("Approved"), steps: [A("Review", [asked("Changes asked"), bad("Rejected")])] },
   { id: "eval", name: "Eval", exit: good("Passed"), steps: [S("Eval", [plain("Unscored"), bad("Eval failed")])] },
   { id: "judge", name: "Judge", exit: good("Low risk"), steps: [S("Guidelines"), S("Diff"), A("Judge", [plain("Unscored"), { name: "High risk", tone: "warn" }])] },
   { id: "decide", name: "Decide", exit: good("Ship"), steps: [P("Decide", [asked("Revise"), bad("Dropped")])] },
-  { id: "ship", name: "Ship", exit: good("Shipped"), steps: [S("Rebase", [plain("Already landed"), asked("Conflict")]), S("Land", [loop("default branch moved"), bad("Not shipped")])] },
+  { id: "ship", name: "Land", exit: good("Shipped"), steps: [S("Rebase", [plain("Already landed"), asked("Conflict")]), S("Land", [loop("default branch moved"), bad("Not shipped")])] },
   { id: "deploy", name: "Deploy", exit: LIVE, steps: [S("Go live", [bad("Deploy failed")])] },
 ];
 
 const waysOut = (f: LibFlow) => [...f.steps.flatMap((s) => s.ends ?? []), ...(f.more ?? [])];
-/** Steps as run (Land in Change is two), and terminal ends only (the exit plus every way out that stops the run). */
-const stepCount = (f: LibFlow) => f.steps.reduce((n, s) => n + (s.n ?? 1), 0);
+/** Terminal ends only: the exit plus every way out that stops the run. */
 const endCount = (f: LibFlow) => 1 + waysOut(f).filter((e) => !e.cont).length;
 const ROW = 7;
 
@@ -171,7 +167,7 @@ function LibraryFigure() {
   const stage = useRef<HTMLDivElement>(null);
   const [sel, setSel] = useState("line");
   const flow = LIBRARY.find((f) => f.id === sel) ?? LIBRARY[0];
-  const steps = stepCount(flow);
+  const steps = flow.steps.length;
   const ends = endCount(flow);
   return (
     <div ref={ref} data-play={playing ? "" : undefined}>
@@ -228,7 +224,7 @@ export function LibrarySection() {
       id="library"
       wide
       title="The flow library"
-      lede={<p>Flows are built from segments. Change is Check, Review, Decide, Land and Deploy in a row, and Quick is Change without Decide. A team can extend any flow with its own steps or write a new one.</p>}
+      lede={<p>Flows are built from steps and segments. Ship opens a pull request, runs CI beside an independent review, merges on green and deploys, asking a person only when the change edits CI. A team can extend any flow with its own steps or write a new one.</p>}
     >
       <LibraryFigure />
     </Section>

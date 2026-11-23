@@ -62,6 +62,10 @@ describe("workspaceDefaultFlow (the web's defaultFlowOf over the CLI's pool)", (
     expect(pool.find((f) => f.slug === "broken")?.errors.length).toBeGreaterThan(0);
     for (const set of [null, "deleted", "triage", "broken"]) expect(workspaceDefaultFlow(pool, set)?.slug).toBe("change");
   });
+
+  test("Change for a workspace that set Quick, which the library retired", () => {
+    expect(workspaceDefaultFlow(poolFlows(repo(), null, []), "quick-change")?.slug).toBe("change");
+  });
 });
 
 /** The flow team "dir" publishes to its own pool: in no repo and shipped by no CLI, so only a read of that pool finds it. */
@@ -71,10 +75,17 @@ const DIR_SHIP = {
   nodes: [{ id: "start" }, { id: "review", prompt: "Read the change." }, { id: "exit" }],
 };
 
+/** The row a run of quick-change left in its runner's pool before the library retired it. */
+const STORED_QUICK = {
+  _id: "k57quick", slug: "quick-change", name: "quick-change", workspace: "team:dir", by: "Ana", mine: true, origin: null,
+  source: line("quick-change", "Quick", "task,branch"),
+  nodes: [{ id: "start" }, { id: "review", prompt: "Read the change." }, { id: "exit" }],
+};
+
 /** Run `cast flow <args>` from inside `cwd`, a directory mapped to team "dir" (or, with `mapped` false, to none) while
- *  the active team is "active". Team "dir"'s pool holds DIR_SHIP and carries `defaultFlow` (or fails with it, an Error);
- *  team "active"'s carries `activeDefault`. */
-async function castFlow(cwd: string, args: string[], defaultFlow: string | null | Error, activeDefault: string | null = null, mapped = true) {
+ *  the active team is "active". Team "dir"'s pool holds DIR_SHIP and `stored`, and carries `defaultFlow` (or fails with
+ *  it, an Error); team "active"'s carries `activeDefault`. */
+async function castFlow(cwd: string, args: string[], defaultFlow: string | null | Error, activeDefault: string | null = null, mapped = true, stored: unknown[] = []) {
   const out: string[] = [];
   const err: string[] = [];
   const posted: string[] = [];
@@ -89,7 +100,7 @@ async function castFlow(cwd: string, args: string[], defaultFlow: string | null 
         if (!body.team_id) return { flows: [], default_flow: null };
         if (body.team_id === "active") return { flows: [], default_flow: activeDefault };
         if (defaultFlow instanceof Error) throw defaultFlow;
-        return { flows: [DIR_SHIP], default_flow: defaultFlow };
+        return { flows: [DIR_SHIP, ...stored], default_flow: defaultFlow };
       }
       if (route === "/cli/flow/live/show") return [];
       throw new Error(`not asked: ${route}`);
@@ -179,6 +190,31 @@ describe("cast flow run with no flow named", () => {
     expect(r.err).toContain("Could not read the workspace's flows, so its default flow is unknown (network down): name the flow to run (cast flow ls)");
     expect(r.err).not.toContain("No flow named");
     expect(r.out).toBe("");
+  });
+
+  test("a workspace whose default is the retired Quick runs Change", async () => {
+    const r = await castFlow(repo(), ["run", "--branch", "feature", "--dry-run"], "quick-change");
+    expect(r.err).toContain("running change, the workspace's default");
+    expect(r.out).toContain("on branch feature");
+  });
+
+  test("naming the retired Quick fails in one line that names Change", async () => {
+    const r = await castFlow(repo(), ["run", "quick-change", "--branch", "feature", "--dry-run"], null);
+    expect(r.code).toBe(1);
+    expect(r.err).toBe("✗ quick-change is no longer in the library: use change (Ship), which asks a person only when the change edits CI");
+    expect(r.out).toBe("");
+  });
+
+  test("a Quick row a run left in the pool brings it back to no listing, show, run or default", async () => {
+    const root = repo();
+    const retired = "✗ quick-change is no longer in the library: use change (Ship), which asks a person only when the change edits CI";
+    const run = await castFlow(root, ["run", "quick-change", "--branch", "feature", "--dry-run"], null, null, true, [STORED_QUICK]);
+    expect([run.code, run.err]).toEqual([1, retired]);
+    const shown = await castFlow(root, ["show", "quick-change"], null, null, true, [STORED_QUICK]);
+    expect([shown.code, shown.err]).toEqual([1, retired]);
+    expect((await castFlow(root, ["ls"], null, null, true, [STORED_QUICK])).out).not.toContain("quick-change");
+    const nameless = await castFlow(root, ["run", "--branch", "feature", "--dry-run"], "quick-change", null, true, [STORED_QUICK]);
+    expect(nameless.err).toContain("running change, the workspace's default");
   });
 
   test("a flow named still runs that flow, and says nothing of the default", async () => {

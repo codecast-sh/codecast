@@ -142,9 +142,6 @@ export const landedSha = (run: { merge?: { sha?: string | null } | null } | null
 export const gateOpen = (run: Pick<JourneyRun, "status" | "gate_decision_id" | "gate_prompt" | "gate_decision_status">) =>
   run.status === "paused" && !!(run.gate_decision_id || run.gate_prompt) && (run.gate_decision_status ?? "pending") === "pending";
 
-/** What a segment's job is called on the way to live, where its pool name says something else: the Ship segment lands the change. */
-const STAGE_WORDS: Record<string, string> = { ship: "Land" };
-
 /** The runner's own landing steps (runner.ts): a run that passes one has landed its change. */
 const LANDING_STEP = /(^|__)(shipped|landed)$/;
 
@@ -243,7 +240,7 @@ function planOf(graph: Graph, withTargets = false): Base[] {
       members,
     };
   };
-  const labelOf = (id: string) => STAGE_WORDS[byId.get(id)?.segment_flow ?? station.get(id)?.flow ?? ""] ?? station.get(id)?.label ?? id;
+  const labelOf = (id: string) => station.get(id)?.label ?? id;
   const stages: Base[] = [];
   const taken = new Set<string>();
   for (const id of order) {

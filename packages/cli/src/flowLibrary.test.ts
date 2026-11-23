@@ -62,6 +62,26 @@ describe("the library", () => {
     expect(parseWorkflowFile(variant.file!).nodes.get("investigate")?.prompt).toBe("Read the system finding.");
   });
 
+  test("a variant that names its base by slug parses beside a base whose stations keep files in a folder of that name", () => {
+    const base: PushedPoolRow = {
+      _id: "kchange", slug: "change", name: "change", source: `digraph change {\n  graph [kind=line, label="Ship"]\n  start [shape=Mdiamond]\n  fix [label="Fix", prompt="@change/fix.md"]\n  exit [shape=Msquare]\n  start -> fix -> exit\n}`,
+      workspace: "user:u1", mine: true, nodes: [{ id: "fix", prompt: "Fix it." }],
+      origin: { file: ".codecast/flows/change.cast", files: [{ node: "fix", prompt: ".codecast/flows/change/fix.md" }] },
+    };
+    const variant: PushedPoolRow = {
+      _id: "know", slug: "ship-now", name: "ship_now", source: `digraph ship_now {\n  graph [extends="change", kind=line, label="Ship now"]\n  fix [label="Fix now"]\n}`,
+      workspace: "user:u1", mine: true, nodes: [{ id: "fix", prompt: "Fix it." }],
+      origin: { file: ".codecast/flows/ship-now.cast", files: [] },
+    };
+    // The repo has its own change, so the published one is read only as the variant's base.
+    const repo = mkdtemp();
+    fs.mkdirSync(path.join(repo, ".codecast", "flows"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".codecast", "flows", "change.cast"), base.source!.replace("@change/fix.md", "Fix it."));
+    const now = poolFlows(repo, null, [variant, base], mkdtemp()).find((f) => f.slug === "ship-now")!;
+    expect(now.errors).toEqual([]);
+    expect(parseWorkflowFile(now.file!).nodes.get("fix")).toMatchObject({ label: "Fix now", prompt: "Fix it." });
+  });
+
   test("the live flow's flow is the spine, its variant sits under it, segments on their own shelf", () => {
     const tree = libraryTree(pool(), [live]);
     expect(tree.spine.map((n) => [n.flow.slug, n.variants.map((v) => v.flow.slug)])).toEqual([["agentwatch", ["agentwatch-system"]]]);

@@ -279,8 +279,8 @@ describe('commit and deploy links', () => {
 describe('flow and proposal links', () => {
   test('a flow opens the phone flow screen by its slug, from the reference and the library link', () => {
     expect(mobileEntityRoute('flow', 'flow:change')).toBe('/flow/change');
-    expect(mobileEntityRoute('flow', 'Flow:Quick-Change')).toBe('/flow/quick-change');
-    expect(mobileRouteForUrl('https://codecast.sh/flows?view=flows&item=quick-change')).toBe('/flow/quick-change');
+    expect(mobileEntityRoute('flow', 'Flow:Prove-Implement')).toBe('/flow/prove-implement');
+    expect(mobileRouteForUrl('https://codecast.sh/flows?view=flows&item=prove-implement')).toBe('/flow/prove-implement');
     expect(mobileRouteForUrl('/flows?item=change')).toBe('/flow/change');
     expect(mobileEntityRoute('flow', 'flow:-bad')).toBeNull();
   });
