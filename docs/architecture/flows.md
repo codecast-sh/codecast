@@ -947,3 +947,63 @@ trust: the eval gate's verdict per candidate and the spend the cache
 records. Runners start without the run's values in their environment.
 The held split's own protections are the registry's (envCases). Runs already
 filed are reused, so a resumed run pays for nothing twice.
+
+## FL11. The intent check
+
+`intent` (`templates/intent.cast`) is a segment in the pool that answers one
+question: did the person who started the run already say, in their own words,
+that this change should ship? A flow composes it where a card would otherwise
+ask that person (Union's land runs it before a mechanism or gate-edit card)
+and routes on its exit, `cleared` when the starter's word covers the change
+and `ask` otherwise. It writes nothing to the run.
+
+Asker reads, in the order they were said, the words people typed into the
+sessions the change came through and their answers to the decision cards
+those sessions and the task asked (an answer a person gave on a card counts
+like a line they typed; an agent's or a policy's does not), and the run's
+starter (`cast flow asker $change_conversation --task --run`: the chain walk
+and provenance of `originator.ts`). Only a message's typed part counts
+(`typedPart`): what a composer send handed over as typed
+(`pending_messages.typed_text`, never the quotes, mention context or
+attachments folded around it; a joint send hands over none, and merging two
+queued rows clears the mark), or a terminal line with its `<pasted_content>`
+blocks and mention context taken out, a slash command as `/name args`. A
+short paste the terminal took as typing, or text pasted into the composer
+box, cannot be told from typing and counts. A terminal line counts only in a
+session the daemon marked `--interactive` (Claude Code's `cli` entrypoint,
+Codex's terminal UI or VS Code extension), read from the transcript head at
+create and, for a session recorded before the mark, on its next sync
+(`conversations.markInteractive`, which only adds that mark to the caller's
+own unmarked session); the Agent SDK, `-p`, any other agent and an unmarked
+session read as program, as do a brief, a relay, an agent's "approved", an
+echo whose words a queue row of the session holds (read only from the day
+around the line), and a session another one handed its work to.
+
+Change records the commit it diffs (`$run_dir/intent-head`) and reads the diff
+as the judge does. Read, a model call (`intent/asker.md`, held by the
+`intent-read` evals), answers `{ship, session, line, card, quote, in_scope,
+why}`: an explicit ship word, an accepted plan that ships, a /drive request or
+a card answer choosing to ship, from the starter, not taken back later, and a
+change inside what they asked for. Verify then sends `cast flow intent-verify
+--cite <session>:<line>` (or `--card sd-N`) `--quote --head --record`, and the
+server is the gate (`/cli/intent/verify`, `verifyCitation` and
+`verifyCardCitation`): the caller is the run's own runner; the cited line or
+card was said on the run's change chain (walked from the run's spawner and the
+session that filed its task, as the run's starter may read them; task
+comments name no anchor) or, for a card, on the run's task; a line is typed,
+a card was answered by a person; that person is `run.user_id` and no agent
+account; the line's typed part or the card's answer holds the quote with
+whitespace folded; and no person answered other than Ship on the task's Ship
+cards after it was said (a composer line is dated by its submit, a card by
+its answer). The check guards against honest misreads, not a token holder
+forging a session's links. Verified, the server comments on the task `<name>
+said to ship: "<quote>" (<cite>), checked against the record.` and the station
+writes `$run_dir/intent.json` (`{starter_id, starter_name, cite, quote,
+head}`, the cite `<session>:<line>` or `card:sd-N`, the starter the server
+checked and the commit Change diffed) for the composing flow to read. Every
+other ending is `ask`, after one task comment saying why (`Intent asks a
+person: ...`: the model's why, the server's refusal, or the failure): no
+session behind the change, a branch that does not resolve, a failed script
+or call, an answer that is not JSON, ship false, out of scope, or a refused
+citation. Asker removes any earlier intent.json first, so a leftover file
+never reads as a verified word.

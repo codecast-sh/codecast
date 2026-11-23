@@ -74,6 +74,20 @@ order, within its caps, so the work flows without anyone pressing start. The
 card goes to the person who answers for the project (the role's person, or the
 project owner), capped per person across every line they answer for.
 
+A person's earlier word can be their answer. When the person who started a
+run already told the work to ship, in a line they typed into a session the
+change came through or in their own answer to a decision card, and the change
+stays inside what they asked for, a flow need not ask them again: the intent
+check (flows.md FL11) says so, and a flow that composes it routes on it
+(Union's land runs it before a mechanism or gate-edit card). A program's words
+never count: a brief, a relayed "approved" or an agent's message is not the
+person's word, nor is a line the composer quoted, a paste the terminal wrapped
+as pasted content, or a send that folded in others' drafts. A short paste the
+terminal took as typing cannot be told from typing, and reads as the person's.
+Code checks the cited line or card before the check passes. Between a word
+and an answer on a card, the newer one stands: a Revise after "ship it" takes
+it back, and "ship it" after a Revise outranks it.
+
 ## LM5. Grounding: goals rank, expectations detect
 
 Two kinds of context, used at two different moments.
