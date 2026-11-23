@@ -94,11 +94,40 @@ export async function unshareAccount(name: string, names: string[], o: { pool?: 
 
 /** Which of your machines run on one of your accounts: all of them (--all),
  *  the named ones, or none named: only the machine that holds it. */
-export async function accountDevices(name: string, needles: string[], o: { all?: boolean }): Promise<void> {
-  const { backend, ownDevice } = await devicesKit();
+/** Which machines a pool row reaches, as `cast accounts pool` names it. */
+export function accountReach(row: { team_id?: unknown; device_ids?: string[] | null }): string {
+  if (row.team_id) return "";
+  if (!row.device_ids) return "all your machines";
+  return row.device_ids.length ? `narrowed to ${row.device_ids.length} machine(s)` : "holder only";
+}
+
+/** What `cast accounts devices` does with its arguments. Naming no machine
+ *  only reads: on 2026-11-22 a bare `cast accounts devices <profile>`, run to
+ *  see where an account ran, narrowed it to the one machine holding it. */
+export function devicesIntent(needles: string[], o: { all?: boolean; onlyHere?: boolean }): "show" | "all" | "only_here" | "narrow" {
+  if (o.all) return "all";
+  if (o.onlyHere) return "only_here";
+  return needles.length ? "narrow" : "show";
+}
+
+export async function accountDevices(name: string, needles: string[], o: { all?: boolean; onlyHere?: boolean }): Promise<void> {
+  const { backend, ownDevice, die } = await devicesKit();
   const p = await ownProfile(name);
   const b = await backend();
-  const ids = o.all ? null : await Promise.all(needles.map(async (n) => (await ownDevice(b, n)).device_id as string));
+  const intent = devicesIntent(needles, o);
+  if (intent === "all" && needles.length) return die("--all takes no machine names");
+  if (intent === "show") {
+    const rows = (await b.client.query(b.api.accountPool.listPool, { api_token: b.token })) ?? [];
+    const row = rows.find((r: any) => r.mine && !r.team_id && r.email === p.email.toLowerCase());
+    console.log(row
+      ? `${p.email} runs on ${accountReach(row)} (${row.machines} machine(s) reached now)`
+      : `${p.email} is not in your account pool yet (it joins once this machine holds it with a setup-token)`);
+    console.log(fmt.muted(`  narrow: cast accounts devices ${name} <machine>…   holder only: --only-this-machine   undo: --all`));
+    return;
+  }
+  const ids = intent === "all" ? null
+    : intent === "only_here" ? []
+    : await Promise.all(needles.map(async (n) => (await ownDevice(b, n)).device_id as string));
   await b.client.mutation(b.api.accountPool.setAccountDevices, { api_token: b.token, email: p.email, device_ids: ids });
   const where = ids === null ? "every machine of yours" : ids.length ? `${ids.length} machine(s) besides this one` : "this machine only";
   console.log(`${fmt.success("ok")} ${p.email} runs on ${where}; machines taken off drop it within a minute`);
@@ -120,7 +149,7 @@ export async function printPool(o: { json?: boolean }): Promise<void> {
     const s = r.usage?.session?.percent;
     const w = r.usage?.weekly?.percent;
     const meter = s === undefined && w === undefined ? fmt.muted("no meter yet") : `session ${Math.round(s ?? 0)}% · week ${Math.round(w ?? 0)}%`;
-    const reach = r.team_id ? "" : r.device_ids ? `[${r.device_ids.length ? `narrowed to ${r.device_ids.length} machine(s)` : "holder only"}]` : "[all your machines]";
+    const reach = r.team_id ? "" : `[${accountReach(r)}]`;
     const labels = [reach, ...(r.pools ?? []).map((l: string) => `[${l}]`)].filter(Boolean).map((l) => fmt.accent(l)).join(" ");
     console.log(`${fmt.accent(r.email)}${labels ? ` ${labels}` : ""}  ${fmt.muted(`from ${r.mine ? "you" : r.contributor_name}`)}  ${meter}  ${fmt.muted(`${r.machines} machine(s)`)}`);
     const total = r.split.reduce((a: number, x: any) => a + x.tokens, 0);
