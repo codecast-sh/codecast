@@ -18,9 +18,9 @@ import { useSyncDecisionDetail, useDecisionDetail } from '@codecast/web/hooks/us
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import type { AnswerDraft } from '@codecast/web/lib/decisionAnswer';
 import { AnswerButton, AnswerControls, appAnswerLook } from '@/components/decisions/AnswerControls';
-import { decisionAnswerLabel } from '@codecast/shared/contracts';
 
 import { DecisionThread } from '@/components/decisions/DecisionThread';
+import { SettledDecision } from '@/components/decisions/SettledDecision';
 import { useDecisionAnswer } from '@/components/decisions/DecisionCard';
 import { pageShareUrl } from '@codecast/shared/entities';
 import { teamMembersOf } from '@codecast/web/lib/activeTeam';
@@ -99,19 +99,22 @@ export default function DecisionScreen() {
 
   const title = queued ? `${position + 1} of ${decideQueue.length}` : 'Decision';
 
-  // Settled: say how, and move on.
+  // Settled: the answer on record, its history, and a way to change it.
   if (!item) {
-    const settled = row && row.status !== 'pending'
-      ? row.status === 'answered' ? `Answered: ${decisionAnswerLabel(row, row) ?? ''}` : row.status === 'withdrawn' ? 'The agent withdrew this question.' : 'Dismissed.'
-      : 'This decision is no longer in your queue.';
+    if (!row || row.status === 'pending') {
+      return (
+        <>
+          <Stack.Screen options={{ title, headerBackTitle: 'Back' }} />
+          <View style={[styles.center, { backgroundColor: Theme.bg }]}>
+            <Text style={styles.muted}>This decision is no longer in your queue.</Text>
+          </View>
+        </>
+      );
+    }
     return (
       <>
-        <Stack.Screen options={{ title, headerBackTitle: 'Back' }} />
-        <ScrollView style={{ backgroundColor: Theme.bg }} contentContainerStyle={styles.body}>
-          <Text style={styles.question}>{source.question}</Text>
-          <Text style={styles.muted}>{settled}</Text>
-          {nextId ? <AnswerButton look={look} label="Next decision" onPress={goNext} /> : null}
-        </ScrollView>
+        <Stack.Screen options={{ title: 'Decision', headerBackTitle: 'Back' }} />
+        <SettledDecision row={row} nextId={nextId} onNext={goNext} />
       </>
     );
   }
