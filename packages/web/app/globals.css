@@ -120,9 +120,9 @@
    header's width, the query container on [data-sv-convhead]) so it still
    holds a readable run of words. Level 6 folds the chips the overflow menu
    already repeats (the parent link and the branch map). Level 7 is the last:
-   the title drops its floor and gives up its last words first, then the
-   status's wake line (what wakes a dormant session) drops its floor and
-   ends in an ellipsis, and then the action cluster gives way from its start
+   the title drops its floor and gives up its last words first, the status's
+   wake line (what wakes a dormant session) keeps only its arrow and when,
+   and then the action cluster gives way from its start
    (justify-end clips its leftmost live pills), so Ship, share and the session
    menu, which repeats what the row sheds, stay on screen in the narrowest
    pane.
@@ -158,7 +158,8 @@
    menu at its end (see the level ladder above). The title still yields
    first: its shrink weight dwarfs the cluster's. */
 [data-sv-convhead] [data-squeeze~="7"] .cc-panel__title { flex-shrink: 1000; }
-[data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] { min-width: 0; flex-shrink: 100; }
+[data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] { min-width: max-content; flex-shrink: 0; }
+[data-sv-convhead] [data-squeeze~="7"] [data-dormant-wake] [data-dormant-what] { display: none; }
 [data-sv-convhead] [data-squeeze~="7"] [data-cc-conv-actions] {
   flex-shrink: 1;
   min-width: 0;
