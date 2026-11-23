@@ -222,7 +222,10 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
 
   // The keyboard's ring: the owners as listed, then the candidates.
   const ring = rows.length + candidates.length;
-  const highlighted = hi < ring ? hi : ring - 1;
+  // A highlight past the end lands on the last candidate, never back on an
+  // owner row: with no candidate (a search with no match) nothing is
+  // highlighted, so Shift+Enter cannot hand an owner the wheel unseen.
+  const highlighted = hi < ring ? hi : candidates.length ? ring - 1 : -1;
   const move = (step: 1 | -1) => {
     if (ring) setHi((h) => (step > 0 ? (Math.min(h, ring - 1) + 1) % ring : (Math.max(h, 0) - 1 + ring) % ring));
   };

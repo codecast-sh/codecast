@@ -121,6 +121,17 @@ test("Shift+Enter makes the highlighted owner driver, and adds a candidate as dr
   expect(chips()).toEqual(["+ Samvit Rao · driver"]);
 });
 
+test("a search with no match highlights nothing, so Shift+Enter makes nobody driver", async () => {
+  await openMenu();
+  const input = w.document.querySelector("[data-owners-menu] input") as HTMLInputElement;
+  const props = (input as any)[Object.keys(input).find((k) => k.startsWith("__reactProps$"))!];
+  await act(async () => { props.onChange({ target: { value: "zzzq" } }); });
+  expect(w.document.querySelector("[data-owners-menu]")!.textContent).toContain("Nobody matches");
+  expect(highlighted()).toEqual([]);
+  await press("Enter", true);
+  expect(chips()).toEqual([]);
+});
+
 test("a touch's synthetic hover highlights nothing; a mouse's does", async () => {
   await openMenu();
   const row = w.document.querySelector("[data-owner-candidate='p:user_sam']") as HTMLElement;
