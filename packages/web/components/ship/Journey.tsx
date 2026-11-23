@@ -118,7 +118,12 @@ function Route({ r }: { r: InsideRoute }) {
   return (
     <li className="sj-in-route" data-state={r.state} data-asks={r.asks ? "" : undefined} data-to={r.to.kind}>
       {r.label ? <span className="sj-in-when">{r.label}</span> : null}
-      {r.steps.map((s) => <span key={s.id} className="sj-in-hop" data-who={s.who} data-state={s.state}>{s.label}<StateWords state={s.state} /></span>)}
+      {r.steps.map((s, i) => (
+        <span key={s.id} className="sj-in-hops">
+          {i || r.label ? <i className="sj-in-arrow" aria-hidden>→</i> : null}
+          <span className="sj-in-hop" data-who={s.who} data-state={s.state}>{s.label}<StateWords state={s.state} /></span>
+        </span>
+      ))}
       <span className="sj-in-to">
         {r.to.kind === "stop" ? <><X className="w-2.5 h-2.5" aria-hidden />stops</> : <><CornerDownLeft className="w-2.5 h-2.5" aria-hidden /><span className="sr-only">back to </span>{r.to.kind === "session" ? "this session" : r.to.label}</>}
       </span>

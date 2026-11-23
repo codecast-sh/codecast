@@ -188,7 +188,9 @@
 .sj-in-route { position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; padding-left: 14px; line-height: 1.45; color: var(--sol-text-muted); }
 .sj-in-route::before { content: ""; position: absolute; left: -18px; top: -5px; width: 26px; height: 14px; border: solid var(--sj-rule); border-width: 0 0 1.5px 1.5px; border-bottom-left-radius: 9px; }
 .sj-in-when { font-style: italic; color: var(--sol-text-dim); }
-:is(.sj-in-when, .sj-in-hop):has(+ .sj-in-hop)::after { content: "→"; font-style: normal; margin-left: 6px; color: var(--sol-text-dim); }
+/* An arrow keeps to the step it leads to, so a wrapped route never starts a line with one, and stays outside a pill. */
+.sj-in-hops { display: inline-flex; align-items: baseline; gap: 6px; }
+.sj-in-arrow { font-style: normal; color: var(--sol-text-dim); }
 .sj-in-hop { color: var(--sol-text); font-weight: 500; }
 .sj-in-to { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
 .sj-in-route[data-to="session"] .sj-in-to { color: color-mix(in srgb, var(--sj-session) 85%, var(--sol-text-dim)); }

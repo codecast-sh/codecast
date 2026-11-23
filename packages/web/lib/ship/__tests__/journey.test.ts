@@ -491,6 +491,14 @@ describe("a segment's inside", () => {
     // A pushed row stores no asks_if, and its source (change.cast) does not name the card: it can only say "sometimes".
     expect(approvalWords(approvalOf(pushedFlow({ _id: "wf_land", ...LAND_FLOW })))).toBe("Sometimes asks you");
   });
+  test("who sent it back: Land's own findings are not the card's, though both sit in Land; a Revise at the card is the person's", () => {
+    let t = 1000;
+    const at = (id: string, status = "completed") => st(id, status, (t += 10));
+    const upTo = [at("land"), at("land__pr"), at("land__checks"), at("land__ci"), at("land__review"), at("land__read")];
+    const back = (node: string, steps: any[]) => journeyOf(land, run({ current_node_id: node, waiting_on_session: { node_id: node, since: t, note: "" }, node_statuses: [...steps, at(node, "running")] })).now;
+    expect(back("fix", [...upTo, at("land__brief"), at("land__changes", "failed")])).toMatchObject({ kind: "session", by: null });
+    expect(back("revise", [...upTo, at("land__merge", "failed"), at("land__why_card"), at("land__card"), at("land__card__decide"), at("land__card__revise", "failed"), at("land__revise", "failed")])).toMatchObject({ kind: "session", by: "the person" });
+  });
   test("round 2 back at PR: nothing inside reads as last round's", () => {
     let t = 1000;
     const at = (id: string, status = "completed", visits = 1) => st(id, status, (t += 10), { visits });

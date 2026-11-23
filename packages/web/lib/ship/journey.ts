@@ -527,8 +527,16 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     const route = graph.edges.find((e) => e.to === first && e.label && stageOf(e.from))?.label;
     return route ? route.charAt(0).toUpperCase() + route.slice(1) : byId.get(first)?.label ?? null;
   };
-  // A step inside a person's card (a gate's own segment): what it sends back, the person sent back.
-  const byPerson = (nodeId: string | undefined) => !!nodeId && graph.nodes.some((n) => n.type === "human" && (n.id === nodeId || segmentTopOf(n.id) === segmentTopOf(nodeId)));
+  // Whether a person sent the work back to the session at `nodeId`: the last step the run took before it, past the ends it
+  // went out through (a step whose every way on leaves the segment it sits in), is a person's. A segment's own Brief
+  // inside the same segment as a card is not the card's.
+  const parentOf = (id: string) => (id.includes(SEGMENT_SEP) ? id.slice(0, id.lastIndexOf(SEGMENT_SEP)) : "");
+  const endStep = (id: string) => { const out = graph.edges.filter((e) => e.from === id); return out.length > 0 && out.every((e) => parentOf(e.to) !== parentOf(id)); };
+  const byPerson = (nodeId: string | null) => {
+    const since = statusOf(nodeId)?.started_at ?? Infinity;
+    const before = statuses.filter((n) => (n.started_at ?? 0) <= since && !isSubject(byId.get(n.node_id)) && !endStep(n.node_id));
+    return byId.get(newest(before)?.node_id ?? "")?.type === "human";
+  };
   const backStage = live ? (backFrom(waitingOn?.node_id ?? null) ?? backFrom(at))?.id ?? null : null;
   const atBase = stageFor(at);
   const atStage = live ? atBase?.id ?? null : null;
@@ -578,7 +586,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const isEntry = (id: string) => graph.nodes.some((x) => x.id.startsWith(`${id}${SEGMENT_SEP}`));
   const isEnd = (id: string) => { const n = byId.get(id); return !!n && (n.type === "exit" || !!n.segment_exit); };
   const stepsOf = (b: Base): StageStep[] => statuses
-    .filter((n) => (inStage(b, n.node_id) && !(b.members.includes(n.node_id) && isEntry(n.node_id)) && !isEnd(n.node_id)) || b.loops.some((l) => l.id === n.node_id))
+    .filter((n) => (inStage(b, n.node_id) && !isEntry(n.node_id) && !isEnd(n.node_id)) || b.loops.some((l) => l.id === n.node_id))
     .map((n) => ({ id: n.node_id, label: labelOf(n.node_id), status: n.status, visits: n.visits ?? null, said: n.result_preview?.trim() || n.activity || null, session: n.session ? { id: String(n.session._id), title: n.session.title ?? null } : null, at: n.started_at ?? null }));
   // What a stage's steps did last (one entry per node: its latest visit); a segment's entry only routes into its steps.
   const latestOf = (b: Base) => newest(statuses.filter((n) => inStage(b, n.node_id) && !(b.members.includes(n.node_id) && isEntry(n.node_id))));
@@ -707,7 +715,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   else if (live && backStage) {
     const loop = plan.find((s) => s.id === backStage)!.loops.find((l) => l.id === segmentTopOf(waitingOn?.node_id ?? at ?? ""));
     const node = statusOf(waitingOn?.node_id ?? at);
-    now = { kind: "session", stage: stageLabel(backStage)!, note: readableWhy(waitingOn?.note) ?? "", since: waitingOn?.since ?? node?.started_at ?? null, round: node?.visits ?? null, max: loop?.max ?? null, by: byPerson(routedFrom(waitingOn?.node_id ?? at ?? "", new Set())?.node_id) ? "the person" : null };
+    now = { kind: "session", stage: stageLabel(backStage)!, note: readableWhy(waitingOn?.note) ?? "", since: waitingOn?.since ?? node?.started_at ?? null, round: node?.visits ?? null, max: loop?.max ?? null, by: byPerson(waitingOn?.node_id ?? at) ? "the person" : null };
   } else if (open) {
     // The card's own step names the bar when it sits off every stage (a card a script asked for); on a stage, the stage.
     const onStage = gateNode ? stageOf(gateNode) : null;
