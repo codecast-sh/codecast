@@ -691,6 +691,7 @@ import type * as pushRouter from "../pushRouter.js";
 import type * as quoteDrafts from "../quoteDrafts.js";
 import type * as rateLimit from "../rateLimit.js";
 import type * as redact from "../redact.js";
+import type * as registeredSessions from "../registeredSessions.js";
 import type * as regulatedDeletion from "../regulatedDeletion.js";
 import type * as replayIssues from "../replayIssues.js";
 import type * as replayTallies from "../replayTallies.js";
@@ -1526,6 +1527,7 @@ declare const fullApi: ApiFromModules<{
   quoteDrafts: typeof quoteDrafts;
   rateLimit: typeof rateLimit;
   redact: typeof redact;
+  registeredSessions: typeof registeredSessions;
   regulatedDeletion: typeof regulatedDeletion;
   replayIssues: typeof replayIssues;
   replayTallies: typeof replayTallies;

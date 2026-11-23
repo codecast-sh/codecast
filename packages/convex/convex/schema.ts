@@ -1392,6 +1392,12 @@ export default defineSchema({
     // only manages sessions whose owner_device_id matches its own device id.
     // "Move to remote" flips this from the local device to the Mac's device.
     owner_device_id: v.optional(v.string()),
+    register_only: v.optional(v.boolean()),
+    delivery_target: v.optional(v.union(
+      v.object({ kind: v.literal("herdr"), socket: v.string(), pane: v.string() }),
+      v.object({ kind: v.literal("paseo"), agent_id: v.string() }),
+    )),
+    ended_at: v.optional(v.number()),
     // DENORMALIZED CACHE of the PRIMARY (first-added, still-present) owner. The
     // canonical owner store is the session_owners join table — a session may have
     // SEVERAL owners and this single field cannot express that, so never branch

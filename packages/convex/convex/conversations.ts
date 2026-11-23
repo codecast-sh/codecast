@@ -7351,6 +7351,7 @@ export const feedForCLI = query({
       .filter((c): c is typeof ownConversations[number] => {
         if (filterUserId && c.user_id.toString() !== filterUserId && !(args.mine_only && isOwnedByMe(c))) return false;
         if (labelConvIds && !labelConvIds.has(c._id.toString())) return false;
+        if ((c as any).ended_at) return false;
 
         // Team filter: when team is resolved from directory, filter own sessions by team
         if (resolvedTeamId && isOwnConversation(c)) {

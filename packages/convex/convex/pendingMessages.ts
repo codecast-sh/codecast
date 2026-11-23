@@ -232,10 +232,12 @@ export function canDaemonSeePendingMessage(
     user_id: Id<"users">;
     owner_device_id?: string;
     execution_protocol_state?: string;
+    register_only?: boolean;
   },
   userId: Id<"users">,
   deviceId: string,
 ): boolean {
+  if (conversation.register_only) return false;
   if (isConversationSafetyBlocked(conversation)) return false;
   // Absence is the only legacy marker. Quiescing and fenced conversations are
   // never permissive fallbacks, and a stamped row can never leak back into the
@@ -387,6 +389,14 @@ export async function updatePendingMessageStatusForDaemon(
   return { updated, skipped: !updated };
 }
 
+export async function bounceFromEndedSession(ctx: { db: any }, msg: any): Promise<void> {
+  if (msg.from_conversation_id) {
+    await notifyStuckSend(ctx, msg, "gone");
+  } else {
+    await patchPendingMessageStatus(ctx, msg, { status: "cancelled" as const });
+  }
+}
+
 // Shared insert path for queueing a message to a conversation's daemon: dedups on
 // client_id, inserts the pending row, and wakes the conversation (un-dismisses,
 // flips completed→active). Both human sends (sendMessageToSession) and session→
@@ -480,6 +490,20 @@ export async function enqueuePendingMessage(
       )
       .first();
     if (existing) return existing._id;
+  }
+
+  if (conversation.ended_at) {
+    const messageId = await insertEnqueuedPendingMessage(ctx, {
+      conversationId: conversation._id,
+      fromUserId,
+      ownerUserId: conversation.user_id,
+      fromConversationId: fields.from_conversation_id,
+      content: fields.content,
+      clientId: fields.client_id,
+      createdAt: Date.now(),
+    });
+    await bounceFromEndedSession(ctx, (await ctx.db.get(messageId))!);
+    return messageId;
   }
 
   if (fields.origin === "scheduler" && !fields.client_id
@@ -979,6 +1003,9 @@ export async function performSessionSend(
   const { target, role: roleTarget } = args.target ? { target: args.target, role: true } : await resolveSendTarget(ctx, authUserId, args.to, ownSender);
   if (!target) {
     throw new Error(`No session found for "${args.to}" (you can only message your own sessions, sessions shared with your team, sessions whose owner granted you send access, or a session that messaged yours)`);
+  }
+  if (target.ended_at) {
+    throw new Error(`Session ${target.short_id ?? target._id.toString().slice(0, 7)} has ended; the message was not sent`);
   }
 
   const isCrossUser = target.user_id.toString() !== authUserId.toString();
@@ -1792,6 +1819,7 @@ export async function collectDeliverableForOwner(
   ctx: { db: any },
   ownerUserId: Id<"users">,
   deviceId: string,
+  canSee: (message: any, conversation: any, userId: Id<"users">, deviceId: string) => boolean = canDaemonSeePendingMessage,
 ): Promise<any[]> {
   // Bounded scans, oldest first. Unbounded collects made this query's cost track
   // the pending BACKLOG, so the exact moment delivery fell behind (backend
@@ -1827,7 +1855,7 @@ export async function collectDeliverableForOwner(
     seen.add(key);
     const conversation = await ctx.db.get(message.conversation_id);
     if (!conversation) continue;
-    if (canDaemonSeePendingMessage(message, conversation, ownerUserId, deviceId)) {
+    if (canSee(message, conversation, ownerUserId, deviceId)) {
       // Stamped here so delivery can refuse a leftover Codex app-server thread
       // after an in-place switch. The conversation row is already loaded.
       owned.push({ ...message, conversation_agent_type: conversation.agent_type ?? null });
@@ -1835,6 +1863,44 @@ export async function collectDeliverableForOwner(
   }
   return headOfEachQueue(owned);
 }
+
+export function canRelaySeePendingMessage(
+  message: { owner_user_id?: Id<"users">; status: string; delivery_protocol_version?: number },
+  conversation: ConversationSafetyState & {
+    user_id: Id<"users">;
+    owner_device_id?: string;
+    register_only?: boolean;
+    ended_at?: number;
+  },
+  userId: Id<"users">,
+  deviceId: string,
+): boolean {
+  return !!conversation.register_only
+    && !conversation.ended_at
+    && conversation.owner_device_id === deviceId
+    && pendingMessageOwnerId(message, conversation) === userId.toString()
+    && message.status === "pending"
+    && !isFencedPendingMessage(message)
+    && !isConversationSafetyBlocked(conversation);
+}
+
+export const pendingForDevice = query({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+    const rows = await collectDeliverableForOwner(ctx, authUserId, args.device_id, canRelaySeePendingMessage);
+    return await Promise.all(rows.map(async (row) => {
+      const conversation = await ctx.db.get(row.conversation_id as Id<"conversations">);
+      return { ...row, delivery_target: conversation?.delivery_target, session_id: conversation?.session_id };
+    }));
+  },
+});
 
 export const getPendingMessagesForDaemon = query({
   args: {
@@ -2283,7 +2349,7 @@ export async function notifyStuckSend(
   const senderConv = await ctx.db.get(msg.from_conversation_id);
   // A sender the user killed has nobody to read the receipt, and queuing it would revive the
   // killed agent just to tell it about an old send (enqueue clears the kill).
-  if (!senderConv || senderConv.inbox_killed_at || isClosedSession(senderConv) || senderConv.status === "completed") {
+  if (!senderConv || senderConv.inbox_killed_at || senderConv.ended_at || isClosedSession(senderConv) || senderConv.status === "completed") {
     // Sender's session is gone or stopped — nowhere to report; just stop re-evaluating this row.
     await ctx.db.patch(msg._id, { sender_notified_at: Date.now() });
     if (giveUp) await patchPendingMessageStatus(ctx, msg, { status: "cancelled" as const });
@@ -2448,6 +2514,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
     const hosted = new Map<string, any>();
     const rewoken = new Set<string>();
     const hostedChecked = new Set<string>();
+    const registerOnly = new Set<string>();
     for (const msg of candidates) {
       // Fenced rows use delivery attempts and permits; legacy elapsed-time
       // healing must never reinterpret their state or synthesize a retry.
@@ -2457,12 +2524,14 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
         const conversation = await ctx.db.get(msg.conversation_id);
         safetyBlocked.set(conversationId, !!conversation && isConversationSafetyBlocked(conversation));
         if (conversation && isHostedAgentType(conversation.agent_type)) hosted.set(conversationId, conversation);
+        if (conversation?.register_only) registerOnly.add(conversationId);
         if (!conversation) {
           gone.add(conversationId);
           ready.delete(conversationId);
           live.delete(conversationId);
         }
       }
+      if (registerOnly.has(conversationId)) continue;
       if (safetyBlocked.get(conversationId)) {
         waiting++;
         continue;
