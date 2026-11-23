@@ -19,7 +19,6 @@
 import { v } from "convex/values";
 import { internalMutation, mutation, query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
-import { internal } from "./_generated/api";
 import { requireUserOrToken } from "./lib/auth";
 import { canAccessProject, resolveWorkspaceKey, workspaceGrantsAccess } from "./lib/access";
 import { nextShortId } from "./counters";
@@ -33,10 +32,9 @@ import { countersFor } from "./lib/orgCaps";
 import { tellRole } from "./pendingMessages";
 import { liveRoleByHandle } from "./lib/orgAccess";
 import { scheduleTriggerMatch } from "./lib/triggerMatch";
-import { emitNotification } from "./notificationRouter";
 import { fillDeployRange } from "./deployTargets";
 import { afterFor, shapeView } from "./deploysView";
-import { devPushedOver, targetDeploys, targetDevPushes } from "./deployTargetsState";
+import { devPushedOver } from "./deployTargetsState";
 import { DEPLOY_FAILED_EVENT, DEPLOY_LIVE_EVENT } from "@codecast/shared/contracts";
 import {
   carriesForMarker,
@@ -47,17 +45,16 @@ import {
   workspaceDeploys,
   workspaceMerges,
 } from "./deployCarries";
+import { closeSuperseded, deployByRef, deploysOfRun, finishable, liveOf, MARKER_SCAN, OPEN, urlFields } from "./lib/deployRows";
+import { capNames, deployDropper, NAME_MAX, newNames, noticeDroppedWork, scheduleDroppedWork } from "./lib/droppedWork";
 import {
   actionsRunKey,
   DAY,
   DEPLOY_SHORT_ID_PREFIX,
-  DEPLOY_SHORT_ID_RE,
-  liveDeployOf,
   liveDeploys,
   normalizeDeployTarget,
   waitingMerges,
   type DeployMerge,
-  type DeployStatus,
 } from "@codecast/shared/contracts/deploys";
 
 /** A line deploy older than this, still waiting for its marker, no longer takes one. */
@@ -66,225 +63,6 @@ const NOTE_MAX = 2000;
 /** A role asks for a deploy only once the newest waiting fix has sat this long, so a burst of merges goes out as one deploy. */
 export const DEPLOY_SETTLE_MS = 30 * 60 * 1000;
 const COMMITS_MAX = 200;
-/** A deploy keeps at most this many names in `adds` and in `drops`, each cut to NAME_MAX characters. */
-const NAMES_MAX = 500;
-const NAME_MAX = 200;
-/** How far back through a target's deploys, and through its dev pushes, a name's adder is looked for. */
-const ADDERS_SCAN = 200;
-/** A marker reads this many of the workspace's deploys; the live deploy is looked for among this many of the target's. */
-const MARKER_SCAN = 100;
-/** A person told a deploy dropped their work is not told again for this long. */
-const DROPPED_WORK_QUIET_MS = 6 * 60 * 60 * 1000;
-/** How many of a person's newest notifications in the quiet window are read for an earlier notice. */
-const DROPPED_WORK_QUIET_SCAN = 100;
-
-/** The classes of name a cut keeps first: a dropped table or index is the loss that matters most. */
-const NAME_CLASSES = ["table:", "index:", "http:", "fn:"];
-const nameClass = (name: string) => {
-  const i = NAME_CLASSES.findIndex((p) => name.startsWith(p));
-  return i < 0 ? NAME_CLASSES.length : i;
-};
-
-/**
- * Names as a deploy keeps them: each cut to NAME_MAX, no repeats, in the lists' order. Past NAMES_MAX the tables
- * are kept first, then indexes, routes and functions, each class sorted, and the rest cut.
- */
-export function capNames(...lists: Array<ReadonlyArray<string> | undefined>): string[] {
-  const all = new Set<string>();
-  for (const list of lists) for (const name of list ?? []) all.add(name.slice(0, NAME_MAX));
-  if (all.size <= NAMES_MAX) return [...all];
-  return [...all].sort((a, b) => nameClass(a) - nameClass(b) || (a < b ? -1 : a > b ? 1 : 0)).slice(0, NAMES_MAX);
-}
-
-/** The target's current live deploy among `recent`, of the repository when both name one: the one that went live last (liveDeployOf). */
-export function liveOf(recent: ReadonlyArray<Doc<"deploys">>, target: string, repository: string | undefined): Doc<"deploys"> | undefined {
-  return liveDeployOf(recent, { target, repository });
-}
-
-/** The target's latest live deploy, among its newest MARKER_SCAN deploys. */
-export async function latestLiveDeploy(ctx: any, workspace: string, target: string, repository?: string): Promise<Doc<"deploys"> | null> {
-  const t = normalizeDeployTarget(target);
-  if (!t) return null;
-  return liveOf(await targetDeploys(ctx, workspace, t, MARKER_SCAN), t, repository ? normalizeRepository(repository) : undefined) ?? null;
-}
-
-type StartedBy = Doc<"deploys">["started_by"];
-
-/** Whether two pushes were made by one pusher: the same account, else (neither has one) the same name. */
-function samePusher(a: StartedBy, b: StartedBy): boolean {
-  if (a?.user_id || b?.user_id) return !!a?.user_id && !!b?.user_id && String(a.user_id) === String(b.user_id);
-  return (a?.name ?? null) === (b?.name ?? null);
-}
-
-/** A push that can put a name on a target or take it off: a deploy, or a dev watcher's push. `at` is when it was last active. */
-export type Push =
-  | { kind: "deploy"; row: Doc<"deploys">; at: number }
-  | { kind: "dev_push"; row: Doc<"dev_pushes">; at: number };
-
-/**
- * A target's recent pushes of one repository, from both tables: its newest `take` deploys and its `take` dev pushes
- * saved last.
- */
-export async function targetPushes(ctx: any, workspace: string, target: string, repository: string | null, take = ADDERS_SCAN): Promise<Push[]> {
-  const [deploys, devPushes] = await Promise.all([targetDeploys(ctx, workspace, target, take), targetDevPushes(ctx, workspace, target, take)]);
-  const here = (r: { repository?: string }) => (r.repository ?? null) === repository;
-  return [
-    ...deploys.filter(here).map((row): Push => ({ kind: "deploy", row, at: row.live_at ?? row.created_at })),
-    ...devPushes.filter(here).map((row): Push => ({ kind: "dev_push", row, at: row.live_at })),
-  ];
-}
-
-/**
- * Who put `name` on a target: of `pushes` (one target and repository), the one active last whose adds hold it.
- * `committed_in` is the earliest clean live deploy active after it whose diff ran (it recorded `drops`, even empty), kept
- * the name, and read prod at or after the adder's last push: that tree held the name, so by then it was in a commit. A
- * diff read before the adder's last push says nothing of it. A later push of either kind that dropped the name ends the
- * search. Pushes are read by when they were last active, so a dev push's add counts from its latest save, and a drop
- * made before the name was put back never ends the search.
- */
-export function adderOf(pushes: ReadonlyArray<Push>, name: string): { adder: Push; committed_in: Doc<"deploys"> | null } | null {
-  const byActivity = [...pushes].sort((a, b) => b.at - a.at || b.row._creationTime - a.row._creationTime);
-  const i = byActivity.findIndex((p) => p.row.adds?.includes(name));
-  if (i < 0) return null;
-  const adder = byActivity[i];
-  for (let j = i - 1; j >= 0; j--) {
-    const p = byActivity[j];
-    if (p.kind === "deploy" && p.row.status !== "live") continue;
-    if (p.row.drops?.includes(name)) break;
-    if (p.kind === "deploy" && !p.row.dirty && Array.isArray(p.row.drops) && p.row.changes_read_at != null && p.row.changes_read_at >= adder.at) {
-      return { adder, committed_in: p.row };
-    }
-  }
-  return { adder, committed_in: null };
-}
-
-/**
- * A dev push's adds and drops after one more save: the net change of all its saves against what prod ran before the
- * row began. A name the save adds that the row had dropped is back as it was (off drops), else the row added it; a
- * name the save drops that the row had added never existed before the row (off adds), else the row dropped it.
- */
-function netChange(row: Pick<Doc<"dev_pushes">, "adds" | "drops">, adds: ReadonlyArray<string>, drops: ReadonlyArray<string>): { adds: string[]; drops: string[] } {
-  const added = new Set(row.adds), dropped = new Set(row.drops);
-  for (const n of adds) if (!dropped.delete(n)) added.add(n);
-  for (const n of drops) if (!added.delete(n)) dropped.add(n);
-  return { adds: capNames([...added]), drops: capNames([...dropped]) };
-}
-
-/** The names of `next` that `before` did not hold: what a write newly recorded. */
-const newNames = (next: ReadonlyArray<string>, before: ReadonlyArray<string> | undefined) => {
-  const had = new Set(before ?? []);
-  return next.filter((n) => !had.has(n));
-};
-
-// ── the dev watcher's pushes ──────────────────────────────────────────────────
-
-export type DevPushMark = {
-  workspace: string;
-  team_id?: Id<"teams">;
-  target: string;
-  repository?: string;
-  sha: string;
-  machine?: string;
-  started_by?: StartedBy;
-  dirty?: number;
-  /** Names the save put on the target and took off it; both sent, possibly empty, exactly when its diff ran. */
-  adds?: string[];
-  drops?: string[];
-  at: number;
-};
-
-/**
- * Record a dev watcher's push: never a deploy (no deploys row, no event, no
- * trigger), a dev push. A save lands on its pusher's row of the same
- * repository, machine and sha that began after the target's live deploy went
- * live, and starts a row of its own otherwise: between deploys, one row per
- * pusher, machine and sha however many saves, and two people whose machines
- * share a hostname keep a row each. The row holds the net change of its saves
- * (netChange). What the save newly drops is told to whoever's uncommitted push
- * put it there (noticeDroppedWork). Returns the row, or null for a target no
- * user reaches.
- */
-export async function recordDevPush(ctx: any, m: DevPushMark): Promise<Id<"dev_pushes"> | null> {
-  const target = normalizeDeployTarget(m.target);
-  if (!target) return null;
-  const now = Date.now();
-  const repository = m.repository ? normalizeRepository(m.repository) : undefined;
-  const machine = m.machine?.trim().slice(0, NAME_MAX) || undefined;
-  const sha = m.sha.trim().toLowerCase();
-  const diffRan = Array.isArray(m.adds) || Array.isArray(m.drops);
-  const adds = capNames(m.adds);
-  const drops = capNames(m.drops);
-  const live = await latestLiveDeploy(ctx, m.workspace, target, repository);
-  const since = live ? live.live_at ?? live.created_at : null;
-  const mine: Doc<"dev_pushes">[] = await ctx.db
-    .query("dev_pushes")
-    .withIndex("by_workspace_target_machine_sha", (q: any) => {
-      const range = q.eq("workspace", m.workspace).eq("target", target).eq("machine", machine).eq("sha", sha);
-      return since == null ? range : range.gt("created_at", since);
-    })
-    .order("desc")
-    .take(20);
-  const own = mine.find((p) => (p.repository ?? null) === (repository ?? null) && samePusher(p.started_by, m.started_by));
-  const dropper = { workspace: m.workspace, target, repository, machine, deploy: null, on: live?.short_id ?? null };
-
-  if (own) {
-    // Another dev push saved since this row's last save put the target's names back as its tree has them: everything
-    // this save drops is dropped again.
-    const later = await targetDevPushes(ctx, m.workspace, target, 5, own.live_at);
-    const wasLast = !later.some((p) => String(p._id) !== String(own._id) && (!p.repository || !repository || p.repository === repository));
-    const next = diffRan ? netChange(own, adds, drops) : { adds: own.adds, drops: own.drops };
-    await ctx.db.patch(own._id, { ...next, dirty: m.dirty ?? 0, live_at: m.at, updated_at: now });
-    const dropped = !diffRan ? [] : wasLast ? newNames(next.drops, own.drops) : drops.filter((n) => next.drops.includes(n));
-    await scheduleDroppedWork(ctx, { ...dropper, exclude: String(own._id) }, dropped, m.started_by);
-    return own._id;
-  }
-  const id: Id<"dev_pushes"> = await ctx.db.insert("dev_pushes", {
-    workspace: m.workspace,
-    ...(m.team_id ? { team_id: m.team_id } : {}),
-    ...(repository ? { repository } : {}),
-    target,
-    sha,
-    ...(machine ? { machine } : {}),
-    ...(m.started_by ? { started_by: m.started_by } : {}),
-    dirty: m.dirty ?? 0,
-    adds,
-    drops,
-    created_at: m.at,
-    live_at: m.at,
-    updated_at: now,
-  });
-  await scheduleDroppedWork(ctx, { ...dropper, exclude: String(id) }, drops, m.started_by);
-  return id;
-}
-
-const OPEN: ReadonlySet<DeployStatus> = new Set(["requested", "running"]);
-
-/** A deploy a report or marker may still finish: an open one, or one closed only because a newer deploy went live. */
-const finishable = (d: Pick<Doc<"deploys">, "status" | "superseded_by">) => OPEN.has(d.status) || (d.status === "cancelled" && !!d.superseded_by);
-
-/** The words a superseded deploy is closed with. */
-export const supersededNote = (by: string) => `superseded by ${by}, never reported live`;
-
-/**
- * The open deploys of a live deploy's target asked for before it: a newer deploy went live, so they never will as
- * asked. Closed as cancelled, naming the deploy that superseded them (unless `dry`); returned either way.
- */
-export async function closeSuperseded(ctx: any, live: Doc<"deploys">, opts: { dry?: boolean; now?: number } = {}): Promise<Doc<"deploys">[]> {
-  if (live.status !== "live") return [];
-  const before: Doc<"deploys">[] = await ctx.db
-    .query("deploys")
-    .withIndex("by_workspace_target_created", (q: any) => q.eq("workspace", live.workspace).eq("target", live.target).lt("created_at", live.created_at))
-    .order("desc")
-    .take(200);
-  const stale = before.filter((d) => OPEN.has(d.status) && (!d.repository || !live.repository || d.repository === live.repository));
-  if (!opts.dry) {
-    const now = opts.now ?? Date.now();
-    for (const d of stale) {
-      await ctx.db.patch(d._id, { status: "cancelled", superseded_by: live.short_id, finished_at: now, updated_at: now, note: [supersededNote(live.short_id), d.note].filter(Boolean).join("\n") });
-    }
-  }
-  return stale;
-}
 
 /** Whether a deploy is in a project's scope: its own project, else its repository's projects, else (a workspace-wide source) every project. */
 function inScope(d: Pick<Doc<"deploys">, "project_id" | "repository">, projectId: string | null, repositories: ReadonlySet<string> | null): boolean {
@@ -539,18 +317,6 @@ export async function recordDeployMarker(ctx: any, m: DeployMarker): Promise<str
   return shortId;
 }
 
-/** The push whose drops are told: a deploy (`deploy`, dp-N) or a dev push (`deploy` null), and the row it is (`exclude`). */
-export type Dropper = {
-  workspace: string;
-  target: string;
-  repository?: string;
-  machine?: string;
-  deploy: string | null;
-  /** A dev push's target's live deploy (dp-N), which it runs on top of: where a phone opens the notice. */
-  on?: string | null;
-  exclude: string;
-};
-
 const startedByArg = v.object({
   kind: v.union(v.literal("person"), v.literal("role"), v.literal("line"), v.literal("source"), v.literal("cli")),
   name: v.string(),
@@ -575,99 +341,6 @@ export const tellDroppedWork = internalMutation({
   },
   handler: async (ctx, args) => noticeDroppedWork(ctx, args.dropper, args.names, args.by),
 });
-
-/**
- * Tell people a push dropped their work in a transaction of its own, after the push's: a throw or a read limit there
- * never loses the push's record.
- */
-async function scheduleDroppedWork(ctx: any, d: Dropper, names: ReadonlyArray<string>, by: StartedBy): Promise<void> {
-  if (!names.length) return;
-  const dropper = {
-    workspace: d.workspace,
-    target: d.target,
-    ...(d.repository ? { repository: d.repository } : {}),
-    ...(d.machine ? { machine: d.machine } : {}),
-    deploy: d.deploy,
-    ...(d.on !== undefined ? { on: d.on } : {}),
-    exclude: d.exclude,
-  };
-  await ctx.scheduler.runAfter(0, internal.deploys.tellDroppedWork, { dropper, names: [...names], ...(by ? { by } : {}) });
-}
-
-const deployDropper = (d: Doc<"deploys">): Dropper => ({ workspace: d.workspace, target: d.target, repository: d.repository, machine: d.machine, deploy: d.short_id, exclude: String(d._id) });
-
-/**
- * A push took names off its target: each person whose uncommitted push put one
- * there hears it. A name's adder is the latest other push of the target (and
- * repository), a deploy or a dev push, whose adds hold it (adderOf), counted
- * only when that push was a dev push or a dirty deploy and no clean deploy
- * whose diff read prod after it kept the name: what a commit holds and a later
- * push took off was the commits' decision, not lost work. `by` is who pushed
- * (not who asked for the deploy the push finished): they are not told about
- * their own, nobody outside the push's workspace is told, and a person this
- * pusher's drops reached in the last DROPPED_WORK_QUIET_MS is not told again
- * about the same pusher's drops of the same kind (a deploy's, a dev push's):
- * two watchers on different trees drop each other's work on every save.
- * Another pusher's drop is told, and so is a deploy's after a dev push's.
- */
-export async function noticeDroppedWork(ctx: any, d: Dropper, names: ReadonlyArray<string>, by: StartedBy): Promise<void> {
-  if (!names.length) return;
-  const pushes = (await targetPushes(ctx, d.workspace, d.target, d.repository ?? null)).filter((p) => String(p.row._id) !== d.exclude);
-  const self = by?.user_id ? String(by.user_id) : null;
-  const people = new Map<string, { user_id: Id<"users">; deploys: Set<string>; devPushes: Set<string>; names: string[] }>();
-  const member = new Map<string, boolean>();
-  for (const name of names) {
-    const found = adderOf(pushes, name);
-    if (!found || found.committed_in) continue;
-    const { adder } = found;
-    if (adder.kind === "deploy" && !((adder.row.dirty ?? 0) > 0)) continue;
-    const userId = adder.row.started_by?.user_id;
-    if (!userId || String(userId) === self) continue;
-    // Someone who has left the team that owns the push no longer reads its names.
-    if (!member.has(String(userId))) member.set(String(userId), await workspaceGrantsAccess(ctx, userId, d.workspace));
-    if (!member.get(String(userId))) continue;
-    const entry = people.get(String(userId)) ?? { user_id: userId, deploys: new Set<string>(), devPushes: new Set<string>(), names: [] };
-    if (adder.kind === "deploy") entry.deploys.add(adder.row.short_id);
-    else entry.devPushes.add(String(adder.row._id));
-    entry.names.push(name);
-    people.set(String(userId), entry);
-  }
-  const since = Date.now() - DROPPED_WORK_QUIET_MS;
-  const dropperName = d.deploy ?? `${by?.name ?? "Someone"}'s dev push${d.machine ? ` from ${d.machine}` : ""}`;
-  // A deploy's notice opens the deploy; a dev push has no page of its own, so its notice opens the Deploys page. The
-  // link is what tells a notice's kind of dropper apart.
-  const link = d.deploy ? `/deploys?deploy=${d.deploy}` : "/deploys";
-  const sameKind = (n: Doc<"notifications">) => (n.link === "/deploys") === !d.deploy;
-  for (const p of people.values()) {
-    const recent: Doc<"notifications">[] = await ctx.db
-      .query("notifications")
-      .withIndex("by_recipient_created", (q: any) => q.eq("recipient_user_id", p.user_id).gte("created_at", since))
-      .order("desc")
-      .take(DROPPED_WORK_QUIET_SCAN);
-    // The same pusher, by account, else by the name a pusher without one (a role, a source) is shown under.
-    const told = recent.some((n) => n.type === "deploy_dropped_work" && sameKind(n)
-      && (by?.user_id ? String(n.actor_user_id) === String(by.user_id) : n.actor_name === by?.name));
-    if (told) continue;
-    const n = p.names.length;
-    const shown = p.names.slice(0, 5).join(", ") + (n > 5 ? ` and ${n - 5} more` : "");
-    const deploys = [...p.deploys];
-    const yours = [
-      p.devPushes.size ? `dev push${p.devPushes.size === 1 ? "" : "es"}` : null,
-      deploys.length ? `uncommitted push${deploys.length === 1 ? "" : "es"} ${deploys.join(", ")}` : null,
-    ].filter(Boolean).join(" and ");
-    await emitNotification(ctx, {
-      event_type: "deploy_dropped_work",
-      ...(by?.user_id ? { actor_user_id: by.user_id } : {}),
-      ...(by?.name ? { actor_name: by.name } : {}),
-      // A dev push's notice names the deploy it ran on top of, for a reader (the phone) with no Deploys list.
-      entity_type: "deploy",
-      entity_id: d.deploy ?? d.on ?? "",
-      link,
-      message: `${dropperName} dropped ${n} thing${n === 1 ? "" : "s"} your ${yours} put on ${d.target}: ${shown}`,
-      recipient_ids: [p.user_id],
-    });
-  }
-}
 
 /**
  * A deploy that just went live or failed: a live one fills its range on main
@@ -1015,24 +688,6 @@ export const rewatchFromLive = internalMutation({
     return { deploy: d.short_id, live_at: d.live_at, dry: !!args.dry, moved };
   },
 });
-
-/** A deploy's url, with the Actions run it names stamped beside it. */
-export function urlFields(url: string): Pick<Doc<"deploys">, "url" | "workflow_run"> {
-  const run = actionsRunKey(url);
-  return { url, ...(run ? { workflow_run: run } : {}) };
-}
-
-/** The deploys an Actions run carried (one per target that runs it; normally one). */
-export async function deploysOfRun(ctx: any, run: string): Promise<Doc<"deploys">[]> {
-  return await ctx.db.query("deploys").withIndex("by_workflow_run", (q: any) => q.eq("workflow_run", run)).take(10);
-}
-
-/** A deploy by its dp-N or its id. */
-async function deployByRef(ctx: any, ref: string): Promise<Doc<"deploys"> | null> {
-  if (DEPLOY_SHORT_ID_RE.test(ref)) return await ctx.db.query("deploys").withIndex("by_short_id", (q: any) => q.eq("short_id", ref.toLowerCase())).first();
-  const id = ctx.db.normalizeId("deploys", ref);
-  return id ? await ctx.db.get(id) : null;
-}
 
 // ── reads ────────────────────────────────────────────────────────────────────
 
