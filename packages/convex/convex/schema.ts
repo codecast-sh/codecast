@@ -1419,7 +1419,7 @@ export default defineSchema({
     // A role started it on its own (spawn.recordHandStart: a hand, a line run's
     // sessions). With the role still filed and no person owner row, it is the
     // role's alone and in no person's inbox (shared isHeldByRoleAlone).
-    // `migrations:backfillRoleStarted` stamps sessions from before the field.
+    // `ownerMigrations:backfillRoleStarted` stamps sessions from before the field.
     role_started: v.optional(v.boolean()),
     // RETIRED (org-staffing.md S28): the escalation stamp `cast escalate` wrote.
     // Nothing reads or writes it. It stays in the schema only until

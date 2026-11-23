@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { backfillRoleStartedPage } from "./lib/roleStartedBackfill";
 
-// migrations:backfillRoleStarted: sessions a role started before
+// ownerMigrations:backfillRoleStarted: sessions a role started before
 // spawn.recordHandStart stamped `role_started` are stamped by the rule a new
 // spawn reads (shared actsForRole on the session that started it); a person's
 // own session filed under the role, and what it started, are left alone.

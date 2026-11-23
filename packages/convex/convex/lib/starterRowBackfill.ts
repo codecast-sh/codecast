@@ -1,4 +1,4 @@
-// One page of migrations:backfillMovedStarterRows (the comment there says
+// One page of ownerMigrations:backfillMovedStarterRows (the comment there says
 // what it writes and why).
 import { addSessionOwnerRow, rowlessStarterOf, syncPrimaryOwnerCache } from "../sessionOwners";
 

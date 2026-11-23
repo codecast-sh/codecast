@@ -1,4 +1,4 @@
-// One page of migrations:backfillBoundDriver (the comment there says what it
+// One page of ownerMigrations:backfillBoundDriver (the comment there says what it
 // stamps and why): one role's sessions held as bound, stamped by the rule
 // applyHoldChange writes for a new binding.
 import { listedOwnerIds } from "@codecast/shared/contracts/sessionOwners";

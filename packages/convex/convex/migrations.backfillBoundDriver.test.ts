@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { backfillBoundDriverPage } from "./lib/boundDriverBackfill";
 
-// migrations:backfillBoundDriver: a person's session a task binding filed
+// ownerMigrations:backfillBoundDriver: a person's session a task binding filed
 // under a role before driver_user_id existed gets its person as driver, the
 // rule applyHoldChange writes for a new binding.
 

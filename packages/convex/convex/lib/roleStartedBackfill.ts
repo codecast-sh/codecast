@@ -1,4 +1,4 @@
-// One page of migrations:backfillRoleStarted (the comment there says what it
+// One page of ownerMigrations:backfillRoleStarted (the comment there says what it
 // stamps and why): one role's sessions, judged by the shared actsForRole.
 import { actsForRole } from "@codecast/shared/contracts";
 import { ownerRowsOf, removeSessionOwnerRow, syncPrimaryOwnerCache } from "../sessionOwners";

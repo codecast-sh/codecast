@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { backfillMovedStarterRowsPage } from "./lib/starterRowBackfill";
 
-// migrations:backfillMovedStarterRows: a person's session that moved to
+// ownerMigrations:backfillMovedStarterRows: a person's session that moved to
 // another account before a move wrote the starter's row gets that row.
 
 const ME = "users_me";

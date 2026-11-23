@@ -635,6 +635,7 @@ import type * as orgUnplaced from "../orgUnplaced.js";
 import type * as orgWatch from "../orgWatch.js";
 import type * as orgWhere from "../orgWhere.js";
 import type * as ownerAttribution from "../ownerAttribution.js";
+import type * as ownerMigrations from "../ownerMigrations.js";
 import type * as pageData from "../pageData.js";
 import type * as pageState from "../pageState.js";
 import type * as pageStateSchema from "../pageStateSchema.js";
@@ -1458,6 +1459,7 @@ declare const fullApi: ApiFromModules<{
   orgWatch: typeof orgWatch;
   orgWhere: typeof orgWhere;
   ownerAttribution: typeof ownerAttribution;
+  ownerMigrations: typeof ownerMigrations;
   pageData: typeof pageData;
   pageState: typeof pageState;
   pageStateSchema: typeof pageStateSchema;

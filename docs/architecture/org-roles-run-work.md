@@ -47,7 +47,7 @@ run it started that no person owns (a retire, a visibility change that drops
 it, the role taken off), the person its reporting line ends at takes it, else
 the person whose account runs the role (`lib/roleRelease`). Owning a
 session never takes it away from the account that runs it.
-`migrations:backfillRoleStarted` stamps sessions from before the field.
+`ownerMigrations:backfillRoleStarted` stamps sessions from before the field.
 
 **Where it sits.** A session a person started that a task binding filed
 under a role (`sessionOwnership.applyHoldChange`, hold `bound`) has its role
