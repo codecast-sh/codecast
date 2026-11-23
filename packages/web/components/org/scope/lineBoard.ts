@@ -8,6 +8,7 @@ import type { TeamTaskStatus } from "@codecast/shared/tasks";
 import { stationOrder } from "../../../lib/taskLine";
 import { taskStatusKey } from "../../../lib/taskStatuses";
 import { DEFAULT_LINE_SLUG, DEFAULT_STEPS_LABEL } from "@codecast/shared/contracts/lineSlug";
+import { retiredFlowLine } from "@codecast/shared/contracts/flowPool";
 
 export type LineTaskLike = {
   _id: string;
@@ -63,11 +64,13 @@ export type LineOption = { slug: string; label: string; shipped: boolean };
 
 /** The picker's rows: the shipped templates, then the caller's own workflows
  *  by slug (an own workflow with a shipped slug wins, since the sweep runs the
- *  pushed row first, L9). A current slug nothing lists stays selectable so
- *  the picker never shows a value it cannot name. */
+ *  pushed row first, L9). A retired flow's stored row is never offered (the
+ *  server refuses it); a role still on one shows it as retired, since nothing
+ *  starts for it. A current slug nothing lists stays selectable so the picker
+ *  never shows a value it cannot name. */
 export function lineOptions(workflows: Array<{ slug: string; name?: string }>, current: string): LineOption[] {
   const own = new Map<string, string>();
-  for (const w of workflows) if (w.slug && !own.has(w.slug)) own.set(w.slug, w.name || w.slug);
+  for (const w of workflows) if (w.slug && !own.has(w.slug) && !retiredFlowLine(w.slug)) own.set(w.slug, w.name || w.slug);
   const out: LineOption[] = [];
   for (const t of SHIPPED_LINE_TEMPLATES) {
     const mine = own.get(t.slug);
@@ -75,6 +78,6 @@ export function lineOptions(workflows: Array<{ slug: string; name?: string }>, c
     own.delete(t.slug);
   }
   for (const [slug, name] of own) out.push({ slug, label: name === slug ? slug : `${name} (${slug})`, shipped: false });
-  if (current && !out.some((o) => o.slug === current)) out.push({ slug: current, label: `${current} (not found)`, shipped: false });
+  if (current && !out.some((o) => o.slug === current)) out.push({ slug: current, label: `${current} (${retiredFlowLine(current) ? "retired: starts nothing" : "not found"})`, shipped: false });
   return out;
 }

@@ -47,4 +47,9 @@ describe("lineOptions", () => {
     const rows = lineOptions([], "custom-line");
     expect(rows.at(-1)).toEqual({ slug: "custom-line", label: "custom-line (not found)", shipped: false });
   });
+  test("a retired flow's stored row is never offered; a role still on one reads as retired", () => {
+    const quick = { slug: "quick-change", name: "Quick" };
+    expect(lineOptions([quick], "line").map((r) => r.slug)).toEqual(["line", "feature", "plan-autopilot"]);
+    expect(lineOptions([quick], "quick-change").at(-1)).toEqual({ slug: "quick-change", label: "quick-change (retired: starts nothing)", shipped: false });
+  });
 });
