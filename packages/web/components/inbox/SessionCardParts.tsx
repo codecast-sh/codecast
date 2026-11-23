@@ -5,7 +5,7 @@ import { Tag, UserCheck, CheckSquare, Square } from "lucide-react";
 import { formatRelative, formatDateFull } from "../../lib/utils";
 import { sessionCardTitle } from "../../lib/sessionCard";
 import { sessionStartupState } from "../../lib/sessionLifecycle";
-import { isHostedAgentType } from "@codecast/shared/contracts";
+import { isClosedSession, isHostedAgentType } from "@codecast/shared/contracts";
 import { cleanTitle } from "../../lib/conversationProcessor";
 import type { InboxSession } from "../../store/inboxStore";
 import { AuthErrorBadge } from "../AuthErrorBadge";
@@ -402,9 +402,9 @@ export function CardRestoreCluster({
   return (
         <div className="absolute top-1.5 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity z-[4]">
           {onKill && (
-            <ShortcutTooltip label={isStashed ? "Kill" : "Remove from list"} side="left">
+            <ShortcutTooltip label={isStashed || isClosedSession(session) ? "Kill" : "Remove from list"} side="left">
               <button
-                aria-label={isStashed ? "Kill" : "Remove from list"}
+                aria-label={isStashed || isClosedSession(session) ? "Kill" : "Remove from list"}
                 onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
                 className="p-1 rounded-md text-sol-text-dim hover:text-sol-red bg-sol-bg/95 shadow-sm border border-sol-border/30"
               >

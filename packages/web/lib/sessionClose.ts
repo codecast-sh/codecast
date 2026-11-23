@@ -7,7 +7,7 @@
 // rows the client holds; the server gathers the same facts from its database
 // (convex lib/closeAside) and asks the same function. Imports by relative path
 // only: the phone bundles this file (Metro maps `@/` to the mobile package).
-import { closeInFlightReason, isLoopFresh, type InFlightFacts, type InFlightReason, type LoopState } from "@codecast/shared/contracts";
+import { closeInFlightReason, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts, type InFlightReason, type LoopState } from "@codecast/shared/contracts";
 import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { sessionLiveAt } from "./liveness";
 
@@ -23,9 +23,10 @@ export type CloseFacts = {
   waitingOnRun: boolean;
 };
 
-export type CloseKind = "aside" | "keeps_loop" | "keeps_limit" | "keeps_triggers" | "waits_on_run" | "clears";
+export type CloseKind = "aside" | "keeps_background" | "keeps_loop" | "keeps_limit" | "keeps_triggers" | "waits_on_run" | "clears";
 
 export function closeKindOf(f: CloseFacts): CloseKind {
+  if (f.inFlight === "background") return "keeps_background";
   if (f.inFlight === "loop") return "keeps_loop";
   if (f.inFlight === "limit") return "keeps_limit";
   if (f.inFlight) return "aside";
@@ -40,6 +41,7 @@ export const closeSetsAside = (f: CloseFacts) => f.inFlight !== null;
 export function closeTooltip(f: CloseFacts): string {
   switch (closeKindOf(f)) {
     case "aside": return "Close: hides it, lets it finish";
+    case "keeps_background": return "Close: hides it, lets its background work finish";
     case "keeps_loop": return "Close: hides it, keeps its loop running";
     case "keeps_limit": return "Close: hides it, picks up when its limit resets";
     case "keeps_triggers":
@@ -81,6 +83,7 @@ export function inFlightFactsOfRow(row: CloseRow, now: number, pendingSend = fal
     inProcessRun: runLiveOf(row) && row.workflow_run_kind === "workflow",
     turnLive: sessionLiveAt(row, now),
     awaitingInput: !!row.awaiting_input,
+    openBackgroundWork: openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, rowHeartbeatAliveAt(row, now)),
     // The pre-close row: a close is the dismissal isBlockedConversation would exclude.
     limitParked: isBlockedConversation({
       pending_api_error: row.pending_api_error === true,

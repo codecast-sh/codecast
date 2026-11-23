@@ -3,7 +3,7 @@
 // server's own read of the row, so a close the client guessed wrong never cuts
 // a turn off or drops a wake. Both sides only gather facts and ask the shared
 // closeInFlightReason. Pure reads, no writes.
-import { closeInFlightReason, deriveLiveAt, HEARTBEAT_ALIVE_MS, isLoopFresh, isOrphanOrSubagent, type InFlightFacts } from "@codecast/shared/contracts";
+import { closeInFlightReason, deriveLiveAt, HEARTBEAT_ALIVE_MS, isClosedSession, isLoopFresh, isOrphanOrSubagent, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts } from "@codecast/shared/contracts";
 import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "../ccAccountsShared";
 
 // The nested group a hide of `lead` takes down with it (cleanup.ts
@@ -41,8 +41,10 @@ export function cascadeTakesDown(
   if (field === "inbox_stashed_at" && isOrphanOrSubagent(child)) return false;
   // A quiet re-assert never re-kills.
   if (child[field] && !opts?.forceKill) return false;
-  // A close leaves a killed member alone: it is retired, nothing of it wakes.
+  // A close leaves a killed member alone (it is retired, nothing of it wakes),
+  // and a closed one with nothing queued (already stopped, its wakes kept).
   if (opts?.close && child.inbox_killed_at) return false;
+  if (opts?.close && isClosedSession(child) && !child.has_pending_messages) return false;
   return true;
 }
 
@@ -97,6 +99,7 @@ export async function inFlightFactsOnServer(ctx: { db: any }, conv: any, now: nu
   }
   let turnLive = false;
   let awaitingInput = false;
+  let openBackgroundWork = false;
   const managed = conv.message_count
     ? await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id)).first()
     : null;
@@ -117,6 +120,7 @@ export async function inFlightFactsOnServer(ctx: { db: any }, conv: any, now: nu
       open_tasks_at: managed.open_tasks_at ?? null,
     }, now);
     turnLive = !live.is_idle;
+    openBackgroundWork = openTasksVouchForWaiting(managed.open_tasks_at, managed.open_tasks?.length ?? 0, rowHeartbeatAliveAt(managed, now));
     awaitingInput = live.awaiting_input || managed.agent_status === "permission_blocked";
     if (!turnLive && !awaitingInput) {
       const newest = await ctx.db
@@ -127,5 +131,5 @@ export async function inFlightFactsOnServer(ctx: { db: any }, conv: any, now: nu
       awaitingInput = !!newest && newest.role === "assistant" && !!newest.tool_calls?.some((tc: any) => tc.name === "AskUserQuestion");
     }
   }
-  return { queued, loopFresh, inProcessRun, turnLive, awaitingInput, limitParked };
+  return { queued, loopFresh, inProcessRun, turnLive, awaitingInput, limitParked, openBackgroundWork };
 }

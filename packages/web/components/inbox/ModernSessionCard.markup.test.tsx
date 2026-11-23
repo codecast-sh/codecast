@@ -178,6 +178,9 @@ describe("the Modern session card", () => {
     expect(stashed.slice(stashed.indexOf("data-mc-tools")).match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Restore"', 'aria-label="Kill"']);
     const closed = render({ _id: "c-closed" }, { variant: "dismissed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined });
     expect(closed.slice(closed.indexOf("data-mc-tools")).match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Restore"', 'aria-label="Remove from list"']);
+    // A row the person closed (not killed) has a Kill there: its X retires it.
+    const realClose = render({ _id: "c-close2", inbox_dismissed_at: 5, inbox_closed_at: 5 } as any, { variant: "dismissed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined });
+    expect(realClose.slice(realClose.indexOf("data-mc-tools")).match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Restore"', 'aria-label="Kill"']);
   });
 
   test("the third line: project, branch or PR, task, links, author, comments; none when there is nothing", () => {

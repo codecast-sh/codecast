@@ -4,7 +4,7 @@ import { SessionTaskChip } from "../work/SessionTaskChip";
 import { Pin, Star, Clock, EyeOff, Workflow } from "lucide-react";
 import { runHref } from "../../lib/decisionLinks";
 import Link from "next/link";
-import { withSafetyBlock, isStashHidden, type UserRest } from "@codecast/shared/contracts";
+import { withSafetyBlock, isClosedSession, isStashHidden, type UserRest } from "@codecast/shared/contracts";
 import { NOTICE_DOT, NOTICE_ROW_WORD } from "../../lib/hostedNotice";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatIdleDuration, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
@@ -372,8 +372,8 @@ export function SessionCardView({
           <div className="absolute top-1 right-1.5 flex items-center gap-0.5 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
             {onKill && (
               <button
-                aria-label={isStashed ? "Kill" : "Remove from list"}
-                title={isStashed ? "Kill" : "Remove from list"}
+                aria-label={isStashed || isClosedSession(session) ? "Kill" : "Remove from list"}
+                title={isStashed || isClosedSession(session) ? "Kill" : "Remove from list"}
                 onClick={(e) => { e.stopPropagation(); onKill(session._id); }}
                 className="p-0.5 rounded text-sol-text-dim hover:text-sol-red transition-colors"
               >

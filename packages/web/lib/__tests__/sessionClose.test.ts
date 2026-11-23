@@ -1,4 +1,5 @@
 import { describe, expect, test } from "bun:test";
+import { IN_FLIGHT_FACT_KEYS } from "@codecast/shared/contracts";
 import { closeFactsOf, closeKindOf, closeSetsAside, closeTooltip, inFlightFactsOfRow, nestedInFlightOf, type CloseFacts } from "../sessionClose";
 
 const NOW = 1_800_000_000_000;
@@ -101,7 +102,17 @@ describe("the facts of a row", () => {
     expect(closeFactsOf({ ...flow, is_workflow_sub: true }, 0, NOW).waitingOnRun).toBe(false);
   });
 
-  test("inFlightFactsOfRow is the whole fact set, nothing more", () => {
-    expect(Object.keys(inFlightFactsOfRow(settled, NOW)).sort()).toEqual(["awaitingInput", "inProcessRun", "limitParked", "loopFresh", "queued", "turnLive"]);
+  test("inFlightFactsOfRow fills the whole shared fact set, nothing more", () => {
+    expect(Object.keys(inFlightFactsOfRow(settled, NOW)).sort()).toEqual([...IN_FLIGHT_FACT_KEYS].sort());
+  });
+
+  test("open background work its daemon still vouches for is a wake: Close sets it aside", () => {
+    const bg = { ...settled, agent_status: "waiting", open_tasks: [{ id: "b1", kind: "background", command: "bun run build" }], open_tasks_at: NOW - 30_000 };
+    const f = closeFactsOf(bg, 0, NOW);
+    expect(f.inFlight).toBe("background");
+    expect(closeTooltip(f)).toBe("Close: hides it, lets its background work finish");
+    // A report its daemon no longer heartbeats for vouches for nothing.
+    expect(closeFactsOf({ ...bg, last_heartbeat: NOW - 3_600_000 }, 0, NOW).inFlight).toBeNull();
+    expect(nestedInFlightOf([{ ...bg, parent_conversation_id: "lead" }] as any, "lead", NOW)).toBe(true);
   });
 });
