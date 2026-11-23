@@ -10,6 +10,11 @@
  * Each platform draws the rows and supplies what differs: the machines a
  * leave can move to, presence, keyboard focus.
  *
+ * The highlight is the model's too: one ring of the owners, then the
+ * candidates, with nothing highlighted on open and the first match while
+ * searching. `activate` is what Enter does on it: a candidate is added, and
+ * with `asDriver` (Shift+Enter) the row becomes the driver.
+ *
  * MOBILE-SAFE like useOwners: bundled into the Expo app, so no DOM here.
  */
 
@@ -27,7 +32,8 @@ export type OwnerPerson = { _id: string; name: string; image?: string };
 export type OwnerCandidate = { key: string; kind: "person"; person: OwnerPerson } | { key: string; kind: "role"; role: OrgRole };
 
 /** One current owner as the menu lists it. `onRemove` null: it cannot go
- *  (the sole owner of an agent-run session); `makeDriver` null: it drives. */
+ *  (the sole owner of an agent-run session), and `refusal` says why when its
+ *  remove is pressed (`refuse`); `makeDriver` null: it drives. */
 export type OwnerMenuRow = {
   key: string;
   person?: OwnerPerson;
@@ -39,6 +45,7 @@ export type OwnerMenuRow = {
   mine: boolean;
   onRemove: (() => void) | null;
   removeLabel: string;
+  refusal: string | null;
   makeDriver: SessionDriver | null;
 };
 
@@ -78,7 +85,11 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
   const initial = edit?.initial ?? live;
   const draft = edit?.draft ?? live;
   const setDraft = (f: (d: OwnersDraft) => OwnersDraft) => setEdit((e) => ({ initial: e?.initial ?? live, draft: f(e?.draft ?? live) }));
-  const [query, setQuery] = useState("");
+  const [query, setQueryRaw] = useState("");
+  // The highlighted row of the ring (owners, then candidates); -1 is none.
+  const [hi, setHi] = useState(-1);
+  // Why the last pressed remove was refused, until the next add.
+  const [notice, setNotice] = useState<string | null>(null);
   const [moreRoles, setMoreRoles] = useState(false);
   // The machines a leave from your own account can move it to are showing.
   const [leaving, setLeaving] = useState(false);
@@ -111,7 +122,10 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
     ...teammates.map((m) => ({ key: `p:${m._id}`, kind: "person" as const, person: personOf(m._id) })),
   ];
 
-  const add = (c: OwnerCandidate, drive = false) => setDraft((d) => (c.kind === "role" ? addRole(d, roleOwnerOf(c.role)) : addPerson(d, c.person._id, drive)));
+  const add = (c: OwnerCandidate, drive = false) => {
+    setNotice(null);
+    setDraft((d) => (c.kind === "role" ? addRole(d, roleOwnerOf(c.role)) : addPerson(d, c.person._id, drive)));
+  };
   const makeDriver = (driver: SessionDriver) => setDraft((d) => ({ ...d, driver }));
   const selectAllTeammates = () => setDraft((d) => addPeople(d, unselected.map((m) => m._id)));
   const leaveTo = (moveTo: MoveTo) => {
@@ -164,6 +178,7 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
       // Leaving a session on your own account first picks a machine to move it to.
       onRemove: mine && soleOwner ? null : mine && runsOnMine && !draft.moveTo ? () => setLeaving((v) => !v) : () => setDraft((d) => removePerson(d, id)),
       removeLabel: mine ? (soleOwner ? "You are its only owner: add someone before you leave" : "Leave") : `Remove ${p.name}`,
+      refusal: mine && soleOwner ? "Add an owner before you leave" : null,
       makeDriver: drives ? null : { kind: "user", user_id: id },
     };
   });
@@ -173,7 +188,7 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
       key: `r:${draft.role.role_id}`, role: draft.role, name: draft.role.name,
       sub: [drives ? "Driver" : "Paused", roleChanged ? "new" : null].filter(Boolean).join(" · "),
       drives, paused: !drives, mine: false,
-      onRemove: () => setDraft(removeRole), removeLabel: `Remove ${draft.role.name}`,
+      onRemove: () => setDraft(removeRole), removeLabel: `Remove ${draft.role.name}`, refusal: null,
       makeDriver: drives ? null : { kind: "role", role_id: draft.role.role_id },
     });
   }
@@ -190,8 +205,33 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
     return false;
   };
 
+  // The keyboard's ring: the owners as listed, then the candidates.
+  const ring = rows.length + candidates.length;
+  const highlighted = hi < ring ? hi : ring - 1;
+  const move = (step: 1 | -1) => {
+    if (ring) setHi((h) => (step > 0 ? (Math.min(h, ring - 1) + 1) % ring : (Math.max(h, 0) - 1 + ring) % ring));
+  };
+  /** Enter on the highlighted row: add a candidate (as driver with
+   *  `asDriver`), or with `asDriver` make an owner the driver. */
+  const activate = (asDriver: boolean) => {
+    if (highlighted < 0) return false;
+    if (highlighted < rows.length) {
+      const target = asDriver && !readOnly ? rows[highlighted].makeDriver : null;
+      if (target) makeDriver(target);
+      return !!target;
+    }
+    add(candidates[highlighted - rows.length], asDriver);
+    return true;
+  };
+  // Typing highlights the first match; clearing the search highlights nothing.
+  const setQuery = (text: string) => {
+    setQueryRaw(text);
+    setHi(text.trim() ? rows.length : -1);
+  };
+  const refuse = (row: OwnerMenuRow) => setNotice(row.refusal);
+
   return {
-    meId, runsOnMine, draft, initial, rows, readOnly, soleOwner, isStandingThread,
+    meId, runsOnMine, highlighted, setHighlighted: setHi, move, activate, notice, refuse, draft, initial, rows, readOnly, soleOwner, isStandingThread,
     query, setQuery, q, moreRoles, setMoreRoles, leaving, setLeaving,
     reasonOf, shownRoles, restRoles, unselected, teammates, candidates,
     add, makeDriver, selectAllTeammates, leaveTo, canTakeOwnership, takeOwnership,

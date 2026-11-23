@@ -117,3 +117,11 @@ export function teamMoveTargets<B extends { device_id: string; is_remote?: boole
   const mine = new Set(own.map((d) => d.device_id));
   return (boxes ?? []).filter((b) => !mine.has(b.device_id) && !b.is_remote).map((b) => ({ ...b, local_project_roots: b.local_project_roots ?? [] }));
 }
+
+/** A machine a leave moves to, named by whose it is: "<First>'s <machine>",
+ *  unless its name already says so. Leaving puts the session on that account. */
+export function machineOf(ownerName: string | null | undefined, device: string): string {
+  const first = ownerName?.split(/\s+/)[0];
+  if (!first || device.toLowerCase().startsWith(first.toLowerCase())) return device;
+  return `${first}'s ${device}`;
+}

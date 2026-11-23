@@ -12,7 +12,8 @@ import { useInboxStore } from "../../store/inboxStore";
 import { closeDomWindow } from "../../test-helpers/domGlobals";
 import { offlineConvexClient } from "../../test-helpers/offlineConvex";
 import { useOwnersFromStore } from "../OwnersBadge";
-import { OwnersSegment, machineOf } from "../OwnersMenu";
+import { OwnersSegment } from "../OwnersMenu";
+import { machineOf } from "../../lib/ownersDraft";
 
 // The owners menu by keyboard and by touch (round 1 web findings 1-3, 8, 10,
 // 12): nothing is highlighted on open; the arrows walk the owners and then
