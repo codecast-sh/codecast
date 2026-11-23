@@ -753,7 +753,7 @@ the route it took, red only where it stopped.
   repository's flow that replaces a library one adds the repository's name,
   "Change · union-mobile"), whether a person approves before it lands, read
   from the graph ("Asks you every time", "Asks you if it edits CI" when a person is asked
-  only on a side route, its words that route's label, "No approval"), and its stages. The
+  only on a side route, worded from that route's label, "No approval"), and its stages. The
   confirm after it says the same: a question every run, "Only if it edits CI", or none. The stages are the
   journey's: the stations a passing run takes, never one only a failure
   reaches (a later deploy after a failed one), and a station marked

@@ -247,7 +247,7 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
       </div>
       <footer className="shp-foot">
         <span className="shp-flowname">{pool.length > 1 ? null : <>{flow.label}{flow === fallback ? <span className="shp-default">Default</span> : null}</>}</span>
-        <button type="button" className="sj-btn" data-primary onClick={() => onRun(flow)} aria-label={pool.length > 1 ? (flow.label === "Ship" ? "Ship this change" : `Ship with ${flow.label}`) : undefined} data-run-through-go={flow.slug}>Ship</button>
+        <button type="button" className="sj-btn" data-primary onClick={() => onRun(flow)} aria-label={pool.length > 1 ? (flow.label === "Ship" ? "Ship this change" : `Ship through ${flow.label}`) : undefined} data-run-through-go={flow.slug}>Ship</button>
       </footer>
     </div>
   );

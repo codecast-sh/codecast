@@ -281,7 +281,7 @@ describe("the shipped change flow", () => {
     expect(ciCall).toContain("--run run-9 --node ci");
     expect(ciCall).toContain(`--head ${pushed}`);
     expect(s.briefs()).toEqual([]);
-    expect(s.sent().at(-1).body).toContain("The Change run on ct-9 is over: Live.");
+    expect(s.sent().at(-1).body).toContain("The Ship run on ct-9 is over: Live.");
   }, 120_000);
 
   test("red CI goes back to the session as one brief with each failure's file, line and excerpt; the fix goes up as the PR again", async () => {
