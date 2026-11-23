@@ -66,7 +66,9 @@ Two settings decide how much it does without you:
 
 ## What you see in the inbox
 
-A role gets one card in your inbox, with a **sessions** pill for the sessions working under it. Those sessions sit under the role (hover one: *Reports to @handle*), not in your inbox one by one, so twenty sessions on growth don't become twenty cards.
+A role is one of a session's owners, beside the people, and every session keeps its own card. A session its role drives that is waiting on input stays under **Working**, with **With** and the role's name where its status goes: the role reads it first, so it doesn't count as needing you and doesn't ring your phone. A session a role started on its own is the role's alone and stays out of your inbox until you add yourself in its owners menu.
+
+Sending into a session its role drives makes you the driver, and the role pauses until someone hands it back. The composer says so before you send and offers **Tell** the role instead. **Make driver** on the role in the session's owners menu hands it back.
 
 A question travels up the line. A session asks its role; a role that can't answer asks whoever it reports to. When it reaches you, it arrives as one card from the lead that needs you, with the question pinned at the top of its conversation.
 
@@ -90,4 +92,4 @@ The iPhone app has the same org, opened as **Org** from the slide-out panel. It 
 | A role isn't starting anything | Check **Starts work on its own** in its **Settings**, and whether it is paused |
 | A role went quiet partway through the day | It reached one of its **Limits**. Raise it, or let it pick up tomorrow |
 | Work in a project isn't reaching its role | Check the role's **Area** includes that project, in its **Settings** |
-| Too many sessions in your inbox | Give the work a role: sessions in a role's area sit under its card |
+| Too many sessions in your inbox | Give the work a role: what it starts on its own stays out of your inbox, and what it drives waits on it, not on you |

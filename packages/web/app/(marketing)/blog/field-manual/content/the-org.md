@@ -64,8 +64,10 @@ Once leads exist, every piece of work has exactly one owner. A role that names t
 
 A session lands under a role for one of two reasons and no others:
 
-1. **Bound.** It is working a task or plan the role owns. Starting that work moves it under the lead and tells it so.
-2. **Filed.** A person or a role put it there: you dragged its card on the chart, used its ownership menu, or the role started it as a hand.
+1. **Bound.** It is working a task or plan the role owns. Starting that work moves it under the lead and tells it so. A session of yours that is bound this way stays yours to drive: it waits on you like any of your sessions.
+2. **Filed.** A person or a role put it there: you dragged its card on the chart, added the role in its owners menu, or the role started it as a hand. The role drives it.
+
+Either way the role becomes one of the session's owners, beside any people who own it, and the session keeps its own card in the inbox.
 
 The folder a session runs in decides nothing. That rule came from a real failure: when folders implied ownership, every unrelated session in a shared repo landed under one lead, which then burned its daily limit three days in a week reading work that was never its. Whenever a session moves, it gets one line telling it whom it now reports to.
 

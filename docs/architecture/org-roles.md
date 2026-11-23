@@ -19,8 +19,9 @@ seat's `anchors` row, org-roles-standing.md T1).
 
 Every session already reports to a person through `session_owners`. This slice
 adds one optional pointer, `conversations.org_role_id`, meaning "this session
-reports to this role". A session with the pointer still has its owners; the
-role sits between the session and the person in the tree.
+reports to this role". The role is one of the session's owners, beside the
+people, and one owner drives (org-roles-run-work.md R1); on the chart the role
+sits between the session and the person.
 
 ## S2. Table `org_roles`
 
@@ -173,14 +174,18 @@ orgRoles.retire({ role_id, standing_session?: "keep" | "retire" })
    moves child roles and open tasks up to the retired role's parent, and keeps
    or retires the standing session.
 orgRoles.reparentSession({ conversation_id, target, note?, from_session? })
-   target: { kind: "user"; user_id } | { kind: "user"; owners: string[]; mode: "set" | "add" | "remove" } | { kind: "role"; role_id }
-   user target: the ownership gesture (the same core `cast own`, `cast disown` and
-   the owners picker call): the owner rows change, the session reports to the
-   person the act named (`add` re-homes under the added person), and org_role_id
-   is cleared. A `remove` leaves the reporting line to whoever remains.
-   role target: set org_role_id; owners unchanged. The caller must be an owner of
-   the conversation (a person target: the ownership rule, any teammate who can
-   see it) or able to reshape the target role.
+   target: { kind: "user"; user_id } | { kind: "user"; owners: string[]; mode: "set" | "add" | "remove" } | { kind: "role"; role_id: string | null }
+   The one reparent core (sessionOwnership.performReparentSession), which the
+   owners menu and `cast own`/`cast disown` also call.
+   owners target: the owner rows change and the role stays (a role is an owner
+   beside the people); `add` makes the added person the primary owner but never
+   the driver. A bare `user_id` (a chart drop on a person) re-homes the session
+   under that person and takes the role off. A `remove` leaves the reporting
+   line to whoever remains.
+   role target: set org_role_id, replacing any role, and clear driver_user_id
+   so the role drives; `null` takes the role off. The caller must be an owner
+   of the conversation (a person target: the ownership rule, any teammate who
+   can see it) or able to reshape the target role.
    Every move that changes the reporting line tells the session once
    ("You now report to <name>. <note>", org-staffing.md S11) and returns
    `told: { sessions, roles }`.

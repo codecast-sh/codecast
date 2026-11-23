@@ -1,6 +1,6 @@
 ---
 name: cast-pass
-description: Hand this session to a teammate so it lands in their inbox with everything they need. Pins where the work stands and what is next, adds them as an owner, and sends them the brief. Use when work should continue under someone else, when a decision is theirs, or when asked to pass, hand over, or assign a session.
+description: Hand this session to a teammate so it lands in their inbox with everything they need. Pins where the work stands and what is next, adds them as an owner who drives, and sends them the brief. Use when work should continue under someone else, when a decision is theirs, or when asked to pass, hand over, or assign a session.
 argument-hint: "<member> [note]"
 ---
 
@@ -17,14 +17,18 @@ id in the pin.
 
 ## Own
 
+Passing is adding them as an owner and making them the driver, the one
+owner the agent works for:
+
 ```bash
-cast own <member>            # adds them; the session sits in both inboxes
-cast own <session> <member>  # a different session of yours
+cast own <member> --drive <member>            # this session
+cast own <session> <member> --drive <member>  # a different session of yours
 ```
 
-They get a notification, and the session surfaces under Needs You in
-their inbox with your name on it. Use `cast disown` on yourself only if the
-work is entirely theirs now.
+They get a notification and the session sits in their inbox. You stay an
+owner, and it stays in your inbox while it runs on your account. If the work
+is entirely theirs now, leave it: `cast disown --move-to <machine>` moves a
+session on your account to a teammate's or a team machine as you go.
 
 ## Brief
 

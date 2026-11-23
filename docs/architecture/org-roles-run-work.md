@@ -60,6 +60,45 @@ needs input and its settle rings nobody (`under_role`). A paused role changes
 nothing: the person drives, and the session files and rings like any other
 (`roleDrives`, `placeInboxRow`, projection version 29).
 
+**Who drives, and how it changes hands.** Adding a person never moves the
+wheel to them (`pinnedDriverAfterAdd`); filing a role makes the role drive.
+A person who owns the session and sends into it while the role or another
+person drives becomes the driver, and a role it takes over from is paused.
+The composer says so before the send ("Sending takes over from <role>") and
+offers **Tell <role>**, which writes to the role's own session and changes
+nothing. A paused role's own session that writes into the session is refused
+with who drives and how to reach them. **Make driver** on any owner in the
+owners menu hands the wheel on, the role included (`setSessionDriver`).
+Handing a session to a teammate is adding them and making them driver
+(`cast own <session> <person> --drive <person>`). There is no team owner:
+**Select all teammates** in the owners menu gives each teammate an ordinary
+owner row on Save, never the wheel.
+
+**Leaving.** Taking yourself out is a leave, whichever door it comes by (the
+owners menu, the phone, `cast disown`). A session that runs on your account
+moves first, in the same transaction, to a teammate's or a team machine
+(**Move and leave**, `cast disown --move-to <machine>`). When nobody else
+owns it, the person whose account now runs it takes a row; an agent account
+cannot, so that leave is refused.
+
+**Where the rule lives.**
+- `shared/contracts/sessionOwners.ts`: the owners and driver as one pure
+  model (`listedOwnerIds`, `driverOf`, `pinnedDriverAfterAdd`,
+  `applyOwnersChangeTo`, the leave check). The convex mutations and the web
+  store's `applySessionOwners` run it, so a Save paints what the server will
+  answer (`sessionOwnership.parity.test.ts`).
+- `shared/contracts/inboxProjection.ts`: `roleDrives`, `startedByRole`,
+  `isHeldByRoleAlone` and `actsForRole`, which inbox membership and
+  placement read.
+- `convex/sessionOwnership.ts`: the reparent core and the mutations
+  (`applyOwnersChange`, `setSessionDriver`, `leaveSession`, `listOwners`,
+  `applyHoldChange`); `convex/lib/sessionOwnerRules.ts` resolves owner refs
+  and keeps the leave rules.
+- Take-over: `pendingMessages` enqueue; the paused role's refusal:
+  `performSessionSend`.
+- Fields: `session_owners` rows, and on `conversations` `org_role_id`,
+  `org_role_hold`, `driver_user_id` and `role_started`.
+
 **Taking over a scope takes over its sessions.** When a role gains scope (a
 role change with projects, a scope change, an adopt, or a person's edit in
 Settings), the sessions in that scope that report to the host and to no role

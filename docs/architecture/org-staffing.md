@@ -409,12 +409,14 @@ wakes.
 
 ## S11. Reporting line edits are one gesture, everywhere
 
-The session ownership menu (take ownership, add an owner, run on a device) is
-the same act as dragging a session on the org chart: it changes who the
-session reports to. One core (`orgRoles.performReparentSession`) serves both
-the org page and the ownership menu; adding an owner re-homes the session
-under that person on the chart and clears its role pointer; choosing a role
-files it under the role. Every reparent, of a session or a role, tells the
+The session's owners menu (people, at most one role, and which owner drives;
+org-roles-run-work.md R1) is the same act as dragging a session on the org
+chart: it changes who the session reports to. One core
+(`sessionOwnership.performReparentSession`) serves the org page, the owners
+menu and `cast own`/`cast disown`. Adding a person keeps the role; choosing a
+role files the session under it, replacing any other, and the role drives; a
+drop on a person on the chart re-homes it under that person and takes the
+role off. Every reparent, of a session or a role, tells the
 agent: a session receives one message ("You now report to <name>. <note>"),
 a role receives an immediate wake with the same line, and its hands get a
 passive fact. The web shows one toast that says both things ("jx7abc now

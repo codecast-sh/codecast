@@ -104,19 +104,24 @@ The right-click menu also carries a few session-level actions that are not triag
 
 ![The command palette with the query 'webhook retry': three session results by Alex Rivera with match counts and dates, and a Done task ct-4182 below](/blog/field-manual/inbox-palette.webp "The palette searches the transcripts behind every session and the tasks they produced, in one list.")
 
-## Assignment decides whose inbox a session is in
+## Owners decide whose inbox a session is in
 
-Three things about a session move independently: whose *account* runs it, which *machine* it runs on, and who *owns* it. Ownership is the one that decides inboxes. A session you run but do not own leaves your inbox, takes its open questions with it, and stops ringing your phone. An unowned session (most of them) stays with whoever started it.
+Three things about a session move independently: whose *account* runs it, which *machine* it runs on, and who *owns* it. A session is in the inbox of each person who owns it and of the person whose account runs it. Most sessions have one owner, whoever started them. A session a role started on its own belongs to the role until a person adds themselves.
+
+The owners sit in the session's header, between the machine and the terminal. Click them to open the owners menu: the current owners first, then suggested roles and your teammates, with a search box. A session can have several people and one role as owners, and it sits in each of their inboxes. **Select all teammates** adds the whole team.
+
+One owner drives: the one the agent works for. Its face is ringed in the header. When a role is an owner, the role drives until a person takes over. Sending into a session its role drives makes you the driver and pauses the role; the composer says so before you send and offers **Tell** the role instead, which passes your words to the role without taking over. **Make driver** on any owner in the menu hands the session on, back to the role included. A session its role drives that is waiting on input files under Working, and its card reads **With** and the role's name (**With Growth**) where the status goes: the role reads it first and raises in its own conversation what needs you.
 
 - An owned session stays in the owner's inbox with no age limit and no status gate. A handoff nobody has opened in six weeks is exactly the one that must not age out.
-- A handoff clears the previous holder's stash and snooze, so the session lands where the new owner can see it. A kill is left alone; that session is retired.
+- Adding an owner clears the previous holder's stash and snooze, so the session lands where the new owner can see it. A kill is left alone; that session is retired.
 - A bot account on a shared machine can park a session on a human reviewer: it shows in the reviewer's Needs You marked with who runs it.
+- To leave a session, remove yourself in the owners menu. One that runs on your account has to move first, and the menu lists your team's machines under **Move and leave**.
 
-A good handoff is more than a reassignment: the agent pins a "blocked" state line written for someone who has not read the thread, adds the teammate as owner, and leaves them one note.
+Handing a session to a teammate is adding them as an owner and making them driver. A good handoff does more: the agent pins a "blocked" state line written for someone who has not read the thread, hands the session over, and leaves them one note. Agents do it with `cast own <session> <teammate> --drive <teammate>`.
 
 ### Team feed vs. your inbox
 
-Your inbox holds sessions you own or started and still hold. The team feed is wider: the team's recent sessions, filterable by person, state and label. A teammate's session appears there because the team can see it, which says nothing about whose move it is. It enters your inbox only when you own it.
+Your inbox holds sessions you own and sessions that run on your account. The team feed is wider: the team's recent sessions, filterable by person, state and label. A teammate's session appears there because the team can see it, which says nothing about whose move it is. It enters your inbox only when you own it.
 
 Agents read the same states. One that orchestrates workers watches for a worker moving to Needs You or Done, reads it, and sends the next step, the way you would.
 
