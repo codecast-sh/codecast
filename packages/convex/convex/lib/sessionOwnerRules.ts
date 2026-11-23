@@ -9,6 +9,8 @@ import { addSessionOwnerRow, ownersFactsOf, settleDriver, syncPrimaryOwnerCache 
 import { driverOf as sharedDriverOf, leaveMovesFirst, leaveStands, listedOwnerIds, runnerTakesLeftSession } from "@codecast/shared/contracts/sessionOwners";
 import { findOwnableConversation } from "./sessionTell";
 import { liveRoleByHandle, resolveRoleRef } from "./orgAccess";
+import { enqueueSyncReceipt } from "../functions";
+import { userScopeKey } from "../syncLog";
 
 export type OwnerInfo = {
   user_id: string;
@@ -269,6 +271,9 @@ export async function settleLeave(ctx: { db: any }, authUserId: Id<"users">, con
   }
   if (!leaveStands(await ownersFactsOf(ctx, await ctx.db.get(conversation._id)), me)) throw new Error("Nobody would own it after you leave: add a teammate first");
   await settleDriver(ctx, conversation._id);
+  // The leave's write left the leaver's scope with their row, so their window
+  // would get no receipt to retire its locks on: it gets one there too.
+  await enqueueSyncReceipt(ctx, userScopeKey(me), "conversations", String(conversation._id));
 }
 
 // An owners edit that takes the caller out of the owners is their leave,

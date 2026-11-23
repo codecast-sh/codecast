@@ -54,6 +54,18 @@ export function syncAckReceipts(ctx: any) {
   return ctx?.[SYNC_ACK]?.receipts ?? [];
 }
 
+// Queue one more sync-log action for an entity this transaction wrote, in a
+// scope its access no longer reaches, so the caller's receipt names a
+// position there. Thin on purpose: no cargo and no access stamp, so a reader
+// sees a bare upsert and asks byIds, never a revocation delete. Nothing for a
+// ctx that did not come through the wrapped builders, or when this
+// transaction already queued an action for it there (a scope move's delete).
+export async function enqueueSyncReceipt(ctx: any, scopeKey: string, entityType: "conversations", entityId: string): Promise<void> {
+  const ack = ctx?.[SYNC_ACK];
+  if (ack?.receipts?.some((r: any) => r.scope_key === scopeKey && r.entity_id === entityId)) return;
+  await ack?.enqueue?.(scopeKey, entityType, entityId, "upsert", {});
+}
+
 function wrapDefinition(def: any): any {
   if (typeof def === "function") {
     return (ctx: any, args: any) => {
