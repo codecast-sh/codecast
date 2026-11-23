@@ -368,6 +368,19 @@ describe("leaving a run a role started", () => {
     expect(roleDrives(row("pool"))).toBe(true);
   });
 
+  test("a teammate who took a hand on the seat's account leaves it to the role, never to the account it runs on", async () => {
+    const { ctx, row, ownersOf } = await world();
+    await ctx.db.patch("hand", { is_private: false, team_visibility: "full" });
+    await performApplyOwnersChange(ctx, PEER as any, { session_id: "hand", change: { add: [PEER] } });
+    await composerSend(ctx, row("hand"), PEER);
+    await performSetSessionDriver(ctx, PEER as any, { session_id: "hand", driver: { kind: "role" } });
+    await performApplyOwnersChange(ctx, PEER as any, { session_id: "hand", change: { leave: {} } });
+    expect(ownersOf("hand")).toEqual([]);
+    expect(roleDrives(row("hand"))).toBe(true);
+    const inbox = await computeInboxSessions(ctx, ME as any, { show_all: true, includeLiveness: false });
+    expect(inbox.sessions.map((s: any) => s._id)).not.toContain("hand");
+  });
+
   test("a person's own session still moves before its runner leaves", async () => {
     const { ctx } = await world();
     await expect(performLeaveSession(ctx, ME as any, { session_id: "filed" })).rejects.toThrow(/runs on your account/);

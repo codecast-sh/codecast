@@ -161,6 +161,15 @@ export function leaveStands(after: OwnersFacts, actor: string): boolean {
   return startedByRole(roleFactsOf(after)) || listedOwnerIds(after).some((id) => id !== actor);
 }
 
+/** Who takes a row when a leave leaves nobody: the person whose account runs
+ *  it, so the starter rule cannot hand it back to the leaver who started it.
+ *  Nobody for a run a role started: with no person left it is the role's
+ *  again, out of the runner's inbox as it was before anyone took it. */
+export function runnerTakesLeftSession(after: OwnersFacts, actor: string): string | null {
+  const runner = humanRunnerOf(after);
+  return after.rows.length === 0 && runner && runner !== actor && !startedByRole(roleFactsOf(after)) ? runner : null;
+}
+
 /** A leave from a session that runs on the leaver's account moves it to
  *  another account first, unless a role started it: that run is the role's,
  *  wherever it runs. */
@@ -212,10 +221,8 @@ export function applyOwnersChangeTo(f: OwnersFacts, change: OwnersChangeInput, c
     }
     next = withoutPeople(next, [ctx.actor]);
     if (next.driver_user_id === ctx.actor) next = { ...next, driver_user_id: null };
-    // Nobody left: the person whose account runs it takes a row, so the
-    // starter rule cannot hand the session back to the leaver who started it.
-    const runner = humanRunnerOf(next);
-    if (next.rows.length === 0 && runner && runner !== ctx.actor) {
+    const runner = runnerTakesLeftSession(next, ctx.actor);
+    if (runner) {
       const rows = [{ user_id: runner, added_at: ctx.now, added_by: ctx.actor }];
       next = { ...next, rows, primary_id: runner };
     }

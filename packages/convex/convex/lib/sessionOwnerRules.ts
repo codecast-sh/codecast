@@ -6,7 +6,7 @@
 
 import type { Id } from "../_generated/dataModel";
 import { addSessionOwnerRow, ownersFactsOf, settleDriver, syncPrimaryOwnerCache } from "../sessionOwners";
-import { driverOf as sharedDriverOf, humanRunnerOf, leaveMovesFirst, leaveStands, listedOwnerIds } from "@codecast/shared/contracts/sessionOwners";
+import { driverOf as sharedDriverOf, leaveMovesFirst, leaveStands, listedOwnerIds, runnerTakesLeftSession } from "@codecast/shared/contracts/sessionOwners";
 import { findOwnableConversation } from "./sessionTell";
 import { liveRoleByHandle, resolveRoleRef } from "./orgAccess";
 
@@ -249,8 +249,8 @@ export async function settleLeave(ctx: { db: any }, authUserId: Id<"users">, con
   const me = String(authUserId);
   const facts = await ownersFactsOf(ctx, conversation);
   if (leaveMovesFirst(facts, me)) throw new Error(LEAVE_MOVE_REFUSAL);
-  const runner = humanRunnerOf(facts);
-  if (facts.rows.length === 0 && runner && runner !== me) {
+  const runner = runnerTakesLeftSession(facts, me);
+  if (runner) {
     await addSessionOwnerRow(ctx, conversation._id, runner as Id<"users">, authUserId);
     await syncPrimaryOwnerCache(ctx, conversation._id);
   }

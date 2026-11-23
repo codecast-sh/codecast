@@ -59,6 +59,9 @@ describe("session owners, as one rule for the server and the store", () => {
     const left = applyOwnersChangeTo(run, { leave: {} }, at);
     expect(leaveStands(left, "me")).toBe(true);
     expect(driverOf(left, listedOwnerIds(left))).toEqual({ kind: "role", role_id: "r1" });
+    // A teammate's leave on a run on my account gives me no row: it is the role's again.
+    const taken = { ...run, rows: [{ user_id: "peer", added_at: 1 }], driver_user_id: null };
+    expect(applyOwnersChangeTo(taken, { leave: {} }, { actor: "peer", now: 100 }).rows).toEqual([]);
     // A person's own session still moves first, and keeps an owner.
     expect(leaveMovesFirst({ ...base, role_id: "r1" }, "me")).toBe(true);
     expect(leaveStands({ ...base, runner_id: "bot", bots: ["bot"] }, "me")).toBe(false);
