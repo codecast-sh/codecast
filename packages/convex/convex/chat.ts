@@ -28,6 +28,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import { api, internal } from "./_generated/api";
 import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId, tellRole } from "./pendingMessages";
+import { pausedRoleLine } from "./lib/sessionTakeOver";
 import { canOwnerOrTeamAccess, isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
 import { activeTeamMembershipFor } from "./lib/access";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
@@ -3890,6 +3891,7 @@ async function maybeRelayToOriginSession(
   // post lost) by enqueuePendingMessage.
   const needsSendGrant = !mentionReply || isHostedAgentType(conversation.agent_type);
   if (needsSendGrant && !(await canSendProductMessage(ctx, opts.senderId, conversation))) return no("no_access");
+  if (await pausedRoleLine(ctx, opts.message.origin_session_id, conversation)) return no("paused_role");
 
   const key = chatRelayClientId(opts.message._id);
   const shortId = (conversation as any).short_id ?? conversation._id.toString().slice(0, 7);
@@ -4416,6 +4418,10 @@ export async function wakeMentionedParties(
       out.skipped.push(`relayed:${shortId}`);
       continue;
     }
+    if (await pausedRoleLine(ctx, selfSession, conversation)) {
+      out.skipped.push(`paused_role:${shortId}`);
+      continue;
+    }
     if (!(await underCaps(String(conversation._id)))) {
       if (personLine) await grantSessionRoom(ctx, opts.channel, grantTargetOf(conversation), "mention");
       out.folded++;
@@ -4509,6 +4515,10 @@ async function deliverToChannelAgents(
       const conversation = row.conversation_id ? await ctx.db.get(row.conversation_id) : null;
       if (!conversation) continue;
       if (opts.alreadyDelivered && String(conversation._id) === opts.alreadyDelivered) continue;
+      if (await pausedRoleLine(ctx, opts.message.origin_session_id, conversation)) {
+        out.skipped.push(`paused_role:${row.short_id}`);
+        continue;
+      }
       const wakeId = await enqueuePendingMessage(ctx, conversation, opts.senderId, {
         content,
         client_id: chatMentionClientId(opts.message._id, conversation._id),

@@ -3,6 +3,7 @@ import { makeFakeDb } from "./testDb";
 import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
 import { performCreateRole, performProvisionRole, performReparentSession, performRetireRole, performTellSessionRole } from "./orgRoles";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
+import { wakeMentionedParties } from "./chat";
 import { computeInboxSessions, heldByRoleAlone } from "./conversations";
 import { formatDecisionAnswer, roleDrives, rollupParentIdOf } from "@codecast/shared/contracts";
 import { dispatch } from "./dispatch";
@@ -261,6 +262,27 @@ describe("a paused role does not take the wheel back itself", () => {
 
     await performSetSessionDriver(ctx, ME as any, { session_id: "filed", driver: { kind: "role" } });
     expect(roleDrives(row("filed"))).toBe(true);
+  });
+});
+
+describe("a paused role's chat line does not wake the session either", () => {
+  test("its standing session mentioning the session in a channel is skipped; a person's mention still wakes it", async () => {
+    const { ctx, tables, row } = await world();
+    await composerSend(ctx, row("filed"), ME);
+    const channel = { _id: "chan1", kind: "channel", name: "growth", team_id: TEAM };
+    const line = (id: string, over: Record<string, any>) => ({ _id: id, channel_id: "chan1", content: "@jxfiled status?", created_at: NOW, ...over });
+    const before = tables.pending_messages.length;
+    const paused = await wakeMentionedParties(ctx, {
+      channel: channel as any, message: line("msg1", { origin: "agent", author_kind: "agent", origin_session_id: "seat" }) as any, root: null,
+      senderId: ME as any, senderName: "Growth lead", roles: [], sessions: [row("filed")],
+    });
+    expect(paused.skipped).toContain("paused_role:jxfiled");
+    expect(tables.pending_messages.length).toBe(before);
+    const person = await wakeMentionedParties(ctx, {
+      channel: channel as any, message: line("msg2", {}) as any, root: null,
+      senderId: PEER as any, senderName: "Peer", roles: [], sessions: [row("filed")],
+    });
+    expect(person.sessions).toBe(1);
   });
 });
 

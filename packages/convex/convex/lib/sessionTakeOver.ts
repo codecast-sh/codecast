@@ -37,6 +37,16 @@ export function actsForPausedRole(sender: any, target: any): boolean {
   return String(sender.standing_role_id ?? sender.org_role_id) === String(target.org_role_id);
 }
 
+/** A chat line written by a session acting for the role a person paused on
+ *  the target: no chat rail (thread relay, mention, room member) wakes the
+ *  target with it, the same rule pausedRoleRefusal holds for `cast send`. The
+ *  line still stands in the chat for the person to read. */
+export async function pausedRoleLine(ctx: { db: any }, originSessionId: string | null | undefined, target: any): Promise<boolean> {
+  if (!originSessionId || !rolePaused(target)) return false;
+  const id = ctx.db.normalizeId?.("conversations", originSessionId) ?? originSessionId;
+  return actsForPausedRole(await ctx.db.get(id), target);
+}
+
 /**
  * Why a send from a role into a session filed under it is refused: a person
  * took the wheel, so the role is paused there. The sender acts for the role
