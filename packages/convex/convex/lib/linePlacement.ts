@@ -23,6 +23,31 @@ export type LinePool = { origin: string; subpath: string; slots: LineSlot[]; off
 // running but blocked on a person's answer, uses no machine.
 export const WORKING_RUN_STATUSES = ["pending", "running"] as const;
 
+// A read-only pass (the live flow's view, liveFlows.liveFlowView) counts each
+// machine's working runs, and each runner's own, once. Loads are keyed by seat
+// and by the agents a flow needs, so leads seated in different folders of one
+// checkout, and the view's own count beside its queue's, would each read every
+// run on the same machines and every run's task again: Union's view read past
+// the 100 MB a query may (Nov 22). A sweep plans through a pass, since its
+// planning writes nothing, but starts its runs outside one: each start's check
+// (orgLine slotStillFree) must count the runs started before it.
+const passes = new WeakMap<object, Map<string, Promise<unknown>>>();
+
+/** A ctx for one read-only pass: what readOnce reads through it is read once. */
+export function readOnlyPass<C extends object>(ctx: C): C {
+  const pass = Object.create(ctx) as C;
+  passes.set(pass, new Map());
+  return pass;
+}
+
+/** `read`, once per read-only pass and key, and every time outside one. */
+export function readOnce<T>(ctx: object, key: string, read: () => Promise<T>): Promise<T> {
+  const memo = passes.get(ctx);
+  if (!memo) return read();
+  if (!memo.has(key)) memo.set(key, read());
+  return memo.get(key) as Promise<T>;
+}
+
 /** Runs of `runner` that wait on a blocking decision: they hold no slot. */
 export async function runsWaitingOnAPerson(ctx: Ctx, runner: string): Promise<Set<string>> {
   const asked: any[] = await ctx.db
@@ -99,7 +124,11 @@ export async function poolDeviceIds(ctx: Ctx, runner: string): Promise<Set<strin
 }
 
 /** The slots the runs on a machine use now: a run waiting on a person, parked, or with no role or task uses none. */
-export async function deviceWorking(ctx: Ctx, device: string, waiting: Set<string>): Promise<number> {
+export function deviceWorking(ctx: Ctx, device: string, waiting: Set<string>): Promise<number> {
+  return readOnce(ctx, `device:${device}`, () => countDeviceWorking(ctx, device, waiting));
+}
+
+async function countDeviceWorking(ctx: Ctx, device: string, waiting: Set<string>): Promise<number> {
   let working = 0;
   for (const status of WORKING_RUN_STATUSES) {
     const runs: any[] = await ctx.db
