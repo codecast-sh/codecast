@@ -68,7 +68,15 @@ case "$1 $2" in
     bun -e 'import { chainBetween, readRebaseChain } from "${rebaseRecord}"; const fs = require("fs"); const d = process.argv[1]; const read = (f) => { try { return JSON.parse(fs.readFileSync(d + "/" + f, "utf-8")); } catch { return null; } }; const ci = read("ci.json"), r = read("review.json"); const no = (s) => { console.log(s); process.exit(2); }; if (!ci) no("no ci.json"); if (ci.green !== true) no("ci.json says CI is not green"); if (!r || r.verdict !== "ship") no("review.json does not say ship"); if (!r.head_sha) no("review.json names no head"); if (r.head_sha !== ci.head_sha && !chainBetween(readRebaseChain(d), r.head_sha, ci.head_sha)) no("the reviewer read " + r.head_sha + ", not the head CI tested (" + ci.head_sha + ")");' "$dir" || exit $?
     answer=$(pop merge)
     case "$answer" in
-      merged) echo '{"sha": "5ca1ab1e00000000000000000000000000000000", "pr": 7, "url": "https://github.com/acme/app/pull/7"}' > "$dir/merge.json"; echo "rebased onto main"; echo 5ca1ab1e00000000000000000000000000000000 ;;
+      merged|merged-gone)
+        echo '{"sha": "5ca1ab1e00000000000000000000000000000000", "pr": 7, "url": "https://github.com/acme/app/pull/7"}' > "$dir/merge.json"
+        # gh 2.105's pr merge --delete-branch removes the worktree that has the branch checked out, then the branch.
+        if [ "$answer" = merged-gone ]; then
+          wt=$(git -C "$FAKE_ROOT" worktree list --porcelain | awk '/^worktree /{w=$2} /^branch refs\\/heads\\/feat$/{print w}')
+          [ -n "$wt" ] && git -C "$FAKE_ROOT" worktree remove --force "$wt"
+          git -C "$FAKE_ROOT" branch -q -D feat; touch "$FAKE_STATE/ws-gone"
+        fi
+        echo "rebased onto main"; echo 5ca1ab1e00000000000000000000000000000000 ;;
       nojson) echo "said merged, wrote nothing" ;;
       conflict) echo "feat conflicts with main in a.txt; main's commits that touched them: 1234abcd fix"; exit 1 ;;
       stale) echo "feat would set back what main changed after it was built: 1234abcd fix; rebuild the change on main"; exit 1 ;;
@@ -87,8 +95,11 @@ case "$1 $2" in
       green) echo "Main CI is green at 0123456789." ;;
       *) echo "Main CI stayed red for 4h (red since 0123456789), at 0123456789: CI: test-cli."; exit 1 ;;
     esac ;;
-  "ws path") echo "$FAKE_ROOT" ;;
+  "ws path")
+    [ -e "$FAKE_STATE/ws-gone" ] && { echo "Workspace '$3' not found in 1 checkouts of $FAKE_ROOT."; exit 1; }
+    echo "$FAKE_ROOT" ;;
   "flow await-deploy")
+    pwd -P > "$FAKE_STATE/deploy-cwd"
     [ -e "$FAKE_STATE/deploy-fails" ] && { echo "The deploy that carried 5ca1ab1e00 failed: web dp-13 (exit 1)."; exit 1; }
     echo "Live: 5ca1ab1e00 on web dp-12." ;;
 esac
@@ -255,7 +266,7 @@ describe("the shipped change flow", () => {
     const s = server(w);
     expect(await run(w)).toBe("completed");
     const calls = w.calls();
-    expect(calls.filter((c) => c !== "ws path")).toEqual(["flow pr", "flow ci", "flow verdicts", "flow merge", "flow await-deploy"]);
+    expect(calls).toEqual(["flow pr", "flow ci", "flow verdicts", "flow merge", "flow await-deploy"]);
     expect(JSON.parse(fs.readFileSync(path.join(w.runDir, "merge.json"), "utf-8")).sha).toBe("5ca1ab1e00000000000000000000000000000000");
     expect(s.spawned).toHaveLength(1);
     // The reviewer is told the round's nonce to pin with its verdict.
@@ -455,6 +466,18 @@ describe("the shipped change flow", () => {
       expect(s.sent().at(-1).body).toContain("stopped at Not merged");
     }
   }, 240_000);
+
+  test("Deploy sends and waits from the run's checkout when Merge took the run's worktree and branch away", async () => {
+    const w = world({ ci: [GREEN], review: [SHIP], merge: ["merged-gone"] });
+    const s = server(w);
+    expect(await run(w)).toBe("completed");
+    expect(fs.existsSync(path.join(process.env.FAKE_STATE!, "ws-gone"))).toBe(true);
+    expect(w.calls()).toEqual(["flow pr", "flow ci", "flow verdicts", "flow merge", "flow await-deploy"]);
+    expect(fs.readFileSync(path.join(process.env.FAKE_STATE!, "deploy-cwd"), "utf-8").trim()).toBe(w.root);
+    const deploy = fs.readFileSync(path.join(process.env.FAKE_STATE!, "calls.log"), "utf-8").split("\n").find((l) => l.startsWith("flow await-deploy "))!;
+    expect(deploy).toContain(`--merge ${w.runDir}/merge.json`);
+    expect(s.sent().at(-1).body).toContain("The Change run on ct-9 is over: Live.");
+  }, 120_000);
 
   test("a deploy that fails after the merge tells the session its change landed but did not go live", async () => {
     const w = world({ ci: [GREEN], review: [SHIP], merge: ["merged"] });
