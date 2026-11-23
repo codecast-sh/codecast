@@ -32,6 +32,12 @@ declare global {
       // OS-level permissions (System Settings, not the in-app prefs) — see
       // lib/osPermissions.ts for the vocabulary. All absent on older builds —
       // gate on them; readiness is then "unknown" and nothing nags.
+      // Touch ID inside the app (electron deviceKey.js, lib/deviceKeyPresence).
+      // Absent on older builds, which open /confirm in the browser instead.
+      deviceKeyStatus?: import("./deviceKeyPresence").DeviceKeySigner["status"];
+      deviceKeyCreate?: import("./deviceKeyPresence").DeviceKeySigner["create"];
+      deviceKeyKeep?: import("./deviceKeyPresence").DeviceKeySigner["keep"];
+      deviceKeySign?: import("./deviceKeyPresence").DeviceKeySigner["sign"];
       getOsPermissions?: () => Promise<Record<string, string>>;
       requestOsPermission?: (kind: string) => Promise<string>;
       openOsPermissionSettings?: (kind: string) => Promise<void>;

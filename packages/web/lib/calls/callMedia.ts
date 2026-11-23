@@ -1,4 +1,5 @@
-import { LocalParticipant, Room, Track, type Participant } from "livekit-client";
+import type { LocalParticipant, Participant, Room, Track } from "livekit-client";
+import { LK, loadLivekit } from "./livekit";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 import { callParticipantKind } from "@codecast/shared/contracts";
 import { isMediaDenial } from "./mediaDenial";
@@ -29,7 +30,7 @@ export function participantTiles(room: Room): ParticipantTile[] {
   const out: ParticipantTile[] = [];
   const all: Participant[] = [room.localParticipant, ...room.remoteParticipants.values()];
   for (const p of all) {
-    const isLocal = p instanceof LocalParticipant;
+    const isLocal = p instanceof LK.LocalParticipant;
     const base = {
       identity: p.identity,
       name: p.name || p.identity,
@@ -37,8 +38,8 @@ export function participantTiles(room: Room): ParticipantTile[] {
       isLocal,
     };
     for (const [source, kind] of [
-      [Track.Source.Camera, "camera"],
-      [Track.Source.ScreenShare, "screen"],
+      [LK.Track.Source.Camera, "camera"],
+      [LK.Track.Source.ScreenShare, "screen"],
     ] as const) {
       const pub = p.getTrackPublication(source);
       // A remote track only renders once subscribed; a local one as soon
@@ -98,7 +99,7 @@ export async function mediaFailureReason(kind: "camera" | "microphone", err?: an
  */
 export async function listDevices(kind: MediaDeviceKind, opts?: { prompt?: boolean }): Promise<MediaDeviceInfo[]> {
   try {
-    const devices = await Room.getLocalDevices(kind, opts?.prompt !== false);
+    const devices = await (await loadLivekit()).Room.getLocalDevices(kind, opts?.prompt !== false);
     noteDevices(kind, devices);
     return devices;
   } catch {

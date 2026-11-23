@@ -66,12 +66,12 @@ export function AccountRecoveryBanner({ conversationId }: { conversationId: stri
   if (limitFamily) {
     const other = otherModelFor(limitFamily);
     const family = `${limitFamily.charAt(0).toUpperCase()}${limitFamily.slice(1)}`;
-    const { best: roomy } = limitContinueTarget(device, now, true, limitFamily);
+    const { best: roomy, models } = limitContinueTarget(device, now, true, limitFamily, { model: session.model, pinned: session.cc_account });
     if (roomy?.email && device?.online && !device.is_remote) {
       return (
         <Bar
           icon="hourglass-half"
-          text={`${family} is out here · ${roomy.email}: ${familyStandingLabel(roomy.usage, limitFamily, now) ?? standingLabel(roomy.usage, now)}`}
+          text={`${family} is out here · ${roomy.email}: ${familyStandingLabel(roomy.usage, limitFamily, now) ?? standingLabel(roomy.usage, now, models)}`}
           action={`Continue on ${roomy.email}`}
           onAction={() => {
             Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
@@ -95,12 +95,12 @@ export function AccountRecoveryBanner({ conversationId }: { conversationId: stri
     );
   }
 
-  const { best } = limitContinueTarget(device, now, true);
+  const { best, models } = limitContinueTarget(device, now, true, undefined, { model: session.model, pinned: session.cc_account });
   const canContinue = !!best?.email && !!device?.online && !device.is_remote;
   return (
     <Bar
       icon="hourglass-half"
-      text={canContinue ? `Out of usage · ${best!.email}: ${standingLabel(best!.usage, now) ?? 'has room'}` : 'Out of usage on this account'}
+      text={canContinue ? `Out of usage · ${best!.email}: ${standingLabel(best!.usage, now, models)}` : 'Out of usage on this account'}
       action={canContinue ? `Continue on ${best!.email}` : 'Accounts'}
       onAction={() => {
         if (!canContinue) return router.push('/accounts');

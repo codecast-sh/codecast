@@ -1,5 +1,6 @@
 import { useInboxStore } from "../store/inboxStore";
 import { mapSlots } from "../store/simSlot";
+import { syncTransaction } from "../store/syncTransaction";
 import { crawlWatermarkScope, syncMetaKey } from "./syncMetaKeys";
 
 // Shared full-reconcile crawl, used by useSyncTasks and useSyncDocs.
@@ -229,7 +230,9 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
     // `ckpt` is the continuation cursor AFTER the rows being flushed — the rows
     // themselves have landed via onPage, so resuming from it is exact. Undefined
     // skips checkpointing (nothing new to record).
-    const flush = (loading: boolean, ckpt?: string | null) => {
+    // The page, its progress and its checkpoint are one transaction: one
+    // subscriber visit per flush instead of three.
+    const flush = (loading: boolean, ckpt?: string | null) => syncTransaction(() => {
       if (buffer.length) {
         opts.onPage(buffer);
         buffer = [];
@@ -239,7 +242,7 @@ export function runReconcileCrawl(opts: CrawlOptions): void {
       if (ckpt !== undefined && ckpt !== null && !superseded()) {
         useInboxStore.getState().recordSyncMeta(metaKey, { resumeCursor: ckpt, resumeAt: Date.now(), resumeSince: since });
       }
-    };
+    });
     for (let i = 0; i < maxPages; i++) {
       // Retry transient page failures with backoff — one hiccup must not abandon
       // the whole crawl and leave a partial list. Give up only after several tries.

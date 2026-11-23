@@ -27,8 +27,9 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { isRecentlyShipped, snippetEnabledOn } from "../../lib/newSnippets";
 import { FeatureVignette } from "./FeatureVignette";
 import { FeatureDialog, NewPill, STABLE_NAME } from "./FeatureDetail";
+import { FeaturePath } from "./FeaturePath";
+import { Button } from "../ui/button";
 import { featureIcon, featureTone, TONE } from "./featureLook";
-import { AgentToolSetupPanel } from "../conversation/blocks/AgentToolSetupCard";
 import { useAgentToolSetup } from "../../lib/useAgentToolSetup";
 import { featureLock, useDevicePolicy } from "../../lib/managedPolicy";
 import { featureOnLedger } from "./useFeatureOffer";
@@ -261,16 +262,40 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
       <FeatureDialog
         slug={openFeature ? openFeature.slug : open === STABLE_KEY ? STABLE_KEY : null}
         feature={openFeature}
-        setup={
-          openFeature && isAgentSetupTool(openFeature.slug) && isOn(openFeature) && d.online ? (
-            <AgentToolSetupPanel tool={openFeature.slug} target={{ deviceId: d.device_id }} machineName={deviceDisplayName(d)} />
+        path={
+          openFeature ? (
+            <FeaturePath
+              on={isOn(openFeature)}
+              machineName={deviceDisplayName(d)}
+              blocked={
+                lockOf(openFeature)
+                  ? { reason: lockOf(openFeature)!, locked: true }
+                  : !d.online
+                    ? { reason: `${deviceDisplayName(d)} is offline. Its switches come back when it reconnects.` }
+                    : null
+              }
+              setup={isAgentSetupTool(openFeature.slug) && d.online ? { tool: openFeature.slug, deviceId: d.device_id } : null}
+              tryIt={FEATURE_EXPLAINERS[openFeature.slug]?.tryIt ?? ""}
+              onClose={() => setOpen(null)}
+              turnOn={
+                <FeatureSwitch
+                  s={openFeature}
+                  machine={deviceDisplayName(d)}
+                  on={false}
+                  disabled={pending.has(openFeature.slug)}
+                  onToggle={(next) => toggle(openFeature, next)}
+                  asButton
+                />
+              }
+            />
           ) : null
         }
         onClose={() => setOpen(null)}
         control={
           openFeature ? (
+            isOn(openFeature) && (
             <label className="flex shrink-0 items-center gap-2 pt-1 text-xs text-sol-text-muted">
-              {isOn(openFeature) ? "On" : "Off"}
+              On
               <FeatureSwitch
                 s={openFeature}
                 machine={deviceDisplayName(d)}
@@ -279,6 +304,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
                 onToggle={(next) => toggle(openFeature, next)}
               />
             </label>
+            )
           ) : open === STABLE_KEY ? (
             <StableControls d={d} panel={panel} />
           ) : null
@@ -289,7 +315,7 @@ function FeatureBoard({ d, features, panel }: { d: Device; features: SnippetDesc
 }
 
 /** A feature's switch. On goes through the shared review (it hands this machine's agents a capability); off is one press. */
-function FeatureSwitch({ s, machine, on, disabled, onToggle }: { s: SnippetDescriptor; machine: string; on: boolean; disabled: boolean; onToggle: (next: boolean) => void }) {
+function FeatureSwitch({ s, machine, on, disabled, onToggle, asButton }: { s: SnippetDescriptor; machine: string; on: boolean; disabled: boolean; onToggle: (next: boolean) => void; /** A primary "Turn on" button instead of a switch. */ asButton?: boolean }) {
   const name = s.name;
   return (
     <ConsequentialSwitch
@@ -297,7 +323,9 @@ function FeatureSwitch({ s, machine, on, disabled, onToggle }: { s: SnippetDescr
       ledger={featureOnLedger(s, [machine])}
       onTurnOn={() => onToggle(true)}
       onTurnOff={() => onToggle(false)}
-      trigger={({ on, press }) => <Switch checked={on} disabled={disabled} onCheckedChange={press} aria-label={name} aria-haspopup={on ? undefined : "dialog"} />}
+      trigger={({ on, press }) => asButton ? (
+        <Button variant="cyan" disabled={disabled} onClick={press} aria-haspopup="dialog" data-feature-turn-on>Turn on {name}</Button>
+      ) : <Switch checked={on} disabled={disabled} onCheckedChange={press} aria-label={name} aria-haspopup={on ? undefined : "dialog"} />}
     />
   );
 }
@@ -401,7 +429,7 @@ function FeatureCard({
         lock
           ? <CardFooter mono={false} left={<span className="inline-flex items-center gap-1 text-sol-text-muted"><Lock className="h-3 w-3" /> {lock}</span>} />
           : isAgentSetupTool(s.slug) && on && d.online
-            ? <SetupFooter tool={s.slug} d={d} />
+            ? <SetupFooter tool={s.slug} d={d} onOpen={onOpen} />
             : <CardFooter left={null} />
       }
     />
@@ -410,11 +438,11 @@ function FeatureCard({
 
 /**
  * A feature that also needs a one-time step on the machine (the Chrome
- * extension, the macOS grants): done, it is a green line; not done, it is the
- * next step and its buttons, right on the card.
+ * extension, the macOS grants): done, it is a green line; not done, it names
+ * what is missing and opens the feature, where the steps are.
  */
-function SetupFooter({ tool, d }: { tool: AgentSetupTool; d: Device }) {
-  const { status } = useAgentToolSetup({ deviceId: d.device_id }, tool, true);
+function SetupFooter({ tool, d, onOpen }: { tool: AgentSetupTool; d: Device; onOpen: () => void }) {
+  const { status, checking } = useAgentToolSetup({ deviceId: d.device_id }, tool, true);
   if (status?.ready) {
     return (
       <CardFooter
@@ -427,9 +455,21 @@ function SetupFooter({ tool, d }: { tool: AgentSetupTool; d: Device }) {
       />
     );
   }
+  if (checking || (status?.tool === "computer" && !status.supported)) return <CardFooter left={null} />;
   return (
-    <div className="space-y-2 border-t border-sol-yellow/25 pt-3">
-      <AgentToolSetupPanel tool={tool} target={{ deviceId: d.device_id }} machineName={deviceDisplayName(d)} compact />
+    <div className="flex items-center justify-between gap-3 border-t border-sol-yellow/25 pt-3">
+      <span className="min-w-0 truncate text-meta text-sol-yellow">{tool === "browser" ? "Chrome not connected" : "Permissions needed"}</span>
+      <Button
+        variant="cyan"
+        size="xs"
+        onClick={(e) => {
+          e.stopPropagation();
+          onOpen();
+        }}
+        data-feature-finish-setup
+      >
+        Finish setup
+      </Button>
     </div>
   );
 }

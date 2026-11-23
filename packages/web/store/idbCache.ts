@@ -53,9 +53,9 @@ export const PERSISTENCE_AVAILABLE = typeof window !== "undefined" && !DOCS_SHOT
 // declared schema against what is actually on disk (adds tables and indexes,
 // drops removed tables) rather than replaying a version ladder — so the old
 // twelve-step ladder that restated the whole schema per step is gone.
-export const CACHE_SCHEMA_VERSION = 111;
+export const CACHE_SCHEMA_VERSION = 112;
 export const CACHE_SCHEMA_SIGNATURE =
-  "accountPool:_id|agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|callDetails:_id|callList:_id|capabilityBindings:_id|capabilityState:_id|changeEditions:_id, team_id, repository, scope, date|changeLive:_id, team_id, repository, surface|changeStories:_id, team_id, repository, date, area|changeStorySessions:_id, team_id, story_id|changeWorks:_id, team_id, kind|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|checkouts:_id, workspace|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|composerSuggestions:_id|conversationPages:_id|dataResults:_id, doc_id|decisionComments:_id, decision_id, created_at|decisionDetails:_id|decisionStacks:_id|decisionThreads:_id|deployDetails:_id|deployReach:_id|deployTargets:_id, workspace|docDetails:_id|docs:_id|envStandings:_id|expectationsOverview:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|flowMaps:_id|foreignTriggers:_id|guestSuggestions:_id, conversation_id|handledDecisions:_id|harnessChanges:_id|initiativeUpdates:_id, initiative_id|initiatives:_id, short_id|issueSyncSources:_id, project_id|lineCards:_id, project_id|lineDeploys:_id, project_id|lineDispatch:_id|lineGraphEditability:_id|lineGraphVersions:_id, workflow_id|lineLabels:_id, run_id|lineOccurrences:_id, project_id|lineReviews:_id|lineStages:_id|lineTimeline:_id, at|lineTries:_id, project_id|liveElements:_id, doc_id|liveFlows:_id, team_id|liveHeads:_id|liveVersions:_id, doc_id|machineResources:_id|managedSessions:_id|meetingBotSettings:_id|meetingBots:_id|meetingCalendarEvents:_id|messageFeed:_id, timestamp|modObjects:_id|modState:_id|mods:_id|mySends:_id, timestamp|notifications:_id|opsAppCalls:_id, source_id|opsApps:_id|opsCiRuns:_id|opsEvents:_id|opsGroups:_id, source_id|opsReplayTallies:_id|opsReplayTimelines:_id|opsReplays:_id|opsSamples:_id, group_id|opsSources:_id|opsWatchSeries:_id|opsWatches:_id|orgLog:_id|orgLogRows:_id, batch|orgProposalChanges:_id, proposal_id|orgProposals:_id|orgTemplateInstances:_id|pageEmbeds:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|permissionRules:_id|pipelines:_id, workspace|plans:_id|prGuides:_id|projectExpectations:_id|projectOutputs:_id|projectTeammateSources:_id|projectUpdates:_id, project_id|projects:_id|pullRequestDetails:_id|pullRequestSessions:_id, conversation_id|pullRequests:_id|quoteDrafts:_id, conversation_id, client_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|repoFlows:_id, root, repository|runGraphs:_id|savedViews:_id|secretHistory:_id|secrets:_id, name|sessionCommands:_id|sessionDecisions:_id|sessionFlows:_id, graph_hash|sessionGoals:_id|sessionIndex:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|shipTargets:_id|sideAnswers:_id, conversation_id|signals:_id|stationInputs:_id|taskComments:_id|taskEvidence:_id|tasks:_id|teamDeploys:_id, workspace|teamKitItems:_id|teamPrompts:_id, team_id, date|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|trialCards:_id, project_id|trialProjects:_id|trialRuns:_id, project_id|trialSpend:_id|viewerRoles:_id|weeklyCards:_id|workflowRuns:_id, workflow_id|workflows:_id";
+  "accountPool:_id|agentChains:_id, name|agentDefinitions:_id, name|agentTaskRuns:_id, task_id|agentTasks:_id|anchorSpaces:_id|anchors:_id|artifacts:_id|bucketAssignments:_id|buckets:_id|callDetails:_id|callList:_id|capabilityBindings:_id|capabilityState:_id|changeEditions:_id, team_id, repository, scope, date|changeLive:_id, team_id, repository, surface|changeStories:_id, team_id, repository, date, area|changeStorySessions:_id, team_id, story_id|changeWorks:_id, team_id, kind|chatAuthors:_id|chatChannels:_id|chatMessages:_id, channel_id, thread_root_id|chatReactions:_id, message_id|chatReads:_id, channel_id|chatSlackLinks:_id, chat_channel_id, team_id|chatSlackPeople:_id, team_id, codecast_user_id|checkouts:_id, workspace|codeComments:_id, pull_request_id, repository, file_path, created_at|comments:_id|commits:_id|composerSuggestions:_id|conversationPages:_id|dataResults:_id, doc_id|decisionComments:_id, decision_id, created_at|decisionDetails:_id|decisionStacks:_id|decisionThreads:_id|deployDetails:_id|deployReach:_id|deployTargets:_id, workspace|docDetails:_id|docs:_id|envStandings:_id|expectationsOverview:_id|externalEvents:_id, team_id, conversation_id, pr_id, task_id, repository, created_at|flowMaps:_id|foreignTriggers:_id|guestSuggestions:_id, conversation_id|handledDecisions:_id|harnessChanges:_id|initiativeUpdates:_id, initiative_id|initiatives:_id, short_id|issueSyncSources:_id, project_id|lineCards:_id, project_id|lineDeploys:_id, project_id|lineDispatch:_id|lineGraphEditability:_id|lineGraphVersions:_id, workflow_id|lineLabels:_id, run_id|lineOccurrences:_id, project_id|lineReviews:_id|lineStages:_id|lineTimeline:_id, at|lineTries:_id, project_id|liveElements:_id, doc_id|liveFlows:_id, team_id|liveHeads:_id|liveVersions:_id, doc_id|machineResources:_id|managedSessions:_id|meetingBotSettings:_id|meetingBots:_id|meetingCalendarEvents:_id|messageFeed:_id, timestamp|modObjects:_id|modState:_id|mods:_id|mySends:_id, timestamp|notifications:_id|opsAppCalls:_id, source_id|opsApps:_id|opsCiRuns:_id|opsEvents:_id|opsGroups:_id, source_id|opsReplayTallies:_id|opsReplayTimelines:_id|opsReplays:_id|opsSamples:_id, group_id|opsSources:_id|opsWatchSeries:_id|opsWatches:_id|orgLog:_id|orgLogRows:_id, batch|orgProposalChanges:_id, proposal_id|orgProposals:_id|orgTemplateInstances:_id|pageEmbeds:_id|pageThreads:_id|pendingPermissions:_id, conversation_id|permissionRules:_id|pipelines:_id, workspace|plans:_id|prGuides:_id|projectExpectations:_id|projectOutputs:_id|projectTeammateSources:_id|projectUpdates:_id, project_id|projects:_id|pullRequestDetails:_id|pullRequestSessions:_id, conversation_id|pullRequests:_id|quoteDrafts:_id, conversation_id, client_id|repoBrowse:_id, scope, repository|repoBrowseAccess:_id, scope, repository|repoFlows:_id, root, repository|runGraphs:_id|savedViews:_id|secretHistory:_id|secrets:_id, name|sessionCommands:_id|sessionDecisions:_id|sessionFlows:_id, graph_hash|sessionGoals:_id|sessionIndex:_id|sessionNotify:_id|sessionReads:_id, conversation_id|sessions:_id|settingsData:_id|shipTargets:_id|sideAnswers:_id, conversation_id|signals:_id|stationInputs:_id|taskComments:_id|taskEvidence:_id|tasks:_id|teamDeploys:_id, workspace|teamKitItems:_id|teamPrompts:_id, team_id, date|threadInbox:_id, kind, team_id, channel_id, conversation_id, task_id|trialCards:_id, project_id|trialProjects:_id|trialRuns:_id, project_id|trialSpend:_id|viewerRoles:_id|weeklyCards:_id|workflowRuns:_id, workflow_id|workflows:_id";
 
 const SYSTEM_TABLES = {
   meta: "key",
@@ -94,6 +94,11 @@ class CacheDB extends Dexie {
   constructor() {
     super("codecast-store");
     this.version(CACHE_SCHEMA_VERSION).stores({ ...COLLECTION_INDEXES, ...SYSTEM_TABLES });
+    // Dexie's liveQuery machinery, which nothing here uses: it worked out the
+    // key ranges of every write and posted them to every tab on the origin
+    // (~200 BroadcastChannel messages a minute from one idle window).
+    this.unuse({ stack: "dbcore", name: "Observability" });
+    this.unuse({ stack: "dbcore", name: "Cache" });
   }
 }
 
@@ -555,6 +560,31 @@ export function setHydrating(v: boolean) {
   _hydrating = v;
 }
 
+// -- Held rows of the split inbox queries (hooks/useSplitQuery) --
+// A split result names its cold rows by hash only; without the rows from an
+// earlier launch the feeder fetches the whole result (the inbox list: 3MB
+// against 213KB split) on every boot. Held rows are the principal's data like
+// any meta row: served only to the cache's owner, purged with it.
+const SPLIT_PREFIX = "split:";
+
+export async function loadSplitRows(name: string): Promise<Array<{ id: string; hash: string; row: unknown }>> {
+  try {
+    if ((await ensureCacheOwnership()) === null) return [];
+    const prefix = `${SPLIT_PREFIX}${name}:`;
+    const rows = await db.meta.where("key").startsWith(prefix).toArray();
+    return rows.map((r) => ({ id: r.key.slice(prefix.length), hash: r.value?.hash, row: r.value?.row })).filter((r) => typeof r.hash === "string");
+  } catch {
+    return [];
+  }
+}
+
+export function persistSplitRows(name: string, upserts: Array<{ id: string; hash: string; row: unknown }>, removes: readonly string[]): void {
+  if (!persistenceOwned()) return;
+  const prefix = `${SPLIT_PREFIX}${name}:`;
+  if (upserts.length) db.meta.bulkPut(upserts.map(({ id, hash, row }) => ({ key: prefix + id, value: { hash, row } }))).catch(() => {});
+  if (removes.length) db.meta.bulkDelete(removes.map((id) => prefix + id)).catch(() => {});
+}
+
 // -- Per-conversation message cache --
 
 // IDB writes are coalesced per conversation. setMessages fires on nearly every
@@ -720,7 +750,17 @@ async function _loadUserMessages(convId: string): Promise<any[] | undefined> {
   }
 }
 
+// Conversations IDB holds nothing for, and when that was read. The inbox warm
+// asks again for the same rows whenever the list moves, and each ask was two
+// reads; a miss is remembered for a minute, and forgotten the moment this
+// window writes the conversation (another window's write costs a cache hit,
+// never a wrong answer: the caller goes to the network on a miss).
+const MISS_TTL_MS = 60_000;
+const _knownMisses = new Map<string, number>();
+
 export async function loadConversationMessages(convId: string): Promise<CachedConversation | null> {
+  const missedAt = _knownMisses.get(convId);
+  if (missedAt !== undefined && Date.now() - missedAt < MISS_TTL_MS && !_pendingMsgWrites.has(convId)) return null;
   // Read-your-writes: a just-written-but-not-yet-flushed payload is the freshest
   // truth, so serve it before falling back to the persisted IDB row.
   const userMessages = await _loadUserMessages(convId);
@@ -733,7 +773,12 @@ export async function loadConversationMessages(convId: string): Promise<CachedCo
     const row = await db.conversationMessages.get(convId);
     // A conversation whose navigator list landed before any message page did
     // still hydrates that list; the caller treats empty messages as a miss.
-    if (!row) return userMessages ? { messages: [], pagination: undefined, latestTimestamp: 0, userMessages } : null;
+    if (!row && !userMessages) {
+      _knownMisses.set(convId, Date.now());
+      return null;
+    }
+    _knownMisses.delete(convId);
+    if (!row) return { messages: [], pagination: undefined, latestTimestamp: 0, userMessages };
     return { messages: row.messages, pagination: row.pagination, latestTimestamp: row.latestTimestamp, userMessages };
   } catch {
     return null;
@@ -745,12 +790,14 @@ export async function loadConversationMessages(convId: string): Promise<CachedCo
 export function writeConversationUserMessages(convId: string, userMessages: any[]) {
   if (_hydrating || !persistenceOwned()) return;
   _touchedAt.set(convId, Date.now());
+  _knownMisses.delete(convId);
   db.conversationUserMessages.put({ convId, userMessages }).catch(() => {});
 }
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
   if (_hydrating || !persistenceOwned()) return;
   _touchedAt.set(convId, Date.now());
+  _knownMisses.delete(convId);
   _pendingMsgWrites.set(convId, { messages, pagination });
   if (!_inFlightMsgWrites.has(convId)) _scheduleMessageWrites();
 }

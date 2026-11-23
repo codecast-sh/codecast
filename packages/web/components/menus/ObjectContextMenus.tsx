@@ -57,7 +57,7 @@ import {
   type DocItem,
 } from "../../store/inboxStore";
 import { setTaskParent, updateTasksAsOne } from "../../lib/taskActions";
-import { animatedCloseSessions, animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../../store/undoActions";
+import { animatedCloseSessions, animatedHideSession, animatedMoveSessions, animatedSetSessionRest, toggleSessionsLikeFirst, undoAsOne } from "../../store/undoActions";
 import { gestureToast } from "../../store/undoStack";
 import { hideFromTeam } from "../../hooks/useTeamShareActions";
 import { counted } from "../../store/undo/labels";
@@ -575,14 +575,14 @@ export function SessionMenuItems({
           <CtxItem
             icon={Archive}
             shortcut="session.stash"
-            onSelect={onStash ?? (() => useInboxStore.getState().stashSession(id))}
+            onSelect={onStash ?? (() => animatedHideSession(id, "stash"))}
           >
             Stash
           </CtxItem>
           <CtxItem
             icon={EyeOff}
             shortcut="session.stashHide"
-            onSelect={() => useInboxStore.getState().stashSession(id, { hidden: true })}
+            onSelect={() => animatedHideSession(id, "stash", { hidden: true })}
           >
             Stash and hide — stays out through trigger wakes
           </CtxItem>
@@ -603,7 +603,7 @@ export function SessionMenuItems({
           <CtxItem
             icon={Clock}
             shortcut="session.deferAdvance"
-            onSelect={onDefer ?? (() => useInboxStore.getState().deferSession(id))}
+            onSelect={onDefer ?? (() => void animatedMoveSessions([id], "Deferred 1 session", (sid) => useInboxStore.getState().deferSession(sid)))}
           >
             Defer
           </CtxItem>

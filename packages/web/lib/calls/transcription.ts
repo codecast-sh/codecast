@@ -16,7 +16,8 @@
 // Module singleton beside callManager, same pattern: components read the small
 // status snapshot via subscribe/getSnapshot; nothing here touches the store
 // except through convex mutations.
-import { Room, RoomEvent, Track, TrackEvent, type LocalTrack } from "livekit-client";
+import type { LocalTrack, Room, RoomEvent, Track, TrackEvent } from "livekit-client";
+import { LK } from "./livekit";
 import { addressesAgent, agentSpokenNames, callSpeakerName, isAgentFaceIdentity, MID_TURN_AGENT_STATUSES } from "@codecast/shared/contracts";
 import { agentStatusAt } from "../liveness";
 import { useInboxStore } from "../../store/inboxStore";
@@ -94,15 +95,15 @@ let watchedMic: LocalTrack | null = null;
 const onMicRestarted = () => attachRoomTracks();
 function watchLocalMic(track: LocalTrack | null) {
   if (track === watchedMic) return;
-  watchedMic?.off(TrackEvent.Restarted, onMicRestarted);
+  watchedMic?.off(LK.TrackEvent.Restarted, onMicRestarted);
   watchedMic = track;
-  watchedMic?.on(TrackEvent.Restarted, onMicRestarted);
+  watchedMic?.on(LK.TrackEvent.Restarted, onMicRestarted);
 }
 
 function attachRoomTracks() {
   if (!room) return;
   // Local mic.
-  const micPub = room.localParticipant.getTrackPublication(Track.Source.Microphone);
+  const micPub = room.localParticipant.getTrackPublication(LK.Track.Source.Microphone);
   const me = room.localParticipant;
   watchLocalMic(micPub?.track ?? null);
   if (micPub?.track?.mediaStreamTrack) {
@@ -119,7 +120,7 @@ function attachRoomTracks() {
   // hand the agent its own words back as the room talking.
   for (const p of room.remoteParticipants.values()) {
     if (isAgentFaceIdentity(p.identity)) continue;
-    const pub = p.getTrackPublication(Track.Source.Microphone);
+    const pub = p.getTrackPublication(LK.Track.Source.Microphone);
     if (pub?.isSubscribed && pub.track?.mediaStreamTrack) {
       attachTrack(
         `${p.identity}:${pub.trackSid}`,
@@ -170,8 +171,8 @@ async function startScribeOnce(opts: {
 
   attachRoomTracks();
   const onTrack = () => attachRoomTracks();
-  room.on(RoomEvent.TrackSubscribed, onTrack);
-  room.on(RoomEvent.LocalTrackPublished, onTrack);
+  room.on(LK.RoomEvent.TrackSubscribed, onTrack);
+  room.on(LK.RoomEvent.LocalTrackPublished, onTrack);
   const onGone = (_t: unknown, pub: { trackSid?: string }) => {
     const key = pub?.trackSid ? keysBySid.get(pub.trackSid) : undefined;
     if (key) {
@@ -179,11 +180,11 @@ async function startScribeOnce(opts: {
       keysBySid.delete(pub.trackSid!);
     }
   };
-  room.on(RoomEvent.TrackUnsubscribed, onGone as any);
+  room.on(LK.RoomEvent.TrackUnsubscribed, onGone as any);
   roomListener = () => {
-    room?.off(RoomEvent.TrackSubscribed, onTrack);
-    room?.off(RoomEvent.LocalTrackPublished, onTrack);
-    room?.off(RoomEvent.TrackUnsubscribed, onGone as any);
+    room?.off(LK.RoomEvent.TrackSubscribed, onTrack);
+    room?.off(LK.RoomEvent.LocalTrackPublished, onTrack);
+    room?.off(LK.RoomEvent.TrackUnsubscribed, onGone as any);
   };
   return true;
 }
