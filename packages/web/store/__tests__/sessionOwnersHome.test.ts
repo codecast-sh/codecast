@@ -194,3 +194,32 @@ test("taking over a run only a role holds brings it into the taker's inbox at on
   expect(draft.sessions[RID].driver_user_id).toBe("me");
   expect(isForeignRow({ ...draft.sessions[RID] }, "me")).toBe(false);
 });
+
+// A leave paints the inbox the way the server will answer: the row leaves the
+// leaver's inbox at once, whether they co-owned a teammate's run or moved
+// their own to a teammate's machine first.
+describe("a leave takes the session out of the inbox at once", () => {
+  const owner = {};
+  const LID = "jx700000000000000000000000000lv1";
+  const readOf = (ids: string[], runner: string) => ({ ...read(ids), conversation_id: LID, runner: { user_id: runner, is_bot: false } });
+  beforeEach(() => useInboxStore.getState()._setDispatch((() => new Promise(() => {})) as any, { owner }));
+  afterEach(() => useInboxStore.getState()._clearDispatch(owner));
+
+  test("leaving a teammate's run you co-own", () => {
+    useInboxStore.setState({ sessions: { [LID]: { _id: LID, session_id: "s-lv", user_id: "mate", updated_at: Date.now(), owner_user_id: "mate", owned_by_me: true, owner_ids: ["mate", "me"] } } } as any);
+    applyCollectionFeed("sessionOwners", readOf(["mate", "me"], "mate"), selectOwnersRow, undefined, undefined, feedOwnerIds);
+    useInboxStore.getState().applySessionOwners(LID, { leave: {} }, null);
+    const row = (useInboxStore.getState().sessions as any)[LID];
+    expect([row.owner_ids, row.owned_by_me]).toEqual([["mate"], false]);
+    expect(isForeignRow(row, "me")).toBe(true);
+  });
+
+  test("leaving your own run by moving it to a teammate's machine", () => {
+    useInboxStore.setState({ sessions: { [LID]: { _id: LID, session_id: "s-lv", user_id: "me", updated_at: Date.now(), owner_user_id: "me", owned_by_me: true, owner_ids: ["me", "mate"] } } } as any);
+    applyCollectionFeed("sessionOwners", readOf(["me", "mate"], "me"), selectOwnersRow, undefined, undefined, feedOwnerIds);
+    useInboxStore.getState().applySessionOwners(LID, { leave: { move_to_device_id: "dev-mate", runner_id: "mate", runner_is_bot: false } }, null);
+    const row = (useInboxStore.getState().sessions as any)[LID];
+    expect([row.owner_ids, row.user_id, row.owner_user_id]).toEqual([["mate"], "mate", "mate"]);
+    expect(isForeignRow(row, "me")).toBe(true);
+  });
+});

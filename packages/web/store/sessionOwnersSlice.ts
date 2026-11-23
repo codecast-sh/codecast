@@ -12,7 +12,7 @@
 // without a line of its own.
 import { action, asyncAction, sync } from "./mutativeMiddleware";
 import { applySyncPatch } from "./syncProtocol";
-import { applyOwnersChangeTo, listedOwnerIds, ownersFactsFromRead, takeOverBySend, type OwnerRowFact, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
+import { applyOwnersChangeTo, isLeave, listedOwnerIds, ownersFactsFromRead, takeOverBySend, type OwnerRowFact, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 
 /** Who drives a session: the role it is filed under, one of its people, or
  *  (`none`) the default, which is how an undo puts back a driver nobody chose. */
@@ -74,10 +74,18 @@ export function createSessionOwnersSlice(): SessionOwnersSliceActions {
       if (!people || !home || home.standing_role_id) return;
       const before = paintedFacts(people, home);
       const to = change.leave?.runner_id ? { runner_id: change.leave.runner_id, runner_is_bot: !!change.leave.runner_is_bot } : undefined;
-      const next = applyOwnersChangeTo(before, { ...change, leave: change.leave ? { move_to: to } : undefined }, { actor: String(this.currentUser?._id ?? ""), now: Date.now() });
+      const actor = String(this.currentUser?._id ?? "");
+      const next = applyOwnersChangeTo(before, { ...change, leave: change.leave ? { move_to: to } : undefined }, { actor, now: Date.now() });
       home.owner_ids = listedOwnerIds(next);
       if ((home.org_role_id ?? null) !== next.role_id) home.org_role_id = next.role_id;
       if ((home.driver_user_id ?? null) !== next.driver_user_id) home.driver_user_id = next.driver_user_id;
+      // A leave takes the session out of the leaver's inbox as the server
+      // will: no claim on it, and after a move it runs on the other account.
+      if (isLeave(change, actor)) {
+        if (home.owned_by_me) home.owned_by_me = false;
+        if (next.runner_id !== before.runner_id) home.user_id = next.runner_id;
+        if ((home.owner_user_id ?? null) !== next.primary_id) home.owner_user_id = next.primary_id;
+      }
     }) as SessionOwnersSliceActions["applySessionOwners"],
     // Onto both twins it has (the inbox row and the conversation it was opened
     // from), so a Save made on either is released by this echo and neither

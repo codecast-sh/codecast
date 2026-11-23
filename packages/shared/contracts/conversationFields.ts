@@ -94,6 +94,12 @@ export const CONVERSATION_FIELDS = {
   // client beside org_role_id.
   owner_ids: { ack: true },
   driver_user_id: { ack: true },
+  // A leave also paints who runs it after a move (user_id), the primary
+  // owner cache (owner_user_id) and the viewer's claim (owned_by_me, a
+  // per-viewer field the row projection derives); the server writes them.
+  user_id: { ack: true },
+  owner_user_id: { ack: true },
+  owned_by_me: { ack: true },
   // Per-user and delivered on its own path, so it is writable but never part
   // of the shared row.
   draft_message: { patch: true },
