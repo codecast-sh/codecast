@@ -8,14 +8,13 @@ import {
   inWorkingSet,
   inboxEpoch,
   isFoldExempt,
-  placeProjectableRow,
-  projectInbox,
   rollupParentIdOf,
   selectWorkingSet,
   type InboxBucket,
   type ProjectableInboxRow,
   type WorkingSetWindow,
 } from "./inboxProjection";
+import { placeProjectableRow, projectInbox } from "./inboxPlacement";
 import {
   GEN_DAY,
   GEN_HOUR,

@@ -534,6 +534,8 @@ import type * as lib_usageDaily from "../lib/usageDaily.js";
 import type * as lib_userSend from "../lib/userSend.js";
 import type * as lib_vendorGuard from "../lib/vendorGuard.js";
 import type * as lib_viewWriters from "../lib/viewWriters.js";
+import type * as lib_waitSetters from "../lib/waitSetters.js";
+import type * as lib_waitWrite from "../lib/waitWrite.js";
 import type * as lib_wallet from "../lib/wallet.js";
 import type * as lib_watchSeries from "../lib/watchSeries.js";
 import type * as lib_webhookPayload from "../lib/webhookPayload.js";
@@ -1367,6 +1369,8 @@ declare const fullApi: ApiFromModules<{
   "lib/userSend": typeof lib_userSend;
   "lib/vendorGuard": typeof lib_vendorGuard;
   "lib/viewWriters": typeof lib_viewWriters;
+  "lib/waitSetters": typeof lib_waitSetters;
+  "lib/waitWrite": typeof lib_waitWrite;
   "lib/wallet": typeof lib_wallet;
   "lib/watchSeries": typeof lib_watchSeries;
   "lib/webhookPayload": typeof lib_webhookPayload;

@@ -9,7 +9,7 @@ import schema from "./schema";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { allModules } from "./testModules.testkit";
-import { PIN_TURN_SLACK_MS, rowPinPredatesTurn } from "@codecast/shared/contracts";
+import { PIN_TURN_SLACK_MS, rowPinPredatesTurn } from "@codecast/shared/contracts/inboxPlacement";
 
 setDefaultTimeout(120_000);
 

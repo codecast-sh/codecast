@@ -203,8 +203,10 @@ APIs, no BigInt) imported by Convex, the web store, mobile, and the daemon. It e
   stashed, hidden (an anchor row that is not hard blocked), questions (asking), pinned,
   new (no messages), then the work state. Pinned outranks the work buckets, so Needs
   Input never counts a pinned row.
-- `inWorkingSet`, `selectWorkingSet`, `computeFold`, `projectInbox`: membership and
-  fold (C4).
+- `inWorkingSet`, `selectWorkingSet`, `computeFold`: membership and fold (C4).
+  `projectInbox`, the whole projection in one call, and `placeProjectableRow`, one
+  row's placement with its wake inputs (`rowWakeInputs`), live beside it in
+  `inboxPlacement.ts`, imported by path so the CLI's boot graph does not carry them.
 - `digestProjection(entries)`: an order independent hash over
   `(id, bucket, below_fold)` triples: FNV 1a 32 per triple folded into two 32 bit
   lanes, 16 hex characters. Fold is in the digest on purpose: with show old off, the

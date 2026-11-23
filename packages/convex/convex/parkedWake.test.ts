@@ -5,7 +5,7 @@ import { allModules } from "./testModules.testkit";
 import { api, internal } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { makeParkedWakeDb } from "./lib/parkedWake";
-import { placeProjectableRow } from "@codecast/shared/contracts";
+import { placeProjectableRow } from "@codecast/shared/contracts/inboxPlacement";
 
 setDefaultTimeout(30_000);
 

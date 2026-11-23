@@ -4,7 +4,6 @@ import {
   createPlanSteps,
   depAddedLine,
   offFrontierLines,
-  parkAfterBlocking,
   planStepBase,
   planTemplate,
   planWorkspace,
@@ -19,6 +18,7 @@ import {
   waitBody,
   type GraphDeps,
 } from "./taskGraphCommands";
+import { parkAfterBlocking } from "./taskParkHint";
 
 const NOW = Date.UTC(2026, 9, 8, 12);
 

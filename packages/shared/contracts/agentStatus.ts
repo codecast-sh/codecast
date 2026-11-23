@@ -144,7 +144,7 @@ export const STATUS_TRUST_TTL_MS = 60 * 60 * 1000;
 
 // How long a declared "dormant" is trusted on its own word. An agent that parks
 // itself names a wake; when the system can verify that wake (rowVerifiedWake in
-// inboxProjection.ts: an armed trigger or loop into the session, a child still
+// inboxPlacement.ts: an armed trigger or loop into the session, a child still
 // producing, daemon-checked open background work, or a server-seen park:
 // rowParkedWakeLive) the park stands as long as the wake does. A bare claim — the wake is another session's
 // reply, a remote job, something the daemon cannot see — has no one to expire
@@ -155,18 +155,6 @@ export const STATUS_TRUST_TTL_MS = 60 * 60 * 1000;
 // unverified claim rather than a park. Keyed on updated_at like the trust TTL:
 // a wake that lands is a message, which restarts the clock and the turn.
 export const DORMANT_CLAIM_TTL_MS = 2 * 60 * 60 * 1000;
-// How long a server-seen "wait" or "run" (conversations.parked_wake_kind)
-// vouches for a quiet session: a wait settles on a webhook or a job that can be
-// lost, and a run can hang with a live pid or run out of resumes, so neither
-// stamp may park a row forever. A run counts besides only while its session's
-// daemon reports. A task blocker is exact, so it has no TTL (rowParkedWakeLive).
-export const PARKED_WAKE_TTL_MS = 72 * 60 * 60 * 1000;
-// How much later than the pin a person's message must be to take the pin down
-// (convex lib/userSend personTurnAnswersPinPatch): the message's time is the
-// machine's clock and the pin's the server's, and a daemon can sync the message
-// the agent answered by pinning after the pin. Taking the pin down is not
-// trusting it: the classifier compares strictly (rowPinPredatesTurn).
-export const PIN_TURN_SLACK_MS = 10_000;
 
 // Pure staleness predicate over a conversation row: its last activity is older
 // than the trust TTL, so any active live status it still carries (agent_status,

@@ -1089,7 +1089,7 @@ export default defineSchema({
     // When the latest turn opened, of any origin: the message time of the
     // newest turn opener (lib/userSend.turnOpenerPatch). A pin older than it
     // is not the agent's word on that turn, so the inbox does not park on it
-    // (inboxProjection rowPinPredatesTurn).
+    // (inboxPlacement rowPinPredatesTurn).
     last_turn_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
     // Started with nobody watching (`cast spawn --unattended`, a role's hand).
@@ -3903,7 +3903,7 @@ export default defineSchema({
     // ct- ids parsed from title, body and head_ref.
     task_ids: v.optional(v.array(v.id("tasks"))),
     // Tasks with a wait still waiting on this PR (task-graph.md TG2), so a
-    // state or checks move settles only them. Added by taskWaits.writeWaits,
+    // state or checks move settles only them. Added by lib/waitWrite.writeWaits,
     // pruned by taskWaits.settlePr.
     waiting_task_ids: v.optional(v.array(v.id("tasks"))),
     // Shepherd: the session that owns this PR until it merges. One standing
@@ -5483,7 +5483,7 @@ export default defineSchema({
     task_id: v.optional(v.id("tasks")),
     station: v.optional(v.string()),
     // Tasks with a wait on this decision (task-graph.md TG2), so answering,
-    // dismissing or reopening it finds them. Added by taskWaits.writeWaits,
+    // dismissing or reopening it finds them. Added by lib/waitWrite.writeWaits,
     // never pruned (a reopen must find its met waits again):
     // each task is re-read and only its waits on this decision move.
     waiting_task_ids: v.optional(v.array(v.id("tasks"))),
@@ -7147,7 +7147,7 @@ export default defineSchema({
     blocks: v.optional(v.array(v.string())),
     // The task graph (docs/architecture/task-graph.md). Waits are blockers on
     // something that is not a task (TG2); every write goes through
-    // taskWaits.writeWaits, which keeps waiting_since set exactly while one
+    // lib/waitWrite.writeWaits, which keeps waiting_since set exactly while one
     // is waiting. Events find their tasks through the target's back
     // reference (waiting_task_ids on the PR or decision), never a scan.
     waits: v.optional(v.array(taskWaitValidator)),

@@ -93,7 +93,15 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, cascadeTakesDownRow, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, cascadeTakesDownRow, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import {
+  rowLiveDeadlines,
+  projectInbox,
+  placeProjectableRow,
+  rowArmedHomes,
+  rowVerifiedWake,
+  rowPinPredatesTurn,
+} from "@codecast/shared/contracts/inboxPlacement";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
 import { closeFactsOf, closeSetsAside, nestedInFlightOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
@@ -105,9 +113,7 @@ import {
   inboxEpoch,
   selectWorkingSet,
   computeFold,
-  projectInbox,
   digestProjection,
-  placeProjectableRow,
   inboxSortTimeOfRow,
   rowLastTurnAllowsPark,
   emptyInboxTally,
@@ -120,9 +126,6 @@ import {
   roleLeadIdsOf,
   isUnderRole,
   isHardBlocked,
-  rowArmedHomes,
-  rowVerifiedWake,
-  rowPinPredatesTurn,
   DEAD_AGENT_STATUSES,
   fnv1a32Update,
   FNV1A32_OFFSET,

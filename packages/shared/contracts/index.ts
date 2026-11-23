@@ -133,8 +133,9 @@ export * from "./fence";
 export * from "./triggerPrecheck";
 export * from "./triggerLifecycle";
 // Not re-exported here, imported by path: orgProposal (the fenced block
-// `cast org init` decisions carry) and browserPaneOffer (an agent offering a
-// page as a pane). Both sit off the CLI boot graph on purpose
+// `cast org init` decisions carry), browserPaneOffer (an agent offering a
+// page as a pane) and inboxPlacement (placing inbox rows, with their wake
+// inputs). All sit off the CLI boot graph on purpose
 // (bench/bootGraph.guard.test.ts): the barrel is on every entry's static
 // graph, so a re-export here is paid by `cast --help`.
 

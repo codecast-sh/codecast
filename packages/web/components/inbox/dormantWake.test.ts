@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { DORMANT_CLAIM_TTL_MS, PARKED_WAKE_TTL_MS } from "@codecast/shared/contracts";
+import { DORMANT_CLAIM_TTL_MS } from "@codecast/shared/contracts";
+import { PARKED_WAKE_TTL_MS } from "@codecast/shared/contracts/inboxPlacement";
 import { DORMANT_RUN_UNREPORTED_TITLE, DORMANT_UNCONFIRMED_TITLE, dormantWakeLabel, dormantWakeOf } from "./dormantWake";
 import type { TriggerRow } from "../triggerTasks";
 

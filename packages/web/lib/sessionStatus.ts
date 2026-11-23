@@ -27,7 +27,8 @@
 //   - Process liveness (/sessions' "active / idle 2h+ / dead / hibernated") is
 //     a different axis; it stays on that page as process facts, not a status.
 
-import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, rowPinPredatesTurn, rowWakeInputs, type WorkState } from "@codecast/shared/contracts";
+import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, type WorkState } from "@codecast/shared/contracts";
+import { rowPinPredatesTurn, rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
 import type { PlanState } from "@codecast/shared/tasks";
 import { agentStatusAt, liveFactsOf } from "./liveness";
 import { apiErrorBadge } from "./apiErrorBadge";

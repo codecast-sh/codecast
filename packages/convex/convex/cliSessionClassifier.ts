@@ -1,6 +1,7 @@
 import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { childProducingNow, deriveSessionActivity, classifyWorkState, trustedAgentStatus, userRestOf, isSettleVerdictCurrent, HEARTBEAT_ALIVE_MS, type WorkState } from "./inboxFilters";
-import { openTasksVouchForWaiting, rowWakeInputs } from "@codecast/shared/contracts";
+import { openTasksVouchForWaiting } from "@codecast/shared/contracts";
+import { rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 
 // The one work-state classifier for every CLI surface that lists sessions

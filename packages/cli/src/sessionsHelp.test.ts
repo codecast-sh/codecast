@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { join } from "node:path";
 
 // `cast sessions --help` says what parks a session in DORMANT the way the
-// inbox decides it (shared/contracts/inboxProjection rowVerifiedWake): a
+// inbox decides it (shared/contracts/inboxPlacement rowVerifiedWake): a
 // wake the system sees, or a bare claim for 2h of quiet.
 test("cast sessions --help names the wakes that keep a session dormant", () => {
   const run = Bun.spawnSync(["bun", join(import.meta.dir, "index.ts"), "sessions", "--help"], { stdout: "pipe", stderr: "pipe" });

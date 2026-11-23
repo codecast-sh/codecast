@@ -10,11 +10,11 @@ import {
   isMachineDeliveredMessage,
   isTestArtifactPath,
   parseTaskCommentMessage,
-  PIN_TURN_SLACK_MS,
   parseDecisionAnswer,
   parseUserMessage,
   stripMentionContext,
 } from "@codecast/shared/contracts";
+import { PIN_TURN_SLACK_MS } from "@codecast/shared/contracts/inboxPlacement";
 import { isStickyEligible, stickyPromptContent } from "../../../web/lib/stickyPrompt";
 import { commandExpansionName } from "../../../web/lib/conversationProcessor";
 import { isFlowPressMessage } from "../../../web/lib/line/flowMessages";

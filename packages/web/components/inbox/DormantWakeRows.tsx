@@ -2,7 +2,7 @@ import type { InboxSession } from "../../store/inboxStore";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
 import { useLiveWatchRows } from "../../hooks/useLiveWatchRows";
 import { threadStateView } from "../../lib/threadState";
-import { rowPinPredatesTurn, rowVerifiedWake } from "@codecast/shared/contracts";
+import { rowPinPredatesTurn, rowVerifiedWake } from "@codecast/shared/contracts/inboxPlacement";
 import { WAKE_BADGE } from "../../lib/triggerBadges";
 import type { TriggerRow } from "../triggerTasks";
 import { SchedChildArrow, SchedFireBadge } from "../TriggerRow";

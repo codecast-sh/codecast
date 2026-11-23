@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, spyOn, test } from "bun:test";
 import { collectInboxSessionsPaginated, classifyWorkStates } from "./conversations";
 import { cliSessionClassifier } from "./cliSessionClassifier";
-import { deriveLiveAt, inboxEpoch, placeProjectableRow } from "@codecast/shared/contracts";
+import { deriveLiveAt, inboxEpoch } from "@codecast/shared/contracts";
+import { placeProjectableRow } from "@codecast/shared/contracts/inboxPlacement";
 import { makeFakeDb } from "./testDb";
 
 // A subagent child row is built by buildSubagentChildRow, not the top-level

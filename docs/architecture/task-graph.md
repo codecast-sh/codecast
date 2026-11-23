@@ -105,7 +105,7 @@ waited on again by adding it again.
 
 `waiting_since` (indexed, sparse) is set while any wait is `waiting` and
 cleared otherwise. It is never written directly: every change to `waits`
-goes through one helper (`writeWaits` in `convex/taskWaits.ts`) that
+goes through one helper (`writeWaits` in `convex/lib/waitWrite.ts`) that
 recomputes it and links each new wait from its target: the PR row's or the
 decision row's `waiting_task_ids`. Events find their tasks through that back
 reference, so an event reads only its own tasks, never a scan.

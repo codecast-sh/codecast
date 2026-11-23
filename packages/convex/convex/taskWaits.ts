@@ -11,10 +11,11 @@
 // (`created_in`), once per wait (`setter_told_at`). That session is also told
 // when its wait fails or someone else removes it.
 //
-// writeWaits is the only writer of `waits`: it keeps `waiting_since` set
-// exactly while a wait is waiting, writes the history line, and links each new
-// PR or decision wait from its target (`waiting_task_ids`), so an event reads
-// only its own tasks and never scans.
+// writeWaits (lib/waitWrite.ts) is the only writer of `waits`: it keeps
+// `waiting_since` set exactly while a wait is waiting, writes the history
+// line, and links each new PR or decision wait from its target
+// (`waiting_task_ids`), so an event reads only its own tasks and never scans.
+// Telling and parking a wait's setter is lib/waitSetters.ts.
 
 import { v } from "convex/values";
 import { internalMutation, mutation, type MutationCtx } from "./functions";
@@ -32,24 +33,30 @@ import {
 } from "./lib/access";
 import { isTeamMember } from "./privacy";
 import { installationForRepo } from "./githubApp";
-import { bySystem, byUser, recordTaskChange, type TaskChangeBy, type TaskFieldChange } from "./lib/taskHistory";
-import { patchTask } from "./lib/taskWrite";
+import { bySystem, byUser, type TaskChangeBy } from "./lib/taskHistory";
 import { dependentRefs, taskByRef, taskLookups } from "./lib/taskGraph";
 import { prByNumber } from "./lib/gitRefs";
-import { boundSessionsOf } from "./lib/taskOwner";
-import { holdsTask } from "./lib/taskHolder";
-import { PARKED_ON_CAP } from "./lib/parkedWake";
 import { waitTargetValidator } from "./lib/taskWaitValidator";
-import { enqueuePendingMessage } from "./pendingMessages";
-import { ExecutionAuthorityError } from "./executionBindings";
+import { decisionByShortId, linkTask, STORED, taskRepositories, writeWaits } from "./lib/waitWrite";
+import {
+  heldWaitsAnswer,
+  ownerOf,
+  parkingSession,
+  parkOn,
+  setterOwed,
+  taskName,
+  tellSetters,
+  tellSettersClosed,
+  tellSettersFailed,
+  wakeSession,
+  type ParkAnswer,
+  type Removed,
+  type Skip,
+} from "./lib/waitSetters";
 import { emitNotification } from "./notificationRouter";
 import { insertTaskComment } from "./tasks";
 import { answerLabel, userMayRead, verdictOfRow, type Verdict } from "./sessionDecisions";
 import {
-  blockersHoldingBack,
-  WAIT_PENDING_WORD,
-  waitSubject,
-  type Blocker,
   isTerminalTaskStatus,
   isUnblocked,
   failedWaitAdvice,
@@ -58,14 +65,12 @@ import {
   parseBlockerRef,
   prRef,
   isPrWaitTarget,
-  prWords,
   sameWaitTarget,
   waitClause,
   waitFailedCause,
   waitFailedWord,
   waitIsReplaceable,
   waitLabel,
-  waitLine,
   waitMetCause,
   waitMetNote,
   type PrWaitTarget,
@@ -74,7 +79,7 @@ import {
   type WaitLabelOptions,
   type WaitTarget,
 } from "@codecast/shared/tasks";
-import { inlineForeignText, normalizeRepository, repositoryKeyOfRemote, rowPinPredatesTurn } from "@codecast/shared/contracts";
+import { inlineForeignText, normalizeRepository } from "@codecast/shared/contracts";
 
 type Ctx = MutationCtx;
 type Task = Doc<"tasks">;
@@ -83,67 +88,6 @@ type PR = Doc<"pull_requests">;
 /** Who signs what codecast writes on a task on its own: the waits' and the
  *  graph's comments and notices. */
 export const SENDER = "codecast";
-/** Stored text about a wait is read later, in other zones (TG11). */
-const STORED = { absolute: true } as const;
-
-/** STORED for `task`'s own text. It is also read away from any checkout, so a
- *  PR outside the task's one repository (taskRepositories) is named in full. */
-async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits ?? []): Promise<WaitLabelOptions> {
-  if (!waits.some(isPrWaitTarget)) return STORED;
-  const repos = await taskRepositories(ctx, task);
-  return { ...STORED, ...prWords(repos.length === 1 ? repos[0] : null) };
-}
-
-// ---------------------------------------------------------------------------
-// The one writer
-// ---------------------------------------------------------------------------
-
-/**
- * Replace `task`'s waits with `next`. Recomputes `waiting_since` (kept while
- * any wait still waits, cleared otherwise), writes one history line per wait
- * that was added, settled, reopened or removed, and links each new PR or
- * decision wait from its target (`waiting_task_ids`). Returns the row as
- * written and the words its waits are stored in (storedWords), for the
- * caller's own text about them.
- */
-export async function writeWaits(ctx: Ctx, task: Task, next: TaskWait[], by: TaskChangeBy, now = Date.now()): Promise<{ task: Task; words: WaitLabelOptions }> {
-  const prev = task.waits ?? [];
-  const waiting_since = next.some((w) => w.state === "waiting") ? (task.waiting_since ?? now) : undefined;
-  await patchTask(ctx, task, { waits: next, waiting_since, updated_at: now });
-
-  const before = new Map(prev.map((w) => [w.id, w]));
-  const kept = new Set(next.map((w) => w.id));
-  const words = await storedWords(ctx, task, [...prev, ...next]);
-  // Both sides of a line are rendered in today's words, so a wait left as it
-  // was renders the same twice and recordTaskChange writes nothing for it.
-  const changes: TaskFieldChange[] = [
-    ...prev.filter((w) => !kept.has(w.id)).map((w): TaskFieldChange => ["waits", waitLine(w, words), ""]),
-    ...next.map((w): TaskFieldChange => ["waits", before.has(w.id) ? waitLine(before.get(w.id)!, words) : "", waitLine(w, words)]),
-  ];
-  await recordTaskChange(ctx, task._id, by, changes, now);
-
-  for (const w of next) {
-    if (before.has(w.id) || w.kind === "time") continue;
-    // A decision is linked even when met at once, so a reopen finds it.
-    const target = w.kind === "decision" ? await decisionByShortId(ctx, w.decision)
-      : w.state === "waiting" ? await prByNumber(ctx, w.repository, w.pr_number)
-      : null;
-    if (target) await linkTask(ctx, target, task._id);
-  }
-  return { task: { ...task, waits: next, waiting_since, updated_at: now }, words };
-}
-
-/** Add `taskId` to a wait target's back reference. */
-async function linkTask(ctx: Ctx, target: Doc<"session_decisions"> | PR, taskId: Id<"tasks">): Promise<boolean> {
-  const linked = target.waiting_task_ids ?? [];
-  if (linked.some((id) => String(id) === String(taskId))) return false;
-  await ctx.db.patch(target._id, { waiting_task_ids: [...linked, taskId] });
-  return true;
-}
-
-async function decisionByShortId(ctx: Pick<Ctx, "db">, shortId: string) {
-  return await ctx.db.query("session_decisions").withIndex("by_short_id", (q) => q.eq("short_id", shortId)).first();
-}
 
 /**
  * The note on a decision wait the answer meets: "answered: Ship it" when
@@ -189,12 +133,6 @@ export type AddWaitInput = { ref?: string; target?: WaitTarget; repository?: str
  *  lists this task in blocked_by, so the wait clearing or failing tells it so
  *  (tellSetters), and its held task unblocking wakes that task's owner. */
 export type AddWaitResult = { wait: TaskWait; met: boolean; existing?: boolean } & ParkAnswer;
-/** "held": the caller is not the wait's setter, but its held task lists this
- *  task in blocked_by, so its own blocker stamp parks it and its held task
- *  unblocking wakes that task's owning session; the wait tells it nothing.
- *  `owns` (with "close"): the caller is its held task's owning session, so
- *  that wake reaches it (ownerOf). */
-type ParkAnswer = { parked?: boolean | "close" | "held"; owns?: boolean };
 
 const str = (x: unknown) => (typeof x === "string" && x.trim() ? x.trim() : undefined);
 
@@ -236,31 +174,6 @@ async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: A
     ? normalizeRepository(target.repository)
     : await repositoryForBarePr(ctx, userId, task, target.pr_number, str(input.repository));
   return { kind: target.kind, repository, pr_number: target.pr_number };
-}
-
-/** The repositories a task's work happens in: the mapped checkout covering its
- *  project's path, and the remotes of the sessions on it. */
-async function taskRepositories(ctx: Ctx, task: Task): Promise<string[]> {
-  const out = new Set<string>();
-  const project = task.project_id ? await ctx.db.get(task.project_id) : null;
-  const path = task.project_path || project?.project_path;
-  if (path) {
-    const mappings = [
-      ...(await ctx.db.query("directory_team_mappings").withIndex("by_user_id", (q) => q.eq("user_id", task.user_id)).collect()),
-      ...(task.team_id ? await ctx.db.query("directory_team_mappings").withIndex("by_team_id", (q) => q.eq("team_id", task.team_id)).collect() : []),
-    ];
-    for (const m of mappings) {
-      const prefix = m.path_prefix.replace(/\/+$/, "");
-      if (m.repository && (path === prefix || path.startsWith(`${prefix}/`))) out.add(normalizeRepository(m.repository));
-    }
-  }
-  const sessions = [task.created_from_conversation, ...(task.conversation_ids ?? [])].filter((id): id is Id<"conversations"> => !!id);
-  for (const id of [...new Set(sessions.map(String))].slice(0, 20)) {
-    const conv = await ctx.db.get(id as Id<"conversations">);
-    const repo = repositoryKeyOfRemote(conv?.git_remote_url);
-    if (repo) out.add(normalizeRepository(repo));
-  }
-  return [...out];
 }
 
 /**
@@ -418,46 +331,6 @@ async function joinWait(ctx: Ctx, userId: Id<"users">, task: Task, existing: Tas
   const answer = !!setter && wait.created_in === String(setter) && open ? await parkOn(ctx, setter!, task) : await heldWaitsAnswer(ctx, by, task, !open);
   return { wait, met, existing: true, ...answer };
 }
-
-/** `parked` for a caller that is not the wait's setter (another session set
- *  it, or a replaced wait's owed setter kept it): "held" when the caller's
- *  held task lists `task` in blocked_by, since its own blocker stamp parks it
- *  (the wait, set by another, tells it nothing); false otherwise, and once
- *  the wait can no longer wake anyone (`settled`). */
-async function heldWaitsAnswer(ctx: Ctx, by: TaskChangeBy | undefined, task: Task, settled: boolean): Promise<ParkAnswer> {
-  if (settled || !by?.conversation_id) return { parked: false };
-  const conv = await ctx.db.get(by.conversation_id);
-  return { parked: conv && (await heldStillWaiting(ctx, conv, task)) ? "held" : false };
-}
-
-/** Add the task its wait is on to the parked session's list
- *  (conversations.parked_on_task_ids, newest last, capped), so its
- *  parked_wake_kind counts that wait (lib/parkedWake.ts). Answers the add's
- *  `parked`: "close" when the session's held task waits on this task closing. */
-async function parkOn(ctx: Ctx, convId: Id<"conversations">, task: Task): Promise<ParkAnswer> {
-  const conv = await ctx.db.get(convId);
-  if (!conv) return { parked: true };
-  const was = conv.parked_on_task_ids ?? [];
-  if (String(was[was.length - 1] ?? "") !== String(task._id)) {
-    const next = [...was.filter((id) => String(id) !== String(task._id)), task._id].slice(-PARKED_ON_CAP);
-    await ctx.db.patch(convId, { parked_on_task_ids: next });
-  }
-  const h = await heldFacts(ctx, conv, task);
-  return h?.stillWaits ? { parked: "close", owns: h.owns } : { parked: true };
-}
-
-/** The session parked on a wait `by` sets on `task`: the caller's own session
- *  holding another task, which nothing else wakes when the wait settles. One
- *  holding this task hears as its owner; one holding none is wiring the graph. */
-async function parkingSession(ctx: Ctx, userId: Id<"users">, task: Task, by: TaskChangeBy): Promise<Id<"conversations"> | undefined> {
-  const conv = by.conversation_id ? await ctx.db.get(by.conversation_id) : null;
-  if (!conv || String(conv.user_id) !== String(userId) || !conv.active_task_id || reviewsHeld(conv)) return undefined;
-  return String(conv.active_task_id) === String(task._id) ? undefined : conv._id;
-}
-
-/** A session reviewing the task it holds: it holds it to review, not to do,
- *  so like a planner it parks on no wait. */
-const reviewsHeld = (conv: Doc<"conversations">) => !!conv.active_task_id && String(conv.review_of_task_id ?? "") === String(conv.active_task_id);
 
 /** Remove waits by id, or every wait matching a ref (a bare `#42` matches
  *  that number in any repository). A met or failed wait is history until
@@ -926,9 +799,6 @@ export async function isTaskUnblocked(ctx: Ctx, task: Task, override?: StatusOf)
 // Telling the people and sessions doing the work
 // ---------------------------------------------------------------------------
 
-/** Sessions a wake passes over: the one that made the change, one told another way. */
-type Skip = readonly (Id<"conversations"> | undefined)[];
-
 /** Wake the session that owns the task (lib/taskOwner) with `content`.
  *  `key` names the event, so a delivery of the same event is enqueued once.
  *  Returns false when no live session owns it, or when the owner refuses
@@ -944,200 +814,6 @@ async function wakeOwner(ctx: Ctx, task: Task, key: string, content: string, ski
   if (skip.some((s) => s && String(owner._id) === String(s))) return true;
   return await wakeSession(ctx, task, owner, key, content);
 }
-
-const ownerOf = async (ctx: Ctx, task: Task) => (await boundSessionsOf(ctx, task)).find((c) => holdsTask(c, task._id));
-
-async function wakeSession(ctx: Ctx, task: Task, conv: Doc<"conversations">, key: string, content: string): Promise<boolean> {
-  try {
-    await enqueuePendingMessage(ctx, conv, conv.user_id, { content, origin: "scheduler", client_id: `task-wait:${task._id}:${key}` });
-    return true;
-  } catch (e) {
-    if (!(e instanceof ExecutionAuthorityError)) throw e;
-    console.warn(`[taskWaits] ${task.short_id}: could not wake ${conv._id}: ${e.message}`);
-    return false;
-  }
-}
-
-/** What a setter is told, or null to pass it over. */
-type Said = { key: string; content: string } | null;
-
-/** Wake each live session that set some of `waits` (`created_in`) and is
- *  not one of `skip`, with what `say` makes of its own waits (null passes it
- *  over). A setter whose done pin answers its latest turn declared its work
- *  delivered, so it is not parked on them and is passed over. Same
- *  refusals as wakeOwner, and `key` keeps one event to one message per
- *  session. */
-async function wakeSetters(
-  ctx: Ctx,
-  task: Task,
-  waits: readonly TaskWait[],
-  skip: Skip,
-  say: (mine: TaskWait[], conv: Doc<"conversations">) => Promise<Said> | Said,
-): Promise<void> {
-  const passed = new Set(skip.filter(Boolean).map(String));
-  const bySetter = new Map<string, TaskWait[]>();
-  for (const w of waits) if (w.created_in && !passed.has(w.created_in)) bySetter.set(w.created_in, [...(bySetter.get(w.created_in) ?? []), w]);
-  for (const [id, mine] of bySetter) {
-    const convId = ctx.db.normalizeId("conversations", id);
-    const conv = convId ? await ctx.db.get(convId) : null;
-    // A done pin fresh for the latest turn (rowPinPredatesTurn) is work
-    // delivered, not a park; an older one answered an earlier turn.
-    if (!conv || conv.inbox_killed_at || (conv.thread_state_status === "done" && !rowPinPredatesTurn(conv))) continue;
-    const said = await say(mine, conv);
-    if (!said) continue;
-    const { key, content } = said;
-    await wakeSession(ctx, task, conv, key, content);
-  }
-}
-
-const clauses = (waits: readonly TaskWait[], words: WaitLabelOptions) => waits.map((w) => waitClause(w, words)).join(", ");
-
-/** A wait whose setter has yet to be dealt with: waiting, or met and not
- *  stamped (`setter_told_at`). */
-const setterOwed = (w: TaskWait) => !!w.created_in && (w.state === "waiting" || (w.state === "met" && !w.setter_told_at));
-
-/** Waits someone removed (removeWaitCore), and who removed them. */
-type Removed = { waits: readonly TaskWait[]; who: string };
-
-/**
- * Tell the sessions that set `task`'s waits, one message per session.
- * `unblocked`, the cause of an unblock: each met wait whose setter was not yet
- * dealt with is told, then stamped (`setter_told_at`) so no later unblock
- * tells it again, so a wait met while something else still blocked the task
- * is told by whichever change cleared the last blocker. `removed`: each
- * setter of a removed wait it was owed is told the wait is gone, whether or
- * not the task is still blocked. A setter in both hears one message. A
- * setter whose held task still waits on this one closing is told what still
- * holds that task and what it can do (heldWaitsLine). The owner of a task now
- * unblocked and `skip` hear another way.
- */
-async function tellSetters(ctx: Ctx, task: Task, skip: Skip, { unblocked, removed }: { unblocked?: string; removed?: Removed }): Promise<void> {
-  const row = await ctx.db.get(task._id);
-  if (!row) return;
-  const met = unblocked === undefined ? [] : (row.waits ?? []).filter((w) => w.state === "met" && setterOwed(w));
-  const gone = (removed?.waits ?? []).filter(setterOwed);
-  if (!met.length && !gone.length) return;
-  const words = await storedWords(ctx, row, [...(row.waits ?? []), ...gone]);
-  const ownerConv = await ownerOf(ctx, row);
-  const owner = unblocked === undefined ? undefined : ownerConv?._id;
-  const name = taskName(row);
-  await wakeSetters(ctx, row, [...met, ...gone], [...skip, owner], async (mine, conv) => {
-    const m = mine.filter((w) => met.includes(w));
-    const r = mine.filter((w) => gone.includes(w));
-    const key = [m.length ? `met:${m.map((w) => w.id).join(",")}` : "", r.length ? `removed:${r.map((w) => w.id).join(",")}` : ""].filter(Boolean).join(";");
-    // The setter's own held task still lists this one in blocked_by: its work
-    // waits for this task to close, which nothing may do (a PR merged outside
-    // a flow closes no task), so it is always told, with what still holds
-    // its task and what it can do about that.
-    const h = await heldFacts(ctx, conv, row);
-    if (!m.length) {
-      const state = unblocked === undefined ? `${row.short_id} is still blocked` : "Nothing it waits on is open any more";
-      return { key, content: `${removed?.who} removed the wait ${clauses(r, words)} you set on ${name}, so it will not wake you.${h?.stillWaits ? ` ${heldWaitsLine(h, row, ownerConv, "removed")}` : ` ${state}. Check whether the work that waited on it can go ahead, and replan it if not.`}` };
-    }
-    const next = h?.stillWaits ? ` ${heldWaitsLine(h, row, ownerConv, "met")}` : h?.others.length ? ` ${heldBlockedLine(h)}` : null;
-    if (!r.length) return { key, content: `${name} is unblocked: ${unblocked}.${next ?? ` You set the wait ${clauses(m, words)} on it, so continue the work that waited on it.`}` };
-    return { key, content: `${name} is unblocked: ${unblocked}. You set the wait ${clauses(m, words)} on it, which was met, and the wait ${clauses(r, words)}, which ${removed?.who} removed.${next ?? " Check whether the work that waited on them can go ahead, and continue it or replan it."}` };
-  });
-  if (!met.length) return;
-  const now = Date.now();
-  await writeWaits(ctx, row, row.waits!.map((w) => (met.includes(w) ? { ...w, setter_told_at: now } : w)), bySystem, now);
-}
-
-/** The open task a setter holds, by short id, else null. */
-async function heldBy(ctx: Ctx, conv: Doc<"conversations">): Promise<Task | null> {
-  const held = conv.active_task_id && !reviewsHeld(conv) ? await ctx.db.get(conv.active_task_id) : null;
-  return held && !isTerminalTaskStatus(held.status) ? held : null;
-}
-
-/** What a setter's own held task still waits on, for `task`'s setter texts.
- *  `stillWaits`: it lists `task` in blocked_by. `others`: every other open
- *  blocker holding it back, as "ct-9 to close", "PR #42 to merge". `owns`:
- *  the setter is the held task's owning session (ownerOf), so its unblocking
- *  wakes this setter; otherwise it wakes the session holding it. */
-type HeldFacts = { held: string; stillWaits: boolean; others: string[]; owns: boolean; owner?: string };
-async function heldFacts(ctx: Ctx, conv: Doc<"conversations">, task: Task): Promise<HeldFacts | null> {
-  const held = await heldBy(ctx, conv);
-  if (!held) return null;
-  const isTask = (ref: string) => ref === task.short_id || ref === String(task._id);
-  const stillWaits = !!held.blocked_by?.some(isTask);
-  let others: string[] = [];
-  if (held.blocked_by?.length || held.waits?.some((w) => w.state === "waiting")) {
-    const { statusOf } = await taskLookups(ctx, held);
-    others = blockersHoldingBack(held, statusOf).filter((b) => !(b.kind === "task" && isTask(b.ref))).map(waitsForClause);
-  }
-  const owner = await ownerOf(ctx, held);
-  const owns = String(owner?._id ?? "") === String(conv._id);
-  return { held: held.short_id, stillWaits, others, owns, owner: owner?.short_id };
-}
-
-/** "ct-9 to close", "PR #42 to merge", "sd-4 to be answered": what "still
- *  waits for" a blocker reads as. */
-function waitsForClause(b: Blocker): string {
-  if (b.kind === "task") return `${b.ref} to close`;
-  if (b.kind === "pr_checks_green") return `green checks on ${waitSubject(b, STORED)}`;
-  if (b.kind === "time") return waitSubject(b, STORED);
-  return `${waitSubject(b, STORED)} ${WAIT_PENDING_WORD[b.kind]}`;
-}
-
-const andList = (xs: string[]) => (xs.length < 2 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`);
-
-/** Who is woken when the held task unblocks: this setter only when it is the
- *  held task's owning session. */
-const woken = (h: HeldFacts) =>
-  h.owns ? `you are woken as ${h.held}'s owner when ${h.held} is unblocked` : `${h.held}'s owning session${h.owner ? ` (${h.owner})` : ""} is woken when it is unblocked`;
-
-/** What a setter whose held task still waits on `task` closing can do, by
- *  whether `task` has an owning session. With one, that owner is told at the
- *  same moment to continue (or replan), so the setter asks it rather than
- *  closing the task itself. With none, nobody is told and nothing may close
- *  it: the setter closes a finished task, or pins blocked so a person moves it. */
-function heldWaitsLine(h: HeldFacts, task: Task, owner: Doc<"conversations"> | undefined, event: "met" | "failed" | "removed"): string {
-  const t = task.short_id;
-  if (!owner) return `${h.held} still waits for ${t} to close. Nobody holds ${t}. If its work is done, close it; otherwise pin blocked naming ${t}, since a person has to move it.`;
-  const who = owner.short_id ? `session ${owner.short_id}` : `${t}'s owner`;
-  if (event === "failed") return `${h.held} still waits for ${t} to close, so replan with ${who}, or drop the dependency.`;
-  if (event === "removed") return `${h.held} still waits for ${t} to close; ${woken(h)}. Pin dormant naming ${t} and end your turn.`;
-  return `${h.held} still waits for ${t} to close: ask ${who} to close ${t} when its work is done; ${woken(h)}. Pin dormant naming ${t} and end your turn.`;
-}
-
-/** What a setter whose held task is held back by other open blockers does:
- *  stay parked on them. */
-const heldBlockedLine = (h: HeldFacts) =>
-  `${h.held} still waits for ${andList(h.others)}; ${woken(h)}. Pin dormant naming ${h.others.length === 1 ? "it" : "them"} and end your turn.`;
-
-/** The setter's held task when it still lists `task` in blocked_by: it waits
- *  on `task` closing, not on the wait the setter set. */
-async function heldStillWaiting(ctx: Ctx, conv: Doc<"conversations">, task: Task): Promise<string | null> {
-  const held = await heldBy(ctx, conv);
-  return held?.blocked_by?.some((ref) => ref === task.short_id || ref === String(task._id)) ? held.short_id : null;
-}
-
-/** `task` closed with waits still owed to the sessions that set them: each is
- *  told once that its wait will not wake it, and the waits are stamped
- *  (`setter_told_at`). The session that closed it hears nothing, nor does a
- *  setter whose held task waits on this one: the close releases that task,
- *  which wakes the setter as its owner (releaseDependents, the same call). */
-async function tellSettersClosed(ctx: Ctx, task: Task, status: string, closedBy: Id<"conversations"> | undefined): Promise<void> {
-  const row = await ctx.db.get(task._id);
-  const owed = (row?.waits ?? []).filter((w) => setterOwed(w) && !w.setter_told_at);
-  if (!row || !owed.length) return;
-  await wakeSetters(ctx, row, owed, [closedBy], async (mine, conv) => {
-    if (await heldStillWaiting(ctx, conv, row)) return null;
-    const waits = mine.length === 1 ? "wait" : "waits";
-    return {
-      key: `closed:${status}:${mine.map((w) => w.id).join(",")}`,
-      content: status === "done"
-        ? `${taskName(row)} was closed as done; the ${waits} you set on it will not wake you. Check whether your work can go ahead.`
-        : `${taskName(row)} was closed (${status}); the ${waits} you set on it will not wake you. Replan your own work.`,
-    };
-  });
-  const now = Date.now();
-  await writeWaits(ctx, row, row.waits!.map((w) => (owed.includes(w) ? { ...w, setter_told_at: now } : w)), bySystem, now);
-}
-
-/** The task as a wake names it. Its title is foreign text in another
- *  session's prompt, so it stays one escaped line. */
-const taskName = (task: Task) => `${task.short_id}${task.title ? ` ("${inlineForeignText(task.title).replace(/"/g, "'").slice(0, 80)}")` : ""}`;
 
 /**
  * The task's last open blocker just cleared (TG2): a comment on the task, then
@@ -1197,25 +873,5 @@ async function onWaitsFailed(ctx: Ctx, task: Task, failed: TaskWait[], words: Wa
       skip,
     );
   }
-  // A setter of several hears of them in one message. The task's blockers are
-  // its owner's to edit (told above), so the setter replans its own work. A
-  // setter whose held task waits on this one closing is told too, what it
-  // can do by whether the task has an owner (heldWaitsLine). Setters of met waits are not told: the owner is told to
-  // replace the failed wait, so the task may still unblock, and a wait
-  // stamp's lifetime bounds one that never does.
-  const taskOwner = await ownerOf(ctx, task);
-  await wakeSetters(ctx, task, failed, [...skip, taskOwner?._id], async (mine, conv) => {
-    const h = await heldFacts(ctx, conv, task);
-    // A replan, never also a pin-dormant order: the work that waited on this
-    // wait has to change. What else holds its task is said, not acted on.
-    const replan = h?.others.length ? "Replan the work that waited on it" : `Replan your own work${h ? ` (${h.held})` : ""}`;
-    const theirs = taskOwner ? `, and leave ${task.short_id}'s blockers to its owner.` : `. Nobody holds ${task.short_id}, so no one else will replan it.`;
-    const next = h?.stillWaits
-      ? heldWaitsLine(h, task, taskOwner, "failed")
-      : `${replan}${theirs}${h?.others.length ? ` ${h.held} also still waits for ${andList(h.others)}.` : ""}`;
-    return {
-      key: `failed:${mine.map((w) => `${w.id}:${w.settled_at}`).join(",")}`,
-      content: `${taskName(task)} is still blocked: ${mine.map(what).join("; ")}, so the ${mine.length === 1 ? "wait" : "waits"} you set on it can no longer clear. ${next}`,
-    };
-  });
+  await tellSettersFailed(ctx, task, failed, what, skip);
 }

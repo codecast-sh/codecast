@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { renderToStaticMarkup } from "react-dom/server";
-import { PARKED_WAKE_TTL_MS } from "@codecast/shared/contracts";
+import { PARKED_WAKE_TTL_MS } from "@codecast/shared/contracts/inboxPlacement";
 import type { InboxSession } from "../../store/inboxStore";
 import { DormantClaimRow } from "./DormantWakeRows";
 

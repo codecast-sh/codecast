@@ -96,7 +96,7 @@ export function isArmedTriggerHome(
 
 // A hosted conversation's routine delivers each run's answer into it, so it
 // never parks there: the answer files like any turn. The same rule as the
-// shared projection's (inboxProjection placeProjectableRow, v20).
+// shared projection's (inboxPlacement placeProjectableRow, v20).
 function triggerMayPark(conv: { agent_type?: string | null }): boolean {
   return !isHostedAgentType(conv.agent_type);
 }

@@ -5,11 +5,11 @@ export { deliverSessionNotification, deliverSessionNotificationToParties, idleDi
 import { routeUpHears, routeUpWaitingSession } from "./agentTasks";
 import {
   openTasksVouchForWaiting,
-  rowWakeInputs,
   IDLE_DIGEST_WINDOW_MS,
   summarizeIdleDigest,
   isHostedAgentType,
 } from "@codecast/shared/contracts";
+import { rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
 import { v } from "convex/values";
 import { commentIdValidator } from "./lib/conversationCommentRows";
 import { internal } from "./_generated/api";

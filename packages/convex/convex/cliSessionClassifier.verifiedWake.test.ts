@@ -4,7 +4,8 @@
 // The shape is jx729tp: a lead whose standing trigger outlives its managed
 // session, that answered a person and pinned dormant.
 import { describe, expect, test } from "bun:test";
-import { deriveLiveAt, pinPredatesUserMessage, placeProjectableRow } from "@codecast/shared/contracts";
+import { deriveLiveAt } from "@codecast/shared/contracts";
+import { pinPredatesUserMessage, placeProjectableRow } from "@codecast/shared/contracts/inboxPlacement";
 import { makeFakeDb } from "./testDb";
 import { cliSessionClassifier } from "./cliSessionClassifier";
 import { convexTest } from "convex-test";

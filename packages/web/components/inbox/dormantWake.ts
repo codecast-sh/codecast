@@ -6,7 +6,8 @@
 // a wait it waits on, and why the server no longer vouches for a run or wait
 // the classifier dropped), or says plainly that nothing is scheduled and when
 // the row comes back to the person.
-import { DORMANT_CLAIM_TTL_MS, rowHeartbeatAliveAt, rowParkedWakeLive, threadStateRows, threadStateHeadline } from "@codecast/shared/contracts";
+import { DORMANT_CLAIM_TTL_MS, rowHeartbeatAliveAt, threadStateRows, threadStateHeadline } from "@codecast/shared/contracts";
+import { rowParkedWakeLive } from "@codecast/shared/contracts/inboxPlacement";
 import type { InboxSession } from "../../store/inboxStore";
 import { fmtClock, fmtDuration } from "../triggerCadence";
 import { taskDisplayTitle, type TaskRow, type TriggerRow } from "../triggerTasks";

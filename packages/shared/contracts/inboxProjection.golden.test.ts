@@ -8,11 +8,11 @@ import {
   digestProjection,
   fnv1a32,
   inboxSortTimeOfRow,
-  projectInbox,
   type InboxBucket,
   type InboxTruncation,
   type ProjectableInboxRow,
 } from "./inboxProjection";
+import { projectInbox } from "./inboxPlacement";
 import { expandFixtureRows, resolveEpochRelative, type FixtureRowSpec } from "./__fixtures__/inboxProjectionGen";
 
 // GOLDEN FIXTURES for the shared inbox projection (sync-convergence C3,
