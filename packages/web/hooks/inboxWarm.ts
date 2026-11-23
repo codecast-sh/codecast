@@ -5,6 +5,7 @@ import { makeCollectionSig } from "../store/wakeSig";
 import { whenInputQuiet } from "../lib/inputQuiet";
 import { windowDrawsTranscripts } from "../lib/windowRole";
 import { windowOrgTree } from "../store/orgSlice";
+import { afterBootIdle } from "../lib/bootIdle";
 import { shareTokenArg } from "../lib/shareTokenScope";
 import { isHostedAgentType } from "@codecast/shared/contracts";
 
@@ -485,9 +486,11 @@ function runWarmLoop(convex: ConvexClient): () => void {
   const unsubscribe = useInboxStore.subscribe((st, prev) => {
     if (warmInputsChanged(st, prev) || visualOrderViewSig(st) !== visualOrderViewSig(prev)) schedule();
   });
+  let cancelBoot = () => {};
   if (hidden()) missed = true;
-  else warmVisibleSessions(convex);
+  else cancelBoot = afterBootIdle(() => warmVisibleSessions(convex));
   return () => {
+    cancelBoot();
     unsubscribe();
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
     if (timer !== null) clearTimeout(timer);

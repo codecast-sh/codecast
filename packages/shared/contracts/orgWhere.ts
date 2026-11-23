@@ -98,7 +98,7 @@ export function orgChatLines(chat: NonNullable<OrgWhere["chat"]>): string[] {
 /** How a session uses where it sits. Read with the facts above it. */
 export const ORG_CONTEXT_GUIDANCE = `${MESSAGING_POLICIES.lead.guidance}
 
-cast role wake @handle reaches a role; cast send <id> a session; cast chat dm @handle "<text>" a person; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue; cast org where shows this picture as it stands now.`;
+cast role wake @handle reaches a role; cast send <id> a session; cast chat dm @handle "<text>" a person; cast route --dry names the owner of a request when you are unsure; cast decide puts a choice in a person's queue, and cast decide "<what Yes does>?" --run "cast …" (--on laptop from a cloud host) is how a step only your person may take reaches them: a Yes card that runs it as theirs, never a command for them to type; cast org where shows this picture as it stands now.`;
 
 /** The block injected at session start. */
 export function orgContextBlock(w: OrgWhere): string {

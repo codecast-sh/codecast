@@ -10,6 +10,9 @@ import { closeDomWindow } from "../../../test-helpers/domGlobals";
 const localRoom = () => ({ localParticipant: { identity: "u-me" } }) as any;
 
 const { bindCallCursors, encodeCursorMessage, resetCallCursors } = await import("../../../lib/calls/callCursors");
+
+// livekit-client loads before a room exists (lib/calls/livekit); these drive rooms directly.
+await (await import("../../../lib/calls/livekit")).loadLivekit();
 const { ScreenCursors } = await import("../ScreenCursors");
 
 const dom = new JSDOM("<!doctype html><html><body></body></html>");
