@@ -380,6 +380,10 @@
       },
     },
   },
+  "patchedDependencies": {
+    "cmdk@1.1.1": "patches/cmdk@1.1.1.patch",
+    "convex@1.36.1": "patches/convex@1.36.1.patch",
+  },
   "overrides": {
     "@radix-ui/react-slot": "1.2.4",
     "react": "19.1.0",
