@@ -314,7 +314,8 @@ export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<
 // starts at its role. A standing session's starts at its parent, never at the
 // role that asked: a lead that reports to a person has no role above it and
 // its people are its owners and that person; a sub-lead's people are its
-// owners alone, and its parent role reads it first. `hears` is the one role
+// owners and the person its line ends at (never the seat's starter), and its
+// parent role reads it first. `hears` is the one role
 // told about the decision, the first on the ladder, when it can be told
 // (reachableRole). While a role hears, the decision enters no person's queue:
 // the role answers it under a grant, or hands it up (handUp): it recommends,
@@ -356,7 +357,11 @@ async function routeForSession(ctx: Ctx, conversation: any, now: number, task?: 
   const parent = conversation.standing_role_id ? role?.reports_to : undefined;
   const first = parent ? (parent.kind === "role" ? await ctx.db.get(parent.role_id) : null) : role;
   const ladder = await buildLadder(ctx, first, now);
-  const people = await peopleFor(ctx, conversation, parent ? (parent.kind === "user" ? parent.user_id : undefined) : ladder.firstPersonId);
+  // A sub-lead's seat has no person owner (org-staffing.md S28): the person
+  // its line ends at answers, never whoever happened to start the seat.
+  const people = parent?.kind === "role" && ladder.firstPersonId
+    ? (Array.from(new Set([...(await listSessionOwnerIds(ctx, conversation._id)), ladder.firstPersonId].map(String))) as Id<"users">[])
+    : await peopleFor(ctx, conversation, parent?.kind === "user" ? parent.user_id : ladder.firstPersonId);
   const hears = first && (await reachableRole(ctx, first._id)) ? first : null;
   if (people.length > 0) return { role, ladder, people, hears };
   const lead = await projectLeadRole(ctx, task);
@@ -424,10 +429,10 @@ export async function rerouteRow(ctx: Ctx, conversation: any, row: DecisionRow, 
   // A proposal's decision asked by another session keeps routing as the station that proposed it.
   const proposal = await ctx.db.query("expectation_proposals").withIndex("by_decision", (q: any) => q.eq("decision_id", row._id)).first();
   const asStation = proposal?.conversation_id && String(proposal.conversation_id) !== String(conversation._id) ? await ctx.db.get(proposal.conversation_id) : undefined;
-  const { role, people: chain, hears, ladder, trial } = await routeFor(ctx, conversation, now, task, asStation);
+  const { people: chain, hears, ladder, trial } = await routeFor(ctx, conversation, now, task, asStation);
   // Shared out by area (decisionRouting.ts): its owner keeps it while they still cover its project.
   const kept = row.holder?.kind === "user" ? (row.holder.id as Id<"users">) : row.asked_user_ids?.[0];
-  const areaOwner = await routeByArea(ctx, { conversation, task, role, category: row.category ?? "unknown", team_id: row.team_id, addressed: !!row.addressed, trial: trial ?? (row.trial ? "owner" : null), workflow_run_id: row.workflow_run_id, keep: kept, now });
+  const areaOwner = await routeByArea(ctx, { conversation, task, category: row.category ?? "unknown", team_id: row.team_id, addressed: !!row.addressed, trial: trial ?? (row.trial ? "owner" : null), charted: ladder.hops.length > 0 || !!row.hops?.length, workflow_run_id: row.workflow_run_id, keep: kept, now });
   const people = areaOwner ? [areaOwner] : chain;
   // A row asked with no ladder takes the one it now climbs, and its first
   // role hears; a row that has one keeps it and the recommendations on it.
@@ -1233,7 +1238,7 @@ export async function askCore(ctx: Ctx, auth: { userId: Id<"users"> }, args: Ask
   const teamTask = task ?? (existing?.task_id ? await ctx.db.get(existing.task_id) : null);
   const team_id = decisionTeamOf(conversation, teamTask);
   // Shared out by area (decisionRouting.ts): the member covering its project owns it; no match keeps the chain's people.
-  const areaOwner = await routeByArea(ctx, { conversation, task, role, category, team_id, addressed: !!addressed, trial: routed.trial, workflow_run_id: args.workflow_run_id, keep: existing?.asked_user_ids?.[0], now });
+  const areaOwner = await routeByArea(ctx, { conversation, task, category, team_id, addressed: !!addressed, trial: routed.trial, charted: routed.ladder.hops.length > 0, workflow_run_id: args.workflow_run_id, keep: existing?.asked_user_ids?.[0], now });
   const people = areaOwner ? [areaOwner] : routedPeople;
   if (existing) {
     // A question a person gave to a teammate or escalated (decisionHandoff.ts) stays theirs when it is asked again.

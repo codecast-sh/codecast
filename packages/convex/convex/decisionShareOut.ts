@@ -17,7 +17,6 @@ import { isHostedAgentType } from "@codecast/shared/contracts";
 import { decisionOwnerOf, planShareOut, type ShareOutMove, type ShareOutRow } from "@codecast/shared/contracts/decisionAreas";
 import { isProtectedCategory } from "./lib/decisionCategory";
 import { syncDecisionInbox } from "./lib/decisionInbox";
-import { roleOfConversation } from "./lib/actor";
 import { areaProjectsOf, noticeAreaOwner, readLoads, teamAreaMembers, teamReadsDecision } from "./decisionRouting";
 
 type Ctx = { db: any; scheduler?: any };
@@ -44,7 +43,8 @@ async function requireAdmin(ctx: Ctx, userId: Id<"users">, teamId: Id<"teams">):
 /** Whether Share out may move this decision at all (the header's list). */
 async function movable(ctx: Ctx, d: DecisionRow, teamId: Id<"teams">): Promise<{ conversation: any; task: any } | null> {
   if (d.status !== "pending" || d.trial || d.silent || d.passed_to || d.escalated || d.addressed) return null;
-  if (isProtectedCategory(d.category) || d.holder?.kind === "role") return null;
+  // A decision that climbs a reporting line is the org chart's to route, never an area's.
+  if (isProtectedCategory(d.category) || d.holder?.kind === "role" || d.hops?.length) return null;
   const conversation = await ctx.db.get(d.conversation_id);
   if (!conversation || isHostedAgentType(conversation.agent_type)) return null;
   const task = d.task_id ? await ctx.db.get(d.task_id) : null;
@@ -66,7 +66,7 @@ async function planFor(ctx: Ctx, teamId: Id<"teams">, now: number): Promise<{ mo
       rows.set(String(d._id), d);
       input.push({
         id: String(d._id),
-        project_ids: await areaProjectsOf(ctx, { task: ok.task, role: await roleOfConversation(ctx, ok.conversation), conversation: ok.conversation }),
+        project_ids: await areaProjectsOf(ctx, { task: ok.task, conversation: ok.conversation }),
         owner: owner?.kind === "user" ? owner.id : null,
         created_at: d.created_at,
       });
