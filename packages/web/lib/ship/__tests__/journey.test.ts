@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { asksBeforeLand, canAnswer, deployHold, journeyOf, journeyStages, journeyWords, landedSha, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { approvalOf, approvalWords, canAnswer, deployHold, journeyOf, journeyStages, journeyWords, landedSha, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
 import { BRANCHING_FLOW, FANOUT_FLOW } from "../journeyFixtures";
 import { pushedFlow } from "../../line/flowPool";
 import { SHIPPED_FLOWS } from "../../line/shippedFlows.generated";
@@ -34,13 +34,13 @@ describe("journeyStages", () => {
     expect(s[1].branches!.map((b) => [b.label, b.who])).toEqual([["CI", "auto"], ["Review", "agent"]]);
     expect(s[2].loops).toEqual([{ id: "ci_conflict", label: "Resolve conflict", max: 3 }, { id: "brief", label: "Fix findings", max: 3 }]);
     expect(s[3].loops.map((l) => l.id)).toEqual(["fix_conflict"]);
-    expect(asksBeforeLand(s)).toBe(false);
+    expect(approvalOf(change)).toEqual({ kind: "if", when: "CI changes" });
   });
   test("a branching flow reads in the order a passing run takes it, Decide before Land", () => {
     const s = journeyStages(branching);
     expect(s.map((x) => x.label)).toEqual(["Check", "Review", "Founder intent", "Land without asking?", "Why a person", "Decide", "Land", "Deploy", "Live"]);
     expect(s.find((x) => x.id === "ship")!.role).toBe("land");
-    expect(asksBeforeLand(s)).toBe(true);
+    expect(approvalOf(branching)).toEqual({ kind: "always" });
   });
   test("the hand-written fan-out flow the gallery draws reads as the library's does", () => {
     expect(journeyStages(pushedFlow({ _id: "wf_fan", ...FANOUT_FLOW })).map((x) => [x.label, x.role, x.who])).toEqual(journeyStages(change).map((x) => [x.label, x.role, x.who]));
@@ -173,10 +173,10 @@ describe("gates", () => {
     const mine = gated(change, CI_CARD, "decide__decide", card());
     expect(mine.now).toMatchObject({ kind: "gate", stage: "Decide", mine: true, decisionId: "d1", prompt: "Ship ct-1? It edits CI.", since: 15 });
     // The stage that holds it is named after the route into the card, not after Verdicts.
-    expect(mine.stages[2]).toMatchObject({ id: "verdicts", label: "Edits CI", state: "waiting", who: "you" });
+    expect(mine.stages[2]).toMatchObject({ id: "verdicts", label: "CI changes", state: "waiting", who: "you" });
     expect(journeyWords(mine)).toEqual({ words: "Your call", tone: "you" });
     const theirs = gated(change, CI_CARD, "decide__decide", card({ holder: { kind: "user", id: "u2" }, asked_user_ids: ["u2"] }));
-    expect(theirs.stages[2]).toMatchObject({ label: "Edits CI", who: "person" });
+    expect(theirs.stages[2]).toMatchObject({ label: "CI changes", who: "person" });
     expect(journeyWords(theirs)).toEqual({ words: "Waiting on a person", tone: "wait" });
     expect(journeyWords(gated(change, CI_CARD, "decide__decide", null)).words).toBe("Waiting on a person");
   });
@@ -361,4 +361,32 @@ test("targetsFromLine reads the Deploy stage's line, old and new", () => {
 
 test("readableWhy cuts long reasons at a word", () => {
   expect(readableWhy("a ".repeat(200))!.endsWith("…")).toBe(true);
+});
+
+describe("approvalOf", () => {
+  test("each shipped line says from its graph whether a person approves", () => {
+    const lines = SHIPPED_FLOWS.filter((f) => f.kind === "line").map((f) => [f.slug, approvalWords(approvalOf(f as any))]);
+    expect(lines).toEqual([["line", "You approve"], ["change", "Asks if CI changes"], ["quick-change", "No approval"], ["climb", "Sometimes asks"]]);
+  });
+  test("a gate on a side route asks only on that route; one reached only past landing asks nobody", () => {
+    const g = (turn: { label?: string }, gateAfterLand = false) => ({
+      nodes: [{ id: "start", label: "start", type: "start" }, { id: "check", label: "Check", type: "command" }, { id: "why", label: "Why", type: "command" }, { id: "ask", label: "Ask", type: "human" }, { id: "landed", label: "Merged", type: "command" }, { id: "exit", label: "Live", type: "exit" }],
+      edges: gateAfterLand
+        ? [{ from: "start", to: "check" }, { from: "check", to: "landed" }, { from: "landed", to: "exit", condition: "outcome = success" }, { from: "landed", to: "ask", condition: "outcome = failure", ...turn }, { from: "ask", to: "exit" }]
+        : [{ from: "start", to: "check" }, { from: "check", to: "landed", condition: "outcome = success" }, { from: "check", to: "why", condition: "outcome = failure", ...turn }, { from: "why", to: "ask" }, { from: "ask", to: "landed" }, { from: "landed", to: "exit" }],
+    }) as any;
+    expect(approvalOf(g({ label: "risky" }))).toEqual({ kind: "if", when: "risky" });
+    expect(approvalWords(approvalOf(g({})))).toBe("Sometimes asks");
+    expect(approvalOf(g({ label: "risky" }, true))).toEqual({ kind: "never" });
+  });
+  test("a card inside the landing segment, off its own passing path, asks only on its route", () => {
+    const seg = (id: string, label: string, type = "command") => ({ id: `land__${id}`, label, type, segment: "land" });
+    const g = {
+      nodes: [{ id: "start", label: "start", type: "start" }, { id: "land", label: "Land", type: "command", segment_entry: true, segment_flow: "land" }, seg("merge", "Merge"), seg("why", "Why a person"), seg("card", "Card", "human"), seg("landed", "Merged"), { id: "exit", label: "Live", type: "exit" }],
+      edges: [{ from: "start", to: "land" }, { from: "land", to: "land__merge" }, { from: "land__merge", to: "land__landed", condition: "outcome = success" }, { from: "land__merge", to: "land__why", condition: "merge.exit_code = 6", label: "edits what judges it" }, { from: "land__why", to: "land__card" }, { from: "land__card", to: "land__merge" }, { from: "land__landed", to: "exit" }],
+    } as any;
+    // The stage reads as a person's, since a step in it is one; the chip still asks only on the card's route.
+    expect(journeyStages(g).find((s) => s.role === "land")!.who).toBe("person");
+    expect(approvalOf(g)).toEqual({ kind: "if", when: "edits what judges it" });
+  });
 });

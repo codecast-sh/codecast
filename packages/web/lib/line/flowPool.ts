@@ -128,6 +128,14 @@ function buildPool(pushed: ReadonlyArray<PushedFlowRow>, repo: ReadonlyArray<Rep
   return all;
 }
 
+/** A repository's flow that replaces a library flow of its slug, named with the repository's short name ("Change ·
+ *  union-mobile"), so it never reads as the library's own. `repository` is the session's, as its remote names it. */
+export function namedForRepo(pool: ReadonlyArray<AppFlow>, repository: string | null): AppFlow[] {
+  const name = repository?.split("/").pop();
+  if (!name) return pool.slice();
+  return pool.map((f) => (f.where === "repo" && SHIPPED_FLOWS.some((s) => s.slug === f.slug) ? { ...f, label: `${f.label} · ${name}` } : f));
+}
+
 export const flowBySlug = (pool: ReadonlyArray<AppFlow>, slug: string | null | undefined) => (slug ? pool.find((f) => f.slug === slug) ?? null : null);
 
 /** The flow a run ran, from its workflow name or slug. */

@@ -116,7 +116,7 @@
 .shp-flow[aria-selected="true"] .shp-radio { border: 4px solid var(--sol-blue); }
 .shp-default { font-size: var(--fs-meta); font-weight: 600; color: var(--sol-blue); margin-left: 6px; }
 .shp-base { font-size: var(--fs-meta); font-weight: 400; color: var(--sol-text-dim); margin-left: 6px; }
-.shp-path { justify-self: end; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.shp-path { justify-self: end; max-width: 100%; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
 .shp-preview { background: var(--sol-bg); }
 .shp-foot { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-top: 1px solid var(--sj-rule-2); }
 .shp-flowname { font-size: 12.5px; font-weight: 600; margin-right: auto; }

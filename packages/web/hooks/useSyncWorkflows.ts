@@ -46,14 +46,18 @@ export function useSyncPoolFlows(workspace?: string | null, enabled = true) {
   return useSyncCollection("workflows", api.workflows.webPool, enabled ? args : "skip");
 }
 
-/** Reader: the pushed rows a workspace's pool draws from: the viewer's own
- *  workflows, then each flow published to the workspace, newest first. appPool
- *  keeps the first of a slug, so the viewer's own copy wins. */
+/** Reader: the pushed rows a workspace's pool draws from: the flows filed under
+ *  the workspace, the viewer's own first, then newest first. A row the viewer
+ *  filed under another workspace is not this one's (a personal flow stays out of
+ *  a team's pool). appPool keeps the first of a slug, so the viewer's own copy wins. */
 export function usePoolFlowRows(workspace?: string | null, enabled = true): any[] {
   useSyncPoolFlows(workspace, enabled);
-  const { workflows: own } = useWorkflows(enabled);
-  const published = useWorkspaceCollection<any>("workflows", workflowSig, workspace ?? null);
-  return useMemo(() => [...own, ...published.slice().sort((a, b) => (b.updated_at ?? 0) - (a.updated_at ?? 0))], [own, published]);
+  const viewerId = useViewerId();
+  const rows = useWorkspaceCollection<any>("workflows", workflowSig, workspace ?? null);
+  return useMemo(() => {
+    const mine = (w: any) => Number(String(w.user_id) === viewerId);
+    return rows.slice().sort((a, b) => mine(b) - mine(a) || (b.updated_at ?? 0) - (a.updated_at ?? 0));
+  }, [rows, viewerId]);
 }
 
 /** The slug a team set as its default flow (teams.setDefaultFlow), or null when it set none or there is no team (the

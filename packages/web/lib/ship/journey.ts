@@ -352,7 +352,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     for (let cur = nodeId; cur && !out.includes(cur) && !stageOf(cur); cur = routedFrom(cur, new Set(out))?.node_id ?? null) out.push(cur);
     return out;
   };
-  // What the run did off the main path, in its own words: the label of the route a stage took into it ("edits CI"),
+  // What the run did off the main path, in its own words: the label of the route a stage took into it ("CI changes"),
   // else the first off-path step's own label.
   const offPathLabel = (nodeId: string): string | null => {
     const first = chain(nodeId).filter((id) => byId.get(id)?.type !== "exit").pop();
@@ -371,7 +371,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const gateNode = open ? run.gate_node_id ?? at : null;
   const gateStage = open ? stageFor(gateNode)?.id ?? null : null;
   const gateMine = open && canAnswer(viewer?.decision, viewer?.id);
-  // A card off the main path names the stage that holds it after the route into it ("Edits CI"), not the stage's own name.
+  // A card off the main path names the stage that holds it after the route into it ("CI changes"), not the stage's own name.
   const gateOff = gateNode && !stageOf(gateNode) ? offPathLabel(gateNode) : null;
   // Where the run stands: stages after it hold only what earlier rounds left, which is not this round's state.
   const current = plan.findIndex((s) => s.id === (backStage ?? gateStage ?? atStage ?? stopStage));
@@ -641,8 +641,45 @@ export function journeyWords(j: Journey | null): { words: string; tone: JourneyT
   }
 }
 
-/** Whether a person approves the change before it lands: a stage of a person's before the one that lands it. */
-export function asksBeforeLand(stages: ReadonlyArray<Pick<JourneyStage, "role" | "who">>): boolean {
-  const land = stages.findIndex((s) => s.role === "land" || s.role === "deploy");
-  return stages.slice(0, land < 0 ? stages.length : land).some((s) => s.who === "person" || s.who === "you");
+/** Whether a person approves the change before it lands: on every run, only on a side route (`when`: the words of the
+ *  route that turns onto it), or never. */
+export type Approval = { kind: "always" } | { kind: "if"; when: string | null } | { kind: "never" };
+
+/**
+ * Who says yes before the change lands, read from the graph. A person's stage on the passing path before the one that
+ * lands it asks on every run. Otherwise a person's step (a segment's own included) that a run can reach before the
+ * change lands, at the runner's landing step or else an exit that is no stop, asks only when a run turns off toward it
+ * from a step that still lands without it: `when` is the words of that turn. Anything else asks nobody.
+ */
+export function approvalOf(graph: Graph): Approval {
+  const plan = planOf(graph);
+  const land = plan.findIndex((s) => s.role === "land" || s.role === "deploy");
+  if (plan.slice(0, land < 0 ? plan.length : land).some((s) => s.who === "person")) return { kind: "always" };
+  const landing = graph.nodes.filter((n) => LANDING_STEP.test(n.id)).map((n) => n.id);
+  const lands = landing.length ? landing : graph.nodes.filter((n) => n.type === "exit" && !n.stop).map((n) => n.id);
+  const start = graph.nodes.filter((n) => n.type === "start").map((n) => n.id);
+  // Every node a walk from `from` reaches, along edges forward or backward, never through `without`.
+  const reach = (from: string[], back: boolean, without?: string) => {
+    const seen = new Set(from.filter((id) => id !== without));
+    for (let frontier = [...seen]; frontier.length; ) {
+      const next = graph.edges.filter((e) => frontier.includes(back ? e.to : e.from)).map((e) => (back ? e.from : e.to)).filter((id) => id !== without && !seen.has(id));
+      for (const id of next) seen.add(id);
+      frontier = [...new Set(next)];
+    }
+    return seen;
+  };
+  const fromStart = reach(start, false);
+  const toLand = reach(lands, true);
+  const asks = graph.nodes.filter((n) => n.type === "human" && fromStart.has(n.id) && toLand.has(n.id)).map((n) => n.id);
+  for (const h of asks) {
+    // The steps that still reach landing without this person, and the turn from one of them toward the person.
+    const passing = reach(lands, true, h);
+    const towards = reach([h], true);
+    const turn = graph.edges.find((e) => passing.has(e.from) && fromStart.has(e.from) && !passing.has(e.to) && towards.has(e.to));
+    if (turn) return { kind: "if", when: turn.label ?? null };
+  }
+  return { kind: "never" };
 }
+
+/** An approval in a chip's words. */
+export const approvalWords = (a: Approval): string => (a.kind === "always" ? "You approve" : a.kind === "if" ? (a.when ? `Asks if ${a.when}` : "Sometimes asks") : "No approval");

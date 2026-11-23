@@ -28,7 +28,7 @@ describe("a checkout with no flows of its own runs the shipped change and line-d
     expect(p.repository).toBe("acme/widgets");
     expect(p.head_sha).toBeNull();
     expect(p.recent).toEqual({ paths: [], commits: [], dropped: 0 });
-    expect(p.change).toMatchObject({ slug: "change", label: "Change", base: "change", file: null, removed: [] });
+    expect(p.change).toMatchObject({ slug: "change", label: "Ship", base: "change", file: null, removed: [] });
     expect(p.change.stations.filter((s) => s.main).map((s) => s.label)).toEqual(["PR", "CI and review", "CI", "Review", "Both done", "Verdicts", "Merge", "Merged", "Deploy"]);
     expect(new Set(p.change.stations.map((s) => s.own))).toEqual(new Set(["inherited"]));
     expect(station(p.change, "review").who).toBe("agent");

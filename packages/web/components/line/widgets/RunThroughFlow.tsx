@@ -13,10 +13,10 @@ import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useInboxStore } from "../../../store/inboxStore";
 import { usePoolFlowRows, useSessionFlowRuns, useTeamDefaultFlowSlug } from "../../../hooks/useSyncWorkflows";
 import { useRunFlow } from "../../../hooks/useFlowObject";
-import { repositoryOfRemote, sessionRemoteOf, sessionRootOf, useRepoFlows } from "../../../hooks/useRepoFlows";
-import { appPool, linesFirst, type AppFlow } from "../../../lib/line/flowPool";
+import { repositoryOfRemote, sessionRemoteOf, sessionRootOf, sessionWorkspaceOf, useRepoFlows } from "../../../hooks/useRepoFlows";
+import { appPool, linesFirst, namedForRepo, type AppFlow } from "../../../lib/line/flowPool";
 import { defaultFlowOf, takesSessionChange } from "@codecast/shared/contracts/flowPool";
-import { asksBeforeLand, journeyOf, journeyStages, journeyWords, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
+import { approvalOf, approvalWords, journeyOf, journeyStages, journeyWords, runIsLive, type Journey, type TargetState } from "../../../lib/ship/journey";
 import { landedSha, reachShip, reachTargets } from "../../../lib/ship/sessionShip";
 import { useDeployReach, type DeployReachRow } from "../../../hooks/useDeployReach";
 import { shipLedgerFor } from "../../consequential/shipLedger";
@@ -177,18 +177,21 @@ export function ShipAgainButton({ flow, conversationId, sessionTitle, primary }:
 }
 
 function PoolPicker({ conversationId, session, onRun }: { conversationId: string; session: string; onRun: (flow: AppFlow) => void }) {
-  const workflows = usePoolFlowRows();
-  const teamSlug = useTeamDefaultFlowSlug();
+  // The session's workspace, not the active one: the pool `cast flow run` reads where the session runs.
+  const workspace = useInboxStore((s) => sessionWorkspaceOf(s as any, conversationId));
+  const workflows = usePoolFlowRows(workspace);
+  const teamSlug = useTeamDefaultFlowSlug(workspace ? (workspace.startsWith("team:") ? workspace.slice(5) : null) : undefined);
   // The session's checkout's own flows come first, as `cast flow run` takes them there.
   const remote = useInboxStore((s) => sessionRemoteOf(s as any, conversationId));
   const root = useInboxStore((s) => sessionRootOf(s as any, conversationId));
-  const repoFlows = useRepoFlows(root, repositoryOfRemote(remote));
+  const repository = repositoryOfRemote(remote);
+  const repoFlows = useRepoFlows(root, repository);
   const { pool, fallback } = useMemo(() => {
     // Flows only: a segment runs one part of a change, never the change to live.
-    const all = linesFirst(appPool(workflows, repoFlows).filter((f) => f.kind === "line" && takesSessionChange(f)));
+    const all = namedForRepo(linesFirst(appPool(workflows, repoFlows).filter((f) => f.kind === "line" && takesSessionChange(f))), repository);
     const d = defaultFlowOf(all, teamSlug);
     return { pool: d ? [d, ...all.filter((f) => f !== d)] : all, fallback: d };
-  }, [workflows, repoFlows, teamSlug]);
+  }, [workflows, repoFlows, repository, teamSlug]);
   const [picked, setPicked] = useState<string | null>(null);
   const flow = pool.find((f) => f.slug === picked) ?? fallback ?? pool[0];
   const journey = useMemo(() => (flow ? journeyOf(flow, null) : null), [flow]);
@@ -198,18 +201,18 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
       <header className="shp-head"><b>Ship</b><span className="shp-session" title={session}>{session}</span></header>
       {pool.length > 1 ? (
         <ul className="shp-flows" role="listbox" aria-label="Flows">
-          {pool.map((f) => (
+          {pool.map((f) => { const approval = approvalOf(f); return (
             <li key={f.slug}>
               <button type="button" role="option" aria-selected={f.slug === flow.slug} className="shp-flow" onClick={() => setPicked(f.slug)} onDoubleClick={() => onRun(f)} data-run-through-flow={f.slug}>
                 <i className="shp-radio" aria-hidden />
                 <b>{f.label}{f === fallback ? <span className="shp-default" data-run-through-default="">Default</span> : f.base ? <span className="shp-base">on {f.base}</span> : null}</b>
                 <span className="shp-path">
-                  <span className="shp-asks" data-asks={asksBeforeLand(journeyStages(f)) ? "" : undefined}>{asksBeforeLand(journeyStages(f)) ? "You approve" : "No approval"}</span>
+                  <span className="shp-asks" data-asks={approval.kind === "never" ? undefined : approval.kind}>{approvalWords(approval)}</span>
                   {journeyStages(f).map((s) => s.label).join(" → ")}
                 </span>
               </button>
             </li>
-          ))}
+          ); })}
         </ul>
       ) : null}
       <div className="shp-preview" data-flow={flow.slug}>
