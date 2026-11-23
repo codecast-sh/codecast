@@ -6,6 +6,7 @@ import { hashToken } from "./apiTokens";
 import { allModules } from "./testModules.testkit";
 import { enqueuePendingMessage, healAndNotifyStuckMessages } from "./pendingMessages";
 import { enqueueKillAndResume } from "./conversations";
+import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
 
 setDefaultTimeout(60_000);
 
@@ -111,6 +112,20 @@ describe("registerSession visibility", () => {
     expect(row.auto_shared).toBeUndefined();
     await expect(s.send(MATE_TOKEN, short_id)).rejects.toThrow();
     expect(await s.pendingRows()).toHaveLength(0);
+  });
+
+  test("a repository the owner locked stays private from a worktree outside the locked folder", async () => {
+    const s = await setup();
+    const remote = "git@github.com:acme/widgets.git";
+    await s.t.run((ctx) => ctx.db.insert("directory_team_mappings", {
+      user_id: s.owner, path_prefix: "/home/me/elsewhere", auto_share: false, private: true,
+      repository: repositoryKeyOfRemote(remote), created_at: Date.now(),
+    } as any));
+    const { conversation_id, short_id } = await s.register({ git_remote_url: remote });
+    const row = await s.conv(conversation_id);
+    expect(row.is_private).toBe(true);
+    expect(row.team_id).toBeUndefined();
+    await expect(s.send(MATE_TOKEN, short_id)).rejects.toThrow();
   });
 
   test("an owner with no team stays private", async () => {

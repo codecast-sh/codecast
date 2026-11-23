@@ -3,7 +3,7 @@ import { mutation } from "./functions";
 import { getAuthenticatedUserId, bounceFromEndedSession, NON_TERMINAL_PENDING_STATUSES } from "./pendingMessages";
 import { checkRateLimit } from "./rateLimit";
 import { isDeletedSession } from "./lib/deletedSessions";
-import { buildShareUpdate, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
+import { buildShareUpdate, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { deliveryTargetValidator } from "./lib/deliveryTargetValidator";
 
@@ -19,6 +19,7 @@ export const registerSession = mutation({
     cwd: v.string(),
     device_id: v.string(),
     delivery_target: deliveryTargetValidator,
+    git_remote_url: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -68,6 +69,7 @@ export const registerSession = mutation({
       status: "active",
       register_only: true,
       delivery_target: args.delivery_target,
+      git_remote_url: args.git_remote_url,
     });
     const shortId = id.toString().slice(0, 7);
     await ctx.db.patch(id, { short_id: shortId });
@@ -76,7 +78,7 @@ export const registerSession = mutation({
       .query("directory_team_mappings")
       .withIndex("by_user_id", (q) => q.eq("user_id", userId))
       .collect();
-    if (!matchDirectoryMapping(mappings as DirectoryMapping[], args.cwd)?.private) {
+    if (!matchDirectoryMapping(mappings as DirectoryMapping[], args.cwd, conversationRepository(conv))?.private) {
       const share = await buildShareUpdate(ctx, conv, userId);
       if (share.team_id) {
         await patchConversationVisibility(ctx, conv, { ...share, auto_shared: true }, userId);

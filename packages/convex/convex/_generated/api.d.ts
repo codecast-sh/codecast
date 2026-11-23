@@ -310,6 +310,7 @@ import type * as lib_decisionTeam from "../lib/decisionTeam.js";
 import type * as lib_decisionVerdict from "../lib/decisionVerdict.js";
 import type * as lib_deletedSessions from "../lib/deletedSessions.js";
 import type * as lib_deletionPlans from "../lib/deletionPlans.js";
+import type * as lib_deliveryTargetValidator from "../lib/deliveryTargetValidator.js";
 import type * as lib_deployAllowance from "../lib/deployAllowance.js";
 import type * as lib_deviceUpdate from "../lib/deviceUpdate.js";
 import type * as lib_displayNames from "../lib/displayNames.js";
@@ -1146,6 +1147,7 @@ declare const fullApi: ApiFromModules<{
   "lib/decisionVerdict": typeof lib_decisionVerdict;
   "lib/deletedSessions": typeof lib_deletedSessions;
   "lib/deletionPlans": typeof lib_deletionPlans;
+  "lib/deliveryTargetValidator": typeof lib_deliveryTargetValidator;
   "lib/deployAllowance": typeof lib_deployAllowance;
   "lib/deviceUpdate": typeof lib_deviceUpdate;
   "lib/displayNames": typeof lib_displayNames;
