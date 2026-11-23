@@ -66,23 +66,27 @@ export const ComposerOwnerStrip = memo(function ComposerOwnerStrip({ conversatio
   if (!active || !line) return null;
   const { tag, telling } = line;
   return (
-    <div className={className}><div data-cc-owner-strip="active" className={STRIP}>
+    <div className={className}><div data-cc-owner-strip="active" className={`${STRIP} max-sm:flex-wrap max-sm:gap-y-1`}>
       <OwnerFace role={line.role} size={16} />
-      {/* A phone keeps the role's tag beside the choice, never a sentence cut through it. */}
-      <span className="flex-1 min-w-0 truncate">
-        <span className="max-sm:hidden">{telling ? "Goes to " : "Sending pauses "}</span>
-        <b className="font-medium text-sol-text">{tag}</b>
-        <span className="max-sm:hidden">{telling ? ", which stays active." : "."}</span>
+      {/* The role's tag is never cut: the words after it give way first,
+          then the words before it, and on a phone the choice takes a row of
+          its own, as the app does. */}
+      <span className="flex min-w-0 flex-1 items-baseline max-sm:basis-44">
+        <span className="min-w-0 overflow-hidden text-ellipsis whitespace-pre">{telling ? "Goes to " : "Sending pauses "}</span>
+        <b className="shrink-0 whitespace-nowrap font-medium text-sol-text">{tag}</b>
+        <span className="min-w-0 shrink-[100] overflow-hidden text-ellipsis whitespace-pre">{telling ? ", which stays active." : "."}</span>
       </span>
-      <SegmentedToggle
-        size="sm"
-        value={telling ? "tell" : "take"}
-        onChange={(key) => setComposerTell(conversationId, key === "tell")}
-        items={[
-          { key: "take", label: "Pause and send", title: `Send here; ${tag} pauses until you resume it` },
-          { key: "tell", label: `Tell ${tag}`, title: `Send to ${line.role.name}'s own session; it stays active` },
-        ]}
-      />
+      <span className="shrink-0 max-sm:ml-auto">
+        <SegmentedToggle
+          size="sm"
+          value={telling ? "tell" : "take"}
+          onChange={(key) => setComposerTell(conversationId, key === "tell")}
+          items={[
+            { key: "take", label: "Pause and send", title: `Send here; ${tag} pauses until you resume it` },
+            { key: "tell", label: `Tell ${tag}`, title: `Send to ${line.role.name}'s own session; it stays active` },
+          ]}
+        />
+      </span>
       <span className="own-strip-key inline-flex shrink-0 items-center gap-1 text-meta text-sol-text-dim max-sm:hidden" data-owner-strip-key>
         <KeyCap size="xs">↵</KeyCap>{telling ? "tell" : "pause and send"}
       </span>
