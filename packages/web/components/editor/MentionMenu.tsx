@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef } from "react";
 import type { MentionItem } from "../../lib/mentionItem";
 import { groupMentionItems } from "../../lib/mentionRanking";
 import { KeyCap } from "../KeyboardShortcutsHelp";
+import { isMac } from "../../shortcuts";
 import { MentionDetail, MentionSuggestion } from "./MentionSuggestion";
 
 type MenuItem = Omit<MentionItem, "id"> & { id?: string; description?: string };
@@ -13,12 +14,14 @@ type MenuItem = Omit<MentionItem, "id"> & { id?: string; description?: string };
 // `items` must already be in orderMentionItems order, so a selected index
 // names the same row here as in the caller's key handler.
 export function MentionMenu({
-  items, selectedIndex, onHover, onPick, query, loading, contextTitle, heading, className, style,
+  items, selectedIndex, onHover, onPick, onAskReply, query, loading, contextTitle, heading, className, style,
 }: {
   items: MenuItem[];
   selectedIndex: number;
   onHover: (index: number) => void;
   onPick: (index: number) => void;
+  /** Chat: insert the session as an address, so the line asks it to reply. */
+  onAskReply?: (index: number) => void;
   query?: string;
   /** A server search is still out: the list may grow. */
   loading?: boolean;
@@ -33,7 +36,11 @@ export function MentionMenu({
   // Keep the selected row in view when the keyboard moves it, never when the
   // pointer does: scrolling under a hovering pointer re-targets the hover.
   const fromPointerRef = useRef(false);
+  const mountedRef = useRef(false);
   useLayoutEffect(() => {
+    const opening = !mountedRef.current;
+    mountedRef.current = true;
+    if (opening && selectedIndex === 0) return;
     if (fromPointerRef.current) { fromPointerRef.current = false; return; }
     const row = listRef.current?.querySelector<HTMLElement>(`[data-index="${selectedIndex}"]`);
     row?.scrollIntoView({ block: "nearest" });
@@ -43,6 +50,7 @@ export function MentionMenu({
     ? [{ key: "all", title: heading, items }]
     : groupMentionItems(items, contextTitle);
   const selected = items[selectedIndex];
+  const canAskReply = !!onAskReply && selected?.type === "session" && !!selected.shortId;
   let index = 0;
 
   return (
@@ -86,20 +94,36 @@ export function MentionMenu({
           <MentionDetail item={selected} />
         </div>
       )}
-      <div className="border-t border-sol-border/40 px-3 h-7 flex items-center gap-3 text-meta text-sol-text-dim">
+      <div className="border-t border-sol-border/40 px-3 h-7 flex items-center gap-3 text-meta text-sol-text-dim whitespace-nowrap">
         <span className="flex items-center gap-1"><KeyCap size="xs">↑</KeyCap><KeyCap size="xs">↓</KeyCap> move</span>
-        <span className="flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> insert</span>
-        <span className="flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> close</span>
-        <span className="ml-auto flex items-center gap-1.5" role="status">
+        {canAskReply ? (
+          <>
+            <span className="flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> mention</span>
+            <button
+              type="button"
+              data-ask-reply
+              onMouseDown={(e) => { e.preventDefault(); onAskReply!(selectedIndex); }}
+              className="-mx-1 px-1 h-5 rounded flex shrink-0 items-center gap-1 text-sol-cyan hover:bg-sol-cyan/10"
+            >
+              <KeyCap size="xs">{isMac ? "⇧" : "Shift"}</KeyCap><KeyCap size="xs">↵</KeyCap> ask to reply
+            </button>
+          </>
+        ) : (
+          <>
+            <span className="flex items-center gap-1"><KeyCap size="xs">↵</KeyCap> insert</span>
+            <span className="flex items-center gap-1"><KeyCap size="xs">Esc</KeyCap> close</span>
+          </>
+        )}
+        <span className="ml-auto min-w-0 flex items-center gap-1.5 overflow-hidden" role="status">
           {loading ? (
             <>
               <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none" aria-hidden>
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z" />
               </svg>
-              Searching everything
+              {canAskReply ? "" : "Searching everything"}
             </>
-          ) : `${items.length} result${items.length === 1 ? "" : "s"}`}
+          ) : canAskReply ? null : `${items.length} result${items.length === 1 ? "" : "s"}`}
         </span>
       </div>
     </div>

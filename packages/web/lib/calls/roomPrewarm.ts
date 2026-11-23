@@ -42,7 +42,8 @@
 //
 //   Not unbounded. One room at a time, released after PREWARM_IDLE_MS, and
 //   never while the call plane is doing anything real.
-import { ConnectionState, RemoteParticipant, RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
+import type { ConnectionState, RemoteParticipant, RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
+import { LK, loadLivekit } from "./livekit";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
 import { huddleRoomOptions } from "./livekitMedia";
@@ -195,10 +196,10 @@ function hearRoom(room: Room): void {
       if (pub.isSubscribed && pub.track) s.attach(pub.track as RemoteTrack, p.identity);
     }
   }
-  room.on(RoomEvent.TrackSubscribed, (track: RemoteTrack, _pub, participant: RemoteParticipant) => {
+  room.on(LK.RoomEvent.TrackSubscribed, (track: RemoteTrack, _pub, participant: RemoteParticipant) => {
     sink?.attach(track, participant.identity);
   });
-  room.on(RoomEvent.TrackUnsubscribed, (track: RemoteTrack, _pub, participant: RemoteParticipant) => {
+  room.on(LK.RoomEvent.TrackUnsubscribed, (track: RemoteTrack, _pub, participant: RemoteParticipant) => {
     sink?.detach(track, participant.identity);
   });
 }
@@ -229,7 +230,7 @@ async function publishMutedMic(room: Room, mine: number): Promise<void> {
     // Silent before it is published, not after.
     clone.enabled = false;
     const pub = await room.localParticipant.publishTrack(clone, {
-      source: Track.Source.Microphone,
+      source: LK.Track.Source.Microphone,
     });
     await pub.mute();
     // ONCE IT IS PUBLISHED IT IS THE ROOM'S, and this module must not touch it
@@ -273,14 +274,16 @@ export function prewarmRoom(roomKey: string): void {
   void (async () => {
     try {
       const prefs = readJoinPrefs();
+      const livekitReady = loadLivekit();
       // The row saying a connection is being held here. Not awaited by the
       // connect below it — it grants nothing, so the media never waits on it.
       void convex!.mutation(api.calls.joinRoom, { room_key: roomKey, prewarm: true }).catch(() => {});
       const { url, token } = await convex!.action(api.calls.mintAccessToken, {
         room_key: roomKey,
       });
+      await livekitReady;
       if (gen !== mine) return;
-      const room = new Room(huddleRoomOptions(prefs));
+      const room = new LK.Room(huddleRoomOptions(prefs));
       await room.connect(url, token);
       if (gen !== mine) {
         void room.disconnect();
@@ -331,7 +334,7 @@ export function takePrewarmedRoom(roomKey: string): Room | null {
   if (!held) return null;
   const usable =
     held.roomKey === roomKey &&
-    held.room.state === ConnectionState.Connected &&
+    held.room.state === LK.ConnectionState.Connected &&
     held.micDeviceId === readJoinPrefs().micDeviceId;
   if (!usable) {
     try {
@@ -380,7 +383,7 @@ export function releasePrewarm(): void {
  *  A prewarmed room publishes one, so the join must not publish a second — two
  *  publications of one device is two voices of the same person. */
 export function warmRoomPublishesMic(room: Room): boolean {
-  return !!room.localParticipant.getTrackPublication(Track.Source.Microphone);
+  return !!room.localParticipant.getTrackPublication(LK.Track.Source.Microphone);
 }
 
 // Dev console / e2e access to the real module instance, exactly as callManager
@@ -401,7 +404,7 @@ if (typeof window !== "undefined" && import.meta.env.DEV) {
             // publish, and they are invisible from anywhere else: this module's
             // Room is not callManager's, so a harness cannot reach it.
             micPublished: warmRoomPublishesMic(warm.room),
-            micMuted: !!warm.room.localParticipant.getTrackPublication(Track.Source.Microphone)
+            micMuted: !!warm.room.localParticipant.getTrackPublication(LK.Track.Source.Microphone)
               ?.isMuted,
             remoteAudio: [...warm.room.remoteParticipants.values()].flatMap((p) =>
               [...p.trackPublications.values()]

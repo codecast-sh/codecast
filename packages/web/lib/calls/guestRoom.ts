@@ -18,6 +18,12 @@ import { huddleRoomOptions, micConstraints, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_P
 import { isMediaDenial, listDevices, mediaFailureReason, participantFlags, participantImage, participantTiles, type ParticipantTile } from "./callMedia";
 import { bindCallCursors } from "./callCursors";
 import { createMicMeter, type MicMeter } from "./micMeter";
+import * as Livekit from "livekit-client";
+import { provideLivekit } from "./livekit";
+
+// The guest page imports livekit-client itself (it is the page's whole job);
+// the call code it shares with members reads it through lib/calls/livekit.
+provideLivekit(Livekit);
 
 // A GUEST'S MEDIA, apart from the app.
 //

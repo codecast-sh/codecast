@@ -33,7 +33,7 @@ import { browserPathLabel, isBrowserRoutePath, subscribeBrowserTitles } from "..
 import { isSimulatorRoutePath } from "../../lib/simulatorPane";
 import { chatTabTitle, recordTabTitle } from "../../lib/tabTitle";
 import { RoutePane, usePaneScope } from "../RoutePane";
-import { TabParamsCtx } from "../../lib/tabParams";
+import { TabPaneCtx, TabParamsCtx } from "../../lib/tabParams";
 import { SessionPane } from "./SessionPane";
 import { PageIcon } from "../RecentVisitRow";
 import { ErrorBoundary } from "../ErrorBoundary";
@@ -175,7 +175,7 @@ const StageCell = memo(function StageCell({
   // conversation in a hidden tab or an unfocused split knows it does not own
   // the keyboard. No `navigate`: a link inside a conversation moves the tab.
   const visible = isTabActive && !rail;
-  const { ctxValue: sessionScope } = usePaneScope({ tabId, path, isActive: active && !rail, isVisible: visible, leafId: paneLeafId });
+  const { ctxValue: sessionScope, paneValue: sessionPane } = usePaneScope({ tabId, path, isActive: active && !rail, isVisible: visible, leafId: paneLeafId });
   return (
     <div
       data-stage-leaf={leafId}
@@ -191,9 +191,11 @@ const StageCell = memo(function StageCell({
           {/* A conversation pane has no strip: its own header hosts close and
               expand, so the drag handle is a grip that surfaces on hover. */}
           {!solo && <PaneGrip leafId={leafId} path={path} />}
+          <TabPaneCtx.Provider value={sessionPane}>
           <TabParamsCtx.Provider value={sessionScope}>
             <SessionPane sessionId={sessionId} onClose={handleClose} onExpand={handleExpand} />
           </TabParamsCtx.Provider>
+          </TabPaneCtx.Provider>
         </>
       ) : ownsHeader ? (
         <>

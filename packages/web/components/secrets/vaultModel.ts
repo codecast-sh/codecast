@@ -223,6 +223,8 @@ export const EVENT_VERB: Record<SecretEventKind, string> = {
   deleted: "deleted it",
   ask_first_on: "turned on Ask first",
   ask_first_off: "turned off Ask first",
+  touch_id_on: "turned on Touch ID",
+  touch_id_off: "turned off Touch ID",
   approval_requested: "asked to read it",
   approved: "approved a read",
   denied: "denied a read",
@@ -248,6 +250,8 @@ export const EVENT_TONE: Partial<Record<SecretEventKind, "blue" | "cyan" | "oran
   restored: "yellow",
   ask_first_on: "cyan",
   ask_first_off: "orange",
+  touch_id_on: "cyan",
+  touch_id_off: "orange",
 };
 
 /** An Activity or Previous line drawn for a press before the server has recorded it; the server's next answer replaces it. */

@@ -94,6 +94,11 @@ class CacheDB extends Dexie {
   constructor() {
     super("codecast-store");
     this.version(CACHE_SCHEMA_VERSION).stores({ ...COLLECTION_INDEXES, ...SYSTEM_TABLES });
+    // Dexie's liveQuery machinery, which nothing here uses: it worked out the
+    // key ranges of every write and posted them to every tab on the origin
+    // (~200 BroadcastChannel messages a minute from one idle window).
+    this.unuse({ stack: "dbcore", name: "Observability" });
+    this.unuse({ stack: "dbcore", name: "Cache" });
   }
 }
 
@@ -555,6 +560,31 @@ export function setHydrating(v: boolean) {
   _hydrating = v;
 }
 
+// -- Held rows of the split inbox queries (hooks/useSplitQuery) --
+// A split result names its cold rows by hash only; without the rows from an
+// earlier launch the feeder fetches the whole result (the inbox list: 3MB
+// against 213KB split) on every boot. Held rows are the principal's data like
+// any meta row: served only to the cache's owner, purged with it.
+const SPLIT_PREFIX = "split:";
+
+export async function loadSplitRows(name: string): Promise<Array<{ id: string; hash: string; row: unknown }>> {
+  try {
+    if ((await ensureCacheOwnership()) === null) return [];
+    const prefix = `${SPLIT_PREFIX}${name}:`;
+    const rows = await db.meta.where("key").startsWith(prefix).toArray();
+    return rows.map((r) => ({ id: r.key.slice(prefix.length), hash: r.value?.hash, row: r.value?.row })).filter((r) => typeof r.hash === "string");
+  } catch {
+    return [];
+  }
+}
+
+export function persistSplitRows(name: string, upserts: Array<{ id: string; hash: string; row: unknown }>, removes: readonly string[]): void {
+  if (!persistenceOwned()) return;
+  const prefix = `${SPLIT_PREFIX}${name}:`;
+  if (upserts.length) db.meta.bulkPut(upserts.map(({ id, hash, row }) => ({ key: prefix + id, value: { hash, row } }))).catch(() => {});
+  if (removes.length) db.meta.bulkDelete(removes.map((id) => prefix + id)).catch(() => {});
+}
+
 // -- Per-conversation message cache --
 
 // IDB writes are coalesced per conversation. setMessages fires on nearly every
@@ -720,7 +750,17 @@ async function _loadUserMessages(convId: string): Promise<any[] | undefined> {
   }
 }
 
+// Conversations IDB holds nothing for, and when that was read. The inbox warm
+// asks again for the same rows whenever the list moves, and each ask was two
+// reads; a miss is remembered for a minute, and forgotten the moment this
+// window writes the conversation (another window's write costs a cache hit,
+// never a wrong answer: the caller goes to the network on a miss).
+const MISS_TTL_MS = 60_000;
+const _knownMisses = new Map<string, number>();
+
 export async function loadConversationMessages(convId: string): Promise<CachedConversation | null> {
+  const missedAt = _knownMisses.get(convId);
+  if (missedAt !== undefined && Date.now() - missedAt < MISS_TTL_MS && !_pendingMsgWrites.has(convId)) return null;
   // Read-your-writes: a just-written-but-not-yet-flushed payload is the freshest
   // truth, so serve it before falling back to the persisted IDB row.
   const userMessages = await _loadUserMessages(convId);
@@ -733,7 +773,12 @@ export async function loadConversationMessages(convId: string): Promise<CachedCo
     const row = await db.conversationMessages.get(convId);
     // A conversation whose navigator list landed before any message page did
     // still hydrates that list; the caller treats empty messages as a miss.
-    if (!row) return userMessages ? { messages: [], pagination: undefined, latestTimestamp: 0, userMessages } : null;
+    if (!row && !userMessages) {
+      _knownMisses.set(convId, Date.now());
+      return null;
+    }
+    _knownMisses.delete(convId);
+    if (!row) return { messages: [], pagination: undefined, latestTimestamp: 0, userMessages };
     return { messages: row.messages, pagination: row.pagination, latestTimestamp: row.latestTimestamp, userMessages };
   } catch {
     return null;
@@ -745,12 +790,14 @@ export async function loadConversationMessages(convId: string): Promise<CachedCo
 export function writeConversationUserMessages(convId: string, userMessages: any[]) {
   if (_hydrating || !persistenceOwned()) return;
   _touchedAt.set(convId, Date.now());
+  _knownMisses.delete(convId);
   db.conversationUserMessages.put({ convId, userMessages }).catch(() => {});
 }
 
 export function writeConversationMessages(convId: string, messages: any[], pagination: any) {
   if (_hydrating || !persistenceOwned()) return;
   _touchedAt.set(convId, Date.now());
+  _knownMisses.delete(convId);
   _pendingMsgWrites.set(convId, { messages, pagination });
   if (!_inFlightMsgWrites.has(convId)) _scheduleMessageWrites();
 }

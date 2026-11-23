@@ -11,17 +11,8 @@ export { mediaFailureReason, listDevices, grantDeviceNames, type ParticipantTile
 // a bug factory): they live in a Map here, exposed to React through the
 // subscribe/snapshot pair at the bottom (useSyncExternalStore, the chatLive
 // pattern).
-import {
-  ConnectionState,
-  DisconnectReason,
-  Participant,
-  RemoteParticipant,
-  RemoteTrack,
-  Room,
-  RoomEvent,
-  Track,
-  createAudioAnalyser,
-} from "livekit-client";
+import type { ConnectionState, DisconnectReason, Participant, RemoteParticipant, RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
+import { LK, loadLivekit } from "./livekit";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
 import { useInboxStore } from "../../store/inboxStore";
@@ -190,11 +181,11 @@ function stopLevelMeter() {
 
 function startLevelMeter() {
   stopLevelMeter();
-  const pub = room?.localParticipant.getTrackPublication(Track.Source.Microphone);
+  const pub = room?.localParticipant.getTrackPublication(LK.Track.Source.Microphone);
   const track = pub?.track;
-  if (!track || track.kind !== Track.Kind.Audio) return;
+  if (!track || track.kind !== LK.Track.Kind.Audio) return;
   try {
-    const { analyser, cleanup } = createAudioAnalyser(track as any, {
+    const { analyser, cleanup } = LK.createAudioAnalyser(track as any, {
       fftSize: 256,
       smoothingTimeConstant: 0.6,
     });
@@ -286,7 +277,7 @@ function stopHeartbeat() {
 }
 
 function attachAudio(track: RemoteTrack, participantId: string) {
-  if (track.kind !== Track.Kind.Audio) return;
+  if (track.kind !== LK.Track.Kind.Audio) return;
   // Idempotent: the prewarm sweep below and the TrackSubscribed listener can
   // both reach the same track, and a second element would play the voice twice.
   if (audioEls.has(`${participantId}:${track.sid}`)) return;
@@ -566,6 +557,8 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
   // identity as the user id, so a prewarm still connecting when this join lands
   // would evict it from the SFU as a duplicate identity.
   const warm = takePrewarmedRoom(roomKey);
+  // The media library loads beside the token (a warm room brought it already).
+  const livekitReady = loadLivekit();
   let r: Room | undefined = warm ?? undefined;
   try {
     // THE SEAT ROW DOES NOT GATE THE VOICE.
@@ -599,12 +592,14 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     // refuses to hand one over whose microphone the person has changed since,
     // so the rule holds across the seam rather than being skipped at it.
     const prefs = readJoinPrefs();
-    r = warm ?? new Room(huddleRoomOptions(prefs));
+    await livekitReady;
+    if (superseded(r)) return;
+    r = warm ?? new LK.Room(huddleRoomOptions(prefs));
     room = r;
     currentRoomKey = roomKey;
     const self = r;
 
-    r.on(RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
+    r.on(LK.RoomEvent.ActiveSpeakersChanged, (speakers: Participant[]) => {
       setCall({ speaking: speakers.map((s) => s.identity) });
     });
     // THE SOUNDS FOLLOW THE ROSTER, NOT THE SFU. A prewarm (roomPrewarm) is a
@@ -616,7 +611,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     // row landed first, or the moment it lands (`watchSeatSounds`), which is
     // also the moment a prewarm becomes a real join. One who leaves without
     // ever having been seated leaves in silence.
-    r.on(RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
+    r.on(LK.RoomEvent.ParticipantConnected, (p: RemoteParticipant) => {
       if (seatedInRoom(roomKey, p.identity)) soundCallJoin();
       else {
         joinChimePending.add(p.identity);
@@ -624,45 +619,45 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
       }
       rebuildTiles();
     });
-    r.on(RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
+    r.on(LK.RoomEvent.ParticipantDisconnected, (p: RemoteParticipant) => {
       if (!joinChimePending.delete(p.identity)) soundCallLeave();
       rebuildTiles();
     });
-    r.on(RoomEvent.TrackSubscribed, (track, _pub, participant: RemoteParticipant) => {
+    r.on(LK.RoomEvent.TrackSubscribed, (track, _pub, participant: RemoteParticipant) => {
       attachAudio(track, participant.identity);
       rebuildTiles();
     });
-    r.on(RoomEvent.TrackUnsubscribed, (track, _pub, participant: RemoteParticipant) => {
+    r.on(LK.RoomEvent.TrackUnsubscribed, (track, _pub, participant: RemoteParticipant) => {
       detachAudio(track, participant.identity);
       rebuildTiles();
     });
     // A remote UNPUBLISH (peer stopped sharing / turned camera off) is a
     // different event from unsubscribe and must also clear the tile — without
     // this a stopped share leaves a dead hero on the stage.
-    r.on(RoomEvent.TrackUnpublished, () => rebuildTiles());
+    r.on(LK.RoomEvent.TrackUnpublished, () => rebuildTiles());
     // Teammates' pointers over a screen share, on the data channel.
     bindCallCursors(r);
-    r.on(RoomEvent.TrackMuted, rebuildTiles);
-    r.on(RoomEvent.TrackUnmuted, rebuildTiles);
-    r.on(RoomEvent.LocalTrackPublished, (pub) => {
+    r.on(LK.RoomEvent.TrackMuted, rebuildTiles);
+    r.on(LK.RoomEvent.TrackUnmuted, rebuildTiles);
+    r.on(LK.RoomEvent.LocalTrackPublished, (pub) => {
       rebuildTiles();
-      if (pub.source === Track.Source.Microphone) startLevelMeter();
+      if (pub.source === LK.Track.Source.Microphone) startLevelMeter();
     });
-    r.on(RoomEvent.LocalTrackUnpublished, (pub) => {
+    r.on(LK.RoomEvent.LocalTrackUnpublished, (pub) => {
       rebuildTiles();
-      if (pub.source === Track.Source.Microphone) stopLevelMeter();
+      if (pub.source === LK.Track.Source.Microphone) stopLevelMeter();
       // Share ended from the browser/OS "stop sharing" bar, camera yanked by
       // a device change: reflect it, so the toggle never lies lit.
-      if (pub.source === Track.Source.ScreenShare) {
+      if (pub.source === LK.Track.Source.ScreenShare) {
         setCall({ sharing: false });
         pushFlags();
       }
-      if (pub.source === Track.Source.Camera) {
+      if (pub.source === LK.Track.Source.Camera) {
         setCall({ camera: false });
         pushFlags();
       }
     });
-    r.on(RoomEvent.Disconnected, (reason?: DisconnectReason) => {
+    r.on(LK.RoomEvent.Disconnected, (reason?: DisconnectReason) => {
       // ONLY THE ROOM HOLDING THE CALL MAY END IT. A join superseded by a newer
       // join of the SAME room disconnects its own Room with these listeners
       // still on (`superseded`, the catch below), and that CLIENT_INITIATED
@@ -709,12 +704,12 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     // and the auto-scribe watch, the surface lookups) say the call had ended
     // and then that it had begun again. Only a `Disconnected` that livekit
     // gave up on ends it, above.
-    r.on(RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
+    r.on(LK.RoomEvent.ConnectionStateChanged, (state: ConnectionState) => {
       const call = useInboxStore.getState().call;
       if (room !== self || call.roomKey !== roomKey) return;
-      const repairing = state === ConnectionState.Reconnecting || state === ConnectionState.SignalReconnecting;
+      const repairing = state === LK.ConnectionState.Reconnecting || state === LK.ConnectionState.SignalReconnecting;
       if (repairing && !call.reconnecting) setCall({ reconnecting: true });
-      if (state === ConnectionState.Connected && (call.phase !== "connected" || call.reconnecting)) {
+      if (state === LK.ConnectionState.Connected && (call.phase !== "connected" || call.reconnecting)) {
         setCall({ phase: "connected", reconnecting: false });
       }
     });
@@ -765,7 +760,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
       }
       await openMicForJoin(r.localParticipant, { intent: opts?.intent });
     } else if (given && given.readyState === "live") {
-      await r.localParticipant.publishTrack(given, { source: Track.Source.Microphone });
+      await r.localParticipant.publishTrack(given, { source: LK.Track.Source.Microphone });
       if (superseded(r)) return;
       // The publication now answers to setMicrophoneEnabled like any other, so
       // the mute the user chose applies to it unchanged.
@@ -825,7 +820,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
 const REJOIN_DELAYS_MS = [0, 1_000, 2_000, 4_000, 8_000, 15_000, 15_000, 15_000, 15_000, 15_000];
 
 function disconnectReasonName(reason: unknown): string {
-  if (typeof reason === "number") return DisconnectReason[reason] ?? String(reason);
+  if (typeof reason === "number") return LK.DisconnectReason[reason] ?? String(reason);
   return reason == null ? "NONE" : String(reason).slice(0, 32);
 }
 
@@ -1218,7 +1213,7 @@ async function applyDevice(r: Room, kind: DeviceKind, want: string): Promise<voi
     if ((r.getActiveDevice(kind) ?? "default") !== want) await r.switchActiveDevice(kind, want);
     return;
   }
-  const mic = () => r.localParticipant.getTrackPublication(Track.Source.Microphone)?.audioTrack;
+  const mic = () => r.localParticipant.getTrackPublication(LK.Track.Source.Microphone)?.audioTrack;
   const track = mic();
   if (track && trackOnDevice(track.mediaStreamTrack, kind, want)) return;
   await r.switchActiveDevice(kind, want);
