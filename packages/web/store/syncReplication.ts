@@ -231,6 +231,13 @@ const isReplicated = (key: string) => REPLICATED_STORE_KEYS.includes(key);
 const REPLICA_SESSIONS_OPTS = {
   preserveFields: SESSIONS_PRESERVE_FIELDS.filter((f) => !(INBOX_FACT_FIELDS as readonly string[]).includes(f)),
 };
+// A conversation row the host changed only in its owner_ids (a Save, the
+// owners read) must still land: an array field is compared by content here,
+// on this path only. A registry `sync` entry would do it everywhere, but it
+// also turns the host's whole-value conversations apply into a collection
+// push, which drops every follower write to a conversation row.
+const REPLICA_CONVERSATIONS_OPTS = { deepFields: ["owner_ids"] };
+const REPLICA_OPTS: Record<string, object> = { sessions: REPLICA_SESSIONS_OPTS, conversations: REPLICA_CONVERSATIONS_OPTS };
 
 /**
  * A synced follower's action tee (wire to `_setActionTee`): its own
@@ -486,7 +493,7 @@ function applyUpdatesToStoreInner(updates: MutUpdate[], opts?: { optimistic?: bo
         // draws when the host never cached the full row; over a full row this
         // window holds (its PR page open), it lands as the same overlay.
         const upserts = u.key === "pullRequests" ? overlayReplicatedPullRequests(u.upserts, (state as any).pullRequests, (state as any).pending) : u.upserts;
-        state.syncTable(u.key, upserts, { isDelta: true, ...(u.key === "sessions" ? REPLICA_SESSIONS_OPTS : {}) });
+        state.syncTable(u.key, upserts, { isDelta: true, ...REPLICA_OPTS[u.key] });
       }
     }
     if (u.removes?.length) state._applyReplicatedRemovals(u.key, u.removes);

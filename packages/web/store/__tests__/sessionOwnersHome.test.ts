@@ -4,6 +4,7 @@
 // they converge on whichever answer is newest and a Save never freezes it.
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { isForeignRow, useInboxStore } from "../inboxStore";
+import { applyUpdatesToStore } from "../syncReplication";
 import { paintTakeOverOnSend } from "../sessionOwnersSlice";
 import { applyCollectionFeed } from "../../hooks/useSyncCollection";
 import { feedOwnerIds, selectOwnersRow } from "../../hooks/useOwners";
@@ -164,12 +165,20 @@ describe("a Save's dispatch carries what it painted", () => {
   });
 });
 
-// A follower takes its host's rows through syncTable, and a conversation row
-// that changed only its owner_ids must not read as a no-op.
-test("a whole-row push that changes only owner_ids applies to the conversation row", () => {
+// A follower takes its host's conversation rows as replicated upserts, and a
+// row that changed only its owner_ids must not read as a no-op. Only that
+// path compares it by content: a registry `sync` entry on conversations would
+// make the host drop a follower's whole-value conversations write.
+test("a replicated row that changes only owner_ids applies to the follower's conversation row", () => {
   useInboxStore.setState({ pending: {}, sessions: {}, conversations: { [ID]: { _id: ID, user_id: "me", updated_at: 1, owner_ids: ["me"] } } } as any);
-  useInboxStore.getState().syncTable("conversations", [{ _id: ID, user_id: "me", updated_at: 1, owner_ids: ["me", "mate"] }] as any);
+  applyUpdatesToStore([{ key: "conversations", upserts: [{ _id: ID, user_id: "me", updated_at: 1, owner_ids: ["me", "mate"] }] } as any]);
   expect((useInboxStore.getState().conversations as any)[ID].owner_ids).toEqual(["me", "mate"]);
+});
+
+test("a follower's whole-value conversations write lands on the host", () => {
+  useInboxStore.setState({ pending: {}, conversations: { [ID]: { _id: ID, title: "old", inbox_stashed_at: 5 } } } as any);
+  applyUpdatesToStore([{ key: "conversations", hasValue: true, value: { [ID]: { _id: ID, title: "new", inbox_stashed_at: null } } } as any], { optimistic: true });
+  expect((useInboxStore.getState().conversations as any)[ID]).toMatchObject({ title: "new", inbox_stashed_at: null });
 });
 
 // A run that only a role holds (role_alone) is out of its runner's inbox. A

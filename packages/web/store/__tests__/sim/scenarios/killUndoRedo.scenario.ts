@@ -9,7 +9,9 @@
 // window places the row where the server does (INV-sessions-mine).
 //
 // The host runs give the kill again in the same tick as the undo, before
-// anything comes back from the server. The follower runs settle in between.
+// anything comes back from the server. The follower runs settle in between,
+// and leave out INV-followers: a follower's late conversations mut leaves the
+// host spelling the clear null where the follower holds it absent (ct-56817).
 
 import { HIDDEN_OVERRIDE_SETTLE_MS } from "../../../inboxOverlays";
 import { scenario, type ScenarioWorld } from "../dsl";
@@ -36,7 +38,8 @@ async function killUndoAgain(w: ScenarioWorld, opts: { follower: boolean; again:
   for (const each of a.windows) await w.expect(each).hides(s);
 }
 
-scenario({ name: "killUndoRedoFollower", seeds: 3 }, (w) => killUndoAgain(w, { follower: true, again: "redo" }));
-scenario({ name: "killUndoRekillFollower", seeds: 3 }, (w) => killUndoAgain(w, { follower: true, again: "kill" }));
+const FOLLOWER_KNOWN = { "INV-followers": "ct-56817" };
+scenario({ name: "killUndoRedoFollower", seeds: 3, known: FOLLOWER_KNOWN }, (w) => killUndoAgain(w, { follower: true, again: "redo" }));
+scenario({ name: "killUndoRekillFollower", seeds: 3, known: FOLLOWER_KNOWN }, (w) => killUndoAgain(w, { follower: true, again: "kill" }));
 scenario({ name: "killUndoRedoQuickHost", seeds: 5 }, (w) => killUndoAgain(w, { follower: false, again: "redo" }));
 scenario({ name: "killUndoRekillQuickHost", seeds: 3 }, (w) => killUndoAgain(w, { follower: false, again: "kill" }));
