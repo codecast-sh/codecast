@@ -199,7 +199,7 @@ export async function ownerSetOf(
 
 /** One owner row as the org change log keeps it, so an undo puts the row back
  *  as it was: who added it, when, and whether its owner had acknowledged it. */
-export type OwnerRowSnapshot = { user_id: string; added_by: string; added_at: number; seen_at?: number; note?: string };
+export type OwnerRowSnapshot = { user_id: string; added_by: string; added_at: number; seen_at?: number; note?: string; released_from?: string };
 
 export async function ownerRowsOf(ctx: { db: any }, conversationId: Id<"conversations">): Promise<OwnerRowSnapshot[]> {
   return (await ownerRows(ctx, conversationId)).map((r: any) => ({
@@ -208,6 +208,7 @@ export async function ownerRowsOf(ctx: { db: any }, conversationId: Id<"conversa
     added_at: r.added_at,
     ...(r.seen_at ? { seen_at: r.seen_at } : {}),
     ...(r.note ? { note: r.note } : {}),
+    ...(r.released_from ? { released_from: String(r.released_from) } : {}),
   }));
 }
 

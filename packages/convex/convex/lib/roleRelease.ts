@@ -45,9 +45,9 @@ export async function releasedRowsOf(ctx: { db: any }, conversationId: Id<"conve
   return rows.filter((r: any) => String(r.released_from ?? "") === String(roleId));
 }
 
-/** An undo put the role back: the rows its departure gave go. */
-export async function returnReleasedRows(ctx: { db: any }, conversationId: Id<"conversations">, roleId: string): Promise<void> {
-  const rows = await releasedRowsOf(ctx, conversationId, roleId);
+/** An undo put the role back: the rows its departure gave go, but for the people in `keep`. */
+export async function returnReleasedRows(ctx: { db: any }, conversationId: Id<"conversations">, roleId: string, keep?: Set<string>): Promise<void> {
+  const rows = (await releasedRowsOf(ctx, conversationId, roleId)).filter((r) => !keep?.has(String(r.user_id)));
   for (const r of rows) await removeSessionOwnerRow(ctx, conversationId, r.user_id);
   if (rows.length) await syncPrimaryOwnerCache(ctx, conversationId);
 }

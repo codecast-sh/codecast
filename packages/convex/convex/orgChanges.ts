@@ -227,6 +227,8 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
   const steps: Step[] = [];
   let messageCount = 0;
   const sessions = new Set<string>();
+  const released: Array<{ conversation_id: string; user_id: string }> = [];
+  const ownersAfterUndo = new Map<string, Set<string>>();
   const orderedRows = (await Promise.all(batches.map((batch) => rowsOf(ctx, batch._id)))).flat().sort((a, b) => b.seq - a.seq);
   for (const row of orderedRows) {
     if (row.undone_by) continue;
@@ -285,24 +287,29 @@ export async function planUndo(ctx: Ctx, userId: Id<"users">, ref: string, inclu
       virtual.set(w.id, { ...(await read(w.id)), ...patchOf(w.before) });
       if (w.table === "conversations") sessions.add(w.id);
       if (w.table === "conversations" && w.before.org_role_id) {
-        for (const r of await releasedRowsOf(ctx, w.id as Id<"conversations">, w.before.org_role_id)) (preview.released_owners ??= []).push({ conversation_id: w.id, user_id: String(r.user_id) });
+        for (const r of await releasedRowsOf(ctx, w.id as Id<"conversations">, w.before.org_role_id)) released.push({ conversation_id: w.id, user_id: String(r.user_id) });
       }
+      // Rows go back newest first, so the last owner set seen is the one the undo ends with.
+      if (w.table === "conversations" && w.before.owner_user_ids) ownersAfterUndo.set(w.id, new Set((w.before.owner_user_ids as string[]).map(String)));
     }
+    if (parent) ownersAfterUndo.set(row.subject.id, new Set(parent.owner_user_ids.map(String)));
     const inverse = inverseFor(row, writes, parent);
     steps.push({ row, inverse, writes, parent });
     preview.will_change.push(inverse);
     messageCount += row.effects.takeover?.told?.sessions ?? 0;
   }
+  // A released row whose person the restored owner set keeps is not removed.
+  for (const r of released) if (!ownersAfterUndo.get(r.conversation_id)?.has(r.user_id)) (preview.released_owners ??= []).push(r);
   const refusal = await validateRestoredRoles(ctx, steps.flatMap((s) => s.writes), read) ?? await refuseOrphans(ctx, steps.flatMap((s) => s.writes), read);
   if (refusal) preview.refused ??= refusal;
   if (messageCount) preview.cannot_take_back.push({ kind: "message_sent", count: messageCount });
   let worked = 0;
   for (const id of sessions) if ((await ctx.db.get(id))?.message_count) worked++;
   if (worked) preview.cannot_take_back.push({ kind: "session_worked", count: worked });
-  return { original, target, preview, steps };
+  return { original, target, preview, steps, ownersAfterUndo };
 }
 
-async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
+async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite, ownersAfterUndo?: Map<string, Set<string>>) {
   const current = await ctx.db.get(w.id);
   // A row logged before a role's charter moved to its doc (lib/roleCharter) may name the old field: it is never written back.
   const { owner_user_ids: owners, owner_rows: ownerRows, ...patch } = patchOf(w.before);
@@ -323,8 +330,9 @@ async function restoreWrite(ctx: Ctx, userId: Id<"users">, w: OrgWrite) {
       for (const id of (await sessionParent(ctx, current)).owner_user_ids) await removeSessionOwnerRow(ctx, current._id, id as Id<"users">);
       await syncPrimaryOwnerCache(ctx, current._id);
     }
-    // The role is back: the rows its departure gave go (a retire's later batches).
-    if (patch.org_role_id) await returnReleasedRows(ctx, current._id, patch.org_role_id);
+    // The role is back: the rows its departure gave go (a retire's later batches),
+    // except a person the undo leaves owning it, whose row stays as it is.
+    if (patch.org_role_id) await returnReleasedRows(ctx, current._id, patch.org_role_id, ownersAfterUndo?.get(String(current._id)));
   }
   // A charter's text goes back the way every body write goes (lib/docBody), so an open editor remounts on it.
   if (w.table === "docs" && "content" in patch) {
@@ -376,7 +384,7 @@ export async function performUndo(ctx: Ctx, userId: Id<"users">, args: { batch: 
   openOrgBatch(ctx, { door: "history", gesture: redo ? "redo" : "undo", undoes: plan.target._id });
   for (const step of plan.steps) {
     await withOrgChange(ctx, userId, { kind: step.inverse.kind, subject: step.row.subject, undoes: step.row._id as Id<"org_changes"> }, async () => {
-      for (const w of [...step.writes].reverse()) await restoreWrite(ctx, userId, w);
+      for (const w of [...step.writes].reverse()) await restoreWrite(ctx, userId, w, plan.ownersAfterUndo);
       if (step.parent) {
         const c = await ctx.db.get(step.row.subject.id);
         await performReparentSession(ctx, userId, { session_id: c._id, target: { kind: "user", owners: step.parent.owner_user_ids, mode: "set", drop_role: true } });

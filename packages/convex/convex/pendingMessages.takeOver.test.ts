@@ -526,6 +526,25 @@ describe("a role's pool hand never ends up owned by nobody", () => {
     }
   });
 
+  test("undoing a move names no owner the undo puts back, and the row put back keeps where it came from", async () => {
+    const { ctx, tables, ownersOf, roleId } = await world();
+    // Each gesture is its own transaction, so its own org-log entry.
+    const tx = () => ({ db: ctx.db, scheduler: ctx.scheduler });
+    await performCreateRole(tx(), ME as any, { name: "Eng lead", handle: "eng", team_id: TEAM });
+    // The account that runs it takes the role off: the person the role reported to takes it.
+    await performApplyOwnersChange(tx(), POOL as any, { session_id: "pool", change: { role: null } });
+    expect(tables.session_owners.find((o) => o.conversation_id === "pool")).toMatchObject({ user_id: ME, released_from: roleId });
+    await performApplyOwnersChange(tx(), ME as any, { session_id: "pool", change: { role: "@growth" } });
+    // One Save: a teammate added and the role changed.
+    await performApplyOwnersChange(tx(), ME as any, { session_id: "pool", change: { add: [PEER], role: "@eng" } });
+    const move = tables.org_changes.at(-1);
+    const plan = await planUndo(tx(), ME as any, String(move.batch));
+    expect(plan.preview.released_owners ?? []).toEqual([]);
+    await performUndo(tx(), ME as any, { batch: String(move.batch) });
+    expect(ownersOf("pool")).toEqual([ME]);
+    expect(tables.session_owners.find((o) => o.conversation_id === "pool")).toMatchObject({ user_id: ME, released_from: roleId });
+  });
+
   test("a batch gives no row to a hand an heir took since, or one that finished", async () => {
     const { ctx, tables, ownersOf, roleId } = await world();
     const eng = await performCreateRole(ctx, ME as any, { name: "Eng lead", handle: "eng", team_id: TEAM });
