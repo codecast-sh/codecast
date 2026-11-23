@@ -311,12 +311,13 @@ function AssignmentSheetBody({
               <IconButton
                 icon="times"
                 label={r.removeLabel}
-                disabled={!r.onRemove}
-                onPress={() => { tap(); r.onRemove?.(); }}
+                dim={!r.onRemove}
+                onPress={() => { tap(); if (r.onRemove) r.onRemove(); else m.refuse(r); }}
               />
             )}
           </View>
         ))}
+        {!seatRoleId && m.notice && <Text style={styles.notice} accessibilityRole="alert">{m.notice}</Text>}
         {m.canTakeOwnership && !seatRoleId && (
           <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); if (m.takeOwnership()) onDone(); }}>
             <FontAwesome name="user-plus" size={13} color={Theme.cyan} style={{ width: 22, textAlign: 'center' }} />
@@ -438,17 +439,17 @@ function SmallButton({ label, onPress }: { label: string; onPress: () => void })
   );
 }
 
-function IconButton({ icon, label, onPress, disabled = false }: { icon: 'times' | 'plus'; label: string; onPress: () => void; disabled?: boolean }) {
+// `dim` draws a refused action greyed but still pressable, so the press can
+// say why (the owners menu's notice), as web does.
+function IconButton({ icon, label, onPress, dim = false }: { icon: 'times' | 'plus'; label: string; onPress: () => void; dim?: boolean }) {
   const Theme = useTheme();
   return (
     <TouchableOpacity
-      style={[styles.iconButton, disabled && { opacity: 0.35 }]}
+      style={[styles.iconButton, dim && { opacity: 0.35 }]}
       activeOpacity={0.6}
-      disabled={disabled}
       onPress={onPress}
       accessibilityRole="button"
       accessibilityLabel={label}
-      accessibilityState={{ disabled }}
     >
       <FontAwesome name={icon} size={14} color={Theme.textMuted} />
     </TouchableOpacity>
@@ -625,6 +626,11 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     fontSize: 12,
     color: Theme.textMuted,
     marginTop: 1,
+  },
+  notice: {
+    fontSize: 12,
+    color: Theme.yellow,
+    paddingVertical: 6,
   },
   leaveBox: {
     borderRadius: 8,
