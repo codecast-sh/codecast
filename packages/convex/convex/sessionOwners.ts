@@ -1,5 +1,5 @@
 import { Id } from "./_generated/dataModel";
-import { listedOwnerIds, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
+import { listedOwnerIds, starterOf, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
 
 // ── Owner-set primitives (session_owners join table) ─────────────────────────
 // The join table is the canonical multi-owner store: the humans whose inboxes a
@@ -289,6 +289,13 @@ export async function ownersFactsOf(
     driver_user_id: conversation.driver_user_id ? String(conversation.driver_user_id) : null,
     primary_id: conversation.owner_user_id ? String(conversation.owner_user_id) : null,
   };
+}
+
+/** The person who owns a session with no owner rows, by the starter rule
+ *  (shared starterOf); null once it has rows. */
+export async function rowlessStarterOf(ctx: { db: any }, conversation: any): Promise<string | null> {
+  const facts = await ownersFactsOf(ctx, conversation);
+  return facts.rows.length ? null : starterOf(facts);
 }
 
 // ── The driver (shared driverOf) ─────────────────────────────────────────────

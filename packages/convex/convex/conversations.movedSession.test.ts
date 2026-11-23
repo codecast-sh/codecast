@@ -69,7 +69,11 @@ describe("a session moved to another account", () => {
 
   test("a session id another account holds with no tie to the caller still creates", async () => {
     const { t, ids, resync, rows } = await movedToCam();
-    await t.run((ctx) => ctx.db.patch(ids.conv, { author_user_id: undefined }));
+    // No tie: not its author, and (since the move wrote the starter's row) no owner row.
+    await t.run(async (ctx) => {
+      await ctx.db.patch(ids.conv, { author_user_id: undefined, owner_user_id: undefined });
+      for (const r of await ctx.db.query("session_owners").withIndex("by_conversation", (q) => q.eq("conversation_id", ids.conv)).collect()) await ctx.db.delete(r._id);
+    });
     await resync();
     expect(await rows()).toHaveLength(2);
   });

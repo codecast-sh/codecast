@@ -23,7 +23,7 @@ import {
 import { activeTokenProfile } from "./ccAccountsShared";
 import { bucketTs } from "./presenceState";
 import { checkConversationAccess, isTeamAdmin, isTeamMember, shareATeam } from "./privacy";
-import { isSessionOwner } from "./sessionOwners";
+import { addSessionOwnerRow, isSessionOwner, rowlessStarterOf, syncPrimaryOwnerCache } from "./sessionOwners";
 import { navPromptField } from "./userMessagesFilter";
 import { localAgentTypeOf, findModelOption, deviceDisplayName, formatMachineSwitchNotice, type DeviceNameSource,
   checkoutInUseMessage,
@@ -904,6 +904,8 @@ export async function performReparentSessionToDevice(
     updated_at: Date.now(),
     ...(await unparkForMove(ctx, conv, device)),
   };
+  // Moved to another account, its starter gets the row an add writes first, so the owner shown is the one the inbox admits.
+  const starter = crossUser ? await rowlessStarterOf(ctx, conv) : null;
   if (crossUser) {
     // Account follows device: the destination's runner now runs + bills it.
     // Pin the author (the pre-move runner) the first time it crosses accounts
@@ -912,6 +914,10 @@ export async function performReparentSessionToDevice(
     patch.user_id = runnerId;
   }
   await ctx.db.patch(conv._id, patch);
+  if (starter) {
+    await addSessionOwnerRow(ctx, conv._id, starter as Id<"users">, starter as Id<"users">);
+    await syncPrimaryOwnerCache(ctx, conv._id);
+  }
   if (crossUser) await followNewRunner(ctx, conv._id, runnerId);
   // The prompts written so far keep their author once user_id names someone else.
   if (crossUser) await stampPriorOwnerPage(ctx, { conversation_id: conv._id, user_id: previousConversation.user_id, until: patch.updated_at });

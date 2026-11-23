@@ -186,6 +186,16 @@ describe("performReparentSessionToDevice", () => {
       expect(conv(db).owner_device_id).toBe("mydev");
     });
 
+    // The starter owns a session before any row exists. Pulled onto another
+    // account, it gets their row, so the owner the session lists is the one
+    // the inbox admits (shared listedOwnerIds would name the author anyway).
+    test("pulling a solo session writes its starter's owner row", async () => {
+      const db = teamFixtures([JASON, ME]);
+      await performReparentSessionToDevice({ db }, ME as any, { session_id: "sess1", device_id: "mydev" });
+      expect(db._tables.session_owners.map((r: any) => [r.user_id, r.added_by])).toEqual([[JASON, JASON]]);
+      expect(conv(db).owner_user_id).toBe(JASON);
+    });
+
     test("a bot caller does not get the team path — bots can't claim, so they can't pull", async () => {
       const db = teamFixtures([JASON, ME]);
       db._tables.users.find((u: any) => u._id === ME).is_bot = true;
