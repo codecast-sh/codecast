@@ -21,7 +21,7 @@
 import { useState } from "react";
 import { useInboxStore } from "../store/inboxStore";
 import { useOwnerCandidates, pickRoster, snapshotsOf, type OwnersApi, type OwnerRole, type SessionDriver } from "./useOwners";
-import { addPeople, addPerson, addRole, diffOwners, driverKey, leave, removePerson, removeRole, type MoveTo, type OwnersDraft } from "../lib/ownersDraft";
+import { addPeople, addPerson, addRole, diffOwners, driverKey, leave, removePerson, removeRole, unleave, type MoveTo, type OwnersDraft } from "../lib/ownersDraft";
 import { useSessionRoleFacts } from "./useOwnersStoreEnv";
 import { isPerson } from "@codecast/shared/team/memberKind";
 import { applyOwnersChangeTo, leaveMovesFirst, leaveStands, type OwnersFacts } from "@codecast/shared/contracts/sessionOwners";
@@ -115,8 +115,11 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
   const suggested = (fits.length ? fits : offerRoles).slice(0, SUGGESTED_ROLES);
   const restRoles = offerRoles.filter((r) => !suggested.includes(r));
   const shownRoles = q || moreRoles ? [...suggested, ...restRoles] : suggested;
-  // Everyone on the session's team not yet an owner or pending, whatever the search shows.
-  const unselected = people.filter((m) => !draft.ownerIds.includes(m._id));
+  // Everyone on the session's team not yet an owner or pending, whatever the
+  // search shows. While you are staged to leave you are not a candidate:
+  // listing you there (and in Select all) quietly undid the leave.
+  const stagedLeave = !!meId && initial.ownerIds.includes(meId) && !draft.ownerIds.includes(meId);
+  const unselected = people.filter((m) => !draft.ownerIds.includes(m._id) && !(stagedLeave && m._id === meId));
   const teammates = unselected.filter((m) => matches(memberName(m), m.email));
   const candidates: OwnerCandidate[] = [
     ...shownRoles.map((r) => ({ key: `r:${r._id}`, kind: "role" as const, role: r })),
@@ -125,7 +128,9 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
 
   const add = (c: OwnerCandidate, drive = false) => {
     setNotice(null);
-    setDraft((d) => (c.kind === "role" ? addRole(d, roleOwnerOf(c.role)) : addPerson(d, c.person._id, drive)));
+    setDraft((d) => (c.kind === "role" ? addRole(d, roleOwnerOf(c.role))
+      // Adding yourself back while staged to leave takes the whole leave back.
+      : stagedLeave && c.person._id === meId ? unleave(d, meId, initial) : addPerson(d, c.person._id, drive)));
   };
   const makeDriver = (driver: SessionDriver) => setDraft((d) => ({ ...d, driver }));
   const selectAllTeammates = () => setDraft((d) => addPeople(d, unselected.map((m) => m._id)));
@@ -158,7 +163,7 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
     ...(iLeave ? ["You leave"] : []),
     ...(roleChanged && initial.role ? [`− ${initial.role.name}`] : []),
     ...(driverChanged && draft.driver && !driverOnNew ? [`${driverName(draft.driver)} · driver`] : []),
-    ...(draft.moveTo ? [`Move to ${draft.moveTo.label}`] : []),
+    ...(iLeave && draft.moveTo ? [`Move to ${draft.moveTo.label}`] : []),
   ];
 
   // A teammate who only sees the session reads the owners: no remove, no Make

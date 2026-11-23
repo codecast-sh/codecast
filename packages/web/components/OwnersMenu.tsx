@@ -128,7 +128,7 @@ function OwnersMenuBody({ conversationId, owners, onClose, onDirty }: { conversa
     return { name, image: member?.image || member?.github_avatar_url };
   };
   const leaveTo = (device: Device & { owner_user_id?: string; is_bot?: boolean }) =>
-    m.leaveTo({ device_id: device.device_id, is_remote: device.is_remote, label: deviceDisplayName(device), runner_id: String(device.owner_user_id ?? ""), runner_is_bot: !!device.is_bot });
+    m.leaveTo({ device_id: device.device_id, is_remote: device.is_remote, label: machineOf(ownerOf(device).name, deviceDisplayName(device)), runner_id: String(device.owner_user_id ?? ""), runner_is_bot: !!device.is_bot });
   const save = () => { if (m.save()) onClose(); };
 
   const onKeyDown = (e: KeyboardEvent) => {

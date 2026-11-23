@@ -8,6 +8,8 @@ import type { OwnerRole, SessionDriver } from "../hooks/useOwners";
 import type { SessionDriverTarget, SessionOwnersChange } from "../store/sessionOwnersSlice";
 import type { OwnerRowFact } from "@codecast/shared/contracts/sessionOwners";
 
+/** `label` names whose machine it is ("Aivery's Mac-mini", machineOf): a
+ *  leave puts the session on that account. */
 export type MoveTo = { device_id: string; is_remote: boolean; label: string; runner_id: string; runner_is_bot: boolean };
 
 export type OwnersDraft = {
@@ -56,6 +58,14 @@ export function addPeople(d: OwnersDraft, ids: string[]): OwnersDraft {
 
 export function leave(d: OwnersDraft, meId: string, moveTo: MoveTo | null): OwnersDraft {
   return { ...removePerson(d, meId), moveTo };
+}
+
+/** Takes a staged leave back: you are an owner again in your place, the
+ *  wheel the leave handed on comes back to you, and no move goes with it. */
+export function unleave(d: OwnersDraft, meId: string, initial: OwnersDraft): OwnersDraft {
+  const ownerIds = [...initial.ownerIds.filter((id) => id === meId || d.ownerIds.includes(id)), ...d.ownerIds.filter((id) => !initial.ownerIds.includes(id))];
+  const driver = driverKey(initial.driver) === `p:${meId}` ? initial.driver : d.driver;
+  return { ...d, ownerIds, driver, moveTo: null };
 }
 
 export type OwnersDiff = {

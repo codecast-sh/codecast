@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addPeople, addPerson, addRole, diffOwners, leave, removePerson, removeRole, teamMoveTargets, type OwnersDraft } from "../ownersDraft";
+import { addPeople, addPerson, addRole, diffOwners, leave, removePerson, removeRole, teamMoveTargets, unleave, type OwnersDraft } from "../ownersDraft";
 
 const EVALS = { role_id: "r1", short_id: "or-1", handle: "evals", name: "Eval Suite lead", avatar: null };
 const GROWTH = { role_id: "r2", short_id: "or-2", handle: "growth", name: "Growth", avatar: null };
@@ -98,4 +98,13 @@ test("a leave moves a session only to a team machine that is not yours and not a
   const boxes = [{ device_id: "laptop" }, { device_id: "mr-bot" }, { device_id: "cloud", is_remote: true }];
   expect(teamMoveTargets(own, boxes).map((b) => b.device_id)).toEqual(["mr-bot"]);
   expect(teamMoveTargets(own, null)).toEqual([]);
+});
+
+test("adding yourself back takes the staged leave back whole: your place, the wheel and no move", () => {
+  const initial: OwnersDraft = { ownerIds: ["me", "ashot"], role: { role_id: "r1", short_id: "or-1", handle: "lead", name: "Lead", avatar: null }, driver: { kind: "user", user_id: "me" }, moveTo: null };
+  const left = leave(initial, "me", { device_id: "box", is_remote: false, label: "Aivery's Mac-mini", runner_id: "bot", runner_is_bot: true });
+  expect(left.driver).toEqual({ kind: "role", role_id: "r1" });
+  const back = unleave(addPeople(left, ["sam"]), "me", initial);
+  expect(back).toEqual({ ...initial, ownerIds: ["me", "ashot", "sam"] });
+  expect(diffOwners(initial, back, { meId: "me" }).change).toEqual({ add: ["sam"] });
 });

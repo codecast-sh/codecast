@@ -280,7 +280,7 @@ function AssignmentSheetBody({
                   disabled={!dev.online}
                   activeOpacity={0.6}
                   testID={`leave-target-${dev.device_id}`}
-                  onPress={() => { tap(); m.leaveTo({ device_id: dev.device_id, is_remote: !!dev.is_remote, label: deviceDisplayName(dev), runner_id: String(dev.owner_user_id ?? ''), runner_is_bot: !!dev.is_bot }); }}
+                  onPress={() => { tap(); m.leaveTo({ device_id: dev.device_id, is_remote: !!dev.is_remote, label: machineOf(owner.name, deviceDisplayName(dev)), runner_id: String(dev.owner_user_id ?? ''), runner_is_bot: !!dev.is_bot }); }}
                 >
                   {owner.name
                     ? <OwnerFace person={{ name: owner.name, image: owner.image }} size={18} />

@@ -213,3 +213,24 @@ test("a personal session offers the viewer's own roles while a team workspace is
   expect(candidates).toEqual(["r:role_mine"]);
   expect(w.document.querySelector("[data-owners-menu]")!.textContent).not.toContain("Nobody else to add");
 });
+
+test("leaving keeps you out of the candidates, and its chips say where it goes and that it cannot be undone", async () => {
+  // My run, with Ashot; Aivery's agent box is a team machine to move it to.
+  const key = `${ME}:user:agentBoxes`;
+  useInboxStore.setState({
+    sessions: { [ID]: { ...(useInboxStore.getState().sessions as any)[ID], org_role_id: null, driver_user_id: ME } },
+    sessionOwners: { [ID]: { ...(useInboxStore.getState() as any).sessionOwners[ID], role: null } },
+    teamMembers: [member(ME, "Me Person"), member("user_ashot", "Ashot Petrosian"), member("user_sam", "Samvit Rao"), { _id: "user_bot", name: "Aivery", is_bot: true, roster_team: TEAM }] as any,
+    settingsData: { ...(useInboxStore.getState() as any).settingsData, [key]: { _id: key, value: [{ device_id: "box1", owner_user_id: "user_bot", runner_name: "Aivery", is_bot: true, label: "Mac-mini", platform: "darwin", is_remote: false, online: true, last_seen: 1, local_project_roots: [] }] } },
+  } as any);
+  await openMenu();
+  await act(async () => { (w.document.querySelector(`[data-owner-row='p:${ME}'] .own-x`) as HTMLElement).click(); });
+  await act(async () => { (w.document.querySelector("[data-leave-target='box1']") as HTMLElement).click(); });
+  expect(chips()).toEqual(["You leave", "Ashot Petrosian · driver", "Move to Aivery's Mac-mini"]);
+  const candidates = [...w.document.querySelectorAll("[data-owner-candidate]")].map((e: any) => e.getAttribute("data-owner-candidate"));
+  expect(candidates).not.toContain(`p:${ME}`);
+  // Select all teammates adds the others, never you: the leave stands.
+  await act(async () => { (w.document.querySelector("[data-select-all-teammates]") as HTMLElement).click(); });
+  expect(chips()).toEqual(["+ Samvit Rao", "You leave", "Ashot Petrosian · driver", "Move to Aivery's Mac-mini"]);
+});
+
