@@ -874,6 +874,16 @@ describe("a team with hundreds of DMs", () => {
     expect(ids).toHaveLength(4);
   });
 
+  test("past the cap, the rail keeps the caller's DMs with the newest lines", async () => {
+    const s = seed();
+    s.chat_channel_members = dms.map((d, i) => ({ _id: `cm-all-${i}`, channel_id: d._id, user_id: ALICE, added_by: BOB, added_at: 1 }));
+    const lines = [{ _id: "line-old", channel_id: "dm-249", user_id: BOB, content: "hi", created_at: 9_000 }];
+    const ids = (await call(listChannels, context(ALICE, { ...s, chat_messages: lines }, indexed), { team_id: TEAM })).channels
+      .filter((c: any) => c.kind === "dm").map((c: any) => c._id);
+    expect(ids).toHaveLength(200);
+    expect(ids).toContain("dm-249");
+  });
+
   test("DMs never count against the cap on named rooms", async () => {
     const ctx = context(BOB, seed(), indexed);
     const made = await call(createChannel, ctx, { team_id: TEAM, name: "deals" });

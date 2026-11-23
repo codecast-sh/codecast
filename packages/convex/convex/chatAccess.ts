@@ -78,8 +78,19 @@ export async function teamRoomsAndDms(
     .withIndex("by_user", (q: any) => q.eq("user_id", userId))
     .collect();
   const memberOf = new Set(rows.map((r) => r.channel_id.toString()));
-  const dms = (await Promise.all([...memberOf].map((id) => ctx.db.get(id as Id<"chat_channels">))))
+  let dms = (await Promise.all([...memberOf].map((id) => ctx.db.get(id as Id<"chat_channels">))))
     .filter((c): c is Doc<"chat_channels"> => !!c && c.kind === "dm" && c.team_id.toString() === teamId.toString());
+  // Past `limit`, the DMs with the newest lines. The rail reads deep into each
+  // DM (railFor), so someone many sessions write to would otherwise trip the
+  // query's read limits. A channel row is not stamped per line, hence the read.
+  if (dms.length > limit) {
+    const newest = new Map(await Promise.all(dms.map(async (c) => [c._id.toString(), (await ctx.db
+      .query("chat_messages")
+      .withIndex("by_channel_created", (q: any) => q.eq("channel_id", c._id))
+      .order("desc")
+      .first())?.created_at ?? c.created_at] as const)));
+    dms = dms.sort((a, b) => newest.get(b._id.toString())! - newest.get(a._id.toString())!).slice(0, limit);
+  }
   const channels = [...(await teamRooms(ctx, teamId, limit)), ...dms].sort(byName);
   return { channels, memberOf };
 }
