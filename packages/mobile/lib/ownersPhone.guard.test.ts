@@ -26,6 +26,13 @@ describe("the owners sheet", () => {
     expect(chip.indexOf("'Owners · whose inbox'")).toBeLessThan(chip.indexOf("<Text style={styles.sectionLabel}>Device</Text>"));
   });
 
+  test("a candidate row and Select all are each one button, read once", () => {
+    const row = chip.slice(chip.indexOf("function CandidateRow"), chip.indexOf("function SmallButton"));
+    expect(row).toContain('accessibilityRole="button"');
+    expect(row).toContain("accessibilityLabel={`Add ${name}${handle ? `, @${handle}` : ''}${reason ? `, ${reason}` : ''}`}");
+    expect(chip).toContain('accessibilityRole="button" accessibilityLabel={`Select all teammates, ${m.unselected.length}`}');
+  });
+
   test("the header chip is a 44pt target in its own layout, not hitSlop alone", () => {
     expect(chip).toMatch(/chipTarget: \{\s*minHeight: 44,/);
     expect(chip).toContain("style={styles.chipTarget}");

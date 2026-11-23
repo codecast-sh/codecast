@@ -353,7 +353,7 @@ function AssignmentSheetBody({
             )}
             <Text style={styles.sectionLabel}>Teammates</Text>
             {m.unselected.length > 0 && (
-              <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); m.selectAllTeammates(); }}>
+              <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); m.selectAllTeammates(); }} accessibilityRole="button" accessibilityLabel={`Select all teammates, ${m.unselected.length}`}>
                 <FontAwesome name="plus" size={12} color={Theme.textMuted} style={{ width: 22, textAlign: 'center' }} />
                 <Text style={[styles.rowLabel, { flex: 1, color: Theme.textMuted }]}>Select all teammates</Text>
                 <Text style={styles.rowHint}>{m.unselected.length}</Text>
@@ -439,8 +439,15 @@ function CandidateRow({ face, name, handle, reason, onAdd }: {
   reason?: string | null;
   onAdd: () => void;
 }) {
+  // One button, read once: the face, the name and the + would each be read.
   return (
-    <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={onAdd}>
+    <TouchableOpacity
+      style={styles.row}
+      activeOpacity={0.6}
+      onPress={onAdd}
+      accessibilityRole="button"
+      accessibilityLabel={`Add ${name}${handle ? `, @${handle}` : ''}${reason ? `, ${reason}` : ''}`}
+    >
       {face}
       <View style={{ flex: 1, minWidth: 0 }}>
         <Text style={styles.rowLabel} numberOfLines={1}>
