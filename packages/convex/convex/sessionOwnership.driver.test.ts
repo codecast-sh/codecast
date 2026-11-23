@@ -1,7 +1,8 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performCreateRole, performReparentSession } from "./orgRoles";
-import { ownersChangeFromDispatch, performAddSessionOwner, performApplyOwnersChange, performListOwners, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners } from "./sessionOwnership";
+import { ownersChangeFromDispatch, performAddSessionOwner, performApplyOwnersChange, performListOwners, performRemoveSessionOwner, performSetSessionOwners } from "./sessionOwnership";
+import { performSetSessionDriver } from "./lib/sessionRolePause";
 import { withLeaveRules } from "./lib/sessionOwnerRules";
 import { checkConversationAccess } from "./privacy";
 

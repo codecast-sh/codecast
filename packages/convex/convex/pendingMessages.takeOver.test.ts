@@ -13,7 +13,8 @@ import { formatDecisionAnswer, roleDrives, rollupParentIdOf, SEND_REFUSED, SEND_
 import { dispatch } from "./dispatch";
 import { sendSessionMessage } from "./pendingMessages";
 import { stopAndSendForUser } from "./daemonCommandUtils";
-import { performListOwners, performPauseSessionRole, performRehomeSessions, performApplyOwnersChange, performLeaveSession, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners, applyOwnersChangeAs } from "./sessionOwnership";
+import { performListOwners, performRehomeSessions, performApplyOwnersChange, performLeaveSession, performRemoveSessionOwner, performSetSessionOwners, applyOwnersChangeAs } from "./sessionOwnership";
+import { performPauseSessionRole, performSetSessionDriver } from "./lib/sessionRolePause";
 
 // One owner drives (org-roles-run-work.md R1). A person's own message into a
 // session takes the wheel from the role or person driving it; the paused role

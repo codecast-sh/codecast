@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { answerCore, GRANT_TTL_MS } from "./sessionDecisions";
-import { performSetSessionDriver } from "./sessionOwnership";
+import { performSetSessionDriver } from "./lib/sessionRolePause";
 import { HOST, BOSS, OWNER2, NOW, askApproach, seated, linesIn } from "./testDecisions";
 
 // A person who takes the wheel of a session filed under a role pauses the
