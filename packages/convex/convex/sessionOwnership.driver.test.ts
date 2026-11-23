@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { performCreateRole, performReparentSession } from "./orgRoles";
-import { performApplyOwnersChange, performListOwners, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners } from "./sessionOwnership";
+import { performAddSessionOwner, performApplyOwnersChange, performListOwners, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners } from "./sessionOwnership";
 import { withLeaveRules } from "./lib/sessionOwnerRules";
 
 // A role is an owner beside the people, and exactly one owner drives
@@ -277,6 +277,25 @@ describe("who may change the owners and the driver", () => {
     expect((await performListOwners(ctx, MATE as any, "sess1"))!.can_edit).toBe(true);
   });
 
+  test("cast own and cast disown refuse a teammate who only sees the session, except claiming it", async () => {
+    const db = fixtures();
+    db._tables.conversations[0].is_private = false;
+    db._tables.users.push({ _id: "u".repeat(31) + "o", name: "Other", email: "other@x.ai" });
+    db._tables.team_memberships.push({ _id: "m3", user_id: "u".repeat(31) + "o", team_id: TEAM, role: "member", joined_at: 1 });
+    const ctx = ctxOf(db);
+    await expect(performAddSessionOwner(ctx, MATE as any, { session_id: "sess1", owner: "other@x.ai" })).rejects.toThrow(/Only an owner/);
+    await expect(performRemoveSessionOwner(ctx, MATE as any, { session_id: "sess1", owner: "me@x.ai" })).rejects.toThrow(/Only an owner/);
+    await expect(performSetSessionOwners(ctx, MATE as any, { session_id: "sess1", owners: [] })).rejects.toThrow(/Only an owner/);
+    await expect(performSetSessionOwners(ctx, MATE as any, { session_id: "sess1", owners: ["me"] })).rejects.toThrow(/Only an owner/);
+    expect(owners(db)).toEqual([ME]);
+    await performAddSessionOwner(ctx, MATE as any, { session_id: "sess1", owner: "me" });
+    expect(owners(db)).toEqual([ME, MATE].sort());
+    // Now an owner, they may hand it on and leave it.
+    await performAddSessionOwner(ctx, MATE as any, { session_id: "sess1", owner: "other@x.ai" });
+    await performRemoveSessionOwner(ctx, MATE as any, { session_id: "sess1", owner: "me" });
+    expect(owners(db)).toEqual([ME, "u".repeat(31) + "o"].sort());
+  });
+
   test("adding a teammate to a session with no owner rows keeps its starter", async () => {
     const db = fixtures();
     db._tables.session_owners = [];
@@ -306,6 +325,17 @@ describe("who may change the owners and the driver", () => {
     await performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { role: role.short_id } });
     expect(await driver(ctx)).toEqual({ kind: "user", user_id: ME });
     await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "sess1", change: { role: "@nobody" } })).rejects.toThrow(/No role @nobody/);
+  });
+
+  test("cast own --drive matches a name among the owners before the team", async () => {
+    const db = fixtures();
+    const SAM2 = "u".repeat(31) + "2";
+    db._tables.users.push({ _id: "u".repeat(31) + "1", name: "Sam Lee", email: "sam1@x.ai" }, { _id: SAM2, name: "Sam Lee", email: "sam2@x.ai" });
+    db._tables.team_memberships.push({ _id: "m4", user_id: "u".repeat(31) + "1", team_id: TEAM, role: "member", joined_at: 1 }, { _id: "m5", user_id: SAM2, team_id: TEAM, role: "member", joined_at: 1 });
+    const ctx = ctxOf(db);
+    await performAddSessionOwner(ctx, ME as any, { session_id: "sess1", owner: "sam2@x.ai" });
+    await performSetSessionDriver(ctx, ME as any, { session_id: "sess1", driver: { kind: "user", user_id: "Sam Lee" } });
+    expect(row(db).driver_user_id).toBe(SAM2);
   });
 
   test("cast own --drive takes a teammate by email once they own it", async () => {

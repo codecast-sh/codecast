@@ -64,7 +64,7 @@ describe("ownership changes notify the people affected", () => {
   });
 
   test("replacement tells the removed owner exactly what changed", async () => {
-    const { ctx, notifications } = world([JASON]);
+    const { ctx, notifications } = world([JASON, ASHOT]);
     await invoke(setSessionOwners, ctx, { owners: [ASHOT] });
     expect(notifications()).toHaveLength(1);
     expect(notifications()[0].recipient_user_id).toBe(JASON);
@@ -73,7 +73,7 @@ describe("ownership changes notify the people affected", () => {
   });
 
   test("single-owner compatibility API also notifies the previous owner", async () => {
-    const { ctx, notifications } = world([SAM]);
+    const { ctx, notifications } = world([SAM, ASHOT]);
     await invoke(setSessionOwner, ctx, { owner: "me" });
     expect(notifications().find((n: any) => n.recipient_user_id === SAM).message).toContain("You were removed as an owner.");
   });
@@ -89,7 +89,7 @@ describe("ownership changes notify the people affected", () => {
   });
 
   test("assigning another person preserves their existing assigned-to-you notification", async () => {
-    const { ctx, notifications } = world([]);
+    const { ctx, notifications } = world([ASHOT]);
     await invoke(addSessionOwner, ctx, { owner: SAM, note: "Please review" });
     const sam = notifications().filter((n: any) => n.recipient_user_id === SAM);
     expect(sam).toHaveLength(1);

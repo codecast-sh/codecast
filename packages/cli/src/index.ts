@@ -240,7 +240,6 @@ import {
 } from "./vault/vaultCli.js";
 import { buildMatcher, contextWindow, matchingLines, resolveLineRange } from "./textView.js";
 import { resolveOwnTarget } from "./ownTarget.js";
-import { describeOwners, isRoleRef, namesFiledRole, ownersLine } from "./ownersView.js";
 import { resolveCurrentConversationId } from "./linkResolve.js";
 import { defaultConfigDir } from "./config/configDir.js";
 import { readLocalConversationMap } from "./localConversationMap.js";
@@ -4196,7 +4195,9 @@ async function readOwners(sessionId: string): Promise<any> {
 }
 
 // A role named on `own --drive`/`disown` must be the one the session is filed under.
-function requireFiledRole(read: any, ref: string, sessionId: string): void {
+async function requireFiledRole(read: any, ref: string, sessionId: string): Promise<void> {
+  // ownersView loads inside the owner verbs, off the boot graph (bootGraph.guard).
+  const { namesFiledRole } = await import("./ownersView.js");
   if (namesFiledRole(read, ref)) return;
   const filed = read.role ? `it is filed under @${read.role.handle}` : "it is filed under no role";
   console.error(`${c.red}✗${c.reset} ${c.cyan}${read.short_id || sessionId}${c.reset} ${ref} is not its role: ${filed}`);
@@ -4208,10 +4209,11 @@ program
   .description(
     "Add an owner to a session: a teammate, or one role\n\n" +
     "A session's owners are whose inbox it sits in: people, and at most one\n" +
-    "role. Exactly one owner drives it, the one the agent works for: the role\n" +
-    "while one is filed, else the person who drives. A person who owns a\n" +
-    "session its role drives takes over by sending into it, and the role is\n" +
-    "paused until someone makes it driver again.\n\n" +
+    "role. Exactly one owner drives it, the one the agent works for. With a\n" +
+    "role filed, the role drives unless a person has taken over, in which case\n" +
+    "that person drives and the role is paused; with no role, a person drives.\n" +
+    "An owner takes over by sending into the session, and the role drives\n" +
+    "again when someone makes it driver.\n\n" +
     "Naming a person ADDS them without displacing anyone and notifies them;\n" +
     "adding someone never moves the wheel to them. Naming a role (@handle)\n" +
     "files the session under it, replacing any other role, and the role drives.\n" +
@@ -4237,6 +4239,7 @@ program
   .option("--drive <who>", "Make this owner the driver: me, a teammate who owns it, or the filed role (@handle)")
   .action(async (first: string, second: string | undefined, opts: { drive?: string }) => {
     const { sessionId, member } = resolveOwnerTarget(first, second, "own");
+    const { isRoleRef, ownersLine } = await import("./ownersView.js");
     const who = member?.trim();
     const from_session = callingSession();
     let told: any = null;
@@ -4250,7 +4253,7 @@ program
     }
     if (opts.drive) {
       const drive = opts.drive.trim();
-      if (isRoleRef(drive)) requireFiledRole(await readOwners(sessionId), drive, sessionId);
+      if (isRoleRef(drive)) await requireFiledRole(await readOwners(sessionId), drive, sessionId);
       await cliPost("/cli/sessions/drive", { session_id: sessionId, driver: isRoleRef(drive) ? { kind: "role" } : { kind: "user", user_id: drive } });
     }
     const read = await readOwners(sessionId);
@@ -4280,18 +4283,24 @@ program
   .option("--move-to <machine>", "Leave a session that runs on your account: the team machine to move it to first")
   .action(async (first: string, second: string | undefined, opts: { all?: boolean; moveTo?: string }) => {
     const { sessionId, member } = resolveOwnerTarget(first, second, "disown");
+    const { isRoleRef, ownersLine } = await import("./ownersView.js");
     const who = member?.trim();
     const from_session = callingSession();
     if (who && isRoleRef(who)) {
-      requireFiledRole(await readOwners(sessionId), who, sessionId);
+      await requireFiledRole(await readOwners(sessionId), who, sessionId);
       await cliPost("/cli/sessions/owners/change", { session_id: sessionId, change: { role: null }, from_session });
       const read = await readOwners(sessionId);
       console.log(`${c.green}✓${c.reset} ${c.cyan}${read.short_id || sessionId}${c.reset} ${c.dim}owners →${c.reset} ${c.magenta}${ownersLine(read)}${c.reset}`);
       return;
     }
     if (opts.moveTo) {
-      if (who && who !== "me") {
-        console.error("--move-to moves a session you leave; it does not apply to removing someone else");
+      if (opts.all || (who && who !== "me")) {
+        console.error("--move-to moves a session you leave; it does not combine with --all or with removing someone else");
+        process.exit(1);
+      }
+      const runner = (await readOwners(sessionId)).runner;
+      if (!runner || runner.user_id !== readConfig()?.user_id) {
+        console.error(`--move-to is for a session that runs on your account; this one runs on ${runner?.name || runner?.email || "another account"}'s. Leave it with: cast disown ${sessionId}`);
         process.exit(1);
       }
       const { convexClient } = await import("./remote/cli.js");
@@ -4341,6 +4350,7 @@ program
   .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
   .action(async (sessionId: string) => {
     const read = await readOwners(sessionId);
+    const { describeOwners } = await import("./ownersView.js");
     const d = describeOwners(read);
     console.log(`${c.cyan}${read.short_id || sessionId}${c.reset}`);
     console.log(`  ${c.dim}owners${c.reset}   ${c.magenta}${d.people}${c.reset}`);

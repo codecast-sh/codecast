@@ -145,6 +145,18 @@ export async function resolveOwnerRef(
   return ownerUser;
 }
 
+// A person as `cast own --drive` names them, looked for among the session's
+// owners before the team, so two teammates with one name resolve to the one
+// who owns it: an exact email or name, else a unique partial match.
+export async function ownerNamed(ctx: { db: any }, ownerIds: string[], ref: string): Promise<string | null> {
+  const needle = ref.trim().toLowerCase();
+  const owners = (await Promise.all(ownerIds.map((id) => ctx.db.get(id)))).filter(Boolean);
+  const exact = owners.find((u: any) => (u.email || "").toLowerCase() === needle) ?? owners.find((u: any) => (u.name || "").toLowerCase() === needle);
+  if (exact) return String(exact._id);
+  const partial = owners.filter((u: any) => (u.name || "").toLowerCase().includes(needle) || (u.email || "").toLowerCase().includes(needle));
+  return partial.length === 1 ? String(partial[0]._id) : null;
+}
+
 // A role as `cast own` names it, as its id: `@handle` among the roles of the
 // session's team (the caller's own roles for a session with no team), or a
 // short id (or-N). The reparent core still checks the caller may file under it.

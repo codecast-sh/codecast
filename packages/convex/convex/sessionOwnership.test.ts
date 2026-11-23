@@ -241,7 +241,7 @@ describe("multi-owner session ownership", () => {
 
   test("a noted handoff to an existing co-owner re-stamps the row and notifies again", async () => {
     const db = fixtures();
-    await performAddSessionOwner({ db }, ASHOT as any, { session_id: "jx1abcd", owner: "jason@union.ai", note: "first look" });
+    await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai", note: "first look" });
     const before = db._tables.session_owners[0];
     expect(before.note).toBe("first look");
     await db.patch(before._id, { seen_at: 1 }); // Jason acknowledged the first handoff
@@ -256,7 +256,7 @@ describe("multi-owner session ownership", () => {
     expect(after.seen_at).toBeUndefined();
 
     // Without a note nothing changes and nobody is notified.
-    const quiet = await performAddSessionOwner({ db }, ASHOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
+    const quiet = await performAddSessionOwner({ db }, BOT as any, { session_id: "jx1abcd", owner: "jason@union.ai" });
     expect(quiet.added).toEqual([]);
     expect(db._tables.session_owners[0].note).toBe("please finish this");
   });
@@ -585,9 +585,15 @@ describe("performListOwnerCandidates", () => {
 
 describe("the sender a move names (from_session)", () => {
   const lines = (db: any) => (db._tables.pending_messages ?? []) as any[];
+  // Ashot owns jx1abcd, so it is theirs to hand on.
+  const fixturesOwnedByAshot = () => {
+    const db = fixtures();
+    db._tables.session_owners = [{ _id: "so_ashot", conversation_id: "jx1abcd_convex_id", user_id: ASHOT, added_by: ASHOT, added_at: 1 }];
+    return db;
+  };
 
   test("a session the caller cannot see is never quoted or stamped as the sender", async () => {
-    const db = fixtures();
+    const db = fixturesOwnedByAshot();
     // jx2abcd is Mr Bot's private session: Ashot cannot see it.
     await performSetSessionOwners({ db }, ASHOT as any, { session_id: "jx1abcd", owners: ["jason@union.ai"], from_session: "jx2abcd" });
     expect(lines(db).length).toBeGreaterThan(0);
@@ -598,7 +604,7 @@ describe("the sender a move names (from_session)", () => {
   });
 
   test("the caller's own session is still named as the sender", async () => {
-    const db = fixtures();
+    const db = fixturesOwnedByAshot();
     await performSetSessionOwners({ db }, ASHOT as any, { session_id: "jx1abcd", owners: ["jason@union.ai"], from_session: "jx3abcd" });
     expect(lines(db).some((row) => String(row.content).includes("jx3abcd"))).toBe(true);
   });

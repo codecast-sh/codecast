@@ -10,7 +10,7 @@ import { addSessionOwnerRow, removeSessionOwnerRow, listSessionOwnerIds, syncPri
 import { isLeave, listedOwnerIds, pinnedDriverAfterAdd, starterOf } from "@codecast/shared/contracts/sessionOwners";
 import {
   assertHumanOwner, avatarOf, driverOf, listOwnerInfos, mayEditOwners, ownerIdsOrStarter, ownersFactsOf, OWNER_CANDIDATE_CAP, resolveOwnableConversation,
-  resolveOwnerRef, resolveOwnerRoleRef, settleLeave, teamMemberDocs, toOwnerInfo, withLeaveRules, type DriverTarget, type OwnerInfo, type OwnerMutationResult, type SessionDriver,
+  ownerNamed, resolveOwnerRef, resolveOwnerRoleRef, settleLeave, teamMemberDocs, toOwnerInfo, withLeaveRules, type DriverTarget, type OwnerInfo, type OwnerMutationResult, type SessionDriver,
 } from "./lib/sessionOwnerRules";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { routeUpWaitingSession } from "./agentTasks";
@@ -466,6 +466,15 @@ async function rehomeSessions(
 // Thin names over the core, kept so the mutations, `cast own`/`cast disown`
 // and the tests read as the gesture they perform.
 
+// Changing who owns a session is for its owners and the account that runs
+// it (mayEditOwners), whichever door it comes by; the owners menu Save
+// (performApplyOwnersChange) holds the same rule. The callers below exempt
+// claiming it yourself and leaving it.
+const OWNERS_EDIT_REFUSAL = "Only an owner of the session, or the account that runs it, can change its owners";
+async function requireOwnersEdit(ctx: { db: any }, authUserId: Id<"users">, conversation: any): Promise<void> {
+  if (!(await mayEditOwners(ctx, authUserId, conversation))) throw new Error(OWNERS_EDIT_REFUSAL);
+}
+
 // Replace the owner set wholesale (empty list = disown everyone): `cast
 // disown --all` and scripts. A set that leaves the caller out is their leave.
 export async function performSetSessionOwners(
@@ -473,6 +482,17 @@ export async function performSetSessionOwners(
   authUserId: Id<"users">,
   args: { session_id: string; owners: string[]; note?: string; from_session?: string },
 ): Promise<ReparentSessionResult> {
+  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+  const named: string[] = [];
+  for (const ref of args.owners.map((o) => o.trim()).filter(Boolean)) {
+    const user = await resolveOwnerRef(ctx, authUserId, conversation, ref);
+    assertHumanOwner(user);
+    named.push(String(user._id));
+  }
+  // Claiming a session nobody owns yet, as its only owner, is a claim.
+  const me = String(authUserId);
+  const selfClaim = named.length > 0 && named.every((id) => id === me) && (await ownerIdsOrStarter(ctx, conversation)).every((id) => id === me);
+  if (!selfClaim) await requireOwnersEdit(ctx, authUserId, conversation);
   return withLeaveRules(ctx, authUserId, args.session_id, () =>
     performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: args.owners, mode: "set" }, handoff: args.note, from_session: args.from_session }));
 }
@@ -483,6 +503,10 @@ export async function performAddSessionOwner(
   authUserId: Id<"users">,
   args: { session_id: string; owner: string; note?: string; from_session?: string },
 ): Promise<ReparentSessionResult> {
+  const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+  const owner = await resolveOwnerRef(ctx, authUserId, conversation, args.owner.trim());
+  assertHumanOwner(owner);
+  if (String(owner?._id) !== String(authUserId)) await requireOwnersEdit(ctx, authUserId, conversation);
   return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: [args.owner], mode: "add" }, handoff: args.note, from_session: args.from_session });
 }
 
@@ -498,6 +522,7 @@ export async function performRemoveSessionOwner(
   if (String(owner?._id) === String(authUserId)) {
     return performLeaveSession(ctx, authUserId, { session_id: String(conversation._id), from_session: args.from_session });
   }
+  await requireOwnersEdit(ctx, authUserId, conversation);
   return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: [args.owner], mode: "remove" }, from_session: args.from_session });
 }
 
@@ -540,7 +565,9 @@ export async function performSetSessionDriver(
   const ownerIds = await ownerIdsOrStarter(ctx, conversation);
   // The web passes an owner's id; `cast own --drive` passes a person as typed.
   const ref = args.driver.user_id;
-  const userId = ownerIds.includes(ref) ? ref : String((await resolveOwnerRef(ctx, authUserId, conversation, ref))._id);
+  let userId = ownerIds.includes(ref) ? ref : null;
+  if (!userId && ref.trim().toLowerCase() !== "me") userId = await ownerNamed(ctx, ownerIds, ref);
+  userId ??= String((await resolveOwnerRef(ctx, authUserId, conversation, ref))._id);
   if (!ownerIds.includes(userId)) throw new Error("Only an owner of the session can drive it; add them as an owner first");
   if (String(conversation.driver_user_id ?? "") !== userId) await ctx.db.patch(conversation._id, { driver_user_id: userId as Id<"users"> });
   return { ok: true, short_id: shortId, conversation_id: conversation._id, driver: { kind: "user", user_id: userId as Id<"users"> } };
@@ -604,7 +631,7 @@ export async function performApplyOwnersChange(
   const selfClaim = change.add?.length === 1 && change.add[0] === String(authUserId) && !change.remove?.length && !change.restore?.length && change.role === undefined && !change.driver && !change.leave;
   const start = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   if (!selfClaim && !(await mayEditOwners(ctx, authUserId, start))) {
-    throw new Error("Only an owner of the session, or the account that runs it, can change its owners");
+    throw new Error(OWNERS_EDIT_REFUSAL);
   }
   const run = (target: ReparentSessionTarget) => performReparentSession(ctx, authUserId, { session_id: args.session_id, target, handoff: change.note, from_session: args.from_session });
   if (change.add?.length) results.push(await run({ kind: "user", owners: change.add, mode: "add" }));
