@@ -102,6 +102,9 @@ function OwnersMenuBody({ conversationId, owners, onClose, onDirty }: { conversa
   const { team: moveTargets } = useMoveTargets();
   const roster = useInboxStore(teamMembersOf) as any[];
   const menuRef = useRef<HTMLDivElement>(null);
+  // Focus the search only for a precise pointer: on a touch screen it raises
+  // the keyboard over the menu when the tap was for Make driver or ×.
+  const [autoFocusSearch] = useState(() => typeof window === "undefined" || !window.matchMedia || !window.matchMedia("(pointer: coarse)").matches);
   const searchRef = useRef<HTMLInputElement>(null);
   const { candidates, q, readOnly, highlighted, rows } = m;
   useWatchEffect(() => onDirty(m.dirty), [m.dirty]); // eslint-disable-line react-hooks/exhaustive-deps
@@ -189,7 +192,7 @@ function OwnersMenuBody({ conversationId, owners, onClose, onDirty }: { conversa
       <div className={SEP} />
       <label className="flex h-8 items-center gap-2 px-2 text-sol-text-dim">
         <Search className="w-3.5 h-3.5" />
-        <input ref={searchRef} autoFocus value={m.query} onChange={(e) => m.setQuery(e.target.value)} placeholder={m.isStandingThread ? "Add a teammate" : "Add a role or teammate"} aria-label="Add a role or teammate" autoComplete="off" className="min-w-0 flex-1 bg-transparent text-ui text-sol-text placeholder:text-sol-text-dim outline-none" />
+        <input ref={searchRef} autoFocus={autoFocusSearch} value={m.query} onChange={(e) => m.setQuery(e.target.value)} placeholder={m.isStandingThread ? "Add a teammate" : "Add a role or teammate"} aria-label="Add a role or teammate" autoComplete="off" className="min-w-0 flex-1 bg-transparent text-ui text-sol-text placeholder:text-sol-text-dim outline-none" />
       </label>
       <div className="max-h-[320px] overflow-y-auto" data-owner-candidates>
         {m.shownRoles.length > 0 && <div className={LABEL}>{q ? "Roles" : "Suggested roles"}</div>}

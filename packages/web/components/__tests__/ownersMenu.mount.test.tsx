@@ -132,6 +132,20 @@ test("a search with no match highlights nothing, so Shift+Enter makes nobody dri
   expect(chips()).toEqual([]);
 });
 
+test("the search box takes focus on open with a mouse, not on a touch screen", async () => {
+  await openMenu();
+  expect(w.document.activeElement).toBe(w.document.querySelector("[data-owners-menu] input"));
+  await act(async () => { root?.unmount(); });
+  const before = w.matchMedia;
+  w.matchMedia = (q: string) => ({ matches: q === "(pointer: coarse)", media: q, addEventListener() {}, removeEventListener() {} });
+  try {
+    await openMenu();
+    expect(w.document.activeElement).not.toBe(w.document.querySelector("[data-owners-menu] input"));
+  } finally {
+    w.matchMedia = before;
+  }
+});
+
 test("a touch's synthetic hover highlights nothing; a mouse's does", async () => {
   await openMenu();
   const row = w.document.querySelector("[data-owner-candidate='p:user_sam']") as HTMLElement;
