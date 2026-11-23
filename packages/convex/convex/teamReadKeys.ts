@@ -199,6 +199,8 @@ export type TeamSessionRow = {
   summary: string | null;
   /** The level the owner shares this session with the team at. */
   sharing: "summary" | "full";
+  /** Every message in the transcript: the person's, the agent's and tool results. */
+  transcript_messages: number;
   work_state: WorkState;
   started_at: string;
   updated_at: string;
@@ -259,6 +261,7 @@ export const sessionsForKey = internalQuery({
         title: (c.title_is_custom || c.subtitle !== undefined) && !needsHostedTitle(c) ? (c.title ?? null) : null,
         summary: c.subtitle ?? null,
         sharing: floor.contentVisible(c) ? "full" : "summary",
+        transcript_messages: c.message_count,
         work_state: (await classifier.classify(c)).work_state,
         started_at: new Date(c.started_at).toISOString(),
         updated_at: new Date(c.updated_at).toISOString(),
