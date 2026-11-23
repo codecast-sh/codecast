@@ -591,15 +591,7 @@ export class TaskScheduler {
   }
 
   private track(run: TrackedRun): void {
-    const heartbeatTimer = setInterval(async () => {
-      const renewed = await this.syncService.renewTaskLease(run.taskId, this.daemonId);
-      if (!renewed) {
-        this.log(`Lease renewal failed for task ${run.taskId}, stopping monitor`);
-        this.cleanupTask(run.taskId);
-      }
-
-      await this.checkTaskCompletion(run.taskId);
-    }, HEARTBEAT_INTERVAL_MS);
+    const heartbeatTimer = setInterval(() => this.heartbeat(run.taskId), HEARTBEAT_INTERVAL_MS);
 
     this.running.set(run.taskId, { ...run, heartbeatTimer });
     // Link the run's conversation to the task as soon as it syncs (bounded
@@ -730,6 +722,21 @@ export class TaskScheduler {
       }
       this.scheduleRunLink(taskId, runSessionUuid, attempt + 1);
     }, delaysMs[attempt]);
+  }
+
+  /** One lease beat. renewTaskLease answers null when the backend did not answer: that says nothing
+   *  about the lease, so the monitor stays (after a wake the first calls time out, and stopping here
+   *  lets a live run's lease lapse and the trigger refire). Only false, the backend's "lost", stops it. */
+  private async heartbeat(taskId: string): Promise<void> {
+    const renewed = await this.syncService.renewTaskLease(taskId, this.daemonId);
+    if (renewed === false) {
+      this.log(`Lease for task ${taskId} lost, stopping monitor`);
+      this.cleanupTask(taskId);
+    } else if (renewed === null) {
+      this.log(`Lease renewal for task ${taskId} unanswered`, "warn");
+    }
+
+    await this.checkTaskCompletion(taskId);
   }
 
   private async checkTaskCompletion(taskId: string): Promise<void> {

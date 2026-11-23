@@ -2725,8 +2725,8 @@ export class SyncService {
     }
   }
 
-  async renewTaskLease(taskId: string, daemonId: string): Promise<boolean> {
-    if (!this.apiToken) return false;
+  async renewTaskLease(taskId: string, daemonId: string): Promise<boolean | null> {
+    if (!this.apiToken) return null;
     try {
       const result = await this.mutate(
         "agentTasks:renewLease" as any,
@@ -2734,7 +2734,7 @@ export class SyncService {
       );
       return result as boolean;
     } catch {
-      return false;
+      return null;
     }
   }
 
