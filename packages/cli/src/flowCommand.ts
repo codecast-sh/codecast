@@ -6,6 +6,7 @@
 // shows one, runs a change through one, switches a live flow, and turns a
 // Claude Code workflow script into a flow (lineCommand.ts adds the flows'
 // working commands).
+import { registerIntentCommands } from "./workflow/intentCommands.js";
 import type { Command } from "commander";
 import { commandGroup } from "./commandGroups.js";
 import { spawnSync } from "./proc.js";
@@ -597,6 +598,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       else if (part === "guidelines") console.log(JSON.stringify(blindGuidelines(range)));
       else throw new Error(`The part is diff or guidelines, not ${part}`);
     });
+
+  // The intent segment's commands (asker, intent-verify).
+  registerIntentCommands(flow, deps.cliPost);
 
   // The daemon's tracer for a Claude Code Workflow run (daemon.ts
   // workflowRunGraph): the script as the graph it ran, as JSON, in its own

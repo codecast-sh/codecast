@@ -164,7 +164,7 @@ describe("running a segment", () => {
 });
 
 describe("the shipped pool", () => {
-  const SEGMENTS = ["check", "review", "judge", "eval", "decide", "ship", "prove-implement"];
+  const SEGMENTS = ["check", "review", "judge", "intent", "eval", "decide", "ship", "prove-implement"];
 
   test("each starter segment says it is one, and the change line asks a person through decide and ends in the deploy segment", () => {
     for (const slug of SEGMENTS) {
