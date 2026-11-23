@@ -16,7 +16,7 @@ import { SESSION_SHORT_ID_RE } from "@codecast/shared/chat";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { lineStartsOn } from "@codecast/shared/contracts/roleAutonomy";
 import { utcDay } from "./lib/orgCaps";
-import { flowAgents, WORKING_RUN_STATUSES } from "./lib/linePlacement";
+import { flowAgents, readOnlyPass, WORKING_RUN_STATUSES } from "./lib/linePlacement";
 import { barWords, byStartOrder, clearsBar, startValue, type FlowBar } from "./lib/linePriority";
 import { problemSourceOf } from "./workflows";
 import { isJudgeProblem } from "@codecast/shared/contracts/judgeReview";
@@ -182,6 +182,7 @@ export type LiveFlowRow = {
   changed_at: number;
   /** The web's optimistic row this one supersedes, for a flow started there. */
   client_key: string | null;
+  /** The flow's working runs, at most LIVE_FLOW_SHOWN of them, newest first for each of its roles. */
   running: string[];
   queue: Array<{ task_id: string; waiting: string | null }>;
 };
@@ -191,18 +192,21 @@ export async function liveFlowView(ctx: Ctx, flow: any, now = Date.now()): Promi
   const roles: any[] = await ctx.db.query("org_roles").collect();
   const team = flowRoles(flow, roles);
   const loads: LineLoads = new Map();
-  // Every machine the flow's leads run on, counted once.
-  for (const r of team) if (r.status === "active") await lineLoadFor(ctx, r, now, loads, roles);
+  // Every machine the flow's leads run on, counted once: its runs are read once in this pass, whatever seat or key asks.
+  const pass = readOnlyPass(ctx);
+  for (const r of team) if (r.status === "active") await lineLoadFor(pass, r, now, loads, roles);
   // Leads seated in different folders of one checkout share its pool: count each pool, and each runner's own machine, once.
   const distinct = new Map([...loads.values()].map((l) => [l.pool ? l.pool.slots.map((sl) => sl.device).sort().join(",") : `runner:${l.runner}`, l]));
   const totals = [...distinct.values()].reduce((t, l) => ({ working: t.working + loadWorking(l), cap: t.cap + l.cap }), { working: 0, cap: 0 });
   const online = [...distinct.values()].reduce((n, l) => n + (l.pool?.slots.length ?? 0), 0);
   const machines = { online, total: online + [...distinct.values()].reduce((n, l) => n + (l.pool?.offline ?? 0), 0) };
-  const plan = await planLiveFlow(ctx, flow, roles, now, LIVE_FLOW_SHOWN, loads);
+  const plan = await planLiveFlow(pass, flow, roles, now, LIVE_FLOW_SHOWN, loads);
+  // As many runs as the view shows, newest first: never every working run of the flow's roles (Union holds hundreds at Queue).
   const running: string[] = [];
   for (const r of team) {
     for (const status of WORKING_RUN_STATUSES) {
-      const runs: any[] = await ctx.db.query("workflow_runs").withIndex("by_org_role_status", (q: any) => q.eq("org_role_id", r._id).eq("status", status)).collect();
+      if (running.length >= LIVE_FLOW_SHOWN) break;
+      const runs: any[] = await ctx.db.query("workflow_runs").withIndex("by_org_role_status", (q: any) => q.eq("org_role_id", r._id).eq("status", status)).order("desc").take(LIVE_FLOW_SHOWN - running.length);
       running.push(...runs.map((run) => String(run._id)));
     }
   }
