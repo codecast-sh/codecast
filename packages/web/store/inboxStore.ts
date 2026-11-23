@@ -93,7 +93,7 @@ import { broadcastGesture, BRIDGED_FIELDS, type BridgedField, type GestureMessag
 // Single source of truth for the agent-status contract, shared with the Convex
 // backend and the CLI daemon. See packages/shared/contracts/agentStatus.ts.
 import { ECHO_SKEW_MS } from "../lib/pendingBanner";
-import { type AgentStatus, ACTIVE_AGENT_STATUSES, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
+import { type AgentStatus, ACTIVE_AGENT_STATUSES, isClosedSession, CONVERSATION_FIELD_TWINS, cloudAgentProviderOfConversation, childAskingAt, deriveLiveAt, rowLiveDeadlines, type LiveFacts, type UserRest, modelOptionKey, formatDecisionAnswer, parseDecisionAnswer, decisionAnswerLabel, advisoryAnswerOpen, hasThreadState, answeredThreadStateFields, isInboxRowField, settingsAfterSnippet, type DeviceSnippetChange, managedIdsAfter, type ProviderKeyCommand, formatCapabilitySlug, DEFAULT_TEAM_FEATURES } from "@codecast/shared/contracts";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
 import { closeFactsOf, closeSetsAside, nestedRunningOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
@@ -819,6 +819,8 @@ export type InboxSession = {
   // send, Restart, undismiss) — see classifyWorkState in convex/inboxFilters.ts,
   // whose precedence the client predicates below mirror.
   inbox_killed_at?: number | null;
+  // A Close (shared isClosedSession): equal to inbox_dismissed_at while closed.
+  inbox_closed_at?: number | null;
   last_user_message?: string | null;
   // Newest image in the conversation (server-denormalized, see convex schema).
   // Presence doubles as "this session has images"; rendered as the inbox row
@@ -3694,14 +3696,19 @@ export function sectionHeaderCount(
 
 // The store-state subset the chokepoint reads. Structural (never the store
 // type itself) so tests and computeVisualOrder's narrowed state can call it.
+// The Closed bucket's paged history: kills (listKilledSessions) and closes
+// (listClosedSessions), each on its own cursor.
 export type KilledShelf = {
   ids: readonly string[];
   cursor: string | null;
-  /** True once the server reported the last page. */
+  closedCursor: string | null;
+  /** True once the server reported the last page of both. */
   complete: boolean;
+  killedDone: boolean;
+  closedDone: boolean;
   loading: boolean;
 };
-export const EMPTY_KILLED_SHELF: KilledShelf = { ids: [], cursor: null, complete: false, loading: false };
+export const EMPTY_KILLED_SHELF: KilledShelf = { ids: [], cursor: null, closedCursor: null, complete: false, killedDone: false, closedDone: false, loading: false };
 
 // How far back the Killed bucket lists kills from THIS replica's cache on its
 // own. A kill is a working-set nonmember on every replica (inWorkingSet mirrors
@@ -4350,7 +4357,7 @@ export function placeInboxRows(
   // Subagent children keep nesting under their parent as everywhere else.
   const listedDismissed = new Set(dismissed.map((s) => s._id));
   const listKilled = (s: InboxSession | undefined) => {
-    if (!s?.inbox_killed_at || listedDismissed.has(s._id) || isOrphanOrSubagent(s)) return;
+    if (!s || !(s.inbox_killed_at || isClosedSession(s)) || listedDismissed.has(s._id) || isOrphanOrSubagent(s)) return;
     listedDismissed.add(s._id);
     dismissed.push(s);
   };

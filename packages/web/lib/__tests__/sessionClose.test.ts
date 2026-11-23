@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { closeFactsOf, closeKindOf, closeSetsAside, closeTooltip, nestedRunningOf, type CloseFacts } from "../sessionClose";
 
 const NOW = 1_800_000_000_000;
-const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ running: false, loop: false, role: false, triggers: 0, waitingOnRun: false, ...f });
+const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ running: false, loop: false, limit: false, role: false, triggers: 0, waitingOnRun: false, ...f });
 
 // One row per line of the brief's table: what Close does, and the words its tooltip says.
 describe("what Close does to a session", () => {
@@ -30,7 +30,7 @@ describe("what Close does to a session", () => {
   });
 
   test("no tooltip names the old gestures", () => {
-    for (const f of [facts({ running: true }), facts({ loop: true }), facts({ role: true }), facts({ triggers: 2 }), facts({ waitingOnRun: true }), facts()]) {
+    for (const f of [facts({ running: true }), facts({ loop: true }), facts({ limit: true }), facts({ role: true }), facts({ triggers: 2 }), facts({ waitingOnRun: true }), facts()]) {
       expect(closeTooltip(f)).not.toMatch(/kill|hibernat|stash/i);
     }
   });
@@ -82,6 +82,15 @@ describe("the facts of a row", () => {
     expect(closeTooltip(loop)).toBe("Close: hides it, keeps its loop running");
     const stale = closeFactsOf({ ...settled, loop_state: { status: "armed", wakeup_at: NOW - 60 * 60_000, event_at: NOW - 2 * 60 * 60_000 } }, 0, NOW);
     expect(stale.loop).toBe(false);
+  });
+
+  test("a session parked on a usage limit has a wake (the reset): Close sets it aside", () => {
+    const parked = closeFactsOf({ ...settled, agent_type: "claude_code", pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000 }, 0, NOW);
+    expect(parked.limit).toBe(true);
+    expect(closeSetsAside(parked)).toBe(true);
+    expect(closeTooltip(parked)).toBe("Close: hides it, picks up when its limit resets");
+    // A park from long ago is the graveyard, not the current incident.
+    expect(closeFactsOf({ ...settled, agent_type: "claude_code", pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 30 * 24 * 3_600_000 }, 0, NOW).limit).toBe(false);
   });
 
   test("a queued message or a question it asked is in flight: Close sets it aside", () => {

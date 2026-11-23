@@ -13,7 +13,7 @@ import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
 
 setDefaultTimeout(60_000);
 
-type Setup = { role?: boolean; conv?: Record<string, unknown>; queued?: boolean; agent?: string; newest?: Record<string, unknown> };
+type Setup = { role?: boolean; conv?: Record<string, unknown>; queued?: boolean; queuedRow?: boolean; agent?: string; newest?: Record<string, unknown> };
 
 async function setup(o: Setup = {}) {
   const t = convexTest(schema, allModules);
@@ -38,7 +38,9 @@ async function setup(o: Setup = {}) {
     }
     if (o.newest) await ctx.db.insert("messages", { conversation_id: c, role: "assistant", content: "", timestamp: now, ...o.newest } as any);
     const task = await ctx.db.insert("agent_tasks", { user_id: user, title: "check CI", prompt: "check CI", schedule_type: "once", mode: "apply", status: "scheduled", retry_count: 0, run_count: 0, created_at: now, run_at: now + 3_600_000, originating_conversation_id: c } as any);
-    const queued = await ctx.db.insert("pending_messages", { conversation_id: c, from_user_id: user, content: "one more thing", status: "pending", created_at: now, retry_count: 0 } as any);
+    const queued = o.queued || o.queuedRow
+      ? await ctx.db.insert("pending_messages", { conversation_id: c, from_user_id: user, content: "one more thing", status: "pending", created_at: now, retry_count: 0 } as any)
+      : null;
     return { user, role, conv: c, task, queued };
   });
   const as = t.withIdentity({ subject: `${ids.user}|test` });
@@ -50,15 +52,18 @@ async function setup(o: Setup = {}) {
   const read = () => t.run(async (ctx) => ({
     conv: (await ctx.db.get(ids.conv)) as any,
     task: (await ctx.db.get(ids.task)) as any,
-    queued: (await ctx.db.get(ids.queued)) as any,
+    queued: ids.queued ? ((await ctx.db.get(ids.queued)) as any) : null,
     kills: (await ctx.db.query("daemon_commands").collect()).filter((c: any) => c.command === "kill_session"),
   }));
   return { t, ids, as, send, read, kills };
 }
 
-// Closed: dismissed, torn down, and nothing that reads as retired.
+// Closed: dismissed with the close marker, torn down keeping its worktree, and
+// nothing that reads as retired.
 function expectClosed(r: { conv: any; task: any; kills: any[] }) {
   expect(r.conv.inbox_dismissed_at).toBeGreaterThan(0);
+  expect(r.conv.inbox_closed_at).toBe(r.conv.inbox_dismissed_at);
+  expect(JSON.parse(r.kills[0]?.args ?? "{}").keep_workspace).toBe(true);
   expect(r.conv.inbox_killed_at).toBeUndefined();
   expect(r.conv.status).not.toBe("completed");
   expect(r.kills.length).toBe(1);
@@ -74,12 +79,10 @@ function expectAside(r: { conv: any; kills: any[] }) {
 }
 
 describe("closeSession stops what has nothing in flight", () => {
-  test("an ordinary idle session is stopped and keeps its armed trigger and queued message", async () => {
+  test("an ordinary idle session is stopped and keeps its armed trigger", async () => {
     const s = await setup({ agent: "idle" });
     await s.send("closeSession", [String(s.ids.conv)]);
-    const r = await s.read();
-    expectClosed(r);
-    expect(r.queued.status).toBe("pending");
+    expectClosed(await s.read());
   });
 
   test("closeSessions (the bulk gesture) does the same", async () => {
@@ -115,6 +118,34 @@ describe("the server sets aside what the client closed while it is in flight", (
   test("a session mid-turn is stashed, and no teardown is queued", async () => {
     const s = await setup({ agent: "working", conv: { updated_at: Date.now() } });
     await s.send("closeSessions", [[String(s.ids.conv)]]);
+    expectAside(await s.read());
+  });
+
+  test("a pending message row is a wake even when the row's flag says none: the session is stashed", async () => {
+    const s = await setup({ queuedRow: true });
+    await s.send("closeSession", [String(s.ids.conv)]);
+    const r = await s.read();
+    expectAside(r);
+    expect(r.queued.status).toBe("pending");
+  });
+
+  test("a session parked on a usage limit (the reset continues it) is stashed", async () => {
+    const s = await setup({ conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: Date.now() - 60_000 } });
+    await s.send("closeSession", [String(s.ids.conv)]);
+    expectAside(await s.read());
+  });
+
+  test("a busy child among more than fifty is found: the newest are read first", async () => {
+    const s = await setup();
+    await s.t.run(async (ctx) => {
+      const now = Date.now();
+      for (let i = 0; i < 55; i++) {
+        await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: 1, updated_at: 1, status: "active", session_id: `s-old${i}`, message_count: 2, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
+      }
+      const busy = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: now, updated_at: now, status: "active", session_id: "s-busy", message_count: 3, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
+      await ctx.db.insert("managed_sessions", { session_id: "s-busy", conversation_id: busy, user_id: s.ids.user, pid: 3, started_at: now, last_heartbeat: now, agent_status: "working", agent_status_updated_at: now } as any);
+    });
+    await s.send("closeSession", [String(s.ids.conv)]);
     expectAside(await s.read());
   });
 
@@ -240,16 +271,107 @@ describe("a closed session is not retired", () => {
     const r = await s.read();
     expect(r.conv.inbox_dismissed_at).toBeUndefined();
     expect(r.conv.status).toBe("active");
-    // The message kept from before the close is still queued, now with a live row to deliver into.
-    expect(r.queued.status).toBe("pending");
     const sent = await s.t.run(async (ctx) => ctx.db.get(out.message_id!));
     expect((sent as any).status).toBe("pending");
   });
 });
 
+describe("nothing retires a closed session after the fact", () => {
+  test("the daemon's markSessionCompleted leaves it open, and a `cast send` with wake off is accepted and queued", async () => {
+    const s = await setup();
+    await s.t.run(async (ctx) => {
+      await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: 1, updated_at: 1, status: "active", session_id: "s-from", short_id: "jx7from", title: "Sender", message_count: 2 } as any);
+    });
+    await s.send("closeSession", [String(s.ids.conv)]);
+    await s.as.mutation(api.conversations.markSessionCompleted, { conversation_id: String(s.ids.conv) });
+    expect((await s.read()).conv.status).toBe("active");
+    const out = await s.t.run(async (ctx) => performSessionSend(ctx, s.ids.user, { to: "jx7clos", from: "jx7from", body: "status?", wake: false }));
+    const sent = await s.t.run(async (ctx) => ctx.db.get(out.message_id!));
+    expect((sent as any).status).toBe("pending");
+    expect((await s.read()).conv.inbox_dismissed_at).toBeUndefined();
+  });
+
+  test("a killed session still completes", async () => {
+    const s = await setup();
+    await s.send("killSession", [String(s.ids.conv)]);
+    await s.t.run(async (ctx) => ctx.db.patch(s.ids.conv, { status: "active" } as any));
+    await s.as.mutation(api.conversations.markSessionCompleted, { conversation_id: String(s.ids.conv) });
+    expect((await s.read()).conv.status).toBe("completed");
+  });
+
+  test("a closed worker frees its fleet slot and its lead hears nothing; a killed one reports", async () => {
+    const run = async (action: "closeSession" | "killSession") => {
+      const s = await setup();
+      const worker = await s.t.run(async (ctx) => ctx.db.insert("conversations", {
+        user_id: s.ids.user, agent_type: "claude_code", started_at: 1, updated_at: 1, status: "active", session_id: "s-w", short_id: "jx7wrkr", message_count: 5,
+        is_subagent: true, parent_conversation_id: s.ids.conv, subagent_slot: "running", merge_back_on_done: true, worktree_path: "/tmp/wt-w",
+      } as any));
+      await s.as.mutation(api.dispatch.dispatch, { action, args: [String(worker)], patches: { conversations: { [String(worker)]: { inbox_dismissed_at: Date.now() } } } });
+      return s.t.run(async (ctx) => ({
+        worker: (await ctx.db.get(worker)) as any,
+        toLead: (await ctx.db.query("pending_messages").collect()).filter((m: any) => String(m.conversation_id) === String(s.ids.conv)),
+      }));
+    };
+    const closed = await run("closeSession");
+    expect(closed.worker.subagent_slot).toBeUndefined();
+    expect(closed.worker.merge_back).toBeUndefined();
+    expect(closed.toLead).toEqual([]);
+    const killed = await run("killSession");
+    expect(killed.worker.merge_back?.state).toBe("kept");
+    expect(killed.toLead.length).toBe(1);
+  });
+});
+
+describe("the daemon's lifecycle read", () => {
+  const lifecycle = (s: Awaited<ReturnType<typeof setup>>) => s.as.query(api.conversations.getConversationLifecycle, { conversation_id: String(s.ids.conv) }) as Promise<any>;
+
+  test("a closed session reads closed, so the daemon does not bring it back on its own", async () => {
+    const s = await setup();
+    await s.send("closeSession", [String(s.ids.conv)]);
+    expect((await lifecycle(s)).closed).toBe(true);
+  });
+
+  test("a message waiting for it is a wake: it reads open whatever has_pending_messages says", async () => {
+    const s = await setup();
+    await s.send("closeSession", [String(s.ids.conv)]);
+    await s.t.run(async (ctx) => {
+      await ctx.db.insert("pending_messages", { conversation_id: s.ids.conv, from_user_id: s.ids.user, content: "late", status: "pending", created_at: Date.now(), retry_count: 0 } as any);
+    });
+    expect((await lifecycle(s)).closed).toBe(false);
+  });
+
+  test("another dismissal is not a close: it stays resumable as before", async () => {
+    const s = await setup({ conv: { inbox_dismissed_at: Date.now() - 1000 } });
+    expect((await lifecycle(s)).closed).toBe(false);
+  });
+
+  test("an undone close is no longer closed (the stale marker is inert)", async () => {
+    const s = await setup();
+    await s.send("closeSession", [String(s.ids.conv)]);
+    await s.send("restoreSession", [String(s.ids.conv)], { [s.ids.conv]: { inbox_dismissed_at: null } });
+    expect((await lifecycle(s)).closed).toBe(false);
+  });
+});
+
+describe("listClosedSessions", () => {
+  test("pages the closes newest-first and skips a close that was undone", async () => {
+    const s = await setup();
+    const [a, b] = await s.t.run(async (ctx) => {
+      const mk = (sid: string) => ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: 1, updated_at: 1, status: "active", session_id: sid, message_count: 2 } as any);
+      return [await mk("s-a"), await mk("s-b")];
+    });
+    await s.send("closeSession", [String(a)], { [String(a)]: { inbox_dismissed_at: Date.now() - 2000 } });
+    await s.send("closeSession", [String(b)], { [String(b)]: { inbox_dismissed_at: Date.now() - 1000 } });
+    await s.send("closeSession", [String(s.ids.conv)]);
+    await s.send("restoreSession", [String(s.ids.conv)], { [s.ids.conv]: { inbox_dismissed_at: null } });
+    const page = await s.as.query(api.conversations.listClosedSessions, { paginationOpts: { numItems: 10, cursor: null } }) as any;
+    expect(page.page.map((r: any) => String(r._id))).toEqual([String(b), String(a)]);
+  });
+});
+
 describe("killSession is still retirement", () => {
   test("a kill cancels the armed trigger and the queued message and stamps the retirement marker", async () => {
-    const s = await setup();
+    const s = await setup({ queuedRow: true });
     await s.send("killSession", [String(s.ids.conv)]);
     const { conv, task, queued, kills } = await s.read();
     expect(conv.inbox_killed_at).toBeGreaterThan(0);
@@ -258,6 +380,7 @@ describe("killSession is still retirement", () => {
     expect(task.status).not.toBe("scheduled");
     expect(task.canceled_on_kill_at).toBeGreaterThan(0);
     expect(queued.status).not.toBe("pending");
+    expect(JSON.parse(kills[0].args).keep_workspace).toBeUndefined();
   });
 
   test("a kill of a role's own session is refused", async () => {

@@ -7,7 +7,7 @@
 // rechecks the same facts (convex lib/closeAside). Imports by relative path
 // only: the phone bundles this file (Metro maps `@/` to the mobile package).
 import { isLoopFresh, type LoopState } from "@codecast/shared/contracts";
-import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
+import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { sessionLiveAt } from "./liveness";
 
 export type CloseFacts = {
@@ -16,6 +16,8 @@ export type CloseFacts = {
   running: boolean;
   /** An armed /loop: a wakeup inside the agent process, so Close sets it aside. */
   loop: boolean;
+  /** Parked on a usage limit: the reset or an account switch continues it. */
+  limit: boolean;
   /** A role's own session or a standing anchor. */
   role: boolean;
   /** Armed triggers that inject into it. */
@@ -25,11 +27,12 @@ export type CloseFacts = {
   waitingOnRun: boolean;
 };
 
-export type CloseKind = "aside" | "keeps_loop" | "keeps_triggers" | "waits_on_run" | "clears";
+export type CloseKind = "aside" | "keeps_loop" | "keeps_limit" | "keeps_triggers" | "waits_on_run" | "clears";
 
 export function closeKindOf(f: CloseFacts): CloseKind {
   if (f.running) return "aside";
   if (f.loop) return "keeps_loop";
+  if (f.limit) return "keeps_limit";
   if (f.role || f.triggers > 0) return "keeps_triggers";
   if (f.waitingOnRun) return "waits_on_run";
   return "clears";
@@ -38,13 +41,14 @@ export function closeKindOf(f: CloseFacts): CloseKind {
 /** Close sets it aside (the agent keeps running) instead of stopping it. */
 export const closeSetsAside = (f: CloseFacts) => {
   const kind = closeKindOf(f);
-  return kind === "aside" || kind === "keeps_loop";
+  return kind === "aside" || kind === "keeps_loop" || kind === "keeps_limit";
 };
 
 export function closeTooltip(f: CloseFacts): string {
   switch (closeKindOf(f)) {
     case "aside": return "Close: hides it, lets it finish";
     case "keeps_loop": return "Close: hides it, keeps its loop running";
+    case "keeps_limit": return "Close: hides it, picks up when its limit resets";
     case "keeps_triggers":
       if (f.triggers === 0) return "Close: stops it, comes back on its next message";
       return `Close: stops it, keeps its ${f.triggers === 1 ? "trigger, comes back when it fires" : `${f.triggers} triggers, comes back when one fires`}`;
@@ -65,6 +69,11 @@ export type CloseRow = InFlightRow & {
   workflow_run_status?: string | null;
   workflow_run_kind?: string | null;
   is_workflow_sub?: boolean | null;
+  is_workflow_primary?: boolean;
+  session_id?: string | null;
+  pending_api_error?: boolean | null;
+  pending_api_error_kind?: string | null;
+  pending_api_error_at?: number | null;
 };
 
 /** Mid-turn at `now`: producing, or blocked on a question it asked (an open
@@ -93,6 +102,14 @@ export function closeFactsOf(row: CloseRow, armedTriggers: number, now: number, 
   return {
     running: pendingSend || nestedRunning || !!row.has_pending || inProcessRun || turnInFlightAt(row, now),
     loop: !!row.loop_state && isLoopFresh(row.loop_state, now),
+    // The pre-close row: a close is the dismissal isBlockedConversation would exclude.
+    limit: isBlockedConversation({
+      pending_api_error: row.pending_api_error === true,
+      pending_api_error_kind: row.pending_api_error_kind,
+      agent_type: row.agent_type ?? undefined,
+      is_workflow_primary: row.is_workflow_primary,
+      session_id: row.session_id,
+    }) && isCurrentBlock(row, now),
     role: !!row.persistent || !!row.standing_role_id,
     triggers: Math.max(armedTriggers, rowArmed),
     waitingOnRun: runLive && !inProcessRun,
