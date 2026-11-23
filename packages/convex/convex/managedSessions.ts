@@ -705,6 +705,9 @@ export const getPendingMessagesForSession = query({
 
     await requireConversationExecution(ctx, authUserId, session.conversation_id);
 
+    const sessionConversation = await ctx.db.get(session.conversation_id);
+    if (sessionConversation?.register_only) return [];
+
     const messages = await ctx.db
       .query("pending_messages")
       .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", session.conversation_id).eq("status", "pending"))
@@ -731,6 +734,10 @@ export const markMessageDelivered = mutation({
     }
 
     await requireConversationExecution(ctx, authUserId, message.conversation_id);
+
+    if ((await ctx.db.get(message.conversation_id))?.register_only) {
+      return { success: true, skipped: true };
+    }
 
     // Same refusals as pendingMessages.updateMessageStatus: a settled row
     // (delivered, cancelled) stays settled, and a row under the fenced

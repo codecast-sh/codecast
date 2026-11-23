@@ -221,23 +221,48 @@ export async function rehomeUndeliveredMessages(
   return moved;
 }
 
+type DeliverableMessage = {
+  from_user_id: Id<"users">;
+  owner_user_id?: Id<"users">;
+  status: string;
+  delivery_protocol_version?: number;
+};
+
+type DeliverableConversation = ConversationSafetyState & {
+  user_id: Id<"users">;
+  owner_device_id?: string;
+  execution_protocol_state?: string;
+  register_only?: boolean;
+  ended_at?: number;
+};
+
 export function canDaemonSeePendingMessage(
-  message: {
-    from_user_id: Id<"users">;
-    owner_user_id?: Id<"users">;
-    status: string;
-    delivery_protocol_version?: number;
-  },
-  conversation: ConversationSafetyState & {
-    user_id: Id<"users">;
-    owner_device_id?: string;
-    execution_protocol_state?: string;
-    register_only?: boolean;
-  },
+  message: DeliverableMessage,
+  conversation: DeliverableConversation,
   userId: Id<"users">,
   deviceId: string,
 ): boolean {
-  if (conversation.register_only) return false;
+  return !conversation.register_only && canDeliverPendingMessage(message, conversation, userId, deviceId);
+}
+
+export function canRelaySeePendingMessage(
+  message: DeliverableMessage,
+  conversation: DeliverableConversation,
+  userId: Id<"users">,
+  deviceId: string,
+): boolean {
+  return !!conversation.register_only
+    && !conversation.ended_at
+    && conversation.owner_device_id === deviceId
+    && canDeliverPendingMessage(message, conversation, userId, deviceId);
+}
+
+function canDeliverPendingMessage(
+  message: DeliverableMessage,
+  conversation: DeliverableConversation,
+  userId: Id<"users">,
+  deviceId: string,
+): boolean {
   if (isConversationSafetyBlocked(conversation)) return false;
   // Absence is the only legacy marker. Quiescing and fenced conversations are
   // never permissive fallbacks, and a stamped row can never leak back into the
@@ -526,7 +551,7 @@ export async function enqueuePendingMessage(
   // A screen recording rides this send: from now on it is sent, and kept.
   await noteScreenRecordingSent(ctx, conversation._id, fromUserId, fields.content);
 
-  if (fields.queue) {
+  if (fields.queue && !conversation.register_only) {
     return await insertEnqueuedPendingMessage(ctx, {
       conversationId: conversation._id,
       fromUserId,
@@ -1864,26 +1889,6 @@ export async function collectDeliverableForOwner(
   return headOfEachQueue(owned);
 }
 
-export function canRelaySeePendingMessage(
-  message: { owner_user_id?: Id<"users">; status: string; delivery_protocol_version?: number },
-  conversation: ConversationSafetyState & {
-    user_id: Id<"users">;
-    owner_device_id?: string;
-    register_only?: boolean;
-    ended_at?: number;
-  },
-  userId: Id<"users">,
-  deviceId: string,
-): boolean {
-  return !!conversation.register_only
-    && !conversation.ended_at
-    && conversation.owner_device_id === deviceId
-    && pendingMessageOwnerId(message, conversation) === userId.toString()
-    && message.status === "pending"
-    && !isFencedPendingMessage(message)
-    && !isConversationSafetyBlocked(conversation);
-}
-
 export const pendingForDevice = query({
   args: {
     api_token: v.optional(v.string()),
@@ -2643,7 +2648,7 @@ export async function healAndNotifyStuckMessages(ctx: { db: any; scheduler?: Wak
 const NON_TERMINAL_STATUSES = ["pending", "injected", "failed", "undeliverable"] as const;
 
 
-const NON_TERMINAL_PENDING_STATUSES = [
+export const NON_TERMINAL_PENDING_STATUSES = [
   "pending",
   "injected",
   "failed",

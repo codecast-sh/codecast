@@ -5,6 +5,7 @@ import { api } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { allModules } from "./testModules.testkit";
 import { enqueuePendingMessage, healAndNotifyStuckMessages } from "./pendingMessages";
+import { enqueueKillAndResume } from "./conversations";
 
 setDefaultTimeout(60_000);
 
@@ -33,7 +34,7 @@ async function setup() {
       started_at: now, updated_at: now, message_count: 1, status: "active", owner_device_id: DEVICE,
     } as any);
     const senderConv = await ctx.db.insert("conversations", {
-      user_id: owner, team_id: team, is_private: false, agent_type: "claude_code", session_id: "sender", short_id: "jx7sendr",
+      user_id: owner, team_id: team, is_private: false, agent_type: "claude_code", session_id: "sender", short_id: "jx7snd1",
       started_at: now, updated_at: now, message_count: 1, status: "active", owner_device_id: DEVICE,
     } as any);
     const mateConv = await ctx.db.insert("conversations", {
@@ -70,6 +71,8 @@ describe("registerSession visibility", () => {
     expect(row.message_count).toBe(0);
     expect(row.is_private).toBe(false);
     expect(row.team_id).toBe(s.team);
+    expect(row.auto_shared).toBe(true);
+    expect(row.status).toBe("active");
 
     const events = await s.t.run((ctx) => ctx.db.query("authority_events").collect() as Promise<any[]>);
     const event = events.find((e) => e.kind === "conversation_visibility_changed" && e.conversation_id === conversation_id);
@@ -96,6 +99,32 @@ describe("registerSession visibility", () => {
     expect(rows[0].owner_user_id).toBe(s.owner);
   });
 
+  test("a folder the owner locked stays private and unreachable for a teammate", async () => {
+    const s = await setup();
+    await s.t.run((ctx) => ctx.db.insert("directory_team_mappings", {
+      user_id: s.owner, path_prefix: "/home/me/work", auto_share: false, private: true, created_at: Date.now(),
+    } as any));
+    const { conversation_id, short_id } = await s.register();
+    const row = await s.conv(conversation_id);
+    expect(row.is_private).toBe(true);
+    expect(row.team_id).toBeUndefined();
+    expect(row.auto_shared).toBeUndefined();
+    await expect(s.send(MATE_TOKEN, short_id)).rejects.toThrow();
+    expect(await s.pendingRows()).toHaveLength(0);
+  });
+
+  test("an owner with no team stays private", async () => {
+    const s = await setup();
+    await s.t.run(async (ctx) => {
+      for (const m of await ctx.db.query("team_memberships").collect()) await ctx.db.delete(m._id);
+      await ctx.db.patch(s.owner, { active_team_id: undefined } as any);
+    });
+    const { conversation_id } = await s.register();
+    const row = await s.conv(conversation_id);
+    expect(row.is_private).toBe(true);
+    expect(row.team_id).toBeUndefined();
+  });
+
   test("a title falls back to the cwd when no segment is left", async () => {
     const s = await setup();
     const { conversation_id } = await s.register({ cwd: "/" });
@@ -109,6 +138,7 @@ describe("registerSession re-registration", () => {
     const first = await s.register();
     await s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "reg-1" });
     expect((await s.conv(first.conversation_id)).ended_at).toBeGreaterThan(0);
+    expect((await s.conv(first.conversation_id)).status).toBe("completed");
 
     const again = await s.register({ delivery_target: PASEO, device_id: "dev-other", cwd: "/srv/next" });
     expect(again.conversation_id).toBe(first.conversation_id);
@@ -117,6 +147,18 @@ describe("registerSession re-registration", () => {
     expect(row.owner_device_id).toBe("dev-other");
     expect(row.project_path).toBe("/srv/next");
     expect(row.ended_at).toBeUndefined();
+    expect(row.status).toBe("active");
+  });
+
+  test("refuses a re-registration from another device while the row is live", async () => {
+    const s = await setup();
+    const { conversation_id } = await s.register();
+    await expect(s.register({ device_id: "dev-other", delivery_target: PASEO })).rejects.toThrow(/another device/);
+    const row = await s.conv(conversation_id);
+    expect(row.owner_device_id).toBe(DEVICE);
+    expect(row.delivery_target).toEqual(HERDR);
+    await s.register({ delivery_target: PASEO });
+    expect((await s.conv(conversation_id)).delivery_target).toEqual(PASEO);
   });
 
   test("leaves a row its owner made private private", async () => {
@@ -191,6 +233,26 @@ describe("no double delivery between daemon and relay", () => {
     expect(await s.forRelay()).toEqual([]);
   });
 
+  test("a row the daemon could not take is not shown to the relay either", async () => {
+    const s = await setup();
+    const { conversation_id, short_id } = await s.register();
+    await s.send(MATE_TOKEN, short_id);
+    expect(await s.forRelay()).toHaveLength(1);
+    await s.t.run((ctx) => ctx.db.patch(conversation_id, { execution_protocol_state: "quiescing" } as any));
+    expect(await s.forRelay()).toEqual([]);
+  });
+
+  test("a direct queued send is pending and visible to the relay", async () => {
+    const s = await setup();
+    const { short_id } = await s.register();
+    await s.send(OWNER_TOKEN, short_id, { direct: true, queue: true });
+    const rows = await s.pendingRows();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].status).toBe("pending");
+    expect(rows[0].queued).toBeUndefined();
+    expect((await s.forRelay()).map((r: any) => r._id)).toEqual([rows[0]._id]);
+  });
+
   test("an ack from another device is skipped", async () => {
     const s = await setup();
     const { short_id } = await s.register();
@@ -209,7 +271,7 @@ describe("the send gate", () => {
     const s = await setup();
     const { conversation_id, short_id } = await s.register();
     await s.t.run((ctx) => ctx.db.patch(conversation_id, { updated_at: Date.now() - 3 * 60 * 60_000 } as any));
-    const res: any = await s.send(OWNER_TOKEN, short_id, { from: "jx7sendr", wake: false });
+    const res: any = await s.send(OWNER_TOKEN, short_id, { from: "jx7snd1", wake: false });
     expect(res.message_id).not.toBeNull();
     const rows = (await s.pendingRows()).filter((r) => r.conversation_id === conversation_id);
     expect(rows).toHaveLength(1);
@@ -226,8 +288,9 @@ describe("the healer", () => {
     const seeded = await s.t.run(async (ctx) => {
       const make = async (conversation_id: any, status: string) =>
         ctx.db.insert("pending_messages", {
-          conversation_id, from_user_id: s.owner, owner_user_id: s.owner, content: `body ${status}`,
+          conversation_id, from_user_id: s.mate, owner_user_id: s.owner, content: `body ${status}`,
           status, retry_count: 2, created_at: old,
+          ...(conversation_id === s.daemonConv ? {} : { from_conversation_id: s.mateConv }),
         } as any);
       const reg = [] as any[];
       for (const status of ["pending", "injected", "failed"]) reg.push(await make(conversation_id, status));
@@ -247,6 +310,9 @@ describe("the healer", () => {
     }
     expect(after.ordinary.status).toBe("pending");
     expect(after.ordinary.dead_session_revived_at).toBe(now);
+    for (const r of after.reg) expect(r.sender_notified_at).toBeUndefined();
+    const notices = (await s.pendingRows()).filter((r) => r.conversation_id === s.mateConv);
+    expect(notices).toEqual([]);
   });
 });
 
@@ -255,7 +321,10 @@ describe("markEnded", () => {
     const s = await setup();
     const { conversation_id, short_id } = await s.register();
     await s.send(MATE_TOKEN, short_id, { from: "jx7mate" });
-    await s.send(OWNER_TOKEN, short_id);
+    await s.send(OWNER_TOKEN, short_id, { from: "jx7snd1" });
+    await s.t.run((ctx) => ctx.db.insert("pending_messages", {
+      conversation_id, from_user_id: s.owner, owner_user_id: s.owner, content: "held note", status: "held", retry_count: 0, created_at: Date.now(),
+    } as any));
     expect(await s.forRelay()).toHaveLength(1);
 
     await s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "reg-1" });
@@ -265,7 +334,11 @@ describe("markEnded", () => {
 
     const rows = await s.pendingRows();
     const toReg = rows.filter((r) => r.conversation_id === conversation_id);
-    expect(toReg.map((r) => r.status)).toEqual(["cancelled", "cancelled"]);
+    expect(toReg.map((r) => r.status)).toEqual(["cancelled", "cancelled", "cancelled"]);
+    expect(row.status).toBe("completed");
+    const selfNotices = rows.filter((r) => r.conversation_id === s.senderConv);
+    expect(selfNotices).toHaveLength(1);
+    expect(selfNotices[0].content).toContain("could not be delivered");
     const notices = rows.filter((r) => r.conversation_id === s.mateConv);
     expect(notices).toHaveLength(1);
     expect(notices[0].status).toBe("pending");
@@ -275,7 +348,7 @@ describe("markEnded", () => {
     expect((await s.conv(conversation_id)).ended_at).toBe(firstEnded);
 
     await expect(s.send(MATE_TOKEN, short_id)).rejects.toThrow(/has ended/);
-    await expect(s.send(OWNER_TOKEN, short_id, { from: "jx7sendr" })).rejects.toThrow(/has ended/);
+    await expect(s.send(OWNER_TOKEN, short_id, { from: "jx7snd1" })).rejects.toThrow(/has ended/);
 
     const feed: any = await s.t.query(api.conversations.feedForCLI, { api_token: MATE_TOKEN });
     expect(feed.conversations.find((c: any) => c.session_id === "reg-1")).toBeUndefined();
@@ -300,5 +373,29 @@ describe("markEnded", () => {
     await expect(s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "ordinary" })).rejects.toThrow(/No registered session/);
     await s.register();
     await expect(s.t.mutation(api.registeredSessions.markEnded, { api_token: MATE_TOKEN, session_id: "reg-1" })).rejects.toThrow(/No registered session/);
+  });
+});
+
+describe("no second deliverer", () => {
+  test("resuming or restarting a registered session throws and queues no daemon command", async () => {
+    const s = await setup();
+    const { conversation_id, short_id } = await s.register();
+    await expect(s.t.mutation(api.conversations.cliResumeSession, { api_token: OWNER_TOKEN, session: short_id })).rejects.toThrow(/does not resume a registered session/);
+    await expect(s.t.run((ctx) => enqueueKillAndResume(ctx as any, s.owner, { _id: conversation_id, session_id: "reg-1", register_only: true }))).rejects.toThrow(/does not resume a registered session/);
+    expect(await s.t.run((ctx) => ctx.db.query("daemon_commands").collect())).toHaveLength(0);
+  });
+
+  test("the cast claude wrapper's managed-session poll neither sees nor settles a registered row", async () => {
+    const s = await setup();
+    const { conversation_id, short_id } = await s.register();
+    await s.t.run((ctx) => ctx.db.insert("managed_sessions", {
+      session_id: "reg-1", conversation_id, user_id: s.owner, pid: 1, started_at: Date.now(), last_heartbeat: Date.now(),
+    } as any));
+    await s.send(MATE_TOKEN, short_id);
+    const [row] = await s.pendingRows();
+    expect(await s.t.query(api.managedSessions.getPendingMessagesForSession, { api_token: OWNER_TOKEN, session_id: "reg-1" })).toEqual([]);
+    const res: any = await s.t.mutation(api.managedSessions.markMessageDelivered, { api_token: OWNER_TOKEN, message_id: row._id });
+    expect(res.skipped).toBe(true);
+    expect((await s.pendingRows())[0].status).toBe("pending");
   });
 });
