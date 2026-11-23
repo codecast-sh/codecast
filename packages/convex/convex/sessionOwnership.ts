@@ -175,6 +175,7 @@ async function reparentSessionCore(
     : known ? ((await mayFileUnderRole(known.row)) ? known.row : null)
     : await findConversationByAnyRefWhere(ctx, args.session_id, mayFileUnderRole);
   if (!conversation) throw new Error("Session not found, or you are not one of its owners");
+  await refusePausedRoleEdit(ctx, authUserId, conversation, args.from_session);
   // A standing session IS a seat; it reports to no seat (org-roles-standing.md
   // T1). Filed under a role it would count as that role's hand, be interrupted
   // by a pause and spend its hand cap. One refusal here, so every door (the
@@ -521,11 +522,14 @@ async function setDriver(ctx: { db: any }, actorId: Id<"users">, conversationId:
   await reroutePendingDecisionsForConversation(ctx, conversationId, Date.now());
 }
 
-// A paused role never takes the wheel back itself, nor swaps itself off: an
-// agent acting for it runs as a person who may edit the owners, so the
-// account check alone would let it. Only a person who owns or runs the
-// session hands the wheel back.
-async function refusePausedRoleSelf(ctx: { db: any }, authUserId: Id<"users">, conversation: any, fromSession?: string): Promise<void> {
+// A paused role changes nothing about the session it is paused on: not its
+// owners (an add, a remove, a set, a leave, a restore), not its role, not who
+// drives. An agent acting for it runs as a person who may edit the owners, so
+// the account check alone would let it take the wheel back by any of those.
+// The reparent core runs this for every owners and role edit, and the driver
+// and restore paths, which bypass the core, run it themselves. Only a person
+// who owns or runs the session changes them.
+async function refusePausedRoleEdit(ctx: { db: any }, authUserId: Id<"users">, conversation: any, fromSession?: string): Promise<void> {
   const from = fromSession?.trim();
   if (!from || !rolePaused(conversation)) return;
   const sender = await findConversationByAnyRef(ctx, from, authUserId);
@@ -533,7 +537,7 @@ async function refusePausedRoleSelf(ctx: { db: any }, authUserId: Id<"users">, c
   const [role, driver] = await Promise.all([ctx.db.get(conversation.org_role_id), ctx.db.get(conversation.driver_user_id)]);
   const handle = role?.handle ? `@${role.handle}` : "the role";
   const name = personName(driver);
-  throw new Error(`${name} drives ${conversation.short_id ?? String(conversation._id).slice(0, 7)}, so ${handle} is paused there, and only a person who owns or runs it can hand ${handle} the wheel back. Ask ${name} in your own thread (cast decide reaches them).`);
+  throw new Error(`${name} drives ${conversation.short_id ?? String(conversation._id).slice(0, 7)}, so ${handle} is paused there, and only a person who owns or runs it changes its owners or who drives. Ask ${name} in your own thread (cast decide reaches them).`);
 }
 
 // Hand the wheel to the filed role or to one of the people who own it. A
@@ -547,7 +551,7 @@ export async function performSetSessionDriver(
   const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
   if (!(await mayEditOwners(ctx, authUserId, conversation))) throw new Error("Only an owner of the session, or the account that runs it, can change who drives it");
-  await refusePausedRoleSelf(ctx, authUserId, conversation, args.from_session);
+  await refusePausedRoleEdit(ctx, authUserId, conversation, args.from_session);
   if (args.driver.kind === "none") {
     await setDriver(ctx, authUserId, conversation._id, null, args.from_session);
     const driver = driverOf({ ...conversation, driver_user_id: undefined }, await ownerIdsOrStarter(ctx, conversation));
@@ -585,6 +589,7 @@ export async function performLeaveSession(
   const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
   const me = String(authUserId);
   if (!(await ownerIdsOrStarter(ctx, conversation)).includes(me)) throw new Error("You are not one of its owners");
+  await refusePausedRoleEdit(ctx, authUserId, conversation, args.from_session);
   if (!args.move_to_device_id && leaveMovesFirst(await ownersFactsOf(ctx, conversation), me)) throw new Error(LEAVE_MOVE_REFUSAL);
   if (args.move_to_device_id) {
     const moved = await performReparentSessionToDevice(ctx, authUserId, { session_id: String(conversation._id), device_id: args.move_to_device_id });
@@ -627,6 +632,7 @@ export async function performApplyOwnersChange(
   if (!selfClaim && !(await mayEditOwners(ctx, authUserId, start))) {
     throw new Error(OWNERS_EDIT_REFUSAL);
   }
+  await refusePausedRoleEdit(ctx, authUserId, start, args.from_session);
   const run = (target: ReparentSessionTarget) => performReparentSession(ctx, authUserId, { session_id: args.session_id, target, handoff: change.note, from_session: args.from_session });
   if (change.add?.length) results.push(await run({ kind: "user", owners: change.add, mode: "add" }));
   if (change.restore?.length) await restoreOwnerRows(ctx, start._id, change.restore);
@@ -634,7 +640,6 @@ export async function performApplyOwnersChange(
     const role = change.role === null ? null : await resolveOwnerRoleRef(ctx, authUserId, start, change.role);
     const before = await resolveOwnableConversation(ctx, authUserId, args.session_id);
     if (String(before.org_role_id ?? "") !== String(role ?? "")) {
-      await refusePausedRoleSelf(ctx, authUserId, before, args.from_session);
       results.push(await run({ kind: "role", role_id: role }));
     }
   }

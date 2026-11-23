@@ -9,7 +9,7 @@ import { formatDecisionAnswer, roleDrives, rollupParentIdOf } from "@codecast/sh
 import { dispatch } from "./dispatch";
 import { sendSessionMessage } from "./pendingMessages";
 import { stopAndSendForUser } from "./daemonCommandUtils";
-import { performApplyOwnersChange, performLeaveSession, performSetSessionDriver, applyOwnersChangeAs } from "./sessionOwnership";
+import { performApplyOwnersChange, performLeaveSession, performRemoveSessionOwner, performSetSessionDriver, performSetSessionOwners, applyOwnersChangeAs } from "./sessionOwnership";
 
 // One owner drives (org-roles-run-work.md R1). A person's own message into a
 // session takes the wheel from the role or person driving it; the paused role
@@ -262,7 +262,7 @@ describe("a paused role does not take the wheel back itself", () => {
     const { ctx, row } = await world();
     await composerSend(ctx, row("filed"), ME);
     await expect(performSetSessionDriver(ctx, ME as any, { session_id: "filed", driver: { kind: "role" }, from_session: "s-seat" }))
-      .rejects.toThrow(/^Me drives jxfiled, so @growth is paused there, and only a person who owns or runs it can hand @growth the wheel back\./);
+      .rejects.toThrow(/^Me drives jxfiled, so @growth is paused there, and only a person who owns or runs it changes its owners or who drives\./);
     await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "filed", change: { role: null }, from_session: "s-seat" })).rejects.toThrow(/@growth is paused there/);
     // The mutation's and the web dispatch's door (applyOwnersChangeAs) holds it too.
     await expect(applyOwnersChangeAs(ctx, ME as any, { session_id: "filed", change: { driver: { kind: "role" } }, from_session: "s-seat" })).rejects.toThrow(/@growth is paused there/);
@@ -292,6 +292,33 @@ describe("a paused role's chat line does not wake the session either", () => {
       senderId: PEER as any, senderName: "Peer", roles: [], sessions: [row("filed")],
     });
     expect(person.sessions).toBe(1);
+  });
+});
+
+describe("a paused role changes nothing about the owners of the session it is paused on", () => {
+  // The role's standing session runs as me, so the account check alone lets it edit.
+  const fromSeat = { from_session: "s-seat" };
+  const peerDrives = async () => {
+    const w = await world();
+    await performApplyOwnersChange(w.ctx, ME as any, { session_id: "filed", change: { add: [PEER], driver: { kind: "user", user_id: PEER } } });
+    expect(w.row("filed").driver_user_id).toBe(PEER);
+    return w;
+  };
+
+  test("removing the person who drives, or setting the owners, is refused", async () => {
+    const { ctx, row } = await peerDrives();
+    await expect(performRemoveSessionOwner(ctx, ME as any, { session_id: "filed", owner: PEER, ...fromSeat })).rejects.toThrow(/@growth is paused there/);
+    await expect(performSetSessionOwners(ctx, ME as any, { session_id: "filed", owners: [], ...fromSeat })).rejects.toThrow(/@growth is paused there/);
+    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "filed", change: { remove: [PEER] }, ...fromSeat })).rejects.toThrow(/@growth is paused there/);
+    expect(row("filed").driver_user_id).toBe(PEER);
+  });
+
+  test("leaving as the person who drives is refused", async () => {
+    const { ctx, row } = await world();
+    await composerSend(ctx, row("hand"), ME);
+    await expect(performLeaveSession(ctx, ME as any, { session_id: "hand", ...fromSeat })).rejects.toThrow(/@growth is paused there/);
+    await expect(performApplyOwnersChange(ctx, ME as any, { session_id: "hand", change: { leave: {} }, ...fromSeat })).rejects.toThrow(/@growth is paused there/);
+    expect(row("hand").driver_user_id).toBe(ME);
   });
 });
 
