@@ -12,8 +12,9 @@ import { api, internal } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
 import { routeUpWaitingSession } from "./agentTasks";
-import { notifyStuckSend } from "./pendingMessages";
+import { enqueuePendingMessage, notifyStuckSend } from "./pendingMessages";
 import { planPaneRefusal } from "./lib/paneRefusal";
+import { tellSession } from "./lib/sessionTell";
 
 setDefaultTimeout(60_000);
 const TOKEN = "close-reports-token";
@@ -69,11 +70,42 @@ describe("a stopped report after a close", () => {
     }
   });
 
-  test("a closed lead is not woken by a worker's stopped", async () => {
+  test("a closed lead IS told by an open worker: its report is a real wake", async () => {
     const s = await setup({ worker: true, leadClosed: true });
     const out = await s.t.mutation(internal.workerSettle.tellParent, { conversation_id: s.ids.worker, status_ts: await s.statusTs(s.ids.worker) });
-    expect(out).toMatchObject({ told: 0, reason: "no_parent" });
-    expect(await s.toConv(s.ids.lead)).toEqual([]);
+    expect(out.told).toBe(1);
+    expect((await s.toConv(s.ids.lead)).length).toBe(1);
+  });
+
+  test("a worker closed with its lead, then woken by its trigger, reports to the closed lead when it finishes", async () => {
+    const s = await setup({ worker: true });
+    const as = s.t.withIdentity({ subject: `${s.ids.user}|test` });
+    const stamp = Date.now();
+    // Closed together (the worker idle, so the close stops both).
+    await s.t.run(async (ctx) => {
+      for (const id of [s.ids.lead, s.ids.worker]) {
+        const m = await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", id)).first();
+        await ctx.db.patch(m!._id, { agent_status: "idle", agent_status_updated_at: stamp - 3_600_000 } as any);
+      }
+    });
+    await as.mutation(api.dispatch.dispatch, { action: "closeSession", args: [String(s.ids.lead)], patches: { conversations: {
+      [String(s.ids.lead)]: { inbox_dismissed_at: stamp, inbox_closed_at: stamp },
+      [String(s.ids.worker)]: { inbox_dismissed_at: stamp, inbox_closed_at: stamp },
+    } } });
+    expect((await s.row(s.ids.lead)).inbox_closed_at).toBe(stamp);
+    // Its trigger fires (a real wake), it does the work and stops.
+    await s.t.run(async (ctx) => {
+      await enqueuePendingMessage(ctx, await ctx.db.get(s.ids.worker), s.ids.user, { content: "trigger fired: check CI", origin: "scheduler" });
+    });
+    const ts = Date.now() + 5;
+    await s.t.run(async (ctx) => {
+      const m = await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", s.ids.worker)).first();
+      await ctx.db.patch(m!._id, { agent_status: "stopped", agent_status_updated_at: ts } as any);
+      await ctx.db.patch(s.ids.worker, { message_count: 14, has_pending_messages: false, thread_state: "Did X", thread_state_status: "done", thread_state_at: ts, thread_state_msg_count: 14 } as any);
+    });
+    const told = await s.t.mutation(internal.workerSettle.tellParent, { conversation_id: s.ids.worker, status_ts: ts });
+    expect(told.told).toBe(1);
+    expect((await s.toConv(s.ids.lead)).length).toBe(1);
   });
 
   test("an open lead still hears about an open worker that stopped", async () => {
@@ -103,6 +135,17 @@ describe("other machine readers", () => {
     });
     expect(await s.toConv(s.ids.lead)).toEqual([]);
     expect((await s.row(s.ids.lead)).inbox_dismissed_at).toBeGreaterThan(0);
+  });
+
+  test("a reparent notice to a closed session is held for its next turn, not a wake", async () => {
+    const s = await setup({ leadClosed: true });
+    const said = await s.t.run(async (ctx) => tellSession(ctx, s.ids.user, await ctx.db.get(s.ids.lead), "You now report to @infra.", undefined, "mv1"));
+    expect(said).toBe("deferred");
+    const lead = await s.row(s.ids.lead);
+    expect(lead.inbox_dismissed_at).toBeGreaterThan(0);
+    expect(lead.inbox_closed_at).toBe(lead.inbox_dismissed_at);
+    const msgs = await s.toConv(s.ids.lead);
+    expect(msgs.map((m: any) => m.status)).toEqual(["held"]);
   });
 
   test("a closed role seat whose pane refuses input is not restarted", () => {
@@ -142,6 +185,9 @@ describe("a worker waiting in its fleet's queue is a wake", () => {
     expect(w.inbox_stashed_at).toBe(ts);
     expect(w.subagent_slot).toBe("queued");
     expect(w.subagent_queued_start).toBeDefined();
+    // Not reaped: an unstarted worker set aside gets no teardown.
+    const kills = await s.t.run(async (ctx) => (await ctx.db.query("daemon_commands").collect()).filter((c: any) => c.command === "kill_session"));
+    expect(kills).toEqual([]);
   });
 
   test("closing its lead (and the worker, as the client sends) sets both aside and keeps the queued start", async () => {
@@ -157,6 +203,9 @@ describe("a worker waiting in its fleet's queue is a wake", () => {
     const w = await s.row(s.worker);
     expect(w.subagent_slot).toBe("queued");
     expect(w.subagent_queued_start).toBeDefined();
+    // Not reaped: no teardown for the queued worker.
+    const kills = await s.t.run(async (ctx) => (await ctx.db.query("daemon_commands").collect()).filter((c: any) => c.command === "kill_session").map((c: any) => JSON.parse(c.args).conversation_id));
+    expect(kills).not.toContain(String(s.worker));
     expect(w.inbox_dismissed_at).toBeUndefined();
   });
 });

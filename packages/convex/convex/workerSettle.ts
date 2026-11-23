@@ -113,7 +113,9 @@ export async function performTellParent(
   // A newer status change owns its own check.
   if (args.status_ts !== undefined && session?.agent_status_updated_at !== args.status_ts) return { told: 0, reason: "superseded" };
   const parent = await ctx.db.get(worker.parent_conversation_id!);
-  if (!parent || String(parent.user_id) !== String(worker.user_id) || parent.inbox_killed_at || isClosedSession(parent)) return { told: 0, reason: "no_parent" };
+  // A closed lead still hears its worker: a worker woken by its own trigger or a
+  // send did real work, and its report is a wake for the lead (a real one).
+  if (!parent || String(parent.user_id) !== String(worker.user_id) || parent.inbox_killed_at) return { told: 0, reason: "no_parent" };
 
   const now = Date.now();
   const siblings: WorkerRow[] = await ctx.db

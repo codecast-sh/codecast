@@ -2,7 +2,7 @@
 // statuses, the one rule for which direction a session moves and which daemon
 // does the work, a batch's roll-up, and the staleness and batch limits.
 
-import { fromConvexAgentType } from "@codecast/shared/contracts";
+import { fromConvexAgentType, isClosedSession } from "@codecast/shared/contracts";
 import { DEVICE_ONLINE_MS } from "../deviceRouting";
 
 export type MigrationDirection = "to_cloud" | "to_local";
@@ -49,6 +49,8 @@ export type PlanConversation = {
   agent_type?: string;
   status?: string;
   inbox_killed_at?: number;
+  inbox_dismissed_at?: number;
+  inbox_closed_at?: number;
   is_subagent?: boolean;
   /** Why it cannot move on its own (heldReason), set by annotateHeld before planning. */
   held?: string | null;
@@ -97,6 +99,7 @@ export function planMigration(opts: {
     // An ended session can still come home: its files and transcript are on the host.
     if (c.status === "completed" && target.is_remote) { skip("the session has ended"); continue; }
     if (c.inbox_killed_at) { skip("the session was killed"); continue; }
+    if (isClosedSession(c)) { skip("the session was closed"); continue; }
     if (c.held) { skip(c.held); continue; }
     if (c.migration) { skip(`already migrating (${c.migration.batch_id})`); continue; }
     if (c.cloud_placement === "pending") { skip("still being placed on the cloud host"); continue; }

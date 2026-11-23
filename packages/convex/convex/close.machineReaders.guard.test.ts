@@ -13,7 +13,6 @@ import { join } from "node:path";
 const READERS: Array<[file: string, guard: string]> = [
   ["notifications.ts", "if (isClosedSession(conv)) return { notified: false, reason: \"closed\" };"],
   ["workerSettle.ts", "if (isClosedSession(worker)) return { told: 0, reason: \"closed\" };"],
-  ["workerSettle.ts", "parent.inbox_killed_at || isClosedSession(parent)"],
   ["workerSettle.ts", "c.hand_wake_notified_key === episodeOf(c) || isClosedSession(c)"],
   ["agentTasks.ts", "if (conv.inbox_killed_at || isClosedSession(conv)) return \"nobody\";"],
   ["idleSummary.ts", "if (isClosedSession(conv)) return { scheduled: false, reason: \"closed\" };"],
@@ -22,6 +21,7 @@ const READERS: Array<[file: string, guard: string]> = [
   ["accountSwitch.ts", "conv.inbox_killed_at != null || isClosedSession(conv)"],
   ["castMachines.ts", "!conv || conv.inbox_killed_at || isClosedSession(conv)"],
   ["lib/paneRefusal.ts", "!unattended || conv.inbox_killed_at || isClosedSession(conv)"],
+  ["lib/sessionTell.ts", "const hold = line.hold || isClosedSession(conversation);"],
   ["conversations.ts", "if (c.inbox_killed_at || isClosedSession(c)) continue;"],
   ["conversations.ts", "c.inbox_killed_at || isClosedSession(c) || !pooledAt"],
   ["conversations.ts", "if (isClosedSession(conv)) return;"],

@@ -331,10 +331,7 @@ export async function applyHideTransition(
   }
   txn.done.add(docKey);
   txn.spent++;
-  // A worker waiting in its fleet's queue has work (its queued start), though
-  // no message yet: hiding it is never a reap of an empty pre-warm.
-  const noWork = doc?.subagent_slot === "queued" ? false : await conversationHasNoWork(ctx, doc);
-  const classified = classifyHideTransition(patch, doc, noWork);
+  const classified = classifyHideTransition(patch, doc, await conversationHasNoWork(ctx, doc));
   // Kill is a DESIRED STATE, not an event. classifyHideTransition gates on the
   // FLAG's transition, so a quiet re-assert of an already-set inbox_dismissed_at
   // (the web's optimistic re-patch, a stub-rekey field flush) classifies "none"
