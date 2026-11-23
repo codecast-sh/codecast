@@ -287,6 +287,7 @@ function plans() {
     byWorkspace("pipelines", "by_workspace_repository"),
     byWorkspace("checkouts", "by_workspace_repository"),
     byWorkspace("deploys", "by_workspace_created"),
+    byWorkspace("dev_pushes", "by_workspace_target_live"),
     byWorkspace("ship_passes", "by_workspace_finished"),
     byWorkspace("repo_leases", "by_workspace_repository"),
     byWorkspace("main_ci_runs", "by_scope_seq"),
