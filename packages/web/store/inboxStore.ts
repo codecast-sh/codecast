@@ -121,6 +121,7 @@ import {
   isHardBlocked,
   rowArmedHomes,
   DEAD_AGENT_STATUSES,
+  fnv1a32,
   fnv1a32Update,
   FNV1A32_OFFSET,
   WORKING_SET_RECENCY_MS,
@@ -9412,12 +9413,18 @@ function noteRetiredAck(key: string, ts: unknown): void {
 // found no lock and would be lost, leaving that lock with no acknowledgement
 // when the server answered differently from the paint. It is kept per field
 // until the write lands: a mut no newer than the send, with the sent value,
-// takes the ack (applyReplicatedFields).
+// takes the ack (applyReplicatedFields). Only a sibling's ack is kept (this
+// window's own write has no mut still to come), and only a digest of the
+// value, never the value itself (a draft, a doc body).
 const EARLY_ACK_LIMIT = 500;
-const earlyAcks = new Map<string, { value: unknown; sentAt: number; ack: Array<{ s: string; p: number }> }>();
+const earlyAcks = new Map<string, { digest: string; sentAt: number; ack: Array<{ s: string; p: number }> }>();
+function valueDigest(v: unknown): string {
+  const json = JSON.stringify(v) ?? "undefined";
+  return `${fnv1a32(json).toString(36)}:${json.length}`;
+}
 function noteEarlyAck(key: string, value: unknown, sentAt: number, ack: Array<{ s: string; p: number }>): void {
   earlyAcks.delete(key);
-  earlyAcks.set(key, { value, sentAt, ack });
+  earlyAcks.set(key, { digest: valueDigest(value), sentAt, ack });
   while (earlyAcks.size > EARLY_ACK_LIMIT) earlyAcks.delete(earlyAcks.keys().next().value!);
 }
 
@@ -9498,6 +9505,7 @@ function stampSyncAckInDraft(
   ack: Array<{ scope_key: string; position: number }>,
   sentAt: number,
   lockIds?: ReadonlySet<string> | readonly string[],
+  fromSibling = false,
 ): boolean {
   if (!patches || typeof patches !== "object" || !Array.isArray(ack) || ack.length === 0) return false;
   const compact = ack.map((a) => ({ s: a.scope_key, p: a.position }));
@@ -9513,7 +9521,7 @@ function stampSyncAckInDraft(
       // No lock yet: the write may still be on its way here (above).
       // Acknowledged and delivered already, it is simply retired.
       if (delivered()) noteRetiredAck(key, sentAt);
-      else noteEarlyAck(key, sentValue, sentAt, compact);
+      else if (fromSibling) noteEarlyAck(key, sentValue, sentAt, compact);
       return;
     }
     if (held !== "lock") return;
@@ -9796,7 +9804,7 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
   }
 
   if (msg.kind === "ack") {
-    stampSyncAckInDraft(draft, msg.patches, msg.ack, msg.sentAt, msg.lockIds);
+    stampSyncAckInDraft(draft, msg.patches, msg.ack, msg.sentAt, msg.lockIds, true);
     return;
   }
 
@@ -10070,7 +10078,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
         if (value === undefined) delete row[field];
         else row[field] = value;
         const early = earlyAcks.get(k);
-        const earlyAck = early && early.sentAt >= ts && sameLockValue(early.value, value) ? early.ack : undefined;
+        const earlyAck = early && early.sentAt >= ts && early.digest === valueDigest(value) ? early.ack : undefined;
         if (earlyAck) earlyAcks.delete(k);
         const ack = (locked && prev.ack && sameLockValue(prev.value, value) ? prev.ack : undefined) ?? earlyAck;
         this.pending[k] = fieldLockEntry(value, ts, ack);
