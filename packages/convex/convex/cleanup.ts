@@ -8,7 +8,7 @@ import { hasRecentPendingDaemonCommand } from "./daemonCommandUtils";
 import { cancelTasksBoundToConversation } from "./lib/agentTaskRows";
 import { cancelQueuedMessagesOnKill } from "./pendingMessages";
 import { releaseSubagentSlot, subagentEnded } from "./subagentFleet";
-import { nestParentIdOf } from "./ccAccountsShared";
+import { nestedGroupOf } from "./lib/closeAside";
 import { isOrphanOrSubagent } from "./inboxFilters";
 
 // ---------------------------------------------------------------------------
@@ -290,15 +290,24 @@ export function classifyHideTransition(
 // lead and its children together, so a row the cascade already tore down in
 // this transaction is not torn down again.
 const HIDE_TEARDOWNS_INLINE = 20;
-type HideTxnState = { spent: number; done: Set<string> };
+// `decided`: rows this transaction's own gesture names (applyPatches notes them
+// first). A cascade never writes over one, whatever order the rows come in:
+// the row's own patch is its decision.
+type HideTxnState = { spent: number; done: Set<string>; decided: Set<string> };
 const hideTxnStates = new WeakMap<object, HideTxnState>();
 function hideTxnState(ctx: { db: any }): HideTxnState {
   let state = hideTxnStates.get(ctx);
-  if (!state) hideTxnStates.set(ctx, (state = { spent: 0, done: new Set() }));
+  if (!state) hideTxnStates.set(ctx, (state = { spent: 0, done: new Set(), decided: new Set() }));
   return state;
 }
 export function hideBudgetLeft(ctx: { db: any }): number {
   return Math.max(0, HIDE_TEARDOWNS_INLINE - hideTxnState(ctx).spent);
+}
+/** The conversation rows a gesture's own patch names, noted before any of them
+ *  applies, so no lead's cascade overrides one of them. */
+export function noteGestureRows(ctx: { db: any }, ids: Iterable<string>): void {
+  const decided = hideTxnState(ctx).decided;
+  for (const id of ids) decided.add(String(id));
 }
 
 export async function applyHideTransition(
@@ -456,26 +465,13 @@ export async function cascadeHideToNestedChildren(
   const field = patch.inbox_dismissed_at ? ("inbox_dismissed_at" as const) : ("inbox_stashed_at" as const);
   const stamp = patch[field];
   if (!stamp) return 0;
-  const leadId = lead._id.toString();
-  const [taskSubs, spawned] = await Promise.all([
-    ctx.db
-      .query("conversations")
-      .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", lead._id))
-      .take(200),
-    ctx.db
-      .query("conversations")
-      .withIndex("by_spawned_by", (q: any) => q.eq("spawned_by_conversation_id", lead._id))
-      .take(200),
-  ]);
-  const seen = new Set<string>();
+  // The same group a close's aside check reads (lib/closeAside nestedGroupOf).
   const childIds: string[] = [];
-  for (const child of [...taskSubs, ...spawned]) {
+  for (const child of await nestedGroupOf(ctx, lead)) {
     const idStr = child._id.toString();
-    if (idStr === leadId || seen.has(idStr)) continue;
-    seen.add(idStr);
-    if (nestParentIdOf(child) !== leadId) continue;
     if (field === "inbox_stashed_at" && isOrphanOrSubagent(child)) continue;
     if (child[field] && !opts?.forceKill) continue; // quiet re-assert — never re-kill
+    if (hideTxnState(ctx).decided.has(idStr)) continue; // its own patch decides it
     childIds.push(idStr);
   }
   await hideNestedChildren(ctx, lead._id, field, stamp, childIds, opts);
@@ -497,7 +493,12 @@ async function hideNestedChildren(
   opts?: { forceKill?: boolean; close?: boolean; cause?: string },
 ): Promise<void> {
   const now = ctx.scheduler ? childIds.slice(0, Math.min(CASCADE_BATCH, hideBudgetLeft(ctx))) : childIds;
+  const txn = hideTxnState(ctx);
   for (const id of now) {
+    // A child this transaction already decided (torn down, or named by the
+    // same gesture's own patch: set aside, closed or killed) keeps that
+    // decision, whichever of the two rows came first.
+    if (txn.done.has(String(id)) || txn.decided.has(String(id))) continue;
     // A copy: applyHideTransition classifies on the PRE-patch row.
     const found = await ctx.db.get(id);
     if (!found) continue;

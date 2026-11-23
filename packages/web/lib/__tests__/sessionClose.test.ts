@@ -1,16 +1,25 @@
 import { describe, expect, test } from "bun:test";
-import { closeFactsOf, closeKindOf, closeSetsAside, closeTooltip, nestedRunningOf, type CloseFacts } from "../sessionClose";
+import { closeFactsOf, closeKindOf, closeSetsAside, closeTooltip, inFlightFactsOfRow, nestedInFlightOf, type CloseFacts } from "../sessionClose";
 
 const NOW = 1_800_000_000_000;
-const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ running: false, loop: false, limit: false, role: false, triggers: 0, waitingOnRun: false, ...f });
+const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ inFlight: null, role: false, triggers: 0, waitingOnRun: false, ...f });
 
 // One row per line of the brief's table: what Close does, and the words its tooltip says.
 describe("what Close does to a session", () => {
-  test("a session running a turn is set aside and keeps running", () => {
-    const f = facts({ running: true, role: true, triggers: 2, waitingOnRun: true });
-    expect(closeKindOf(f)).toBe("aside");
-    expect(closeSetsAside(f)).toBe(true);
-    expect(closeTooltip(f)).toBe("Close: hides it, lets it finish");
+  test("a session in flight is set aside and keeps running", () => {
+    for (const inFlight of ["live", "awaiting", "queued", "workflow", "nested"] as const) {
+      const f = facts({ inFlight, role: true, triggers: 2, waitingOnRun: true });
+      expect(closeKindOf(f)).toBe("aside");
+      expect(closeSetsAside(f)).toBe(true);
+      expect(closeTooltip(f)).toBe("Close: hides it, lets it finish");
+    }
+  });
+
+  test("a fresh /loop and a usage-limit park are set aside with their own words", () => {
+    expect(closeSetsAside(facts({ inFlight: "loop" }))).toBe(true);
+    expect(closeTooltip(facts({ inFlight: "loop" }))).toBe("Close: hides it, keeps its loop running");
+    expect(closeSetsAside(facts({ inFlight: "limit" }))).toBe(true);
+    expect(closeTooltip(facts({ inFlight: "limit" }))).toBe("Close: hides it, picks up when its limit resets");
   });
 
   test("a role's own session or one with armed triggers stops and keeps them", () => {
@@ -20,7 +29,7 @@ describe("what Close does to a session", () => {
     expect(closeSetsAside(facts({ role: true, triggers: 2 }))).toBe(false);
   });
 
-  test("a session waiting on a workflow run stops and comes back when the run reports", () => {
+  test("a session waiting on a codecast flow run stops and comes back when the run reports", () => {
     expect(closeTooltip(facts({ waitingOnRun: true }))).toBe("Close: stops it, comes back when its run reports");
   });
 
@@ -30,7 +39,7 @@ describe("what Close does to a session", () => {
   });
 
   test("no tooltip names the old gestures", () => {
-    for (const f of [facts({ running: true }), facts({ loop: true }), facts({ limit: true }), facts({ role: true }), facts({ triggers: 2 }), facts({ waitingOnRun: true }), facts()]) {
+    for (const f of [facts({ inFlight: "live" }), facts({ inFlight: "loop" }), facts({ inFlight: "limit" }), facts({ role: true }), facts({ triggers: 2 }), facts({ waitingOnRun: true }), facts()]) {
       expect(closeTooltip(f)).not.toMatch(/kill|hibernat|stash/i);
     }
   });
@@ -38,75 +47,61 @@ describe("what Close does to a session", () => {
 
 describe("the facts of a row", () => {
   const settled = { message_count: 12, agent_status: "idle", updated_at: NOW - 60 * 60_000, last_heartbeat: NOW - 1000 };
+  const reason = (row: Record<string, unknown>, pendingSend = false) => closeFactsOf(row as any, 0, NOW, pendingSend).inFlight;
 
-  test("a producing agent is running; a send in flight is too", () => {
-    expect(closeFactsOf({ ...settled, agent_status: "working", updated_at: NOW - 1000 }, 0, NOW).running).toBe(true);
-    expect(closeFactsOf(settled, 0, NOW).running).toBe(false);
-    expect(closeFactsOf(settled, 0, NOW, true).running).toBe(true);
+  test("each in-flight fact, gathered from the row", () => {
+    expect(reason(settled)).toBeNull();
+    expect(reason({ ...settled, agent_status: "working", updated_at: NOW - 1000 })).toBe("live");
+    expect(reason({ ...settled, awaiting_input: true })).toBe("awaiting");
+    expect(inFlightFactsOfRow({ ...settled, has_pending: true }, NOW).queued).toBe(true);
+    expect(reason({ ...settled, has_pending: true })).not.toBeNull();
+    expect(reason(settled, true)).toBe("queued");
+    expect(reason({ ...settled, workflow_run_id: "w1", workflow_run_status: "running", workflow_run_kind: "workflow" })).toBe("workflow");
+    expect(reason({ ...settled, loop_state: { status: "armed", wakeup_at: NOW + 60_000, event_at: NOW - 1000 } })).toBe("loop");
+    expect(reason({ ...settled, agent_type: "claude_code", pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000 })).toBe("limit");
   });
 
-  test("a lead whose subagent or teammate is mid-turn is running, so Close sets it aside", () => {
-    const busy = { ...settled, agent_status: "working", updated_at: NOW - 1000 };
+  test("a long-overdue /loop and an old usage-limit park hold nothing", () => {
+    expect(reason({ ...settled, loop_state: { status: "armed", wakeup_at: NOW - 60 * 60_000, event_at: NOW - 2 * 60 * 60_000 } })).toBeNull();
+    expect(reason({ ...settled, agent_type: "claude_code", pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 30 * 24 * 3_600_000 })).toBeNull();
+  });
+
+  test("a lead any member of whose nested group is in flight, by the same verdict, is set aside", () => {
+    const loop = { status: "armed", wakeup_at: NOW + 60_000, event_at: NOW - 1000 };
+    const child = (parent: string, extra: Record<string, unknown>) => ({ ...settled, parent_conversation_id: parent, ...extra });
     const rows = [
-      { ...busy, parent_conversation_id: "lead" },
-      { ...settled, parent_conversation_id: "idle-lead" },
-      { ...busy, spawned_by_conversation_id: "team-lead", agent_team_name: "crew", agent_name: "worker" },
+      child("busy", { agent_status: "working", updated_at: NOW - 1000 }),
+      child("loop", { loop_state: loop }),
+      child("limit", { agent_type: "claude_code", pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000 }),
+      child("flow", { workflow_run_id: "w1", workflow_run_status: "running", workflow_run_kind: "workflow" }),
+      child("queued", { has_pending: true }),
+      child("asking", { awaiting_input: true }),
+      child("idle", {}),
+      { ...settled, agent_status: "working", updated_at: NOW - 1000, spawned_by_conversation_id: "team", agent_team_name: "crew", agent_name: "worker" },
       // A cast-spawn worker (spawned_by, no team) is not nested: it never comes down with its spawner.
-      { ...busy, spawned_by_conversation_id: "spawner" },
+      { ...settled, agent_status: "working", updated_at: NOW - 1000, spawned_by_conversation_id: "spawner" },
     ];
-    expect(nestedRunningOf(rows, "lead", NOW)).toBe(true);
-    expect(nestedRunningOf(rows, "team-lead", NOW)).toBe(true);
-    expect(nestedRunningOf(rows, "idle-lead", NOW)).toBe(false);
-    expect(nestedRunningOf(rows, "spawner", NOW)).toBe(false);
-    const f = closeFactsOf(settled, 0, NOW, false, nestedRunningOf(rows, "lead", NOW));
-    expect(closeSetsAside(f)).toBe(true);
+    for (const lead of ["busy", "loop", "limit", "flow", "queued", "asking", "team"]) expect([lead, nestedInFlightOf(rows as any, lead, NOW)]).toEqual([lead, true]);
+    for (const lead of ["idle", "spawner"]) expect([lead, nestedInFlightOf(rows as any, lead, NOW)]).toEqual([lead, false]);
+    const f = closeFactsOf(settled, 0, NOW, false, true);
+    expect(f.inFlight).toBe("nested");
     expect(closeTooltip(f)).toBe("Close: hides it, lets it finish");
   });
 
-  test("a role is a persistent anchor or a role's own session", () => {
-    expect(closeFactsOf({ ...settled, persistent: true }, 0, NOW).role).toBe(true);
-    expect(closeFactsOf({ ...settled, standing_role_id: "r1" }, 0, NOW).role).toBe(true);
-    expect(closeFactsOf(settled, 0, NOW).role).toBe(false);
-  });
-
-  test("triggers count the roster and the row's own armed flag before the roster loads, never a /loop", () => {
+  test("triggers count the roster and the row's own armed flag, never a /loop", () => {
     expect(closeFactsOf(settled, 2, NOW).triggers).toBe(2);
-    expect(closeFactsOf({ ...settled, loop_state: { status: "armed", wakeup_at: NOW + 60_000, event_at: NOW - 1000 } }, 2, NOW).triggers).toBe(2);
     expect(closeFactsOf({ ...settled, armed_trigger_kind: "standing" }, 0, NOW).triggers).toBe(1);
   });
 
-  test("a fresh armed /loop lives in the agent process, so Close sets it aside; a long-overdue one does not hold it", () => {
-    const loop = closeFactsOf({ ...settled, loop_state: { status: "armed", wakeup_at: NOW + 60_000, event_at: NOW - 1000 } }, 3, NOW);
-    expect(loop.loop).toBe(true);
-    expect(closeSetsAside(loop)).toBe(true);
-    expect(closeTooltip(loop)).toBe("Close: hides it, keeps its loop running");
-    const stale = closeFactsOf({ ...settled, loop_state: { status: "armed", wakeup_at: NOW - 60 * 60_000, event_at: NOW - 2 * 60 * 60_000 } }, 0, NOW);
-    expect(stale.loop).toBe(false);
-  });
-
-  test("a session parked on a usage limit has a wake (the reset): Close sets it aside", () => {
-    const parked = closeFactsOf({ ...settled, agent_type: "claude_code", pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000 }, 0, NOW);
-    expect(parked.limit).toBe(true);
-    expect(closeSetsAside(parked)).toBe(true);
-    expect(closeTooltip(parked)).toBe("Close: hides it, picks up when its limit resets");
-    // A park from long ago is the graveyard, not the current incident.
-    expect(closeFactsOf({ ...settled, agent_type: "claude_code", pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 30 * 24 * 3_600_000 }, 0, NOW).limit).toBe(false);
-  });
-
-  test("a queued message or a question it asked is in flight: Close sets it aside", () => {
-    expect(closeSetsAside(closeFactsOf({ ...settled, has_pending: true }, 0, NOW))).toBe(true);
-    expect(closeSetsAside(closeFactsOf({ ...settled, awaiting_input: true }, 0, NOW))).toBe(true);
-  });
-
-  test("a codecast flow run it started is a wake it comes back on; a Workflow-tool run runs inside it, so it is set aside", () => {
+  test("a codecast flow run is a wake it comes back on; a Workflow-tool run runs inside it", () => {
     const flow = { ...settled, workflow_run_id: "w1", workflow_run_status: "running" };
     expect(closeFactsOf(flow, 0, NOW).waitingOnRun).toBe(true);
-    expect(closeTooltip(closeFactsOf(flow, 0, NOW))).toBe("Close: stops it, comes back when its run reports");
-    const tool = closeFactsOf({ ...flow, workflow_run_kind: "workflow" }, 0, NOW);
-    expect(tool.waitingOnRun).toBe(false);
-    expect(tool.running).toBe(true);
-    expect(closeTooltip(tool)).toBe("Close: hides it, lets it finish");
+    expect(closeFactsOf({ ...flow, workflow_run_kind: "workflow" }, 0, NOW).waitingOnRun).toBe(false);
     expect(closeFactsOf({ ...flow, workflow_run_status: "completed" }, 0, NOW).waitingOnRun).toBe(false);
     expect(closeFactsOf({ ...flow, is_workflow_sub: true }, 0, NOW).waitingOnRun).toBe(false);
+  });
+
+  test("inFlightFactsOfRow is the whole fact set, nothing more", () => {
+    expect(Object.keys(inFlightFactsOfRow(settled, NOW)).sort()).toEqual(["awaitingInput", "inProcessRun", "limitParked", "loopFresh", "queued", "turnLive"]);
   });
 });

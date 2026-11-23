@@ -65,6 +65,34 @@ describe("closeSessions", () => {
     expect(Object.values<any>(close?.patches.conversations ?? {}).some((f) => !!f.inbox_dismissed_at)).toBe(false);
   });
 
+  test("a lead whose nested child holds any in-flight fact is set aside, and the child is untouched", () => {
+    const CHILD = "d".repeat(32);
+    const cases: Record<string, Record<string, unknown>> = {
+      loop: { loop_state: { status: "armed", wakeup_at: NOW + 600_000, armed_at: NOW, event_at: NOW } },
+      limit: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 60_000 },
+      workflow: { workflow_run_id: "w1", workflow_run_status: "running", workflow_run_kind: "workflow" },
+      queued: { has_pending: true },
+      awaiting: { awaiting_input: true },
+    };
+    for (const [name, extra] of Object.entries(cases)) {
+      seed();
+      const child = row(CHILD, { parent_conversation_id: IDLE, is_subagent: true, ...extra });
+      useInboxStore.setState((s: any) => ({ sessions: { ...s.sessions, [CHILD]: child }, conversations: { ...s.conversations, [CHILD]: { ...child } } }));
+      const out = useInboxStore.getState().closeSession(IDLE);
+      expect([name, out?.aside]).toEqual([name, [IDLE]]);
+      expect([name, get(IDLE).inbox_dismissed_at ?? null]).toEqual([name, null]);
+      expect([name, get(CHILD).inbox_dismissed_at ?? null, get(CHILD).inbox_closed_at ?? null]).toEqual([name, null, null]);
+    }
+  });
+
+  test("a close writes inbox_closed_at equal to its dismissed stamp, and sends it", () => {
+    useInboxStore.getState().closeSession(IDLE);
+    expect(get(IDLE).inbox_closed_at).toBe(get(IDLE).inbox_dismissed_at);
+    const close = sent.find((s) => s.action === "closeSession")!;
+    const fields = close.patches.conversations[IDLE];
+    expect(fields.inbox_closed_at).toBe(fields.inbox_dismissed_at);
+  });
+
   test("an armed /loop or a queued message is in flight: the session is set aside, not stopped", () => {
     const LOOP = "e".repeat(32);
     const QUEUED = "f".repeat(32);

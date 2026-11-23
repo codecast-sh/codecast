@@ -192,6 +192,93 @@ describe("the server sets aside what the client closed while it is in flight", (
   });
 });
 
+describe("a lead is in flight when any member of its nested group is", () => {
+  const now = Date.now();
+  const facts: Record<string, { conv?: Record<string, unknown>; agent?: string; pending?: boolean; run?: boolean; newest?: boolean }> = {
+    loop: { conv: { loop_state: { status: "armed", wakeup_at: now + 600_000, armed_at: now, event_at: now } } },
+    limit: { conv: { pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: now - 60_000 } },
+    workflow: { run: true },
+    queued: { pending: true },
+    awaiting: { agent: "permission_blocked" },
+    poll: { agent: "idle", newest: true },
+  };
+  for (const [name, f] of Object.entries(facts)) {
+    test(`a child with ${name} keeps its lead aside, and the child is untouched`, async () => {
+      const s = await setup();
+      const child = await s.t.run(async (ctx) => {
+        const t = Date.now();
+        const c = await ctx.db.insert("conversations", {
+          user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t - 3_600_000, status: "active", session_id: "s-kid", message_count: 4,
+          is_subagent: true, parent_conversation_id: s.ids.conv, last_message_role: "assistant", ...f.conv,
+        } as any);
+        if (f.agent) await ctx.db.insert("managed_sessions", { session_id: "s-kid", conversation_id: c, user_id: s.ids.user, pid: 9, started_at: t, last_heartbeat: t, agent_status: f.agent, agent_status_updated_at: t } as any);
+        if (f.newest) await ctx.db.insert("messages", { conversation_id: c, role: "assistant", content: "", timestamp: t, tool_calls: [{ id: "q", name: "AskUserQuestion", input: "{}" }] } as any);
+        if (f.pending) await ctx.db.insert("pending_messages", { conversation_id: c, from_user_id: s.ids.user, content: "later", status: "pending", created_at: t, retry_count: 0 } as any);
+        if (f.run) {
+          const run = await ctx.db.insert("workflow_runs", { user_id: s.ids.user, run_kind: "workflow", external_run_id: "wf-kid", workflow_name: "audit", status: "running", node_statuses: [], created_at: 1, updated_at: 1 } as any);
+          await ctx.db.patch(c, { workflow_run_id: run } as any);
+        }
+        return c;
+      });
+      await s.send("closeSession", [String(s.ids.conv)]);
+      expectAside(await s.read());
+      const kid = (await s.t.run((ctx) => ctx.db.get(child))) as any;
+      expect(kid.inbox_dismissed_at).toBeUndefined();
+      expect(kid.inbox_closed_at).toBeUndefined();
+    });
+  }
+
+  for (const order of ["lead first", "child first"] as const) {
+    test(`a close of a lead and its busy child together sets both aside, ${order}`, async () => {
+      const s = await setup();
+      const child = await s.t.run(async (ctx) => {
+        const t = Date.now();
+        const c = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t, status: "active", session_id: "s-kid", message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
+        await ctx.db.insert("managed_sessions", { session_id: "s-kid", conversation_id: c, user_id: s.ids.user, pid: 9, started_at: t, last_heartbeat: t, agent_status: "working", agent_status_updated_at: t } as any);
+        return c;
+      });
+      const t = Date.now();
+      const lead = [String(s.ids.conv), { inbox_dismissed_at: t, inbox_closed_at: t }] as const;
+      const kid = [String(child), { inbox_dismissed_at: t, inbox_closed_at: t }] as const;
+      const rows = order === "lead first" ? [lead, kid] : [kid, lead];
+      await s.send("closeSessions", [rows.map(([id]) => id)], Object.fromEntries(rows));
+      expectAside(await s.read());
+      const k = (await s.t.run((ctx) => ctx.db.get(child))) as any;
+      expect(k.inbox_dismissed_at).toBeUndefined();
+      expect(k.inbox_closed_at).toBeUndefined();
+      expect(k.inbox_stashed_at).toBeGreaterThan(0);
+    });
+  }
+
+  test("a kill of a lead does not override a child the same gesture already decided", async () => {
+    const s = await setup();
+    const t = Date.now();
+    const child = await s.t.run(async (ctx) => ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t, status: "active", session_id: "s-kid", message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv } as any));
+    // The child's own stash lands first; the lead's kill cascade must leave it stashed.
+    await s.send("killSessions", [[String(child), String(s.ids.conv)]], { [String(child)]: { inbox_stashed_at: t }, [s.ids.conv]: { inbox_dismissed_at: t } });
+    const k = (await s.t.run((ctx) => ctx.db.get(child))) as any;
+    expect(k.inbox_stashed_at).toBe(t);
+    expect(k.inbox_dismissed_at).toBeUndefined();
+  });
+});
+
+describe("a close is a close by its fields, on any rail", () => {
+  test("a stub's re-key flush carrying both stamps closes the row without retiring it", async () => {
+    const s = await setup();
+    const t = Date.now();
+    await s.as.mutation(api.dispatch.dispatch, { action: "flushResolvedSessionFields", args: [String(s.ids.conv), { inbox_dismissed_at: t, inbox_closed_at: t }] });
+    expectClosed(await s.read());
+  });
+
+  test("the same flush with only the dismissed stamp is a plain dismissal: it retires", async () => {
+    const s = await setup();
+    await s.as.mutation(api.dispatch.dispatch, { action: "flushResolvedSessionFields", args: [String(s.ids.conv), { inbox_dismissed_at: Date.now() }] });
+    const { conv, task } = await s.read();
+    expect(conv.inbox_killed_at).toBeGreaterThan(0);
+    expect(task.status).not.toBe("scheduled");
+  });
+});
+
 describe("close carries through the deferred paths", () => {
   test("a close of more rows than one transaction applies keeps every row's trigger after the deferred batch", async () => {
     const s = await setup();
