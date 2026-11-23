@@ -74,11 +74,18 @@ describe("classifySession is a thin adapter over the shared classifier (no secon
   });
 
   it("a changed row arrives as a new object and misses the cache (no stale verdict)", () => {
-    // Same fields, different reference — the store hands out a new object whenever
-    // a row actually changes, so a new ref must recompute rather than reuse.
-    const a = classifySession(sess({ awaiting_input: true }));
-    const b = classifySession(sess({ awaiting_input: true }));
-    expect(a).not.toBe(b);
-    expect(b.waiting).toBe(a.waiting);
+    // The store hands out a new object whenever a row actually changes, so a
+    // new ref must recompute rather than reuse the old row's verdict.
+    const waiting = sess({ awaiting_input: true });
+    expect(classifySession(waiting).waiting).toBe(true);
+    expect(classifySession({ ...waiting, awaiting_input: false, agent_status: "running", is_idle: false }).waiting).toBe(false);
+  });
+
+  // A person's view: a wait its role drives is the role's work (shared
+  // personWorkState), so the chime, the counts and every mark read it working.
+  it("a wait its role drives reads working; a paused role's wait is the person's", () => {
+    const roleDriven = sess({ org_role_id: "org_roles_infra", awaiting_input: true } as any);
+    expect(classifySession(roleDriven)).toEqual({ idle: false, waiting: false, rest: "needs_input" });
+    expect(classifySession({ ...roleDriven, driver_user_id: "u1" } as any).waiting).toBe(true);
   });
 });

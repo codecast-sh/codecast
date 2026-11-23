@@ -261,7 +261,8 @@ export function StableContextPicker({ conversationId, trailing, className = "w-f
       project_path: conversation.project_path ?? null,
       updated_at: conversation.updated_at,
       message_count: conversation.message_count,
-      work_state: conversation.work_state,
+      // A wait its role drives (with_role) is the role's: a person reads it working.
+      work_state: conversation.with_role ? "working" : conversation.work_state,
       is_live: conversation.is_live,
       user_name: conversation.user?.name ?? conversation.user?.email ?? null,
       owned_by_me: conversation.owned_by_me,

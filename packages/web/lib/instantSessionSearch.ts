@@ -9,7 +9,7 @@
 // from — except to say, honestly, that content search is still running.
 import { useDeferredValue, useMemo } from "react";
 import { normalizeQueryQuotes, parseSessionQuery } from "@codecast/shared/search";
-import type { WorkState } from "@codecast/shared/contracts";
+import { personWorkState, type InboxBucket, type WorkState } from "@codecast/shared/contracts";
 import {
   useInboxStore,
   filterInboxScopeFromState,
@@ -170,7 +170,9 @@ export function sessionStanding(
     ? "snoozed"
     : null;
   const mine = row.isOwn ?? (!row.user_id || !meId || row.user_id === meId || !!row.owned_by_me);
-  return { state: placed?.work_state ?? null, shelf, sub: isSub(row), mine };
+  // A wait its role drives is the role's: the palette neither lifts nor marks it.
+  const state = placed ? personWorkState(live && !("bucket" in live) ? live : row, placed as { bucket: InboxBucket; work_state: WorkState }) : null;
+  return { state, shelf, sub: isSub(row), mine };
 }
 
 const TIER_SPAN = 10;

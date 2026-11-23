@@ -27,7 +27,7 @@
 //   - Process liveness (/sessions' "active / idle 2h+ / dead / hibernated") is
 //     a different axis; it stays on that page as process facts, not a status.
 
-import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, type WorkState } from "@codecast/shared/contracts";
+import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, roleDrives, type WorkState } from "@codecast/shared/contracts";
 import type { PlanState } from "@codecast/shared/tasks";
 import { agentStatusAt, liveFactsOf } from "./liveness";
 import { apiErrorBadge } from "./apiErrorBadge";
@@ -152,6 +152,9 @@ export type StatusRow = {
   agent_status_updated_at?: number | null;
   daemon_alive_until?: number | null;
   last_role_is_user?: boolean | null;
+  // Who drives it (shared roleDrives): a role's ask is the role's, never "Needs you".
+  org_role_id?: string | null;
+  driver_user_id?: string | null;
 };
 
 /** Facts a row does not carry, from the store around it. */
@@ -233,12 +236,13 @@ export type SessionStatusInput = {
 
 /** The bucket a per-row placement files under once the facts it cannot see
  *  are read, the same overlays placeInboxRows applies: a send in flight
- *  (the person already acted), a pending ask, and the clock past a snooze
- *  (sessionPlacement reads time at the row's own last activity). */
+ *  (the person already acted), a pending ask (unless its role drives it: the
+ *  ask is the role's), and the clock past a snooze (sessionPlacement reads
+ *  time at the row's own last activity). */
 function overlaidBucket(bucket: string, row: StatusRow, now: number, live: StatusLive): string {
   let b = bucket;
   if (b === "snoozed" && !(row.inbox_snoozed_until && row.inbox_snoozed_until > now)) b = "needs_input";
-  if (live.asking && !row.inbox_killed_at && !row.user_rest && b !== "dismissed" && b !== "stashed" && b !== "snoozed") b = "questions";
+  if (live.asking && !row.inbox_killed_at && !row.user_rest && !roleDrives(row) && b !== "dismissed" && b !== "stashed" && b !== "snoozed") b = "questions";
   if (live.pendingSend && !(row.inbox_snoozed_until && row.inbox_snoozed_until > now) && (b === "needs_input" || b === "done" || b === "dormant" || b === "new")) b = "working";
   return b;
 }
@@ -266,11 +270,11 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
   if (row.inbox_snoozed_until && row.inbox_snoozed_until > now) return "dormant";
   if (live.stopped) return "error";
   if (live.pendingSend) return "working";
-  if (live.asking) return "needs_you";
+  if (live.asking && !roleDrives(row)) return "needs_you";
   if ((row.message_count ?? 0) === 0) return statusStarting(row, now, live, hosted) ? "starting" : "idle";
   switch (placement?.state ?? workStateOfRow(row, now)) {
     case "working": return "working";
-    case "needs_input": return statusFailure(row, now, live) ? "error" : "needs_you";
+    case "needs_input": return statusFailure(row, now, live) ? "error" : roleDrives(row) && !row.user_rest ? "working" : "needs_you";
     case "done": return "done";
     case "dormant": return "dormant";
     default: return "idle";

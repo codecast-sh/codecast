@@ -21,7 +21,7 @@ import {
   getProjectName,
   teamInboxIdsOf,
 } from "../store/inboxStore";
-import { isLivenessStale, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
+import { isLivenessStale, roleDrives, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
 import { makeCollectionSig } from "../store/wakeSig";
 import { agentStatusAt } from "../lib/liveness";
 import { threadStateView, compactAge } from "../lib/threadState";
@@ -55,6 +55,14 @@ export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
   // status claims — the same precedence the pending_send overlay gives in-flight.
   if (inFlight(s, opts)) return "running";
   if (s.inbox_snoozed_until && s.inbox_snoozed_until <= opts.now) return "needsYou";
+  const band = agentBandOf(s, opts);
+  // What a session its role drives waits on is the role's (shared
+  // roleDrives), as the inbox files it: working, "With <role>". The person's
+  // own filing still comes first.
+  return band === "needsYou" && roleDrives(s) && !s.user_rest ? "running" : band;
+}
+
+function agentBandOf(s: InboxSession, opts: FleetBandOpts): FleetBand {
   // Concrete blockers only. Deliberately NOT isSessionHardBlocked: its "dead
   // agent with output" arm counts every cleanly finished session ("stopped" +
   // idle is the NORMAL end state of a run), which floods this band and makes
@@ -184,6 +192,10 @@ export function fleetSessionSig(s: InboxSession): string {
     s.thread_state ? 1 : 0,
     s.thread_state_at ?? 0,
     s.thread_state_status ?? "",
+    // Who drives it (roleDrives) and the person's own filing.
+    s.org_role_id ?? "",
+    s.driver_user_id ?? "",
+    s.user_rest ?? "",
   ].join("\x1f");
 }
 
