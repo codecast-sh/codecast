@@ -534,7 +534,7 @@ const ConversationViewInner = (
   // The header row sheds chip detail level by level until the title fits
   // (see hooks/useSqueezeToFit and the .cq-sq* tiers in globals.css).
   const squeezeRowRef = useRef<HTMLDivElement>(null);
-  useSqueezeToFit(squeezeRowRef, 7);
+  useSqueezeToFit(squeezeRowRef, 8);
   const modernStyle = useIsModernStyle();
   // Subagents carry parent_conversation_id; visible children (agent-team
   // teammates, spawns) carry spawned_by_conversation_id. The header chip and

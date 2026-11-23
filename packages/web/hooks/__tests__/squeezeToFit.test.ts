@@ -43,11 +43,26 @@ describe("conversation header squeeze", () => {
     }
   });
 
-  test("the deepest level releases the title floor instead of wrapping", () => {
+  test("the deepest levels release the title floor instead of wrapping", () => {
     const max = Number(view.match(/useSqueezeToFit\(squeezeRowRef, (\d+)\)/)?.[1]);
-    expect(max).toBeGreaterThan(0);
-    const deepest = new RegExp(`\\[data-squeeze~="${max}"\\] \\.cc-panel__title \\{ min-width: 0; \\}`);
-    expect(css).toMatch(deepest);
+    expect(max).toBeGreaterThan(1);
+    // Levels are cumulative: the deepest carries every token below it.
+    const release = Number(css.match(/\[data-squeeze~="(\d+)"\] \.cc-panel__title \{ min-width: 0; \}/)?.[1]);
+    expect(release).toBeGreaterThan(0);
+    expect(release).toBeLessThanOrEqual(max);
+  });
+
+  // The runner pill (machine | owners | terminal) is how a person reaches who
+  // runs and who owns a session, so the last level sheds the unkept actions
+  // before the cluster clips, and the runner is never one of them.
+  test("the last level sheds the unkept actions before it clips the runner", () => {
+    const max = Number(view.match(/useSqueezeToFit\(squeezeRowRef, (\d+)\)/)?.[1]);
+    expect(css).toContain(`[data-sv-convhead] [data-squeeze~="${max}"] [data-cc-conv-actions] > :not([data-cc-keep]) { display: none !important; }`);
+    const clip = css.match(/\[data-squeeze~="(\d+)"\] \[data-cc-conv-actions\] \{[^}]*justify-content: flex-end/);
+    expect(Number(clip?.[1])).toBe(max);
+    expect(view).toMatch(/<span data-cc-runner data-cc-keep="live"/);
+    // The dormant chip yields its width before the cluster does.
+    expect(css).toMatch(/\[data-squeeze~="(\d)"\] \[data-dormant-wake\] \{ min-width: 0;/);
   });
 
   test("applySqueeze picks the smallest level that fits", () => {
