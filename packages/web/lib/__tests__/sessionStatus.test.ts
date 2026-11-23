@@ -86,11 +86,15 @@ const CASES: Case[] = [
   { name: "work the classifier calls delivered", row: row({ agent_status: "idle", settle_verdict: "done" }), status: "done", bucket: "done", board: "finished" },
   { name: "work the agent declared done", row: row({ agent_status: null, ...STATE("Shipped the retry fix", "done") }), status: "done", bucket: "done", board: "finished" },
   { name: "a run that exited after declaring done", row: row({ agent_status: "stopped", ...STATE("Shipped", "done") }), status: "done", bucket: "done", board: "finished" },
+  // A turn opened after the done pin and the process stopped in it: that turn got no answer.
+  { name: "an exit after a turn the done pin never answered", row: row({ agent_status: "stopped", ...STATE("Shipped", "done"), last_turn_at: NOW - 30_000 }), status: "error", bucket: "needs_input", board: "finished" },
   // An exit after the agent parked itself as dormant ended its turn. With a
   // standing trigger into it the trigger resumes it, so it parks; with only
   // its own word for the wake it is the person's move, never a crash.
   { name: "a trigger-run session that exited between runs", row: row({ agent_status: "stopped", armed_trigger_kind: "standing", ...STATE("Waiting on the nightly", "dormant") }), status: "dormant", bucket: "dormant", board: "finished" },
   { name: "an exit after a dormant claim nothing backs", row: row({ agent_status: "stopped", ...STATE("Next nightly wakes me", "dormant") }), status: "needs_you", bucket: "needs_input", board: "finished" },
+  // A dormant pin older than the latest turn exempts nothing: the stop is a death to read.
+  { name: "an exit after a turn the dormant pin never answered", row: row({ agent_status: "stopped", ...STATE("Next nightly wakes me", "dormant"), last_turn_at: NOW - 30_000 }), status: "error", bucket: "needs_input", board: "finished" },
   { name: "filed as done by the person", row: row({ agent_status: "idle", user_rest: "done" }), status: "done", bucket: "done", board: "finished" },
   // INBOX-1: parked was a dim header in the rail, blue in the lenses and
   // FINISHED on the board. Dormant, blue-grey.
@@ -107,6 +111,37 @@ const CASES: Case[] = [
 ];
 
 const noQueue = { queued: new Set<string>(), pendingSendIds: new Set<string>(), now: NOW };
+
+// A row no placement covers (a process the inbox does not hold) keeps the
+// coarse fallback, but with the shared pin and wake rules.
+describe("the fallback for a row the inbox does not place", () => {
+  const bare = (extra: Record<string, unknown>) => sessionStatusOf({ row: { message_count: 5, updated_at: NOW - 60_000, ...extra } as any, now: NOW });
+  test("a done pin older than the latest turn is not done", () => {
+    expect(bare({ thread_state_status: "done", thread_state_at: NOW - 120_000 })).toBe("done");
+    expect(bare({ thread_state_status: "done", thread_state_at: NOW - 120_000, last_turn_at: NOW - 60_000 })).toBe("idle");
+  });
+  test("a daemon dormant claim with no verified wake expires; a pinned dormant with no status parks only on a wake", () => {
+    // An inbox row spells unset facts as null: it carries them.
+    expect(bare({ agent_status: "dormant", agent_status_updated_at: NOW - 3 * 3_600_000, updated_at: NOW - 3 * 3_600_000, last_heartbeat: NOW - 5_000, thread_state_status: null, parked_wake_kind: null })).toBe("needs_you");
+    expect(bare({ thread_state_status: "dormant", thread_state_at: NOW - 120_000, parked_wake_kind: "blocker" })).toBe("dormant");
+    expect(bare({ thread_state_status: "dormant", thread_state_at: NOW - 120_000 })).toBe("idle");
+  });
+  test("a hibernated process follows the same pin and wake rules", () => {
+    const hib = { agent_status: "hibernated", agent_status_updated_at: NOW - 120_000, last_heartbeat: NOW - 5_000 };
+    expect(bare({ ...hib, thread_state_status: "dormant", thread_state_at: NOW - 120_000, parked_wake_kind: "blocker" })).toBe("dormant");
+    expect(bare({ ...hib, thread_state_status: "dormant", thread_state_at: NOW - 120_000 })).toBe("idle");
+    expect(bare({ ...hib, thread_state_status: "done", thread_state_at: NOW - 120_000 })).toBe("done");
+  });
+  // The /sessions row for a foreign process carries status, count and
+  // heartbeat only (ModernSessionRow): it cannot expire a claim, so it keeps
+  // the coarse mapping, and a failure flag still wins over hibernated.
+  test("a row without the pin and wake facts keeps the coarse mapping", () => {
+    const quiet = { agent_status_updated_at: NOW - 3 * 3_600_000, updated_at: NOW - 3 * 3_600_000, last_heartbeat: NOW - 5_000 };
+    expect(bare({ ...quiet, agent_status: "dormant" })).toBe("dormant");
+    expect(bare({ ...quiet, agent_status: "hibernated" })).toBe("dormant");
+    expect(bare({ ...quiet, agent_status: "hibernated", session_error: "boom" })).toBe("error");
+  });
+});
 
 describe("the status vocabulary", () => {
   test("nine states, each with its own word, mark and theme colour", () => {

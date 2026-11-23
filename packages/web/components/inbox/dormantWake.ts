@@ -2,9 +2,11 @@
 // section carries. A parked session is only safe to ignore when the reader can
 // see the wake it waits on, so the line names the soonest real wake the store
 // knows about (a running workflow or background task, a subagent still
-// producing, a trigger or /loop and its countdown), or says plainly that
-// nothing is scheduled and when the row comes back to the person.
-import { DORMANT_CLAIM_TTL_MS, threadStateRows, threadStateHeadline } from "@codecast/shared/contracts";
+// producing, a trigger or /loop and its countdown, a run it started, a task or
+// a wait it waits on, and why the server no longer vouches for a run or wait
+// the classifier dropped), or says plainly that nothing is scheduled and when
+// the row comes back to the person.
+import { DORMANT_CLAIM_TTL_MS, rowHeartbeatAliveAt, rowParkedWakeLive, threadStateRows, threadStateHeadline } from "@codecast/shared/contracts";
 import type { InboxSession } from "../../store/inboxStore";
 import { fmtClock, fmtDuration } from "../triggerCadence";
 import { taskDisplayTitle, type TaskRow, type TriggerRow } from "../triggerTasks";
@@ -20,6 +22,21 @@ export type DormantWake =
   | { kind: "trigger"; row: TriggerRow; others: number }
   /** The row says a trigger is armed, but the roster has not loaded it. */
   | { kind: "trigger_unloaded" }
+  /** The server sees a live run this session started (parked_wake_kind "run"),
+   *  and its machine's daemon reports. */
+  | { kind: "run" }
+  /** A run it started while its session's daemon is not reporting (the
+   *  heartbeat lapsed; a hibernated session's daemon still reports): only that
+   *  daemon resumes the run, so the classifier no longer counts it. */
+  | { kind: "run_unreported" }
+  /** An open task on the held task's blocked_by (parked_wake_kind "blocker"). */
+  | { kind: "blocker" }
+  /** Only waits stand (parked_wake_kind "wait"): on the held task, or set on
+   *  another. The row does not say which wait, nor who set it. */
+  | { kind: "wait" }
+  /** A wait or run stamp quiet past PARKED_WAKE_TTL_MS: the wake may still
+   *  come, but nothing has confirmed it since `since`. */
+  | { kind: "unconfirmed"; wake: "wait" | "run"; since: number }
   | { kind: "snoozed"; at: number }
   /** The person filed it here themselves. */
   | { kind: "parked" }
@@ -34,6 +51,9 @@ export interface DormantWakeSession {
   inbox_snoozed_until?: number | null;
   producing_until?: number | null;
   armed_trigger_kind?: string | null;
+  parked_wake_kind?: string | null;
+  /** The daemon's heartbeat, which a run stamp needs (rowParkedWakeLive). */
+  last_heartbeat?: number | null;
   workflow_run_id?: string | null;
   workflow_run_status?: string | null;
   workflow_run_name?: string | null;
@@ -93,8 +113,24 @@ export function dormantWakeOf(
   const next = soonest(armed);
   if (next) return { kind: "trigger", row: next, others: armed.length - 1 };
   if ((session.armed_trigger_kind ?? "none") !== "none") return { kind: "trigger_unloaded" };
-  return { kind: "claim", what: namedWake(session.thread_state), back: (session.updated_at ?? now) + DORMANT_CLAIM_TTL_MS };
+  return serverParkOf(session, now) ?? { kind: "claim", what: namedWake(session.thread_state), back: (session.updated_at ?? now) + DORMANT_CLAIM_TTL_MS };
 }
+
+/** The server-seen park on the row (parked_wake_kind), judged by the
+ *  classifier's own rule (rowParkedWakeLive): a live one is named as a wake,
+ *  one it dropped is named with why (quiet past its trust, or a run while this
+ *  session's daemon is not running) rather than hidden. */
+export function serverParkOf(session: Pick<DormantWakeSession, "parked_wake_kind" | "updated_at" | "last_heartbeat">, now: number): DormantWake | null {
+  const kind = session.parked_wake_kind;
+  if (kind !== "run" && kind !== "blocker" && kind !== "wait") return null;
+  const row = { parked_wake_kind: kind, updated_at: session.updated_at ?? now, last_heartbeat: session.last_heartbeat ?? null };
+  if (rowParkedWakeLive(row, now)) return { kind };
+  if (kind === "run" && !rowHeartbeatAliveAt(row, now)) return { kind: "run_unreported" };
+  return { kind: "unconfirmed", wake: kind === "run" ? "run" : "wait", since: row.updated_at };
+}
+
+/** A park the classifier counts as a wake right now. */
+export const isLivePark = (wake: DormantWake | null): boolean => wake?.kind === "run" || wake?.kind === "blocker" || wake?.kind === "wait";
 
 // The words for a wake, shared by the inbox card's child line (DormantWakeRow)
 // and the conversation header's chip (DormantWakeChip), so both say the same.
@@ -102,33 +138,46 @@ export interface DormantWakeLabel {
   what: string;
   /** When it wakes; a trigger carries its task instead, drawn as its live countdown badge. */
   when: string | { task: TaskRow };
-  /** Nothing verifiable is scheduled: the agent's claim, unverified. */
-  warn: boolean;
+  /** Why the line warns, as its tooltip: an unverified claim, or a server-seen
+   *  wake gone quiet past its trust. Null when the wake is one to trust. */
+  warn: string | null;
 }
 
 export const DORMANT_CLAIM_TITLE = "The agent named a wake nothing here can see. It returns to Needs Input if nothing happens.";
+export const DORMANT_UNCONFIRMED_TITLE = "The server saw this wake, but nothing has happened for 3 days; it is yours to check.";
+export const DORMANT_RUN_UNREPORTED_TITLE = "This session's daemon is not reporting, so the run it started no longer vouches for it; it is yours to check.";
 
 export function dormantWakeLabel(wake: DormantWake, now: number): DormantWakeLabel {
   switch (wake.kind) {
     case "trigger":
-      return { what: taskDisplayTitle(wake.row.task) + (wake.others > 0 ? ` +${wake.others}` : ""), when: { task: wake.row.task }, warn: false };
+      return { what: taskDisplayTitle(wake.row.task) + (wake.others > 0 ? ` +${wake.others}` : ""), when: { task: wake.row.task }, warn: null };
     case "trigger_unloaded":
-      return { what: "a trigger fires into it", when: "armed", warn: false };
+      return { what: "a trigger fires into it", when: "armed", warn: null };
     case "workflow":
-      return { what: `workflow: ${wake.name}`, when: "when it finishes", warn: false };
+      return { what: `workflow: ${wake.name}`, when: "when it finishes", warn: null };
     case "background":
-      return { what: `${wake.count > 1 ? `${wake.count} background tasks` : "background task"}${wake.what ? `: ${wake.what}` : ""}`, when: "when it finishes", warn: false };
+      return { what: `${wake.count > 1 ? `${wake.count} background tasks` : "background task"}${wake.what ? `: ${wake.what}` : ""}`, when: "when it finishes", warn: null };
     case "workers":
-      return { what: "its subagents are still working", when: "when they finish", warn: false };
+      return { what: "its subagents are still working", when: "when they finish", warn: null };
+    case "run":
+      return { what: "a run it started", when: "when it ends or asks you", warn: null };
+    case "run_unreported":
+      return { what: "a run it started · its session's daemon is not reporting", when: "yours now", warn: DORMANT_RUN_UNREPORTED_TITLE };
+    case "blocker":
+      return { what: "a task it waits on", when: "when it closes", warn: null };
+    case "wait":
+      return { what: "a pending wait", when: "when it clears", warn: null };
+    case "unconfirmed":
+      return { what: `${wake.wake === "run" ? "a run it started" : "a pending wait"} · unconfirmed ${fmtDuration(Math.max(0, now - wake.since))}`, when: "yours now", warn: DORMANT_UNCONFIRMED_TITLE };
     case "snoozed":
-      return { what: "snoozed", when: fmtClock(wake.at, now), warn: false };
+      return { what: "snoozed", when: fmtClock(wake.at, now), warn: null };
     case "parked":
-      return { what: "parked by you", when: "on next activity", warn: false };
+      return { what: "parked by you", when: "on next activity", warn: null };
     case "claim":
       return {
         what: wake.what ? `nothing scheduled · ${wake.what}` : "nothing scheduled",
         when: wake.back > now ? `yours in ${fmtDuration(wake.back - now)}` : "yours now",
-        warn: true,
+        warn: DORMANT_CLAIM_TITLE,
       };
   }
 }

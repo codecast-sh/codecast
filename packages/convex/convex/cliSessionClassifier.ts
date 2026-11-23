@@ -1,6 +1,6 @@
 import { wakeFieldsOf, wakeCost } from "./wakeCost";
-import { deriveSessionActivity, classifyWorkState, trustedAgentStatus, userRestOf, isSettleVerdictCurrent, HEARTBEAT_ALIVE_MS, type WorkState } from "./inboxFilters";
-import { openTasksVouchForWaiting } from "@codecast/shared/contracts";
+import { childProducingNow, deriveSessionActivity, classifyWorkState, trustedAgentStatus, userRestOf, isSettleVerdictCurrent, HEARTBEAT_ALIVE_MS, type WorkState } from "./inboxFilters";
+import { openTasksVouchForWaiting, rowWakeInputs } from "@codecast/shared/contracts";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 
 // The one work-state classifier for every CLI surface that lists sessions
@@ -96,6 +96,9 @@ export function cliSessionClassifier(ctx: any, now: number) {
         awaitingInput = true;
       }
     }
+    // A settled parent whose subagent child is still producing is parked on it,
+    // as in the inbox (producing_until) and the needs-input push.
+    const childProducing = activity.isIdle && !awaitingInput && (await childProducingNow(ctx, conv, now));
     const ws = classifyWorkState({
       agentStatus,
       isIdle: activity.isIdle,
@@ -109,7 +112,12 @@ export function cliSessionClassifier(ctx: any, now: number) {
       armedLoopHome: isArmedLoopHome(conv, now),
       armedOnceTriggerHome: isArmedTriggerHome(conv, armedHomes.once),
       settleVerdict: isSettleVerdictCurrent(conv) ? conv.settle_verdict : null,
+      childProducing,
       declaredStatus: conv.thread_state_status ?? null,
+      ...rowWakeInputs({
+        ...conv,
+        open_tasks: managed?.open_tasks, open_tasks_at: managed?.open_tasks_at, last_heartbeat: managed?.last_heartbeat,
+      }, { trusted: agentStatus, raw: managed?.agent_status }, now, childProducing),
       sessionBoundary: managed?.agent_status_boundary === true,
       pendingApiError: conv.pending_api_error === true,
       sessionError: !!conv.session_error,

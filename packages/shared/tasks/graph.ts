@@ -37,6 +37,13 @@ export type TaskWait = WaitTarget & {
   state: WaitState;
   created_at: number;
   created_by?: string;
+  /** The conversation `_id` of the session that set it while holding
+   *  another task, woken when it settles; unset otherwise. */
+  created_in?: string;
+  /** When the met wait's setter was dealt with: told, or passed over
+   *  (killed, refusing messages, or the owner who heard another way), so no
+   *  later unblock tells it again. */
+  setter_told_at?: number;
   settled_at?: number;
   /** Written when it settles: "merged", "answered: Ship it", "closed without merging". */
   note?: string;

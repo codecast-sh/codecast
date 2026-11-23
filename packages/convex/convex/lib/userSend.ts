@@ -3,11 +3,14 @@ import { internal } from "../_generated/api";
 import { isTeamMember } from "../privacy";
 import {
   AGENT_SETUP_CONTINUE_MESSAGE,
+  answeredThreadStateFields,
   huddleExcerptNote,
+  isCompactionSummaryMessage,
   isHuddleFeedNotice,
   isMachineDeliveredMessage,
   isTestArtifactPath,
   parseTaskCommentMessage,
+  PIN_TURN_SLACK_MS,
   parseDecisionAnswer,
   parseUserMessage,
   stripMentionContext,
@@ -183,14 +186,73 @@ export function turnOpener(conversation: Doc<"conversations">, msg: SendMessage)
   return null;
 }
 
-// The conversation fields a turn opener changes; empty when it changes none.
-export function turnOpenerPatch(conversation: Doc<"conversations">, opener: TurnOpener | null): Partial<Doc<"conversations">> {
-  if (!opener) return {};
-  const by = opener.origin === "person" ? opener.by : undefined;
+// Who a user-role message comes from as far as the pin is concerned, which is
+// wider than turnOpener: every user-role message that starts the agent working
+// again counts, bare nudges ("yes", "go ahead") and interrupts included.
+// "person" when it was typed or pressed by a person; "machine" for a program's
+// send, a machine-delivered message, a skill's body, a background job's result
+// notice, or codecast's session-move notice (it asks the agent to reorient, so
+// it opens a turn). Null for tool results, assistant messages, and what runs
+// no agent turn, as the CLI's turn model reads a transcript (cli
+// transcriptTurn.ts LOCAL_COMMAND): a slash command's own line (a prompt
+// command's turn is its expansion or skill body, which counts), local command
+// output, `!` bash mode, the local-command caveat, a compaction's summary and
+// prompt, a bare /compact, /clear, /resume or local command typed as text (the
+// web model picker's `/model X` among them), and the "[Codecast import]" note,
+// which a resume writes into a rebuilt transcript as context and no turn.
+const BOUNDARY_PREFIXES = [
+  "This session is being continued",
+  "Your task is to create a detailed summary",
+  "Full transcript available at:",
+  "[Codecast import]",
+];
+const LOCAL_TURNLESS_RE = /^(<command-name>|<command-message>|<local-command-|<bash-input>|<bash-stdout>|<bash-stderr>|Caveat:)/;
+const TURNLESS_COMMANDS = new Set(["compact", "clear", "resume", "model", "usage", "cost", "context", "status"]);
+export function isSessionBoundaryMessage(t: string): boolean {
+  if (LOCAL_TURNLESS_RE.test(t) || isCompactionSummaryMessage(t)) return true;
+  const bare = t.match(/^\/([a-z][\w-]*)(\s|$)/);
+  if (bare && TURNLESS_COMMANDS.has(bare[1])) return true;
+  const text = stripMessageTags(t);
+  return BOUNDARY_PREFIXES.some((p) => text.startsWith(p));
+}
+export function pinTurnKind(msg: SendMessage): "person" | "machine" | null {
+  if (msg.role !== "user" || (msg.tool_results && msg.tool_results.length > 0)) return null;
+  const t = (msg.content ?? "").trim();
+  if (isSessionBoundaryMessage(t)) return null;
+  if (msg.queued === "program" || isMachineDeliveredMessage(t) || SKILL_RE.test(t)) return "machine";
+  if (NOISE_PREFIXES.some((p) => p !== "[Request interrupted" && stripMessageTags(t).startsWith(p))) return "machine";
+  return "person";
+}
+
+// The conversation fields a turn changes; empty when it changes none.
+// `turnAt` is the newest pinTurnKind message's time: last_turn_at only moves
+// forward, so a resync of older messages leaves it alone. The origin and its
+// person follow the turn opener alone (turnOpener).
+export function turnOpenerPatch(conversation: Doc<"conversations">, opener: TurnOpener | null, turnAt: number | null): Partial<Doc<"conversations">> {
   const patch: Partial<Doc<"conversations">> = {};
+  if (turnAt != null && turnAt > (conversation.last_turn_at ?? 0)) patch.last_turn_at = turnAt;
+  if (!opener) return patch;
+  const by = opener.origin === "person" ? opener.by : undefined;
   if (opener.origin !== conversation.last_turn_origin) patch.last_turn_origin = opener.origin;
   if (String(by ?? "") !== String(conversation.last_turn_by ?? "")) patch.last_turn_by = by;
   return patch;
+}
+
+// A person's message (pinTurnKind) written after the pin answers it
+// (answeredThreadStateFields), as a codecast send does at enqueue. A message
+// typed at the terminal reaches the server only through message sync, so the
+// pin comes down here. A person's message older than the pin, or within
+// PIN_TURN_SLACK_MS of it (the two clocks drift), may be one the agent
+// answered by pinning (a daemon can sync it after the pin), so the pin stays
+// on the row. The classifier still reads a pin older than the latest turn as
+// no verdict (rowPinPredatesTurn), so a standing pin hides no ask.
+export function personTurnAnswersPinPatch(
+  conversation: Pick<Doc<"conversations">, "thread_state_at">,
+  personTurnAt: number | null,
+): ReturnType<typeof answeredThreadStateFields> | Record<string, never> {
+  const pinnedAt = conversation.thread_state_at;
+  if (personTurnAt == null || pinnedAt == null || personTurnAt <= pinnedAt + PIN_TURN_SLACK_MS) return {};
+  return answeredThreadStateFields();
 }
 
 // Who a session's own action speaks for when the session acts through the CLI

@@ -27,7 +27,7 @@
 //   - Process liveness (/sessions' "active / idle 2h+ / dead / hibernated") is
 //     a different axis; it stays on that page as process facts, not a status.
 
-import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, type WorkState } from "@codecast/shared/contracts";
+import { DEAD_AGENT_STATUSES, deriveLiveAt, isExitAfterDone, rowPinPredatesTurn, rowWakeInputs, type WorkState } from "@codecast/shared/contracts";
 import type { PlanState } from "@codecast/shared/tasks";
 import { agentStatusAt, liveFactsOf } from "./liveness";
 import { apiErrorBadge } from "./apiErrorBadge";
@@ -141,6 +141,16 @@ export type StatusRow = {
   pending_api_error?: boolean | null;
   pending_api_error_kind?: string | null;
   thread_state_status?: string | null;
+  thread_state_at?: number | null;
+  /** When the latest turn opened: a pin older than it answered an earlier turn (rowPinPredatesTurn). */
+  last_turn_at?: number | null;
+  /** The pin rule's fallback with no last_turn_at, answered by the server (pinPredatesUserMessage). */
+  pin_predates_user_message?: boolean | null;
+  // The wake facts the shared pin rules read (rowWakeInputs).
+  armed_trigger_kind?: string | null;
+  parked_wake_kind?: string | null;
+  producing_until?: number | null;
+  loop_state?: Parameters<typeof rowWakeInputs>[0]["loop_state"];
   inbox_killed_at?: number | null;
   inbox_dismissed_at?: number | null;
   inbox_stashed_at?: number | null;
@@ -198,12 +208,13 @@ export function statusFailure(row: StatusRow, now: number, live: StatusLive = {}
   if (row.is_unresponsive || deriveLiveAt(liveFactsOf(row), now).is_unresponsive) return { label: "Unresponsive" };
   // An exit after the agent parked itself as dormant ended a turn, not the
   // work: a claimed wake the system cannot see is the person's move (Needs
-  // you), not a failure to clear.
+  // you), not a failure to clear. A pin older than the latest turn (done or
+  // dormant) answered an earlier turn, so it exempts nothing.
   const status = agentStatusAt(row, now);
   if (
     status && DEAD_AGENT_STATUSES.has(status) && (row.message_count ?? 0) > 0 &&
-    row.thread_state_status !== "dormant" &&
-    !isExitAfterDone({ agentStatus: status, declaredStatus: row.thread_state_status ?? null, hasPending: !!row.has_pending, isUnresponsive: !!row.is_unresponsive })
+    (row.thread_state_status !== "dormant" || rowPinPredatesTurn(row)) &&
+    !isExitAfterDone({ agentStatus: status, declaredStatus: row.thread_state_status ?? null, hasPending: !!row.has_pending, isUnresponsive: !!row.is_unresponsive, pinPredatesTurn: rowPinPredatesTurn(row) })
   ) return { label: "Agent stopped" };
   return null;
 }
@@ -278,16 +289,46 @@ export function sessionStatusOf({ row, section, placement, now, live = {}, hoste
 }
 
 /** A row with no placement at all (a process the inbox does not hold): what
- *  its live status says, the coarse fallback /sessions always used. */
+ *  its live status says, the coarse fallback /sessions always used. It is not
+ *  the full placement, which files every quiet settled row Needs You (this
+ *  row may be a teammate's, so it reads idle). When the row carries the pin
+ *  and wake facts (an inbox row: thread_state_status, parked_wake_kind and the
+ *  rest, null when unset), it applies the shared classifier's pin and wake
+ *  rules (rowWakeInputs) so it cannot keep a verdict the placement drops: a
+ *  pin older than the latest turn says nothing, a fresh pin speaks over a
+ *  decayed idle, a dormant claim with no verified wake expires to
+ *  needs_input, and a pinned dormant with no live status (or a hibernated
+ *  process) parks only on a verified wake. A row without them (the /sessions
+ *  row for a foreign process: status, count and heartbeat only) cannot expire
+ *  a claim, so a dormant or hibernated status stays dormant; a failure flag
+ *  still wins over hibernated. */
 function workStateOfRow(row: StatusRow, now: number): WorkState {
   const status = agentStatusAt(row, now);
   if (row.awaiting_input || status === "permission_blocked") return "needs_input";
-  if (status === "hibernated" || status === "dormant" || status === "waiting") return "dormant";
-  if (status && status !== "idle" && !DEAD_AGENT_STATUSES.has(status)) return "working";
-  if (row.pending_api_error || row.session_error || row.is_unresponsive) return "needs_input";
-  if (row.thread_state_status === "done") return "done";
+  const failed = !!(row.pending_api_error || row.session_error || row.is_unresponsive);
+  if (status === "done") return "done";
+  if (status === "waiting") return "dormant";
+  if (!carriesWakeFacts(row)) {
+    if (status === "hibernated" && failed) return "needs_input";
+    if (status === "dormant" || status === "hibernated") return "dormant";
+    if (status && status !== "idle" && !DEAD_AGENT_STATUSES.has(status)) return "working";
+    return failed ? "needs_input" : "idle";
+  }
+  const wake = rowWakeInputs({ ...row, updated_at: row.updated_at ?? 0 }, { trusted: status, raw: row.agent_status }, now);
+  const pin = wake.pinPredatesTurn ? null : row.thread_state_status;
+  if (status === "dormant") return wake.dormantClaimExpired ? "needs_input" : "dormant";
+  if (status && status !== "idle" && status !== "hibernated" && !DEAD_AGENT_STATUSES.has(status)) return "working";
+  if (failed) return "needs_input";
+  if (status === "idle" && !wake.pinSpeaks) return "idle";
+  if (pin === "done") return "done";
+  if (pin === "dormant") return wake.verifiedWake && !wake.dormantClaimExpired ? "dormant" : "idle";
   return "idle";
 }
+
+/** An inbox row spells an unset pin or wake fact as null; a row built from a
+ *  bare process listing leaves them out. */
+const carriesWakeFacts = (row: StatusRow): boolean =>
+  row.thread_state_status !== undefined || row.parked_wake_kind !== undefined || row.armed_trigger_kind !== undefined || row.last_turn_at !== undefined;
 
 /** The state of a row the palette lists (lib/instantSessionSearch
  *  SessionStanding: the inbox's placement when it holds the row, else its

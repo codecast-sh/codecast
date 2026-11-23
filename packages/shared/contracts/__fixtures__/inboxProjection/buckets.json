@@ -468,6 +468,84 @@
       "inbox_stashed_at": "E-1h"
     },
     {
+      "_id": "pinned_dormant_trigger",
+      "status": "completed",
+      "updated_at": "E-3h",
+      "message_count": 5,
+      "is_idle": true,
+      "thread_state_status": "dormant",
+      "armed_trigger_kind": "standing",
+      "last_turn_allows_park": false
+    },
+    {
+      "_id": "pinned_dormant_stale",
+      "status": "completed",
+      "updated_at": "E-3h",
+      "message_count": 5,
+      "is_idle": true,
+      "thread_state_status": "dormant",
+      "thread_state_at": "E-5h",
+      "last_turn_at": "E-4h",
+      "armed_trigger_kind": "standing",
+      "last_turn_allows_park": false
+    },
+    {
+      "_id": "pinned_done_over_idle",
+      "status": "active",
+      "updated_at": "E-3h",
+      "message_count": 5,
+      "agent_status": "idle",
+      "raw_agent_status": "working",
+      "is_idle": true,
+      "thread_state_status": "done",
+      "thread_state_at": "E-3h",
+      "last_turn_at": "E-4h"
+    },
+    {
+      "_id": "pinned_dormant_bare",
+      "status": "completed",
+      "updated_at": "E-3h",
+      "message_count": 5,
+      "is_idle": true,
+      "thread_state_status": "dormant"
+    },
+    {
+      "_id": "dormant_claim_run",
+      "status": "active",
+      "updated_at": "E-3h",
+      "message_count": 5,
+      "agent_status": "dormant",
+      "is_idle": true,
+      "last_heartbeat": "E-5s",
+      "parked_wake_kind": "run"
+    },
+    {
+      "_id": "dormant_claim_wait_stale",
+      "status": "active",
+      "updated_at": "E-73h",
+      "message_count": 5,
+      "agent_status": "dormant",
+      "is_idle": true,
+      "parked_wake_kind": "wait"
+    },
+    {
+      "_id": "pinned_dormant_blocker_4d",
+      "status": "completed",
+      "updated_at": "E-96h",
+      "message_count": 5,
+      "is_idle": true,
+      "thread_state_status": "dormant",
+      "parked_wake_kind": "blocker"
+    },
+    {
+      "_id": "dormant_claim_expired",
+      "status": "active",
+      "updated_at": "E-3h",
+      "message_count": 5,
+      "agent_status": "dormant",
+      "is_idle": true
+    },
+    {
       "_id": "snoozed",
       "status": "active",
       "updated_at": "E-40d",
@@ -493,9 +571,9 @@
         "questions": 1,
         "pinned": 3,
         "new": 2,
-        "needs_input": 23,
-        "done": 5,
-        "dormant": 6,
+        "needs_input": 26,
+        "done": 6,
+        "dormant": 8,
         "working": 4,
         "idle": 0,
         "snoozed": 1,
@@ -507,9 +585,9 @@
         "questions": 0,
         "pinned": 0,
         "new": 0,
-        "needs_input": 0,
+        "needs_input": 1,
         "done": 0,
-        "dormant": 0,
+        "dormant": 1,
         "working": 0,
         "idle": 0,
         "snoozed": 0,
@@ -518,7 +596,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "1eb636f462b06964",
+    "set_digest": "fc90905cd08cdc5e",
     "placements": {
       "anchorblockedz130000000000000000": [
         "needs_input",
@@ -600,6 +678,21 @@
         "needs_input",
         false
       ],
+      "dormantclaimexpiredz190000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "dormantclaimrunz1500000000000000": [
+        "dormant",
+        "dormant",
+        false
+      ],
+      "dormantclaimwaitstalez2100000000": [
+        "needs_input",
+        "needs_input",
+        true
+      ],
       "forkchildz9000000000000000000000": [
         "needs_input",
         "needs_input",
@@ -663,6 +756,31 @@
       "permissionz100000000000000000000": [
         "needs_input",
         "needs_input",
+        false
+      ],
+      "pinneddoneoveridlez1800000000000": [
+        "done",
+        "done",
+        false
+      ],
+      "pinneddormantbarez17000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "pinneddormantblocker4dz220000000": [
+        "dormant",
+        "dormant",
+        true
+      ],
+      "pinneddormantstalez1800000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "pinneddormanttriggerz20000000000": [
+        "dormant",
+        "dormant",
         false
       ],
       "pinnedneedsz11000000000000000000": [
@@ -783,6 +901,9 @@
       "declareddonez1200000000000000000": -180000,
       "declareddormantz1500000000000000": -300000,
       "dismissedz9000000000000000000000": -1920000,
+      "dormantclaimexpiredz190000000000": -10800000,
+      "dormantclaimrunz1500000000000000": -10800000,
+      "dormantclaimwaitstalez2100000000": -262800000,
       "forkchildz9000000000000000000000": -2460000,
       "hibernatedaskz130000000000000000": -7200000,
       "hibernatedstashedz17000000000000": -7200000,
@@ -796,6 +917,11 @@
       "oncehomeneedsz130000000000000000": -600000,
       "ownpromptz9000000000000000000000": -1080000,
       "permissionz100000000000000000000": -1140000,
+      "pinneddoneoveridlez1800000000000": -10800000,
+      "pinneddormantbarez17000000000000": -10800000,
+      "pinneddormantblocker4dz220000000": -345600000,
+      "pinneddormantstalez1800000000000": -10800000,
+      "pinneddormanttriggerz20000000000": -10800000,
       "pinnedneedsz11000000000000000000": -1740000,
       "pinnedworkingz130000000000000000": -1800000,
       "queueddeadafterdonez190000000000": -1440000,
@@ -823,9 +949,13 @@
         "rowdonenodaemonz1500000000000000",
         "boundarykeepsdonez17000000000000",
         "settledonecurrentz17000000000000",
-        "deadafterdonez130000000000000000"
+        "deadafterdonez130000000000000000",
+        "pinneddoneoveridlez1800000000000"
       ],
       "dormant": [
+        "pinneddormantblocker4dz220000000",
+        "dormantclaimrunz1500000000000000",
+        "pinneddormanttriggerz20000000000",
         "userdormantz11000000000000000000",
         "loopfreshz9000000000000000000000",
         "oncehomedonez1200000000000000000",
@@ -855,7 +985,11 @@
         "forkchildz9000000000000000000000",
         "hibernatedaskz130000000000000000",
         "hibernatedz100000000000000000000",
+        "dormantclaimexpiredz190000000000",
+        "pinneddormantbarez17000000000000",
+        "pinneddormantstalez1800000000000",
         "unresponsivenotidlez190000000000",
+        "dormantclaimwaitstalez2100000000",
         "snoozeduez9000000000000000000000"
       ],
       "new": [

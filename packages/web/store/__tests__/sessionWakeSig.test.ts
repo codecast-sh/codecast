@@ -24,6 +24,15 @@ const session = (id: string, extra: Partial<InboxSession> = {}): InboxSession =>
   ...extra,
 });
 
+describe("sessionStructuralSig — the pin's standing", () => {
+  // A row pinned before last_turn_at existed gains the stamp on its next
+  // ingest; a fresh pin then speaks over a settled idle, so the row re-places.
+  it("wakes when last_turn_at first lands under a fresh pin", () => {
+    const pinned = session("a", { thread_state_status: "done", thread_state_at: T });
+    expect(sessionStructuralSig(session("a", { thread_state_status: "done", thread_state_at: T, last_turn_at: T - 1_000 }))).not.toBe(sessionStructuralSig(pinned));
+  });
+});
+
 describe("sessionStructuralSig — heartbeat churn is inert", () => {
   it("ignores updated_at / last_heartbeat / last_message_at bumps", () => {
     const base = session("a");

@@ -5,7 +5,7 @@
 //
 // PURE isomorphic code: no Node or DOM APIs, no BigInt, so the Convex runtime,
 // the daemon, the browser and React Native all run the same bytes.
-import { ACTIVE_AGENT_STATUSES, AGENT_IDLE_GRACE_MS, DORMANT_CLAIM_TTL_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, trustedAgentStatus } from "./agentStatus";
+import { ACTIVE_AGENT_STATUSES, AGENT_IDLE_GRACE_MS, DORMANT_CLAIM_TTL_MS, HEARTBEAT_ALIVE_MS, PARKED_WAKE_TTL_MS, STATUS_TRUST_TTL_MS, trustedAgentStatus } from "./agentStatus";
 import { isMachineDeliveredMessage } from "./machineMessages";
 import { isLoopFresh, LOOP_OVERDUE_GRACE_MS, type LoopState } from "./loopState";
 import { openTasksVouchForWaiting } from "./openTasks";
@@ -133,7 +133,12 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // trigger-run session ends its turn this way and the trigger resumes it.
 // v28: the first row past the fold's gap folds with everything older. It used
 // to stay shown, so filing the oldest shown row surfaced the next older one.
-export const INBOX_PROJECTION_VERSION = 28 as const;
+// v29: a server-seen wake (parked_wake_kind: a task blocker, exact; a wait,
+// for PARKED_WAKE_TTL_MS of quiet; a run, while its daemon's heartbeat lives)
+// is a verified wake, and a pinned dormant with no daemon status parks while
+// one stands, unless a turn opened after the pin; a fresh pin speaks over a
+// settled idle.
+export const INBOX_PROJECTION_VERSION = 29 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -189,7 +194,13 @@ export interface WorkStateInput {
   settleVerdict?: string | null;
   /** conversations.thread_state_status — the agent's declaration ON THE ROW, for rows with no daemon status at all (see the fallback in classifyWorkState). */
   declaredStatus?: string | null;
-  /** A declared `dormant` that names no wake the system can verify (no armed trigger or loop into the session, no daemon-checked open task, no child still producing) and has been quiet past DORMANT_CLAIM_TTL_MS. The claim outlived its trust: the row files needs_input and the inbox shows it as an unverified claim. Computed in placeProjectableRow. */
+  /** A wake the system can stand behind will reach the session: an armed trigger into it (any kind, whoever spoke last; not a hosted conversation's routine), a fresh /loop wakeup, a child still producing, daemon-checked open work, or a server-seen park (rowParkedWakeLive: a blocker task, a wait within PARKED_WAKE_TTL_MS, a run within it while its session's daemon reports). It keeps a live daemon's declared `dormant` from expiring, and parks a pinned `dormant` with no daemon status or a dead process. Computed by rowWakeInputs. */
+  verifiedWake?: boolean;
+  /** A turn opened after the row's pin was written (rowPinPredatesTurn): the pin is not the agent's word on that turn, so it carries no verdict. */
+  pinPredatesTurn?: boolean;
+  /** The pin carries the verdict over a decayed `idle` (rowWakeInputs): the daemon's RAW status is "working", the trusted status decayed it to "idle", and the pin answers the latest turn (last_turn_at set, the pin not older). That is the one case it covers: the daemon's pane reconciler wrote `working` over a declared pin. A daemon-reported "idle" always wins, since the daemon judges turns from the transcript on its own clock. */
+  pinSpeaks?: boolean;
+  /** A declared `dormant` with no verifiedWake, quiet past DORMANT_CLAIM_TTL_MS. The claim outlived its trust: the row files needs_input and the inbox shows it as an unverified claim. Computed in placeProjectableRow. */
   dormantClaimExpired?: boolean;
   /** The settled status is a SESSION BOUNDARY — a resume, a clear, or a manual /compact landing at an idle prompt (statusHook's SessionStart / PostCompact, carried as managed_sessions.agent_status_boundary). No turn ended, so the status is evidence that the agent is quiet and never a verdict about work: the row keeps its own declaration instead of the boundary consuming it, and every completion-reactive consumer (the needs-input push, unread) ignores it. */
   sessionBoundary?: boolean;
@@ -213,9 +224,12 @@ export interface WorkStateInput {
 //   - "dormant":     settled, and a machine wake owns the next move — the agent
 //                    declared it, an open background task implies it, a
 //                    subagent child is still producing, the home of an armed
-//                    inject trigger, or the user parked it. A bare
-//                    declaration (no wake the system can verify) holds for
-//                    DORMANT_CLAIM_TTL_MS of quiet, then reads needs_input.
+//                    inject trigger, a live workflow run, task blocker or wait
+//                    the server sees (parked_wake_kind), or the user parked it. A
+//                    bare declaration (no wake the system can verify) holds
+//                    for DORMANT_CLAIM_TTL_MS of quiet, then reads
+//                    needs_input. A declaration pinned on the row with no
+//                    daemon status parks only while a verified wake stands.
 //   - "idle":        nothing to act on: blank sessions (no messages yet), and
 //                    KILLED sessions — the user retired those, so they never
 //                    read as working or needs-input again (see `killed` below).
@@ -245,9 +259,10 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // park gesture, and last the settle classifier — which only speaks when no
   // declaration exists, and only for THIS settle.
   // A declared dormant is a promise about a wake. Verified wakes (an armed
-  // trigger or loop, checked open work) park in their own right below; a bare
-  // promise parks only until DORMANT_CLAIM_TTL_MS of quiet — nothing else can
-  // re-derive it, because the re-derivation IS the wake landing.
+  // trigger or loop, checked open work, a server-seen run, blocker or wait) park in
+  // their own right below; a bare promise parks only until
+  // DORMANT_CLAIM_TTL_MS of quiet — nothing else can re-derive it, because the
+  // re-derivation IS the wake landing.
   //
   // A SESSION BOUNDARY is read for the verdict as if the daemon reported
   // nothing: a resume, a clear or a manual /compact lands the agent at an idle
@@ -264,17 +279,35 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
   // (its pinned declaration, the settle classifier, a structural wake).
   // Filing every hibernated row as dormant parked finished sessions and open
   // asks alike behind a wake that does not exist.
-  const verdictStatus = input.sessionBoundary || agentStatus === "hibernated" ? undefined : agentStatus;
-  const declaredDormant =
-    (verdictStatus === "dormant" && !input.dormantClaimExpired) || verdictStatus === "waiting";
+  const settledStatus = input.sessionBoundary || agentStatus === "hibernated" ? undefined : agentStatus;
+  // A `working` the trust rule decayed to `idle`, under a FRESH pin
+  // (pinSpeaks), carries the pin's verdict as if the daemon had reported it:
+  // the daemon's pane reconciler can overwrite a declared dormant or done with
+  // `working` (jx76sve). An `idle` the daemon reported itself keeps its own
+  // verdict, and so does a settle after a turn the agent did not re-pin.
+  const pinSpeaks = settledStatus === "idle" && !!input.pinSpeaks && (input.declaredStatus === "dormant" || input.declaredStatus === "done");
+  const verdictStatus = pinSpeaks ? input.declaredStatus! : settledStatus;
   // The daemon carries a declaration as the settle status while the session is
   // live. When there is NO daemon status at all (the managed row aged out, the
   // machine is gone, the row predates the feature), the row's own pinned
-  // thread_state_status is the best remaining evidence — a `done` there was
+  // thread_state_status is the best remaining evidence. A `done` there was
   // the agent's last word and nothing can have moved since without a daemon.
-  // Only `done` rides this fallback: a `dormant` promise with no daemon has no
-  // one to deliver its wake, so it stays needs_input (a human must look).
-  const declaredDone = verdictStatus === "done" || (!verdictStatus && input.declaredStatus === "done");
+  // A pinned `dormant` parks only while a verified wake stands (a trigger, a
+  // loop, a blocker or wait; a run only while its session's daemon reports,
+  // since only that daemon resumes its runner); a bare one
+  // has no one to deliver its wake, so it stays needs_input (a human must
+  // look). The wake counts raw, not through the last-turn park rule: a
+  // person's last turn is one the agent answered by pinning dormant. A pin
+  // older than the latest turn (a session message, a trigger inject, a wait's
+  // wake) is not the agent's word on that turn, which may have ended asking,
+  // so it parks nothing.
+  const declaredDormant =
+    (verdictStatus === "dormant" && !input.dormantClaimExpired) ||
+    verdictStatus === "waiting" ||
+    (!verdictStatus && input.declaredStatus === "dormant" && !!input.verifiedWake && !input.pinPredatesTurn);
+  // The same freshness holds for a pinned `done`: one older than the latest
+  // turn answered an earlier turn, not the one that ran since.
+  const declaredDone = verdictStatus === "done" || (!verdictStatus && input.declaredStatus === "done" && !input.pinPredatesTurn);
   // A `done` rest with an armed once trigger into the session parks instead:
   // the follow-up names the next actor (the machine fires in N days), and
   // nothing is left for the human to unblock. Only `done` demotes — a once
@@ -384,32 +417,38 @@ export function isDeclaredBlocked(input: Pick<WorkStateInput, "agentStatus" | "d
 }
 
 // The process exited AFTER the agent declared the work delivered, with nothing
-// queued behind it. Nobody is owed anything: the exit is the ordinary end of a
+// queued behind it, and no turn opened after that declaration. Nobody is owed anything: the exit is the ordinary end of a
 // headless run (every trigger run in a fresh session ends this way, and
 // `cast trigger complete` is its declaration), not a death a human must read.
 // The declaration is read off the row because the daemon's "stopped" replaced
 // the settle status that carried it. Queued work or a hanging message on a
 // dead agent still needs a restart, so those keep the dead arm.
-export function isExitAfterDone(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus" | "hasPending" | "isUnresponsive">): boolean {
+export function isExitAfterDone(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus" | "hasPending" | "isUnresponsive" | "pinPredatesTurn">): boolean {
   return (
     !!input.agentStatus &&
     DEAD_AGENT_STATUSES.has(input.agentStatus) &&
     input.declaredStatus === "done" &&
+    !input.pinPredatesTurn &&
     !input.hasPending &&
     !input.isUnresponsive
   );
 }
 
 // The process exited while a standing trigger or a live /loop owns the
-// session's next wake, with nothing queued and no declared block. A trigger
-// delivers into a stopped session by resuming it, so the exit ends a run, not
-// the session: the wake the system verified stands. A declared block still
-// claims the human, and queued work still needs a restart.
-export function isExitBeforeArmedWake(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus" | "hasPending" | "isUnresponsive" | "armedTriggerHome" | "armedLoopHome">): boolean {
+// session's next wake, or while it is pinned dormant on a verified wake (a
+// trigger, a loop, a blocker or wait; a run only while its session's daemon
+// reports), with nothing queued and no declared block. A trigger
+// delivers into a stopped session by resuming it, and a blocker's clearing
+// wakes it by a message, so the exit ends a run, not the session: the wake the
+// system verified stands. The daemon-less arm of classifyWorkState reads the
+// same wake set, so a stopped, hibernated or aged-out row files the same. A declared block still claims the human, and queued work
+// still needs a restart.
+export function isExitBeforeArmedWake(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus" | "hasPending" | "isUnresponsive" | "armedTriggerHome" | "armedLoopHome" | "verifiedWake" | "pinPredatesTurn">): boolean {
+  const pinnedPark = input.declaredStatus === "dormant" && !!input.verifiedWake && !input.pinPredatesTurn;
   return (
     !!input.agentStatus &&
     DEAD_AGENT_STATUSES.has(input.agentStatus) &&
-    !!(input.armedTriggerHome || input.armedLoopHome) &&
+    !!(input.armedTriggerHome || input.armedLoopHome || pinnedPark) &&
     input.declaredStatus !== "blocked" &&
     !input.hasPending &&
     !input.isUnresponsive
@@ -421,7 +460,7 @@ export function isExitBeforeArmedWake(input: Pick<WorkStateInput, "agentStatus" 
 // agent's own declared block. The one condition that surfaces an anchor row out
 // of `hidden`, and what keeps a standing trigger's home from collapsing under
 // its schedule row.
-export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pendingApiError" | "agentStatus" | "messageCount" | "isUnresponsive" | "declaredStatus" | "hasPending" | "armedTriggerHome" | "armedLoopHome">): boolean {
+export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pendingApiError" | "agentStatus" | "messageCount" | "isUnresponsive" | "declaredStatus" | "hasPending" | "armedTriggerHome" | "armedLoopHome" | "verifiedWake" | "pinPredatesTurn">): boolean {
   const hasMsgs = input.messageCount > 0;
   if (input.awaitingInput) return true;
   if (input.pendingApiError && hasMsgs) return true;
@@ -1165,6 +1204,16 @@ export interface ProjectableInboxRow extends WorkingSetRow {
   /** conversations.last_turn_origin: who started the latest turn. */
   last_turn_origin?: "person" | "machine" | null;
   armed_trigger_kind?: string | null;
+  /** conversations.parked_wake_kind: a wake the server sees for this session — "run" (a live workflow run it spawned on its own machine), "blocker" (an open task on the held task's blocked_by) or "wait" (only waits stand: on the held task, or set elsewhere and still owed); "none" or absent otherwise. */
+  parked_wake_kind?: string | null;
+  /** The daemon's own status before any trust rule, when the row's agent_status carries the trusted one (the server's placeConversationRow, the web replica). Absent: agent_status is the raw status too. Read only by the pin backstop (WorkStateInput.pinSpeaks). */
+  raw_agent_status?: string | null;
+  /** pinPredatesUserMessage over the conversation, computed by the server (enrichInboxSessionRow) so the row carries a bit that flips at most once per pin rather than last_user_message_at, which moves on every tool call. rowPinPredatesTurn's fallback for a row with no last_turn_at. */
+  pin_predates_user_message?: boolean | null;
+  /** conversations.last_turn_at: when the latest turn of any origin opened (rowPinPredatesTurn). */
+  last_turn_at?: number | null;
+  /** conversations.thread_state_at: when the pin (thread_state_status) was written. */
+  thread_state_at?: number | null;
   /** conversations.agent_type: a hosted conversation's routine never parks it. */
   agent_type?: string | null;
   // The pull request this session shepherds (prShepherd.refreshConversationPrStatus).
@@ -1416,6 +1465,8 @@ export function rowLiveDeadlines(row: LiveFactsRow): Array<number | null> {
     row.loop_state?.status === "armed" ? row.loop_state.wakeup_at + LOOP_OVERDUE_GRACE_MS : null,
     // A bare dormant claim outliving its trust (placeProjectableRow).
     u + DORMANT_CLAIM_TTL_MS,
+    // A server-seen wake stamp outliving its trust (placeProjectableRow).
+    u + PARKED_WAKE_TTL_MS,
   ];
 }
 
@@ -1465,23 +1516,101 @@ export function rowArmedHomes(
   };
 }
 
+// A server-seen park (parked_wake_kind) still vouched for, by what can go
+// wrong with each kind. "blocker", an open task on the held task's
+// blocked_by, is recomputed on every task write, so it is exact. "wait" (a PR,
+// decision or time wait) rests on a webhook or a job that can be lost, so it
+// counts only for PARKED_WAKE_TTL_MS of quiet. "run" executes on the
+// spawner's machine, whose daemon resumes its runner and tells the subject, so
+// it counts only while that session's daemon heartbeat is alive, and, since a
+// hung runner is never resumed and a runner that keeps dying runs out of
+// resumes, only for PARKED_WAKE_TTL_MS of quiet too.
+export function rowParkedWakeLive(row: Pick<ProjectableInboxRow, "parked_wake_kind" | "updated_at" | "last_heartbeat">, epoch: number): boolean {
+  const quiet = epoch - row.updated_at < PARKED_WAKE_TTL_MS;
+  switch (row.parked_wake_kind) {
+    case "blocker": return true;
+    case "wait": return quiet;
+    case "run": return quiet && rowHeartbeatAliveAt(row, epoch);
+    default: return false;
+  }
+}
+
+// A turn opened after the pin was written (WorkStateInput.pinPredatesTurn).
+// Strict, as the daemon compares: a send delivered seconds after a done pin
+// opened a turn the pin never answered. A row with no last_turn_at (no turn
+// since the stamp existed) falls back to pinPredatesUserMessage.
+export function rowPinPredatesTurn(row: Pick<ProjectableInboxRow, "last_turn_at" | "thread_state_at" | "pin_predates_user_message"> & { last_user_message_at?: number | null }): boolean {
+  if (row.last_turn_at != null) return row.last_turn_at > (row.thread_state_at ?? 0);
+  return row.pin_predates_user_message ?? pinPredatesUserMessage(row);
+}
+
+// The fallback for a row with no last_turn_at: the newest user-role message
+// came more than LEGACY_PIN_SLACK_MS after the pin. That timestamp also moves
+// on tool results (the pin's own `cast state` result lands milliseconds after
+// it), hence the slack. Inbox rows carry the answer
+// (pin_predates_user_message, computed in enrichInboxSessionRow), never the
+// timestamp, which changes on every tool call; readers of the conversation
+// doc (cast sessions, the push, the server placement) compute it here.
+export const LEGACY_PIN_SLACK_MS = 60_000;
+export function pinPredatesUserMessage(conv: { last_turn_at?: number | null; last_user_message_at?: number | null; thread_state_at?: number | null }): boolean {
+  return conv.last_turn_at == null && conv.last_user_message_at != null && conv.last_user_message_at > (conv.thread_state_at ?? 0) + LEGACY_PIN_SLACK_MS;
+}
+
+// The wakes the system can stand behind (WorkStateInput.verifiedWake). Trigger
+// and loop homes are counted raw here (not gated on `park`): a human who spoke
+// last starts a turn that re-derives the status anyway, and the question is
+// only whether SOMETHING will wake the session. A hosted conversation's
+// routine never parks it (rowArmedHomes), so its trigger counts for nothing.
+// A child still producing (a --subagent worker the session waits on) is a
+// wake too: its result is the next turn. So is a park the server sees
+// (parked_wake_kind): a live workflow run the session spawned, an open
+// blocker on the task it holds, or a wait (rowParkedWakeLive).
+export function rowVerifiedWake(
+  row: Pick<ProjectableInboxRow, "armed_trigger_kind" | "agent_type" | "parked_wake_kind" | "updated_at" | "producing_until" | "loop_state" | "open_tasks" | "open_tasks_at" | "last_heartbeat">,
+  epoch: number,
+): boolean {
+  const loop = row.loop_state;
+  return (
+    (!isHostedAgentType(row.agent_type) && (row.armed_trigger_kind ?? "none") !== "none") ||
+    rowParkedWakeLive(row, epoch) ||
+    childProducingAt(row, epoch) ||
+    (!!loop && loop.status === "armed" && isLoopFresh(loop, epoch)) ||
+    openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, rowHeartbeatAliveAt(row, epoch))
+  );
+}
+
+export type WakeInputs = Pick<WorkStateInput, "verifiedWake" | "pinPredatesTurn" | "pinSpeaks" | "dormantClaimExpired">;
+
+// The wake and pin inputs of classifyWorkState, from the row. Every caller
+// (placeProjectableRow, cast sessions, the needs-input push) takes them from
+// here, so the inbox, the CLI and the push agree. `agentStatus` is the
+// trusted status; `childProducing` is a caller's own read of a producing
+// child (the inbox reads it off the row). dormantClaimExpired: a live dormant
+// claim (the daemon's, or a fresh dormant pin speaking over a settled idle)
+// with no verified wake, quiet past DORMANT_CLAIM_TTL_MS.
+export function rowWakeInputs(
+  row: Parameters<typeof rowVerifiedWake>[0] & Pick<ProjectableInboxRow, "last_turn_at" | "thread_state_at" | "thread_state_status">,
+  status: { trusted: string | null | undefined; raw: string | null | undefined },
+  epoch: number,
+  childProducing = false,
+): WakeInputs {
+  const verifiedWake = childProducing || rowVerifiedWake(row, epoch);
+  const pinPredatesTurn = rowPinPredatesTurn(row);
+  const pinSpeaks = status.trusted === "idle" && status.raw === "working" && row.last_turn_at != null && !pinPredatesTurn;
+  const claim = status.trusted === "dormant" || (pinSpeaks && row.thread_state_status === "dormant");
+  return {
+    verifiedWake,
+    pinPredatesTurn,
+    pinSpeaks,
+    dormantClaimExpired: claim && !verifiedWake && epoch - row.updated_at >= DORMANT_CLAIM_TTL_MS,
+  };
+}
+
 export function placeProjectableRow(
   row: ProjectableInboxRow,
   asking: boolean,
   epoch: number,
 ): InboxPlacement {
-  const loop = row.loop_state;
-  // The wakes the system can stand behind. Trigger and loop homes are counted
-  // raw here (not gated on `park`): a human who spoke last starts a turn that
-  // re-derives the status anyway, and the question is only whether SOMETHING
-  // will wake the session.
-  // A child still producing (a --subagent worker the session waits on) is a
-  // wake too: its result is the next turn.
-  const verifiedWake =
-    (row.armed_trigger_kind ?? "none") !== "none" ||
-    childProducingAt(row, epoch) ||
-    (!!loop && loop.status === "armed" && isLoopFresh(loop, epoch)) ||
-    openTasksVouchForWaiting(row.open_tasks_at, row.open_tasks?.length ?? 0, rowHeartbeatAliveAt(row, epoch));
   return placeInboxRow({
     agentStatus: row.agent_status ?? undefined,
     isIdle: !!row.is_idle,
@@ -1497,7 +1626,7 @@ export function placeProjectableRow(
     childProducing: childProducingAt(row, epoch),
     settleVerdict: isSettleVerdictCurrent(row as { settle_verdict_at?: number | null; updated_at: number }) ? (row.settle_verdict ?? null) : null,
     declaredStatus: row.thread_state_status ?? null,
-    dormantClaimExpired: row.agent_status === "dormant" && !verifiedWake && epoch - row.updated_at >= DORMANT_CLAIM_TTL_MS,
+    ...rowWakeInputs(row, { trusted: row.agent_status, raw: row.raw_agent_status ?? row.agent_status }, epoch),
     sessionBoundary: row.agent_status_boundary === true,
     pendingApiError: row.pending_api_error === true,
     sessionError: !!row.session_error,

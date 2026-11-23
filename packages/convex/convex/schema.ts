@@ -1086,6 +1086,11 @@ export default defineSchema({
     // is "person" (lib/userSend.turnOpenerPatch). A brief the session writes
     // while working on it is theirs (actingPersonOf), not its runner's.
     last_turn_by: v.optional(v.id("users")),
+    // When the latest turn opened, of any origin: the message time of the
+    // newest turn opener (lib/userSend.turnOpenerPatch). A pin older than it
+    // is not the agent's word on that turn, so the inbox does not park on it
+    // (inboxProjection rowPinPredatesTurn).
+    last_turn_at: v.optional(v.number()),
     is_subagent: v.optional(v.boolean()),
     // Started with nobody watching (`cast spawn --unattended`, a role's hand).
     // Read through isUnattendedConversation (@codecast/shared), which also
@@ -1321,6 +1326,20 @@ export default defineSchema({
     // read per execution. Absent = "none". Semantic (not churn), so it rides
     // the sync log.
     armed_trigger_kind: v.optional(v.union(v.literal("none"), v.literal("standing"), v.literal("once"))),
+    // Denormalized: the wake a parked session has that the server can see —
+    // "blocker" (an open task in its active task's blocked_by), "run" (a live
+    // routine run it spawned on its own work and machine), or "wait" (only
+    // waits stand, on its active task or set on another; lib/parkedWake.ts). Kept
+    // true by makeParkedWakeDb beneath every wrapped mutation, so the inbox
+    // projection counts it as a verified wake off the row alone. Absent =
+    // "none". Semantic, so it rides the sync log.
+    parked_wake_kind: v.optional(v.union(v.literal("none"), v.literal("run"), v.literal("blocker"), v.literal("wait"))),
+    // The tasks this session parked on by setting a wait while holding
+    // another (taskWaits.addWaitCore / joinWait, `parked: true`), newest last,
+    // at most PARKED_ON_CAP. A wait there that still owes this session a wake
+    // is a "wait" above; the recompute drops a task once nothing there is
+    // owed, and the field with it.
+    parked_on_task_ids: v.optional(v.array(v.id("tasks"))),
     // The pull request this session shepherds, folded for the inbox card and
     // the thread state panel. Single writer: prShepherd.refreshConversationPrStatus.
     // state mirrors pull_requests.shepherd_state.
@@ -1579,6 +1598,9 @@ export default defineSchema({
     .index("by_org_role", ["org_role_id"])
     // Sparse: the one row that IS a role's standing session (T1).
     .index("by_standing_role", ["standing_role_id"])
+    // Sparse: the sessions holding a task (active_task_id). Powers
+    // parked_wake_kind's recompute when that task's blockers move (lib/parkedWake.ts).
+    .index("by_active_task", ["active_task_id"])
     .searchIndex("search_title_v2", {
       searchField: "title",
       filterFields: ["user_id"],

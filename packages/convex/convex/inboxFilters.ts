@@ -2,7 +2,7 @@ import type { Doc } from "./_generated/dataModel";
 // Single source of truth for the "agent is actively producing" set and the
 // stale-status trust TTL. Re-exported so existing `from "./inboxFilters"`
 // importers (incl. the tests) keep working unchanged.
-import { ACTIVE_AGENT_STATUSES, TRUST_DECAYING_STATUSES, DECLARED_VERDICT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, isSessionIdle, isUnservedSession, type WorkState } from "@codecast/shared/contracts";
+import { ACTIVE_AGENT_STATUSES, TRUST_DECAYING_STATUSES, DECLARED_VERDICT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, HEARTBEAT_ALIVE_MS, WORK_STATES, isSessionIdle, isUnservedSession, trustedAgentStatus, type WorkState } from "@codecast/shared/contracts";
 
 export { ACTIVE_AGENT_STATUSES, STATUS_TRUST_TTL_MS, AGENT_IDLE_GRACE_MS, WORK_STATES, type WorkState };
 // The work-state classifier lives in @codecast/shared/contracts/inboxProjection
@@ -391,6 +391,32 @@ export function subagentIsProducing(input: {
   if (!input.isSubagent || input.convStatus !== "active") return false;
   if (input.now - input.updatedAt < SUBAGENT_PRODUCING_GRACE_MS) return true;
   return input.isLive && ACTIVE_AGENT_STATUSES.has(input.agentStatus ?? "");
+}
+
+// Whether a subagent child of `conv` is producing now: the cheap recent-output
+// arm first, the child's managed session only when that fails. A settled
+// parent is parked on such a child (classifyWorkState's childProducing). The
+// needs-input push and the CLI surfaces read it here; the inbox carries it on
+// the row (producing_until).
+export async function childProducingNow(ctx: { db: any }, conv: { _id: any }, now: number): Promise<boolean> {
+  const children = await ctx.db
+    .query("conversations")
+    .withIndex("by_parent_conversation_id", (q: any) => q.eq("parent_conversation_id", conv._id))
+    .take(20);
+  for (const c of children) {
+    if (!c.is_subagent || c.status !== "active") continue;
+    if (subagentIsProducing({ isSubagent: true, convStatus: c.status, updatedAt: c.updated_at, isLive: false, agentStatus: undefined, now })) return true;
+    const childSession = await ctx.db
+      .query("managed_sessions")
+      .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", c._id))
+      .first();
+    const childAlive = !!childSession?.last_heartbeat && now - childSession.last_heartbeat < HEARTBEAT_ALIVE_MS;
+    if (childAlive && subagentIsProducing({
+      isSubagent: true, convStatus: c.status, updatedAt: c.updated_at,
+      isLive: true, agentStatus: trustedAgentStatus(childSession?.agent_status, c.updated_at, now), now,
+    })) return true;
+  }
+  return false;
 }
 
 // The stamp-currency rules (the user's dormant gesture, the settle verdict)
