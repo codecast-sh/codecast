@@ -893,12 +893,14 @@ export const createFromCli = mutation({
     // One role per run: a run a role starts is admitted on that role's own
     // pool, filed under it and counted against it, so its stations (which
     // name the same spawner) answer to the same role.
-    const lead = args.detach && lineRun && taskRow ? startingRole ?? await projectLeadRole(ctx, taskRow) : null;
+    const problemLead = args.detach && lineRun && taskRow ? await projectLeadRole(ctx, taskRow) : null;
+    const lead = args.detach && lineRun && taskRow ? startingRole ?? problemLead : null;
+    const otherRole = !!startingRole && String(startingRole._id) !== String(problemLead?._id);
     const room = lead ? await admitRoleRun(ctx, lead, now, undefined, needs) : null;
     // The pool takes the runner's own runs, and anyone's the asking machine cannot run.
     const pooled = room?.pooled && (room.runner === String(userId) || unfit) ? room : null;
     // The problem's queue is its lead's; another role's full pool starts nothing and queues nothing.
-    if (pooled && "waiting" in pooled && startingRole) throw new Error(`${taskRow?.short_id ?? workflowName} did not start: ${pooled.waiting}`);
+    if (pooled && "waiting" in pooled && otherRole) throw new Error(`${taskRow?.short_id ?? workflowName} did not start: ${pooled.waiting}`);
     if (pooled && "waiting" in pooled) {
       const refusal = await liveRunRefusal(ctx, taskRow, args.force);
       if (refusal) throw new Error(refusal);

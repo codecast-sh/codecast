@@ -574,6 +574,41 @@ describe("orgLine admission (LE6)", () => {
         expect(tables.workflow_runs.find((r) => r._id === out.run_id)).toMatchObject({ org_role_id: "org_roles_ops" });
       });
 
+      // @ops, run by MATE, seated in another repo (/work/ops) than the problem's (/srv/growth).
+      const withOps = (tables: Record<string, any[]>, folder = "/srv/growth") => {
+        const growth = tables.org_roles[0];
+        tables.org_roles.push({ ...growth, _id: "org_roles_ops", short_id: "or-ops", handle: "ops", name: "Ops", anchor_id: "anchors_ops", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: MATE }, counters: undefined });
+        tables.anchors.push({ _id: "anchors_ops", team_id: TEAM, bot_user_id: "users_bot", host_user_id: MATE, conversation_id: "conversations_ops" });
+        tables.conversations.push({ ...tables.conversations.find((c) => c._id === STANDING)!, _id: "conversations_ops", session_id: "ops", user_id: MATE, standing_role_id: "org_roles_ops", anchor_id: "anchors_ops", project_path: folder });
+        return { growth, ops: tables.org_roles.at(-1)! };
+      };
+      const startAs = async (ctx: any, tables: Record<string, any[]>, spawner: string, project_path: string) => {
+        const { hashToken } = await import("./apiTokens");
+        const { createFromCli } = await import("./workflow_runs");
+        tables.api_tokens = [{ _id: "api_tokens_mate", user_id: MATE, token_hash: await hashToken("mate-token") }];
+        return (createFromCli as any)._handler(ctx, { api_token: "mate-token", workflow_name: "line", task_id: "ct-c0", project_path, detach: true, run_on_device: "dev-mate", spawner_session: spawner });
+      };
+
+      test("the lead's own run on its problem, with its pool full, goes back in the queue rather than failing", async () => {
+        const { ctx, tables } = seated([seatLaptop, host("h1", 1)]);
+        tables.workflow_runs.push(workRun(0, { runner_device: "h1" }));
+        const out = await startAs(ctx, tables, "standing", "/srv/growth");
+        expect(out.run_id).toBeNull();
+        expect(out.queued).toMatch(/^1 run is working on @growth's machines, so ct-c0 is back in the line's queue/);
+        expect(tables.workflow_runs).toHaveLength(1);
+      });
+
+      test("another role's run on the lead's problem, with its pool full, is refused: no run, and neither role's count moves", async () => {
+        const { ctx, tables } = seated([seatLaptop, host("h1", 1)]);
+        const { growth, ops } = withOps(tables);
+        tables.workflow_runs.push(workRun(0, { runner_device: "h1" }));
+        await expect(startAs(ctx, tables, "ops", "/srv/growth")).rejects.toThrow(/ct-c0 did not start: 1 run is working on @ops's machines/);
+        expect(tables.workflow_runs).toHaveLength(1);
+        expect(ops.counters?.hands ?? 0).toBe(0);
+        expect(growth.counters?.hands ?? 0).toBe(0);
+        expect(tables.tasks.find((t) => t._id === "tasks_c0")!.status).toBe("open");
+      });
+
       test("a person's own run from a plain terminal stays theirs, though the task's lead speaks for it", async () => {
         const { hashToken } = await import("./apiTokens");
         const { createFromCli } = await import("./workflow_runs");
