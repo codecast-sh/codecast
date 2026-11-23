@@ -51,6 +51,20 @@ describe("closeSessions", () => {
     expect(get(SEAT).inbox_dismissed_at).toBeGreaterThan(0);
   });
 
+  test("an idle lead whose subagent is mid-turn is set aside, and nothing in its group is stopped", () => {
+    const CHILD = "d".repeat(32);
+    useInboxStore.setState((s: any) => ({
+      sessions: { ...s.sessions, [CHILD]: row(CHILD, { agent_status: "working", updated_at: NOW - 1000, parent_conversation_id: IDLE, is_subagent: true }) },
+    }));
+    useInboxStore.getState().closeSession(IDLE);
+    expect(get(IDLE).inbox_stashed_at).toBeGreaterThan(0);
+    expect(get(IDLE).inbox_dismissed_at ?? null).toBeNull();
+    expect(get(CHILD).inbox_dismissed_at ?? null).toBeNull();
+    const close = sent.find((s) => s.action === "closeSession");
+    expect(close?.result).toEqual({ aside: [IDLE] });
+    expect(Object.values<any>(close?.patches.conversations ?? {}).some((f) => !!f.inbox_dismissed_at)).toBe(false);
+  });
+
   test("it goes out as one closeSessions dispatch naming the session it set aside", () => {
     useInboxStore.getState().closeSessions([IDLE, BUSY]);
     const close = sent.find((s) => s.action === "closeSessions");

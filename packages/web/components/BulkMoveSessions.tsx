@@ -26,8 +26,8 @@ import { getLabelColor } from "../lib/labelColors";
 import { labelSessions } from "../lib/labelSessions";
 import { fileSessionsAsRest } from "../store/undoActions";
 import { SwitchReview } from "./consequential/ConsequentialSwitch";
-import { killSessionsLedger } from "./consequential/ledgers";
-import { armedInjectTasksFor, taskDisplayTitle, type TaskRow } from "./triggerTasks";
+import { killReviewOf } from "./consequential/killReview";
+import type { TaskRow } from "./triggerTasks";
 
 /** The device rows of a "Move to…" submenu: laptops, team machines, then cloud hosts. */
 export function MoveToDeviceItems({ sessions, onDone }: { sessions: any[]; onDone?: () => void }) {
@@ -233,24 +233,9 @@ export function InboxSelectionBar({
   );
 }
 
-/** The selection's sessions that are mid-turn, by title: killing them loses that turn. */
-function workingTitles(sessions: InboxSession[]): string[] {
-  return sessions.filter((s) => s.is_idle === false).map((s) => (s as { title?: string }).title || "Untitled session");
-}
-
-/** What a kill of these sessions cancels besides the agents: the armed
- *  triggers into them (by title) and how many hold queued messages. */
-function killCancels(sessions: InboxSession[]): { triggers: string[]; queued: number } {
-  const tasks = Object.values(useInboxStore.getState().agentTasks ?? {}) as TaskRow[];
-  return {
-    triggers: sessions.flatMap((s) => armedInjectTasksFor(tasks, s._id).map(taskDisplayTitle)),
-    queued: sessions.filter((s) => s.has_pending).length,
-  };
-}
-
 /** Kill for one session or a selection: it ends at once (restore brings it
  *  back) unless it would cut a turn off or cancel a trigger or a queued
- *  message, which opens the review first. */
+ *  message, which opens the review first (killReviewOf). */
 export function KillSelection({ sessions, onKill, onClear, item, label }: {
   sessions: InboxSession[];
   onKill: (ids: string[]) => void;
@@ -261,10 +246,8 @@ export function KillSelection({ sessions, onKill, onClear, item, label }: {
 }) {
   const [reviewing, setReviewing] = React.useState(false);
   const kill = () => { setReviewing(false); onKill(sessions.map((s) => s._id)); onClear(); };
-  const working = workingTitles(sessions);
-  const { triggers, queued } = killCancels(sessions);
-  const asks = working.length > 0 || triggers.length > 0 || queued > 0;
-  const one = sessions.length === 1 ? sessions[0] : null;
+  const review = killReviewOf(sessions, Object.values(useInboxStore.getState().agentTasks ?? {}) as TaskRow[]);
+  const asks = !!review;
   return (
     <>
       {item ? (
@@ -277,9 +260,9 @@ export function KillSelection({ sessions, onKill, onClear, item, label }: {
           <Square className="h-3 w-3" /> Kill
         </button>
       )}
-      {reviewing && (
+      {reviewing && review && (
         <SwitchReview
-          ledger={killSessionsLedger({ total: sessions.length, working, triggers, queued, ...(one ? { subject: (one as { title?: string }).title || "Untitled session" } : {}) })}
+          ledger={review}
           onClose={() => setReviewing(false)}
           onConfirm={kill}
         />

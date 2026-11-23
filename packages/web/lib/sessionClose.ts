@@ -3,10 +3,12 @@
 // menu, the phone), so the button never promises what the gesture does not do.
 // Imports by relative path only: the phone bundles this file (Metro maps `@/`
 // to the mobile package).
+import { nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { sessionLiveAt } from "./liveness";
 
 export type CloseFacts = {
-  /** Running a turn right now: Close sets it aside and lets it finish. */
+  /** Running a turn right now, itself or a session nested under it: Close
+   *  sets it aside and lets it finish, so nothing in its group is stopped. */
   running: boolean;
   /** A role's own session or a standing anchor. */
   role: boolean;
@@ -50,14 +52,24 @@ export type CloseRow = Parameters<typeof sessionLiveAt>[0] & {
   is_workflow_sub?: boolean | null;
 };
 
+type NestedRow = Parameters<typeof sessionLiveAt>[0] & Parameters<typeof nestParentIdOf>[0];
+
+/** A session nested under `id` (a Task subagent or a teammate: the group a
+ *  close or kill takes down with its lead, nestParentIdOf) is mid-turn. */
+export function nestedRunningOf(rows: Iterable<NestedRow>, id: string, now: number): boolean {
+  for (const r of rows) if (nestParentIdOf(r) === id && sessionLiveAt(r, now)) return true;
+  return false;
+}
+
 /** The facts of one row at `now`. `armedTriggers` is the roster's count of
  *  armed triggers into it; `pendingSend` a send this window has not seen
- *  land, which is a turn starting. */
-export function closeFactsOf(row: CloseRow, armedTriggers: number, now: number, pendingSend = false): CloseFacts {
+ *  land, which is a turn starting; `nestedRunning` a session in its nested
+ *  group mid-turn (nestedRunningOf). */
+export function closeFactsOf(row: CloseRow, armedTriggers: number, now: number, pendingSend = false, nestedRunning = false): CloseFacts {
   // The row says a trigger is armed before the roster has loaded it.
   const rowArmed = (row.armed_trigger_kind ?? "none") !== "none" ? 1 : 0;
   return {
-    running: pendingSend || sessionLiveAt(row, now),
+    running: pendingSend || nestedRunning || sessionLiveAt(row, now),
     role: !!row.persistent || !!row.standing_role_id,
     triggers: Math.max(armedTriggers + (row.loop_state ? 1 : 0), rowArmed),
     waitingOnRun: !!row.workflow_run_id && !row.is_workflow_sub && (row.workflow_run_status === "running" || row.workflow_run_status === "pending"),

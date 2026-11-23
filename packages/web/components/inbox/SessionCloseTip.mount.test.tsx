@@ -46,6 +46,16 @@ describe("SessionCloseTip", () => {
     expect(await tip({ ...settled, agent_status: "working", updated_at: NOW - 1000 } as InboxSession)).toBe("Close: hides it, lets it finish");
   });
 
+  test("an idle lead whose subagent is mid-turn", async () => {
+    const sessions = useInboxStore.getState().sessions;
+    useInboxStore.setState({ sessions: { ...sessions, sub: { ...settled, _id: "sub", agent_status: "working", updated_at: NOW - 1000, parent_conversation_id: "c1" } } } as any);
+    try {
+      expect(await tip(settled)).toBe("Close: hides it, lets it finish");
+    } finally {
+      useInboxStore.setState({ sessions } as any);
+    }
+  });
+
   test("a session with armed triggers counts only its own", async () => {
     useInboxStore.setState({ agentTasks: { t1: armed("t1", "c1"), t2: armed("t2", "c1"), t3: armed("t3", "other") } } as any);
     expect(await tip(settled)).toBe("Close: stops it, keeps its 2 triggers, comes back when one fires");
