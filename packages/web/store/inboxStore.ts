@@ -9405,6 +9405,21 @@ function noteRetiredAck(key: string, ts: unknown): void {
   while (retiredAckTs.size > RETIRED_ACK_LIMIT) retiredAckTs.delete(retiredAckTs.keys().next().value!);
 }
 
+// An acknowledgement that reached this window before the write it answers:
+// a host takes a follower's ack on the gesture bridge, and the follower's
+// replicated mut, which plants the mirror lock, can come after it. The ack
+// found no lock and would be lost, leaving that lock with no acknowledgement
+// when the server answered differently from the paint. It is kept per field
+// until the write lands: a mut no newer than the send, with the sent value,
+// takes the ack (applyReplicatedFields).
+const EARLY_ACK_LIMIT = 500;
+const earlyAcks = new Map<string, { value: unknown; sentAt: number; ack: Array<{ s: string; p: number }> }>();
+function noteEarlyAck(key: string, value: unknown, sentAt: number, ack: Array<{ s: string; p: number }>): void {
+  earlyAcks.delete(key);
+  earlyAcks.set(key, { value, sentAt, ack });
+  while (earlyAcks.size > EARLY_ACK_LIMIT) earlyAcks.delete(earlyAcks.keys().next().value!);
+}
+
 function retireAckedLockInDraft(draft: any, key: string, restore = true): void {
   const entry = draft.pending[key] as any;
   delete draft.pending[key];
@@ -9450,7 +9465,13 @@ function stampSyncAckInDraft(
         for (const [field, sentValue] of Object.entries(fields as Record<string, any>)) {
           const key = `${storeKey}:${docId}:${field}`;
           const entry = draft.pending[key] as any;
-          if (!entry) continue;
+          if (!entry) {
+            // No lock yet: the write may still be on its way here (above).
+            // Acknowledged and delivered already, it is simply retired.
+            if (compact.some((a) => (draft.syncMeta[syncLogScopeMetaKey(a.s)]?.cursor ?? 0) >= a.p)) noteRetiredAck(key, sentAt);
+            else noteEarlyAck(key, sentValue, sentAt, compact);
+            continue;
+          }
           // Guard by VALUE, not send-time ordering: an outbox redrive or
           // retry invokes the binding long after the write was drafted, so a
           // time guard lets an old write's ack stamp (and retire) the entry
@@ -10002,7 +10023,10 @@ const inboxStoreConfig = (set: any, get: any) => ({
         if (!locked && value !== undefined && sameLockValue(row[field], value)) continue;
         if (value === undefined) delete row[field];
         else row[field] = value;
-        const ack = locked && prev.ack && sameLockValue(prev.value, value) ? prev.ack : undefined;
+        const early = earlyAcks.get(k);
+        const earlyAck = early && early.sentAt >= ts && sameLockValue(early.value, value) ? early.ack : undefined;
+        if (earlyAck) earlyAcks.delete(k);
+        const ack = (locked && prev.ack && sameLockValue(prev.value, value) ? prev.ack : undefined) ?? earlyAck;
         this.pending[k] = fieldLockEntry(value, ts, ack);
       }
     }
@@ -17008,7 +17032,7 @@ if (!survivingInboxStore) useInboxStore.subscribe((state, prev) => {
 export const __createInboxStoreForTests = createInboxStore;
 const windowBindings = () => ({
   _heldOverlayFacts, recentlyRequestedPendingMessages, resolvedSessionPreparations, recentThawTimer, _userMsgsProbed, _idbHydrating, hydrationEpoch, _lastParityCheckAt, deferredDeletedSessions,
-  _membershipKey, _membershipVal, _visibleMemo, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
+  _membershipKey, _membershipVal, _visibleMemo, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs, earlyAcks,
 });
 /** The live per-window bindings (collections by reference), and set() for the ones a window swaps by value. */
 export const __inboxStoreWindowBindings = {

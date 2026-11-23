@@ -62,6 +62,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/inboxStore.ts:_placedMemo": "window",
   // The retired field locks' acknowledgement times: each window acknowledges its own writes.
   "store/inboxStore.ts:retiredAckTs": "window",
+  // Acknowledgements that came before the write they answer: per window, like retiredAckTs.
+  "store/inboxStore.ts:earlyAcks": "window",
   // The dev parity check's throttle: one per window, as each browser window keeps its own.
   "store/inboxStore.ts:_lastParityCheckAt": "window",
   "store/inboxStore.ts:_depChanges": { shared: "dev render census, read only from the console" },
@@ -317,7 +319,7 @@ type InboxSlots = ReturnType<InboxBindings["get"]>;
 // The inboxStore window bindings declared as const collections: set() refills
 // them in place, and the store's own setter reassigns the rest. A binding
 // missing here is never restored, which realm.selftest's round trip catches.
-const INBOX_CONST_COLLECTIONS = ["recentlyRequestedPendingMessages", "resolvedSessionPreparations", "_userMsgsProbed", "_idbHydrating", "deferredDeletedSessions", "_placedMemo", "_visibleMemo", "retiredAckTs"] as const;
+const INBOX_CONST_COLLECTIONS = ["recentlyRequestedPendingMessages", "resolvedSessionPreparations", "_userMsgsProbed", "_idbHydrating", "deferredDeletedSessions", "_placedMemo", "_visibleMemo", "retiredAckTs", "earlyAcks"] as const;
 
 // inboxStore exports its live window bindings; the copying lives here. A
 // snapshot copies the const collections and both levels of _heldOverlayFacts
@@ -354,6 +356,7 @@ function inboxStoreSeam(b: InboxBindings): SlotSeam {
       _placementDeadlineMemo: null,
       _placedMemo: new Map(),
       retiredAckTs: new Map(),
+      earlyAcks: new Map(),
     }),
     get: () => copy(b.get()),
     set: (snap: object) => {
