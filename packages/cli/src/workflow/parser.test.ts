@@ -115,6 +115,18 @@ describe("workflow/parser", () => {
     expect(impl.goal_gate).toBe(true);
   });
 
+  test("fold=true marks a station as bookkeeping; it is otherwise a station like any other", () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      verdicts [shape=parallelogram, script="echo ok", fold=true]
+      merge [shape=parallelogram, script="echo ok"]
+      exit [shape=Msquare]
+      start -> verdicts -> merge -> exit
+    }`);
+    expect(g.nodes.get("verdicts")).toMatchObject({ type: "command", script: "echo ok", fold: true });
+    expect(g.nodes.get("merge")!.fold).toBeUndefined();
+  });
+
   test("auto-creates placeholder nodes referenced only in edges", () => {
     const src = `digraph g {
       start [shape=Mdiamond]

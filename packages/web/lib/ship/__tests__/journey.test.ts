@@ -143,10 +143,22 @@ describe("the fan-out and its verdicts", () => {
   test("a run at Verdicts reads as CI + Review, and one at Merged as Merge", () => {
     const atVerdicts = journeyOf(change, run({ current_node_id: "verdicts", node_statuses: [...ROUND, st("verdicts", "running", 13)] }));
     expect(states(atVerdicts)).toEqual(["PR:done", "CI + Review:active", "Merge:idle", "Deploy:idle", "Live:idle"]);
-    expect(atVerdicts.now).toMatchObject({ kind: "working", stage: "CI + Review", waits: [{ on: "CI + Review", since: 13 }] });
+    expect(atVerdicts.now).toMatchObject({ kind: "working", stage: "CI + Review", waits: [{ on: "CI", since: 13 }, { on: "Review", since: 13 }] });
+    expect(journeyWords(atVerdicts)).toEqual({ words: "In CI and review", tone: "agent" });
+    // Paused there, it waits, as any other stage does.
+    const paused = journeyOf(change, run({ status: "paused", current_node_id: "verdicts", node_statuses: [...ROUND, st("verdicts", "running", 13)] }));
+    expect(states(paused)).toEqual(["PR:done", "CI + Review:waiting", "Merge:idle", "Deploy:idle", "Live:idle"]);
     const atMerged = journeyOf(change, run({ current_node_id: "landed", merge: { sha: "4a6e413b2c" }, node_statuses: [...GREEN, st("merge", "completed", 14), st("landed", "running", 15)] }));
     expect(states(atMerged)).toEqual(["PR:done", "CI + Review:done", "Merge:active", "Deploy:idle", "Live:idle"]);
     expect(atMerged.now).toMatchObject({ kind: "working", stage: "Merge", verb: "Merging" });
+  });
+  test("a stop at Merged after the merge was recorded: Merge landed, and the stop is before Deploy", () => {
+    const j = journeyOf(change, run({ status: "failed", current_node_id: "landed", merge: { sha: "4a6e413b2c" }, fail_reason: "Stopped: the runner died", node_statuses: [...GREEN, st("merge", "completed", 14), st("landed", "failed", 15)] }));
+    expect(states(j)).toEqual(["PR:done", "CI + Review:done", "Merge:done", "Deploy:stopped", "Live:idle"]);
+    expect(j.now).toMatchObject({ kind: "stopped", stage: "Deploy", fix: "deploy" });
+    // With no merge recorded, the stop is Merge's.
+    const unmerged = journeyOf(change, run({ status: "failed", current_node_id: "landed", fail_reason: "Stopped: the runner died", node_statuses: [...GREEN, st("merge", "completed", 14), st("landed", "failed", 15)] }));
+    expect(states(unmerged)).toEqual(["PR:done", "CI + Review:done", "Merge:stopped", "Deploy:idle", "Live:idle"]);
   });
   test("round 2 in the fan-out ignores round 1's verdicts", () => {
     const j = journeyOf(change, run({ current_node_id: "checks", node_statuses: [verdicts("brief", "red", "changes"), st("brief", "completed", 20), st("pr", "completed", 40, { visits: 2 }), st("checks", "running", 41), st("ci", "running", 41, { result_preview: "Waiting on CI for #12 at def5678: 1 of 9 jobs done, 1m" }), st("review", "completed", 10)] }));
@@ -388,14 +400,37 @@ describe("approvalOf", () => {
     expect(approvalWords(approvalOf(g({})))).toBe("Sometimes asks");
     expect(approvalOf(g({ label: "risky" }, true))).toEqual({ kind: "never" });
   });
-  test("a card inside the landing segment, off its own passing path, asks only on its route", () => {
+  // The shape of a repository's change that lands through one segment (Union's): a card inside Land only when the change
+  // edits what judges it, and a later deploy only when the deploy failed.
+  const landsThroughSegment = () => {
     const seg = (id: string, label: string, type = "command") => ({ id: `land__${id}`, label, type, segment: "land" });
-    const g = {
-      nodes: [{ id: "start", label: "start", type: "start" }, { id: "land", label: "Land", type: "command", segment_entry: true, segment_flow: "land" }, seg("merge", "Merge"), seg("why", "Why a person"), seg("card", "Card", "human"), seg("landed", "Merged"), { id: "exit", label: "Live", type: "exit" }],
-      edges: [{ from: "start", to: "land" }, { from: "land", to: "land__merge" }, { from: "land__merge", to: "land__landed", condition: "outcome = success" }, { from: "land__merge", to: "land__why", condition: "merge.exit_code = 6", label: "edits what judges it" }, { from: "land__why", to: "land__card" }, { from: "land__card", to: "land__merge" }, { from: "land__landed", to: "exit" }],
+    return {
+      nodes: [
+        { id: "start", label: "start", type: "start" },
+        { id: "land", label: "Land", type: "command", segment_entry: true, segment_flow: "land" }, seg("merge", "Merge"), seg("why", "Why a person"), seg("card", "Card", "human"), seg("landed", "Merged"),
+        { id: "deploy", label: "Deploy", type: "conditional", segment_entry: true, segment_flow: "deploy" }, { id: "deploy__wait", label: "Go live", type: "command", segment: "deploy" },
+        { id: "redeploy", label: "Wait for a later deploy", type: "command" },
+        { id: "exit", label: "Live", type: "exit" }, { id: "never_live", label: "Never live", type: "exit", stop: "x" },
+      ],
+      edges: [
+        { from: "start", to: "land" }, { from: "land", to: "land__merge" },
+        { from: "land__merge", to: "land__landed", condition: "outcome = success" },
+        { from: "land__merge", to: "land__why", condition: "merge.exit_code = 6", label: "edits what judges it" },
+        { from: "land__why", to: "land__card" }, { from: "land__card", to: "land__merge" },
+        { from: "land__landed", to: "deploy" }, { from: "deploy", to: "deploy__wait" },
+        { from: "deploy__wait", to: "exit", condition: "outcome = success" },
+        { from: "deploy__wait", to: "redeploy", condition: "outcome = failure", label: "deploy failed" },
+        { from: "redeploy", to: "exit", condition: "outcome = success", label: "a later deploy" },
+        { from: "redeploy", to: "never_live", condition: "outcome = failure" },
+      ],
     } as any;
-    // The stage reads as a person's, since a step in it is one; the chip still asks only on the card's route.
-    expect(journeyStages(g).find((s) => s.role === "land")!.who).toBe("person");
+  };
+  test("a card a segment reaches only on a side route makes its stage no person's, and asks only on that route", () => {
+    const g = landsThroughSegment();
+    expect(journeyStages(g).map((s) => [s.label, s.who])).toEqual([["Land", "auto"], ["Deploy", "auto"], ["Live", "auto"]]);
     expect(approvalOf(g)).toEqual({ kind: "if", when: "edits what judges it" });
+  });
+  test("a station only a failure reaches is no stage of the passing run", () => {
+    expect(journeyStages(landsThroughSegment()).map((s) => s.label)).not.toContain("Wait for a later deploy");
   });
 });

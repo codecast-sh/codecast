@@ -32,6 +32,8 @@ export type FlowNodeIn = {
   timeout?: number;
   /** An exit the machine caused, not the change (a check it could not run): running again can help. */
   machine?: boolean;
+  /** Bookkeeping that finishes the stage before it (`fold=true`): drawn as part of that stage. */
+  fold?: boolean;
 };
 export type FlowEdgeIn = { from: string; to: string; label?: string; condition?: string };
 

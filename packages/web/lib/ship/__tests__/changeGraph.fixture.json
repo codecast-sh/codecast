@@ -44,7 +44,8 @@
       "label": "Verdicts",
       "shape": "parallelogram",
       "type": "command",
-      "timeout": 60
+      "timeout": 60,
+      "fold": true
     },
     {
       "id": "merge",
@@ -93,7 +94,8 @@
       "label": "Merged",
       "shape": "parallelogram",
       "type": "command",
-      "timeout": 60
+      "timeout": 60,
+      "fold": true
     },
     {
       "id": "exit",

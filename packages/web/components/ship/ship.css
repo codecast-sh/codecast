@@ -117,10 +117,10 @@
 .shp-foot .sj-btn { padding: 5px 16px; font-size: 12.5px; }
 
 /* On a phone the panel is a sheet from the bottom: clear of the home indicator, every press at least 44px tall, and a
-   flow's approval and path on a line under its name. */
+   flow's approval and path under its name, wrapping rather than cut. */
 .shp-sheet { padding-bottom: env(safe-area-inset-bottom); }
 .shp-sheet .shp-flow { min-height: 44px; grid-template-columns: 14px minmax(0, 1fr); row-gap: 2px; }
-.shp-sheet .shp-path { grid-column: 2; justify-self: start; }
+.shp-sheet .shp-path { grid-column: 2; justify-self: start; white-space: normal; line-height: 1.5; }
 .shp-sheet .sj-btn, .shp-sheet .shp-link { min-height: 44px; display: inline-flex; align-items: center; }
 .shp-sheet .shp-foot .sj-btn { padding: 0 24px; }
 

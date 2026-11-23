@@ -56,6 +56,8 @@ export const FANOUT_FLOW: FixtureFlowRow = {
   source: `digraph change {
   graph [kind="line", label="Change", takes="task,branch"]
   review [backend=session]
+  verdicts [fold=true]
+  landed [fold=true]
   brief [backend=subject, max_visits=3]
   fix_conflict [backend=subject, max_visits=3]
   nopr [stop="$pr.output"]

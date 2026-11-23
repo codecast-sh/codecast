@@ -754,8 +754,12 @@ the route it took, red only where it stopped.
   "Change · union-mobile"), whether a person approves before it lands, read
   from the graph ("You approve", "Asks if CI changes" when a person is asked
   only on a side route, "No approval"), and its stages. The stages are the
-  journey's: a script bounded to a minute (Verdicts, Merged) is the stage
-  before it finishing, not a stage of its own. It draws the picked one and
+  journey's: the stations a passing run takes, never one only a failure
+  reaches (a later deploy after a failed one), and a station marked
+  `fold=true` is bookkeeping, drawn as part of the stage before it (change's
+  Verdicts reads in CI + Review, its Merged in Merge); it runs like any other
+  station. A stage reads Person only when a person is asked on its passing
+  route, never for a card a segment reaches on a side route. It draws the picked one and
   opens the shared confirm review: steps, agent sessions that start, questions
   for you, who does each step, the ways it can end, how to stop. Confirming
   asks the session to run its own change through it. On a phone it opens as a

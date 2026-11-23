@@ -99,6 +99,10 @@ export interface WorkflowNode {
   // test database, a missing tool), not that the change is wrong: the task
   // gets a note and the run's owner hears it, never followers as a blocker.
   machine?: boolean;
+  // Bookkeeping (flows.md FL4): the station finishes the stage before it (reads
+  // its verdicts, records the sha it merged), so a person sees it as part of
+  // that stage, never as a stage of its own. It runs like any other station.
+  fold?: boolean;
   // A station that came from a segment (flows.md FL3): the node that named the
   // segment, the segment's name and slug, and for its entry and exits which one.
   segment?: string;

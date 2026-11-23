@@ -52,7 +52,7 @@ digraph change {
   review [label="Review", backend=session, agent=claude, reviewer=true, prompt="@change/review.md"]
   joined [label="Both done", shape=tripleoctagon]
   // The reviewer's verdict is what its session pinned, never a file: Verdicts counts it only with this round's nonce.
-  verdicts [label="Verdicts", shape=parallelogram, timeout=60, script="cast flow verdicts --dir \"$run_dir\" --review \"$review.json\""]
+  verdicts [label="Verdicts", shape=parallelogram, timeout=60, fold=true, script="cast flow verdicts --dir \"$run_dir\" --review \"$review.json\""]
   // On success stdout is merge.json alone, so the run reads $merge.json.sha; a merge with no sha on main refuses (exit 2).
   merge [label="Merge", shape=parallelogram, timeout=3600,
     script="d=\"$run_dir\"; rm -f \"$d/merge.json\"; cast flow merge --pr \"$pr.json.number\" --branch \"$branch\" --dir \"$d\" > \"$d/merge.out\" 2> \"$d/merge.log\"; code=$?; if [ \"$code\" -eq 0 ]; then cat \"$d/merge.log\" \"$d/merge.out\" >&2; cat \"$d/merge.json\" || exit 2; else cat \"$d/merge.log\" \"$d/merge.out\"; fi; exit \"$code\""]
@@ -71,7 +71,7 @@ digraph change {
   // A question typed at the Ship card goes to the reviewer, who has read the change.
   decide [flow="decide", answerer="review"]
   // Named for the runner (runner.ts, the run's end): a stop past here tells the session its change is on main.
-  landed [label="Merged", shape=parallelogram, timeout=60, script="echo \"$merge.json.sha\""]
+  landed [label="Merged", shape=parallelogram, timeout=60, fold=true, script="echo \"$merge.json.sha\""]
   deploy [flow="deploy"]
   exit [shape=Msquare, label="Live"]
 
