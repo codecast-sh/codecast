@@ -198,9 +198,10 @@ function AssignmentSheetBody({
   const Theme = useTheme();
   const { devices } = useDevices();
   const m = useOwnersMenu(conversationId, owners);
-  // A role's own session reports to someone: its owners change by moving the
-  // role on the org chart, so the sheet only lists them here.
-  const { seatRoleId } = useSessionRoleFacts(conversationId);
+  // A role's own session reports to someone (a role, else a person), which is
+  // whose inbox it is in: it changes by moving the role on the org chart, so
+  // the sheet says who and offers no owner edits.
+  const { seatRoleId, currentRole: parentRole } = useSessionRoleFacts(conversationId);
   const readOnly = m.readOnly || !!seatRoleId;
   // A leave from your own account moves the session first, to a team machine.
   const { data: boxes } = useSettingsData('agentBoxes');
@@ -268,7 +269,13 @@ function AssignmentSheetBody({
 
         <View style={styles.divider} />
 
-        <Text style={styles.sectionLabel}>Owners · whose inbox</Text>
+        <Text style={styles.sectionLabel}>{seatRoleId ? 'Reports to · whose inbox' : 'Owners · whose inbox'}</Text>
+        {seatRoleId && (parentRole || m.rows[0]?.person) && (
+          <View style={styles.row} testID="seat-reports-to">
+            {parentRole ? <OwnerFace role={roleOwnerOf(parentRole)} size={22} /> : <OwnerFace person={m.rows[0].person} size={22} />}
+            <Text style={[styles.rowLabel, { flex: 1 }]} numberOfLines={1}>Reports to {parentRole ? parentRole.name : m.rows[0].name}</Text>
+          </View>
+        )}
         {m.leaving && (
           <View style={styles.leaveBox}>
             <Text style={styles.rowHint}>Runs on your account. Move it to leave:</Text>
@@ -289,8 +296,8 @@ function AssignmentSheetBody({
             ))}
           </View>
         )}
-        {m.rows.length === 0 && <Text style={styles.emptyText}>Nobody yet</Text>}
-        {m.rows.map((r) => (
+        {!seatRoleId && m.rows.length === 0 && <Text style={styles.emptyText}>Nobody yet</Text>}
+        {!seatRoleId && m.rows.map((r) => (
           <View key={r.key} style={styles.row} testID={`owner-row-${r.key}`}>
             <OwnerFace person={r.person} role={r.role} size={22} driver={r.drives} paused={r.paused} />
             <View style={{ flex: 1, minWidth: 0 }}>
@@ -310,7 +317,7 @@ function AssignmentSheetBody({
             )}
           </View>
         ))}
-        {m.canTakeOwnership && (
+        {m.canTakeOwnership && !seatRoleId && (
           <TouchableOpacity style={styles.row} activeOpacity={0.6} onPress={() => { tap(); if (m.takeOwnership()) onDone(); }}>
             <FontAwesome name="user-plus" size={13} color={Theme.cyan} style={{ width: 22, textAlign: 'center' }} />
             <Text style={[styles.rowLabel, { color: Theme.cyan }]}>Take ownership</Text>
