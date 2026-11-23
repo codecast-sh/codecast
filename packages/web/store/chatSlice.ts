@@ -1560,13 +1560,16 @@ export function createChatSlice(set: any, get: any): ChatSliceImpl {
  *  row carried by a push is readable, so its tombstone is lifted and the row
  *  lands. Runs after the merge, which skipped the row on the tombstone. */
 export function liftExcludesForIncoming(collection: string) {
-  return (draft: any, _table: any, incoming: Array<{ _id: string }>) => {
+  return (draft: any, table: Record<string, unknown>, incoming: Array<{ _id: string }>) => {
     let lifted: Record<string, unknown> | null = null;
     for (const row of incoming) {
       const key = `${collection}:${row._id}`;
       if (draft.pending[key]?.type !== "exclude") continue;
       delete draft.pending[key];
-      (lifted ??= { ...draft[collection] })[row._id] = row;
+      // Copy the plain table the sync just assigned, never the draft: spreading
+      // draft[collection] copies a child draft per row into a frozen object
+      // finalize cannot clean, and every row then commits as a revoked proxy.
+      (lifted ??= { ...table })[row._id] = row;
     }
     // A synced collection is a frozen whole (inboxStore.syncTable), so a lifted
     // row lands by replacing the object, never by writing into it.
