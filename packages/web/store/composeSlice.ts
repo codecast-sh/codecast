@@ -53,6 +53,22 @@ export type ComposeSliceState = {
   toggleComposeDock: () => void;
 };
 
+/** A composer opened for a task (a compose link) is born bound to it: the
+ *  create carries the stub's _linkedObject (createSessionFromStub), and the
+ *  server links the session and makes it the task's owner in the same
+ *  transaction, as the task list's start does. active_task is the new
+ *  session's task badge (header, sidebar) from its first optimistic paint, as
+ *  ContextChatInput sets it; the composer itself draws no task chip. */
+export function bindComposeTask(
+  store: { syncRecord: (field: string, id: string, record: any) => void },
+  stubId: string,
+  task: NonNullable<ComposeContext["linkedTask"]>,
+): void {
+  const activeTask = { _id: task._id, short_id: task.short_id, title: task.title, status: task.status };
+  store.syncRecord("sessions", stubId, { _linkedObject: { type: "task", id: task._id }, active_task: activeTask });
+  store.syncRecord("conversations", stubId, { active_task_id: task._id, active_task: activeTask });
+}
+
 /** The draft content held for a compose stub, or null when there is none worth
  *  keeping. MessageInput persists text and pasted images (blob previews
  *  included) into drafts[id] synchronously as they change. */
