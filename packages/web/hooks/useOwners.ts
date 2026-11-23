@@ -79,6 +79,8 @@ export type SessionOwnersRow = {
   /** A role started it: while it is filed under a role, it has no starter owner. */
   role_started?: boolean;
   can_edit: boolean;
+  /** The viewer reads it as a teammate, owner or not (a leave can be undone). */
+  team_access?: boolean;
 };
 
 /** The session row's half of the owners facts: the role, the driver, the
@@ -185,6 +187,7 @@ const ownersRowSig = (r: SessionOwnersRow) => [
   r.role?.name ?? "",
   r.runner?.user_id ?? "",
   r.can_edit ? 1 : 0,
+  r.team_access ? 1 : 0,
   (r.owners ?? []).map((o) => `${o.user_id}:${o.name ?? ""}:${o.image ?? ""}:${o.seen_at ?? ""}:${o.added_at ?? ""}`).join(","),
 ].join("|");
 

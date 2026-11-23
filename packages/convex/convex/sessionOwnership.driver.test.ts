@@ -207,6 +207,24 @@ describe("leaving a session", () => {
     expect(row(db).author_user_id).toBe(ME);
   });
 
+  // Undo of a leave is a rejoin (an add of yourself, the self-claim). The
+  // listOwners read says whether it will succeed (team_access), and the
+  // client offers the undo only then.
+  test("an owner who leaves a run the team shares can rejoin it, and the read said so", async () => {
+    const db = leaveFixtures({ user_id: MATE, owner_device_id: "mini", is_private: false, team_visibility: "full" }, [{ _id: "so1", conversation_id: CONV, user_id: MATE, added_by: MATE, added_at: 1 }, { _id: "so2", conversation_id: CONV, user_id: ME, added_by: MATE, added_at: 2 }]);
+    expect((await performListOwners(ctxS(db), ME as any, "sess1"))!.team_access).toBe(true);
+    await performApplyOwnersChange(ctxS(db), ME as any, { session_id: "sess1", change: { leave: {} } });
+    await performApplyOwnersChange(ctxS(db), ME as any, { session_id: "sess1", change: { add: [ME] } });
+    expect(db._tables.session_owners.map((r: any) => r.user_id).sort()).toEqual([MATE, ME].sort());
+  });
+
+  test("an owner of a run the team cannot read in full has no way back after leaving, and the read said so", async () => {
+    const db = leaveFixtures({ user_id: MATE, owner_device_id: "mini", team_visibility: "summary" }, [{ _id: "so1", conversation_id: CONV, user_id: MATE, added_by: MATE, added_at: 1 }, { _id: "so2", conversation_id: CONV, user_id: ME, added_by: MATE, added_at: 2 }]);
+    expect((await performListOwners(ctxS(db), ME as any, "sess1"))!.team_access).toBe(false);
+    await performApplyOwnersChange(ctxS(db), ME as any, { session_id: "sess1", change: { leave: {} } });
+    await expect(performApplyOwnersChange(ctxS(db), ME as any, { session_id: "sess1", change: { add: [ME] } })).rejects.toThrow(/No session found/);
+  });
+
   test("an owner of a teammate's session leaves and the rest stay", async () => {
     const db = leaveFixtures({ user_id: MATE, owner_device_id: "mini" }, [{ _id: "so1", conversation_id: CONV, user_id: MATE, added_by: MATE, added_at: 1 }, { _id: "so2", conversation_id: CONV, user_id: ME, added_by: MATE, added_at: 2 }]);
     await performApplyOwnersChange(ctxS(db), ME as any, { session_id: "sess1", change: { leave: {} } });

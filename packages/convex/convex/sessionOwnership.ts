@@ -5,7 +5,7 @@ import { internal } from "./_generated/api";
 import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
-import { checkConversationAccess } from "./privacy";
+import { canTeamMemberAccess, checkConversationAccess } from "./privacy";
 import { addSessionOwnerRow, removeSessionOwnerRow, listSessionOwnerIds, ownersFactsOf, settleDriver, syncPrimaryOwnerCache, humanStarterUser, restoreOwnerRows, writeDriver, type OwnerRowSnapshot } from "./sessionOwners";
 import { isLeave, leaveMovesFirst, listedOwnerIds, pinnedDriverAfterAdd, starterOf } from "@codecast/shared/contracts/sessionOwners";
 import {
@@ -913,6 +913,10 @@ export async function performListOwners(
   bots: string[];
   role_started: boolean;
   can_edit: boolean;
+  /** The caller reads it as a teammate, owner or not: after leaving a run
+   *  whose runner stays, they can take it back (the self-claim in
+   *  applyOwnersChange), so the client offers a leave's undo only then. */
+  team_access: boolean;
 } | null> {
   const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) return null;
@@ -965,6 +969,7 @@ export async function performListOwners(
     bots: facts.bots,
     role_started: facts.role_started,
     can_edit: String(conversation.user_id) === String(authUserId) || owners.some((o) => o.user_id === String(authUserId)),
+    team_access: await canTeamMemberAccess(ctx, authUserId, conversation),
   };
 }
 

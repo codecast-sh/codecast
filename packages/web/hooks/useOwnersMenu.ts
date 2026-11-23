@@ -136,7 +136,7 @@ export function useOwnersMenu(conversationId: string, owners: OwnersApi) {
 
   // Leave, the move with it, and everything else land as one change, so a
   // refusal (the move or the leave) rolls the whole Save back.
-  const diff = diffOwners(initial, draft, { meId, initialDriverUserId: owners.session.driver_user_id, snapshots: snapshotsOf(owners.row, initial.ownerIds) });
+  const diff = diffOwners(initial, draft, { meId, initialDriverUserId: owners.session.driver_user_id, snapshots: snapshotsOf(owners.row, initial.ownerIds), canRejoin: !!owners.row?.team_access });
   const { added, removed, leaving: iLeave, roleChanged, driverChanged, dirty, change, inverse } = diff;
   /** Save: true when it sent something (the menu then closes). */
   const save = () => {

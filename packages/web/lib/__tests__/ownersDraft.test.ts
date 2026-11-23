@@ -44,26 +44,28 @@ describe("the owners menu's staged change", () => {
     expect(removeRole(roleDrives).driver).toEqual({ kind: "user", user_id: "me" });
   });
 
-  test("leaving rides the change with its move, and is undone by rejoining", () => {
+  test("leaving rides the change with its move, and has no undo: the session runs on another account now", () => {
     const two: OwnersDraft = { ownerIds: ["me", "ashot"], role: null, driver: { kind: "user", user_id: "ashot" }, moveTo: null };
     const d = leave(two, "me", { device_id: "mini", is_remote: false, label: "Ashot's Mac mini", runner_id: "ashot", runner_is_bot: false });
     const { change, inverse, dirty } = diffOwners(two, d, { meId: "me" });
     expect(dirty).toBe(true);
     expect(change).toEqual({ leave: { move_to_device_id: "mini", runner_id: "ashot", runner_is_bot: false } });
-    // Rejoin: the session stays on the machine it moved to.
-    expect(inverse).toEqual({ add: ["me"] });
+    expect(inverse).toBeNull();
+    expect(diffOwners(two, d, { meId: "me", canRejoin: true }).inverse).toBeNull();
   });
 
-  test("leaving a teammate's session needs no move, and is undone by rejoining", () => {
+  test("leaving a teammate's session needs no move, and is undone by rejoining only when the leaver still sees it", () => {
     const two: OwnersDraft = { ownerIds: ["ashot", "me"], role: null, driver: { kind: "user", user_id: "ashot" }, moveTo: null };
-    const { change, inverse } = diffOwners(two, leave(two, "me", null), { meId: "me" });
+    const { change, inverse } = diffOwners(two, leave(two, "me", null), { meId: "me", canRejoin: true });
     expect(change).toEqual({ leave: {} });
     expect(inverse).toEqual({ add: ["me"] });
+    // Not shared with the leaver's team: the server would refuse the rejoin.
+    expect(diffOwners(two, leave(two, "me", null), { meId: "me", canRejoin: false }).inverse).toBeNull();
   });
 
   test("a leave with other changes has no undo: who left may not edit the rest", () => {
     const three: OwnersDraft = { ownerIds: ["ashot", "me", "sam"], role: null, driver: { kind: "user", user_id: "ashot" }, moveTo: null };
-    const { inverse } = diffOwners(three, leave(removePerson(three, "sam"), "me", null), { meId: "me" });
+    const { inverse } = diffOwners(three, leave(removePerson(three, "sam"), "me", null), { meId: "me", canRejoin: true });
     expect(inverse).toBeNull();
   });
 

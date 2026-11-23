@@ -66,9 +66,12 @@ export type OwnersDiff = {
   driverChanged: boolean;
   dirty: boolean;
   change: SessionOwnersChange;
-  /** The change that puts it back. A leave alone is undone by rejoining (the
-   *  session stays where the leave moved it); a leave with other changes has
-   *  none, since a person who left may no longer edit the rest. */
+  /** The change that puts it back. A leave alone, with no move, from a
+   *  session the leaver reads as a teammate (`canRejoin`) is undone by
+   *  rejoining: the server's self-claim takes anyone who sees the session.
+   *  Any other leave has none: after a move the session runs on another
+   *  account, which may not share it, and a leave with other changes leaves
+   *  edits a person who left may no longer make. */
   inverse: SessionOwnersChange | null;
 };
 
@@ -79,7 +82,7 @@ export type OwnersDiff = {
  * unset, never as a stamped person. `snapshots` are the owner rows as they
  * stand, so an undo of a remove puts each back in its place.
  */
-export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meId?: string; initialDriverUserId?: string | null; snapshots?: OwnerRowFact[] } = {}): OwnersDiff {
+export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meId?: string; initialDriverUserId?: string | null; snapshots?: OwnerRowFact[]; canRejoin?: boolean } = {}): OwnersDiff {
   const added = draft.ownerIds.filter((id) => !initial.ownerIds.includes(id));
   const gone = initial.ownerIds.filter((id) => !draft.ownerIds.includes(id));
   const leaving = !!opts.meId && gone.includes(opts.meId);
@@ -101,7 +104,7 @@ export function diffOwners(initial: OwnersDraft, draft: OwnersDraft, opts: { meI
     : initial.role && initial.driver?.kind === "role" ? { kind: "role" } : { kind: "none" };
   const restore = (opts.snapshots ?? []).filter((r) => removed.includes(r.user_id));
   const readd = removed.filter((id) => !restore.some((r) => r.user_id === id));
-  const leaveOnly = leaving && !added.length && !removed.length && !roleChanged && !driverChanged;
+  const leaveOnly = leaving && !move && !!opts.canRejoin && !added.length && !removed.length && !roleChanged && !driverChanged;
   const inverse: SessionOwnersChange | null = leaveOnly ? { add: [opts.meId!] } : leaving ? null : {
     ...(restore.length ? { restore } : {}),
     ...(readd.length ? { add: readd } : {}),
