@@ -40,7 +40,7 @@ import { charterPatch } from "./lib/orgCharter";
 import { takeOverSessionsSoon, takeoverPhrase } from "./orgInit";
 import { performArchiveAll } from "./orgProposals";
 import { reroutePendingDecisionsForConversation } from "./sessionDecisions";
-import { ownRunAsRoleLeaves } from "./lib/roleRelease";
+import { giveReleasedRun, releasedRunNeedsOwner } from "./lib/roleRelease";
 import { handOpenTasksUpChain } from "./tasks";
 import { EMPTY_SCOPE, isScopeless, keepsReportsInside, normalizeScope, outsideKeptArea, sameScope, scopeIds, scopeOutside, scopeOverlap, type PlanProjectOf, type Scope } from "./lib/orgScope";
 import { areaMoves, areasOf, beginAreaHandoff, handOverAreaMoves, ownerSnapshot } from "./orgHandoff";
@@ -629,6 +629,22 @@ const RETIRE_FALLBACK_NOTE = "The role that looked after this area was retired. 
 // call once it has completed.
 type RetireArgs = { role_id: string; standing_session?: UnseatChoice; fall_back?: boolean; handoff?: "wait" | "skip" | "done" };
 
+const RETIRE_RELEASE_BATCH = 100;
+
+// The rest of a retire's live hands, one batch per transaction (performRetireRoleCore).
+export const giveReleasedRuns = internalMutation({
+  args: { role_id: v.id("org_roles"), conversation_ids: v.array(v.id("conversations")), added_by: v.id("users") },
+  handler: async (ctx, args) => {
+    const role = await ctx.db.get(args.role_id);
+    const [batch, rest] = [args.conversation_ids.slice(0, RETIRE_RELEASE_BATCH), args.conversation_ids.slice(RETIRE_RELEASE_BATCH)];
+    for (const id of batch) {
+      await giveReleasedRun(ctx, id, role, args.added_by);
+      await reroutePendingDecisionsForConversation(ctx, id, Date.now());
+    }
+    if (rest.length) await ctx.scheduler.runAfter(0, internal.orgRoles.giveReleasedRuns, { ...args, conversation_ids: rest });
+  },
+});
+
 export async function performRetireRole(ctx: any, userId: Id<"users">, args: RetireArgs): Promise<any> {
   return withOrgChange(ctx, userId, { kind: "retire" }, () => performRetireRoleCore(ctx, userId, args));
 }
@@ -714,8 +730,15 @@ async function performRetireRoleCore(ctx: any, userId: Id<"users">, args: Retire
     .collect();
   // An open decision follows its session (S28): the retired role leaves the
   // route, and the card goes to the people who now answer for the session.
+  // Its live hands no person owns go to the person it answered to: the
+  // first RETIRE_RELEASE_BATCH here, the rest in scheduled batches, so a
+  // role with many hands stays inside one transaction's write limit.
+  const toGive = filed.filter(releasedRunNeedsOwner).map((c: any) => c._id);
+  for (const id of toGive.slice(0, RETIRE_RELEASE_BATCH)) await giveReleasedRun(ctx, id, role, userId);
+  if (toGive.length > RETIRE_RELEASE_BATCH) {
+    await ctx.scheduler.runAfter(0, internal.orgRoles.giveReleasedRuns, { role_id: role._id, conversation_ids: toGive.slice(RETIRE_RELEASE_BATCH), added_by: userId });
+  }
   for (const conv of filed) {
-    await ownRunAsRoleLeaves(ctx, conv, role, userId);
     await ctx.db.patch(conv._id, { org_role_id: undefined, org_role_hold: undefined });
     await reroutePendingDecisionsForConversation(ctx, conv._id, now);
   }

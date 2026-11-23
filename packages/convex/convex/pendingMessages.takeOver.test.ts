@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
-import { performCreateRole, performProvisionRole, performReparentSession, performRetireRole, performTellSessionRole } from "./orgRoles";
+import { giveReleasedRuns, performCreateRole, performProvisionRole, performReparentSession, performRetireRole, performTellSessionRole } from "./orgRoles";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { wakeMentionedParties } from "./chat";
 import { computeInboxSessions, heldByRoleAlone } from "./conversations";
@@ -411,6 +411,25 @@ describe("a role's pool hand never ends up owned by nobody", () => {
     expect(row("pool").org_role_id).toBeUndefined();
     expect(ownersOf("pool")).toEqual([ME]);
     expect(await inInbox(ctx, "pool")).toBe(true);
+  });
+
+  test("a retire gives only live hands a person, the first hundred at once and the rest in scheduled batches", async () => {
+    const { ctx, tables, ownersOf, roleId } = await world();
+    const hand = (id: string, over: Record<string, any> = {}) => session(id, { user_id: POOL, org_role_id: roleId, role_started: true, ...over });
+    tables.conversations.push(hand("done", { status: "completed" }), hand("killed", { inbox_killed_at: NOW }));
+    for (let i = 0; i < 101; i++) tables.conversations.push(hand(`live${i}`));
+    const scheduled: any[] = [];
+    ctx.scheduler = { runAfter: async (_ms: number, _fn: unknown, args: any) => { scheduled.push(args); } };
+    await performRetireRole(ctx, ME as any, { role_id: String(roleId), handoff: "skip" });
+    expect(ownersOf("done")).toEqual([]);
+    expect(ownersOf("killed")).toEqual([]);
+    // With the world's own three live hands that is 104: four wait for the next batch.
+    const given = tables.conversations.filter((c) => c.role_started && ownersOf(c._id).length);
+    expect(given).toHaveLength(100);
+    const batch = scheduled.find((a) => a.conversation_ids);
+    expect(batch.conversation_ids).toHaveLength(4);
+    await (giveReleasedRuns as any)._handler(ctx, batch);
+    expect(tables.conversations.filter((c) => c.role_started && ownersOf(c._id).length)).toHaveLength(104);
   });
 
   test("taking the role off it, or a visibility change that drops the role, does the same", async () => {
