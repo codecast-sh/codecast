@@ -1007,6 +1007,11 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
         firstMessage: opts.first_message,
         first_message_client_id: opts.first_message_client_id,
       });
+      // A hosted session started for a task or doc (a compose link, a context
+      // chat) is linked to it the same way a machine session is below.
+      if (opts.linked_object?.id) {
+        await linkConversationToObject(ctx, userId, opts.linked_object.type, opts.linked_object.id, started.conversation_id);
+      }
       return started.conversation_id;
     }
     const sessionId = opts.session_id || crypto.randomUUID();
