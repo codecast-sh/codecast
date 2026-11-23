@@ -368,23 +368,27 @@ export function killSessionsLedger(r: { total: number; working: string[]; lost?:
  * `stations`: the passing path's stations by name (a fan-out's branches each count), when the caller knows them;
  * `drawn`: the confirm draws them as a lane, so no row spells them. `stops`: the stations that can end the run.
  * `from`: where the change ships from, when that is a risk worth saying (far behind main, conflicting with it).
+ * `asks`: what a person is asked on every run; `asksIf`: the condition a person is asked only on (a side route's words),
+ * or "" when that route has none.
  */
-export function flowRunLedger(r: { flow: string; session: string; count?: number; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; ends: ReadonlyArray<string>; stations?: ReadonlyArray<string>; stops?: ReadonlyArray<string>; drawn?: boolean; from?: string | null }): SwitchLedger {
+export function flowRunLedger(r: { flow: string; session: string; count?: number; stages: ReadonlyArray<{ label: string; who: string; loops: ReadonlyArray<{ label: string }> }>; asks: ReadonlyArray<string>; asksIf?: string | null; ends: ReadonlyArray<string>; stations?: ReadonlyArray<string>; stops?: ReadonlyArray<string>; drawn?: boolean; from?: string | null }): SwitchLedger {
   const by = (who: string) => r.stages.filter((s) => s.who === who).map((s) => s.label);
   const agents = by("agent");
   const backs = r.stages.filter((s) => s.loops.length).map((s) => s.label);
   const n = r.count ?? 1, agentRuns = agents.length * n, asks = r.asks.length * n; // one run per session shipped
   const path = r.stations ?? r.stages.map((s) => s.label);
   const word = r.stations ? ["station", "stations"] : ["stage", "stages"];
+  const maybe = !asks && r.asksIf != null;
   return {
-    name: `Ship through ${r.flow}`,
+    // The library's flow is itself called Ship: it ships this change, never "through Ship".
+    name: r.flow === "Ship" ? (n > 1 ? "Ship these changes" : "Ship this change") : `Ship through ${r.flow}`,
     subject: r.session,
     shift: null,
     figures: [
       { value: String(path.length), label: path.length === 1 ? word[0] : word[1] },
       ...(n > 1 ? [{ value: String(n), label: "runs start", tone: "warn" as const }] : []),
       { value: String(agentRuns), label: agentRuns === 1 ? "agent session starts" : "agent sessions start", ...(agentRuns ? { tone: "warn" as const } : {}) },
-      { value: String(asks), label: asks === 1 ? "question for you" : "questions for you" },
+      maybe ? { value: n > 1 ? `0–${n}` : "0–1", label: "questions for you" } : { value: String(asks), label: asks === 1 ? "question for you" : "questions for you" },
     ],
     rows: [
       ...(r.from ? [{ k: "From", v: r.from, tone: "bad" as const }] : []),
@@ -392,6 +396,7 @@ export function flowRunLedger(r: { flow: string; session: string; count?: number
       ...(r.drawn ? [] : [{ k: r.stations ? "Stations" : "Stages", v: path.join(" → ") }]),
       ...(agents.length ? [{ k: "An agent", v: agents.join(", ") }] : []),
       ...r.asks.map((q) => ({ k: "You", v: q })),
+      ...(maybe ? [{ k: "You", v: r.asksIf ? `Only if ${r.asksIf}` : "Only on some runs" }] : []),
       ...(backs.length ? [{ k: "Comes back", v: `${n > 1 ? "to each session" : "to the session"} at ${backs.join(", ")}` }] : []),
       ...(r.stops ? (r.stops.length ? [{ k: "Can stop", v: r.stops.join(", ") }] : [])
         : r.ends.length ? [{ k: "Can stop", v: `${r.ends.length} ways`, list: [...r.ends] }] : []),

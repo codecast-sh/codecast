@@ -35,7 +35,7 @@ describe("journeyStages", () => {
     expect(s[1].branches!.map((b) => [b.label, b.who])).toEqual([["CI", "auto"], ["Review", "agent"]]);
     expect(s[1].loops).toEqual([{ id: "ci_conflict", label: "Resolve conflict", max: 3 }, { id: "brief", label: "Fix findings", max: 3 }]);
     expect(s[2].loops.map((l) => l.id)).toEqual(["fix_conflict"]);
-    expect(approvalOf(change)).toEqual({ kind: "if", when: "CI changes" });
+    expect(approvalOf(change)).toEqual({ kind: "if", when: "it edits CI" });
   });
   test("a branching flow reads in the order a passing run takes it, Decide before Land", () => {
     const s = journeyStages(branching);
@@ -194,10 +194,10 @@ describe("gates", () => {
     const mine = gated(change, CI_CARD, "decide__decide", card());
     expect(mine.now).toMatchObject({ kind: "gate", stage: "Decide", mine: true, decisionId: "d1", prompt: "Ship ct-1? It edits CI.", since: 15 });
     // The stage that holds it (CI + Review, whose verdicts sent the run there) is named after the route into the card.
-    expect(mine.stages[1]).toMatchObject({ id: "checks", label: "CI changes", state: "waiting", who: "you" });
+    expect(mine.stages[1]).toMatchObject({ id: "checks", label: "It edits CI", state: "waiting", who: "you" });
     expect(journeyWords(mine)).toEqual({ words: "Your call", tone: "you" });
     const theirs = gated(change, CI_CARD, "decide__decide", card({ holder: { kind: "user", id: "u2" }, asked_user_ids: ["u2"] }));
-    expect(theirs.stages[1]).toMatchObject({ label: "CI changes", who: "person" });
+    expect(theirs.stages[1]).toMatchObject({ label: "It edits CI", who: "person" });
     expect(journeyWords(theirs)).toEqual({ words: "Waiting on a person", tone: "wait" });
     expect(journeyWords(gated(change, CI_CARD, "decide__decide", null)).words).toBe("Waiting on a person");
   });
@@ -387,7 +387,7 @@ test("readableWhy cuts long reasons at a word", () => {
 describe("approvalOf", () => {
   test("each shipped line says from its graph whether a person approves", () => {
     const lines = SHIPPED_FLOWS.filter((f) => f.kind === "line").map((f) => [f.slug, approvalWords(approvalOf(f as any))]);
-    expect(lines).toEqual([["line", "You approve"], ["change", "Asks if CI changes"], ["quick-change", "No approval"], ["climb", "Sometimes asks"]]);
+    expect(lines).toEqual([["line", "Asks you every time"], ["change", "Asks you if it edits CI"], ["quick-change", "No approval"], ["climb", "Sometimes asks you"]]);
   });
   test("a gate on a side route asks only on that route; one reached only past landing asks nobody", () => {
     const g = (turn: { label?: string }, gateAfterLand = false) => ({
@@ -397,7 +397,7 @@ describe("approvalOf", () => {
         : [{ from: "start", to: "check" }, { from: "check", to: "landed", condition: "outcome = success" }, { from: "check", to: "why", condition: "outcome = failure", ...turn }, { from: "why", to: "ask" }, { from: "ask", to: "landed" }, { from: "landed", to: "exit" }],
     }) as any;
     expect(approvalOf(g({ label: "risky" }))).toEqual({ kind: "if", when: "risky" });
-    expect(approvalWords(approvalOf(g({})))).toBe("Sometimes asks");
+    expect(approvalWords(approvalOf(g({})))).toBe("Sometimes asks you");
     expect(approvalOf(g({ label: "risky" }, true))).toEqual({ kind: "never" });
   });
   // The shape of a repository's change that lands through one segment (Union's): a card inside Land only when the change
@@ -440,6 +440,6 @@ describe("approvalOf", () => {
       edges: [{ from: "start", to: "check" }, { from: "check", to: "land", condition: "outcome = success" }, { from: "land", to: "land__approve" }, { from: "land__approve", to: "land__landed" }, { from: "land__landed", to: "exit" }],
     } as any;
     expect(journeyStages(g).find((s) => s.role === "land")).toMatchObject({ label: "Land", who: "person" });
-    expect(approvalWords(approvalOf(g))).toBe("You approve");
+    expect(approvalWords(approvalOf(g))).toBe("Asks you every time");
   });
 });

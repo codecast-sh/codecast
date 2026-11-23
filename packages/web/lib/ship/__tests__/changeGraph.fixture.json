@@ -446,13 +446,13 @@
     {
       "from": "verdicts",
       "to": "ci_card",
-      "label": "CI changes",
+      "label": "it edits CI",
       "condition": "verdicts.json.next = decide and change_conversation"
     },
     {
       "from": "verdicts",
       "to": "nobody",
-      "label": "CI changes, no session",
+      "label": "it edits CI, no session",
       "condition": "verdicts.json.next = decide"
     },
     {

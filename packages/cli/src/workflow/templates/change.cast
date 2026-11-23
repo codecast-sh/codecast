@@ -37,7 +37,7 @@
 //   cast flow run change            # this session's own edits
 //   cast flow run change --task ct-N
 digraph change {
-  graph [kind="line", label="Ship", description="Pull request, CI beside an independent review, merge on green, deploy; the session fixes what they find, and you are asked only if CI changes", takes="task,branch", goal="$task_title", on_failure=stop, fix="brief"]
+  graph [kind="line", label="Ship", description="Pull request, CI beside an independent review, merge on green, deploy; the session fixes what they find, and you are asked only if it edits CI", takes="task,branch", goal="$task_title", on_failure=stop, fix="brief"]
   rankdir=LR
   start [shape=Mdiamond]
   pr [label="PR", shape=parallelogram, timeout=600,
@@ -121,8 +121,8 @@ digraph change {
   verdicts -> noci     [condition="verdicts.json.next = no_ci", label="CI never reported again"]
   verdicts -> wait_main     [condition="verdicts.json.next = wait_main and wait_main.visits < 2", label="every failure is main's"]
   verdicts -> mainred_again [condition="verdicts.json.next = wait_main", label="main red again"]
-  verdicts -> ci_card       [condition="verdicts.json.next = decide and change_conversation", label="CI changes"]
-  verdicts -> nobody        [condition="verdicts.json.next = decide", label="CI changes, no session"]
+  verdicts -> ci_card       [condition="verdicts.json.next = decide and change_conversation", label="it edits CI"]
+  verdicts -> nobody        [condition="verdicts.json.next = decide", label="it edits CI, no session"]
   verdicts -> found    [condition="(verdicts.json.next = brief or verdicts.json.next = conflict) and not change_conversation", label="found work, no session"]
   verdicts -> ci_conflict [condition="verdicts.json.next = conflict", label="conflicts with main"]
   verdicts -> brief    [condition="verdicts.json.next = brief", label="CI red, changes asked or no verdict"]

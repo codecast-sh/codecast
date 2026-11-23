@@ -392,7 +392,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     for (let cur = nodeId; cur && !out.includes(cur) && !stageOf(cur); cur = routedFrom(cur, new Set(out))?.node_id ?? null) out.push(cur);
     return out;
   };
-  // What the run did off the main path, in its own words: the label of the route a stage took into it ("CI changes"),
+  // What the run did off the main path, in its own words: the label of the route a stage took into it ("It edits CI"),
   // else the first off-path step's own label.
   const offPathLabel = (nodeId: string): string | null => {
     const first = chain(nodeId).filter((id) => byId.get(id)?.type !== "exit").pop();
@@ -414,7 +414,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const gateNode = open ? run.gate_node_id ?? at : null;
   const gateStage = open ? stageFor(gateNode)?.id ?? null : null;
   const gateMine = open && canAnswer(viewer?.decision, viewer?.id);
-  // A card off the main path names the stage that holds it after the route into it ("CI changes"), not the stage's own name.
+  // A card off the main path names the stage that holds it after the route into it ("It edits CI"), not the stage's own name.
   const gateOff = gateNode && !stageOf(gateNode) ? offPathLabel(gateNode) : null;
   // Where the run stands: stages after it hold only what earlier rounds left, which is not this round's state.
   const current = plan.findIndex((s) => s.id === (backStage ?? gateStage ?? atStage ?? stopStage));
@@ -732,4 +732,4 @@ export function approvalOf(graph: Graph): Approval {
 }
 
 /** An approval in a chip's words. */
-export const approvalWords = (a: Approval): string => (a.kind === "always" ? "You approve" : a.kind === "if" ? (a.when ? `Asks if ${a.when}` : "Sometimes asks") : "No approval");
+export const approvalWords = (a: Approval): string => (a.kind === "always" ? "Asks you every time" : a.kind === "if" ? (a.when ? `Asks you if ${a.when}` : "Sometimes asks you") : "No approval");

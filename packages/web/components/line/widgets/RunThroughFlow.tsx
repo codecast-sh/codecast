@@ -6,9 +6,9 @@
 // picked: the session is the run's subject, so what a stage finds comes back
 // to it. While a run is in flight, or once one has ended, the chip says where
 // the change is and the panel shows that run, with the person's part in it.
-import { useMemo, useState } from "react";
+import { createContext, useContext, useMemo, useState } from "react";
 import Link from "next/link";
-import { Rocket } from "lucide-react";
+import { Rocket, X } from "lucide-react";
 import { useWorkspaceFeature } from "../../../lib/teamFeatures";
 import { useInboxStore } from "../../../store/inboxStore";
 import { usePoolFlowRows, useSessionFlowRuns, useTeamDefaultFlowSlug } from "../../../hooks/useSyncWorkflows";
@@ -25,7 +25,7 @@ import { sessionIdleAt } from "../../../lib/liveness";
 import { formatElapsed } from "../../../lib/taskLine";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
-import { Sheet, SheetContent, SheetTitle, SheetTrigger } from "../../ui/sheet";
+import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from "../../ui/sheet";
 import { BELOW_SM, useMediaQuery } from "../../../hooks/useIsPhone";
 import { JourneyView } from "../../ship/Journey";
 import { HEADER_CHIP } from "../../../lib/headerChip";
@@ -117,7 +117,7 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
           <SheetTrigger asChild>{trigger}</SheetTrigger>
           <SheetContent side="bottom" hideClose aria-describedby={undefined} className="p-0 border-sol-border bg-sol-bg shp-sheet" data-run-through-pool>
             <SheetTitle className="sr-only">Ship</SheetTitle>
-            {panel}
+            <InSheet.Provider value={true}>{panel}</InSheet.Provider>
           </SheetContent>
         </Sheet>
       ) : (
@@ -133,6 +133,13 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   );
 }
 
+/** Whether the panel is in the phone's sheet, which has no corner close of its own: each panel's head carries one. */
+const InSheet = createContext(false);
+function SheetCloser() {
+  return useContext(InSheet) ? (
+    <SheetClose className="shp-close" aria-label="Close Ship"><X className="w-4 h-4" aria-hidden /></SheetClose>
+  ) : null;
+}
 
 /** A press the session has not answered with a run yet: how long ago it went, and the message itself a press away. */
 function Starting({ press, onOpen }: { press: Press; onOpen: () => void }) {
@@ -143,6 +150,7 @@ function Starting({ press, onOpen }: { press: Press; onOpen: () => void }) {
         <b>Starting</b>
         <span className="shp-sub">asked {formatElapsed(press.at, now)} ago · no run yet</span>
         <button type="button" className="shp-link" onClick={onOpen} data-ship-press-open>Open message</button>
+        <SheetCloser />
       </header>
     </div>
   );
@@ -171,6 +179,7 @@ function RunPanel({ run, flow, journey, targets, notice, onAgain }: { run: any; 
         {run.task_short_id ? <Link className="shp-task" href={`/tasks/${run.task_short_id}`}>{run.task_short_id}</Link> : null}
         <span className="shp-sub">{run.task_title ?? ""}</span>
         <Link className="shp-link" href={`/workflows/runs/${run._id}`}>Open run</Link>
+        <SheetCloser />
       </header>
       {notice}
       <JourneyView journey={journey} run={run} now_ms={now} targets={targets}
@@ -216,29 +225,29 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
   if (!flow || !journey) return null;
   return (
     <div className="shp" data-ship-picker>
-      <header className="shp-head"><b>Ship</b><span className="shp-session" title={session}>{session}</span></header>
+      <header className="shp-head"><b>Ship</b><span className="shp-session" title={session}>{session}</span><SheetCloser /></header>
       {pool.length > 1 ? (
-        <ul className="shp-flows" role="listbox" aria-label="Flows">
+        // A native radio group: one tab stop, arrow keys move the pick, Enter ships the picked flow.
+        <div className="shp-flows" role="radiogroup" aria-label="Flows">
           {pool.map((f) => { const approval = approvalOf(f); return (
-            <li key={f.slug}>
-              <button type="button" role="option" aria-selected={f.slug === flow.slug} className="shp-flow" onClick={() => setPicked(f.slug)} onDoubleClick={() => onRun(f)} data-run-through-flow={f.slug}>
-                <i className="shp-radio" aria-hidden />
-                <b>{f.label}{f === fallback ? <span className="shp-default" data-run-through-default="">Default</span> : f.base ? <span className="shp-base">on {f.base}</span> : null}</b>
-                <span className="shp-path">
-                  <span className="shp-asks" data-asks={approval.kind === "never" ? undefined : approval.kind}>{approvalWords(approval)}</span>
-                  {journeyStages(f).map((s) => s.label).join(" → ")}
-                </span>
-              </button>
-            </li>
+            <label key={f.slug} className="shp-flow" onDoubleClick={() => onRun(f)} data-run-through-flow={f.slug}>
+              <input type="radio" className="shp-radio" name={`ship-flow-${conversationId}`} value={f.slug} checked={f.slug === flow.slug}
+                onChange={() => setPicked(f.slug)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onRun(f); } }} />
+              <b>{f.label}{f === fallback ? <span className="shp-default" data-run-through-default=""><span className="sr-only"> </span>Default</span> : f.base ? <span className="shp-base">on {f.base}</span> : null}</b>
+              <span className="shp-path">
+                <span className="shp-asks" data-asks={approval.kind === "never" ? undefined : approval.kind}>{approvalWords(approval)}</span>
+                {journeyStages(f).map((s) => s.label).join(" → ")}
+              </span>
+            </label>
           ); })}
-        </ul>
+        </div>
       ) : null}
       <div className="shp-preview" data-flow={flow.slug}>
         <JourneyView journey={journey} now_ms={0} />
       </div>
       <footer className="shp-foot">
         <span className="shp-flowname">{pool.length > 1 ? null : <>{flow.label}{flow === fallback ? <span className="shp-default">Default</span> : null}</>}</span>
-        <button type="button" className="sj-btn" data-primary onClick={() => onRun(flow)} data-run-through-go={flow.slug}>Ship</button>
+        <button type="button" className="sj-btn" data-primary onClick={() => onRun(flow)} aria-label={pool.length > 1 ? (flow.label === "Ship" ? "Ship this change" : `Ship with ${flow.label}`) : undefined} data-run-through-go={flow.slug}>Ship</button>
       </footer>
     </div>
   );

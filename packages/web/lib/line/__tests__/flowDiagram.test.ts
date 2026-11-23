@@ -20,7 +20,7 @@ describe("a flow as a diagram", () => {
     const side = (i: number) => flowDiagram(change).steps[i].side.map((r) => [r.tone, r.outcome, r.leadsTo]);
     expect(side(2)).toEqual([
       ["out", "pushed after this round", "Branch moved"], ["stop", "Branch keeps moving", null], ["stop", "Rejected", null], ["out", "CI never reported", "CI"], ["out", "no verdict this round", "Review"], ["stop", "CI never reported", null],
-      ["out", "every failure is main's", "Wait for main"], ["stop", "Main stayed red", null], ["out", "CI changes", "Why a person"], ["stop", "Needs a person", null], ["stop", "Found work", null],
+      ["out", "every failure is main's", "Wait for main"], ["stop", "Main stayed red", null], ["out", "it edits CI", "Why a person"], ["stop", "Needs a person", null], ["stop", "Found work", null],
       ["back", "conflicts with main", "this session"], ["back", "CI red, changes asked or no verdict", "this session"], ["stop", "No verdicts", null],
     ]);
     expect(side(3)).toEqual([["back", "conflict", "this session"], ["out", "retest", "Retest"], ["stop", "Main keeps moving", null], ["stop", "Not merged", null]]);

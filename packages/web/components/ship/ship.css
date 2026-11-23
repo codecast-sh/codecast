@@ -43,6 +43,7 @@
 .sj-branch[data-state="back"] { color: var(--sj-session); }
 .sj-branch[data-state="stopped"] { color: var(--sj-bad); }
 .sj-branch[data-state="waiting"] { color: var(--sj-wait); }
+.sj-branch-flag { font-style: normal; font-weight: 700; margin-left: 2px; }
 .sj-stage { --sj-who-c: var(--sj-auto); }
 .sj-stage[data-who="agent"] { --sj-who-c: var(--sj-agent); }
 .sj-stage[data-who="you"] { --sj-who-c: var(--sj-you); }
@@ -79,6 +80,7 @@
 .sj-act[data-primary]:hover, .sj-btn[data-primary]:hover { background: color-mix(in srgb, var(--sol-blue) 22%, var(--sj-card)); }
 .sj-btn[data-quiet] { border-color: transparent; background: none; color: var(--sol-text-muted); }
 .sj-btn[data-quiet]:hover { color: var(--sol-red); background: color-mix(in srgb, var(--sol-red) 8%, transparent); }
+.sj-act:focus-visible, .sj-btn:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: 2px; }
 
 /* The header chip: Ship, or where the session's change is. */
 .shp-chip { --shp-c: var(--sol-text-muted); }
@@ -104,10 +106,13 @@
 .shp-flows { list-style: none; margin: 0; padding: 6px; display: flex; flex-direction: column; gap: 2px; border-bottom: 1px solid var(--sj-rule-2); }
 .shp-flow { width: 100%; display: grid; grid-template-columns: 14px auto 1fr; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 8px; border: 1px solid transparent; background: none; text-align: left; cursor: pointer; color: var(--sol-text); }
 .shp-flow:hover { background: color-mix(in srgb, var(--sol-bg-alt) 50%, transparent); }
-.shp-flow[aria-selected="true"] { background: var(--sj-card); border-color: var(--sj-rule); }
+.shp-flow:has(.shp-radio:checked) { background: var(--sj-card); border-color: var(--sj-rule); }
+/* The keyboard's place in the group, drawn inside the row so the popover's clipped edge never cuts it. */
+.shp-flow:has(.shp-radio:focus-visible) { outline: 2px solid var(--sol-blue); outline-offset: -2px; }
 .shp-flow b { font-size: 12.5px; font-weight: 600; }
-.shp-radio { width: 12px; height: 12px; border-radius: 999px; border: 1.5px solid var(--sj-rule); }
-.shp-flow[aria-selected="true"] .shp-radio { border: 4px solid var(--sol-blue); }
+.shp-radio { appearance: none; margin: 0; width: 12px; height: 12px; border-radius: 999px; border: 1.5px solid var(--sj-rule); background: none; cursor: pointer; }
+.shp-radio:focus-visible { outline: none; }
+.shp-radio:checked { border: 4px solid var(--sol-blue); }
 .shp-default { font-size: var(--fs-meta); font-weight: 600; color: var(--sol-blue); margin-left: 6px; }
 .shp-base { font-size: var(--fs-meta); font-weight: 400; color: var(--sol-text-dim); margin-left: 6px; }
 .shp-path { justify-self: end; max-width: 100%; font-size: var(--fs-meta); color: var(--sol-text-dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -119,6 +124,9 @@
 /* On a phone the panel is a sheet from the bottom: clear of the home indicator, every press at least 44px tall, and a
    flow's approval and path under its name, wrapping rather than cut. */
 .shp-sheet { padding-bottom: env(safe-area-inset-bottom); }
+.shp-close { margin-left: auto; align-self: center; flex: none; width: 44px; height: 44px; margin-block: -10px; margin-right: -10px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; color: var(--sol-text-muted); }
+.shp-link + .shp-close { margin-left: 0; }
+.shp-close:focus-visible { outline: 2px solid var(--sol-blue); outline-offset: -2px; }
 .shp-sheet .shp-flow { min-height: 44px; grid-template-columns: 14px minmax(0, 1fr); row-gap: 2px; }
 .shp-sheet .shp-path { grid-column: 2; justify-self: start; white-space: normal; line-height: 1.5; }
 .shp-sheet .sj-btn, .shp-sheet .shp-link { min-height: 44px; display: inline-flex; align-items: center; }
