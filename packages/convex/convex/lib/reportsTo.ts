@@ -36,12 +36,15 @@ export async function reportsToOf(ctx: { db: any }, conversationId: Id<"conversa
   const read = known.read ?? ((id: any) => ctx.db.get(id));
   const row = known.row ?? await ctx.db.get(conversationId);
   if (!row) return null;
-  // driver_user_id always names an owner (sessionOwners.writeDriver), and the
-  // primary cache is set exactly when owner rows exist (syncPrimaryOwnerCache),
-  // so no owner row is read here: with neither, its starter drives. A takeover
-  // of a hundred sessions reads no rows for this.
-  const named = [row.driver_user_id, row.owner_user_id].filter(Boolean).map(String);
-  const ownerIds = named.length ? named : listedOwnerIds(await ownersFactsOf(ctx, row, { rows: [], getDoc: read }));
+  // The primary cache is set exactly when owner rows exist
+  // (syncPrimaryOwnerCache), so the rows are read only to check a driver who
+  // is not the primary still owns it; with neither, its starter drives. A
+  // takeover of a hundred sessions, which have no driver, reads no rows here.
+  const driverId = row.driver_user_id ? String(row.driver_user_id) : null;
+  const primary = row.owner_user_id ? String(row.owner_user_id) : null;
+  const ownerIds = driverId && driverId !== primary
+    ? listedOwnerIds(await ownersFactsOf(ctx, row, { getDoc: read }))
+    : primary ? [primary] : listedOwnerIds(await ownersFactsOf(ctx, row, { rows: [], getDoc: read }));
   const driver = driverOf(row, ownerIds);
   if (driver?.kind === "role") {
     const role = await read(driver.role_id);

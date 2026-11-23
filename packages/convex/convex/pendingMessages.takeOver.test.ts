@@ -190,6 +190,17 @@ describe("only a send that says so takes the wheel", () => {
     expect(lines.some((c) => c.includes("You now report to Me: your questions and decisions go to them."))).toBe(true);
   });
 
+  test("a chart drop on a teammate after a take-over hands them the wheel and tells the agent so", async () => {
+    const { ctx, row, ownersOf, tables } = await world();
+    await composerSend(ctx, row("filed"), ME);
+    expect(ownersOf("filed")).toEqual([]);
+    await performReparentSession(ctx, ME as any, { session_id: "filed", target: { kind: "user", user_id: PEER as any } });
+    expect(ownersOf("filed")).toEqual([PEER]);
+    expect(row("filed").driver_user_id).toBeUndefined();
+    const lines = tables.pending_messages.filter((m) => m.conversation_id === "filed").map((m) => String(m.content));
+    expect(lines.some((c) => c.includes("You now report to Peer"))).toBe(true);
+  });
+
   test("taking the wheel leaves the primary owner as it was", async () => {
     const { ctx, row } = await world();
     await ctx.db.patch("shared", { driver_user_id: PEER, owner_user_id: PEER });

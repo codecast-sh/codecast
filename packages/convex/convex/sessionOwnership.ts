@@ -6,7 +6,7 @@ import { Id } from "./_generated/dataModel";
 import { getAuthenticatedUserId } from "./pendingMessages";
 import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { checkConversationAccess } from "./privacy";
-import { addSessionOwnerRow, removeSessionOwnerRow, listSessionOwnerIds, ownersFactsOf, syncPrimaryOwnerCache, humanStarterUser, restoreOwnerRows, writeDriver, type OwnerRowSnapshot } from "./sessionOwners";
+import { addSessionOwnerRow, removeSessionOwnerRow, listSessionOwnerIds, ownersFactsOf, settleDriver, syncPrimaryOwnerCache, humanStarterUser, restoreOwnerRows, writeDriver, type OwnerRowSnapshot } from "./sessionOwners";
 import { isLeave, leaveMovesFirst, listedOwnerIds, pinnedDriverAfterAdd, starterOf } from "@codecast/shared/contracts/sessionOwners";
 import {
   assertHumanOwner, avatarOf, driverOf, listOwnerInfos, mayEditOwners, ownerIdsOrStarter, OWNER_CANDIDATE_CAP, resolveOwnableConversation,
@@ -277,6 +277,9 @@ async function reparentSessionCore(
       await ctx.db.patch(conversation._id, { org_role_id: undefined, org_role_hold: undefined });
       roleId = undefined;
     }
+    // A drop on a person writes no row for a starter who drove with none:
+    // the wheel leaves whoever no longer owns it, whatever the mode.
+    await settleDriver(ctx, conversation._id);
     owners = mode === "set" ? desired.map(toOwnerInfo) : await listOwnerInfos(ctx, conversation._id);
   } else if (!targetRole) {
     if (roleId) {
