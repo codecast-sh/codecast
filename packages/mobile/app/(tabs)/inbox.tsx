@@ -14,7 +14,7 @@ import {
   useInboxStore, type InboxSession, type BucketItem,
   chipMatchesSession, getProjectName, resolveInboxViewMode, resolveShowSubagents, flatViewSessions, convBucketMap,
   groupSessionsForLabelView, groupSessionsByPlan, sortLabels,
-  sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount,
+  sessionUnreadMap, sessionUnreadWakeSig, sectionHeaderCount, convHasPendingSend,
 } from '@codecast/web/store/inboxStore';
 import { hiddenBucketTree, killAllIds } from '@codecast/web/store/hiddenBucketTree';
 import { partitionTriggerInbox, type TaskRow } from '@codecast/web/components/triggerTasks';
@@ -30,6 +30,7 @@ import { bootMark } from '@/lib/bootProfile';
 import { setInboxDrawerOpen } from '@/lib/inboxDrawer';
 import { holdKill, showNotice, useUndoBar } from '@/lib/undoBar';
 import { appAlert, appPrompt, showActionSheet, type SheetItem } from '@/lib/popups';
+import { closeDetail, killReview } from '@/lib/sessionVerbs';
 import { useInboxPlacement } from '@/hooks/useInboxPlacement';
 import Feather from '@expo/vector-icons/Feather';
 import * as Haptics from 'expo-haptics';
@@ -140,6 +141,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const catchingUp = useInboxStore((s) => s.livenessHeldAt != null);
   const hydrated = useInboxStore((s) => s.clientStateInitialized);
   const stashSession = useInboxStore((s) => s.stashSession);
+  const closeSession = useInboxStore((s) => s.closeSession);
   const restoreSession = useInboxStore((s) => s.restoreSession);
   const pinSession = useInboxStore((s) => s.pinSession);
   // Store actions, not the raw convex mutation: the hide data-transition is
@@ -204,6 +206,13 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const handleStash = useCallback((conversationId: string) => {
     stashSession(conversationId);
   }, [stashSession]);
+
+  // Close: done looking at it, the web card's one remove (store closeSession).
+  // A turn in progress is set aside and finishes; anything else stops and
+  // files under Closed, keeping its triggers and queued messages.
+  const handleClose = useCallback((conversationId: string) => {
+    closeSession(conversationId);
+  }, [closeSession]);
 
   const handleRestore = useCallback((conversationId: string) => {
     restoreSession(conversationId);
@@ -284,16 +293,29 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     // team can see it. The store action records its own Undo on the bar.
     const store = useInboxStore.getState();
     const canHide = session.is_private === false && !!session.team_id && session.user_id === store.currentUser?._id;
+    const tasks = Object.values(store.agentTasks ?? {}) as TaskRow[];
+    const pendingSend = convHasPendingSend(store.pendingMessages[session._id], Date.now());
+    // Kill retires it: asks first when it would cut a turn off or cancel a
+    // trigger or a queued message (the web's kill review, as an alert).
+    const kill = () => {
+      const review = killReview(session, tasks);
+      if (!review) { holdKill(session._id); return; }
+      appAlert(review.title, review.message, [
+        { text: review.keep, style: 'cancel' },
+        { text: review.confirm, style: 'destructive', onPress: () => holdKill(session._id) },
+      ]);
+    };
     showActionSheet(sessionTitle(session), [
+      { label: 'Close', detail: closeDetail(session, tasks, Date.now(), pendingSend), icon: 'x', onPress: () => handleClose(session._id) },
       { label: session.is_pinned ? 'Unpin' : 'Pin', icon: 'map-pin', onPress: () => handlePin(session._id) },
       { label: favoriteLabel, icon: 'star', onPress: toggleFavorite },
       { label: 'Mark unread', icon: 'circle', onPress: markUnread },
       { label: 'Label…', icon: 'tag', onPress: () => openLabelPicker(session) },
       ...(canHide ? [{ label: 'Hide from team', icon: 'lock', onPress: () => useInboxStore.getState().setPrivacy(session._id, true) } satisfies SheetItem] : []),
       { label: 'Stash', icon: 'archive', onPress: () => handleStash(session._id) },
-      { label: 'Kill session', icon: 'x-octagon', destructive: true, onPress: () => holdKill(session._id) },
+      { label: 'Kill session', icon: 'x-octagon', destructive: true, onPress: kill },
     ]);
-  }, [handlePin, handleStash, openLabelPicker]);
+  }, [handlePin, handleStash, handleClose, openLabelPicker]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
@@ -325,7 +347,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       isUnread={!!unreadByConv[s._id]}
       selected={currentId === s._id}
       onPress={openSession}
-      onDismiss={handleStash}
+      onClose={handleClose}
       onLongPress={handleSessionLongPress as (session: SessionData) => void}
       roleSessions={roleSessionsByLead.get(s._id)}
       onOpenRole={openRole}
@@ -336,7 +358,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     return s._id === heldKillId
       ? <RNView key={s._id} style={styles.heldKill} pointerEvents="none">{row}</RNView>
       : row;
-  }, [openSession, currentId, handleStash, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId]);
+  }, [openSession, currentId, handleClose, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
@@ -444,7 +466,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
         <RNView style={styles.emptyInbox}>
           <FontAwesome name="inbox" size={32} color={Theme.textMuted0} />
           <RNText style={styles.emptyText}>Inbox zero</RNText>
-          <RNText style={styles.emptySubtext}>All sessions stashed, killed, or idle</RNText>
+          <RNText style={styles.emptySubtext}>All sessions stashed, closed, or idle</RNText>
         </RNView>
       ) }];
     }
@@ -503,7 +525,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- sessionsSig gates the sessions map; manualOrderKey gates the getState() manual-order read
   }, [activeSessions, sessionsSig, sessionsFirstLoad, hydrated, filteredQuestions, filteredPinned, statusWorking, statusNeedsInput, statusDone, statusDormant, filteredNew, renderSection, viewMode, sortedAll, subsByParent, showSubagents, manualOrderKey, currentSessionId, chipMatches, buckets, bucketByConv, placed.counts, pinned, newSessions, needsInput, done, dormant, working, appearance, unreadByConv, coarseNow, planRows, placed]);
 
-  // Stashed (agent alive, kill-all) and Killed buckets — the web panel's two
+  // Stashed (agent alive, kill-all) and Closed buckets — the web panel's two
   // hidden sections, collapsed by default behind count toggles.
   const ListFooter = useMemo(() => (
     <RNView>
@@ -528,7 +550,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           activeOpacity={0.7}
         >
           <FontAwesome name={showKilled ? "chevron-up" : "chevron-down"} size={11} color={Theme.textMuted0} />
-          <RNText style={styles.dismissedToggleText}>Killed <RNText style={styles.sectionCount}>{filteredKilled.length}</RNText></RNText>
+          <RNText style={styles.dismissedToggleText}>Closed <RNText style={styles.sectionCount}>{filteredKilled.length}</RNText></RNText>
         </TouchableOpacity>
       </RNView>
       {showStashed && stashedCards.length > 0 && (
@@ -562,13 +584,13 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       {showKilled && (
         <RNView style={styles.dismissedSection}>
           {filteredKilled.length === 0 ? (
-            <RNText style={styles.dismissedEmpty}>No killed sessions</RNText>
+            <RNText style={styles.dismissedEmpty}>No closed sessions</RNText>
           ) : (
             filteredKilled.slice(0, 100).map(s => (
               <HiddenSessionRow
                 key={s._id}
                 session={s as SessionData}
-                variant="killed"
+                variant="closed"
                 onPress={() => openSession(s._id)}
                 onRestore={() => handleRestore(s._id)}
               />

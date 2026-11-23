@@ -6,12 +6,12 @@ import {
   SessionData, sessionTitle, agentLabel, agentColor, formatRelativeTime, projectName, styles as sessionStyles,
 } from '@/components/SessionItem';
 
-// Stashed/Killed bucket row — the web SessionCard's hidden variants. Tap opens
+// Stashed/Closed bucket row — the web SessionCard's hidden variants. Tap opens
 // the session; explicit buttons restore (both) and kill (stashed only — a
-// killed session's agent is already torn down).
+// closed session's agent is already stopped).
 export function HiddenSessionRow({ session, variant, onPress, onRestore, onKill, held }: {
   session: SessionData;
-  variant: "stashed" | "killed";
+  variant: "stashed" | "closed";
   onPress: () => void;
   onRestore: () => void;
   onKill?: () => void;
