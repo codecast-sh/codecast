@@ -10,6 +10,7 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
+import { closeSetsAsideOnServer } from "./lib/closeAside";
 
 setDefaultTimeout(60_000);
 
@@ -259,6 +260,80 @@ describe("a lead is in flight when any member of its nested group is", () => {
     const k = (await s.t.run((ctx) => ctx.db.get(child))) as any;
     expect(k.inbox_stashed_at).toBe(t);
     expect(k.inbox_dismissed_at).toBeUndefined();
+  });
+});
+
+// A db that counts every read it serves: a get, or one query run (first,
+// take, collect, unique, paginate), however it was built.
+function countingDb(db: any) {
+  const counter = { reads: 0 };
+  const TERMINAL = new Set(["first", "take", "collect", "unique", "paginate"]);
+  const wrapQuery = (q: any): any => new Proxy(q, {
+    get(target, prop) {
+      const v = target[prop];
+      if (typeof v !== "function") return v;
+      return (...args: any[]) => {
+        const out = v.apply(target, args);
+        if (TERMINAL.has(String(prop))) { counter.reads++; return out; }
+        return out && typeof out === "object" && !(out instanceof Promise) ? wrapQuery(out) : out;
+      };
+    },
+  });
+  const wrapped = new Proxy(db, {
+    get(target, prop) {
+      if (prop === "get") return (...args: any[]) => { counter.reads++; return target.get(...args); };
+      if (prop === "query") return (...args: any[]) => wrapQuery(target.query(...args));
+      const v = target[prop];
+      return typeof v === "function" ? v.bind(target) : v;
+    },
+  });
+  return { db: wrapped, counter };
+}
+
+describe("the aside check is cheap on a big finished group", () => {
+  test("a lead with 300 finished subagents and one busy one: set aside, under 2 reads per finished child", async () => {
+    const s = await setup();
+    const now = Date.now();
+    await s.t.run(async (ctx) => {
+      const kid = (i: number, extra: Record<string, unknown> = {}) => ctx.db.insert("conversations", {
+        user_id: s.ids.user, agent_type: "claude_code", started_at: i, updated_at: i, status: "completed", session_id: `s-done${i}`,
+        message_count: 9, is_subagent: true, parent_conversation_id: s.ids.conv, ...extra,
+      } as any);
+      // The scan reads newest first: 150 finished, then the busy one, then 150 older finished.
+      for (let i = 0; i < 150; i++) await kid(i);
+      const busy = await kid(150, { status: "active", session_id: "s-busy", updated_at: now });
+      await ctx.db.insert("managed_sessions", { session_id: "s-busy", conversation_id: busy, user_id: s.ids.user, pid: 7, started_at: now, last_heartbeat: now, agent_status: "working", agent_status_updated_at: now } as any);
+      for (let i = 151; i < 301; i++) await kid(i);
+    });
+    const counted = await s.t.run(async (ctx) => {
+      const { db, counter } = countingDb(ctx.db);
+      const verdict = await closeSetsAsideOnServer({ db }, await ctx.db.get(s.ids.conv), now, { forceKill: true });
+      return { verdict, reads: counter.reads };
+    });
+    expect(counted.verdict).toBe("nested");
+    // 150 finished children are scanned before the busy one, and none costs a
+    // read: the lead's own facts, the group's two index reads, the busy child's.
+    // (Reading every member's full facts took 606 reads here.)
+    expect(counted.reads).toBeLessThan(2 * 150);
+    expect(counted.reads).toBeLessThan(20);
+    await s.send("closeSession", [String(s.ids.conv)]);
+    expectAside(await s.read());
+  });
+
+  test("a killed child is not one the close takes down, so it costs nothing and holds nothing", async () => {
+    const s = await setup();
+    await s.t.run(async (ctx) => {
+      for (let i = 0; i < 40; i++) {
+        await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: i, updated_at: i, status: "active", session_id: `s-k${i}`, message_count: 3, is_subagent: true, parent_conversation_id: s.ids.conv, inbox_killed_at: 5, inbox_dismissed_at: 5 } as any);
+      }
+    });
+    const counted = await s.t.run(async (ctx) => {
+      const { db, counter } = countingDb(ctx.db);
+      const verdict = await closeSetsAsideOnServer({ db }, await ctx.db.get(s.ids.conv), Date.now(), { forceKill: true });
+      return { verdict, reads: counter.reads };
+    });
+    expect(counted.verdict).toBeNull();
+    expect(counted.reads).toBeLessThan(10);
   });
 });
 

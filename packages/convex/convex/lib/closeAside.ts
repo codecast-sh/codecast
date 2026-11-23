@@ -3,7 +3,7 @@
 // server's own read of the row, so a close the client guessed wrong never cuts
 // a turn off or drops a wake. Both sides only gather facts and ask the shared
 // closeInFlightReason. Pure reads, no writes.
-import { closeInFlightReason, deriveLiveAt, HEARTBEAT_ALIVE_MS, isLoopFresh, type InFlightFacts } from "@codecast/shared/contracts";
+import { closeInFlightReason, deriveLiveAt, HEARTBEAT_ALIVE_MS, isLoopFresh, isOrphanOrSubagent, type InFlightFacts } from "@codecast/shared/contracts";
 import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "../ccAccountsShared";
 
 // The nested group a hide of `lead` takes down with it (cleanup.ts
@@ -28,16 +28,52 @@ export async function nestedGroupOf(ctx: { db: any }, lead: any): Promise<any[]>
   return out;
 }
 
+/** Whether a hide of a lead takes this member of its nested group down (the
+ *  cascade's own per-child rule, cleanup.ts cascadeHideToNestedChildren). The
+ *  aside check scans exactly the members this admits, so a close is set aside
+ *  for precisely the children it would otherwise stop. */
+export function cascadeTakesDown(
+  child: any,
+  field: "inbox_dismissed_at" | "inbox_stashed_at",
+  opts?: { forceKill?: boolean; close?: boolean },
+): boolean {
+  // A stash takes only the members that are inbox rows of their own.
+  if (field === "inbox_stashed_at" && isOrphanOrSubagent(child)) return false;
+  // A quiet re-assert never re-kills.
+  if (child[field] && !opts?.forceKill) return false;
+  // A close leaves a killed member alone: it is retired, nothing of it wakes.
+  if (opts?.close && child.inbox_killed_at) return false;
+  return true;
+}
+
 /** Why a close must set this conversation aside (stash) instead of stopping
- *  it: itself in flight, or "nested" when a member of its nested group is.
- *  Null when stopping it and its group loses nothing. */
-export async function closeSetsAsideOnServer(ctx: { db: any }, conv: any, now: number): Promise<string | null> {
+ *  it: itself in flight, or "nested" when a member of its nested group the
+ *  close would take down is. Null when stopping it and its group loses nothing.
+ *  It runs inside the gesture's mutation, so a member is judged by what its
+ *  row says before anything is read for it, and one that has finished costs no
+ *  reads (a lead with hundreds of finished subagents once timed this out). */
+export async function closeSetsAsideOnServer(ctx: { db: any }, conv: any, now: number, opts?: { forceKill?: boolean }): Promise<string | null> {
   const own = closeInFlightReason(await inFlightFactsOnServer(ctx, conv, now));
   if (own) return own;
   for (const child of await nestedGroupOf(ctx, conv)) {
+    if (!cascadeTakesDown(child, "inbox_dismissed_at", { forceKill: opts?.forceKill, close: true })) continue;
+    const row = rowInFlightFacts(child, now);
+    if (row.queued || row.loopFresh || row.limitParked) return "nested";
+    // Finished, nothing queued, no loop: no process, no wake, nothing to read.
+    if (child.status === "completed") continue;
     if (closeInFlightReason(await inFlightFactsOnServer(ctx, child, now))) return "nested";
   }
   return null;
+}
+
+// The facts a row carries itself: no reads.
+function rowInFlightFacts(conv: any, now: number): Pick<InFlightFacts, "queued" | "loopFresh" | "limitParked"> {
+  return {
+    queued: !!conv.has_pending_messages,
+    loopFresh: !!conv.loop_state && isLoopFresh(conv.loop_state, now),
+    // The pre-close row: a close is the dismissal isBlockedConversation would exclude.
+    limitParked: isBlockedConversation({ ...conv, inbox_dismissed_at: undefined }) && isCurrentBlock(conv, now),
+  };
 }
 
 /** A message still waiting to reach this session: a wake a close never holds
@@ -52,15 +88,13 @@ export async function hasDeliverableMessage(ctx: { db: any }, convId: any): Prom
 
 /** The shared in-flight facts of one conversation, from the database. */
 export async function inFlightFactsOnServer(ctx: { db: any }, conv: any, now: number): Promise<InFlightFacts> {
-  const queued = !!conv.has_pending_messages || await hasDeliverableMessage(ctx, conv._id);
-  const loopFresh = !!conv.loop_state && isLoopFresh(conv.loop_state, now);
+  const { queued: flagged, loopFresh, limitParked } = rowInFlightFacts(conv, now);
+  const queued = flagged || await hasDeliverableMessage(ctx, conv._id);
   let inProcessRun = false;
   if (conv.workflow_run_id) {
     const run = await ctx.db.get(conv.workflow_run_id);
     inProcessRun = run?.run_kind === "workflow" && (run.status === "running" || run.status === "pending");
   }
-  // The pre-close row: a close is the dismissal isBlockedConversation would exclude.
-  const limitParked = isBlockedConversation({ ...conv, inbox_dismissed_at: undefined }) && isCurrentBlock(conv, now);
   let turnLive = false;
   let awaitingInput = false;
   const managed = conv.message_count
