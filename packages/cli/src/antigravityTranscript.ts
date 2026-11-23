@@ -104,6 +104,76 @@ function toolInput(args: unknown): Record<string, unknown> {
   return {};
 }
 
+function str(value: unknown): string | undefined {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return undefined;
+}
+
+function int(value: unknown): number | undefined {
+  const n = typeof value === "number" ? value : typeof value === "string" && value.trim() ? Number(value) : NaN;
+  return Number.isSafeInteger(n) ? n : undefined;
+}
+
+function truthy(value: unknown): boolean {
+  return value === true || (typeof value === "string" && value.toLowerCase() === "true");
+}
+
+function compact(input: Record<string, unknown>): Record<string, unknown> {
+  return Object.fromEntries(Object.entries(input).filter(([, v]) => v !== undefined && v !== ""));
+}
+
+/**
+ * agy's tool calls in the shape every renderer already draws (Bash, Read,
+ * Edit, Write, WebSearch, Agent). agy names its tools in snake_case and its
+ * arguments in PascalCase, every value a string ("StartLine": "1", "Overwrite":
+ * "True"), so passed through raw they drew as bare `run_command` chips with no
+ * command, path or diff (jx79syt, 2026-11-22). Argument names were read off
+ * real transcripts (agy 1.5.14). Tools with no counterpart (manage_task,
+ * send_message, manage_subagents, ask_question) keep their own name and args.
+ */
+export function normalizeAntigravityToolCall(name: string, args: Record<string, unknown>): { name: string; input: Record<string, unknown> } {
+  switch (name) {
+    case "run_command":
+      return {
+        name: "Bash",
+        input: compact({
+          command: str(args.CommandLine),
+          description: str(args.toolSummary),
+          run_in_background: truthy(args.IsDaemon) ? true : undefined,
+        }),
+      };
+    case "read_file": {
+      const start = int(args.StartLine);
+      const end = int(args.EndLine);
+      return {
+        name: "Read",
+        input: compact({
+          file_path: str(args.Path),
+          offset: start,
+          limit: start !== undefined && end !== undefined && end >= start ? end - start + 1 : undefined,
+        }),
+      };
+    }
+    case "edit_file":
+      return {
+        name: "Edit",
+        input: compact({ file_path: str(args.Path), old_string: str(args.Target), new_string: str(args.Replacement) }),
+      };
+    case "write_file":
+      return { name: "Write", input: compact({ file_path: str(args.Path), content: str(args.Content) }) };
+    case "search_web":
+      return { name: "WebSearch", input: compact({ query: str(args.query) }) };
+    case "invoke_subagent":
+      return {
+        name: "Agent",
+        input: compact({ description: str(args.Role), subagent_type: str(args.TypeName), prompt: str(args.Prompt) }),
+      };
+    default:
+      return { name, input: args };
+  }
+}
+
 export function parseAntigravityTranscript(content: string): ParsedMessage[] {
   const messages: ParsedMessage[] = [];
   // Calls still waiting for their GENERIC rows, oldest first, each with the
@@ -126,7 +196,7 @@ export function parseAntigravityTranscript(content: string): ParsedMessage[] {
           ? row.tool_calls.flatMap((raw, i) => {
               const call = raw as { name?: unknown; args?: unknown } | null;
               const name = text(call?.name);
-              return name ? [{ id: `agy-t${step}-${i}`, name, input: toolInput(call?.args) }] : [];
+              return name ? [{ id: `agy-t${step}-${i}`, ...normalizeAntigravityToolCall(name, toolInput(call?.args)) }] : [];
             })
           : [];
         const body = text(row.content);

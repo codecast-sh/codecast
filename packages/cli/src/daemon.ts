@@ -16224,7 +16224,11 @@ async function checkForInteractivePrompt(
     // A dialog raised between turns (a background agent's permission ask) sits under
     // the previous turn's prose, which the JSONL already holds: posting it again
     // repeats that message in the transcript.
-    const scraped = terminalDialog ? "" : extractAssistantProseAbovePrompt(paneContent);
+    // Antigravity writes each step to its transcript before the next one paints,
+    // so its ask_question call and everything above it are already synced; its
+    // pane rows ("Ran 17 commands … (ctrl+o to expand)") are TUI chrome, and
+    // scraping them posted that chrome once per question (jx79syt, 2026-11-22).
+    const scraped = terminalDialog || file?.agentType === "antigravity" ? "" : extractAssistantProseAbovePrompt(paneContent);
     const prose = scraped && !sessionJsonlHasAssistantProse(sessionId, scraped) ? scraped : "";
 
     // Prefer the hook's full tool_input (option descriptions + headers + multiSelect,

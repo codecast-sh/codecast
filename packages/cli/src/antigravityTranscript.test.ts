@@ -32,7 +32,7 @@ describe("parseAntigravityTranscript", () => {
     // Only the words inside <USER_REQUEST>, not agy's metadata and settings notices.
     expect(messages[0]!.content).toBe("Run the shell command 'echo probe-ok' and then reply with the single word pong.");
     expect(messages[1]!.toolCalls).toEqual([
-      { id: "agy-t1-0", name: "run_command", input: { CommandLine: "echo probe-ok", WaitMsBeforeAsync: 5000, toolSummary: "Echo probe-ok" } },
+      { id: "agy-t1-0", name: "Bash", input: { command: "echo probe-ok", description: "Echo probe-ok" } },
     ]);
     expect(messages[1]!.toolResults).toHaveLength(1);
     expect(messages[1]!.toolResults![0]!.toolUseId).toBe("agy-t1-0");
@@ -104,6 +104,29 @@ describe("parseAntigravityTranscript", () => {
     expect(m!.toolCalls).toEqual([
       { id: "agy-t0-0", name: "a", input: { x: 1 } },
       { id: "agy-t0-1", name: "b", input: {} },
+    ]);
+  });
+
+  test("agy's tools arrive in the shapes the renderers draw", () => {
+    // Argument names and string values as real agy 1.5.14 transcripts write them.
+    const calls = [
+      { name: "run_command", args: { CommandLine: "bun test", IsDaemon: "True", WaitMsBeforeAsync: "10000", toolSummary: "Run tests" } },
+      { name: "read_file", args: { Path: "/r/a.ts", StartLine: "10", EndLine: "59" } },
+      { name: "edit_file", args: { Path: "/r/a.ts", Target: "old", Replacement: "new", ArtifactMetadata: "{}" } },
+      { name: "write_file", args: { Path: "/r/b.md", Content: "# hi", Overwrite: "True" } },
+      { name: "search_web", args: { query: "agy docs" } },
+      { name: "invoke_subagent", args: { Prompt: "Audit startup", Role: "Startup auditor", TypeName: "research" } },
+      { name: "manage_task", args: { Action: "list" } },
+    ];
+    const [m] = parseAntigravityTranscript(row({ step_index: 0, type: "PLANNER_RESPONSE", tool_calls: calls }) + "\n");
+    expect(m!.toolCalls!.map(({ name, input }) => ({ name, input }))).toEqual([
+      { name: "Bash", input: { command: "bun test", description: "Run tests", run_in_background: true } },
+      { name: "Read", input: { file_path: "/r/a.ts", offset: 10, limit: 50 } },
+      { name: "Edit", input: { file_path: "/r/a.ts", old_string: "old", new_string: "new" } },
+      { name: "Write", input: { file_path: "/r/b.md", content: "# hi" } },
+      { name: "WebSearch", input: { query: "agy docs" } },
+      { name: "Agent", input: { description: "Startup auditor", subagent_type: "research", prompt: "Audit startup" } },
+      { name: "manage_task", input: { Action: "list" } },
     ]);
   });
 
