@@ -20,14 +20,16 @@ function sameTask(a: string, b: string): boolean {
  *  task in blocked_by: as the wait's setter (`parked: "close"`), the wait
  *  still tells it when the task unblocks or the wait fails, and its held task
  *  unblocking wakes that task's owner (this session only when `owns`); as a
- *  joiner of another session's wait (`"held"`), the wait tells it nothing. A
+ *  joiner of another session's wait (`"held"`), the wait tells it nothing,
+ *  and its held task unblocking wakes it only when `owns`. A
  *  session holding no task is wiring up the graph, not waiting: no hint. */
 export type HeldPark = { kind: "close" | "held"; owns: boolean };
 export function parkAfterBlocking(sessionId: string | null, shortId: string, open: Blocker[], pulse: TaskPulse | null, parked: Blocker[] = [], held: HeldPark | null = null): string | null {
   if (!sessionId || !open.length || !pulse?.started || !pulse.task) return null;
   if (sameTask(pulse.task, shortId)) return parkingLine(open, shortId);
   if (parked.length && held?.kind === "held") {
-    return `${pulse.task} still waits for ${shortId} to close; you are woken when ${pulse.task} is unblocked. Pin dormant naming ${shortId} and end your turn.`;
+    const wake = held.owns ? `you are woken as ${pulse.task}'s owner` : `${pulse.task}'s owning session is woken`;
+    return `${pulse.task} still waits for ${shortId} to close; ${wake} when ${pulse.task} is unblocked. Pin dormant naming ${shortId} and end your turn.`;
   }
   if (parked.length && held?.kind === "close") {
     const wake = held.owns ? `woken as ${pulse.task}'s owner` : `${pulse.task}'s owning session is woken`;

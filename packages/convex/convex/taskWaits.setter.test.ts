@@ -387,7 +387,7 @@ describe("setter texts when the held task still waits on the task", () => {
   test("joining another session's wait answers held when the held task waits on the task", async () => {
     const { wait } = await setup({ heldWaitsOnA: true });
     expect((await wait("setter2")).parked).toBe(true);
-    expect(await wait("setter")).toMatchObject({ existing: true, parked: "held" });
+    expect(await wait("setter")).toMatchObject({ existing: true, parked: "held", owns: true });
     // A caller whose task does not wait on ct-7 hears nothing new.
     const plain = await setup();
     await plain.wait("setter2");

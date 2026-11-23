@@ -127,8 +127,11 @@ describe("parkAfterBlocking", () => {
 
   // A joiner of another session's wait: the wait tells it nothing.
   test("a session that joined another's wait is promised no notice", () => {
+    expect(parkAfterBlocking("s1", "ct-5", open, { task: "ct-8", started: true }, open, { kind: "held", owns: true })).toBe(
+      "ct-8 still waits for ct-5 to close; you are woken as ct-8's owner when ct-8 is unblocked. Pin dormant naming ct-5 and end your turn.",
+    );
     expect(parkAfterBlocking("s1", "ct-5", open, { task: "ct-8", started: true }, open, { kind: "held", owns: false })).toBe(
-      "ct-8 still waits for ct-5 to close; you are woken when ct-8 is unblocked. Pin dormant naming ct-5 and end your turn.",
+      "ct-8 still waits for ct-5 to close; ct-8's owning session is woken when ct-8 is unblocked. Pin dormant naming ct-5 and end your turn.",
     );
   });
 

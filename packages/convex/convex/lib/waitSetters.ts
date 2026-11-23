@@ -60,7 +60,8 @@ export async function wakeSession(ctx: Ctx, task: Task, conv: Doc<"conversations
 export async function heldWaitsAnswer(ctx: Ctx, by: TaskChangeBy | undefined, task: Task, settled: boolean): Promise<ParkAnswer> {
   if (settled || !by?.conversation_id) return { parked: false };
   const conv = await ctx.db.get(by.conversation_id);
-  return { parked: conv && (await heldStillWaiting(ctx, conv, task)) ? "held" : false };
+  const h = conv ? await heldFacts(ctx, conv, task) : null;
+  return h?.stillWaits ? { parked: "held", owns: h.owns } : { parked: false };
 }
 
 /** Add the task its wait is on to the parked session's list
