@@ -892,11 +892,12 @@ export const createFromCli = mutation({
     // the line's queue for the sweep to start in rank order.
     // One role per run: a run a role starts is admitted on that role's own
     // pool, filed under it and counted against it, so its stations (which
-    // name the same spawner) answer to the same role.
+    // name the same spawner) answer to the same role. Another role's run on
+    // the lead's problem still works in the problem's repo, the lead's folder.
     const problemLead = args.detach && lineRun && taskRow ? await projectLeadRole(ctx, taskRow) : null;
     const lead = args.detach && lineRun && taskRow ? startingRole ?? problemLead : null;
     const otherRole = !!startingRole && String(startingRole._id) !== String(problemLead?._id);
-    const room = lead ? await admitRoleRun(ctx, lead, now, undefined, needs) : null;
+    const room = lead ? await admitRoleRun(ctx, lead, now, undefined, needs, otherRole ? problemLead : undefined) : null;
     // The pool takes the runner's own runs, and anyone's the asking machine cannot run.
     const pooled = room?.pooled && (room.runner === String(userId) || unfit) ? room : null;
     // The problem's queue is its lead's; another role's full pool starts nothing and queues nothing.

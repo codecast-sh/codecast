@@ -241,10 +241,12 @@ export type LineLoads = Map<string, LineLoad>;
 /**
  * The load a role's next run meets: its pool's slots when a machine of its runner, else of its team, offers its
  * checkout; else its runner's own machine. `needs`: the agents the run's flow starts (flowAgents), which every pool
- * machine must be able to start.
+ * machine must be able to start. `folderOf`: the role whose folder the run works in, when it is not `role`'s own
+ * (another role's run on a lead's problem works in the problem's repo).
  */
-export async function lineLoadFor(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), roles?: any[], needs?: readonly string[]): Promise<LineLoad> {
+export async function lineLoadFor(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), roles?: any[], needs?: readonly string[], folderOf?: any): Promise<LineLoad> {
   const seat = await seatOf(ctx, role);
+  if (folderOf) seat.project_path = (await seatOf(ctx, folderOf)).project_path;
   const key = `${seat.runner}|${seat.project_path ?? ""}|${role.team_id ?? ""}|${needs?.join(",") ?? ""}`;
   const known = loads.get(key);
   if (known) return known;
@@ -271,8 +273,8 @@ export function claimSlot(load: LineLoad): RunPlace | undefined {
  */
 export type Admission = { runner: string; pooled: boolean } & ({ place?: RunPlace } | { waiting: string });
 
-export async function admitRoleRun(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), needs?: readonly string[]): Promise<Admission> {
-  const load = await lineLoadFor(ctx, role, now, loads, undefined, needs);
+export async function admitRoleRun(ctx: Ctx, role: any, now: number, loads: LineLoads = new Map(), needs?: readonly string[], folderOf?: any): Promise<Admission> {
+  const load = await lineLoadFor(ctx, role, now, loads, undefined, needs, folderOf);
   const at = { runner: load.runner, pooled: !!load.pool };
   if (freeSlots(load) <= 0) return { ...at, waiting: `${load.working} run${load.working === 1 ? " is" : "s are"} working on @${role.handle}'s machine${load.pool ? "s" : ""}` };
   return { ...at, place: claimSlot(load) };

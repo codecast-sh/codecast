@@ -609,6 +609,16 @@ describe("orgLine admission (LE6)", () => {
         expect(tables.tasks.find((t) => t._id === "tasks_c0")!.status).toBe("open");
       });
 
+      test("another role's run works in the problem's repo, never in that role's own folder", async () => {
+        const opsRepo = normalizeGitOrigin("git@github.com:Acme/Ops.git")!;
+        const laptop2 = { ...seatLaptop, git_plane: [...seatLaptop.git_plane, { root: "/work", origin: "git@github.com:Acme/Ops.git", origin_ok: true }] };
+        const opsHost = host("h2", 4, { line_slots: [{ root: "/home/ubuntu/h2", origin: opsRepo, runs: 4 }] });
+        const { ctx, tables } = seated([laptop2, host("h1", 4), opsHost]);
+        withOps(tables, "/work/ops");
+        const out = await startAs(ctx, tables, "ops", "/work/ops");
+        expect(tables.workflow_runs.find((r) => r._id === out.run_id)).toMatchObject({ org_role_id: "org_roles_ops", runner_device: "h1", project_path: "/home/ubuntu/h1/growth" });
+      });
+
       test("a person's own run from a plain terminal stays theirs, though the task's lead speaks for it", async () => {
         const { hashToken } = await import("./apiTokens");
         const { createFromCli } = await import("./workflow_runs");
