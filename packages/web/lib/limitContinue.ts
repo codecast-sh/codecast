@@ -19,18 +19,28 @@ export type LimitProfile = { name: string; email?: string; usage?: CcUsage; logi
  *  it, a Fable park pointed at an account whose Fable week was as spent as the
  *  one it left, while the one account with Fable left went unoffered
  *  (2026-11-22). */
-export function limitContinueTarget(device: any, now: number, live: boolean, family?: string): { fleetEmail?: string; active?: LimitProfile; best?: LimitProfile } {
+export function limitContinueTarget(
+  device: any,
+  now: number,
+  live: boolean,
+  family?: string,
+  session: { model?: string | null; pinned?: string | null } = {},
+): { fleetEmail?: string; active?: LimitProfile; best?: LimitProfile; models?: string[] } {
   const profiles: LimitProfile[] = device?.profiles ?? [];
   const fleetEmail = fleetAccount(device, now).email;
   const active = profiles.find((p) => p.email && p.email === fleetEmail);
+  // The session's own model counts too: a Fable session parked on its 5h
+  // window must not land on an account whose Fable week is spent.
+  const models = [family, session.model].filter((m): m is string => !!m);
+  const pinnedEmail = session.pinned ? profiles.find((p) => p.name === session.pinned || p.email === session.pinned)?.email : undefined;
   // Only while the park is live: a settled session's old proposal is history.
   const proposal = live && device ? pendingProposal([device], now) : null;
   // A model's room counts only where its meter proves it: an account that
   // reports no such window is unproven, never room (the switcher's rule too).
-  const eligible = fallbackProfiles(profiles, fleetEmail, now, family ? [family] : undefined)
-    .filter((p) => !family || familyStandingLabel(p.usage ?? undefined, family, now) !== undefined);
+  const eligible = fallbackProfiles(profiles, fleetEmail, now, models.length ? models : undefined)
+    .filter((p) => p.email !== pinnedEmail && (!family || familyStandingLabel(p.usage ?? undefined, family, now) !== undefined));
   const proposed = proposal?.target_email ? eligible.find((p) => p.email === proposal.target_email) : undefined;
-  return { fleetEmail, active, best: proposed ?? eligible[0] };
+  return { fleetEmail, active, best: proposed ?? eligible[0], models: models.length ? models : undefined };
 }
 
 /** "Fable 22% used": an account's standing on one model's week, the window

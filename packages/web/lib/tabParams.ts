@@ -1,4 +1,4 @@
-import { createContext, useContext } from "react";
+import { createContext, use, useContext } from "react";
 
 export function parseTabLocation(path: string) {
   const url = new URL(path, "https://codecast.local");
@@ -39,4 +39,18 @@ export const TabParamsCtx = createContext<{
 
 export function useTabContext() {
   return useContext(TabParamsCtx);
+}
+
+export type TabPane = { tabId: string; isActive: boolean; isVisible?: boolean; navigate?: (path: string, mode: "push" | "replace") => void; leafId?: string; getPath?: () => string };
+
+// The pane's identity without its location, provided beside TabParamsCtx by
+// every pane: a reader that only asks which pane it is in (the router,
+// presence, the stage) stays still while the pane navigates. Undefined means
+// no pane provided it (a test that sets TabParamsCtx alone), so the full
+// context answers.
+export const TabPaneCtx = createContext<TabPane | null | undefined>(undefined);
+
+export function useTabPane(): TabPane | null {
+  const pane = use(TabPaneCtx);
+  return pane !== undefined ? pane : use(TabParamsCtx);
 }

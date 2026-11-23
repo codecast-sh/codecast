@@ -9,8 +9,9 @@
 
 import { Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
-import { useTabContext } from "../../lib/tabParams";
+import { useTabPane } from "../../lib/tabParams";
 import { useVaultLocalPath } from "../../hooks/useVaultLocalPath";
+import { RemoteFileView } from "../../components/vault/RemoteFileView";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useConvex } from "convex/react";
 import {
@@ -143,7 +144,7 @@ function VaultContent() {
   // tab's layout. This effect drives the resizable panel to match. Expanding
   // resizes to an explicit width rather than calling expand(): the library's
   // restored size can land below the collapse midpoint and clamp straight back to 0.
-  const inSplitPane = !!useTabContext()?.leafId;
+  const inSplitPane = !!useTabPane()?.leafId;
   const storeRightPanelOpen = useVaultStore((s) => s.rightPanelOpen);
   const setStoreRightPanelOpen = useVaultStore((s) => s.setRightPanelOpen);
   const [paneRightPanelOpen, setPaneRightPanelOpen] = useState(false);
@@ -264,7 +265,7 @@ function VaultContent() {
     if (connection === "idle") void connect(convex);
   }, [connection, connect, convex]);
 
-  useVaultLocalPath(localPath, targetLine, router);
+  const remoteFile = useVaultLocalPath(localPath, targetLine, router, searchParams.get("conv"));
 
   // `line` rides along in the URL for search results: the note view doesn't
   // scroll to it yet, but the link already carries where the hit was.
@@ -404,6 +405,7 @@ function VaultContent() {
     openNote(landing);
   }, [activeVault, activePath, showGraph, scannedAt, setDirsExpanded, openNote]);
 
+  if (remoteFile && !activePath && (connection === "no-daemon" || vaults.length === 0)) return <RemoteFileView state={remoteFile} />;
   if (connection === "no-daemon")
     return (
       <LocalDaemonUnreachable
@@ -727,6 +729,8 @@ function VaultContent() {
                 <VaultFileView path={activePath} />
               )}
             </HoverPreviewProvider>
+          ) : remoteFile ? (
+            <RemoteFileView state={remoteFile} />
           ) : (
             <div className="h-full flex flex-col items-center justify-center gap-2 text-sol-text-dim">
               <FolderTree className="w-8 h-8 opacity-30" />

@@ -8,13 +8,16 @@ import { waitingOnPerson, type QueueItem } from '@codecast/web/lib/decisionQueue
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import { QueueChip, askingSessionLine } from '@/components/decisions/QueueMeta';
 import { TeamDecisionList } from '@/components/decisions/TeamDecisionList';
+import { DecidedDecisionList } from '@/components/decisions/DecidedDecisionList';
 
 // Decisions, Mine and Team as on the web's Decisions page. Mine is the
 // viewer's queue, in its order (lib/decisionQueue: blocked and reachable
 // first, oldest first within a tier): a `cast decide` row opens the
 // one-at-a-time screen; a terminal prompt (an AskUserQuestion, a permission)
 // has no authored payload and is answered inside its session. Team is every
-// open decision of the workspace with its owner (TeamDecisionList).
+// open decision of the workspace with its owner (TeamDecisionList). Decided is
+// every settled one, newest first, each opening to its answer and a way to
+// change it (DecidedDecisionList, SettledDecision).
 export default function DecisionsScreen() {
   const Theme = useTheme();
   const router = useRouter();
@@ -24,12 +27,12 @@ export default function DecisionsScreen() {
   const mine = queue.length;
   const withLead = queue.length - waitingOnPerson(queue).length;
   const firstDecide = useMemo(() => queue.find((i) => i.source === 'decide' && !i.heldByRole), [queue]);
-  const [view, setView] = useState<'mine' | 'team'>('mine');
+  const [view, setView] = useState<'mine' | 'team' | 'decided'>('mine');
   const switcher = (
     <View style={[styles.switcher, { borderColor: Theme.borderLight }]}>
-      {(['mine', 'team'] as const).map((v) => (
+      {(['mine', 'team', 'decided'] as const).map((v) => (
         <TouchableOpacity key={v} style={[styles.seg, view === v && { backgroundColor: Theme.card }]} onPress={() => setView(v)} accessibilityRole="tab" accessibilityState={{ selected: view === v }}>
-          <Text style={[styles.segText, view === v && { color: Theme.text }]}>{v === 'mine' ? 'Mine' : 'Team'}</Text>
+          <Text style={[styles.segText, view === v && { color: Theme.text }]}>{v === 'mine' ? 'Mine' : v === 'team' ? 'Team' : 'Decided'}</Text>
         </TouchableOpacity>
       ))}
     </View>
@@ -43,7 +46,7 @@ export default function DecisionsScreen() {
   return (
     <>
       <Stack.Screen options={{ title: 'Decisions', headerBackTitle: 'Inbox' }} />
-      {view === 'team' ? <TeamDecisionList header={switcher} /> : <FlatList
+      {view === 'team' ? <TeamDecisionList header={switcher} /> : view === 'decided' ? <DecidedDecisionList header={switcher} /> : <FlatList
         style={{ backgroundColor: Theme.bg }}
         contentContainerStyle={styles.list}
         data={queue}
