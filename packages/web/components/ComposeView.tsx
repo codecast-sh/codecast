@@ -144,7 +144,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     // A resumed draft keeps its agent; otherwise the caller's agent, then the
     // conversation on screen's, carries over, and the default
     // (lib/defaultAgent: the hosted assistant with no machine) fills in.
-    const agentType = resumed?.agent_type || newConversationAgentType(store, context?.agentType ?? ctx.agentType);
+    const agentType = resumed?.agent_type || newConversationAgentType(store, ctx.agentType, context?.agentType);
 
     // Shared optimistic-create path — see store.beginOptimisticSession.
     // deferCreate: opening the popup seeds ONLY a local stub (so the null-state
@@ -170,6 +170,17 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     if (instance) store.bindComposeStub(instance.id, sid);
 
     if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
+    // A composer opened for a task (a compose link) is born bound to it: the
+    // create carries the stub's _linkedObject (createSessionFromStub), and the
+    // server links the session and makes it the task's owner in the same
+    // transaction, as the task list's start does. active_task paints the badge
+    // meanwhile, as ContextChatInput does.
+    const task = context?.linkedTask;
+    if (task && sid !== resumeStubId) {
+      const activeTask = { _id: task._id, short_id: task.short_id, title: task.title, status: task.status };
+      store.syncRecord("sessions", sid, { _linkedObject: { type: "task", id: task._id }, active_task: activeTask });
+      store.syncRecord("conversations", sid, { active_task_id: task._id, active_task: activeTask });
+    }
     setSessionId(sid);
     setRestored(sid === resumeStubId);
     setSkillCtx({ projectPath: (sid === resumeStubId ? resumed?.project_path : path) || undefined, agentType });
