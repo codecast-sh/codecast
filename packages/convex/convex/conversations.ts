@@ -8665,6 +8665,8 @@ async function enrichInboxSessionRow(
   // already in hand — zero extra reads): identity, progress, and the latest
   // running agent's "what it's doing" line.
   let workflow_run_status: string | null = null;
+  // "workflow" for a Workflow-tool run, which runs inside this session's own agent process.
+  let workflow_run_kind: string | null = null;
   let workflow_run_name: string | null = null;
   let workflow_run_agents_done: number | null = null;
   let workflow_run_agents_total: number | null = null;
@@ -8674,6 +8676,7 @@ async function enrichInboxSessionRow(
     const run = await getDoc(conv.workflow_run_id);
     if (run) {
       workflow_run_status = run.status;
+      workflow_run_kind = run.run_kind ?? null;
       workflow_run_name = run.workflow_name ?? null;
       const nodes = run.node_statuses ?? [];
       workflow_run_agents_total = run.agent_count ?? (nodes.length || null);
@@ -8837,6 +8840,7 @@ async function enrichInboxSessionRow(
     is_workflow_sub: conv.is_workflow_sub || false,
     is_workflow_primary: conv.is_workflow_primary || false,
     workflow_run_status,
+    workflow_run_kind,
     workflow_run_name,
     flow_name,
     flow_run_id,
@@ -9042,6 +9046,7 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     is_workflow_sub: child.is_workflow_sub || false,
     is_workflow_primary: false,
     workflow_run_status: null,
+    workflow_run_kind: null,
     workflow_run_name: null,
     workflow_run_agents_done: null,
     workflow_run_agents_total: null,

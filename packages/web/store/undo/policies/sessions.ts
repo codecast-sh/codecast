@@ -190,17 +190,17 @@ export const SESSIONS_UNDO_POLICY: UndoPolicy = {
       ...KILL,
     },
   },
-  // A close sets a running session aside and closes the rest; its undo puts
-  // both back the way a stash's and a kill's do. Nothing was canceled, so the
-  // label needs no note.
-  closeSession: onSession("Closed", KILL),
+  // A close sets a running session aside and hides the rest; it stamps no
+  // retirement marker (no inbox_killed_at), so its undo is a plain un-hide.
+  // Nothing was canceled, so the label needs no note.
+  closeSession: onSession("Closed", HIDE),
   closeSessions: {
     spec: {
       label: (ctx) => {
         const ids = (ctx.args[0] ?? []) as string[];
         return ids.length === 1 ? `Closed ${sessionTitle(ctx.before, ids[0]!)}` : `Closed ${counted(ids.length, "session")}`;
       },
-      ...KILL,
+      ...HIDE,
     },
   },
   // assignSessionToBucket and switchProject are classified in work.ts, beside

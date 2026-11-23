@@ -915,6 +915,9 @@ export type InboxSession = {
   is_workflow_sub?: boolean;
   is_workflow_primary?: boolean;
   workflow_run_status?: string | null;
+  // "workflow": a Workflow-tool run, inside this session's own agent process (a
+  // codecast flow run has station sessions of its own and reports back).
+  workflow_run_kind?: string | null;
   workflow_run_name?: string | null;
   workflow_run_agents_done?: number | null;
   workflow_run_agents_total?: number | null;

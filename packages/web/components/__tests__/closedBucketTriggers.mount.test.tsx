@@ -62,7 +62,7 @@ const row = (_id: string, title: string) => ({
   _id, title, session_id: `s-${_id.slice(0, 6)}`, user_id: "me", owned_by_me: true, status: "active",
   started_at: NOW - 3_600_000, updated_at: NOW - 60_000, last_heartbeat: NOW - 1_000, message_count: 12,
   is_idle: true, agent_status: "idle", project_path: "/src/project",
-  inbox_dismissed_at: NOW - 30_000, inbox_killed_at: NOW - 30_000,
+  inbox_dismissed_at: NOW - 30_000,
 });
 const task = (_id: string, conv: string, status: string) => ({
   _id, title: `Check CI for ${conv.slice(0, 6)}`, prompt: "check CI", status, schedule_type: "recurring", mode: "apply",
@@ -72,7 +72,8 @@ const task = (_id: string, conv: string, status: string) => ({
 function seed() {
   __resetInboxPlacementCacheForTests();
   useInboxStore.setState({
-    sessions: { [CLOSED]: row(CLOSED, "Closed with a trigger"), [KILLED]: row(KILLED, "Killed, trigger canceled") },
+    // A close stamps only inbox_dismissed_at; a kill also stamps the retirement marker and completes it.
+    sessions: { [CLOSED]: row(CLOSED, "Closed with a trigger"), [KILLED]: { ...row(KILLED, "Killed, trigger canceled"), inbox_killed_at: NOW - 30_000, status: "completed" } },
     conversations: {},
     pending: {},
     pendingMessages: {},

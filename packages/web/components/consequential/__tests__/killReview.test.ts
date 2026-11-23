@@ -24,6 +24,18 @@ describe("killReviewOf", () => {
     assertGlance(l);
   });
 
+  test("a persistent anchor keeps its triggers and queue on a kill, so only a cut-off turn asks", () => {
+    expect(killReviewOf([s("a", { persistent: true, has_pending: true })], [armed("t", "a")])).toBeNull();
+    expect(killReviewOf([s("a", { persistent: true, is_idle: false })], [])?.rows.find((r) => r.k === "Working")?.list).toEqual(["Row a"]);
+  });
+
+  test("a role's own session never asks here: its kill opens the retire question instead", () => {
+    expect(killReviewOf([s("a", { standing_role_id: "r1", is_idle: false, has_pending: true })], [armed("t", "a")])).toBeNull();
+    const l = killReviewOf([s("a", { standing_role_id: "r1" }), s("b", { has_pending: true }), s("c")], [armed("t", "a")])!;
+    expect(l.name).toBe("Kill 2 sessions");
+    expect(l.rows.find((r) => r.k === "Triggers")?.v).toBe("Canceled");
+  });
+
   test("queued messages ask first", () => {
     const l = killReviewOf([s("a", { has_pending: true })], [])!;
     expect(l.rows.find((r) => r.k === "Queued")?.v).toBe("Messages dropped");
