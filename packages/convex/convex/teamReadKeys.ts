@@ -74,10 +74,16 @@ export const list = query({
     if (!userId) return null;
     if (!(await isAdmin(ctx, userId, args.team_id))) return null;
     const keys = await keysOf(ctx, args.team_id);
-    // A key outlives its minter's admin role, so the list says which minters are no longer admins.
-    const creators = new Map<string, { name: string | null; admin: boolean }>();
-    for (const id of new Set(keys.map((k) => k.created_by))) {
-      creators.set(String(id), { name: (await ctx.db.get(id))?.name ?? null, admin: await isAdmin(ctx, id, args.team_id) });
+    const creators = new Map<string, string | null>();
+    for (const id of new Set(keys.map((k) => String(k.created_by)))) {
+      creators.set(id, (await ctx.db.get(id as Id<"users">))?.name ?? null);
+    }
+    // A key outlives its minter's admin role, so the list says which live keys'
+    // minters are no longer team admins. The live-key cap bounds these reads.
+    const now = Date.now();
+    const stillAdmin = new Map<string, boolean>();
+    for (const id of new Set(keys.filter((k) => isLive(k, now)).map((k) => k.created_by))) {
+      stillAdmin.set(String(id), await isAdmin(ctx, id, args.team_id));
     }
     return keys
       .sort((a, b) => b.created_at - a.created_at)
@@ -86,8 +92,9 @@ export const list = query({
         name: k.name,
         prefix: k.prefix,
         created_at: k.created_at,
-        created_by_name: creators.get(String(k.created_by))?.name ?? null,
-        created_by_still_admin: creators.get(String(k.created_by))?.admin ?? false,
+        created_by_name: creators.get(String(k.created_by)) ?? null,
+        /** Null for an ended key, whose minter is not looked up. */
+        created_by_still_admin: stillAdmin.get(String(k.created_by)) ?? null,
         expires_at: k.expires_at,
         revoked_at: k.revoked_at ?? null,
         last_used_at: k.last_used_at ?? null,
