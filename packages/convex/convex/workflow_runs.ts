@@ -34,8 +34,7 @@ import { flowAgents, missingAgentOn } from "./lib/linePlacement";
 import { actsForRole, agentDisplayName, deviceDisplayName } from "@codecast/shared/contracts";
 import { navPromptField } from "./userMessagesFilter";
 import { retainSessionCreator } from "./sessionLaunch";
-import { recordHandStart } from "./spawn";
-import { roleOfConversation } from "./lib/actor";
+import { gateHandStart, gateRoleCaps, recordHandStart } from "./spawn";
 import { isSessionOwner } from "./sessionOwners";
 import { withAgentSessions } from "./lib/runAgentSessions";
 import { changeSessionOf } from "./lib/taskOwner";
@@ -838,6 +837,12 @@ export const createFromCli = mutation({
     const spawner = args.spawner_session
       ? await findConversationByAnyRef(ctx, args.spawner_session, userId)
       : await projectLeadSession(ctx, taskRow);
+    // The run is the role's start only when the caller names a session that
+    // acts for the role. The project lead's session a plain run speaks
+    // through (projectLeadSession) starts nothing: a person's own run stays
+    // theirs. A role's run is a hand: its switch and daily caps gate it
+    // before any machine is admitted (spawn.gateHandStart).
+    const startingRole = args.spawner_session && spawner && actsForRole(spawner) ? await gateHandStart(ctx, spawner) : null;
 
     // Resolve workflow_id — either passed directly (the caller's own, or one
     // its workspace's library holds) or look up by name
@@ -915,11 +920,11 @@ export const createFromCli = mutation({
       fresh_branch: args.detach && lineRun,
       now,
     });
-    // The run is the role's start only when the caller names a session that
-    // acts for the role. The project lead's session a plain run speaks
-    // through (projectLeadSession) starts nothing: a person's own run stays theirs.
-    const startingRole = args.spawner_session && spawner && actsForRole(spawner) ? await roleOfConversation(ctx, spawner) : null;
-    if (startingRole) await recordHandStart(ctx, startingRole, primary_conversation_id);
+    // A run a place admitted for the lead is filed under the lead, and counts
+    // as its hand; the lead's caps hold too when it is not the starting role.
+    const handOf = place && startingRole ? lead : startingRole;
+    if (handOf && startingRole && String(handOf._id) !== String(startingRole._id)) await gateRoleCaps(ctx, handOf);
+    if (handOf) await recordHandStart(ctx, handOf, primary_conversation_id);
     else await retainSessionCreator(ctx, primary_conversation_id, userId, host);
     // A placed run names its machine from the start, so the pool counts it there before a runner claims it.
     if (place) await ctx.db.patch(run_id, { runner_device: place.device });

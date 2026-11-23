@@ -540,6 +540,22 @@ describe("orgLine admission (LE6)", () => {
         expect(tables.conversations.find((c) => c._id === out.primary_conversation_id)).toMatchObject({ org_role_id: ROLE, role_started: true });
       });
 
+      test("a run the role's session starts is gated as a hand: refused at the daily cap, and while the role is paused", async () => {
+        const { hashToken } = await import("./apiTokens");
+        const { createFromCli } = await import("./workflow_runs");
+        const { ctx, tables } = seated([seatLaptop, host("h1", 4)]);
+        tables.api_tokens = [{ _id: "api_tokens_mate", user_id: MATE, token_hash: await hashToken("mate-token") }];
+        tables.org_roles[0].caps = { ...tables.org_roles[0].caps, hands_per_day: 1 };
+        const start = (task: string) => (createFromCli as any)._handler(ctx, { api_token: "mate-token", workflow_name: "line", task_id: task, project_path: "/srv/growth", detach: true, run_on_device: "dev-mate", spawner_session: "standing" });
+        await start("ct-c0");
+        const runs = tables.workflow_runs.length;
+        await expect(start("ct-c1")).rejects.toThrow(/reached today's limit of 1 hands/);
+        expect(tables.workflow_runs).toHaveLength(runs);
+        tables.org_roles[0].caps = { ...tables.org_roles[0].caps, hands_per_day: 100 };
+        tables.org_roles[0].status = "paused";
+        await expect(start("ct-c1")).rejects.toThrow(/is paused/);
+      });
+
       test("a person's own run from a plain terminal stays theirs, though the task's lead speaks for it", async () => {
         const { hashToken } = await import("./apiTokens");
         const { createFromCli } = await import("./workflow_runs");
