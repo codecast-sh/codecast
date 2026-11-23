@@ -11,6 +11,7 @@ import { applyCollectionFeed } from "../../hooks/useSyncCollection";
 import { feedOwnerFacts, selectOwnersRow } from "../../hooks/useOwners";
 import { ownerIdsOnRow } from "../../hooks/useOwnersStoreEnv";
 import { coOwnersOf } from "../../lib/coOwners";
+import { UNDO_SPECS } from "../undo/policy";
 
 const ID = "jx7000000000000000000000000000own";
 const MEMBERS = ["me", "mate", "sam", "pat", "quinn"].map((_id) => ({ _id, name: _id[0].toUpperCase() + _id.slice(1) }));
@@ -319,5 +320,24 @@ describe("a leave's locks retire on its receipt", () => {
     await until(() => locks().length === 0);
     expect(locks()).toEqual([]);
     expect(facts()).toEqual(["me", true, "me", ["me", "mate"]]);
+  });
+});
+
+// The undo history names what a Save did: a Resume moves no owner, it hands
+// the session back to its role.
+describe("an owners change in the undo history", () => {
+  const before = {
+    sessions: { [ID]: { _id: ID, title: "Pricing copy", org_role_id: "role1" } },
+    orgTree: { roles: [{ _id: "role1", name: "Growth lead", handle: "growth" }] },
+  };
+  const label = (change: unknown) => (UNDO_SPECS.applySessionOwners as any).label({ args: [ID, change, null], before, changes: [] });
+
+  test("a Resume reads Resumed @role", () => {
+    expect(label({ driver: { kind: "role" } })).toBe("Resumed @growth in “Pricing copy”");
+  });
+
+  test("a leave and any other change keep their own words", () => {
+    expect(label({ remove: ["me"], leave: {} })).toBe("Left “Pricing copy”");
+    expect(label({ add: ["mate"], driver: { kind: "role" } })).toBe("Changed the owners of “Pricing copy”");
   });
 });

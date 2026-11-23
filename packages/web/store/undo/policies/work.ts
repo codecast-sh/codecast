@@ -339,6 +339,12 @@ const teamRow = (state: any, id: string): any => (state?.teams ?? []).find((t: a
 const roleName = (state: any, id: string) =>
   quoted(((state?.orgTree?.roles ?? []) as any[]).find((r) => String(r?._id) === id)?.name, "role");
 const org = (label: (ctx: UndoCtx) => string): Spec => ({ spec: { label, external: "org" } });
+/** A session's role as the composer names it: its @handle, else its name. */
+const sessionRoleTag = (state: any, sessionId: string) => {
+  const row = state?.sessions?.[sessionId] ?? state?.conversations?.[sessionId];
+  const role = ((state?.orgTree?.roles ?? []) as any[]).find((r) => String(r?._id) === String(row?.org_role_id)) ?? row?.role;
+  return role?.handle ? `@${role.handle}` : role?.name ?? "the role";
+};
 
 // The owners chip, the handoff composer and the chart all move a session
 // through reparentOrgSession. The label says which gesture it was, in the
@@ -884,7 +890,14 @@ export const WORK_UNDO_POLICY: UndoPolicy = {
   // the machine it moved to stays.
   applySessionOwners: {
     spec: {
-      label: (ctx) => `${(ctx.args[1] as { leave?: unknown } | undefined)?.leave ? "Left" : "Changed the owners of"} ${sessionTitle(ctx.before, ctx.args[0] as string)}`,
+      label: (ctx) => {
+        const change = ctx.args[1] as { leave?: unknown; driver?: { kind?: string } } | undefined;
+        const title = sessionTitle(ctx.before, ctx.args[0] as string);
+        if (change?.leave) return `Left ${title}`;
+        // A Resume moves no owner: it hands the session back to its role.
+        if (change?.driver?.kind === "role" && Object.keys(change).every((k) => k === "driver")) return `Resumed ${sessionRoleTag(ctx.before, ctx.args[0] as string)} in ${title}`;
+        return `Changed the owners of ${title}`;
+      },
       inverse: (ctx) => (ctx.args[2] ? [call("applySessionOwners", ctx.args[0], ctx.args[2], ctx.args[1])] : null),
     },
   },
