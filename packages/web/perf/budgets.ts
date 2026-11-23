@@ -50,14 +50,17 @@ async function twice(): Promise<Report[]> {
   return out;
 }
 
-await test("switch", "a warm conversation switch fetches no history and opens the same 15 subscriptions each way", async () => {
+await test("switch", "a warm conversation switch fetches no history and opens the same 14 subscriptions each way", async () => {
   await setup("switch");
   for (const r of await twice()) {
     expect({ ...pick(r, ["convexQueries", "convexActions", "convexSubscribes", "storeWrites", "domMutations"]), asked: r.detail.query }).toEqual({
       // A cached window of 200 rows needs no snapshot, backfill or reread.
       convexQueries: 0, convexActions: 0, asked: [],
       // The destination's live queries (tail, meta, watermark, pane chrome).
-      convexSubscribes: 15,
+      // The owners read (listOwners) is a store feeder now, held at "skip"
+      // until the server confirms the caller, which this client never does,
+      // so it is not counted here; a signed-in browser still opens it.
+      convexSubscribes: 14,
       // Two writes that change no key: each wakes every subscriber for nothing.
       storeWrites: 2,
       // The pane swaps its subtrees; nothing else on the page moves. Six rows
