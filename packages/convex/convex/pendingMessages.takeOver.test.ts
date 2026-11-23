@@ -7,6 +7,7 @@ import { planUndo, performUndo } from "./orgChanges";
 import { wakeMentionedParties } from "./chat";
 import { computeInboxSessions, heldByRoleAlone } from "./conversations";
 import { endMembership } from "./lib/teamMembershipEnd";
+import { backfillBoundDriverPage } from "./lib/boundDriverBackfill";
 import { formatDecisionAnswer, roleDrives, rollupParentIdOf, SEND_REFUSED, SEND_REFUSED_PAUSED_ROLE } from "@codecast/shared/contracts";
 import { dispatch } from "./dispatch";
 import { sendSessionMessage } from "./pendingMessages";
@@ -413,6 +414,34 @@ describe("a session that moves to another role keeps who drives it", () => {
     expect(row("bound").org_role_id).toBe(eng._id);
     expect(row("bound").driver_user_id).toBeUndefined();
     expect(roleDrives(row("bound"))).toBe(true);
+  });
+});
+
+// ownerMigrations:backfillBoundDriver on sessions a binding and a takeover
+// both held as bound before driver_user_id existed.
+describe("the bound-driver backfill", () => {
+  test("gives a binding's session its person, leaves a takeover's with the role, and a re-run never undoes a Resume", async () => {
+    const { ctx, tables, row } = await world();
+    const tx = () => ({ db: ctx.db, scheduler: ctx.scheduler });
+    const eng = await performCreateRole(tx(), ME as any, { name: "Eng lead", handle: "eng", team_id: TEAM });
+    await ctx.db.patch("plain", { active_task_id: "tasks_1" });
+    await ctx.db.patch("shared", { active_task_id: "tasks_2" });
+    // A binding files through the reparent core (applyHoldChange), as main did: no driver yet.
+    await performReparentSession(tx(), ME as any, { session_id: "shared", target: { kind: "role", role_id: String(eng._id), hold: "bound" } });
+    // A scope change takes the other by the rule.
+    await performRehomeSessions(tx(), ME as any, eng, [{ raw: row("plain") }], { by_rule: true });
+    for (const id of ["plain", "shared"]) expect(row(id)).toMatchObject({ org_role_id: eng._id, org_role_hold: "bound" });
+    const engIndex = [...tables.org_roles].sort((a, b) => String(a._id).localeCompare(String(b._id))).findIndex((r) => r._id === eng._id);
+    const run = (dryRun: boolean) => backfillBoundDriverPage(tx(), { dryRun, roleIndex: engIndex });
+    expect((await run(true)).rows.map((r) => r.session)).toEqual([row("shared").short_id]);
+    await run(false);
+    expect(row("shared").driver_user_id).toBe(ME);
+    expect(roleDrives(row("plain"))).toBe(true);
+    // Resume @eng on the bound session, then run the backfill again.
+    await performSetSessionDriver(tx(), ME as any, { session_id: "shared", driver: { kind: "role" } });
+    expect((await run(true)).rows).toEqual([]);
+    await run(false);
+    expect(roleDrives(row("shared"))).toBe(true);
   });
 });
 

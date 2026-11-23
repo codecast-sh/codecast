@@ -47,12 +47,15 @@ export const backfillRoleStarted = internalMutation({
 // One-time backfill, run once when driver_user_id ships: a person's session a
 // task binding filed under a role before the field existed gets its person as
 // driver, the rule applyHoldChange writes for a new binding (held as bound, not
-// a role's start by roleStartJudge, its human starter still owns it). A move never picks a driver
-// (sessionOwnership.rehomeSessions), so without this they stay the role's. A
-// takeover by the rule held sessions as bound too and cannot be told apart.
-// Run only once: a later run would undo a "make the role drive" on a bound
-// session. Dry by default; one role's page per transaction, continued by the
-// scheduler on a real run. `role` (a handle) narrows it.
+// a role's start by roleStartJudge, its human starter still owns it). A move
+// never picks a driver (sessionOwnership.rehomeSessions), so without this
+// they stay the role's. A takeover by the rule held sessions as bound too; the
+// org log tells it apart (its write sits in a scope, hire or retire row, a
+// binding's in a session row of its own), and those stay the role's. A
+// session whose driver changed since the field shipped (`driver_changed_at`,
+// a Resume among them) is left alone, so a re-run changes nothing. Dry by
+// default; one role's page per transaction, continued by the scheduler on a
+// real run. `role` (a handle) narrows it.
 //   packages/convex/run.sh ownerMigrations:backfillBoundDriver '{"dryRun":true}'
 export const backfillBoundDriver = internalMutation({
   args: {

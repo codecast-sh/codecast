@@ -320,7 +320,7 @@ export async function writeDriver(ctx: { db: any }, conversationId: Id<"conversa
   const owns = userId ? listedOwnerIds(await ownersFactsOf(ctx, conversation)).includes(userId) : false;
   const next = owns ? userId : null;
   if (String(conversation.driver_user_id ?? "") === String(next ?? "")) return false;
-  await ctx.db.patch(conversationId, { driver_user_id: (next ?? undefined) as Id<"users"> | undefined });
+  await ctx.db.patch(conversationId, { driver_user_id: (next ?? undefined) as Id<"users"> | undefined, driver_changed_at: Date.now() });
   return true;
 }
 

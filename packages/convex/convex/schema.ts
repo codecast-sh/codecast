@@ -1416,6 +1416,11 @@ export default defineSchema({
     // means the primary owner. Written by sessionOwnership (setSessionDriver,
     // the reparent core: a role target clears it, removing the person clears it).
     driver_user_id: v.optional(v.id("users")),
+    // When writeDriver last changed who drives (a take-over, a pause, a
+    // Resume). `ownerMigrations:backfillBoundDriver` leaves alone any session
+    // whose driver has changed since the field shipped, so a re-run never
+    // undoes a Resume.
+    driver_changed_at: v.optional(v.number()),
     // A role started it on its own (spawn.recordHandStart: a hand, a line run's
     // sessions). With the role still filed and no person owner row, it is the
     // role's alone and in no person's inbox (shared isHeldByRoleAlone).
