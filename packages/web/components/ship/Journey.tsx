@@ -8,8 +8,8 @@
 import { memo, useMemo, useState } from "react";
 import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
-import { ArrowRight, Check, CornerDownLeft, Loader2, X } from "lucide-react";
-import { WHO_WORDS, gateWaitWords, holdWords, sentBackWords, stopWords, targetsFromLine, waitWords, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
+import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, X } from "lucide-react";
+import { WHO_WORDS, approvalWords, gateWaitWords, holdWords, insideWords, sentBackWords, stopWords, targetsFromLine, waitWords, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
 import { ageShort } from "../../lib/lineFlow";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
@@ -31,7 +31,7 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
           const next = stages[i + 1];
           return (
             <li key={s.id} className="sj-stage" data-state={s.state} data-who={s.who} data-past={next && (next.state !== "idle" || s.state === "done") ? "" : undefined} data-stage={s.id}>
-              {onOpen && s.steps?.length ? (
+              {onOpen && (s.steps?.length || s.inside) ? (
                 <button type="button" className="sj-stage-btn" aria-expanded={open === s.id} onClick={() => onOpen(open === s.id ? null : s.id)} data-journey-stage={s.id}>
                   <StageFace s={s} finished={finished} />
                 </button>
@@ -41,7 +41,7 @@ export const JourneyTrack = memo(function JourneyTrack({ stages, compact = false
         })}
       </ol>
       {looping.length && !compact ? (
-        <div className="sj-return" data-active={back ? "" : undefined} style={{ gridColumn: `${looping[0] + 1} / ${looping[looping.length - 1] + 2}`, ["--n" as string]: looping[looping.length - 1] - looping[0] + 1 }}
+        <div className="sj-return" data-active={back ? "" : undefined} data-single={looping.length === 1 ? "" : undefined} style={{ gridColumn: `${looping[0] + 1} / ${looping[looping.length - 1] + 2}`, ["--n" as string]: looping[looping.length - 1] - looping[0] + 1 }}
           title={`Back to this session from ${looping.map((i) => stages[i].label).join(", ")}`} data-journey-return>
           <span className="sj-return-line" aria-hidden />
           <span className="sj-return-words"><CornerDownLeft className="w-2.5 h-2.5" aria-hidden />findings come back to this session</span>
@@ -63,6 +63,8 @@ function StageFace({ s, finished = false }: { s: JourneyStage; finished?: boolea
           <StateWords state={s.state} />
         </span>
       ) : <span className="sj-label">{s.label}<StateWords state={s.state} /></span>}
+      {/* A segment hints at its inside, which a press on it opens in place. */}
+      {s.inside ? <span className="sj-hint" data-journey-hint><span>{insideWords(s.inside)}</span><ChevronDown className="sj-hint-caret" aria-hidden /></span> : null}
       <span className="sj-who">
         {finished ? (s.round ? `round ${s.round}` : "") : s.state === "back" ? "This session" : s.role === "live" || s.state === "skipped" ? "" : WHO_WORDS[s.who]}
         {!finished && s.round ? <span className="sj-round">· round {s.round}</span> : null}
@@ -82,6 +84,46 @@ const BRANCH_FLAG: Partial<Record<JourneyStage["state"], { glyph: string; words:
 const STATE_WORDS: Partial<Record<JourneyStage["state"], string>> = { done: "done", active: "current", waiting: "waiting", back: "sent back", stopped: "stopped", routed: "went another way", skipped: "skipped" };
 function StateWords({ state }: { state: JourneyStage["state"] }) {
   return STATE_WORDS[state] ? <span className="sr-only">, {STATE_WORDS[state]}</span> : null;
+}
+
+/**
+ * A segment opened in place: its passing steps down a spine, each route off a step a branch under it that says where it
+ * goes back to, and the segment's end last, so nothing reads as after it. A route a person answers on is dashed and says
+ * what makes a run ask: it asks only when a run turns there.
+ */
+function SegmentInside({ stage }: { stage: JourneyStage }) {
+  const { path, routes, end } = stage.inside!;
+  return (
+    <ol className="sj-in" aria-label={`Inside ${stage.label}`} data-journey-inside={stage.id}>
+      {path.map((p) => {
+        const off = routes.filter((r) => r.from === p.id);
+        return (
+          <li key={p.id} className="sj-in-step" data-state={p.state} data-who={p.who} data-stage={p.id}>
+            <span className="sj-in-node" aria-hidden><Mark state={p.state} /></span>
+            <span className="sj-in-head">
+              <b>{p.branches ? p.branches.map((b, i) => <span key={b.id} className="sj-branch" data-state={b.state} data-stage={b.id}>{i ? <i className="sj-in-beside"> beside </i> : null}{b.label}</span>) : p.label}<StateWords state={p.state} /></b>
+              <span className="sj-in-who">{WHO_WORDS[p.who]}</span>
+            </span>
+            {off.length ? <ul className="sj-in-routes" aria-label={`Off ${p.label}`}>{off.map((r, i) => <Route key={i} r={r} />)}</ul> : null}
+          </li>
+        );
+      })}
+      {end ? <li className="sj-in-step sj-in-end"><span className="sj-in-node" aria-hidden /><span className="sj-in-head"><b>{end}</b></span></li> : null}
+    </ol>
+  );
+}
+
+function Route({ r }: { r: InsideRoute }) {
+  return (
+    <li className="sj-in-route" data-state={r.state} data-asks={r.asks ? "" : undefined} data-to={r.to.kind}>
+      {r.label ? <span className="sj-in-when">{r.label}</span> : null}
+      {r.steps.map((s) => <span key={s.id} className="sj-in-hop" data-who={s.who} data-state={s.state}>{s.label}<StateWords state={s.state} /></span>)}
+      <span className="sj-in-to">
+        {r.to.kind === "stop" ? <><X className="w-2.5 h-2.5" aria-hidden />stops</> : <><CornerDownLeft className="w-2.5 h-2.5" aria-hidden />{r.to.kind === "session" ? "this session" : r.to.label}</>}
+      </span>
+      {r.asks ? <span className="sj-in-if">{approvalWords({ kind: "if", when: r.asks.when })}</span> : null}
+    </li>
+  );
 }
 
 /** What one stage did on the run: each of its steps with its words, rounds and the session that did it. */
@@ -256,8 +298,9 @@ export function JourneyView({ journey, run, now_ms, compact, actions, again, tar
   const team = typeof run?.workspace === "string" && run.workspace.startsWith("team:") ? run.workspace.slice(5) : null;
   return (
     <div className="sj" data-journey={journey.now.kind}>
-      <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={run ? setOpen : undefined} />
-      {opened ? <StageDetail stage={opened} now_ms={now_ms} /> : null}
+      <JourneyTrack stages={journey.stages} compact={compact} open={open} onOpen={setOpen} />
+      {opened?.inside ? <SegmentInside stage={opened} /> : null}
+      {opened?.steps?.length ? <StageDetail stage={opened} now_ms={now_ms} /> : null}
       {run ? <JourneyNowBar now={journey.now} run={run} now_ms={now_ms} again={again}>{actions}</JourneyNowBar> : null}
       {run && landed && team && run.spawner_conversation_id ? <SessionTargets teamId={team} conversationId={String(run.spawner_conversation_id)} line={"line" in journey.now ? journey.now.line : null} known={targets} focus={runFocus(run)} /> : null}
     </div>

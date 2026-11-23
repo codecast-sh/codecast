@@ -703,6 +703,8 @@ export function renderGalleryMessages(now: number): Row[] {
   asst(`Landed, waiting on a deploy:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipDeploy}"}\n\`\`\``);
   asst(`Live everywhere it ships:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipLive}"}\n\`\`\``);
   asst(`A finished run of a library flow:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.libraryRun}"}\n\`\`\``);
+  asst(`A flow that is one segment, its findings sent back to this session (press Land to see inside it):\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipLandBack}"}\n\`\`\``);
+  asst(`The same flow at the person's card inside Land:\n\n\`\`\`${FLOW_FENCE_LANG}\n{"run":"${GALLERY_FLOW.shipLandCard}"}\n\`\`\``);
 
   section("Pipeline");
   sh(EDIT_ADD.command, EDIT_ADD.output);

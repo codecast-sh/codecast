@@ -22,6 +22,8 @@
 .sj-return { grid-row: 2; display: flex; flex-direction: column; align-items: center; gap: 3px; }
 .sj-return-line { position: relative; align-self: stretch; height: 8px; border: 1.5px solid color-mix(in srgb, var(--sj-session) 45%, transparent); border-top: 0; border-radius: 0 0 8px 8px; margin: -4px calc(50% / var(--n, 1)) 0; }
 .sj-return-words { display: inline-flex; align-items: center; gap: 4px; font-size: var(--fs-meta); color: color-mix(in srgb, var(--sj-session) 85%, var(--sol-text-dim)); }
+/* One stage that sends work back: a hook under it, out and back into the same stage. */
+.sj-return[data-single] .sj-return-line { align-self: center; width: 64px; height: 12px; margin: -2px 0 0; border-radius: 0 0 12px 12px; }
 .sj-return[data-active] .sj-return-line { border-color: var(--sj-session); }
 .sj-return[data-active] .sj-return-words { color: var(--sj-session); font-weight: 600; }
 .sj-stage { position: relative; display: flex; flex-direction: column; align-items: center; gap: 3px; min-width: 0; text-align: center; }
@@ -156,6 +158,51 @@
 .sj-detail-mark[data-status="running"] { background: var(--sol-blue); animation: sj-pulse 1.6s ease-in-out infinite; }
 .sj-detail-session { color: var(--sol-blue); text-decoration: none; }
 .sj-detail-session:hover { text-decoration: underline; }
+
+/* A segment's inside, hinted under its stage and opened in place: its passing steps down a spine, each route off a step a
+   branch under it, the segment's end last. A route a person answers on is dashed in the asker's blue. */
+.sj-hint { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; font-size: var(--fs-meta); line-height: 1.2; color: var(--sol-text-dim); }
+.sj-hint > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sj-hint-caret { width: 11px; height: 11px; flex: none; transition: transform .2s; }
+.sj-stage-btn[aria-expanded="true"] .sj-hint-caret { transform: rotate(180deg); }
+.sj-in { list-style: none; margin: 0; padding: 12px 14px 12px 16px; border-top: 1px solid var(--sj-rule-2); background: var(--sj-card); font-size: 12px; }
+.sj-in-step { position: relative; padding: 0 0 12px 26px; --sj-who-c: var(--sj-auto); }
+.sj-in-step[data-who="agent"] { --sj-who-c: var(--sj-agent); }
+.sj-in-step::before { content: ""; position: absolute; left: 7px; top: 18px; bottom: 0; width: 2px; border-radius: 2px; background: var(--sj-rule); }
+.sj-in-end { padding-bottom: 0; }
+.sj-in-end::before { display: none; }
+.sj-in-node { position: absolute; left: 0; top: 1px; width: 16px; height: 16px; border-radius: 999px; display: grid; place-items: center; border: 1.5px solid color-mix(in srgb, var(--sj-who-c) 45%, var(--sj-rule)); background: var(--sj-card); color: var(--sol-text-dim); }
+.sj-in-node svg { width: 9px; height: 9px; }
+.sj-in-node .sj-pulse, .sj-in-node .sj-wait { width: 6px; height: 6px; }
+.sj-in-end .sj-in-node { left: 3px; top: 4px; width: 10px; height: 10px; border-radius: 2px; transform: rotate(45deg); border-color: var(--sj-rule); }
+.sj-in-step[data-state="done"] .sj-in-node { background: var(--sj-ok); border-color: var(--sj-ok); color: #fff; }
+.sj-in-step[data-state="active"] .sj-in-node { border-color: var(--sj-who-c); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sj-who-c) 16%, transparent); }
+.sj-in-step[data-state="routed"] .sj-in-node { border-color: var(--sol-text-dim); color: var(--sol-text-muted); }
+.sj-in-step[data-state="stopped"] .sj-in-node { background: var(--sj-bad); border-color: var(--sj-bad); color: #fff; }
+.sj-in-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; min-height: 18px; }
+.sj-in-head b { font-size: 12.5px; font-weight: 600; }
+.sj-in-beside { font-style: normal; font-weight: 400; color: var(--sol-text-dim); }
+.sj-in-who { font-size: var(--fs-meta); color: var(--sj-who-c); }
+.sj-in-routes { list-style: none; margin: 6px 0 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+/* Each route leaves the spine on an elbow and reads left to right: when, the steps it runs, where it goes back to. */
+.sj-in-route { position: relative; display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 6px; padding-left: 14px; line-height: 1.45; color: var(--sol-text-muted); }
+.sj-in-route::before { content: ""; position: absolute; left: -18px; top: -5px; width: 26px; height: 14px; border: solid var(--sj-rule); border-width: 0 0 1.5px 1.5px; border-bottom-left-radius: 9px; }
+.sj-in-when { font-style: italic; color: var(--sol-text-dim); }
+:is(.sj-in-when, .sj-in-hop):has(+ .sj-in-hop)::after { content: "→"; font-style: normal; margin-left: 6px; color: var(--sol-text-dim); }
+.sj-in-hop { color: var(--sol-text); font-weight: 500; }
+.sj-in-to { display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-meta); color: var(--sol-text-dim); }
+.sj-in-route[data-to="session"] .sj-in-to { color: color-mix(in srgb, var(--sj-session) 85%, var(--sol-text-dim)); }
+/* A person's step only a turn reaches: dashed, as the route that leads to it, with what makes a run ask under it. */
+.sj-in-route[data-asks]::before { border-style: dashed; border-color: color-mix(in srgb, var(--sj-you) 55%, transparent); }
+.sj-in-hop:is([data-who="person"], [data-who="you"]) { padding: 0 7px; border: 1px dashed color-mix(in srgb, var(--sj-you) 60%, transparent); border-radius: 999px; color: var(--sj-you); background: color-mix(in srgb, var(--sj-you) 7%, transparent); }
+.sj-in-if { flex-basis: 100%; font-size: var(--fs-meta); color: var(--sj-you); }
+/* On a run: the route it is on now, the one that sent the work back, and the card waiting on an answer. */
+.sj-in-route[data-state="active"] .sj-in-hop[data-state="active"] { color: var(--sol-blue); }
+.sj-in-route[data-state="back"], .sj-in-route[data-state="back"] .sj-in-hop { color: var(--sj-session); }
+.sj-in-route[data-state="back"]::before { border-color: var(--sj-session); }
+.sj-in-route[data-state="back"] .sj-in-to { color: var(--sj-session); font-weight: 600; }
+.sj-in-hop[data-state="waiting"] { border-style: solid; border-color: var(--sj-wait); background: color-mix(in srgb, var(--sj-wait) 16%, var(--sj-card)); color: var(--sol-text); }
+.sj-in-route[data-state="waiting"]::before { border-color: var(--sj-wait); }
 /* A Ship press the session answered without a run: its answer, quoted. */
 .shp-declined { padding: 9px 14px 10px; border-bottom: 1px solid var(--sj-rule-2); background: var(--sj-sunk); }
 .shp-declined header { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
@@ -166,6 +213,7 @@ button.shp-link { background: none; border: 0; padding: 0; cursor: pointer; font
 .shp-session { font-size: 13px; color: var(--sol-text); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .sj-target-item { display: inline-flex; align-items: center; gap: 4px; }
 .shp-asks { display: inline-block; margin-right: 10px; padding: 0 7px; border-radius: 999px; font-size: var(--fs-meta); font-weight: 600; color: var(--sol-text-muted); background: color-mix(in srgb, var(--sol-text-dim) 12%, transparent); }
+.shp-flowname .shp-asks { margin: 0 0 0 8px; }
 .shp-asks[data-asks] { color: var(--sol-blue); background: color-mix(in srgb, var(--sol-blue) 12%, transparent); }
 .shp-foot .sj-btn[data-primary] { background: var(--sol-blue); border-color: var(--sol-blue); color: #fff; }
 .shp-foot .sj-btn[data-primary]:hover { filter: brightness(1.08); background: var(--sol-blue); }

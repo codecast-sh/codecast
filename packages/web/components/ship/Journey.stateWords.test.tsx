@@ -30,3 +30,21 @@ describe("states that read without color", () => {
     expect(text(stopped)).toContain("CI + Review✕ (stopped), stopped");
   });
 });
+
+const { journeyStages } = await import("../../lib/ship/journey");
+const { pushedFlow } = await import("../../lib/line/flowPool");
+const { LAND_FLOW } = await import("../../lib/ship/journeyFixtures");
+
+describe("a segment stage", () => {
+  const stages = journeyStages(pushedFlow({ _id: "wf_land", ...LAND_FLOW })).map((s) => ({ ...s, state: "idle", round: null })) as any;
+  test("hints at its inside under its name, a press away from opening it", () => {
+    const html = renderToStaticMarkup(<JourneyTrack stages={stages} onOpen={() => {}} />);
+    expect(html).toContain('aria-expanded="false"');
+    expect(text(html)).toContain("PR · CI + Review · Merge");
+  });
+  test("alone and sending work back, it draws a hook under itself, not a bracket of no width", () => {
+    expect(renderToStaticMarkup(<JourneyTrack stages={stages} />)).toContain("data-single");
+    const two = [stage("pr", "PR", "idle", { loops: [{ id: "fix", label: "Fix", max: 3 }] }), stage("merge", "Merge", "idle", { loops: [{ id: "fix", label: "Fix", max: 3 }] })];
+    expect(renderToStaticMarkup(<JourneyTrack stages={two} />)).not.toContain("data-single");
+  });
+});
