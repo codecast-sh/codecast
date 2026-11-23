@@ -16,7 +16,7 @@ import { resolveSessionSkills } from "../lib/sessionSkills";
 import { broadcastComposeOptimistic } from "../lib/composeBridge";
 import { agentDisplayName, isHostedAgentType } from "@codecast/shared/contracts";
 import { newConversationAgentType } from "../lib/defaultAgent";
-import { composeDraftContent, findKeptComposeDraft, type ComposeContext, type ComposeInstance } from "../store/composeSlice";
+import { bindComposeTask, composeDraftContent, findKeptComposeDraft, type ComposeContext, type ComposeInstance } from "../store/composeSlice";
 import { flushDraftWrite } from "../lib/pendingDraftWrites";
 import { settleHostedStart } from "../lib/startHostedConversation";
 import { useOnlyHostedAgent } from "../hooks/usePinnedAgents";
@@ -170,18 +170,7 @@ export function ComposeView({ initialQuery, context, onClose, closeGuardRef, ins
     if (instance) store.bindComposeStub(instance.id, sid);
 
     if (initialQuery) store.setDraft(sid, { draft_message: initialQuery });
-    // A composer opened for a task (a compose link) is born bound to it: the
-    // create carries the stub's _linkedObject (createSessionFromStub), and the
-    // server links the session and makes it the task's owner in the same
-    // transaction, as the task list's start does. active_task is the new
-    // session's task badge (header, sidebar) from its first optimistic paint,
-    // as ContextChatInput sets it; the composer itself draws no task chip.
-    const task = context?.linkedTask;
-    if (task && sid !== resumeStubId) {
-      const activeTask = { _id: task._id, short_id: task.short_id, title: task.title, status: task.status };
-      store.syncRecord("sessions", sid, { _linkedObject: { type: "task", id: task._id }, active_task: activeTask });
-      store.syncRecord("conversations", sid, { active_task_id: task._id, active_task: activeTask });
-    }
+    if (context?.linkedTask && sid !== resumeStubId) bindComposeTask(store, sid, context.linkedTask);
     setSessionId(sid);
     setRestored(sid === resumeStubId);
     setSkillCtx({ projectPath: (sid === resumeStubId ? resumed?.project_path : path) || undefined, agentType });

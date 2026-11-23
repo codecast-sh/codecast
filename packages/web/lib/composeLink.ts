@@ -30,7 +30,6 @@ const PROJECT_MAX_LENGTH = 512;
 // C0 and C1 controls and DEL, except tab and newline: they only reach a
 // textarea's value, but a NUL or an escape sequence is never part of a draft
 // worth keeping.
-// eslint-disable-next-line no-control-regex
 const CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 // Characters that draw nothing, which can carry text the person cannot see to
 // the agent that reads the message they send: every default-ignorable code
@@ -40,7 +39,7 @@ const CONTROL_CHARS = /[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g;
 // interlinear annotation marks, the object replacement character, the null
 // notehead). Joiners and the two emoji
 // selectors are judged by what they follow instead (dropStrayMarks).
-const IGNORABLE = /(?![\u200c\u200d\ufe0e\ufe0f])\p{Default_Ignorable_Code_Point}|[\u2800\ufff9-\ufffc\u{13430}-\u{1343f}\u{1d159}]/gu;
+const IGNORABLE = /(?!\u200c|\u200d|\ufe0e|\ufe0f)\p{Default_Ignorable_Code_Point}|[\u2800\ufff9-\ufffc\u{13430}-\u{1343f}\u{1d159}]/gu;
 // Private-use and unassigned code points: no font this text will meet draws
 // them as words, and some draw as nothing at all (Apple's U+F860 family, the
 // unassigned Mongolian and Thai slots) or shift the text after them.

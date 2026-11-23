@@ -6,7 +6,7 @@
 // never sends: the person presses Enter.
 import { useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { useConvexAuth } from "convex/react";
+import { useServerAuthenticated } from "./useServerAuthSettled";
 import { toast } from "sonner";
 import { useInboxStore, findProjectPathByName } from "../store/inboxStore";
 import { parseComposeLink, draftForTask, resolveLinkProject, stripComposeLink } from "../lib/composeLink";
@@ -36,7 +36,7 @@ export function useComposeLink(active: boolean): void {
   // see the task (unknown, or another workspace's): the draft opens unbound.
   // Asked only once the socket is signed in: before that the server answers
   // null for a caller it does not know yet, which would read as "not yours".
-  const { isAuthenticated } = useConvexAuth();
+  const isAuthenticated = useServerAuthenticated();
   const answer = useSyncTaskDetail(active && isAuthenticated && link?.task ? link.task : undefined);
   const settingsReady = useInboxStore((s) => s.clientStateInitialized);
   const rosterReady = useInboxStore((s) => s.machineRosterLive);
