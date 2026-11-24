@@ -127,16 +127,24 @@ export function trackStep(child: ChildProcess): void {
 }
 
 /** Stop every running step's whole process group with SIGTERM (deploy.sh's launchd job boots itself out on it) and
- *  wait for each to end. False when one is still running after the grace: its tree must stay. */
+ *  wait until each group is gone. False when one is still running after the grace: its tree must stay. */
 export async function stopSteps(graceMs = STOP_GRACE_MS): Promise<boolean> {
   const live = [...running].filter((c) => c.exitCode === null && c.signalCode === null && c.pid);
   for (const c of live) { try { process.kill(-c.pid!, "SIGTERM"); } catch {} }
+  const until = Date.now() + graceMs;
   const ended = await Promise.all(live.map((c) => new Promise<boolean>((resolve) => {
     if (c.exitCode !== null || c.signalCode !== null) return resolve(true);
     const timer = setTimeout(() => resolve(false), graceMs);
     c.once("close", () => { clearTimeout(timer); resolve(true); });
   })));
-  return ended.every(Boolean);
+  if (!ended.every(Boolean)) return false;
+  // `close` says only that nothing writes to the step's output any more: a member writing elsewhere may still run,
+  // and one that has exited stays in the group until whatever adopted it reaps it.
+  while (live.some((c) => alive(-c.pid!))) {
+    if (Date.now() >= until) return false;
+    await new Promise((res) => setTimeout(res, 20));
+  }
+  return true;
 }
 
 /** The sha the merge landed as, once it has (merge.json is written first): a station stopped after that point still
