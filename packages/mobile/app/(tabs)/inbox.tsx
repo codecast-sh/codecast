@@ -4,6 +4,8 @@ import { TextInput, Text as RNText } from '@/components/Themed';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { api } from '@codecast/convex/convex/_generated/api';
 import { Component, type ReactNode, useState, useCallback, useRef, useMemo, useEffect } from 'react';
+import { useViewableOwnerCards } from '@/hooks/useViewableOwnerCards';
+import { pendingSendIdsOf } from '@codecast/web/store/inboxOverlays';
 import { useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
 import { Theme, Spacing, themedStyles, useTheme, useAppearanceKey } from '@/constants/Theme';
@@ -115,7 +117,14 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   // The rows as the shared chokepoint places them (hooks/useInboxPlacement):
   // the same computation the slide-out panel's counts and web run. The body
   // reads the raw sessions map off the store at render, gated by sessionsSig.
-  const { placed, sessionsSig, coarseNow, currentSessionId, sessionsWithQueuedMessages } = useInboxPlacement();
+  const { placed, sessionsSig, pendingSendSig, coarseNow, currentSessionId, sessionsWithQueuedMessages } = useInboxPlacement();
+  // A send of yours still waiting locally (the outbox), per row: a row that
+  // waits on it reads working, as web's card reads it.
+  const pendingSendIds = useMemo(
+    () => pendingSendIdsOf(useInboxStore.getState(), coarseNow),
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- the signatures stand in for the churny refs
+    [pendingSendSig, sessionsWithQueuedMessages, coarseNow],
+  );
   const inboxPainted = useRef(false);
   useEffect(() => {
     if (inboxPainted.current) return;
@@ -356,12 +365,15 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
       onOpenRole={openRole}
       clock={rowMinute}
       reviveAt={reviveByConv[s._id]}
+      placedBucket={placed.placements.get(s._id)?.bucket}
+      placedState={placed.placements.get(s._id)?.work_state}
+      pendingSend={pendingSendIds.has(s._id)}
     />
     );
     return s._id === heldKillId
       ? <RNView key={s._id} style={styles.heldKill} pointerEvents="none">{row}</RNView>
       : row;
-  }, [openSession, currentId, handleClose, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId]);
+  }, [openSession, currentId, handleClose, handleSessionLongPress, openRole, rowMinute, reviveByConv, unreadByConv, roleSessionsByLead, heldKillId, placed, pendingSendIds]);
 
   // Collapsible section — collapse state lives in the shared store's
   // collapsedSections. Grouped-view sections keep their historical label keys;
@@ -624,6 +636,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   const SEARCH_REVEAL_HEIGHT = 44;
   const [listHeight, setListHeight] = useState(0);
   const listRef = useRef<FlatList<InboxListItem>>(null);
+  const onViewableItemsChanged = useViewableOwnerCards<InboxListItem>();
   // contentOffset applies only at mount, before the list is measured, so a
   // short list would open with the search row showing. Tuck it once the list
   // has a height, and again whenever a new filter replaces the rows.
@@ -633,7 +646,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
   }, [listHeight > 0, activeProjectFilter, activeBucketFilter]);
 
   return (
-    <InboxRowEnvProvider>
+    <InboxRowEnvProvider viewableOwners>
     <SafeAreaView style={styles.container} edges={panel ? ['top', 'bottom', 'left'] : ['top']}>
       <RNView style={styles.header}>
         {panel ? <TouchableOpacity
@@ -737,6 +750,7 @@ export function InboxView({ panel = false, currentId, onOpenSession, onExit }: {
           data={listData}
           keyExtractor={inboxItemKey}
           renderItem={renderListItem}
+          onViewableItemsChanged={onViewableItemsChanged}
           initialNumToRender={FIRST_PAINT_ROWS}
           maxToRenderPerBatch={10}
           windowSize={7}
