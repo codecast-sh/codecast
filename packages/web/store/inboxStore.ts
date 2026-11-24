@@ -50,7 +50,7 @@ import { afterCommit, rekeyUndoIds, sameShape, withoutUndo } from "@platform/eng
 import { adoptWorkspaceSnapshot, createWorkspace, serializeWorkspace, hydrateWorkspace, autoAllowed as wsAutoAllowedPure, isSessionRailOpen, isCommentRailOpen, SESSION_LIST_PANE, TERMINAL_PANE, type PersistedWorkspace, showPane, hidePane, togglePane, setPresentation as wsSetPresentationPure, setSize as wsSetSizePure, type WorkspaceState, type SlotId, type Pane, type Presentation } from "./workspace";
 import { applyWorkbench as applyWorkbenchPure, captureWorkbench, chipFilterOf, resolveWorkbenchFilter, type WorkbenchSnapshot } from "./workbench";
 import { declareViewNav, freshHomeLaunchPending, hasViewNavigated, recordNavEvent, settleFreshHomeLaunch, type ViewNavSource } from "./viewNav";
-import { applySyncTable, applySyncRecord, applySyncPatch, applyShapeLocks, type PendingEntry } from "./syncProtocol";
+import { applySyncTable, applySyncRecord, applySyncPatch, applyShapeLocks, noteAckedLock, type PendingEntry } from "./syncProtocol";
 import { syncTransaction } from "./syncTransaction";
 import { installStoreListenerCensus } from "./storeListenerCensus";
 import { current, isDraft, original } from "mutative";
@@ -121,6 +121,12 @@ import {
   isOrphanOrSubagent,
   isNestedIdentity,
   isAssignedAwayFromViewer,
+  underOwnersModel,
+  isInboxMember,
+  escalatedAsks,
+  agentAnswersRow,
+  personWorkState,
+  waitReachedPeople,
   commandsSession,
   rollupParentIdOf,
   rideLeadPlacements,
@@ -368,6 +374,7 @@ import { createExpectationsSlice, type ExpectationsSliceActions } from "./expect
 import { createOpsSlice, type OpsSliceActions } from "./opsSlice";
 import { createLiveArtifactsSlice, type LiveArtifactsSliceActions } from "./liveArtifactsSlice";
 import { createMeetingBotsSlice, type MeetingBotsSliceActions } from "./meetingBotsSlice";
+import { createSessionOwnersSlice, type SessionOwnersSliceActions } from "./sessionOwnersSlice";
 import { createAgentConnectionsSlice, type AgentConnectionsSliceActions } from "./agentConnectionsSlice";
 import { createComposeSlice, type ComposeInstance, type ComposeSliceState } from "./composeSlice";
 // Re-exported so chat surfaces import their selectors from the store, like every
@@ -1051,6 +1058,26 @@ export type InboxSession = {
   team_session?: boolean;
   team_answered_by?: string | null;
   team_answered_at?: number | null;
+  // The owners model (team feature session_owners), stamped by the server only
+  // on a row it applies to (shared underOwnersModel): the marker, the person
+  // who owns it only because nothing else does (membership, with owned_by_me:
+  // shared isInboxMember), the session that owns it, whether a role started
+  // it, the last owner write, when a person released it from its parent (the
+  // nested seat), and its current wait's escalation: when, the message count
+  // it covers, and the person it reached that no owner row names (shared
+  // waitReachedPeople, escalatedSeat). Who else owns it is the owners read.
+  owners_model?: boolean | null;
+  implicit_owner?: string | null;
+  owner_session_id?: string | null;
+  role_started?: boolean | null;
+  owners_changed_at?: number | null;
+  parent_released_at?: number | null;
+  wait_up_at?: number | null;
+  wait_up_count?: number | null;
+  wait_up_person?: string | null;
+  // The waiting episode the needs-input push last covered ("<count>:<kind>"):
+  // a current escalation's kind (shared escalatedAsks).
+  needs_input_notified_key?: string | null;
   // Unacknowledged handoff: a teammate assigned this session to the current user
   // and they haven't acked it yet (session_owners.seen_at unset). Stamped by
   // computeInboxSessions; cleared by ackSessionAssignment (server) and
@@ -2565,6 +2592,15 @@ function workingSetRowOf(s: InboxSession): WorkingSetRow {
     // The role a session rides (isUnderRole): same shared computation.
     org_role_id: s.org_role_id ?? null,
     standing_role_id: s.standing_role_id ?? null,
+    // The owners model's marker and the facts its seats read (shared
+    // nestedSeat, escalatedSeat).
+    owners_model: s.owners_model ?? null,
+    user_id: s.user_id ?? null,
+    implicit_owner: s.implicit_owner ?? null,
+    parent_released_at: s.parent_released_at ?? null,
+    wait_up_at: s.wait_up_at ?? null,
+    wait_up_count: s.wait_up_count ?? null,
+    wait_up_person: s.wait_up_person ?? null,
   };
 }
 
@@ -2602,8 +2638,9 @@ let _membershipVal: InboxMembership | null = null;
 export function computeInboxMembership(
   sessions: Record<string, InboxSession>,
   epoch: number,
+  meId?: string | null,
 ): InboxMembership {
-  const key = `${sessionsWakeSig(sessions)}\x1e${membershipTimeSig(sessions)}\x1e${epoch}`;
+  const key = `${sessionsWakeSig(sessions)}\x1e${membershipTimeSig(sessions)}\x1e${epoch}\x1e${meId ?? ""}`;
   if (_membershipVal && _membershipKey === key) return _membershipVal;
   const rows: WorkingSetRow[] = [];
   for (const s of Object.values(sessions)) {
@@ -2612,8 +2649,8 @@ export function computeInboxMembership(
     if (!isMemberCandidate(s)) continue;
     rows.push(workingSetRowOf(s));
   }
-  const { members, truncated } = selectWorkingSet(rows, epoch);
-  const { belowFold } = computeFold(members);
+  const { members, truncated } = selectWorkingSet(rows, epoch, meId);
+  const { belowFold } = computeFold(members, meId);
   _membershipVal = { epoch, members: new Set(members.keys()), belowFold, truncated };
   _membershipKey = key;
   return _membershipVal;
@@ -2717,6 +2754,9 @@ export function isForeignRow(s: InboxSession, meId: string | null | undefined): 
 }
 function isForeignRowUncached(s: InboxSession, meId: string): boolean {
   if (!isConvexId(s._id)) return false; // optimistic stub — always mine
+  // Under the owners model the inbox is exactly what the viewer owns (an owner
+  // row, the implicit starter, or an escalated wait), whoever runs it.
+  if (underOwnersModel(s)) return !isInboxMember(s, meId);
   if (isAssignedAwayFromViewer(s, meId)) return true;
   if (!s.user_id) return false; // thin/legacy row with no author → keep
   return isForeignSession(s, undefined, meId);
@@ -3027,7 +3067,7 @@ export function computeInboxVisible(
   if (scope === "team") {
     result = { visibleSessions: scoped, oldCount: 0, membership: null, scoped };
   } else {
-    const membership = computeInboxMembership(scoped, epoch);
+    const membership = computeInboxMembership(scoped, epoch, meId);
     result = { ...partitionWorkingSet(scoped, membership, { showOld, deps }), membership, scoped };
   }
   _visibleMemo.set(slot, { key, val: result });
@@ -3047,8 +3087,8 @@ const REST_RANK: Record<SessionRestState, number> = { needs_input: 0, done: 1, d
 // ct-47520 class: the legacy per-row classifier filed a staleness-swept row
 // as needs_input while the chokepoint placed it Done. Rows with no placement
 // (create stubs, children riding their parent) keep the legacy verdict.
-export function rankVerdictOf(s: InboxSession, placement?: { work_state: WorkState } | null): SessionVerdict {
-  return placement ? verdictOfWorkState(placement.work_state) : classifySession(s);
+export function rankVerdictOf(s: InboxSession, placement?: { work_state: WorkState; bucket?: InboxBucket } | null): SessionVerdict {
+  return verdictOfWorkState(sortWorkStateOf(s, placement));
 }
 type SortRank = [number, number, number, number, number, number, number];
 // A row's rank reads only its own fields and the class it sorts by, so it is
@@ -3084,9 +3124,12 @@ function buildSortRank(s: InboxSession, c: SessionVerdict): SortRank {
 // legacy verdict read back as a work state. The exact inverse of
 // verdictOfWorkState, so the class the order uses is the class the section
 // files under.
-function sortWorkStateOf(s: InboxSession, placement?: { work_state: WorkState } | null): WorkState {
-  if (placement) return placement.work_state;
-  const c = rankVerdictOf(s, null);
+// A wait its agent owner answers ranks as the person reads it: working
+// (personWorkState), the section it files under.
+function sortWorkStateOf(s: InboxSession, placement?: { work_state: WorkState; bucket?: InboxBucket } | null): WorkState {
+  if (placement) return placement.bucket ? personWorkState(s, placement as { work_state: WorkState; bucket: InboxBucket }) : placement.work_state;
+  if (agentAnswersRow(s)) return personSessionWorkState(s);
+  const c = classifySession(s);
   return c.waiting ? c.rest : c.idle ? "idle" : "working";
 }
 
@@ -3405,6 +3448,13 @@ export function sessionPlacement(s: InboxSession, now = Date.now()): RowVerdict 
 export function sessionWorkState(s: InboxSession, now = Date.now()): WorkState {
   return sessionPlacement(s, now).work_state;
 }
+/** Who acts next as a PERSON reads it: the work state, except a wait an agent
+ *  owner answers, which is the agent's work (shared personWorkState). Every
+ *  person-facing reader (counts, the chime, the palette, plan groups) reads
+ *  this; an agent watching the session reads sessionWorkState. */
+export function personSessionWorkState(s: InboxSession, now = Date.now()): WorkState {
+  return personWorkState(s, sessionPlacement(s, now));
+}
 export function classifySession(s: InboxSession, now = Date.now()): SessionVerdict {
   const p = sessionPlacement(s, now);
   let c = _classifyCache.get(p);
@@ -3503,7 +3553,10 @@ export function orchestrationGroupLabelOf(s: InboxSession): string | null {
 // A foreign-run cached row that claims the viewer as an owner: the rows a
 // disown can change (my own runs keep their stamps; another user's ownership
 // is server truth about them).
-export function claimsViewer(s: { user_id?: string | null; owned_by_me?: boolean; owner_user_id?: string | null }, meId: string): boolean {
+// Under the owners model the claim is membership itself (isInboxMember), on
+// any row, the viewer's own runs included: leaving the owners leaves the inbox.
+export function claimsViewer(s: { user_id?: string | null; owned_by_me?: boolean; owner_user_id?: string | null; owners_model?: boolean | null; implicit_owner?: string | null; wait_up_person?: string | null; wait_up_count?: number | null; message_count?: number | null }, meId: string): boolean {
+  if (underOwnersModel(s)) return isInboxMember(s, meId);
   if (!s.user_id || s.user_id === meId) return false;
   return !!s.owned_by_me || s.owner_user_id === meId;
 }
@@ -3550,6 +3603,13 @@ export function sessionStructuralSig(s: InboxSession): string {
     // the pre-handoff answer until some other row happened to move.
     s.owner_user_id || "",
     s.owned_by_me ? 1 : 0,
+    // Under the owners model the people decide membership and the agent owner
+    // where a wait files. Owner writes and a wait passed up move these, never
+    // a heartbeat.
+    s.owners_model ? `m:${s.implicit_owner ?? ""}` : "-",
+    s.owner_session_id || "",
+    // The escalation's standing flips once, on the next message.
+    `${s.wait_up_person ?? ""}:${waitReachedPeople(s) ? 1 : 0}:${escalatedAsks(s) ? 1 : 0}`,
     // WHICH ROLE LOOKS AFTER IT decides whether it is a card or a small row
     // under the role's standing session (isUnderRole): a session under a role
     // rides the role's card and never counts toward the person's needs input.
@@ -3817,6 +3877,10 @@ function projectableRowOf(s: InboxSession, live: LiveFacts): ProjectableInboxRow
     ...base,
     inbox_rest: s.inbox_rest ?? s.user_rest ?? null,
     inbox_rest_at: s.inbox_rest_at ?? (s.user_rest ? (s.updated_at || 1) : null),
+    owner_session_id: s.owner_session_id ?? null,
+    wait_up_count: s.wait_up_count ?? null,
+    wait_up_person: s.wait_up_person ?? null,
+    user_rest: s.user_rest ?? null,
     anchor_id: s.is_anchor ? s._id : null,
     armed_trigger_kind: s.armed_trigger_kind ?? null,
     parked_wake_kind: s.parked_wake_kind ?? null,
@@ -4003,6 +4067,9 @@ function deriveInboxAsking(
     // the account that runs it. A focused deep-link keeps the row in scope, but
     // it is not this viewer's question.
     if (meId && isForeignRow(s, meId)) return false;
+    // A prompt its agent owner answers is the agent's, until it passes it up
+    // (shared agentAnswersRow; the server's rowAsks).
+    if (agentAnswersRow(s)) return false;
     return sessionHasOpenQuestion(s, state.questionResolutions);
   };
   const askingChildParents = new Set<string>();
@@ -4013,13 +4080,16 @@ function deriveInboxAsking(
     // The overlay's child_asking fact: an asking child this replica never
     // holds (a live pool row outside its window) still lifts the parent,
     // until that child's ask stops counting (child_asking_until).
-    if (childAskingAt(s, now) && liftable(s)) askingChildParents.add(s._id);
+    // Under the owners model a child is its owner's to answer: nothing lifts.
+    if (!underOwnersModel(s) && childAskingAt(s, now) && liftable(s)) askingChildParents.add(s._id);
     if (s.inbox_killed_at) continue;
     // The shared rollup rule (rollupParentIdOf): the same grouping the server
     // pool applies, so a parent is lifted on both sides or neither.
     const parent = rollupParentIdOf(s);
     if (!parent || !asks(s)) continue;
-    if (!liftable(mineAll[parent])) continue;
+    // A parent under the owners model answers its children itself: nothing of
+    // a child's lifts it (the server's rowAsks), whatever team the child is in.
+    if (!liftable(mineAll[parent]) || underOwnersModel(mineAll[parent])) continue;
     askingChildParents.add(parent);
   }
   const askingOf = (s: InboxSession) => asks(s) || askingChildParents.has(s._id);
@@ -4028,7 +4098,7 @@ function deriveInboxAsking(
   // typing into the parent, so those keep the row in QUESTIONS.
   const ownPromptOnly = (s: InboxSession) =>
     !pendingDecide.has(s._id) && !askingChildParents.has(s._id) && !(meId && isForeignRow(s, meId))
-    && sessionHasOpenQuestion(s, state.questionResolutions);
+    && !agentAnswersRow(s) && sessionHasOpenQuestion(s, state.questionResolutions);
   return { mineAll, askingOf, ownPromptOnly };
 }
 
@@ -4067,6 +4137,7 @@ export function projectReplicaInbox(
     adapted.set(s._id, projectableRowOf(s, deriveLiveAt(liveFactsOf(s), ctx.now)));
   }
   const proj = projectInbox(adapted.values(), ctx.epoch, {
+    viewer: meId,
     asking: (id) => {
       const row = rowById.get(id);
       return row ? askingOf(row) : false;
@@ -4469,7 +4540,7 @@ export function placeInboxRows(
     if (!nestParent || !allIds.has(nestParent)) continue;
     if (nestWorkers && isSpawnedWorker(s)) {
       const own = placements.get(s._id)?.bucket ?? null;
-      const needsYou = own ? workerNeedsYou(own) : sessionWorkState(s, now) === "needs_input" || askingOf(s);
+      const needsYou = own ? workerNeedsYou(own) : personSessionWorkState(s, now) === "needs_input" || askingOf(s);
       const keepsOwnRow = isMemberCandidate(s) && (needsYou || own === "pinned");
       spawnedPresent.push({ s, parent: nestParent, nested: !keepsOwnRow, needsYou });
       if (keepsOwnRow) continue;
@@ -5327,7 +5398,7 @@ export function groupSessionsByPlan(
   const memberOf = (sess: InboxSession): PlanMember => {
     const placed = opts.placements?.get(sess._id);
     // An open `cast decide` files the row under questions: that waits on a person too.
-    let work_state: WorkState = placed?.bucket === "questions" ? "needs_input" : placed?.work_state ?? sessionWorkState(sess, now);
+    let work_state: WorkState = placed?.bucket === "questions" ? "needs_input" : personWorkState(sess, placed ?? sessionPlacement(sess, now));
     const quiet = placed ? QUIET_BUCKETS.has(placed.bucket) : !!(sess.inbox_stashed_at || sess.is_anchor || sess.standing_role_id);
     if (work_state === "needs_input" && quiet) work_state = "done";
     return { id: sess._id, work_state, at: inboxSortTimeOfRow(sess, work_state, inboxEpoch(now)).at };
@@ -5857,6 +5928,8 @@ function dropOrphanSubagents(list: InboxSession[], focusedId?: string | null, ne
   const nestParentOf = inboxNestParentOf(list, nestWorkers);
   return list.filter((s) => {
     if (s._id === focusedId || s.is_pinned) return true;
+    // Under the owners model nothing nests: a listed row is one the viewer owns.
+    if (underOwnersModel(s)) return true;
     // A role's session is a subagent of the role's card.
     if (!isSubagentConversation(s) && !isAgentTeamWorker(s) && !isUnderRole(s)) return true;
     const p = nestParentOf(s);
@@ -5893,6 +5966,9 @@ export function inboxNestParentOf(rows: Iterable<InboxSession>, nestWorkers = fa
     return runHosts.get(runId) ?? null;
   };
   return (s) => {
+    // Under the owners model a row stands alone in its owners' inboxes; the
+    // agents a session started are listed in that conversation instead.
+    if (underOwnersModel(s)) return null;
     const shared = nestParentIdOf(s);
     if (shared) return shared;
     if (isUnderRole(s)) return s.org_role_id ? roleLeads.get(s.org_role_id) ?? null : null;
@@ -5923,7 +5999,7 @@ export function nestsWorkers(ui: { modern_style?: boolean; modern_focused?: bool
 // card of its own: its teammates nest under it, and a sub row never draws rows
 // of its own.
 export function isSpawnedWorker(s: InboxSession): boolean {
-  if (nestParentIdOf(s) || isUnderRole(s)) return false;
+  if (underOwnersModel(s) || nestParentIdOf(s) || isUnderRole(s)) return false;
   if (s.is_workflow_sub) return !!s.workflow_run_id;
   if (!s.spawned_by_conversation_id) return false;
   return !(s.agent_team_name && s.agent_name === "team-lead");
@@ -6285,7 +6361,7 @@ function dropGuestKnock(draft: any, guestId: string): void {
 // RegisteredCollectionSlots: every collection in CLIENT_SYNC_REGISTRY gets a
 // typed `Record<string, any>` slot here by registration alone; the explicit
 // fields below narrow the ones with a real row type.
-interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, PrioritiesSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, AgentConnectionsSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
+interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSliceActions, ProjectUpdatesSliceActions, LineWorkflowSliceActions, LineSliceActions, PrioritiesSliceActions, TrialSliceActions, ExpectationsSliceActions, OpsSliceActions, LiveArtifactsSliceActions, MeetingBotsSliceActions, AgentConnectionsSliceActions, SessionOwnersSliceActions, ComposeSliceState, Omit<RegisteredCollectionSlots, keyof ChatSliceState | keyof OrgSliceState> {
   sessions: Record<string, InboxSession>;
   pending: Record<string, PendingEntry>;
   currentSessionId: string | null;
@@ -6783,6 +6859,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   markServerDeleted: (convId: string) => void;
   // -- Sync-log write acks (docs/architecture/sync-log-migration.md D8) --
   stampSyncAck: (patches: any, ack: Array<{ scope_key: string; position: number }>, sentAt: number, opts?: { local?: boolean; lockIds?: ReadonlySet<string> | readonly string[] }) => void;
+  /** An owners change's dispatch was acknowledged: retire the owners locks it planted (by lock id), each row taking the newest server value its lock hid. */
+  settleOwnersAck: (lockIds: readonly string[]) => void;
   retireAckedPending: (scopeKey: string, upTo: number, opts?: { restore?: boolean }) => void;
   /** A follower's own write echoed by the host: its locks on these cells (and on every field of these rows) forget the host rows they recorded before. */
   forgetLockSeen: (keys: string[], rowPrefixes?: string[]) => void;
@@ -6837,8 +6915,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   // access was revoked — drop the cached body so the page shows "not found"
   // instead of stale content forever.
   dropDocDetail: (id: string) => void;
-  // Local-first clear of a row's "assigned to you" ping (paired with the
-  // ackSessionAssignment mutation, which the caller fires separately).
+  // Local-first clear of a row's "assigned to you" ping; its dispatch runs
+  // the ackSessionAssignment mutation.
   clearAssignedPing: (conversationId: string) => void;
   syncOverlay: (field: string, overlayById: Record<string, Record<string, any>>) => void;
   syncMentionIndex: (kind: "tasks" | "docs" | "plans", items: any[]) => void;
@@ -9691,6 +9769,72 @@ function retireAckedLockInDraft(draft: any, key: string, restore = true): void {
   else row[field] = newest;
 }
 
+// The fields an owners change paints under a lock (sessionOwnersSlice
+// applySessionOwners): the owners read's facts and the inbox row's stamps.
+// Its acknowledgement settles them (settleOwnersAck): it marks each lock it
+// planted `acked`, and the first server value applied to that field after the
+// ack retires it (store syncProtocol), the exact echo or not: the server had
+// the change by then, so its answer is the truth (someone else's change at the
+// same moment, a follower's, a leave sent offline). A value the store saw
+// before the ack is never put back: a feed that batches its pushes can still
+// hold the newer answer. A lock that never hears its acknowledgement (a window
+// that closed) is bounded like a triage lock (HIDDEN_OVERRIDE_SETTLE_MS;
+// releaseSettledFieldLocks and the owners read's apply).
+export const OWNERS_LOCK_FIELDS: Readonly<Record<string, readonly string[]>> = {
+  sessionOwners: ["people_ids", "role", "parent_session"],
+  sessions: ["owned_by_me", "implicit_owner", "org_role_id", "owner_session_id"],
+};
+
+function isOwnersLockKey(key: string): boolean {
+  const storeAt = key.indexOf(":");
+  const fieldAt = key.lastIndexOf(":");
+  if (storeAt < 0 || fieldAt <= storeAt) return false;
+  return !!OWNERS_LOCK_FIELDS[key.slice(0, storeAt)]?.includes(key.slice(fieldAt + 1));
+}
+
+// A sibling's settle that reached this window before the mut it settles (the
+// two ride different channels): held here a minute, by key and value, and
+// applied when that mut plants its lock (applyReplicatedFields).
+const EARLY_SETTLE_MS = 60_000;
+const earlySettles = new Map<string, { value: unknown; sentAt: number; at: number }>();
+
+/** A mirrored lock just planted by a sibling's mut: marked acked when its settle came first. */
+function takeEarlySettle(draft: any, key: string): void {
+  const early = earlySettles.get(key);
+  if (!early) return;
+  earlySettles.delete(key);
+  const entry = draft.pending[key] as any;
+  if (Date.now() - early.at > EARLY_SETTLE_MS || entry?.type !== "field" || entry.lock !== undefined) return;
+  if (sameShape(entry.value, early.value) && (entry.ts ?? 0) <= early.sentAt) {
+    draft.pending[key] = { ...entry, acked: true };
+    noteAckedLock();
+  }
+}
+
+/** Marks acked the owners locks a send planted: by lock id, or (a sibling's
+ *  mirror, which carries none) by the sent value, no newer than the send. */
+function settleOwnersLocksInDraft(draft: any, lockIds: ReadonlySet<string>, sent?: ReadonlyArray<{ key: string; value: unknown }>, sentAt = Infinity): Array<{ key: string; value: unknown }> {
+  const settled: Array<{ key: string; value: unknown }> = [];
+  const keys = sent ? sent.map((s) => s.key) : Object.keys(draft.pending ?? {}).filter(isOwnersLockKey);
+  for (const key of keys) {
+    if (!isOwnersLockKey(key)) continue;
+    const entry = draft.pending[key] as any;
+    if (entry?.type !== "field") {
+      const value = sent?.find((s) => s.key === key)?.value;
+      if (sent) earlySettles.set(key, { value, sentAt, at: Date.now() });
+      continue;
+    }
+    const ours = entry.lock !== undefined
+      ? lockIds.has(entry.lock)
+      : !!sent && sameShape(entry.value, sent.find((s) => s.key === key)?.value) && (entry.ts ?? 0) <= sentAt;
+    if (!ours || entry.acked) continue;
+    settled.push({ key, value: entry.value });
+    draft.pending[key] = { ...entry, acked: true };
+    noteAckedLock();
+  }
+  return settled;
+}
+
 function stampSyncAckInDraft(
   draft: any,
   patches: any,
@@ -10051,6 +10195,11 @@ function applyGestureInDraft(draft: any, msg: GestureMessage) {
     return;
   }
 
+  if (msg.kind === "settle") {
+    settleOwnersLocksInDraft(draft, new Set(msg.lockIds), msg.locks, msg.sentAt);
+    return;
+  }
+
   if (msg.kind === "fields") {
     // Verbatim mirror of a patchConversation gesture. patchConversation
     // Object.assigns the same fields onto BOTH twins, so both get them here.
@@ -10317,6 +10466,7 @@ const inboxStoreConfig = (set: any, get: any) => ({
         else row[field] = value;
         const ack = locked && prev.ack && sameLockValue(prev.value, value) ? prev.ack : undefined;
         this.pending[k] = fieldLockEntry(value, ts, ack);
+        takeEarlySettle(this, k);
       }
     }
   }),
@@ -10383,8 +10533,12 @@ const inboxStoreConfig = (set: any, get: any) => ({
     for (const id of ids) {
       const s = this.sessions[id];
       if (!s || !claimsViewer(s, meId)) continue;
+      if (underOwnersModel(s)) {
+        if (s.implicit_owner === meId) s.implicit_owner = null;
+        if (s.wait_up_person === meId) s.wait_up_person = null;
+      }
       s.owned_by_me = false;
-      s.owner_user_id = null;
+      if (s.owner_user_id === meId || !underOwnersModel(s)) s.owner_user_id = null;
     }
   }),
   setShowOldSessions: (show: boolean) => get().updateClientUI({ inbox_show_old: show }),
@@ -11663,6 +11817,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
   // rows) and retire them at the same position — they have no dispatch of
   // their own to be acknowledged. `local` marks the bridged receipt, which
   // stamps and does not re-announce.
+  settleOwnersAck: sync(function (this: Draft, lockIds: readonly string[]) {
+    const settled = settleOwnersLocksInDraft(this, new Set(lockIds));
+    if (settled.length) broadcastGesture({ kind: "settle", locks: settled, lockIds: [...lockIds], sentAt: Date.now(), ts: Date.now() }, bridgeUserId(this));
+  }),
+
   stampSyncAck: sync(function (
     this: Draft,
     patches: any,
@@ -13463,9 +13622,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
   }),
 
   // Local-first retire of the "assigned to you" ping: the UI clears it the
-  // moment the user acks, while the ackSessionAssignment mutation round-trips;
-  // the next inbox sync reflects the server's cleared state and agrees.
-  clearAssignedPing: sync(function (this: Draft, conversationId: string) {
+  // moment the user acks, and the dispatch stamps seen_at on the server
+  // (sessionOwnership.ackSessionAssignment); the next inbox sync agrees.
+  clearAssignedPing: action(function (this: Draft, conversationId: string) {
     const row = this.sessions[conversationId];
     if (row?.assigned_ping) row.assigned_ping = null;
   }),
@@ -16490,6 +16649,8 @@ const inboxStoreConfig = (set: any, get: any) => ({
   ...createMeetingBotsSlice(),
   // Outside agents over MCP (store/agentConnectionsSlice.ts): disconnect from Settings.
   ...createAgentConnectionsSlice(),
+  // Session owners under the session_owners model (store/sessionOwnersSlice.ts).
+  ...createSessionOwnersSlice(),
 
 });
 
@@ -17144,6 +17305,9 @@ async function hydrateInboxCacheFromIDB(): Promise<boolean> {
         if (merge.apply) updates[key] = merge.value;
       }
       if (updates.pendingMessages) updates.queuedMessages = queuedMessagesFromPending(updates.pendingMessages);
+      // A persisted acked owners lock re-arms the apply's acked check
+      // (syncProtocol noteAckedLock): an earlier empty scan cleared it.
+      if (updates.pending) noteAckedLock();
       if (Object.keys(updates).length > 0) {
         useInboxStore.setState(updates);
       }
@@ -17355,7 +17519,7 @@ if (!survivingInboxStore) useInboxStore.subscribe((state, prev) => {
 export const __createInboxStoreForTests = createInboxStore;
 const windowBindings = () => ({
   _heldOverlayFacts, recentlyRequestedPendingMessages, resolvedSessionPreparations, recentThawTimer, _userMsgsProbed, _idbHydrating, hydrationEpoch, _lastParityCheckAt, deferredDeletedSessions, heldAnswerDeliveries,
-  _membershipKey, _membershipVal, _visibleMemo, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
+  _membershipKey, _membershipVal, _visibleMemo, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs, earlySettles,
 });
 /** The live per-window bindings (collections by reference), and set() for the ones a window swaps by value. */
 export const __inboxStoreWindowBindings = {

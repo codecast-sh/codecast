@@ -46,6 +46,8 @@ import {
 
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useClaudeBackend } from "../hooks/useSessionCommands";
+import { useInboxStore } from "../store/inboxStore";
+import { ownersModelOnFor } from "../store/sessionOwnersSlice";
 import { SdkBackendPill } from "./ClaudeBackendControl";
 
 export function TmuxAttachPill({
@@ -69,6 +71,8 @@ export function TmuxAttachPill({
 
   const { machine, attach, copyAttach } = useAttachCopy(tmuxSession, conversationKey);
   const { backend } = useClaudeBackend(conversationKey);
+  // Under the owners model the docked terminal's title copies the command.
+  const ownersOn = useInboxStore((s) => !!conversationKey && ownersModelOnFor(s as never, conversationKey));
 
   useWatchEffect(() => {
     const p = prev.current;
@@ -146,7 +150,7 @@ export function TmuxAttachPill({
           {tmuxSession && <DeviceDot online={isLive} />}
         </button>
       </ShortcutTooltip>
-      {canSplit && (
+      {canSplit && !ownersOn && (
         <ShortcutTooltip label={copyLabel} side="bottom">
           {/* aria-disabled, NOT disabled: a truly disabled button suppresses the
               pointer events the tooltip needs, and in the foreign-machine case

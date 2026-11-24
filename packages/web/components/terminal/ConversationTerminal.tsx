@@ -27,7 +27,7 @@
 
 import { useCallback, useRef, useState, useSyncExternalStore } from "react";
 import { useConvex } from "convex/react";
-import { X, RotateCw, Radio } from "lucide-react";
+import { X, RotateCw, Radio, Copy, Check } from "lucide-react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
@@ -56,6 +56,9 @@ import {
 
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { useTerminalIsland } from "../../hooks/useTerminalIsland";
+import { useAttachCopy } from "../../hooks/useAttachCopy";
+import { useInboxStore } from "../../store/inboxStore";
+import { ownersModelOnFor } from "../../store/sessionOwnersSlice";
 const MIN_HEIGHT = 90;
 // Comfortably more than the daemon's heartbeat, so a slow round-trip doesn't
 // flicker the "paused" label on and off.
@@ -66,6 +69,45 @@ export function ConversationTerminalSplit({ convKey, tmuxSession }: { convKey: s
   const split = splits.get(convKey);
   if (!split) return null;
   return <SplitBody convKey={convKey} split={split} tmuxSession={tmuxSession ?? null} />;
+}
+
+// Under the owners model the pane's name carries the attach command: the
+// title names the pane and the machine it runs on, and a click copies the
+// command (or says why there is none). The copy icon always shows, so a
+// touch screen, which never hovers, still says the title copies.
+function AttachTitle({ target, convKey, machineName }: { target: string; convKey: string; machineName: string | null }) {
+  const { attach, copyAttach } = useAttachCopy(target, convKey);
+  const [copied, setCopied] = useState(false);
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  return (
+    <button
+      type="button"
+      data-terminal-attach
+      title={attach ? `Copy ${attach}` : undefined}
+      aria-label={attach ? `Copy ${attach}` : target}
+      onClick={() => {
+        copyAttach();
+        if (!attach) return;
+        setCopied(true);
+        if (timer.current) clearTimeout(timer.current);
+        timer.current = setTimeout(() => setCopied(false), 1500);
+      }}
+      className="inline-flex min-w-0 items-center gap-1.5 rounded px-1 -mx-1 text-meta font-mono text-sol-text-muted hover:text-sol-text hover:bg-sol-text/[0.06]"
+    >
+      <span className="truncate">{target}{machineName ? <span className="text-sol-text-dim"> · {machineName}</span> : null}</span>
+      {copied
+        ? <span className="inline-flex shrink-0 items-center gap-1 text-sol-green"><Check className="w-3 h-3" aria-hidden />Copied</span>
+        : <Copy className="w-3 h-3 shrink-0 text-sol-text-dim" aria-hidden />}
+    </button>
+  );
+}
+
+/** The docked terminal's title: the pane's name, which under the owners model
+ *  also names the machine and copies the attach command. */
+export function TerminalTitle({ target, convKey, machineName, ownersOn }: { target: string; convKey: string; machineName: string | null; ownersOn: boolean }) {
+  return ownersOn
+    ? <AttachTitle target={target} convKey={convKey} machineName={machineName} />
+    : <span className="text-meta font-mono text-sol-text-muted truncate">{target}</span>;
 }
 
 function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: SplitState; tmuxSession: string | null }) {
@@ -172,6 +214,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
   // No instance yet means the endpoint is still resolving — that's loading too.
   const isConnecting = !failure && (!status || status === "connecting");
   const isRemote = !!inst?.state.remote;
+  const ownersOn = useInboxStore((s) => ownersModelOnFor(s as never, convKey));
   // A relayed pane that stops sending is the one failure the socket path can't
   // have: the picture stays perfectly readable while being minutes old. Frames
   // arrive on a heartbeat even when the screen doesn't change, so silence means
@@ -243,13 +286,13 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
       className={`flex-shrink-0 flex flex-col bg-sol-bg ${island.className}`}
       style={{ ...island.style, height: dragHeight ?? split.height }}
     >
-      <div className="flex items-center h-[24px] px-2 gap-1.5 flex-shrink-0 bg-sol-bg-alt/30 border-b border-sol-border/20 select-none">
+      <div data-terminal-bar className="flex items-center h-[24px] px-2 gap-1.5 flex-shrink-0 bg-sol-bg-alt/30 border-b border-sol-border/20 select-none">
         <span
           className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
             status === "open" && !inst?.state.reconnecting ? "bg-sol-violet" : isConnecting || inst?.state.reconnecting ? "bg-sol-yellow animate-pulse" : "bg-sol-text-dim/40"
           }`}
         />
-        <span className="text-meta font-mono text-sol-text-muted truncate">{target}</span>
+        <TerminalTitle target={target} convKey={convKey} machineName={machineName} ownersOn={ownersOn} />
         {inst && status === "open" && <TerminalSeat tab={inst.state} />}
         {isRemote && (
           <span
@@ -257,7 +300,7 @@ function SplitBody({ convKey, split, tmuxSession }: { convKey: string; split: Sp
             title={`Relayed from ${machineName ?? "another machine"}. Typing works, but every keystroke makes a round trip — expect a moment before it shows up.`}
           >
             <Radio className="w-2.5 h-2.5" />
-            {machineName ?? "remote"}
+            {ownersOn ? "relayed" : machineName ?? "remote"}
           </span>
         )}
         {stale && (

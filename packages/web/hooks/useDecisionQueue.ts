@@ -11,6 +11,7 @@ import {
   type QueueItem,
 } from "../lib/decisionQueue";
 import { SYNTHETIC_POLL_OPTION, type PollQuestion } from "../lib/pollPayload";
+import { agentAnswersRow } from "@codecast/shared/contracts";
 
 // Structural signature for the decision collection: everything the queue
 // branches on, nothing that churns. Rows only change on ask/answer, so this
@@ -124,7 +125,9 @@ export function buildDecisionQueue(
     if (authored.has(row._id)) continue;
     // questionResolutions: answered/dismissed HERE — same predicate the rail
     // section renders with, so the queue and the rail agree in every render.
-    if (!sessionHasOpenQuestion(row, resolutions)) {
+    // A prompt its agent owner answers is the agent's, never the person's
+    // queue, until the agent passes it up (shared agentAnswersRow).
+    if (agentAnswersRow(row) || !sessionHasOpenQuestion(row, resolutions)) {
       // No longer asking — forget the stamp so a future question is timed
       // from when it actually appeared, not from this tab's first boot.
       forgetBlocked(row._id);

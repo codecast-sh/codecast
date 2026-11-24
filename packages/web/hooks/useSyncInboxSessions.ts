@@ -4,7 +4,7 @@ import { captureError } from "../lib/analytics";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore, InboxSession, classifySession, claimsViewer, isSub, isConvexId } from "../store/inboxStore";
 import { agentStatusAt } from "../lib/liveness";
-import { WORKING_SET_RECENCY_MS } from "@codecast/shared/contracts";
+import { WORKING_SET_RECENCY_MS, agentAnswersRow } from "@codecast/shared/contracts";
 import { startWarmLoop } from "./inboxWarm";
 import { toast } from "sonner";
 import { soundIdle } from "../lib/sounds";
@@ -52,6 +52,9 @@ export function waitingSoundKey(session: InboxSession, queued: Set<string>): str
   // Only a genuine claim on the human chimes: the SHARED verdict's
   // needs_input (a delivered or parked settle is quiet) — the server's
   // needs-input push stands down on the same verdict.
+  // A wait its agent owner answers rings nobody (shared agentAnswersRow): the
+  // agent is told, and the server's push stands down the same way.
+  if (agentAnswersRow(session)) return null;
   const now = Date.now();
   const c = classifySession(session, now);
   if (!c.waiting || c.rest !== "needs_input") return null;

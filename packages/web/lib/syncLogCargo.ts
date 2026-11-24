@@ -9,6 +9,7 @@
 import {
   INBOX_FACT_FIELDS,
   isInboxRowField,
+  INBOX_MODEL_ONLY_ROW_FIELDS,
   isSettleVerdictCurrent,
   userRestOf,
 } from "@codecast/shared/contracts";
@@ -44,7 +45,10 @@ export const ENRICH_TRIGGER_FIELDS: Record<CargoCollection, ReadonlySet<string>>
   docs: new Set(["plan_id", "doc_type"]),
   plans: new Set([]),
   projects: new Set([]),
-  sessions: new Set(["active_plan_id", "active_task_id", "workflow_run_id"]),
+  // owners_changed_at: every owner write under the owners model stamps it,
+  // and org_role_id or parent_released_at move the agent owner; implicit_owner,
+  // owner_session_id and owned_by_me are derived from facts the replica lacks.
+  sessions: new Set(["active_plan_id", "active_task_id", "workflow_run_id", "owners_changed_at", "org_role_id", "parent_released_at"]),
 };
 
 // Sessions rows rename three raw fields (enrichInboxSessionRow).
@@ -134,6 +138,8 @@ function planSessions(
   // list and byIds write, so landing it would flap on their next push.
   const fields: Record<string, any> = {};
   for (const [k, v] of Object.entries(changed)) if (isInboxRowField(k)) fields[k] = v;
+  // Model-only fields land on a model row only, as the list ships them.
+  if (!existing?.owners_model) for (const k of INBOX_MODEL_ONLY_ROW_FIELDS) delete fields[k];
   const unset: string[] = [];
   // Derived twins, recomputed from the merged row with the shared helpers.
   const merged = { ...(existing ?? {}), ...changed };
