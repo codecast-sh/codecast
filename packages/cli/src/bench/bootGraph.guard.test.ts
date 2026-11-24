@@ -527,9 +527,7 @@ describe("command groups stay off the boot graph", () => {
     // and the daemon's close-aware lifecycle reads (+6).
     // 4852 the same day: auto-resume reads the transcript's latest permission
     // mode, not its first (resumeCommand.ts +1).
-    // 4854 (2026-11-24): the register, unregister and relay manifest entries
-    // and the messaging-only gates in fastPath.ts (#102) (+2).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4854);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4852);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -759,9 +757,7 @@ describe("command groups stay off the boot graph", () => {
     // launches or resumes.
     // 624 the same day: contracts/agentPins.ts, as on index.ts's graph above.
     // 625 (2026-11-23): contracts/closedSession.ts, as on index.ts's graph above.
-    // 626 (2026-11-24): pidFileLock.ts, the pid-file lock moved out of daemon.ts
-    // so cast relay can take one without loading the daemon (#102).
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(626);
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(625);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

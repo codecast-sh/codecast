@@ -109,8 +109,6 @@ export function launchTokenEnv(token: string | null | undefined): string {
 export function scrubAgentEnv<T extends Record<string, string | undefined>>(env: T): T {
   for (const v of AGENT_SCRUBBED_ENV_VARS) delete env[v];
   delete env[SDK_SESSION_ENV];
-  delete env.PASEO_AGENT_ID;
-  for (const v of Object.keys(env)) if (v.startsWith("HERDR_")) delete env[v];
   return env;
 }
 

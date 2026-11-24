@@ -56,7 +56,6 @@ export type PlanConversation = {
   held?: string | null;
   cloud_placement?: string;
   migration?: { batch_id: string } | null;
-  register_only?: boolean;
 };
 
 export type PlannedRow = {
@@ -97,7 +96,6 @@ export function planMigration(opts: {
     if (seen.has(c._id)) continue;
     seen.add(c._id);
     if (!target) { skip("the destination device is not registered"); continue; }
-    if (c.register_only) { skip("a registered session can't move devices"); continue; }
     // An ended session can still come home: its files and transcript are on the host.
     if (c.status === "completed" && target.is_remote) { skip("the session has ended"); continue; }
     if (c.inbox_killed_at) { skip("the session was killed"); continue; }

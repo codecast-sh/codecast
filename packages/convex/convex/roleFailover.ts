@@ -149,7 +149,7 @@ export async function performRoleFailover(ctx: any, role: any, now: number, minC
   const last: RoleFailover | undefined = role.failover;
   if (last?.to && now - last.at < ROLE_FAILOVER_COOLDOWN_MS) return null;
   const conv = await standingConversationOf(ctx, role);
-  if (!conv?.owner_device_id || conv.register_only || conv.status !== "active") return null;
+  if (!conv?.owner_device_id || conv.status !== "active") return null;
   const roster: Probe[] = await ctx.db.query("devices").withIndex("by_user_id", (q: any) => q.eq("user_id", conv.user_id)).collect();
   const device = roster.find((d) => d.device_id === conv.owner_device_id) ?? null;
   const reason = hostTrouble(device, conv, { now, roster, minCliVersion, lastFailoverAt: last?.at ?? 0 });

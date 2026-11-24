@@ -153,7 +153,7 @@ export async function performRegisterManagedSession(
         .withIndex("by_user_device", (q: any) => q.eq("user_id", authUserId).eq("device_id", args.device_id))
         .first()
       : null;
-    const stampDeviceId = ownedDevice && !linkedConversation?.register_only ? args.device_id : undefined;
+    const stampDeviceId = ownedDevice ? args.device_id : undefined;
 
     if (stampDeviceId && effectiveConversationId) {
       const conv = await ctx.db.get(effectiveConversationId);

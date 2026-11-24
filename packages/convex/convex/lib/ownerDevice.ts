@@ -13,18 +13,11 @@ import { DEVICE_ONLINE_MS } from "../deviceRouting";
  */
 export async function resolveOwnerDeviceView(
   ctx: { db: any },
-  conv: { user_id: any; owner_device_id?: string | null; register_only?: boolean },
+  conv: { user_id: any; owner_device_id?: string | null },
   now: number = Date.now(),
 ): Promise<{ owner_device_id: string | null; owner_is_remote: boolean; owner_online: boolean }> {
   const owner = conv.owner_device_id ?? null;
   if (!owner) return { owner_device_id: null, owner_is_remote: false, owner_online: false };
-  if (conv.register_only) {
-    const beat = await ctx.db
-      .query("relay_heartbeats")
-      .withIndex("by_user_device", (q: any) => q.eq("user_id", conv.user_id).eq("device_id", owner))
-      .first();
-    return { owner_device_id: owner, owner_is_remote: false, owner_online: !!beat && now - beat.last_seen < DEVICE_ONLINE_MS };
-  }
   const ownerDevice = await ctx.db
     .query("devices")
     .withIndex("by_user_device", (q: any) =>

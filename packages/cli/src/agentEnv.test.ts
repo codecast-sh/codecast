@@ -34,12 +34,6 @@ describe("agent env scrub", () => {
     expect(env).toEqual({ PATH: "/bin", HOME: "/h" });
   });
 
-  test("scrubAgentEnv drops another agent's delivery target: PASEO_AGENT_ID and every HERDR_ variable, not PASEO_HOME", () => {
-    const env: Record<string, string | undefined> = { PATH: "/bin", PASEO_AGENT_ID: "a", PASEO_HOME: "/p", PASEO_CLI: "/x", HERDR_ENV: "1", HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/s", CODECAST_LAUNCH_TOKEN: "t" };
-    scrubAgentEnv(env);
-    expect(env).toEqual({ PATH: "/bin", PASEO_HOME: "/p", PASEO_CLI: "/x", CODECAST_LAUNCH_TOKEN: "t" });
-  });
-
   test("watchdog script unsets the markers before anything else runs", () => {
     for (const isBinary of [true, false]) {
       const script = buildWatchdogShellScript({ isBinary, watchdogCommand: "cast _watchdog" });
