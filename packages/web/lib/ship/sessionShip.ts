@@ -7,7 +7,8 @@
 import { segmentTopOf } from "@codecast/shared/contracts/flowPool";
 import type { DeployReach, ReachState } from "@codecast/shared/contracts/deployReach";
 import { sessionsOf, type TeamDeployRow } from "../deploys/targets";
-import { canAnswer, deployHold, gateOpen, gateWaitWords, holderOf, holdWords, landedSha as mergedSha, type GateDecision, type TargetState } from "./journey";
+import { canAnswer, deployHold, gateOpen, gateWaitWords, holderOf, holdWords, type GateDecision, type TargetState } from "./journey";
+import { landedSha as mergedSha } from "./runRecord";
 
 export type ShipTone = "working" | "agent" | "session" | "you" | "ok" | "bad" | "wait";
 export type SessionShip = { words: string; tone: ShipTone; deploy?: string | null; run?: string | null };

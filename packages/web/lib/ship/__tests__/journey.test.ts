@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import { approvalOf, approvalWords, canAnswer, deployHold, insideWords, journeyOf, journeyStages, journeyWords, landedSha, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { approvalOf, approvalWords, canAnswer, deployHold, insideWords, journeyOf, journeyStages, journeyWords, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { landedSha } from "../runRecord";
 import { BRANCHING_FLOW, FANOUT_FLOW, LAND_ASKS, LAND_FLOW, LAND_REPO_FLOW } from "../journeyFixtures";
 import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
 import { SHIPPED_FLOWS } from "../../line/shippedFlows.generated";
