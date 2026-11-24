@@ -22,10 +22,10 @@ async function endRegisteredRow(ctx: { db: any }, conv: any): Promise<void> {
 async function endSupersededRows(ctx: { db: any }, keep: any): Promise<void> {
   const rows = await ctx.db
     .query("conversations")
-    .withIndex("by_owner_device_register_only", (q: any) => q.eq("user_id", keep.user_id).eq("owner_device_id", keep.owner_device_id).eq("register_only", true))
+    .withIndex("by_owner_device_register_only", (q: any) => q.eq("user_id", keep.user_id).eq("owner_device_id", keep.owner_device_id).eq("register_only", true).eq("ended_at", undefined))
     .collect();
   for (const row of rows) {
-    if (row._id !== keep._id && !row.ended_at && sameDeliveryTarget(row.delivery_target, keep.delivery_target)) await endRegisteredRow(ctx, row);
+    if (row._id !== keep._id && sameDeliveryTarget(row.delivery_target, keep.delivery_target)) await endRegisteredRow(ctx, row);
   }
 }
 
@@ -69,6 +69,7 @@ export const registerSession = mutation({
         owner_device_id: args.device_id,
         project_path: args.cwd,
         ended_at: undefined,
+        registered_at: Date.now(),
         status: "active",
       });
       await endSupersededRows(ctx, (await ctx.db.get(existing._id))!);
@@ -91,6 +92,7 @@ export const registerSession = mutation({
       is_private: true,
       status: "active",
       register_only: true,
+      registered_at: now,
       delivery_target: args.delivery_target,
       git_remote_url: args.git_remote_url,
     });
@@ -117,6 +119,7 @@ export const markEnded = mutation({
     api_token: v.optional(v.string()),
     session_id: v.string(),
     delivery_target: v.optional(deliveryTargetValidator),
+    device_id: v.optional(v.string()),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -130,6 +133,7 @@ export const markEnded = mutation({
       .first();
     if (!conv || !conv.register_only) throw new Error("No registered session found for that session id");
     if (conv.ended_at) return;
+    if (args.device_id && conv.owner_device_id !== args.device_id) return;
     if (args.delivery_target && !sameDeliveryTarget(conv.delivery_target, args.delivery_target)) return;
     await endRegisteredRow(ctx, conv);
   },
@@ -160,16 +164,16 @@ export const registeredForDevice = query({
     device_id: v.string(),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) {
-      throw new Error("Authentication failed: invalid token or session");
-    }
+    const caller = await deviceTokenCaller(ctx, args.api_token);
+    if (!caller) throw new Error("Authentication failed: invalid token or session");
+    if (caller.boundDeviceId && caller.boundDeviceId !== args.device_id) throw new Error("This token is bound to a different machine");
+    const userId = caller.userId;
     const rows = await ctx.db
       .query("conversations")
-      .withIndex("by_owner_device_register_only", (q) => q.eq("user_id", userId).eq("owner_device_id", args.device_id).eq("register_only", true))
+      .withIndex("by_owner_device_register_only", (q) => q.eq("user_id", userId).eq("owner_device_id", args.device_id).eq("register_only", true).eq("ended_at", undefined))
       .collect();
     return rows
-      .filter((c) => !c.ended_at && c.delivery_target && c.session_id)
-      .map((c) => ({ session_id: c.session_id!, delivery_target: c.delivery_target!, short_id: c.short_id ?? c._id.toString().slice(0, 7) }));
+      .filter((c) => c.delivery_target && c.session_id)
+      .map((c) => ({ session_id: c.session_id!, delivery_target: c.delivery_target!, short_id: c.short_id ?? c._id.toString().slice(0, 7), registered_at: c.registered_at ?? c.started_at }));
   },
 });

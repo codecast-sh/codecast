@@ -483,7 +483,7 @@ describe("registeredForDevice", () => {
     await s.register({ session_id: "reg-other", device_id: "dev-other" });
     const rows: any[] = await list(s);
     expect(rows.map((r) => r.session_id).sort()).toEqual(["reg-1", "reg-2"]);
-    expect(rows.find((r) => r.session_id === "reg-1")).toEqual({ session_id: "reg-1", delivery_target: HERDR, short_id });
+    expect(rows.find((r) => r.session_id === "reg-1")).toEqual({ session_id: "reg-1", delivery_target: HERDR, short_id, registered_at: expect.any(Number) });
     expect(rows.find((r) => r.session_id === "reg-2").delivery_target).toEqual(PASEO);
   });
 
@@ -711,5 +711,58 @@ describe("an uncertain hand-off", () => {
     expect(res.skipped).toBe(false);
     expect((await s.pendingRows())[0].status).toBe("failed");
     expect(await s.forRelay()).toEqual([]);
+  });
+});
+
+describe("markEnded from another device", () => {
+  test("a row registered on device Y is not ended by a sweep or hook on device X with the same target", async () => {
+    const s = await setup();
+    const { conversation_id } = await s.register({ device_id: "dev-y" });
+    await s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "reg-1", delivery_target: HERDR, device_id: DEVICE });
+    expect((await s.conv(conversation_id)).ended_at).toBeUndefined();
+    await s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "reg-1", delivery_target: HERDR, device_id: "dev-y" });
+    expect((await s.conv(conversation_id)).ended_at).toBeGreaterThan(0);
+  });
+
+  test("without a device id it still ends the row", async () => {
+    const s = await setup();
+    const { conversation_id } = await s.register();
+    await s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "reg-1" });
+    expect((await s.conv(conversation_id)).ended_at).toBeGreaterThan(0);
+  });
+});
+
+describe("live rows only", () => {
+  test("a device's ended rows stay out of registeredForDevice and the supersede read, and a re-registration brings the row back", async () => {
+    const s = await setup();
+    const first = await s.register();
+    await s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "reg-1" });
+    expect(await s.t.query(api.registeredSessions.registeredForDevice, { api_token: OWNER_TOKEN, device_id: DEVICE })).toEqual([]);
+    await s.register({ session_id: "reg-2" });
+    expect((await s.conv(first.conversation_id)).ended_at).toBeGreaterThan(0);
+    await s.register();
+    const live: any[] = await s.t.query(api.registeredSessions.registeredForDevice, { api_token: OWNER_TOKEN, device_id: DEVICE });
+    expect(live.map((r) => r.session_id)).toEqual(["reg-1"]);
+    expect((await s.conv(first.conversation_id)).ended_at).toBeUndefined();
+  });
+
+  test("registered_at is stamped on register and again on a re-registration", async () => {
+    const s = await setup();
+    const { conversation_id } = await s.register();
+    const first = (await s.conv(conversation_id)).registered_at;
+    expect(first).toBeGreaterThan(0);
+    await s.t.run((ctx) => ctx.db.patch(conversation_id, { registered_at: 1 } as any));
+    await s.register();
+    expect((await s.conv(conversation_id)).registered_at).toBeGreaterThan(1);
+  });
+
+  test("registeredForDevice refuses a token bound to another device", async () => {
+    const s = await setup();
+    await s.t.run(async (ctx) => {
+      const [row] = await ctx.db.query("api_tokens").collect();
+      await ctx.db.patch(row._id, { device_id: "dev-bound" } as any);
+    });
+    await expect(s.t.query(api.registeredSessions.registeredForDevice, { api_token: `${OWNER_TOKEN}.dev-bound`, device_id: DEVICE })).rejects.toThrow(/bound to a different machine/);
+    expect(await s.t.query(api.registeredSessions.registeredForDevice, { api_token: `${OWNER_TOKEN}.dev-bound`, device_id: "dev-bound" })).toEqual([]);
   });
 });
