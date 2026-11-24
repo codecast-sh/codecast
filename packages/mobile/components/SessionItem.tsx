@@ -3,7 +3,10 @@ import { probeGesture, probeRender, PERF_PROBE } from '@/lib/perfProbe';
 import { Text as RNText } from '@/components/Themed';
 import { createContext, memo, useContext, useRef, useCallback, useEffect, useMemo, useState, type ReactNode } from 'react';
 import { cleanUserMessage } from '@codecast/web/components/sessionMessage';
-import { showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
+import { railRowPlacement, showsBlockedBadge, useInboxStore } from '@codecast/web/store/inboxStore';
+import { convHasPendingSend } from '@codecast/web/store/inboxOverlays';
+import { sessionStatusOf } from '@codecast/web/lib/sessionStatus';
+import { pendingDecisionConvIds } from '@codecast/web/lib/decisionQueue';
 import { apiErrorBadge } from '@codecast/web/lib/apiErrorBadge';
 import { resolveImageThumbs } from '@codecast/web/lib/uiPrefDefaults';
 import { useAckAssignment } from '@codecast/web/hooks/useAckAssignment';
@@ -19,6 +22,14 @@ import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ImageViewer } from '@/components/chat/ImageViewer';
 import { IdentityPrefsOverride, useIdentityPrefs } from '@codecast/web/hooks/useIdentityPrefs';
 import { MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
+import { coOwnersOf, coOwnersSig } from '@codecast/web/lib/coOwners';
+import { ownerRoleHandleOf, ownerSessionTitleOf, withOwnerFactsOf, withOwnerLabelOf, withOwnerShown } from '@codecast/web/lib/withOwner';
+import { underOwnersModel } from '@codecast/shared/contracts';
+import { holdOwnerCard } from '@codecast/web/lib/visibleOwnerCards';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
+import { isConvexId } from '@codecast/web/lib/entityLinks';
+import { useWatchEffect } from '@codecast/web/hooks/useWatchEffect';
+import { CoOwnerFaces } from '@/components/owners/OwnerFace';
 
 export type SessionData = {
   _id: string;
@@ -133,18 +144,24 @@ type InboxRowEnv = {
   projectFilter: string | null;
   /** The inbox_image_thumbs pref, stamped LWW so the toggle follows the user. */
   showImageThumb: boolean;
+  /** The viewer, for the owners faces of rows under the owners model. */
+  meId: string | null;
+  /** The list reports which rows are on screen (lib/visibleOwnerCards'
+   *  setViewableOwnerCards), so a row does not hold its owners id itself. */
+  viewableOwners: boolean;
 };
 const InboxRowEnvContext = createContext<InboxRowEnv | null>(null);
 
 /** Wraps a list of session rows (SwipeableSessionItem). */
-export function InboxRowEnvProvider({ children }: { children: ReactNode }) {
+export function InboxRowEnvProvider({ children, viewableOwners = false }: { children: ReactNode; viewableOwners?: boolean }) {
   const projectFilter = useInboxStore((s) => s.activeProjectFilter);
   const showImageThumb = useInboxStore((s) => resolveImageThumbs(s.clientState?.ui));
+  const meId = useInboxStore((s) => (s.currentUser?._id ? String(s.currentUser._id) : null));
   // The faces and identity lines read this instead of each subscribing.
   const prefs = useIdentityPrefs();
   const env = useMemo(
-    () => ({ projectFilter, showImageThumb }),
-    [projectFilter, showImageThumb],
+    () => ({ projectFilter, showImageThumb, meId, viewableOwners }),
+    [projectFilter, showImageThumb, meId, viewableOwners],
   );
   return (
     <IdentityPrefsOverride.Provider value={prefs}>
@@ -159,7 +176,45 @@ function useRowEnv(): InboxRowEnv {
   return env;
 }
 
-export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number }) {
+/** The row's other owners' faces, from the owners read (sessionOwners). It
+ *  holds its id for the window's owners feeder unless the list reports
+ *  which rows are on screen. */
+function RowCoOwners({ id }: { id: string }) {
+  const env = useRowEnv();
+  const sig = useInboxStore((s) => coOwnersSig(s as never, id));
+  const coOwners = useMemo(() => (sig ? coOwnersOf(useInboxStore.getState() as never, id, env.meId, teamMembersOf(useInboxStore.getState())) : null), [sig, env.meId, id]);
+  useWatchEffect(() => (!env.viewableOwners && isConvexId(id) ? holdOwnerCard(id) : undefined), [env.viewableOwners, id]);
+  return coOwners ? <CoOwnerFaces owners={coOwners} /> : null;
+}
+
+/** Where the list placed a row (store placedRailPlacement) and whether a send
+ *  of yours waits on it locally: the facts the row's state reads, as web's
+ *  card reads its section. A list that places nothing leaves them out. */
+export type RowPlacementProps = { placedBucket?: string; placedState?: string; pendingSend?: boolean };
+
+/** "With <owner>": who answers the row's wait, its role and owning session as
+ *  the owners read says them, drawn only while the row reads working (web's
+ *  sessionStatusOf and withOwnerShown). `line` draws it as the row's only
+ *  detail line, with no separator after it. */
+function RowWithOwner({ session, line = false, placedBucket, placedState, pendingSend }: { session: SessionData; line?: boolean } & RowPlacementProps) {
+  const Theme = useTheme();
+  const label = useInboxStore((s) => {
+    const row = withOwnerFactsOf(s as never, session as any);
+    const now = Date.now();
+    const pending = pendingSend ?? (s.sessionsWithQueuedMessages.has(session._id) || convHasPendingSend((s.pendingMessages as any)?.[session._id], now));
+    // A list that places nothing: the row's own placement, lifted into
+    // Questions by a pending decide for you, as the inbox's placement lifts it.
+    const placement = placedBucket ? { bucket: placedBucket, state: placedState } as never : railRowPlacement(row, now);
+    const asking = !placedBucket && pendingDecisionConvIds(s.sessionDecisions as never, s.currentUser?._id ? String(s.currentUser._id) : null).has(session._id);
+    const working = sessionStatusOf({ row, section: null, placement, now, live: { pendingSend: pending, asking } }) === 'working';
+    return withOwnerShown(withOwnerLabelOf(row, ownerSessionTitleOf(s as never, row), ownerRoleHandleOf(s as never, row)), working, pending);
+  });
+  if (!label) return null;
+  const lead = <RNText style={{ color: Theme.green, fontWeight: '600' }} testID="row-with-owner">With {label}{line ? null : <RNText style={{ color: Theme.textMuted0, fontWeight: '400' }}> · </RNText>}</RNText>;
+  return line ? <RNText style={styles.summaryText} numberOfLines={1}>{lead}</RNText> : lead;
+}
+
+export function SessionItem({ session, isUnread, selected, onPress, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend }: { session: SessionData; isUnread?: boolean; selected?: boolean; onPress: () => void; roleSessions?: number; onOpenRole?: () => void; onLongPress?: () => void; reviveAt?: number } & RowPlacementProps) {
   if (PERF_PROBE) probeRender('SessionItem');
   const Theme = useTheme();
   const { projectFilter, showImageThumb } = useRowEnv();
@@ -198,6 +253,12 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
   // Handoff note starts clamped; tapping the pill body reveals the full reason.
   const [pingExpanded, setPingExpanded] = useState(false);
   const title = sessionTitle(session);
+  // Under the owners model the row draws its other owners' faces and who
+  // answers its wait ("With <owner>"), each in a child mounted only for such a
+  // row: a row off the model reads nothing of the owners.
+  const ownersModel = underOwnersModel(session as any);
+  const place = { placedBucket, placedState, pendingSend };
+  const withLead = ownersModel ? <RowWithOwner session={session} {...place} /> : null;
 
   return (
     <TouchableOpacity
@@ -235,6 +296,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
         </RNView>
         <RNView style={styles.rightMeta}>
           {sLabel && <RNText style={[styles.statusBadge, { color: sColor }]}>{sLabel}</RNText>}
+          {ownersModel && <RowCoOwners id={session._id} />}
           <RNText style={styles.timeText}>
             {formatRelativeTime(session.updated_at)}
           </RNText>
@@ -291,24 +353,27 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
         // thread has run far past the write, so a neglected line stops
         // reading as current.
         <RNText style={[styles.stateText, stateView.freshness !== 'fresh' && styles.stateTextStale]} numberOfLines={2}>
-          {stateView.cardLine}
+          {withLead}{stateView.cardLine}
         </RNText>
       ) : null}
       {/* A phone row carries one line of detail: the agent's pinned state,
           else the generated summary, else what the person last asked. */}
       {!stateView && (session.idle_summary || session.subtitle) ? (
         <RNText style={styles.summaryText} numberOfLines={1}>
-          {(session.idle_summary || session.subtitle)!.replace(/^\s*[-*•]\s+/, '')}
+          {withLead}{(session.idle_summary || session.subtitle)!.replace(/^\s*[-*•]\s+/, '')}
         </RNText>
       ) : null}
 
       {!stateView && !(session.idle_summary || session.subtitle) && userMessage && (
         <RNText style={styles.userMessage} numberOfLines={1}>
-          <RNText style={styles.userMessageCaret}>&gt; </RNText>
+          {withLead}<RNText style={styles.userMessageCaret}>&gt; </RNText>
           {userMessage}
         </RNText>
       )}
 
+      {ownersModel && !stateView && !(session.idle_summary || session.subtitle) && !userMessage ? (
+        <RowWithOwner session={session} line {...place} />
+      ) : null}
       {(project || showAuthor || blockedBadge || ship) ? (
       <RNView style={styles.conversationMeta}>
         {ship && <ShipTag ship={ship} />}
@@ -336,7 +401,7 @@ export function SessionItem({ session, isUnread, selected, onPress, onLongPress,
 // only the rows whose props changed, and a heartbeat alone changes none
 // (lib/sessionRowEqual). The callbacks take the row's id (or the
 // row) so the list passes the same functions to every row.
-export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt }: {
+export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session, isUnread, selected, onPress, onClose, onLongPress, roleSessions, onOpenRole, reviveAt, placedBucket, placedState, pendingSend }: RowPlacementProps & {
   session: SessionData;
   isUnread?: boolean;
   /** The row is the conversation on screen (a conversation's inbox panel). */
@@ -470,7 +535,7 @@ export const SwipeableSessionItem = memo(function SwipeableSessionItem({ session
       style={[styles.conversationItem, { transform: [{ translateX }] }]}
       {...(responder ? responder.panHandlers : {})}
     >
-      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} />
+      <SessionItem session={session} selected={selected} roleSessions={roleSessions} onOpenRole={openRole} isUnread={isUnread} onPress={press} onLongPress={longPress} reviveAt={reviveAt} placedBucket={placedBucket} placedState={placedState} pendingSend={pendingSend} />
       <RNView style={styles.separator} />
     </RNAnimated.View>
   );
