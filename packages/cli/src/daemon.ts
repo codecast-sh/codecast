@@ -17885,36 +17885,55 @@ export async function acceptTrustPrompt(target: string): Promise<boolean> {
 // Read the list, move the highlight onto the target row, re-read to prove it
 // moved, and only then press Enter. If the highlight cannot be placed, press
 // NOTHING. Never confirming is recoverable; confirming the wrong option is not.
-export async function selectHighlightedOption(target: string, isTarget: (line: string) => boolean, dialog: string): Promise<boolean> {
+// Consecutive refusals per pane. The caller polls again after each one, so the
+// first refusal logs the screen and the rest stay quiet; a success clears it.
+const highlightFailures = new Map<string, number>();
+export const HIGHLIGHT_HOLD_AFTER_FAILURES = 5;
+export const HIGHLIGHT_HOLD_REASON = "the terminal shows a dialog whose highlight Codecast can't place";
+export function highlightFailureCount(target: string): number {
+  return highlightFailures.get(target) ?? 0;
+}
+
+export async function selectHighlightedOption(target: string, isTarget: (line: string) => boolean, dialog: string, exec: typeof tmuxExec = tmuxExec): Promise<boolean> {
+  let rows: string[] = [];
   const capture = async (): Promise<string[]> => {
-    const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-30"]);
-    return stdout.split("\n");
+    const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-30"]);
+    return rows = stdout.split("\n");
   };
   const press = async (key: string, times = 1) => {
     for (let i = 0; i < times; i++) {
-      await tmuxExec(["send-keys", "-t", target, key]);
+      await exec(["send-keys", "-t", target, key]);
       await new Promise(r => setTimeout(r, 120));
     }
+  };
+  const refused = (message: string): false => {
+    const count = highlightFailureCount(target) + 1;
+    highlightFailures.set(target, count);
+    if (count === 1) log(`${message}\n${holdScreen(rows.join("\n"))}`);
+    return false;
   };
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const step = planHighlightStep(await capture(), isTarget);
-    if (step.action === "none") {
-      log(`Not touching ${dialog} in ${target}: ${step.reason}`);
-      return false;
-    }
+    if (step.action === "none") return refused(`Not touching ${dialog} in ${target}: ${step.reason}`);
     if (step.action === "confirm") {
       log(`Selecting "${step.option}" in ${dialog} in ${target} (Enter)`);
-      await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      await exec(["send-keys", "-t", target, "Enter"]);
       await new Promise(r => setTimeout(r, 500));
+      highlightFailures.delete(target);
       return true;
     }
     await press(step.key, step.times);
     await new Promise(r => setTimeout(r, 300));
     // Loop re-reads and only confirms once the highlight is provably on the target.
   }
-  log(`Could not place the highlight on the target option of ${dialog} in ${target}; pressing nothing`);
-  return false;
+  return refused(`Could not place the highlight on the target option of ${dialog} in ${target}; pressing nothing`);
+}
+
+/** The hold for a trust dialog whose highlight keeps refusing, once the streak is earned. */
+export function trustHighlightHold(target: string, pane: string): InputBlockedError | null {
+  if (highlightFailureCount(target) < HIGHLIGHT_HOLD_AFTER_FAILURES) return null;
+  return new InputBlockedError("trust dialog highlight cannot be placed", HIGHLIGHT_HOLD_REASON, holdScreen(pane));
 }
 
 class InputBlockedError extends Error {
@@ -18127,7 +18146,11 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     // Grok is glyphless, so the skip below would swallow this as "still booting"
     // and never send `y`. Answer it here, before that continue.
     if (state === "trust") {
-      await acceptTrustPrompt(target);
+      if (!(await acceptTrustPrompt(target))) {
+        const hold = trustHighlightHold(target, stdout);
+        if (hold) throw hold;
+        await new Promise(resolve => setTimeout(resolve, 1000 * highlightFailureCount(target)));
+      }
       continue;
     }
 
