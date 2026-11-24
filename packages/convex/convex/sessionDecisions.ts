@@ -54,6 +54,7 @@ import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
 import { invalidImpact } from "@codecast/shared/contracts/decisionImpact";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
+import { endRunFields } from "./lib/runEnd";
 import { CARD_GATE_NODE_ID, validateChangeCard, type ChangeCard } from "@codecast/shared/contracts/changeCard";
 
 export const optionValidator = v.object({
@@ -847,7 +848,7 @@ async function settleGateRun(ctx: Ctx, row: DecisionRow, verdict: Verdict, now: 
   if (!run || run.status !== "paused") return false;
   if (String(run.gate_decision_id ?? "") !== String(row._id)) return false;
   if (verdict.status !== "answered") {
-    await ctx.db.patch(run._id, { status: "failed", fail_reason: "gate dismissed", updated_at: now });
+    await ctx.db.patch(run._id, { ...endRunFields(run, "failed", now), fail_reason: "gate dismissed", updated_at: now });
     return true;
   }
   const key: string | undefined = verdict.answer_index !== undefined ? run.gate_choices?.[verdict.answer_index]?.key : undefined;
@@ -1622,7 +1623,7 @@ export async function withdrawCore(ctx: Ctx, row: DecisionRow, now: number, via?
   if (row.workflow_run_id) {
     const run = await ctx.db.get(row.workflow_run_id);
     if (run && run.status === "paused" && String(run.gate_decision_id ?? "") === String(row._id)) {
-      await ctx.db.patch(run._id, { status: "failed", fail_reason: opts?.presentAgain ? GATE_PRESENT_AGAIN : "gate withdrawn", updated_at: now });
+      await ctx.db.patch(run._id, { ...endRunFields(run, "failed", now), fail_reason: opts?.presentAgain ? GATE_PRESENT_AGAIN : "gate withdrawn", updated_at: now });
     }
   }
   // The same settle every resolution takes (the-line.md L4): inbox rows
