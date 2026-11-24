@@ -12,6 +12,12 @@
 //     (workflows.upsertWorkflowFor).
 //   - A variant's base (`extends`) is the base flow's current version at the
 //     run's start, so an edit to the spine reaches its variants.
+//   - A segment (`flow="<slug>"`) the workspace published is pinned at the
+//     save: each version names the segment versions current then (segments),
+//     a run records them after the flow and its bases, and its runner reads
+//     each segment from there on any machine. A segment nobody published
+//     (shipped, or only in a repo) resolves on the host as before (cli
+//     parser.ts resolveFlowSource).
 //   - `runs_from = "repo"` pins a flow to its checkout's file; unset is the
 //     resolution from before the library, byte for byte (cli daemonGraph.ts).
 import { ConvexError, v } from "convex/values";
@@ -19,10 +25,10 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import { internalMutation, mutation, query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
-import { flowGraphAttr } from "@codecast/shared/contracts/flowPool";
+import { flowGraphAttr, flowSegmentSlugs, publishableFlowSource } from "@codecast/shared/contracts/flowPool";
 import { workspaceGrantsAccess } from "./lib/access";
-import { recordGraphVersion } from "./workflows";
-import { LIBRARY_LINE, libraryVersionOf, newestOfLine, nextSeq, placeLine } from "./lib/runGraph";
+import { recordGraphVersion, type SegmentPins } from "./workflows";
+import { LIBRARY_LINE, graphOfVersion, holdsGraph, libraryVersionOf, newestOfLine, nextSeq, placeLine, versionToPin } from "./lib/runGraph";
 import { extendsFile, isExtendsPath } from "./lib/flowRoute";
 
 type Snapshot = NonNullable<Doc<"workflow_versions">["snapshot"]>;
@@ -92,7 +98,34 @@ export async function recordWorkflowVersion(ctx: any, workflowId: Id<"workflows"
   }
   const snapshot = snapshotOfRow(row);
   if (JSON.stringify(snapshot).length > SNAPSHOT_MAX_BYTES) throw new ConvexError(`${row.slug} is too big to keep as a library version (over ${SNAPSHOT_MAX_BYTES} bytes)`);
-  return await standAt(ctx, row, await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, snapshot, { line: LIBRARY_LINE }));
+  const segments = await segmentPins(ctx, row, snapshot.source);
+  return await standAt(ctx, row, await recordGraphVersion(ctx, workflowId, userId, origin ?? { graph_hash: contentHash(snapshot), nodes: [] }, now, snapshot, { line: LIBRARY_LINE, segments }));
+}
+
+/**
+ * Each segment a library flow's source composes that its workspace published, at the version a run starting now would
+ * read (a library flow's current version, a published one's standing version, the graph the pool serves): what a save
+ * pins. A segment pinned to its repo (`runs_from = "repo"`) is the checkout's file, so it is never pinned.
+ */
+async function segmentPins(ctx: any, row: Doc<"workflows">, source: string): Promise<SegmentPins> {
+  const out: SegmentPins = [];
+  for (const slug of flowSegmentSlugs(source)) {
+    if (slug === row.slug) continue;
+    const seg = await publishedSegment(ctx, row, slug);
+    const ver = seg ? await versionToPin(ctx, seg._id) : null;
+    if (seg && ver && holdsGraph(ver)) out.push({ slug, workflow_id: seg._id, version_id: ver._id });
+  }
+  return out;
+}
+
+/** The flow a slug names as a row's segment: the owner's library flow, else the workspace's library flow, else the
+ *  workspace's newest published flow of that slug (the one its pool lists). */
+async function publishedSegment(ctx: any, row: Doc<"workflows">, slug: string): Promise<Doc<"workflows"> | null> {
+  const own: Doc<"workflows"> | null = await ctx.db.query("workflows").withIndex("by_user_slug", (q: any) => q.eq("user_id", row.user_id).eq("slug", slug)).first();
+  if (own && own._id !== row._id && own.runs_from === "library") return own;
+  const pool: Doc<"workflows">[] = row.workspace ? await ctx.db.query("workflows").withIndex("by_workspace", (q: any) => q.eq("workspace", row.workspace)).collect() : [];
+  const named = pool.filter((w) => w.slug === slug && w._id !== row._id && w.runs_from !== "repo").sort((a, b) => b.updated_at - a.updated_at);
+  return named.find((w) => w.runs_from === "library") ?? named.find((w) => publishableFlowSource(w.source)) ?? null;
 }
 
 /** Whether the row stands at a version pushed from a file. */
@@ -142,8 +175,9 @@ async function baseOf(ctx: any, row: Doc<"workflows">): Promise<Doc<"workflows">
 }
 
 /**
- * The library versions a run on this flow executes, the flow first and then
- * each base it extends: the run records them at its start
+ * The library versions a run on this flow executes, the flow first, then
+ * each base it extends, then each segment those versions pinned and the
+ * segments those pinned in turn: the run records them at its start
  * (workflow_runs.flow_versions). Nothing for a flow that does not run from
  * the library, or has no version with content yet: that run resolves its
  * graph as before.
@@ -155,11 +189,36 @@ export async function runFlowVersions(ctx: any, workflowId: Id<"workflows"> | un
   for (let at: Doc<"workflows"> | null = row; at && out.length < 8; at = await baseOf(ctx, at)) {
     if (out.some((x) => x.workflow_id === at!._id)) break;
     const ver = await currentVersion(ctx, at._id);
-    if (!ver) return at === row ? {} : { flow_versions: out };
+    if (!ver) {
+      if (at === row) return {};
+      break;
+    }
     out.push({ workflow_id: at._id, version_id: ver._id });
   }
-  return { flow_versions: out };
+  return { flow_versions: await withSegments(ctx, out) };
 }
+
+/** The versions after each segment their versions pinned, breadth first, each flow and slug once (a runner reads a
+ *  segment by slug, cli daemonGraph.ts parseLibraryRun). A pin whose version keeps no graph is left to the host. */
+async function withSegments(ctx: any, versions: FlowVersions): Promise<FlowVersions> {
+  const out = [...versions];
+  const flows = new Set(out.map((x) => String(x.workflow_id)));
+  const slugs = new Set<string>();
+  for (const x of out) slugs.add(((await ctx.db.get(x.workflow_id)) as Doc<"workflows"> | null)?.slug ?? "");
+  for (let i = 0; i < out.length && out.length < MAX_RUN_VERSIONS; i++) {
+    const ver: Doc<"workflow_versions"> | null = await ctx.db.get(out[i]!.version_id);
+    for (const pin of ver?.segments ?? []) {
+      if (flows.has(String(pin.workflow_id)) || slugs.has(pin.slug) || out.length >= MAX_RUN_VERSIONS) continue;
+      const seg: Doc<"workflow_versions"> | null = await ctx.db.get(pin.version_id);
+      if (!holdsGraph(seg)) continue;
+      flows.add(String(pin.workflow_id));
+      slugs.add(pin.slug);
+      out.push({ workflow_id: pin.workflow_id, version_id: pin.version_id });
+    }
+  }
+  return out;
+}
+const MAX_RUN_VERSIONS = 24;
 
 type FlowVersions = Array<{ workflow_id: Id<"workflows">; version_id: Id<"workflow_versions"> }>;
 
@@ -227,15 +286,15 @@ export const repinLiveRuns = internalMutation({
   },
 });
 
-/** What a runner materializes for a run that recorded library versions (getForDaemon's `library`), in the order it writes them: the flow, then its bases. */
+/** What a runner materializes for a run that recorded library versions (getForDaemon's `library`), in the order it writes them: the flow, then its bases, then its segments. A segment published outside the library keeps its graph apart (graphOfVersion). */
 export async function libraryOfRun(ctx: any, run: Pick<Doc<"workflow_runs">, "flow_versions">): Promise<{ library?: { versions: Array<{ workflow_id: string; version_id: string; slug: string | null; snapshot: Snapshot }> } }> {
   if (!run.flow_versions?.length) return {};
   const versions = [];
   for (const fv of run.flow_versions) {
-    const ver: Doc<"workflow_versions"> | null = await ctx.db.get(fv.version_id);
-    if (!ver?.snapshot) return {};
+    const snapshot = await graphOfVersion(ctx, await ctx.db.get(fv.version_id));
+    if (!snapshot) return {};
     const row: Doc<"workflows"> | null = await ctx.db.get(fv.workflow_id);
-    versions.push({ workflow_id: String(fv.workflow_id), version_id: String(fv.version_id), slug: row?.slug ?? null, snapshot: ver.snapshot });
+    versions.push({ workflow_id: String(fv.workflow_id), version_id: String(fv.version_id), slug: row?.slug ?? null, snapshot });
   }
   return { library: { versions } };
 }
@@ -290,7 +349,7 @@ async function restoreCore(ctx: any, userId: Id<"users">, ref: string, version: 
   });
   // The same graph as that version: a new row in the history, so the restore is itself a version.
   const seq = await nextSeq(ctx, row._id);
-  const id = await ctx.db.insert("workflow_versions", { workflow_id: row._id, graph_hash: ver.graph_hash, nodes: ver.nodes, changed: [], by: userId, at: now, snapshot: s, line: LIBRARY_LINE, seq });
+  const id = await ctx.db.insert("workflow_versions", { workflow_id: row._id, graph_hash: ver.graph_hash, nodes: ver.nodes, changed: [], by: userId, at: now, snapshot: s, line: LIBRARY_LINE, seq, ...(ver.segments ? { segments: ver.segments } : {}) });
   await ctx.db.patch(row._id, { version_id: id });
   return { slug: row.slug, restored: want.n, version: seq, version_id: id };
 }

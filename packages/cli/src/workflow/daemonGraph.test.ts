@@ -87,6 +87,66 @@ describe("graphForDaemonRun", () => {
     fs.rmSync(cache, { recursive: true, force: true });
   });
 
+  test("a segment the run recorded a version of reads that version, whatever this machine's index and checkouts hold; a run that recorded none resolves it here, as before", () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), "daemongraph-seg-"));
+    const saved = { dir: process.env.CODECAST_DIR, cache: process.env.CODECAST_FLOWS_CACHE };
+    process.env.CODECAST_DIR = path.join(home, ".codecast");
+    delete process.env.CODECAST_FLOWS_CACHE;
+    try {
+      const cache = path.join(home, ".codecast", "flows");
+      fs.mkdirSync(cache, { recursive: true });
+      const land = (says: string) => `digraph land { graph [kind="segment"]; start [shape=Mdiamond]; merge [prompt="${says}"]; exit [shape=Msquare]; start -> merge -> exit }`;
+      // The host's checkout carries its own land.cast.
+      const checkout = path.join(home, "repo");
+      fs.mkdirSync(path.join(checkout, ".codecast", "flows"), { recursive: true });
+      fs.writeFileSync(path.join(checkout, ".codecast", "flows", "land.cast"), land("The checkout's land."));
+      const onefix = { workflow_id: "w1", version_id: "v30", slug: "onefix", snapshot: { name: "onefix", source: `digraph onefix { start [shape=Mdiamond]; fix [prompt="Fix."]; land [flow="land"]; exit [shape=Msquare]; start -> fix -> land -> exit }`, nodes: [], file: "outreach/line/onefix.cast", files: [] } };
+      const recorded = { workflow_id: "w9", version_id: "v4", slug: "land", snapshot: { name: "land", source: land("The recorded land."), nodes: [], file: ".codecast/flows/land.cast", files: [] } };
+      const run = { workflow_name: "onefix", project_path: checkout };
+      const merge = (versions: any[]) => daemonRunGraph(run, { name: "onefix", nodes: [], edges: [], library: { versions } }, checkout, "dev-b").graph!.nodes.get("land__merge")!.prompt;
+
+      // This machine's index lacks land, and a hand-placed copy sits where the walk up from the library reaches.
+      fs.writeFileSync(path.join(cache, "land.cast"), land("The host's copy."));
+      expect(fs.existsSync(path.join(cache, "index.json"))).toBe(false);
+      expect(merge([onefix, recorded])).toBe("The recorded land.");
+
+      // A version saved before segments were pinned: the hand-placed copy, as today.
+      expect(merge([onefix])).toBe("The host's copy.");
+      // Without it, the team flow this machine last indexed.
+      fs.rmSync(path.join(cache, "land.cast"));
+      const team = path.join(cache, "k57land", "land.cast");
+      fs.mkdirSync(path.dirname(team), { recursive: true });
+      fs.writeFileSync(team, land("The indexed land."));
+      fs.writeFileSync(path.join(cache, "index.json"), JSON.stringify({ land: team }));
+      expect(merge([onefix])).toBe("The indexed land.");
+      expect(merge([onefix, recorded])).toBe("The recorded land.");
+    } finally {
+      for (const [k, v] of [["CODECAST_DIR", saved.dir], ["CODECAST_FLOWS_CACHE", saved.cache]] as const) {
+        if (v === undefined) delete process.env[k];
+        else process.env[k] = v;
+      }
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  test("a run with more versions than fit a directory's name writes them under a hash of them all", () => {
+    const fs = require("node:fs");
+    const os = require("node:os");
+    const path = require("node:path");
+    const { materializeLibraryRun } = require("./daemonGraph");
+    const cache = fs.mkdtempSync(path.join(os.tmpdir(), "daemongraph-long-"));
+    const version = (id: string) => ({ workflow_id: "w", version_id: id, slug: id, snapshot: { name: id, source: `digraph ${id} { start [shape=Mdiamond]; exit [shape=Msquare]; start -> exit }`, nodes: [], file: `${id}.cast`, files: [] } });
+    const ids = (tail: string) => [..."abcdefg"].map((c) => `${c.repeat(31)}${tail}`);
+    const a = materializeLibraryRun(ids("1").map(version), cache);
+    const b = materializeLibraryRun([...ids("1").slice(0, 6), "z".repeat(32)].map(version), cache);
+    expect(path.basename(path.dirname(a))).toMatch(/^v-h[0-9a-f]{40}$/);
+    expect(path.dirname(a)).not.toBe(path.dirname(b));
+    fs.rmSync(cache, { recursive: true, force: true });
+  });
+
   test("a row pushed from another repo's checkout on this machine never answers a run in this one", () => {
     const fs = require("node:fs");
     const os = require("node:os");

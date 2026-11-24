@@ -103,10 +103,13 @@ export function poolFlows(cwd: string, session?: string | null, published: Reado
   // A run of a flow the library retired left a row of that name behind, which nothing shadows any more: it never joins.
   const pushed = published.filter((row) => !retiredFlowLine(row.slug));
   const dir = repoFlowsDir(cwd);
-  // Every team flow the repo and the shipped flows do not name is written and indexed before any flow is read, so a
-  // flow here (or another team flow) can use one as a segment (teamFlowIndex.ts).
-  const repoSlugs = new Set((dir ? fs.readdirSync(dir) : []).filter((f) => f.endsWith(".cast")).map((f) => f.replace(/\.cast$/, "")));
-  const team = pushed.filter((row) => row.source && !repoSlugs.has(row.slug) && !Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, row.slug));
+  const newest = new Map<string, PushedPoolRow>();
+  for (const row of pushed) if (!newest.has(row.slug)) newest.set(row.slug, row);
+  // Every team flow the shipped flows do not name is written and indexed before any flow is read, so a flow here (or
+  // another team flow) can use one as a segment (teamFlowIndex.ts). One this checkout's `.codecast/flows` also names is
+  // indexed too: the index is the machine's, and a daemon run anywhere reads it; the repo's own file still wins here,
+  // because the parser reads the repo before the index (parser.ts resolveFlowSource).
+  const team = [...newest.values()].filter((row) => row.source && !Object.prototype.hasOwnProperty.call(BUILTIN_WORKFLOW_TEMPLATES, row.slug));
   writeTeamFlowIndex(new Map(team.map((row) => [row.slug, materializePushedFlow(row, cacheRoot)] as const)), cacheRoot);
   const own = new Set<string>();
   if (dir) {
@@ -124,8 +127,6 @@ export function poolFlows(cwd: string, session?: string | null, published: Reado
     out.push(describeFlow(slug, src, "shipped", null, dir ?? undefined));
   }
   const named = new Set(out.map((f) => f.slug));
-  const newest = new Map<string, PushedPoolRow>();
-  for (const row of pushed) if (!newest.has(row.slug)) newest.set(row.slug, row);
   for (const row of pushed) {
     if (named.has(row.slug) || !row.source) continue;
     named.add(row.slug);
