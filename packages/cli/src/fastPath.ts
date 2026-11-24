@@ -45,6 +45,16 @@ export function isStableContextFastPath(argv: string[]): boolean {
   return isSessionStartVerb(argv, "stable-context");
 }
 
+const RELAY_HOOK_COMMANDS: readonly string[] = ["register", "unregister", "relay"];
+
+export function isRelayHookArgv(argv: readonly string[]): boolean {
+  return RELAY_HOOK_COMMANDS.includes(argv[2] ?? "");
+}
+
+export function messagingOnly(config: { messaging_only?: boolean } | null | undefined): boolean {
+  return config?.messaging_only === true;
+}
+
 export function isTaskContextFastPath(argv: string[]): boolean {
   return isSessionStartVerb(argv, "_task-context");
 }

@@ -778,13 +778,13 @@ Examples:
   cast guide tasks --json    Machine-readable {topic, version, build_id, body}`,
     load: () => import("./guide.js").then((m) => m.registerGuideCommand),
   },
+  { token: "register", hasOptions: true, description: "Register this agent session for messaging only (run from a Claude Code SessionStart hook)", load: () => import("./relay/commands.js").then((m) => m.registerRegisterCommand) },
+  { token: "unregister", hasOptions: true, description: "End this agent session's messaging-only registration (run from a Claude Code SessionEnd hook)", load: () => import("./relay/commands.js").then((m) => m.registerUnregisterCommand) },
+  { token: "relay", hasOptions: true, description: "Deliver messages to registered herdr and paseo agent sessions on this machine", load: () => import("./relay/commands.js").then((m) => m.registerRelayCommand) },
 ];
 
 const BY_TOKEN = new Map<string, CommandGroup>();
-for (const group of COMMAND_GROUPS) {
-  BY_TOKEN.set(group.token, group);
-  for (const alias of group.aliases ?? []) BY_TOKEN.set(alias, group);
-}
+for (const group of COMMAND_GROUPS) for (const token of [group.token, ...(group.aliases ?? [])]) BY_TOKEN.set(token, group);
 
 /** The group a first token names, by token or by alias. */
 export function groupForToken(token: string | undefined): CommandGroup | undefined {

@@ -16,6 +16,7 @@ function deps(over: Partial<RegisterDeps> & { mutation?: (name: string, args: an
     stdoutIsTTY: false,
     readStdin: async () => JSON.stringify({ session_id: "hook-sess", cwd: "/hook/cwd" }),
     ancestorComms: async () => ["sh", "claude", "Paseo Daemon"],
+    identify: async () => undefined,
     gitRemote: async () => "git@github.com:a/b.git",
     deviceId: () => "dev-1",
     cwd: () => "/proc/cwd",
@@ -60,6 +61,46 @@ describe("target detection through register", () => {
     const { d, calls } = deps({ gitRemote: async () => undefined });
     await runRegister({}, d);
     expect("git_remote_url" in calls[0].args).toBe(false);
+  });
+});
+
+describe("one target, one claude session", () => {
+  test("a daemon-launched session never registers", async () => {
+    const { d, calls, err } = deps({ env: { PASEO_AGENT_ID: "a", CODECAST_LAUNCH_TOKEN: "abc123" } });
+    expect(await runRegister({}, d)).toBe(0);
+    expect(calls).toEqual([]);
+    expect(err).toEqual([]);
+  });
+
+  test("a paseo home is registered with the agent", async () => {
+    const { d, calls } = deps({ env: { PASEO_AGENT_ID: "a", PASEO_HOME: "/alt" } });
+    await runRegister({}, d);
+    expect(calls[0].args.delivery_target).toEqual({ kind: "paseo", agent_id: "a", home: "/alt" });
+  });
+
+  test.each(["codex", "Codex", "gemini", "opencode"])("a %s agent running claude -p does not register", async (provider) => {
+    const seen: unknown[] = [];
+    const { d, calls } = deps({ identify: async (t) => { seen.push(t); return provider; } });
+    expect(await runRegister({}, d)).toBe(0);
+    expect(calls).toEqual([]);
+    expect(seen).toEqual([{ kind: "paseo", agent_id: "agent-7" }]);
+  });
+
+  test("a claude agent registers, and an undetected or failed lookup does not refuse", async () => {
+    for (const identify of [async () => "claude", async () => "Claude", async () => undefined]) {
+      const { d, calls } = deps({ identify });
+      await runRegister({}, d);
+      expect(calls).toHaveLength(1);
+    }
+  });
+
+  test("the lookup is bounded by the hook's budget: a hang is cut off and the session still registers", async () => {
+    const { d, calls, err } = deps({ identify: () => new Promise(() => {}), timeoutMs: 20 });
+    const start = Date.now();
+    expect(await runRegister({}, d)).toBe(0);
+    expect(calls).toHaveLength(1);
+    expect(Date.now() - start).toBeLessThan(1000);
+    expect(err).toEqual([]);
   });
 });
 

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import { HerdrError } from "../herdr.js";
 import { createTargetAdapter, detectDeliveryTarget, type ExecResult, type TargetTransport } from "./targets.js";
 
@@ -32,6 +33,9 @@ describe("detectDeliveryTarget", () => {
   test("paseo from PASEO_AGENT_ID", () => {
     expect(detectDeliveryTarget({ PASEO_AGENT_ID: "a1" })).toEqual({ kind: "paseo", agent_id: "a1" });
   });
+  test("paseo carries its home when PASEO_HOME is set", () => {
+    expect(detectDeliveryTarget({ PASEO_AGENT_ID: "a1", PASEO_HOME: "/p" })).toEqual({ kind: "paseo", agent_id: "a1", home: "/p" });
+  });
   test("herdr from the pane and the socket herdr exports", () => {
     expect(detectDeliveryTarget({ HERDR_PANE_ID: "w1:p1", HERDR_SOCKET_PATH: "/s/herdr.sock" })).toEqual({ kind: "herdr", pane: "w1:p1", socket: "/s/herdr.sock" });
   });
@@ -59,7 +63,7 @@ describe("herdr adapter", () => {
     ["pane_not_found", "gone"],
     ["agent_pane_not_found", "gone"],
     ["unreachable", "transient"],
-    ["timeout", "transient"],
+    ["timeout", "uncertain"],
     ["agent_not_ready", "transient"],
     ["agent_prompt_failed", "transient"],
   ])("error %s maps to %s", async (code, kind) => {
@@ -72,23 +76,15 @@ describe("herdr adapter", () => {
     expect((await createTargetAdapter(t).deliver(HERDR, "x")).kind).toBe("transient");
   });
 
-  const agent = (session: unknown) => fakeTransport({ herdr: async () => ({ type: "agent_info", agent: { agent_session: session } }) }).transport;
-  test("probe: asks agent.get for the pane", async () => {
-    const { transport, calls } = fakeTransport({ herdr: async (...a) => { calls.herdr.push(a); return { agent: {} }; } });
-    await createTargetAdapter(transport).probe(HERDR, "s1");
+  test("probe: asks agent.get for the pane and a found agent is alive", async () => {
+    const { transport, calls } = fakeTransport({ herdr: async (...args) => { calls.herdr.push(args); return { agent: {} }; } });
+    expect((await createTargetAdapter(transport).probe(HERDR)).kind).toBe("alive");
     expect(calls.herdr[0][1]).toBe("agent.get");
     expect(calls.herdr[0][2]).toEqual({ target: "w1:p2" });
   });
-  test("probe: matching id session is alive", async () => {
-    expect((await createTargetAdapter(agent({ kind: "id", value: "s1", agent: "claude", source: "x" })).probe(HERDR, "s1")).kind).toBe("alive");
-  });
-  test("probe: a different id session is gone", async () => {
-    expect((await createTargetAdapter(agent({ kind: "id", value: "other", agent: "claude", source: "x" })).probe(HERDR, "s1")).kind).toBe("gone");
-  });
-  test("probe: a missing or null session, or a non-id kind, is not evidence", async () => {
-    for (const session of [undefined, null, { kind: "path", value: "/x/y", agent: "claude", source: "x" }, { kind: "id", value: "", agent: "claude", source: "x" }]) {
-      expect((await createTargetAdapter(agent(session)).probe(HERDR, "s1")).kind).toBe("alive");
-    }
+  test("probe: an agent_session naming another session is not evidence", async () => {
+    const t = fakeTransport({ herdr: async () => ({ agent: { agent_session: { kind: "id", value: "someone-else", agent: "claude", source: "x" } } }) }).transport;
+    expect((await createTargetAdapter(t).probe(HERDR)).kind).toBe("alive");
   });
   test.each([
     ["agent_not_found", "gone"],
@@ -96,7 +92,7 @@ describe("herdr adapter", () => {
     ["unreachable", "unknown"],
     ["timeout", "unknown"],
   ])("probe error %s is %s", async (code, kind) => {
-    expect((await createTargetAdapter(failing(code)).probe(HERDR, "s1")).kind).toBe(kind as string as never);
+    expect((await createTargetAdapter(failing(code)).probe(HERDR)).kind).toBe(kind as string as never);
   });
 });
 
@@ -105,7 +101,7 @@ describe("paseo adapter", () => {
 
   test("sends with steer, no-wait and a prompt file, then removes the file", async () => {
     const { transport, calls } = fakeTransport({ exec: async (file, args, timeoutMs) => { calls.exec.push({ file, args, timeoutMs }); return { code: 0, stdout: '{"ok":true}', stderr: "" }; } });
-    expect(await createTargetAdapter(transport).deliver(PASEO, "hi there")).toEqual({ kind: "ok" });
+    expect(await createTargetAdapter(transport, {}).deliver(PASEO, "hi there")).toEqual({ kind: "ok" });
     expect(calls.exec[0].file).toBe("paseo");
     expect(calls.exec[0].args).toEqual(["send", "agent-1", "--behavior", "steer", "--no-wait", "--prompt-file", calls.temps[0].file, "--json"]);
     expect(calls.temps[0]).toMatchObject({ content: "hi there", mode: 0o600, removed: true });
@@ -135,13 +131,13 @@ describe("paseo adapter", () => {
   });
 
   test("probe: AGENT_NOT_FOUND and Archived are gone", async () => {
-    expect((await createTargetAdapter(fakeTransport({ exec: exec({ code: 1, stdout: JSON.stringify({ error: { code: "AGENT_NOT_FOUND" } }) }) }).transport).probe(PASEO, "s")).kind).toBe("gone");
-    expect((await createTargetAdapter(fakeTransport({ exec: exec({ stdout: JSON.stringify({ Id: "a", Archived: true }) }) }).transport).probe(PASEO, "s")).kind).toBe("gone");
+    expect((await createTargetAdapter(fakeTransport({ exec: exec({ code: 1, stdout: JSON.stringify({ error: { code: "AGENT_NOT_FOUND" } }) }) }).transport).probe(PASEO)).kind).toBe("gone");
+    expect((await createTargetAdapter(fakeTransport({ exec: exec({ stdout: JSON.stringify({ Id: "a", Archived: true }) }) }).transport).probe(PASEO)).kind).toBe("gone");
   });
 
   test("probe: a live agent is alive and asked through inspect --json", async () => {
     const { transport, calls } = fakeTransport({ exec: async (f, a, t) => { calls.exec.push({ f, a, t }); return { code: 0, stdout: JSON.stringify({ Id: "a", Archived: false }), stderr: "" }; } });
-    expect((await createTargetAdapter(transport).probe(PASEO, "s")).kind).toBe("alive");
+    expect((await createTargetAdapter(transport).probe(PASEO)).kind).toBe("alive");
     expect(calls.exec[0].a).toEqual(["inspect", "agent-1", "--json"]);
   });
 
@@ -152,8 +148,96 @@ describe("paseo adapter", () => {
       exec({ stdout: "not json" }),
       async () => { throw new Error("spawn failed"); },
     ]) {
-      expect((await createTargetAdapter(fakeTransport({ exec: e }).transport).probe(PASEO, "s")).kind).toBe("unknown");
+      expect((await createTargetAdapter(fakeTransport({ exec: e }).transport).probe(PASEO)).kind).toBe("unknown");
     }
+  });
+});
+
+describe("paseo binary and home", () => {
+  const withHome = { kind: "paseo" as const, agent_id: "agent-1", home: "/alt/home" };
+
+  test("PASEO_CLI names the binary, and the default is paseo on PATH", async () => {
+    const a = fakeTransport();
+    await createTargetAdapter(a.transport, { PASEO_CLI: "/opt/Paseo/bin/paseo" }).deliver(PASEO, "x");
+    await createTargetAdapter(a.transport, { PASEO_CLI: "/opt/Paseo/bin/paseo" }).probe(PASEO);
+    expect(a.calls.exec.map((c) => c.file)).toEqual(["/opt/Paseo/bin/paseo", "/opt/Paseo/bin/paseo"]);
+    const b = fakeTransport();
+    await createTargetAdapter(b.transport, {}).probe(PASEO);
+    expect(b.calls.exec[0].file).toBe("paseo");
+  });
+
+  test("a target's home goes to send and inspect as --home, and its absence adds nothing", async () => {
+    const { transport, calls } = fakeTransport({ exec: async (file, args, timeoutMs) => { calls.exec.push({ file, args, timeoutMs }); return { code: 0, stdout: "{}", stderr: "" }; } });
+    const adapter = createTargetAdapter(transport, {});
+    await adapter.deliver(withHome, "x");
+    await adapter.probe(withHome);
+    await adapter.deliver(PASEO, "x");
+    expect(calls.exec[0].args.slice(-2)).toEqual(["--home", "/alt/home"]);
+    expect(calls.exec[1].args).toEqual(["inspect", "agent-1", "--json", "--home", "/alt/home"]);
+    expect(calls.exec[2].args).not.toContain("--home");
+  });
+});
+
+describe("a timeout after the request was written is uncertain, never retried as a send", () => {
+  test("paseo send killed by its timeout", async () => {
+    const { transport, calls } = fakeTransport({ exec: async () => ({ code: -1, stdout: "", stderr: "timed out", timedOut: true }) });
+    expect((await createTargetAdapter(transport).deliver(PASEO, "x")).kind).toBe("uncertain");
+    expect(calls.temps[0].removed).toBe(true);
+  });
+});
+
+describe("identify", () => {
+  test("herdr reports the detected agent name, and no agent or a failed lookup reports nothing", async () => {
+    const ok = fakeTransport({ herdr: async () => ({ agent: { agent: "claude" } }) }).transport;
+    expect(await createTargetAdapter(ok).identify(HERDR)).toBe("claude");
+    const codex = fakeTransport({ herdr: async () => ({ agent: { agent: "codex" } }) }).transport;
+    expect(await createTargetAdapter(codex).identify(HERDR)).toBe("codex");
+    const none = fakeTransport({ herdr: async () => ({ agent: { agent: null } }) }).transport;
+    expect(await createTargetAdapter(none).identify(HERDR)).toBeUndefined();
+    const failed = fakeTransport({ herdr: async () => { throw new HerdrError("agent_not_found", "x"); } }).transport;
+    expect(await createTargetAdapter(failed).identify(HERDR)).toBeUndefined();
+  });
+
+  test("herdr identify uses a short timeout", async () => {
+    const { transport, calls } = fakeTransport();
+    await createTargetAdapter(transport).identify(HERDR);
+    expect(calls.herdr[0].timeoutMs).toBeLessThanOrEqual(3000);
+  });
+
+  test("paseo reports its Provider from inspect, and a failure or garbage reports nothing", async () => {
+    const codex = fakeTransport({ exec: async () => ({ code: 0, stdout: JSON.stringify({ Provider: "codex" }), stderr: "" }) }).transport;
+    expect(await createTargetAdapter(codex).identify(PASEO)).toBe("codex");
+    const claude = fakeTransport({ exec: async () => ({ code: 0, stdout: JSON.stringify({ Provider: "claude" }), stderr: "" }) }).transport;
+    expect(await createTargetAdapter(claude).identify(PASEO)).toBe("claude");
+    for (const e of [async () => ({ code: 1, stdout: "", stderr: "down" }), async () => { throw new Error("spawn"); }, async () => ({ code: 0, stdout: "not json", stderr: "" })]) {
+      expect(await createTargetAdapter(fakeTransport({ exec: e }).transport).identify(PASEO)).toBeUndefined();
+    }
+  });
+
+  test("paseo identify uses a short timeout", async () => {
+    const { transport, calls } = fakeTransport();
+    await createTargetAdapter(transport).identify(PASEO);
+    expect(calls.exec[0].timeoutMs).toBeLessThanOrEqual(3000);
+  });
+});
+
+describe("the real transport runs from the home directory", () => {
+  test("exec starts in $HOME even when the caller's cwd is elsewhere", async () => {
+    const { realTransport } = await import("./targets.js");
+    const before = process.cwd();
+    process.chdir("/");
+    try {
+      const res = await realTransport.exec("pwd", [], 5000);
+      expect(fs.realpathSync(res.stdout.trim())).toBe(fs.realpathSync(os.homedir()));
+    } finally {
+      process.chdir(before);
+    }
+  });
+
+  test("a command killed by its timeout reports timedOut", async () => {
+    const { realTransport } = await import("./targets.js");
+    const res = await realTransport.exec("sleep", ["5"], 100);
+    expect(res.timedOut).toBe(true);
   });
 });
 

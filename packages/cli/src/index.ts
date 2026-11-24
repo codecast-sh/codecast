@@ -149,7 +149,7 @@ import { isManagedInstall } from "./managedInstall.js";
 import { checkForUpdates, performUpdate, showUpdateNotice, getVersion, getMemoryVersion, getTaskVersion, getWorkVersion, getWorkflowVersion, getMessagingVersion, getVisualVersion, getForksVersion, getPublishVersion, getStateVersion, getBrowserVersion, getChatVersion, ensureCastAlias, isDevMode, updateRecentlyFailed, recordUpdateFailure, getDecideVersion, getCallsVersion, getLimitsVersion, getComputerVersion, getCheckVersion, getSkillsVersion, getPrVersion, getModsVersion, getSimVersion, getVaultVersion} from "./update.js";
 import { type SectionSpec, getSnippetTargets, installSectionToTargets, cutOwnedSections, REFERENCES_SECTION, installMessagingSnippet, installReferencesSnippet, installPublishSnippet, installBrowserSnippet, installChatSnippet, snippetStale, stampSnippet } from "./snippets.js";
 import { installAllStableHooks, parseStableHookClient, removeAllStableHooks, runStableContextHook } from "./stableContext.js";
-import { isCredentialHelperFastPath, isStableContextFastPath as isStableContextFastPathArgv, isTaskContextFastPath, runFastPath } from "./fastPath.js";
+import { isCredentialHelperFastPath, isRelayHookArgv, isStableContextFastPath as isStableContextFastPathArgv, isTaskContextFastPath, messagingOnly, runFastPath } from "./fastPath.js";
 import { DAEMON_BUILD_ID } from "./daemonBuildId.js";
 import { BUILD_ID_VALUE_RE, daemonBuildUnchanged } from "./daemonBuildGate.js";
 import { DAEMON_STOP_SIGKILL_MS } from "./shutdownBudget.js";
@@ -918,6 +918,7 @@ function readTaskPulse(): { task?: string; plan?: string } | null {
 // and the removal live in harnessHooksInstall.ts, loaded here on demand so an
 // ordinary command never parses them (bench/bootGraph.guard.test.ts).
 async function syncHooks(config?: Record<string, any> | null): Promise<void> {
+  if (messagingOnly(config ?? readConfig())) return;
   const { syncHarnessHooks } = await import("./harnessHooksInstall.js");
   syncHarnessHooks(config ?? readConfig());
 }
@@ -925,6 +926,7 @@ async function syncHooks(config?: Record<string, any> | null): Promise<void> {
 // After an Agent Features toggle: only the hooks that belong to a feature
 // move, so turning one feature on never installs anything else.
 async function syncFeatureHooks(config?: Record<string, any> | null): Promise<void> {
+  if (messagingOnly(config ?? readConfig())) return;
   const { syncFeatureHooks: sync } = await import("./harnessHooksInstall.js");
   sync(config ?? readConfig());
 }
@@ -1033,7 +1035,7 @@ function ensureDaemonRunning(): void {
   // Whatever supervises the daemon also restarts it, version bounces included.
   if (autostartDisabledByEnv()) return;
   const config = readConfig();
-  if (!config?.auth_token) return;
+  if (!config?.auth_token || messagingOnly(config)) return;
   if (isDaemonRunning()) {
     try {
       const runningVersion = fs.existsSync(VERSION_FILE)
@@ -2440,6 +2442,7 @@ function snippetDescriptor(slug: string) {
 }
 
 async function refreshEnabledSnippets(config: Record<string, any>): Promise<void> {
+  if (messagingOnly(config)) return;
   if (config.memory_enabled) installMemorySnippet(true);
   if (config.task_enabled) installTaskSnippet(true);
   if (config.work_enabled) installWorkSnippet(true);
@@ -5156,34 +5159,6 @@ program
   });
 
 program
-  .command("register")
-  .description("Register this agent session for messaging only (run from a Claude Code SessionStart hook)")
-  .option("--session-id <id>", "Claude session id (default: from the hook payload on stdin)")
-  .option("--cwd <dir>", "Working directory (default: from the hook payload on stdin)")
-  .action(async (options) => {
-    const { registerMain } = await import("./relay/wiring.js");
-    process.exit(await registerMain({ sessionId: options.sessionId, cwd: options.cwd }, readConfig));
-  });
-
-program
-  .command("unregister")
-  .description("End this agent session's messaging-only registration (run from a Claude Code SessionEnd hook)")
-  .option("--session-id <id>", "Claude session id (default: from the hook payload on stdin)")
-  .action(async (options) => {
-    const { unregisterMain } = await import("./relay/wiring.js");
-    process.exit(await unregisterMain({ sessionId: options.sessionId }, readConfig));
-  });
-
-program
-  .command("relay")
-  .description("Deliver messages to registered herdr and paseo agent sessions on this machine")
-  .option("--background", "Start the relay detached unless one is already running")
-  .action(async (options) => {
-    const { relayMain } = await import("./relay/wiring.js");
-    process.exit(await relayMain({ background: options.background }, readConfig));
-  });
-
-program
   .command("gc")
   .description("Kill tmux sessions idle longer than --mins (default 60); --dry-run lists them first")
   .option("-m, --mins <minutes>", "Idle threshold in whole minutes (default: 60)")
@@ -5944,7 +5919,7 @@ registerSyncVerbs(syncCommand);
 // Every key `cast config` reads and writes: the plain settable ones, then the
 // ones with their own setter below. The help and the unknown-key error both
 // read this list, so they cannot disagree.
-const CONFIG_SETTABLE_KEYS = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"] as const;
+const CONFIG_SETTABLE_KEYS = ["auth_token", "web_url", "user_id", "convex_url", "team_id", "excluded_paths", "claude_args", "codex_args", "browser_capture", "cloud_mirror_enabled", "cloud_mirror_exclude", "cloud_mirror_include", "sync_always", "sync_never", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled", "messaging_only"] as const;
 const CONFIG_ALL_KEYS: readonly string[] = [...CONFIG_SETTABLE_KEYS, "claude_backend", "subagents.per_session", "subagents.per_machine", "check.per_machine", "check.reserve_gb", "interactive_jobs.per_machine", "flow.device", "agent"];
 
 program
@@ -5998,6 +5973,7 @@ program
         if (config.sync_never) console.log(`  sync_never: ${config.sync_never}`);
         if (config.cloud_mirror_include) console.log(`  cloud_mirror_include: ${config.cloud_mirror_include}`);
         console.log(`  session_trailer: ${config.session_trailer !== false}`);
+        console.log(`  messaging_only: ${messagingOnly(config)}`);
         const fleet = normalizeSubagentCaps(config.subagents);
         console.log(`  subagents.per_session: ${fleet.per_session}`);
         console.log(`  subagents.per_machine: ${fleet.per_machine}`);
@@ -6231,7 +6207,7 @@ program
     const settableKeys = CONFIG_SETTABLE_KEYS;
     const sensitiveKeys = ["auth_token"];
     // Keys stored as booleans: the setter takes true/false/1/0 and rejects the rest.
-    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled"]);
+    const BOOLEAN_CONFIG_KEYS = new Set<string>(["cloud_mirror_enabled", "session_trailer", "tmux_server_per_session", "level_checkouts_enabled", "messaging_only"]);
     type SettableKey = (typeof settableKeys)[number];
 
     if (!settableKeys.includes(key as SettableKey)) {
@@ -23165,7 +23141,7 @@ messaging
 // it, which has no timeout and is not worth waiting on.
 let autoUpdateSettled: Promise<unknown> = Promise.resolve();
 let autoUpdateInstalling = false;
-if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !process.env.CODECAST_NO_AUTO_UPDATE) autoUpdateSettled = checkForUpdates().then(async (available) => {
+if (!isStableContextFastPath && !isRelayHookArgv(process.argv) && !isCredentialHelperFastPath(process.argv) && !process.env.CODECAST_NO_AUTO_UPDATE) autoUpdateSettled = checkForUpdates().then(async (available) => {
   if (!available) return;
 
   // Source checkouts can't self-update (performUpdate refuses in dev mode);

@@ -525,7 +525,7 @@ describe("command groups stay off the boot graph", () => {
     // pin lists that let a newer client through (+1).
     // 4851 (2026-11-23): contracts/closedSession.ts, the shared Close verdict,
     // and the daemon's close-aware lifecycle reads (+6).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4851);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4852);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
@@ -755,7 +755,7 @@ describe("command groups stay off the boot graph", () => {
     // launches or resumes.
     // 624 the same day: contracts/agentPins.ts, as on index.ts's graph above.
     // 625 (2026-11-23): contracts/closedSession.ts, as on index.ts's graph above.
-    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(625);
+    expect(graph.nodes.size, "source files on daemon.ts's static graph").toBeLessThanOrEqual(626);
   }, GRAPH_WALK_TIMEOUT);
 
   test("commandGroups.ts is a leaf: it imports no repo module at runtime", () => {

@@ -1,5 +1,6 @@
 import { execFile } from "../proc.js";
-import { detectDeliveryTarget } from "./targets.js";
+import { LAUNCH_TOKEN_VAR } from "../agentEnv.js";
+import { detectDeliveryTarget, type DeliveryTarget } from "./targets.js";
 
 export type RegisterOptions = { sessionId?: string; cwd?: string };
 
@@ -14,6 +15,7 @@ export type RegisterDeps = {
   stdoutIsTTY: boolean;
   readStdin: () => Promise<string>;
   ancestorComms: () => Promise<string[]>;
+  identify: (target: DeliveryTarget) => Promise<string | undefined>;
   gitRemote: (cwd: string) => Promise<string | undefined>;
   deviceId: () => string;
   cwd: () => string;
@@ -74,6 +76,7 @@ async function guarded(name: string, deps: RegisterDeps, body: () => Promise<voi
 
 export function runRegister(opts: RegisterOptions, deps: RegisterDeps): Promise<number> {
   return guarded("register", deps, async () => {
+    if (deps.env[LAUNCH_TOKEN_VAR]) return;
     const target = detectDeliveryTarget(deps.env);
     if (!target) return;
     const ancestry = (await deps.ancestorComms()).filter(isClaudeComm).length;
@@ -82,6 +85,8 @@ export function runRegister(opts: RegisterOptions, deps: RegisterDeps): Promise<
       deps.err("cast register: not running inside a Claude Code session; nothing registered");
       return;
     }
+    const provider = await withTimeout(deps.identify(target), Math.min(3_000, deps.timeoutMs ?? COMMAND_TIMEOUT_MS), "identify").catch(() => undefined);
+    if (provider && provider.toLowerCase() !== "claude") return;
     const { sessionId, cwd } = await resolveInput(opts, deps);
     if (!sessionId) return deps.err("cast register: no session id (pass --session-id or run from a SessionStart hook)");
     if (!deps.config?.auth_token || !deps.config.convex_url) return deps.err("cast register: not logged in; run: cast auth");

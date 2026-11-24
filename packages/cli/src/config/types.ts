@@ -318,6 +318,7 @@ export interface Config extends CloudSessionSyncSettings {
   // off on this machine; `git config codecast.sessionTrailer false` in one
   // repository, CODECAST_SESSION_TRAILER=0 in one environment.
   session_trailer?: boolean;
+  messaging_only?: boolean;
 
   // --- Queue limits (cast queue lists every queue) ---
   // How many `cast spawn --subagent` workers one session (default 10) and this
