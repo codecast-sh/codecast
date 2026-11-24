@@ -11,7 +11,7 @@
 //
 // This module is a LEAF: it must not import from inboxStore (the store
 // imports it), only types and pure helpers.
-import { TRIAGE_CONVERSATION_FIELDS } from "@codecast/shared/contracts";
+import { TRIAGE_CONVERSATION_FIELDS, underOwnersModel } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
 
 // The exact overlay alphabet, per the pinned contract:
@@ -62,6 +62,12 @@ export const HIDDEN_OVERRIDE_SETTLE_MS = 5 * 60 * 1000;
 // the gesture bridge), plus the park/defer twins that move a row between rest
 // buckets.
 export const TRIAGE_PENDING_FIELDS: readonly string[] = TRIAGE_CONVERSATION_FIELDS;
+
+// An owners change's stamps on the inbox row (sessionOwnersSlice) move a row
+// under the owners model the same way while their locks live, bounded the
+// same. Off the model these fields are no gesture of this kind (a role filing
+// locks org_role_id there, as on main), so they darken nothing.
+export const OWNERS_PENDING_FIELDS: readonly string[] = ["owned_by_me", "implicit_owner", "org_role_id", "owner_session_id"];
 
 // How long an unconfirmed send keeps its session placed as WORKING. A send's
 // receipt lands within seconds, but only in the window that dispatched it:
@@ -170,6 +176,7 @@ export type InboxOverlayDeps = {
 export function collectTriagePendingIds(
   pending: Record<string, { type: string; ts?: number } & Record<string, any>>,
   now: number,
+  sessions?: Record<string, Record<string, any> | undefined>,
 ): Set<string> {
   const ids = new Set<string>();
   for (const key in pending) {
@@ -179,7 +186,8 @@ export function collectTriagePendingIds(
     if (parts.length < 3) continue;
     const [coll, id, field] = [parts[0], parts[1], parts.slice(2).join(":")];
     if (coll !== "sessions" && coll !== "conversations") continue;
-    if (!(TRIAGE_PENDING_FIELDS as readonly string[]).includes(field)) continue;
+    if (!(TRIAGE_PENDING_FIELDS as readonly string[]).includes(field)
+      && !(OWNERS_PENDING_FIELDS.includes(field) && underOwnersModel(sessions?.[id] ?? {}))) continue;
     // An undated entry cannot be aged — keep protecting it (same rule as the
     // reconcile's lockedLocal).
     if (entry.ts != null && now - entry.ts >= HIDDEN_OVERRIDE_SETTLE_MS) continue;
@@ -204,7 +212,7 @@ export function collectInboxOverlayDeps(
     now,
     focusedId: state.currentSessionId ?? null,
     pendingCreateIds: new Set(Object.keys(state.pendingSessionCreates ?? {})),
-    triagePendingIds: collectTriagePendingIds(state.pending ?? {}, now),
+    triagePendingIds: collectTriagePendingIds(state.pending ?? {}, now, state.sessions),
     pendingSendIds,
     reviveIds: freshReviveRequestIds(state.blockedReviveRequestedAt, now),
     draftIds,

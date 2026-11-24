@@ -98,6 +98,10 @@ import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { ConversationAssignmentBadge } from "./AssignmentBadge";
 import { LocalMirrorChip } from "./LocalMirror";
 import { AssignedToYouBanner, useOwnersFromStore, type HandoffInfo } from "./OwnersBadge";
+import { useSyncSessionOwners } from "../hooks/useSyncSessionOwners";
+import { NotInInboxBar } from "./conversation/ComposerOwnerStrip";
+import { SessionAgentsBand } from "./conversation/SessionAgentsBand";
+import { OwnersMenuItem, OwnersSheet } from "./OwnersMenu";
 import { ThreadSuggestions } from "./org/SuggestionSet";
 import { TmuxAttachPill } from "./TmuxAttachPill";
 import { useAttachCopy } from "../hooks/useAttachCopy";
@@ -1226,6 +1230,10 @@ const ConversationViewInner = (
   // timeline.length. Every viewer sees every handoff; the assignee's own
   // "Got it" strip is the header banner.
   const ownersApi = useOwnersFromStore(pendingConvId);
+  // The owners model's read and agents band (session_owners): fed while open.
+  useSyncSessionOwners(pendingConvId);
+  // The owners menu as a sheet, from the session menu on a narrow header.
+  const [ownersSheetOpen, setOwnersSheetOpen] = useState(false);
   const handoffMeId = ownersApi.currentUser?._id?.toString?.();
   const handoffsByIndex = useMemo(() => {
     const byIndex = new Map<number, HandoffInfo[]>();
@@ -4772,6 +4780,9 @@ const ConversationViewInner = (
                     <MenuTarget ids={conversation?._id ? [String(conversation._id)] : []} foreign={!isOwner || guest} open={sessionMenuOpen} onDone={() => setSessionMenuOpen(false)} />
                     {/* The full command surface: what the header squeeze sheds
                         (globals.css, cq-sq*) stays reachable here. */}
+                    {/* Under the owners model, when the header is too narrow
+                        for the owners segment (a phone). */}
+                    {!guest && conversation?._id && <OwnersMenuItem conversationId={String(conversation._id)} onOpen={() => setOwnersSheetOpen(true)} />}
                     <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Copy</DropdownMenuLabel>
                     <DropdownMenuItem onSelect={copyConversationLink}>
                       <svg className="w-3 h-3 mr-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -5076,6 +5087,9 @@ const ConversationViewInner = (
             <BrowserWatchSplit convKey={conversation._id.toString()} sessionUuid={managedSession?.session_id} tmuxSession={managedSession?.tmux_session} lastPage={lastBrowserPage} />
           </ErrorBoundary>
         )}
+        {ownersSheetOpen && conversation?._id && <OwnersSheet conversationId={String(conversation._id)} open onOpenChange={setOwnersSheetOpen} />}
+        {/* Under the owners model: the agents this session owns. */}
+        {conversation && !guest && <SessionAgentsBand conversationId={conversation._id.toString()} />}
         {/* What this session belongs to, on one row: the task it owns (the
             task page carries this session the same way, so each face holds
             the other), then the trigger, plan and workflow strips in
@@ -5536,6 +5550,9 @@ const ConversationViewInner = (
               than a floating overlay. treePopoverOpen is owner-only, so only the
               owner branch needs it; the no-composer case is the fixed fallback
               above. */}
+          {/* Under the owners model: a session you can see but do not own (the
+              owner composer draws its own, above its box). */}
+          {!guest && !onSendOverride && !effectiveIsOwner && <NotInInboxBar conversationId={conversation._id.toString()} className="mx-auto mb-1.5 px-4 conv-col" />}
           {!effectiveIsOwner ? (
             <NonOwnerMessageInput
               conversation={conversation}

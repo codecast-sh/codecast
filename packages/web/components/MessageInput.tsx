@@ -48,6 +48,7 @@ import { useMutation, useConvex } from "convex/react";
 import { api as _typedApi } from "@codecast/convex/convex/_generated/api";
 import { Id } from "@codecast/convex/convex/_generated/dataModel";
 import { HandoffPicker, useOwnersFromStore } from "./OwnersBadge";
+import { ComposerOwnerStrip, NotInInboxBar } from "./conversation/ComposerOwnerStrip";
 import { usePendingMessageStatus } from "../hooks/useSyncPendingPermissions";
 import { useInboxStore, isConvexId, convHasPendingSend, viewerCommandsSession, type OptimisticImage } from "../store/inboxStore";
 import { useChangedState } from "../hooks/useChangedState";
@@ -2681,6 +2682,12 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
           )}
           {!bareComposer && lightboxImageIndex === null && agentStatus === "compacting" && (
             <LiveCompactionCard conversationId={conversationId} expanded={isExpanded} />
+          )}
+          {!bareComposer && !hero && lightboxImageIndex === null && (
+            <>
+              <NotInInboxBar conversationId={conversationId} className={`mx-auto mb-1.5 ${inline ? "" : "px-4"} ${colWidth}`} />
+              <ComposerOwnerStrip conversationId={conversationId} active={isFocused || hasContent} className={`mx-auto mb-1.5 ${inline ? "" : "px-4"} ${colWidth}`} />
+            </>
           )}
           {caught && (
             <div className={`mx-auto mb-2 ${inline ? "" : "px-4"} ${colWidth} ${lightboxImageIndex !== null ? "hidden" : ""}`}>

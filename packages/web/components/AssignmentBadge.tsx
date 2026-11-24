@@ -37,6 +37,8 @@ import {
   RunOnDeviceItems,
 } from "./DeviceBadge";
 import { useOwnersFromStore, OwnerAvatar, OwnerMenuItems } from "./OwnersBadge";
+import { OwnersSegment } from "./OwnersMenu";
+import { ownersModelOnFor, ownersReadOf } from "../store/sessionOwnersSlice";
 import { useSessionRoleFacts } from "../hooks/useOwnersStoreEnv";
 import { SessionAccountLine } from "./conversation/SessionAccountLabel";
 import { RoleFace } from "./org/RoleFace";
@@ -131,6 +133,8 @@ export function AssignmentBadge({
   // The hand-off step replaces the whole menu while it is open.
   const [handingOff, setHandingOff] = useState(false);
   const orgOn = useWorkspaceFeature("org");
+  const ownersOn = useInboxStore((s) => ownersModelOnFor(s as never, conversationId));
+  const ownersRead = useInboxStore((s) => !!ownersReadOf(s as never, conversationId));
   // A session may run on a machine outside the viewer's own device list (a
   // teammate's, or the shared agent box whose daemon authenticates as the bot
   // account) — resolve it via the conversation so the lobe shows its hostname
@@ -201,8 +205,80 @@ export function AssignmentBadge({
       + `${preparing ? "\nPreparing the host — its checkout is being made now." : ""}`
     : "No machine recorded for this session.";
 
-  if (!(owners.canManage ?? isOwner)) {
+  const deviceLobe = (
+
+    <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing || shared ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
+      {d ? (
+        <>
+          <DeviceIcon d={d} className="w-3.5 h-3.5" />
+          {!compact && <span className="truncate cq-sq1">{deviceDisplayName(d)}</span>}
+          {/* A worktree has its own pill beside this one (SessionWorktreePills); the main checkout has none, so it is said here. */}
+          {!compact && shared && !worktree && (
+            <span className="truncate max-w-[70px] font-mono text-meta opacity-70 cq-sq1">shared</span>
+          )}
+          {!compact && base7 && (
+            <span className="font-mono text-meta opacity-70 whitespace-nowrap cq-sq1">@{base7}</span>
+          )}
+          {/* While the host is being prepared there is nothing to be
+              online about yet — the dot would read as "offline", which is
+              wrong. Say what is actually happening instead. */}
+          {preparing ? (
+            <span className="inline-flex items-center gap-1 whitespace-nowrap animate-pulse">
+              <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" />
+              {!compact && <span className="text-meta cq-sq1">preparing cloud host</span>}
+            </span>
+          ) : (
+            <DeviceDot online={d.online} />
+          )}
+        </>
+      ) : (
+        <>
+          <DeviceDot online={false} />
+          {!compact && <span className="cq-sq1">{ownerDeviceId ? foreign === undefined ? "Loading machine" : "Unknown machine" : "Unassigned"}</span>}
+        </>
+      )}
+    </span>
+  );
+
+  // Under the owners model the store's owners read says it: a viewer it was
+  // read for may open the owners (to edit, or read-only with Add me).
+  const canManage = ownersOn ? (ownersRead ? true : undefined) : owners.canManage;
+  if (!(canManage ?? isOwner)) {
     return runner ? <RunnerBadge runner={runner} compact={compact} title={owners.canManage === false ? "Shared session · read-only access" : "Checking assignment permissions"} /> : null;
+  }
+
+  // Under the owners model the pill is machine | owners | terminal: the
+  // machine opens where it runs, the owners segment opens the owners menu.
+  if (ownersOn) {
+    return (
+      <>
+      <DropdownMenu key={conversationId}>
+        <DropdownMenuTrigger asChild>
+          <button
+            type="button"
+            data-runner-device
+            title={deviceTitle}
+            className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-meta font-medium outline-none transition-colors hover:border-sol-border/80"
+          >
+            {deviceLobe}
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" className="min-w-[16rem] max-w-[24rem]">
+          {runner && <div className="px-2 py-1.5 text-xs text-sol-text-muted">Runs under {runner.name}’s account</div>}
+          <SessionAccountLine conversationId={conversationId} className="px-2 pb-1 pt-0" />
+          {!isRunner && <div className="px-2 pb-1.5 text-meta text-sol-text-dim">Moving to your machine uses your account and billing.</div>}
+          <RunOnDeviceItems conversationId={conversationId} ownerDeviceId={ownerDeviceId} allowRemoteMove={isRunner} />
+          {cloudHost && isRunner && !preparing && (
+            <>
+              <DropdownMenuSeparator />
+              <MirrorMenuItems conversationId={conversationId} />
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <OwnersSegment conversationId={conversationId} />
+      </>
+    );
   }
 
   return (
@@ -216,39 +292,7 @@ export function AssignmentBadge({
           title={`${deviceTitle} · ${ownerHover}`}
           className="inline-flex items-stretch rounded-full border border-sol-border/40 overflow-hidden text-meta font-medium outline-none transition-colors hover:border-sol-border/80"
         >
-          {(loaded || d || owners.canManage) && (
-            <span className={`inline-flex items-center gap-1 py-0.5 ${compact ? "pl-1.5 pr-1" : `pl-2 pr-1.5 ${worktree || preparing || shared ? "max-w-[260px]" : "max-w-[150px]"}`} ${deviceTint(d, !own && !!foreign)}`}>
-              {d ? (
-                <>
-                  <DeviceIcon d={d} className="w-3.5 h-3.5" />
-                  {!compact && <span className="truncate cq-sq1">{deviceDisplayName(d)}</span>}
-                  {/* A worktree has its own pill beside this one (SessionWorktreePills); the main checkout has none, so it is said here. */}
-                  {!compact && shared && !worktree && (
-                    <span className="truncate max-w-[70px] font-mono text-meta opacity-70 cq-sq1">shared</span>
-                  )}
-                  {!compact && base7 && (
-                    <span className="font-mono text-meta opacity-70 whitespace-nowrap cq-sq1">@{base7}</span>
-                  )}
-                  {/* While the host is being prepared there is nothing to be
-                      online about yet — the dot would read as "offline", which is
-                      wrong. Say what is actually happening instead. */}
-                  {preparing ? (
-                    <span className="inline-flex items-center gap-1 whitespace-nowrap animate-pulse">
-                      <span className="w-1.5 h-1.5 rounded-full bg-current opacity-60" />
-                      {!compact && <span className="text-meta cq-sq1">preparing cloud host</span>}
-                    </span>
-                  ) : (
-                    <DeviceDot online={d.online} />
-                  )}
-                </>
-              ) : (
-                <>
-                  <DeviceDot online={false} />
-                  {!compact && <span className="cq-sq1">{ownerDeviceId ? foreign === undefined ? "Loading machine" : "Unknown machine" : "Unassigned"}</span>}
-                </>
-              )}
-            </span>
-          )}
+          {(loaded || d || owners.canManage) && deviceLobe}
           <span
             className={`inline-flex items-center gap-1.5 py-0.5 ${compact ? "pl-1 pr-1.5" : "pl-1.5 pr-2 max-w-[150px]"} ${
               ownershipChanged ? "bg-sol-cyan/10 text-sol-cyan" : "text-sol-text-dim hover:text-sol-text"

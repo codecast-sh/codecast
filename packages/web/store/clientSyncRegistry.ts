@@ -374,6 +374,29 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["sessionGoals.forConversation"],
     writtenBy: ["sessionGoals"],
   },
+  // A session's owners under the session_owners model (convex sessionOwnership
+  // listOwners for an open conversation, listOwnersFor for the cards on
+  // screen; store/sessionOwnersSlice): one row per conversation, keyed by its
+  // id, fed while it is open or drawn, so delta. `people_ids` (who holds an
+  // owner row), `role` and `parent_session` are what a change paints, held
+  // until the read echoes them; `people_info` and the rest are detail.
+  sessionOwners: {
+    persistence: { kind: "collection", key: "sessionOwners" },
+    sync: { isDelta: true, deepFields: ["people_ids", "people_info", "role", "parent_session", "implicit_starter"] },
+    localFirst: true,
+    feeds: ["sessionOwnership.listOwners", "sessionOwnership.listOwnersFor"],
+  },
+  // The agents working for a session under the owners model (convex
+  // sessionAgents.listSessionAgents): one row per open conversation, its
+  // sub-agents and the sessions it spawned, each with its state and people.
+  // The agents band draws it; an agent's owners, once read, come from
+  // sessionOwners (lib/sessionAgents). Only the server writes it.
+  sessionAgents: {
+    persistence: { kind: "collection", key: "sessionAgents" },
+    sync: { isDelta: true, deepFields: ["agents"] },
+    feeds: ["sessionAgents.listSessionAgents"],
+  },
+
   // The composer's suggested reply (convex composerSuggestions.ts): one row
   // per conversation, its owner's only, fed while the conversation is open,
   // so delta. The ghost in the empty composer reads it (hooks/useComposerSuggestion).
@@ -2297,6 +2320,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   sessionDecisions: "shared",
   decisionStacks: "shared",
   sessionGoals: "shared",
+  sessionOwners: "shared",
+  sessionAgents: "shared",
   composerSuggestions: "shared",
   handledDecisions: "shared",
   decisionDetails: "shared",

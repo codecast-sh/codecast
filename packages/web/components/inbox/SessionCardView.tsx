@@ -37,6 +37,7 @@ import { ACTIVE_CARD_CLASS } from "./sessionCardTypes";
 import { BrowserPaneOfferGlyph } from "../browser/BrowserPaneOfferChip";
 import { ShortcutTooltip } from "../KeyboardShortcutsHelp";
 import { useSessionCardDrag } from "../../hooks/useSessionCardDrag";
+import { CoOwnerFaces, WithOwnerMark } from "./CoOwnerFaces";
 import {
   AssignedPingStrip,
   CardHoverToolbar,
@@ -88,6 +89,7 @@ export function SessionCardView({
   identity: identityProp,
   viewers,
   spawnedByTitle,
+  withOwner = null, coOwners = null,
   anchorIdentity,
   runHost,
   placeDevice,
@@ -744,6 +746,7 @@ export function SessionCardView({
             <CommentThreadsChip session={session} viewerId={viewerId} onOpenComments={onOpenComments} />
             <FoldedSubagentsMark count={hiddenRunningSubagents} onOpen={foldedSubagentId && onOpenParent ? () => onOpenParent(foldedSubagentId) : undefined} />
             <CardPinMark session={session} onPin={onPin} />
+            <WithOwnerMark withOwner={withOwner} working={isWorking} pendingSend={isPendingSend} />
             <CardStatusSignals
               session={session}
               showBlockedBadge={showBlockedBadge}
@@ -753,8 +756,8 @@ export function SessionCardView({
               isPendingWorking={isPendingWorking}
               isRowRestarting={isRowRestarting}
             />
-            {/* Every row keeps its time column, so the list scans down one
-                edge. */}
+            <CoOwnerFaces owners={coOwners} />
+            {/* Every row keeps its time column, so the list scans down one edge. */}
             <span data-sv-time className="flex-shrink-0 whitespace-nowrap text-meta text-sol-text-dim tabular-nums">
               {formatRowTime(session.updated_at, isHostedAgentType(session.agent_type))}
             </span>

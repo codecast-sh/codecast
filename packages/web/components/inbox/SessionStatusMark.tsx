@@ -40,11 +40,11 @@ export function SessionStatusMark({ status, size = 10, className = "" }: { statu
 
 /** A state's word, in its colour. The tooltip says what the word means, or
  *  the reason behind it when the caller has one. */
-export function SessionStatusWord({ status, title, className = "" }: { status: SessionStatus; title?: string; className?: string }) {
+export function SessionStatusWord({ status, title, className = "", word }: { status: SessionStatus; title?: string; className?: string; word?: string | null }) {
   const meta = SESSION_STATUS[status];
   return (
     <span data-status-word={status} title={title ?? meta.meaning} className={`${meta.text} ${className}`}>
-      {meta.word}
+      {word ?? meta.word}
     </span>
   );
 }
