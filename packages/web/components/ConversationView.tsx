@@ -35,8 +35,7 @@ import { useRecordConversationOpen } from "../lib/accessLogOpen";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
 import { SessionCanvasToggle } from "./conversation/SessionCanvasToggle";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
-import { useVirtualizer, elementScroll, observeElementOffset, type Virtualizer } from "@tanstack/react-virtual";
-import { flushSync } from "react-dom";
+import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
 import { foldHostedRetries, type RetryFoldRow } from "../lib/hostedNotice";
 import { ApprovalAnswerLine, HostedNotice, MailConnectChip, RoutineOfferChip, approvalAnswerAddsToReceipt, hostedNoticeKind, offersMailConnect, routineOffer } from "./conversation/HostedNotice";
@@ -220,7 +219,8 @@ import { createScrollHold, type ScrollHold } from "../lib/virtualList/scrollHold
 import { VLIST_LEGACY } from "../lib/virtualList/legacyFlags";
 import { useScrollSeek } from "../hooks/useScrollSeek";
 import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
-import { scrollOutranRows, rangeLeftMountedRows, type MountedRows } from "../lib/virtualList/coverage";
+import type { MountedRows } from "../lib/virtualList/coverage";
+import { createScrollSync, type ScrollSync } from "../lib/virtualList/scrollSync";
 import { lazyNamed } from "../lib/lazyNamed";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
@@ -1802,14 +1802,17 @@ const ConversationViewInner = (
 
   // The one pending programmatic scroll target (lib/virtualList/scrollHold).
   const holdRef = useRef<ScrollHold | null>(null);
-  // The fast-scroll tracker and the rows in the DOM, for the two scroll hooks
-  // below, which the virtualizer keeps from its first render.
+  // The reader's scroll, the virtualizer's offset and the rows in the DOM kept
+  // in step (lib/virtualList/scrollSync), for the three hooks below.
   const seekRef = useRef<{ wrote: (top: number) => void; reader: () => boolean } | null>(null);
   const mountedRowsRef = useRef<MountedRows | null>(null);
-  // Tells the virtualizer an offset the way its scroll event would.
-  const reportOffsetRef = useRef<((offset: number) => void) | null>(null);
   const [, commitRows] = useReducer((n: number) => n + 1, 0);
-  const rowCommitQueuedRef = useRef(false);
+  const scrollSyncRef = useRef<ScrollSync | null>(null);
+  const scrollSync = (scrollSyncRef.current ??= createScrollSync({
+    seek: () => seekRef.current,
+    mounted: () => mountedRowsRef.current,
+    commit: commitRows,
+  }));
   const virtualizer = useVirtualizer({
     directDomUpdates: true,
     // Rows placed by `top`, not translate3d: a 3D transform makes every row a
@@ -1819,64 +1822,15 @@ const ConversationViewInner = (
     onChange: (instance, sync) => {
       updateScrollProgress(instance);
       holdRef.current?.onChange();
-      // A measurement moved the range under a reader's scroll: commit the new
-      // rows before this frame paints (lib/virtualList/coverage). In a
-      // microtask, once for the frame's whole batch of measurements, and
-      // because onChange also fires inside React's commit (a row's measure
-      // ref), where a flushSync is refused.
-      if (sync || rowCommitQueuedRef.current || !seekRef.current?.reader()) return;
-      const wanted = () => { const items = instance.getVirtualItems(); return rangeLeftMountedRows(mountedRowsRef.current, items[0]?.index, items[items.length - 1]?.index); };
-      if (!wanted()) return;
-      rowCommitQueuedRef.current = true;
-      queueMicrotask(() => {
-        rowCommitQueuedRef.current = false;
-        if (wanted()) flushSync(commitRows);
-      });
+      if (!VLIST_LEGACY) scrollSync.changed(instance, sync);
     },
     // A measurement re-renders with the next batch, not synchronously inside
     // the ref or resize callback: synchronous re-renders turned the first
     // paint of a conversation into a chain of commits, each forcing the next
-    // row's layout read against a freshly changed page.
+    // row's layout read against a freshly changed page. The exceptions, both
+    // under a reader's scroll only, are scrollSync's.
     useFlushSync: false,
-    // The exception is a reader's scroll that has passed the last mounted row:
-    // waiting for the next batch there paints a frame of bare background where
-    // rows belong (lib/virtualList/coverage), so that one range change commits
-    // inside the scroll event. A programmatic scroll (the open-at-bottom pin)
-    // is not the reader's and never takes this path.
-    observeElementOffset: (instance, cb) => {
-      const report = (offset: number) => cb(offset, instance.isScrolling);
-      reportOffsetRef.current = report;
-      const stop = observeElementOffset(instance, (offset, isScrolling) => {
-        const outran = isScrolling && !!seekRef.current?.reader() && scrollOutranRows({
-          offset,
-          viewport: instance.scrollRect?.height ?? 0,
-          count: instance.options.count,
-          mounted: mountedRowsRef.current,
-        });
-        if (outran) flushSync(() => cb(offset, isScrolling));
-        else cb(offset, isScrolling);
-      });
-      return () => { if (reportOffsetRef.current === report) reportOffsetRef.current = null; stop?.(); };
-    },
-    // Every scrollTop the list sets itself goes two more places. A smooth
-    // scroll passes through its target over many frames and is left out.
-    //  - The fast-scroll tracker, so a height correction never reads as the
-    //    reader's speed.
-    //  - Back to the virtualizer, when the write is a size correction. It
-    //    learns its own offset only from the scroll event, a frame later, and
-    //    until then works out the range from the new sizes at the old offset:
-    //    after a row above the viewport measured in 1,500px taller, that is a
-    //    range 1,500px away, committed and painted as an empty pane for a
-    //    frame. Telling it now is what the scroll event will tell it, early.
-    scrollToFn: (offset, o, instance) => {
-      elementScroll(offset, o, instance);
-      if (o.behavior === "smooth") return;
-      const target = Math.max(0, offset + (o.adjustments ?? 0));
-      seekRef.current?.wrote(target);
-      // Not in a pane under display:none (a background tab): a write there
-      // moves nothing, and no scroll event would ever take the offset back.
-      if (o.adjustments && (instance.scrollRect?.height ?? 0) > 0) reportOffsetRef.current?.(target);
-    },
+    ...(VLIST_LEGACY ? {} : { observeElementOffset: scrollSync.observeElementOffset, scrollToFn: scrollSync.scrollToFn }),
     count: timeline.length,
     getScrollElement: () => containerRef.current,
     getItemKey,
@@ -2891,8 +2845,7 @@ const ConversationViewInner = (
     const told = () => {
       const top = sc.scrollTop;
       lastScrollTopRef.current = top;
-      seekRef.current?.wrote(top);
-      if (!VLIST_LEGACY) reportOffsetRef.current?.(top);
+      if (!VLIST_LEGACY) scrollSyncRef.current?.wrote(top);
     };
     const pinExact = () => {
       const el = sc.querySelector(`#${CSS.escape(a.id)}`);

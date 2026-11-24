@@ -338,6 +338,152 @@ describe("scrollOutranRows", () => {
   });
 });
 
+import { createScrollSync, writeLanded } from "../scrollSync";
+import { rangeLeftMountedRows } from "../coverage";
+
+describe("rangeLeftMountedRows", () => {
+  const mounted = { firstIndex: 10, start: 2000, lastIndex: 20, end: 4000 };
+  test("the same first and last row is the same range", () => {
+    expect(rangeLeftMountedRows(mounted, 10, 20)).toBe(false);
+  });
+  test("a range that starts or ends on another row has left the DOM's", () => {
+    expect(rangeLeftMountedRows(mounted, 9, 20)).toBe(true);
+    expect(rangeLeftMountedRows(mounted, 10, 24)).toBe(true);
+  });
+  test("with nothing mounted, or no range, there is nothing to commit", () => {
+    expect(rangeLeftMountedRows(null, 10, 20)).toBe(false);
+    expect(rangeLeftMountedRows(mounted, undefined, undefined)).toBe(false);
+  });
+});
+
+describe("scroll sync", () => {
+  // The real virtualizer with scrollSync's two hooks, over a scroller that
+  // clamps writes the way a browser does and emits no events of its own.
+  function synced(opts: { boxed?: boolean; reader?: boolean } = {}) {
+    const seekWrites: number[] = [];
+    const commits: number[] = [];
+    const sync = createScrollSync({
+      seek: () => ({ wrote: (top) => { seekWrites.push(top); }, reader: () => opts.reader ?? true }),
+      mounted: () => mounted.value,
+      commit: () => { commits.push(1); },
+    });
+    const mounted: { value: { firstIndex: number; start: number; lastIndex: number; end: number } | null } = { value: null };
+    let top = 0;
+    let scrollHeight = 10_000;
+    const el = {
+      get scrollTop() { return top; },
+      scrollTo(o: { top: number }) { top = Math.max(0, Math.min(o.top, scrollHeight - 500)); },
+      clientHeight: 500,
+      get scrollHeight() { return scrollHeight; },
+      ownerDocument: { defaultView: { requestAnimationFrame: () => 0, cancelAnimationFrame: () => {}, setTimeout, clearTimeout, performance } },
+      addEventListener() {}, removeEventListener() {},
+    };
+    const v: Virtualizer<any, any> = new Virtualizer({
+      count: 100,
+      getItemKey: (i) => `k${i}`,
+      getScrollElement: () => el,
+      estimateSize: () => 100,
+      observeElementRect: (_i, cb) => { cb({ width: 800, height: opts.boxed === false ? 0 : 500 }); return () => {}; },
+      observeElementOffset: sync.observeElementOffset,
+      scrollToFn: sync.scrollToFn,
+      onChange: (instance, s) => sync.changed(instance, s),
+    });
+    v._didMount();
+    v._willUpdate();
+    v.shouldAdjustScrollPositionOnItemSizeChange = (item) => item.start < (v.scrollOffset ?? 0);
+    // What a scroll event does: the offset the scroller is at.
+    const scrolled = (to: number) => { top = to; sync.wrote(to); seekWrites.length = 0; };
+    return { v, el, sync, seekWrites, commits, mounted, scrolled, setScrollHeight: (h: number) => { scrollHeight = h; } };
+  }
+
+  test("a correction above the viewport reaches the virtualizer before any scroll event", () => {
+    const { v, el, seekWrites, scrolled } = synced();
+    scrolled(3000);
+    // Row 5 (above the viewport) measures in 1,500px taller than its estimate.
+    v.resizeItem(5, 1600);
+    expect(el.scrollTop).toBe(4500);
+    expect(v.scrollOffset).toBe(4500);
+    expect(seekWrites).toEqual([4500]);
+    // The same rows are in range as before the correction.
+    expect(v.getVirtualItems().some((it) => it.index === 30)).toBe(true);
+  });
+
+  test("corrections in one batch add up from the offset already handed back", () => {
+    const { v, el, scrolled } = synced();
+    scrolled(3000);
+    v.resizeItem(5, 1600);
+    v.resizeItem(6, 400);
+    expect(el.scrollTop).toBe(4800);
+    expect(v.scrollOffset).toBe(4800);
+  });
+
+  test("a write the scroller clamps is not handed back: the virtualizer keeps the offset the scroller is at", () => {
+    const { v, el, seekWrites, scrolled, setScrollHeight } = synced();
+    // The reader sits at the scroller's end; the container grows only after the write.
+    setScrollHeight(3500);
+    scrolled(3000);
+    v.resizeItem(5, 1600);
+    expect(el.scrollTop).toBe(3000);
+    expect(v.scrollOffset).toBe(3000);
+    expect(seekWrites).toEqual([3000]);
+  });
+
+  test("a pane without a box hands nothing back", () => {
+    const { v, scrolled } = synced({ boxed: false });
+    scrolled(3000);
+    v.resizeItem(5, 1600);
+    expect(v.scrollOffset).toBe(3000);
+  });
+
+  test("a jump is the tracker's to know and the virtualizer's own to reconcile", () => {
+    const { v, seekWrites } = synced();
+    seekWrites.length = 0;
+    v.scrollToOffset(4000);
+    expect(seekWrites).toEqual([4000]);
+    // Nothing handed back: the virtualizer's offset waits for the scroll event.
+    expect(v.scrollOffset).toBe(0);
+  });
+
+  test("a measurement that moves the range under a reader's scroll commits before the frame ends, once", async () => {
+    const { v, commits, mounted, scrolled } = synced();
+    scrolled(3000);
+    const items = v.getVirtualItems();
+    mounted.value = { firstIndex: items[0].index, start: items[0].start, lastIndex: items[items.length - 1].index, end: items[items.length - 1].end };
+    // Two visible rows shrink to nothing: more rows belong on screen now.
+    v.resizeItem(31, 0);
+    v.resizeItem(32, 0);
+    expect(commits).toEqual([]);
+    await Promise.resolve();
+    expect(commits).toEqual([1]);
+  });
+
+  test("the same measurement with no reader scrolling waits for the next batch", async () => {
+    const { v, commits, mounted, scrolled } = synced({ reader: false });
+    scrolled(3000);
+    const items = v.getVirtualItems();
+    mounted.value = { firstIndex: items[0].index, start: items[0].start, lastIndex: items[items.length - 1].index, end: items[items.length - 1].end };
+    v.resizeItem(31, 0);
+    v.resizeItem(32, 0);
+    await Promise.resolve();
+    expect(commits).toEqual([]);
+  });
+
+  test("a measurement that leaves the range alone commits nothing", async () => {
+    const { v, commits, mounted, scrolled } = synced();
+    scrolled(3000);
+    const items = v.getVirtualItems();
+    mounted.value = { firstIndex: items[0].index, start: items[0].start, lastIndex: items[items.length - 1].index, end: items[items.length - 1].end };
+    v.resizeItem(5, 1600);
+    await Promise.resolve();
+    expect(commits).toEqual([]);
+  });
+
+  test("writeLanded allows for sub-pixel rounding and nothing more", () => {
+    expect(writeLanded(4500, 4500.4)).toBe(true);
+    expect(writeLanded(4500, 3000)).toBe(false);
+  });
+});
+
 import { adjustScrollForResizeRule } from "../resizeAdjust";
 
 describe("adjustScrollForResizeRule", () => {

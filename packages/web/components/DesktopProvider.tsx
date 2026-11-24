@@ -7,7 +7,6 @@ import { useLocation } from "react-router";
 import { useMutation, useConvexAuth } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { floorRequestDue, isBelowFloor } from "../lib/desktopFloor";
-import { updateNeedsRetry } from "../lib/desktopUpdateState";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   isDesktop,
@@ -511,7 +510,7 @@ export function DesktopProvider() {
   // A failed run (dead socket, sha mismatch, unreachable server) surfaces the
   // retry UI immediately — main.js aborts any wedged attempt on retry, so the
   // button always does real work now.
-  const showStalled = updateNeedsRetry({ ready, stalled, errored, updating, known: update != null });
+  const showStalled = stalled || (errored && (updating || update != null));
 
   // The banner sits over the composer, so it must never demand permanent
   // screen space: a download auto-collapses to a small pill after a few
@@ -575,7 +574,7 @@ export function DesktopProvider() {
             style={{ width: `${ipc?.percent ?? 0}%` }}
           />
         )}
-        {updating && !ready && !showStalled && (
+        {updating && !showStalled && (
           <div className="absolute bottom-0 left-0 h-[2px] w-1/4 bg-sol-cyan animate-[indeterminateBar_1.3s_ease-in-out_infinite]" />
         )}
         <div className="flex items-start gap-3 px-4 py-3">
