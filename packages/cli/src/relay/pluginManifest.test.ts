@@ -90,6 +90,6 @@ describe("the hook scripts", () => {
   test("the SessionEnd script hands the payload to a background unregister, because plugin hooks get a 1.5s budget", () => {
     const end = fs.readFileSync(scriptOf(hookCommands().find((h) => h.event === "SessionEnd")!.command), "utf-8");
     expect(end).toContain("INPUT=$(cat)");
-    expect(end).toMatch(/\(printf '%s' "\$INPUT" \| "\$CAST" unregister >\/dev\/null 2>&1\) &/);
+    expect(end).toMatch(/\(trap '' HUP; printf '%s' "\$INPUT" \| "\$CAST" unregister >\/dev\/null 2>&1\) &/);
   });
 });
