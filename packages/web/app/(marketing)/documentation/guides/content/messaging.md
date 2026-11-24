@@ -37,8 +37,6 @@ The iPhone app shows the same **Message to** and **Message from** cards in a ses
 
 When an agent fans work out to several sessions, those sessions would pile up in your inbox. With Messaging on, agents tidy up after themselves using the same controls you have, and tell you which sessions they moved and why.
 
-![A session's right-click menu in the inbox with Stash, Stash and hide and Kill session](/documentation/messaging/triage-menu.webp "The controls for moving a session out of the inbox.")
-
 You find these controls in a session's right-click menu. Hovering an inbox card shows **Close**, and its tooltip says what closing will do to that session. On the iPhone, swipe a session to close it, or press and hold it for **Close**, **Stash** and **Kill session**.
 
 | Control | Keys | What it does |
@@ -46,7 +44,7 @@ You find these controls in a session's right-click menu. Hovering an inbox card 
 | **Close** | `Ctrl` `Shift` `Backspace` | You're done looking at it. A finished session stops and leaves the inbox; one still working keeps running out of view. Its triggers and queued messages stay, so a trigger firing or a new message brings it back |
 | **Stash** | `Ctrl` `Backspace` | Takes the session out of the inbox. The agent keeps running, and the session comes back when it needs you or a scheduled wake fires |
 | **Stash and hide** | `Ctrl` `Alt` `Backspace` | Like Stash, but a scheduled wake doesn't bring it back. Only a real need for you does |
-| **Kill session** | | In the right-click menu only. The agent stops and its schedules and queued messages are cancelled; it asks first when that would cancel something. The transcript stays |
+| **Kill session** | | Not on the card toolbar: it is in the right-click menu, the command palette and the selection bar, and is the X on a card already in Stashed or Closed. The agent stops and its schedules and queued messages are cancelled; it asks first when that would cancel something. The transcript stays |
 | **Restore session to inbox** | | Takes the place of Stash on a session that is already out of the inbox, and brings it back. A closed or killed agent restarts only when you send it a message |
 
 ```figure
