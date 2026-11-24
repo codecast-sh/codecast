@@ -43,6 +43,8 @@ import { randomUUID, createHash, randomBytes } from "node:crypto";
 import * as http from "http";
 import { Database } from "bun:sqlite";
 import { childErrorDetail, execSync, execFileSync, exec, execFile, execFileAsync as _execFileAsync, refuseKeychainCallsWhileLocked, spawn, spawnSync, whichBin } from "./proc.js";
+import { isProcessRunning, readPidFile, releasePidFileIfOwned, tryAcquirePidFileLock } from "./pidFileLock.js";
+export { releasePidFileIfOwned, tryAcquirePidFileLock };
 import { setSlowSyncSink, timeSyncFs } from "./slowSync.js";
 import { raiseThreadToInteractiveQos } from "./threadQos.js";
 import { countingSemaphore } from "./semaphore.js";
@@ -1503,7 +1505,6 @@ const PROJECT_MAP_FILE = path.join(CONFIG_DIR, "project-paths.json");
 // sessionId -> repair key (see projectPathRepairKey) the server last confirmed.
 const PROJECT_PATH_REPAIRS_FILE = path.join(CONFIG_DIR, "project-path-repairs.json");
 const APP_SERVER_THREADS_FILE = path.join(CONFIG_DIR, "app-server-threads.json");
-const PID_FILE_STALE_GRACE_MS = 2_000;
 
 // `Config` (the ~/.codecast/config.json shape) is unified in ./config/types.ts —
 // the faithful union of every field the daemon, the CLI (index.ts), and the claude
@@ -28805,15 +28806,6 @@ async function waitForConfig(): Promise<{ config: Config; convexUrl: string }> {
   }
 }
 
-function isProcessRunning(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * Is a live agent running in this tmux session — and, when `sessionId` is given,
  * is it THIS session's agent? A tmux named for a session can host a different
@@ -29325,82 +29317,6 @@ function recordCrash(): { count: number; backoffMinutes: number } {
 
 function clearCrashCount(): void {
   try { if (fs.existsSync(CRASH_FILE)) fs.unlinkSync(CRASH_FILE); } catch {}
-}
-
-function readPidFile(pidFile: string): number | null {
-  try {
-    const pid = parseInt(fs.readFileSync(pidFile, "utf-8").trim(), 10);
-    return Number.isFinite(pid) && pid > 0 ? pid : null;
-  } catch {
-    return null;
-  }
-}
-
-export function tryAcquirePidFileLock(
-  pidFile: string,
-  pid: number,
-  options: {
-    nowMs?: number;
-    staleGraceMs?: number;
-    isProcessRunning?: (pid: number) => boolean;
-  } = {},
-): boolean {
-  const nowMs = options.nowMs ?? Date.now();
-  const staleGraceMs = options.staleGraceMs ?? PID_FILE_STALE_GRACE_MS;
-  const isPidRunning = options.isProcessRunning ?? isProcessRunning;
-
-  for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      const fd = fs.openSync(pidFile, "wx", 0o600);
-      try {
-        fs.writeFileSync(fd, `${pid}\n`);
-        fs.fsyncSync(fd);
-      } finally {
-        fs.closeSync(fd);
-      }
-      return true;
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== "EEXIST") return false;
-    }
-
-    const existingPid = readPidFile(pidFile);
-    if (existingPid === pid) return true;
-    if (existingPid && isPidRunning(existingPid)) return false;
-
-    let stat: fs.Stats;
-    try {
-      stat = fs.statSync(pidFile);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") continue;
-      return false;
-    }
-
-    if (nowMs - stat.mtimeMs < staleGraceMs) {
-      return false;
-    }
-
-    try {
-      fs.unlinkSync(pidFile);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code === "ENOENT") continue;
-      return false;
-    }
-  }
-
-  return false;
-}
-
-export function releasePidFileIfOwned(pidFile: string, pid: number): boolean {
-  if (readPidFile(pidFile) !== pid) return false;
-  try {
-    fs.unlinkSync(pidFile);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function acquireLock(): boolean {

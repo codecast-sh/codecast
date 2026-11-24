@@ -40,6 +40,7 @@ import { queueMoveContinueIfMidTurn } from "./moveContinue";
 import { followNewRunner } from "./lib/followNewRunner";
 import { stampPriorOwnerPage } from "./ownerAttribution";
 import { deviceManagementFor } from "./lib/teamPolicyGuard";
+import { assertNotRegisterOnly, moveRefusal } from "./lib/registerOnly";
 
 async function getAuthenticatedUserId(
   ctx: { db: any },
@@ -60,7 +61,7 @@ async function getAuthenticatedUserId(
 // (registerDevice, claimDeviceAccount) take a token and nothing else.
 // verifyApiToken has already refused a bound token presented from another
 // device, so `boundDeviceId` is the device this call arrived from.
-async function deviceTokenCaller(
+export async function deviceTokenCaller(
   ctx: { db: any },
   apiToken?: string,
 ): Promise<{ userId: Id<"users">; boundDeviceId?: string } | null> {
@@ -217,6 +218,7 @@ export async function enqueueStartSession(
   },
 ): Promise<Id<"daemon_commands"> | null> {
   const conv = await ctx.db.get(opts.conversationId);
+  assertNotRegisterOnly(conv, "a registered session can't be started");
   // A quiescing/fenced conversation's runtime belongs to the execution
   // coordinator; emitting a legacy start here would spawn a second, unmanaged
   // runtime beside the coordinator's binding (split-brain via the start
@@ -504,7 +506,7 @@ export async function performMoveSessionToDevice(
   args: { conversation_id: Id<"conversations">; owner_device_id: string; project_path: string; resume?: boolean; shared_with?: string[] },
 ): Promise<{ ok: true; command_id: string | undefined; owner_device_id: string }> {
   const conv = await ctx.db.get(args.conversation_id);
-  if (!conv || conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
+  if (!conv || conv.register_only || conv.user_id.toString() !== userId.toString()) throw new Error(moveRefusal(conv, "not your conversation"));
   const priorDeviceId = conv.owner_device_id as string | undefined;
   // A move onto a HOST merges into its main checkout of the repo, which the
   // sessions already there keep sharing the way they share a laptop folder.
@@ -614,7 +616,7 @@ export const moveToRemote = mutation({
     if (replay) return { command_id: replay._id, source: replay.target_device_id ?? null, dest: JSON.parse(replay.args ?? "{}").to_device_id ?? null };
     const conv = await findConversationByAnyRefWhere(ctx, args.conversation_id, (candidate: any) =>
       candidate.user_id.toString() === userId.toString());
-    if (!conv) throw new Error("not your conversation");
+    if (!conv || conv.register_only) throw new Error(moveRefusal(conv, "not your conversation"));
 
     const now = Date.now();
     const devices = await ctx.db
@@ -679,7 +681,7 @@ export async function performReassignToDevice(
   args: { conversation_id: Id<"conversations">; device_id: string; request_id?: string; allow_cross_user?: boolean },
 ): Promise<{ ok: true; command_id: any; device_id: string; label: string; cross_user?: boolean }> {
   const conv = await ctx.db.get(args.conversation_id);
-  if (!conv) throw new Error("not your conversation");
+  if (!conv || conv.register_only) throw new Error(moveRefusal(conv, "not your conversation"));
   const replay = args.request_id !== undefined && await findSessionCommandByRequest(ctx, userId, args.request_id);
   if (replay) return { ok: true, command_id: replay._id, device_id: args.device_id, label: "" };
   const device = await ownDevice(ctx, userId, args.device_id);
@@ -864,6 +866,7 @@ export async function performReparentSessionToDevice(
       `No session found for "${args.session_id}" that you run or own, or that is visible to your team`,
     );
   }
+  assertNotRegisterOnly(conv);
   const device = await resolveSessionLaunchDevice(ctx, userId, args.device_id);
   if (!device) throw new Error("Unknown device: choose one of your machines or one your team shares");
   // Whose daemon and account the session runs under after the move.
@@ -1099,7 +1102,7 @@ export async function performClaimDeviceAccount(
   const movable: any[] = [];
   for (const conv of rows) {
     const access = await checkConversationAccess(ctx, callerId, conv);
-    if (access === "owner" || (access === "team" && !!caller && !caller.is_bot)) movable.push(conv);
+    if (!conv.register_only && (access === "owner" || (access === "team" && !!caller && !caller.is_bot))) movable.push(conv);
   }
   const skipped = rows.length - movable.length;
   const page = movable.slice(0, CLAIM_ACCOUNT_PAGE);
@@ -2000,7 +2003,7 @@ export const claimConversation = mutation({
     const convId = ctx.db.normalizeId("conversations", args.conversation_id);
     if (!convId) return;
     const conv = await ctx.db.get(convId);
-    if (!conv || conv.user_id.toString() !== userId.toString()) return;
+    if (!conv || conv.register_only || conv.user_id.toString() !== userId.toString()) return;
     const device = await ownDevice(ctx, userId, args.device_id);
     await ctx.db.patch(convId, {
       owner_device_id: args.device_id,
@@ -2034,7 +2037,7 @@ export const claimConversationForStart = mutation({
     const convId = ctx.db.normalizeId("conversations", args.conversation_id);
     if (!convId) return { won: true as const }; // unknown id — don't block the spawn
     const conv = await ctx.db.get(convId);
-    if (!conv || conv.user_id.toString() !== userId.toString()) return { won: false as const };
+    if (!conv || conv.register_only || conv.user_id.toString() !== userId.toString()) return { won: false as const };
     const owner = (conv as any).owner_device_id as string | undefined;
     if (owner && owner !== args.device_id) {
       const ownerDevice = await ctx.db
@@ -2085,7 +2088,7 @@ export const setConversationOwner = mutation({
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication required");
     const conv = await ctx.db.get(args.conversation_id);
-    if (!conv) throw new Error("conversation not found");
+    if (!conv || conv.register_only) throw new Error(moveRefusal(conv, "conversation not found"));
     if (conv.user_id.toString() !== userId.toString()) throw new Error("not your conversation");
     const device = args.owner_device_id
       ? await ownDevice(ctx, userId, args.owner_device_id)

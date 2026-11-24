@@ -22,6 +22,7 @@ import { Id } from "./_generated/dataModel";
 import { DEVICE_ONLINE_MS, pathUnderRoot } from "./deviceRouting";
 import { releasePreviousOwner } from "./sessionRelease";
 import { policyWorkspaceOf, requireTeamPolicyAllows } from "./lib/teamPolicyGuard";
+import { assertNotRegisterOnly } from "./lib/registerOnly";
 import {
   CLOUD_START_RUN_MS,
   cloudHostManaged,
@@ -313,6 +314,7 @@ export async function parkOnCloudHost(
   cloudDeviceId: string,
   opts: { projectPath?: string | null; gitRoot?: string | null; force?: boolean; workspace?: CloudWorkspaceMode; startFrom?: CloudStartFrom; leaveOut?: string[] } = {},
 ): Promise<Id<"daemon_commands"> | null> {
+  assertNotRegisterOnly(conv);
   // Every cloud park passes here (web creates, dispatch, moves, re-parks).
   await requireTeamPolicyAllows(ctx, { workspace: policyWorkspaceOf("conversations", conv) }, "cloud_hosts_disabled");
   const projectPath = opts.projectPath ?? conv.project_path ?? null;
