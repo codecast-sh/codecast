@@ -7351,6 +7351,7 @@ export const feedForCLI = query({
       .filter((c): c is typeof ownConversations[number] => {
         if (filterUserId && c.user_id.toString() !== filterUserId && !(args.mine_only && isOwnedByMe(c))) return false;
         if (labelConvIds && !labelConvIds.has(c._id.toString())) return false;
+        if (c.ended_at) return false;
 
         // Team filter: when team is resolved from directory, filter own sessions by team
         if (resolvedTeamId && isOwnConversation(c)) {
@@ -13793,12 +13794,13 @@ export async function resolveRestartTarget(
 export async function enqueueKillAndResume(
   ctx: MutationCtx,
   userId: Id<"users">,
-  conv: { _id: Id<"conversations">; session_id?: string; project_path?: string; git_root?: string; agent_type?: string; fork_status?: string; fork_daemon_args?: string },
+  conv: { _id: Id<"conversations">; session_id?: string; project_path?: string; git_root?: string; agent_type?: string; fork_status?: string; fork_daemon_args?: string; register_only?: boolean },
   // requestId: the client's id for this restart (store restartSession).
   // It lands on the resume row, the one whose outcome IS the restart's, so the
   // row the click painted settles from it. A replayed request queues nothing.
   opts: { forceReconstitute?: boolean; switchAgent?: boolean; model?: string; effort?: string; requestId?: string; cause?: string } = {},
 ) {
+  if (conv.register_only) throw new Error("codecast does not resume a registered session");
   if (opts.cause) noteWriteCause(ctx, opts.cause);
   const now = Date.now();
   // Throws for a hosted conversation: no daemon kills or resumes it.

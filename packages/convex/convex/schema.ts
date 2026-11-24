@@ -36,6 +36,7 @@ import { callTables } from "./callsSchema";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { mcpTables } from "./mcpSchema";
 import { roleIconValidator } from "./lib/roleIconValidator";
+import { deliveryTargetValidator } from "./lib/registerOnly";
 import { assistantTables } from "./assistantSchema";
 import { castMachineTables } from "./castMachinesSchema";
 import { dataSyncTables } from "./dataSyncSchema";
@@ -1392,6 +1393,9 @@ export default defineSchema({
     // only manages sessions whose owner_device_id matches its own device id.
     // "Move to remote" flips this from the local device to the Mac's device.
     owner_device_id: v.optional(v.string()),
+    register_only: v.optional(v.boolean()),
+    delivery_target: v.optional(deliveryTargetValidator),
+    ended_at: v.optional(v.number()),
     // DENORMALIZED CACHE of the PRIMARY (first-added, still-present) owner. The
     // canonical owner store is the session_owners join table — a session may have
     // SEVERAL owners and this single field cannot express that, so never branch

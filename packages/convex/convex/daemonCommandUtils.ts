@@ -119,8 +119,9 @@ export async function recentConversationCommands(ctx: DbCtx, userId: Id<"users">
  */
 export async function enqueueResumeSession(
   ctx: DbCtx,
-  conv: Pick<Doc<"conversations">, "_id" | "user_id" | "session_id" | "project_path" | "git_root" | "agent_type" | "owner_device_id">,
+  conv: Pick<Doc<"conversations">, "_id" | "user_id" | "session_id" | "project_path" | "git_root" | "agent_type" | "owner_device_id" | "register_only">,
 ): Promise<{ deduplicated: boolean; command_id?: Id<"daemon_commands"> }> {
+  if (conv.register_only) throw new Error("codecast does not resume a registered session");
   // Throws for a hosted conversation: no daemon resumes it.
   const agentType = localAgentTypeOf(conv.agent_type);
   const pendingCommands = await ctx.db
