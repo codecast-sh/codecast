@@ -56,6 +56,14 @@ import {
   INBOX_WINDOW_CAPS,
   isSessionActivityFresh,
   isAssignedAwayFromViewer,
+  underOwnersModel,
+  isInboxMember,
+  agentAnswersRow,
+  agentOwnerOfRow,
+  personWorkState,
+  escalatedToViewer,
+  escalatedAsks,
+  type OwnersModelRow,
   isStackedAsk,
   type InboxBucket,
   type InboxPlacement,
@@ -81,6 +89,8 @@ import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { nestParentIdOf, subagentLinkFields } from "./ccAccountsShared";
 import { isSessionOwner, ownerRowsForUser, sessionOwnerRow, teamOwnerRowsForUser } from "./sessionOwners";
 import { isTeamOwnedConversation, overlayViewerTriage, recordViewerTriage, refuseHidingTeamSession } from "./lib/viewerTriage";
+import { inboxMemoGet, inboxOwnersOf, ownersModelOnMemo, userMembershipsMemo, withInboxOwners } from "./lib/inboxOwners";
+import { releaseDeadParentChildrenLater } from "./lib/agentOwnerWaits";
 import { hideConversationForViewer, unhideConversationForViewer, viewerHiddenConversationIds } from "./inboxHides";
 import { approxMessageBytes, filterUserMessages, isImportNotice, isNavigableUserMessage, navPromptField, navPromptPatch, toNavigatorRow, type FilteredUserMessage } from "./userMessagesFilter";
 import {
@@ -89,6 +99,7 @@ import {
   canTeamMemberReadSummary,
   canOwnerOrTeamAccess,
   checkConversationAccess,
+  conversationAccessMemo,
   isConversationTeamVisible,
   createTeamFeedFilter,
   resolveTeamForPath,
@@ -7423,6 +7434,8 @@ export const feedForCLI = query({
       is_live?: boolean;
       agent_status?: string;
       work_state?: WorkState;
+      // The agent owner a wait is with, under the owners model (cliSessionClassifier rowFields).
+      with_owner?: string;
       is_killed?: boolean;
       is_completed?: boolean;
       recency_rank?: RecencyRank;
@@ -7693,6 +7706,8 @@ export const deleteByProjectHash = mutation({
       .first();
 
     if (!hasMoreMsgs) {
+      const doc = await ctx.db.get(convId);
+      if (doc) await releaseDeadParentChildrenLater(ctx, doc);
       await ctx.db.delete(convId);
       return { deleted: 1, hasMore: false, conv_id: null };
     }
@@ -8958,6 +8973,9 @@ async function enrichInboxSessionRow(
     // author/owner display names are stamped by computeInboxSessions, which
     // caches the user docs across rows.
     owner_user_id: (conv as any).owner_user_id?.toString() ?? null,
+    // The owners model (lib/inboxOwners): its marker, implicit starter and
+    // owning session only where the model applies, which every placement reads.
+    ...(await inboxOwnerRowFields(ctx, conv)),
     user_id: conv.user_id,
     acting_user_id: (conv as any).acting_user_id ?? null,
     is_anchor: !!(conv as any).anchor_id,
@@ -8975,6 +8993,28 @@ async function enrichInboxSessionRow(
   };
 
   return { row: spellAbsentAsNull(row), subagentChildren, dismissed, stashed, hidden };
+}
+
+// The owners fields of an inbox row (shared underOwnersModel), with the raw
+// stamps the model reads.
+async function inboxOwnerRowFields(ctx: any, conv: any): Promise<Record<string, unknown>> {
+  const owners = await inboxOwnersOf(ctx, conv);
+  // Off the model a row carries none of them (INBOX_MODEL_ONLY_ROW_FIELDS):
+  // its shape is the un-flagged one, and the episode key, which every
+  // session's push rewrites, never moves a row nothing here reads it on.
+  if (!owners) return {};
+  return {
+    owners_model: owners.owners_model,
+    implicit_owner: owners.implicit_owner ?? null,
+    owner_session_id: owners.owner_session_id ?? null,
+    role_started: conv.role_started ?? null,
+    owners_changed_at: conv.owners_changed_at ?? null,
+    parent_released_at: conv.parent_released_at ?? null,
+    wait_up_at: conv.wait_up_at ?? null,
+    wait_up_count: conv.wait_up_count ?? null,
+    wait_up_person: conv.wait_up_person?.toString() ?? null,
+    needs_input_notified_key: conv.needs_input_notified_key ?? null,
+  };
 }
 
 // An inbox row spells every absent optional as null, the spelling the
@@ -9190,6 +9230,8 @@ export async function scanInboxConversations(
   // included): a member's fold flag is read from here, never from the cut.
   selectionIds: ReadonlySet<string>;
   belowFold: ReadonlySet<string>;
+  // Whose inbox (the shared selection's viewer).
+  viewer: string;
   // Conversations in this user's owner set — drives the owned_by_me flag during
   // enrichment without a per-row session_owners lookup.
   ownedByMeIds: Set<string>;
@@ -9203,6 +9245,9 @@ export async function scanInboxConversations(
   truncated: Set<InboxTruncation>;
   // Pinned rows past the newest INBOX_PINNED_CHILDREN_SCAN, in pin order.
   pinnedOverflowIds: Set<string>;
+  // Rows only the escalated window seats: a wait someone else's session put
+  // to the viewer. They skip the children scan, as pinned overflow does.
+  escalatedOnlyIds: Set<string>;
   // Named path only: teammates of the named rows the windows would have
   // pooled, for groupPoolChildren. Never rows of their own.
   poolChildren: any[];
@@ -9349,7 +9394,7 @@ export async function scanInboxConversations(
   let ownerLookupComplete = false;
   // Live team sessions (the team owns them): read alongside the person rows,
   // a window of their own. A team past its window is recovered by id below.
-  const teamOwnersP = noWindows ? Promise.resolve({ rows: [] as any[], truncated: false, truncatedTeamIds: [] as string[] }) : teamOwnerRowsForUser(ctx, userId, INBOX_WINDOW_CAP);
+  const teamOwnersP = noWindows ? Promise.resolve({ rows: [] as any[], truncated: false, truncatedTeamIds: [] as string[] }) : userMembershipsMemo(ctx, userId).then((ms) => teamOwnerRowsForUser(ctx, userId, INBOX_WINDOW_CAP, ms));
   let overflowedTeams = new Set<string>();
   const ownerRowsQ = noWindows ? Promise.resolve([] as any[]) : ctx.db
     .query("session_owners")
@@ -9390,8 +9435,54 @@ export async function scanInboxConversations(
       ))
       .take(INBOX_WINDOW_CAP)
     : Promise.resolve([]);
-  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, snoozedConversations, ownerRows, recentSubagents, adoptedConversations] =
-    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, snoozedConversationsQ, ownerRowsQ, recentSubagentsQ, adoptedConversationsQ]);
+  // The owners model's two windows, read only for a viewer the model can
+  // reach (one of their teams has session_owners; the memo shares the read
+  // with the per-row check). Each reads only rows that are the viewer's, so
+  // its cap counts members (the shared inWorkingSet's twin):
+  //   - nested: a subagent the viewer released from its parent and owns as
+  //     its implicit starter (shared nestedSeat), newest release first. The
+  //     recent index reads top-level rows only. A child whose parent died
+  //     without a release has no seat here: its wait escalates (escalateWait).
+  //   - escalated: a wait that reached the viewer whom no owner row names
+  //     (wait_up_person), newest first.
+  const modelWindowsQ: Promise<{ nested: any[]; escalated: any[] }> = noWindows
+    ? Promise.resolve({ nested: [], escalated: [] })
+    : ownersModelOnMemo(ctx, { user_id: userId }).then(async (on) => {
+      if (!on) return { nested: [], escalated: [] };
+      const [nested, escalated] = await Promise.all([
+        ctx.db
+          .query("conversations")
+          .withIndex("by_user_subagent_released", (q: any) => q.eq("user_id", userId).eq("is_subagent", true).gte("parent_released_at", 0))
+          .order("desc")
+          .filter((q: any) => q.and(
+            q.or(q.eq(q.field("status"), "active"), q.eq(q.field("status"), "completed")),
+            q.gte(q.field("updated_at"), sessionWindowCutoff),
+            q.or(q.neq(q.field("history_import"), true), q.gte(q.field("updated_at"), now - HISTORY_IMPORT_INBOX_MS)),
+            // Unfiled (isFiled), and owned by its starter alone: no person
+            // owner, no role, not a role's start, started by the viewer.
+            q.eq(q.field("inbox_pinned_at"), undefined),
+            q.eq(q.field("inbox_dismissed_at"), undefined),
+            q.eq(q.field("inbox_stashed_at"), undefined),
+            q.eq(q.field("inbox_snoozed_until"), undefined),
+            q.eq(q.field("inbox_adopted_at"), undefined),
+            q.eq(q.field("owner_user_id"), undefined),
+            q.eq(q.field("org_role_id"), undefined),
+            q.neq(q.field("role_started"), true),
+            q.or(q.eq(q.field("author_user_id"), undefined), q.eq(q.field("author_user_id"), userId)),
+          ))
+          .take(INBOX_WINDOW_CAPS.nested + 1),
+        ctx.db
+          .query("conversations")
+          .withIndex("by_wait_up_person", (q: any) => q.eq("wait_up_person", userId).gte("wait_up_at", dismissedCutoff))
+          .order("desc")
+          .take(INBOX_WINDOW_CAPS.escalated + 1),
+      ]);
+      if (nested.length > INBOX_WINDOW_CAPS.nested) truncated.add("nested");
+      if (escalated.length > INBOX_WINDOW_CAPS.escalated) truncated.add("escalated");
+      return { nested: nested.slice(0, INBOX_WINDOW_CAPS.nested), escalated: escalated.slice(0, INBOX_WINDOW_CAPS.escalated) };
+    });
+  const [recentConversations, pinnedConversations, dismissedConversations, stashedConversations, snoozedConversations, ownerRows, recentSubagents, adoptedConversations, modelWindows] =
+    await Promise.all([recentConversationsQ, pinnedConversationsQ, dismissedConversationsQ, stashedConversationsQ, snoozedConversationsQ, ownerRowsQ, recentSubagentsQ, adoptedConversationsQ, modelWindowsQ]);
   const ownedByMeIds = new Set<string>(
     ownerRows.map((r: any) => r.conversation_id.toString())
   );
@@ -9451,6 +9542,32 @@ export async function scanInboxConversations(
   for (const c of stashedConversations) byId.set(c._id.toString(), c);
   for (const c of snoozedConversations) byId.set(c._id.toString(), c);
   for (const c of adoptedConversations) byId.set(c._id.toString(), c);
+  // The model windows' rows count only under the model (dropped below when
+  // the model does not apply to them, so a flag-off row's scan is unchanged).
+  const modelWindowIds = new Set<string>();
+  for (const c of modelWindows.nested) {
+    const idStr = c._id.toString();
+    if (byId.has(idStr)) continue;
+    byId.set(idStr, c);
+    modelWindowIds.add(idStr);
+  }
+  // A wait that escalated to the caller lists only while they can open the
+  // session (checkConversationAccess, the conversation page's own rule): the
+  // audience never names anyone else (waitAudienceOf), and a visibility
+  // change or a leave hands the wait on (lib/inboxOwners rerouteEscalatedWait).
+  const canOpen = conversationAccessMemo(ctx, userId);
+  const escalatedReadable = await Promise.all(modelWindows.escalated.map(async (c: any) =>
+    byId.has(c._id.toString()) || canOpen(c)));
+  // A row only its escalation seats skips the per-row children scan
+  // (escalatedOnlyIds) and its liveness read: it costs the scan no reads.
+  const escalatedOnlyIds = new Set<string>();
+  modelWindows.escalated.forEach((c: any, i: number) => {
+    const idStr = c._id.toString();
+    if (byId.has(idStr) || !escalatedReadable[i]) return;
+    byId.set(idStr, c);
+    modelWindowIds.add(idStr);
+    escalatedOnlyIds.add(idStr);
+  });
 
   // Hydrate only the owned conversations the window scans above didn't already
   // fetch (an owned session of my OWN is usually in the recent window — the get
@@ -9569,8 +9686,30 @@ export async function scanInboxConversations(
   // for them by id. A teammate's row is here because the team board shows the
   // team (its owner says nothing about my inbox), and an explicitly requested
   // id was named by the caller — neither is mine to hide.
+  //
+  // Under the owners model (team feature session_owners, read off each
+  // session's team) the inbox is exactly the sessions the caller owns: every
+  // candidate wears its owner fields (lib/inboxOwners), so the shared
+  // membership and placement read them, and a row the caller reached through
+  // their own windows but does not own leaves, run on their account or not.
+  // Assignment is then the owners rule itself, not a drop.
   const uidForAssign = userId.toString();
+  const escalatedIds = new Set<string>();
+  const owned = await Promise.all([...byId.values()].map((conv) => withInboxOwners(ctx, conv)));
+  for (const conv of owned) byId.set(conv._id.toString(), conv);
   for (const [idStr, conv] of [...byId.entries()]) {
+    if (modelWindowIds.has(idStr) && !underOwnersModel(conv)) {
+      byId.delete(idStr);
+      continue;
+    }
+    if (underOwnersModel(conv)) {
+      // A wait that escalated to the caller holds its seat in the escalated
+      // window (the shared escalatedSeat reads the same wait off the row).
+      if (escalatedToViewer(conv, uidForAssign)) escalatedIds.add(idStr);
+      const mine = conv.user_id?.toString() === uidForAssign || ownedByMeIds.has(idStr) || escalatedIds.has(idStr) || modelWindowIds.has(idStr);
+      if (mine && !extraIds.has(idStr) && !isInboxMember({ ...conv, owned_by_me: ownedByMeIds.has(idStr) }, uidForAssign)) byId.delete(idStr);
+      continue;
+    }
     if (conv.user_id?.toString() !== uidForAssign) continue;
     if (extraIds.has(idStr)) continue;
     if (
@@ -9612,7 +9751,11 @@ export async function scanInboxConversations(
   // an owned foreign-run session's daemon rows belong to the running account,
   // so merge its liveness per-conversation or the row would always classify as
   // dead/idle even while the runner's agent is actively working.
-  const foreignConvs = conversations.filter((c) => c.user_id.toString() !== userId.toString());
+  // A row only its escalation seats is a current wait (membership reads the
+  // wait off the row, so an ended one already left): a blocking ask with no
+  // message since, waiting on a person whatever its daemon says. Its
+  // placement needs no liveness, so the escalated window costs no reads.
+  const foreignConvs = conversations.filter((c) => c.user_id.toString() !== userId.toString() && !escalatedOnlyIds.has(c._id.toString()));
   if (opts.includeLiveness && foreignConvs.length > 0) {
     await mergeForeignConversationLiveness(ctx, maps, foreignConvs, now);
   }
@@ -9632,16 +9775,16 @@ export async function scanInboxConversations(
   // Named rows are deliberate: outside the selection, so they never fold.
   for (const c of opts.namedOnly ? [] : conversations) {
     const idStr = c._id.toString();
-    if (c.user_id.toString() !== uidStr && !ownedByMeIds.has(idStr)) continue;
+    if (c.user_id.toString() !== uidStr && !ownedByMeIds.has(idStr) && !escalatedIds.has(idStr)) continue;
     selectionInput.push(ownedByMeIds.has(idStr) ? { ...c, owned_by_me: true } : c);
   }
-  const selection = selectWorkingSet(selectionInput, now);
+  const selection = selectWorkingSet(selectionInput, now, uidStr);
   for (const kind of selection.truncated) truncated.add(kind);
-  const { cutoff: clusterCutoff, belowFold } = computeFold(selection.members);
+  const { cutoff: clusterCutoff, belowFold } = computeFold(selection.members, uidStr);
 
   return {
-    conversations, maps, deliberateIds, clusterCutoff, selectionIds: new Set(selection.members.keys()), belowFold,
-    ownedByMeIds, myOwnerRowById, ownerRowFor, truncated, pinnedOverflowIds, recentSubagents, poolChildren,
+    conversations, maps, deliberateIds, clusterCutoff, selectionIds: new Set(selection.members.keys()), belowFold, viewer: uidStr,
+    ownedByMeIds, myOwnerRowById, ownerRowFor, truncated, pinnedOverflowIds, escalatedOnlyIds, recentSubagents, poolChildren,
   };
 }
 
@@ -9669,12 +9812,12 @@ function pooledByWindows(c: any, userId: Id<"users">, now: number): boolean {
 // the per-row cut, 0 for the deliberate ones. Pure over the doc and the scan
 // so the base list, the liveness overlay and the CLI agree byte for byte.
 export function belowFoldFor(
-  scan: { selectionIds: ReadonlySet<string>; belowFold: ReadonlySet<string>; deliberateIds: ReadonlySet<string>; ownedByMeIds: ReadonlySet<string>; clusterCutoff: number },
+  scan: { selectionIds: ReadonlySet<string>; belowFold: ReadonlySet<string>; deliberateIds: ReadonlySet<string>; ownedByMeIds: ReadonlySet<string>; clusterCutoff: number; viewer: string },
   conv: { _id: { toString(): string } | string; updated_at: number; has_pending_messages?: boolean | null; inbox_pinned_at?: number | null; inbox_dismissed_at?: number | null; inbox_stashed_at?: number | null },
 ): boolean {
   const cid = conv._id.toString();
   if (scan.selectionIds.has(cid)) return scan.belowFold.has(cid);
-  return isBelowFoldAt(conv as any, scan.deliberateIds.has(cid) || scan.ownedByMeIds.has(cid) ? 0 : scan.clusterCutoff);
+  return isBelowFoldAt(conv as any, scan.deliberateIds.has(cid) || scan.ownedByMeIds.has(cid) ? 0 : scan.clusterCutoff, scan.viewer);
 }
 
 // `truncated` as the payload carries it: the fixed alphabet's order, so two
@@ -9739,7 +9882,7 @@ export async function computeInboxSessions(
     subagentWindow: fastFieldsInOverlay,
     namedOnly: opts.namedOnly,
   });
-  const { conversations, maps, truncated, pinnedOverflowIds } = scan;
+  const { conversations, maps, truncated, pinnedOverflowIds, escalatedOnlyIds } = scan;
   // The child rows whose fast fields the overlay owns (see the scan's
   // subagentWindow). A child outside the window keeps message_count and
   // updated_at on its list row: the overlay never sees it, so a stripped row
@@ -9764,8 +9907,10 @@ export async function computeInboxSessions(
   }
   // One memoized get for every per-row reference (plan/task/workflow run, the
   // acting bot, run-by / owner users): rows share these ids heavily, and each
-  // duplicate read counts against the same system-operation budget.
-  const getDoc = makeMemoGet(ctx);
+  // duplicate read counts against the same system-operation budget. It is the
+  // owners read's own memo, so a parent or starter the scan already read for
+  // a row's owners is not read again.
+  const getDoc = inboxMemoGet(ctx);
   // Rows are independent — enrich them concurrently (sequential per-row awaits
   // made this heartbeat-hot path slow enough to time out under load; see
   // computeSessionsLiveness). Assembly below stays in candidate order.
@@ -9782,7 +9927,9 @@ export async function computeInboxSessions(
     // Pinned rows past the newest INBOX_PINNED_CHILDREN_SCAN skip the children
     // scan unless the caller asked for everything: children are never counted,
     // and the scan was the read that hit the system-operation limit.
-    const rowSkip = !opts.show_all && pinnedOverflowIds.has(conv._id.toString())
+    // A row only its escalation seats skips it always: a wait put to the
+    // viewer files by its own liveness, never a child's.
+    const rowSkip = (!opts.show_all && pinnedOverflowIds.has(conv._id.toString())) || escalatedOnlyIds.has(conv._id.toString())
       ? { ...(enrichSkip ?? {}), children: true }
       : enrichSkip;
     const { row, subagentChildren, dismissed, stashed, hidden } = await enrichInboxSessionRow(ctx, conv, maps, now, belowFoldFor(scan, conv), rowSkip, getDoc);
@@ -9822,7 +9969,7 @@ export async function computeInboxSessions(
     const { asking: askingParents } = await buildAskingParents(ctx, childrenByParent, maps, now, pendingDecisionIds);
     for (const r of enrichedRows) {
       const cid = r.conv._id.toString();
-      const asking = ownAsk(r.row, r.conv) || pendingDecisionIds.has(cid) || askingParents.has(cid);
+      const asking = rowAsks(r.conv, ownAsk(r.row, r.conv), pendingDecisionIds.has(cid), askingParents.has(cid));
       const placement = placeConversationRow(r.conv, r.row, asking, r.row.last_user_message, now);
       r.row.bucket = placement.bucket;
       r.row.work_state = placement.work_state;
@@ -9843,7 +9990,7 @@ export async function computeInboxSessions(
     // for a row whose probe was skipped.
     stampChildRow = (child, row) => {
       const cid = child._id.toString();
-      const asking = ownAsk(row, child) || pendingDecisionIds.has(cid) || askingParents.has(cid);
+      const asking = rowAsks(child, ownAsk(row, child), pendingDecisionIds.has(cid), askingParents.has(cid));
       const placement = placeConversationRow(child, row, asking, row.last_user_message, now);
       row.bucket = placement.bucket;
       row.work_state = placement.work_state;
@@ -9866,6 +10013,10 @@ export async function computeInboxSessions(
     // invisible (parent was excluded from the idle query entirely) and
     // exposing them now would make active buckets pick them up as orphans.
     if (r.dismissed || r.stashed) continue;
+    // Under the owners model a child belongs to the session that started it,
+    // not under its card: it is a row only where someone owns it, and the
+    // conversation's agents list (listSessionAgents) shows the rest.
+    if (underOwnersModel(r.conv)) continue;
     for (const child of r.subagentChildren) {
       if (topLevelIds.has(child._id.toString())) continue;
       const childRow = await buildSubagentChildRow(child, maps, now, r.conv._id, (id) => ctx.db.get(id));
@@ -10378,16 +10529,28 @@ export async function buildAskingParents(
 // is blocked on plumbing, and files needs_input through the pendingApiError
 // arm — the same exception the web decision queue applies
 // (lib/decisionQueue sessionHasOpenQuestion), so both sides share one rule.
+// Whether a row asks the viewer: its own open prompt, a pending decision in
+// their queue, or a child's ask. Under the owners model a child's ask is its
+// parent session's to answer, and a row an agent owner answers asks the viewer
+// only through a decision that reached them (the agent passed it up). The
+// replica's twin is the store's deriveInboxAsking.
+export function rowAsks(conv: any, own: boolean, decision: boolean, child: boolean): boolean {
+  if (!underOwnersModel(conv)) return own || decision || child;
+  return decision || (own && !agentAnswersRow(conv));
+}
+
 export function ownAsk(
   lv: { awaiting_input?: boolean | null; agent_status?: string | null },
-  conv?: { pending_api_error_kind?: string | null; agent_type?: string | null },
+  conv?: { pending_api_error_kind?: string | null; agent_type?: string | null } & OwnersModelRow,
 ): boolean {
   if (conv?.pending_api_error_kind && BLOCKED_BANNER_KINDS.has(conv.pending_api_error_kind)) return false;
   // A hosted conversation asks only through its decision row (the pending
   // decision ids every caller ORs in); its permission_blocked status lags an
   // answer. The web queue applies the same rule.
   if (isHostedAgentType(conv?.agent_type)) return false;
-  return !!lv.awaiting_input || lv.agent_status === "permission_blocked";
+  // A current escalation of a prompt or a question, whose liveness the scan
+  // does not read (escalatedOnlyIds).
+  return !!lv.awaiting_input || lv.agent_status === "permission_blocked" || (!!conv && escalatedAsks(conv));
 }
 
 // The one placement call for a conversation, from the doc plus its
@@ -10794,13 +10957,16 @@ export async function computeSessionsLiveness(
     // holds, and its fact-only overlay row cannot create one. A parent with
     // its own pending decide is lifted by that, and its children are not
     // probed in this execution (buildAskingParents), so it reads false.
-    const childAsking = askingParents.has(cid) && !pendingDecisionIds.has(cid);
+    // Under the owners model a child is its owner's to answer: nothing of a
+    // child's lifts or surfaces its parent (rowAsks).
+    const model = underOwnersModel(conv);
+    const childAsking = !model && askingParents.has(cid) && !pendingDecisionIds.has(cid);
     const childFacts = {
       child_asking: childAsking,
       child_asking_until: childAsking ? liftUntil(cid) : null,
-      child_live: hasLiveNestedChild(childrenByParent.get(cid) ?? [], maps, now),
+      child_live: !model && hasLiveNestedChild(childrenByParent.get(cid) ?? [], maps, now),
     };
-    const askingFor = (lv: LivenessFields, t: number) => ownAsk(lv, conv) || pendingDecisionIds.has(cid) || childAskingAt(childFacts, t);
+    const askingFor = (lv: LivenessFields, t: number) => rowAsks(conv, ownAsk(lv, conv), pendingDecisionIds.has(cid), childAskingAt(childFacts, t));
     const placeAt = (t: number): InboxPlacement => placeLivenessRowAt(conv, maps, reads[i], producingUntil, askingFor, t).placement;
     const { lv, asking, placement } = placeLivenessRowAt(conv, maps, reads[i], producingUntil, askingFor, now);
     const stale = computeBucketStale(
@@ -10982,6 +11148,10 @@ export function tallyInboxRows(
     // The projection placement (shared placeInboxRow) and the fold flag, next
     // to the verdict the CLI has always tallied.
     bucket: InboxBucket;
+    // Under the owners model, the agent owner a wait files under working for
+    // ("With <owner>": @role, or the owning session's id); null otherwise.
+    // work_state stays raw for the agents that watch it.
+    with_owner: string | null;
     below_fold: boolean;
     is_killed: boolean;
     is_pinned: boolean;
@@ -11020,8 +11190,9 @@ export function tallyInboxRows(
   // tally must too, or a requested subagent lists and counts double).
   const seenSubagents = new Set<string>();
   for (const s of sessions) {
-    // Keep the monitor to top-level sessions — unless this row was named.
-    if (s.is_subagent) {
+    // Keep the monitor to top-level sessions — unless this row was named. A
+    // subagent the viewer owns under the owners model is a top-level row.
+    if (s.is_subagent && !underOwnersModel(s)) {
       const id = s._id.toString();
       if (!opts.requestedIds?.has(id) || seenSubagents.has(id)) continue;
       seenSubagents.add(id);
@@ -11061,9 +11232,13 @@ export function tallyInboxRows(
       continue;
     }
     const is_live = !!s.is_connected && s.agent_status !== "hibernated";
+    // A person's figures: a wait an agent owner answers counts as working
+    // (personWorkState), the way the inbox files it.
+    const shownState = personWorkState(s, { bucket, work_state });
+    const agent = shownState !== work_state ? agentOwnerOfRow(s) : null;
 
     counts.total++;
-    counts[work_state]++;
+    counts[shownState]++;
     if (s.is_pinned) counts.pinned++;
     if (is_live) counts.live++;
     if (s.below_fold) counts.below_fold++;
@@ -11072,7 +11247,7 @@ export function tallyInboxRows(
     if (opts.stateFilter === "pinned" && !s.is_pinned) continue;
     if (opts.stateFilter === "live" && !is_live) continue;
     if (opts.stateFilter === "hibernated" && s.agent_status !== "hibernated") continue;
-    if (opts.stateFilter && opts.stateFilter !== "pinned" && opts.stateFilter !== "live" && opts.stateFilter !== "hibernated" && work_state !== opts.stateFilter) continue;
+    if (opts.stateFilter && opts.stateFilter !== "pinned" && opts.stateFilter !== "live" && opts.stateFilter !== "hibernated" && shownState !== opts.stateFilter) continue;
 
     rows.push({
       id: s._id,
@@ -11088,6 +11263,7 @@ export function tallyInboxRows(
       hibernated_at: s.hibernated_at ?? null,
       work_state,
       bucket,
+      with_owner: agent ? (agent.kind === "role" ? `@${s.role?.handle ?? "role"}` : agent.id.slice(0, 7)) : null,
       below_fold: !!s.below_fold,
       // A retired row (still listed while pinned, or under --all). The watch
       // stream reads it to emit a kill as a departure, not a transition.
@@ -11377,6 +11553,8 @@ export async function collectInboxSessionsPaginated(
     await stampInboxViewerFields(row, conv, userId, await sessionOwnerRow(ctx, conv._id, userId), getDoc);
     stripInboxLiveness(row);
     rows.push(row);
+    // Under the owners model a child is no row under its parent (listInboxSessions).
+    if (underOwnersModel(row)) continue;
     for (const child of subagentChildren) {
       // An adopted child is a top-level row of its own (shared isAdoptedChild),
       // listed by the scan itself, as listInboxSessions does.
@@ -11540,6 +11718,12 @@ export const getInboxSessionsByIds = query({
   },
 });
 
+// The escalated window's admission for one row (scanInboxConversations).
+async function escalatedToCaller(ctx: any, conv: any, userId: Id<"users">): Promise<boolean> {
+  if (!escalatedToViewer({ ...conv, owners_model: true }, userId.toString())) return false;
+  return (await ownersModelOnMemo(ctx, conv)) && (await checkConversationAccess(ctx, userId, conv)) !== "denied";
+}
+
 // Auth-free body of getInboxSessionsByIds, exported for tests.
 export async function collectInboxSessionsByIds(ctx: any, userId: Id<"users">, ids: string[]) {
   const now = inboxEpoch(Date.now());
@@ -11554,8 +11738,11 @@ export async function collectInboxSessionsByIds(ctx: any, userId: Id<"users">, i
     // owned window applies, so a replica can heal an assigned row it missed.
     // The owner seat is stamped so the client's foreign-row rule keeps it.
     // One owner-row read gives admission, owned_by_me and assigned_ping.
+    // Under the owners model, also the person its standing wait reached, on
+    // the escalated window's terms (a member of its team): a row that only
+    // left the window's cap is still theirs, and the client keeps its claim.
     const myOwnerRow = await sessionOwnerRow(ctx, conv._id, userId);
-    if (conv.user_id.toString() !== userId.toString() && !myOwnerRow) continue;
+    if (conv.user_id.toString() !== userId.toString() && !myOwnerRow && !(await escalatedToCaller(ctx, conv, userId))) continue;
     if (conv.status !== "active" && conv.status !== "completed") continue;
     const { row } = await enrichInboxSessionRow(ctx, conv, EMPTY_INBOX_MAPS, now, false, { auq: true }, getDoc);
     await stampInboxViewerFields(row, conv, userId, myOwnerRow, getDoc);

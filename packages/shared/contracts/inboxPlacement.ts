@@ -17,6 +17,7 @@ import { isLoopFresh, LOOP_OVERDUE_GRACE_MS } from "./loopState";
 import { openTasksVouchForWaiting } from "./openTasks";
 import { isHostedAgentType } from "./agentClients";
 import {
+  agentAnswersRow,
   childProducingAt,
   computeFold,
   digestProjection,
@@ -34,6 +35,7 @@ import {
   type InboxTruncation,
   type LiveFactsRow,
   type ProjectableInboxRow,
+  type ViewerRef,
   type WorkingSetWindow,
   type WorkStateInput,
 } from "./inboxProjection";
@@ -221,6 +223,7 @@ export function placeProjectableRow(
     isAnchor: !!row.anchor_id,
     personTurn: row.last_turn_origin === "person",
     asking,
+    agentAnswers: agentAnswersRow(row),
   });
 }
 
@@ -230,6 +233,8 @@ export function placeProjectableRow(
 // flag — own open prompt, pending `cast decide`, or a child's open ask.
 export type InboxProjectionInputs = {
   asking?: (id: string) => boolean;
+  /** Whose inbox: the owners model's nested and escalated seats are theirs alone. */
+  viewer?: ViewerRef;
 };
 
 // Membership, fold, placement, tallies and digest over a replica's rows at one
@@ -251,8 +256,8 @@ export function projectInbox<Row extends ProjectableInboxRow>(
    *  overflowed (C6), so it needs the selection's view of the row. */
   windows: Map<string, WorkingSetWindow[]>;
 } {
-  const { members, truncated } = selectWorkingSet(rows, epoch);
-  const { belowFold } = computeFold(members);
+  const { members, truncated } = selectWorkingSet(rows, epoch, overlays?.viewer);
+  const { belowFold } = computeFold(members, overlays?.viewer);
   const entries: Array<readonly [string, InboxBucket, boolean]> = [];
   const placements = new Map<string, InboxPlacement & { below_fold: boolean }>();
   const windows = new Map<string, WorkingSetWindow[]>();

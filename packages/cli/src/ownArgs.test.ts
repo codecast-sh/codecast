@@ -25,6 +25,12 @@ describe("looksLikeMember", () => {
     expect(looksLikeMember("Jason Benn")).toBe(true);
   });
 
+  test("an @role and parent are owners, never sessions", () => {
+    expect(looksLikeMember("@eval")).toBe(true);
+    expect(looksLikeMember("parent")).toBe(true);
+    expect(resolveOwnTarget("parent", undefined, CURRENT)).toEqual({ ok: true, sessionId: "CURRENT-SESSION", member: "parent" });
+  });
+
   test("session references are not", () => {
     expect(looksLikeMember("jx7c6zk")).toBe(false);
     expect(looksLikeMember("jx71s6ayvgf9qh98zzm555agm58caknb")).toBe(false);
@@ -140,6 +146,19 @@ describe("unknown commands (subprocess)", () => {
   // `cast link` is what the agent actually wanted. Its ref argument used to be
   // required, so the one thing you could not ask for was "link to THIS
   // session" — which is why an invented command got reached for instead.
+  test("own and disown keep today's rule first and put the owners model under the feature", async () => {
+    for (const cmd of ["own", "disown"]) {
+      const r = await run([cmd, "--help"]);
+      expect(r.exitCode).toBe(0);
+      const today = r.stdout.indexOf("A session is in the inbox of each person who owns it");
+      const feature = r.stdout.indexOf("With the Session owners team feature:");
+      expect(today).toBeGreaterThan(-1);
+      expect(feature).toBeGreaterThan(today);
+      expect(r.stdout).not.toMatch(/disown \S+ (@\w+|parent)\s+# take it over/);
+    }
+    expect((await run(["own", "--help"])).stdout).toContain("--take-over");
+  }, 60_000);
+
   test("`cast link` takes no required argument", async () => {
     const r = await run(["link", "--help"]);
     expect(r.exitCode).toBe(0);

@@ -30,6 +30,7 @@ import {
 // replayable from its seed.
 
 const EPOCH = inboxEpoch(1_800_000_000_000);
+const VIEWER = "users_viewer";
 const SEEDS = Array.from({ length: 60 }, (_, i) => 1000 + i);
 
 function shuffled<T>(items: T[], seed: number): T[] {
@@ -177,6 +178,11 @@ describe("truncation flags", () => {
         case "snoozed": return { ...base, inbox_snoozed_until: EPOCH + GEN_HOUR - i * 1000 };
         case "owned": return { ...base, updated_at: EPOCH - GEN_MIN - i * 1000, owned_by_me: true };
         case "adopted": return { ...base, is_subagent: true, parent_conversation_id: "run_log", inbox_adopted_at: EPOCH - GEN_HOUR - i * 1000 };
+        // Under the owners model: a subagent the viewer released and owns, seated by
+        // its release (released in the opposite order to its activity).
+        case "nested": return { ...base, is_subagent: true, parent_conversation_id: "parent", owners_model: true, user_id: VIEWER, implicit_owner: VIEWER, parent_released_at: EPOCH - GEN_HOUR + i * 1000, updated_at: EPOCH - GEN_MIN - i * 1000 };
+        // Under the owners model: a standing wait that escalated to the viewer, on a session filed out of the recent window.
+        case "escalated": return { ...base, owners_model: true, wait_up_person: VIEWER, inbox_dismissed_at: EPOCH - 60 * GEN_DAY, wait_up_at: EPOCH - GEN_MIN - i * 1000, wait_up_count: 3 };
       }
     });
   }
@@ -184,16 +190,16 @@ describe("truncation flags", () => {
   it("every window is silent AT its cap and fires at cap + 1, and only that window fires", () => {
     for (const w of WINDOWS) {
       const cap = INBOX_WINDOW_CAPS[w];
-      const atCap = selectWorkingSet(rowsIn(w, cap), EPOCH);
+      const atCap = selectWorkingSet(rowsIn(w, cap), EPOCH, VIEWER);
       // owned rows are recent-eligible too; the recent cap is the same size, so
       // it stays silent at the owned cap as well.
       expect(atCap.truncated).toEqual([]);
       expect(atCap.members.size).toBe(cap);
-      const over = selectWorkingSet(rowsIn(w, cap + 1), EPOCH);
+      const over = selectWorkingSet(rowsIn(w, cap + 1), EPOCH, VIEWER);
       const expected = w === "owned" ? ["recent", "owned"] : [w];
       expect(over.truncated).toEqual(expected);
       expect(over.members.size).toBe(cap);
-      for (const id of over.members.keys()) expect(inWorkingSet(over.members.get(id)!.row, EPOCH)).toContain(w);
+      for (const id of over.members.keys()) expect(inWorkingSet(over.members.get(id)!.row, EPOCH, VIEWER)).toContain(w);
     }
   });
 
@@ -201,9 +207,9 @@ describe("truncation flags", () => {
     for (const w of WINDOWS.filter((x) => x !== "owned")) {
       const cap = INBOX_WINDOW_CAPS[w];
       const rows = shuffled(rowsIn(w, cap + 25), 7);
-      const { members } = selectWorkingSet(rows, EPOCH);
+      const { members } = selectWorkingSet(rows, EPOCH, VIEWER);
       const key = (r: ProjectableInboxRow) =>
-        w === "recent" ? r.updated_at : w === "pinned" ? r.inbox_pinned_at! : w === "dismissed" ? r.inbox_dismissed_at! : w === "snoozed" ? r.inbox_snoozed_until! : w === "adopted" ? r.inbox_adopted_at! : r.inbox_stashed_at!;
+        w === "recent" ? r.updated_at : w === "pinned" ? r.inbox_pinned_at! : w === "dismissed" ? r.inbox_dismissed_at! : w === "snoozed" ? r.inbox_snoozed_until! : w === "adopted" ? r.inbox_adopted_at! : w === "nested" ? r.parent_released_at! : w === "escalated" ? r.wait_up_at! : r.inbox_stashed_at!;
       const kept = [...members.values()].map((m) => key(m.row)).sort((a, b) => b - a);
       const all = rows.map(key).sort((a, b) => b - a);
       expect(kept).toEqual(all.slice(0, cap));

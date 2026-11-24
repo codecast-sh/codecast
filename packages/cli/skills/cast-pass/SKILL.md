@@ -18,13 +18,12 @@ id in the pin.
 ## Own
 
 ```bash
-cast own <member>            # adds them; the session sits in both inboxes
+cast own <member>            # adds them as an owner of this session
 cast own <session> <member>  # a different session of yours
 ```
 
-They get a notification, and the session surfaces under Needs You in
-their inbox with your name on it. Use `cast disown` on yourself only if the
-work is entirely theirs now.
+They get a notification and the session sits in their inbox. You stay an
+owner; `cast disown` yourself only if the work is entirely theirs now.
 
 ## Brief
 

@@ -674,3 +674,19 @@ describe("formatReadResult with a shared short id", () => {
     expect(out).toContain("   jx78gqjj | ");
   });
 });
+
+// Under the owners model (team feature session_owners) a wait an agent owner
+// answers is the agent's: `cast sessions` files it under WORKING, "with
+// @role", while work_state stays the session's own for agents watching it.
+describe("formatMonitor files an agent-answered wait under WORKING", () => {
+  test("with_owner moves the row from NEEDS YOU to WORKING and names the owner; without it the row is NEEDS YOU", () => {
+    const waiting = session({ work_state: "needs_input" });
+    const withOwner = strip(formatMonitor(result([{ ...waiting, with_owner: "@growth" }], { needs_input: 0, working: 1 })));
+    expect(withOwner).toContain("WORKING (1)");
+    expect(withOwner).not.toContain("NEEDS YOU");
+    expect(withOwner).toContain("with @growth");
+    const plain = strip(formatMonitor(result([waiting], { needs_input: 1 })));
+    expect(plain).toContain("NEEDS YOU (1)");
+    expect(plain).not.toContain("with @");
+  });
+});

@@ -20,7 +20,14 @@ import {
   listSessionOwnerIds,
   syncPrimaryOwnerCache,
   humanStarterUser,
+  ownersModelOn,
+  sessionOwnerFactsOf,
+  type OwnerRowSnapshot,
 } from "./sessionOwners";
+import { mayEditOwners, ownersOf } from "@codecast/shared/contracts/sessionOwners";
+import { assertHumanOwner, assertRoleMayOwn, ownerCandidatesFor, ownersChangeFor, resolveOwnerRef, writeOwnersChange, type OwnerCandidate } from "./lib/ownersChange";
+export { OWNER_CANDIDATE_CAP, type OwnerCandidate } from "./lib/ownersChange";
+import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { notifySessionAssigned, notifySessionOwnershipChanged } from "./sessionAssignmentNotifications";
 import { routeUpWaitingSession } from "./agentTasks";
 import { requireRole, userCanAdminRole } from "./lib/orgAccess";
@@ -122,100 +129,6 @@ async function resolveOwnableConversation(
   return conversation;
 }
 
-// Picker roster cap. The live listOwners subscription must NEVER walk the
-// team — that collect + N user-doc reads is what blew the syscall budget
-// (and re-ran on every teammate daemon heartbeat, because those user docs
-// are heartbeat-hot). Mutations still resolve names against the full set.
-export const OWNER_CANDIDATE_CAP = 250;
-
-async function teamMemberDocs(
-  ctx: { db: any },
-  teamId: any,
-  cap?: number,
-): Promise<any[]> {
-  const q = ctx.db
-    .query("team_memberships")
-    .withIndex("by_team_id", (q: any) => q.eq("team_id", teamId));
-  const memberships = cap ? await q.take(cap) : await q.collect();
-  return (
-    await Promise.all(memberships.map((m: any) => ctx.db.get(m.user_id)))
-  ).filter(Boolean) as any[];
-}
-
-// Resolve one owner ref to a user doc: "me", then exact email, then exact name,
-// then a UNIQUE substring — scripts pass exact emails; the looser tiers are for
-// humans at the CLI.
-async function resolveOwnerRef(
-  ctx: { db: any },
-  authUserId: Id<"users">,
-  conversation: any,
-  ownerRef: string,
-): Promise<any> {
-  if (ownerRef.toLowerCase() === "me") return ctx.db.get(authUserId);
-
-  const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
-
-  // A raw user id — the web owners picker passes each member's _id directly
-  // (the CLI passes email/name). Resolve it, then apply the same access rule as
-  // a lookup: the caller may always claim THEMSELVES (no team needed, e.g. a
-  // private session), but adding anyone ELSE requires the session to have a team
-  // they belong to — a teammate can't own a session they can't even see.
-  if (/^[a-z0-9]{16,}$/i.test(ownerRef)) {
-    let candidate: any = null;
-    try { candidate = await ctx.db.get(ownerRef as Id<"users">); } catch { candidate = null; }
-    if (candidate && (candidate.email !== undefined || candidate.name !== undefined)) {
-      if (candidate._id.toString() === authUserId.toString()) return candidate; // self-claim
-      if (!conversation.team_id) {
-        throw new Error(`Session ${shortId} has no team — you can only add teammates to a shared/team session. Claim it yourself instead.`);
-      }
-      const membership = await ctx.db
-        .query("team_memberships")
-        .withIndex("by_user_team", (q: any) =>
-          q.eq("user_id", candidate._id).eq("team_id", conversation.team_id))
-        .first();
-      if (!membership) {
-        throw new Error(`${candidate.name || candidate.email || "That user"} isn't a member of this session's team`);
-      }
-      return candidate;
-    }
-    // Not a user id (or unresolvable) — fall through to name/email matching.
-  }
-
-  if (!conversation.team_id) {
-    throw new Error(`Session ${shortId} has no team — an owner must be a teammate. Use "me" to claim it yourself.`);
-  }
-  const members = await teamMemberDocs(ctx, conversation.team_id);
-
-  const needle = ownerRef.toLowerCase();
-  let ownerUser =
-    members.find((u) => (u.email || "").toLowerCase() === needle) ??
-    members.find((u) => (u.name || "").toLowerCase() === needle) ??
-    null;
-  if (!ownerUser) {
-    const fuzzy = members.filter(
-      (u) => (u.name || "").toLowerCase().includes(needle) || (u.email || "").toLowerCase().includes(needle)
-    );
-    if (fuzzy.length === 1) ownerUser = fuzzy[0];
-    else if (fuzzy.length > 1) {
-      const names = fuzzy.map((u) => u.name || u.email).join(", ");
-      throw new Error(`"${ownerRef}" matches multiple team members (${names}) — use an exact email`);
-    }
-  }
-  if (!ownerUser) throw new Error(`No team member found matching "${ownerRef}"`);
-  return ownerUser;
-}
-
-// Bots may CALL these mutations to park a session on a human (the Aivery flow),
-// but may never BE an owner — ownership means "this human's inbox is
-// responsible," and nobody reads a bot's inbox.
-function assertHumanOwner(ownerUser: any): void {
-  if (ownerUser.is_bot) {
-    throw new Error(
-      `${ownerUser.name || ownerUser.email || "That user"} is an agent account — sessions can only be owned by a human team member`
-    );
-  }
-}
-
 async function listOwnerInfos(
   ctx: { db: any },
   conversationId: Id<"conversations">,
@@ -270,7 +183,12 @@ export type ReparentSessionTarget =
   // rule moved it for the work it is bound to, so a binding may move it
   // again; `filed` (default), a person or role put it there, so only a
   // person or role moves it.
-  | { kind: "role"; role_id: string; hold?: "bound" | "filed" };
+  | { kind: "role"; role_id: string; hold?: "bound" | "filed" }
+  // The owner model's one change (session_owners feature, shared
+  // contracts/sessionOwners): people by ref, rows put back by an undo, the
+  // role (a ref replaces it, null takes it off) and the parent's release.
+  // `take_over` takes every agent owner off and makes the caller an owner.
+  | { kind: "owners"; add?: string[]; remove?: string[]; restore?: OwnerRowSnapshot[]; role?: string | null; release_parent?: boolean; take_over?: boolean };
 
 export type ReportsTo =
   | { kind: "user"; user_id: Id<"users">; name: string }
@@ -338,13 +256,15 @@ async function unhide(ctx: { db: any }, conversation: any): Promise<void> {
 // sessions in one transaction, and each used to resolve the same role, the
 // same admin check, the same acting person and the same sender again: 16
 // reads a session). `read` memoizes user and role docs, which no reparent
-// writes; conversations are never read through it.
+// writes; conversations are never read through it. `ownersModel` is
+// ownersModelOn read once per team (or runner) for the batch.
 export type ReparentBatch = {
   role: any;
   canReshape: boolean;
   actor: any;
   sender: any | null;
   read: (id: any) => Promise<any>;
+  ownersModel: (conversation: any) => Promise<boolean>;
 };
 
 export async function prepareReparentBatch(ctx: { db: any }, authUserId: Id<"users">, roleRef: string, fromSession?: string): Promise<ReparentBatch> {
@@ -359,6 +279,9 @@ export async function prepareReparentBatch(ctx: { db: any }, authUserId: Id<"use
     return doc;
   };
   docs.set(String(role._id), Promise.resolve(role));
+  const models = new Map<string, Promise<boolean>>();
+  const modelKey = (c: any) => (c.team_id ? `team:${c.team_id}` : `user:${c.user_id}`);
+  const ownersModel = (c: any) => models.get(modelKey(c)) ?? models.set(modelKey(c), ownersModelOn(ctx, c)).get(modelKey(c))!;
   const fromRef = fromSession?.trim();
   return {
     role,
@@ -366,6 +289,7 @@ export async function prepareReparentBatch(ctx: { db: any }, authUserId: Id<"use
     actor: await read(authUserId),
     sender: fromRef ? await findOwnableConversation(ctx, authUserId, fromRef) : null,
     read,
+    ownersModel,
   };
 }
 
@@ -398,7 +322,7 @@ async function reparentSessionCore(
     const access = await checkConversationAccess(ctx, authUserId, c);
     return access === "owner" || (access === "team" && canReshapeTarget);
   };
-  const conversation = args.target.kind === "user"
+  const conversation = args.target.kind === "user" || args.target.kind === "owners"
     ? await resolveOwnableConversation(ctx, authUserId, args.session_id)
     : known ? ((await mayFileUnderRole(known.row)) ? known.row : null)
     : await findConversationByAnyRefWhere(ctx, args.session_id, mayFileUnderRole);
@@ -407,13 +331,14 @@ async function reparentSessionCore(
   // T1). Filed under a role it would count as that role's hand, be interrupted
   // by a pause and spend its hand cap. One refusal here, so every door (the
   // chart, the ownership menu, the CLI) inherits it.
-  if (args.target.kind === "role" && (conversation.standing_role_id || conversation.anchor_id)) {
+  const setsRole = args.target.kind === "role" || (args.target.kind === "owners" && !!args.target.role);
+  if (setsRole && (conversation.standing_role_id || conversation.anchor_id)) {
     throw new Error("That session is a standing agent's own thread; it cannot be filed under a role");
   }
   // A role's own session is owned by whom the role reports to (S28,
   // sessionOwners.stampSeatOwners), so its owner changes only by moving the
   // role. One writer keeps the chart line and the inbox from disagreeing.
-  if (args.target.kind === "user" && conversation.standing_role_id) {
+  if ((args.target.kind === "user" || args.target.kind === "owners") && conversation.standing_role_id) {
     const seatRole = await ctx.db.get(conversation.standing_role_id);
     throw new Error(`That is @${seatRole?.handle ?? "the role"}'s own session: it belongs to whoever the role reports to. Change who the role reports to instead (cast org reparent @${seatRole?.handle ?? "<role>"} --to <person or @role>, or the role page).`);
   }
@@ -422,6 +347,7 @@ async function reparentSessionCore(
   if (targetRole?.team_id && String(conversation.team_id ?? "") === String(targetRole.team_id) && !(await roleMayHoldSession(ctx, targetRole, conversation))) {
     throw new Error(`That session is private to you, and @${targetRole.handle} is a role your team can read; share the session with the team first, or keep it under you`);
   }
+  const ownersModel = await (known ? known.batch.ownersModel(conversation) : ownersModelOn(ctx, conversation));
   rememberOrgRecord(ctx, conversation);
   const shortId = conversation.short_id ?? conversation._id.toString().slice(0, 7);
   const before = await reportsToOf(ctx, conversation._id, conversation.org_role_id, { read: known?.batch.read, row: conversation });
@@ -433,7 +359,20 @@ async function reparentSessionCore(
   let owners: OwnerInfo[];
   let roleId: Id<"org_roles"> | undefined = conversation.org_role_id;
 
-  if (args.target.kind === "user") {
+  if (ownersModel) {
+    const change = await ownersChangeFor(ctx, authUserId, conversation, args.target, targetRole);
+    const res = await writeOwnersChange(ctx, authUserId, conversation, change, {
+      // The chart's drop on a role keeps its own access rule (mayFileUnderRole).
+      checkEdit: args.target.kind !== "role",
+      note: handoff ?? note,
+      hold: args.target.kind === "role" ? args.target.hold ?? "filed" : "filed",
+    });
+    added.push(...res.added);
+    removed.push(...res.removed);
+    roleId = res.roleId;
+    if (added.length > 0) await unhide(ctx, conversation);
+    owners = await listOwnerInfos(ctx, conversation._id);
+  } else if (args.target.kind === "user") {
     // A bare `user_id` is the chart's drop on a person: it ADDS that person
     // and re-homes the session under them (S11), so a session two people own
     // does not silently lose the other. The owner list form is the picker's,
@@ -550,16 +489,14 @@ async function reparentSessionCore(
       roleId = undefined;
     }
     owners = mode === "set" ? desired.map(toOwnerInfo) : await listOwnerInfos(ctx, conversation._id);
-  } else {
-    if (targetRole.status === "retired") throw new Error("That role is retired");
-    // A team role only takes sessions routed to its team; a personal role
-    // takes anything its owner may reparent.
-    if (targetRole.team_id && (conversation.team_id?.toString() ?? null) !== targetRole.team_id.toString()) {
-      throw new Error("That session is not in the role's team");
-    }
+  } else if (args.target.kind === "role") {
+    assertRoleMayOwn(conversation, targetRole);
     await ctx.db.patch(conversation._id, { org_role_id: targetRole._id, org_role_hold: args.target.hold ?? "filed" });
     roleId = targetRole._id;
     owners = await listOwnerInfos(ctx, conversation._id);
+  } else {
+    // An owners change is the owner model's alone.
+    throw new Error(teamFeatureOffMessage("session_owners"));
   }
 
   const after = await reportsToOf(ctx, conversation._id, roleId, { read: known?.batch.read });
@@ -710,22 +647,58 @@ export async function performSetSessionOwners(
   return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: args.owners, mode: "set" }, handoff: args.note, from_session: args.from_session });
 }
 
-// Add ONE owner without disturbing the others (`cast own`).
+// Add ONE owner without disturbing the others (`cast own`). An `@role` makes
+// that role the session's role (the session_owners feature only).
 export async function performAddSessionOwner(
   ctx: { db: any },
   authUserId: Id<"users">,
   args: { session_id: string; owner: string; note?: string; from_session?: string },
 ): Promise<ReparentSessionResult> {
-  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: [args.owner], mode: "add" }, handoff: args.note, from_session: args.from_session });
+  const target: ReparentSessionTarget = args.owner.trim().startsWith("@")
+    ? { kind: "owners", role: args.owner.trim() }
+    : { kind: "user", owners: [args.owner], mode: "add" };
+  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target, handoff: args.note, from_session: args.from_session });
 }
 
-// Remove ONE owner, leaving the rest (`cast disown`; defaults to self).
+// Remove ONE owner, leaving the rest (`cast disown`; defaults to self). Under
+// the session_owners feature, `@role` takes its role off and `parent`
+// releases its parent session, each alone (taking it over is `take_over`).
+export const PARENT_OWNER_REF = "parent";
+
 export async function performRemoveSessionOwner(
   ctx: { db: any },
   authUserId: Id<"users">,
   args: { session_id: string; owner: string; from_session?: string },
 ): Promise<ReparentSessionResult> {
-  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target: { kind: "user", owners: [args.owner], mode: "remove" }, from_session: args.from_session });
+  const ref = args.owner.trim();
+  let target: ReparentSessionTarget = { kind: "user", owners: [args.owner], mode: "remove" };
+  if (ref.startsWith("@") || ref.toLowerCase() === PARENT_OWNER_REF) {
+    const conversation = await resolveOwnableConversation(ctx, authUserId, args.session_id);
+    if (!(await ownersModelOn(ctx, conversation))) throw new Error(teamFeatureOffMessage("session_owners"));
+    const owners = ownersOf(await sessionOwnerFactsOf(ctx, conversation));
+    if (ref.startsWith("@")) {
+      const role = owners.role ? await ctx.db.get(owners.role) : null;
+      if (!role || role.handle !== ref.slice(1).toLowerCase()) throw new Error(`${ref} does not own this session`);
+      target = { kind: "owners", role: null };
+    } else {
+      if (!owners.parentSession) throw new Error("No parent session owns this session");
+      target = { kind: "owners", release_parent: true };
+    }
+  }
+  return performReparentSession(ctx, authUserId, { session_id: args.session_id, target, from_session: args.from_session });
+}
+
+// The owners Save, `cast own --take-over` and Take it over under the
+// session_owners feature: one change, one transaction (shared
+// contracts/sessionOwners applyOwnersChangeTo is the rule). Refused cleanly
+// when the session's team does not have the feature.
+export async function performApplyOwnersChange(
+  ctx: { db: any },
+  authUserId: Id<"users">,
+  args: { session_id: string; add?: string[]; remove?: string[]; restore?: OwnerRowSnapshot[]; role?: string | null; release_parent?: boolean; take_over?: boolean; note?: string; from_session?: string },
+): Promise<ReparentSessionResult> {
+  const { session_id, note, from_session, ...change } = args;
+  return performReparentSession(ctx, authUserId, { session_id, target: { kind: "owners", ...change }, handoff: note, from_session });
 }
 
 // Back-compat single-owner form: `owner` REPLACES the whole set; null disowns
@@ -864,48 +837,37 @@ export const removeSessionOwner = mutation({
   },
 });
 
-// A row of the owner-candidate roster: who the picker may OFFER. Mirrors the
-// fields the web/mobile pickers render off a store roster row.
-export type OwnerCandidate = {
-  _id: string;
-  name: string | null;
-  email: string | null;
-  image: string | null;
-  github_avatar_url: string | null;
-  is_bot: boolean;
-};
-
-const toOwnerCandidate = (u: any): OwnerCandidate => ({
-  _id: u._id.toString(),
-  name: u.name ?? null,
-  email: u.email ?? null,
-  image: u.image ?? null,
-  github_avatar_url: u.github_avatar_url ?? null,
-  is_bot: !!u.is_bot,
+// One owners change under the session_owners feature (performApplyOwnersChange).
+export const applyOwnersChange = mutation({
+  args: {
+    session_id: SESSION_REF,
+    add: v.optional(v.array(OWNER_REF)),
+    remove: v.optional(v.array(OWNER_REF)),
+    restore: v.optional(v.array(v.object({
+      user_id: v.string(),
+      added_by: v.string(),
+      added_at: v.number(),
+      seen_at: v.optional(v.number()),
+      note: v.optional(v.string()),
+    }))),
+    // A role ref (@handle, or-N, id) replaces the role; null takes it off.
+    role: v.optional(v.union(v.string(), v.null())),
+    release_parent: v.optional(v.boolean()),
+    // Take it over: every agent owner comes off and the caller becomes an owner.
+    take_over: v.optional(v.boolean()),
+    note: v.optional(v.string()),
+    from_session: v.optional(v.string()),
+    api_token: v.optional(v.string()),
+  },
+  handler: async (ctx, args) => {
+    const { api_token, ...rest } = args;
+    const authUserId = await requireAuth(ctx, api_token);
+    const result = await performApplyOwnersChange(ctx, authUserId, { ...rest, note: rest.note?.trim() || undefined });
+    await notifySessionAssigned(ctx, result.conversation_id, result.added, authUserId, rest.note?.trim());
+    await notifySessionOwnershipChanged(ctx, result.conversation_id, result, authUserId);
+    return result;
+  },
 });
-
-// Who may become an owner of THIS session — the same rule resolveOwnerRef
-// enforces on write: members of the session's team, or only the caller when
-// the session is teamless (self-claim). The pickers render exactly this list;
-// a roster taken from the viewer's ACTIVE team offers people the server would
-// reject whenever the session is stamped with a different team.
-//
-// Cap the membership walk: a reactive subscriber that collected the whole
-// team paid N user-doc reads (and re-ran on every teammate heartbeat). The
-// picker is a one-shot open; 250 candidates is more humans than we show.
-async function ownerCandidatesFor(
-  ctx: { db: any },
-  authUserId: Id<"users">,
-  conversation: any,
-): Promise<OwnerCandidate[]> {
-  if (!conversation.team_id) {
-    const me = await ctx.db.get(authUserId);
-    return me ? [toOwnerCandidate(me)] : [];
-  }
-  return (await teamMemberDocs(ctx, conversation.team_id, OWNER_CANDIDATE_CAP)).map(
-    toOwnerCandidate,
-  );
-}
 
 // The owner SET for one session — chips, the "assigned to you" banner, ack
 // state. Fetched on demand for a single open session, so the inbox list never
@@ -915,40 +877,86 @@ async function ownerCandidatesFor(
 // throws) when the ref doesn't resolve to an accessible session: the web
 // subscribes while a session is open, and it legitimately races creation —
 // an optimistic stub's client UUID only resolves once the server row syncs.
+// Under the session_owners feature the read also names the session's role,
+// its parent session and its implicit starter apart (shared ownersOf), and
+// whether the viewer may edit them. `owners` stays the people list a
+// person-only reader shows: the rows, else the implicit starter.
+export type OwnersModelRead = {
+  session_owners: true;
+  people: OwnerInfo[];
+  role: { role_id: string; short_id: string | null; handle: string; name: string } | null;
+  parent_session: { conversation_id: string; short_id: string; title: string | null } | null;
+  implicit_starter: (OwnerInfo & { implicit: true }) | null;
+  /** The human who started it (shared SessionOwnerFacts.starter) and whether
+   *  a role started it: what a client needs to paint an owners change by the
+   *  shared rule before the server answers. */
+  starter_id: string | null;
+  role_started: boolean;
+  can_edit: boolean;
+  owners_changed_at: number | null;
+};
+
+function starterInfo(conversation: any, starter: any): OwnerInfo {
+  const startedAt = conversation.started_at ?? conversation._creationTime ?? Date.now();
+  return {
+    ...toOwnerInfo(starter),
+    added_by: starter._id.toString(),
+    added_by_name: starter.name ?? starter.email ?? null,
+    added_at: startedAt,
+    seen_at: startedAt,
+    image: avatarOf(starter),
+    added_by_image: avatarOf(starter),
+  };
+}
+
 export async function performListOwners(
   ctx: { db: any },
   authUserId: Id<"users">,
   sessionId: string,
-): Promise<{
+): Promise<({
   short_id: string;
   conversation_id: Id<"conversations">;
   owners: OwnerInfo[];
   team: TeamOwnerInfo | null;
-} | null> {
+} & (OwnersModelRead | { session_owners?: undefined })) | null> {
   const conversation = await findOwnableConversation(ctx, authUserId, sessionId);
   if (!conversation) return null;
+  const short_id = conversation.short_id ?? conversation._id.toString().slice(0, 7);
   const owners = await listOwnerInfos(ctx, conversation._id);
   const team = await teamOwnerInfo(ctx, conversation._id);
+  if (await ownersModelOn(ctx, conversation)) {
+    return { short_id, conversation_id: conversation._id, team, ...(await ownersModelRead(ctx, authUserId, conversation, owners)) };
+  }
   if (owners.length === 0 && !team) {
     const starter = await humanStarterUser(ctx, conversation);
-    if (starter) {
-      const startedAt = conversation.started_at ?? conversation._creationTime ?? Date.now();
-      owners.push({
-        ...toOwnerInfo(starter),
-        added_by: starter._id.toString(),
-        added_by_name: starter.name ?? starter.email ?? null,
-        added_at: startedAt,
-        seen_at: startedAt,
-        image: avatarOf(starter),
-        added_by_image: avatarOf(starter),
-      });
-    }
+    if (starter) owners.push(starterInfo(conversation, starter));
   }
+  return { short_id, conversation_id: conversation._id, owners, team };
+}
+
+async function ownersModelRead(ctx: { db: any }, authUserId: Id<"users">, conversation: any, people: OwnerInfo[]): Promise<OwnersModelRead & { owners: OwnerInfo[] }> {
+  const facts = await sessionOwnerFactsOf(ctx, conversation);
+  const o = ownersOf(facts);
+  const starter = o.implicitStarter ? await ctx.db.get(o.implicitStarter) : null;
+  const implicit_starter = starter ? { ...starterInfo(conversation, starter), implicit: true as const } : null;
+  const roleDoc = o.role ? await ctx.db.get(o.role) : null;
+  const parent = o.parentSession ? await ctx.db.get(o.parentSession) : null;
+  // A parent the viewer cannot read is named by its id alone.
+  const parentAccess = parent ? await checkConversationAccess(ctx, authUserId, parent) : null;
+  const readable = parentAccess === "owner" || parentAccess === "team";
   return {
-    short_id: conversation.short_id ?? conversation._id.toString().slice(0, 7),
-    conversation_id: conversation._id,
-    owners,
-    team,
+    session_owners: true,
+    owners: implicit_starter ? [...people, implicit_starter] : people,
+    people,
+    role: roleDoc ? { role_id: String(roleDoc._id), short_id: roleDoc.short_id ?? null, handle: roleDoc.handle, name: roleDoc.name } : null,
+    parent_session: o.parentSession
+      ? { conversation_id: o.parentSession, short_id: parent?.short_id ?? o.parentSession.slice(0, 7), title: readable ? parent?.title ?? null : null }
+      : null,
+    implicit_starter,
+    starter_id: facts.starter,
+    role_started: !!facts.role_started,
+    can_edit: mayEditOwners(facts, String(authUserId)),
+    owners_changed_at: conversation.owners_changed_at ?? null,
   };
 }
 
@@ -965,6 +973,36 @@ export const listOwners = query({
       return null;
     }
     return performListOwners(ctx, authUserId, args.session_id);
+  },
+});
+
+// The owners of many sessions at once, for the faces on inbox cards: an inbox
+// row carries no owner list (lib/inboxOwners), so the cards on screen read
+// them here in one query, by conversation id (a direct read each). Each id
+// goes through the same access chokepoint as listOwners
+// (findOwnableConversation); one the caller cannot read is left out, never an
+// error. At most LIST_OWNERS_FOR_CAP ids are read; the rest are left out the
+// same way, so a caller asks for what is on screen. A bad token throws, as
+// listOwners does.
+export const LIST_OWNERS_FOR_CAP = 60;
+
+export async function performListOwnersFor(ctx: { db: any }, authUserId: Id<"users">, conversationIds: ReadonlyArray<Id<"conversations"> | string>) {
+  const ids = [...new Set(conversationIds.map(String))].slice(0, LIST_OWNERS_FOR_CAP);
+  const reads = await Promise.all(ids.map((id) => performListOwners(ctx, authUserId, id).catch(() => null)));
+  const out: Record<string, NonNullable<Awaited<ReturnType<typeof performListOwners>>>> = {};
+  for (const read of reads) if (read) out[String(read.conversation_id)] = read;
+  return out;
+}
+
+export const listOwnersFor = query({
+  args: { conversation_ids: v.array(v.id("conversations")), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const authUserId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!authUserId) {
+      if (args.api_token) throw new Error("Authentication failed: invalid token or session");
+      return {};
+    }
+    return performListOwnersFor(ctx, authUserId, args.conversation_ids);
   },
 });
 
@@ -1091,7 +1129,9 @@ export async function applyHoldChange(ctx: { db: any; scheduler?: any }, convers
   if (change.kind === "keep") return { change: "keep" };
   const actor = c.owner_user_id ?? c.user_id;
   if (change.kind === "release") {
-    await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "user", user_id: actor, mode: "add" }, note: `Its work is no longer in @${change.from.handle ?? "the role"}'s area.` });
+    // Under the owner model a person target keeps the role, so the release names the role coming off.
+    const target: ReparentSessionTarget = await ownersModelOn(ctx, c) ? { kind: "owners", role: null } : { kind: "user", user_id: actor, mode: "add" };
+    await performReparentSession(ctx, actor, { session_id: String(c._id), target, note: `Its work is no longer in @${change.from.handle ?? "the role"}'s area.` });
     return { change: "release", role: change.from.handle };
   }
   await performReparentSession(ctx, actor, { session_id: String(c._id), target: { kind: "role", role_id: String(change.role._id), hold: "bound" }, note: BOUND_NOTE });

@@ -1,8 +1,11 @@
-import { isClosedSession } from "@codecast/shared/contracts";
+import { isClosedSession, waitReachedPeople } from "@codecast/shared/contracts";
 import { mutation, query, internalAction, internalMutation, internalQuery } from "./functions";
 import { deliverSessionNotification, deliverSessionNotificationToParties, idleDigestOn } from "./lib/sessionNotify";
 export { deliverSessionNotification, deliverSessionNotificationToParties, idleDigestOn };
 import { routeUpHears, routeUpWaitingSession } from "./agentTasks";
+import { agentOwnerFor, agentOwnerHears, escalateWait, routeWaitToAgentOwner } from "./lib/agentOwnerWaits";
+import { ownersModelOnMemo, rerouteEscalatedWait } from "./lib/inboxOwners";
+import { sessionOwnerRow } from "./sessionOwners";
 import {
   openTasksVouchForWaiting,
   IDLE_DIGEST_WINDOW_MS,
@@ -18,7 +21,8 @@ import { getAuthUserId } from "@convex-dev/auth/server";
 import type { Id } from "./_generated/dataModel";
 import { verifyApiToken } from "./apiTokens";
 import { canAccessConversation, canAccessDoc, canAccessPlan, canAccessTask } from "./lib/access";
-import { teamReadLevel } from "./privacy";
+import { checkConversationAccess, teamReadLevel } from "./privacy";
+import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { ENTITY_TYPE, NOTIFICATION_TYPE } from "./lib/notificationTypes";
 import { isAgentSpawnedConversation, isSubagentConversation } from "./ccAccountsShared";
 import {
@@ -527,39 +531,50 @@ export const createSessionNotification = mutation({
     if (!conversation || conversation.user_id !== auth.userId) {
       return { error: "Not found" };
     }
-
-    // A daemon titles every permission push alike; the person needs to know
-    // which session is asking.
-    const title = args.type === "permission_request"
-      ? `${sessionPushTitle(conversation)} · needs permission`
-      : args.title;
-    const delivered = await deliverSessionNotificationToParties(
-      ctx, conversation, args.type, title, args.message,
-    );
-
-    // Stamp the needs-input dedupe key so the server-side check
-    // (checkNeedsInput) stands down for the episode this push already covered:
-    // "session_idle" here is the legacy no-hook watcher path, and a
-    // "permission_request" push covers the permission_blocked flavor even if
-    // the pending_permissions record is slow to land.
-    const dedupeKind =
-      args.type === "session_idle" ? "idle" :
-      args.type === "permission_request" ? "permission_blocked" : null;
-    if (dedupeKind) {
-      await ctx.db.patch(args.conversation_id, {
-        needs_input_notified_key: `${conversation.message_count || 0}:${dedupeKind}`,
-      });
-    }
-
-    if (delivered && args.type === "session_idle") {
-      await ctx.scheduler.runAfter(0, internal.idleSummary.generateIdleSummary, {
-        conversation_id: args.conversation_id,
-      });
-    }
-
-    return delivered ? { notified: true } : { skipped: true };
+    return performDaemonSessionPush(ctx, conversation, args);
   },
 });
+
+// The daemon's own push for a session (createSessionNotification).
+export async function performDaemonSessionPush(
+  ctx: any,
+  conversation: any,
+  args: { type: "session_idle" | "permission_request" | "session_error"; title: string; message: string },
+): Promise<{ notified: true } | { skipped: true }> {
+  // A daemon titles every permission push alike; the person needs to know
+  // which session is asking.
+  const title = args.type === "permission_request"
+    ? `${sessionPushTitle(conversation)} · needs permission`
+    : args.title;
+  const delivered = await deliverSessionNotificationToParties(
+    ctx, conversation, args.type, title, args.message,
+  );
+
+  // Stamp the needs-input dedupe key so the server-side check
+  // (checkNeedsInput) stands down for the episode this push already covered:
+  // "session_idle" here is the legacy no-hook watcher path, and a
+  // "permission_request" push covers the permission_blocked flavor even if
+  // the pending_permissions record is slow to land. Under the owners model
+  // the key means "this episode's people were rung", so a push that reached
+  // nobody (an agent owner answers it) leaves it for the check that rings
+  // them once the wait reaches them.
+  const dedupeKind =
+    args.type === "session_idle" ? "idle" :
+    args.type === "permission_request" ? "permission_blocked" : null;
+  if (dedupeKind && (delivered || !(await ownersModelOnMemo(ctx, conversation)))) {
+    await ctx.db.patch(conversation._id, {
+      needs_input_notified_key: `${conversation.message_count || 0}:${dedupeKind}`,
+    });
+  }
+
+  if (delivered && args.type === "session_idle") {
+    await ctx.scheduler.runAfter(0, internal.idleSummary.generateIdleSummary, {
+      conversation_id: conversation._id,
+    });
+  }
+
+  return delivered ? { notified: true } : { skipped: true };
+}
 
 // ── The single-row verdict ───────────────────────────────────────────────────
 //
@@ -735,8 +750,21 @@ export async function performNeedsInputCheck(
   // A role that cannot be told (its trigger paused or cancelled, no standing
   // session, the org off, its machine away) is no reader at all: `unheard` sends the settle on
   // to the person's own notify below, so the wait is never swallowed.
+  //
+  // Under the owners model (team feature session_owners) the reader is the
+  // session's agent owner, its role or the session that started it
+  // (lib/agentOwnerWaits), and one it cannot reach, or that already passed
+  // this wait up, sends the wait to the person owners: wait_up_at files it
+  // under Needs You and the push below rings them.
   let unheard = false;
-  if ((conv.org_role_id || conv.standing_role_id) && state === "needs_input") {
+  const model = await agentOwnerFor(ctx, conv);
+  // A standing escalation whose person can no longer open the session (its
+  // visibility changed since, or their membership's did) goes on to someone
+  // who can; the check that rerouting schedules rings them.
+  if (model?.reachedPeople && (await rerouteEscalatedWait(ctx, conv))) return { notified: false, reason: "rerouted" };
+  const agent = model?.agent ?? null;
+  const routed = model ? !!agent : !!(conv.org_role_id || conv.standing_role_id);
+  if (routed && state === "needs_input" && !model?.reachedPeople) {
     const kind = needsInputKind({ awaitingInput, agentStatus, isUnresponsive: activity.isUnresponsive });
     const declared = conv.thread_state_status === "blocked";
     const stuck = awaitingInput || kind === "permission_blocked" || kind === "stopped" || kind === "unresponsive";
@@ -755,11 +783,21 @@ export async function performNeedsInputCheck(
         status_ts: session?.agent_status_updated_at,
       });
     } else if (stuck || declared) {
-      unheard = (await routeUpWaitingSession(ctx, conv, { why: stuck ? kind : "blocked", since, stuck })) === "unreachable";
+      const wait = { why: stuck ? kind : "blocked", since, stuck };
+      unheard = (await (agent ? routeWaitToAgentOwner(ctx, conv, agent, wait) : routeUpWaitingSession(ctx, conv, wait))) === "unreachable";
     } else {
-      unheard = (await routeUpHears(ctx, conv)) === "unreachable";
+      unheard = (await (agent ? agentOwnerHears(ctx, conv, agent) : routeUpHears(ctx, conv))) === "unreachable";
     }
   }
+  if (agent && state === "needs_input" && (unheard || model?.reachedPeople)) {
+    unheard = true;
+    if (!model?.reachedPeople) await escalateWait(ctx, conv);
+  }
+  // A child no window seats for its person (lib/inboxOwners unseatedChild: a
+  // dead parent's, until its release is written, or a released subagent its
+  // runner did not start) has no agent: its wait escalates, as an unreachable
+  // parent's would, so its person lists it.
+  if (model?.orphaned && state === "needs_input" && !model.reachedPeople) await escalateWait(ctx, conv);
 
   // ── The stall rule ─────────────────────────────────────────────────────────
   // Only the HARD kinds count as a stall: the machine cannot proceed (open
@@ -787,12 +825,17 @@ export async function performNeedsInputCheck(
   // chimes like any session waiting on them.
   // A role's standing session that reports to a role rides that role's card
   // the same way (S28), so it rings nobody either.
-  if (conv.org_role_id && !unheard) {
-    return { notified: false, reason: "under_role" };
+  if ((model ? !!agent : !!conv.org_role_id) && !unheard) {
+    return { notified: false, reason: model ? "agent_owner" : "under_role" };
   }
   // ── Push etiquette (chime only) ────────────────────────────────────────────
+  // An escalated wait (its agent owner could not hear it or passed it up, or
+  // its parent died) is meant for its people: the push etiquette below (a pin,
+  // a schedule run, the machine-turn guard, the daemon's own permission push)
+  // never swallows it.
+  const escalated = !!model && (unheard || waitReachedPeople(conv));
   // The sound skips pinned (isSessionWaitingForInput's !is_pinned arms).
-  if (conv.inbox_pinned_at) return { notified: false, reason: "pinned" };
+  if (conv.inbox_pinned_at && !escalated) return { notified: false, reason: "pinned" };
   // Mirror of the web's isSub guard (inboxStore): the SAME two shared
   // predicates, in the same order — isSubagentConversation here (reason
   // "subagent": is_subagent / parent link; a workflow sub keeps this reason
@@ -807,17 +850,20 @@ export async function performNeedsInputCheck(
   // terminal has no spawner and pushes per worker — intended: human-started
   // fan-out is first-class. The schedule_run stand-down further down is
   // server-only (the chime has no agent_task_id case).
-  if (isSubagentConversation(conv) || conv.is_workflow_sub) {
+  // Under the owners model who owns it decides who hears, so these two
+  // stand-downs are the model's own: a child its parent session owns never
+  // reaches here unless the wait went up to its people.
+  if (!model && (isSubagentConversation(conv) || conv.is_workflow_sub)) {
     return { notified: false, reason: "subagent" };
   }
   // The bar is "a session the USER was driving is waiting on THEM". Machine-
   // initiated sessions never clear it: agent fan-out (cast spawn, agent-team
   // fleets — the same classification that gates the "started coding" team
   // notification) and schedule runs park idle after every turn by design.
-  if (isAgentSpawnedConversation(conv)) {
+  if (!model && isAgentSpawnedConversation(conv)) {
     return { notified: false, reason: "agent_spawned" };
   }
-  if (conv.agent_task_id) {
+  if (conv.agent_task_id && !escalated) {
     return { notified: false, reason: "schedule_run" };
   }
   // The settle classifier is NOT scheduled from here any more: this check
@@ -837,13 +883,21 @@ export async function performNeedsInputCheck(
   // Dead/unresponsive sessions land in needs-input on the web too, but a push
   // for every deliberately closed terminal session is noise — keep the push to
   // the genuinely-waiting kinds.
-  if (kind === "stopped" || kind === "unresponsive") return { notified: false, reason: "dead" };
+  if (kind === "stopped" || kind === "unresponsive") {
+    // A dead session asks nobody anything: its escalation ends, so it holds
+    // no one's inbox.
+    if (escalated) await ctx.db.patch(conv._id, { wait_up_at: undefined, wait_up_count: undefined, wait_up_person: undefined });
+    return { notified: false, reason: "dead" };
+  }
 
   // The waiting episode's identity, and only a REAL settle ever reaches it —
   // the boundary return above is what keeps it that way (ct-49533). The key
   // stays this exact shape because the daemon's own permission push writes it
   // too (notifySession, always for a real settle) and the two must match for
-  // that stand-down to work.
+  // that stand-down to work. Under the owners model it means "this episode's
+  // people were covered": the daemon's push stamps it only on a delivery
+  // (one its agent owner answered reaches nobody), and this check only past
+  // the agent's stand-down. So it alone decides whether this check stands down.
   const key = `${conv.message_count}:${kind}`;
   if (conv.needs_input_notified_key === key) return { notified: false, reason: "dup" };
 
@@ -860,14 +914,20 @@ export async function performNeedsInputCheck(
     .order("desc")
     .filter((q: any) => q.eq(q.field("role"), "user"))
     .first();
-  if (isMachineStartedTurn(lastUserMsg?.content)) {
+  // An escalated wait (its agent owner could not be told, or passed it up)
+  // is meant for its people whoever started the turn: an agent-owned session
+  // is driven by session messages and scheduled frames as a rule.
+  if (!escalated && isMachineStartedTurn(lastUserMsg?.content)) {
     return { notified: false, reason: "machine_turn" };
   }
 
   // The daemon already pushes "Permission needed" when it creates the pending
   // permission record — only cover the recordless blocks (AskUserQuestion and
-  // scraped prompts, which the daemon's SKIP_TOOLS deliberately skips).
-  if (kind === "permission_blocked") {
+  // scraped prompts, which the daemon's SKIP_TOOLS deliberately skips). Off
+  // the owners model only: under it a daemon push that rang its people
+  // stamped the key (`dup` above), and one that rang nobody (its agent owner
+  // answered) left the ringing to this check.
+  if (kind === "permission_blocked" && !model) {
     const open = await ctx.db
       .query("pending_permissions")
       .withIndex("by_conversation_status", (q: any) =>
@@ -880,7 +940,10 @@ export async function performNeedsInputCheck(
     }
   }
 
-  // Mark BEFORE delivering so a conflicting retry can't double-push.
+  // Mark BEFORE delivering so a conflicting retry can't double-push. Under
+  // the owners model a wait its agent owner answered returned above, so this
+  // episode is its people's: covered, whatever their notification settings,
+  // and escalatedAsks files it by this key.
   await ctx.db.patch(conv._id, { needs_input_notified_key: key });
 
   const title = sessionPushTitle(conv);
@@ -1027,6 +1090,134 @@ export const checkNeedsInput = internalMutation({
     status_ts: v.optional(v.number()),
   },
   handler: (ctx, args) => performNeedsInputCheck(ctx, args),
+});
+
+// A parent that dies (killed or deleted) no longer owns its children: they
+// fall back to their people, their implicit starter included (the shared
+// rule reads a dead parent as released). This writes that release down on
+// each child under the owners model that still matters to a person (its
+// process is alive, or a wait stands), so the nested window lists a subagent
+// for its starter: one past the kill cascade's reach, or a deleted parent's,
+// which the cascade never takes. A finished or idle child is history: it
+// stays unreleased and in nobody's inbox, and cannot crowd out the nested
+// window's real releases. A wait the parent was told stood "With <parent>"
+// and rang nobody, and the needs-input check runs only when the child's own
+// status moves, so its check runs again here and reaches the child's people.
+// Paged, 50 children a call, over the Task subagents and then the spawned
+// sessions, so the kill or delete mutation never carries it.
+const DEAD_PARENT_PAGE = 50;
+
+// A wait stands on the child: one it told its parent (hand_wake_notified_key,
+// "<message_count>:<state>") with no message since, or one that already
+// reached its people.
+function standingWait(child: any): boolean {
+  const told = typeof child.hand_wake_notified_key === "string" && Number(child.hand_wake_notified_key.split(":")[0]) === (child.message_count ?? 0);
+  return told || waitReachedPeople(child);
+}
+
+// The child's agent process is alive: its daemon row's heartbeat is fresh.
+async function processAlive(ctx: { db: any }, child: any, now: number): Promise<boolean> {
+  const managed = await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", child._id)).first();
+  return !!managed?.last_heartbeat && now - managed.last_heartbeat < HEARTBEAT_ALIVE_MS;
+}
+
+export async function performReleaseDeadParentChildren(
+  ctx: { db: any; scheduler: any },
+  args: { parent_id: string; released_at: number; spawned?: boolean; cursor?: string | null },
+): Promise<{ released: number; rechecked: number }> {
+  const field = args.spawned ? "spawned_by_conversation_id" : "parent_conversation_id";
+  const page = await ctx.db
+    .query("conversations")
+    .withIndex(args.spawned ? "by_spawned_by" : "by_parent_conversation_id", (q: any) => q.eq(field, args.parent_id))
+    .paginate({ numItems: DEAD_PARENT_PAGE, cursor: args.cursor ?? null });
+  let released = 0;
+  let rechecked = 0;
+  const now = Date.now();
+  for (const child of page.page) {
+    if (child.inbox_killed_at || child.status !== "active" || !(await ownersModelOnMemo(ctx, child))) continue;
+    const waiting = standingWait(child);
+    if (!waiting && !(await processAlive(ctx, child, now))) continue;
+    if (child.parent_released_at == null) {
+      await ctx.db.patch(child._id, { parent_released_at: args.released_at });
+      released++;
+    }
+    if (waiting) {
+      await ctx.scheduler.runAfter(0, internal.notifications.checkNeedsInput, { conversation_id: child._id });
+      rechecked++;
+    }
+  }
+  if (!page.isDone) {
+    await ctx.scheduler.runAfter(0, internal.notifications.releaseDeadParentChildren, { ...args, cursor: page.continueCursor });
+  } else if (!args.spawned) {
+    await ctx.scheduler.runAfter(0, internal.notifications.releaseDeadParentChildren, { parent_id: args.parent_id, released_at: args.released_at, spawned: true });
+  }
+  return { released, rechecked };
+}
+
+// A member's visibility change can shut out the person a wait on one of
+// their sessions escalated to (teams.applyMembershipVisibilityChange, the one
+// writer of it): each standing escalation on their active sessions in that
+// team goes on to someone who can open it (rerouteEscalatedWait). Paged.
+const MEMBER_ESCALATIONS_PAGE = 100;
+export async function performRerouteMemberEscalations(
+  ctx: { db: any; scheduler: any },
+  args: { user_id: string; team_id: string; cursor?: string | null },
+): Promise<{ rerouted: number }> {
+  const page = await ctx.db
+    .query("conversations")
+    .withIndex("by_team_user_status_updated", (q: any) => q.eq("team_id", args.team_id).eq("user_id", args.user_id).eq("status", "active"))
+    .filter((q: any) => q.neq(q.field("wait_up_person"), undefined))
+    .paginate({ numItems: MEMBER_ESCALATIONS_PAGE, cursor: args.cursor ?? null });
+  let rerouted = 0;
+  for (const conv of page.page) if (await rerouteEscalatedWait(ctx, conv)) rerouted++;
+  if (!page.isDone) await ctx.scheduler.runAfter(0, internal.notifications.rerouteMemberEscalations, { ...args, cursor: page.continueCursor });
+  return { rerouted };
+}
+
+export const rerouteMemberEscalations = internalMutation({
+  args: { user_id: v.string(), team_id: v.string(), cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: (ctx, args) => performRerouteMemberEscalations(ctx, args),
+});
+
+export const releaseDeadParentChildren = internalMutation({
+  args: { parent_id: v.string(), released_at: v.number(), spawned: v.optional(v.boolean()), cursor: v.optional(v.union(v.string(), v.null())) },
+  handler: (ctx, args) => performReleaseDeadParentChildren(ctx, args),
+});
+
+// A session's agent owner (its role, or the session that started it) passes
+// what the session waits on up to its person owners (`cast own <s> --pass-up`):
+// the wait files under Needs You and the needs-input check rings them. Only
+// under the owners model (team feature session_owners), and only while an
+// agent owns it: without one its waits already reach its people.
+// Only the agent owner itself (the owning session, or the role's own standing
+// session, named by from_session) or a person who owns the session may.
+export async function performPassWaitUp(ctx: any, userId: Id<"users">, session: string, fromSession?: string): Promise<{ short_id: string }> {
+  const readable = async (c: any) => (await checkConversationAccess(ctx, userId, c)) !== "denied";
+  const conv = await findConversationByAnyRefWhere(ctx, session, readable);
+  if (!conv) throw new Error(`No session found for "${session}"`);
+  const model = await agentOwnerFor(ctx, conv);
+  if (!model) throw new Error("Passing a wait up needs the session owners feature on the session's team");
+  if (!model.agent) throw new Error("No agent owns it: its waits already reach its people");
+  const personOwner = !!(await sessionOwnerRow(ctx, conv._id, userId));
+  const sender = fromSession?.trim() ? await findConversationByAnyRefWhere(ctx, fromSession.trim(), readable) : null;
+  // The sender must be a session the caller runs: the agent owner's own
+  // session acting, never one they can merely read.
+  const isAgent = !!sender && String(sender.user_id) === String(userId) && (model.agent.kind === "session"
+    ? String(sender._id) === model.agent.id
+    : String(sender.standing_role_id ?? "") === model.agent.id);
+  if (!isAgent && !personOwner) throw new Error("Only its agent owner, from its own session, or a person who owns it can pass its wait up");
+  if (!model.reachedPeople) await escalateWait(ctx, conv);
+  await ctx.scheduler.runAfter(0, internal.notifications.checkNeedsInput, { conversation_id: conv._id });
+  return { short_id: conv.short_id ?? String(conv._id).slice(0, 7) };
+}
+
+export const passWaitUp = mutation({
+  args: { session: v.string(), from_session: v.optional(v.string()), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = args.api_token ? (await verifyApiToken(ctx, args.api_token, false))?.userId : await getAuthUserId(ctx);
+    if (!userId) throw new Error("Not authenticated");
+    return performPassWaitUp(ctx, userId as Id<"users">, args.session, args.from_session);
+  },
 });
 
 const ENTITY_TYPE_VALIDATOR = v.union(
