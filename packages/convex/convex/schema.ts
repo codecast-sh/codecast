@@ -36,7 +36,7 @@ import { callTables } from "./callsSchema";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { mcpTables } from "./mcpSchema";
 import { roleIconValidator } from "./lib/roleIconValidator";
-import { deliveryTargetValidator } from "./lib/deliveryTargetValidator";
+import { deliveryTargetValidator } from "./lib/registerOnly";
 import { assistantTables } from "./assistantSchema";
 import { castMachineTables } from "./castMachinesSchema";
 import { dataSyncTables } from "./dataSyncSchema";

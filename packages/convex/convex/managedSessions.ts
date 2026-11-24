@@ -14,6 +14,7 @@ import {
   NEEDS_INPUT_PERMISSION_CHECK_DELAY_MS,
 } from "./inboxFilters";
 import { isDaemonManagedRow } from "./lib/liveSessions";
+import { isRegisterOnly } from "./lib/registerOnly";
 import { performListActiveSessions } from "./managedSessionsList";
 import { scheduleLiveActivityRefresh } from "./lib/liveActivityRefresh";
 import { scheduleFedSessionSettle } from "./callChat";
@@ -695,18 +696,14 @@ export const getPendingMessagesForSession = query({
       .withIndex("by_session_id", (q: any) => q.eq("session_id", args.session_id))
       .first();
 
-    if (!session || !session.conversation_id) {
-      return [];
-    }
+    if (!session || !session.conversation_id) return [];
 
     if (session.user_id.toString() !== authUserId.toString()) {
       throw new Error("Unauthorized");
     }
 
     await requireConversationExecution(ctx, authUserId, session.conversation_id);
-
-    const sessionConversation = await ctx.db.get(session.conversation_id);
-    if (sessionConversation?.register_only) return [];
+    if (await isRegisterOnly(ctx, session.conversation_id)) return [];
 
     const messages = await ctx.db
       .query("pending_messages")
@@ -729,15 +726,10 @@ export const markMessageDelivered = mutation({
     }
 
     const message = await ctx.db.get(args.message_id);
-    if (!message) {
-      throw new Error("Message not found");
-    }
+    if (!message) throw new Error("Message not found");
 
     await requireConversationExecution(ctx, authUserId, message.conversation_id);
-
-    if ((await ctx.db.get(message.conversation_id))?.register_only) {
-      return { success: true, skipped: true };
-    }
+    if (await isRegisterOnly(ctx, message.conversation_id)) return { success: true, skipped: true };
 
     // Same refusals as pendingMessages.updateMessageStatus: a settled row
     // (delivered, cancelled) stays settled, and a row under the fenced

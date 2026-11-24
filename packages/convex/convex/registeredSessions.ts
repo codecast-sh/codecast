@@ -5,7 +5,7 @@ import { checkRateLimit } from "./rateLimit";
 import { isDeletedSession } from "./lib/deletedSessions";
 import { buildShareUpdate, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
-import { deliveryTargetValidator } from "./lib/deliveryTargetValidator";
+import { deliveryTargetValidator } from "./lib/registerOnly";
 
 function titleOf(cwd: string): string {
   const trimmed = cwd.replace(/\/+$/, "");
