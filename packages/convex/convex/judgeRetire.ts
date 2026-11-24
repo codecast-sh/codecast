@@ -16,6 +16,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { insertTaskComment, moveTaskStatus } from "./tasks";
 import { refreshCauseDescription } from "./signals";
 import { latestExpectations } from "./lib/expectationsApply";
+import { endRunFields } from "./lib/runEnd";
 import { isTerminalTaskStatus } from "@codecast/shared/tasks";
 import { judgeInputs } from "./momentsSchema";
 import { fold, findingStanding, type StandingRun } from "./lib/findingStanding";
@@ -658,7 +659,7 @@ export const settleDrawCard = internalMutation({
     await ctx.db.patch(row._id, { status: "closed", updated_at: now });
     const run: Doc<"workflow_runs"> | null = await ctx.db.get(row.run_id);
     if (run && run.status === "paused" && run.gate_node_id === row.node_id) {
-      await ctx.db.patch(run._id, { status: "completed", gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, updated_at: now });
+      await ctx.db.patch(run._id, { ...endRunFields(run, "completed", now), gate_node_id: undefined, gate_prompt: undefined, gate_choices: undefined, gate_response: undefined, updated_at: now });
     }
     const asked = row.decision_id ? await ctx.db.get(row.decision_id) : null;
     if (asked?.status === "pending") await withdrawCore(ctx, asked as any, now);

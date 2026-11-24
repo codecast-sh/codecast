@@ -14,6 +14,7 @@ import { ownsWork } from "@codecast/shared/contracts/orgLead";
 import { roleSubject, withOrgChange } from "./lib/orgChangeLog";
 import { isHandBriefing } from "./spawn";
 import { isOrphanOrSubagent } from "./inboxFilters";
+import { closeRunningStations } from "./lib/runEnd";
 
 // One-time backfill: stamp conversations.model from each conversation's newest
 // assistant message carrying a real model id ("<synthetic>" = error banner, not
@@ -738,3 +739,26 @@ async function clearCopiedStashPage(ctx: { db: any }, userId: any, dryRun: boole
     done: page.isDone as boolean,
   };
 }
+
+// One-time repair: close the stations runs that ended before lib/runEnd.ts
+// still mark running (a spinner and a clock counting on a failed run). Dry by
+// default; a real run walks every page.
+//   packages/convex/run.sh migrations:closeEndedRunStations '{"dryRun":false}'
+export const closeEndedRunStations = internalMutation({
+  args: { dryRun: v.optional(v.boolean()), cursor: v.optional(v.string()), numItems: v.optional(v.number()) },
+  handler: async (ctx, args) => {
+    const dryRun = args.dryRun ?? true;
+    const page = await ctx.db.query("workflow_runs").paginate({ cursor: args.cursor ?? null, numItems: args.numItems ?? 100 });
+    const closed: string[] = [];
+    for (const run of page.page) {
+      if ((run.status !== "completed" && run.status !== "failed") || !run.node_statuses.some((n) => n.status === "running")) continue;
+      closed.push(String(run._id));
+      // Closed at the run's own end, so a station's time reads to when the run stopped, not to today.
+      if (!dryRun) await ctx.db.patch(run._id, { node_statuses: closeRunningStations(run.node_statuses, run.status, run.updated_at) });
+    }
+    if (!dryRun && !page.isDone) {
+      await ctx.scheduler.runAfter(0, internal.migrations.closeEndedRunStations, { dryRun, cursor: page.continueCursor, numItems: args.numItems });
+    }
+    return { dryRun, scanned: page.page.length, closed, cursor: page.continueCursor, done: page.isDone };
+  },
+});
