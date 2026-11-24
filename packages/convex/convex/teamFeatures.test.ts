@@ -105,7 +105,7 @@ describe("setTeamFeature", () => {
 
   test("a feature in development is turned on by staff only; a team that has it keeps it and turns it off", async () => {
     const ctx = ctxFor(ALICE);
-    for (const feature of ["agent_faces", "agent_realtime"]) {
+    for (const feature of ["agent_faces", "agent_realtime", "session_owners"]) {
       await expect(call(setTeamFeature, ctx, { team_id: ON, feature, enabled: true })).rejects.toThrow(/in development/);
     }
     // Changes stays self-serve: it runs on codecast's own pipeline, not a paid in-development API.

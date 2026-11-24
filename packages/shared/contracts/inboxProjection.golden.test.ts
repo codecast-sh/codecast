@@ -118,6 +118,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // its heartbeat (the pinned_dormant, pinned_done and dormant_claim rows in
   // buckets.json).
   29: "cc88df91db5d8a97",
+  // v30: the owners model on rows stamped owners_model (owners.json):
+  // nothing rides, and a wait an agent owner answers files as working.
+  30: "9781dfc51b7e955b",
 };
 
 type Expected = {

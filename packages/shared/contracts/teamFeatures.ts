@@ -10,7 +10,7 @@
 // the snippet fan-out can never disagree about which features exist or which
 // snippet belongs to which. PURE isomorphic data — no Node or DOM APIs.
 
-export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line" | "member_spend" | "team_sessions" | "reply_streaming" | "priorities";
+export type TeamFeatureKey = "chat" | "calls" | "org" | "changes" | "agent_faces" | "agent_realtime" | "ship" | "line" | "member_spend" | "team_sessions" | "reply_streaming" | "priorities" | "session_owners";
 
 export interface TeamFeatureDescriptor {
   key: TeamFeatureKey;
@@ -120,6 +120,16 @@ export const TEAM_FEATURES: TeamFeatureDescriptor[] = [
     desc: "A session the whole team owns: in everyone's inbox, answered by anyone, picked as Team when you start it. In development.",
     short: "Sessions the whole team owns and answers",
     snippets: [],
+  },
+  {
+    key: "session_owners",
+    name: "Session owners",
+    desc: "Your inbox is the sessions you own. A session's owners are people, one role, or the session that started it; an agent owner answers it until you take it over. In development.",
+    short: "Your inbox is the sessions you own",
+    // Staff turn it on for a team (after its backfill and count, docs/architecture/session-owners.md).
+    inDevelopment: true,
+    snippets: [],
+    personal: true,
   },
   {
     key: "member_spend",

@@ -55,6 +55,7 @@ import { linkTeamHostBeat } from "./teamHosts";
 import { dropLateExportAnswer } from "./folderSync";
 import { scheduleRecoveryOnNewAccount, scheduleSwitchAhead } from "./lib/hostRecovery";
 import { ensurePersonalShares } from "./accountPool";
+import { releaseDeadParentChildrenLater } from "./lib/agentOwnerWaits";
 import {
   CURRENT_USER_GRANT_KEY,
   CURRENT_USER_VIEW_CONTRACT_ID,
@@ -2996,6 +2997,7 @@ async function deleteConversationsForPathInternal(
     return { conversationsDeleted: 0, messagesDeleted: msgs.length, hasMore: true };
   }
 
+  await releaseDeadParentChildrenLater(ctx, conv);
   await ctx.db.delete(conv._id);
   const nextConv = await findNextConversationForPath(ctx, userId, pathPrefix);
   return { conversationsDeleted: 1, messagesDeleted: msgs.length, hasMore: !!nextConv };

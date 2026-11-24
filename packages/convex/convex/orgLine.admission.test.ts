@@ -550,6 +550,17 @@ describe("orgLine admission (LE6)", () => {
         expect((await runnerLoad(ctx, MATE)).working).toBe(0);
       });
 
+      test("under session_owners the run is the role's start, and no person owns it", async () => {
+        const { ctx, tables } = seated([seatLaptop, host("h1", 2)]);
+        tables.teams[0].features = { ...tables.teams[0].features, session_owners: true };
+        await sweepCore(ctx, NOW);
+        expect(tables.workflow_runs.length).toBeGreaterThan(0);
+        for (const run of tables.workflow_runs) {
+          expect(ownersOf(tables, run.primary_conversation_id)).toEqual([]);
+          expect(tables.conversations.find((c) => c._id === run.primary_conversation_id)).toMatchObject({ org_role_id: ROLE, role_started: true });
+        }
+      });
+
       test("keeps its own pool when its account offers one, and waits there rather than spilling onto the team's", async () => {
         const { ctx, tables } = seated([seatLaptop, host("m1", 1, { user_id: MATE }), host("h1", 4)]);
         const res = await sweepCore(ctx, NOW);
