@@ -1873,7 +1873,9 @@ const ConversationViewInner = (
       if (o.behavior === "smooth") return;
       const target = Math.max(0, offset + (o.adjustments ?? 0));
       seekRef.current?.wrote(target);
-      if (o.adjustments) reportOffsetRef.current?.(target);
+      // Not in a pane under display:none (a background tab): a write there
+      // moves nothing, and no scroll event would ever take the offset back.
+      if (o.adjustments && (instance.scrollRect?.height ?? 0) > 0) reportOffsetRef.current?.(target);
     },
     count: timeline.length,
     getScrollElement: () => containerRef.current,
