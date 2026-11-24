@@ -141,6 +141,7 @@ describe("team read keys", () => {
         summary: "Ada summary",
         sharing: "full",
         transcript_messages: 1,
+        started_by_agent: false,
         work_state: expect.any(String),
         started_at: new Date(NOW - 2 * HOUR).toISOString(),
         updated_at: new Date(NOW - HOUR).toISOString(),
@@ -154,6 +155,17 @@ describe("team read keys", () => {
     // A cursor keeps the window it was given: last week's session is out on every page.
     const week = await readAll(t, key, `&since=${NOW - 8 * 24 * HOUR}&until=${NOW - 6 * 24 * HOUR}`);
     expect(week.sessions.map((s) => s.title)).toEqual(["Ada last week"]);
+  });
+
+  test("a row says when an agent started the session", async () => {
+    const { t, ada, team, as } = await setup();
+    const own = await session(t, ada, { team_id: team, title: "Ada's own", updated_at: NOW - HOUR });
+    await session(t, ada, { team_id: team, title: "Started by Ada's agent", updated_at: NOW - 2 * HOUR, spawned_by_conversation_id: own });
+    const { key } = await mint(as(ada), team);
+
+    const { sessions } = await readAll(t, key);
+    expect(sessions.find((s) => s.title === "Ada's own")).toMatchObject({ started_by_agent: false });
+    expect(sessions.find((s) => s.title === "Started by Ada's agent")).toMatchObject({ started_by_agent: true });
   });
 
   test("the key and a member's feed list the same sessions", async () => {
