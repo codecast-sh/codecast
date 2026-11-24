@@ -242,8 +242,15 @@ const minutes = (ms: number) => {
 export async function awaitDeploy(input: { sha: string; base: string; plan: DeployDuties; intervalMs: number; once?: boolean }, io: DeployWaitIO): Promise<DeployWaitResult> {
   const { sha, plan } = input;
   const short = sha.slice(0, 7);
-  const tail = plan.left.length ? ` ${plan.left.join("; ")}.` : "";
-  if (!plan.duties.length) return { code: 0, line: `${short} is on main; nothing this run deploys ships its files.${tail}` };
+  // Targets the run only waits on that the server has no record of: no reader would ever say one is live, so each is
+  // named and dropped from the wait rather than waited on until a deadline.
+  const unknown: string[] = [];
+  let duties = plan.duties;
+  const tailOf = () => {
+    const notes = [...plan.left, ...unknown.map((t) => `${t} has no record on the server, so nothing says when it is live; not waited on`)];
+    return notes.length ? ` ${notes.join("; ")}.` : "";
+  };
+  if (!plan.duties.length) return { code: 0, line: `${short} is on main; nothing this run deploys ships its files.${tailOf()}` };
   const kept = io.clock.load();
   const clock: DeployClock = kept && kept.sha === sha && !kept.stuck ? kept : { sha, start: io.now(), since: {} };
   io.clock.save(clock);
@@ -267,6 +274,9 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
     const rows = await io.targets();
     const now = io.now();
     if (rows) {
+      for (const d of duties) if (d.action === "wait" && !rows.some((r) => r.name === d.target)) unknown.push(d.target);
+      duties = duties.filter((d) => !unknown.includes(d.target));
+      if (!duties.length) return { code: 0, line: `${short} is on main; nothing this run can watch ships its files.${tailOf()}` };
       const ci = new Map<string, MainCi>();
       const ciAt = async (at: string, gate: CiGate) => {
         const key = `${at} ${gate.workflow ?? `* -${(gate.exclude ?? []).join(",")}`}`;
@@ -275,15 +285,15 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
       // An `after` target the run does not send (a person, a role, a push or the server sends it, or it is held back)
       // holds its dependents until a deploy carrying the commit is live on it, as the target's own record says (a ship
       // pass that sent it before the merge counts). One the run sends goes in the same `cast deploy`, which orders them.
-      const owned = new Set(plan.duties.map((d) => d.target));
-      const sends = new Set(plan.duties.filter((d) => d.action === "send").map((d) => d.target));
+      const owned = new Set(duties.map((d) => d.target));
+      const sends = new Set(duties.filter((d) => d.action === "send").map((d) => d.target));
       const outsideLive = new Map<string, boolean>();
-      for (const a of new Set(plan.duties.flatMap((d) => d.after).filter((a) => !owned.has(a)))) {
+      for (const a of new Set(duties.flatMap((d) => d.after).filter((a) => !owned.has(a)))) {
         const row = rows.find((r) => r.name === a);
         outsideLive.set(a, row ? (await targetState(row, io.carries)).state === "live" : false);
       }
       const states = new Map<string, TargetState>();
-      for (const d of plan.duties) {
+      for (const d of duties) {
         const row = rows.find((r) => r.name === d.target);
         let s: TargetState = row ? await targetState(row, io.carries) : { target: d.target, state: "waiting" };
         // A gated send that went out at a head that turned out red or still running failed at its own CI step: main
@@ -299,7 +309,7 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
       const failed = [...states.values()].filter((s): s is Extract<TargetState, { state: "failed" }> => s.state === "failed");
       if (failed.length) return { code: 1, line: `The deploy that carried ${short} failed: ${failed.map((s) => `${s.target} ${s.deploy.short_id}${s.deploy.note ? ` (${s.deploy.note.split("\n")[0]})` : ""}`).join(", ")}.` };
       // Once a target's release has ended with no deploy carrying the commit, it will get none.
-      const unsent = plan.duties.filter((d) => ended.get(d.target) && states.get(d.target)!.state === "waiting");
+      const unsent = duties.filter((d) => ended.get(d.target) && states.get(d.target)!.state === "waiting");
       if (unsent.length) {
         // A deploy asked for since the wait began that went out without the commit sent the head of a checkout that
         // had not pulled it.
@@ -314,7 +324,7 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
         return { code: 1, line: `No deploy carries ${short}: ${why.join("; ")}.` };
       }
       for (const s of states.values()) if (s.state === "live") live.set(s.target, s.deploy.short_id);
-      if (plan.duties.every((d) => live.has(d.target))) return { code: 0, line: `Live: ${short} on ${plan.duties.map((d) => `${d.target} ${live.get(d.target)}`).join(", ")}.${tail}` };
+      if (duties.every((d) => live.has(d.target))) return { code: 0, line: `Live: ${short} on ${duties.map((d) => `${d.target} ${live.get(d.target)}`).join(", ")}.${tailOf()}` };
       const ciWords = async (at: string, g: CiGate, verdict: MainCi) => {
         if (verdict.state !== "failed") return verdict.state === "running" ? "running" : "no CI yet";
         const since = await io.redSince(at, g);
@@ -322,7 +332,7 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
       };
       const batch: string[] = [];
       let started = false;
-      for (const d of plan.duties) {
+      for (const d of duties) {
         const s = states.get(d.target)!;
         if (s.state === "live") continue;
         const unasked = d.action === "send" && !sent.has(d.target) && s.state === "waiting";
@@ -357,11 +367,11 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
         io.send(batch).then(done, (err) => done({ code: 1, last: err instanceof Error ? err.message : String(err) }));
       }
     }
-    const waiting = plan.duties.filter((d) => !live.has(d.target));
+    const waiting = duties.filter((d) => !live.has(d.target));
     const overCap = now - clock.start > DEPLOY_WAIT_CAP_MS;
     const missed = waiting.filter((d) => overCap || (clock.since[d.target] !== undefined && now - clock.since[d.target] > d.deadlineMs));
     if (missed.length) {
-      const liveNow = plan.duties.filter((d) => live.has(d.target)).map((d) => `${d.target} ${live.get(d.target)}`);
+      const liveNow = duties.filter((d) => live.has(d.target)).map((d) => `${d.target} ${live.get(d.target)}`);
       const after = (d: Duty) => (clock.since[d.target] !== undefined && now - clock.since[d.target] > d.deadlineMs ? `after ${minutes(d.deadlineMs)}` : `after ${minutes(DEPLOY_WAIT_CAP_MS)}, the longest a run waits`);
       const stuck = `Deploy stuck: ${missed.map((d) => `${d.target} is not live with ${short} ${after(d)} (last: ${words(d.target)})`).join("; ")}.${liveNow.length ? ` Live: ${liveNow.join(", ")}.` : ""}`;
       clock.stuck = true;
@@ -373,7 +383,7 @@ export async function awaitDeploy(input: { sha: string; base: string; plan: Depl
     // it will get once it can go.
     const clockOf = (d: Duty) => (clock.since[d.target] !== undefined ? `${minutes(now - clock.since[d.target])} of ${minutes(d.deadlineMs)}` : `held ${minutes(now - clock.start)}, then ${minutes(d.deadlineMs)}`);
     const next = rows
-      ? plan.duties.map((d) => `${d.target}: ${live.has(d.target) ? `live in ${live.get(d.target)}` : words(d.target, clockOf(d))}`).join("; ")
+      ? duties.map((d) => `${d.target}: ${live.has(d.target) ? `live in ${live.get(d.target)}` : words(d.target, clockOf(d))}`).join("; ")
       : `Cannot read the deploy targets (cast line deploy targets --json, from the server) for ${waiting.map((d) => d.target).join(", ")}; trying again (${minutes(now - clock.start)} in).`;
     if (next !== line) io.progress((line = next));
     if (input.once) return { code: 3, line };
@@ -406,12 +416,8 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
   if ("error" in merged) { console.log(merged.error); return merged.unread ? 1 : 4; }
   await recordMergedSha(opts, merged.sha, env.post, (l) => console.error(l));
 
-  const { checkoutTargets } = await import("../lineDeploy.js");
-  const { loadLineProfile } = await import("../lineProfile.js");
-  const line = (() => { try { return loadLineProfile(cwd).profile.deploy; } catch { return null; } })();
-  let declared: DeployTarget[];
-  try { declared = await checkoutTargets(cwd); } catch (err) { console.log(`Cannot read this checkout's deploy targets: ${err instanceof Error ? err.message : String(err)}`); return 1; }
-  const plan = deployDuties(declared, merged.files, { except: (opts.except ?? "").split(/[\s,]+/).filter(Boolean), held: lineHeld(line), send: opts.send === "release" });
+  let plan: DeployDuties;
+  try { plan = await landedDuties(cwd, merged, opts); } catch (err) { console.log(`Cannot read the deploy targets ${merged.sha.slice(0, 10)} declares: ${err instanceof Error ? err.message : String(err)}`); return 1; }
   // A finished verdict on a commit never changes, so looking back for where main went red asks GitHub once per commit.
   const verdicts = new Map<string, MainCi>();
   const ciOf = async (at: string, gate: CiGate) => {
@@ -471,6 +477,17 @@ export async function runAwaitDeploy(opts: AwaitDeployOptions, env: AwaitDeployE
   const result = await awaitDeploy({ sha: merged.sha, base: opts.base, plan, intervalMs: Math.max(5, Number(opts.interval) || 60) * 1000, once: opts.once }, io);
   console.log(result.line);
   return result.code;
+}
+
+/**
+ * The run's duties for a merged commit, from the targets that commit declares: never the checkout's working tree or
+ * the server's published list, either of which can still name a target the commit removed (aivery-operator, waited on
+ * for 23h from Nov 20 after union-mobile dropped it).
+ */
+export async function landedDuties(cwd: string, merged: { sha: string; files: ReadonlyArray<string> }, opts: Pick<AwaitDeployOptions, "except" | "send">): Promise<DeployDuties> {
+  const { commitTargets } = await import("../lineDeploy.js");
+  const declared = await commitTargets(cwd, merged.sha);
+  return deployDuties(declared.targets, merged.files, { except: (opts.except ?? "").split(/[\s,]+/).filter(Boolean), held: lineHeld(declared.line), send: opts.send === "release" });
 }
 
 /**
