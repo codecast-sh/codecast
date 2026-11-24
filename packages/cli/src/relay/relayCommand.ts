@@ -78,11 +78,15 @@ export function realRuntimeDeps(config: RelayRuntimeDeps["config"], deviceId: st
 export async function runRelayCommand(opts: { background?: boolean }, deps: RelayRuntimeDeps): Promise<number> {
   if (!deps.config?.auth_token || !deps.config.convex_url) {
     deps.log("not logged in; run: cast auth");
-    return 1;
+    return opts.background ? 0 : 1;
   }
   if (opts.background) {
-    if (deps.isRunning()) deps.log("cast relay is already running");
-    else deps.spawnBackground();
+    try {
+      if (deps.isRunning()) deps.log("cast relay is already running");
+      else deps.spawnBackground();
+    } catch (err) {
+      deps.log(`could not start the relay: ${err instanceof Error ? err.message.split("\n")[0] : String(err)}`);
+    }
     return 0;
   }
   if (!deps.acquire()) {

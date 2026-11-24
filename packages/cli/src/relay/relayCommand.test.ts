@@ -2,6 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { pollUntil } from "../test-helpers/pollUntil.js";
 import { isProcessRunning, readPidFile, releasePidFileIfOwned, tryAcquirePidFileLock } from "../pidFileLock.js";
 import { relayChildEnv, relayPaths, runRelayCommand, type RelayConvexClient, type RelayRuntimeDeps } from "./relayCommand.js";
 
@@ -43,13 +44,12 @@ function harness(over: Partial<RelayRuntimeDeps> = {}, clientOver: Partial<Relay
   return { deps, pidFile, logs, mutations, subs, state, client };
 }
 
-const settle = () => new Promise((r) => setTimeout(r, 20));
 
 describe("relay lock", () => {
   test("a second relay exits 0 saying it is already running, and leaves the first's lock", async () => {
     const a = harness();
     const first = runRelayCommand({}, a.deps);
-    await settle();
+    await pollUntil(() => fs.existsSync(a.pidFile), "first relay lock");
     expect(fs.existsSync(a.pidFile)).toBe(true);
 
     const b = harness({ pidFile: a.pidFile, acquire: () => tryAcquirePidFileLock(a.pidFile, process.pid + 1, { isProcessRunning: () => true }) });
@@ -86,6 +86,15 @@ describe("--background", () => {
     expect(h.subs).toEqual([]);
   });
 
+  test("never fails a hook: not logged in or a failed spawn still exits 0 with one log line", async () => {
+    const out = harness({ config: null });
+    expect(await runRelayCommand({ background: true }, out.deps)).toBe(0);
+    expect(out.logs).toHaveLength(1);
+    const boom = harness({ spawnBackground: () => { throw new Error("spawn ENOENT\nstack"); } });
+    expect(await runRelayCommand({ background: true }, boom.deps)).toBe(0);
+    expect(boom.logs).toEqual(["could not start the relay: spawn ENOENT"]);
+  });
+
   test("does not spawn when one already runs", async () => {
     const h = harness({ isRunning: () => true });
     expect(await runRelayCommand({ background: true }, h.deps)).toBe(0);
@@ -106,7 +115,7 @@ describe("running relay", () => {
   test("subscribes to pendingForDevice, heartbeats at start, and stops cleanly on a signal", async () => {
     const h = harness();
     const done = runRelayCommand({}, h.deps);
-    await settle();
+    await pollUntil(() => h.subs.length > 0 && h.mutations.length > 0, "subscription and heartbeat");
     expect(h.subs[0].name).toBe("pendingMessages:pendingForDevice");
     expect(h.subs[0].args).toEqual({ api_token: "tok", device_id: "dev" });
     expect(h.mutations.map((m) => m.name)).toContain("registeredSessions:relayHeartbeat");
@@ -121,9 +130,9 @@ describe("running relay", () => {
   test("rows pushed by the subscription are delivered and acked", async () => {
     const h = harness();
     const done = runRelayCommand({}, h.deps);
-    await settle();
+    await pollUntil(() => h.subs.length > 0, "subscription");
     h.subs[0].onResult([{ _id: "m1", content: "hello", session_id: "s", delivery_target: { kind: "paseo", agent_id: "a" } }]);
-    await settle();
+    await pollUntil(() => h.mutations.some((m) => m.name === "pendingMessages:updateMessageStatus"), "the ack");
     expect(h.mutations.find((m) => m.name === "pendingMessages:updateMessageStatus")!.args).toMatchObject({ message_id: "m1", status: "delivered" });
     h.state.signal();
     await done;
@@ -132,7 +141,7 @@ describe("running relay", () => {
   test("an authentication or query error from the subscription exits non-zero, logs it and releases the lock", async () => {
     const h = harness();
     const done = runRelayCommand({}, h.deps);
-    await settle();
+    await pollUntil(() => h.subs.length > 0, "subscription");
     h.subs[0].onError(new Error("Authentication failed: invalid token or session"));
     expect(await done).toBe(1);
     expect(h.logs.join("\n")).toContain("Authentication failed");
