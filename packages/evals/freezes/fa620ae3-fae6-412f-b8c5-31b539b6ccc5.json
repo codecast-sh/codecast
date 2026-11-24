@@ -1,0 +1,26 @@
+{
+  "name": "close-advice armed-trigger-decides",
+  "anchor": {
+    "kind": "message",
+    "id": "fixture:armed-trigger-decides"
+  },
+  "subject": {
+    "kind": "synthetic",
+    "id": "close-advice:armed-trigger-decides",
+    "title": "close-advice armed-trigger-decides"
+  },
+  "asOf": "2026-09-01T12:00:00.000Z",
+  "trigger": {
+    "type": "close-advice"
+  },
+  "meta": {
+    "surface": "close-advice",
+    "visibility": "public",
+    "snapshot": "fixtures/close-advice/armed-trigger-decides.json"
+  },
+  "judge": null,
+  "notes": null,
+  "tags": [],
+  "id": "fa620ae3-fae6-412f-b8c5-31b539b6ccc5",
+  "createdAt": "2026-11-24T02:34:14.430Z"
+}

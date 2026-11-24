@@ -7,8 +7,8 @@ export type StatusPillSpec = { tone: string; dot: string; label: string; short: 
 const LIVE_TONES = {
   thinking: { tone: "text-sol-violet", dot: "animate-pulse bg-sol-violet", label: "Thinking", short: "Think" },
   compacting: { tone: "text-amber-400", dot: "animate-pulse bg-amber-400", label: "Compacting", short: "Compact" },
-  waiting: { tone: "text-sol-blue", dot: "animate-pulse bg-sol-blue", label: "Dormant", short: "Dormant" },
-  dormant: { tone: "text-sol-blue", dot: "animate-pulse bg-sol-blue", label: "Dormant", short: "Dormant" },
+  waiting: { tone: "text-sol-blue", dot: "animate-pulse bg-sol-blue", label: "Sleeping", short: "Sleeping" },
+  dormant: { tone: "text-sol-blue", dot: "animate-pulse bg-sol-blue", label: "Sleeping", short: "Sleeping" },
   permission_blocked: { tone: "text-sol-orange", dot: "animate-pulse bg-sol-orange", label: "Needs You", short: "Input" },
   starting: { tone: "text-sol-cyan", dot: "animate-pulse bg-sol-cyan", label: "Starting", short: "Start" },
   resuming: { tone: "text-sol-cyan", dot: "animate-pulse bg-sol-cyan", label: "Resuming", short: "Rsum" },

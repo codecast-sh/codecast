@@ -40,7 +40,7 @@ export type SessionState = "working" | "needs" | "dormant" | "done";
 export const STATE: Record<SessionState, { word: string; color: string }> = {
   working: { word: "working", color: SOL.green },
   needs: { word: "needs you", color: SOL.yellow },
-  dormant: { word: "dormant", color: SOL.blue },
+  dormant: { word: "sleeping", color: SOL.blue },
   done: { word: "done", color: SOL.cyan },
 };
 

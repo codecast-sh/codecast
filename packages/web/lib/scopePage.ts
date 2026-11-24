@@ -146,7 +146,7 @@ export const HAND_GROUPS: { state: WorkState; label: string }[] = [
   { state: "needs_input", label: "Needs you" },
   { state: "done", label: "Done" },
   { state: "working", label: "Working" },
-  { state: "dormant", label: "Dormant" },
+  { state: "dormant", label: "Sleeping" },
   { state: "idle", label: "Idle" },
 ];
 

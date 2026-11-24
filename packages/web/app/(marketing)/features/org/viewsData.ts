@@ -17,7 +17,7 @@ export const COUNT_ORDER: CountKey[] = ["needs", "working", "dormant", "done", "
 export const COUNT_META: Record<CountKey, { label: string; color: string }> = {
   needs: { label: "needs you", color: SOL.yellow },
   working: { label: "working", color: SOL.green },
-  dormant: { label: "dormant", color: SOL.blue },
+  dormant: { label: "sleeping", color: SOL.blue },
   done: { label: "done", color: SOL.cyan },
   idle: { label: "idle", color: SOL.base1 },
 };
@@ -39,7 +39,7 @@ export const STANDING: Record<Standing, { label: string; color: string }> = {
   working: { label: "working", color: SOL.green },
   blocked: { label: "waiting on you", color: SOL.yellow },
   done: { label: "done", color: SOL.cyan },
-  dormant: { label: "dormant", color: SOL.blue },
+  dormant: { label: "sleeping", color: SOL.blue },
 };
 
 export type Area = "waiting" | "stuck" | "overloaded" | "quiet" | "ok";

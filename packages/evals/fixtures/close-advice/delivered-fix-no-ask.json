@@ -1,0 +1,61 @@
+{
+ "asOf": "2026-09-01T12:00:00.000Z",
+ "snapshot": {
+  "now": 1788264000000,
+  "conv_id": "conv-delivered-fix-no-ask",
+  "docs": {
+   "conversations": [
+    {
+     "_id": "conv-delivered-fix-no-ask",
+     "_creationTime": 1788260400000,
+     "short_id": "deliver",
+     "title": "Fix the export button",
+     "status": "completed",
+     "updated_at": 1788262800000,
+     "message_count": 4,
+     "user_id": "user-1"
+    }
+   ],
+   "messages": [
+    {
+     "_id": "conv-delivered-fix-no-ask-m1",
+     "_creationTime": 1788262200000,
+     "conversation_id": "conv-delivered-fix-no-ask",
+     "timestamp": 1788262200000,
+     "role": "user",
+     "content": "The CSV export button on the reports page does nothing. Can you fix it?"
+    },
+    {
+     "_id": "conv-delivered-fix-no-ask-m2",
+     "_creationTime": 1788262500000,
+     "conversation_id": "conv-delivered-fix-no-ask",
+     "timestamp": 1788262500000,
+     "role": "assistant",
+     "content": "Found it: the click handler was bound to a stale ref after the table rewrite. Fixing now."
+    },
+    {
+     "_id": "conv-delivered-fix-no-ask-m3",
+     "_creationTime": 1788262800000,
+     "conversation_id": "conv-delivered-fix-no-ask",
+     "timestamp": 1788262800000,
+     "role": "assistant",
+     "content": "Fixed and shipped. The export button now downloads the CSV again; I added a test that clicks it and checks the file. Deployed to production and confirmed the download works on the live reports page."
+    }
+   ],
+   "managed_sessions": [],
+   "agent_tasks": [],
+   "pending_messages": [],
+   "users": [
+    {
+     "_id": "user-1",
+     "_creationTime": 1788177600000,
+     "name": "A person"
+    }
+   ]
+  }
+ },
+ "label": {
+  "verdict": "close",
+  "why": "the fix is shipped and verified; nothing is asked"
+ }
+}

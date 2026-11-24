@@ -6,6 +6,7 @@
 import { closeInFlightReason, deriveLiveAt, HEARTBEAT_ALIVE_MS, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts } from "@codecast/shared/contracts";
 import { cascadeTakesDownRow, NESTED_GROUP_SCAN, type HoldFacts } from "@codecast/shared/contracts/closeCascade";
 import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "../ccAccountsShared";
+import { closeInFlightOf, nestedInFlightFrom, type CloseFacts, type NestedInFlight } from "@codecast/shared/contracts/closeKind";
 
 // The nested group a hide of `lead` takes down with it (cleanup.ts
 // cascadeHideToNestedChildren reads exactly this): Task subagents and
@@ -29,9 +30,11 @@ export async function nestedGroupOf(ctx: { db: any }, lead: any): Promise<any[]>
 }
 
 /** Whether a hide of a lead takes this member of its nested group down (the
- *  cascade's own per-child rule, cleanup.ts cascadeHideToNestedChildren). The
- *  aside check scans exactly the members this admits, so a close is set aside
- *  for precisely the children it would otherwise stop. */
+ *  cascade's own per-child rule, cleanup.ts cascadeHideToNestedChildren). A
+ *  close runs both with forceKill (dispatch: every close, whichever rail it
+ *  arrives on, is a forced close), so the aside check scans exactly the
+ *  members the close's cascade stops: a close is set aside for precisely the
+ *  children it would otherwise stop. */
 export function cascadeTakesDown(
   child: any,
   field: "inbox_dismissed_at" | "inbox_stashed_at",
@@ -40,24 +43,51 @@ export function cascadeTakesDown(
   return cascadeTakesDownRow(child, field, { ...opts, queued: !!child.has_pending_messages });
 }
 
-/** Why a close must set this conversation aside (stash) instead of stopping
- *  it: itself in flight, or "nested" when a member of its nested group the
- *  close would take down is. Null when stopping it and its group loses nothing.
- *  It runs inside the gesture's mutation, so a member is judged by what its
- *  row says before anything is read for it, and one that has finished costs no
- *  reads (a lead with hundreds of finished subagents once timed this out). */
-export async function closeSetsAsideOnServer(ctx: { db: any }, conv: any, now: number, opts?: { forceKill?: boolean }): Promise<string | null> {
-  const own = closeInFlightReason(await inFlightFactsOnServer(ctx, conv, now));
-  if (own) return own;
-  for (const child of await nestedGroupOf(ctx, conv)) {
-    if (!cascadeTakesDown(child, "inbox_dismissed_at", { forceKill: opts?.forceKill, close: true })) continue;
+/** Whether a close must set this conversation aside (stash) instead of
+ *  stopping it: itself in flight, or a member of its nested group the close
+ *  would take down. The gesture's own question, asked inside its mutation, so
+ *  it stops at the first answer: a lead in flight reads none of its group, a
+ *  member is judged by what its row says before anything is read for it, and
+ *  one that has finished costs no reads (a lead with hundreds of finished
+ *  subagents once timed this out). */
+export async function closeSetsAsideOnServer(ctx: { db: any }, conv: any, now: number): Promise<boolean> {
+  if (closeInFlightReason(await inFlightFactsOnServer(ctx, conv, now))) return true;
+  return (await scanGroup(ctx, await nestedGroupOf(ctx, conv), now, true)) !== null;
+}
+
+/** Why a close would set this conversation aside: itself in flight, or
+ *  through a member of its nested group ("nested_awaiting" when that member
+ *  waits on the person, which outranks every reason but its own question;
+ *  "nested" otherwise). Null when stopping it and its group loses nothing.
+ *  Close advice's question, not the gesture's: it reads past a busy member to
+ *  find a waiting one, so it costs what a group with none in flight costs.
+ *  `group`: the nested group it read, for a caller that shows it. */
+export async function closeInFlightOnServer(ctx: { db: any }, conv: any, now: number): Promise<{ inFlight: CloseFacts["inFlight"]; group: any[] }> {
+  const [facts, group] = await Promise.all([inFlightFactsOnServer(ctx, conv, now), nestedGroupOf(ctx, conv)]);
+  const own = closeInFlightReason(facts);
+  const nested = own === "awaiting" ? null : await scanGroup(ctx, group, now, false);
+  return { inFlight: closeInFlightOf(own, nested), group };
+}
+
+// The members a close takes down (cascadeTakesDown, as a forced close), in
+// flight. `firstOnly`: the first answer will do (the gesture); otherwise a
+// member waiting on the person is looked for past a busy one.
+async function scanGroup(ctx: { db: any }, group: any[], now: number, firstOnly: boolean): Promise<NestedInFlight> {
+  let nested: NestedInFlight = null;
+  for (const child of group) {
+    if (!cascadeTakesDown(child, "inbox_dismissed_at", { forceKill: true, close: true })) continue;
     const row = rowInFlightFacts(child, now);
-    if (row.queued || row.loopFresh || row.limitParked || row.fleetQueued) return "nested";
-    // Finished, nothing queued, no loop: no process, no wake, nothing to read.
-    if (child.status === "completed") continue;
-    if (closeInFlightReason(await inFlightFactsOnServer(ctx, child, now))) return "nested";
+    const flagged = row.queued || row.loopFresh || row.limitParked || row.fleetQueued;
+    if (flagged && firstOnly) return "nested";
+    // Finished: no process to ask anything, so its row's flags are the whole answer.
+    if (child.status === "completed") {
+      if (flagged) nested = "nested";
+      continue;
+    }
+    nested = nestedInFlightFrom(closeInFlightReason(await inFlightFactsOnServer(ctx, child, now))) ?? nested;
+    if (nested === "nested_awaiting" || (nested && firstOnly)) break;
   }
-  return null;
+  return nested;
 }
 
 // The facts a row carries itself: no reads.

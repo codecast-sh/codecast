@@ -237,7 +237,7 @@ export const SHORTCUTS: ShortcutDef[] = [
   // Shift+Backspace itself. Non-destructive: the row moves to the Dormant
   // section and comes back on its own at the next wake.
   { key: 'alt+z', action: 'session.snooze', skipInputCheck: true, description: 'Snooze session…' },
-  { key: 'alt+shift+backspace', action: 'session.dormantAdvance', skipInputCheck: 'whenEmpty', description: 'Dormant and advance (a machine wakes it)' },
+  { key: 'alt+shift+backspace', action: 'session.dormantAdvance', skipInputCheck: 'whenEmpty', description: 'Sleep and advance (a machine wakes it)' },
   // Ctrl+N opens the new-session popup over the current view; Ctrl+Alt+N the
   // same surface as a page in the main window. Ctrl+Shift+N is the desktop's
   // system-wide chord for the popup, so in the app it opens the popup too.

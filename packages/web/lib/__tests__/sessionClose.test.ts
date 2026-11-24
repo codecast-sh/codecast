@@ -1,10 +1,12 @@
 import { describe, expect, test } from "bun:test";
 import { IN_FLIGHT_FACT_KEYS } from "@codecast/shared/contracts";
-import { closeFactsOf, closeKindOf, closeSetsAside, closeTakesDownOf, closeTooltip, inFlightFactsOfRow, nestedInFlightOf, type CloseFacts } from "../sessionClose";
+import { closeKindOf, closeSetsAside, closeTooltip, type CloseFacts } from "@codecast/shared/contracts/closeKind";
+import { closeFactsOf, closeTakesDownOf, inFlightFactsOfRow, nestedInFlightOf } from "../sessionClose";
+import { closeFactsInStore } from "../closeFactsInStore";
 
 const NOW = 1_800_000_000_000;
 // A role never comes back on done (closeReturnsOnDone), so the facts follow unless a test says otherwise.
-const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ inFlight: null, role: false, returnsOnDone: !f.role, triggers: 0, waitingOnRun: false, takesDown: 0, ...f });
+const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ inFlight: null, role: false, returnsOnDone: !f.role, triggers: 0, parkedWake: null, waitingOnRun: false, takesDown: 0, ...f });
 
 // One row per line of the brief's table: what Close does, and the words its tooltip says.
 describe("what Close does to a session", () => {
@@ -57,6 +59,12 @@ describe("what Close does to a session", () => {
 
   test("a session waiting on a codecast flow run stops and comes back when the run finishes", () => {
     expect(closeTooltip(facts({ waitingOnRun: true }))).toBe("Close: stops it, its run goes on, back when it's done or needs you");
+  });
+
+  test("a parked session stops; its park wakes it out of sight", () => {
+    expect(closeTooltip(facts({ parkedWake: "blocker" }))).toBe("Close: stops it, wakes when its blocker clears, back when it's done or needs you");
+    expect(closeTooltip(facts({ parkedWake: "wait", role: true }))).toBe("Close: stops it, wakes when its wait ends, back when it needs you");
+    expect(closeTooltip(facts({ parkedWake: "run", triggers: 1 }))).toBe("Close: stops it, runs its trigger out of sight, back when it's done or needs you");
   });
 
   test("an ordinary finished session stops and leaves the list", () => {
@@ -120,11 +128,44 @@ describe("the facts of a row", () => {
       { ...settled, session_id: "ca19ce3d-worker", agent_status: "working", updated_at: NOW - 1000, is_subagent: true, parent_conversation_id: "worker" },
       { ...settled, session_id: "uuid-spawner", agent_status: "working", updated_at: NOW - 1000, spawned_by_conversation_id: "spawner" },
     ];
-    for (const lead of ["busy", "loop", "limit", "flow", "queued", "asking", "team"]) expect([lead, nestedInFlightOf(rows as any, lead, NOW)]).toEqual([lead, true]);
-    for (const lead of ["idle", "spawner", "worker"]) expect([lead, nestedInFlightOf(rows as any, lead, NOW)]).toEqual([lead, false]);
-    const f = closeFactsOf(settled, 0, NOW, false, true);
+    for (const lead of ["busy", "loop", "limit", "flow", "queued", "team"]) expect([lead, nestedInFlightOf(rows as any, lead, NOW)]).toEqual([lead, "nested"]);
+    expect(nestedInFlightOf(rows as any, "asking", NOW)).toBe("nested_awaiting");
+    for (const lead of ["idle", "spawner", "worker"]) expect([lead, nestedInFlightOf(rows as any, lead, NOW)]).toEqual([lead, null]);
+    const f = closeFactsOf(settled, 0, NOW, false, "nested");
     expect(f.inFlight).toBe("nested");
     expect(closeTooltip(f)).toBe("Close: hides it, back when it's done or needs you");
+  });
+
+  test("a member waiting on the person, anywhere in the group, is the person's: the tooltip says so, the Close still sets it aside", () => {
+    const teammate = { ...settled, awaiting_input: true, spawned_by_conversation_id: "lead", agent_team_name: "crew", agent_name: "worker" };
+    const busy = { ...settled, session_id: "agent-a0a0a062757379", agent_status: "working", updated_at: NOW - 1000, is_subagent: true, parent_conversation_id: "lead" };
+    // A busy member first does not hide the waiting one behind it.
+    expect(nestedInFlightOf([busy, teammate] as any, "lead", NOW)).toBe("nested_awaiting");
+    for (const lead of [settled, { ...settled, agent_status: "working", updated_at: NOW - 1000 }]) {
+      const f = closeFactsOf(lead, 0, NOW, false, nestedInFlightOf([busy, teammate] as any, "lead", NOW));
+      expect(f.inFlight).toBe("nested_awaiting");
+      expect(closeKindOf(f)).toBe("awaiting");
+      expect(closeTooltip(f)).toBe("Close: hides it; one of its agents still waits on you");
+      expect(closeSetsAside(f)).toBe(true);
+    }
+    // Its own question still reads as its own.
+    expect(closeTooltip(closeFactsOf({ ...settled, awaiting_input: true }, 0, NOW, false, "nested_awaiting"))).toBe("Close: hides it; it still waits on you");
+  });
+
+  test("a trigger counts only when it will fire, by the server's own predicate", () => {
+    const task = (status: string, extra: Record<string, unknown> = {}) => ({ _id: `t-${status}-${Object.keys(extra).join()}`, status, originating_conversation_id: "c1", ...extra });
+    const triggers = (...tasks: Array<Record<string, unknown>>) =>
+      closeFactsInStore({ agentTasks: Object.fromEntries(tasks.map((t) => [t._id, t])) }, { ...settled, _id: "c1" } as any, NOW).triggers;
+    expect(triggers(task("scheduled"), task("running"))).toBe(2);
+    // Paused fires only once a person resumes it; a failed or flagged last run asks for a look.
+    expect(triggers(task("paused"), task("scheduled", { last_run_failed: true }), task("scheduled", { last_run_needs_attention: true }))).toBe(0);
+    expect(triggers({ ...task("scheduled"), originating_conversation_id: "other" })).toBe(0);
+  });
+
+  test("a park counts only while the server still stands behind it", () => {
+    expect(closeFactsOf({ ...settled, parked_wake_kind: "blocker" }, 0, NOW).parkedWake).toBe("blocker");
+    expect(closeFactsOf({ ...settled, parked_wake_kind: "wait", updated_at: NOW - 30 * 24 * 3_600_000 }, 0, NOW).parkedWake).toBe(null);
+    expect(closeFactsOf({ ...settled, parked_wake_kind: "none" }, 0, NOW).parkedWake).toBe(null);
   });
 
   test("triggers count the roster and the row's own armed flag, never a /loop", () => {
@@ -148,7 +189,7 @@ describe("the facts of a row", () => {
     const q = { ...settled, session_id: "ca19ce3d-q", message_count: 0, subagent_slot: "queued" };
     expect(closeFactsOf(q, 0, NOW).inFlight).toBe("fleet");
     expect(closeSetsAside(closeFactsOf(q, 0, NOW))).toBe(true);
-    expect(nestedInFlightOf([{ ...q, is_subagent: true, parent_conversation_id: "lead" }] as any, "lead", NOW)).toBe(false);
+    expect(nestedInFlightOf([{ ...q, is_subagent: true, parent_conversation_id: "lead" }] as any, "lead", NOW)).toBeNull();
     expect(closeFactsOf({ ...settled, subagent_slot: "running" }, 0, NOW).inFlight).toBeNull();
   });
 
@@ -159,7 +200,7 @@ describe("the facts of a row", () => {
     expect(closeTooltip(f)).toBe("Close: hides it, keeps its background work, back when it's done or needs you");
     // A report its daemon no longer heartbeats for vouches for nothing.
     expect(closeFactsOf({ ...bg, last_heartbeat: NOW - 3_600_000 }, 0, NOW).inFlight).toBeNull();
-    expect(nestedInFlightOf([{ ...bg, session_id: "agent-a0a0a06267", parent_conversation_id: "lead" }] as any, "lead", NOW)).toBe(true);
+    expect(nestedInFlightOf([{ ...bg, session_id: "agent-a0a0a06267", parent_conversation_id: "lead" }] as any, "lead", NOW)).toBe("nested");
   });
 
   test("a close takes down the lead's Task subagents and teammates not already closed or killed, and the tooltip counts them", () => {

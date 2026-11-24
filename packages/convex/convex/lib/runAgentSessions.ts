@@ -9,6 +9,9 @@ import { findConversationByAnyRef } from "../conversationSessionLookup";
 // enriched most-recent-first and older ones degrade to plain (non-clickable) rows.
 /** `cast task handoff`'s comment (taskClaim.handoffCommentText): "Handoff: <status>", a blank line, the evidence. */
 export const HANDOFF_COMMENT = /^Handoff: (\w+)\s*\n?([\s\S]*)$/;
+/** A handoff is that comment as a review a session wrote; a note quoting one, or one with no session, is not. */
+export const isHandoffComment = (c: { text?: string | null; comment_type?: string; conversation_id?: unknown }): boolean =>
+  !!c.conversation_id && c.comment_type === "review" && HANDOFF_COMMENT.test(String(c.text ?? ""));
 
 /** Each station session's last handoff on the run's task, by conversation id:
  *  how a builder ended (done, blocked, needs_context) is its handoff, which
@@ -22,7 +25,7 @@ async function handoffsByConversation(ctx: any, run: any, budget: { reads: numbe
     .order("desc")
     .take(200);
   for (const c of comments) {
-    const m = c.conversation_id && c.comment_type === "review" ? String(c.text ?? "").match(HANDOFF_COMMENT) : null;
+    const m = isHandoffComment(c) ? String(c.text).match(HANDOFF_COMMENT) : null;
     // The note is what a person reads in place of the station's last line (the evidence, what it tried, what it needs):
     // kept whole up to a page, never cut mid-thought at a preview's length.
     if (m && !out.has(String(c.conversation_id))) out.set(String(c.conversation_id), { status: m[1], note: m[2].trim().slice(0, 4000), at: c.created_at });

@@ -15,7 +15,7 @@ import { internalAction, internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import type { Doc, Id } from "./_generated/dataModel";
 import { nextShortId } from "./counters";
-import { runModelCallOrOwn, type CallScope } from "./modelCalls";
+import { runModelCall, type CallScope } from "./modelCalls";
 import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { sessionVisibility, type SessionVisibility } from "./lib/prioritySessionVisibility";
@@ -477,15 +477,14 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const { input, readTo, left } = runShare(read, read.input, fittingPrefix(read.input));
   const { req } = priorityPassRequest(input);
   const spec = { model: req.model, max_tokens: req.max_tokens, system: req.system, prompt: req.prompt, output: "json" as const, output_schema: req.output_schema };
-  const reply = await runModelCallOrOwn(
+  const reply = await runModelCall(
     ctx,
     callScope(args.workspace),
-    gate.budgeted,
     "grouping",
     spec,
     "Priority pass",
-    { ctx, scope: { workspace: args.workspace } },
     PASS_TIMEOUT_MS,
+    { budgeted: gate.budgeted },
   );
   const fail = async (error: string, repeats: boolean): Promise<PassResult> => {
     await ctx.runMutation(self.recordRun, { ...base, run_id, cursor_at, cost_usd: reply.cost_usd, status: "error", error, repeats, step_to: readTo });

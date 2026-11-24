@@ -257,7 +257,7 @@ export interface WorkStateInput {
 // needs_input. A declared BLOCK (the pin's `--status blocked`) sits with the
 // hard blocks, above every structural park: a standing trigger or loop into
 // the session keeps firing, but the agent said a human must act, and the card
-// must say so where the human looks (isDeclaredBlocked).
+// must say so where the human looks (declaredBlockHolds).
 export function classifyWorkState(input: WorkStateInput): WorkState {
   const { agentStatus, isIdle, awaitingInput, hasPending, isUnresponsive, messageCount, killed } = input;
   const dead = !!agentStatus && DEAD_AGENT_STATUSES.has(agentStatus);
@@ -330,7 +330,7 @@ export function classifyWorkState(input: WorkStateInput): WorkState {
     // soft verdict nor a structural park (a standing trigger or loop that
     // keeps injecting into the session) overrides it. Cleared by the agent's
     // own next declaration, never by a model.
-    if (isDeclaredBlocked(input)) return "needs_input";
+    if (declaredBlockHolds(input)) return "needs_input";
     if (declaredDormant || input.armedTriggerHome || input.armedLoopHome || input.childProducing) return "dormant";
     if (declaredDone) return doneRest();
     // The classifier only ever files DONE: dormancy needs a wake the system
@@ -419,13 +419,12 @@ export interface InboxPlacementInput extends WorkStateInput {
 
 export type InboxPlacement = { bucket: InboxBucket; work_state: WorkState };
 
-// The agent's own `cast state --status blocked`, read off the row, while the
-// daemon reports the turn settled (idle) or reports nothing at all (the managed
-// row aged out, the machine is gone). A live status that is NOT idle is a
-// fresher signal than the pin: working means the agent moved on, and
-// dormant / done / waiting are the daemon carrying a newer declaration.
-export function isDeclaredBlocked(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus">): boolean {
-  return input.declaredStatus === "blocked" && (input.agentStatus === "idle" || !input.agentStatus);
+// A pinned `blocked` holds the row in needs_input over every wake while the
+// trusted status is idle, absent or dead; any other live status is a newer
+// word. Read raw (it stands until the next declaration). Close advice calls it.
+export function declaredBlockHolds(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus">): boolean {
+  if (input.declaredStatus !== "blocked") return false;
+  return !input.agentStatus || input.agentStatus === "idle" || DEAD_AGENT_STATUSES.has(input.agentStatus);
 }
 
 // The process exited AFTER the agent declared the work delivered, with nothing
@@ -461,7 +460,7 @@ export function isExitBeforeArmedWake(input: Pick<WorkStateInput, "agentStatus" 
     !!input.agentStatus &&
     DEAD_AGENT_STATUSES.has(input.agentStatus) &&
     !!(input.armedTriggerHome || input.armedLoopHome || pinnedPark) &&
-    input.declaredStatus !== "blocked" &&
+    !declaredBlockHolds(input) &&
     !input.hasPending &&
     !input.isUnresponsive
   );
@@ -478,7 +477,7 @@ export function isHardBlocked(input: Pick<WorkStateInput, "awaitingInput" | "pen
   if (input.pendingApiError && hasMsgs) return true;
   if (input.agentStatus === "permission_blocked") return true;
   if (!!input.agentStatus && DEAD_AGENT_STATUSES.has(input.agentStatus) && hasMsgs && !isExitAfterDone(input) && !isExitBeforeArmedWake(input)) return true;
-  if (isDeclaredBlocked(input) && hasMsgs) return true;
+  if (declaredBlockHolds(input) && hasMsgs) return true;
   return input.isUnresponsive;
 }
 

@@ -96,6 +96,7 @@ describe("getConversationLifecycle", () => {
       agent_type: null,
       closed: false,
       inbox_closed_at: null,
+      loop_state: null,
     });
   });
 
@@ -111,6 +112,7 @@ describe("getConversationLifecycle", () => {
       agent_type: null,
       closed: false,
       inbox_closed_at: null,
+      loop_state: null,
     });
   });
 
@@ -133,6 +135,12 @@ describe("getConversationLifecycle", () => {
     const tables = { conversations: [killedRow] };
     expect(await call(tables, RUNNER, {})).toBeNull();
     expect(await call(tables, RUNNER, { conversation_id: CONV, session_id: "s1" })).toBeNull();
+  });
+
+  test("reports an armed /loop so the hibernation pass does not park the timer away", async () => {
+    const loop = { status: "armed", wakeup_at: 5_000, armed_at: 1_000, event_at: 1_000 };
+    const tables = { conversations: [{ _id: CONV, user_id: RUNNER, status: "active", loop_state: loop }] };
+    expect((await call(tables, RUNNER, { conversation_id: CONV }))!.loop_state).toEqual(loop);
   });
 
   test("reports the conversation's declared agent so a Codex recovery can refuse a switched session", async () => {
@@ -160,6 +168,7 @@ describe("getConversationLifecycle", () => {
         agent_type: null,
         closed: false,
         inbox_closed_at: null,
+        loop_state: null,
       });
     });
 

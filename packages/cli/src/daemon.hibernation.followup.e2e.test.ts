@@ -24,7 +24,7 @@ import type { AgentStatus } from "@codecast/shared/contracts";
 const harnesses: Harness[] = [];
 const roots: string[] = [];
 const children: ChildProcess[] = [];
-const life = { status: "active", source: "lifecycle" as const, hideStateKnown: true, inboxPinnedAt: null, hasPendingMessages: false };
+const life = { status: "active", source: "lifecycle" as const, hideStateKnown: true, inboxPinnedAt: null, hasPendingMessages: false, loopState: null };
 const alive = (h: Harness) => tmuxRun(["has-session", "-t", `=${h.tmuxSession}`]).status === 0;
 const defer = () => { let resolve!: () => void; const promise = new Promise<void>(r => { resolve = r; }); return { promise, resolve }; };
 async function terminal(args: string[]) {

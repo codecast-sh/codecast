@@ -3,7 +3,7 @@ import Link from "next/link";
 import { Star, Rocket, Lock, Users } from "lucide-react";
 import { withSafetyBlock, isClosedSession, isStashHidden, isHostedAgentType, isClosedHidden } from "@codecast/shared/contracts";
 import { shipHref } from "../../lib/ship/sessionShip";
-import { closedBackWords } from "../../lib/sessionClose";
+import { closedBackWords } from "@codecast/shared/contracts/closeKind";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { drawsNested, formatRowTime, sessionCardTitle } from "../../lib/sessionCard";
 import { sessionCardSummary } from "../../lib/sessionSummary";

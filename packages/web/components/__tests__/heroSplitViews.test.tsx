@@ -61,7 +61,7 @@ describe("AgentStatusPill", () => {
   test("labels", () => {
     expect(label("working")).toBe("Working");
     expect(label("thinking")).toBe("Thinking");
-    expect(label("waiting")).toBe("Dormant");
+    expect(label("waiting")).toBe("Sleeping");
     expect(label("permission_blocked")).toBe("Needs You");
     expect(label("connected")).toBe("Connected");
     expect(label("connected", true)).toBe("Delivering");

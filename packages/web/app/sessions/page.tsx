@@ -98,7 +98,7 @@ const WORK_STATE_STYLES: Record<WorkState, { label: string; cls: string }> = {
   needs_input: { label: "needs you", cls: "text-sol-yellow bg-sol-yellow/15 border-sol-yellow/30" },
   done:        { label: "done",        cls: "text-sol-cyan bg-sol-cyan/10 border-sol-cyan/30" },
   working:     { label: "working",     cls: "text-sol-green bg-sol-green/10 border-sol-green/30" },
-  dormant:     { label: "dormant",     cls: "text-sol-blue bg-sol-blue/10 border-sol-blue/30" },
+  dormant:     { label: "sleeping",    cls: "text-sol-blue bg-sol-blue/10 border-sol-blue/30" },
   idle:        { label: "idle",        cls: "text-sol-text-muted bg-sol-bg-highlight/50 border-sol-border/40" },
 };
 

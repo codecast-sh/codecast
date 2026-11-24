@@ -121,7 +121,7 @@ export function paletteActions(type: PaletteTargetType | null, targets: any[], u
         row("session_stash", many(`Stash ${noun}`, `Stash # ${nouns}`), Archive, "s", "session.stash"),
         row("session_stash_hide", many(`Stash and hide ${noun}`, `Stash and hide # ${nouns}`), EyeOff, "b", "session.stashHide"),
         row("session_defer", many(`Defer ${noun}`, `Defer # ${nouns}`), Clock, "d", "session.deferAdvance"),
-        row("session_dormant", "Dormant: a machine wakes it", Moon, "z", "session.dormantAdvance"),
+        row("session_dormant", "Sleep: a machine wakes it", Moon, "z", "session.dormantAdvance"),
         row("session_done", "Mark done", CheckCircle2, "e"),
         row("session_needs_input", "Mark needs you", CircleDot, "g"),
       ]),

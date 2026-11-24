@@ -294,6 +294,7 @@ Examples:
     description: "The older name for cast flow's working commands: the same subcommands, the same output",
     load: () => import("./lineCommand.js").then((m) => m.registerLineCommand),
   },
+  { token: "advise-close", hidden: true, args: ["<session>"], hasOptions: true, description: "Whether closing a session from the inbox loses anything (Close advice teams)", load: () => import("./closeAdviceCommand.js").then((m) => m.registerAdviseCloseCommand) },
   {
     token: "mod",
     aliases: ["mods"],
@@ -434,7 +435,7 @@ files in the inbox when your turn ends:
   working   still moving (default)
   blocked   a human must act to unblock you            → Needs You
   done      delivered; nothing stalled, review at leisure → Done
-  dormant   a machine wakes you; name the wake in the text → Dormant
+  dormant   a machine wakes you; name the wake in the text → Sleeping
 done and dormant cover exactly the turn that declares them: after the next
 wake, declare again or the session returns to Needs You.
 

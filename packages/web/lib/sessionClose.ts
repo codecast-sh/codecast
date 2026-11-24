@@ -1,80 +1,19 @@
-// What a card's Close does to one session, and the words its tooltip says.
-// One decision for every Close surface (the card button, session.close, the
-// menu, the phone), so the button never promises what the gesture does not do.
-// Close is dormancy, not retirement: a session in flight (shared
-// closeInFlightReason), or the lead of a nested group any member of which a
-// close would take down is, is set aside instead of stopped. A close takes down
-// only its Task subagents and teammates (shared cascadeTakesDownRow); a
-// spawned child with its own process stays up. This file only gathers the facts from the
-// rows the client holds; the server gathers the same facts from its database
-// (convex lib/closeAside) and asks the same function. Imports by relative path
-// only: the phone bundles this file (Metro maps `@/` to the mobile package).
-import { closeReturnsOnDone, closeInFlightReason, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts, type InFlightReason, type LoopState } from "@codecast/shared/contracts";
+// The facts a card's Close reads for one session, from the rows the client
+// holds. The decision and its words are shared (contracts/closeKind), so every
+// Close surface (the card button, session.close, the menu, the phone) and
+// close advice say what the gesture does. Close is dormancy, not retirement: a
+// session in flight (shared closeInFlightReason), or the lead of a nested group
+// any member of which a close would take down is, is set aside instead of
+// stopped. A close takes down only its Task subagents and teammates (shared
+// cascadeTakesDownRow); a spawned child with its own process stays up. The
+// server gathers the same facts from its database (convex lib/closeAside).
+// Imports by relative path only: the phone bundles this file (Metro maps `@/`
+// to mobile).
+import { closeInFlightReason, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts, type LoopState } from "@codecast/shared/contracts";
 import { cascadeTakesDownRow, type HoldFacts } from "@codecast/shared/contracts/closeCascade";
+import { closeFactsFrom, closeInFlightOf, nestedInFlightFrom, type CloseFacts, type NestedInFlight } from "@codecast/shared/contracts/closeKind";
 import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { sessionLiveAt } from "./liveness";
-
-export type CloseFacts = {
-  /** Why it is in flight, itself ("nested": a member of its nested group), or null. */
-  inFlight: InFlightReason | "nested" | null;
-  /** A role's own session or a standing anchor. */
-  role: boolean;
-  /** A closed session stays out through machine wakes and comes back when its
-   *  agent pins blocked (Needs you); an ordinary one also when it pins done
-   *  (shared closeReturnsOnDone), a role, an anchor or a standing trigger's home not. */
-  returnsOnDone: boolean;
-  /** Armed triggers that inject into it. */
-  triggers: number;
-  /** A codecast flow run it started, with station sessions of its own, that
-   *  has not reported yet. */
-  waitingOnRun: boolean;
-  /** Agents under it a stop takes down with it (closeTakesDownOf): its Task
-   *  subagents and teammates. */
-  takesDown: number;
-};
-
-export type CloseKind = "aside" | "awaiting" | "keeps_background" | "keeps_loop" | "keeps_limit" | "keeps_triggers" | "waits_on_run" | "clears";
-
-export function closeKindOf(f: CloseFacts): CloseKind {
-  if (f.inFlight === "awaiting") return "awaiting";
-  if (f.inFlight === "background") return "keeps_background";
-  if (f.inFlight === "loop") return "keeps_loop";
-  if (f.inFlight === "limit") return "keeps_limit";
-  if (f.inFlight) return "aside";
-  if (f.role || f.triggers > 0) return "keeps_triggers";
-  if (f.waitingOnRun) return "waits_on_run";
-  return "clears";
-}
-
-/** Close sets it aside (the agent keeps running) instead of stopping it. */
-export const closeSetsAside = (f: CloseFacts) => f.inFlight !== null;
-
-// What brings a closed session back: its agent pinning done (an ordinary
-// session) or blocked (isClosedHidden, performSetThreadState), or a person
-// writing to it.
-const closedBack = (returnsOnDone: boolean) => (returnsOnDone ? "back when it's done or needs you" : "back when it needs you");
-
-/** The words a closed session a machine woke shows for what brings it back. */
-export const closedBackWords = (row: Parameters<typeof closeReturnsOnDone>[0]) => closedBack(closeReturnsOnDone(row));
-
-export function closeTooltip(f: CloseFacts): string {
-  const them = f.takesDown === 0 ? "it" : f.takesDown === 1 ? "it and the agent under it" : `it and the ${f.takesDown} agents under it`;
-  const back = closedBack(f.returnsOnDone);
-  switch (closeKindOf(f)) {
-    case "aside": return `Close: hides it, ${back}`;
-    case "awaiting": return "Close: hides it; it still waits on you";
-    case "keeps_background": return `Close: hides it, keeps its background work, ${back}`;
-    case "keeps_loop": return `Close: hides it, keeps its loop, ${back}`;
-    // Its resume (a "continue" send, when recovery is on) is an ordinary send
-    // and shows it; with recovery off, it waits for the person.
-    case "keeps_limit": return "Close: hides it, still parked on its limit";
-    case "keeps_triggers":
-      if (f.triggers === 0) return `Close: stops ${them}, ${back}`;
-      return `Close: stops ${them}, runs its ${f.triggers === 1 ? "trigger" : `${f.triggers} triggers`} out of sight, ${back}`;
-    case "waits_on_run": return `Close: stops ${them}, its run goes on, ${back}`;
-    case "clears": return `Close: stops ${them}, clears ${f.takesDown ? "them" : "it"} from the list`;
-  }
-}
 
 /** The row fields the facts read. Every inbox row carries them. */
 export type CloseRow = Parameters<typeof sessionLiveAt>[0] & {
@@ -93,6 +32,7 @@ export type CloseRow = Parameters<typeof sessionLiveAt>[0] & {
   pending_api_error_kind?: string | null;
   pending_api_error_at?: number | null;
   subagent_slot?: string | null;
+  parked_wake_kind?: string | null;
 };
 
 const runLiveOf = (row: CloseRow) =>
@@ -146,26 +86,30 @@ export function closeTakesDownOf(rows: Iterable<NestedRow>, id: string): NestedR
   return out;
 }
 
-/** A member a close of `id` would take down (closeTakesDownOf) is in flight
- *  by the same verdict. A spawned child mid-turn is not: the close leaves it up. */
-export function nestedInFlightOf(rows: Iterable<NestedRow>, id: string, now: number): boolean {
-  return closeTakesDownOf(rows, id).some((r) => closeInFlightReason(inFlightFactsOfRow(r, now)) !== null);
+/** Whether a member a close of `id` would take down (closeTakesDownOf) is in
+ *  flight by the same verdict, and whether one waits on the person, which
+ *  outranks the rest. A spawned child mid-turn is not: the close leaves it up. */
+export function nestedInFlightOf(rows: Iterable<NestedRow>, id: string, now: number): NestedInFlight {
+  let out: NestedInFlight = null;
+  for (const r of closeTakesDownOf(rows, id)) {
+    out = nestedInFlightFrom(closeInFlightReason(inFlightFactsOfRow(r, now))) ?? out;
+    if (out === "nested_awaiting") break;
+  }
+  return out;
 }
 
 /** The facts of one row at `now`. `armedTriggers` is the roster's count of
  *  armed triggers into it; `pendingSend` a send this window has not seen
- *  land; `nestedInFlight` a member of its nested group in flight (nestedInFlightOf);
- *  `takesDown` how many members a stop takes down (closeTakesDownOf). */
-export function closeFactsOf(row: CloseRow, armedTriggers: number, now: number, pendingSend = false, nestedInFlight = false, takesDown = 0): CloseFacts {
-  // The row says a trigger is armed before the roster has loaded it.
-  const rowArmed = (row.armed_trigger_kind ?? "none") !== "none" ? 1 : 0;
+ *  land; `nested` its nested group in flight (nestedInFlightOf); `takesDown`
+ *  how many members a stop takes down (closeTakesDownOf). */
+export function closeFactsOf(row: CloseRow, armedTriggers: number, now: number, pendingSend = false, nested: NestedInFlight = null, takesDown = 0): CloseFacts {
   const facts = inFlightFactsOfRow(row, now, pendingSend);
-  return {
-    inFlight: closeInFlightReason(facts) ?? (nestedInFlight ? "nested" : null),
-    role: !!row.persistent || !!row.standing_role_id,
-    returnsOnDone: closeReturnsOnDone(row),
-    triggers: Math.max(armedTriggers, rowArmed),
-    waitingOnRun: runLiveOf(row) && !facts.inProcessRun,
+  return closeFactsFrom(row, {
+    inFlight: closeInFlightOf(closeInFlightReason(facts), nested),
+    armedTriggers,
+    lastHeartbeat: row.last_heartbeat ?? null,
+    runLive: runLiveOf(row),
+    inProcessRun: facts.inProcessRun,
     takesDown,
-  };
+  }, now);
 }

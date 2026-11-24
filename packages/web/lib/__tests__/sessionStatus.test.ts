@@ -147,7 +147,7 @@ describe("the status vocabulary", () => {
   test("nine states, each with its own word, mark and theme colour", () => {
     const words = SESSION_STATUSES.map((s) => SESSION_STATUS[s].word);
     expect(new Set(words).size).toBe(SESSION_STATUSES.length);
-    expect(words).toEqual(["Needs you", "Error", "Working", "Starting", "Done", "Dormant", "Idle", "Stashed", "Closed"]);
+    expect(words).toEqual(["Needs you", "Error", "Working", "Starting", "Done", "Sleeping", "Idle", "Stashed", "Closed"]);
     expect(new Set(SESSION_STATUSES.map((s) => SESSION_STATUS[s].mark)).size).toBe(SESSION_STATUSES.length);
     for (const s of SESSION_STATUSES) {
       // Colours come from the sol-* theme tokens only.
