@@ -108,6 +108,11 @@ export function createCtx(seed: Record<string, Rec[]>) {
         async take(n: number) {
           return run().slice(0, n);
         },
+        async paginate({ numItems, cursor }: { numItems: number; cursor: string | null }) {
+          const rows = run();
+          const start = cursor ? Number(cursor) : 0;
+          return { page: rows.slice(start, start + numItems), isDone: start + numItems >= rows.length, continueCursor: String(start + numItems) };
+        },
       };
       return chain;
     },

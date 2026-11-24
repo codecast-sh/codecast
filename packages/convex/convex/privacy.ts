@@ -273,6 +273,31 @@ export async function checkConversationAccess(
   return "denied";
 }
 
+// checkConversationAccess(viewer, conv) !== "denied" for many conversations
+// in one call (the inbox scan's escalated window): the team-content grant,
+// the common one, reads the viewer's membership once per team and each
+// runner's once per team; a conversation it does not cover goes through
+// checkConversationAccess itself, so the answer is always that one.
+export function conversationAccessMemo(ctx: DbCtx, viewerId: Id<"users">): (conversation: ConversationForAccess) => Promise<boolean> {
+  const member = new Map<string, Promise<boolean>>();
+  const runner = new Map<string, Promise<MembershipVisibilityFacts | null>>();
+  return async (conversation) => {
+    if (conversation.user_id.toString() === viewerId.toString()) return true;
+    if (conversation.team_id) {
+      const team = String(conversation.team_id);
+      let isMember = member.get(team);
+      if (!isMember) member.set(team, (isMember = isTeamMember(ctx, viewerId, conversation.team_id)));
+      if (await isMember) {
+        const key = `${conversation.user_id}:${team}`;
+        let membership = runner.get(key);
+        if (!membership) runner.set(key, (membership = getOwnerMembership(ctx, conversation.user_id, conversation.team_id)));
+        if (teamReadLevelSync(conversation as any, effectiveMembershipVisibility(await membership, conversation.started_at)) === "content") return true;
+      }
+    }
+    return (await checkConversationAccess(ctx, viewerId, conversation)) !== "denied";
+  };
+}
+
 // ── Team feed filter ──
 // Pre-loads membership data for team feed filtering, returns a predicate.
 // Use this everywhere team conversations are listed or counted.

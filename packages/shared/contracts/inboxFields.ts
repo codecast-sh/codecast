@@ -90,12 +90,34 @@ export const INBOX_ROW_FIELDS = [
   "flow_name", "flow_run_id",
   "anchor_id", "is_anchor", "last_turn_origin", "org_role_id", "standing_role_id", "role", "acting_user_id",
   "character_avatar", "character_name", "drawn_icon", "icon", "icon_color", "image_preview_url", "browser_pane_offer",
-  "owner_device_id", "owner_user_id", "author_avatar", "local_mirror", "migration_batch_id",
+  "owner_device_id", "owner_user_id",
+  // The owners model (team feature session_owners), stamped only on a row it
+  // applies to (underOwnersModel): the marker, the implicit starter (the one
+  // owner a row can name without reading owner rows), the session that owns
+  // it, whether a role started it, the last owner write (an ENRICH trigger),
+  // when a person released it from its parent (the nested seat), and its
+  // current wait's escalation: when, the message count it covers, and the
+  // person it reached that no owner row names (waitReachedPeople). Who else
+  // owns it is the owners read, never the row.
+  "owners_model", "implicit_owner", "owner_session_id", "role_started", "owners_changed_at", "parent_released_at", "wait_up_at", "wait_up_count", "wait_up_person",
+  // The waiting episode the needs-input push last covered ("<count>:<kind>"):
+  // an escalated wait's kind (shared escalatedAsks).
+  "needs_input_notified_key",
+  "author_avatar", "local_mirror", "migration_batch_id",
   "cloud_placement", "cloud_seed", "cloud_workspace", "cloud_context_too_large", "cloud_placement_progress",
   "subagent_slot", "subagent_slot_at", "subagent_slot_device", "subagent_caps", "merge_back",
   // The viewer stamps (stampInboxViewerFields).
   "owned_by_me", "team_session", "author_name", "author_email", "assigned_ping", "owner_name", "owner_email",
 ] as const;
+
+// The row fields only a row under the owners model carries (underOwnersModel),
+// so an un-flagged row has exactly the shape it had before the model: the
+// list omits them off the model, and cargo never lands them there. A missing
+// field reads as null everywhere (underOwnersModel is `=== true`).
+export const INBOX_MODEL_ONLY_ROW_FIELDS: ReadonlySet<string> = new Set([
+  "owners_model", "implicit_owner", "owner_session_id", "role_started", "owners_changed_at",
+  "parent_released_at", "wait_up_at", "wait_up_count", "wait_up_person", "needs_input_notified_key",
+]);
 
 const INBOX_ROW_FIELD_SET: ReadonlySet<string> = new Set(INBOX_ROW_FIELDS);
 /** Whether a key belongs on an inbox row's body (INBOX_ROW_FIELDS): what a

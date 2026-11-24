@@ -4,6 +4,7 @@ import { mutation, query, action, internalMutation, internalQuery } from "./func
 import { ConvexError, v } from "convex/values";
 import type { Doc, Id } from "./_generated/dataModel";
 import { api, internal } from "./_generated/api";
+import { ownersModelOnMemo } from "./lib/inboxOwners";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { isTeamAdmin, shareATeam } from "./privacy";
 import { dropOwnerRow, endMembership, ownerGrantHolds } from "./lib/teamMembershipEnd";
@@ -1488,6 +1489,11 @@ export async function applyMembershipVisibilityChange(
     detail: { before: { visibility: membership.visibility }, after: { visibility, mode } },
   });
   await invalidateForMember(ctx, userId, teamId);
+  // A wait on their sessions that escalated to someone this shuts out goes
+  // on to someone who can open it (owners model).
+  if ("scheduler" in ctx && (await ownersModelOnMemo(ctx, { team_id: teamId }))) {
+    await (ctx as any).scheduler.runAfter(0, internal.notifications.rerouteMemberEscalations, { user_id: String(userId), team_id: String(teamId) });
+  }
   return next;
 }
 

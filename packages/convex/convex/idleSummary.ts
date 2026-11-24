@@ -1,6 +1,7 @@
 import { isClosedSession } from "@codecast/shared/contracts";
 import { internalMutation, internalAction, internalQuery } from "./functions";
 import { routeUpWaitingSession } from "./agentTasks";
+import { agentOwnerFor, escalateWait, routeWaitToAgentOwner } from "./lib/agentOwnerWaits";
 import { v } from "convex/values";
 import { internal } from "./_generated/api";
 import { isLowSignalPrompt } from "./titleGeneration";
@@ -115,7 +116,21 @@ export async function performSetIdleSummary(ctx: any, args: { conversation_id: a
     // declared blocks were routed at settle time (notifications).
     if (args.settle_verdict === "needs_input") {
       const conv = await ctx.db.get(args.conversation_id);
-      if (conv && (conv.org_role_id || conv.standing_role_id) && conv.thread_state_status !== "blocked") {
+      // Under the owners model the reader is its agent owner, a parent
+      // session included (lib/agentOwnerWaits); one that cannot be told sends
+      // the wait to its people.
+      const model = conv ? await agentOwnerFor(ctx, conv) : null;
+      if (conv && model) {
+        if (model.agent && !model.reachedPeople && conv.thread_state_status !== "blocked") {
+          const routed = await routeWaitToAgentOwner(ctx, conv, model.agent, { why: "waiting", since: conv.updated_at ?? Date.now() });
+          // Found unreachable only now (it heard at settle time): the wait
+          // goes to its people, and the needs-input check rings them.
+          if (routed === "unreachable") {
+            await escalateWait(ctx, conv);
+            await ctx.scheduler.runAfter(0, internal.notifications.checkNeedsInput, { conversation_id: conv._id });
+          }
+        }
+      } else if (conv && (conv.org_role_id || conv.standing_role_id) && conv.thread_state_status !== "blocked") {
         await routeUpWaitingSession(ctx, conv, { why: "waiting", since: conv.updated_at ?? Date.now() });
       }
     }

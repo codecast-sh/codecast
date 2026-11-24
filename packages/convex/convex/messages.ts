@@ -1,4 +1,4 @@
-import { isHostedAgentType } from "@codecast/shared/contracts";
+import { endedEscalationPatch, isHostedAgentType } from "@codecast/shared/contracts";
 import { isTeamOwnedConversation } from "./lib/viewerTriage";
 import { recordTeamAnswer } from "./lib/teamSessionAnswer";
 import { listSessionPartyIds } from "./sessionOwners";
@@ -1247,6 +1247,8 @@ export const addMessage = mutation({
       // transcript uploaded again weeks later must not sort as fresh.
       updated_at: Math.max(conversation.updated_at, msgTimestamp),
       last_message_role: args.role,
+      // An escalated wait ends with the next message (owners model).
+      ...endedEscalationPatch(conversation, newMessageCount - supersededBanners),
     };
     stampFirstPrompt(conversation, [{ role: args.role, content: safeContent, tool_results: args.tool_results }], convPatch);
     await answerTeamSessionFromTranscript(ctx, conversation, opener);
@@ -1974,6 +1976,8 @@ export async function writeMessageBatch(ctx: MutationCtx, conversation: Doc<"con
       message_count: newMessageCount - supersededBanners,
       updated_at: Math.max(conversation.updated_at, maxMsgTs || Date.now()),
       last_message_role: lastMsg.role,
+      // An escalated wait ends with the next message (owners model).
+      ...endedEscalationPatch(conversation, newMessageCount - supersededBanners),
     };
     stampFirstPrompt(conversation, args.messages, convPatch);
     await answerTeamSessionFromTranscript(ctx, conversation, lastTurnOpener);

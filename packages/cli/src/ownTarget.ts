@@ -17,7 +17,9 @@
 // an email or a name containing whitespace is unmistakably a person, while
 // anything id-shaped keeps its old meaning. Guessing the other way round could
 // silently retarget a real session, which is far worse than an error message.
-export const looksLikeMember = (arg: string) => arg.includes("@") || /\s/.test(arg.trim());
+// `@role` and `parent` name a session's agent owners (`cast own @role`,
+// `cast disown parent`), never a session.
+export const looksLikeMember = (arg: string) => arg.includes("@") || /\s/.test(arg.trim()) || arg.trim().toLowerCase() === "parent";
 
 export type OwnTarget =
   | { ok: true; sessionId: string; member: string | undefined }
