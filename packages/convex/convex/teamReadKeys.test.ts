@@ -7,7 +7,7 @@
 // unknown-key window is refused before any lookup, a team holds a capped
 // number of live keys, and minting, use and revoking show in the audit every
 // member reads.
-import { describe, expect, setDefaultTimeout, test } from "bun:test";
+import { describe, expect, jest, setDefaultTimeout, test } from "bun:test";
 import { convexTest } from "convex-test";
 import { httpRouter } from "convex/server";
 import { hashToken } from "@platform/auth/convex";
@@ -18,6 +18,7 @@ import { allModules } from "./testModules.testkit";
 import { TEAM_SESSIONS_PATH, teamSessionsHttp } from "./lib/teamReadKeyHttp";
 import { MAX_LIVE_TEAM_READ_KEYS } from "./lib/teamReadKey";
 import { USE_WINDOW_MS } from "./teamReadKeys";
+import { scheduleUserSend } from "./lib/userSend";
 
 setDefaultTimeout(120_000);
 
@@ -141,6 +142,8 @@ describe("team read keys", () => {
         summary: "Ada summary",
         sharing: "full",
         transcript_messages: 1,
+        user_messages: 0,
+        started_by_agent: false,
         work_state: expect.any(String),
         started_at: new Date(NOW - 2 * HOUR).toISOString(),
         updated_at: new Date(NOW - HOUR).toISOString(),
@@ -154,6 +157,34 @@ describe("team read keys", () => {
     // A cursor keeps the window it was given: last week's session is out on every page.
     const week = await readAll(t, key, `&since=${NOW - 8 * 24 * HOUR}&until=${NOW - 6 * 24 * HOUR}`);
     expect(week.sessions.map((s) => s.title)).toEqual(["Ada last week"]);
+  });
+
+  test("a row counts the messages a person typed, and says when an agent started the session", async () => {
+    const { t, ada, team, as } = await setup();
+    const own = await session(t, ada, { team_id: team, title: "Ada typed", updated_at: NOW - HOUR, message_count: 7 });
+    await session(t, ada, { team_id: team, title: "Started by Ada's agent", updated_at: NOW - 2 * HOUR, spawned_by_conversation_id: own });
+    // Every user-role message goes through the live send rule: two Ada typed,
+    // a tool result and a message another session sent.
+    const user = async (content: string, extra: Record<string, unknown> = {}) =>
+      t.run(async (ctx: any) => {
+        const _id = await ctx.db.insert("messages", { conversation_id: own, message_uuid: crypto.randomUUID(), role: "user", content, timestamp: NOW - HOUR, ...extra });
+        await scheduleUserSend(ctx, (await ctx.db.get(own))!, { _id, role: "user", content, ...extra }, NOW - HOUR);
+      });
+    jest.useFakeTimers();
+    try {
+      await user("fix the flaky login test");
+      await user("now open a PR");
+      await user("ok", { tool_results: [{ tool_use_id: "t1", content: "ok" }] });
+      await user('<session-message from="jx12345">status?</session-message>');
+      await t.finishAllScheduledFunctions(() => jest.runAllTimers());
+    } finally {
+      jest.useRealTimers();
+    }
+    const { key } = await mint(as(ada), team);
+
+    const { sessions } = await readAll(t, key);
+    expect(sessions.find((s) => s.title === "Ada typed")).toMatchObject({ transcript_messages: 7, user_messages: 2, started_by_agent: false });
+    expect(sessions.find((s) => s.title === "Started by Ada's agent")).toMatchObject({ user_messages: 0, started_by_agent: true });
   });
 
   test("the key and a member's feed list the same sessions", async () => {

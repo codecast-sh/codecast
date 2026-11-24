@@ -384,6 +384,15 @@ async function logUserSend(ctx: { db: any }, send: Send, at: SendAt, message: Do
     ...sendText(message.content),
     ...(decision ? { decision } : {}),
   });
+  if (!decision?.picked) await adjustTypedMessageCount(ctx, at.conversation_id, 1);
+}
+
+// conversations.typed_message_count follows the log: every insert and delete
+// of a row that is not a picked decision answer moves it by one.
+export async function adjustTypedMessageCount(ctx: { db: any }, conversationId: Id<"conversations">, delta: number): Promise<void> {
+  const conversation = await ctx.db.get(conversationId);
+  if (!conversation) return;
+  await ctx.db.patch(conversationId, { typed_message_count: Math.max(0, (conversation.typed_message_count ?? 0) + delta) });
 }
 
 export async function maybeRecordUserSend(

@@ -825,6 +825,9 @@ export default defineSchema({
     started_at: v.number(),
     updated_at: v.number(),
     message_count: v.number(),
+    // The session's rows in the per-send log (user_sends), less picked
+    // decision answers: the messages a person typed (lib/userSend.ts).
+    typed_message_count: v.optional(v.number()),
     // Monotonic server watermark for material transcript changes. Unlike
     // message_count it advances for inserts AND same-UUID patches, so clients
     // can recover a streaming message that finalized while their subscription
@@ -4611,6 +4614,7 @@ export default defineSchema({
     // One person's sends across every team and their personal workspace,
     // newest first: the Messages feed (userSends.mine).
     .index("by_user_timestamp", ["user_id", "timestamp"])
+    .index("by_conversation", ["conversation_id"])
     .searchIndex("search_text", { searchField: "text", filterFields: ["user_id"] }),
 
   // Per-day token and spend counters (the "Tokens" and "Spend" chart

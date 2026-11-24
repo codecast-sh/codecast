@@ -22,6 +22,7 @@ import { needsHostedTitle } from "./assistant/backfills";
 import { isAfter, pageNewestFirst, type StreamPosition } from "./feedPagination";
 import { windowSpent } from "./ipRateLimit";
 import { cliSessionClassifier } from "./cliSessionClassifier";
+import { isProgramLaunched } from "./lib/userSend";
 import {
   MAX_LIVE_TEAM_READ_KEYS,
   TEAM_READ_KEY_EXPIRY_DAYS,
@@ -214,6 +215,8 @@ export type TeamSessionRow = {
   sharing: "summary" | "full";
   /** Every message in the transcript: the person's, the agent's and tool results. */
   transcript_messages: number;
+  user_messages: number;
+  started_by_agent: boolean;
   work_state: WorkState;
   started_at: string;
   updated_at: string;
@@ -275,6 +278,8 @@ export const sessionsForKey = internalQuery({
         summary: c.subtitle ?? null,
         sharing: floor.contentVisible(c) ? "full" : "summary",
         transcript_messages: c.message_count,
+        user_messages: c.typed_message_count ?? 0,
+        started_by_agent: isProgramLaunched(c),
         work_state: (await classifier.classify(c)).work_state,
         started_at: new Date(c.started_at).toISOString(),
         updated_at: new Date(c.updated_at).toISOString(),

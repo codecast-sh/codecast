@@ -2,7 +2,7 @@ import { internalMutation, internalQuery } from "./functions";
 import { internal } from "./_generated/api";
 import { v } from "convex/values";
 import type { Doc } from "./_generated/dataModel";
-import { isProgramLaunched, maybeRecordUserSend, typedWords } from "./lib/userSend";
+import { adjustTypedMessageCount, isProgramLaunched, maybeRecordUserSend, typedWords } from "./lib/userSend";
 import { recordUsageDays, turnCost, turnTokens, type UsageTurn } from "./lib/usageDaily";
 import { approxMessageBytes } from "./userMessagesFilter";
 
@@ -84,7 +84,10 @@ export const wipe = internalMutation({
     let full = false;
     for (const table of WIPE_TABLES[args.kind ?? "sends"]) {
       const rows = await ctx.db.query(table as any).take(WIPE_ROWS);
-      for (const row of rows) await ctx.db.delete(row._id);
+      for (const row of rows) {
+        await ctx.db.delete(row._id);
+        if (table === "user_sends" && !(row as any).decision?.picked) await adjustTypedMessageCount(ctx, (row as any).conversation_id, -1);
+      }
       if (rows.length === WIPE_ROWS) { full = true; break; }
     }
     if (full) {
@@ -377,6 +380,7 @@ export const pruneLog = internalMutation({
       const m = await ctx.db.get(row.message_id);
       if (m && typedWords(m.content) !== null) continue;
       await ctx.db.delete(row._id);
+      if (!row.decision?.picked) await adjustTypedMessageCount(ctx, row.conversation_id, -1);
       dropped++;
     }
     if (page.isDone) {
@@ -384,5 +388,45 @@ export const pruneLog = internalMutation({
       return;
     }
     await ctx.scheduler.runAfter(0, internal.sendBackfill.pruneLog, { user_id: args.user_id, cursor: page.continueCursor, dropped });
+  },
+});
+
+// Set conversations.typed_message_count from the per-send log, for sessions
+// whose sends were logged before the count was kept. Walks the log in
+// conversation order, so each session's rows come together and a session with
+// no sends is never read. A session cut across two pages carries its partial
+// count to the next step. It sets the count, so a rerun changes nothing and a
+// send logged while it runs is counted once.
+// `packages/convex/run.sh sendBackfill:countTyped '{}'`.
+const COUNT_PAGE = 300;
+export const countTyped = internalMutation({
+  args: {
+    cursor: v.optional(v.string()),
+    carry: v.optional(v.object({ conversation_id: v.id("conversations"), count: v.number() })),
+    sessions: v.optional(v.number()),
+  },
+  handler: async (ctx, args) => {
+    let sessions = args.sessions ?? 0;
+    let current = args.carry ?? null;
+    const flush = async () => {
+      if (!current) return;
+      const c = await ctx.db.get(current.conversation_id);
+      if (c && c.typed_message_count !== current.count) await ctx.db.patch(c._id, { typed_message_count: current.count });
+      sessions++;
+    };
+    const page = await ctx.db.query("user_sends").withIndex("by_conversation").paginate({ numItems: COUNT_PAGE, cursor: args.cursor ?? null });
+    for (const row of page.page) {
+      if (current?.conversation_id !== row.conversation_id) {
+        await flush();
+        current = { conversation_id: row.conversation_id, count: 0 };
+      }
+      if (!row.decision?.picked) current.count++;
+    }
+    if (page.isDone) {
+      await flush();
+      console.log(`[sendBackfill.countTyped] done, ${sessions} sessions`);
+      return;
+    }
+    await ctx.scheduler.runAfter(0, internal.sendBackfill.countTyped, { cursor: page.continueCursor, carry: current ?? undefined, sessions });
   },
 });
