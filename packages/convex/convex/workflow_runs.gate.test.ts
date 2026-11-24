@@ -359,11 +359,14 @@ describe("a run that is over (runOver)", () => {
     tables.workflow_runs[0].current_node_id = "build_hold";
     tables.workflow_runs[0].node_statuses = [{ node_id: "build_hold", status: "running", started_at: NOW }];
     await (cancel as any)._handler(asUser(ctx, HOST), { id: RUN });
+    // The cancel closed the station the run was in (lib/runEnd.ts); nothing a late report says changes it.
+    const closed = structuredClone(tables.workflow_runs[0].node_statuses);
+    expect(closed).toEqual([{ node_id: "build_hold", status: "failed", outcome: "stopped", started_at: NOW, completed_at: expect.any(Number) }]);
     const r = await report(ctx, { node_id: "build_hold", node_status: "completed", outcome: "success" });
     expect(r).toEqual({ ended: { status: "failed", reason: "Cancelled by user" } });
     expect(await report(ctx, { node_id: "build", node_status: "running" })).toEqual(r);
     expect(tables.workflow_runs[0]).toMatchObject({ status: "failed", fail_reason: "Cancelled by user", current_node_id: "build_hold" });
-    expect(tables.workflow_runs[0].node_statuses).toEqual([{ node_id: "build_hold", status: "running", started_at: NOW }]);
+    expect(tables.workflow_runs[0].node_statuses).toEqual(closed);
   });
 
   test("a gate a stopped run reaches asks nobody, and the card its presenter posted on the way goes with the run", async () => {
