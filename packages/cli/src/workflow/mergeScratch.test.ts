@@ -170,4 +170,21 @@ await new Promise((res) => setTimeout(res, 20_000));
       r.done();
     }
   }, { timeout: 30_000 });
+
+  test("a job of the step's that writes elsewhere and will not stop keeps the tree, though the step's output has closed", async () => {
+    const r = repo();
+    let pid = 0;
+    try {
+      const ran = runShell("( trap '' TERM; exec sleep 20 ) >/dev/null 2>&1 & sleep 20; wait", r.root, () => {}, {}, (child) => { pid = child.pid!; trackStep(child); });
+      await new Promise((res) => setTimeout(res, 300));
+      let released = false;
+      expect(await shutDown(async () => { released = true; }, 500)).toBe(false);
+      expect(released).toBe(false);
+      await ran;
+      expect(() => process.kill(-pid, 0)).not.toThrow();
+    } finally {
+      try { process.kill(-pid, "SIGKILL"); } catch {}
+      r.done();
+    }
+  }, { timeout: 30_000 });
 });
