@@ -18,6 +18,7 @@ import FontAwesome from '@expo/vector-icons/FontAwesome';
 import Feather from '@expo/vector-icons/Feather';
 import { mixColor } from '@/lib/solColor';
 import { showNotice } from '@/lib/undoBar';
+import { useUndoBarAnchor } from '@/hooks/useUndoBarAnchor';
 import { copyToClipboard } from '@/lib/clipboard';
 import { useActiveTeamFeature } from '@/lib/teamFeatures';
 import { usePolicyRefusal } from '@codecast/web/lib/managedPolicy';
@@ -82,6 +83,9 @@ import { openSelectText } from '@/components/SelectTextSheet';
 import { readableText } from '@/lib/markdown';
 import { ComposeButton } from '@/components/session/ComposeButton';
 import { ScreenRecordingCard } from '@/components/ScreenRecordingCard';
+import { ComposerOwnerStrip, NotInInboxBar } from '@/components/session/OwnerComposerLines';
+import { SessionAgentsList } from '@/components/session/SessionAgentsList';
+import { useSyncSessionOwners } from '@codecast/web/hooks/useSyncSessionOwners';
 import { MessageComposer, dispatchComposerSend, useComposerImages, IMAGE_ONLY_CONTENT, type ComposerStatus } from '@/components/session/MessageComposer';
 import { sessionLanded } from '@/lib/compose';
 import { mobileEntityRoute } from '@/lib/linkRoutes';
@@ -2486,6 +2490,8 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
   waitsOnAnswer?: boolean;
 }) {
   const Theme = useTheme();
+  // The box has focus: the owners strip shows while it does or while it holds text.
+  const [composerFocused, setComposerFocused] = useState(false);
   const hostedWorking = useConversationWorking(conversationId as string) && hosted && !waitsOnAnswer;
   const answeredBefore = useInboxStore((s) => hosted && (s.messages[conversationId as string] ?? []).some((m: { role?: string }) => m.role === 'assistant'));
   const hostedLast = useInboxStore((s) => (hosted ? hostedLastExchange(s.messages[conversationId as string] as any, s.sessionDecisions, conversationId as string, Date.now()) : null));
@@ -2684,7 +2690,18 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
             if (t !== null) { setMessage(t); inputRef.current?.focus(); }
           },
         }}
-        above={hosted ? null : <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />}
+        onFocusChange={hosted ? undefined : setComposerFocused}
+        above={hosted ? null : (
+          <>
+            {isConvexId(String(conversationId)) && (
+              <>
+                <NotInInboxBar conversationId={conversationId as string} />
+                <ComposerOwnerStrip conversationId={conversationId as string} active={composerFocused || !!message.trim()} />
+              </>
+            )}
+            <SlashCommandPills conversationId={conversationId as string} text={message} onPick={(t) => { setMessage(t); inputRef.current?.focus(); }} />
+          </>
+        )}
       />
     </RNView>
   );
@@ -2817,6 +2834,7 @@ const NO_APPROVALS: ReturnType<typeof useConversationApprovals> = [];
 export function SessionScreen({ id, message: highlightMessageParam, focus: focusParam, boardHref: boardHrefProp }: { id: string; message?: string; focus?: string; boardHref?: string }) {
   if (PERF_PROBE) probeRender('SessionScreen');
   const Theme = useTheme();
+  const undoAnchor = useUndoBarAnchor();
   // The store's server dispatch is wired once, at the root (StoreSyncBridge
   // mounts useSyncCore above every screen), and must not be wired again here:
   // the binding is a single slot with an owner, so a screen that binds takes
@@ -2844,6 +2862,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
   // of this viewer's, but only while the screen is focused and the app is in
   // the foreground.
   useAckActiveSession(typeof id === "string" ? id : null);
+  // The owners read and the agents list under the owners model (session_owners).
+  useSyncSessionOwners(typeof id === "string" && isConvexId(id) ? id : "");
 
   const flatListRef = useRef<FlatList>(null);
   const pendingStartScrollRef = useRef(false);
@@ -4670,6 +4690,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
                 )}
               </ScrollView>
             </RNView>
+            {/* Under the owners model: the agents this session owns. */}
+            {!hosted && isConvexId(conversation._id) && <SessionAgentsList conversationId={String(conversation._id)} />}
             {searchVisible && (
               <RNView style={[styles.searchBar, styles.floatingSearchBar]}>
                 <FontAwesome name="search" size={12} color={Theme.textDim} style={{ marginRight: 8 }} />
@@ -4991,6 +5013,8 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             That overlay used to be a full-width absolute layer on the KAV
             whose bottom inset was a guessed composer height; with the
             keyboard open the send button sat inside it and the overlay won. */}
+        {/* Everything docked over the keyboard: the undo bar sits above it (useUndoBarAnchor). */}
+        <RNView ref={undoAnchor.ref} onLayout={undoAnchor.onLayout} collapsable={false}>
         {!hosted && pendingDecisions[0]?.decisionId ? (
           <DecisionCard key={pendingDecisions[0].decisionId} decisionRef={pendingDecisions[0].decisionId} docked />
         ) : !hosted && runningPermission ? (
@@ -5016,6 +5040,7 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             hosted={hosted}
             waitsOnAnswer={hostedApprovals.length > 0}
           />
+        </RNView>
         </RNView>
       </KeyboardAvoidingView>
       {shareSelectionMode && (

@@ -1,9 +1,9 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AccessibilityInfo, Animated, AppState, Easing, PanResponder, StyleSheet, TouchableOpacity, View as RNView } from 'react-native';
 import * as Haptics from 'expo-haptics';
 import { Text as RNText } from '@/components/Themed';
 import { Spacing, TAB_BAR_HEIGHT, themedStyles, useTheme } from '@/constants/Theme';
-import { dismissUndoBar, runHeldKill, useUndoBar, type UndoBarItem } from '@/lib/undoBar';
+import { dismissUndoBar, runHeldKill, undoBarLift, useUndoBar, type UndoBarItem } from '@/lib/undoBar';
 
 /** Mounted once at the root: the bar for whatever lib/undoBar is showing. */
 export function UndoBarHost() {
@@ -14,11 +14,25 @@ export function UndoBarHost() {
     const sub = AppState.addEventListener('change', (state) => { if (state !== 'active') runHeldKill(); });
     return () => sub.remove();
   }, []);
-  return item ? <UndoBar key={item.key} item={item} /> : null;
+  // The bar's own frame, measured in the window: its bottom is where `bottom`
+  // counts from, which on Android edge-to-edge sits above the window's own
+  // bottom by the navigation bar.
+  const hostRef = useRef<RNView>(null);
+  const [hostBottom, setHostBottom] = useState<number | null>(null);
+  const measure = () => hostRef.current?.measureInWindow((_x, y, _w, h) => { if (h > 0) setHostBottom(y + h); });
+  return (
+    <RNView ref={hostRef} onLayout={measure} style={StyleSheet.absoluteFill} pointerEvents="box-none" collapsable={false}>
+      {item ? <UndoBar key={item.key} item={item} hostBottom={hostBottom} /> : null}
+    </RNView>
+  );
 }
 
-function UndoBar({ item }: { item: UndoBarItem }) {
+function UndoBar({ item, hostBottom }: { item: UndoBarItem; hostBottom: number | null }) {
   const Theme = useTheme();
+  // Above a conversation's composer and its owner lines, so Undo never covers
+  // the control it takes back.
+  const dockTop = useUndoBar((s) => s.dockTop);
+  const lift = dockTop != null && hostBottom != null ? undoBarLift(hostBottom, dockTop) : 0;
   const enter = useRef(new Animated.Value(0)).current;
   const drag = useRef(new Animated.Value(0)).current;
   const left = useRef(new Animated.Value(1)).current;
@@ -58,7 +72,7 @@ function UndoBar({ item }: { item: UndoBarItem }) {
   return (
     <Animated.View
       {...pan.panHandlers}
-      style={[styles.bar, { opacity: enter, transform: [{ translateY }] }]}
+      style={[styles.bar, lift > 0 && { bottom: lift + Spacing.sm }, { opacity: enter, transform: [{ translateY }] }]}
       accessibilityLiveRegion="polite"
     >
       <RNView style={styles.words}>
