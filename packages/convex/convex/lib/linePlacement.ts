@@ -96,6 +96,29 @@ async function parkedAtStation(ctx: Ctx, run: any): Promise<boolean> {
   return false;
 }
 
+/** Rows flowRunsAt reads at most for one station, matching or not: other flows' runs at a station of the same name are
+ *  read and skipped, and a station crowded with them must not read the whole set. */
+export const ROOM_SCAN_MAX = 500;
+
+/**
+ * How many of a flow's working runs stand at `station`, counting no further than `stopAt`: one index range per
+ * status (workflow_runs by_workspace_status_node), left as soon as the count reaches `stopAt` or ROOM_SCAN_MAX rows
+ * were read. A run is the flow's when it runs the flow's workflow or a variant pinned to it (flow_versions).
+ */
+export async function flowRunsAt(ctx: Ctx, workspace: string, workflowId: string, station: string, stopAt: number): Promise<number> {
+  let n = 0;
+  let read = 0;
+  if (stopAt <= 0) return 0;
+  for (const status of WORKING_RUN_STATUSES) {
+    const range = ctx.db.query("workflow_runs").withIndex("by_workspace_status_node", (q: any) => q.eq("workspace", workspace).eq("status", status).eq("current_node_id", station));
+    for await (const r of range as AsyncIterable<any>) {
+      if (String(r.workflow_id) === workflowId || (r.flow_versions ?? []).some((fv: any) => String(fv.workflow_id) === workflowId)) n++;
+      if (n >= stopAt || ++read >= ROOM_SCAN_MAX) return n;
+    }
+  }
+  return n;
+}
+
 /**
  * The agents a flow's stations start: each agent or prompt station's own, and the runner's default (Claude) for one
  * that names none, spelled as the runner spells them (cli runner.ts waitOnStation).

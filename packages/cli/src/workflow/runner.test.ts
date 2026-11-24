@@ -449,6 +449,20 @@ describe("workflow/graphToPushPayload", () => {
     expect("parks" in byId.start).toBe(false);
   });
 
+  test("a parking station's room reaches the push payload, the graph convex stores and reads", () => {
+    const g = parseWorkflowSource(`digraph g {
+      start [shape=Mdiamond]
+      queue [label="Queue", shape=parallelogram, script="true", parks=true, room=8]
+      odd   [label="Odd", shape=parallelogram, script="true", parks=true, room=0]
+      exit  [shape=Msquare]
+      start -> queue -> odd -> exit
+    }`);
+    const byId = Object.fromEntries(graphToPushPayload(g).nodes.map((n) => [n.id, n]));
+    expect(byId.queue).toMatchObject({ parks: true, room: 8 });
+    expect("room" in byId.odd).toBe(false);
+    expect("room" in byId.start).toBe(false);
+  });
+
   test("the push payload carries the graph stack, and omits it when the graph has none", () => {
     const withStack = parseWorkflowSource(`digraph g {
       graph [stack="Release gates"]

@@ -1,8 +1,11 @@
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { LINE_RUNS_PER_RUNNER, requeueCore, sweepCore } from "./orgLine";
-import { barFromCli, clearHoldCore, libraryFlowId, clearHoldFromCli, createLiveFlowCore, moveLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, setBarCore, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
+import { barFromCli, clearHoldCore, libraryFlowId, clearHoldFromCli, createLiveFlowCore, moveLiveFlowCore, holdFromCli, liveFlowView, MAX_HOLD_MS, queueRoom, setBarCore, setOnCore, setOnFromCli, showFromCli } from "./liveFlows";
 import { hashToken } from "./apiTokens";
+import { convexTest } from "convex-test";
+import schema from "./schema";
+import { allModules } from "./testModules.testkit";
 
 // A team's live flow (liveFlows.ts): one queue in start order across every
 // lead, admitted onto each problem's area lead's machines, while the leads
@@ -407,5 +410,91 @@ describe("libraryFlowId", () => {
   test("reads the id from the flow the web's Make live sends, and takes a bare id as is", () => {
     expect(libraryFlowId({ id: "workflows_onefix", slug: "onefix", label: "Union fix flow" } as { id: string })).toBe("workflows_onefix");
     expect(libraryFlowId("workflows_onefix")).toBe("workflows_onefix");
+  });
+});
+
+// Nov 23: Union's onefix Queue parks (it holds no machine slot), so the live flow saw free slots on every sweep and
+// started up to ten more each time: 300+ runs waited at Queue for four build places, 172 started in one hour. A
+// parking station that declares room=N holds at most N of the flow's runs; at N the flow starts nothing.
+describe("liveFlows: a parking station's room", () => {
+  const ROOM = 3;
+  const WS = `team:${TEAM}`;
+  const spine = { _id: "workflows_spine", user_id: HOST, slug: "agentwatch", name: "agentwatch", label: "Acme fix flow", edges: [], created_at: 1, updated_at: 1, nodes: [
+    { id: "start", label: "start", shape: "Mdiamond", type: "start" },
+    { id: "queue", label: "Queue", shape: "parallelogram", type: "tool", parks: true, room: ROOM },
+    { id: "build", label: "Build", shape: "box", type: "agent" },
+  ] };
+  const other = { ...spine, _id: "workflows_other", slug: "other", name: "other", label: "Other flow" };
+  const at = (n: number, o: Record<string, any> = {}) => Array.from({ length: n }, (_, i) => ({
+    _id: `workflow_runs_${o.key ?? "q"}${i}`, user_id: HOST, workspace: WS, status: "running", workflow_id: "workflows_spine", current_node_id: "queue", node_statuses: [], created_at: 1, updated_at: 1, ...o,
+  }));
+  const setup = (runs: any[]) => fixtures({ tasks: [problem("g70", "growth", 70), problem("d90", "deals", 90)], extra: { workflows: [spine, other], workflow_runs: runs } });
+
+  test("with room=N and N of the flow's runs at the station, a sweep starts nothing and says why, as the view does", async () => {
+    const { ctx, tables } = setup(at(ROOM));
+    const res = await sweepCore(ctx, NOW);
+    expect(res.started).toEqual([]);
+    expect(res.skipped_capped).toContain("live:live_flows_1");
+    expect(tables.workflow_runs).toHaveLength(ROOM);
+    const view = await liveFlowView(ctx, tables.live_flows[0], NOW);
+    expect(view.waiting).toBe(`${ROOM} runs wait at Queue`);
+    expect(view.queue.map((q) => q.waiting)).toEqual([`${ROOM} runs wait at Queue`, `${ROOM} runs wait at Queue`]);
+  });
+
+  test("with N-1 it starts, no more than the room left", async () => {
+    const { ctx } = setup(at(ROOM - 1));
+    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_d90"]);
+    const { ctx: roomy } = setup(at(ROOM - 2));
+    expect((await sweepCore(roomy, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_d90", "tasks_g70"]);
+  });
+
+  test("other flows' runs at a station of the same name, and finished runs, do not count", async () => {
+    const { ctx } = setup([
+      ...at(ROOM, { key: "other", workflow_id: "workflows_other" }),
+      ...at(ROOM, { key: "done", status: "completed" }),
+      ...at(ROOM, { key: "failed", status: "failed" }),
+      ...at(ROOM, { key: "build", current_node_id: "build" }),
+    ]);
+    expect((await sweepCore(ctx, NOW)).started.map((s) => s.task_id)).toEqual(["tasks_d90", "tasks_g70"]);
+  });
+
+  test("a pending run counts, and so does a variant's run pinned to the flow", async () => {
+    const { ctx } = setup([
+      ...at(1, { key: "pending", status: "pending" }),
+      ...at(ROOM - 1, { key: "variant", workflow_id: "workflows_other", flow_versions: [{ workflow_id: "workflows_other", version_id: "v1" }, { workflow_id: "workflows_spine", version_id: "v2" }] }),
+    ]);
+    expect((await sweepCore(ctx, NOW)).started).toEqual([]);
+  });
+
+  test("the count stops reading at N", async () => {
+    const { ctx, tables } = setup(at(ROOM * 10));
+    let read = 0;
+    const db = ctx.db;
+    const counting = { db: Object.assign(Object.create(db), {
+      query: (table: string) => {
+        const q = db.query(table);
+        const withIndex = q.withIndex.bind(q);
+        q.withIndex = (name: string, fn: any) => {
+          const range = withIndex(name, fn);
+          if (name !== "by_workspace_status_node") return range;
+          const rows = range[Symbol.asyncIterator].bind(range);
+          range[Symbol.asyncIterator] = async function* () { for await (const r of { [Symbol.asyncIterator]: rows }) { read++; yield r; } };
+          return range;
+        };
+        return q;
+      },
+    }) };
+    expect(await queueRoom(counting, tables.live_flows[0], spine.nodes)).toEqual({ left: 0, words: `${ROOM} runs wait at Queue` });
+    expect(read).toBe(ROOM);
+  });
+
+  test("a station's room survives the schema convex stores a flow's graph in", async () => {
+    const t = convexTest(schema, allModules);
+    const nodes = await t.run(async (c) => {
+      const user = await c.db.insert("users", { name: "Host" } as any);
+      const id = await c.db.insert("workflows", { ...spine, _id: undefined, user_id: user } as any);
+      return (await c.db.get(id))!.nodes;
+    });
+    expect(nodes.find((n: any) => n.id === "queue")).toMatchObject({ parks: true, room: ROOM });
   });
 });

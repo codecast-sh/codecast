@@ -2,7 +2,7 @@
 // serializer every push site uses (the-line.md L8 node fidelity). Every node
 // attribute the daemon needs to run the stored graph as a local run would
 // (definition, reviewer, timeout, temperature, the gate's doc and category, a
-// station that parks) rides here, so no push site can drop one.
+// station that parks and its room) rides here, so no push site can drop one.
 import type { WorkflowGraph } from "./types.js";
 
 export function graphNodesPayload(graph: WorkflowGraph) {
@@ -15,6 +15,7 @@ export function graphNodesPayload(graph: WorkflowGraph) {
     ...(n.agent ? { agent: n.agent } : {}),
     ...(n.isolated !== undefined ? { isolated: n.isolated } : {}),
     ...(n.parks ? { parks: true } : {}),
+    ...(n.room !== undefined ? { room: n.room } : {}),
     ...(n.reasoning_effort ? { reasoning_effort: n.reasoning_effort } : {}),
     ...(n.max_visits !== undefined ? { max_visits: n.max_visits } : {}),
     ...(n.max_retries !== undefined ? { max_retries: n.max_retries } : {}),

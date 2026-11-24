@@ -45,6 +45,9 @@ export interface WorkflowNode {
   // room): while a run stands here it holds no machine slot, and it counts
   // again once it moves on (linePlacement.holdsSlot reads it from the flow).
   parks?: boolean;
+  // A station that parks may hold at most this many of the flow's runs: while it holds that many, the flow's live
+  // admission starts nothing (convex liveFlows.queueFullWords). Union's onefix Queue says room=8.
+  room?: number;
   // Command nodes that render the line's own text (Union's shared text from
   // _shared.md): re-made whenever the run resumes, so a resumed run reads the
   // text as it is now, never the copy in its checkpoint (line-versions.md LV4).
