@@ -257,3 +257,12 @@ test("the line names the account when the move changed it", () => {
   expect(roleFailoverLine("eng", f, "u1", () => "Dana")).toContain("It now runs and bills under Dana.");
   expect(roleFailoverLine("eng", { ...f, cross_user: false }, "u1", () => "Dana")).not.toContain("bills");
 });
+
+test("a standing session that is a registered one is never failed over", async () => {
+  const w = await world({ macQuietMs: ROLE_FAILOVER_QUIET_MS + MIN });
+  await w.t.run((ctx: any) => ctx.db.patch(w.conv, { register_only: true }));
+  const out = await sweep(w.t, w.now);
+  expect(out.outcomes).toEqual([]);
+  expect((await w.t.run((ctx: any) => ctx.db.get(w.conv))).owner_device_id).toBe("jason-mac");
+  expect(await notices(w.t, w.seed.ashot)).toEqual([]);
+});

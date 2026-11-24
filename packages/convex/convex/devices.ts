@@ -1101,7 +1101,7 @@ export async function performClaimDeviceAccount(
   const movable: any[] = [];
   for (const conv of rows) {
     const access = await checkConversationAccess(ctx, callerId, conv);
-    if (access === "owner" || (access === "team" && !!caller && !caller.is_bot)) movable.push(conv);
+    if (!conv.register_only && (access === "owner" || (access === "team" && !!caller && !caller.is_bot))) movable.push(conv);
   }
   const skipped = rows.length - movable.length;
   const page = movable.slice(0, CLAIM_ACCOUNT_PAGE);

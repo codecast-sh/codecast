@@ -8,7 +8,7 @@ import { enqueuePendingMessage, healAndNotifyStuckMessages } from "./pendingMess
 import { enqueueKillAndResume } from "./conversations";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
 import { DEVICE_ONLINE_MS } from "./deviceRouting";
-import { enqueueStartSession, performMoveSessionToDevice, performReassignToDevice, performReparentSessionToDevice } from "./devices";
+import { enqueueStartSession, performClaimDeviceAccount, performMoveSessionToDevice, performReassignToDevice, performReparentSessionToDevice } from "./devices";
 import { parkOnCloudHost } from "./cloudPlacement";
 import { performCreateBatch, performFinishSession } from "./sessionMigrations";
 
@@ -567,6 +567,17 @@ describe("a registered session cannot move devices", () => {
     await s.t.run((ctx) => ctx.db.insert("devices", { user_id: s.owner, device_id: "dev-other", label: "Other", platform: "linux", last_seen: Date.now() } as any));
     const res = await s.t.mutation(api.devices.claimConversationForStart, { api_token: OWNER_TOKEN, conversation_id: s.conversation_id, device_id: "dev-other" });
     expect(res).toEqual({ won: false });
+    await s.unchanged();
+  });
+
+  test("claiming a device's sessions for a new account leaves the registered row with its account", async () => {
+    const s = await withRegistered();
+    await s.t.run((ctx) => ctx.db.insert("devices", { user_id: s.mate, device_id: DEVICE, label: "Laptop", platform: "linux", last_seen: Date.now() } as any));
+    const res: any = await s.t.run((ctx) => performClaimDeviceAccount(ctx as any, s.mate, { previousUserId: s.owner, deviceId: DEVICE }));
+    expect(res.moved).toBe(2);
+    expect(res.skipped).toBe(1);
+    expect((await s.conv(s.conversation_id)).user_id).toBe(s.owner);
+    expect((await s.conv(s.daemonConv)).user_id).toBe(s.mate);
     await s.unchanged();
   });
 
