@@ -235,9 +235,10 @@ function landingCommit(exec: Exec, cwd: string, branch: string, into: string, he
 }
 
 /** The whole step, from the allowance to the record. `post` is the CLI's
- *  authenticated call. */
+ *  authenticated call; `session` is who the step's comment signs as (the
+ *  caller's own session, else its run's), never the person behind the token. */
 export async function runMergeStep(
-  args: { cwd: string; run_id: string; branch: string; into: string; task?: string; post: (path: string, body: Record<string, unknown>) => Promise<any>; exec?: Exec; log?: (line: string) => void },
+  args: { cwd: string; run_id: string; branch: string; into: string; task?: string; session?: string; post: (path: string, body: Record<string, unknown>) => Promise<any>; exec?: Exec; log?: (line: string) => void },
 ): Promise<{ outcome: MergeOutcome; check: MergeCheck | null; recorded: any | null }> {
   const out = await mergeStep(args);
   // The person said Ship and the change is not on the default branch: the
@@ -245,7 +246,7 @@ export async function runMergeStep(
   const task = args.task ?? out.check?.task?.short_id;
   if (out.outcome.kind === "left" && task) {
     const text = `Merge left to a person: ${out.outcome.reason}. ${args.branch} is not on ${args.into}; land it by hand.`;
-    try { await args.post("/cli/work/comment", { short_id: task, comment_type: "blocker", text }); } catch {}
+    try { await args.post("/cli/work/comment", { short_id: task, comment_type: "blocker", text, ...(args.session ? { conversation_id: args.session } : {}) }); } catch {}
   }
   return out;
 }

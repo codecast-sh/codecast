@@ -373,6 +373,20 @@ describe("runMergeStep", () => {
     expect(posts[1].body).toMatchObject({ short_id: "ct-7", comment_type: "blocker" });
     expect(posts[1].body.text).toContain("codecast/line-ct-7 is not on main");
     expect(posts[1].body.text).toContain("no merge authority");
+    expect(posts[1].body.conversation_id).toBeUndefined();
+  });
+
+  // ct-100734: posted bare from a line station, the blocker read as the person's own words and reached the working session as theirs.
+  test("a merge left to a person signs its blocker as the session it was given (a station's run)", async () => {
+    const posts: Array<{ path: string; body: any }> = [];
+    const { exec } = scripted({});
+    const post = async (path: string, body: any) => {
+      posts.push({ path, body });
+      if (path.endsWith("/check")) return { ...allowed, allowed: false, reason: "merge is off for this line" };
+      return { ok: true };
+    };
+    await runMergeStep({ cwd: "/repo", run_id: "run_1", branch: "b", into: "main", task: "ct-7", session: "conv_run", post, exec });
+    expect(posts[1]).toMatchObject({ path: "/cli/work/comment", body: { short_id: "ct-7", comment_type: "blocker", conversation_id: "conv_run" } });
   });
 
   test("a landed merge posts no blocker", async () => {

@@ -93,7 +93,8 @@ export function registerLineSubcommands(line: Command, deps: GroupDeps): void {
       // Throwing, never exiting: a server that refuses or cannot be read is a
       // merge left to a person (exit 0), not a failed station.
       const post = (path: string, body: Record<string, unknown>) => apiPost(deps, path, body, { exitOnError: false, describeError: cliErrorMessage });
-      const result = await runMergeStep({ cwd, run_id: options.run, branch: options.branch, into, task: options.task || undefined, post, log: (l) => { if (!options.json) console.log(l); } });
+      const { commentSession } = await import("./sessionIdentity.js");
+      const result = await runMergeStep({ cwd, run_id: options.run, branch: options.branch, into, task: options.task || undefined, session: commentSession(null) ?? undefined, post, log: (l) => { if (!options.json) console.log(l); } });
       if (options.json) console.log(JSON.stringify(result, null, 2));
     });
 

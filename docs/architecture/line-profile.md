@@ -94,7 +94,11 @@ the run's worktree in its own shell, with `task_id`, `branch`,
 environment (`LINE_COMMAND_VARS`), which is how `$run_dir` in a command
 expands. `$run_dir` is the run's files directory, inside the repository's git
 directory (`<git common dir>/cast-line/line-<task>`), the same for every
-station and never committed.
+station and never committed. The environment also names the run's own session
+(`CODECAST_RUN_CONVERSATION_ID`), so a comment the command posts (`cast task
+comment`, `done -m`, `drop -m`, `cast line merge`) signs as the run: it never
+reads as the words of the person whose token the host holds, and never reaches
+the task's working session as theirs.
 A repo without a profile gets the defaults: `cast ws check`, no prove or eval
 command (the stations pass with a note saying so), codecast's prompting
 standard, and the shared principles with no project file.

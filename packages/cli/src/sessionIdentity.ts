@@ -9,9 +9,17 @@ export function sessionIdFromEnv(env: NodeJS.ProcessEnv = process.env): string |
   return null;
 }
 
-/** `env` as a person's own shell would have it: nothing that ties a cast command to an agent session or its task and plan bindings. What a command a person approved runs with (daemon run_cast). */
+/** A station's run, named by its runner (workflow/runner.ts stationEnv) for a script with no session of its own. */
+export const RUN_CONVERSATION_ENV = "CODECAST_RUN_CONVERSATION_ID";
+
+/** Who a comment signs as: the agent session the environment names, else the run whose station this is, else `guess` (a session found by looking). */
+export function commentSession(guess: string | null, env: NodeJS.ProcessEnv = process.env): string | null {
+  return sessionIdFromEnv(env) || env[RUN_CONVERSATION_ENV] || guess;
+}
+
+/** `env` as a person's own shell would have it: nothing that ties a cast command to an agent session, a run or its task and plan bindings. What a command a person approved runs with (daemon run_cast). */
 export function personEnv(env: NodeJS.ProcessEnv = process.env): Record<string, string> {
-  const drop = new Set<string>([...SESSION_ID_KEYS, "CODECAST_TASK_ID", "CODECAST_PLAN_ID", "CODECAST_CWD"]);
+  const drop = new Set<string>([...SESSION_ID_KEYS, RUN_CONVERSATION_ENV, "CODECAST_TASK_ID", "CODECAST_PLAN_ID", "CODECAST_CWD"]);
   const out: Record<string, string> = {};
   for (const [k, val] of Object.entries(env)) if (val !== undefined && !drop.has(k)) out[k] = val;
   return out;

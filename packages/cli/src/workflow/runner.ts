@@ -30,6 +30,7 @@ import * as readline from "readline";
 import { c } from "../colors.js";
 import { cliFetch } from "../cliHttp.js";
 import { claudeProjectDirName } from "../projectPathResolver.js";
+import { RUN_CONVERSATION_ENV } from "../sessionIdentity.js";
 import { behindWords, frozenChangeContext } from "./flowChangeFile.js";
 import { webBaseUrl } from "../config/readLocalConfig.js";
 import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
@@ -1268,7 +1269,7 @@ async function executeFanout(
     const ctx = { ...state.context };
     let outcome: NodeOutcome;
     if (options.dryRun) outcome = "success";
-    else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd, stationWatch(options));
+    else if (branch.type === "command") outcome = await executeCommand(branch, ctx, cwd, stationWatch(options), stationEnv(options));
     else if (branch.type === "call") outcome = await executeCallNode(branch, graph, ctx, cwd, options);
     // A hand is checkpointed when it starts, so a resumed fanout waits on it rather than starting a second (runResume.ts).
     else if ((branch.type === "agent" || branch.type === "prompt") && branch.backend === "session") outcome = await executeSessionNode(branch, graph, ctx, cwd, options, () => {
@@ -1585,6 +1586,13 @@ class RunEndedOnServer extends Error {}
  */
 function stopIfEnded(options: RunOptions): void {
   if (options.endedOnServer) throw new RunEndedOnServer(options.endedOnServer);
+}
+
+/** A station's script has no session of its own: the run's is in its environment, so a comment it posts signs as the
+ *  run. Posted bare, a station's notice read as the words of the person whose token the host holds and was relayed
+ *  into the task's working session as theirs (ct-100734, 295 relays in a week). */
+function stationEnv(options: RunOptions): Record<string, string> {
+  return options.runSession ? { [RUN_CONVERSATION_ENV]: options.runSession } : {};
 }
 
 /**
@@ -2242,7 +2250,7 @@ async function driveRun(
     options.resumed = { node_id: resumeAt.node_id, gate: resumeAt.gate, hands: resumeAt.hands, finished: resumeAt.finished };
     console.log(`${c.dim}Resuming at ${graph.nodes.get(resumeAt.node_id)?.label ?? resumeAt.node_id} (state from the ${resumeAt.from})${c.reset}`);
     // The line's own text is read as it is now (line-versions.md LV4).
-    for (const node of refreshedOnResume(graph, state.completed)) await executeCommand(node, state.context, cwd);
+    for (const node of refreshedOnResume(graph, state.completed)) await executeCommand(node, state.context, cwd, {}, stationEnv(options));
   }
 
   // A person who brought the subject back keeps it, across a resume too: the parker reads that off the run's context.
@@ -2492,7 +2500,7 @@ async function runNodeLoop(
     } else if (current.type === "start") {
       outcome = "success";
     } else if (current.type === "command") {
-      outcome = await executeCommand(current, state.context, cwd, stationWatch(options));
+      outcome = await executeCommand(current, state.context, cwd, stationWatch(options), stationEnv(options));
     } else if (current.type === "call") {
       outcome = await executeCallNode(current, graph, state.context, cwd, options);
     } else if (current.type === "human" && options.runId) {

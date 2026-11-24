@@ -532,7 +532,10 @@ describe("command groups stay off the boot graph", () => {
     // 4854 (2026-11-24): the register, unregister and relay manifest entries
     // and the messaging-only gates in fastPath.ts (#102) (+2).
     // 4855 the same day: fsAtomic.ts, as in the file count above (+1).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4855);
+    // 4856 the same day (ct-100734): a line station's comments sign as its run, not as the person behind the
+    // host's token: the run variable and commentSession in sessionIdentity.ts, used by `cast task comment`,
+    // `done -m` and `drop -m` (+1).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4856);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
