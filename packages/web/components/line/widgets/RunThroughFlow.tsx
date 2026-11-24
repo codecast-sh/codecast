@@ -23,6 +23,7 @@ import { shipLedgerFor } from "../../consequential/shipLedger";
 import { pressFromSig, pressSig, runThroughMessage, type Press, type PressMsg } from "../../../lib/line/flowMessages";
 import { sessionIdleAt } from "../../../lib/liveness";
 import { formatElapsed } from "../../../lib/taskLine";
+import { editedSince, fixRounds } from "../../../lib/ship/newEdits";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from "../../ui/sheet";
@@ -102,7 +103,7 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
     </button>
   );
   const panel = showRun ? (
-    <RunPanel run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
+    <RunPanel conversationId={conversationId} run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
   ) : starting && !again ? (
     <Starting press={press!} onOpen={() => { setOpen(false); openMessage(conversationId, press!.id); }} />
   ) : (
@@ -167,11 +168,26 @@ function PressNotice({ press, onRead }: { press: Press; onRead: () => void }) {
   );
 }
 
+/** Where a run leaves its change on main: shipping again takes whatever the checkout holds now, not that change. */
+const LANDED_NOW = new Set<Journey["now"]["kind"]>(["landed", "deploying", "live", "merged"]);
+
+/** Whether the session edited a file after `since` outside the `except` windows (lib/ship/newEdits.ts). */
+function useEditedSince(conversationId: string, since: number | null, except: ReadonlyArray<readonly [number, number]>): boolean {
+  // The conversation's own list: it changes only when its messages do, never on another row's heartbeat.
+  const msgs = useInboxStore((s) => (s.messages as Record<string, Array<{ timestamp: number; tool_calls?: Array<{ name?: string }> }>>)[conversationId]);
+  return useMemo(() => !!since && !!msgs && editedSince(msgs, since, except), [msgs, since, except]);
+}
+
 /** The session's run: its journey, who acts now, and the person's controls on it. */
-function RunPanel({ run, flow, journey, targets, notice, onAgain }: { run: any; flow: AppFlow; journey: Journey; targets?: TargetState[]; notice?: React.ReactNode; onAgain: () => void }) {
+function RunPanel({ conversationId, run, flow, journey, targets, notice, onAgain }: { conversationId: string; run: any; flow: AppFlow; journey: Journey; targets?: TargetState[]; notice?: React.ReactNode; onAgain: () => void }) {
   const now = useCoarseNow(15_000);
   const live = runIsLive(run);
   const stop = journey.now.kind === "stopped" || journey.now.kind === "failed" ? journey.now : null;
+  // A run that landed its change offers another only once the session has edited something the run did not take: since
+  // it started, outside the session's own fix rounds, whose edits went out with it.
+  const fixing = useMemo(() => fixRounds(flow, run), [flow, run]);
+  const edited = useEditedSince(conversationId, live ? null : run.created_at ?? null, fixing);
+  const spent = LANDED_NOW.has(journey.now.kind) && !edited;
   return (
     <div className="shp" data-ship-run={run._id}>
       <header className="shp-head">
@@ -185,8 +201,8 @@ function RunPanel({ run, flow, journey, targets, notice, onAgain }: { run: any; 
       <JourneyView journey={journey} run={run} now_ms={now} targets={targets}
         actions={live
           ? <button type="button" className="sj-btn" data-quiet onClick={() => void useInboxStore.getState().stopLineRun(run._id)} data-flow-stop={run._id}>Stop</button>
-          // A stop's bar places Ship again itself; a finished run offers it plainly.
-          : stop ? null : <button type="button" className="sj-btn" onClick={onAgain} data-ship-again>Ship again</button>}
+          // A stop's bar places Ship again itself; a finished run offers it plainly, a landed one only with new edits.
+          : stop || spent ? null : <button type="button" className="sj-btn" onClick={onAgain} data-ship-again>Ship again</button>}
         again={(primary) => <button type="button" className="sj-btn" data-primary={primary ? "" : undefined} data-quiet={primary ? undefined : ""} onClick={onAgain} data-ship-again>Ship again</button>} />
     </div>
   );

@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
-import { approvalOf, approvalWords, canAnswer, deployHold, insideWords, journeyOf, journeyStages, journeyWords, landedSha, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
-import { BRANCHING_FLOW, FANOUT_FLOW, LAND_ASKS, LAND_FLOW, LAND_REPO_FLOW } from "../journeyFixtures";
+import { approvalOf, approvalWords, canAnswer, deployHold, insideWords, journeyOf, journeyStages, journeyWords, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { landedSha } from "../runRecord";
+import { BRANCHING_FLOW, FANOUT_FLOW, LAND_ASKS, LAND_FLOW, LAND_REPO_FLOW, UNION_CHANGE_FLOW, UNION_FLAT_RUN, UNION_FLAT_SHA } from "../journeyFixtures";
 import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
 import { SHIPPED_FLOWS } from "../../line/shippedFlows.generated";
 import { GALLERY_FLOW, renderGalleryRecords } from "../../renderGallery";
@@ -283,20 +284,31 @@ describe("stops", () => {
 
 describe("landed and deploying", () => {
   const atDeploy = (line: string, merge: unknown = { sha: "4a6e413b2c", at: 9 }) => journeyOf(change, run({ current_node_id: "deploy__wait", merge, node_statuses: [...MERGED, st("deploy__wait", "running", 16, { result_preview: line })] }));
-  test("only a merge recorded on the run is landed; a sha in a step's output is not", () => {
+  test("landed is a merge recorded on the run, else the sha a passing merge step reported, unless Deploy found it not on main", () => {
     expect(landedSha({ merge: { sha: "4a6e413b2c" } })).toBe("4a6e413b2c");
     expect(landedSha({ merge: null })).toBeNull();
-    // At Deploy with no merge recorded (merged by its own script, an older CLI): the wait, claiming neither way.
+    // No merge recorded (merged by its own script, an older CLI): the merge step's own report is the landing, as await-deploy reads it.
+    expect(landedSha({ merge: null, node_statuses: MERGED })).toBe("4a6e413b2c");
+    // Only a step that passed, and only its own "sha" (never the PR's head_sha).
+    expect(landedSha({ node_statuses: [st("merge", "failed", 14, { result_preview: '{"sha":"4a6e413b2c"}' })] })).toBeNull();
+    expect(landedSha({ node_statuses: [st("pr", "completed", 1, { result_preview: '{"pr":12,"head_sha":"361c9c1107"}' })] })).toBeNull();
+    // Deploy then said the commit is not on main: the step's word is not the landing.
+    expect(landedSha({ current_node_id: "deploy__unmerged", node_statuses: MERGED })).toBeNull();
     const printed = atDeploy("Waiting for change-x to land on main", null);
-    expect(printed.now).toMatchObject({ kind: "working", stage: "Deploy", role: "deploy" });
-    expect(printed.stages.find((s) => s.role === "land")!.state).toBe("routed");
-    expect(journeyWords(printed)).toEqual({ words: "Deploy", tone: "working" });
+    expect(printed.now).toMatchObject({ kind: "landed", sha: "4a6e413b2c" });
+    expect(printed.stages.find((s) => s.role === "land")!.state).toBe("done");
+    // At Deploy with no sha anywhere: the wait, claiming neither way.
+    const NO_SHA = [...GREEN, st("merge", "completed", 14), st("landed", "completed", 15), st("deploy", "completed", 15)];
+    const silent = journeyOf(change, run({ current_node_id: "deploy__wait", node_statuses: [...NO_SHA, st("deploy__wait", "running", 16, { result_preview: "Waiting for change-x to land on main" })] }));
+    expect(silent.now).toMatchObject({ kind: "working", stage: "Deploy", role: "deploy" });
+    expect(silent.stages.find((s) => s.role === "land")!.state).toBe("routed");
+    expect(journeyWords(silent)).toEqual({ words: "Deploy", tone: "working" });
     // Ended at Deploy with no merge on it: Not landed. Ended at an earlier stage: stopped there, as before.
     const unmerged = journeyOf(change, run({ status: "failed", current_node_id: "deploy__unmerged", fail_reason: "Stopped: Nothing was merged: the run has no merged commit, so nothing goes out.", node_statuses: [...MERGED, st("deploy__wait", "failed", 16)] }));
     expect(unmerged.now).toMatchObject({ kind: "unlanded" });
     expect(journeyWords(unmerged)).toEqual({ words: "Not landed", tone: "bad" });
     // Finished with no merge on it: done, never Not landed.
-    expect(journeyOf(change, run({ status: "completed", current_node_id: "merge", node_statuses: MERGED })).now.kind).toBe("passed");
+    expect(journeyOf(change, run({ status: "completed", current_node_id: "merge", node_statuses: NO_SHA })).now.kind).toBe("passed");
     // A run that completed at its end with nothing merged (its change already upstream) is Done, never Live.
     const upstream = journeyOf(change, run({ status: "completed", current_node_id: "exit", merge: null }));
     expect(upstream.now.kind).toBe("passed");
@@ -528,5 +540,38 @@ describe("a segment's inside", () => {
     const route = atCard.stages[0].inside!.routes.find((r) => r.asks)!;
     expect(route.state).toBe("waiting");
     expect(route.steps.map((x) => [x.label, x.state, x.who])).toEqual([["Why a person", "done", "auto"], ["Decide", "waiting", "you"], ["Person said Ship", "idle", "auto"]]);
+  });
+});
+
+describe("a finished run drawn on a newer version of its flow", () => {
+  // Union's change as it stands, and a finished run of its older version, its steps recorded flat (journeyFixtures).
+  const segmented = pushedFlow({ _id: "wf_union_change", ...UNION_CHANGE_FLOW });
+  const SHA = UNION_FLAT_SHA;
+  const FLAT = UNION_FLAT_RUN.node_statuses;
+  const finished = run(UNION_FLAT_RUN);
+
+  test("every stage it passed is done, its merged sha read from the merge step, and it ends Live", () => {
+    expect(landedSha(finished)).toBe(SHA);
+    const j = journeyOf(segmented, finished);
+    expect(states(j)).toEqual(["Land:done", "Deploy:done", "Live:done"]);
+    expect(j.now.kind).toBe("live");
+    expect(journeyWords(j)).toEqual({ words: "Live", tone: "ok" });
+    // Land's inside reads the flat steps as its own.
+    expect(j.stages[0].inside!.path.map((p) => `${p.label}:${p.state}`)).toEqual(["PR:done", "CI + Review:done", "Merge:done"]);
+  });
+
+  test("a flat step goes into a segment only when the run entered that segment at its start", () => {
+    // The library change flow today holds a Decide segment (decide__ship, decide__revise); a run of its older version
+    // stopped at its own Checks (check__failed) after the session's Revise, and never reached Decide.
+    const shipped = flowBySlug(appPool([]), "change")!;
+    const old = journeyOf(shipped, run({ status: "failed", current_node_id: "check__failed", fail_reason: "Stopped: Checks failed", node_statuses: [st("pr", "completed", 1), st("revise", "completed", 2), st("ship", "completed", 3), st("ship__ship", "completed", 3), st("check__failed", "completed", 4)] }));
+    expect(old.stages.find((s) => s.id === "decide")?.state ?? "none").not.toBe("done");
+    expect(old.stages.find((s) => s.role === "deploy")!.state).not.toBe("stopped");
+    expect(old.now.kind).not.toBe("unlanded");
+  });
+  test("while it runs, the flat step it stands at is Land's", () => {
+    const j = journeyOf(segmented, run({ status: "running", current_node_id: "merge", node_statuses: [...FLAT.slice(0, 6), st("merge", "running", 12)] }));
+    expect(j.now).toMatchObject({ kind: "working", stage: "Land" });
+    expect(states(j)).toEqual(["Land:active", "Deploy:idle", "Live:idle"]);
   });
 });

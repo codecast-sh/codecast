@@ -11,6 +11,7 @@
 // and run card, the inbox card and the phone's run card all read a run here.
 import { foldFlow, passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { asksIfOf, insideOf, insideOnRun, type RouteBase, type StageInside } from "./segmentInside";
+import { landedSha, parentOf, recordedIds } from "./runRecord";
 
 export { insideWords, type InsideRoute, type StageInside } from "./segmentInside";
 
@@ -139,9 +140,6 @@ export function canAnswer(d: GateDecision | null | undefined, viewer: string | n
 
 /** Whether a decision waits on a role or on people. */
 export const holderOf = (d: GateDecision | null | undefined): "person" | "role" => ((d?.passed_to ?? d?.holder)?.kind === "role" ? "role" : "person");
-
-/** The one landed fact: the sha a merge recorded on the run (`/cli/line/merge/record`). Nothing else means landed. */
-export const landedSha = (run: { merge?: { sha?: string | null } | null } | null | undefined): string | null => run?.merge?.sha || null;
 
 /** Whether a gate holds the run for an answer: paused on a card nobody has answered. */
 export const gateOpen = (run: Pick<JourneyRun, "status" | "gate_decision_id" | "gate_prompt" | "gate_decision_status">) =>
@@ -377,15 +375,16 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const idle = (b: Base): JourneyStage => ({ ...strip(b), state: "idle", round: null, ...(b.branches ? { branches: b.branches.map(idle) } : {}) });
   if (!run) return { stages: plan.map(idle), now: { kind: "idle" } };
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-  const statuses = run.node_statuses ?? [];
+  const idOf = recordedIds(graph, run);
+  const statuses = (run.node_statuses ?? []).map((n) => (idOf(n.node_id) === n.node_id ? n : { ...n, node_id: idOf(n.node_id) }));
   const statusOf = (id: string | null | undefined) => (id ? [...statuses].reverse().find((n) => n.node_id === id) : undefined);
   const newest = (list: NodeStatus[]) => list.reduce<NodeStatus | undefined>((best, n) => (!best || (n.started_at ?? 0) >= (best.started_at ?? 0) ? n : best), undefined);
   const live = LIVE_STATUSES.has(run.status);
   const passed = run.status === "completed";
   const failed = run.status === "failed";
   const sha = landedSha(run);
-  const waitingOn = run.waiting_on_session ?? null;
-  const at = run.current_node_id ?? null;
+  const waitingOn = run.waiting_on_session ? { ...run.waiting_on_session, node_id: idOf(run.waiting_on_session.node_id) } : null;
+  const at = run.current_node_id ? idOf(run.current_node_id) : null;
   const flowStages = plan.filter((s) => s.role !== "live" && s.members.length);
   const stageOf = (nodeId: string | null) => (nodeId ? flowStages.find((s) => inStage(s, nodeId)) ?? null : null);
   // A fix station belongs to the stage that sent the work back.
@@ -422,7 +421,6 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   // Whether a person sent the work back to the session at `nodeId`: the last step the run took before it, past the ends it
   // went out through (a step whose every way on leaves the segment it sits in), is a person's. A segment's own Brief
   // inside the same segment as a card is not the card's.
-  const parentOf = (id: string) => (id.includes(SEGMENT_SEP) ? id.slice(0, id.lastIndexOf(SEGMENT_SEP)) : "");
   const endStep = (id: string) => { const out = graph.edges.filter((e) => e.from === id); return out.length > 0 && out.every((e) => parentOf(e.to) !== parentOf(id)); };
   const byPerson = (nodeId: string | null) => {
     const since = statusOf(nodeId)?.started_at ?? Infinity;
@@ -438,7 +436,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const stopStage = failed ? (pastLanding ? plan[plan.indexOf(atBase!) + 1]?.id ?? atBase!.id : atBase?.id ?? null) : null;
   // An open card is a gate wherever its node sits: on a stage when the walk back finds one, else in the bar alone.
   const open = live && gateOpen(run);
-  const gateNode = open ? run.gate_node_id ?? at : null;
+  const gateNode = open ? (run.gate_node_id ? idOf(run.gate_node_id) : at) : null;
   const gateStage = open ? stageFor(gateNode)?.id ?? null : null;
   const gateMine = open && canAnswer(viewer?.decision, viewer?.id);
   // A card off the main path names the stage that holds it after the route into it ("It edits CI"), not the stage's own name.
