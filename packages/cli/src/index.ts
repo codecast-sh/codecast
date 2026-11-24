@@ -248,7 +248,7 @@ import type { MachineCapKey } from "./machineCaps.js";
 
 const program = new Command();
 // Both SessionStart hooks print into the agent's context, so neither may meet the update notice.
-const isStableContextFastPath = isStableContextFastPathArgv(process.argv) || isTaskContextFastPath(process.argv);
+const isStableContextFastPath = isStableContextFastPathArgv(process.argv) || isTaskContextFastPath(process.argv) || isRelayHookArgv(process.argv);
 
 // Get the real cwd - CODECAST_CWD is set by the dev wrapper script
 // to preserve the original directory when running via bun run
@@ -23141,7 +23141,7 @@ messaging
 // it, which has no timeout and is not worth waiting on.
 let autoUpdateSettled: Promise<unknown> = Promise.resolve();
 let autoUpdateInstalling = false;
-if (!isStableContextFastPath && !isRelayHookArgv(process.argv) && !isCredentialHelperFastPath(process.argv) && !process.env.CODECAST_NO_AUTO_UPDATE) autoUpdateSettled = checkForUpdates().then(async (available) => {
+if (!isStableContextFastPath && !isCredentialHelperFastPath(process.argv) && !process.env.CODECAST_NO_AUTO_UPDATE) autoUpdateSettled = checkForUpdates().then(async (available) => {
   if (!available) return;
 
   // Source checkouts can't self-update (performUpdate refuses in dev mode);

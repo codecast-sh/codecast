@@ -56,8 +56,9 @@ describe("the auto-update stays out of the hook commands, flag or not", () => {
     expect(isRelayHookArgv(["bun", "cast"])).toBe(false);
   });
 
-  test("the auto-update line is guarded by it, beside the stable-context guard", () => {
-    expect(INDEX).toMatch(/if \(!isStableContextFastPath && !isRelayHookArgv\(process\.argv\) && [^\n]*autoUpdateSettled = checkForUpdates\(\)/);
+  test("the auto-update line skips it through the hook fast-path flag", () => {
+    expect(INDEX).toMatch(/const isStableContextFastPath = [^\n]*\|\| isRelayHookArgv\(process\.argv\);/);
+    expect(INDEX).toMatch(/if \(!isStableContextFastPath && [^\n]*autoUpdateSettled = checkForUpdates\(\)/);
   });
 
   test("the three commands skip the daemon autostart and command log in the preAction hook", () => {
