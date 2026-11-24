@@ -1,0 +1,14 @@
+{
+  "name": "codecast",
+  "description": "Claude Code plugins from codecast",
+  "owner": {
+    "name": "codecast"
+  },
+  "plugins": [
+    {
+      "name": "codecast-messaging",
+      "source": "./plugins/codecast-messaging",
+      "description": "Make Claude sessions started from herdr or paseo addressable by other agents through cast send, without transcript sync"
+    }
+  ]
+}

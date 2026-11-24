@@ -1,0 +1,10 @@
+{
+  "name": "codecast-messaging",
+  "version": "0.1.0",
+  "description": "Make Claude sessions started from herdr or paseo addressable by other agents through cast send, without transcript sync",
+  "author": {
+    "name": "codecast"
+  },
+  "homepage": "https://github.com/codecast-sh/codecast/issues/102",
+  "license": "MIT"
+}
