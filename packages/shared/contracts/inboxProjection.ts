@@ -148,7 +148,8 @@ export type InboxTruncation = (typeof INBOX_TRUNCATION_KINDS)[number];
 // parent. A wait its agent owner answers (agentAnswersRow: its role, or the
 // session that started it, until the wait reaches its people) files as
 // working, "With <owner>". A row without owners_model places exactly as v29.
-export const INBOX_PROJECTION_VERSION = 30 as const;
+// v31: a pinned block holds through hibernation (declaredBlockHolds).
+export const INBOX_PROJECTION_VERSION = 31 as const;
 
 export type InboxProjection = {
   v: typeof INBOX_PROJECTION_VERSION;
@@ -419,12 +420,13 @@ export interface InboxPlacementInput extends WorkStateInput {
 
 export type InboxPlacement = { bucket: InboxBucket; work_state: WorkState };
 
-// A pinned `blocked` holds the row in needs_input over every wake while the
-// trusted status is idle, absent or dead; any other live status is a newer
-// word. Read raw (it stands until the next declaration). Close advice calls it.
+// A pinned `blocked` holds the row in needs_input over every wake unless a
+// newer word speaks (working, dormant, done, waiting): idle, hibernated (says
+// nothing of who acts), absent or dead hold it. Read raw. Close advice calls it.
 export function declaredBlockHolds(input: Pick<WorkStateInput, "agentStatus" | "declaredStatus">): boolean {
   if (input.declaredStatus !== "blocked") return false;
-  return !input.agentStatus || input.agentStatus === "idle" || DEAD_AGENT_STATUSES.has(input.agentStatus);
+  const s = input.agentStatus;
+  return !s || s === "idle" || s === "hibernated" || DEAD_AGENT_STATUSES.has(s);
 }
 
 // The process exited AFTER the agent declared the work delivered, with nothing

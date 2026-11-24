@@ -468,6 +468,38 @@
       "inbox_stashed_at": "E-1h"
     },
     {
+      "_id": "hibernated_blocked_trigger",
+      "status": "active",
+      "updated_at": "E-2h",
+      "message_count": 5,
+      "agent_status": "hibernated",
+      "is_idle": true,
+      "thread_state_status": "blocked",
+      "armed_trigger_kind": "standing",
+      "last_turn_allows_park": true
+    },
+    {
+      "_id": "hibernated_blocked_done",
+      "status": "active",
+      "updated_at": "E-2h",
+      "message_count": 5,
+      "agent_status": "hibernated",
+      "is_idle": true,
+      "thread_state_status": "blocked",
+      "settle_verdict": "done",
+      "settle_verdict_at": "E-1h"
+    },
+    {
+      "_id": "hibernated_blocked_anchor",
+      "status": "active",
+      "updated_at": "E-2h",
+      "message_count": 5,
+      "agent_status": "hibernated",
+      "is_idle": true,
+      "thread_state_status": "blocked",
+      "anchor_id": "an-1"
+    },
+    {
       "_id": "pinned_dormant_trigger",
       "status": "completed",
       "updated_at": "E-3h",
@@ -571,7 +603,7 @@
         "questions": 1,
         "pinned": 3,
         "new": 2,
-        "needs_input": 26,
+        "needs_input": 29,
         "done": 6,
         "dormant": 8,
         "working": 4,
@@ -596,7 +628,7 @@
         "hidden": 0
       }
     },
-    "set_digest": "fc90905cd08cdc5e",
+    "set_digest": "91cf249a7dac7b86",
     "placements": {
       "anchorblockedz130000000000000000": [
         "needs_input",
@@ -699,6 +731,21 @@
         false
       ],
       "hibernatedaskz130000000000000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "hibernatedblockedanchorz23000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "hibernatedblockeddonez2100000000": [
+        "needs_input",
+        "needs_input",
+        false
+      ],
+      "hibernatedblockedtriggerz2400000": [
         "needs_input",
         "needs_input",
         false
@@ -906,6 +953,9 @@
       "dormantclaimwaitstalez2100000000": -262800000,
       "forkchildz9000000000000000000000": -2460000,
       "hibernatedaskz130000000000000000": -7200000,
+      "hibernatedblockedanchorz23000000": -7200000,
+      "hibernatedblockeddonez2100000000": -7200000,
+      "hibernatedblockedtriggerz2400000": -7200000,
       "hibernatedstashedz17000000000000": -7200000,
       "hibernatedz100000000000000000000": -7200000,
       "killedpinnedz1200000000000000000": -1980000,
@@ -984,6 +1034,9 @@
         "completedcontentz160000000000000",
         "forkchildz9000000000000000000000",
         "hibernatedaskz130000000000000000",
+        "hibernatedblockedanchorz23000000",
+        "hibernatedblockeddonez2100000000",
+        "hibernatedblockedtriggerz2400000",
         "hibernatedz100000000000000000000",
         "dormantclaimexpiredz190000000000",
         "pinneddormantbarez17000000000000",
