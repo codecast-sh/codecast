@@ -64,7 +64,7 @@ describe("herdr adapter", () => {
     ["agent_prompt_failed", "transient"],
   ])("error %s maps to %s", async (code, kind) => {
     const res = await createTargetAdapter(failing(code)).deliver(HERDR, "x");
-    expect(res.kind).toBe(kind);
+    expect(res.kind).toBe(kind as string as never);
   });
 
   test("a non-herdr throw is transient", async () => {
@@ -96,7 +96,7 @@ describe("herdr adapter", () => {
     ["unreachable", "unknown"],
     ["timeout", "unknown"],
   ])("probe error %s is %s", async (code, kind) => {
-    expect((await createTargetAdapter(failing(code)).probe(HERDR, "s1")).kind).toBe(kind);
+    expect((await createTargetAdapter(failing(code)).probe(HERDR, "s1")).kind).toBe(kind as string as never);
   });
 });
 
