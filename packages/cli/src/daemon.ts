@@ -28322,12 +28322,14 @@ async function deliverMessageIntoSession(
       // but hasn't consumed our payload yet. Fall-through would auto-resume a
       // parallel instance beside it — rethrow and let the retry re-enter this
       // same pane after backoff.
-      // A delivery wraps an unreadable pane as an unverified-input hold; its
-      // cause still counts toward the rebuild, or the hold would never end.
-      const unresolved = err instanceof TmuxDeliveryUncertainError ? err.cause : undefined;
-      if (isDeliveryVerdict(err) && !(unresolved && noteUnresolvablePane(sessionId, unresolved))) throw err;
+      // A delivery wraps an unreadable pane as an unverified-input hold; the
+      // failure it wraps still counts toward the rebuild, or the hold would
+      // never end. One count per failure, wrapped or not.
+      const wrapped = err instanceof TmuxDeliveryUncertainError ? err.wrappedMessage : undefined;
+      const rebuild = noteUnresolvablePane(sessionId, wrapped ?? msg);
+      if (isDeliveryVerdict(err) && !rebuild) throw err;
       logDelivery(`tmux injection failed for ${injectTarget}: ${msg}`);
-      if (unresolved || noteUnresolvablePane(sessionId, msg)) {
+      if (rebuild) {
         if (hasOpenBackgroundWork(sessionId) || subagentActiveAgoMs(sessionId) !== Infinity) {
           // An unreadable pane is not a dead agent. Background work or a subagent
           // running inside it dies with the tree, so the message waits instead.
