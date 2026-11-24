@@ -7,6 +7,7 @@ import { useLocation } from "react-router";
 import { useMutation, useConvexAuth } from "convex/react";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
 import { floorRequestDue, isBelowFloor } from "../lib/desktopFloor";
+import { updateCardState } from "../lib/desktopUpdateState";
 import { api } from "@codecast/convex/convex/_generated/api";
 import {
   isDesktop,
@@ -87,7 +88,8 @@ export function DesktopProvider() {
   const router = useRouter();
   const initRef = useRef(false);
   const [update, setUpdate] = useState<{ current: string; latest: string } | null>(null);
-  const [updating, setUpdating] = useState(false);
+  // This window asked for the update. A finished download does not clear it.
+  const [requested, setRequested] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [stalled, setStalled] = useState(false);
   // Real download progress from Electron's own auto-updater (works when
@@ -113,7 +115,7 @@ export function DesktopProvider() {
 
   const startUpdate = () => {
     setStalled(false);
-    setUpdating(true);
+    setRequested(true);
     setAttempt((a) => a + 1);
     // Newer desktop builds download in-process and report real progress over
     // IPC (the `ipc` state below), then swap + relaunch on "Restart". Older
@@ -124,7 +126,7 @@ export function DesktopProvider() {
     if (hasInProcessUpdater()) {
       checkForUpdate({ manual: false });
     } else {
-      requestDesktopUpdate({}).catch(() => setUpdating(false));
+      requestDesktopUpdate({}).catch(() => setRequested(false));
     }
   };
 
@@ -459,12 +461,17 @@ export function DesktopProvider() {
     };
   });
 
-  const ready = ipc?.status === "ready";
-  const downloading = ipc?.status === "downloading";
-  const errored = ipc?.status === "error";
+  // A failed run (dead socket, sha mismatch, unreachable server) surfaces the
+  // retry UI immediately — main.js aborts any wedged attempt on retry, so the
+  // button always does real work now.
+  const { ready, downloading, errored, updating, inProgress, showStalled } = updateCardState({
+    status: ipc?.status,
+    requested,
+    stalled,
+    known: update != null,
+  });
   const latest = ipc?.version ?? update?.latest ?? (belowFloor ? floor ?? undefined : undefined);
   const current = update?.current ?? shellVersion;
-  const inProgress = updating || downloading;
 
   // Below the floor: start on our own, once per window per interval. The
   // daemon path quits and relaunches the app to apply, so the relaunched
@@ -507,10 +514,6 @@ export function DesktopProvider() {
     return () => window.clearTimeout(id);
   }, [inProgress, ipc?.percent, attempt]);
 
-  // A failed run (dead socket, sha mismatch, unreachable server) surfaces the
-  // retry UI immediately — main.js aborts any wedged attempt on retry, so the
-  // button always does real work now.
-  const showStalled = stalled || (errored && (updating || update != null));
 
   // The banner sits over the composer, so it must never demand permanent
   // screen space: a download auto-collapses to a small pill after a few
