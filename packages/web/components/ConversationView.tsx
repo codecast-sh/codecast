@@ -18,7 +18,7 @@ import { usePaletteSessionCommands } from "../lib/paletteSessionCommands";
 import Link from "next/link";
 import { dragCarriesPane } from "../lib/stage";
 import { useRouter } from "next/navigation";
-import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, useContext, Fragment, Suspense, type ForwardedRef } from "react";
+import { useLayoutEffect, useRef, useState, useMemo, useReducer, useImperativeHandle, forwardRef, useCallback, memo, useContext, Fragment, Suspense, type ForwardedRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -35,7 +35,8 @@ import { useRecordConversationOpen } from "../lib/accessLogOpen";
 import { BrowserPaneOfferChip } from "./browser/BrowserPaneOfferChip";
 import { SessionCanvasToggle } from "./conversation/SessionCanvasToggle";
 import { BrowserSessionContext } from "../hooks/useBrowserTabActions";
-import { useVirtualizer, type Virtualizer } from "@tanstack/react-virtual";
+import { useVirtualizer, elementScroll, observeElementOffset, type Virtualizer } from "@tanstack/react-virtual";
+import { flushSync } from "react-dom";
 import { isCommandMessage, cleanContent, cleanTitle, extractFilePaths, isHiddenSystemNotice, isLimitNoticeSuperseded, isContextOnlyUserMessage, initialSubagentPromptId } from "../lib/conversationProcessor";
 import { foldHostedRetries, type RetryFoldRow } from "../lib/hostedNotice";
 import { ApprovalAnswerLine, HostedNotice, MailConnectChip, RoutineOfferChip, approvalAnswerAddsToReceipt, hostedNoticeKind, offersMailConnect, routineOffer } from "./conversation/HostedNotice";
@@ -219,6 +220,7 @@ import { createScrollHold, type ScrollHold } from "../lib/virtualList/scrollHold
 import { VLIST_LEGACY } from "../lib/virtualList/legacyFlags";
 import { useScrollSeek } from "../hooks/useScrollSeek";
 import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
+import { scrollOutranRows, rangeLeftMountedRows, type MountedRows } from "../lib/virtualList/coverage";
 import { lazyNamed } from "../lib/lazyNamed";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
@@ -1800,18 +1802,79 @@ const ConversationViewInner = (
 
   // The one pending programmatic scroll target (lib/virtualList/scrollHold).
   const holdRef = useRef<ScrollHold | null>(null);
+  // The fast-scroll tracker and the rows in the DOM, for the two scroll hooks
+  // below, which the virtualizer keeps from its first render.
+  const seekRef = useRef<{ wrote: (top: number) => void; reader: () => boolean } | null>(null);
+  const mountedRowsRef = useRef<MountedRows | null>(null);
+  // Tells the virtualizer an offset the way its scroll event would.
+  const reportOffsetRef = useRef<((offset: number) => void) | null>(null);
+  const [, commitRows] = useReducer((n: number) => n + 1, 0);
+  const rowCommitQueuedRef = useRef(false);
   const virtualizer = useVirtualizer({
     directDomUpdates: true,
     // Rows placed by `top`, not translate3d: a 3D transform makes every row a
     // compositor layer, and the browser re-layers the whole page on each frame
     // that moves the caret, so each keystroke paid for every visible row.
     directDomUpdatesMode: "position",
-    onChange: (instance) => { updateScrollProgress(instance); holdRef.current?.onChange(); },
+    onChange: (instance, sync) => {
+      updateScrollProgress(instance);
+      holdRef.current?.onChange();
+      // A measurement moved the range under a reader's scroll: commit the new
+      // rows before this frame paints (lib/virtualList/coverage). In a
+      // microtask, once for the frame's whole batch of measurements, and
+      // because onChange also fires inside React's commit (a row's measure
+      // ref), where a flushSync is refused.
+      if (sync || rowCommitQueuedRef.current || !seekRef.current?.reader()) return;
+      const wanted = () => { const items = instance.getVirtualItems(); return rangeLeftMountedRows(mountedRowsRef.current, items[0]?.index, items[items.length - 1]?.index); };
+      if (!wanted()) return;
+      rowCommitQueuedRef.current = true;
+      queueMicrotask(() => {
+        rowCommitQueuedRef.current = false;
+        if (wanted()) flushSync(commitRows);
+      });
+    },
     // A measurement re-renders with the next batch, not synchronously inside
     // the ref or resize callback: synchronous re-renders turned the first
     // paint of a conversation into a chain of commits, each forcing the next
     // row's layout read against a freshly changed page.
     useFlushSync: false,
+    // The exception is a reader's scroll that has passed the last mounted row:
+    // waiting for the next batch there paints a frame of bare background where
+    // rows belong (lib/virtualList/coverage), so that one range change commits
+    // inside the scroll event. A programmatic scroll (the open-at-bottom pin)
+    // is not the reader's and never takes this path.
+    observeElementOffset: (instance, cb) => {
+      const report = (offset: number) => cb(offset, instance.isScrolling);
+      reportOffsetRef.current = report;
+      const stop = observeElementOffset(instance, (offset, isScrolling) => {
+        const outran = isScrolling && !!seekRef.current?.reader() && scrollOutranRows({
+          offset,
+          viewport: instance.scrollRect?.height ?? 0,
+          count: instance.options.count,
+          mounted: mountedRowsRef.current,
+        });
+        if (outran) flushSync(() => cb(offset, isScrolling));
+        else cb(offset, isScrolling);
+      });
+      return () => { if (reportOffsetRef.current === report) reportOffsetRef.current = null; stop?.(); };
+    },
+    // Every scrollTop the list sets itself goes two more places. A smooth
+    // scroll passes through its target over many frames and is left out.
+    //  - The fast-scroll tracker, so a height correction never reads as the
+    //    reader's speed.
+    //  - Back to the virtualizer, when the write is a size correction. It
+    //    learns its own offset only from the scroll event, a frame later, and
+    //    until then works out the range from the new sizes at the old offset:
+    //    after a row above the viewport measured in 1,500px taller, that is a
+    //    range 1,500px away, committed and painted as an empty pane for a
+    //    frame. Telling it now is what the scroll event will tell it, early.
+    scrollToFn: (offset, o, instance) => {
+      elementScroll(offset, o, instance);
+      if (o.behavior === "smooth") return;
+      const target = Math.max(0, offset + (o.adjustments ?? 0));
+      seekRef.current?.wrote(target);
+      if (o.adjustments) reportOffsetRef.current?.(target);
+    },
     count: timeline.length,
     getScrollElement: () => containerRef.current,
     getItemKey,
@@ -1852,6 +1915,13 @@ const ConversationViewInner = (
   if (!VLIST_LEGACY) attributeMeasurementsByKey(virtualizer);
   holdRef.current ??= createScrollHold(virtualizer, () => containerRef.current);
   const seek = useScrollSeek(containerRef, () => virtualizer.getVirtualItems().map((v) => v.key));
+  seekRef.current = seek;
+  const listDrawn = density !== "story" && density !== "summary";
+  useLayoutEffect(() => {
+    const items = listDrawn ? virtualizer.getVirtualItems() : [];
+    const first = items[0], last = items[items.length - 1];
+    mountedRowsRef.current = first && last ? { firstIndex: first.index, start: first.start, lastIndex: last.index, end: last.end } : null;
+  });
   useMountEffect(() => () => holdRef.current?.release());
   // ConversationView stays mounted across switches: the previous
   // conversation's pending target must not pull the next one.
@@ -2809,12 +2879,25 @@ const ConversationViewInner = (
     const sc = containerRef.current;
     if (!sc) return;
     paginationCooldownRef.current = Date.now() + 500;
+    // The pin writes scrollTop past the virtualizer, which would learn of it
+    // from the scroll event a frame later and until then render the range of
+    // the offset it knew: with a page of older messages above, that is the top
+    // of the new page, thousands of px from the view (measured: up to three
+    // blank frames on each page). The reader's wheel is still turning, so the
+    // same jump also read as a fling and drew the landing as placeholders.
+    // Both hear of the write here, as the list's own corrections report theirs.
+    const told = () => {
+      const top = sc.scrollTop;
+      lastScrollTopRef.current = top;
+      seekRef.current?.wrote(top);
+      if (!VLIST_LEGACY) reportOffsetRef.current?.(top);
+    };
     const pinExact = () => {
       const el = sc.querySelector(`#${CSS.escape(a.id)}`);
       if (!el) return false;
       const correction = (el.getBoundingClientRect().top - sc.getBoundingClientRect().top) / cssZoomOf(sc) - a.relTop;
-      if (correction !== 0) sc.scrollTop += correction;
-      lastScrollTopRef.current = sc.scrollTop;
+      if (correction !== 0) { sc.scrollTop += correction; told(); }
+      else lastScrollTopRef.current = sc.scrollTop;
       return true;
     };
     if (!pinExact()) {
@@ -2825,10 +2908,10 @@ const ConversationViewInner = (
       // scrollTop is still the right offset (the end-anchor snap is what moved us).
       if (a.dir === 'older') {
         const grew = sc.scrollHeight - a.scrollHeight;
-        if (grew > 0) { sc.scrollTop += grew; lastScrollTopRef.current = sc.scrollTop; }
+        if (grew > 0) { sc.scrollTop += grew; told(); }
       } else {
         sc.scrollTop = a.scrollTop;
-        lastScrollTopRef.current = sc.scrollTop;
+        told();
       }
     }
     requestAnimationFrame(() => { pinExact(); paginationCooldownRef.current = 0; });
@@ -5182,6 +5265,7 @@ const ConversationViewInner = (
                     data-index={virtualItem.index}
                     data-vkey={String(virtualItem.key)}
                     data-seek=""
+                    className="seek-row"
                     ref={virtualizer.measureElement}
                     style={{ position: "absolute", left: 0, width: "100%", height: virtualItem.size }}
                   />

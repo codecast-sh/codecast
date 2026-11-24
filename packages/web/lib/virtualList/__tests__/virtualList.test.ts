@@ -215,7 +215,7 @@ describe("scroll seek", () => {
   };
 
   test("a fast reader flick enters seeking and slowing down leaves it", () => {
-    const { seen } = run([[0, 0, true], [160, 16, true], [320, 32, true], [340, 48, true], [345, 64, true], [346, 80, true]]);
+    const { seen } = run([[0, 0, true], [160, 16, true], [320, 32, true], [480, 48, true], [500, 64, true], [505, 80, true], [506, 96, true], [506, 112, true], [506, 128, true], [506, 144, true]]);
     expect(seen).toEqual([true, false]);
   });
 
@@ -225,8 +225,76 @@ describe("scroll seek", () => {
   });
 
   test("slow reading never seeks", () => {
-    const { seen } = run([[0, 0, true], [20, 16, true], [40, 32, true], [60, 48, true]]);
+    const { seen } = run([[0, 0, true], [20, 16, true], [40, 32, true], [60, 48, true], [80, 64, true], [100, 80, true]]);
     expect(seen).toEqual([]);
+  });
+
+  test("reading pace with late frames never seeks", () => {
+    // 25 px a frame at 120 Hz, 3 px/ms. Every third frame renders rows and
+    // starts 6 ms late, so the one after it lands 2 ms behind: 12 px/ms between
+    // that pair.
+    const steps: Array<[number, number, boolean]> = [];
+    for (let f = 0; f < 60; f++) steps.push([f * 25, f * 8 + (f % 3 === 0 ? 6 : 0), true]);
+    expect(run(steps).seen).toEqual([]);
+  });
+
+  // A row above the viewport measured in 400px taller than its estimate and
+  // the list moved scrollTop by the same amount, mid-scroll, at reading pace.
+  const correction: Array<[top: number, at: number]> = [[0, 0], [20, 16], [440, 32], [460, 48], [480, 64], [500, 80]];
+
+  test("the list's own scroll correction under the reader's wheel never seeks", () => {
+    const seen: boolean[] = [];
+    const t = createScrollSeekTracker((s) => seen.push(s), { idleMs: 10_000 });
+    for (const [top, at] of correction) {
+      t.input(at);
+      if (top === 440) t.wrote(420);
+      t.scroll(top, at);
+    }
+    t.dispose();
+    expect(seen).toEqual([]);
+  });
+
+  test("the same jump, unreported, reads as a fling", () => {
+    const { seen } = run(correction.map(([top, at]) => [top, at, true]));
+    expect(seen[0]).toBe(true);
+  });
+
+  test("a fling still seeks through the list's corrections", () => {
+    const seen: boolean[] = [];
+    const t = createScrollSeekTracker((s) => seen.push(s), { idleMs: 10_000 });
+    let top = 0;
+    for (let at = 0; at <= 160; at += 16) {
+      t.input(at);
+      if (at === 32) { top += 300; t.wrote(top); }
+      top += 160;
+      t.scroll(top, at);
+    }
+    t.dispose();
+    expect(seen).toEqual([true]);
+  });
+
+  test("a write before the reader has scrolled leaves nothing to measure from", () => {
+    const seen: boolean[] = [];
+    const t = createScrollSeekTracker((s) => seen.push(s), { idleMs: 10_000 });
+    t.wrote(5_000);
+    t.input(0);
+    t.scroll(5_000, 0);
+    t.scroll(5_020, 16);
+    t.dispose();
+    expect(seen).toEqual([]);
+  });
+
+  test("the reader is scrolling for a moment after each input, and while dragging the scrollbar", () => {
+    const t = createScrollSeekTracker(() => {}, { idleMs: 10_000, inputWindowMs: 250 });
+    expect(t.reader(0)).toBe(false);
+    t.input(100);
+    expect(t.reader(300)).toBe(true);
+    expect(t.reader(400)).toBe(false);
+    t.drag(true, 500);
+    expect(t.reader(5_000)).toBe(true);
+    t.drag(false, 5_000);
+    expect(t.reader(5_300)).toBe(false);
+    t.dispose();
   });
 
   test("rows on screen when seeking began stay real", () => {
@@ -238,6 +306,35 @@ describe("scroll seek", () => {
     expect(keep.placeholder("b")).toBe(true);
     keep.end();
     expect(keep.placeholder("b")).toBe(false);
+  });
+});
+
+import { scrollOutranRows } from "../coverage";
+
+describe("scrollOutranRows", () => {
+  // Rows 10..20 are in the DOM, covering offsets 2000..4000 of a 100-row list.
+  const mounted = { firstIndex: 10, start: 2000, lastIndex: 20, end: 4000 };
+  const at = (offset: number, m: typeof mounted | null = mounted, count = 100) => scrollOutranRows({ offset, viewport: 600, count, mounted: m });
+
+  test("a viewport inside the mounted rows is covered", () => {
+    expect(at(2000)).toBe(false);
+    expect(at(3400)).toBe(false);
+  });
+
+  test("a scroll past either edge of the mounted rows is not", () => {
+    expect(at(1999)).toBe(true);
+    expect(at(3401)).toBe(true);
+    expect(at(40_000)).toBe(true);
+  });
+
+  test("past the first and the last row of the list there is nothing to mount", () => {
+    expect(at(0, { firstIndex: 0, start: 16, lastIndex: 20, end: 4000 })).toBe(false);
+    expect(at(3900, { firstIndex: 10, start: 2000, lastIndex: 99, end: 4000 })).toBe(false);
+  });
+
+  test("an empty list, or a scroller not laid out yet, asks for nothing", () => {
+    expect(at(500, null)).toBe(false);
+    expect(scrollOutranRows({ offset: 0, viewport: 0, count: 100, mounted })).toBe(false);
   });
 });
 
