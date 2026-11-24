@@ -11,6 +11,7 @@ import { capsFor, countersFor, utcDay } from "./lib/orgCaps";
 import { flowAdmits, flowHands, liveFlowFor, planLiveFlow } from "./liveFlows";
 import { atCap } from "@codecast/shared/contracts/orgCapacity";
 import { recordHandStart } from "./spawn";
+import { ownersModelOn } from "./sessionOwners";
 import { retainSessionCreator } from "./sessionLaunch";
 import { insertTaskComment, moveTaskStatus } from "./tasks";
 import { createRunCore, isLiveRunStatus, queueRunOnDaemon } from "./workflow_runs";
@@ -436,7 +437,8 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
     now,
   });
 
-  await retainSessionCreator(ctx, primaryConvId, seatId, hostId);
+  // Under the session_owners feature the role started it, so no person owns it: it is the role's.
+  if (!(await ownersModelOn(ctx, await ctx.db.get(primaryConvId)))) await retainSessionCreator(ctx, primaryConvId, seatId, hostId);
   // A placed run names its machine from the start, so the pool counts it
   // there before a runner claims it.
   if (o.place) await ctx.db.patch(runId, { runner_device: o.place.device });
@@ -444,7 +446,7 @@ export async function startRoleRun(ctx: Ctx, role: any, o: { slug: string; task?
 
   // The run's primary session is a hand of the role: it counts against
   // caps.hands_per_day and carries org_role_id, the same as a spawn.
-  await recordHandStart(ctx, role, primaryConvId);
+  await recordHandStart(ctx, role, primaryConvId, true);
   return { runId, primaryConvId };
 }
 

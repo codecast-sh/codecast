@@ -1,6 +1,7 @@
 import { wakeFieldsOf, wakeCost } from "./wakeCost";
 import { childProducingNow, deriveSessionActivity, classifyWorkState, trustedAgentStatus, userRestOf, isSettleVerdictCurrent, HEARTBEAT_ALIVE_MS, type WorkState } from "./inboxFilters";
-import { openTasksVouchForWaiting } from "@codecast/shared/contracts";
+import { agentAnswersRow, agentOwnerOfRow, openTasksVouchForWaiting } from "@codecast/shared/contracts";
+import { inboxOwnersOf } from "./lib/inboxOwners";
 import { rowWakeInputs } from "@codecast/shared/contracts/inboxPlacement";
 import { armedTriggerHomeLoader, isArmedTriggerHome, isArmedLoopHome } from "./dormancy";
 
@@ -135,13 +136,28 @@ export function cliSessionClassifier(ctx: any, now: number) {
   const rowFields = async (conv: any) => {
     const managed = await managedFor(conv);
     const { work_state, agent_status } = await classify(conv);
+    // Under the owners model, the agent owner answering this wait: a person
+    // reads it as working, "with <owner>" (inboxForCLI's with_owner).
+    const withOwner = await withOwnerOf(conv, work_state);
     return {
       ...(isLiveManaged(managed) ? { is_live: true as const, agent_status: agent_status || undefined } : {}),
       work_state,
+      ...(withOwner ? { with_owner: withOwner } : {}),
       ...(conv.inbox_killed_at ? { is_killed: true as const } : {}),
       ...(conv.status === "completed" ? { is_completed: true as const } : {}),
       recency_rank: recencyRankOf(conv, now),
     };
+  };
+
+  const withOwnerOf = async (conv: any, work_state: WorkState): Promise<string | null> => {
+    if (work_state !== "needs_input" || userRestOf(conv)) return null;
+    const owners = await inboxOwnersOf(ctx, conv);
+    const row = owners ? { ...conv, ...owners } : null;
+    if (!row || !agentAnswersRow(row)) return null;
+    const agent = agentOwnerOfRow(row)!;
+    if (agent.kind === "session") return agent.id.slice(0, 7);
+    const role = await ctx.db.get(agent.id).catch(() => null);
+    return `@${role?.handle ?? "role"}`;
   };
 
   return { managedFor, isLiveManaged, classify, rowFields };

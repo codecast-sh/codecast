@@ -4167,15 +4167,10 @@ labelCmd
     console.log(`${c.green}ok${c.reset} removed label ${c.yellow}${result.label}${c.reset}${note}`);
   });
 
-// Render an owner set as a comma-separated list of names, or "nobody".
-const formatOwners = (owners: Array<{ name?: string | null; email?: string | null }> | undefined) =>
-  owners?.length
-    ? owners.map((o) => o.name || o.email || "?").join(", ")
-    : "nobody";
-
 // Split `own`/`disown` positionals into their two slots (see ownTarget.ts): a
-// lone argument that is unmistakably a person targets the CURRENT session,
-// rather than being read as a session id that cannot resolve.
+// lone argument that is unmistakably an owner (a person, an @role, parent)
+// targets the CURRENT session, rather than being read as a session id that
+// cannot resolve.
 function resolveOwnerTarget(
   first: string,
   second: string | undefined,
@@ -4192,89 +4187,113 @@ function resolveOwnerTarget(
   return { sessionId: r.sessionId, member: r.member };
 }
 
+const OWNERS_MODEL_HELP =
+  "A session is in the inbox of each person who owns it, or of the person\n" +
+  "who started it while nobody does.\n\n" +
+  "With the Session owners team feature:\n" +
+  "  A session is in the inbox of each of its owners, and only theirs. Its\n" +
+  "  owners are people, at most one role, and the session that started it\n" +
+  "  (a sub-agent's or a spawned session's parent). The person who started\n" +
+  "  it owns it while nothing else does, unless a role started it. An agent\n" +
+  "  owner (the role, else the parent session) answers what the session\n" +
+  "  asks. Owners, and the account that runs it, change its owners; anyone\n" +
+  "  who can see it can add themselves. @role, parent and --take-over need it.";
+
 program
   .command("own")
   .description(
-    "Add an owner to a session — a team member responsible for steering it\n\n" +
-    "A session has a SET of owners: it can sit in several teammates' inboxes at\n" +
-    "once, and each owner gets a notification when they're added. `own` ADDS an\n" +
-    "owner without displacing the existing ones (use `disown` to remove one).\n\n" +
-    "An owner is distinct from whose account RUNS the session, and from which\n" +
-    "DEVICE it runs on — all three move independently. An agent account (e.g. a\n" +
-    "bot on a shared machine) can park a session on a human reviewer; it then\n" +
-    "surfaces in the OWNER's inbox (web NEEDS YOU + cast sessions/feed) marked\n" +
-    "with who runs it. Owners reply with cast send or the web composer.\n\n" +
-    "Ownership decides whose inbox it is in. A session you run but own no part\n" +
-    "of leaves your inbox and stops notifying you, whatever state it is in; name\n" +
-    "its id to read it anyway. An owned session stays in the owner's inbox with\n" +
-    "no recency limit, and a handoff clears a dismiss, stash or snooze so it\n" +
-    "lands where they can see it.\n\n" +
-    "You can own any session you can see in the feed (your own, or one shared\n" +
-    "with a team you're in). Scripts should pass an exact email.\n\n" +
+    "Add an owner to a session: a teammate, or a role with @handle\n\n" +
+    OWNERS_MODEL_HELP + "\n\n" +
+    "Adding a person keeps the other people; they get a notification.\n" +
+    "Scripts should pass an exact email. With the feature, adding a role\n" +
+    "replaces the role it had, and --take-over takes every agent owner off\n" +
+    "(its role and its parent session) and makes you an owner.\n\n" +
     "Examples:\n" +
-    "  cast own jx7c6zk jason@example.com   # hand off to a teammate (notifies them)\n" +
-    "  cast own jason@example.com           # …hand off the CURRENT session\n" +
-    "  cast own jx7c6zk                     # claim it yourself\n" +
+    "  cast own jx7c6zk                     # add yourself\n" +
+    "  cast own jx7c6zk jason@example.com   # add a teammate\n" +
+    "  cast own jason@example.com           # ...to the CURRENT session\n" +
+    "  cast own jx7c6zk @eval               # make @eval its role\n" +
     "  cast owners jx7c6zk                  # who owns it\n" +
-    "  cast disown jx7c6zk                  # step off it yourself\n" +
-    "  cast disown jx7c6zk --all            # clear every owner"
+    "  cast own jx7c6zk --take-over         # take it over from its agent owners\n" +
+    "  cast own jx7c6zk --pass-up           # an agent owner hands its wait to the people"
   )
-  .argument("<session_or_member>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or a member email/name, to use the CURRENT session")
-  .argument("[member]", "Team member email (exact) or name; defaults to you")
-  .action(async (first: string, second: string | undefined) => {
+  .argument("<session_or_owner>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or an owner, to use the CURRENT session")
+  .argument("[owner]", "Team member email (exact) or name, or @role; defaults to you")
+  .option("--take-over", "Take every agent owner off (its role, its parent session) and become an owner")
+  .option("--pass-up", "As its agent owner: pass what the session waits on up to its people, instead of answering it")
+  .action(async (first: string, second: string | undefined, opts: { passUp?: boolean; takeOver?: boolean }) => {
+    const { ownersLine } = await import("./ownersView.js");
     const { sessionId, member } = resolveOwnerTarget(first, second, "own");
+    if (opts.takeOver) {
+      const res = await cliPost("/cli/sessions/owners/apply", { session_id: sessionId, take_over: true, from_session: callingSession() });
+      const read = await cliPost("/cli/sessions/owners", { session_id: sessionId });
+      console.log(`${c.green}✓${c.reset} ${c.cyan}${res.short_id || sessionId}${c.reset} ${c.dim}taken over; owners →${c.reset} ${c.magenta}${ownersLine(read ?? res)}${c.reset}`);
+      return;
+    }
+    if (opts.passUp) {
+      const res = await cliPost("/cli/sessions/pass-up", { session: sessionId, from_session: callingSession() });
+      console.log(`${c.green}✓${c.reset} ${c.cyan}${res?.short_id || sessionId}${c.reset} ${c.dim}passed up to its people${c.reset}`);
+      return;
+    }
     const result = await cliPost("/cli/sessions/own", {
       session_id: sessionId,
       owner: member?.trim() || "me",
       from_session: callingSession(),
     });
-    const added = result.added?.length > 0;
-    const note = added ? "" : ` ${c.dim}(already an owner)${c.reset}`;
+    const read = await cliPost("/cli/sessions/owners", { session_id: sessionId });
+    const note = result.added?.length > 0 || member?.trim().startsWith("@") ? "" : ` ${c.dim}(already an owner)${c.reset}`;
     console.log(
       `${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
-      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}${note}${toldSuffix(result.told)}`
+      `${c.dim}owners →${c.reset} ${c.magenta}${ownersLine(read ?? result)}${c.reset}${note}${toldSuffix(result.told)}`
     );
   });
 
 program
   .command("disown")
-  .description("Remove an owner from a session — defaults to you (see: cast own)")
-  .argument("<session_or_member>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or a member email/name, to use the CURRENT session")
-  .argument("[member]", "Team member email (exact) or name; defaults to you")
-  .option("--all", "Clear EVERY owner, not just one")
+  .description(
+    "Remove an owner from a session: a person (defaults to you), its @role, or parent\n\n" +
+    OWNERS_MODEL_HELP + "\n\n" +
+    "Removing its @role or its parent session removes only that owner (to\n" +
+    "take it over from both, cast own --take-over). With the feature a\n" +
+    "session always keeps an owner, so the last one cannot leave.\n\n" +
+    "Examples:\n" +
+    "  cast disown jx7c6zk                  # leave it yourself\n" +
+    "  cast disown jx7c6zk ashot@x.ai       # remove a teammate\n" +
+    "  cast disown jx7c6zk @eval            # its role no longer owns it\n" +
+    "  cast disown jx7c6zk parent           # the session that started it no longer owns it"
+  )
+  .argument("<session_or_owner>", "Session short ID (e.g. jx7c6zk), UUID, or full ID — or an owner, to use the CURRENT session")
+  .argument("[owner]", "Team member email (exact) or name, @role, or parent; defaults to you")
+  .option("--all", "Remove every person owner")
   .action(async (first: string, second: string | undefined, opts: { all?: boolean }) => {
+    const { ownersLine } = await import("./ownersView.js");
     const { sessionId, member } = resolveOwnerTarget(first, second, "disown");
+    const ref = member?.trim() || "me";
+    const agentOwner = ref.startsWith("@") || ref.toLowerCase() === "parent";
     const result = opts.all
       ? await cliPost("/cli/sessions/owners/set", { session_id: sessionId, owners: [], from_session: callingSession() })
-      : await cliPost("/cli/sessions/disown", {
-          session_id: sessionId,
-          owner: member?.trim() || "me",
-          from_session: callingSession(),
-        });
-    // Owners are a set, so "remove the owner" is ambiguous — you name the one you
-    // mean. When the named target (or you, by default) isn't actually an owner,
-    // nothing is removed; a green ✓ there hid a no-op (e.g. a bot disowning a
-    // session it parked on someone else). Fail loudly and name the current
-    // owners so the fix is just re-running with the right target.
-    if (!opts.all && !(result.removed?.length > 0)) {
+      : await cliPost("/cli/sessions/disown", { session_id: sessionId, owner: ref, from_session: callingSession() });
+    const read = (await cliPost("/cli/sessions/owners", { session_id: sessionId })) ?? result;
+    // Naming someone who is not an owner removes nothing: say so and name the
+    // owners, so the fix is re-running with the right one.
+    if (!opts.all && !agentOwner && !(result.removed?.length > 0)) {
       const target = member?.trim() ? `"${member.trim()}"` : "you are";
       console.error(
         `${c.red}✗${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
         `${target} not an owner — nothing removed. ` +
-        `${c.dim}current owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}` +
-        `${result.owners?.length ? " (re-run naming one of them, or --all to clear every owner)" : ""}`
+        `${c.dim}current owners →${c.reset} ${c.magenta}${ownersLine(read)}${c.reset}`
       );
       process.exit(1);
     }
     console.log(
       `${c.green}✓${c.reset} ${c.cyan}${result.short_id || sessionId}${c.reset} ` +
-      `${c.dim}owners →${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}`
+      `${c.dim}owners →${c.reset} ${c.magenta}${ownersLine(read)}${c.reset}`
     );
   });
 
 program
   .command("owners")
-  .description("List a session's owners — whose inboxes it sits in (see: cast own)")
+  .description("List a session's owners: people, its role, the session that started it (see: cast own)")
   .argument("<session_id>", "Session short ID (e.g. jx7c6zk), session UUID, or full ID")
   .action(async (sessionId: string) => {
     const result = await cliPost("/cli/sessions/owners", { session_id: sessionId });
@@ -4282,10 +4301,14 @@ program
       console.error(notFoundLine("session", sessionId, SESSION_ID_HINT));
       process.exit(1);
     }
-    console.log(
-      `${c.cyan}${result.short_id || sessionId}${c.reset} ` +
-      `${c.dim}owners:${c.reset} ${c.magenta}${formatOwners(result.owners)}${c.reset}`
-    );
+    const { ownersLine, ownersView } = await import("./ownersView.js");
+    const lines = ownersView(result);
+    if (!result.session_owners) {
+      console.log(`${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owners:${c.reset} ${c.magenta}${ownersLine(result)}${c.reset}`);
+      return;
+    }
+    console.log(`${c.cyan}${result.short_id || sessionId}${c.reset} ${c.dim}owners${c.reset}`);
+    for (const line of lines) console.log(`  ${line}`);
   });
 
 program
@@ -7462,7 +7485,7 @@ program
       const sessions = (feed.conversations || []).map((c: any) => ({
         id: c.id, session_id: c.session_id, title: c.title, project_path: c.project_path,
         updated_at: c.updated_at, message_count: c.message_count, agent_type: c.agent_type,
-        agent_status: c.agent_status, work_state: c.work_state || "idle", is_pinned: !!c.is_pinned,
+        agent_status: c.agent_status, work_state: c.work_state || "idle", with_owner: c.with_owner ?? null, is_pinned: !!c.is_pinned,
         bucket: c.bucket ?? null, below_fold: !!c.below_fold,
         is_killed: !!c.is_killed,
         is_live: !!c.is_live, is_unresponsive: false, awaiting_input: false,
@@ -7472,7 +7495,9 @@ program
       // reports fold rows as their own figure, mirroring inboxForCLI's counts.
       const counts: any = { working: 0, needs_input: 0, done: 0, dormant: 0, idle: 0, pinned: 0, live: 0, below_fold: 0, total: 0 };
       for (const s of sessions) {
-        counts.total++; counts[s.work_state] = (counts[s.work_state] || 0) + 1;
+        // A person's figures: a wait its agent owner answers counts as working.
+        const shown = s.with_owner ? "working" : s.work_state;
+        counts.total++; counts[shown] = (counts[shown] || 0) + 1;
         if (s.is_pinned) counts.pinned++; if (s.is_live) counts.live++;
         if (s.below_fold) counts.below_fold++;
       }
@@ -7649,11 +7674,15 @@ program
     //   new        — session entered the set (spawned, or started matching the query)
     //   transition — a member's work_state changed
     //   gone       — session left the set (stopped matching --state, or dismissed)
-    let prevRows: Record<string, { state: string; title: string | null; session_id: string | null }> = {};
+    // `owner`: under the owners model, the agent owner a wait is with (the
+    // row's with_owner). Its change is a transition too: an agent passing a
+    // wait up to its people moves nothing in work_state, which stays the
+    // session's own for the agents watching it.
+    let prevRows: Record<string, { state: string; owner: string | null; title: string | null; session_id: string | null }> = {};
     let firstFrame = true;
     let seenAny = false;
-    const emit = (ev: { event: string; id: string; session_id: string | null; title: string | null; from: string | null; to: string | null; is_pinned?: boolean; is_live?: boolean; label?: string | null }) => {
-      if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), ...ev, is_pinned: !!ev.is_pinned, is_live: !!ev.is_live, label: ev.label ?? null }));
+    const emit = (ev: { event: string; id: string; session_id: string | null; title: string | null; from: string | null; to: string | null; is_pinned?: boolean; is_live?: boolean; label?: string | null; with_owner?: string | null }) => {
+      if (options.json) console.log(JSON.stringify({ ts: new Date().toISOString(), ...ev, is_pinned: !!ev.is_pinned, is_live: !!ev.is_live, label: ev.label ?? null, with_owner: ev.with_owner ?? null }));
       else console.log(formatSessionChangeLine({ id: ev.id, title: ev.title, from: ev.from, to: ev.to, is_pinned: !!ev.is_pinned, is_live: !!ev.is_live }));
     };
     const onSessions = (sessions: any[]) => {
@@ -7669,12 +7698,13 @@ program
         // leaves the "gone" pass below to announce it exactly once, with the
         // state it left from.
         if (s.is_killed) continue;
-        cur[s.id] = { state: s.work_state, title: s.title ?? null, session_id: s.session_id ?? null };
+        const owner = s.with_owner ?? null;
+        cur[s.id] = { state: s.work_state, owner, title: s.title ?? null, session_id: s.session_id ?? null };
         if (firstFrame) continue;
         const prev = prevRows[s.id];
         const isNew = prev === undefined;
-        if (!isNew && prev.state === s.work_state) continue; // unchanged — skip
-        emit({ event: isNew ? "new" : "transition", id: s.id, session_id: s.session_id ?? null, title: s.title ?? null, from: isNew ? null : prev.state, to: s.work_state, is_pinned: !!s.is_pinned, is_live: !!s.is_live, label: s.label ?? null });
+        if (!isNew && prev.state === s.work_state && prev.owner === owner) continue; // unchanged — skip
+        emit({ event: isNew ? "new" : "transition", id: s.id, session_id: s.session_id ?? null, title: s.title ?? null, from: isNew ? null : prev.state, to: s.work_state, is_pinned: !!s.is_pinned, is_live: !!s.is_live, label: s.label ?? null, with_owner: owner });
       }
       if (!firstFrame) {
         for (const [id, p] of Object.entries(prevRows)) {

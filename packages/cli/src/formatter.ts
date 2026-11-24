@@ -918,6 +918,10 @@ interface MonitorSession {
   agent_type?: string;
   agent_status?: string;
   work_state: string;
+  /** Under the owners model, the agent owner answering this wait ("@role" or
+   *  the owning session's id): the person reads it as working, "with <owner>".
+   *  work_state stays the session's own. */
+  with_owner?: string | null;
   /** Retired (inbox_killed_at). Shipped by inboxForCLI; the watch stream reads
    * it to emit a kill as a departure, and the snapshot badges it. */
   is_killed?: boolean;
@@ -1067,7 +1071,7 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
   }
 
   const renderRow = (s: MonitorSession) => {
-    const badge = formatStateBadge(s);
+    const badge = s.with_owner ? `${formatStateBadge({ ...s, work_state: "working" })} ${c.dim}with ${s.with_owner}${c.reset}` : formatStateBadge(s);
     const idPart = `${c.magenta}${truncateId(s.id)}${c.reset}`;
     const mark = changes[s.id] ? `  ${changeLabel(changes[s.id])}` : "";
     // Second-party-owned rows: show who runs it (this inbox shows it because
@@ -1141,7 +1145,7 @@ export function formatMonitor(result: MonitorResult, options: MonitorOptions = {
     if (options.all) groups.push(["idle", `${c.gray}IDLE${c.reset}`]);
 
     for (const [ws, label] of groups) {
-      const group = result.sessions.filter((s) => s.work_state === ws);
+      const group = result.sessions.filter((s) => (s.with_owner ? "working" : s.work_state) === ws);
       if (group.length === 0) continue;
       lines.push(`${c.bold}${label}${c.reset} ${c.dim}(${group.length})${c.reset}`);
       lines.push("");

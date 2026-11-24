@@ -5,9 +5,10 @@
 // notices) does not import the needs-input check, which reaches agentTasks
 // and the whole function graph behind it (ct-92329).
 import { internal } from "../_generated/api";
-import { IDLE_DIGEST_WINDOW_MS, isAssignedAwayFromOwnerSet } from "@codecast/shared/contracts";
+import { IDLE_DIGEST_WINDOW_MS, agentAnswersRow, isAssignedAwayFromOwnerSet, waitReachedPeople } from "@codecast/shared/contracts";
 import { enqueuePush } from "../pushRouter";
 import { listSessionPartyIds } from "../sessionOwners";
+import { inboxOwnersOf, waitAudienceOf } from "./inboxOwners";
 import { cardRangFor } from "./decisionRing";
 
 export type SessionNotifType =
@@ -157,11 +158,36 @@ export async function deliverSessionNotification(
 // hear about it, not just the one cached in owner_user_id.
 export async function deliverSessionNotificationToParties(
   ctx: any,
-  conversation: { _id: any; user_id: any; owner_user_id?: any },
+  conversation: { _id: any; user_id: any; owner_user_id?: any; team_id?: any; message_count?: number; wait_up_count?: number; wait_up_person?: any },
   type: SessionNotifType,
   title: string,
   message: string,
 ): Promise<boolean> {
+  // Under the owners model (team feature session_owners) the alert follows
+  // the owners rule: the person owners hear, the implicit starter included,
+  // and a wait an agent owner answers rings nobody (shared agentAnswersRow)
+  // until it reaches them (wait_up_at). With no person owner left, the human
+  // who started it hears, so a wait is never swallowed.
+  const owners = await inboxOwnersOf(ctx, conversation);
+  if (owners) {
+    const row = { ...conversation, ...owners };
+    const isWait = type === "session_idle" || type === "permission_request";
+    if (isWait && agentAnswersRow(row)) return false;
+    // Exactly the people whose inbox lists it: the shared audience rule's
+    // people (its person owners, its starter, down to where its role's line
+    // ends or a workspace admin, never an agent account), so someone always
+    // hears it. Where that falls past the owners, the person a current
+    // escalation reached is the one its stamp names, so a wait handed on from
+    // a leaver never rings them again.
+    const escalatedTo = row.wait_up_person && waitReachedPeople(row) ? String(row.wait_up_person) : null;
+    const audience = await waitAudienceOf(ctx, conversation, { agentReachable: false });
+    const people = escalatedTo && (!audience || audience.person) ? [escalatedTo] : audience?.people ?? [];
+    let reached = false;
+    for (const id of new Set(people.map(String))) {
+      if (await deliverSessionNotification(ctx, id, conversation._id, type, title, message)) reached = true;
+    }
+    return reached;
+  }
   // Recipients are the UNION of the canonical owner set and the owner_user_id
   // cache. The cache is a safety net, not a second source of truth: a legacy row
   // written before the session_owners backfill has a cached owner but no join
