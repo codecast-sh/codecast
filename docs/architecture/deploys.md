@@ -516,7 +516,10 @@ carries it. It starts only from the commit the run merged: `$run_dir/
 merge.json`'s sha (Merge, or Land, FL4), else the merge recorded on the run
 (`run.merge.sha`, which `cast line merge` writes without a merge.json). With
 neither, or a sha that is not on origin's default branch, it stops at once at
-Not merged. Of the targets the change's files touch:
+Not merged. Its targets are the ones the merged commit declares: its
+`.codecast/deploy.toml`, `workspace.toml` and `line.toml` read from git, never a
+checkout's working tree or the server's published list, either of which can
+still name a target the commit removed. Of the targets the change's files touch:
 
 - `release` targets that run here: it sends them, `cast deploy <targets>
   --carrying <merged sha>` in a process of its own, then waits for them. One with a `ci`
@@ -548,6 +551,13 @@ Not merged. Of the targets the change's files touch:
   parks, so that day holds no slot.
 
 A target held back with `except` is not waited on; the last line names it. A
+target the stage only waits on that the server has no record of has no reader to
+say it is live: while another target can say the commit is live, it does not hold
+Live, and the last line names it (`aivery-operator has no record on the server,
+so nothing says when it is live; not waited on`). Every look reads the server
+again, so a target published mid-wait is waited on again. One an `after` names
+still holds its dependents. When no target can say so (an empty answer, every
+target unrecorded), the stage waits and its deadlines end it stuck. A
 deploy sends main's head (DP13), so a later commit's deploy that carries the
 merged one satisfies the wait. When the send ends and a target it sent has no
 deploy carrying the commit, the stage fails at once rather than wait out the
