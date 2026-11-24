@@ -18,7 +18,7 @@ import { usePaletteSessionCommands } from "../lib/paletteSessionCommands";
 import Link from "next/link";
 import { dragCarriesPane } from "../lib/stage";
 import { useRouter } from "next/navigation";
-import { useLayoutEffect, useRef, useState, useMemo, useImperativeHandle, forwardRef, useCallback, memo, useContext, Fragment, Suspense, type ForwardedRef } from "react";
+import { useLayoutEffect, useRef, useState, useMemo, useReducer, useImperativeHandle, forwardRef, useCallback, memo, useContext, Fragment, Suspense, type ForwardedRef } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { useWatchEffect } from "../hooks/useWatchEffect";
@@ -219,6 +219,8 @@ import { createScrollHold, type ScrollHold } from "../lib/virtualList/scrollHold
 import { VLIST_LEGACY } from "../lib/virtualList/legacyFlags";
 import { useScrollSeek } from "../hooks/useScrollSeek";
 import { adjustScrollForResizeRule } from "../lib/virtualList/resizeAdjust";
+import type { MountedRows } from "../lib/virtualList/coverage";
+import { createScrollSync, type ScrollSync } from "../lib/virtualList/scrollSync";
 import { lazyNamed } from "../lib/lazyNamed";
 
 const MOMENT_FEATURES: readonly MomentFeature[] = ["decide", "visual", "publish"];
@@ -1800,18 +1802,35 @@ const ConversationViewInner = (
 
   // The one pending programmatic scroll target (lib/virtualList/scrollHold).
   const holdRef = useRef<ScrollHold | null>(null);
+  // The reader's scroll, the virtualizer's offset and the rows in the DOM kept
+  // in step (lib/virtualList/scrollSync), for the three hooks below.
+  const seekRef = useRef<{ wrote: (top: number) => void; reader: () => boolean } | null>(null);
+  const mountedRowsRef = useRef<MountedRows | null>(null);
+  const [, commitRows] = useReducer((n: number) => n + 1, 0);
+  const scrollSyncRef = useRef<ScrollSync | null>(null);
+  const scrollSync = (scrollSyncRef.current ??= createScrollSync({
+    seek: () => seekRef.current,
+    mounted: () => mountedRowsRef.current,
+    commit: commitRows,
+  }));
   const virtualizer = useVirtualizer({
     directDomUpdates: true,
     // Rows placed by `top`, not translate3d: a 3D transform makes every row a
     // compositor layer, and the browser re-layers the whole page on each frame
     // that moves the caret, so each keystroke paid for every visible row.
     directDomUpdatesMode: "position",
-    onChange: (instance) => { updateScrollProgress(instance); holdRef.current?.onChange(); },
+    onChange: (instance, sync) => {
+      updateScrollProgress(instance);
+      holdRef.current?.onChange();
+      if (!VLIST_LEGACY) scrollSync.changed(instance, sync);
+    },
     // A measurement re-renders with the next batch, not synchronously inside
     // the ref or resize callback: synchronous re-renders turned the first
     // paint of a conversation into a chain of commits, each forcing the next
-    // row's layout read against a freshly changed page.
+    // row's layout read against a freshly changed page. The exceptions, both
+    // under a reader's scroll only, are scrollSync's.
     useFlushSync: false,
+    ...(VLIST_LEGACY ? {} : { observeElementOffset: scrollSync.observeElementOffset, scrollToFn: scrollSync.scrollToFn }),
     count: timeline.length,
     getScrollElement: () => containerRef.current,
     getItemKey,
@@ -1852,6 +1871,13 @@ const ConversationViewInner = (
   if (!VLIST_LEGACY) attributeMeasurementsByKey(virtualizer);
   holdRef.current ??= createScrollHold(virtualizer, () => containerRef.current);
   const seek = useScrollSeek(containerRef, () => virtualizer.getVirtualItems().map((v) => v.key));
+  seekRef.current = seek;
+  const listDrawn = density !== "story" && density !== "summary";
+  useLayoutEffect(() => {
+    const items = listDrawn ? virtualizer.getVirtualItems() : [];
+    const first = items[0], last = items[items.length - 1];
+    mountedRowsRef.current = first && last ? { firstIndex: first.index, start: first.start, lastIndex: last.index, end: last.end } : null;
+  });
   useMountEffect(() => () => holdRef.current?.release());
   // ConversationView stays mounted across switches: the previous
   // conversation's pending target must not pull the next one.
@@ -2809,12 +2835,24 @@ const ConversationViewInner = (
     const sc = containerRef.current;
     if (!sc) return;
     paginationCooldownRef.current = Date.now() + 500;
+    // The pin writes scrollTop past the virtualizer, which would learn of it
+    // from the scroll event a frame later and until then render the range of
+    // the offset it knew: with a page of older messages above, that is the top
+    // of the new page, thousands of px from the view (measured: up to three
+    // blank frames on each page). The reader's wheel is still turning, so the
+    // same jump also read as a fling and drew the landing as placeholders.
+    // Both hear of the write here, as the list's own corrections report theirs.
+    const told = () => {
+      const top = sc.scrollTop;
+      lastScrollTopRef.current = top;
+      if (!VLIST_LEGACY) scrollSyncRef.current?.wrote(top);
+    };
     const pinExact = () => {
       const el = sc.querySelector(`#${CSS.escape(a.id)}`);
       if (!el) return false;
       const correction = (el.getBoundingClientRect().top - sc.getBoundingClientRect().top) / cssZoomOf(sc) - a.relTop;
-      if (correction !== 0) sc.scrollTop += correction;
-      lastScrollTopRef.current = sc.scrollTop;
+      if (correction !== 0) { sc.scrollTop += correction; told(); }
+      else lastScrollTopRef.current = sc.scrollTop;
       return true;
     };
     if (!pinExact()) {
@@ -2825,10 +2863,10 @@ const ConversationViewInner = (
       // scrollTop is still the right offset (the end-anchor snap is what moved us).
       if (a.dir === 'older') {
         const grew = sc.scrollHeight - a.scrollHeight;
-        if (grew > 0) { sc.scrollTop += grew; lastScrollTopRef.current = sc.scrollTop; }
+        if (grew > 0) { sc.scrollTop += grew; told(); }
       } else {
         sc.scrollTop = a.scrollTop;
-        lastScrollTopRef.current = sc.scrollTop;
+        told();
       }
     }
     requestAnimationFrame(() => { pinExact(); paginationCooldownRef.current = 0; });
@@ -5182,6 +5220,7 @@ const ConversationViewInner = (
                     data-index={virtualItem.index}
                     data-vkey={String(virtualItem.key)}
                     data-seek=""
+                    className="seek-row"
                     ref={virtualizer.measureElement}
                     style={{ position: "absolute", left: 0, width: "100%", height: virtualItem.size }}
                   />
