@@ -8,11 +8,33 @@
  * `cast land prune` frees the branch name too and keeps its head under
  * refs/codecast/land-archive/<branch> (land/prune.ts); the branch comes back
  * from there (ct-68695 and ct-62158 failed at Eval on Nov 5 with both gone).
+ * A line run starts with its branch alone (lineTrialBranch.ts freshRunBranch),
+ * so the first station that uses the tree makes it here too, and a station
+ * that does not use it never makes it (usesRunTree).
  */
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { c } from "../colors.js";
 import { execFileSync } from "../proc.js";
+import type { WorkflowGraph, WorkflowNode } from "./types.js";
+
+const NAMES_TREE = /\$(?:worktree\b|\{worktree\})/;
+
+/**
+ * Whether `node` works in the run's tree: an isolated station, the subject's
+ * own (it freezes the change again from the tree), one whose script or prompt
+ * names `$worktree`, or a fan-out to such a station. Only these put the tree
+ * back (runner.ts), so a run waiting at Queue holds a branch and no tree: 300+
+ * waiting runs each held a 3.4 GB tree built at Start (Nov 20).
+ */
+export function usesRunTree(node: WorkflowNode, graph: WorkflowGraph): boolean {
+  if (node.isolated || node.backend === "subject" || NAMES_TREE.test(`${node.script ?? ""}\n${node.prompt ?? ""}`)) return true;
+  if (node.type !== "parallel_fanout") return false;
+  return graph.edges.some((e) => {
+    const to = e.from === node.id ? graph.nodes.get(e.to) : undefined;
+    return !!to && to.type !== "parallel_fanout" && usesRunTree(to, graph);
+  });
+}
 
 export type RunWorktreeRestore = "present" | "restored" | "no_branch";
 
@@ -22,7 +44,7 @@ export async function restoreRunTree(cwd: string, context: Record<string, string
   if (!worktree) return;
   const branch = context["branch"] || `codecast/${worktree}`;
   try {
-    if (await restoreRunWorktree(cwd, worktree, branch) === "restored") console.log(`${c.dim}Put worktree ${worktree} back on ${branch}${c.reset}`);
+    if (await restoreRunWorktree(cwd, worktree, branch) === "restored") console.log(`${c.dim}Made worktree ${worktree} on ${branch}${c.reset}`);
   } catch (err) {
     // The station that needs it still fails with its own error; the run is not stopped here.
     console.error(`${c.yellow}Could not put worktree ${worktree} back on ${branch}: ${(err as Error).message}${c.reset}`);
@@ -62,7 +84,7 @@ export async function restoreRunWorktree(cwd: string, name: string, branch: stri
  * frozen for the run, that holds work main lacks (worktreeGc.ts contentKeepReason), which the daemon's sweep shows to
  * the run's task. A run waiting at a gate never gets here: its runner waits
  * with it, and a runner that dies there is resumed, restoring the tree before
- * the gate.
+ * the next station that uses it (usesRunTree).
  */
 export async function releaseEndedRunTree(cwd: string, context: Record<string, string>): Promise<void> {
   const name = context["worktree"];

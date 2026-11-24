@@ -48,6 +48,28 @@ describe("freshRunBranch", () => {
     fs.rmSync(root, { recursive: true, force: true });
   }, 60_000);
 
+  // Nov 20 and Nov 23: runs waiting at Queue each held a full workspace built at Start, and filled the Union line hosts' disks.
+  test("in a repo with a workspace manifest, a fresh run makes only its branch: no worktree and no workspace", async () => {
+    const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "trial-manifest-")));
+    const origin = path.join(root, "origin.git");
+    const repo = path.join(root, "repo");
+    spawnSync("git", ["init", "-q", "--bare", "-b", "main", origin]);
+    spawnSync("git", ["clone", "-q", origin, repo]);
+    for (const [k, val] of [["user.email", "t@t"], ["user.name", "t"], ["commit.gpgsign", "false"]]) sh(repo, "config", k, val);
+    fs.mkdirSync(path.join(repo, ".codecast"));
+    fs.writeFileSync(path.join(repo, ".codecast", "workspace.toml"), "[setup]\ninstall = []\n");
+    fs.writeFileSync(path.join(repo, "a.txt"), "unfixed\n");
+    sh(repo, "add", "."); sh(repo, "commit", "-qm", "base"); sh(repo, "push", "-q", "origin", "main");
+
+    const fresh = await freshRunBranch(repo, { name: "onefix" }, "ct-3");
+    expect(fresh).toEqual({ slug: "onefix-ct-3", branch: "codecast/onefix-ct-3", base: "origin/main", set_aside: null });
+    expect(sh(repo, "rev-parse", "codecast/onefix-ct-3")).toBe(sh(repo, "rev-parse", "origin/main"));
+    expect(fs.existsSync(path.join(repo, ".codecast", "worktrees", "onefix-ct-3"))).toBe(false);
+    expect(fs.existsSync(path.join(repo, ".codecast", "workspaces", "onefix-ct-3"))).toBe(false);
+    expect(sh(repo, "worktree", "list", "--porcelain")).not.toContain("codecast/onefix-ct-3");
+    fs.rmSync(root, { recursive: true, force: true });
+  }, 60_000);
+
   // ct-60298: a build hand the runner settled while it worked was still in the
   // worktree when the next run cut its fresh branch; it found its branch reset
   // and put its fix back on it, so the next run proved against the old fix.
