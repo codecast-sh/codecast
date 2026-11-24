@@ -14,7 +14,12 @@
  * sidecar travels with the key when cloned, so a mismatch on load means "this
  * key file was born on different hardware" → rotate. The rotated key is
  * HMAC(oldKey, hostid) — deterministic, so concurrent processes detecting the
- * clone converge on the same new key without locking. The pre-rotation key is
+ * clone converge on the same new key without locking. That holds only because
+ * every file is replaced whole (a reader never sees a truncated key) and a
+ * reader takes the sidecar before the key: the rotation writes the sidecar
+ * last, so a reader that sees the new sidecar sees the rotated key too. The
+ * first key is created with an exclusive link, so two processes starting on
+ * an empty dir share one key. The pre-rotation key is
  * kept (.machine_key.prev) so the cloned auth token still decrypts; it gets
  * re-encrypted under the new key on the next config write.
  *
@@ -29,6 +34,7 @@ import * as crypto from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { defaultConfigDir } from "./config/configDir.js";
+import { writeFileAtomic } from "./fsAtomic.js";
 
 export const MACHINE_KEY_LEN = 32;
 
@@ -70,28 +76,27 @@ export function resolveMachineKey(dir: string, getHardwareId: () => string): Mac
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   }
 
+  const hostid = hostidHash(getHardwareId());
+  // The sidecar before the key: see the header.
+  let recorded = "";
+  try {
+    recorded = fs.readFileSync(hostidFile, "utf8").trim();
+  } catch {}
+
   let key: Buffer | null = null;
   try {
     const existing = fs.readFileSync(keyFile);
     if (existing.length >= MACHINE_KEY_LEN) key = existing;
   } catch {}
 
-  const hostid = hostidHash(getHardwareId());
-
   if (!key) {
-    key = crypto.randomBytes(MACHINE_KEY_LEN);
-    writeSecretFile(keyFile, key);
+    key = createKeyOnce(keyFile);
     if (hostid) writeSecretFile(hostidFile, hostid + "\n");
     return { secret: key, previousSecret: readPrev(prevFile), rotated: false };
   }
 
   // No hardware id on this platform/environment → binding disabled, key as-is.
   if (!hostid) return { secret: key, previousSecret: readPrev(prevFile), rotated: false };
-
-  let recorded = "";
-  try {
-    recorded = fs.readFileSync(hostidFile, "utf8").trim();
-  } catch {}
 
   if (!recorded) {
     // Pre-binding install: adopt this hardware as the key's rightful home.
@@ -145,10 +150,21 @@ function readPrev(prevFile: string): Buffer | null {
 }
 
 function writeSecretFile(file: string, data: Buffer | string): void {
-  fs.writeFileSync(file, data, { mode: 0o600 });
+  writeFileAtomic(file, data, { mode: 0o600 });
+}
+
+/** A new random key, unless another process created one first: then theirs. */
+function createKeyOnce(keyFile: string): Buffer {
+  const tmp = `${keyFile}.${process.pid}.${crypto.randomBytes(4).toString("hex")}.tmp`;
+  writeSecretFile(tmp, crypto.randomBytes(MACHINE_KEY_LEN));
   try {
-    fs.chmodSync(file, 0o600);
-  } catch {}
+    fs.linkSync(tmp, keyFile);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+  return fs.readFileSync(keyFile);
 }
 
 let cachedHardwareId: string | null = null;

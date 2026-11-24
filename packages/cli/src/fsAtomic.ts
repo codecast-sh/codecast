@@ -14,14 +14,14 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
-export function writeFileAtomic(file: string, text: string, opts: { mode?: number; sync?: boolean } = {}): void {
+export function writeFileAtomic(file: string, text: string | Uint8Array, opts: { mode?: number; sync?: boolean } = {}): void {
   // pid and a random suffix, opened exclusively: two writes of one file from
   // the same process (or a recycled pid) never share a temp file.
   const tmp = `${file}.${process.pid}.${randomBytes(4).toString("hex")}.tmp`;
   try {
     const fd = fs.openSync(tmp, "wx", opts.mode ?? 0o600);
     try {
-      fs.writeSync(fd, text);
+      fs.writeFileSync(fd, text);
       if (opts.sync) fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);
