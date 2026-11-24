@@ -7,6 +7,10 @@ import { allModules } from "./testModules.testkit";
 import { enqueuePendingMessage, healAndNotifyStuckMessages } from "./pendingMessages";
 import { enqueueKillAndResume } from "./conversations";
 import { repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { DEVICE_ONLINE_MS } from "./deviceRouting";
+import { enqueueStartSession, performMoveSessionToDevice, performReassignToDevice, performReparentSessionToDevice } from "./devices";
+import { parkOnCloudHost } from "./cloudPlacement";
+import { performCreateBatch, performFinishSession } from "./sessionMigrations";
 
 setDefaultTimeout(60_000);
 
@@ -412,5 +416,202 @@ describe("no second deliverer", () => {
     const res: any = await s.t.mutation(api.managedSessions.markMessageDelivered, { api_token: OWNER_TOKEN, message_id: row._id });
     expect(res.skipped).toBe(true);
     expect((await s.pendingRows())[0].status).toBe("pending");
+  });
+});
+
+describe("relay heartbeat", () => {
+  const beat = (s: Awaited<ReturnType<typeof setup>>, token = OWNER_TOKEN, device_id = DEVICE) =>
+    s.t.mutation(api.registeredSessions.relayHeartbeat, { api_token: token, device_id });
+  const beats = (s: Awaited<ReturnType<typeof setup>>) => s.t.run((ctx) => ctx.db.query("relay_heartbeats").collect());
+  const devicesRows = (s: Awaited<ReturnType<typeof setup>>) => s.t.run((ctx) => ctx.db.query("devices").collect());
+
+  test("upserts one row per user and device and writes no devices row", async () => {
+    const s = await setup();
+    await beat(s);
+    await beat(s);
+    await beat(s, OWNER_TOKEN, "dev-other");
+    const rows = await beats(s);
+    expect(rows).toHaveLength(2);
+    expect(rows.filter((r: any) => r.device_id === DEVICE)).toHaveLength(1);
+    expect(await devicesRows(s)).toHaveLength(0);
+  });
+
+  test("requires authentication", async () => {
+    const s = await setup();
+    await expect(beat(s, "nope")).rejects.toThrow(/Authentication failed/);
+  });
+
+  test("a send reports the registered target live only while the heartbeat is fresh", async () => {
+    const s = await setup();
+    const { short_id } = await s.register();
+    const before: any = await s.send(MATE_TOKEN, short_id);
+    expect(before.target_live).toBe(false);
+
+    await beat(s);
+    const fresh: any = await s.send(MATE_TOKEN, short_id);
+    expect(fresh.target_live).toBe(true);
+    expect(fresh.arrives).not.toBe(before.arrives);
+
+    await s.t.run(async (ctx) => {
+      const [row] = await ctx.db.query("relay_heartbeats").collect();
+      await ctx.db.patch(row._id, { last_seen: Date.now() - DEVICE_ONLINE_MS - 1000 });
+    });
+    const stale: any = await s.send(MATE_TOKEN, short_id);
+    expect(stale.target_live).toBe(false);
+    expect(stale.arrives).toBe(before.arrives);
+    expect(await devicesRows(s)).toHaveLength(0);
+  });
+
+  test("a fresh devices row does not make a registered target live, and another device's heartbeat does not either", async () => {
+    const s = await setup();
+    const { short_id } = await s.register();
+    await s.t.run((ctx) => ctx.db.insert("devices", { user_id: s.owner, device_id: DEVICE, label: "x", platform: "linux", last_seen: Date.now() } as any));
+    await beat(s, OWNER_TOKEN, "dev-other");
+    const res: any = await s.send(MATE_TOKEN, short_id);
+    expect(res.target_live).toBe(false);
+  });
+});
+
+describe("registeredForDevice", () => {
+  const list = (s: Awaited<ReturnType<typeof setup>>, token = OWNER_TOKEN, device_id = DEVICE) =>
+    s.t.query(api.registeredSessions.registeredForDevice, { api_token: token, device_id });
+
+  test("lists the caller's live register-only rows on that device with their target", async () => {
+    const s = await setup();
+    const { short_id } = await s.register();
+    await s.register({ session_id: "reg-2", delivery_target: PASEO });
+    await s.register({ session_id: "reg-other", device_id: "dev-other" });
+    const rows: any[] = await list(s);
+    expect(rows.map((r) => r.session_id).sort()).toEqual(["reg-1", "reg-2"]);
+    expect(rows.find((r) => r.session_id === "reg-1")).toEqual({ session_id: "reg-1", delivery_target: HERDR, short_id });
+    expect(rows.find((r) => r.session_id === "reg-2").delivery_target).toEqual(PASEO);
+  });
+
+  test("leaves out ended rows, ordinary rows and another account's rows", async () => {
+    const s = await setup();
+    await s.register();
+    await s.register({ session_id: "reg-2" });
+    await s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "reg-2" });
+    expect((await list(s) as any[]).map((r) => r.session_id)).toEqual(["reg-1"]);
+    expect(await list(s, MATE_TOKEN)).toEqual([]);
+  });
+
+  test("requires authentication", async () => {
+    const s = await setup();
+    await expect(list(s, "nope")).rejects.toThrow(/Authentication failed/);
+  });
+});
+
+describe("a registered session cannot move devices", () => {
+  const MOVE = /a registered session can't move devices/;
+
+  async function withRegistered() {
+    const s = await setup();
+    const { conversation_id, short_id } = await s.register();
+    const other = await s.t.run((ctx) => ctx.db.insert("devices", { user_id: s.owner, device_id: "dev-other", label: "Other", platform: "linux", last_seen: Date.now() } as any));
+    const unchanged = async () => {
+      const row = await s.conv(conversation_id);
+      expect(row.owner_device_id).toBe(DEVICE);
+      expect(row.delivery_target).toEqual(HERDR);
+      expect(await s.t.run((ctx) => ctx.db.query("daemon_commands").collect())).toHaveLength(0);
+    };
+    return { ...s, conversation_id, short_id, other, unchanged };
+  }
+
+  test("moveToRemote throws", async () => {
+    const s = await withRegistered();
+    await expect(s.t.mutation(api.devices.moveToRemote, { api_token: OWNER_TOKEN, conversation_id: s.short_id, to_device_id: "dev-other" })).rejects.toThrow(MOVE);
+    await s.unchanged();
+  });
+
+  test("setConversationOwner throws", async () => {
+    const s = await withRegistered();
+    await expect(s.t.mutation(api.devices.setConversationOwner, { api_token: OWNER_TOKEN, conversation_id: s.conversation_id, owner_device_id: "dev-other" })).rejects.toThrow(MOVE);
+    await s.unchanged();
+  });
+
+  test("reassignToDevice and reparentSessionToDevice throw", async () => {
+    const s = await withRegistered();
+    await expect(s.t.mutation(api.devices.reassignToDevice, { api_token: OWNER_TOKEN, conversation_id: s.short_id, device_id: "dev-other" })).rejects.toThrow(MOVE);
+    await expect(s.t.mutation(api.devices.reparentSessionToDevice, { api_token: OWNER_TOKEN, session_id: s.short_id, device_id: "dev-other" })).rejects.toThrow(MOVE);
+    await s.unchanged();
+  });
+
+  test("a teammate pulling a shared registered row onto their machine throws", async () => {
+    const s = await withRegistered();
+    await expect(s.t.mutation(api.devices.reparentSessionToDevice, { api_token: MATE_TOKEN, session_id: s.short_id, device_id: "dev-mate" })).rejects.toThrow(MOVE);
+    await s.unchanged();
+  });
+
+  test("the exported move, reassign, reparent, start and park helpers throw", async () => {
+    const s = await withRegistered();
+    const run = (fn: (ctx: any) => Promise<unknown>) => s.t.run((ctx) => fn(ctx));
+    await expect(run((ctx) => performMoveSessionToDevice(ctx, s.owner, { conversation_id: s.conversation_id, owner_device_id: "dev-other", project_path: "/x" }))).rejects.toThrow(MOVE);
+    await expect(run((ctx) => performReassignToDevice(ctx, s.owner, { conversation_id: s.conversation_id, device_id: "dev-other" }))).rejects.toThrow(MOVE);
+    await expect(run((ctx) => performReparentSessionToDevice(ctx, s.owner, { session_id: s.short_id, device_id: "dev-other" }))).rejects.toThrow(MOVE);
+    await expect(run((ctx) => enqueueStartSession(ctx, s.owner, { conversationId: s.conversation_id, agentType: "claude" as any }))).rejects.toThrow(MOVE);
+    await expect(run(async (ctx) => parkOnCloudHost(ctx, s.owner, await ctx.db.get(s.conversation_id), "dev-other"))).rejects.toThrow(MOVE);
+    await s.unchanged();
+  });
+
+  test("an ordinary conversation still starts and moves through the same helpers", async () => {
+    const s = await withRegistered();
+    await s.t.run((ctx) => ctx.db.insert("devices", { user_id: s.owner, device_id: DEVICE, label: "Laptop", platform: "darwin", last_seen: Date.now() } as any));
+    const res: any = await s.t.run((ctx) => performReassignToDevice(ctx as any, s.owner, { conversation_id: s.daemonConv, device_id: "dev-other" }));
+    expect(res.ok).toBe(true);
+    expect((await s.conv(s.daemonConv)).owner_device_id).toBe("dev-other");
+  });
+
+  test("claimConversationForStart refuses a registered row quietly and leaves the owner alone", async () => {
+    const s = await withRegistered();
+    await s.t.run((ctx) => ctx.db.insert("devices", { user_id: s.owner, device_id: "dev-other", label: "Other", platform: "linux", last_seen: Date.now() } as any));
+    const res = await s.t.mutation(api.devices.claimConversationForStart, { api_token: OWNER_TOKEN, conversation_id: s.conversation_id, device_id: "dev-other" });
+    expect(res).toEqual({ won: false });
+    await s.unchanged();
+  });
+
+  test("a batch skips the registered row and still plans the others", async () => {
+    const s = await withRegistered();
+    await s.t.run(async (ctx) => {
+      await ctx.db.insert("devices", { user_id: s.owner, device_id: DEVICE, label: "Laptop", platform: "darwin", last_seen: Date.now() } as any);
+      await ctx.db.insert("devices", { user_id: s.owner, device_id: "box", label: "Box", platform: "linux", is_remote: true, last_seen: Date.now() } as any);
+      await ctx.db.patch(s.daemonConv, { session_id: "ordinary" });
+    });
+    const plan: any = await s.t.run((ctx) => performCreateBatch(ctx as any, s.owner, { conversation_ids: [s.short_id, "jx7ordi"], to_device_id: "box", dry_run: true }));
+    expect(plan.skipped.map((r: any) => [r.short_id, r.reason])).toContainEqual([s.short_id, "a registered session can't move devices"]);
+    expect(plan.rows.map((r: any) => r.short_id)).toEqual(["jx7ordi"]);
+    await s.unchanged();
+  });
+
+  test("finishing a migration of a row that registered meanwhile fails that row without throwing", async () => {
+    const s = await withRegistered();
+    const migration = await s.t.run((ctx) => ctx.db.insert("session_migrations", {
+      user_id: s.owner, batch_id: "b1", conversation_id: s.conversation_id, direction: "to_cloud", to_device_id: "dev-other",
+      executor_device_id: DEVICE, status: "switching", position: 0, attempt: 0, created_at: 1, updated_at: 1,
+    } as any));
+    const res: any = await s.t.run((ctx) => performFinishSession(ctx as any, s.owner, { migration_id: migration, project_path: "/x" }));
+    expect(res).toEqual({ ok: false, reason: "a registered session can't move devices" });
+    await s.unchanged();
+  });
+});
+
+describe("poll-keystroke control rows", () => {
+  test("the relay settles a control row at the head with undeliverable, and the queue moves on", async () => {
+    const s = await setup();
+    const { conversation_id, short_id } = await s.register();
+    await s.send(MATE_TOKEN, short_id);
+    const control = JSON.stringify({ __cc_poll: true, keys: ["Down", "Enter"] });
+    await s.t.run((ctx) => enqueuePendingMessage(ctx as any, { _id: conversation_id, user_id: s.owner, register_only: true, owner_device_id: DEVICE } as any, s.owner, { content: control, human: true }));
+    const head: any[] = await s.forRelay();
+    expect(head).toHaveLength(1);
+    expect(head[0].content).toBe(control);
+    const res = await s.t.mutation(api.pendingMessages.updateMessageStatus, {
+      api_token: OWNER_TOKEN, message_id: head[0]._id, status: "undeliverable", device_id: DEVICE,
+    });
+    expect(res.skipped).toBe(false);
+    const next: any[] = await s.forRelay();
+    expect(next).toHaveLength(1);
+    expect(next[0].content).not.toBe(control);
+    expect((await s.pendingRows()).find((r) => r._id === head[0]._id)!.status).toBe("undeliverable");
   });
 });

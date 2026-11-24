@@ -9,3 +9,7 @@ export const deliveryTargetValidator = v.union(
 export async function isRegisterOnly(ctx: { db: any }, conversationId: Id<"conversations">): Promise<boolean> {
   return !!(await ctx.db.get(conversationId))?.register_only;
 }
+
+export function assertNotRegisterOnly(conv: { register_only?: boolean } | null | undefined): void {
+  if (conv?.register_only) throw new Error("a registered session can't move devices");
+}

@@ -1,5 +1,5 @@
 import { v } from "convex/values";
-import { mutation } from "./functions";
+import { mutation, query } from "./functions";
 import { getAuthenticatedUserId, bounceFromEndedSession, NON_TERMINAL_PENDING_STATUSES } from "./pendingMessages";
 import { checkRateLimit } from "./rateLimit";
 import { isDeletedSession } from "./lib/deletedSessions";
@@ -113,5 +113,44 @@ export const markEnded = mutation({
         .collect();
       for (const row of rows) await bounceFromEndedSession(ctx, row);
     }
+  },
+});
+
+export const relayHeartbeat = mutation({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+    const existing = await ctx.db
+      .query("relay_heartbeats")
+      .withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.device_id))
+      .first();
+    if (existing) await ctx.db.patch(existing._id, { last_seen: Date.now() });
+    else await ctx.db.insert("relay_heartbeats", { user_id: userId, device_id: args.device_id, last_seen: Date.now() });
+  },
+});
+
+export const registeredForDevice = query({
+  args: {
+    api_token: v.optional(v.string()),
+    device_id: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const userId = await getAuthenticatedUserId(ctx, args.api_token);
+    if (!userId) {
+      throw new Error("Authentication failed: invalid token or session");
+    }
+    const rows = await ctx.db
+      .query("conversations")
+      .withIndex("by_owner_device", (q) => q.eq("user_id", userId).eq("owner_device_id", args.device_id))
+      .collect();
+    return rows
+      .filter((c) => c.register_only && !c.ended_at && c.delivery_target && c.session_id)
+      .map((c) => ({ session_id: c.session_id!, delivery_target: c.delivery_target!, short_id: c.short_id ?? c._id.toString().slice(0, 7) }));
   },
 });

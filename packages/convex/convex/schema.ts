@@ -3519,6 +3519,12 @@ export default defineSchema({
     .index("by_user_id", ["user_id"])
     .index("by_user_device", ["user_id", "device_id"]),
 
+  relay_heartbeats: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    last_seen: v.number(),
+  }).index("by_user_device", ["user_id", "device_id"]),
+
   // The last transfer outcome per ordered pair of one owner's machines
   // (peerLinks.ts): from = the source that served, to = the requester.
   peer_links: defineTable({
