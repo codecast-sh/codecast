@@ -426,19 +426,23 @@ export function chooseClaudeAutoTrim(data: ExportResult): number | undefined {
 }
 
 /**
- * Extract the first user message's `permissionMode` from a JSONL transcript
- * head. Used by the daemon's auto-resume to preserve bypass when the original
- * session was launched in bypass mode.
+ * The latest `permissionMode` a transcript records, so auto-resume keeps the
+ * mode the session ended in.
  */
 export function extractJsonlPermissionMode(jsonlContent: string): string | undefined {
-  const firstUserLine = jsonlContent.split("\n").find(l => l.includes('"type":"user"'));
-  if (!firstUserLine) return undefined;
-  try {
-    const parsed = JSON.parse(firstUserLine);
-    return typeof parsed.permissionMode === "string" ? parsed.permissionMode : undefined;
-  } catch {
-    return undefined;
+  const lines = jsonlContent.split("\n");
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (!lines[i].includes('"permissionMode"')) continue;
+    try {
+      const mode = JSON.parse(lines[i]).permissionMode;
+      if (typeof mode === "string") return mode;
+    } catch {}
   }
+  return undefined;
+}
+
+export function latestJsonlPermissionModeFromFile(jsonlPath: string): string | undefined {
+  return lastFlagFromFileWindows(jsonlPath, (window) => extractJsonlPermissionMode(window) ?? "") || undefined;
 }
 
 /**
