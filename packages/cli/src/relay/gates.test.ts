@@ -96,6 +96,10 @@ describe("the auto-update stays out of the hook commands, flag or not", () => {
     expect(INDEX).toMatch(/if \(!isStableContextFastPath && [^\n]*autoUpdateSettled = checkForUpdates\(\)/);
   });
 
+  test("cast config never starts the daemon, so turning messaging_only on cannot start the one it forbids", () => {
+    expect(INDEX).toMatch(/const internalCmds = \[[^\]]*'config'[^\]]*\];\s*if \(!internalCmds\.includes\(cmdName\)\) \{\s*logCliCommand\(cmdName, args\);\s*ensureDaemonRunning\(\);/);
+  });
+
   test("the three commands skip the daemon autostart and command log in the preAction hook", () => {
     const line = INDEX.split("\n").find((l) => l.includes("const internalCmds = ["))!;
     for (const verb of ["register", "unregister", "relay"]) expect(line).toContain(`'${verb}'`);

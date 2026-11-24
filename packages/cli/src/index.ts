@@ -23229,7 +23229,7 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   if (process.env.DEBUG_CLI) {
     console.error(`[DEBUG] preAction hook: cmd=${cmdName} args=${args}`);
   }
-  const internalCmds = ['start', 'stop', 'status', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update', 'agent-context', 'register', 'unregister', 'relay'];
+  const internalCmds = ['start', 'stop', 'status', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update', 'agent-context', 'config', 'register', 'unregister', 'relay'];
   if (!internalCmds.includes(cmdName)) {
     logCliCommand(cmdName, args);
     ensureDaemonRunning();
