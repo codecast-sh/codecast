@@ -22,10 +22,13 @@ export class TmuxDeliveryUncertainError extends Error {
   // on, when the cause is something the person can see and clear.
   readonly holdReason?: string;
   readonly screen?: string;
-  constructor(reason: string, hold?: { holdReason: string; screen?: string }) {
+  /** Message of the failure this wraps, unprefixed, so the pane-rebuild count can still classify it. */
+  readonly wrappedMessage?: string;
+  constructor(reason: string, hold?: { holdReason: string; screen?: string }, wrappedMessage?: string) {
     super(`INJECT_UNVERIFIED: ${reason}; preserving the original terminal write`);
     this.holdReason = hold?.holdReason;
     this.screen = hold?.screen;
+    this.wrappedMessage = wrappedMessage;
   }
 }
 

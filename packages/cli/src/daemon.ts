@@ -19002,7 +19002,7 @@ export async function injectViaTmux(target: string, content: string, agentType?:
     if (!opts?.delivery || isDeliveryVerdict(error)) throw error;
     throw new TmuxDeliveryUncertainError(String(error), error instanceof UnreadableScreenError
       ? { holdReason: UNREADABLE_SCREEN_HOLD_REASON, screen: error.screen }
-      : undefined);
+      : undefined, error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -28322,9 +28322,14 @@ async function deliverMessageIntoSession(
       // but hasn't consumed our payload yet. Fall-through would auto-resume a
       // parallel instance beside it — rethrow and let the retry re-enter this
       // same pane after backoff.
-      if (isDeliveryVerdict(err)) throw err;
+      // A delivery wraps an unreadable pane as an unverified-input hold; the
+      // failure it wraps still counts toward the rebuild, or the hold would
+      // never end. One count per failure, wrapped or not.
+      const wrapped = err instanceof TmuxDeliveryUncertainError ? err.wrappedMessage : undefined;
+      const rebuild = noteUnresolvablePane(sessionId, wrapped ?? msg);
+      if (isDeliveryVerdict(err) && !rebuild) throw err;
       logDelivery(`tmux injection failed for ${injectTarget}: ${msg}`);
-      if (noteUnresolvablePane(sessionId, msg)) {
+      if (rebuild) {
         if (hasOpenBackgroundWork(sessionId) || subagentActiveAgoMs(sessionId) !== Infinity) {
           // An unreadable pane is not a dead agent. Background work or a subagent
           // running inside it dies with the tree, so the message waits instead.
