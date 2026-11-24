@@ -215,6 +215,18 @@ describe("workflow/runner (command nodes)", () => {
     expect(cap.logs.some(l => l.includes("hello-world"))).toBe(true);
   });
 
+  // ct-100734: a station's `cast task comment` had no session to sign with, so it read as the person's own words.
+  test("a command station's script runs as its run: the run's own session is in its environment", async () => {
+    const g = parseWorkflowSource(`digraph g {
+      start  [shape=Mdiamond]
+      run    [shape=parallelogram, script="echo as-run-[$CODECAST_RUN_CONVERSATION_ID]"]
+      exit   [shape=Msquare]
+      start -> run -> exit
+    }`);
+    await runWorkflow(g, { cwd: tmpDir, runSession: "conv_run" });
+    expect(cap.logs.some(l => l.includes("as-run-[conv_run]"))).toBe(true);
+  });
+
   // ct-58757: Verify sent Implement back twice, and both later hands, told
   // nothing of why, checked their own work again and handed it in unchanged.
   test("a station the run comes back to is told which station sent it back and what it found", async () => {

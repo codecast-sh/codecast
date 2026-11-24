@@ -120,6 +120,28 @@ describe("a person's comment reaches the session that owns the task", () => {
     await comment(t, "Progress: halfway", "sess-other");
     expect(await pending(t)).toHaveLength(0);
   });
+
+  // ct-100734: a line station's `cast task comment` posted with no session, so it read as the person's own words and
+  // was relayed into the working session as theirs. The station now signs it with its run's conversation id.
+  test("a station's comment signed with its run's conversation id never relays, and names the run", async () => {
+    const { t, userId } = await setup(60_000);
+    const runConversation = await t.run(async (ctx: any) => {
+      const now = Date.now();
+      const run = await ctx.db.insert("workflow_runs", { user_id: userId, workflow_name: "line", status: "running", node_statuses: [], created_at: now, updated_at: now } as any);
+      const conversation = await ctx.db.insert("conversations", {
+        user_id: userId, agent_type: "claude_code", session_id: `wf-${run}`, short_id: "jx7cccc", title: "line run", started_at: now, updated_at: now,
+        message_count: 1, is_private: true, status: "active", project_path: "/repo", workflow_run_id: run, is_workflow_primary: true,
+      } as any);
+      await ctx.db.patch(run, { primary_conversation_id: conversation } as any);
+      return conversation;
+    });
+    await comment(t, "Merged to main as abc1234567 (PR #4685).", String(runConversation));
+    expect(await pending(t)).toHaveLength(0);
+    const [c] = await comments(t);
+    expect(c.author).toBe("Line run");
+    expect(c.author_user_id).toBeUndefined();
+    expect(c.delivered_to_conversation_id).toBeUndefined();
+  });
 });
 
 describe("the session a task's change came from (change_session on /cli/work/get)", () => {
