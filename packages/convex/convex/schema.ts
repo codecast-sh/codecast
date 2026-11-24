@@ -1394,6 +1394,7 @@ export default defineSchema({
     // "Move to remote" flips this from the local device to the Mac's device.
     owner_device_id: v.optional(v.string()),
     register_only: v.optional(v.boolean()),
+    registered_at: v.optional(v.number()),
     delivery_target: v.optional(deliveryTargetValidator),
     ended_at: v.optional(v.number()),
     // DENORMALIZED CACHE of the PRIMARY (first-added, still-present) owner. The
@@ -1573,6 +1574,7 @@ export default defineSchema({
     // The Closed shelf's closes (listClosedSessions), newest-first.
     .index("by_user_closed", ["user_id", "inbox_closed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
+    .index("by_owner_device_register_only", ["user_id", "owner_device_id", "register_only", "ended_at"])
     // A device's live rows (cloud.hostSessions): a host that has run thousands
     // of stations reads only the ones still active, not its whole history.
     .index("by_owner_device_status", ["user_id", "owner_device_id", "status"])
@@ -3518,6 +3520,12 @@ export default defineSchema({
   })
     .index("by_user_id", ["user_id"])
     .index("by_user_device", ["user_id", "device_id"]),
+
+  relay_heartbeats: defineTable({
+    user_id: v.id("users"),
+    device_id: v.string(),
+    last_seen: v.number(),
+  }).index("by_user_device", ["user_id", "device_id"]),
 
   // The last transfer outcome per ordered pair of one owner's machines
   // (peerLinks.ts): from = the source that served, to = the requester.
