@@ -121,6 +121,9 @@ const GOLDEN_HASH_BY_VERSION: Record<number, string> = {
   // v30: the owners model on rows stamped owners_model (owners.json):
   // nothing rides, and a wait an agent owner answers files as working.
   30: "9781dfc51b7e955b",
+  // v31: a pinned block holds through hibernation, over a trigger, a done
+  // settle and an anchor's hiding (the hibernated_blocked rows in buckets.json).
+  31: "6bee8d665370845a",
 };
 
 type Expected = {

@@ -309,6 +309,17 @@ describe("isHardBlocked", () => {
   test("an anchor that declares itself blocked surfaces out of hidden", () => {
     expect(placeInboxRow(input({ isAnchor: true, declaredStatus: "blocked" })).bucket).toBe("needs_input");
   });
+  // The daemon hibernates an idle session to free the machine; that says
+  // nothing about who acts next, so a pinned block holds through it.
+  test("a declared block holds through hibernation, over a wake and a done settle", () => {
+    const hib = { agentStatus: "hibernated", declaredStatus: "blocked" };
+    expect(classifyWorkState(input({ ...hib, armedTriggerHome: true, verifiedWake: true }))).toBe("needs_input");
+    expect(classifyWorkState(input({ ...hib, settleVerdict: "done" }))).toBe("needs_input");
+    expect(isHardBlocked(input(hib))).toBe(true);
+    expect(placeInboxRow(input({ ...hib, isAnchor: true })).bucket).toBe("needs_input");
+    // A hibernated row with no pin still files by the verdict it carries.
+    expect(classifyWorkState(input({ agentStatus: "hibernated", armedTriggerHome: true }))).toBe("dormant");
+  });
 });
 
 describe("computeBucketStale", () => {
@@ -743,9 +754,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 30", () => {
+  test("the caps are the single source and the version is 31", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200, adopted: 100, nested: 25, escalated: 200 });
-    expect(INBOX_PROJECTION_VERSION).toBe(30);
+    expect(INBOX_PROJECTION_VERSION).toBe(31);
   });
 });
 
