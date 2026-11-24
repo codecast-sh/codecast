@@ -200,8 +200,7 @@ export const recordUse = internalMutation({
 
 export type TeamSessionRow = {
   id: string;
-  /** The person the session is assigned to, else the member who runs it. `email`
-   *  is the account email the team roster already shows every member. */
+  /** The person the session is assigned to, else the member who runs it. */
   owner: { id: string; name: string | null; github_username: string | null; email: string | null };
   agent: string;
   branch: string | null;
