@@ -315,7 +315,7 @@ function fixture(transport = "tmux", cached = true) {
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "lineEndingAt", "skipSuggestionMenu", "composerTextStart", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "transcriptEchoes", "injectViaTmux", "injectViaTmuxInner",
-      "planHighlightStep", "selectRowHasLabel", "highlightFailureCount", "selectHighlightedOption", "isClaudeIdleResumeDialog", "isIdleResumeOptionRow",
+      "planHighlightStep", "selectRowHasLabel", "highlightFailureCount", "trustHighlightHold", "selectHighlightedOption", "isClaudeIdleResumeDialog", "isIdleResumeOptionRow",
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
       "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "injectViaGhostty", "herdrKey", "injectViaHerdr", "noteUnreachableAgent", "injectThroughPane", "normalizeTty", "getTerminalLabel", "terminalLacksInjector", "injectViaTerminal",
@@ -324,7 +324,7 @@ function fixture(transport = "tmux", cached = true) {
     ];
     const constants = [
       "RESUME_CWD_PICKER_RE", "COMPOSER_RULE", "HOLD_SCREEN_ROWS", "UNREADABLE_SCREEN_HOLD_REASON", "MID_TURN_COMMAND_HOLD_REASON", "TURN_SPINNER_OR_INTERRUPT", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "INJECTABLE_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
-      "PANE_TITLE_WORKING", "PANE_REBUILD_THRESHOLD", "PANE_REBUILD_WINDOW_MS", "PANE_REBUILD_MIN_GAP_MS", "unresolvablePanes", "highlightFailures", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
+      "PANE_TITLE_WORKING", "PANE_REBUILD_THRESHOLD", "PANE_REBUILD_WINDOW_MS", "PANE_REBUILD_MIN_GAP_MS", "unresolvablePanes", "highlightFailures", "highlightPane", "HIGHLIGHT_HOLD_AFTER_FAILURES", "HIGHLIGHT_HOLD_REASON", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
       "ANSI_ESCAPE_RE", "MACHINE_WAKE_IDLE_RESUME_CHOICE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME", "STARTED_FATAL_CONFIRM_MS", "fatalPaneSince",
     ].map(name => {
       const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
