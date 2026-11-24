@@ -1,4 +1,5 @@
 import { parsePollMessage } from "../pollMessage.js";
+import { sanitizeForTerminal } from "./sanitize.js";
 import type { DeliveryTarget, TargetAdapter } from "./targets.js";
 
 export type PendingRow = {
@@ -8,6 +9,8 @@ export type PendingRow = {
   delivery_target?: DeliveryTarget;
   image_storage_id?: string;
   image_storage_ids?: string[];
+  created_at?: number;
+  _creationTime?: number;
 };
 
 export type RelayClient = {
@@ -27,6 +30,7 @@ export type RelayDeps = {
 type OwedStatus = "delivered" | "failed" | "undeliverable";
 
 export const GONE_STRIKES_TO_END = 2;
+export const HERDR_END_GRACE_MS = 3 * 60_000;
 
 export function wrapForHandoff(content: string, imageCount = 0): string {
   const note = imageCount > 0 ? `\n[${imageCount} image(s) not delivered]` : "";
@@ -88,7 +92,7 @@ export class Relay {
       try {
         do {
           this.dirty = false;
-          await Promise.all(this.rows.map((row) => this.handle(row)));
+          await Promise.all(groupBySession(this.rows).map((group) => this.runGroup(group)));
         } while (this.dirty);
       } finally {
         this.running = false;
@@ -97,14 +101,22 @@ export class Relay {
     return this.runPromise;
   }
 
-  private async handle(row: PendingRow): Promise<void> {
-    if (this.settled.has(row._id)) return;
+  private async runGroup(group: PendingRow[]): Promise<void> {
+    for (const row of group) if (!(await this.handle(row))) return;
+  }
+
+  private async handle(row: PendingRow): Promise<boolean> {
+    if (this.settled.has(row._id)) return true;
     try {
       const status = this.owed.get(row._id) ?? (isControlMessage(row.content) ? "undeliverable" : undefined);
-      if (status) return await this.settle(row, status);
-      await this.deliver(row);
+      if (status) {
+        await this.settle(row, status);
+        return true;
+      }
+      return await this.deliver(row);
     } catch (err) {
       this.deps.log(`message ${row._id}: ${errorText(err)}; will retry`);
+      return false;
     }
   }
 
@@ -120,31 +132,30 @@ export class Relay {
     this.deps.log(res?.skipped ? `message ${row._id}: ${status} skipped, already settled` : `message ${row._id}: ${status}`);
   }
 
-  private async deliver(row: PendingRow): Promise<void> {
+  private async deliver(row: PendingRow): Promise<boolean> {
     if (!row.delivery_target || !row.session_id) {
       this.deps.log(`message ${row._id}: no delivery target on its session; leaving pending`);
-      return;
+      return false;
     }
     const images = row.image_storage_ids?.length ?? (row.image_storage_id ? 1 : 0);
     if (images > 0) this.deps.log(`message ${row._id}: ${images} image(s) skipped, delivering text only`);
-    const result = await this.deps.adapter.deliver(row.delivery_target, wrapForHandoff(row.content, images));
+    const content = row.delivery_target.kind === "herdr" ? sanitizeForTerminal(row.content) : row.content;
+    const result = await this.deps.adapter.deliver(row.delivery_target, wrapForHandoff(content, images));
     if (result.kind === "ok") {
       this.owed.set(row._id, "delivered");
       this.goneStrikes.delete(row.session_id);
       this.deps.log(`message ${row._id}: handed off to ${describe(row.delivery_target)}`);
-      return await this.settle(row, "delivered");
+      await this.settle(row, "delivered");
+      return true;
     }
     if (result.kind === "uncertain") {
       this.owed.set(row._id, "failed");
       this.deps.log(`message ${row._id}: ${result.reason}; it may have landed, marking failed and not resending`);
-      return await this.settle(row, "failed");
+      await this.settle(row, "failed");
+      return false;
     }
-    if (result.kind === "gone") {
-      const strikes = this.strike(row.session_id);
-      this.deps.log(`message ${row._id}: ${result.reason}; strike ${strikes}, left pending`);
-      return;
-    }
-    this.deps.log(`message ${row._id}: ${result.kind} (${result.reason}); will retry`);
+    this.deps.log(`message ${row._id}: ${result.kind} (${result.reason}); left pending${result.kind === "gone" ? " for the sweep to judge" : ", will retry"}`);
+    return false;
   }
 
   private strike(sessionId: string): number {
@@ -154,7 +165,7 @@ export class Relay {
   }
 
   private async endSession(sessionId: string, target: DeliveryTarget): Promise<void> {
-    await this.deps.client.mutation("registeredSessions:markEnded", { session_id: sessionId, delivery_target: target, api_token: this.deps.apiToken });
+    await this.deps.client.mutation("registeredSessions:markEnded", { session_id: sessionId, delivery_target: target, device_id: this.deps.deviceId, api_token: this.deps.apiToken });
     this.goneStrikes.delete(sessionId);
     this.rows = this.rows.filter((r) => r.session_id !== sessionId);
   }
@@ -165,7 +176,7 @@ export class Relay {
   }
 
   private async runSweep(): Promise<void> {
-    let registered: Array<{ session_id: string; delivery_target: DeliveryTarget; short_id: string }>;
+    let registered: Array<{ session_id: string; delivery_target: DeliveryTarget; short_id: string; registered_at?: number }>;
     try {
       registered = await this.deps.client.query("registeredSessions:registeredForDevice", this.auth());
     } catch (err) {
@@ -176,6 +187,11 @@ export class Relay {
       const live = await this.deps.adapter.probe(reg.delivery_target);
       if (live.kind !== "gone") {
         this.goneStrikes.delete(reg.session_id);
+        return;
+      }
+      if (reg.delivery_target.kind === "herdr" && reg.registered_at !== undefined && (this.deps.now ?? Date.now)() - reg.registered_at < HERDR_END_GRACE_MS) {
+        this.goneStrikes.delete(reg.session_id);
+        this.deps.log(`sweep: ${reg.short_id} looks gone (${live.reason}) but registered moments ago; herdr may still be detecting its agent`);
         return;
       }
       const strikes = this.strike(reg.session_id);
@@ -191,6 +207,16 @@ export class Relay {
       }
     }));
   }
+}
+
+function groupBySession(rows: PendingRow[]): PendingRow[][] {
+  const groups = new Map<string, PendingRow[]>();
+  for (const row of rows) {
+    const key = row.session_id ?? `row:${row._id}`;
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
+  const at = (row: PendingRow) => row.created_at ?? row._creationTime ?? 0;
+  return [...groups.values()].map((group) => group.map((row, index) => ({ row, index })).sort((a, b) => at(a.row) - at(b.row) || a.index - b.index).map((x) => x.row));
 }
 
 function describe(target: DeliveryTarget): string {

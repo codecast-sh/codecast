@@ -4,7 +4,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { pollUntil } from "../test-helpers/pollUntil.js";
 import { isProcessRunning, readPidFile, releasePidFileIfOwned, tryAcquirePidFileLock } from "../pidFileLock.js";
-import { authHash, isAuthError, relayChildEnv, relayPaths, relaySpawnOptions, runRelayCommand, type RelayConfig, type RelayConvexClient, type RelayRuntimeDeps } from "./relayCommand.js";
+import { LONGEST_ADAPTER_TIMEOUT_MS, HERDR_PROMPT_TIMEOUT_MS, PASEO_SEND_TIMEOUT_MS } from "./targets.js";
+import { DEFAULT_INTERVALS, authHash, isAuthError, relayChildEnv, relayPaths, relaySpawnOptions, runRelayCommand, type RelayConfig, type RelayConvexClient, type RelayRuntimeDeps } from "./relayCommand.js";
 
 const dirs: string[] = [];
 afterEach(() => {
@@ -169,6 +170,14 @@ describe("--background", () => {
   test("the detached child starts in the home directory, not the hook's cwd", () => {
     const opts = relaySpawnOptions(7, { PASEO_AGENT_ID: "a", PATH: "/bin" });
     expect(opts).toEqual({ detached: true, stdio: ["ignore", 7, 7], env: { PATH: "/bin" }, cwd: os.homedir() });
+  });
+});
+
+describe("shutdown and replacement waits outlast the slowest send", () => {
+  test("drain is longer than every adapter timeout, and the replacement wait is longer than the drain", () => {
+    expect(LONGEST_ADAPTER_TIMEOUT_MS).toBeGreaterThanOrEqual(Math.max(HERDR_PROMPT_TIMEOUT_MS, PASEO_SEND_TIMEOUT_MS));
+    expect(DEFAULT_INTERVALS.drain).toBeGreaterThan(LONGEST_ADAPTER_TIMEOUT_MS);
+    expect(DEFAULT_INTERVALS.replaceWait).toBeGreaterThan(DEFAULT_INTERVALS.drain);
   });
 });
 

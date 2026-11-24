@@ -33,6 +33,7 @@ export const HERDR_PROBE_TIMEOUT_MS = 3_000;
 export const PASEO_SEND_TIMEOUT_MS = 15_000;
 export const PASEO_PROBE_TIMEOUT_MS = 8_000;
 export const IDENTIFY_TIMEOUT_MS = 2_500;
+export const LONGEST_ADAPTER_TIMEOUT_MS = Math.max(HERDR_PROMPT_TIMEOUT_MS, HERDR_PROBE_TIMEOUT_MS, PASEO_SEND_TIMEOUT_MS, PASEO_PROBE_TIMEOUT_MS);
 
 const HERDR_GONE_CODES = new Set(["agent_not_found", "pane_not_found", "agent_pane_not_found"]);
 

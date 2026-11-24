@@ -111,11 +111,17 @@ export function runRegister(opts: RegisterOptions, deps: RegisterDeps): Promise<
 export function runUnregister(opts: RegisterOptions, deps: RegisterDeps): Promise<number> {
   return guarded("unregister", deps, async () => {
     const { sessionId } = await resolveInput(opts, deps);
+    const target = detectDeliveryTarget(deps.env);
     if (!sessionId) return deps.err("cast unregister: no session id (pass --session-id or run from a SessionEnd hook)");
     if (!deps.config?.auth_token || !deps.config.convex_url) return deps.err("cast unregister: not logged in; run: cast auth");
     try {
       await withTimeout(
-        deps.makeClient(deps.config.convex_url).mutation("registeredSessions:markEnded", { api_token: deps.config.auth_token, session_id: sessionId }),
+        deps.makeClient(deps.config.convex_url).mutation("registeredSessions:markEnded", {
+          api_token: deps.config.auth_token,
+          session_id: sessionId,
+          device_id: deps.deviceId(),
+          ...(target ? { delivery_target: target } : {}),
+        }),
         deps.timeoutMs ?? COMMAND_TIMEOUT_MS,
         "markEnded",
       );

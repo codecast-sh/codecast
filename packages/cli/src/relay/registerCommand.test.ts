@@ -253,7 +253,16 @@ describe("unregister", () => {
   test("marks the hook's session ended with the token", async () => {
     const { d, calls } = deps({ env: {}, ancestorComms: async () => [] });
     expect(await runUnregister({}, d)).toBe(0);
-    expect(calls).toEqual([{ name: "registeredSessions:markEnded", args: { api_token: "tok", session_id: "hook-sess" } }]);
+    expect(calls).toEqual([{ name: "registeredSessions:markEnded", args: { api_token: "tok", session_id: "hook-sess", device_id: "dev-1" } }]);
+  });
+
+  test("a late SessionEnd names its own pane or agent and device, so a resumed registration elsewhere survives it", async () => {
+    const herdr = deps({ env: { HERDR_PANE_ID: "w1:p3", HERDR_SOCKET_PATH: "/s/herdr.sock" } });
+    await runUnregister({}, herdr.d);
+    expect(herdr.calls[0].args).toEqual({ api_token: "tok", session_id: "hook-sess", device_id: "dev-1", delivery_target: { kind: "herdr", pane: "w1:p3", socket: "/s/herdr.sock" } });
+    const paseo = deps({ env: { PASEO_AGENT_ID: "a", PASEO_HOME: "/h" } });
+    await runUnregister({}, paseo.d);
+    expect(paseo.calls[0].args.delivery_target).toEqual({ kind: "paseo", agent_id: "a", home: "/h" });
   });
 
   test("the flag overrides the payload", async () => {

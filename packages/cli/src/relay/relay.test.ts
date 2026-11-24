@@ -186,8 +186,8 @@ describe("blocked, transient and uncertain", () => {
   });
 });
 
-describe("gone is a strike, and only the sweep ends a session", () => {
-  const reg = (id: string, target: DeliveryTarget = HERDR) => ({ session_id: id, delivery_target: target, short_id: `s-${id}` });
+describe("gone: only sweep readings count, and only the sweep ends a session", () => {
+  const reg = (id: string, target: DeliveryTarget = HERDR, registered_at?: number) => ({ session_id: id, delivery_target: target, short_id: `s-${id}`, ...(registered_at !== undefined ? { registered_at } : {}) });
 
   test("a delivery gone leaves the row pending and ends nothing, however often it repeats", async () => {
     const s = setup({ deliver: () => ({ kind: "gone", reason: "agent_not_found" }) });
@@ -195,39 +195,28 @@ describe("gone is a strike, and only the sweep ends a session", () => {
     for (let i = 0; i < 5; i++) await s.relay.tick();
     expect(s.ended()).toEqual([]);
     expect(s.statusCalls()).toEqual([]);
-    expect(s.logs.join("\n")).toContain("left pending");
+    expect(s.logs.join("\n")).toContain("left pending for the sweep to judge");
   });
 
-  test("delivery strikes and a gone sweep reading together end the session, with the probed target", async () => {
+  test("several delivery gones plus one sweep reading do not end the session; two consecutive sweep readings do", async () => {
     const s = setup({
       registered: [reg("sess-x")],
       deliver: () => ({ kind: "gone", reason: "agent_not_found" }),
       probe: () => ({ kind: "gone", reason: "pane closed" }),
     });
-    await s.relay.onRows([row("m1", { session_id: "sess-x" })]);
-    await s.relay.sweep();
-    expect(s.ended().map((m) => m.args)).toEqual([{ session_id: "sess-x", delivery_target: HERDR, api_token: "tok" }]);
-  });
-
-  test("the sweep alone needs GONE_STRIKES_TO_END consecutive gone readings", async () => {
-    expect(GONE_STRIKES_TO_END).toBe(2);
-    const s = setup({ registered: [reg("a")], probe: () => ({ kind: "gone", reason: "pane closed" }) });
+    await s.relay.onRows([row("m1", { session_id: "sess-x", created_at: 1 }), row("m2", { session_id: "sess-x", created_at: 2 })]);
+    await s.relay.tick();
+    await s.relay.tick();
     await s.relay.sweep();
     expect(s.ended()).toEqual([]);
     await s.relay.sweep();
-    expect(s.ended()).toHaveLength(1);
+    expect(s.ended().map((m) => m.args)).toEqual([{ session_id: "sess-x", delivery_target: HERDR, device_id: "dev", api_token: "tok" }]);
   });
 
-  test("a delivered message clears the strikes", async () => {
-    let gone = true;
-    const s = setup({
-      registered: [reg("sess-x")],
-      deliver: () => (gone ? { kind: "gone", reason: "x" } : { kind: "ok" }),
-      probe: () => ({ kind: "gone", reason: "x" }),
-    });
+  test("a delivered message clears the sweep's strike", async () => {
+    const s = setup({ registered: [reg("sess-x")], probe: () => ({ kind: "gone", reason: "x" }) });
+    await s.relay.sweep();
     await s.relay.onRows([row("m1", { session_id: "sess-x" })]);
-    gone = false;
-    await s.relay.tick();
     await s.relay.sweep();
     expect(s.ended()).toEqual([]);
   });
@@ -258,11 +247,115 @@ describe("gone is a strike, and only the sweep ends a session", () => {
     expect(s.ended().map((m) => m.args.session_id)).toEqual(["dead"]);
   });
 
+  test("a herdr pane registered moments ago is never ended, however often it reads gone; a paseo agent and an old pane are", async () => {
+    const now = 10_000_000;
+    const s = setup({
+      registered: [reg("fresh", HERDR, now - 60_000), reg("old", { ...HERDR, pane: "p2" }, now - 4 * 60_000), reg("fresh-paseo", PASEO, now - 60_000)],
+      probe: () => ({ kind: "gone", reason: "x" }),
+    });
+    (s.relay as any).deps.now = () => now;
+    for (let i = 0; i < 4; i++) await s.relay.sweep();
+    expect([...new Set(s.ended().map((m) => m.args.session_id))].sort()).toEqual(["fresh-paseo", "old"]);
+    expect(s.logs.join("\n")).toContain("registered moments ago");
+  });
+
   test("a failed listing ends nothing and does not throw", async () => {
     const s = setup();
     (s.relay as any).deps.client = strictStub<RelayClient>("convex", { query: async () => { throw new Error("offline"); } });
     await s.relay.sweep();
     expect(s.ended()).toEqual([]);
+  });
+});
+
+describe("order within a session", () => {
+  test("rows for one session go in the server's oldest-first order, one at a time, whatever order the push lists them", async () => {
+    const trace: string[] = [];
+    let inflight = 0;
+    let overlap = false;
+    const s = setup();
+    (s.relay as any).deps.adapter.deliver = async (_t: DeliveryTarget, text: string) => {
+      const name = text.split("\n")[1];
+      trace.push(`start ${name}`);
+      if (++inflight > 1) overlap = true;
+      await new Promise((r) => setTimeout(r, name === "one" ? 40 : 1));
+      inflight--;
+      trace.push(`end ${name}`);
+      return { kind: "ok" };
+    };
+    await s.relay.onRows([row("m2", { content: "two", session_id: "s", created_at: 2 }), row("m1", { content: "one", session_id: "s", created_at: 1 })]);
+    expect(trace).toEqual(["start one", "end one", "start two", "end two"]);
+    expect(overlap).toBe(false);
+    expect(s.statuses()).toEqual(["m1:delivered", "m2:delivered"]);
+  });
+
+  test("equal timestamps keep the server's own order", async () => {
+    const s = setup();
+    await s.relay.onRows([row("a", { content: "a", session_id: "s", created_at: 5 }), row("b", { content: "b", session_id: "s", created_at: 5 })]);
+    expect(s.delivered.map((d) => d.text.split("\n")[1])).toEqual(["a", "b"]);
+  });
+
+  test("a blocked first row holds the second, and both go once it clears", async () => {
+    let blocked = true;
+    const s = setup({ deliver: (_t, text) => (blocked && text.includes("one") ? { kind: "blocked", reason: "dialog" } : { kind: "ok" }) });
+    await s.relay.onRows([row("m1", { content: "one", session_id: "s", created_at: 1 }), row("m2", { content: "two", session_id: "s", created_at: 2 })]);
+    expect(s.delivered).toHaveLength(1);
+    expect(s.statusCalls()).toEqual([]);
+    blocked = false;
+    await s.relay.tick();
+    expect(s.delivered.map((d) => d.text.split("\n")[1])).toEqual(["one", "one", "two"]);
+    expect(s.statuses()).toEqual(["m1:delivered", "m2:delivered"]);
+  });
+
+  test("an uncertain first row also holds the second until a later pass", async () => {
+    let uncertain = true;
+    const s = setup({ deliver: (_t, text) => (uncertain && text.includes("one") ? { kind: "uncertain", reason: "timeout" } : { kind: "ok" }) });
+    await s.relay.onRows([row("m1", { content: "one", session_id: "s", created_at: 1 }), row("m2", { content: "two", session_id: "s", created_at: 2 })]);
+    expect(s.delivered).toHaveLength(1);
+    expect(s.statuses()).toEqual(["m1:failed"]);
+    uncertain = false;
+    await s.relay.tick();
+    expect(s.statuses()).toEqual(["m1:failed", "m2:delivered"]);
+  });
+
+  test("a control row ahead of a message settles and does not hold it", async () => {
+    const control = JSON.stringify({ __cc_poll: true, keys: ["Enter"] });
+    const s = setup();
+    await s.relay.onRows([row("c", { content: control, session_id: "s", created_at: 1 }), row("m", { content: "go", session_id: "s", created_at: 2 })]);
+    expect(s.statuses()).toEqual(["c:undeliverable", "m:delivered"]);
+  });
+
+  test("different sessions run in parallel", async () => {
+    let inflight = 0;
+    let peak = 0;
+    const s = setup();
+    (s.relay as any).deps.adapter.deliver = async () => {
+      peak = Math.max(peak, ++inflight);
+      await new Promise((r) => setTimeout(r, 20));
+      inflight--;
+      return { kind: "ok" };
+    };
+    await s.relay.onRows([row("a", { session_id: "sa" }), row("b", { session_id: "sb" }), row("c", { session_id: "sc" })]);
+    expect(peak).toBe(3);
+  });
+
+  test("a blocked session does not hold another", async () => {
+    const s = setup({ deliver: (_t, text) => (text.includes("body-a") ? { kind: "blocked", reason: "dialog" } : { kind: "ok" }) });
+    await s.relay.onRows([row("a", { session_id: "sa" }), row("b", { session_id: "sb" })]);
+    expect(s.statuses()).toEqual(["b:delivered"]);
+  });
+});
+
+describe("what reaches a herdr pane", () => {
+  test("terminal escapes and control characters are stripped before the wrapper, newlines and tabs survive", async () => {
+    const s = setup();
+    await s.relay.onRows([row("m1", { content: "a\x1b[201~\nrm -rf\x1b[200~b\x07\tc\x7f\x00d\x1b[31mred" })]);
+    expect(s.delivered[0].text).toBe("<<<<<<\na\nrm -rfb\tcd[31mred\n>>>>>>");
+  });
+
+  test("paseo gets the text as written", async () => {
+    const s = setup();
+    await s.relay.onRows([row("m1", { content: "a\x1b[201~b", delivery_target: PASEO })]);
+    expect(s.delivered[0].text).toBe("<<<<<<\na\x1b[201~b\n>>>>>>");
   });
 });
 

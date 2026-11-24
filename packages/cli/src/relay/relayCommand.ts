@@ -8,7 +8,7 @@ import { defaultConfigDir } from "../config/configDir.js";
 import { isProcessRunning, readPidFile, releasePidFileIfOwned, tryAcquirePidFileLock } from "../pidFileLock.js";
 import { spawn } from "../proc.js";
 import { Relay, type PendingRow, type RelayClient } from "./relay.js";
-import { createTargetAdapter, type TargetAdapter } from "./targets.js";
+import { createTargetAdapter, LONGEST_ADAPTER_TIMEOUT_MS, type TargetAdapter } from "./targets.js";
 
 export type RelayIntervals = {
   heartbeat: number;
@@ -20,14 +20,17 @@ export type RelayIntervals = {
   drain: number;
 };
 
+export const DRAIN_MS = LONGEST_ADAPTER_TIMEOUT_MS + 1_000;
+export const REPLACE_WAIT_MS = DRAIN_MS + 4_000;
+
 export const DEFAULT_INTERVALS: RelayIntervals = {
   heartbeat: 45_000,
   retry: 15_000,
   sweep: 60_000,
   resubscribeMin: 1_000,
   resubscribeMax: 60_000,
-  replaceWait: 5_000,
-  drain: 10_000,
+  replaceWait: REPLACE_WAIT_MS,
+  drain: DRAIN_MS,
 };
 
 export type RelayConvexClient = RelayClient & {
