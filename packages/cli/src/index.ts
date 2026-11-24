@@ -16371,6 +16371,8 @@ Examples:
         console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} ${fmt.highlight(describeEventScope({ ...event_filter!, ...(event_filter!.page_id ? { page_slug: event_filter!.page_id } : {}) }))}: ${c.bold}${title}${c.reset}`);
       } else if (options.in) {
         console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} in ${options.in}: ${c.bold}${title}${c.reset}`);
+      } else if (options.at) {
+        console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} at ${new Date(run_at!).toLocaleString()}: ${c.bold}${title}${c.reset}`);
       } else {
         console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} queued now: ${c.bold}${title}${c.reset}`);
       }
