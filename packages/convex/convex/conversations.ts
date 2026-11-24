@@ -44,11 +44,9 @@ import {
   WORKING_SET_RECENCY_MS,
   HISTORY_IMPORT_INBOX_MS,
   BLOCKED_BANNER_KINDS,
-  placeProjectableRow,
   deriveLiveAt,
   isClosedSession,
   trustedStatusAt,
-  rowLiveDeadlines,
   childAskingAt,
   rowLastTurnAllowsPark,
   INBOX_FACT_FIELDS,
@@ -64,6 +62,7 @@ import {
   type InboxTruncation,
   type SessionActivity,
 } from "@codecast/shared/contracts";
+import { rowLiveDeadlines, pinPredatesUserMessage, placeProjectableRow } from "@codecast/shared/contracts/inboxPlacement";
 import { Doc, Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
 import { verifyApiToken } from "./apiTokens";
@@ -7352,6 +7351,7 @@ export const feedForCLI = query({
       .filter((c): c is typeof ownConversations[number] => {
         if (filterUserId && c.user_id.toString() !== filterUserId && !(args.mine_only && isOwnedByMe(c))) return false;
         if (labelConvIds && !labelConvIds.has(c._id.toString())) return false;
+        if (c.ended_at) return false;
 
         // Team filter: when team is resolved from directory, filter own sessions by team
         if (resolvedTeamId && isOwnConversation(c)) {
@@ -8887,6 +8887,14 @@ async function enrichInboxSessionRow(
     // Denormalized armed inject-trigger state (see schema) — the classifier's
     // structural dormancy input, read off the row instead of agent_tasks.
     armed_trigger_kind: conv.armed_trigger_kind ?? null,
+    // Denormalized run/blocker wake (see schema), read off the row the same way.
+    parked_wake_kind: conv.parked_wake_kind ?? null,
+    // When the latest turn opened (see schema): a pin older than it parks nothing.
+    last_turn_at: conv.last_turn_at ?? null,
+    // The pin rule's fallback for a row with no last_turn_at, as its answer:
+    // last_user_message_at moves on every tool call, so shipping it would
+    // resend the list on each one (rowPinPredatesTurn).
+    pin_predates_user_message: pinPredatesUserMessage(conv),
     // The pull request this session shepherds (see schema). Folded onto the row
     // so the inbox card and the thread state panel can show its state without
     // reading pull_requests per card.
@@ -9006,6 +9014,16 @@ async function buildSubagentChildRow(child: any, maps: InboxSessionMaps, now: nu
     thread_state_at: child.thread_state_at ?? null,
     thread_state_msg_count: child.thread_state_msg_count ?? null,
     thread_state_status: child.thread_state_status ?? null,
+    // The pin and wake facts placement reads (PLACEMENT_ROW_FIELDS), carried as
+    // the top-level row carries them: the server places a child from its doc,
+    // the web from this row, so a missing one splits the two.
+    armed_trigger_kind: child.armed_trigger_kind ?? null,
+    parked_wake_kind: child.parked_wake_kind ?? null,
+    last_turn_at: child.last_turn_at ?? null,
+    pin_predates_user_message: pinPredatesUserMessage(child),
+    last_turn_origin: child.last_turn_origin ?? null,
+    loop_state: child.loop_state && child.loop_state.status !== "stopped" ? child.loop_state : null,
+    settle_verdict: isSettleVerdictCurrent(child) ? (child.settle_verdict ?? null) : null,
     is_idle: childIsIdle,
     awaiting_input: false,
     is_unresponsive: false,
@@ -10355,6 +10373,17 @@ export const PLACEMENT_LIVENESS_FIELDS = [
   "open_tasks", "open_tasks_at", "producing_until", "last_heartbeat",
 ] as const satisfies ReadonlyArray<keyof LivenessFields>;
 
+// The conversation fields placement reads off a row (placeProjectableRow: the
+// pin and wake rules, the rest verdicts, the triage stamps). Every row
+// projection carries each one (conversationFields.guard.test.ts): the server
+// places from the doc and the web from the row, so a field one projection
+// leaves out files the same session two ways.
+export const PLACEMENT_ROW_FIELDS = [
+  "thread_state_status", "thread_state_at", "last_turn_at", "pin_predates_user_message", "parked_wake_kind", "armed_trigger_kind",
+  "loop_state", "settle_verdict", "last_turn_origin", "pending_api_error", "session_error", "agent_type",
+  "inbox_killed_at", "inbox_snoozed_until", "inbox_dismissed_at", "inbox_stashed_at", "inbox_pinned_at", "inbox_rest", "inbox_rest_at",
+] as const;
+
 export function placeConversationRow(
   conv: any,
   lv: Partial<Pick<LivenessFields, (typeof PLACEMENT_LIVENESS_FIELDS)[number]>>,
@@ -10380,6 +10409,8 @@ export function placeConversationRow(
         open_tasks: lv.open_tasks ?? null,
         open_tasks_at: lv.open_tasks_at ?? null,
       }, now) ?? null,
+      // The raw status beside it, for the pin backstop (pinSpeaks).
+      raw_agent_status: lv.agent_status ?? null,
       agent_status_boundary: lv.agent_status_boundary ?? null,
       is_idle: lv.is_idle ?? null,
       awaiting_input: lv.awaiting_input ?? null,
@@ -13763,12 +13794,13 @@ export async function resolveRestartTarget(
 export async function enqueueKillAndResume(
   ctx: MutationCtx,
   userId: Id<"users">,
-  conv: { _id: Id<"conversations">; session_id?: string; project_path?: string; git_root?: string; agent_type?: string; fork_status?: string; fork_daemon_args?: string },
+  conv: { _id: Id<"conversations">; session_id?: string; project_path?: string; git_root?: string; agent_type?: string; fork_status?: string; fork_daemon_args?: string; register_only?: boolean },
   // requestId: the client's id for this restart (store restartSession).
   // It lands on the resume row, the one whose outcome IS the restart's, so the
   // row the click painted settles from it. A replayed request queues nothing.
   opts: { forceReconstitute?: boolean; switchAgent?: boolean; model?: string; effort?: string; requestId?: string; cause?: string } = {},
 ) {
+  if (conv.register_only) throw new Error("codecast does not resume a registered session");
   if (opts.cause) noteWriteCause(ctx, opts.cause);
   const now = Date.now();
   // Throws for a hosted conversation: no daemon kills or resumes it.

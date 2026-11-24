@@ -749,16 +749,31 @@ the route it took, red only where it stopped.
   from the graph ("Asks you every time"; "Asks you if it edits CI" when a person is
   asked only on a side route and that person's step says what makes a run ask
   with `asks_if="it edits CI"`, words that finish "Asks you if …", set on the gate
-  or on the segment node that holds it, as change's `decide` does; "Sometimes asks
+  or on a segment node that holds it, the nearest one first, as change's `decide`
+  and Union's Land `card` do; "Sometimes asks
   you" when it says nothing, never the route's label, which names the route; "No
-  approval"), and its stages. The confirm after it says the same: a question every
+  approval"), and its stages; a lone flow has no row, and its label and approval
+  sit beside Ship. The confirm after it says the same: a question every
   run, "Only if it edits CI" (else "On some runs"), or none. The stages are the
   journey's: the stations a passing run takes, never one only a failure
   reaches (a later deploy after a failed one), and a station marked
   `fold=true` is bookkeeping, drawn as part of the stage before it (change's
   Verdicts reads in CI + Review, its Merged in Merge); it runs like any other
   station. A stage reads Person only when a person is asked on its passing
-  route, never for a card a segment reaches on a side route. It draws the picked one and
+  route, never for a card a segment reaches on a side route. A segment stage
+  with more than one step, or a route off them, shows its inside, read from the
+  graph (`insideOf` in `lib/ship/segmentInside.ts`): under its name a quiet line of
+  its passing steps ("PR · CI + Review · Merge"), and a press on it opens them
+  in place down a spine that ends at the segment's end ("Merged"). Each route
+  off a step hangs under that step, labelled by its edge's label, through the
+  steps it runs to where it goes: back to a step ("↩ Merge"), back to the
+  session (an end the composing flow sends to a `backend=subject` station), or
+  a stop. A route walks on by its edges' conditions alone, the passing one
+  first, then a step's default; an edge whose condition compares two words the
+  parser wrote in (a segment param) is never taken. A route through a person's
+  step is dashed and carries its "Asks you if …" words. On a run each step and
+  route takes its state (the route that sent the work back, the card that
+  waits). A single stage that sends work back draws a hook under itself. It draws the picked one and
   opens the shared confirm review: steps, agent sessions that start, questions
   for you, who does each step, the ways it can end, how to stop. Confirming
   asks the session to run its own change through it. On a phone it opens as a

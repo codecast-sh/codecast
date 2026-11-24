@@ -5,6 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { sweepHostDisk } from "./hostDiskSweep.js";
 import { LANDED_REF } from "./remote/session-move.js";
+import { moveToTrash, TRASH_GRACE_MS } from "./workspace/trash.js";
 
 const git = (cwd: string, ...args: string[]) => execFileSync("git", ["-C", cwd, ...args], { encoding: "utf-8", env: { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } }).trim();
 
@@ -13,6 +14,8 @@ function world() {
   const repo = path.join(work, "repo");
   fs.mkdirSync(repo);
   git(repo, "init", "-q", "-b", "main");
+  git(repo, "config", "user.email", "t@t");
+  git(repo, "config", "user.name", "t");
   fs.writeFileSync(path.join(repo, "a.txt"), "a\n");
   git(repo, "add", "-A");
   git(repo, "commit", "-qm", "base");
@@ -65,7 +68,7 @@ test("worktrees are swept in checkouts kept outside ~/work too", async () => {
   expect(r.released.concat(r.kept.map((k) => k.path))).toContain(wt);
 });
 
-test("a line run's worktree goes once no live run works in it, whatever it holds; its branch stays (2026-10-24)", async () => {
+test("a line run's worktree goes once no live run works in it; what it left uncommitted is committed onto its branch, which stays (2026-10-24, ct-99146)", async () => {
   const { work, repo } = world();
   const tree = (name: string, runId: string) => {
     const wt = path.join(repo, ".codecast", "worktrees", name);
@@ -85,4 +88,26 @@ test("a line run's worktree goes once no live run works in it, whatever it holds
   expect(r.released).toEqual([failed]);
   expect(r.kept).toEqual([{ path: live, reason: "a live run works in it" }]);
   expect(git(repo, "branch", "--list", "codecast/agentwatch-ct-1")).toContain("codecast/agentwatch-ct-1");
+  expect(git(repo, "show", "codecast/agentwatch-ct-1:scratch.log")).toBe("left over");
+});
+
+test("a destroyed worktree is deleted once its grace is over, with no git probe; a fresh one waits (line-2, 2026-11-21)", async () => {
+  const { work, repo } = world();
+  const root = path.join(repo, ".codecast", "worktrees");
+  const destroyed = (name: string) => {
+    const wt = path.join(root, name);
+    git(repo, "worktree", "add", "-q", "-b", `codecast/${name}`, wt);
+    fs.writeFileSync(path.join(wt, "left.txt"), "uncommitted\n");
+    const trash = moveToTrash(wt);
+    git(repo, "worktree", "prune");
+    return trash;
+  };
+  const old = destroyed("run-a");
+  const past = new Date(Date.now() - TRASH_GRACE_MS - 60_000);
+  fs.utimesSync(old, past, past);
+  const fresh = destroyed("run-b");
+  const r = await sweepHostDisk({ workDir: work, inUsePaths: [], log: () => {} });
+  expect(r.released).toEqual([old]);
+  expect(r.kept).toEqual([{ path: fresh, reason: "destroyed under 5 min ago" }]);
+  expect([fs.existsSync(old), fs.existsSync(fresh)]).toEqual([false, true]);
 });

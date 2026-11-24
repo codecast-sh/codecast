@@ -22,6 +22,7 @@ import { activityPlanOf, computeStale, type ActivityCommit, type ActivitySession
 import { isActiveTask } from "@codecast/shared/tasks";
 import { approxMessageBytes, isNavigableUserMessage } from "./userMessagesFilter";
 import { roleCharterOf } from "./lib/roleCharter";
+import { teamRooms } from "./chatAccess";
 
 // org.health (docs/architecture/org-staffing.md S3): the flow signals the
 // capacity model needs, per role, per person and for the company, with the
@@ -555,7 +556,7 @@ export async function computeOrgHealth(ctx: Ctx, userId: Id<"users">, teamId: Id
   // ── Chat mentions of roles (team only) ──────────────────────────────────
   const mentions = new Map<string, number>();
   if (teamId) {
-    const channels: any[] = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", teamId)).take(HEALTH_CAPS.channels);
+    const channels: any[] = await teamRooms(ctx, teamId, HEALTH_CAPS.channels);
     for (const ch of channels) {
       if (ch.archived_at) continue;
       const msgs: any[] = await ctx.db.query("chat_messages").withIndex("by_channel_created", (q: any) => q.eq("channel_id", ch._id).gte("created_at", cut7)).order("desc").take(HEALTH_CAPS.messages_per_channel);

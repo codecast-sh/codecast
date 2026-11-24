@@ -19,7 +19,7 @@ import { verifyApiToken } from "./apiTokens";
 import { lineSlugOf } from "./orgRoles";
 import { isLineRunSlug, lineRouteFor } from "./workflows";
 import { seatPlace } from "./lib/seatPlace";
-import { deviceWorking, holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, runsWaitingOnAPerson, slotRuns, takeSlot, WORKING_RUN_STATUSES, type LinePool, type LineSlot } from "./lib/linePlacement";
+import { deviceWorking, holdsSlot, linePoolFor, poolCap, poolDeviceIds, poolFree, poolWorking, readOnce, readOnlyPass, runsWaitingOnAPerson, slotRuns, takeSlot, WORKING_RUN_STATUSES, type LinePool, type LineSlot } from "./lib/linePlacement";
 import { allRolesInBoundary, projectLeadRole, resolveRoleRef, userCanAccessRole } from "./lib/orgAccess";
 import { taskWork } from "./lib/orgOwnership";
 import { ownerOf, projectLeadOf } from "@codecast/shared/contracts/orgLead";
@@ -207,7 +207,11 @@ async function seatOf(ctx: Ctx, role: any): Promise<{ runner: string; project_pa
 // those on a pool machine, which its slots count, and those that run on
 // another account's machine (the team's pool). Every role counts, paused and
 // retired ones too: their runs still use the machine.
-export async function runnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promise<RunnerLoad> {
+export function runnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promise<RunnerLoad> {
+  return readOnce(ctx, `runner:${runner}`, () => countRunnerLoad(ctx, runner, roles));
+}
+
+async function countRunnerLoad(ctx: Ctx, runner: string, roles?: any[]): Promise<RunnerLoad> {
   const all: any[] = roles ?? await ctx.db.query("org_roles").collect();
   const waiting = await runsWaitingOnAPerson(ctx, runner);
   const pooled = await poolDeviceIds(ctx, runner);
@@ -617,7 +621,8 @@ async function slotStillFree(ctx: Ctx, role: any, place: RunPlace): Promise<bool
 
 /** The pass in one transaction, as the tests drive it; `dry` plans only (orgLine.explain). */
 export async function sweepCore(ctx: Ctx, now = Date.now(), o: { dry?: boolean } = {}): Promise<SweepResult> {
-  const plan = await planSweep(ctx, now, { loads: o.dry });
+  // Planning writes nothing, so it counts each machine once (linePlacement.readOnlyPass); each start below counts afresh.
+  const plan = await planSweep(readOnlyPass(ctx), now, { loads: o.dry });
   if (o.dry) return { ...plan, started: plan.started.map((s) => ({ ...s, run_id: `dry${s.place ? `@${s.place.device}` : ""}` })) };
   const resumed: NonNullable<SweepResult["resumed"]> = [];
   for (const r of plan.resumed ?? []) if (await resumePlanned(ctx, r.run_id, now)) resumed.push(r);

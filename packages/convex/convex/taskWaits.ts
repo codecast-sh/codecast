@@ -6,12 +6,16 @@
 // sessionDecisions.settleResolution), or the clock (settleTimeWait). When a
 // task's last blocker clears, by a wait settling or being removed or a task in
 // its blocked_by closing (releaseDependents, from every close), onUnblocked
-// tells the task and whoever works it.
+// tells the task and whoever works it: the session that owns it, and each
+// session that set one of its met waits while holding another task
+// (`created_in`), once per wait (`setter_told_at`). That session is also told
+// when its wait fails or someone else removes it.
 //
-// writeWaits is the only writer of `waits`: it keeps `waiting_since` set
-// exactly while a wait is waiting, writes the history line, and links each new
-// PR or decision wait from its target (`waiting_task_ids`), so an event reads
-// only its own tasks and never scans.
+// writeWaits (lib/waitWrite.ts) is the only writer of `waits`: it keeps
+// `waiting_since` set exactly while a wait is waiting, writes the history
+// line, and links each new PR or decision wait from its target
+// (`waiting_task_ids`), so an event reads only its own tasks and never scans.
+// Telling and parking a wait's setter is lib/waitSetters.ts.
 
 import { v } from "convex/values";
 import { internalMutation, mutation, type MutationCtx } from "./functions";
@@ -29,14 +33,26 @@ import {
 } from "./lib/access";
 import { isTeamMember } from "./privacy";
 import { installationForRepo } from "./githubApp";
-import { bySystem, byUser, recordTaskChange, type TaskChangeBy, type TaskFieldChange } from "./lib/taskHistory";
-import { patchTask } from "./lib/taskWrite";
+import { bySystem, byUser, type TaskChangeBy } from "./lib/taskHistory";
 import { dependentRefs, taskByRef, taskLookups } from "./lib/taskGraph";
 import { prByNumber } from "./lib/gitRefs";
-import { boundSessionsOf } from "./lib/taskOwner";
 import { waitTargetValidator } from "./lib/taskWaitValidator";
-import { enqueuePendingMessage } from "./pendingMessages";
-import { ExecutionAuthorityError } from "./executionBindings";
+import { decisionByShortId, linkTask, STORED, taskRepositories, writeWaits } from "./lib/waitWrite";
+import {
+  heldWaitsAnswer,
+  ownerOf,
+  parkingSession,
+  parkOn,
+  setterOwed,
+  taskName,
+  tellSetters,
+  tellSettersClosed,
+  tellSettersFailed,
+  wakeSession,
+  type ParkAnswer,
+  type Removed,
+  type Skip,
+} from "./lib/waitSetters";
 import { emitNotification } from "./notificationRouter";
 import { insertTaskComment } from "./tasks";
 import { answerLabel, userMayRead, verdictOfRow, type Verdict } from "./sessionDecisions";
@@ -49,14 +65,12 @@ import {
   parseBlockerRef,
   prRef,
   isPrWaitTarget,
-  prWords,
   sameWaitTarget,
   waitClause,
   waitFailedCause,
   waitFailedWord,
   waitIsReplaceable,
   waitLabel,
-  waitLine,
   waitMetCause,
   waitMetNote,
   type PrWaitTarget,
@@ -65,7 +79,7 @@ import {
   type WaitLabelOptions,
   type WaitTarget,
 } from "@codecast/shared/tasks";
-import { inlineForeignText, normalizeRepository, repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { inlineForeignText, normalizeRepository } from "@codecast/shared/contracts";
 
 type Ctx = MutationCtx;
 type Task = Doc<"tasks">;
@@ -74,67 +88,6 @@ type PR = Doc<"pull_requests">;
 /** Who signs what codecast writes on a task on its own: the waits' and the
  *  graph's comments and notices. */
 export const SENDER = "codecast";
-/** Stored text about a wait is read later, in other zones (TG11). */
-const STORED = { absolute: true } as const;
-
-/** STORED for `task`'s own text. It is also read away from any checkout, so a
- *  PR outside the task's one repository (taskRepositories) is named in full. */
-async function storedWords(ctx: Ctx, task: Task, waits: TaskWait[] = task.waits ?? []): Promise<WaitLabelOptions> {
-  if (!waits.some(isPrWaitTarget)) return STORED;
-  const repos = await taskRepositories(ctx, task);
-  return { ...STORED, ...prWords(repos.length === 1 ? repos[0] : null) };
-}
-
-// ---------------------------------------------------------------------------
-// The one writer
-// ---------------------------------------------------------------------------
-
-/**
- * Replace `task`'s waits with `next`. Recomputes `waiting_since` (kept while
- * any wait still waits, cleared otherwise), writes one history line per wait
- * that was added, settled, reopened or removed, and links each new PR or
- * decision wait from its target (`waiting_task_ids`). Returns the row as
- * written and the words its waits are stored in (storedWords), for the
- * caller's own text about them.
- */
-export async function writeWaits(ctx: Ctx, task: Task, next: TaskWait[], by: TaskChangeBy, now = Date.now()): Promise<{ task: Task; words: WaitLabelOptions }> {
-  const prev = task.waits ?? [];
-  const waiting_since = next.some((w) => w.state === "waiting") ? (task.waiting_since ?? now) : undefined;
-  await patchTask(ctx, task, { waits: next, waiting_since, updated_at: now });
-
-  const before = new Map(prev.map((w) => [w.id, w]));
-  const kept = new Set(next.map((w) => w.id));
-  const words = await storedWords(ctx, task, [...prev, ...next]);
-  // Both sides of a line are rendered in today's words, so a wait left as it
-  // was renders the same twice and recordTaskChange writes nothing for it.
-  const changes: TaskFieldChange[] = [
-    ...prev.filter((w) => !kept.has(w.id)).map((w): TaskFieldChange => ["waits", waitLine(w, words), ""]),
-    ...next.map((w): TaskFieldChange => ["waits", before.has(w.id) ? waitLine(before.get(w.id)!, words) : "", waitLine(w, words)]),
-  ];
-  await recordTaskChange(ctx, task._id, by, changes, now);
-
-  for (const w of next) {
-    if (before.has(w.id) || w.kind === "time") continue;
-    // A decision is linked even when met at once, so a reopen finds it.
-    const target = w.kind === "decision" ? await decisionByShortId(ctx, w.decision)
-      : w.state === "waiting" ? await prByNumber(ctx, w.repository, w.pr_number)
-      : null;
-    if (target) await linkTask(ctx, target, task._id);
-  }
-  return { task: { ...task, waits: next, waiting_since, updated_at: now }, words };
-}
-
-/** Add `taskId` to a wait target's back reference. */
-async function linkTask(ctx: Ctx, target: Doc<"session_decisions"> | PR, taskId: Id<"tasks">): Promise<boolean> {
-  const linked = target.waiting_task_ids ?? [];
-  if (linked.some((id) => String(id) === String(taskId))) return false;
-  await ctx.db.patch(target._id, { waiting_task_ids: [...linked, taskId] });
-  return true;
-}
-
-async function decisionByShortId(ctx: Pick<Ctx, "db">, shortId: string) {
-  return await ctx.db.query("session_decisions").withIndex("by_short_id", (q) => q.eq("short_id", shortId)).first();
-}
 
 /**
  * The note on a decision wait the answer meets: "answered: Ship it" when
@@ -175,7 +128,11 @@ async function prReachesTask(ctx: Pick<Ctx, "db">, pr: PR, task: Task): Promise<
  *  paint the wait before the server answers. */
 export type AddWaitInput = { ref?: string; target?: WaitTarget; repository?: string; time_zone?: string; id?: string };
 
-export type AddWaitResult = { wait: TaskWait; met: boolean; existing?: boolean };
+/** `parked`: the caller's session is the wait's setter (parkingSession). true:
+ *  its settling wakes that session. "close": the session's held task still
+ *  lists this task in blocked_by, so the wait clearing or failing tells it so
+ *  (tellSetters), and its held task unblocking wakes that task's owner. */
+export type AddWaitResult = { wait: TaskWait; met: boolean; existing?: boolean } & ParkAnswer;
 
 const str = (x: unknown) => (typeof x === "string" && x.trim() ? x.trim() : undefined);
 
@@ -217,31 +174,6 @@ async function resolveTarget(ctx: Ctx, userId: Id<"users">, task: Task, input: A
     ? normalizeRepository(target.repository)
     : await repositoryForBarePr(ctx, userId, task, target.pr_number, str(input.repository));
   return { kind: target.kind, repository, pr_number: target.pr_number };
-}
-
-/** The repositories a task's work happens in: the mapped checkout covering its
- *  project's path, and the remotes of the sessions on it. */
-async function taskRepositories(ctx: Ctx, task: Task): Promise<string[]> {
-  const out = new Set<string>();
-  const project = task.project_id ? await ctx.db.get(task.project_id) : null;
-  const path = task.project_path || project?.project_path;
-  if (path) {
-    const mappings = [
-      ...(await ctx.db.query("directory_team_mappings").withIndex("by_user_id", (q) => q.eq("user_id", task.user_id)).collect()),
-      ...(task.team_id ? await ctx.db.query("directory_team_mappings").withIndex("by_team_id", (q) => q.eq("team_id", task.team_id)).collect() : []),
-    ];
-    for (const m of mappings) {
-      const prefix = m.path_prefix.replace(/\/+$/, "");
-      if (m.repository && (path === prefix || path.startsWith(`${prefix}/`))) out.add(normalizeRepository(m.repository));
-    }
-  }
-  const sessions = [task.created_from_conversation, ...(task.conversation_ids ?? [])].filter((id): id is Id<"conversations"> => !!id);
-  for (const id of [...new Set(sessions.map(String))].slice(0, 20)) {
-    const conv = await ctx.db.get(id as Id<"conversations">);
-    const repo = repositoryKeyOfRemote(conv?.git_remote_url);
-    if (repo) out.add(normalizeRepository(repo));
-  }
-  return [...out];
 }
 
 /**
@@ -324,7 +256,9 @@ async function writableTask(ctx: Ctx, userId: Id<"users">, shortId: string): Pro
  * gives way to the new one, which is checked afresh: a failed wait would keep
  * blocking beside it, and a met checks wait may stand on checks a push has
  * since turned red. A replacement met at once unblocks the task the way a
- * settle does. A time wait schedules the job that settles it.
+ * settle does. A time wait schedules the job that settles it. A wait set by
+ * a session parked on it (parkingSession) records that session as
+ * `created_in`; `atCreate` is a task's create, whose waits wire the graph.
  */
 export async function addWaitCore(
   ctx: Ctx,
@@ -332,6 +266,7 @@ export async function addWaitCore(
   shortId: string,
   input: AddWaitInput,
   by: TaskChangeBy & { created_by?: string } = byUser(userId),
+  { atCreate = false }: { atCreate?: boolean } = {},
 ): Promise<AddWaitResult> {
   const now = Date.now();
   const task = await writableTask(ctx, userId, shortId);
@@ -346,20 +281,27 @@ export async function addWaitCore(
   if (existing && id) {
     throw new Error(`${task.short_id} ${existing.state === "met" ? "already has a wait" : "is already waiting"} ${waitClause(existing, STORED)}`);
   }
-  if (existing) return { wait: existing, met: existing.state === "met", existing: true };
+  if (existing) return await joinWait(ctx, userId, task, existing, atCreate ? undefined : by);
   if (id && !isWaitId(id)) throw new Error(`"${id}" is not a wait id (shared/tasks newWaitId)`);
 
   const check = await checkTarget(ctx, userId, task, target, now);
+  const setter = atCreate ? undefined : await parkingSession(ctx, userId, task, by);
+  const replaced = waits.filter((w) => waitIsReplaceable(w) && sameWaitTarget(w, target));
+  // A replaced wait whose setter is still owed passes that setter on; the
+  // caller is the setter only when there is none, as in joinWait.
+  const createdIn = replaced.find(setterOwed)?.created_in ?? (setter ? String(setter) : undefined);
+  const mine = !!setter && createdIn === String(setter);
   const wait: TaskWait = {
     ...target,
     id: id ?? newWaitId(now),
     state: check.met ? "met" : "waiting",
     created_at: now,
     created_by: by.created_by ?? String(userId),
-    ...(check.met ? { settled_at: now, note: check.note } : {}),
+    ...(createdIn ? { created_in: createdIn } : {}),
+    // Met at once, the caller knows from the answer to this call.
+    ...(check.met ? { settled_at: now, note: check.note, ...(mine ? { setter_told_at: now } : {}) } : {}),
   };
   const { created_by: _createdBy, ...changeBy } = by;
-  const replaced = waits.filter((w) => waitIsReplaceable(w) && sameWaitTarget(w, target));
   const wasUnblocked = replaced.length && check.met ? await isTaskUnblocked(ctx, task) : true;
   const { task: after, words } = await writeWaits(ctx, task, [...waits.filter((w) => !replaced.includes(w)), wait], changeBy, now);
   if (!wasUnblocked && !isTerminalTaskStatus(after.status) && (await isTaskUnblocked(ctx, after))) {
@@ -368,13 +310,33 @@ export async function addWaitCore(
   if (wait.kind === "time" && !check.met) {
     await ctx.scheduler.runAt(wait.at, internal.taskWaits.settleTimeWait, { task_id: task._id, wait_id: wait.id, at: wait.at });
   }
-  return { wait, met: check.met };
+  const answer = mine && !check.met ? await parkOn(ctx, setter!, task) : await heldWaitsAnswer(ctx, by, task, check.met);
+  return { wait, met: check.met, ...answer };
+}
+
+/** The caller sets a wait another writer already set: it becomes the wait's
+ *  setter when it would have been one (parkingSession; `by` is unset at a
+ *  task's create), the wait has none, and the wait can still wake it
+ *  (waiting, or met while the task is still blocked and its setter not yet
+ *  dealt with). Another session's wait stays that session's. */
+async function joinWait(ctx: Ctx, userId: Id<"users">, task: Task, existing: TaskWait, by: TaskChangeBy | undefined): Promise<AddWaitResult> {
+  const met = existing.state === "met";
+  const setter = by && (await parkingSession(ctx, userId, task, by));
+  let wait = existing;
+  const open = existing.state === "waiting" || (met && !existing.setter_told_at && !(await isTaskUnblocked(ctx, task)));
+  if (setter && !existing.created_in && open) {
+    wait = { ...existing, created_in: String(setter) };
+    await writeWaits(ctx, task, task.waits!.map((w) => (w.id === existing.id ? wait : w)), bySystem);
+  }
+  const answer = !!setter && wait.created_in === String(setter) && open ? await parkOn(ctx, setter!, task) : await heldWaitsAnswer(ctx, by, task, !open);
+  return { wait, met, existing: true, ...answer };
 }
 
 /** Remove waits by id, or every wait matching a ref (a bare `#42` matches
  *  that number in any repository). A met or failed wait is history until
  *  removed. Removing the last open blocker unblocks the task the way a
- *  settle does, so a session parked on it is woken. */
+ *  settle does, so a session parked on it is woken. A session that set a
+ *  removed wait it was still owed is told it is gone (tellSetters). */
 export async function removeWaitCore(
   ctx: Ctx,
   userId: Id<"users">,
@@ -409,10 +371,14 @@ export async function removeWaitCore(
   }
   const wasUnblocked = await isTaskUnblocked(ctx, task);
   const { task: after, words } = await writeWaits(ctx, task, waits.filter((w) => !match(w)), by);
-  if (!wasUnblocked && !isTerminalTaskStatus(after.status) && (await isTaskUnblocked(ctx, after))) {
+  if (isTerminalTaskStatus(after.status)) return { removed };
+  const who = await writerName(ctx, by);
+  const unblocked = !wasUnblocked && (await isTaskUnblocked(ctx, after));
+  const gone = { waits: removed, who };
+  if (unblocked) {
     const what = removed.map((w) => `the wait ${waitClause(w, words)}`).join(", ");
-    await onUnblocked(ctx, after, `${await writerName(ctx, by)} removed ${what}`, unblockBy(by, `removed:${removed.map((w) => w.id).join(",")}`));
-  }
+    await onUnblocked(ctx, after, `${who} removed ${what}`, unblockBy(by, `removed:${removed.map((w) => w.id).join(",")}`), gone);
+  } else await tellSetters(ctx, after, [by.conversation_id], { removed: gone });
   return { removed };
 }
 
@@ -455,7 +421,7 @@ export async function addWaitsAtCreate(
   if (!args.waits?.length) return undefined;
   const by = await cliWriter(ctx, userId, args.conversation_id);
   const added: AddWaitResult[] = [];
-  for (const ref of args.waits) added.push(await addWaitCore(ctx, userId, shortId, { ref, repository: args.repository, time_zone: args.time_zone }, by));
+  for (const ref of args.waits) added.push(await addWaitCore(ctx, userId, shortId, { ref, repository: args.repository, time_zone: args.time_zone }, by, { atCreate: true }));
   return added;
 }
 
@@ -531,7 +497,7 @@ async function settleWaits(ctx: Ctx, task: Task, settle: (w: TaskWait) => Settle
   const { task: after, words } = await writeWaits(ctx, task, next, bySystem, now);
   if (isTerminalTaskStatus(after.status)) return after;
   const failed = settled.filter((w) => w.state === "failed");
-  for (const w of failed) await onWaitFailed(ctx, after, w, words, by.conversationId);
+  if (failed.length) await onWaitsFailed(ctx, after, failed, words, [by.conversationId, by.told]);
   if (!failed.length && (await isTaskUnblocked(ctx, after))) {
     await onUnblocked(ctx, after, settled.map((w) => waitMetCause(w, words)).join(", "), { ...by, key: `met:${settled.map((w) => w.id).join(",")}@${now}` });
   }
@@ -765,6 +731,7 @@ export async function releaseDependents(
   { closingLater: later, closing, ...by }: Omit<UnblockBy, "key"> & { closingLater?: Task; closing?: ReadonlySet<string> } = {},
 ): Promise<void> {
   if (!next || !isTerminalTaskStatus(next) || isTerminalTaskStatus(task.status)) return;
+  await tellSettersClosed(ctx, task, next, by.conversationId);
   const self = new Set([task.short_id, String(task._id)]);
   const known = new Map<string, { short_id?: string; status: string }>([...self].map((r) => [r, { short_id: task.short_id, status: next }]));
   if (later) for (const r of [later.short_id, String(later._id)]) if (r) known.set(r, { short_id: later.short_id, status: later.status });
@@ -841,39 +808,27 @@ export async function isTaskUnblocked(ctx: Ctx, task: Task, override?: StatusOf)
  *  the message may already be queued. One of `skip` (the session that made the change, one told another
  *  way) owns it but is not woken. A machine wake, so it acknowledges no
  *  assignment ping. */
-async function wakeOwner(ctx: Ctx, task: Task, key: string, content: string, skip: readonly (Id<"conversations"> | undefined)[] = []): Promise<boolean> {
-  const owner = (await boundSessionsOf(ctx, task)).find((c) => !c.inbox_killed_at);
+async function wakeOwner(ctx: Ctx, task: Task, key: string, content: string, skip: Skip = []): Promise<boolean> {
+  const owner = await ownerOf(ctx, task);
   if (!owner) return false;
   if (skip.some((s) => s && String(owner._id) === String(s))) return true;
-  try {
-    await enqueuePendingMessage(ctx, owner, owner.user_id, { content, origin: "scheduler", client_id: `task-wait:${task._id}:${key}` });
-    return true;
-  } catch (e) {
-    if (!(e instanceof ExecutionAuthorityError)) throw e;
-    console.warn(`[taskWaits] ${task.short_id}: could not wake ${owner._id}: ${e.message}`);
-    return false;
-  }
+  return await wakeSession(ctx, task, owner, key, content);
 }
-
-/** The task as a wake names it. Its title is foreign text in another
- *  session's prompt, so it stays one escaped line. */
-const taskName = (task: Task) => `${task.short_id}${task.title ? ` ("${inlineForeignText(task.title).replace(/"/g, "'").slice(0, 80)}")` : ""}`;
 
 /**
  * The task's last open blocker just cleared (TG2): a comment on the task, then
  * the owning session is woken to continue, or else a person it is assigned to
- * is told. This is how an agent parks: it sets a wait on its own task and
- * ends its turn.
+ * is told. The sessions that set its met waits are woken too (tellSetters):
+ * each waits on this task to continue work of its own, so that wake does not
+ * stand in for the assignee's notice. This is how an agent parks: it sets a
+ * wait and ends its turn.
  */
-export async function onUnblocked(ctx: Ctx, task: Task, cause: string, by: UnblockBy = {}): Promise<void> {
+export async function onUnblocked(ctx: Ctx, task: Task, cause: string, by: UnblockBy = {}, removed?: Removed): Promise<void> {
   await insertTaskComment(ctx, task._id, { author: SENDER, text: `Unblocked: ${cause}`, comment_type: "note" });
-  const woke = await wakeOwner(
-    ctx,
-    task,
-    `unblocked:${by.key ?? `${cause}@${task.updated_at ?? 0}`}`,
-    `${taskName(task)} is unblocked: ${cause}. Nothing it waits on is open any more, so continue the work.`,
-    [by.conversationId, by.told],
-  );
+  const key = `unblocked:${by.key ?? `${cause}@${task.updated_at ?? 0}`}`;
+  const skip = [by.conversationId, by.told];
+  const woke = await wakeOwner(ctx, task, key, `${taskName(task)} is unblocked: ${cause}. Nothing it waits on is open any more, so continue the work.`, skip);
+  await tellSetters(ctx, task, skip, { unblocked: cause, removed });
   if (woke || task.ephemeral || !task.assignee) return;
   const assignee = ctx.db.normalizeId("users", task.assignee);
   const person = assignee ? await ctx.db.get(assignee) : null;
@@ -902,17 +857,21 @@ export async function onBlockedAgain(ctx: Ctx, task: Task, cause: string, by: Un
   );
 }
 
-/** A wait that can no longer be met keeps blocking; the task needs a new
- *  plan, so the task says so and its owner is woken. */
-async function onWaitFailed(ctx: Ctx, task: Task, w: TaskWait, words: WaitLabelOptions, skip?: Id<"conversations">): Promise<void> {
+/** Waits that can no longer be met keep blocking; the task needs a new
+ *  plan, so the task says so and its owner is woken for each, and each
+ *  session that set them, whose work waited on them, once. */
+async function onWaitsFailed(ctx: Ctx, task: Task, failed: TaskWait[], words: WaitLabelOptions, skip: Skip): Promise<void> {
   // The full ref, so the comment renders the PR as a live pill.
-  const what = waitFailedCause(w, { ...words, fullRef: true });
-  await insertTaskComment(ctx, task._id, { author: SENDER, text: `Still blocked: ${what}, so this wait can no longer clear.`, comment_type: "blocker" });
-  await wakeOwner(
-    ctx,
-    task,
-    `failed:${w.id}:${w.settled_at}`,
-    `${taskName(task)} is still blocked: ${what}, so that wait can no longer clear. The task needs a new plan: ${failedWaitAdvice(task.short_id, [w])}`,
-    [skip],
-  );
+  const what = (w: TaskWait) => waitFailedCause(w, { ...words, fullRef: true });
+  for (const w of failed) {
+    await insertTaskComment(ctx, task._id, { author: SENDER, text: `Still blocked: ${what(w)}, so this wait can no longer clear.`, comment_type: "blocker" });
+    await wakeOwner(
+      ctx,
+      task,
+      `failed:${w.id}:${w.settled_at}`,
+      `${taskName(task)} is still blocked: ${what(w)}, so that wait can no longer clear. The task needs a new plan: ${failedWaitAdvice(task.short_id, [w])}`,
+      skip,
+    );
+  }
+  await tellSettersFailed(ctx, task, failed, what, skip);
 }

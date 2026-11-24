@@ -10,9 +10,9 @@ import {
   isFoldExempt,
   isUnderRole,
   isWorkingSetWindow,
-  projectInbox,
   type WorkingSetRow,
 } from "./inboxProjection";
+import { projectInbox } from "./inboxPlacement";
 
 const EPOCH = inboxEpoch(1_800_000_000_000);
 const DAY = 24 * 60 * 60 * 1000;

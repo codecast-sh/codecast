@@ -29,6 +29,8 @@ const lifecycle = {
   state: waitStateValidator,
   created_at: v.number(),
   created_by: v.optional(v.string()),
+  created_in: v.optional(v.string()),
+  setter_told_at: v.optional(v.number()),
   settled_at: v.optional(v.number()),
   note: v.optional(v.string()),
 };

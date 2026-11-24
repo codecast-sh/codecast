@@ -22,6 +22,7 @@ import { activeTeamMembershipFor } from "./lib/access";
 import { personName } from "./lib/sessionTell";
 import { computeProjectContext, sessionProject } from "./projectContext";
 import { teamHasFeature } from "./lib/teamFeatureGuard";
+import { teamRooms } from "./chatAccess";
 
 type Ref = OrgWhere["work"]["task"];
 
@@ -134,7 +135,7 @@ async function chatRoomsFor(ctx: { db: any }, teamId: Id<"teams"> | undefined, c
     for (const row of await ctx.db.query("chat_channel_agents").withIndex("by_role", (q: any) => q.eq("role_id", seat._id)).take(20)) add(row.channel_id, "role");
     for (const id of seat.follow_channel_ids ?? []) add(id, "role");
   }
-  const team: any[] = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", teamId)).take(200);
+  const team: any[] = await teamRooms(ctx, teamId, 200);
   for (const c of team) if (c.is_default) add(c._id, "default");
   const rooms: OrgChatRoom[] = [];
   for (const [id, w] of why) {

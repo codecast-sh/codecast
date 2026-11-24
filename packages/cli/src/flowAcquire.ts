@@ -17,3 +17,12 @@ export function acquireFailureLine(worktree: string, out: string, err: string): 
   }
   return `Could not make the worktree for the change: ${(err || out).trim().split("\n").pop()}`;
 }
+
+/**
+ * A child `cast` as flowCommand's cast() reports it. A spawn that never started (no such binary on PATH, or a
+ * compiled CLI's own path) has no exit status and no output, only `error`: its reason is the line, not an empty
+ * one (ct-98253).
+ */
+export function castResult(r: { status: number | null; stdout?: string | null; stderr?: string | null; error?: Error }): { code: number; out: string; err: string } {
+  return { code: r.status ?? 1, out: r.stdout ?? "", err: [r.stderr, r.error?.message].filter(Boolean).join("\n") };
+}

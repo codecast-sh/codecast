@@ -2,7 +2,8 @@ import { describe, expect, spyOn, test } from "bun:test";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { DORMANT_CLAIM_TTL_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, deriveLiveAt, placeProjectableRow, type ProjectableInboxRow } from "@codecast/shared/contracts";
+import { DORMANT_CLAIM_TTL_MS, HEARTBEAT_ALIVE_MS, STATUS_TRUST_TTL_MS, deriveLiveAt, type ProjectableInboxRow } from "@codecast/shared/contracts";
+import { placeProjectableRow } from "@codecast/shared/contracts/inboxPlacement";
 import { acquireSessionProcessOwnership, findSessionFile, paneReconcileTarget, primeSessionFileIndexAtBoot, reconciledStatusWithTasks, resetSessionFileIndexForTests, resolveTurnEndStatus } from "./daemon.js";
 import { closeDaemonWorkers, configureDaemonWorkers } from "./workers/bridge.js";
 import { writeThreadStatePulse } from "./threadStateStamp.js";
@@ -103,7 +104,7 @@ describe("dormant background task refresh", () => {
   test("a verified background wait stays dormant beyond the two-hour claim expiry while its daemon heartbeats", () => {
     const end = START + DORMANT_CLAIM_TTL_MS + 60 * 60_000;
     for (let now = START; now <= end; now += 90_000) {
-      expect(paneReconcileTarget("idle", "dormant")).toBe("idle");
+      expect(paneReconcileTarget("idle", "dormant", false)).toBe("idle");
       expect(reconciledStatusWithTasks("dormant", "idle", true, "dormant")).toBeNull();
       // The report is never re-sent: the heartbeat alone keeps it standing.
       expect(placeProjectableRow(dormant(START, now - 30_000), false, now)).toEqual({ bucket: "dormant", work_state: "dormant" });
@@ -136,7 +137,7 @@ describe("dormant background task refresh", () => {
     for (const block of [{ awaiting_input: true }, { pending_api_error: true }, { agent_status: "permission_blocked" }, { thread_state_status: "blocked", agent_status: "idle" }]) {
       expect(placeProjectableRow({ ...dormant(now), ...block }, true, now).work_state).toBe("needs_input");
     }
-    expect(paneReconcileTarget("busy", "dormant")).toBe("working");
+    expect(paneReconcileTarget("busy", "dormant", true)).toBe("working");
     expect(reconciledStatusWithTasks("dormant", "active", true)).toBe("working");
   });
 });

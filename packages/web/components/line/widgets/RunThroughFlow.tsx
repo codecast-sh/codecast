@@ -23,6 +23,7 @@ import { shipLedgerFor } from "../../consequential/shipLedger";
 import { pressFromSig, pressSig, runThroughMessage, type Press, type PressMsg } from "../../../lib/line/flowMessages";
 import { sessionIdleAt } from "../../../lib/liveness";
 import { formatElapsed } from "../../../lib/taskLine";
+import { editedSince, fixRounds } from "../../../lib/ship/newEdits";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from "../../ui/sheet";
@@ -102,7 +103,7 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
     </button>
   );
   const panel = showRun ? (
-    <RunPanel run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
+    <RunPanel conversationId={conversationId} run={run} flow={runFlow!} journey={journey!} targets={reach ? targets : undefined} notice={notice} onAgain={() => setAgain(true)} />
   ) : starting && !again ? (
     <Starting press={press!} onOpen={() => { setOpen(false); openMessage(conversationId, press!.id); }} />
   ) : (
@@ -167,11 +168,26 @@ function PressNotice({ press, onRead }: { press: Press; onRead: () => void }) {
   );
 }
 
+/** Where a run leaves its change on main: shipping again takes whatever the checkout holds now, not that change. */
+const LANDED_NOW = new Set<Journey["now"]["kind"]>(["landed", "deploying", "live", "merged"]);
+
+/** Whether the session edited a file after `since` outside the `except` windows (lib/ship/newEdits.ts). */
+function useEditedSince(conversationId: string, since: number | null, except: ReadonlyArray<readonly [number, number]>): boolean {
+  // The conversation's own list: it changes only when its messages do, never on another row's heartbeat.
+  const msgs = useInboxStore((s) => (s.messages as Record<string, Array<{ timestamp: number; tool_calls?: Array<{ name?: string }> }>>)[conversationId]);
+  return useMemo(() => !!since && !!msgs && editedSince(msgs, since, except), [msgs, since, except]);
+}
+
 /** The session's run: its journey, who acts now, and the person's controls on it. */
-function RunPanel({ run, flow, journey, targets, notice, onAgain }: { run: any; flow: AppFlow; journey: Journey; targets?: TargetState[]; notice?: React.ReactNode; onAgain: () => void }) {
+function RunPanel({ conversationId, run, flow, journey, targets, notice, onAgain }: { conversationId: string; run: any; flow: AppFlow; journey: Journey; targets?: TargetState[]; notice?: React.ReactNode; onAgain: () => void }) {
   const now = useCoarseNow(15_000);
   const live = runIsLive(run);
   const stop = journey.now.kind === "stopped" || journey.now.kind === "failed" ? journey.now : null;
+  // A run that landed its change offers another only once the session has edited something the run did not take: since
+  // it started, outside the session's own fix rounds, whose edits went out with it.
+  const fixing = useMemo(() => fixRounds(flow, run), [flow, run]);
+  const edited = useEditedSince(conversationId, live ? null : run.created_at ?? null, fixing);
+  const spent = LANDED_NOW.has(journey.now.kind) && !edited;
   return (
     <div className="shp" data-ship-run={run._id}>
       <header className="shp-head">
@@ -185,8 +201,8 @@ function RunPanel({ run, flow, journey, targets, notice, onAgain }: { run: any; 
       <JourneyView journey={journey} run={run} now_ms={now} targets={targets}
         actions={live
           ? <button type="button" className="sj-btn" data-quiet onClick={() => void useInboxStore.getState().stopLineRun(run._id)} data-flow-stop={run._id}>Stop</button>
-          // A stop's bar places Ship again itself; a finished run offers it plainly.
-          : stop ? null : <button type="button" className="sj-btn" onClick={onAgain} data-ship-again>Ship again</button>}
+          // A stop's bar places Ship again itself; a finished run offers it plainly, a landed one only with new edits.
+          : stop || spent ? null : <button type="button" className="sj-btn" onClick={onAgain} data-ship-again>Ship again</button>}
         again={(primary) => <button type="button" className="sj-btn" data-primary={primary ? "" : undefined} data-quiet={primary ? undefined : ""} onClick={onAgain} data-ship-again>Ship again</button>} />
     </div>
   );
@@ -201,6 +217,12 @@ export function ShipAgainButton({ flow, conversationId, sessionTitle, primary }:
       {reviewing ? <SwitchReview ledger={shipLedgerFor(flow, sessionTitle)} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); useInboxStore.getState().sendMessage(conversationId, runThroughMessage(flow)); }} /> : null}
     </>
   );
+}
+
+/** Whether a flow asks the person before the change lands, as a chip. */
+function Asks({ flow }: { flow: AppFlow }) {
+  const approval = approvalOf(flow);
+  return <span className="shp-asks" data-asks={approval.kind === "never" ? undefined : approval.kind}>{approvalWords(approval)}</span>;
 }
 
 function PoolPicker({ conversationId, session, onRun }: { conversationId: string; session: string; onRun: (flow: AppFlow) => void }) {
@@ -229,24 +251,23 @@ function PoolPicker({ conversationId, session, onRun }: { conversationId: string
       {pool.length > 1 ? (
         // A native radio group: one tab stop, arrow keys move the pick, Enter ships the picked flow.
         <div className="shp-flows" role="radiogroup" aria-label="Flows">
-          {pool.map((f) => { const approval = approvalOf(f); return (
+          {pool.map((f) => (
             <label key={f.slug} className="shp-flow" onDoubleClick={() => onRun(f)} data-run-through-flow={f.slug}>
               <input type="radio" className="shp-radio" name={`ship-flow-${conversationId}`} value={f.slug} checked={f.slug === flow.slug}
                 onChange={() => setPicked(f.slug)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); onRun(f); } }} />
               <b>{f.label}{f === fallback ? <span className="shp-default" data-run-through-default=""><span className="sr-only"> </span>Default</span> : f.base ? <span className="shp-base">on {f.base}</span> : null}</b>
-              <span className="shp-path">
-                <span className="shp-asks" data-asks={approval.kind === "never" ? undefined : approval.kind}>{approvalWords(approval)}</span>
-                {journeyStages(f).map((s) => s.label).join(" → ")}
-              </span>
+              <span className="shp-path">{journeyStages(f).map((s) => s.label).join(" → ")}</span>
+              <Asks flow={f} />
             </label>
-          ); })}
+          ))}
         </div>
       ) : null}
       <div className="shp-preview" data-flow={flow.slug}>
         <JourneyView journey={journey} now_ms={0} />
       </div>
       <footer className="shp-foot">
-        <span className="shp-flowname">{pool.length > 1 ? null : <>{flow.label}{flow === fallback ? <span className="shp-default">Default</span> : null}</>}</span>
+        {/* A lone flow has no list row, so its name and whether it asks the person sit here. */}
+        <span className="shp-flowname">{pool.length > 1 ? null : <>{flow.label}{flow === fallback ? <span className="shp-default">Default</span> : null}<Asks flow={flow} /></>}</span>
         <button type="button" className="sj-btn" data-primary onClick={() => onRun(flow)} aria-label={pool.length > 1 ? (flow.label === "Ship" ? "Ship this change" : `Ship through ${flow.label}`) : undefined} data-run-through-go={flow.slug}>Ship</button>
       </footer>
     </div>

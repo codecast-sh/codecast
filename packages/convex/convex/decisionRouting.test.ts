@@ -6,7 +6,7 @@
 // preview matching what it applies.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
-import { askCore, finalizeAnswer, reroutePendingDecisionsForConversation } from "./sessionDecisions";
+import { askCore, finalizeAnswer, reroutePendingDecisionsForConversation, rerouteChartedDecisionsCore } from "./sessionDecisions";
 import { passCore } from "./decisionHandoff";
 import { shareOutCore, shareOutPreviewCore } from "./decisionShareOut";
 import { AREAS_RECHECK_MS, askForAreas } from "./decisionAreas";
@@ -139,12 +139,61 @@ describe("ask time: the project picks its members", () => {
     expect(askedOf(tables, none.id)).toEqual([HOST]);
   });
 
-  test("a role scope's project, then the session's work, when there is no task", async () => {
+  test("the session's work, when there is no task", async () => {
     const { ctx, tables } = seed();
-    const byRole = await ask(ctx, { session_id: "sess-role" });
-    expect(askedOf(tables, byRole.id)).toEqual([KIM]);
     const bySession = await ask(ctx, { session_id: "sess-desk" });
     expect(askedOf(tables, bySession.id)).toEqual([KIM]);
+  });
+
+  test("a session under a role follows the org chart, never an area", async () => {
+    const { ctx, tables } = seed();
+    // The Desk lead reports to HOST; Kim covers Desk and Deals is Sam's and Jas's.
+    for (const task of [undefined, "ct-1", "ct-2"]) {
+      const r = await ask(ctx, { session_id: "sess-role", ...(task ? { task } : {}) });
+      expect(askedOf(tables, r.id)).toEqual([HOST]);
+    }
+    expect(tables.notifications.filter((x: any) => x.type === "decision_assigned")).toEqual([]);
+  });
+
+  test("a lead that reports to a person asks that person, never an area, on ask and on reroute", async () => {
+    const { ctx, tables } = seed();
+    // The Desk lead's own seat: it reports to HOST, so its ladder is empty.
+    tables.conversations.push({ _id: "conversations_seat", session_id: "sess-seat", user_id: HOST, team_id: TEAM, message_count: 1, standing_role_id: "org_roles_desk" });
+    const r = await ask(ctx, { session_id: "sess-seat", task: "ct-2" });
+    expect(row(tables, r.id).hops).toEqual([]);
+    expect(askedOf(tables, r.id)).toContain(HOST);
+    expect(askedOf(tables, r.id)).not.toContain(KIM);
+    await reroutePendingDecisionsForConversation(ctx, "conversations_seat" as any, NOW);
+    expect(askedOf(tables, r.id)).toContain(HOST);
+    expect(askedOf(tables, r.id)).not.toContain(KIM);
+    expect(tables.notifications.filter((x: any) => x.type === "decision_assigned")).toEqual([]);
+  });
+
+  test("the repair moves an open decision areas gave away back onto the org chart, and nothing else", async () => {
+    const { ctx, tables } = seed();
+    const pending = (id: string, conversation: string, session: string, asked: any[], over: any = {}) => ({
+      _id: id, short_id: id, conversation_id: conversation, session_id: session, user_id: HOST, question: id, options, status: "pending", category: "approach",
+      holder: { kind: "user", id: asked[0] }, holder_key: `user:${asked[0]}`, asked_user_ids: asked, task_id: "tasks_desk", team_id: TEAM, created_at: NOW - 100, hops: [], ...over,
+    });
+    tables.session_decisions.push(
+      // Asked from a session under the Desk lead, given to Kim by her area before this change.
+      pending("sd-misrouted", "conversations_role", "sess-role", [KIM]),
+      // Already where the org chart puts it.
+      pending("sd-right", "conversations_role", "sess-role", [HOST]),
+      // Off the chart: an area owner is the right answer there.
+      pending("sd-offchart", "conversations_desk", "sess-desk", [KIM]),
+      // A person passed it to Kim: it stays with her.
+      pending("sd-passed", "conversations_role", "sess-role", [KIM], { passed_to: { kind: "user", id: KIM } }),
+    );
+    const dry = await rerouteChartedDecisionsCore(ctx, true, NOW);
+    expect(dry.moved).toEqual(["sd-misrouted"]);
+    expect(askedOf(tables, "sd-misrouted")).toEqual([KIM]);
+    const run = await rerouteChartedDecisionsCore(ctx, false, NOW);
+    expect(run.moved).toEqual(["sd-misrouted"]);
+    expect(askedOf(tables, "sd-misrouted")).toEqual([HOST]);
+    expect(row(tables, "sd-misrouted").holder).toEqual({ kind: "user", id: HOST });
+    for (const [id, who] of [["sd-right", HOST], ["sd-offchart", KIM], ["sd-passed", KIM]]) expect(askedOf(tables, id)).toEqual([who]);
+    expect((await rerouteChartedDecisionsCore(ctx, true, NOW)).moved).toEqual([]);
   });
 
   test("the area owner is told, once, and the asker never", async () => {
@@ -305,7 +354,11 @@ describe("Share out", () => {
       open("session_decisions_loose", { task_id: "tasks_loose" }),
       open("session_decisions_named", { addressed: true }),
       open("session_decisions_prod", { category: "production" }),
+      open("session_decisions_charted", { hops: [{ role_id: "org_roles_desk", at: NOW - 100 }] }),
+      // The Desk lead's own seat reports to HOST: no ladder, still the org chart's.
+      open("session_decisions_seat", { conversation_id: "conversations_seat", session_id: "sess-seat", task_id: "tasks_desk", hops: [] }),
     );
+    s.tables.conversations.push({ _id: "conversations_seat", session_id: "sess-seat", user_id: HOST, team_id: TEAM, message_count: 1, standing_role_id: "org_roles_desk" });
     return s;
   };
 
@@ -329,7 +382,7 @@ describe("Share out", () => {
       expect(askedOf(tables, m.decision_id)).toEqual([m.to]);
       expect(row(tables, m.decision_id).holder_key).toBe(`user:${m.to}`);
     }
-    for (const kept of ["session_decisions_loose", "session_decisions_named", "session_decisions_prod"]) expect(askedOf(tables, kept)).toEqual([HOST]);
+    for (const kept of ["session_decisions_loose", "session_decisions_named", "session_decisions_prod", "session_decisions_charted", "session_decisions_seat"]) expect(askedOf(tables, kept)).toEqual([HOST]);
     // One notice per person.
     const notes = tables.notifications.filter((x: any) => x.type === "decision_assigned");
     expect(notes.map((x: any) => String(x.recipient_user_id)).sort()).toEqual([JAS, KIM, SAM].sort());

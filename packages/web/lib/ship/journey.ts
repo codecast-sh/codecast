@@ -10,6 +10,10 @@
 // merged sha on the run. Pure, with relative imports only: the web's Ship panel
 // and run card, the inbox card and the phone's run card all read a run here.
 import { foldFlow, passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
+import { asksIfOf, insideOf, insideOnRun, type RouteBase, type StageInside } from "./segmentInside";
+import { landedSha, parentOf, recordedIds } from "./runRecord";
+
+export { insideWords, type InsideRoute, type StageInside } from "./segmentInside";
 
 /** `you`: an open card on the stage the viewer may answer; `person`: a person answers there, the viewer or not. */
 export type StageWho = "session" | "agent" | "you" | "person" | "auto";
@@ -38,6 +42,8 @@ export type JourneyStage = {
   steps?: StageStep[];
   /** A fan-out's branches, side by side, each with its own state. */
   branches?: JourneyStage[];
+  /** A segment's own steps, when it has more than one or routes off them. */
+  inside?: StageInside;
 };
 
 export type StageStep = { id: string; label: string; status: string; visits: number | null; said: string | null; session: { id: string; title: string | null } | null; at: number | null };
@@ -135,9 +141,6 @@ export function canAnswer(d: GateDecision | null | undefined, viewer: string | n
 /** Whether a decision waits on a role or on people. */
 export const holderOf = (d: GateDecision | null | undefined): "person" | "role" => ((d?.passed_to ?? d?.holder)?.kind === "role" ? "role" : "person");
 
-/** The one landed fact: the sha a merge recorded on the run (`/cli/line/merge/record`). Nothing else means landed. */
-export const landedSha = (run: { merge?: { sha?: string | null } | null } | null | undefined): string | null => run?.merge?.sha || null;
-
 /** Whether a gate holds the run for an answer: paused on a card nobody has answered. */
 export const gateOpen = (run: Pick<JourneyRun, "status" | "gate_decision_id" | "gate_prompt" | "gate_decision_status">) =>
   run.status === "paused" && !!(run.gate_decision_id || run.gate_prompt) && (run.gate_decision_status ?? "pending") === "pending";
@@ -145,7 +148,8 @@ export const gateOpen = (run: Pick<JourneyRun, "status" | "gate_decision_id" | "
 /** The runner's own landing steps (runner.ts): a run that passes one has landed its change. */
 const LANDING_STEP = /(^|__)(shipped|landed)$/;
 
-type Base = Omit<JourneyStage, "state" | "round" | "steps" | "branches"> & { members: string[]; kind: string; branches?: Base[]; /** Bookkeeping steps the stage holds after its own work (its verdicts, the sha it merged). */ tail?: string[] };
+/** `tail`: bookkeeping steps the stage holds after its own work (its verdicts, the sha it merged). */
+type Base = Omit<JourneyStage, "state" | "round" | "steps" | "branches" | "inside"> & { members: string[]; kind: string; branches?: Base[]; tail?: string[]; inside?: { path: Base[]; routes: RouteBase[]; end: string | null } };
 
 const isSubject = (n: FlowNodeIn | undefined) => n?.backend === "subject";
 const inGroup = (stageId: string, nodeId: string) => nodeId === stageId || nodeId.startsWith(`${stageId}${SEGMENT_SEP}`);
@@ -191,8 +195,9 @@ function passingSteps(graph: Graph, id: string): FlowNodeIn[] {
   return walked;
 }
 
-/** The flow's stages on its main path, in the order a passing run reaches them, then Deploy and Live. */
-function planOf(graph: Graph, withTargets = false): Base[] {
+/** The flow's stages on its main path, in the order a passing run reaches them, then Deploy and Live. `nested`: a
+ *  segment's own steps, whose segments read as one step each. */
+function planOf(graph: Graph, withTargets = false, nested = false): Base[] {
   const folded = foldFlow(graph.nodes, graph.edges);
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
   const station = new Map(folded.stations.map((s) => [s.id, s]));
@@ -229,7 +234,9 @@ function planOf(graph: Graph, withTargets = false): Base[] {
   const stageOf = (members: string[], label: string): Base => {
     const node = byId.get(members[0]);
     const deploy = members.length === 1 && isDeployStage(node);
+    const inside = !nested && members.length === 1 ? insideOf(graph, members[0], INSIDE_READERS) : undefined;
     return {
+      ...(inside ? { inside } : {}),
       id: members[0],
       label,
       role: deploy ? "deploy" : "step",
@@ -289,7 +296,15 @@ function planOf(graph: Graph, withTargets = false): Base[] {
   ];
 }
 
-const strip = ({ members: _m, kind: _k, tail: _t, branches, ...s }: Base): Omit<JourneyStage, "state" | "round"> => ({ ...s, ...(branches ? { branches: branches.map((b) => ({ ...strip(b), state: "idle" as const, round: null })) } : {}) });
+const idleStage = (b: Base): JourneyStage => ({ ...strip(b), state: "idle", round: null });
+/** What a segment's inside reads of the journey: its own stages, whose segments read as one step each, and who acts. */
+const INSIDE_READERS = { plan: (g: Graph) => planOf(g, false, true), who: whoOf, passing: passingSteps };
+
+const strip = ({ members: _m, kind: _k, tail: _t, branches, inside, ...s }: Base): Omit<JourneyStage, "state" | "round"> => ({
+  ...s,
+  ...(branches ? { branches: branches.map(idleStage) } : {}),
+  ...(inside ? { inside: { ...inside, path: inside.path.map(idleStage), routes: inside.routes.map((r) => ({ ...r, state: "idle" as const, steps: r.steps.map((st) => ({ ...st, state: "idle" as const })) })) } } : {}),
+});
 
 /** The flow's stages on its main path, in execution order, then its Deploy and Live. */
 export function journeyStages(graph: Graph): Omit<JourneyStage, "state" | "round">[] {
@@ -360,15 +375,16 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const idle = (b: Base): JourneyStage => ({ ...strip(b), state: "idle", round: null, ...(b.branches ? { branches: b.branches.map(idle) } : {}) });
   if (!run) return { stages: plan.map(idle), now: { kind: "idle" } };
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-  const statuses = run.node_statuses ?? [];
+  const idOf = recordedIds(graph, run);
+  const statuses = (run.node_statuses ?? []).map((n) => (idOf(n.node_id) === n.node_id ? n : { ...n, node_id: idOf(n.node_id) }));
   const statusOf = (id: string | null | undefined) => (id ? [...statuses].reverse().find((n) => n.node_id === id) : undefined);
   const newest = (list: NodeStatus[]) => list.reduce<NodeStatus | undefined>((best, n) => (!best || (n.started_at ?? 0) >= (best.started_at ?? 0) ? n : best), undefined);
   const live = LIVE_STATUSES.has(run.status);
   const passed = run.status === "completed";
   const failed = run.status === "failed";
   const sha = landedSha(run);
-  const waitingOn = run.waiting_on_session ?? null;
-  const at = run.current_node_id ?? null;
+  const waitingOn = run.waiting_on_session ? { ...run.waiting_on_session, node_id: idOf(run.waiting_on_session.node_id) } : null;
+  const at = run.current_node_id ? idOf(run.current_node_id) : null;
   const flowStages = plan.filter((s) => s.role !== "live" && s.members.length);
   const stageOf = (nodeId: string | null) => (nodeId ? flowStages.find((s) => inStage(s, nodeId)) ?? null : null);
   // A fix station belongs to the stage that sent the work back.
@@ -402,8 +418,15 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     const route = graph.edges.find((e) => e.to === first && e.label && stageOf(e.from))?.label;
     return route ? route.charAt(0).toUpperCase() + route.slice(1) : byId.get(first)?.label ?? null;
   };
-  // A step inside a person's card (a gate's own segment): what it sends back, the person sent back.
-  const byPerson = (nodeId: string | undefined) => !!nodeId && graph.nodes.some((n) => n.type === "human" && (n.id === nodeId || segmentTopOf(n.id) === segmentTopOf(nodeId)));
+  // Whether a person sent the work back to the session at `nodeId`: the last step the run took before it, past the ends it
+  // went out through (a step whose every way on leaves the segment it sits in), is a person's. A segment's own Brief
+  // inside the same segment as a card is not the card's.
+  const endStep = (id: string) => { const out = graph.edges.filter((e) => e.from === id); return out.length > 0 && out.every((e) => parentOf(e.to) !== parentOf(id)); };
+  const byPerson = (nodeId: string | null) => {
+    const since = statusOf(nodeId)?.started_at ?? Infinity;
+    const before = statuses.filter((n) => (n.started_at ?? 0) <= since && !isSubject(byId.get(n.node_id)) && !endStep(n.node_id));
+    return byId.get(newest(before)?.node_id ?? "")?.type === "human";
+  };
   const backStage = live ? (backFrom(waitingOn?.node_id ?? null) ?? backFrom(at))?.id ?? null : null;
   const atBase = stageFor(at);
   const atStage = live ? atBase?.id ?? null : null;
@@ -413,7 +436,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const stopStage = failed ? (pastLanding ? plan[plan.indexOf(atBase!) + 1]?.id ?? atBase!.id : atBase?.id ?? null) : null;
   // An open card is a gate wherever its node sits: on a stage when the walk back finds one, else in the bar alone.
   const open = live && gateOpen(run);
-  const gateNode = open ? run.gate_node_id ?? at : null;
+  const gateNode = open ? (run.gate_node_id ? idOf(run.gate_node_id) : at) : null;
   const gateStage = open ? stageFor(gateNode)?.id ?? null : null;
   const gateMine = open && canAnswer(viewer?.decision, viewer?.id);
   // A card off the main path names the stage that holds it after the route into it ("It edits CI"), not the stage's own name.
@@ -453,7 +476,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const isEntry = (id: string) => graph.nodes.some((x) => x.id.startsWith(`${id}${SEGMENT_SEP}`));
   const isEnd = (id: string) => { const n = byId.get(id); return !!n && (n.type === "exit" || !!n.segment_exit); };
   const stepsOf = (b: Base): StageStep[] => statuses
-    .filter((n) => (inStage(b, n.node_id) && !(b.members.includes(n.node_id) && isEntry(n.node_id)) && !isEnd(n.node_id)) || b.loops.some((l) => l.id === n.node_id))
+    .filter((n) => (inStage(b, n.node_id) && !isEntry(n.node_id) && !isEnd(n.node_id)) || b.loops.some((l) => l.id === n.node_id))
     .map((n) => ({ id: n.node_id, label: labelOf(n.node_id), status: n.status, visits: n.visits ?? null, said: n.result_preview?.trim() || n.activity || null, session: n.session ? { id: String(n.session._id), title: n.session.title ?? null } : null, at: n.started_at ?? null }));
   // What a stage's steps did last (one entry per node: its latest visit); a segment's entry only routes into its steps.
   const latestOf = (b: Base) => newest(statuses.filter((n) => inStage(b, n.node_id) && !(b.members.includes(n.node_id) && isEntry(n.node_id))));
@@ -488,12 +511,17 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
     if (said === "missing") return "routed";
     return passed && last ? "done" : passed ? "skipped" : "idle";
   };
+  // A segment's inside on the run (segmentInside.ts insideOnRun). A stage after where the run stands holds nothing of this round.
+  const insideOn = (b: Base, index: number): StageInside => insideOnRun(b.inside!, {
+    statuses, here: gateNode ?? (live ? at : null), gate: !!gateNode, paused: run.status === "paused", live,
+    later: !passed && current >= 0 && index > current, back: b.id === backStage, gateWho: gateMine ? "you" : "person",
+  }, idleStage);
   const stageOn = (b: Base, index: number): JourneyStage => {
     const mine = statuses.filter((n) => inStage(b, n.node_id));
     const rounds = Math.max(0, ...mine.map((n) => n.visits ?? 1));
     // An open card says who may answer it: the viewer, or someone else.
     const who: StageWho = b.id === gateStage ? (gateMine ? "you" : "person") : b.who;
-    const base = { ...strip(b), ...(b.id === gateStage && gateOff ? { label: gateOff } : {}), who, steps: stepsOf(b), round: rounds > 1 ? rounds : null };
+    const base = { ...strip(b), ...(b.id === gateStage && gateOff ? { label: gateOff } : {}), who, steps: stepsOf(b), round: rounds > 1 ? rounds : null, ...(b.inside ? { inside: insideOn(b, index) } : {}) };
     if (b.role === "live") return { ...base, state: allLive ? "done" : passed ? "skipped" : "idle" };
     if (b.role === "deploy") {
       const state: StageState = allLive ? "done"
@@ -545,7 +573,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   else if (live && backStage) {
     const loop = plan.find((s) => s.id === backStage)!.loops.find((l) => l.id === segmentTopOf(waitingOn?.node_id ?? at ?? ""));
     const node = statusOf(waitingOn?.node_id ?? at);
-    now = { kind: "session", stage: stageLabel(backStage)!, note: readableWhy(waitingOn?.note) ?? "", since: waitingOn?.since ?? node?.started_at ?? null, round: node?.visits ?? null, max: loop?.max ?? null, by: byPerson(routedFrom(waitingOn?.node_id ?? at ?? "", new Set())?.node_id) ? "the person" : null };
+    now = { kind: "session", stage: stageLabel(backStage)!, note: readableWhy(waitingOn?.note) ?? "", since: waitingOn?.since ?? node?.started_at ?? null, round: node?.visits ?? null, max: loop?.max ?? null, by: byPerson(waitingOn?.node_id ?? at) ? "the person" : null };
   } else if (open) {
     // The card's own step names the bar when it sits off every stage (a card a script asked for); on a stage, the stage.
     const onStage = gateNode ? stageOf(gateNode) : null;
@@ -699,7 +727,7 @@ export type Approval = { kind: "always" } | { kind: "if"; when: string | null } 
  * Who says yes before the change lands, read from the graph. A person's stage on the passing path before the one that
  * lands it asks on every run. Otherwise a person's step (a segment's own included) that a run can reach before the
  * change lands, at the runner's landing step or else an exit that is no stop, asks only when a run turns off toward it
- * from a step that still lands without it: `when` is that step's `asks_if` (on it or on the segment that holds it),
+ * from a step that still lands without it: `when` is that step's `asks_if` (on it, else on each segment holding it, outermost last),
  * never a route's label, which names the route and is not written to finish a sentence. Anything else asks nobody.
  */
 export function approvalOf(graph: Graph): Approval {
@@ -729,11 +757,7 @@ export function approvalOf(graph: Graph): Approval {
     const passing = reach(lands, true, h);
     const towards = reach([h], true);
     const turn = graph.edges.find((e) => passing.has(e.from) && fromStart.has(e.from) && !passing.has(e.to) && towards.has(e.to));
-    if (turn) {
-      const step = graph.nodes.find((n) => n.id === h);
-      const top = graph.nodes.find((n) => n.id === segmentTopOf(h));
-      return { kind: "if", when: step?.asks_if ?? top?.asks_if ?? null };
-    }
+    if (turn) return { kind: "if", when: asksIfOf(graph, h) };
   }
   return { kind: "never" };
 }

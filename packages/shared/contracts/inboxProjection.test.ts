@@ -1,6 +1,7 @@
 import { HOSTED_AGENT_TYPE } from "./assistant";
 import { DORMANT_CLAIM_TTL_MS } from "./agentStatus";
-import { deriveLiveAt, rowLiveDeadlines } from "./inboxProjection";
+import { deriveLiveAt } from "./inboxProjection";
+import { rowLiveDeadlines, placeProjectableRow, projectInbox } from "./inboxPlacement";
 import { describe, expect, test } from "bun:test";
 import {
   INBOX_BUCKETS,
@@ -22,8 +23,6 @@ import {
   inboxEpoch,
   isHardBlocked,
   placeInboxRow,
-  placeProjectableRow,
-  projectInbox,
   selectWorkingSet,
   shouldShowInInbox,
   isAssignedAwayFromViewer,
@@ -744,9 +743,9 @@ describe("field ownership constants", () => {
     for (const f of INBOX_PROJECTION_FIELDS) expect(INBOX_FACT_FIELDS).not.toContain(f);
   });
 
-  test("the caps are the single source and the version is 28", () => {
+  test("the caps are the single source and the version is 29", () => {
     expect(INBOX_WINDOW_CAPS).toEqual({ recent: 200, pinned: 100, dismissed: 200, stashed: 200, snoozed: 200, owned: 200, adopted: 100 });
-    expect(INBOX_PROJECTION_VERSION).toBe(28);
+    expect(INBOX_PROJECTION_VERSION).toBe(29);
   });
 });
 

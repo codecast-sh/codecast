@@ -24,6 +24,7 @@ import { makeSyncAckCollector, type SyncAckPosition } from "./syncLog";
 import { attachSyncOutbox } from "./syncOutboxWriter";
 import { makeLifecycleEventDb } from "./lifecycleEvents";
 import { makeSessionStartsDb } from "./lib/sessionStarts";
+import { makeParkedWakeDb } from "./lib/parkedWake";
 import { makeWellFormedDb } from "./lib/wellFormed";
 
 const SYNC_ACK = Symbol.for("codecast.syncAckCollector");
@@ -37,9 +38,10 @@ function withChangeLog(ctx: any): any {
   // The lifecycle trail (lifecycleEvents.ts) is outermost: it sees each write
   // as the mutation asked for it, and records through the raw db.
   const tracked = makePrincipalViewTrackedDb(makeChangeTrackedDb(ctx.db, collector));
-  // session_starts follows conversation writes beneath it (lib/sessionStarts.ts).
+  // session_starts follows conversation writes beneath it (lib/sessionStarts.ts),
+  // and parked_wake_kind follows run, task and binding writes (lib/parkedWake.ts).
   // Outermost of all: every layer beneath sees only well-formed strings (lib/wellFormed.ts).
-  const wrapped: any = { ...ctx, db: makeWellFormedDb(makeLifecycleEventDb(makeSessionStartsDb(tracked, ctx.db), ctx.db)) };
+  const wrapped: any = { ...ctx, db: makeWellFormedDb(makeLifecycleEventDb(makeParkedWakeDb(makeSessionStartsDb(tracked, ctx.db), ctx.db), ctx.db)) };
   wrapped[SYNC_ACK] = collector;
   return wrapped;
 }

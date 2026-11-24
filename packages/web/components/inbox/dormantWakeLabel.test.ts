@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { dormantWakeLabel, sessionTriggerRows } from "./dormantWake";
+import { DORMANT_CLAIM_TITLE, dormantWakeLabel, sessionTriggerRows } from "./dormantWake";
 import type { TriggerRow } from "../triggerTasks";
 
 const NOW = 1_800_000_000_000;
@@ -9,12 +9,12 @@ const task = (over: Record<string, unknown>) =>
 describe("dormantWakeLabel", () => {
   test("each wake kind reads as what it waits on and when", () => {
     expect(dormantWakeLabel({ kind: "background", count: 1, what: "Poll for native step-path docs" }, NOW))
-      .toEqual({ what: "background task: Poll for native step-path docs", when: "when it finishes", warn: false });
+      .toEqual({ what: "background task: Poll for native step-path docs", when: "when it finishes", warn: null });
     expect(dormantWakeLabel({ kind: "background", count: 3, what: "" }, NOW).what).toBe("3 background tasks");
-    expect(dormantWakeLabel({ kind: "workflow", name: "audit" }, NOW)).toEqual({ what: "workflow: audit", when: "when it finishes", warn: false });
-    expect(dormantWakeLabel({ kind: "workers" }, NOW)).toEqual({ what: "its subagents are still working", when: "when they finish", warn: false });
-    expect(dormantWakeLabel({ kind: "trigger_unloaded" }, NOW)).toEqual({ what: "a trigger fires into it", when: "armed", warn: false });
-    expect(dormantWakeLabel({ kind: "parked" }, NOW)).toEqual({ what: "parked by you", when: "on next activity", warn: false });
+    expect(dormantWakeLabel({ kind: "workflow", name: "audit" }, NOW)).toEqual({ what: "workflow: audit", when: "when it finishes", warn: null });
+    expect(dormantWakeLabel({ kind: "workers" }, NOW)).toEqual({ what: "its subagents are still working", when: "when they finish", warn: null });
+    expect(dormantWakeLabel({ kind: "trigger_unloaded" }, NOW)).toEqual({ what: "a trigger fires into it", when: "armed", warn: null });
+    expect(dormantWakeLabel({ kind: "parked" }, NOW)).toEqual({ what: "parked by you", when: "on next activity", warn: null });
     expect(dormantWakeLabel({ kind: "snoozed", at: NOW + 3_600_000 }, NOW).what).toBe("snoozed");
   });
 
@@ -27,9 +27,9 @@ describe("dormantWakeLabel", () => {
 
   test("an unverified claim warns and says when it comes back", () => {
     expect(dormantWakeLabel({ kind: "claim", what: "reply from jx7", back: NOW + 30 * 60_000 }, NOW))
-      .toEqual({ what: "nothing scheduled · reply from jx7", when: "yours in 30m", warn: true });
+      .toEqual({ what: "nothing scheduled · reply from jx7", when: "yours in 30m", warn: DORMANT_CLAIM_TITLE });
     expect(dormantWakeLabel({ kind: "claim", what: null, back: NOW - 1 }, NOW))
-      .toEqual({ what: "nothing scheduled", when: "yours now", warn: true });
+      .toEqual({ what: "nothing scheduled", when: "yours now", warn: DORMANT_CLAIM_TITLE });
   });
 });
 

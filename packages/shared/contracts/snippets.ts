@@ -515,7 +515,7 @@ Pin a short state on this session saying where the work stands. The human sees i
 
 - \`blocked\`: a human must act first (answer, grant, decide). Files under **Needs You** and claims their eyes, so declare it only when true.
 - \`done\`: delivered, nothing stalled; read at leisure.
-- \`dormant\`: a machine wakes you (a trigger you armed, a background task, another session's reply, a blocker on the task you hold: a PR, a decision, a time). Only when you can **name the wake** in the text; if you can't say what resumes you, you are \`blocked\`.
+- \`dormant\`: a machine wakes you (a trigger you armed, a background task, another session's reply, a blocker on the task you hold: a PR, a decision, a time, or a wait you set on another task while holding yours). Only when you can **name the wake** in the text; if you can't say what resumes you, you are \`blocked\`.
 - \`working\` (the default): still moving.
 
 \`done\` and \`dormant\` cover only the turn that declares them, and a message from the human takes the pin down, so declare again at the end of each turn. Never park an ask in prose and go dormant: queue it with \`cast decide\`, then declare dormant.
@@ -556,7 +556,7 @@ cast state show <session_id>         # read another session's state
 
 A state is most valuable on long threads, parked ones, and ones shared across sessions. Every settle you leave undeclared is a card the human must open to learn it needed nothing. To keep the first line short, cut references and detail, never meaning; rewrite it when the work moves on. Write for someone who has been away: what is happening, what it waits on, what comes next, and whether anything is theirs to decide. A \`Next:\` with no real step or a \`You:\` that asks nothing is padding.
 
-Update it when the answer changes: a phase ends, you get blocked, you hand off, you go quiet. A send from another session or a trigger wake leaves the pin standing. Clear it only when it stops being true or useful: a state waiting on something that already arrived is worse than none, and one you stopped maintaining reads as abandoned. Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. Even on a short thread, a one-line \`--status done\` at the end files it where it belongs.
+Update it when the answer changes: a phase ends, you get blocked, you hand off, you go quiet. A send from another session or a trigger wake leaves the pin on the row, but it no longer speaks for the turn that opened, so re-pin at the end of every turn. Clear it only when it stops being true or useful: a state waiting on something that already arrived is worse than none, and one you stopped maintaining reads as abandoned. Pin one on any thread that will run long, park on something outside your control, or share work with other sessions. Even on a short thread, a one-line \`--status done\` at the end files it where it belongs.
 `;
 
 export const MESSAGING_SNIPPET_END = "<!-- /codecast-messaging -->";
@@ -646,7 +646,7 @@ cast publish set <target> --password p      # change gates or --title without re
 
 Gates, on publish or \`set\`: \`--password <p>\` (\`--password-stdin\` keeps it out of the process list, \`--no-password\` clears), \`--email-gate\` / \`--no-email-gate\`, \`--expires 7d|24h|30m|never\`, \`--edit-mode owner|link|team\`, \`--no-session\` / \`--session\` (the link back to this session), \`--no-comments\`.
 
-In link edit mode the output also carries an edit URL that grants editing to whoever holds it; \`cast publish links\` reprints both. A comment reaches your session only when its author turns on "Send to agent": you (the owner link or your account) or a signed-in teammate who can see the page, whose words arrive marked as theirs; anonymous comments stay in the discussion. Each comment can name an element and a moment of the page's timeline, and \`cast publish comments\` prints both. The page shows viewers that you are working and reloads when you publish again, so answer a comment by republishing, then resolve it.
+In link edit mode the output also carries an edit URL that grants editing to whoever holds it; \`cast publish links\` reprints both. A comment reaches your session only when its author turns on "Send to agent": you (the owner link or your account) or a signed-in teammate who can see the page, whose words arrive marked as theirs; anonymous comments stay in the discussion. Each comment can name an element, a moment of the page's timeline and the page's view, and \`cast publish comments\` prints them. A page with several views (steps, tabs, screens of a flow) keeps the one showing in \`?view=<name>\`, set on the current query string (codecast's own params stay) with \`history.replaceState\` whenever it changes, and read at load: each comment attaches to the view it was made on and shows only there. The page shows viewers that you are working and reloads when you publish again, so answer a comment by republishing, then resolve it.
 
 ### Dashboards
 

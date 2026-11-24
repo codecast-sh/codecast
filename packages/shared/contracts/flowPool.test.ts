@@ -72,6 +72,21 @@ test("the main path runs through a station inserted after a segment, not its way
   ]);
 });
 
+test("a station only a failure reaches is off the main path, though its way on is an end", () => {
+  const n = (id: string, type: string) => ({ id, label: id, shape: "box", type });
+  const nodes = [n("start", "start"), n("deploy", "command"), n("redeploy", "command"), n("exit", "exit"), n("never", "exit")] as unknown as Parameters<typeof foldFlow>[0];
+  const edges = [
+    { from: "start", to: "deploy" },
+    { from: "deploy", to: "exit", condition: "outcome = success" },
+    { from: "deploy", to: "redeploy", condition: "outcome = failure" },
+    { from: "redeploy", to: "exit", condition: "outcome = success" },
+    { from: "redeploy", to: "never", condition: "outcome = failure" },
+  ];
+  const folded = foldFlow(nodes, edges);
+  expect(folded.path).toEqual(["deploy"]);
+  expect(folded.stations.find((s) => s.id === "redeploy")!.main).toBe(false);
+});
+
 test("a variant's edits read as one line each", () => {
   const label = (id: string) => ({ check: "Check", review: "Review", decide: "Decide", lint: "Lint", e2e: "E2E" })[id] ?? id;
   expect([

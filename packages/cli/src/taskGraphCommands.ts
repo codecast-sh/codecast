@@ -11,7 +11,6 @@ import {
   isWaitId,
   notReadyLabel,
   numberedWaveError,
-  parkingLine,
   parseBlockerRef,
   parseStepLines,
   planTail,
@@ -39,7 +38,8 @@ import { c, fmt } from "./colors.js";
 import { shellEscapeForSh as shq } from "./supervision.js";
 import { stdinText } from "./sendBody.js";
 import { workOriginStamp } from "./sessionIdentity.js";
-import { readTaskPulseFor, type TaskPulse } from "./taskPulse.js";
+import { readTaskPulseFor } from "./taskPulse.js";
+import type { HeldPark } from "./taskParkHint.js";
 
 /** What the commands here need from index.ts. */
 export type GraphDeps = {
@@ -136,6 +136,10 @@ export async function applyBlockers(deps: GraphDeps, shortId: string, refs: stri
   const ctx = { cwd: deps.cwd(), sessionId: deps.sessionId() };
   const words = checkoutWords(ctx.cwd);
   const added: Blocker[] = [];
+  // The waits the server recorded this session as parked on (TG2 `parked`),
+  // and, when its held task waits on this one closing, how (HeldPark).
+  const parked: Blocker[] = [];
+  let held: HeldPark | null = null;
   for (const r of routed) {
     if (r.kind === "task") {
       const result = await deps.cliPost(mode === "add" ? "/cli/work/dep" : "/cli/work/undep", { short_id: shortId, blocked_by: r.ref, ...writerOf(deps) });
@@ -145,30 +149,17 @@ export async function applyBlockers(deps: GraphDeps, shortId: string, refs: stri
       const result = await deps.cliPost("/cli/work/wait", waitBody(shortId, r, ctx));
       console.log(`${c.green}ok${c.reset} ${waitAddedLine(shortId, result, words)}`);
       if (result?.wait) added.push(result.wait);
+      if (result?.wait && (result.parked === true || result.parked === "close" || result.parked === "held")) parked.push(result.wait);
+      if (result?.parked === "close" || result?.parked === "held") held = { kind: result.parked, owns: result.owns === true };
     } else {
       const result = await deps.cliPost("/cli/work/unwait", waitBody(shortId, r, { ...ctx, removing: true }));
       for (const w of (result?.removed ?? []) as TaskWait[]) console.log(`${c.green}ok${c.reset} ${shortId} is no longer ${waitingOn(w, words)}`);
     }
   }
   // A hint, so stderr: the last line on stdout stays the ok a caller reads.
-  const park = parkAfterBlocking(ctx.sessionId, shortId, added.filter(holdsBack), readTaskPulseFor(ctx.sessionId));
+  const { parkAfterBlocking } = await import("./taskParkHint.js");
+  const park = parkAfterBlocking(ctx.sessionId, shortId, added.filter(holdsBack), readTaskPulseFor(ctx.sessionId), parked.filter(holdsBack), held);
   if (park) console.error(fmt.muted(park));
-}
-
-/** Two spellings of one task id ("CT-012", "ct-12"). */
-function sameTask(a: string, b: string): boolean {
-  const norm = (id: string) => { const p = parseBlockerRef(id); return p.ok && p.kind === "task" ? p.ref : id.toLowerCase(); };
-  return norm(a) === norm(b);
-}
-
-/** After an agent blocks a task: how to park on it when this session holds
- *  it, else, when it holds another task, that nothing will wake it when the
- *  blockers clear (a clearing wakes only the session holding the task, TG2).
- *  A session holding no task is wiring up the graph, not waiting: no hint. */
-export function parkAfterBlocking(sessionId: string | null, shortId: string, open: Blocker[], pulse: TaskPulse | null): string | null {
-  if (!sessionId || !open.length || !pulse?.started || !pulse.task) return null;
-  if (sameTask(pulse.task, shortId)) return parkingLine(open, shortId);
-  return `This session does not hold ${shortId}, so nothing wakes it when ${open.length === 1 ? "this clears" : "these clear"} (cast task start ${shortId} to hold it).`;
 }
 
 // ---------------------------------------------------------------------------

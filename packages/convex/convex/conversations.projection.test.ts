@@ -16,7 +16,8 @@ import {
   STATUS_TRUST_TTL_MS,
   HEARTBEAT_ALIVE_MS,
 } from "./inboxFilters";
-import { digestProjection, inboxEpoch, INBOX_FACT_FIELDS, INBOX_PROJECTION_VERSION, deriveLiveAt, trustedStatusAt, rowLiveDeadlines, computeBucketStale, placeProjectableRow, rollupParentIdOf, type InboxBucket } from "@codecast/shared/contracts";
+import { digestProjection, inboxEpoch, INBOX_FACT_FIELDS, INBOX_PROJECTION_VERSION, deriveLiveAt, trustedStatusAt, computeBucketStale, rollupParentIdOf, type InboxBucket } from "@codecast/shared/contracts";
+import { rowLiveDeadlines, placeProjectableRow } from "@codecast/shared/contracts/inboxPlacement";
 import { makeFakeDb } from "./testDb";
 
 // The server half of sync-convergence (docs/architecture/sync-convergence.md):

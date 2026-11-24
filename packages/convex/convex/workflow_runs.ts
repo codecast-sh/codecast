@@ -8,6 +8,7 @@ import { findConversationByAnyRef, findConversationByAnyRefWhere } from "./conve
 import { killConversation } from "./conversations";
 import { askCore, finalizeAnswer, joinStack, normalizeVerdict, personMayResolve, refreshHolder, userMayRead, withdrawCore, GATE_PRESENT_AGAIN, type AnsweredBy } from "./sessionDecisions";
 import { adoptedCategory } from "./lib/decisionCategory";
+import { LIVE_RUN_STATUSES } from "./lib/parkedWake";
 import { createStackCore } from "./decisionStacks";
 import { projectLeadRole } from "./lib/orgAccess";
 import { CARD_GATE_NODE_ID, costParts, isLineRun, lineRunOutcome, mergeLeft, type ChangeCard } from "@codecast/shared/contracts/changeCard";
@@ -38,6 +39,7 @@ import { retainSessionCreator } from "./sessionLaunch";
 import { isSessionOwner } from "./sessionOwners";
 import { withAgentSessions } from "./lib/runAgentSessions";
 import { changeSessionOf } from "./lib/taskOwner";
+import { closeRunningStations, endRunFields } from "./lib/runEnd";
 import { graphOfVersion, pinnedVersionOf, repinToReported, rowAtVersion, runWorkflowOf, versionToPin } from "./lib/runGraph";
 
 export { withAgentSessions };
@@ -417,7 +419,7 @@ async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<bo
 export async function cancelCore(ctx: Ctx, run: any, now = Date.now(), reason = "Cancelled by user"): Promise<void> {
   if (run.status === "completed" || run.status === "failed") return;
   await withdrawOpenGate(ctx, { ...run, status: "failed", fail_reason: reason }, now);
-  await ctx.db.patch(run._id, { status: "failed", fail_reason: reason, updated_at: now });
+  await ctx.db.patch(run._id, { ...endRunFields(run, "failed", now), fail_reason: reason, updated_at: now });
   await stopStationHands(ctx, run);
 }
 
@@ -661,7 +663,7 @@ async function runCheckoutDevice(ctx: Ctx, userId: Id<"users">, runId: Id<"workf
 // daemon (the-line.md L9). One place, so a field added to runs or to the
 // primary conversation lands on both paths.
 // LE1.4: a run that has not ended. One cause holds at most one of these.
-export const LIVE_RUN_STATUSES = ["pending", "running", "paused"] as const;
+export { LIVE_RUN_STATUSES };
 export const isLiveRunStatus = (status: string | undefined): boolean =>
   (LIVE_RUN_STATUSES as readonly string[]).includes(status ?? "");
 
@@ -1257,11 +1259,13 @@ export const updateProgress = mutation({
     } else if (nodeEntry) {
       nodeStatuses.push(nodeEntry);
     }
+    const ending = args.run_status === "completed" || args.run_status === "failed" ? args.run_status : null;
 
     await ctx.db.patch(args.run_id, {
       current_node_id: args.current_node_id,
-      node_statuses: nodeStatuses,
-      status: args.run_status ?? run.status,
+      node_statuses: ending ? closeRunningStations(nodeStatuses, ending, now) : nodeStatuses,
+      // Named only when it moves, so a progress report stays off parked_wake_kind's run recompute (lib/parkedWake.ts).
+      ...(args.run_status && args.run_status !== run.status ? { status: args.run_status } : {}),
       fail_reason: args.fail_reason,
       // A runner's first report names the graph it loaded, so a restart a re-pin asked for has happened.
       ...(args.graph_hash ? { graph_hash: args.graph_hash, restart_runner_at: undefined, ...repin } : {}),

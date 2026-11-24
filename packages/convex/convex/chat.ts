@@ -31,7 +31,7 @@ import { canSendProductMessage, enqueuePendingMessage, getAuthenticatedUserId, t
 import { canOwnerOrTeamAccess, isConversationOwner, isTeamAdmin, isTeamMember } from "./privacy";
 import { activeTeamMembershipFor } from "./lib/access";
 import { requireTeamFeature, teamHasFeature } from "./teamFeatures";
-import { canAccessChannel, canReadChannelAnonymously, channelAgentRows, channelMemberIds, chatReadOriginArgs, isChannelMember, isCommunity, isRestricted, sessionChatScope, sessionDmRefusal, sessionMayReadChannel, primeSessionListing, grantSessionRoom, grantTargetOf, type ChatReadOrigin, type SessionChatScope } from "./chatAccess";
+import { canAccessChannel, canReadChannelAnonymously, channelAgentRows, channelMemberIds, chatReadOriginArgs, isChannelMember, isCommunity, isRestricted, sessionChatScope, sessionDmRefusal, sessionMayReadChannel, primeSessionListing, grantSessionRoom, grantTargetOf, teamRooms, teamRoomsAndDms, type ChatReadOrigin, type SessionChatScope } from "./chatAccess";
 import { dmAnchorFor, dmExchange, dmSessionLineAnswered } from "./chatDm";
 import {
   dmKeyFor,
@@ -456,17 +456,7 @@ export const listChannels = query({
       return { team_id: null, channels: [], reads: [], rail: [] };
     }
 
-    const teamChannels = await ctx.db
-      .query("chat_channels")
-      .withIndex("by_team_name", (q: any) => q.eq("team_id", teamId))
-      .take(MAX_CHANNELS_PER_TEAM);
-    // One membership read serves every restricted room on the page: which
-    // private rooms and DMs the caller is inside.
-    const myMemberRows = await ctx.db
-      .query("chat_channel_members")
-      .withIndex("by_user", (q: any) => q.eq("user_id", userId))
-      .collect();
-    const myRestricted = new Set(myMemberRows.map((r) => r.channel_id.toString()));
+    const { channels: teamChannels, memberOf: myRestricted } = await teamRoomsAndDms(ctx, userId, teamId, MAX_CHANNELS_PER_TEAM);
     // A private room the caller is not in must not exist for them — not as a
     // name in the rail, not as a row in the cache.
     const visibleToPerson = teamChannels.filter(
@@ -1225,13 +1215,11 @@ export const createChannel = mutation({
       return { channel_id: existingName._id, client_id: args.client_id, created: false, team_id: teamId, team_name: teamName, workspace_guessed: workspaceGuessed };
     }
 
-    const count = await ctx.db
-      .query("chat_channels")
-      .withIndex("by_team_name", (q: any) => q.eq("team_id", teamId))
-      .take(MAX_CHANNELS_PER_TEAM + 1);
-    // `>=`, not `>`: the rail reads exactly MAX_CHANNELS_PER_TEAM rows, so a team
-    // holding the cap already has as many channels as anyone can see. One more
-    // would exist and accept messages while never appearing in any rail.
+    const count = await teamRooms(ctx, teamId, MAX_CHANNELS_PER_TEAM + 1);
+    // `>=`, not `>`: the rail reads exactly MAX_CHANNELS_PER_TEAM named rooms, so
+    // a team holding the cap already has as many as anyone can see. One more
+    // would exist and accept messages while never appearing in any rail. DMs
+    // reach the rail through their members, so they never count here.
     if (count.length >= MAX_CHANNELS_PER_TEAM) {
       chatFail("INVALID", `A team may have at most ${MAX_CHANNELS_PER_TEAM} channels`);
     }

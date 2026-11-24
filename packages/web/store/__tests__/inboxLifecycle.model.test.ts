@@ -24,9 +24,9 @@ import {
   AGENT_IDLE_GRACE_MS,
   HEARTBEAT_ALIVE_MS,
   deriveLiveAt,
-  placeProjectableRow,
   type ProjectableInboxRow,
 } from "@codecast/shared/contracts";
+import { placeProjectableRow } from "@codecast/shared/contracts/inboxPlacement";
 import { useInboxStore, placeInboxRows, __resetInboxPlacementCacheForTests } from "../inboxStore";
 import { PENDING_SEND_WORKING_TTL_MS } from "../inboxOverlays";
 import { startLivenessHold, type LivenessHoldIO } from "../../hooks/livenessHold";

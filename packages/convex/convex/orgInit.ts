@@ -19,7 +19,7 @@ import { performRehomeSessions, type RehomeResult } from "./sessionOwnership";
 import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import { activitySessionsFromScan, latestEventAnywhere, readActivityCommits, readWorkTasks, reposFromScan, roleActivity, slimWorkTasks, type WorkTasks } from "./orgHealth";
 import { activityPlanOf, computeOrgActivity, isLandedCommit, landingFor, namedTextOf, namesRecord, recordWords, type OrgActivity, type RecordRef } from "./lib/orgActivity";
-import { canAccessChannel } from "./chatAccess";
+import { canAccessChannel, teamRoomsAndDms } from "./chatAccess";
 import type { VendorGate } from "./lib/vendorGuard";
 import type { AskModel, StatedGoals } from "./lib/statedGoals";
 import { goalModelAsk, readGoalCandidates, readSaid, readStatedGoals } from "./orgSaid";
@@ -673,7 +673,7 @@ export async function computeAnalysisSignals(ctx: Ctx, userId: Id<"users">, team
   const channels: Array<{ id: string; name: string; messages_30d: number; last_at?: number }> = [];
   const chatRead: Array<{ channel: any; msgs: any[] }> = [];
   if (teamId) {
-    const rows: any[] = await ctx.db.query("chat_channels").withIndex("by_team_name", (q: any) => q.eq("team_id", teamId)).take(ANALYSIS_CAPS.channels);
+    const { channels: rows } = await teamRoomsAndDms(ctx, userId, teamId, ANALYSIS_CAPS.channels);
     for (const ch of rows) {
       if (!ch.name || ch.archived_at) continue;
       if (!(await canAccessChannel(ctx as any, userId, ch))) continue;

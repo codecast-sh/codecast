@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { sessionSnoozeUntil } from "./sessionSnooze";
-import { placeProjectableRow, projectInbox, rowLiveDeadlines } from "./inboxProjection";
+import { rowLiveDeadlines, placeProjectableRow, projectInbox } from "./inboxPlacement";
 
 const now = 1_800_000_000_000;
 const row = { _id: "session", status: "active", updated_at: now - 40 * 86400_000, message_count: 10, is_idle: true, agent_status: "done", inbox_snoozed_until: now + 60_000 };

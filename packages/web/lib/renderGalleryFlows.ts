@@ -4,7 +4,7 @@
 // Pure and free of the `@/` alias: the phone's bundle and tests import it through the gallery.
 import { readEdit } from "./line/flowEditFence";
 import { EDIT_SKIP } from "./renderGalleryPipeline.generated";
-import { BRANCHING_FLOW, FANOUT_FLOW } from "./ship/journeyFixtures";
+import { BRANCHING_FLOW, FANOUT_FLOW, LAND_FLOW } from "./ship/journeyFixtures";
 
 // The flow object (ct-69934): their runs, graph and session-flow row are store records the gallery's loader seeds
 // (renderGalleryRecords).
@@ -32,8 +32,12 @@ export const GALLERY_FLOW = {
   // Landed and held on main's red CI; a change that edits CI, at the person's card off the main path.
   shipHeld: "galleryshiprunheldmain01",
   shipCiCard: "galleryshipruncicard0001",
+  // A flow that is one segment, Land: its findings sent back to the session, and a change at the person's card inside it.
+  shipLandBack: "galleryshiprunlandback01",
+  shipLandCard: "galleryshiprunlandcard01",
   branchingGraph: "galleryflowbranching0001",
   fanoutGraph: "galleryflowfanout0000001",
+  landGraph: "galleryflowland000000001",
   // The pipeline's inline objects (pipeline.md PL5, PL6): the change run that carried the skip edit out, and the repo's pipeline.
   editLive: "galleryeditrunlive000001",
   pipeline: "gallerypipeline000000001",
@@ -88,6 +92,8 @@ export function shipRuns(now: number, viewerId: string, workspace: string, conve
   const failed = (id: string) => ({ ...status(id, "completed"), status: "failed" });
   const fan = { ...base, workflow_id: GALLERY_FLOW.fanoutGraph, workflow_slug: FANOUT_FLOW.slug, workflow_name: FANOUT_FLOW.name };
   const branching = { ...base, workflow_id: GALLERY_FLOW.branchingGraph, workflow_slug: BRANCHING_FLOW.slug, workflow_name: BRANCHING_FLOW.name };
+  const land = { ...base, workflow_id: GALLERY_FLOW.landGraph, workflow_slug: LAND_FLOW.slug, workflow_name: LAND_FLOW.name };
+  const landRound = [...through("land__pr", "land__checks"), said("land__ci", "Waiting on CI for #12 at abc1234: 14 of 14 jobs done, 11m"), ...through("land__review", "land__read")];
   const merge = (at: number) => ({ sha: "4a6e413b2c", branch: "codecast/change-ct-4110", into: "main", at });
   // The round: PR, then CI and Review side by side; CI's last progress line stays on its node, Review reports nothing.
   const round = [...through("pr", "checks"), said("ci", "Waiting on CI for #12 at abc1234: a second look before calling it green, 9m"), status("review", "completed"), status("joined", "completed")];
@@ -130,6 +136,13 @@ export function shipRuns(now: number, viewerId: string, workspace: string, conve
     // The change run that carried the skip edit out (it ran the graph the edit built), live in refs.liveDeploy.
     { ...base, workflow_slug: "change", workflow_name: "change", _id: GALLERY_FLOW.editLive, graph_hash: readEdit(EDIT_SKIP_FENCE)!.graph_hash, task_short_id: "ct-4111", task_title: "Skip Decide on this repo's changes", status: "completed", current_node_id: "exit", merge: merge(now - 700_000),
       node_statuses: [...through("pr", "lint"), ...merged.slice(1), said("deploy__wait", `Live: 4a6e413b2c on web ${refs.liveDeploy}.`), status("deploy__live", "completed")] },
+    // Land's Read found something: its Brief went back to the session through the segment's Changes asked.
+    { ...land, _id: GALLERY_FLOW.shipLandBack, status: "running", current_node_id: "fix",
+      waiting_on_session: { node_id: "fix", conversation_id: conversationId, since: now - 180_000, note: "CI red on #12: 1 failure in test-web (inboxDivider.test.ts: the count reads 0 with sessions below it)." },
+      node_statuses: [...landRound, ...through("land__brief", "land__changes"), { ...status("fix", "running"), visits: 1 }] },
+    // Merge stopped on exit 6, the change edits what judges it: the card inside Land waits on the viewer.
+    { ...land, _id: GALLERY_FLOW.shipLandCard, status: "paused", current_node_id: "land__card__decide", gate_node_id: "land__card__decide", gate_prompt: "Ship ct-4110? It edits CI, so CI can't vouch for it.", gate_decision_id: refs.decision, gate_decision_short_id: refs.decisionShort,
+      node_statuses: [...landRound, failed("land__merge"), ...through("land__why_card", "land__card"), { ...status("land__card__decide", "running"), started_at: now - 40_000 }] },
     // Merge refused: the runner reports the exit it stopped at.
     { ...fan, _id: GALLERY_FLOW.shipRefused, status: "failed", current_node_id: "unshipped",
       fail_reason: "Stopped: The merge guard refused: the branch would undo changes main made to packages/web/lib/inboxDivider.ts since 4a6e413.",
@@ -138,6 +151,6 @@ export function shipRuns(now: number, viewerId: string, workspace: string, conve
 }
 
 /** The pushed graphs the branching and fan-out run cards draw from. */
-export const shipGraphs = (now: number, viewerId: string, workspace: string) => [BRANCHING_FLOW, FANOUT_FLOW].map((f) => ({
-  ...f, _id: f === BRANCHING_FLOW ? GALLERY_FLOW.branchingGraph : GALLERY_FLOW.fanoutGraph, user_id: viewerId, workspace, created_at: now, updated_at: now,
+export const shipGraphs = (now: number, viewerId: string, workspace: string) => ([[BRANCHING_FLOW, GALLERY_FLOW.branchingGraph], [FANOUT_FLOW, GALLERY_FLOW.fanoutGraph], [LAND_FLOW, GALLERY_FLOW.landGraph]] as const).map(([f, _id]) => ({
+  ...f, _id, user_id: viewerId, workspace, created_at: now, updated_at: now,
 }));

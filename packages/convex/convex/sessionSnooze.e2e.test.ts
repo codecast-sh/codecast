@@ -3,7 +3,7 @@ import { applyPatches } from "./dispatch";
 import { computeInboxSessions, computeSessionsLiveness } from "./conversations";
 import { enqueuePendingMessage } from "./pendingMessages";
 import { makeFakeDb } from "./testDb";
-import { placeProjectableRow } from "@codecast/shared/contracts";
+import { placeProjectableRow } from "@codecast/shared/contracts/inboxPlacement";
 
 test("durable snooze reaches both inbox channels and resurfaces after expiry without a browser", async () => {
   const now = Math.floor(Date.now() / 60_000) * 60_000;

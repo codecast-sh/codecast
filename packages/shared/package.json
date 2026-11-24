@@ -34,6 +34,7 @@
     "./contracts/plainText": "./contracts/plainText.ts",
     "./contracts/commitDiffs": "./contracts/commitDiffs.ts",
     "./contracts/orgProposal": "./contracts/orgProposal.ts",
+    "./contracts/inboxPlacement": "./contracts/inboxPlacement.ts",
     "./contracts/shellWords": "./contracts/shellWords.ts",
     "./contracts/commandRun": "./contracts/commandRun.ts",
     "./contracts/lineSlug": "./contracts/lineSlug.ts",
