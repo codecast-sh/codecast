@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { chatSendOrigin, personEnv, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
+import { chatSendOrigin, commentSession, personEnv, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
 
 describe("chatSendOrigin", () => {
   test.each([
@@ -61,9 +61,27 @@ describe("workOriginStamp", () => {
 
 describe("personEnv", () => {
   test("drops every variable that ties a command to an agent session, and keeps the rest", () => {
-    const env = { CLAUDE_CODE_SESSION_ID: "s1", CODEX_THREAD_ID: "t", CODEX_SESSION_ID: "c", CODECAST_SESSION_ID: "w", CODECAST_MANAGED_SESSION: "m", CODECAST_TASK_ID: "ct-1", CODECAST_PLAN_ID: "pl-1", CODECAST_CWD: "/x", PATH: "/bin", HOME: "/h" };
+    const env = { CLAUDE_CODE_SESSION_ID: "s1", CODEX_THREAD_ID: "t", CODEX_SESSION_ID: "c", CODECAST_SESSION_ID: "w", CODECAST_MANAGED_SESSION: "m", CODECAST_RUN_CONVERSATION_ID: "conv_run", CODECAST_TASK_ID: "ct-1", CODECAST_PLAN_ID: "pl-1", CODECAST_CWD: "/x", PATH: "/bin", HOME: "/h" };
     const out = personEnv(env);
     expect(out).toEqual({ PATH: "/bin", HOME: "/h" });
     expect(sessionIdFromEnv(out)).toBeNull();
+    expect(commentSession(null, out)).toBeNull();
+  });
+});
+
+// ct-100734: a line station's comments posted with no session, read as the person's own words and were relayed into the working session as theirs.
+describe("commentSession", () => {
+  test("a station's script signs as its run, ahead of any session found by looking", () => {
+    expect(commentSession(null, { CODECAST_RUN_CONVERSATION_ID: "conv_run" })).toBe("conv_run");
+    expect(commentSession("ancestor-session", { CODECAST_RUN_CONVERSATION_ID: "conv_run" })).toBe("conv_run");
+  });
+
+  test("an agent session the environment names signs as itself, inside a station too", () => {
+    expect(commentSession(null, { CODECAST_RUN_CONVERSATION_ID: "conv_run", CLAUDE_CODE_SESSION_ID: "s1" })).toBe("s1");
+  });
+
+  test("outside a run it is the session found by looking, or none", () => {
+    expect(commentSession("found", {})).toBe("found");
+    expect(commentSession(null, { CODECAST_RUN_CONVERSATION_ID: "" })).toBeNull();
   });
 });

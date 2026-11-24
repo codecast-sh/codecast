@@ -64,6 +64,7 @@ function fixture(transport = "tmux", cached = true) {
   const commands: string[] = [];
   const captureSizes: number[] = [];
   const reaped: number[] = [];
+  const killed: string[] = [];
   const hooks = { resume: fail("resume") as (...args: unknown[]) => unknown, capture: () => {}, input: (_event: string) => {}, loaded: () => {}, exec: async (_args: string[]) => {}, prepare: async (): Promise<unknown> => null, markWrite: undefined as undefined | ((id: string) => Promise<unknown>) };
   const timers: Array<{ fn: () => unknown; ms: number; cancelled: boolean }> = [];
   const clock = { now: 1_000_000, steps: 0 };
@@ -249,7 +250,7 @@ function fixture(transport = "tmux", cached = true) {
       statuses.push({ messageId: id, status: "injected" });
       injectedMessageTs.set(id, { ts: clock.now, conversationId: "conv", confirmed: false, pasted: false });
     },
-    clearUnresolvablePane: () => {}, noteUnresolvablePane: fail("rebuild"),
+    clearUnresolvablePane: () => {}, killTmuxSessionAndTree: async (name: string) => { killed.push(name); },
     // herdr's API answers, but no pane holds the agent's tty: the injector's
     // real failure when it cannot find the pane a person resumed the session in.
     findHerdrPaneForTty: async () => null, herdrRequest: fail("herdr request"),
@@ -315,16 +316,16 @@ function fixture(transport = "tmux", cached = true) {
       "captureTmuxComposerPane", "stripAnsi", "stripTmuxFaintText", "lineEndingAt", "skipSuggestionMenu", "composerTextStart", "tmuxComposerRegion", "tmuxPromptStillHasInput", "tmuxPromptShowsPastePlaceholder", "pasteChipLines", "pasteChipContradicts",
       "tmuxPaneShowsBlockingPrompt", "takeTmuxSubmitVerdict", "recordTmuxSubmitVerdict", "verifyTmuxSubmitAfterPaste", "runTmuxSubmitVerify",
       "deliverIntoPane", "paneInteractiveQuestion", "paneInteractivePrompt", "transcriptEchoes", "injectViaTmux", "injectViaTmuxInner",
-      "planHighlightStep", "selectRowHasLabel", "selectHighlightedOption", "isClaudeIdleResumeDialog", "isIdleResumeOptionRow",
+      "planHighlightStep", "selectRowHasLabel", "highlightFailureCount", "trustHighlightHold", "selectHighlightedOption", "isClaudeIdleResumeDialog", "isIdleResumeOptionRow",
       "buildAppleScript", "captureAppleScriptPane", "injectViaAppleScript", "writeTerminalInjectionScript",
       "findKittyWindowId", "mapKeyForKitty", "kittySendText", "writeKittyInjectionPayload", "injectViaKitty",
-      "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "injectViaGhostty", "herdrKey", "injectViaHerdr", "noteUnreachableAgent", "injectThroughPane", "normalizeTty", "getTerminalLabel", "terminalLacksInjector", "injectViaTerminal",
+      "findWezTermPaneId", "weztermSendText", "weztermSendKeys", "injectViaWezTerm", "injectViaGhostty", "herdrKey", "injectViaHerdr", "noteUnreachableAgent", "noteUnresolvablePane", "injectThroughPane", "normalizeTty", "getTerminalLabel", "terminalLacksInjector", "injectViaTerminal",
       "deliverMessage", "deliverMessageIntoSession", "launchPromptCarried", "settleLaunchPrompt", "injectedMarkSettled", "rependAfterAttempt",
       "autoResumeSessionInner", "probeStartedPane", "classifyStartedPane", "paneContentAfterLaunchEcho", "heldFatal",
     ];
     const constants = [
       "RESUME_CWD_PICKER_RE", "COMPOSER_RULE", "HOLD_SCREEN_ROWS", "UNREADABLE_SCREEN_HOLD_REASON", "MID_TURN_COMMAND_HOLD_REASON", "TURN_SPINNER_OR_INTERRUPT", "DRAIN_MAX_CYCLES", "TMUX_WINDOW_WIDTH", "TMUX_WINDOW_HEIGHT", "TMUX_SIZE_ARGS", "INJECTABLE_TERMINALS", "DELIVERY_TIMEOUT_MS", "IN_FLIGHT_GRACE_MS", "TRUST_PROMPT_RE",
-      "PANE_TITLE_WORKING", "PANE_REBUILD_THRESHOLD", "PANE_REBUILD_WINDOW_MS", "PANE_REBUILD_MIN_GAP_MS", "unresolvablePanes", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
+      "PANE_TITLE_WORKING", "PANE_REBUILD_THRESHOLD", "PANE_REBUILD_WINDOW_MS", "PANE_REBUILD_MIN_GAP_MS", "unresolvablePanes", "UNRESOLVABLE_PANE_ERRORS", "highlightFailures", "highlightPane", "HIGHLIGHT_HOLD_AFTER_FAILURES", "HIGHLIGHT_HOLD_REASON", "SUBMIT_VERDICT_TTL_MS", "submitVerdicts", "INJECTED_MARK_SETTLE_CAP_MS",
       "ANSI_ESCAPE_RE", "MACHINE_WAKE_IDLE_RESUME_CHOICE", "LAUNCH_PROMPT_CARRY_MS", "LAUNCH_PROMPT_SETTLE_MS", "LAUNCH_SCRIPTS_DIRNAME", "STARTED_FATAL_CONFIRM_MS", "fatalPaneSince",
     ].map(name => {
       const line = source.split("\n").find(l => new RegExp(`^(?:export )?\\s*const ${name} =`).test(l));
@@ -370,7 +371,7 @@ function fixture(transport = "tmux", cached = true) {
   }
   const api = fixtureFactory(...Object.values(deps));
   return {
-    ...api, reaped, state, events, bodies, holds, commands, captureSizes, hooks, timers, clock, prompt, launchPromptCarries, directory, pendingInteractivePrompts, lastEmittedSyntheticPrompt, closed, statuses, deps,
+    ...api, reaped, killed, state, events, bodies, holds, commands, captureSizes, hooks, timers, clock, prompt, launchPromptCarries, directory, pendingInteractivePrompts, lastEmittedSyntheticPrompt, closed, statuses, deps,
     deliver: (body: string, id = "update") => api.deliverMessage("conv", body, deps.conversationCache, syncService, id, {}),
     scan: async (rows: Array<{ _id: string; content: string; delivery_force?: boolean }>) => {
       for (const row of rows) messages.set(row._id, { ...row, conversation_id: "conv" });
@@ -782,6 +783,32 @@ describe("machine prompt delivery safety", () => {
     f.hooks.input = (event: string) => { if (event === "paste") f.state.menu = null; };
     await f.scan([{ _id: "held", content: "please continue", delivery_force: true }]);
     expect(f.bodies).toEqual(["please continue"]);
+  });
+
+  // A held delivery whose pane screen cannot be read used to be held for ever:
+  // the unreadable-screen error was wrapped as an unverified-input hold and
+  // rethrown before the pane-rebuild count ran, so nothing ever replaced the pane.
+  test("a pane whose screen stays unreadable is rebuilt after the streak, not held for ever", async () => {
+    const f = fixture();
+    f.pendingInteractivePrompts.clear();
+    f.state.menu = "  a screen with no composer, no rule and no dialog footer\n  that no rule in the classifier knows";
+    const resumes: unknown[][] = [];
+    f.hooks.resume = (...args: unknown[]) => { resumes.push(args); return true; };
+    // Each hold re-pends on its own timer; the scanner then takes the message again.
+    const retry = async () => {
+      await f.timers.find((timer: { ms: number; cancelled: boolean }) => timer.ms === 5000 && !timer.cancelled)!.fn();
+      f.timers.length = 0;
+      f.clock.now += 20_000;
+    };
+    for (let attempt = 1; attempt <= 4; attempt++) {
+      await f.scan([{ _id: "held", content: "please continue" }]);
+      await retry();
+    }
+    expect(f.killed).toEqual([]);
+    expect(resumes).toEqual([]);
+    await f.scan([{ _id: "held", content: "please continue" }]);
+    expect(f.killed).toEqual(["target"]);
+    expect(resumes).toHaveLength(1);
   });
 
   // The held screen syncs beside the message and goes to daemon.log, so a

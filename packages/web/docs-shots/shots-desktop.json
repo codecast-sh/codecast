@@ -250,16 +250,6 @@
   "batch": "working-together-a"
  },
  {
-  "file": "/documentation/messaging/triage-menu.webp",
-  "device": "desktop",
-  "surface": "/inbox with the right-click menu open on a session card that is still in the inbox",
-  "state": "Context menu on a worker session (not yet stashed) showing Stash, 'Stash and hide \u2014 stays out through trigger wakes' and Kill session with their shortcut hints; the folded Stashed and Killed sections visible at the bottom of the inbox",
-  "crop": "element: inbox sidebar with the open context menu",
-  "alt": "A session's right-click menu in the inbox with Stash, Stash and hide and Kill session",
-  "caption": "The controls for moving a session out of the inbox.",
-  "batch": "working-together-a"
- },
- {
   "file": "/documentation/forks-and-spawn/workers.webp",
   "device": "desktop",
   "surface": "/inbox with a parent session open",

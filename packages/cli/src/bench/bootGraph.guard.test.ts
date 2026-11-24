@@ -344,7 +344,9 @@ describe("command groups stay off the boot graph", () => {
     // of agentClients.ts for its max-lines pin), carried by the contracts barrel.
     // 374 (2026-11-23): contracts/closedSession.ts, the shared Close verdict
     // (isClosedSession, closeInFlightReason), carried by the contracts barrel.
-    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(374);
+    // 375 (2026-11-24): fsAtomic.ts (node imports only), so machineKey.ts and
+    // device.ts replace their files whole and concurrent readers agree on a key.
+    expect(graph.nodes.size, "source files on index.ts's static graph").toBeLessThanOrEqual(375);
     // 3404 KB with those eleven leaves and the growth of index.ts itself.
     // 3407 after ct-52819: the watchdog pass deadline in supervision.ts and the
     // launchd kickstart in index.ts's startDaemon. No new file.
@@ -529,7 +531,11 @@ describe("command groups stay off the boot graph", () => {
     // mode, not its first (resumeCommand.ts +1).
     // 4854 (2026-11-24): the register, unregister and relay manifest entries
     // and the messaging-only gates in fastPath.ts (#102) (+2).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4854);
+    // 4855 the same day: fsAtomic.ts, as in the file count above (+1).
+    // 4856 the same day (ct-100734): a line station's comments sign as its run, not as the person behind the
+    // host's token: the run variable and commentSession in sessionIdentity.ts, used by `cast task comment`,
+    // `done -m` and `drop -m` (+1).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4856);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

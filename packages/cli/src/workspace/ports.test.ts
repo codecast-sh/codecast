@@ -9,6 +9,10 @@ import {
 } from "./ports.js";
 import type { WorkspaceManifest } from "./types.js";
 
+// Every port here sits below 32768, outside Linux's ephemeral range
+// (32768-60999). The parallel suite's own sockets take ports from that range,
+// so a fixed port inside it is sometimes already in use and the probe tests fail.
+
 // Track sockets we open during tests so afterEach can close them all.
 const openServers: Server[] = [];
 
@@ -41,9 +45,9 @@ function holdPort(port: number): Promise<Server> {
 const sampleManifest = (): WorkspaceManifest => ({
   setup: { copy: [], share: [], install: [], generate: [], migrate: [] },
   ports: {
-    web: { base: 33000, range: 100 },
-    api: { base: 33001, range: 100 },
-    db: { base: 33002, range: 100 },
+    web: { base: 23000, range: 100 },
+    api: { base: 23001, range: 100 },
+    db: { base: 23002, range: 100 },
   },
   services: {},
   env: {},
@@ -59,17 +63,17 @@ const sampleManifest = (): WorkspaceManifest => ({
 describe("computePorts", () => {
   test("returns base when index=0", () => {
     expect(computePorts(sampleManifest(), 0)).toEqual({
-      web: 33000,
-      api: 33001,
-      db: 33002,
+      web: 23000,
+      api: 23001,
+      db: 23002,
     });
   });
 
   test("base + index*range when index>0", () => {
     expect(computePorts(sampleManifest(), 2)).toEqual({
-      web: 33200,
-      api: 33201,
-      db: 33202,
+      web: 23200,
+      api: 23201,
+      db: 23202,
     });
   });
 
@@ -107,8 +111,8 @@ describe("allocatePorts (noProbe)", () => {
     const m = sampleManifest();
     const alloc = await allocatePorts(m, { startIndex: 3, noProbe: true });
     expect(alloc.resourceIndex).toBe(3);
-    expect(alloc.ports.web).toBe(33300);
-    expect(alloc.env.PORT_WEB).toBe("33300");
+    expect(alloc.ports.web).toBe(23300);
+    expect(alloc.env.PORT_WEB).toBe("23300");
   });
 
   test("five simultaneous workspaces get unique ports per name (sequential indices)", async () => {
@@ -139,28 +143,28 @@ describe("allocatePorts (live probe)", () => {
     const m = sampleManifest();
     const alloc = await allocatePorts(m, { startIndex: 0 });
     expect(alloc.resourceIndex).toBe(0);
-    expect(alloc.ports.web).toBe(33000);
+    expect(alloc.ports.web).toBe(23000);
   });
 
   test("collision detected: bumps to next index", async () => {
     const m = sampleManifest();
     // Hold the 'web' port at index=0 so allocator must move to index=1.
-    await holdPort(33000);
+    await holdPort(23000);
     const alloc = await allocatePorts(m, { startIndex: 0 });
     expect(alloc.resourceIndex).toBeGreaterThanOrEqual(1);
     // The chosen 'web' port should not be the held one.
-    expect(alloc.ports.web).not.toBe(33000);
+    expect(alloc.ports.web).not.toBe(23000);
   });
 
   test("throws PortAllocationError when all attempts collide", async () => {
     const m: WorkspaceManifest = {
       ...sampleManifest(),
-      ports: { web: { base: 34000, range: 1 } },
+      ports: { web: { base: 24000, range: 1 } },
     };
     // Block 3 consecutive ports so all 3 attempted indices fail.
-    await holdPort(34000);
-    await holdPort(34001);
-    await holdPort(34002);
+    await holdPort(24000);
+    await holdPort(24001);
+    await holdPort(24002);
     await expect(
       allocatePorts(m, { startIndex: 0, maxIndices: 3, maxExtensions: 0 }),
     ).rejects.toBeInstanceOf(PortAllocationError);
@@ -169,16 +173,16 @@ describe("allocatePorts (live probe)", () => {
   test("error carries the list of conflicting ports", async () => {
     const m: WorkspaceManifest = {
       ...sampleManifest(),
-      ports: { web: { base: 34100, range: 1 } },
+      ports: { web: { base: 24100, range: 1 } },
     };
-    await holdPort(34100);
+    await holdPort(24100);
     try {
       await allocatePorts(m, { startIndex: 0, maxIndices: 1, maxExtensions: 0 });
       throw new Error("expected throw");
     } catch (e) {
       expect(e).toBeInstanceOf(PortAllocationError);
       const pe = e as PortAllocationError;
-      expect(pe.conflicts).toEqual([{ name: "web", port: 34100 }]);
+      expect(pe.conflicts).toEqual([{ name: "web", port: 24100 }]);
     }
   });
 });
@@ -186,28 +190,28 @@ describe("allocatePorts (live probe)", () => {
 describe("allocatePorts (reservations)", () => {
   test("skips reserved numbers regardless of their service name", async () => {
     const allocation = await allocatePorts(sampleManifest(), {
-      reservedPorts: new Set([33001, 33102]),
+      reservedPorts: new Set([23001, 23102]),
     });
     expect(allocation.resourceIndex).toBe(2);
-    expect(allocation.ports).toEqual({ web: 33200, api: 33201, db: 33202 });
+    expect(allocation.ports).toEqual({ web: 23200, api: 23201, db: 23202 });
   });
 
   test("reservations still apply when TCP probing is disabled", async () => {
     const allocation = await allocatePorts(sampleManifest(), {
       noProbe: true,
-      reservedPorts: new Set([33000]),
+      reservedPorts: new Set([23000]),
     });
     expect(allocation.resourceIndex).toBe(1);
-    expect(allocation.env.PORT_WEB).toBe("33100");
+    expect(allocation.env.PORT_WEB).toBe("23100");
   });
 
   test("reports reserved conflicts when every candidate is claimed", async () => {
     await expect(allocatePorts(sampleManifest(), {
       maxIndices: 2, maxExtensions: 0,
-      reservedPorts: new Set([33000, 33101]),
+      reservedPorts: new Set([23000, 23101]),
     })).rejects.toMatchObject({
       name: "PortAllocationError",
-      conflicts: [{ name: "api", port: 33101 }],
+      conflicts: [{ name: "api", port: 23101 }],
     });
   });
 });
@@ -219,23 +223,23 @@ describe("allocatePorts (reservations)", () => {
 describe("isPortFree", () => {
   test("returns true for an unbound high port", async () => {
     // Pick a random high port that's almost certainly free.
-    expect(await isPortFree(34900)).toBe(true);
+    expect(await isPortFree(24900)).toBe(true);
   });
 
   test("returns false for a port we currently bind", async () => {
-    await holdPort(34901);
-    expect(await isPortFree(34901)).toBe(false);
+    await holdPort(24901);
+    expect(await isPortFree(24901)).toBe(false);
   });
 });
 
 describe("allocatePorts (pool extension)", () => {
   const pooled = (): WorkspaceManifest => ({
     ...sampleManifest(),
-    ports: { web: { base: 35000, range: 10 } },
+    ports: { web: { base: 25000, range: 10 } },
   });
 
   function block(from: number, count: number): Set<number> {
-    return new Set(Array.from({ length: count }, (_unused, i) => 35000 + (from + i) * 10));
+    return new Set(Array.from({ length: count }, (_unused, i) => 25000 + (from + i) * 10));
   }
 
   test("extends upward by the pool's own size once every pooled index is taken", async () => {

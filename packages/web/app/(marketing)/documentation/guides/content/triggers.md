@@ -73,7 +73,7 @@ The iPhone app has the same line in its inbox; long-press a row there to **Run n
 
 ## What it will and won't do
 
-- **Triggers follow their conversation.** Killing a conversation cancels its triggers; restoring it arms them again.
+- **Triggers follow their conversation.** Closing a conversation keeps its triggers, and one firing brings it back. Killing it cancels them; restoring it arms them again.
 - **A usage limit pauses a run, it doesn't fail it.** The run picks up where it stopped when the limit resets.
 - **Read-only runs stay read-only.** A trigger set to report only can look, but can't edit files or change anything.
 - **Only the owner deletes.** Teammates who can see a trigger can't remove it.

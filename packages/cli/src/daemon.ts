@@ -17862,21 +17862,21 @@ export function selectRowHasLabel(line: string, label: string): boolean {
   return line.replace(/^\s*[❯›>]?\s*/, "").split(/\s{3,}/)[0].trim() === label.trim();
 }
 
-export async function acceptTrustPrompt(target: string): Promise<boolean> {
+export async function acceptTrustPrompt(target: string, exec: typeof tmuxExec = tmuxExec): Promise<boolean> {
   // Grok paints y/n with no cursor glyph, so the highlight walker below would
   // return "none" and press nothing forever. The TUI itself names `y` as the
   // grant key — send that, never Enter (there is no highlighted row).
   try {
-    const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${GROK_TRUST_PANE_CAPTURE_LINES}`]);
+    const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", `-${GROK_TRUST_PANE_CAPTURE_LINES}`]);
     const grantKey = isGrokTrustDialog(stdout) ? "y" : isCursorTrustDialog(stdout) ? "a" : null;
     if (grantKey) {
       log(`Answering folder-trust dialog in ${target} (${grantKey})`);
-      await tmuxExec(["send-keys", "-t", target, grantKey]);
+      await exec(["send-keys", "-t", target, grantKey]);
       await new Promise(r => setTimeout(r, 1500));
       return true;
     }
   } catch {}
-  const accepted = await selectHighlightedOption(target, isTrustAffirmativeRow, "the trust or bypass-permissions dialog");
+  const accepted = await selectHighlightedOption(target, isTrustAffirmativeRow, "the trust or bypass-permissions dialog", exec);
   // The agent boots behind this dialog; give it a moment before the caller re-reads.
   if (accepted) await new Promise(r => setTimeout(r, 1500));
   return accepted;
@@ -17885,36 +17885,57 @@ export async function acceptTrustPrompt(target: string): Promise<boolean> {
 // Read the list, move the highlight onto the target row, re-read to prove it
 // moved, and only then press Enter. If the highlight cannot be placed, press
 // NOTHING. Never confirming is recoverable; confirming the wrong option is not.
-export async function selectHighlightedOption(target: string, isTarget: (line: string) => boolean, dialog: string): Promise<boolean> {
+// Consecutive refusals per pane. The caller polls again after each one, so the
+// first refusal logs the screen and the rest stay quiet; a success clears it.
+const highlightFailures = new Map<string, number>();
+export const HIGHLIGHT_HOLD_AFTER_FAILURES = 5;
+export const HIGHLIGHT_HOLD_REASON = "the terminal shows a dialog whose highlight Codecast can't place";
+// "name:0.0" and "name" are one pane: the launch and injection paths name it differently.
+const highlightPane = (target: string): string => target.split(":")[0];
+export function highlightFailureCount(target: string): number {
+  return highlightFailures.get(highlightPane(target)) ?? 0;
+}
+
+export async function selectHighlightedOption(target: string, isTarget: (line: string) => boolean, dialog: string, exec: typeof tmuxExec = tmuxExec): Promise<boolean> {
+  let rows: string[] = [];
   const capture = async (): Promise<string[]> => {
-    const { stdout } = await tmuxExec(["capture-pane", "-p", "-J", "-t", target, "-S", "-30"]);
-    return stdout.split("\n");
+    const { stdout } = await exec(["capture-pane", "-p", "-J", "-t", target, "-S", "-30"]);
+    return rows = stdout.split("\n");
   };
   const press = async (key: string, times = 1) => {
     for (let i = 0; i < times; i++) {
-      await tmuxExec(["send-keys", "-t", target, key]);
+      await exec(["send-keys", "-t", target, key]);
       await new Promise(r => setTimeout(r, 120));
     }
+  };
+  const refused = (message: string): false => {
+    const count = highlightFailureCount(target) + 1;
+    highlightFailures.set(highlightPane(target), count);
+    if (count === 1) log(`${message}\n${holdScreen(rows.join("\n"))}`);
+    return false;
   };
 
   for (let attempt = 0; attempt < 4; attempt++) {
     const step = planHighlightStep(await capture(), isTarget);
-    if (step.action === "none") {
-      log(`Not touching ${dialog} in ${target}: ${step.reason}`);
-      return false;
-    }
+    if (step.action === "none") return refused(`Not touching ${dialog} in ${target}: ${step.reason}`);
     if (step.action === "confirm") {
       log(`Selecting "${step.option}" in ${dialog} in ${target} (Enter)`);
-      await tmuxExec(["send-keys", "-t", target, "Enter"]);
+      await exec(["send-keys", "-t", target, "Enter"]);
       await new Promise(r => setTimeout(r, 500));
+      highlightFailures.delete(highlightPane(target));
       return true;
     }
     await press(step.key, step.times);
     await new Promise(r => setTimeout(r, 300));
     // Loop re-reads and only confirms once the highlight is provably on the target.
   }
-  log(`Could not place the highlight on the target option of ${dialog} in ${target}; pressing nothing`);
-  return false;
+  return refused(`Could not place the highlight on the target option of ${dialog} in ${target}; pressing nothing`);
+}
+
+/** The hold for a trust dialog whose highlight keeps refusing, once the streak is earned. */
+export function trustHighlightHold(target: string, pane: string): InputBlockedError | null {
+  if (highlightFailureCount(target) < HIGHLIGHT_HOLD_AFTER_FAILURES) return null;
+  return new InputBlockedError("trust dialog highlight cannot be placed", HIGHLIGHT_HOLD_REASON, holdScreen(pane));
 }
 
 class InputBlockedError extends Error {
@@ -18127,7 +18148,11 @@ export async function ensureTmuxReady(target: string, agentType?: AgentClientId,
     // Grok is glyphless, so the skip below would swallow this as "still booting"
     // and never send `y`. Answer it here, before that continue.
     if (state === "trust") {
-      await acceptTrustPrompt(target);
+      if (!(await acceptTrustPrompt(target))) {
+        const hold = trustHighlightHold(target, stdout);
+        if (hold) throw hold;
+        await new Promise(resolve => setTimeout(resolve, 1000 * highlightFailureCount(target)));
+      }
       continue;
     }
 
@@ -19002,7 +19027,7 @@ export async function injectViaTmux(target: string, content: string, agentType?:
     if (!opts?.delivery || isDeliveryVerdict(error)) throw error;
     throw new TmuxDeliveryUncertainError(String(error), error instanceof UnreadableScreenError
       ? { holdReason: UNREADABLE_SCREEN_HOLD_REASON, screen: error.screen }
-      : undefined);
+      : undefined, error instanceof Error ? error.message : String(error));
   }
 }
 
@@ -24890,13 +24915,21 @@ export function classifyStartedPane(
 // showing ("Yes, I trust" is preselected; Enter accepts) and reports "trust" so
 // the caller keeps polling. A failed capture is "booting" while the tmux
 // session exists and "gone" once it does not.
-async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: string) => void): Promise<{ state: StartedPaneState; pane: string }> {
+// holdOnTrust: a delivery waiting on this pane asks for the hold a trust dialog
+// earns once its highlight keeps refusing (discovery has no message to hold).
+export async function probeStartedPane(
+  entry: StartedSessionInfo,
+  inspectPane?: (pane: string) => void,
+  opts: { exec?: typeof tmuxExec; pause?: (ms: number) => Promise<unknown>; holdOnTrust?: boolean } = {},
+): Promise<{ state: StartedPaneState; pane: string }> {
+  const exec = opts.exec ?? tmuxExec;
+  const pause = opts.pause ?? ((ms: number) => new Promise(r => setTimeout(r, ms)));
   let paneContent: string;
   const captureLines = entry.agentType === "grok" ? GROK_TRUST_PANE_CAPTURE_LINES : 20;
   try {
-    ({ stdout: paneContent } = await tmuxExec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", `-${captureLines}`]));
+    ({ stdout: paneContent } = await exec(["capture-pane", "-p", "-J", "-t", entry.tmuxSession, "-S", `-${captureLines}`]));
   } catch {
-    const alive = await tmuxExec(["has-session", "-t", entry.tmuxSession]).then(() => true, () => false);
+    const alive = await exec(["has-session", "-t", entry.tmuxSession]).then(() => true, () => false);
     return { state: alive ? "booting" : "gone", pane: "" };
   }
   const { promptReadyPattern, paneReadiness } = localAgentClient(entry.agentType);
@@ -24909,7 +24942,7 @@ async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: 
   let modes: PaneTerminalModes | undefined;
   if (paneReadiness?.modes) {
     try {
-      const { stdout } = await tmuxExec(["display-message", "-p", "-t", entry.tmuxSession, "-F", "#{alternate_on},#{cursor_flag}"]);
+      const { stdout } = await exec(["display-message", "-p", "-t", entry.tmuxSession, "-F", "#{alternate_on},#{cursor_flag}"]);
       const [alternate, cursor] = stdout.trim().split(",");
       modes = { alternateScreen: alternate === "1", cursorVisible: cursor === "1" };
     } catch {}
@@ -24920,9 +24953,14 @@ async function probeStartedPane(entry: StartedSessionInfo, inspectPane?: (pane: 
     // highlight, so a bare Enter here quit the agent it had just started.
     // Grok has no highlight at all — acceptTrustPrompt sends `y`.
     log(`Started session ${entry.tmuxSession} showing trust prompt, selecting the affirmative option`);
-    await acceptTrustPrompt(entry.tmuxSession).catch(() => false);
+    if (!(await acceptTrustPrompt(entry.tmuxSession, exec).catch(() => false))) {
+      const hold = opts.holdOnTrust ? trustHighlightHold(entry.tmuxSession, paneContent) : null;
+      if (hold) throw hold;
+      await pause(1000 * highlightFailureCount(entry.tmuxSession));
+    }
     return { state, pane: paneContentAfterLaunchEcho(paneContent) };
   }
+  highlightFailures.delete(highlightPane(entry.tmuxSession));
   // A blank frame is the boot clear, which the classifier already reads as
   // booting; there is nothing on it to inspect.
   if (paneContent.trim()) inspectPane?.(paneContent);
@@ -27811,7 +27849,7 @@ async function settleLaunchPrompt(messageId: string, syncService: Pick<SyncServi
       return true;
     }
     // The probe also answers the trust dialog a first launch in a folder shows.
-    const probe = await probeStartedPane(pane);
+    const probe = await probeStartedPane(pane, undefined, { holdOnTrust: true });
     if (probe.state === "gone" || probe.state === "fatal") {
       launchPromptCarries.delete(messageId);
       logDelivery(`msg=${messageId.slice(0, 8)} launch prompt lost: ${carry.tmuxSession} is ${probe.state}`);
@@ -28132,7 +28170,7 @@ async function deliverMessageIntoSession(
       for (let i = 0; i < 60; i++) {
         await new Promise(resolve => setTimeout(resolve, 250));
         // A card answer (a poll) answers the dialog; every other message is a paste the dialog would refuse.
-        const probe = await deliveryStep(messageId, "probe_started_pane", () => probeStartedPane(entry, parsePollMessage(content) ? undefined : assertPromptAbsent));
+        const probe = await deliveryStep(messageId, "probe_started_pane", () => probeStartedPane(entry, parsePollMessage(content) ? undefined : assertPromptAbsent, { holdOnTrust: true }));
         if (probe.state === "gone") throw new Error(`tmux session ${entry.tmuxSession} is gone`);
         if (probe.state === "fatal") {
           log(`Started session ${entry.tmuxSession} hit fatal error, falling through. Pane: ${probe.pane.slice(0, 200)}`);
@@ -28322,9 +28360,14 @@ async function deliverMessageIntoSession(
       // but hasn't consumed our payload yet. Fall-through would auto-resume a
       // parallel instance beside it — rethrow and let the retry re-enter this
       // same pane after backoff.
-      if (isDeliveryVerdict(err)) throw err;
+      // A delivery wraps an unreadable pane as an unverified-input hold; the
+      // failure it wraps still counts toward the rebuild, or the hold would
+      // never end. One count per failure, wrapped or not.
+      const wrapped = err instanceof TmuxDeliveryUncertainError ? err.wrappedMessage : undefined;
+      const rebuild = noteUnresolvablePane(sessionId, wrapped ?? msg);
+      if (isDeliveryVerdict(err) && !rebuild) throw err;
       logDelivery(`tmux injection failed for ${injectTarget}: ${msg}`);
-      if (noteUnresolvablePane(sessionId, msg)) {
+      if (rebuild) {
         if (hasOpenBackgroundWork(sessionId) || subagentActiveAgoMs(sessionId) !== Infinity) {
           // An unreadable pane is not a dead agent. Background work or a subagent
           // running inside it dies with the tree, so the message waits instead.

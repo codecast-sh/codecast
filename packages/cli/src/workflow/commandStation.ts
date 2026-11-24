@@ -184,11 +184,13 @@ const PIPE_CLOSE_GRACE_MS = 2000;
 
 const seconds = (ms: number) => (ms >= 120_000 ? `${Math.round(ms / 60_000)}m` : `${Math.round(ms / 1000)}s`);
 
+/** `env` is what the runner adds to the script's environment beyond the line's run values: its run's own session (runner.ts stationEnv). */
 export async function executeCommand(
   node: WorkflowNode,
   context: Record<string, string>,
   cwd: string,
   watch: StationWatch = {},
+  env: Record<string, string> = {},
 ): Promise<NodeOutcome> {
   const script = expandScriptVars(node.script!, context);
   console.log(`${c.dim}  $ ${script.split('\n')[0]}${script.includes('\n') ? '...' : ''}${c.reset}`);
@@ -207,7 +209,7 @@ export async function executeCommand(
         cwd,
         // A project's line command (line-profile.md LP2) names run values
         // ($run_dir, $task_id, ...) that its own shell expands.
-        env: { ...process.env, ...lineCommandEnv(context) },
+        env: { ...process.env, ...lineCommandEnv(context), ...env },
         stdio: ["ignore", "pipe", "pipe"],
         // Its own process group, so ending the station takes the script's
         // children with it. spawnSync's timeout sent one SIGTERM to bash

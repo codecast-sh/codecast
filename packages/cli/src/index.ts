@@ -22,7 +22,7 @@ import { describeHangMarker, latestHang, noRestartReason, type HangMarker } from
 import { READY_LIST_LIMIT, buildTaskClaimBody, buildTaskStartBody, foldStaleTasks, groupTasksByAssignee, readyCountLine, startedLines, taskHintBody, unclaimedLine } from "./taskClaim.js";
 import { ASSIGNEE_MEANS } from "@codecast/shared/contracts/orgAssignee";
 import { usedOf } from "@codecast/shared/contracts/orgCapacity";
-import { chatSendOrigin, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
+import { chatSendOrigin, commentSession, sessionIdFromEnv, workOriginStamp } from "./sessionIdentity.js";
 import { AUTONOMY_LABEL, autonomyOn, autonomySentence, lineStartsOn, switchFromStageWord } from "@codecast/shared/contracts/roleAutonomy";
 import open from "open";
 import * as fs from "fs";
@@ -16380,6 +16380,8 @@ Examples:
         console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} ${fmt.highlight(describeEventScope({ ...event_filter!, ...(event_filter!.page_id ? { page_slug: event_filter!.page_id } : {}) }))}: ${c.bold}${title}${c.reset}`);
       } else if (options.in) {
         console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} in ${options.in}: ${c.bold}${title}${c.reset}`);
+      } else if (options.at) {
+        console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} at ${new Date(run_at!).toLocaleString()}: ${c.bold}${title}${c.reset}`);
       } else {
         console.log(`${c.green}+${c.reset} Trigger ${c.cyan}${shortId}${c.reset} queued now: ${c.bold}${title}${c.reset}`);
       }
@@ -18039,7 +18041,8 @@ work
     await cliPost("/cli/work/update", body);
     if (options.message) {
       const commentBody: Record<string, any> = { short_id: shortId, text: options.message, comment_type: "note" };
-      if (sessionId) commentBody.conversation_id = sessionId;
+      const signer = commentSession(sessionId);
+      if (signer) commentBody.conversation_id = signer;
       await cliPost("/cli/work/comment", commentBody);
     }
     console.log(`${c.green}ok${c.reset} Completed ${c.cyan}${shortId}${c.reset}`);
@@ -18200,7 +18203,8 @@ work
     if (sessionId) clearTaskPulseIfBound(sessionId, shortId);
     if (options.message) {
       const commentBody: Record<string, any> = { short_id: shortId, text: options.message, comment_type: "note" };
-      if (sessionId) commentBody.conversation_id = sessionId;
+      const signer = commentSession(sessionId);
+      if (signer) commentBody.conversation_id = signer;
       await cliPost("/cli/work/comment", commentBody);
     }
     console.log(`${c.green}ok${c.reset} Dropped ${c.cyan}${shortId}${c.reset}`);
@@ -18309,7 +18313,7 @@ work
   .option("-t, --type <type>", "Comment type: note or progress (the board's record, reaches no inbox); blocker or review (reach the people following the task)", choiceOption(["note", "progress", "blocker", "review"]), "note")
   .option("-a, --author <name>", "Ignored: the author is the identity behind your token (a role signs as the role); kept for older scripts")
   .action(async (shortId: string, text: string, options: any) => {
-    const sessionId = detectCurrentSessionId();
+    const sessionId = commentSession(detectCurrentSessionId());
     const body: Record<string, any> = { short_id: shortId, text, comment_type: options.type };
     if (sessionId) {
       body.conversation_id = sessionId;
