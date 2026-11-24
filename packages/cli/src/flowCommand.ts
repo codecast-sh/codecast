@@ -22,6 +22,7 @@ import { staleRepoFlow } from "./workflow/staleRepoFlow.js";
 import { registerFlowStations } from "./flowStations.js";
 import { registerFlowEditCommand } from "./flowEditCommand.js";
 import { registerFlowAwaitDeployCommand } from "./flowAwaitDeployCommand.js";
+import { registerFlowRunsCommand } from "./flowRunsCommand.js";
 import { baseOf, graphOf, printVariantChanges } from "./flowBase.js";
 import { findFlow, poolWorkspace, readPool, shortSessionId, type FoundFlow, type PoolAt } from "./flowFind.js";
 import { acquireFailureLine, castResult } from "./flowAcquire.js";
@@ -581,6 +582,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
     .action(async (runId: string) => (await import("./workflow/placedChange.js")).refreezeRunCommand(runId, deps.realCwd(), deps.cliPost));
 
   registerFlowAwaitDeployCommand(flow, deps, cast);
+  registerFlowRunsCommand(flow, deps);
 
   // What the judge segment's call reads (workflow/blindChange.ts): a change's
   // diff or the guidelines it answers to, with every sign of its author removed.
