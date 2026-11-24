@@ -7,6 +7,8 @@
 //            data-cast-id, or nth-of-type steps from <body>)
 //   ox, oy   the point inside that element's box, as fractions
 //   t        seconds into the page's timeline (window.__castTimeline)
+//   view     the page's ?view= when it was made: the step, tab or screen it
+//            shows on (absent = the landing view)
 export interface PageAnchor {
   x?: number;
   y?: number;
@@ -15,6 +17,7 @@ export interface PageAnchor {
   ox?: number;
   oy?: number;
   t?: number;
+  view?: string;
 }
 
 export function parsePageAnchor(raw: string | null | undefined): PageAnchor | null {
@@ -41,6 +44,7 @@ export function formatTimelineAt(t: number): string {
 export function describePageAnchor(a: PageAnchor | null): string[] {
   if (!a) return [];
   const parts: string[] = [];
+  if (typeof a.view === "string" && a.view) parts.push(`on view \`?view=${a.view.slice(0, 80)}\``);
   if (typeof a.sel === "string" && a.sel) parts.push(`on element \`${a.sel.slice(0, 160)}\``);
   if (typeof a.t === "number" && Number.isFinite(a.t)) parts.push(`at ${formatTimelineAt(a.t)} of the timeline`);
   if (a.snippet) parts.push(`on the words "${String(a.snippet).slice(0, 120)}"`);
