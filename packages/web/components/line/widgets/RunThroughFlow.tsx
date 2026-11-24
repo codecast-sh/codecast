@@ -23,8 +23,7 @@ import { shipLedgerFor } from "../../consequential/shipLedger";
 import { pressFromSig, pressSig, runThroughMessage, type Press, type PressMsg } from "../../../lib/line/flowMessages";
 import { sessionIdleAt } from "../../../lib/liveness";
 import { formatElapsed } from "../../../lib/taskLine";
-import { toolRowKind } from "../../../lib/modernRow";
-import { recordedIds } from "../../../lib/ship/runRecord";
+import { editedSince, fixRounds } from "../../../lib/ship/newEdits";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { Popover, PopoverContent, PopoverTrigger } from "../../ui/popover";
 import { Sheet, SheetClose, SheetContent, SheetTitle, SheetTrigger } from "../../ui/sheet";
@@ -172,22 +171,11 @@ function PressNotice({ press, onRead }: { press: Press; onRead: () => void }) {
 /** Where a run leaves its change on main: shipping again takes whatever the checkout holds now, not that change. */
 const LANDED_NOW = new Set<Journey["now"]["kind"]>(["landed", "deploying", "live", "merged"]);
 
-/** Whether the session edited a file after `since` outside the `except` windows: an edit or write call among its loaded messages, newest first. */
+/** Whether the session edited a file after `since` outside the `except` windows (lib/ship/newEdits.ts). */
 function useEditedSince(conversationId: string, since: number | null, except: ReadonlyArray<readonly [number, number]>): boolean {
   // The conversation's own list: it changes only when its messages do, never on another row's heartbeat.
   const msgs = useInboxStore((s) => (s.messages as Record<string, Array<{ timestamp: number; tool_calls?: Array<{ name?: string }> }>>)[conversationId]);
-  const windows = except.map(([from, to]) => `${from}-${to}`).join(",");
-  return useMemo(() => {
-    if (!since || !msgs) return false;
-    for (let i = msgs.length - 1; i >= 0 && msgs[i].timestamp > since; i--) {
-      const t = msgs[i].timestamp;
-      if (except.some(([from, to]) => t >= from && t <= to)) continue;
-      if (msgs[i].tool_calls?.some((c) => { const kind = toolRowKind(String(c?.name ?? "")); return kind === "edit" || kind === "write"; })) return true;
-    }
-    return false;
-    // `except` is read through `windows`, its value, so a fresh array each render does not rescan.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [msgs, since, windows]);
+  return useMemo(() => !!since && !!msgs && editedSince(msgs, since, except), [msgs, since, except]);
 }
 
 /** The session's run: its journey, who acts now, and the person's controls on it. */
@@ -197,11 +185,7 @@ function RunPanel({ conversationId, run, flow, journey, targets, notice, onAgain
   const stop = journey.now.kind === "stopped" || journey.now.kind === "failed" ? journey.now : null;
   // A run that landed its change offers another only once the session has edited something the run did not take: since
   // it started, outside the session's own fix rounds, whose edits went out with it.
-  // A step's id as journeyOf reads it: a run of an older version of the flow may have named it otherwise.
-  const idOf = recordedIds(flow, run);
-  const fixing = (run.node_statuses ?? [])
-    .filter((n: { node_id: string }) => flow.nodes.some((x) => x.id === idOf(n.node_id) && x.backend === "subject"))
-    .map((n: { started_at?: number; completed_at?: number }) => [n.started_at ?? 0, n.completed_at ?? Infinity] as const);
+  const fixing = useMemo(() => fixRounds(flow, run), [flow, run]);
   const edited = useEditedSince(conversationId, live ? null : run.created_at ?? null, fixing);
   const spent = LANDED_NOW.has(journey.now.kind) && !edited;
   return (

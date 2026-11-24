@@ -343,3 +343,29 @@ export const LAND_REPO_FLOW = {
   })),
   edges: LAND_FLOW.edges,
 };
+
+/** Union's change as it stands (Nov 23): Land, then the Deploy segment that waits for the change to go live. */
+export const UNION_CHANGE_FLOW: FixtureFlowRow = {
+  ...LAND_FLOW,
+  slug: "gallery-change-union",
+  name: "gallery-change-union",
+  nodes: [...LAND_FLOW.nodes.map((n) => (n.id === "exit" ? { ...n, label: "Live" } : n)), ...d.nodes],
+  edges: [...LAND_FLOW.edges.filter((e) => !(e.from === "land__landed" && e.to === "exit")), { from: "land__landed", to: "deploy" }, ...d.edges],
+};
+
+const at = (node_id: string, t: number, result_preview?: string) => ({ node_id, status: "completed", started_at: t, completed_at: t, ...(result_preview ? { result_preview } : {}) });
+export const UNION_FLAT_SHA = "5caaa346ac7a76979e522a9031a01e968b28f086";
+/** A finished run of UNION_CHANGE_FLOW's older version (ct-98800, Nov 21): its steps recorded flat, before Land was a
+ *  segment (`merge`, not `land__merge`), no version pinned, and no merge recorded on it: only its merge step's sha. */
+export const UNION_FLAT_RUN = {
+  _id: "run_union_flat",
+  status: "completed",
+  current_node_id: "exit",
+  created_at: 1,
+  node_statuses: [
+    at("start", 1), at("pr", 2, '{"pr":4486,"head_sha":"361c9c110713cde8ebe2a097401824df594c3530","created":true}'),
+    at("checks", 3), at("review", 3), at("ci", 10), at("read", 11), at("merge", 12, JSON.stringify({ pr: 4486, sha: UNION_FLAT_SHA })),
+    at("deploy", 13), at("deploy__wait", 14, "5caaa346ac is on main; no deploy target ships these files, so nothing waits on a deploy."),
+    at("deploy__live", 15, '{"exit": "live"}'), at("exit", 16),
+  ],
+};

@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { approvalOf, approvalWords, canAnswer, deployHold, insideWords, journeyOf, journeyStages, journeyWords, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
 import { landedSha } from "../runRecord";
-import { BRANCHING_FLOW, FANOUT_FLOW, LAND_ASKS, LAND_FLOW, LAND_REPO_FLOW } from "../journeyFixtures";
+import { BRANCHING_FLOW, FANOUT_FLOW, LAND_ASKS, LAND_FLOW, LAND_REPO_FLOW, UNION_CHANGE_FLOW, UNION_FLAT_RUN, UNION_FLAT_SHA } from "../journeyFixtures";
 import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
 import { SHIPPED_FLOWS } from "../../line/shippedFlows.generated";
 import { GALLERY_FLOW, renderGalleryRecords } from "../../renderGallery";
@@ -544,32 +544,11 @@ describe("a segment's inside", () => {
 });
 
 describe("a finished run drawn on a newer version of its flow", () => {
-  // Union's change as it stands (Land and Deploy segments), and a run of it from before Land was a segment: its steps
-  // recorded flat (`merge`, not `land__merge`), no pinned version, and no merge recorded on it (ct-98800, Nov 21).
-  const node = (id: string, label: string, type: string) => ({ id, label, type });
-  const segmented = pushedFlow({
-    _id: "wf_union_change",
-    ...LAND_FLOW,
-    nodes: [...LAND_FLOW.nodes.map((n) => (n.id === "exit" ? { ...n, label: "Live" } : n)), node("deploy", "Deploy", "conditional"), node("deploy__wait", "Go live", "command"), node("deploy__live", "Live", "command"), node("deploy__failed", "Deploy failed", "command")],
-    edges: [
-      ...LAND_FLOW.edges.filter((e) => !(e.from === "land__landed" && e.to === "exit")),
-      { from: "land__landed", to: "deploy" },
-      { from: "deploy", to: "deploy__wait" },
-      { from: "deploy__wait", to: "deploy__live", condition: "outcome = success" },
-      { from: "deploy__wait", to: "deploy__failed", condition: "outcome = failure" },
-      { from: "deploy__live", to: "exit", condition: "outcome = success" },
-    ],
-  });
-  const SHA = "5caaa346ac7a76979e522a9031a01e968b28f086";
-  const FLAT = [
-    st("start", "completed", 1),
-    st("pr", "completed", 2, { result_preview: '{"pr":4486,"head_sha":"361c9c110713cde8ebe2a097401824df594c3530","created":true}' }),
-    st("checks", "completed", 3), st("review", "completed", 3, { outcome: "success" }), st("ci", "completed", 10),
-    st("read", "completed", 11), st("merge", "completed", 12, { result_preview: JSON.stringify({ pr: 4486, sha: SHA }) }),
-    st("deploy", "completed", 13), st("deploy__wait", "completed", 14, { result_preview: "5caaa346ac is on main; no deploy target ships these files, so nothing waits on a deploy." }),
-    st("deploy__live", "completed", 15, { result_preview: '{"exit": "live"}' }), st("exit", "completed", 16),
-  ];
-  const finished = run({ status: "completed", current_node_id: "exit", merge: undefined, node_statuses: FLAT });
+  // Union's change as it stands, and a finished run of its older version, its steps recorded flat (journeyFixtures).
+  const segmented = pushedFlow({ _id: "wf_union_change", ...UNION_CHANGE_FLOW });
+  const SHA = UNION_FLAT_SHA;
+  const FLAT = UNION_FLAT_RUN.node_statuses;
+  const finished = run(UNION_FLAT_RUN);
 
   test("every stage it passed is done, its merged sha read from the merge step, and it ends Live", () => {
     expect(landedSha(finished)).toBe(SHA);
