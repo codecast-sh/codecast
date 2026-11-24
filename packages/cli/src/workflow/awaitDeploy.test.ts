@@ -10,7 +10,7 @@ import * as path from "node:path";
 import { DEPLOY_WAIT_CAP_MS, parseDeployTargets } from "@codecast/shared/contracts/deployTargets";
 import type { MainRedPayload } from "@codecast/shared/contracts/mainRed";
 import { parseWorkflowSource } from "./parser";
-import { awaitDeploy, ciGateOf, deployDuties, holds, lineHeld, mainCiAt, mergedCommit, mergedSha, recordMergedSha, redSinceWords, targetState, targetTouches, type DeployClock, type DeployTargetRow, type DeployWaitIO, type MainCi } from "./awaitDeploy";
+import { awaitDeploy, ciGateOf, deployDuties, holds, landedDuties, lineHeld, mainCiAt, mergedCommit, mergedSha, recordMergedSha, redSinceWords, targetState, targetTouches, type DeployClock, type DeployTargetRow, type DeployWaitIO, type MainCi } from "./awaitDeploy";
 
 const ENV = { ...process.env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t", GIT_CONFIG_NOSYSTEM: "1" };
 let dir = "";
@@ -395,6 +395,47 @@ describe("awaitDeploy", () => {
     expect(f.sends).toEqual([]);
     expect(f.lines[0]).toBe("backend: waiting for a deploy that carries 1a2b3c4 (0m of 60m)");
     expect(r.code).toBe(0);
+  });
+});
+
+// ct-98114, Nov 20: union-mobile dropped aivery-operator from deploy.toml, and a change landed on top of that removal
+// still waited 23h for it, because the wait read its targets from somewhere other than the commit it landed.
+describe("a target the landed commit no longer declares", () => {
+  const PROD = `[[target]]\nname = "production"\nwhen = ["outreach/backend/**"]\nrun = "./deploy.sh"\nlive = "json:https://api.example.com/health#gitSha"\n`;
+  const AIVERY = `[[target]]\nname = "aivery-operator"\nwhen = ["outreach/backend/**"]\nrun = "./deploy.sh --components aivery"\nlive = "json:https://aivery.example.com/health#gitSha"\n`;
+
+  test("the wait's duties come from the landed commit, not a shared checkout's working tree", async () => {
+    const repo = path.join(dir, "shared");
+    execFileSync("git", ["init", "-q", "-b", "main", repo], { env: ENV });
+    write(repo, ".codecast/deploy.toml", PROD + AIVERY);
+    write(repo, "outreach/backend/a.ts", "a1\n");
+    git(repo, "add", "-A");
+    git(repo, "commit", "-qm", "both targets");
+    write(repo, ".codecast/deploy.toml", PROD);
+    git(repo, "commit", "-qam", "remove aivery-operator");
+    write(repo, "outreach/backend/a.ts", "a2\n");
+    git(repo, "commit", "-qam", "the change");
+    const landed = git(repo, "rev-parse", "HEAD");
+    // The shared checkout's files read as they did before the removal (another session's tree, a ref moved under it).
+    write(repo, ".codecast/deploy.toml", PROD + AIVERY);
+
+    const plan = await landedDuties(repo, { sha: landed, files: ["outreach/backend/a.ts"] }, {});
+    expect(plan.duties.map((d) => d.target)).toEqual(["production"]);
+  });
+
+  test("a target the server has no record of is named as unknown, never waited on", async () => {
+    const both = deployDuties(parseDeployTargets({ target: [
+      { name: "production", run: "p.sh", when: "api/**" },
+      { name: "aivery-operator", run: "a.sh", when: "api/**" },
+    ] }, []), ["api/b.ts"]);
+    expect(both.duties.map((d) => [d.target, d.action])).toEqual([["production", "wait"], ["aivery-operator", "wait"]]);
+    const f = fake((tick) => [{ name: "production", history: tick >= 1 ? [dp("dp-2148", "live")] : [] }]);
+    const r = await awaitDeploy({ sha: SHA, base: "main", plan: both, intervalMs: MIN }, f.io);
+    expect(r).toEqual({ code: 0, line: "Live: 1a2b3c4 on production dp-2148. aivery-operator has no record on the server, so nothing says when it is live; not waited on." });
+    expect(f.blocks).toEqual([]);
+
+    const none = await awaitDeploy({ sha: SHA, base: "main", plan: deployDuties(parseDeployTargets({ target: [{ name: "aivery-operator", run: "a.sh", when: "api/**" }] }, []), ["api/b.ts"]), intervalMs: MIN }, fake(() => []).io);
+    expect(none).toEqual({ code: 0, line: "1a2b3c4 is on main; nothing this run can watch ships its files. aivery-operator has no record on the server, so nothing says when it is live; not waited on." });
   });
 });
 
