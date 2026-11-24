@@ -6,7 +6,7 @@
           {
             "type": "command",
             "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.sh\"",
-            "timeout": 20
+            "async": true
           }
         ]
       }
