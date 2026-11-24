@@ -5,7 +5,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { parseWorkflowSource } from "./parser.js";
 import { lineRunDir, runWorkflow } from "./runner.js";
-import { releaseEndedRunTree, restoreRunWorktree, stopRunBrowser } from "./runWorktree.js";
+import { releaseEndedRunTree, restoreRunWorktree, stopRunBrowser, usesRunTree } from "./runWorktree.js";
 
 // Real git: what matters is git's own refusal to check out a branch whose
 // removed worktree it still lists, and that the branch's commits come back.
@@ -159,6 +159,117 @@ describe("a resumed run's worktree", () => {
     expect(await stopRunBrowser(os.tmpdir(), { worktree: NAME })).toBe(false);
   });
 
+  // Nov 20 and Nov 23: every line run built its tree at Start, and the 300+ runs waiting at Queue for 4 build places
+  // filled the Union line hosts' disks. A run now starts with its branch alone (lineTrialBranch.ts freshRunBranch).
+  // Shaped like Union's onefix: Problem and Harm are scripts, Triage a session in the checkout, Queue a long wait, and
+  // Build the one isolated station. A probe records, without naming $worktree, whether the run's tree exists.
+  const RUN = "line-ct-9";
+  const probe = (at: string) => `mkdir -p $run_dir && { test -d "$(git rev-parse --show-toplevel)/.codecast/worktrees/${RUN}" && echo tree || echo none; } > $run_dir/${at}.txt`;
+  const seen = (at: string) => fs.readFileSync(path.join(lineRunDir(repoRoot, RUN), `${at}.txt`), "utf8").trim();
+  const runTree = () => path.join(repoRoot, ".codecast", "worktrees", RUN);
+  // Each isolated hand the run asked for, and whether its tree was there when it asked.
+  let isolatedSpawns: boolean[] = [];
+  const runQuietly = async (graph: ReturnType<typeof parseWorkflowSource>, extra: Record<string, unknown> = {}) => {
+    const fetched = globalThis.fetch;
+    isolatedSpawns = [];
+    globalThis.fetch = (async (_url: unknown, init?: { body?: unknown }) => {
+      if (typeof init?.body === "string" && JSON.parse(init.body).worktree_name === RUN) isolatedSpawns.push(fs.existsSync(runTree()));
+      return new Response(JSON.stringify({ ok: true }), { status: 200 });
+    }) as unknown as typeof fetch;
+    const log = console.log;
+    console.log = () => {};
+    try {
+      return await runWorkflow(graph, { cwd: repoRoot, runId: "run-1", runSession: "conv_run", taskId: "ct-9", apiToken: "tok", convexSiteUrl: "https://convex.test", pollIntervalMs: 1, ...extra } as any);
+    } finally {
+      globalThis.fetch = fetched;
+      console.log = log;
+    }
+  };
+  const done = (node_id: string, completed_at: number) => ({ node_id, status: "completed", completed_at });
+
+  test("a run that starts with its branch alone has no tree until its first isolated station, which makes it on that branch", async () => {
+    const graph = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      bind [shape=parallelogram, script="${probe("bind").replace(/"/g, '\\"')}"]
+      triage [label="Triage", backend=session, agent=claude, prompt="is it real"]
+      harm [shape=parallelogram, script="${probe("harm").replace(/"/g, '\\"')}"]
+      queue [shape=parallelogram, script="${probe("queue").replace(/"/g, '\\"')}"]
+      build [label="Build", backend=session, agent=claude, prompt="build it", isolated=true]
+      built [shape=parallelogram, script="mkdir -p $run_dir && t=$(git rev-parse --show-toplevel)/.codecast/worktrees/${RUN} && git -C $t rev-parse --abbrev-ref HEAD > $run_dir/built.txt && git -C $t rev-parse HEAD >> $run_dir/built.txt"]
+      exit [shape=Msquare]
+      start -> bind -> triage -> harm -> queue -> build -> built -> exit
+    }`);
+    const started = git(repoRoot, "rev-parse", "HEAD");
+    git(repoRoot, "branch", "--no-track", `codecast/${RUN}`, started);
+    // The checkout moves on while the run waits, so a tree cut from its HEAD would be the wrong one.
+    git(repoRoot, "commit", "-q", "--allow-empty", "-m", "later on main");
+    expect(await runQuietly(graph)).toBe("completed");
+    expect([seen("bind"), seen("harm"), seen("queue")]).toEqual(["none", "none", "none"]);
+    expect(isolatedSpawns).toEqual([true]);
+    expect(seen("built").split("\n")).toEqual([`codecast/${RUN}`, started]);
+  }, 30000);
+
+  test("after a sweep removed the tree, a station that does not use it leaves it gone, and one naming $worktree gets it back", async () => {
+    const graph = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      build [label="Build", backend=session, agent=claude, prompt="build it", isolated=true]
+      sweep [shape=parallelogram, script="git worktree remove --force \\"$(git rev-parse --show-toplevel)/.codecast/worktrees/${RUN}\\" && ${probe("swept").replace(/"/g, '\\"')}"]
+      push [shape=parallelogram, script="mkdir -p $run_dir && git -C \\"$(git rev-parse --show-toplevel)/.codecast/worktrees/\${worktree}\\" rev-parse --abbrev-ref HEAD > $run_dir/push.txt"]
+      exit [shape=Msquare]
+      wait [shape=parallelogram, script="${probe("wait").replace(/"/g, '\\"')}"]
+      start -> build -> sweep -> wait -> push -> exit
+    }`);
+    git(repoRoot, "branch", "--no-track", `codecast/${RUN}`, "HEAD");
+    expect(await runQuietly(graph)).toBe("completed");
+    expect(seen("swept")).toBe("none");
+    expect(seen("wait")).toBe("none");
+    expect(seen("push")).toBe(`codecast/${RUN}`);
+  }, 30000);
+
+  test("a resume at a station that uses the tree puts it back; a resume at one that does not leaves it gone", async () => {
+    const graph = parseWorkflowSource(`digraph line {
+      start [shape=Mdiamond]
+      build [label="Build", backend=session, agent=claude, prompt="build it", isolated=true]
+      deploy [shape=parallelogram, script="${probe("deploy").replace(/"/g, '\\"')}"]
+      exit [shape=Msquare]
+      start -> build -> deploy -> exit
+    }`);
+    git(repoRoot, "branch", "--no-track", `codecast/${RUN}`, "HEAD");
+    const at = (node: string, completed: string[]) => runQuietly(graph, {
+      resume: { status: "running", current_node_id: node, node_statuses: completed.map((id, i) => done(id, i + 1)) },
+    });
+    expect(await at("deploy", ["start", "build"])).toBe("completed");
+    expect(seen("deploy")).toBe("none");
+    expect(fs.existsSync(runTree())).toBe(false);
+    expect(await at("build", ["start"])).toBe("completed");
+    expect(seen("deploy")).toBe("tree");
+  }, 30000);
+
+  test("only stations that work in the run's tree use it: isolated, the subject's, a script or prompt naming $worktree, a fan-out to one", () => {
+    const graph = parseWorkflowSource(`digraph onefix {
+      start [shape=Mdiamond]
+      bind [shape=parallelogram, script="bun nodes.ts problem --task $task_id"]
+      triage [backend=session, agent=claude, prompt="Work only in your own worktree and branch."]
+      queue [shape=parallelogram, script="bun nodes.ts queue --task $task_id --cap 4"]
+      build [backend=session, agent=claude, isolated=true, prompt="build it"]
+      critique [shape=component]
+      c_reach [backend=session, agent=claude, prompt="git -C \\"$(cast ws path $worktree)\\" diff origin/main...HEAD"]
+      c_intent [backend=session, agent=claude, prompt="read the card"]
+      critique_done [shape=tripleoctagon]
+      gate [shape=parallelogram, script="bun guard.ts gate --worktree \\"$(cast ws path \${worktree})\\""]
+      other [shape=parallelogram, script="echo $worktree_path"]
+      decide [shape=hexagon, prompt="$build.json.question"]
+      fix [label="Fix", backend=subject, prompt="fix what the check found"]
+      exit [shape=Msquare]
+      start -> bind -> triage -> queue -> build -> critique
+      critique -> c_reach -> critique_done
+      critique -> c_intent -> critique_done
+      critique_done -> gate -> other -> decide -> fix -> exit
+    }`);
+    const using = [...graph.nodes.values()].filter((n) => usesRunTree(n, graph)).map((n) => n.id).sort();
+    expect(using).toEqual(["build", "c_reach", "critique", "fix", "gate"]);
+  });
+
   test("with no branch left there is nothing to put back, and no checkout is made from main", async () => {
     fs.rmSync(tree(), { recursive: true, force: true });
     git(repoRoot, "worktree", "prune");
@@ -304,7 +415,7 @@ describe("a run that ends without landing", () => {
     expect(fs.existsSync(fixTree())).toBe(false);
     expect(git(repoRoot, "show", `codecast/${FIX}:NOTES.md`)).toBe("half a note");
 
-    // The daemon resumes the paused run once its card is answered: the tree is back before the gate and the station after it.
+    // The daemon resumes the paused run once its card is answered: the tree is back before the next station that uses it.
     const outcome = await drive(graph, {
       resume: { status: "running", current_node_id: "decide", gate_node_id: "decide", gate_response: "S", node_statuses: [done("start", 1), done("build", 2), done("leave", 3)] },
     });

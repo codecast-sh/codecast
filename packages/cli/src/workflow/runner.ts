@@ -35,7 +35,7 @@ import { webBaseUrl } from "../config/readLocalConfig.js";
 import { checkoutChangeOf, failureExcerpt, findingRoots, gateAnswerMessage, runEndMessage, runWorktreePath, sentBackWords, subjectOf, writerBrief, writersNamed, type Subject, type Writer } from "./subjectStation.js";
 import { notLiveYet, startSubjectParker, subjectOtherWork, subjectRow, subjectSettled, type SubjectParker } from "./subjectPark.js";
 import { lineRunsRoot } from "./runDirs.js";
-import { releaseEndedRunTree, restoreRunTree, stopRunBrowser } from "./runWorktree.js";
+import { releaseEndedRunTree, restoreRunTree, stopRunBrowser, usesRunTree } from "./runWorktree.js";
 
 function resolveNextNode(
   graph: WorkflowGraph,
@@ -690,6 +690,9 @@ async function waitOnStation(
     worktreeName = runSlug(graph, context, node.id);
     context["worktree"] = worktreeName;
     context["branch"] = `codecast/${worktreeName}`;
+    // A line run starts with its branch alone (lineTrialBranch.ts freshRunBranch), so its tree is made here, on
+    // that branch. The daemon's own create would take a warm slot cut from the checkout's HEAD instead.
+    if (!options.dryRun) await restoreRunTree(cwd, context);
   }
   // A resumed run waits on the hand its runner left working (runResume.ts)
   // rather than starting the station over; a hand stopped when the run ended
@@ -2233,8 +2236,9 @@ async function driveRun(
       state.context["worktree"] = runSlug(graph, state.context, isolated.id);
       state.context["branch"] = `codecast/${state.context["worktree"]}`;
     }
-    // A run waiting days at its card can lose its checkout; its branch puts it back.
-    if (!options.dryRun) await restoreRunTree(cwd, state.context);
+    // A run waiting days at its card can lose its checkout; its branch puts it back, if what it runs first uses it.
+    const first = [graph.nodes.get(resumeAt.node_id), ...refreshedOnResume(graph, state.completed)];
+    if (!options.dryRun && first.some((n) => n && usesRunTree(n, graph))) await restoreRunTree(cwd, state.context);
     options.resumed = { node_id: resumeAt.node_id, gate: resumeAt.gate, hands: resumeAt.hands, finished: resumeAt.finished };
     console.log(`${c.dim}Resuming at ${graph.nodes.get(resumeAt.node_id)?.label ?? resumeAt.node_id} (state from the ${resumeAt.from})${c.reset}`);
     // The line's own text is read as it is now (line-versions.md LV4).
@@ -2446,8 +2450,6 @@ async function runNodeLoop(
       break;
     }
     Object.assign(state.context, profile);
-    // A runner alive through days at a hold loses its checkout as a parked one does (ct-68695 at the Eval wallet).
-    if (!options.dryRun && state.completed.length > 0) await restoreRunTree(cwd, state.context);
 
     // ── Stage 2: Print node header ────────────────────────────────────────────
     const icon = nodeIcon(current);
@@ -2457,6 +2459,9 @@ async function runNodeLoop(
     // waits outside it for a place, and the station's clock starts once the place is the run's.
     const stationCap = Number(state.context[`line.caps.stations.${current.id}`] || 0);
     if (stationCap > 0 && options.runId && !options.dryRun) await waitForStationPlace(current, stationCap, options);
+    // A runner alive through days at a hold loses its checkout as a parked one does (ct-68695 at the Eval wallet).
+    // Only a station that uses the tree puts it back, once it holds its place: a run waiting at Queue holds none.
+    if (!options.dryRun && usesRunTree(current, graph)) await restoreRunTree(cwd, state.context);
 
     // ── Stage 3: Execute node ─────────────────────────────────────────────────
     if (options.runId) {

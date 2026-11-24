@@ -5,7 +5,8 @@
 // prove loops. Before a trial run starts, the earlier run's worktree, branch
 // and run directory are set aside under a dated name (nothing is deleted:
 // work it left uncommitted is committed onto the set-aside branch), and a new
-// worktree and branch start from origin/main.
+// branch starts from origin/main. Its worktree is made before the first
+// station that uses it (runWorktree.ts usesRunTree), not here.
 import fs from "node:fs";
 import path from "node:path";
 import { spawnSync } from "./proc.js";
@@ -200,16 +201,14 @@ export async function freshRunBranch(cwd: string, graph: Pick<WorkflowGraph, "na
     const runDir = lineRunDir(repo, slug);
     if (fs.existsSync(runDir)) fs.renameSync(runDir, lineRunDir(repo, setAside));
   }
-  if (fs.existsSync(path.join(repo, ".codecast", "workspace.toml"))) {
-    // Built here, ready, so the run's hand attaches to it (daemon createWorktree)
-    // rather than to a warm pool slot cut from the checkout's own HEAD.
-    const { acquireWorkspace, releaseWorkspace } = await import("./workspace/lifecycle.js");
-    // A workspace of this name that holds no branch any more (one that broke while it was built) would
-    // refuse the start, and every later one, with no runner to say so (ct-59568): it goes first.
-    if (fs.existsSync(path.join(repo, ".codecast", "workspaces", slug))) await releaseWorkspace(repo, slug);
-    await acquireWorkspace(repo, slug, { branch, startPoint: base });
-  } else if (!git(repo, ["branch", "--no-track", branch, base]).ok) {
-    throw new Error(`Could not start ${branch} from ${base}`);
+  // A workspace of this name that holds no branch any more (one that broke while it was built) would
+  // be taken for the new branch's tree (ct-59568): it goes first.
+  if (fs.existsSync(path.join(repo, ".codecast", "workspaces", slug))) {
+    const { releaseWorkspace } = await import("./workspace/lifecycle.js");
+    await releaseWorkspace(repo, slug);
   }
+  // Only the branch. A run can wait days at Queue before Build, and a 3.4 GB tree per waiting run filled the
+  // Union line hosts' disks (Nov 20 and Nov 23): the runner makes it before the first station that uses it.
+  if (!git(repo, ["branch", "--no-track", branch, base]).ok) throw new Error(`Could not start ${branch} from ${base}`);
   return { slug, branch, base, set_aside: setAside };
 }

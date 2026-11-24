@@ -418,7 +418,7 @@ import { collectMachineResources, processesStartedOutside, readHostPressure } fr
 import { setBackgroundSessions, setGovernorBackground, holdForDelivery, isDeliveryHeld } from "./backgroundPriority.js";
 import { BOOT_LOAD_RATIO_CAUTIOUS, bootPacingAfter, planBootPacing, type BootPacingPlan, type BootPacingTier } from "./bootPacing.js";
 import { followsCredentialStore, orcaPaneKeyOf, terminalProgramOf, terminalProgramOnTty, tmuxEnvNamesSession, tmuxSessionEnvUpdates, withoutSessionIds } from "./processEnv.js";
-import { resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
+import { latestJsonlPermissionModeFromFile, resumeEffortFlagFromFile, resumeModelFlagFromFile } from "./resumeCommand.js";
 import { backgroundAgentPanelOnPane, CLAUDE_COMPOSER_SCROLLED_ABOVE, CLAUDE_COMPOSER_SCROLLED_BELOW, CLAUDE_OVERPAINTED_RULE, CLAUDE_TURN_STATUS_LINE, composerScrolledPastCaret, composerTextStart, GLYPHLESS_PROMPT_CLIENTS, GROK_TRUST_PANE_CAPTURE_LINES, classifyGlyphlessClientPaneState, classifyLivePaneFor, classifyTmuxLiveState, claudeTurnRunningOnPane, glyphlessPromptPattern, isClaudeBypassWarning, isClaudeIdleResumeDialog, isClaudeRewindDialog, isIdleResumeOptionRow, isAgentLoginScreen, isCodexTrustDialog, isCodexUpdateDialog, isCursorTrustDialog, isGrokTrustDialog, isResumeCwdPicker, livenessFromTmuxState, type TmuxLiveState, agentAtLoginScreen } from "./tmuxPaneState.js";
 import {
   fetchExport,
@@ -442,7 +442,6 @@ import {
   chooseClaudeAutoTrim,
   combineClaudeResumeFlags,
   copyJsonlAsSession,
-  extractJsonlPermissionMode,
   isForkArtifactSessionId,
   isWorkflowAgentTranscriptPath,
   isManagedTmuxName,
@@ -26243,11 +26242,12 @@ export async function buildClaudeResumeCommand(a: {
   keychain?: boolean;
 }): Promise<{ resumeCmd: string; resumeAccountPrefix: string; resumeAccount: string | undefined; displacedAccount?: string }> {
   const { sessionId, cwd, jsonlPath, jsonlContent, config, conversationId } = a;
-  // A mode the session reported on the backend it leaves wins over the one its transcript recorded at launch.
-  const jsonlBypass = !a.permissionMode && extractJsonlPermissionMode(jsonlContent) === "bypassPermissions";
+  // A mode reported by the backend the session leaves wins over its transcript's latest.
+  const jsonlMode = a.permissionMode ? undefined : latestJsonlPermissionModeFromFile(jsonlPath);
+  const jsonlBypass = jsonlMode === "bypassPermissions";
   const extraFlags = combineClaudeResumeFlags(
     getAgentArgs(config, "claude"),
-    claudePermissionFlagsFor(a.permissionMode, config),
+    claudePermissionFlagsFor(a.permissionMode ?? (jsonlBypass ? undefined : jsonlMode), config),
     jsonlBypass,
   );
   let resumeId = sessionId;

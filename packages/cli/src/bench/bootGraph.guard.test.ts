@@ -525,9 +525,11 @@ describe("command groups stay off the boot graph", () => {
     // pin lists that let a newer client through (+1).
     // 4851 (2026-11-23): contracts/closedSession.ts, the shared Close verdict,
     // and the daemon's close-aware lifecycle reads (+6).
-    // 4853 (2026-11-24): the register, unregister and relay manifest entries
+    // 4852 the same day: auto-resume reads the transcript's latest permission
+    // mode, not its first (resumeCommand.ts +1).
+    // 4854 (2026-11-24): the register, unregister and relay manifest entries
     // and the messaging-only gates in fastPath.ts (#102) (+2).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4853);
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4854);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {
