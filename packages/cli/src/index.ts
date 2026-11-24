@@ -5156,6 +5156,34 @@ program
   });
 
 program
+  .command("register")
+  .description("Register this agent session for messaging only (run from a Claude Code SessionStart hook)")
+  .option("--session-id <id>", "Claude session id (default: from the hook payload on stdin)")
+  .option("--cwd <dir>", "Working directory (default: from the hook payload on stdin)")
+  .action(async (options) => {
+    const { registerMain } = await import("./relay/wiring.js");
+    process.exit(await registerMain({ sessionId: options.sessionId, cwd: options.cwd }, readConfig));
+  });
+
+program
+  .command("unregister")
+  .description("End this agent session's messaging-only registration (run from a Claude Code SessionEnd hook)")
+  .option("--session-id <id>", "Claude session id (default: from the hook payload on stdin)")
+  .action(async (options) => {
+    const { unregisterMain } = await import("./relay/wiring.js");
+    process.exit(await unregisterMain({ sessionId: options.sessionId }, readConfig));
+  });
+
+program
+  .command("relay")
+  .description("Deliver messages to registered herdr and paseo agent sessions on this machine")
+  .option("--background", "Start the relay detached unless one is already running")
+  .action(async (options) => {
+    const { relayMain } = await import("./relay/wiring.js");
+    process.exit(await relayMain({ background: options.background }, readConfig));
+  });
+
+program
   .command("gc")
   .description("Kill tmux sessions idle longer than --mins (default 60); --dry-run lists them first")
   .option("-m, --mins <minutes>", "Idle threshold in whole minutes (default: 60)")
@@ -23216,7 +23244,7 @@ program.hook('preAction', (thisCommand, actionCommand) => {
   if (process.env.DEBUG_CLI) {
     console.error(`[DEBUG] preAction hook: cmd=${cmdName} args=${args}`);
   }
-  const internalCmds = ['start', 'stop', 'status', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update', 'agent-context'];
+  const internalCmds = ['start', 'stop', 'status', 'daemon', 'codecast', '_daemon', '_watchdog', 'auth', 'login', 'update', 'agent-context', 'register', 'unregister', 'relay'];
   if (!internalCmds.includes(cmdName)) {
     logCliCommand(cmdName, args);
     ensureDaemonRunning();
