@@ -14,6 +14,11 @@
 // and a known key is charged before its parameters are read. Both limiters
 // fail closed.
 //
+// Each session's owner is { id, name, github_username, email }. name and
+// github_username are null for a member who never set them; email is the
+// account email, which the team roster already shows every member, so a
+// client can still tell whose session it is.
+//
 // Each session carries transcript_messages: the count of every message in its
 // transcript, so the person's prompts, the agent's replies and tool results
 // all add to it. The team feed shows the same count at every sharing level.
