@@ -83,6 +83,21 @@ describe("machineKey hardware binding", () => {
     expect(clone1.secret.equals(clone2.secret)).toBe(true);
   });
 
+  it("processes that find the clone at the same moment end on one key", async () => {
+    // Each child resolves the same cloned dir as HW_B and prints the key it got.
+    const child = `const { resolveMachineKey } = await import(${JSON.stringify(`${import.meta.dir}/machineKey.ts`)});
+console.log(resolveMachineKey(process.argv[1], () => ${JSON.stringify(HW_B())}).secret.toString("hex"));`;
+    for (let trial = 0; trial < 8; trial++) {
+      const macA = tmpDir();
+      resolveMachineKey(macA, HW_A);
+      const macB = cloneDir(macA);
+      const procs = Array.from({ length: 4 }, () => Bun.spawn(["bun", "-e", child, macB], { stdout: "pipe" }));
+      const keys = await Promise.all(procs.map(async (p) => (await new Response(p.stdout).text()).trim()));
+      keys.push(resolveMachineKey(macB, HW_B).secret.toString("hex"));
+      expect(new Set(keys).size).toBe(1);
+    }
+  }, 30_000);
+
   it("recovers from a rotation interrupted before the sidecar write", () => {
     const macA = tmpDir();
     const original = resolveMachineKey(macA, HW_A);

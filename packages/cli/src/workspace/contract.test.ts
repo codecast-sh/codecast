@@ -34,7 +34,7 @@ const baseManifest = (): WorkspaceManifest => ({
     generate: [],
     migrate: [],
   },
-  ports: { web: { base: 39000, range: 100 } },
+  ports: { web: { base: 29000, range: 100 } },
   services: {},
   env: { NODE_ENV: "development" },
   teardown: { run: [] },
@@ -69,8 +69,8 @@ function makeReadyWorkspace(name: string): Workspace {
     branch: `codecast/${name}`,
     resourceIndex: 0,
     manifest: baseManifest(),
-    ports: { web: 39000 },
-    env: { NODE_ENV: "development", PORT_WEB: "39000" },
+    ports: { web: 29000 },
+    env: { NODE_ENV: "development", PORT_WEB: "29000" },
     state: "ready",
   };
 }
@@ -241,7 +241,7 @@ describe("validateContract", () => {
 
   test("missing manifest env var → broken", async () => {
     const ws = makeReadyWorkspace("m4");
-    ws.env = { PORT_WEB: "39000" }; // dropped NODE_ENV
+    ws.env = { PORT_WEB: "29000" }; // dropped NODE_ENV
     const r = await validateContract(ws);
     const envCheck = r.checks.find((c) => c.name === "env-vars");
     expect(envCheck?.ok).toBe(false);
@@ -275,7 +275,7 @@ describe("validateContract", () => {
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.once("listening", resolve);
-      server.listen(39000, "127.0.0.1");
+      server.listen(29000, "127.0.0.1");
     });
     try {
       const r = await validateContract(ws);

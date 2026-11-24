@@ -18,6 +18,18 @@ beforeAll(() => { home = isolateCodecastDir(); });
 afterAll(() => home.restore());
 
 const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+// A station process left after its runner ended, as /proc has it: state (Z is a
+// zombie nobody reaped), parent, group and command, so a red run names its cause.
+const survivors = (pids: number[]) => pids.filter(alive).map((pid) => {
+  try {
+    const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf-8");
+    const [state, ppid, pgid] = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+    const cmd = fs.readFileSync(`/proc/${pid}/cmdline`, "utf-8").replace(/\0/g, " ").trim().slice(0, 60);
+    return `${pid} state=${state} ppid=${ppid} pgid=${pgid} ${cmd}`;
+  } catch {
+    return `${pid} (no /proc entry)`;
+  }
+}).join("; ");
 const pidsIn = (file: string) => (fs.existsSync(file) ? fs.readFileSync(file, "utf-8").trim().split("\n").filter(Boolean).map(Number) : []);
 const strays: number[] = [];
 // The production grace between TERM and KILL is 10 s; these cases need only see the KILL come.
@@ -93,7 +105,9 @@ describe("a station whose runner goes", () => {
     await pollUntil(() => started().length === 4, "the station's processes starting", { ms: 15_000 });
     runner.kill("SIGTERM");
     expect(await runner.exited).toBe(143);
-    await pollUntil(() => !started().some(alive), "every station process ending", { ms: 30_000 });
+    await pollUntil(() => !started().some(alive), "every station process ending", { ms: 30_000 }).catch((err) => {
+      throw new Error(`${err.message}; still there: ${survivors(started()) || "none"}`);
+    });
     expect(fs.existsSync(path.join(stationRecordDir(), `${runner.pid}.json`))).toBe(false);
   }, 60_000);
 

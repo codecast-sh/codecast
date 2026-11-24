@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { createHash } from "node:crypto";
 import { spawnSync } from "../proc.js";
 import { parseWorkflowFile, parseWorkflowSource, resolveFlowSource, type ResolveFlow } from "./parser.js";
 import { resolveWorkflowSource } from "./templates.js";
@@ -52,11 +53,15 @@ export function materializeLibraryRun(versions: LibraryVersion[], cacheRoot = co
 
 /** Each version's graph file, in the order given. */
 function materializeLibraryFiles(versions: LibraryVersion[], cacheRoot = codecastPath("flows")): string[] {
-  const key = `v-${versions.map((v) => v.version_id.replace(/[^\w-]/g, "")).join("-")}`.slice(0, 200);
+  // A run with its segments' versions can name more than fit a directory's name: those are named by a hash of them all,
+  // so two runs that share the first few versions never write into one directory.
+  const ids = versions.map((v) => v.version_id.replace(/[^\w-]/g, "")).join("-");
+  const key = ids.length <= 198 ? `v-${ids}` : `v-h${createHash("sha256").update(ids).digest("hex").slice(0, 40)}`;
   return versions.map((v) => materializePushedFlow({ _id: key, slug: v.snapshot.name, name: v.snapshot.name, source: v.snapshot.source, nodes: v.snapshot.nodes, origin: { file: v.snapshot.file, files: v.snapshot.files } }, cacheRoot));
 }
 
-/** A library run's graph: a base the flow names by slug reads the version the run recorded, written beside the others. */
+/** A library run's graph: a base or a segment the flow names by slug reads the version the run recorded, written beside
+ *  the others, ahead of anything on this machine; one it recorded no version of resolves here (resolveFlowSource). */
 export function parseLibraryRun(versions: LibraryVersion[], cacheRoot = codecastPath("flows")): WorkflowGraph {
   const files = materializeLibraryFiles(versions, cacheRoot);
   const bySlug = new Map(versions.slice(1).flatMap((v, i) => (v.slug ? [[v.slug, files[i + 1]] as const] : [])));

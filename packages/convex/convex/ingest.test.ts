@@ -1,4 +1,4 @@
-import { describe, expect, setSystemTime, test } from "bun:test";
+import { beforeEach, describe, expect, setSystemTime, test } from "bun:test";
 import { sha256Hex } from "./lib/hash";
 import { HOUR_MS, hourStart } from "./lib/ingestGroups";
 import { isIngestKey } from "@codecast/shared/contracts/ingest";
@@ -8,7 +8,9 @@ import { PROMOTE_RETRY_MS, PROMOTE_SPACING_MS, PROMOTE_TRIES, queuePromotions, s
 import { promotionSignal } from "./lib/ingestPayloads";
 import { listForTask, listForTeam } from "./externalEvents";
 import { applyTaskUpdate, insertTask, nextArmingAfterRun } from "./agentTasks";
-import { h, world, armedWorld, TEAM, teamSource, NOW, err, batch, names, live, stats } from "./ingest.testkit";
+import { h, world, armedWorld, TEAM, teamSource, NOW, err, batch, names, live, stats, refreshNow } from "./ingest.testkit";
+
+beforeEach(refreshNow);
 
 describe("sources", () => {
   test("create returns the key once and stores only its hash", async () => {

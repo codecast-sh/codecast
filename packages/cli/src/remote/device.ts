@@ -28,6 +28,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { getMachineKey, hardwareId } from "../machineKey.js";
 import { defaultConfigDir } from "../config/configDir.js";
+import { writeFileAtomic } from "../fsAtomic.js";
 
 const DEVICE_BINDING_FILE = path.join(defaultConfigDir(), ".device_binding.json");
 const CONFIG_FILE = path.join(defaultConfigDir(), "config.json");
@@ -142,8 +143,9 @@ function readDeviceBinding(): DeviceBinding | null {
 
 function writeDeviceBinding(binding: DeviceBinding): void {
   try {
-    fs.writeFileSync(DEVICE_BINDING_FILE, JSON.stringify(binding), { mode: 0o600 });
-    fs.chmodSync(DEVICE_BINDING_FILE, 0o600); // mode option only applies at creation
+    // Whole or not at all: a reader that saw half a file would take it for no
+    // binding and adopt the legacy id.
+    writeFileAtomic(DEVICE_BINDING_FILE, JSON.stringify(binding), { mode: 0o600 });
   } catch {} // identity must never throw; worst case we re-adopt next start
 }
 

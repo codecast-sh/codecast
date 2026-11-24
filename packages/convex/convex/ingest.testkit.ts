@@ -45,7 +45,10 @@ export async function teamSource(w: ReturnType<typeof world>, extra: Record<stri
   return out as { source: any; ingest_key: string };
 }
 
-export const NOW = Date.now();
+/** When the running test began (refreshNow). The kit loads once per process, and a suite that crosses the top of an hour
+ *  or a day would otherwise put a later test's occurrences in an hour or a day its receive time has left. */
+export let NOW = Date.now();
+export function refreshNow(): void { NOW = Date.now(); }
 export const err = (message: string, over: Record<string, unknown> = {}) => ({ type: "error", message, at: NOW, ...over });
 export const batch = (w: ReturnType<typeof world>, sourceId: string, items: unknown[], extra: Record<string, unknown> = {}) =>
   h(applyBatch)(w.internalCtx, { source_id: sourceId, items_json: JSON.stringify(items), ...extra });
