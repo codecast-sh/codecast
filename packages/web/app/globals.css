@@ -986,6 +986,25 @@ html, body {
   }
 }
 
+/* A transcript row that only flies past on a fast scroll
+   (lib/virtualList/scrollSeek) draws as faint lines in the conversation column
+   rather than bare background, so a fling reads as the transcript moving and
+   not as it vanishing. One pseudo-element painting three gradients: no
+   animation, no layer, and a row too short for a line draws nothing. */
+.seek-row::before {
+  content: "";
+  position: absolute;
+  inset: 14px 0;
+  margin: 0 auto;
+  width: calc(100% - 3rem);
+  max-width: calc(var(--conv-col-w, 56rem) - 3rem);
+  --seek-line: linear-gradient(to bottom, var(--sol-bg-highlight) 0 10px, transparent 10px);
+  background:
+    var(--seek-line) 0 0 / 94% 78px repeat-y,
+    var(--seek-line) 0 26px / 100% 78px repeat-y,
+    var(--seek-line) 0 52px / 61% 78px repeat-y;
+}
+
 .animate-message-in {
   animation: messageSlideIn 0.3s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
