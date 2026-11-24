@@ -150,7 +150,9 @@ async function acquireWorkspaceUnlocked(repoRoot: string, name: string, opts: Ac
       }
     }
 
-    if (!noPorts && !opts.skipPool && !opts.branch && !opts.startPoint && !existing && !inputRoot) {
+    // A branch already named for this workspace is checked out as it stands (an ended run's, released with its
+    // work committed): a pool slot is cut from main and its rename onto that branch fails half done (ct-99146).
+    if (!noPorts && !opts.skipPool && !opts.branch && !opts.startPoint && !existing && !inputRoot && !branchExists(repoRoot, branch)) {
       // Why record BEFORE claiming: the demand file is what sizes the pool and
       // what the daemon's maintainer watches, so writing it here is what
       // re-arms the slot this create is about to consume — and only when the
@@ -746,6 +748,10 @@ function buildWorkspaceEnv(
   ports: Record<string, number>,
 ): Record<string, string> {
   return { ...manifest.env, ...portsToEnv(ports) };
+}
+
+function branchExists(repoRoot: string, branch: string): boolean {
+  try { gitArgv(repoRoot, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]); return true; } catch { return false; }
 }
 
 function gitArgv(cwd: string, args: string[]): string {
