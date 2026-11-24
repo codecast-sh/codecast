@@ -700,3 +700,16 @@ describe("daemon self-stamps leave a registered row alone", () => {
     expect((await s.conv(conversation_id)).owner_device_id).toBe(DEVICE);
   });
 });
+
+describe("an uncertain hand-off", () => {
+  test("the relay settles it failed through updateMessageStatus and the row leaves its queue", async () => {
+    const s = await setup();
+    const { short_id } = await s.register();
+    await s.send(MATE_TOKEN, short_id);
+    const [row]: any[] = await s.forRelay();
+    const res = await s.t.mutation(api.pendingMessages.updateMessageStatus, { api_token: OWNER_TOKEN, message_id: row._id, status: "failed", device_id: DEVICE });
+    expect(res.skipped).toBe(false);
+    expect((await s.pendingRows())[0].status).toBe("failed");
+    expect(await s.forRelay()).toEqual([]);
+  });
+});
