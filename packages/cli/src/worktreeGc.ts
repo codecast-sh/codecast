@@ -55,7 +55,6 @@ import { treeGitDir } from "./land/hold.js";
 import { runSide, type SnapshotResult } from "./cloud/syncSide.js";
 import { MERGED_REF_PREFIX, worktreeMatchesMergedBack } from "./mergeBack.js";
 import { lineRunsRoot, runTreeNames, runTreesOf } from "./workflow/runDirs.js";
-import { readFrozenChange } from "./workflow/flowChangeFile.js";
 
 /** The run trees of a checkout that a live run still works in, or null when that cannot be told. */
 export type RunTreesInUse = (repoRoot: string) => Promise<ReadonlySet<string> | null>;
@@ -325,6 +324,7 @@ export async function contentKeepReason(worktreePath: string, repoRoot: string, 
  * own branch.
  */
 export async function commitRunLeftovers(tree: string, name: string, message: string, runDir?: string): Promise<string | null> {
+  const { readFrozenChange } = await import("./workflow/flowChangeFile.js");
   if (readFrozenChange(runDir)) return "its branch is the change frozen for the run";
   const own = `codecast/${name}`;
   const head = await git(tree, ["symbolic-ref", "-q", "--short", "HEAD"]).catch(() => "");
