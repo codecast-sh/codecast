@@ -37,7 +37,7 @@ const deployedBy = (run: Run) => !!run.node_statuses?.some((n) => segmentTopOf(n
 
 /** The commit a finished run landed on main and left for a deploy to take out: its flow has no Deploy station. */
 export function landedSha(run: Run): string | null {
-  return run.status === "completed" && !deployedBy(run) ? run.merge?.sha ?? null : null;
+  return run.status === "completed" && !deployedBy(run) ? mergedSha(run) : null;
 }
 
 const REACH_WORDS: Record<ReachState, { words: string; tone: ShipTone }> = {

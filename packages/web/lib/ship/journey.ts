@@ -140,8 +140,31 @@ export function canAnswer(d: GateDecision | null | undefined, viewer: string | n
 /** Whether a decision waits on a role or on people. */
 export const holderOf = (d: GateDecision | null | undefined): "person" | "role" => ((d?.passed_to ?? d?.holder)?.kind === "role" ? "role" : "person");
 
-/** The one landed fact: the sha a merge recorded on the run (`/cli/line/merge/record`). Nothing else means landed. */
-export const landedSha = (run: { merge?: { sha?: string | null } | null } | null | undefined): string | null => run?.merge?.sha || null;
+/** The runner's merge step and its landing steps (runner.ts): what one reports when it passes is the commit it put on main. */
+const MERGING_STEP = /(^|__)(merge|shipped|landed)$/;
+/** Deploy's stop for a commit it did not find on main (`cast flow await-deploy` exit 4). */
+const UNMERGED_STEP = /(^|__)unmerged$/;
+const SHA_OUT = /"sha"\s*:\s*"([0-9a-f]{7,40})"/;
+
+type LandedRun = {
+  merge?: { sha?: string | null } | null;
+  current_node_id?: string | null;
+  node_statuses?: ReadonlyArray<{ node_id: string; status?: string; result_preview?: string | null; started_at?: number }> | null;
+};
+
+/**
+ * The landed fact: the sha a merge recorded on the run (`/cli/line/merge/record`), else the sha a merge or landing step
+ * reported when it passed, as await-deploy reads a merge station's merge.json (a flow's own merge script, a run from a
+ * CLI that recorded nothing), unless Deploy then stopped finding it not on main. Nothing else means landed.
+ */
+export function landedSha(run: LandedRun | null | undefined): string | null {
+  if (run?.merge?.sha) return run.merge.sha;
+  const statuses = run?.node_statuses ?? [];
+  const step = [...statuses].reverse().find((n) => n.status === "completed" && MERGING_STEP.test(n.node_id) && SHA_OUT.test(n.result_preview ?? ""));
+  if (!step) return null;
+  const refuted = UNMERGED_STEP.test(run?.current_node_id ?? "") || statuses.some((n) => UNMERGED_STEP.test(n.node_id) && (n.started_at ?? 0) >= (step.started_at ?? 0));
+  return refuted ? null : step.result_preview!.match(SHA_OUT)![1];
+}
 
 /** Whether a gate holds the run for an answer: paused on a card nobody has answered. */
 export const gateOpen = (run: Pick<JourneyRun, "status" | "gate_decision_id" | "gate_prompt" | "gate_decision_status">) =>
@@ -154,6 +177,28 @@ const LANDING_STEP = /(^|__)(shipped|landed)$/;
 type Base = Omit<JourneyStage, "state" | "round" | "steps" | "branches" | "inside"> & { members: string[]; kind: string; branches?: Base[]; tail?: string[]; inside?: { path: Base[]; routes: RouteBase[]; end: string | null } };
 
 const isSubject = (n: FlowNodeIn | undefined) => n?.backend === "subject";
+const leafOf = (id: string) => id.split(SEGMENT_SEP).pop()!;
+const parentOf = (id: string) => (id.includes(SEGMENT_SEP) ? id.slice(0, id.lastIndexOf(SEGMENT_SEP)) : "");
+
+/**
+ * The steps a run recorded, by their ids in this graph. A run with no pinned version is drawn on the flow as it stands,
+ * and one of an older version may have named its steps before a segment held them (`merge`, now `land__merge`). Such a
+ * flat id becomes the one segment step with the same last part, and only in a segment the run entered at its start (one
+ * of the steps its entry leads to is among them): a step of the same name in a segment the run never reached is another
+ * step (an old `revise` is not the card's `decide__revise`). Every other id stays as recorded.
+ */
+function graphIds(graph: Graph, recorded: ReadonlyArray<string>): (id: string) => string {
+  const own = new Set(graph.nodes.map((n) => n.id));
+  const byLeaf = new Map<string, string | null>();
+  for (const n of graph.nodes) byLeaf.set(leafOf(n.id), byLeaf.has(leafOf(n.id)) ? null : n.id);
+  const guess = new Map<string, string>();
+  for (const id of recorded) {
+    const to = !own.has(id) && !id.includes(SEGMENT_SEP) ? byLeaf.get(id) : null;
+    if (to && parentOf(to)) guess.set(id, to);
+  }
+  const entered = new Set([...guess.values()].filter((to) => graph.edges.some((e) => e.from === parentOf(to) && e.to === to)).map(parentOf));
+  return (id) => { const to = guess.get(id); return to && entered.has(parentOf(to)) ? to : id; };
+}
 const inGroup = (stageId: string, nodeId: string) => nodeId === stageId || nodeId.startsWith(`${stageId}${SEGMENT_SEP}`);
 const inStage = (s: Pick<Base, "members">, nodeId: string) => s.members.some((m) => inGroup(m, nodeId));
 
@@ -377,15 +422,16 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const idle = (b: Base): JourneyStage => ({ ...strip(b), state: "idle", round: null, ...(b.branches ? { branches: b.branches.map(idle) } : {}) });
   if (!run) return { stages: plan.map(idle), now: { kind: "idle" } };
   const byId = new Map(graph.nodes.map((n) => [n.id, n]));
-  const statuses = run.node_statuses ?? [];
+  const idOf = graphIds(graph, [...(run.node_statuses ?? []).map((n) => n.node_id), run.current_node_id ?? "", run.waiting_on_session?.node_id ?? "", run.gate_node_id ?? ""]);
+  const statuses = (run.node_statuses ?? []).map((n) => (idOf(n.node_id) === n.node_id ? n : { ...n, node_id: idOf(n.node_id) }));
   const statusOf = (id: string | null | undefined) => (id ? [...statuses].reverse().find((n) => n.node_id === id) : undefined);
   const newest = (list: NodeStatus[]) => list.reduce<NodeStatus | undefined>((best, n) => (!best || (n.started_at ?? 0) >= (best.started_at ?? 0) ? n : best), undefined);
   const live = LIVE_STATUSES.has(run.status);
   const passed = run.status === "completed";
   const failed = run.status === "failed";
   const sha = landedSha(run);
-  const waitingOn = run.waiting_on_session ?? null;
-  const at = run.current_node_id ?? null;
+  const waitingOn = run.waiting_on_session ? { ...run.waiting_on_session, node_id: idOf(run.waiting_on_session.node_id) } : null;
+  const at = run.current_node_id ? idOf(run.current_node_id) : null;
   const flowStages = plan.filter((s) => s.role !== "live" && s.members.length);
   const stageOf = (nodeId: string | null) => (nodeId ? flowStages.find((s) => inStage(s, nodeId)) ?? null : null);
   // A fix station belongs to the stage that sent the work back.
@@ -422,7 +468,6 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   // Whether a person sent the work back to the session at `nodeId`: the last step the run took before it, past the ends it
   // went out through (a step whose every way on leaves the segment it sits in), is a person's. A segment's own Brief
   // inside the same segment as a card is not the card's.
-  const parentOf = (id: string) => (id.includes(SEGMENT_SEP) ? id.slice(0, id.lastIndexOf(SEGMENT_SEP)) : "");
   const endStep = (id: string) => { const out = graph.edges.filter((e) => e.from === id); return out.length > 0 && out.every((e) => parentOf(e.to) !== parentOf(id)); };
   const byPerson = (nodeId: string | null) => {
     const since = statusOf(nodeId)?.started_at ?? Infinity;
@@ -438,7 +483,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   const stopStage = failed ? (pastLanding ? plan[plan.indexOf(atBase!) + 1]?.id ?? atBase!.id : atBase?.id ?? null) : null;
   // An open card is a gate wherever its node sits: on a stage when the walk back finds one, else in the bar alone.
   const open = live && gateOpen(run);
-  const gateNode = open ? run.gate_node_id ?? at : null;
+  const gateNode = open ? (run.gate_node_id ? idOf(run.gate_node_id) : at) : null;
   const gateStage = open ? stageFor(gateNode)?.id ?? null : null;
   const gateMine = open && canAnswer(viewer?.decision, viewer?.id);
   // A card off the main path names the stage that holds it after the route into it ("It edits CI"), not the stage's own name.
