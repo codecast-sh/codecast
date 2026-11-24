@@ -68,16 +68,6 @@ export const WORKING_TOGETHER_A: Shot[] = [
     frame: "element",
     out: "public/documentation/decisions/steer-dock.webp",
   },
-
-  {
-    name: "messaging/triage-menu",
-    route: conv(D.deadLetters._id),
-    viewport: { width: 1280, height: 820 },
-    rail: true,
-    steps: [{ rightClick: `[data-sv-rail] [data-session-id="${D.deadLetters._id}"]` }, { sleep: 700 }],
-    frame: "window",
-    out: "public/documentation/messaging/triage-menu.webp",
-  },
   /* ── Messaging ─────────────────────────────────────────────────────────── */
   {
     name: "messaging/message-from",

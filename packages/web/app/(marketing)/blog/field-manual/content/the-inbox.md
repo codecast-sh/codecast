@@ -70,8 +70,8 @@ The parking verbs, lightest first:
 - **Dormant**: parked; a machine wakes it (a schedule, a watcher, another session).
 - **Stash**: out of the inbox, and the agent keeps running. It comes back on its own when a scheduled run fires into it, when the agent says it is blocked, or when it stalls on a prompt, a question or a dead process.
 - **Stash and hide**: a stash that stays out through scheduled wakes. Only a real ask brings it back. Made for a recurring loop you have reviewed and want quiet.
-- **Close**: done looking at it. A finished session stops and files under Closed; one still working keeps running out of view. Its schedules and queued messages stay, so the next one to fire, or a new message, brings it back. The card's tooltip says which will happen.
-- **Kill**: in the right-click menu and the command palette, not on the card. Tears the agent down and cancels anything scheduled into it, asking first when there is something to cancel, and files it under Closed. The transcript stays readable and the session restartable.
+- **Close**: done looking at it. A finished session stops and files under Closed; one still working keeps running and files under Stashed. Its schedules and queued messages stay, so the next one to fire, or a new message, brings it back. The card's tooltip says which will happen.
+- **Kill**: in the right-click menu, the command palette and the selection bar, and the square stop button on a card already in Stashed or Closed. Tears the agent down and cancels anything scheduled into it, asking first when there is something to cancel, and files it under Closed. The transcript stays readable and the session restartable.
 
 Two filing verbs remove nothing: **Pin** (top of the list) and **Label** (one of your personal labels; a session carries at most one, and teammates never see yours). Dragging a card into Needs You, Done or Dormant is the same verdict as the menu item. Working is not a drop target: nobody can declare that an agent is producing. Every action lands in the undo history (`Ctrl/Cmd+Z`); undoing a kill brings the card back, but the agent stays stopped until you restart it.
 
@@ -85,10 +85,10 @@ Two filing verbs remove nothing: **Pin** (top of the list) and **Label** (one of
 | Snooze | Right-click ("Snooze…") | `Alt+Z` | | Dormant until the time you pick; "Move to Needs You now" wakes it early |
 | Stash | Triage bar, right-click | `Ctrl+Backspace` | Long-press | Out of the inbox; agent keeps running |
 | Stash and hide | Triage bar "more", right-click | `Ctrl+Alt+Backspace` | | Stays out until an ask |
-| Close | The card's X, triage bar, right-click | `Ctrl+Shift+Backspace` | Swipe left, or long-press | Agent stopped (left running if mid-turn), schedules kept, filed under Closed |
-| Kill | Right-click, command palette | | Long-press, then confirm | Agent stopped, schedules cancelled, filed under Closed |
+| Close | The card's X, triage bar, right-click | `Ctrl+Shift+Backspace` | Swipe left, or long-press | Agent stopped and filed under Closed (mid-turn, left running under Stashed); schedules kept |
+| Kill | Right-click, command palette, selection bar; the stop button on a stashed or closed card | | Long-press | Agent stopped, schedules cancelled (asks first when there are some), filed under Closed |
 | Restore | Right-click on a stashed or closed card | | | Back in the inbox (a closed or killed agent stays stopped) |
-| Pin | Triage bar "more", right-click | `Ctrl+Shift+P`; jump to pinned with `Ctrl+P` (Mac) | Swipe right, or long-press | Top of the list, state kept underneath |
+| Pin | Triage bar "more", right-click | `Ctrl+Shift+P`; jump to pinned with `Ctrl+P` (Mac) | Long-press | Top of the list, state kept underneath |
 | Label | Triage bar "more", right-click | `Ctrl+L` | Long-press, "Label…" | Files under a personal label |
 | Mark unread | Right-click | `Ctrl+Shift+U` | Long-press | Card keeps its dot until you next open it |
 | Rename | Right-click | `Ctrl+Shift+E` | | New title on the card |
@@ -125,7 +125,7 @@ Agents read the same states. One that orchestrates workers watches for a worker 
 
 ## The inbox on the phone
 
-The iOS app runs the same placement over the same data, so its sections and counts match the web exactly. Swipe a card left to stash it, right to pin it, and long-press for the rest (pin, favorite, mark unread, label, stash, kill). A session handed to you arrives with a "Got it" row to acknowledge it. Replying from the phone is the same as typing at the terminal: the agent gets your message as its next turn and carries on.
+The iOS app runs the same placement over the same data, so its sections and counts match the web exactly. Swipe a card left to close it, and long-press for the rest (close, pin, favorite, mark unread, label, stash, kill). A session handed to you arrives with a "Got it" row to acknowledge it. Replying from the phone is the same as typing at the terminal: the agent gets your message as its next turn and carries on.
 
 ![A Codex session on the desktop asks 'Should a 410 Gone count as failed?' while the same session is open on an iPhone with a reply being typed: 'Agreed. Log 410s, never retry.'](/blog/field-manual/inbox-phone-ask.webp "A Codex worker asks a question; the same session is open on the phone and the answer is half typed.")
 ![The reply 'Agreed. Log 410s, never retry.' has landed in both the desktop transcript and the phone, and Codex answers 'Got it: 410s logged once, never retried. Running the tests.' with a Working indicator](/blog/field-manual/inbox-phone.webp "Seconds later the reply is in the transcript on both screens and the session is Working again.")
