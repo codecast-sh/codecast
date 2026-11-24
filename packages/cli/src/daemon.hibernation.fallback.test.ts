@@ -29,7 +29,7 @@ function fixture() {
     transcriptLastRealMs: async () => { calls.push("transcript"); return null; },
     lifecycle: async () => {
       calls.push("lifecycle");
-      return { status: "active", hideStateKnown: true, source: "lifecycle", inboxPinnedAt: null, hasPendingMessages: false, inboxKilledAt: null, inboxDismissedAt: null, inboxStashedAt: null };
+      return { status: "active", hideStateKnown: true, source: "lifecycle", inboxPinnedAt: null, hasPendingMessages: false, loopState: null, inboxKilledAt: null, inboxDismissedAt: null, inboxStashedAt: null };
     },
     canReapPidTree: () => { calls.push("ownership"); return true; },
     deliveryActive: (id) => h.state.resumeInFlight.has(id),
@@ -175,7 +175,7 @@ describe("dry run reports without parking", () => {
     const { h, io, calls } = fixture();
     io.policy = () => ({ maxLive: 1, idleMs: 1, maxPerPass: 5, dryRun: true });
     io.inspectTarget = async () => target;
-    io.lifecycle = async () => ({ status: "active", hideStateKnown: true, source: "lifecycle", inboxPinnedAt: null, hasPendingMessages: true, inboxKilledAt: null, inboxDismissedAt: null, inboxStashedAt: null });
+    io.lifecycle = async () => ({ status: "active", hideStateKnown: true, source: "lifecycle", inboxPinnedAt: null, hasPendingMessages: true, loopState: null, inboxKilledAt: null, inboxDismissedAt: null, inboxStashedAt: null });
     expect(await h.runHibernationPass(io)).toBe(0);
     expect(calls).not.toContain("park");
     expect(logs(h)).toContain("would park 0");

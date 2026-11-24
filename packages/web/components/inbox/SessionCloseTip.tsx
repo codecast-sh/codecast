@@ -1,5 +1,5 @@
 import { useInboxStore, type InboxSession } from "../../store/inboxStore";
-import { closeTooltip } from "../../lib/sessionClose";
+import { closeTooltip } from "@codecast/shared/contracts/closeKind";
 import { closeFactsInStore } from "../../lib/closeFactsInStore";
 
 /** The Close button's tooltip: what Close does to this session now. Drawn

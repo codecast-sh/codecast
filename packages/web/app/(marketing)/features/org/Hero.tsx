@@ -236,7 +236,7 @@ function Stage() {
         status={
           <Swap
             t={T.wake}
-            before={<><SessionDot state="dormant" className="mr-1.5 align-middle" size={6} />dormant · checked 2h ago</>}
+            before={<><SessionDot state="dormant" className="mr-1.5 align-middle" size={6} />sleeping · checked 2h ago</>}
             after={<><SessionDot state="working" className="mr-1.5 align-middle" size={6} /><span style={{ color: SOL.green }}>working</span> · checkout error</>}
           />
         }
@@ -248,7 +248,7 @@ function Stage() {
         }
       />
       <LeadCard r={role("growth")} t={0.85} status={<><SessionDot state="working" className="mr-1.5 align-middle" size={6} /><span style={{ color: SOL.green }}>working</span> · launch post draft</>} />
-      <LeadCard r={role("people")} t={0.95} status={<><SessionDot state="dormant" className="mr-1.5 align-middle" size={6} />dormant · weekly review Fri</>} />
+      <LeadCard r={role("people")} t={0.95} status={<><SessionDot state="dormant" className="mr-1.5 align-middle" size={6} />sleeping · weekly review Fri</>} />
 
       {ROLES.filter((r) => SUBS[r.id] !== undefined).map((r, i) => (
         <SubNode
@@ -256,7 +256,7 @@ function Stage() {
           r={r}
           t={1.55 + i * 0.07}
           status={r.id === "release"
-            ? <Swap t={T.ready} before={<span style={{ color: DIM }}>dormant</span>} after={<span style={{ color: SOL.yellow }}>fix ready to ship</span>} className="justify-center" />
+            ? <Swap t={T.ready} before={<span style={{ color: DIM }}>sleeping</span>} after={<span style={{ color: SOL.yellow }}>fix ready to ship</span>} className="justify-center" />
             : r.id === "social" ? <span style={{ color: SOL.green }}>working</span> : undefined}
         />
       ))}

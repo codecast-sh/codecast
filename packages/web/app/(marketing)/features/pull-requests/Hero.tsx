@@ -254,9 +254,9 @@ function SessionCard() {
         <span className="text-meta" style={{ color: SOL.blue }}>claude</span>
         <span className="ml-auto text-meta">
           <Swap>
-            <span className="prx-a" style={{ ...at(c.wake), color: SOL.base1 }}>○ dormant</span>
+            <span className="prx-a" style={{ ...at(c.wake), color: SOL.base1 }}>○ sleeping</span>
             <span className="prx-b" style={{ ...at(c.wake, c.sleep), color: SOL.green }}><span className="prx-live">●</span> working</span>
-            <span className="prx-in" style={{ ...at(c.sleep), color: SOL.base1 }}>○ dormant</span>
+            <span className="prx-in" style={{ ...at(c.sleep), color: SOL.base1 }}>○ sleeping</span>
           </Swap>
         </span>
       </div>

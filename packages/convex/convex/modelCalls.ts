@@ -13,22 +13,22 @@ import type { Id } from "./_generated/dataModel";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { verifyApiToken } from "./apiTokens";
 import { createWorkContext } from "./data";
-import { requireTeamAdmin, requireTeamMembership } from "./lib/access";
+import { requireTeamAdmin, requireTeamMembership, workspaceForConversation, workspaceKey } from "./lib/access";
 import { isStaff } from "./lib/staff";
 import { parseWorkspaceKey } from "./lib/accessKeys";
 import { callModelMetered, estimatedUsage, modelCost } from "./lib/anthropic";
-import { readBudget, setBudgetCap, settleBudget, takeBudget, worstCaseCost } from "./lib/teamBudget";
+import { readBudget, setBudgetCap, settleBudget, takeBudget, workspaceBudgeted, worstCaseCost } from "./lib/teamBudget";
 import { recordModelSpend } from "./lib/modelSpend";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { modelCallProblem, parseJsonBlock, type BudgetPurpose, type BudgetSummary, type ModelCallResult, type ModelCallSpec } from "@codecast/shared/contracts/modelCall";
-import { vendorRefusalFor, type VendorGate } from "./lib/vendorGuard";
+import { vendorRefusalFor } from "./lib/vendorGuard";
 
 const purposeValidator = v.union(v.literal("judge"), v.literal("grouping"), v.literal("call"));
 
 /** Whether a workspace pays for model calls at all (a cap above zero): with none, grouping is off, never refused. */
 export const budgetSet = internalQuery({
   args: { workspace: v.string() },
-  handler: async (ctx, args): Promise<boolean> => ((await ctx.db.query("team_budgets").withIndex("by_workspace", (q: any) => q.eq("workspace", args.workspace)).first())?.cap_usd ?? 0) > 0,
+  handler: async (ctx, args): Promise<boolean> => workspaceBudgeted(ctx, args.workspace),
 });
 
 export const reserve = internalMutation({
@@ -47,6 +47,20 @@ export const settle = internalMutation({
 
 /** Where a call is charged: the workspace's budget, and the project (or projects) it served, which model_spend_hours splits it among. */
 export type CallScope = { workspace: string; team_id?: Id<"teams">; project_id?: Id<"projects">; project_ids?: Id<"projects">[] };
+
+/** Which workspace pays for a model call over one session's content, and
+ *  whether it keeps a budget (runModelCall `budgeted`). */
+export type SessionCallBudget = { scope: CallScope; budgeted: boolean };
+
+/** The session's own access workspace (workspaceForConversation: its team's
+ *  while the team can see it, its owner's otherwise), the workspace its spend
+ *  shows under. The one rule for every call over a session (a goal judge,
+ *  close advice). */
+export async function sessionCallBudget(ctx: { db: any }, conv: Parameters<typeof workspaceForConversation>[0]): Promise<SessionCallBudget> {
+  const ws = workspaceForConversation(conv);
+  const scope: CallScope = { workspace: workspaceKey(ws), ...(ws.type === "team" ? { team_id: ws.teamId } : {}) };
+  return { scope, budgeted: await workspaceBudgeted(ctx, scope.workspace) };
+}
 
 const projectsOf = (scope: CallScope): Id<"projects">[] => scope.project_ids ?? (scope.project_id ? [scope.project_id] : []);
 
@@ -105,16 +119,28 @@ export async function withinBudget<T>(
  * Runs one call inside the team's budget. Answers `budget` without sending
  * anything when the cap has no room; otherwise charges what the call cost,
  * failed or not (a call that reported no usage is charged its prompt).
+ * `content`: whose content beyond the workspace the prompt carries (a
+ * session, the caller's token), so the vendor gate reads those too.
+ * `budgeted: false`: the workspace keeps no budget (workspaceBudgeted), so the
+ * call is codecast's own, like the idle summary's: the same gate and errors,
+ * nothing reserved, charged or recorded.
  */
-export async function runModelCall(ctx: { runQuery: any; runMutation: any; scheduler: any }, scope: CallScope, purpose: BudgetPurpose, spec: ModelCallSpec, label: string, timeoutMs = 60_000): Promise<ModelCallResult> {
+export async function runModelCall(
+  ctx: { runQuery: any; runMutation: any; scheduler: any },
+  scope: CallScope,
+  purpose: BudgetPurpose,
+  spec: ModelCallSpec,
+  label: string,
+  timeoutMs = 60_000,
+  opts: { content?: { conversationId?: string; apiToken?: string }; budgeted?: boolean } = {},
+): Promise<ModelCallResult> {
   const problem = modelCallProblem(spec);
   if (problem) return { ok: false, reason: "failed", error: problem, cost_usd: 0, model: spec.model };
   // A regulated team's call is refused before its budget is touched, so it costs nothing.
-  const gate = { ctx, scope: { workspace: scope.workspace } };
+  const gate = { ctx, scope: { workspace: scope.workspace, ...opts.content } };
   const refusal = await vendorRefusalFor(ctx, gate.scope, "anthropic");
   if (refusal) return { ok: false, reason: "failed", error: refusal, cost_usd: 0, model: spec.model };
-  const held = worstCaseCost(spec.model, (spec.system?.length ?? 0) + spec.prompt.length, spec.max_tokens);
-  const spent = await withinBudget(ctx, scope, purpose, held, async (charge): Promise<ModelCallResult> => {
+  const call = async (charge: (usd: number) => void): Promise<ModelCallResult> => {
     const { reply, usage, error, transient } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, output_schema: spec.output_schema, label, timeout_ms: timeoutMs, gate });
     const cost = modelCost(spec.model, usage ?? estimatedUsage(spec.system, spec.prompt));
     charge(cost);
@@ -125,28 +151,12 @@ export async function runModelCall(ctx: { runQuery: any; runMutation: any; sched
       return { ok: true, text: reply.text, json, usage: reply.usage, cost_usd: cost, model: spec.model, stop_reason: reply.stop_reason };
     }
     return { ok: true, text: reply.text, usage: reply.usage, cost_usd: cost, model: spec.model, stop_reason: reply.stop_reason };
-  });
+  };
+  if (opts.budgeted === false) return call(() => {});
+  const held = worstCaseCost(spec.model, (spec.system?.length ?? 0) + spec.prompt.length, spec.max_tokens);
+  const spent = await withinBudget(ctx, scope, purpose, held, call);
   if (!spent.room) return { ok: false, reason: "budget", error: "the team's model budget for this month has no room", cost_usd: 0, model: spec.model, worst_case_usd: held };
   return spent.value;
-}
-
-/**
- * A call for codecast's own loops (a goal judge, the priorities pass): a
- * workspace with a model budget pays for it there (runModelCall); one with
- * none gets it on codecast's own key, unmetered, like the idle summary.
- * `gate` is whose content goes on the own-key path.
- */
-export async function runModelCallOrOwn(ctx: { runQuery: any; runMutation: any; scheduler: any }, scope: CallScope, budgeted: boolean, purpose: BudgetPurpose, spec: ModelCallSpec, label: string, gate: VendorGate, timeoutMs = 60_000): Promise<ModelCallResult> {
-  if (budgeted) return runModelCall(ctx, scope, purpose, spec, label, timeoutMs);
-  const problem = modelCallProblem(spec);
-  if (problem) return { ok: false, reason: "failed", error: problem, cost_usd: 0, model: spec.model };
-  const { reply, usage, error } = await callModelMetered({ model: spec.model, system: spec.system, prompt: spec.prompt, max_tokens: spec.max_tokens, output_schema: spec.output_schema, label, timeout_ms: timeoutMs, gate });
-  const cost = modelCost(spec.model, usage ?? estimatedUsage(spec.system, spec.prompt));
-  if (!reply) return { ok: false, reason: "failed", error: error ?? "the model gave no answer", cost_usd: cost, model: spec.model };
-  if (spec.output !== "json") return { ok: true, text: reply.text, usage: reply.usage, cost_usd: cost, model: spec.model, stop_reason: reply.stop_reason };
-  const json = parseJsonBlock(reply.text);
-  if (json === null) return { ok: false, reason: "failed", error: "the answer held no JSON", cost_usd: cost, model: spec.model };
-  return { ok: true, text: reply.text, json, usage: reply.usage, cost_usd: cost, model: spec.model, stop_reason: reply.stop_reason };
 }
 
 const scopeArgs = {

@@ -130,10 +130,10 @@ describe("the Modern session card", () => {
     expect(word(render({ _id: "c-w", is_idle: false, agent_status: "working" }, { variant: "working" }))).toBe("Working");
     expect(word(render({ _id: "c-n" }, { sectionStatus: "blocked" }))).toBe("Needs you");
     expect(word(render({ _id: "c-d" }, { sectionStatus: "done" }))).toBe("Done");
-    expect(word(render({ _id: "c-p" }, { sectionStatus: "dormant" }))).toBe("Dormant");
+    expect(word(render({ _id: "c-p" }, { sectionStatus: "dormant" }))).toBe("Sleeping");
     expect(word(render({ _id: "c-s" }, { variant: "stashed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined }))).toBe("Stashed");
     expect(word(render({ _id: "c-k" }, { variant: "dismissed", onRestore: noop, onKill: noop, onClose: undefined, onPin: undefined }))).toBe("Closed");
-    expect(word(render({ _id: "c-z", inbox_snoozed_until: NOW + 60 * MIN }, { variant: "snoozed", onRestore: noop }))).toBe("Dormant");
+    expect(word(render({ _id: "c-z", inbox_snoozed_until: NOW + 60 * MIN }, { variant: "snoozed", onRestore: noop }))).toBe("Sleeping");
   });
 
   // Under the owners model a wait its agent owner answers files under Working

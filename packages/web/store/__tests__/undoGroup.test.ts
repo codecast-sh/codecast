@@ -47,7 +47,7 @@ describe("fileSessionsAsRest", () => {
 
   test("one row keeps the action's own label", async () => {
     await fileSessionsAsRest([IDS[0]!], "dormant");
-    expect(getUndoHistory().items[0]!.label).toBe("Filed “Row 0” as Dormant");
+    expect(getUndoHistory().items[0]!.label).toBe("Filed “Row 0” as Sleeping");
   });
 
   test("killed rows are skipped and record nothing", async () => {

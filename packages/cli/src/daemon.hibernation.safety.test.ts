@@ -8,7 +8,7 @@ import {
 import { SyncService, type ConversationLifecycle } from "./syncService.js";
 
 const tracked: string[] = [];
-const life = (): ConversationLifecycle => ({ status: "active", source: "lifecycle", hideStateKnown: true, inboxPinnedAt: null, hasPendingMessages: false });
+const life = (): ConversationLifecycle => ({ status: "active", source: "lifecycle", hideStateKnown: true, inboxPinnedAt: null, hasPendingMessages: false, loopState: null });
 function fixture() {
   const id = `e1-${crypto.randomUUID()}`;
   const tmux = `cc-e1-${id}`;

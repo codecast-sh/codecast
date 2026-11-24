@@ -1,6 +1,6 @@
-import { expect, test } from "bun:test";
+import { afterEach, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
-import { withinBudget } from "./modelCalls";
+import { runModelCall, withinBudget } from "./modelCalls";
 import { HOLD_OUTLIVES_ANY_CALL_MS, takeBudget } from "./lib/teamBudget";
 
 // A settle the budget row refuses (write conflicts under a burst of judging)
@@ -69,4 +69,32 @@ test("a row never stamped starts the clock at its first refusal", async () => {
 test("spend alone filling the cap still refuses", async () => {
   const db = budgetDb({ spent_usd: 399.9, held_usd: 0, last_granted_at: 0 });
   expect(await takeBudget({ db }, "team:t", undefined, 0.18, OCT)).toBe(false);
+});
+
+// A workspace with no budget: the call is codecast's own (a goal judge, close
+// advice). The same gate and the same answer, nothing reserved or recorded.
+const realFetch = globalThis.fetch;
+const realKey = process.env.ANTHROPIC_API_KEY;
+afterEach(() => {
+  globalThis.fetch = realFetch;
+  if (realKey === undefined) delete process.env.ANTHROPIC_API_KEY;
+  else process.env.ANTHROPIC_API_KEY = realKey;
+});
+
+test("an unbudgeted call asks the same gate, for the workspace and the content, and touches no budget", async () => {
+  process.env.ANTHROPIC_API_KEY = "test-key";
+  globalThis.fetch = (async () => new Response(JSON.stringify({ content: [{ type: "text", text: "VERDICT: close" }], usage: { input_tokens: 10, output_tokens: 2 }, stop_reason: "end_turn" }), { status: 200 })) as any;
+  const gates: any[] = [];
+  const mutations: string[] = [];
+  const ctx = {
+    runQuery: async (_fn: any, args: any) => (gates.push(args), null),
+    runMutation: async (fn: any) => (mutations.push(getFunctionName(fn)), true),
+    scheduler: { runAfter: async () => {} },
+  };
+  const spec = { model: "claude-haiku-5-5", prompt: "p", max_tokens: 10, output: "text" as const };
+  const r = await runModelCall(ctx, { workspace: "user:u" }, "judge", spec, "Test", 5_000, { budgeted: false, content: { conversationId: "c1", apiToken: "tok" } });
+  expect(r).toMatchObject({ ok: true, text: "VERDICT: close" });
+  expect(mutations).toEqual([]);
+  // Two asks of the one gate scope: runModelCall's own, before anything is sent, and the send's.
+  expect(gates.map((g) => [g.workspace, g.conversation_id, g.api_token])).toEqual([["user:u", "c1", "tok"], ["user:u", "c1", "tok"]]);
 });

@@ -10580,6 +10580,18 @@ export const PLACEMENT_ROW_FIELDS = [
   "inbox_killed_at", "inbox_snoozed_until", "inbox_dismissed_at", "inbox_stashed_at", "inbox_pinned_at", "inbox_rest", "inbox_rest_at",
 ] as const;
 
+// The daemon's status as placement trusts it at `now` (trustedStatusAt over
+// the row's liveness facts): the one status the verdict reads.
+function placementStatusOf(conv: any, lv: Partial<Pick<LivenessFields, (typeof PLACEMENT_LIVENESS_FIELDS)[number]>>, now: number): string | null {
+  return trustedStatusAt({
+    agent_status: lv.agent_status ?? null,
+    updated_at: lv.updated_at ?? conv.updated_at,
+    last_heartbeat: lv.last_heartbeat ?? null,
+    open_tasks: lv.open_tasks ?? null,
+    open_tasks_at: lv.open_tasks_at ?? null,
+  }, now) ?? null;
+}
+
 export function placeConversationRow(
   conv: any,
   lv: Partial<Pick<LivenessFields, (typeof PLACEMENT_LIVENESS_FIELDS)[number]>>,
@@ -10598,13 +10610,7 @@ export function placeConversationRow(
     {
       ...conv,
       // The row ships the daemon's raw status; placement reads the verdict.
-      agent_status: trustedStatusAt({
-        agent_status: lv.agent_status ?? null,
-        updated_at: lv.updated_at ?? conv.updated_at,
-        last_heartbeat: lv.last_heartbeat ?? null,
-        open_tasks: lv.open_tasks ?? null,
-        open_tasks_at: lv.open_tasks_at ?? null,
-      }, now) ?? null,
+      agent_status: placementStatusOf(conv, lv, now),
       // The raw status beside it, for the pin backstop (pinSpeaks).
       raw_agent_status: lv.agent_status ?? null,
       agent_status_boundary: lv.agent_status_boundary ?? null,
@@ -10800,20 +10806,21 @@ export async function classifyWorkStates(
 }
 
 // One session's work state and when its status last moved, for a surface
-// that names it (a published page's agent chip). Reads the named liveness
-// (buildNamedSessionMaps), not the runner's whole managed_sessions set, so a
-// page polled by many viewers costs a handful of documents a poll.
+// that names it (a published page's agent chip, close advice). Reads the
+// named liveness (buildNamedSessionMaps), not the runner's whole
+// managed_sessions set, so a page polled by many viewers costs a handful of
+// documents a poll. `agentStatus`: the trusted status the verdict read.
 export async function classifyNamedWorkState(
   ctx: any,
   conv: any,
   now: number,
-): Promise<{ state: WorkState; since: number }> {
+): Promise<{ state: WorkState; since: number; agentStatus: string | null }> {
   const { maps, children } = await buildNamedSessionMaps(ctx, conv.user_id, [conv], now);
   const reads = await readLivenessRowInputs(ctx, conv, maps, now);
   const cid = conv._id.toString();
   const producingUntil = producingUntilOf(groupPoolChildren(children).get(cid) ?? [], maps);
-  const { placement } = placeLivenessRowAt(conv, maps, reads, producingUntil, (lv) => ownAsk(lv, conv), now);
-  return { state: placement.work_state, since: maps.agentStatusUpdatedAtMap.get(cid) ?? conv.updated_at };
+  const { lv, placement } = placeLivenessRowAt(conv, maps, reads, producingUntil, (lv) => ownAsk(lv, conv), now);
+  return { state: placement.work_state, since: maps.agentStatusUpdatedAtMap.get(cid) ?? conv.updated_at, agentStatus: placementStatusOf(conv, lv, now) };
 }
 
 // The reads for one row: the un-backfilled last-role fallback and the AUQ
@@ -11969,6 +11976,10 @@ export const getConversationLifecycle = query({
       // refuses to park such a session, because parking it would trade a live
       // pane for a resume the very next tick.
       has_pending_messages: conv.has_pending_messages ?? false,
+      // An armed /loop wakeup lives in the agent process: the hibernation pass
+      // refuses to park such a session, because nothing resumes a parked pane
+      // when the wakeup comes due. Null when it never armed one.
+      loop_state: conv.loop_state ?? null,
       // The daemon's Codex app-server recovery must not revive a thread after
       // an in-place switch away from Codex (jx7dj4aq: divider landed, Codex
       // still answered). Null when the row has no stamp.

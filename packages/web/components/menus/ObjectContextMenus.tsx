@@ -618,7 +618,7 @@ export function SessionMenuItems({
             shortcut="session.dormantAdvance"
             onSelect={() => animatedSetSessionRest(id, "dormant")}
           >
-            Dormant — a machine wakes it
+            Sleeping — a machine wakes it
           </CtxItem>
           <CtxItem icon={CheckCircle2} onSelect={() => animatedSetSessionRest(id, "done")}>
             Mark done

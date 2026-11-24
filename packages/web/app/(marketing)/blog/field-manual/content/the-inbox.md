@@ -14,7 +14,7 @@ The inbox renders these sections top to bottom, and the order is the point: your
 - **Needs You** (yellow): the ball is in your court.
 - **Done** (cyan): delivered; read it when you like.
 - **Working**: the agent is producing right now. Leave it alone.
-- **Dormant** (blue): parked on a wake a machine owns, such as a scheduled check or a background watcher.
+- **Sleeping** (blue): parked on a wake a machine owns, such as a scheduled check or a background watcher.
 
 Below those sit three collapsed buckets that are nobody's move: **Snoozed**, **Stashed** (with a "kill all" button) and **Closed** (closed and killed sessions; a closed one shows its triggers underneath, and moves to Stashed once a trigger or another session wakes it). On a busy day they hold hundreds of sessions, none of them in your way.
 
@@ -24,17 +24,17 @@ A session's section is decided first by anything you did to it (stashed, snoozed
 
 ## The five work states, and what moves a session between them
 
-Every session carries one of five work states: **Working**, **Needs You**, **Done**, **Dormant**, **Idle**. One shared function computes it everywhere, so the web inbox, the phone, push notifications and the Lock Screen can never disagree about where a session belongs.
+Every session carries one of five work states: **Working**, **Needs You**, **Done**, **Sleeping**, **Idle**. One shared function computes it everywhere, so the web inbox, the phone, push notifications and the Lock Screen can never disagree about where a session belongs.
 
 It reads what the agent's process is doing, what the transcript shows, what the agent said about itself, and what you did to the card. The rules, in order:
 
 1. **Killed wins.** A killed session is idle, and nothing but a new message from you makes it look busy again.
 2. **Snooze.** A snoozed session is dormant until its time comes, then needs you.
-3. **Your own verdict.** If you filed the row yourself (dragged it into a section, or chose Mark done, Dormant or Mark needs you), it stays there. This outranks even hard blocks, because you already saw them. It expires on the next activity, so it can never hide a *new* ask.
+3. **Your own verdict.** If you filed the row yourself (dragged it into a section, or chose Mark done, Sleep or Mark needs you), it stays there. This outranks even hard blocks, because you already saw them. It expires on the next activity, so it can never hide a *new* ask.
 4. **Hard blocks** go to Needs You: an error banner ("Please run /login", a usage limit), an open question, a permission prompt.
 5. **Producing** goes to Working: the agent is thinking, compacting, starting or resuming, or there is queued work a live machine can deliver.
 6. **Dead or unresponsive with output** goes to Needs You: someone has to read it or restart it (unless it exited right after saying it was done, the ordinary end of a scheduled run).
-7. **Settled** (the turn ended) picks a resting place, in trust order: the agent said it is blocked, so Needs You; it named a wake, or a schedule or loop is armed into it, or one of its workers is still running, so Dormant; it said done, so Done; a classifier read the turn and judged it delivered, so Done. Anything else falls through to Needs You.
+7. **Settled** (the turn ended) picks a resting place, in trust order: the agent said it is blocked, so Needs You; it named a wake, or a schedule or loop is armed into it, or one of its workers is still running, so Sleeping; it said done, so Done; a classifier read the turn and judged it delivered, so Done. Anything else falls through to Needs You.
 8. **Not settled, no status**: you just sent a message it has not picked up, so Working. No messages at all is Idle.
 
 > **Why it matters.** The fallthrough is deliberate: a finished turn that nobody classified lands in Needs You, not Done. The system never guesses that work is finished. Silence costs you a glance; a wrong "done" costs you a stalled agent you never look at again.
@@ -67,22 +67,22 @@ When you are not going to reply right now, you park the card. Three surfaces sha
 The parking verbs, lightest first:
 
 - **Defer**: not now. The card drops down the stack and comes back on its next activity.
-- **Dormant**: parked; a machine wakes it (a schedule, a watcher, another session).
+- **Sleeping**: parked; a machine wakes it (a schedule, a watcher, another session).
 - **Stash**: out of the inbox, and the agent keeps running. It comes back on its own when a scheduled run fires into it, another session writes to it, the agent says it is blocked, or when it stalls on a prompt, a question or a dead process.
 - **Stash and hide**: a stash that stays out through scheduled wakes and other sessions' messages. Only a real ask brings it back. Made for a recurring loop you have reviewed and want quiet.
 - **Close**: done looking at it. A finished session stops and files under Closed; one still working keeps running and files under Stashed. Its schedules and queued messages stay, and like Stash and hide, they and other sessions' messages run it out of sight, under Stashed. It comes back when its agent declares it is done or blocked, a run completes asking for attention, it stalls, or you write to it. A role's session, or one a repeating schedule wakes, does not come back on done, since its routine runs end done. The card's tooltip says which will happen.
 - **Kill**: in the right-click menu, the command palette and the selection bar, and the square stop button on a card already in Stashed or Closed. Tears the agent down and cancels anything scheduled into it, asking first when there is something to cancel, and files it under Closed. The transcript stays readable and the session restartable.
 
-Two filing verbs remove nothing: **Pin** (top of the list) and **Label** (one of your personal labels; a session carries at most one, and teammates never see yours). Dragging a card into Needs You, Done or Dormant is the same verdict as the menu item. Working is not a drop target: nobody can declare that an agent is producing. Every action lands in the undo history (`Ctrl/Cmd+Z`); undoing a kill brings the card back, but the agent stays stopped until you restart it.
+Two filing verbs remove nothing: **Pin** (top of the list) and **Label** (one of your personal labels; a session carries at most one, and teammates never see yours). Dragging a card into Needs You, Done or Sleeping is the same verdict as the menu item. Working is not a drop target: nobody can declare that an agent is producing. Every action lands in the undo history (`Ctrl/Cmd+Z`); undoing a kill brings the card back, but the agent stays stopped until you restart it.
 
 | Action | Where in the app | Shortcut | On the phone | What happens |
 |---|---|---|---|---|
 | Reply | Composer | `Enter`; `Alt+Enter` sends and advances | Open the session, type | Lands in the agent's terminal as its next turn; card goes to Working |
 | Approve / deny | The permission prompt | `y` / `n` | Buttons on the prompt | Answers the waiting tool |
 | Defer | Triage bar, right-click | `Shift+Backspace` | | Card sinks until its next activity |
-| Dormant | Triage bar "more", right-click | `Alt+Shift+Backspace` | | Files under Dormant until the next wake |
+| Sleep | Triage bar "more", right-click | `Alt+Shift+Backspace` | | Files under Sleeping until the next wake |
 | Mark done / needs you | Right-click, or drag the card | | | Files the card where you put it, until the next activity |
-| Snooze | Right-click ("Snooze…") | `Alt+Z` | | Dormant until the time you pick; "Move to Needs You now" wakes it early |
+| Snooze | Right-click ("Snooze…") | `Alt+Z` | | Sleeping until the time you pick; "Move to Needs You now" wakes it early |
 | Stash | Triage bar, right-click | `Ctrl+Backspace` | Long-press | Out of the inbox; agent keeps running |
 | Stash and hide | Triage bar "more", right-click | `Ctrl+Alt+Backspace` | | Stays out until an ask |
 | Close | The card's X, triage bar, right-click | `Ctrl+Shift+Backspace` | Swipe left, or long-press | Agent stopped and filed under Closed (mid-turn, left running under Stashed); schedules kept; back when it's done or needs you (a role or repeating trigger: needs you only) |

@@ -49,8 +49,8 @@ export const PARK_VERBS: TriageVerb[] = [
   {
     id: "dormant",
     action: "session.dormantAdvance",
-    label: "Dormant",
-    done: "Dormant",
+    label: "Sleep",
+    done: "Sleeping",
     icon: Moon,
     blurb: "Parked. A machine wakes it: a trigger, a watcher, another session.",
     hover: "hover:text-sol-blue hover:bg-sol-blue/10",

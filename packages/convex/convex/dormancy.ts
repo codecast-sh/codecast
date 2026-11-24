@@ -14,25 +14,14 @@
 // it. Standing loops (recurring / event) and `once` follow-ups park with
 // different strength — see ArmedTriggerHomes — so the loader keeps them apart.
 import { isHostedAgentType, isLoopFresh, isMachineDeliveredMessage } from "@codecast/shared/contracts";
+import { ARMED_TRIGGER_STATUSES, isArmedInjectTrigger, type InjectTriggerTask as SharedInjectTriggerTask } from "@codecast/shared/contracts/armedTrigger";
 import type { QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
-const ARMED_TRIGGER_STATUSES = ["scheduled", "running"] as const;
-
-type InjectTriggerTask = {
+type InjectTriggerTask = SharedInjectTriggerTask & {
   originating_conversation_id?: Id<"conversations"> | null;
   schedule_type: string;
-  status: string;
-  last_run_failed?: boolean | null;
-  last_run_needs_attention?: boolean | null;
 };
-
-export function isArmedInjectTrigger(task: InjectTriggerTask): boolean {
-  if (!task.originating_conversation_id) return false;
-  if (!(ARMED_TRIGGER_STATUSES as readonly string[]).includes(task.status)) return false;
-  if (task.last_run_failed || task.last_run_needs_attention) return false;
-  return true;
-}
 
 export function isStandingInjectTrigger(task: InjectTriggerTask): boolean {
   if (task.schedule_type !== "recurring" && task.schedule_type !== "event") return false;

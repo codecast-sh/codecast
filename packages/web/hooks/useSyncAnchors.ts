@@ -153,7 +153,7 @@ export function deriveAnchorStatus(a: Partial<AnchorRow> | null | undefined, now
   }
   const fresh = a.conv_updated_at && now - a.conv_updated_at < 3 * 60 * 1000;
   if (fresh) return { label: "online", dot: "bg-sol-green", text: "text-sol-green", tone: "online" };
-  return { label: "dormant · wakes on an event", dot: "bg-sol-text-dim/60", text: "text-sol-text-dim", tone: "dormant" };
+  return { label: "sleeping · wakes on an event", dot: "bg-sol-text-dim/60", text: "text-sol-text-dim", tone: "dormant" };
 }
 
 

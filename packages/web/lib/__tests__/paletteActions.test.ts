@@ -279,7 +279,7 @@ describe("palette item ranking", () => {
     const dev = paletteActions("session", [row], "u1", false).map((a) => a.label);
     expect(dev).toContain("Rename session…");
     expect(dev).toContain("Kill session");
-    expect(dev).toContain("Dormant: a machine wakes it");
+    expect(dev).toContain("Sleep: a machine wakes it");
   });
 
   test("keyword rows still hide when they do not match", () => {

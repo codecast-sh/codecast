@@ -104,7 +104,8 @@ import {
   rowPinPredatesTurn,
 } from "@codecast/shared/contracts/inboxPlacement";
 import { agentStatusAt, liveFactsOf } from "../lib/liveness";
-import { closeFactsOf, closeSetsAside, holdFactsOfRow, nestedInFlightOf } from "../lib/sessionClose";
+import { closeSetsAside } from "@codecast/shared/contracts/closeKind";
+import { closeFactsOf, holdFactsOfRow, nestedInFlightOf } from "../lib/sessionClose";
 // The shared inbox projection (docs/architecture/sync-convergence.md): the
 // working-set selection, fold, fact/stamp field ownership, and the epoch clock.
 // Membership on this replica is the SAME selection the server scan runs.

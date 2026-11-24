@@ -1,0 +1,66 @@
+{
+ "asOf": "2026-09-01T12:00:00.000Z",
+ "snapshot": {
+  "now": 1788264000000,
+  "conv_id": "conv-armed-trigger-decides",
+  "docs": {
+   "conversations": [
+    {
+     "_id": "conv-armed-trigger-decides",
+     "_creationTime": 1788260400000,
+     "short_id": "armed-t",
+     "title": "Watch the nightly build",
+     "status": "completed",
+     "updated_at": 1788262800000,
+     "message_count": 4,
+     "armed_trigger_kind": "once",
+     "user_id": "user-1",
+     "settle_verdict": "done",
+     "settle_verdict_at": 1788262801000,
+     "idle_summary": "Set a 2 AM trigger to report the nightly build"
+    }
+   ],
+   "messages": [
+    {
+     "_id": "conv-armed-trigger-decides-m1",
+     "_creationTime": 1788262500000,
+     "conversation_id": "conv-armed-trigger-decides",
+     "timestamp": 1788262500000,
+     "role": "user",
+     "content": "Check tonight's nightly build and tell me if it fails."
+    },
+    {
+     "_id": "conv-armed-trigger-decides-m2",
+     "_creationTime": 1788262800000,
+     "conversation_id": "conv-armed-trigger-decides",
+     "timestamp": 1788262800000,
+     "role": "assistant",
+     "content": "I set a trigger for 2 AM to read the nightly build's result and report back here."
+    }
+   ],
+   "managed_sessions": [],
+   "agent_tasks": [
+    {
+     "_id": "task-nightly-check",
+     "_creationTime": 1788262200000,
+     "originating_conversation_id": "conv-armed-trigger-decides",
+     "status": "scheduled",
+     "schedule_type": "once",
+     "title": "Read the nightly build result"
+    }
+   ],
+   "pending_messages": [],
+   "users": [
+    {
+     "_id": "user-1",
+     "_creationTime": 1788177600000,
+     "name": "A person"
+    }
+   ]
+  }
+ },
+ "label": {
+  "verdict": "close",
+  "why": "an armed trigger brings it back; the verified facts decide with no model call"
+ }
+}

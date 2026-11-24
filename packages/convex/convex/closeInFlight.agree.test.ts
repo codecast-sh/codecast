@@ -185,14 +185,14 @@ describe("the client and the server agree on the group a close takes down", () =
 
   test("a spawned child mid-turn does not set its lead's close aside", async () => {
     const r = await group([{ session_id: "agent-a0a0a06131" }, { session_id: "ca19ce3d-spawned", busy: true }]);
-    expect(r.serverAside).toBeNull();
-    expect(r.clientAside).toBe(false);
+    expect(r.serverAside).toBe(false);
+    expect(r.clientAside).toBeNull();
   });
 
   test("an agent- subagent mid-turn does", async () => {
     const r = await group([{ session_id: "agent-a0a0a06131", busy: true }, { session_id: "ca19ce3d-spawned" }]);
-    expect(r.serverAside).toBe("nested");
-    expect(r.clientAside).toBe(true);
+    expect(r.serverAside).toBe(true);
+    expect(r.clientAside).toBe("nested");
   });
 
   test("an already closed or killed subagent is not counted", async () => {

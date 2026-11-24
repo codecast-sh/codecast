@@ -1,4 +1,5 @@
-import { closeTooltip, type CloseRow } from '@codecast/web/lib/sessionClose';
+import { closeEffect } from '@codecast/shared/contracts/closeKind';
+import type { CloseRow } from '@codecast/web/lib/sessionClose';
 import { closeFactsInStore, type CloseStore } from '@codecast/web/lib/closeFactsInStore';
 import type { TaskRow } from '@codecast/web/components/triggerTasks';
 import { killReviewOf } from '@codecast/web/components/consequential/killReview';
@@ -8,11 +9,11 @@ import { killReviewOf } from '@codecast/web/components/consequential/killReview'
 
 type Row = CloseRow & { _id: string; title?: string | null; is_idle?: boolean; has_pending?: boolean };
 
-/** What Close does to this row now: the web tooltip without its "Close: ",
+/** What Close does to this row now: the web tooltip without its "Close: " (closeEffect),
  *  for the line under the menu's Close. Reads the store exactly as the web
  *  tooltip does (closeFactsInStore): triggers, an unlanded send, the nested group. */
 export function closeDetail(row: Row, store: CloseStore, now: number): string {
-  const words = closeTooltip(closeFactsInStore(store, row, now)).replace(/^Close: /, '');
+  const words = closeEffect(closeFactsInStore(store, row, now));
   return words.charAt(0).toUpperCase() + words.slice(1);
 }
 

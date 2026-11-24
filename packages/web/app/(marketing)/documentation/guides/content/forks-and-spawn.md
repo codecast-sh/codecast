@@ -15,7 +15,7 @@ Open **Settings**, pick **Agent Features** under *Machines*, choose the computer
 - "Audit each of the three payment modules in parallel and summarize the risks."
 - "Reproduce the bug in the other repo while you keep working on the fix here."
 
-The agent writes each worker a brief, starts it, and waits. A worker starts fresh and knows only its brief, so the agent gives it what it needs. While it waits, the parent is **dormant**. It wakes when its workers finish, get stuck, or need a permission, and workers that finish together reach it as one message. Then it reads their results and gives you one answer.
+The agent writes each worker a brief, starts it, and waits. A worker starts fresh and knows only its brief, so the agent gives it what it needs. While it waits, the parent is **sleeping**. It wakes when its workers finish, get stuck, or need a permission, and workers that finish together reach it as one message. Then it reads their results and gives you one answer.
 
 ## Workers in the inbox
 
@@ -23,7 +23,7 @@ The agent writes each worker a brief, starts it, and waits. A worker starts fres
 
 - **Workers nest under their parent.** The parent shows its first two; **+N more sub-sessions** expands the rest and **collapse** folds them away.
 - **Every worker is a full session.** Click one to read what it did, or write to it like any conversation.
-- **States say who acts next.** **working** means the agent is producing, **dormant** means it waits on something that will wake it, **needs you** means a person has to act, and **done** means it delivered.
+- **States say who acts next.** **working** means the agent is producing, **sleeping** means it waits on something that will wake it, **needs you** means a person has to act, and **done** means it delivered.
 
 Your agent creates separate inbox threads only when you ask for them. Asking for something to run in parallel gets you workers, not a stack of new cards.
 
@@ -72,6 +72,6 @@ In the iPhone app, press and hold a message and pick **Fork from here**. The ses
 | What you notice | What to do |
 |-----------------|------------|
 | Workers show up as separate cards in your inbox | Ask the agent to start them as workers under its own session next time |
-| The parent looks stuck while its workers run | It is **dormant**, waiting for them. It wakes when they finish |
+| The parent looks stuck while its workers run | It is **sleeping**, waiting for them. It wakes when they finish |
 | A worker is marked **needs you** | Open it. It may be asking a question or waiting on a permission prompt |
 | You can't find a worker | Expand **+N more sub-sessions** under its parent |

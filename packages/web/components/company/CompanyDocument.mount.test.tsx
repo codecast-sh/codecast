@@ -242,7 +242,7 @@ async function verifyCompany() {
   assert.deepEqual(cells(quality), GRID.filter((c) => c !== "ol-owner"), "the owner cell left empty, every other column held");
   assert.equal(quality.querySelector("[data-line-title]")!.getAttribute("href"), "/org/or-36");
   none(quality.querySelector("[data-role-reports-to]"), "it sits right under whom it reports to: the line does not name them again");
-  assert.equal(quality.querySelector("[data-role-state]")!.getAttribute("data-role-state"), "dormant", "its standing agent's own word");
+  assert.equal(quality.querySelector("[data-role-state]")!.getAttribute("data-role-state"), "sleeping", "its standing agent's own word");
   assert.equal(quality.querySelector("[data-role-carries]")!.textContent, "leads Agent Quality");
   assert.equal(line("fixture-role-head-of-people")!.querySelector("[data-role-carries]")!.textContent, "owns Every project has a lead and every goal an owner");
   // A person opens in place to the goals they own, as goal lines.

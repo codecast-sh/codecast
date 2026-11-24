@@ -85,7 +85,7 @@ async function verifySummaries() {
   const quality = tree.roles.find((r: any) => r.short_id === "or-36")!;
   assert.equal(q("[data-summary-title]")!.textContent, "Agent Quality");
   assert.equal(q("[data-summary-sub]")!.textContent, roleWords(quality).name);
-  assert.deepEqual(facts(), ["↳ Ashot Petrosian", "dormant", facts()[2]]);
+  assert.deepEqual(facts(), ["↳ Ashot Petrosian", "sleeping", facts()[2]]);
   assert.match(facts()[2]!, /^since /);
   assert.deepEqual(serves(), ["/goals/in-4", "/goals/in-1"], "the goal it owns first, then the one its project carries");
   assert.equal(q("[data-summary-carried]")!.textContent, "CarriesAgent Quality");
