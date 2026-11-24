@@ -370,6 +370,13 @@ function barHtml(o: BrandOpts): string {
   #__cc_cpanel .__cc_pendrow { margin: 10px 0 0; padding: 8px 1px 0; border-top: 1px solid var(--cc-line); font-size: 11px; }
   /* Threads: avatar-column grid, replies on a connector line. */
   #__cc_cpanel .__cc_threads { margin: 4px -10px -10px; }
+  /* Comments made on the page's other views: one row per view, linking there. */
+  #__cc_cpanel .__cc_ovs { margin: 14px -10px -10px; padding: 4px 4px 6px; border-top: 1px solid var(--cc-line); }
+  #__cc_cpanel .__cc_ovh { color: var(--cc-dim); font-size: 10px; text-transform: uppercase; letter-spacing: .07em; padding: 6px 10px 2px; }
+  #__cc_cpanel .__cc_ov { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-radius: 6px; color: var(--cc-ink); text-decoration: none; font-size: 12px; }
+  #__cc_cpanel .__cc_ov:hover { background: var(--cc-hov); }
+  #__cc_cpanel .__cc_ovv { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  #__cc_cpanel .__cc_ovn { margin-left: auto; color: var(--cc-dim); flex-shrink: 0; }
   #__cc_cpanel .__cc_thread { position: relative; padding: 10px 14px 9px; border-top: 1px solid var(--cc-line); }
   #__cc_cpanel .__cc_thread:last-child { border-radius: 0 0 12px 12px; }
   #__cc_cpanel .__cc_thread.__cc_sel { background: rgba(38,139,210,.07); }
@@ -842,7 +849,7 @@ function barHtml(o: BrandOpts): string {
   // change in the same commit or in-page nav strands unlocked viewers.
   var keepHash=location.hash||"";
   var withQ=function(extra){var q=new URLSearchParams(location.search);var out=new URLSearchParams();
-    ["m","k","e","live"].forEach(function(p){var val=q.get(p);if(val)out.set(p,val);});
+    ["m","k","e","live","view"].forEach(function(p){var val=q.get(p);if(val)out.set(p,val);});
     if(CC.live)out.set("live","1");
     Object.keys(extra).forEach(function(p){out.set(p,String(extra[p]));});
     return location.pathname+"?"+out.toString()+keepHash;};
@@ -869,7 +876,8 @@ function barHtml(o: BrandOpts): string {
   document.addEventListener("click",closeAll);
   panels.forEach(function(p){if(p)p.addEventListener("click",function(e){e.stopPropagation();});});
   var fetchMeta=function(cb){fetch(CC.metaUrl,{cache:"no-store"}).then(function(r){return r.json();}).then(cb,function(){});};
-  var setCount=function(){var cc=document.getElementById("__cc_ccount");if(cc)cc.textContent=CC.comments?String(CC.comments):"";};
+  var setCount=function(){var cc=document.getElementById("__cc_ccount");if(!cc)return;
+    var n=savedLoaded?savedHere().length:CC.comments;cc.textContent=n?String(n):"";};
   // --- the page's agent ---
   // The session that made the page, as a quiet chip: idle, working, needs
   // input, and "updating" from a send to the agent until a newer version
@@ -951,6 +959,23 @@ function barHtml(o: BrandOpts): string {
   var cpanel=document.getElementById("__cc_cpanel");
   var drafts=[];
   var saved=[],savedLoaded=false;
+  // --- the page's views ---
+  // A page with several views (steps, tabs, screens of a flow) keeps the one
+  // showing in ?view=<name>, written with history.replaceState/pushState.
+  // A comment records the view it was made on (anchor.view) and shows only
+  // there; no param, or an anchor without one, is the landing view "". A
+  // reply belongs to its thread's view.
+  var viewNow=function(){try{return (new URLSearchParams(location.search).get("view")||"").slice(0,200);}catch(e){return "";}};
+  var curView=viewNow();
+  var viewOf=function(c){var an=parseAnchor(c);return an&&typeof an.view==="string"?an.view:"";};
+  var threadViews=function(){var m={};saved.forEach(function(c){if(!c.parent_id)m[c.id]=viewOf(c);});return m;};
+  var viewOfIn=function(c,tv){return c.parent_id&&tv[c.parent_id]!==undefined?tv[c.parent_id]:viewOf(c);};
+  var savedHere=function(){var tv=threadViews();return saved.filter(function(c){return viewOfIn(c,tv)===curView;});};
+  // The same page at another view, every other param (gate tokens, live,
+  // theme) kept. c is dropped unless asked for: it would reopen a thread.
+  var viewUrl=function(v,keepC){var q=new URLSearchParams(location.search);
+    if(v)q.set("view",v);else q.delete("view");if(!keepC)q.delete("c");
+    var s=q.toString();return location.pathname+(s?"?"+s:"")+location.hash;};
   // Inline reply composers: which thread is open, and per-thread draft text
   // (kept out of the DOM so meta refreshes don't eat what's being typed).
   var replyState={open:null,text:{}};
@@ -1091,11 +1116,13 @@ function barHtml(o: BrandOpts): string {
   var pinTimer=null;
   var renderPins=function(){
     NL.draw();
+    setCount();
+    var here=savedHere();
     var marks=[];
-    saved.forEach(function(c){var an=parseAnchor(c);
+    here.forEach(function(c){var an=parseAnchor(c);
       if(an&&typeof an.t==="number"&&!c.parent_id)marks.push({t:an.t,n:marks.length+1,label:c.author_name+": "+c.text.slice(0,80),avatar:c.author_avatar||undefined,id:c.id});});
     TL.markers(marks);
-    var anchored=saved.filter(function(c){var an=parseAnchor(c);return !!an&&(an.sel||typeof an.x==="number"||typeof an.y==="number");});
+    var anchored=here.filter(function(c){var an=parseAnchor(c);return !!an&&(an.sel||typeof an.x==="number"||typeof an.y==="number");});
     if(!pinLayer&&!anchored.length)return;
     pinsOn().innerHTML="";
     pinNodes=anchored.map(function(c){
@@ -1127,6 +1154,19 @@ function barHtml(o: BrandOpts): string {
     // handler that closes every panel.
     seekTo(c);setTimeout(function(){openC(null,c.id,true);},0);
   });
+  // The page changing view under the bar: wrap the history writes it makes
+  // and listen for back/forward, then show that view's pins and threads.
+  // The open panel redraws unless drafts are in it (never under typing).
+  var onView=function(){
+    var v=viewNow();if(v===curView)return;
+    curView=v;renderPins();
+    if(cpanel&&!cpanel.hidden&&!drafts.length)renderC();
+  };
+  ["pushState","replaceState"].forEach(function(k){
+    var orig=history[k];if(typeof orig!=="function")return;
+    history[k]=function(){var r=orig.apply(this,arguments);try{onView();}catch(e){}return r;};
+  });
+  window.addEventListener("popstate",onView);
   var refreshSaved=function(cb){fetchMeta(function(m){
     if(!m)return;
     saved=m.comments||[];savedLoaded=true;
@@ -1141,6 +1181,14 @@ function barHtml(o: BrandOpts): string {
     refreshSaved(function(){
       var target=null;saved.forEach(function(x){if(x.id===focusCid)target=x;});
       var tid=target&&target.parent_id?target.parent_id:focusCid;
+      // A comment made on another view: open the page on that view. Once
+      // only: if the URL this document was requested at already named it,
+      // the page moved off it on its own, and reloading again would loop.
+      var tview=target?viewOfIn(target,threadViews()):curView;
+      if(tview!==curView){
+        var asked="";try{var nav=performance.getEntriesByType("navigation")[0];asked=new URL(nav?nav.name:location.href).searchParams.get("view")||"";}catch(e){}
+        if(asked!==tview){location.replace(viewUrl(tview,true));return;}
+      }
       openC(null,tid,true);
       var p=target?posFor(parseAnchor(target)):null;
       if(!p){var top2=null;saved.forEach(function(x){if(x.id===tid)top2=x;});if(top2)p=posFor(parseAnchor(top2));}
@@ -1195,10 +1243,13 @@ function barHtml(o: BrandOpts): string {
   // job, where the name and the send live, so the editor links there.
   var dSeq=0,draftEd=null;
   // A draft's "Send to agent" starts on for the owner and off for a teammate.
-  var newDraft=function(a){var d={id:"d"+(++dSeq),text:"",anchor:a,agent:steerRole()==="owner"};drafts.push(d);return d;};
+  // Every draft records the view it was started on.
+  var newDraft=function(a){if(curView){a=a||{};a.view=curView;}
+    var d={id:"d"+(++dSeq),text:"",anchor:a,agent:steerRole()==="owner"};drafts.push(d);return d;};
   var hasSpot=function(d){return !!(d.anchor&&typeof d.anchor.x==="number"&&typeof d.anchor.y==="number");};
+  var draftHere=function(d){return ((d.anchor&&d.anchor.view)||"")===curView;};
   var draftSrc={sticky:false,hint:"Click anywhere to pin your comment · Esc cancels",
-    notes:function(){var out=[];drafts.forEach(function(d,i){if(hasSpot(d))out.push({key:d.id,n:i+1,x:d.anchor.x,y:d.anchor.y,t:d.anchor.t,body:d.text,snippet:d.anchor.snippet||""});});return out;},
+    notes:function(){var out=[];drafts.forEach(function(d,i){if(hasSpot(d)&&draftHere(d))out.push({key:d.id,n:i+1,x:d.anchor.x,y:d.anchor.y,t:d.anchor.t,body:d.text,snippet:d.anchor.snippet||""});});return out;},
     editing:function(){return draftEd;},
     label:function(nt){return "Draft "+nt.n+" · not posted yet";},
     add:function(pt,snip,t){
@@ -1280,9 +1331,10 @@ function barHtml(o: BrandOpts): string {
   // selected state (deep links and pin jumps — NOT reply-opens).
   var renderC=function(focusIdx,scrollToCid,highlightCid){
     cpanel.innerHTML="";
+    var here=savedHere();
     var head=el("div","__cc_phdr");
     head.appendChild(el("span","__cc_pht","Discussion"));
-    if(saved.length>0)head.appendChild(el("span","__cc_phn",String(saved.length)));
+    if(here.length>0)head.appendChild(el("span","__cc_phn",String(here.length)));
     head.appendChild(el("span","__cc_sp"));
     if(me){
       var mh=el("span","__cc_meid");mh.title="Commenting as "+me.name;
@@ -1297,10 +1349,13 @@ function barHtml(o: BrandOpts): string {
     cpanel.appendChild(head);
     var body=el("div","__cc_pbody");
     cpanel.appendChild(body);
-    if(!drafts.length&&!saved.length){
+    // The other views' comments, counted per view (replies with their thread).
+    var tv=threadViews(),elsewhere={},nElse=0;
+    saved.forEach(function(c){var v=viewOfIn(c,tv);if(v!==curView){elsewhere[v]=(elsewhere[v]||0)+1;nElse++;}});
+    if(!drafts.length&&!here.length){
       var em=el("div","__cc_empty");
       var ei=el("div");ei.innerHTML=bigBubbleSvg;em.appendChild(ei);
-      em.appendChild(el("div","__cc_e1","No comments yet"));
+      em.appendChild(el("div","__cc_e1",nElse?"No comments on this view":"No comments yet"));
       em.appendChild(el("div","__cc_e2","Pin a note on the page, or select text to comment on it."));
       body.appendChild(em);
     }
@@ -1389,14 +1444,14 @@ function barHtml(o: BrandOpts): string {
       pr.appendChild(sa2);
       body.appendChild(pr);
     }
-    if(saved.length){
+    if(here.length){
       // Threads: top-level comments newest-first, replies chronological
       // under their comment. A reply whose thread got resolved away renders
       // as its own top-level row instead of vanishing.
       var topIds={};
-      saved.forEach(function(c){if(!c.parent_id)topIds[c.id]=1;});
+      here.forEach(function(c){if(!c.parent_id)topIds[c.id]=1;});
       var tops=[],repl={};
-      saved.forEach(function(c){
+      here.forEach(function(c){
         if(c.parent_id&&topIds[c.parent_id]){(repl[c.parent_id]=repl[c.parent_id]||[]).push(c);}
         else tops.push(c);
       });
@@ -1509,6 +1564,18 @@ function barHtml(o: BrandOpts): string {
         threads.appendChild(card);
       });
       body.appendChild(threads);
+    }
+    if(nElse){
+      var ovs=el("div","__cc_ovs");
+      ovs.appendChild(el("div","__cc_ovh","Other views"));
+      Object.keys(elsewhere).sort().forEach(function(v){
+        var a=document.createElement("a");a.className="__cc_ov";a.href=viewUrl(v,false);
+        a.title="Open the page on this view";
+        a.appendChild(el("span","__cc_ovv",v||"Start"));
+        a.appendChild(el("span","__cc_ovn",elsewhere[v]+(elsewhere[v]===1?" comment":" comments")));
+        ovs.appendChild(a);
+      });
+      body.appendChild(ovs);
     }
     syncSend();
     if(focusIdx!=null){var t=cpanel.querySelector('[data-i="'+focusIdx+'"] textarea');if(t)t.focus();}
@@ -1864,7 +1931,7 @@ ${body}
     var base=hashAt>=0?href.slice(0,hashAt):href;
     var qAt=base.indexOf("?");
     var params=new URLSearchParams(qAt>=0?base.slice(qAt+1):"");
-    ["m","k","e","live"].forEach(function(p){var v=q.get(p);if(v)params.set(p,v);});
+    ["m","k","e","live","view"].forEach(function(p){var v=q.get(p);if(v)params.set(p,v);});
     var qs=params.toString();
     a.href=location.pathname+(qs?"?"+qs:"")+hash;
   });
