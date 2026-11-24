@@ -1573,6 +1573,7 @@ export default defineSchema({
     // The Closed shelf's closes (listClosedSessions), newest-first.
     .index("by_user_closed", ["user_id", "inbox_closed_at"])
     .index("by_owner_device", ["user_id", "owner_device_id"])
+    .index("by_owner_device_register_only", ["user_id", "owner_device_id", "register_only"])
     // A device's live rows (cloud.hostSessions): a host that has run thousands
     // of stations reads only the ones still active, not its whole history.
     .index("by_owner_device_status", ["user_id", "owner_device_id", "status"])

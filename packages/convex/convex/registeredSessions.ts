@@ -5,7 +5,29 @@ import { checkRateLimit } from "./rateLimit";
 import { isDeletedSession } from "./lib/deletedSessions";
 import { buildShareUpdate, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
-import { deliveryTargetValidator } from "./lib/registerOnly";
+import { deliveryTargetValidator, sameDeliveryTarget } from "./lib/registerOnly";
+import { deviceTokenCaller } from "./devices";
+
+async function endRegisteredRow(ctx: { db: any }, conv: any): Promise<void> {
+  await ctx.db.patch(conv._id, { ended_at: Date.now(), status: "completed" });
+  for (const status of NON_TERMINAL_PENDING_STATUSES) {
+    const rows = await ctx.db
+      .query("pending_messages")
+      .withIndex("by_conversation_status", (q: any) => q.eq("conversation_id", conv._id).eq("status", status))
+      .collect();
+    for (const row of rows) await bounceFromEndedSession(ctx, row);
+  }
+}
+
+async function endSupersededRows(ctx: { db: any }, keep: any): Promise<void> {
+  const rows = await ctx.db
+    .query("conversations")
+    .withIndex("by_owner_device_register_only", (q: any) => q.eq("user_id", keep.user_id).eq("owner_device_id", keep.owner_device_id).eq("register_only", true))
+    .collect();
+  for (const row of rows) {
+    if (row._id !== keep._id && !row.ended_at && sameDeliveryTarget(row.delivery_target, keep.delivery_target)) await endRegisteredRow(ctx, row);
+  }
+}
 
 function titleOf(cwd: string): string {
   const trimmed = cwd.replace(/\/+$/, "");
@@ -49,6 +71,7 @@ export const registerSession = mutation({
         ended_at: undefined,
         status: "active",
       });
+      await endSupersededRows(ctx, (await ctx.db.get(existing._id))!);
       return {
         conversation_id: existing._id,
         short_id: existing.short_id ?? existing._id.toString().slice(0, 7),
@@ -84,6 +107,7 @@ export const registerSession = mutation({
         await patchConversationVisibility(ctx, conv, { ...share, auto_shared: true }, userId);
       }
     }
+    await endSupersededRows(ctx, (await ctx.db.get(id))!);
     return { conversation_id: id, short_id: shortId };
   },
 });
@@ -92,6 +116,7 @@ export const markEnded = mutation({
   args: {
     api_token: v.optional(v.string()),
     session_id: v.string(),
+    delivery_target: v.optional(deliveryTargetValidator),
   },
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
@@ -105,14 +130,8 @@ export const markEnded = mutation({
       .first();
     if (!conv || !conv.register_only) throw new Error("No registered session found for that session id");
     if (conv.ended_at) return;
-    await ctx.db.patch(conv._id, { ended_at: Date.now(), status: "completed" });
-    for (const status of NON_TERMINAL_PENDING_STATUSES) {
-      const rows = await ctx.db
-        .query("pending_messages")
-        .withIndex("by_conversation_status", (q) => q.eq("conversation_id", conv._id).eq("status", status))
-        .collect();
-      for (const row of rows) await bounceFromEndedSession(ctx, row);
-    }
+    if (args.delivery_target && !sameDeliveryTarget(conv.delivery_target, args.delivery_target)) return;
+    await endRegisteredRow(ctx, conv);
   },
 });
 
@@ -122,10 +141,10 @@ export const relayHeartbeat = mutation({
     device_id: v.string(),
   },
   handler: async (ctx, args) => {
-    const userId = await getAuthenticatedUserId(ctx, args.api_token);
-    if (!userId) {
-      throw new Error("Authentication failed: invalid token or session");
-    }
+    const caller = await deviceTokenCaller(ctx, args.api_token);
+    if (!caller) throw new Error("Authentication failed: invalid token or session");
+    if (caller.boundDeviceId && caller.boundDeviceId !== args.device_id) throw new Error("This token is bound to a different machine");
+    const userId = caller.userId;
     const existing = await ctx.db
       .query("relay_heartbeats")
       .withIndex("by_user_device", (q) => q.eq("user_id", userId).eq("device_id", args.device_id))
@@ -147,10 +166,10 @@ export const registeredForDevice = query({
     }
     const rows = await ctx.db
       .query("conversations")
-      .withIndex("by_owner_device", (q) => q.eq("user_id", userId).eq("owner_device_id", args.device_id))
+      .withIndex("by_owner_device_register_only", (q) => q.eq("user_id", userId).eq("owner_device_id", args.device_id).eq("register_only", true))
       .collect();
     return rows
-      .filter((c) => c.register_only && !c.ended_at && c.delivery_target && c.session_id)
+      .filter((c) => !c.ended_at && c.delivery_target && c.session_id)
       .map((c) => ({ session_id: c.session_id!, delivery_target: c.delivery_target!, short_id: c.short_id ?? c._id.toString().slice(0, 7) }));
   },
 });

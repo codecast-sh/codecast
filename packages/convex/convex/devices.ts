@@ -61,7 +61,7 @@ async function getAuthenticatedUserId(
 // (registerDevice, claimDeviceAccount) take a token and nothing else.
 // verifyApiToken has already refused a bound token presented from another
 // device, so `boundDeviceId` is the device this call arrived from.
-async function deviceTokenCaller(
+export async function deviceTokenCaller(
   ctx: { db: any },
   apiToken?: string,
 ): Promise<{ userId: Id<"users">; boundDeviceId?: string } | null> {
@@ -218,7 +218,7 @@ export async function enqueueStartSession(
   },
 ): Promise<Id<"daemon_commands"> | null> {
   const conv = await ctx.db.get(opts.conversationId);
-  assertNotRegisterOnly(conv);
+  assertNotRegisterOnly(conv, "a registered session can't be started");
   // A quiescing/fenced conversation's runtime belongs to the execution
   // coordinator; emitting a legacy start here would spawn a second, unmanaged
   // runtime beside the coordinator's binding (split-brain via the start
@@ -1998,7 +1998,7 @@ export const claimConversation = mutation({
     const convId = ctx.db.normalizeId("conversations", args.conversation_id);
     if (!convId) return;
     const conv = await ctx.db.get(convId);
-    if (!conv || conv.user_id.toString() !== userId.toString()) return;
+    if (!conv || conv.register_only || conv.user_id.toString() !== userId.toString()) return;
     const device = await ownDevice(ctx, userId, args.device_id);
     await ctx.db.patch(convId, {
       owner_device_id: args.device_id,

@@ -490,7 +490,7 @@ describe("registeredForDevice", () => {
   test("leaves out ended rows, ordinary rows and another account's rows", async () => {
     const s = await setup();
     await s.register();
-    await s.register({ session_id: "reg-2" });
+    await s.register({ session_id: "reg-2", delivery_target: PASEO });
     await s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "reg-2" });
     expect((await list(s) as any[]).map((r) => r.session_id)).toEqual(["reg-1"]);
     expect(await list(s, MATE_TOKEN)).toEqual([]);
@@ -549,7 +549,7 @@ describe("a registered session cannot move devices", () => {
     await expect(run((ctx) => performMoveSessionToDevice(ctx, s.owner, { conversation_id: s.conversation_id, owner_device_id: "dev-other", project_path: "/x" }))).rejects.toThrow(MOVE);
     await expect(run((ctx) => performReassignToDevice(ctx, s.owner, { conversation_id: s.conversation_id, device_id: "dev-other" }))).rejects.toThrow(MOVE);
     await expect(run((ctx) => performReparentSessionToDevice(ctx, s.owner, { session_id: s.short_id, device_id: "dev-other" }))).rejects.toThrow(MOVE);
-    await expect(run((ctx) => enqueueStartSession(ctx, s.owner, { conversationId: s.conversation_id, agentType: "claude" as any }))).rejects.toThrow(MOVE);
+    await expect(run((ctx) => enqueueStartSession(ctx, s.owner, { conversationId: s.conversation_id, agentType: "claude" as any }))).rejects.toThrow(/a registered session can't be started/);
     await expect(run(async (ctx) => parkOnCloudHost(ctx, s.owner, await ctx.db.get(s.conversation_id), "dev-other"))).rejects.toThrow(MOVE);
     await s.unchanged();
   });
@@ -624,5 +624,79 @@ describe("poll-keystroke control rows", () => {
     expect(next).toHaveLength(1);
     expect(next[0].content).not.toBe(control);
     expect((await s.pendingRows()).find((r) => r._id === head[0]._id)!.status).toBe("undeliverable");
+  });
+});
+
+describe("a registration supersedes other sessions on the same target", () => {
+  const live = (s: Awaited<ReturnType<typeof setup>>) => s.t.query(api.registeredSessions.registeredForDevice, { api_token: OWNER_TOKEN, device_id: DEVICE }) as Promise<any[]>;
+
+  test("a new session on a reused pane ends the old one and bounces its queue", async () => {
+    const s = await setup();
+    const first = await s.register();
+    await s.send(MATE_TOKEN, first.short_id);
+    await s.register({ session_id: "reg-2" });
+    expect((await live(s)).map((r) => r.session_id)).toEqual(["reg-2"]);
+    const old = await s.conv(first.conversation_id);
+    expect(old.ended_at).toBeGreaterThan(0);
+    expect((await s.pendingRows())[0].status).toBe("cancelled");
+  });
+
+  test("a re-registration of the same session ends nothing of its own", async () => {
+    const s = await setup();
+    await s.register();
+    await s.register();
+    expect((await live(s)).map((r) => r.session_id)).toEqual(["reg-1"]);
+  });
+
+  test("different panes, different paseo homes, other devices and ordinary rows are left alone", async () => {
+    const s = await setup();
+    await s.register();
+    await s.register({ session_id: "reg-pane", delivery_target: { ...HERDR, pane: "p2" } });
+    await s.register({ session_id: "reg-paseo-a", delivery_target: { ...PASEO, home: "/a" } });
+    await s.register({ session_id: "reg-paseo-b", delivery_target: { ...PASEO, home: "/b" } });
+    await s.register({ session_id: "reg-other-dev", device_id: "dev-other" });
+    expect((await live(s)).map((r) => r.session_id).sort()).toEqual(["reg-1", "reg-pane", "reg-paseo-a", "reg-paseo-b"]);
+    expect((await s.conv(s.daemonConv)).ended_at).toBeUndefined();
+  });
+});
+
+describe("markEnded with an expected target", () => {
+  test("ends the row when the target matches and is a quiet no-op when the row moved on", async () => {
+    const s = await setup();
+    const { conversation_id } = await s.register();
+    await s.register({ delivery_target: { ...HERDR, pane: "p9" } });
+    await s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "reg-1", delivery_target: HERDR });
+    expect((await s.conv(conversation_id)).ended_at).toBeUndefined();
+    await s.t.mutation(api.registeredSessions.markEnded, { api_token: OWNER_TOKEN, session_id: "reg-1", delivery_target: { ...HERDR, pane: "p9" } });
+    expect((await s.conv(conversation_id)).ended_at).toBeGreaterThan(0);
+  });
+});
+
+describe("relay heartbeat authentication", () => {
+  test("a token bound to another device is refused", async () => {
+    const s = await setup();
+    await s.t.run(async (ctx) => {
+      const [row] = await ctx.db.query("api_tokens").collect();
+      await ctx.db.patch(row._id, { device_id: "dev-bound" } as any);
+    });
+    await expect(s.t.mutation(api.registeredSessions.relayHeartbeat, { api_token: `${OWNER_TOKEN}.dev-bound`, device_id: DEVICE })).rejects.toThrow(/bound to a different machine/);
+    await s.t.mutation(api.registeredSessions.relayHeartbeat, { api_token: `${OWNER_TOKEN}.dev-bound`, device_id: "dev-bound" });
+  });
+});
+
+describe("daemon self-stamps leave a registered row alone", () => {
+  test("claimConversation does not restamp it", async () => {
+    const s = await setup();
+    const { conversation_id } = await s.register();
+    await s.t.mutation(api.devices.claimConversation, { api_token: OWNER_TOKEN, conversation_id: String(conversation_id), device_id: "dev-other" });
+    expect((await s.conv(conversation_id)).owner_device_id).toBe(DEVICE);
+  });
+
+  test("a daemon's managed session for the same session id does not restamp it", async () => {
+    const s = await setup();
+    const { conversation_id } = await s.register();
+    await s.t.run((ctx) => ctx.db.insert("devices", { user_id: s.owner, device_id: "dev-other", label: "o", platform: "linux", last_seen: Date.now() } as any));
+    await s.t.mutation(api.managedSessions.registerManagedSession, { api_token: OWNER_TOKEN, session_id: "reg-1", pid: 5, device_id: "dev-other" } as any);
+    expect((await s.conv(conversation_id)).owner_device_id).toBe(DEVICE);
   });
 });
