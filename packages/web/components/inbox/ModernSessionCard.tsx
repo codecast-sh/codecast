@@ -30,7 +30,9 @@ import { badgeVariants } from "../ui/badge";
 import { AssignedPingStrip, FoldedSubagentsMark, ForkCorner, SelectTick } from "./SessionCardParts";
 import { ModernAuthorChip, ModernBranchChip, ModernCardToolbar, ModernCommentsChip, ModernFactChip, ModernLinkChip, ModernPinGlyph, ModernProjectChip, ModernFlowChip } from "./ModernCardParts";
 import { SessionStatusMark, SessionStatusWord } from "./SessionStatusMark";
+import { CoOwnerFaces } from "./CoOwnerFaces";
 import type { SessionCardViewProps } from "./SessionCardView";
+import { withOwnerShown } from "../../lib/withOwner";
 import "./modernSessionCard.css";
 
 // The inbox session card in the Modern style: the same props as SessionCardView
@@ -94,6 +96,8 @@ export function ModernSessionCardView({
   identity: identityProp,
   viewers,
   spawnedByTitle,
+  withOwner: ownerLabel = null,
+  coOwners = null,
   anchorIdentity,
   placeDevice,
   thumbSrc,
@@ -148,6 +152,9 @@ export function ModernSessionCardView({
     hosted,
   });
   const meta = SESSION_STATUS[status];
+  // Under the owners model a wait its agent owner answers says who has it.
+  const shown = withOwnerShown(ownerLabel, status === "working", isPendingSend);
+  const withOwner = shown ? `With ${shown}` : null;
   const line = sessionCardLine({
     row: session,
     status,
@@ -306,7 +313,7 @@ export function ModernSessionCardView({
       <div
         role="button"
         tabIndex={0}
-        aria-label={`${displayTitle}, ${meta.word}${line.reason ? `, ${line.reason}` : ""}${time ? `, ${time}` : ""}`}
+        aria-label={`${displayTitle}, ${withOwner ?? meta.word}${line.reason ? `, ${line.reason}` : ""}${time ? `, ${time}` : ""}`}
         onClick={(e) => onSelect(session, e)}
         onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onSelect(session); } }}
         className={`block w-full cursor-pointer text-left ${nested ? "py-1.5 pl-6 pr-3" : "py-2 pl-3 pr-3"} outline-none focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[color:var(--focus-ring)]`}
@@ -340,13 +347,14 @@ export function ModernSessionCardView({
               </span>
             )}
             {session.is_pinned && <span data-mc-pin title="Pinned" className="flex items-center text-sol-magenta"><ModernPinGlyph filled className="w-3 h-3" /></span>}
+            <CoOwnerFaces owners={coOwners} />
             {time && <span data-mc-time title={details} className="whitespace-nowrap text-meta tabular-nums text-sol-text-dim">{time}</span>}
           </span>
         </div>
         <div data-mc-line2 className={`mt-0.5 flex min-w-0 items-start gap-2 ${hasThumb ? "pr-11" : ""}`}>
           <span className="flex h-[18px] w-5 shrink-0 items-center justify-center"><SessionStatusMark status={status} /></span>
           <p title={lineTitle} className={`min-w-0 flex-1 ${nested ? "text-meta" : "text-ui"} ${expanded ? "line-clamp-2" : "truncate"}`}>
-            <SessionStatusWord status={status} title={meta.meaning} className="font-medium" />
+            <SessionStatusWord status={status} word={withOwner} title={withOwner ? "" : meta.meaning} className="font-medium" />
             {line.reason && <span className={meta.text}><span aria-hidden className="text-sol-text-dim"> · </span>{line.reason}</span>}
             {line.text && (
               <span className="text-sol-text-muted">

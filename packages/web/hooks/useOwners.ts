@@ -19,12 +19,12 @@
  */
 
 import { useMemo, useState, useSyncExternalStore } from "react";
-import { useMutation } from "convex/react";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { humanizeConvexError } from "@codecast/shared/contracts";
 import { isConvexId } from "../lib/entityLinks";
 import { useWatchEffect } from "./useWatchEffect";
 import { useQueryNoThrow } from "./useQueryNoThrow";
+import { useInboxStore } from "../store/inboxStore";
 import { peopleOf } from "@codecast/shared/team/memberKind";
 
 type OwnerInfo = {
@@ -189,7 +189,6 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
     api.sessionOwnership.listOwners,
     shouldQueryOwners(conversationId, currentUser) ? { session_id: conversationId } : "skip",
   );
-  const ackAssignment = useMutation(api.sessionOwnership.ackSessionAssignment);
 
   // In-flight optimistic overrides: user_id -> desired membership. Each entry is
   // dropped once the reactive query confirms it (reconcile effect), so the chip
@@ -380,13 +379,9 @@ export function useOwners(conversationId: string, env: OwnersEnv) {
   // long as I own the session, not just until I press "Got it".
   const handoff = myRow && myRow.added_by && myRow.added_by !== meId ? myRow : null;
   const myAssignment = !ackedLocally && handoff && !handoff.seen_at ? handoff : null;
-  const ack = async () => {
+  const ack = () => {
     setAckedLocally(true);
-    try {
-      await ackAssignment({ session_id: conversationId });
-    } catch {
-      setAckedLocally(false);
-    }
+    useInboxStore.getState().clearAssignedPing(conversationId);
   };
 
   const canManage = error || data === null ? false : data ? true : undefined;
