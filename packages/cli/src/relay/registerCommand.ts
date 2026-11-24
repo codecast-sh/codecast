@@ -1,5 +1,6 @@
 import { execFile } from "../proc.js";
 import { LAUNCH_TOKEN_VAR } from "../agentEnv.js";
+import { messagingOnly } from "../fastPath.js";
 import { detectDeliveryTarget, type DeliveryTarget } from "./targets.js";
 
 export type RegisterOptions = { sessionId?: string; cwd?: string };
@@ -9,7 +10,7 @@ export type HookInput = { session_id?: string; cwd?: string };
 export type CommandClient = { mutation(name: string, args: Record<string, unknown>): Promise<any> };
 
 export type RegisterDeps = {
-  config: { auth_token?: string; convex_url?: string } | null;
+  config: { auth_token?: string; convex_url?: string; messaging_only?: boolean } | null;
   env: Record<string, string | undefined>;
   stdinIsTTY: boolean;
   stdoutIsTTY: boolean;
@@ -76,6 +77,7 @@ async function guarded(name: string, deps: RegisterDeps, body: () => Promise<voi
 
 export function runRegister(opts: RegisterOptions, deps: RegisterDeps): Promise<number> {
   return guarded("register", deps, async () => {
+    if (!messagingOnly(deps.config)) return deps.err("cast register: this machine is not messaging-only, so nothing is registered (cast config messaging_only true)");
     if (deps.env[LAUNCH_TOKEN_VAR]) return;
     const target = detectDeliveryTarget(deps.env);
     if (!target) return;

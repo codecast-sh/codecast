@@ -42,7 +42,7 @@ export async function unregisterMain(opts: RegisterOptions, read: ConfigReader):
   return runUnregister(opts, realRegisterDeps(safeConfig(read)));
 }
 
-export async function relayMain(opts: { background?: boolean }, read: ConfigReader): Promise<number> {
+export async function relayMain(opts: { background?: boolean; stop?: boolean }, read: ConfigReader): Promise<number> {
   const makeClient = (url: string): RelayConvexClient =>
     new ConvexClient(url, { webSocketConstructor: recoveringWebSocket({ completeMissingClose: true }) }) as any;
   return runRelayCommand(opts, realRuntimeDeps(() => safeConfig(read), deviceId(), makeClient));

@@ -49,6 +49,41 @@ describe("what the flag gates in index.ts", () => {
   });
 });
 
+describe("sign-in on a messaging-only machine writes the auth config and nothing else", () => {
+  const body = () => bodyOf("async function runOnboarding(config: Config): Promise<void> {");
+
+  test("runOnboarding returns first, before the history import, ~/.claude writes, the daemon and autostart", () => {
+    const b = body();
+    expect(b.startsWith("async function runOnboarding(config: Config): Promise<void> {\n  if (messagingOnly(config)) {\n")).toBe(true);
+    const gate = b.indexOf("return;", b.indexOf("messagingOnly(config)"));
+    for (const later of ["history_import_pending", "installSlashCommand()", "syncHooks(config)", "installSkillsSnippet", "startDaemon()", "ensureAutostart()"]) {
+      expect(b.indexOf(later)).toBeGreaterThan(gate);
+    }
+  });
+
+  test("runAuth and runLogin write the config before onboarding and spread the existing one, so the flag survives sign-in", () => {
+    for (const fn of ["async function runLogin(setupToken: string): Promise<void> {", "async function runAuth(opts: { query?: Record<string, string> } = {}): Promise<void> {"]) {
+      const b = bodyOf(fn);
+      expect(b).toContain("...existingConfig,");
+      expect(b.indexOf("writeConfig(config);")).toBeLessThan(b.indexOf("await runOnboarding(config);"));
+    }
+  });
+
+  test("the enrollment path does not start a daemon on such a machine", () => {
+    expect(INDEX).toContain("else if (!autostartDisabledByEnv() && !isDaemonRunning() && !messagingOnly(enrolled)) {\n      startDaemon();");
+  });
+});
+
+describe("uninstall stops the relay", () => {
+  test("it asks stopRelay to stop it before removing anything", () => {
+    const start = INDEX.indexOf('.command("uninstall")');
+    const block = INDEX.slice(start, INDEX.indexOf('.command("links")', start));
+    expect(block).toContain('await import("./relay/relayCommand.js")');
+    expect(block).toContain("await stopRelay(realStopDeps(), DEFAULT_INTERVALS.replaceWait);");
+    expect(block.indexOf("stopRelay(")).toBeLessThan(block.indexOf("// 2. Remove auto-start"));
+  });
+});
+
 describe("the auto-update stays out of the hook commands, flag or not", () => {
   test("register, unregister and relay are recognised by argv", () => {
     for (const verb of ["register", "unregister", "relay"]) expect(isRelayHookArgv(["bun", "cast", verb, "--background"])).toBe(true);

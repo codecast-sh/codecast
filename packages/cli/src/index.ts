@@ -1713,6 +1713,10 @@ function startDaemon(opts: { afterStop?: boolean } = {}): void {
 // When there is no TTY (e.g. `curl | sh -s -- <token>` without /dev/tty), it
 // applies recommended defaults instead of blocking on prompts.
 async function runOnboarding(config: Config): Promise<void> {
+  if (messagingOnly(config)) {
+    console.log(`${fmt.success(icons.check)} Signed in. This machine is messaging-only: no daemon, no transcript sync, nothing written to ~/.claude.`);
+    return;
+  }
   // A machine linked just now uploads every transcript on disk on the
   // daemon's next start, not only the last week's (daemon.ts runHistoryImport).
   config.history_import_pending = true;
@@ -3044,7 +3048,7 @@ mdm
     for (const p of adoptManagedBinary(os.homedir())) console.log(fmt.muted(`${p} now runs the managed binary`));
     if (step.signIn) {
       await runAuth({ query: { enroll: result.enrollment_id, ...(profile.user_email ? { login_hint: profile.user_email } : {}) } });
-    } else if (!autostartDisabledByEnv() && !isDaemonRunning()) {
+    } else if (!autostartDisabledByEnv() && !isDaemonRunning() && !messagingOnly(enrolled)) {
       startDaemon();
     }
   });
@@ -9753,6 +9757,11 @@ program
     if (fs.existsSync(PID_FILE)) {
       console.log("Stopping daemon...");
       stopDaemon();
+    }
+
+    {
+      const { realStopDeps, stopRelay, DEFAULT_INTERVALS } = await import("./relay/relayCommand.js");
+      await stopRelay(realStopDeps(), DEFAULT_INTERVALS.replaceWait);
     }
 
     // 2. Remove auto-start
