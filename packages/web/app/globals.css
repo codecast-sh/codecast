@@ -287,6 +287,31 @@
    only its glyph and dot. */
 [data-sv-convhead] [data-cc-runner]:has([data-runner-device]) [data-tmux-pill] .cq-sq2 { display: none; }
 
+/* The owners segment (components/OwnersMenu, the session_owners model): the
+   owners' faces in order. No face is ringed. */
+[data-cc-runner] [data-owners-seg] { cursor: pointer; transition: background-color .12s; }
+[data-cc-runner] [data-owners-seg]:hover,
+[data-cc-runner] [data-owners-seg].is-open { background: color-mix(in srgb, var(--sol-text) 7%, transparent); }
+.own-stack { display: inline-flex; align-items: center; gap: 5px; }
+[data-owners-menu] .own-plus:hover { background: color-mix(in srgb, var(--sol-text) 8%, transparent); }
+/* The owners sheet (a phone's header has no owners segment): touch sized whatever the pointer. */
+[data-owners-sheet] [data-owners-menu] .own-row { min-height: 44px; }
+[data-owners-sheet] [data-owners-menu] .own-x, [data-owners-sheet] [data-owners-menu] .own-plus { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
+[data-owners-sheet] [data-owners-menu] [data-owners-foot] button { min-height: 44px; }
+[data-owners-sheet] [data-owners-menu] input { font-size: 16px; }
+.own-chip { display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px 0 4px; border-radius: 6px; background: color-mix(in srgb, var(--sol-text) 6%, transparent); font-size: var(--fs-meta); color: var(--sol-text-muted); }
+/* Touch: 44px rows and icon buttons; a framed button keeps its look and takes
+   a 44px hit area around it. The terminal's copy title grows its bar to 44px. */
+@media (pointer: coarse) {
+  [data-owners-menu] .own-row { min-height: 44px; }
+  [data-owners-menu] .own-x, [data-owners-menu] .own-plus { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; min-height: 44px; }
+  [data-owners-menu] [data-owners-foot] button, [data-cc-owner-strip] button, [data-cc-not-in-inbox] button, [data-cc-agents-list] button, [data-cc-runner] [data-owners-seg] { position: relative; }
+  [data-owners-menu] [data-owners-foot] button::after, [data-cc-owner-strip] button::after, [data-cc-not-in-inbox] button::after, [data-cc-agents-list] button::after, [data-cc-runner] [data-owners-seg]::after { content: ""; position: absolute; inset: -10px -2px; }
+  [data-terminal-bar]:has([data-terminal-attach]) { height: 44px !important; }
+  [data-terminal-attach] { min-height: 44px; }
+  [data-cc-agents-band] > button { min-height: 44px; }
+}
+
 /* Status tabs swap a multi-pill segmented control for a single compact dropdown
    once the header is too tight to show every pill on one row alongside the
    toolbar. Measured for the Tasks header (the widest consumer: ~52 title + ~452
@@ -7859,6 +7884,7 @@ html.light .chg-root { --chg-risk-hatch: repeating-linear-gradient(135deg, color
 .modern-style [data-sv-convhead] [data-cc-runner] [data-runner-device] { height: 100% !important; }
 .modern-style [data-sv-convhead] [data-cc-runner] [data-runner-device] > span { align-items: center; }
 .modern-style [data-sv-convhead] [data-cc-runner] > * + * { border-left-color: transparent; }
+.modern-style [data-sv-convhead] [data-cc-runner] [data-owners-seg] { padding: 0 7px 0 6px; gap: 5px; }
 .modern-style [data-sv-convhead] [data-cc-conv-actions] { gap: 4px; }
 /* Actions are 28px ghost buttons with a 16px glyph. */
 .modern-style [data-sv-convhead] [data-cc-conv-actions] > :is(button, a):not([data-cc-image-pill]),

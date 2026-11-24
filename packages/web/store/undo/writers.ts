@@ -304,6 +304,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   bookmarks: "toggleBookmark's spec carries an inverse (the same toggle), which reaches the server as the toggle itself.",
   mcpConnections: "Written only by disconnectAgent, which revokes an outside agent's access (a delete); never undoable.",
   permissionRules: "Written only by addPermissionRule, a create, and removePermissionRule, a delete; never undoable.",
+  sessionOwners: "Written only by applySessionOwners (people_ids, role, parent_session), whose spec carries an inverse: the change that puts the owners back; a released parent has none.",
   sessionGoals:
     "Written only by setSessionGoal, pauseSessionGoal, resumeSessionGoal and clearSessionGoal, which steer an agent working toward the goal; machine control, never undoable.",
   pendingPermissions: "Written only by resolvePermission, an answer the agent acts on at once; never undoable.",

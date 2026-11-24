@@ -9,7 +9,7 @@
 // from — except to say, honestly, that content search is still running.
 import { useDeferredValue, useMemo } from "react";
 import { normalizeQueryQuotes, parseSessionQuery } from "@codecast/shared/search";
-import type { WorkState } from "@codecast/shared/contracts";
+import { isInboxMember, personWorkState, underOwnersModel, type InboxBucket, type WorkState } from "@codecast/shared/contracts";
 import {
   useInboxStore,
   filterInboxScopeFromState,
@@ -169,8 +169,12 @@ export function sessionStanding(
     : bucket === "snoozed"
     ? "snoozed"
     : null;
-  const mine = row.isOwn ?? (!row.user_id || !meId || row.user_id === meId || !!row.owned_by_me);
-  return { state: placed?.work_state ?? null, shelf, sub: isSub(row), mine };
+  const facts = live && !("bucket" in live) ? live : row;
+  // Under the owners model "mine" is owning it, whoever runs it.
+  const mine = row.isOwn ?? (underOwnersModel(facts) ? isInboxMember(facts, meId) : !row.user_id || !meId || row.user_id === meId || !!row.owned_by_me);
+  // As a person reads it: a wait its agent owner answers is working.
+  const state = placed ? personWorkState(facts, placed as { bucket: InboxBucket; work_state: WorkState }) : null;
+  return { state, shelf, sub: isSub(row), mine };
 }
 
 const TIER_SPAN = 10;

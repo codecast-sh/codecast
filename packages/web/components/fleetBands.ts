@@ -21,7 +21,7 @@ import {
   getProjectName,
   teamInboxIdsOf,
 } from "../store/inboxStore";
-import { isLivenessStale, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
+import { agentAnswersRow, isLivenessStale, THREAD_STATE_STALE_MSGS } from "@codecast/shared/contracts";
 import { makeCollectionSig } from "../store/wakeSig";
 import { agentStatusAt } from "../lib/liveness";
 import { threadStateView, compactAge } from "../lib/threadState";
@@ -51,6 +51,13 @@ const inFlight = (s: InboxSession, opts: FleetBandOpts) =>
 const isProducing = (s: InboxSession, now: number) => !s.inbox_killed_at && (isAgentActive(s, now) || !s.is_idle);
 
 export function fleetBandFor(s: InboxSession, opts: FleetBandOpts): FleetBand {
+  const band = fleetBandOf(s, opts);
+  // A wait its agent owner answers is the agent's (shared agentAnswersRow), as
+  // the inbox files it: running, "With <owner>". The person's own filing wins.
+  return band === "needsYou" && agentAnswersRow(s) && !s.user_rest ? "running" : band;
+}
+
+function fleetBandOf(s: InboxSession, opts: FleetBandOpts): FleetBand {
   // A message on its way to the agent reads as running, whatever the stale
   // status claims — the same precedence the pending_send overlay gives in-flight.
   if (inFlight(s, opts)) return "running";
@@ -157,6 +164,10 @@ export function fleetSessionSig(s: InboxSession): string {
     s.session_id ?? "",
     // The band's own inputs.
     s.agent_status ?? "",
+    // Whether an agent owner answers its wait (agentAnswersRow), and the
+    // person's own filing that outranks it.
+    agentAnswersRow(s) ? 1 : 0,
+    s.user_rest ?? "",
     s.is_idle ? 1 : 0,
     // Liveness overlay field; not on the base row type (teamSessionsLiveness
     // merges it in), and the fleet filter branches on it.

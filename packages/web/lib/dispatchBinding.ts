@@ -63,6 +63,9 @@ export function makeDispatchBinding(
       (res) => {
         settle({ ok: true });
         if (action === "answerDecision") releaseHeldAnswer(args?.[0], true);
+        // The server has an owners change: the locks it planted settle on
+        // whatever the server answers since (store settleOwnersAck).
+        if (action === "applySessionOwners" && lockIds?.size) useInboxStore.getState().settleOwnersAck([...lockIds]);
         return res;
       },
       (err) => { settle({ err }); throw err; },

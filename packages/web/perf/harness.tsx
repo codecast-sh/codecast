@@ -14,7 +14,10 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
 // The -modern workloads are the same inbox with the Modern style on (its
 // session card, ModernSessionCardView, and section header): the same budgets.
-export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
+// The -owners workloads are the same inbox with every session under the
+// session_owners model: each row carries its owner fields and each has an
+// owners read in the store, which the cards' owner faces read.
+export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "inbox-load-owners" | "inbox-heartbeat-owners" | "inbox-owners-push" | "diff";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -97,7 +100,7 @@ class VisibleObserver {
   observe(el: Element) {
     this.targets.add(el);
     queueMicrotask(() => {
-      if (this.targets.has(el) && el.isConnected) this.callback([{ target: el, isIntersecting: true, intersectionRatio: 1 } as unknown as IntersectionObserverEntry], this as unknown as IntersectionObserver);
+      if (this.targets.has(el) && el.isConnected) this.callback([{ target: el, isIntersecting: true, intersectionRatio: 1, boundingClientRect: { top: 0 } } as unknown as IntersectionObserverEntry], this as unknown as IntersectionObserver);
     });
   }
   unobserve(el: Element) { this.targets.delete(el); }
@@ -260,7 +263,21 @@ function messages(conv: string, n: number): any[] {
   return out;
 }
 
-function seedStore(sessions: number) {
+// An owners read (sessionOwnership.listOwnersFor's shape) for session i: the
+// viewer, a teammate on every third, a role on every fifth.
+const ROLE_ID = "jd7perfrole00000000000000000000";
+function ownersRead(i: number) {
+  const id = convId(i);
+  const people = [{ user_id: ME, name: "Perf", email: null, added_by: ME, added_at: now - i * 1000 }];
+  if (i % 3 === 0) people.push({ user_id: "user_teammate", name: "Teammate", email: null, added_by: ME, added_at: now - i * 1000 + 1 });
+  return {
+    session_owners: true, conversation_id: id, people,
+    role: i % 5 === 0 ? { role_id: ROLE_ID, short_id: "or-1", handle: "evals", name: "Eval Suite lead" } : null,
+    parent_session: null, implicit_starter: null, starter_id: ME, role_started: false, can_edit: true, owners_changed_at: now - i * 1000,
+  };
+}
+
+async function seedStore(sessions: number, owners = false) {
   const st = useInboxStore.getState() as any;
   st._setDispatch?.(async () => undefined);
   useInboxStore.setState({
@@ -269,7 +286,13 @@ function seedStore(sessions: number) {
   } as any);
   // Through the feed's own path, so what the first sync does at boot (view
   // adoption, the conversations mirror) is done before anything is measured.
-  useInboxStore.getState().syncTable("sessions", Object.values(sessionRows(sessions)) as any);
+  const rows = Object.values(sessionRows(sessions));
+  if (owners) for (const [i, row] of rows.entries()) Object.assign(row, { owners_model: true, owned_by_me: true, implicit_owner: null, org_role_id: i % 5 === 0 ? ROLE_ID : null, owner_session_id: null });
+  useInboxStore.getState().syncTable("sessions", rows as any);
+  if (owners) {
+    const { applySessionOwnersReads } = await import("../hooks/useSyncSessionOwners");
+    applySessionOwnersReads(Object.fromEntries(rows.map((_, i) => [convId(i), ownersRead(i)])));
+  }
 }
 
 // --- Mounting and measuring ------------------------------------------------
@@ -373,7 +396,7 @@ let bench: Bench | null = null;
 // answer is on screen.
 async function setupSwitch(): Promise<Bench> {
   const { InboxConversation } = await import("../app/inbox/QueuePageClient");
-  seedStore(2000);
+  await seedStore(2000);
   const [a, b] = [convId(1), convId(2)];
   for (const id of [a, b]) useInboxStore.getState().setMessages(id, messages(id, 200), { hasMoreAbove: true, initialized: true });
   mount();
@@ -401,7 +424,7 @@ async function setupSwitch(): Promise<Bench> {
 // so this is the re-render that memoization exists for.
 async function setupAppend(): Promise<Bench> {
   const { InboxConversation } = await import("../app/inbox/QueuePageClient");
-  seedStore(2000);
+  await seedStore(2000);
   const a = convId(1);
   useInboxStore.getState().setMessages(a, messages(a, 200), { hasMoreAbove: true, initialized: true });
   mount();
@@ -427,15 +450,37 @@ async function setupAppend(): Promise<Bench> {
 const INBOX_SESSIONS = 5000;
 const cards = () => host.querySelectorAll("[data-session-id]").length;
 
-async function inboxPanel(modern = false) {
+// The coarse clocks (engine useCoarseNow: 15 s and up) tick on real time, so a
+// run that crosses a tick re-renders every relative time on the cards
+// (WakeWhen, CardBars) whatever the action did. The owners variants set up
+// longest and crossed one: they freeze those clocks, so a run counts only what
+// its action caused. Shorter timers (settling, the feeder's) still run.
+const COARSE_CLOCK_MS = 5_000;
+function freezeCoarseClocks(): void {
+  const real = globalThis.setInterval;
+  const frozen = ((fn: (...args: any[]) => void, ms?: number, ...rest: any[]) =>
+    (ms ?? 0) >= COARSE_CLOCK_MS ? (0 as unknown as ReturnType<typeof setInterval>) : real(fn, ms, ...rest)) as typeof setInterval;
+  globalThis.setInterval = frozen;
+  w.setInterval = frozen;
+}
+
+async function inboxPanel(modern = false, owners = false) {
+  if (owners) freezeCoarseClocks();
   const { SessionListPanel } = await import("../components/GlobalSessionPanel");
   const { ThemeContext } = await import("../components/ThemeProvider");
-  seedStore(INBOX_SESSIONS);
+  await seedStore(INBOX_SESSIONS, owners);
   mount();
   // Modern: the root class the style's CSS keys on, and the theme context the
   // components read it from (hooks/useVisualStyle).
   // Classic mounts the panel bare, as it always did.
-  const bare = <SessionListPanel activeSessionId={convId(3)} onSessionSelect={() => {}} />;
+  // Under the owners model the window's owners feeder rides along, as the
+  // dashboard mounts it (DashboardLayout's VisibleOwnersFeeder), and every
+  // card it watches reports itself on screen.
+  const { useSyncVisibleSessionOwners } = await import("../hooks/useSyncVisibleSessionOwners");
+  function OwnersFeeder() { useSyncVisibleSessionOwners(); return null; }
+  if (owners) (globalThis as any).IntersectionObserver = w.IntersectionObserver = VisibleObserver;
+  const list = <SessionListPanel activeSessionId={convId(3)} onSessionSelect={() => {}} />;
+  const bare = owners ? <>{list}<OwnersFeeder /></> : list;
   if (modern) w.document.documentElement.classList.add("modern-style");
   const theme = { theme: "light", toggleTheme: () => {}, visualStyle: "modern", setVisualStyle: () => {} } as any;
   const panel = modern ? <ThemeContext.Provider value={theme}>{bare}</ThemeContext.Provider> : bare;
@@ -445,8 +490,8 @@ async function inboxPanel(modern = false) {
 }
 
 // Opening the inbox: the list mounts over the full cache.
-async function setupInboxLoad(modern = false): Promise<Bench> {
-  const { show, hide } = await inboxPanel(modern);
+async function setupInboxLoad(modern = false, owners = false): Promise<Bench> {
+  const { show, hide } = await inboxPanel(modern, owners);
   await show();
   await hide();
   return {
@@ -468,11 +513,11 @@ async function setupInboxLoad(modern = false): Promise<Bench> {
 // moves, which changes nothing the list shows, so a beat may re-render
 // nothing.
 const LIVE_SET = 600;
-async function setupInboxHeartbeat(modern = false): Promise<Bench> {
+async function setupInboxHeartbeat(modern = false, owners = false): Promise<Bench> {
   const { applyMineLivenessPayload } = await import("../hooks/useSyncInboxSessions");
   const { INBOX_FACT_FIELDS, INBOX_PROJECTION_VERSION } = await import("@codecast/shared/contracts");
   const { placeInboxRows } = await import("../store/inboxStore");
-  const { show } = await inboxPanel(modern);
+  const { show } = await inboxPanel(modern, owners);
   await show();
   const target = host.querySelector("[data-session-id]")!.getAttribute("data-session-id")!;
   const sessions = useInboxStore.getState().sessions as Record<string, any>;
@@ -511,6 +556,25 @@ async function setupInboxHeartbeat(modern = false): Promise<Bench> {
   };
 }
 
+// A push of the visible cards' owners reads (listOwnersFor), as fresh objects
+// a decoded push is, saying what the store already holds: it may write
+// nothing and re-render nothing. Its follow-up changes one card's owners.
+async function setupInboxOwnersPush(): Promise<Bench> {
+  const { applySessionOwnersReads } = await import("../hooks/useSyncSessionOwners");
+  const { show } = await inboxPanel(false, true);
+  await show();
+  const drawn = [...host.querySelectorAll("[data-session-id]")].map((el) => el.getAttribute("data-session-id")!);
+  const index = (id: string) => Number(id.slice(3));
+  return {
+    run: () => measure(async () => {
+      const payload = structuredClone(Object.fromEntries(drawn.map((id) => [id, ownersRead(index(id))])));
+      await act(async () => { applySessionOwnersReads(payload); });
+      await settle();
+    }),
+    reset: () => settle(),
+  };
+}
+
 // Opening a long diff: a 1,560-line TypeScript file with every 20th line
 // changed, shown whole (expandUnchanged) in the diff viewer, from mount until
 // its window is drawn. A diff past VIRTUALIZE_LINE_THRESHOLD draws windowed
@@ -535,7 +599,7 @@ const diffLines = () => {
 
 async function setupDiff(): Promise<Bench> {
   const { DiffView } = await import("../components/DiffView");
-  seedStore(200);
+  await seedStore(200);
   mount();
   const [oldStr, newStr] = [longFile(false), longFile(true)];
   (globalThis as any).IntersectionObserver = w.IntersectionObserver = VisibleObserver;
@@ -573,6 +637,9 @@ const setups: Record<Workload, () => Promise<Bench>> = {
   "inbox-heartbeat": () => setupInboxHeartbeat(),
   "inbox-load-modern": () => setupInboxLoad(true),
   "inbox-heartbeat-modern": () => setupInboxHeartbeat(true),
+  "inbox-load-owners": () => setupInboxLoad(false, true),
+  "inbox-heartbeat-owners": () => setupInboxHeartbeat(false, true),
+  "inbox-owners-push": setupInboxOwnersPush,
   diff: setupDiff,
 };
 
