@@ -39,21 +39,22 @@ When an agent fans work out to several sessions, those sessions would pile up in
 
 ![A session's right-click menu in the inbox with Stash, Stash and hide and Kill session](/documentation/messaging/triage-menu.webp "The controls for moving a session out of the inbox.")
 
-You find these controls in a session's right-click menu, and on the inbox card when you hover. On the iPhone, press and hold a session for **Stash** and **Kill session**.
+You find these controls in a session's right-click menu. Hovering an inbox card shows **Close**, and its tooltip says what closing will do to that session. On the iPhone, swipe a session to close it, or press and hold it for **Close**, **Stash** and **Kill session**.
 
 | Control | Keys | What it does |
 |---------|------|--------------|
+| **Close** | `Ctrl` `Shift` `Backspace` | You're done looking at it. A finished session stops and leaves the inbox; one still working keeps running out of view. Its triggers and queued messages stay, so a trigger firing or a new message brings it back |
 | **Stash** | `Ctrl` `Backspace` | Takes the session out of the inbox. The agent keeps running, and the session comes back when it needs you or a scheduled wake fires |
 | **Stash and hide** | `Ctrl` `Alt` `Backspace` | Like Stash, but a scheduled wake doesn't bring it back. Only a real need for you does |
-| **Kill session** | `Ctrl` `Shift` `Backspace` | You're done with it. The agent stops and its schedules are cancelled. The transcript stays |
-| **Restore session to inbox** | | Takes the place of Stash on a session that is already out of the inbox, and brings it back. A killed agent restarts only when you send it a message |
+| **Kill session** | | In the right-click menu only. The agent stops and its schedules and queued messages are cancelled; it asks first when that would cancel something. The transcript stays |
+| **Restore session to inbox** | | Takes the place of Stash on a session that is already out of the inbox, and brings it back. A closed or killed agent restarts only when you send it a message |
 
 ```figure
 InboxGesturesFigure
-Stash and hide take a session out of view while it keeps working. Kill stops it. The dashed lines are what brings each one back.
+Stash and hide take a session out of view while it keeps working. Close stops a finished one and keeps its wakes. The dashed lines are what brings each one back.
 ```
 
-Stashed and killed sessions sit in the **Stashed** and **Killed** sections at the bottom of the inbox, folded by default.
+Stashed sessions sit in the **Stashed** section at the bottom of the inbox, and closed and killed ones in **Closed**, both folded by default. A closed session shows its triggers under it.
 
 ## When something is off
 
@@ -62,4 +63,4 @@ Stashed and killed sessions sit in the **Stashed** and **Killed** sections at th
 | The agent says it can't message another session | Check that **Messaging** is on for its computer in **Agent Features**, then start a new session |
 | The agent declined to wake an old session | Waking a session that has sat idle for a long time costs it a full reload. Tell the agent to send anyway if the work is worth it |
 | A message to a teammate's session hasn't landed | Their computer is probably offline. It is delivered when they come back |
-| A session you expected is missing from the inbox | Look in **Stashed** at the bottom of the inbox, and pick **Restore session to inbox** |
+| A session you expected is missing from the inbox | Look in **Stashed** or **Closed** at the bottom of the inbox, and pick **Restore session to inbox** |

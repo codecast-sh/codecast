@@ -435,7 +435,7 @@ export default function DocsPage() {
             ))}
           </div>
           <P>
-            Click a card to open its conversation. When you are done with one, stash it (<Kbd>Ctrl+Backspace</Kbd>) and
+            Click a card to open its conversation. When you are done with one, close it (<Kbd>Ctrl+Shift+Backspace</Kbd>) and
             the inbox opens the next, so you can work down a queue without reaching for the mouse. The chips across the top filter by label or project.
           </P>
 
@@ -530,7 +530,7 @@ export default function DocsPage() {
           <P>
             Press <Kbd>Cmd+K</Kbd> anywhere. The palette searches sessions, tasks, plans, docs, people and pages, grouped
             by kind with the ones you touched most recently first. It also runs actions on the session you have open,
-            or on several you selected in the inbox: pin, stash, defer or kill them in one go.
+            or on several you selected in the inbox: pin, stash, defer, close or kill them in one go.
           </P>
           <Screenshot
             src="/docs/app/palette.webp"
