@@ -467,6 +467,24 @@ export async function checkoutTargets(root: string): Promise<DeployTarget[]> {
 }
 
 /**
+ * The targets a commit declares, and its line profile's [line.deploy], read from git rather than any working tree: a
+ * shared checkout's files can be behind, ahead of, or edited past the commit a run landed.
+ */
+export async function commitTargets(root: string, sha: string): Promise<{ targets: DeployTarget[]; line: ResolvedLineProfile["profile"]["deploy"] | null }> {
+  const { gitTry } = await import("./wipSnapshot.js");
+  const { DEFAULT_SHIP } = await import("./land/shipCheckout.js");
+  const { MANIFEST_REL_PATH, parseManifestText } = await import("./workspace/manifest.js");
+  const { DEPLOY_TARGETS_REL_PATH, parseDeployTargetsText } = await import("./workspace/deployTargetsFile.js");
+  const { LINE_PROFILE_REL_PATH, parseLineProfileText, resolveLineProfile } = await import("./lineProfile.js");
+  const at = (rel: string) => gitTry(root, ["show", `${sha}:${rel}`]);
+  const [manifest, deploy, profile] = await Promise.all([at(MANIFEST_REL_PATH), at(DEPLOY_TARGETS_REL_PATH), at(LINE_PROFILE_REL_PATH)]);
+  const steps = manifest ? parseManifestText(manifest, MANIFEST_REL_PATH).ship?.deploy ?? DEFAULT_SHIP.deploy : DEFAULT_SHIP.deploy;
+  const line = (() => { try { return profile ? resolveLineProfile(parseLineProfileText(profile, LINE_PROFILE_REL_PATH).values, { root }).profile.deploy : null; } catch { return null; } })();
+  const targets = targetsOf({ declared: () => (deploy ? parseDeployTargetsText(deploy, steps, DEPLOY_TARGETS_REL_PATH).map((e) => e.target) : []), line: () => line });
+  return { targets, line };
+}
+
+/**
  * The step commands a deploy of a target runs (DP13): the send is its command (its rollback for a rollback), and a
  * target codecast reads from elsewhere (GitHub, a release's latest.json) has a live step that waits until that
  * reader records the deploy's sha.
