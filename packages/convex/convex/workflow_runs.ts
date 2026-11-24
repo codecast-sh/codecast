@@ -39,6 +39,7 @@ import { retainSessionCreator } from "./sessionLaunch";
 import { isSessionOwner } from "./sessionOwners";
 import { withAgentSessions } from "./lib/runAgentSessions";
 import { changeSessionOf } from "./lib/taskOwner";
+import { closeRunningStations, endRunFields } from "./lib/runEnd";
 import { graphOfVersion, pinnedVersionOf, repinToReported, rowAtVersion, runWorkflowOf, versionToPin } from "./lib/runGraph";
 
 export { withAgentSessions };
@@ -418,7 +419,7 @@ async function canCancelRun(ctx: Ctx, userId: Id<"users">, run: any): Promise<bo
 export async function cancelCore(ctx: Ctx, run: any, now = Date.now(), reason = "Cancelled by user"): Promise<void> {
   if (run.status === "completed" || run.status === "failed") return;
   await withdrawOpenGate(ctx, { ...run, status: "failed", fail_reason: reason }, now);
-  await ctx.db.patch(run._id, { status: "failed", fail_reason: reason, updated_at: now });
+  await ctx.db.patch(run._id, { ...endRunFields(run, "failed", now), fail_reason: reason, updated_at: now });
   await stopStationHands(ctx, run);
 }
 
@@ -1258,10 +1259,11 @@ export const updateProgress = mutation({
     } else if (nodeEntry) {
       nodeStatuses.push(nodeEntry);
     }
+    const ending = args.run_status === "completed" || args.run_status === "failed" ? args.run_status : null;
 
     await ctx.db.patch(args.run_id, {
       current_node_id: args.current_node_id,
-      node_statuses: nodeStatuses,
+      node_statuses: ending ? closeRunningStations(nodeStatuses, ending, now) : nodeStatuses,
       // Named only when it moves, so a progress report stays off parked_wake_kind's run recompute (lib/parkedWake.ts).
       ...(args.run_status && args.run_status !== run.status ? { status: args.run_status } : {}),
       fail_reason: args.fail_reason,
