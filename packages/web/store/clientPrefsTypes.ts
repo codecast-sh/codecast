@@ -114,6 +114,9 @@ export type ClientDismissed = {
   // Onboarding strip after the first sync: "decide what syncs and what your
   // team sees" (SharingSetupBanner). Stamped when taken or dismissed.
   sharing_setup?: number;
+  // The session "Set up with an agent" last started (lib/sharingAgent): the
+  // setup strip points at it while it is open instead of the manual route.
+  sharing_agent?: string;
   // Blocked-sessions banner X (timestamp snooze, cross-device).
   blocked_sessions_banner?: number;
   // "Turn on desktop notifications" nudge X (timestamp snooze; a missed

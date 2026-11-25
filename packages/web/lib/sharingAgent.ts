@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { useInboxStore, defaultNewSessionPath } from "../store/inboxStore";
 import { spawnSessionWithPrompt } from "./spawnSession";
 import { openConversationBeside } from "../hooks/useOpenLinkedSession";
+import { isSessionSetAside } from "./sessionRetirement";
 
 export const SHARING_AGENT_PROMPT = `Help me decide what syncs to codecast and what my teams can see, then set it up.
 
@@ -28,8 +29,26 @@ export function startSharingAgent(): string {
   // Started from the settings modal, the modal would cover the conversation;
   // the page it showed is one click away in the sidebar.
   if (st.settingsModalSection) st.closeSettingsModal();
+  // Remembered in synced client state, so the setup strip can point at this
+  // conversation after a reload and on other devices. The stub id serves
+  // until the real one lands.
+  st.updateClientDismissed("sharing_agent", stubId);
+  void st.awaitConvexId(stubId).then(
+    (id) => { if (id !== stubId) useInboxStore.getState().updateClientDismissed("sharing_agent", id); },
+    () => {},
+  );
   openConversationBeside(stubId);
   return stubId;
+}
+
+/** The sharing agent's conversation while it is still open: its row is in
+ *  the store, not dismissed, stashed or killed, and not completed. Null once
+ *  it ends or when none was started, so the strip falls back to the manual route. */
+export function openSharingAgentId(s: { clientState?: { dismissed?: { sharing_agent?: string } }; sessions: Record<string, any> }): string | null {
+  const id = s.clientState?.dismissed?.sharing_agent;
+  const row = id ? s.sessions[id] : undefined;
+  if (!row || isSessionSetAside(row) || row.status === "completed") return null;
+  return id!;
 }
 
 export function launchSharingAgent(): void {

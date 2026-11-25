@@ -104,3 +104,17 @@ test("with a sharing agent open, the strip opens that agent's conversation inste
   root.unmount();
   useInboxStore.setState({ navigateToSession: realNavigate, requestNavigate: realRequest });
 });
+
+test("once the sharing agent is dismissed, the strip offers the manual route again", async () => {
+  const id = useInboxStore.getState().clientState.dismissed?.sharing_agent as string;
+  expect(id).toBeTruthy();
+  const sessions = useInboxStore.getState().sessions;
+  useInboxStore.setState({ sessions: { ...sessions, [id]: { ...sessions[id], inbox_dismissed_at: Date.now() } } as any });
+
+  const container = document.createElement("div");
+  const root = createRoot(container);
+  await act(async () => { root.render(<SetupNudgeBanner />); });
+  expect(container.textContent).toContain("Nothing flows to Littlebird yet.");
+  expect(container.querySelector('a[href="/settings/sync"]')).not.toBeNull();
+  root.unmount();
+});
