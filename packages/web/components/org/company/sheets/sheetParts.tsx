@@ -12,6 +12,8 @@ import { compactAge } from "../../../../lib/threadState";
 import { useCoarseNow } from "../../../../hooks/useCoarseNow";
 import { useOpenLinkedSession } from "../../../../hooks/useOpenLinkedSession";
 import { useInboxStore } from "../../../../store/inboxStore";
+import { viewedConversationId } from "../../../../hooks/usePresenceReporter";
+import { usePathname } from "next/navigation";
 
 /** What a sheet says when the store holds no such object for this workspace. */
 export function NotHere({ what }: { what: string }) {
@@ -29,7 +31,11 @@ export function RoleNowLine({ role, onOpen }: { role: OrgRole; onOpen?: () => vo
   const now = roleNow(role);
   const clock = useCoarseNow(60_000);
   const openLinked = useOpenLinkedSession();
-  const onScreen = useInboxStore((s) => s.currentSessionId);
+  // On screen by the rail's own rule: the inbox's conversation only on the
+  // inbox, the URL's on a conversation page, none on /org (the inbox pointer
+  // outlives leaving the inbox and names nothing shown there).
+  const pathname = usePathname();
+  const onScreen = useInboxStore((s) => viewedConversationId(s, pathname));
   if (!now) return null;
   const named = roleNowRefs(now.words).length > 0;
   const target = named ? null : roleNowSession(role, onScreen);

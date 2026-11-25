@@ -18,7 +18,8 @@ afterAll(() => closeDomWindow(dom));
 const React = await import("react");
 const h = React.createElement;
 mock.module("next/link", () => ({ default: ({ href, children, ...rest }: any) => h("a", { href, ...rest }, children) }));
-mock.module("next/navigation", () => ({ useRouter: () => ({ push() {}, replace() {} }), useSearchParams: () => new URLSearchParams(), usePathname: () => "/" }));
+let pathname = "/inbox";
+mock.module("next/navigation", () => ({ useRouter: () => ({ push() {}, replace() {} }), useSearchParams: () => new URLSearchParams(), usePathname: () => pathname }));
 const convexReact = await import("convex/react");
 mock.module("convex/react", () => ({ ...convexReact, useQuery: () => undefined, useQueries: () => ({}), useMutation: () => async () => {} }));
 const noThrow = await import("../../../../../hooks/useQueryNoThrow");
@@ -34,12 +35,15 @@ const { useInboxStore } = await import("../../../../../store/inboxStore");
 const { declareViewNav } = await import("../../../../../store/viewNav");
 type OrgRole = import("../../../orgTypes").OrgRole;
 
+// Session ids are Convex-shaped: "on screen" counts only a real conversation id.
+const SESS = "jx7sess1aaaaaaaaaaaaaaaaaaaaaaaa";
+const STAND = "jx7stand1aaaaaaaaaaaaaaaaaaaaaaa";
 const WORDS = "Fixing a live leak: the broker's new sharing wording can pass a person's health on in an introduction";
 const role = {
   _id: "role-1", short_id: "r-1", name: "Broker steward", handle: "broker", status: "active",
   scope_type: "team", team_id: "team-1", host_user_id: "u1", scope: { kind: "team" }, reports_to: { kind: "user", user_id: "u1" },
   standing: { state_line: WORDS, state_at: Date.now() - 60_000 },
-  sessions: [{ _id: "sess-1", short_id: "jx7abcd", title: "broker leak", agent_type: "claude_code", state: "working", updated_at: Date.now(), subagent_count: 0, is_anchor: true }],
+  sessions: [{ _id: SESS, short_id: "jx7abcd", title: "broker leak", agent_type: "claude_code", state: "working", updated_at: Date.now(), subagent_count: 0, is_anchor: true }],
   counts: {}, total: 1,
 } as unknown as OrgRole;
 
@@ -63,22 +67,22 @@ test("the words naming a role's current work open that work", async () => {
   await unmount();
 });
 
-const withStanding = (r: OrgRole, extra: object = {}) => ({ ...r, standing: { ...r.standing, conversation_id: "standing-1", short_id: "jx7stand" }, ...extra } as OrgRole);
+const withStanding = (r: OrgRole, extra: object = {}) => ({ ...r, standing: { ...r.standing, conversation_id: STAND, short_id: "jx7stand" }, ...extra } as OrgRole);
 const setOnScreen = (id: string | null) => { declareViewNav("gesture"); useInboxStore.setState({ currentSessionId: id } as any); };
 
 test("a state line beside live work opens that work, not the role's own standing session", async () => {
   const { words, unmount } = await mount(withStanding(role));
   expect(words.tagName).toBe("BUTTON");
   await click(words);
-  expect(opened).toEqual(["sess-1"]);
+  expect(opened).toEqual([SESS]);
   await unmount();
 });
 
 test("the standing session working as the newest live row still yields to the work session", async () => {
-  const standingRow = { ...role.sessions[0], _id: "standing-1", short_id: "jx7stand", updated_at: Date.now() + 1000 };
+  const standingRow = { ...role.sessions[0], _id: STAND, short_id: "jx7stand", updated_at: Date.now() + 1000 };
   const { words, unmount } = await mount(withStanding(role, { sessions: [standingRow, role.sessions[0]] }));
   await click(words);
-  expect(opened).toEqual(["sess-1"]);
+  expect(opened).toEqual([SESS]);
   await unmount();
 });
 
@@ -86,22 +90,22 @@ test("a state line with nothing else live opens the standing session", async () 
   const { words, unmount } = await mount(withStanding(role, { sessions: [] }));
   expect(words.tagName).toBe("BUTTON");
   await click(words);
-  expect(opened).toEqual(["standing-1"]);
+  expect(opened).toEqual([STAND]);
   await unmount();
 });
 
 test("the line never opens the conversation already on screen", async () => {
-  setOnScreen("standing-1");
+  setOnScreen(STAND);
   try {
     const plain = await mount(withStanding(role, { sessions: [] }));
     expect(plain.words.closest("a[href], button, [role=button], [role=link]")).toBeNull();
     await click(plain.words);
     expect(opened).toEqual([]);
     await plain.unmount();
-    setOnScreen("sess-1");
+    setOnScreen(SESS);
     const other = await mount(withStanding(role));
     await click(other.words);
-    expect(opened).toEqual(["standing-1"]);
+    expect(opened).toEqual([STAND]);
     await other.unmount();
   } finally {
     setOnScreen(null);
@@ -110,7 +114,7 @@ test("the line never opens the conversation already on screen", async () => {
 
 test("words that name an object link that object instead of a session", async () => {
   const line = "Landing ct-99041 under pl-1064";
-  const { words, unmount } = await mount(withStanding(role, { standing: { state_line: line, conversation_id: "standing-1" } }));
+  const { words, unmount } = await mount(withStanding(role, { standing: { state_line: line, conversation_id: STAND } }));
   expect(words.tagName).not.toBe("BUTTON");
   expect(words.textContent).toContain("ct-99041");
   const links = [...words.querySelectorAll("a[href], button, [role=button], [role=link]")];
@@ -122,9 +126,9 @@ test("words that name an object link that object instead of a session", async ()
 });
 
 test("without a state line the words open the working session they summarise", async () => {
-  const { words, unmount } = await mount({ ...role, standing: { conversation_id: "standing-1" } } as OrgRole);
+  const { words, unmount } = await mount({ ...role, standing: { conversation_id: STAND } } as OrgRole);
   await click(words);
-  expect(opened).toEqual(["sess-1"]);
+  expect(opened).toEqual([SESS]);
   await unmount();
 });
 
@@ -140,9 +144,25 @@ test("words that name no session stay plain text and open nothing", async () => 
 
 test("a sheet's onOpen still opens the role from its name", async () => {
   let roleOpened = 0;
-  const { unmount } = await mount({ ...role, standing: { ...role.standing, conversation_id: "standing-1" } } as OrgRole, () => { roleOpened++; });
+  const { unmount } = await mount({ ...role, standing: { ...role.standing, conversation_id: STAND } } as OrgRole, () => { roleOpened++; });
   await click(document.querySelector("[data-role-now-open]")!);
   expect(roleOpened).toBe(1);
   expect(opened).toEqual([]);
   await unmount();
+});
+
+test("on a role's own page the inbox's last conversation is not on screen, so the line still opens it", async () => {
+  // The inbox pointer outlives leaving the inbox; /org shows no conversation.
+  setOnScreen(STAND);
+  pathname = "/org/r-1";
+  try {
+    const { words, unmount } = await mount(withStanding(role, { sessions: [] }));
+    expect(words.tagName).toBe("BUTTON");
+    await click(words);
+    expect(opened).toEqual([STAND]);
+    await unmount();
+  } finally {
+    pathname = "/inbox";
+    setOnScreen(null);
+  }
 });
