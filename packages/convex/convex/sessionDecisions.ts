@@ -22,7 +22,7 @@ import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { withDecisionFacts } from "./lib/decisionRowFacts";
 import { decisionTeamOf } from "./lib/decisionTeam";
-import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, advisoryAnswerOpen, isHostedAgentType } from "@codecast/shared/contracts";
+import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, advisoryAnswerOpen, isHostedAgentType, isClosedSession } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { emitNotification } from "./notificationRouter";
 import { nextShortId } from "./counters";
@@ -1751,7 +1751,9 @@ export async function listForSessionCore(
     // `cast decide ls --mine` (the-line.md L10): every pending decision the
     // caller holds, from the same read the web queue uses, oldest first so
     // the list reads as the queue does.
-    rows = (await listForUserCore(ctx, auth.userId, Date.now())).filter((r) => r.status === "pending");
+    const ended = new Map<string, Promise<boolean>>();
+    rows = [];
+    for (const r of await listForUserCore(ctx, auth.userId, Date.now())) if (r.status === "pending" && !(await askerEnded(ctx, r, ended))) rows.push(r);
     rows.sort((a, b) => a.created_at - b.created_at);
     return { decisions: rows.map((r) => cliRowShape(r, own(r))) };
   }
@@ -2650,6 +2652,7 @@ const OPEN_PROBLEM_STATUSES = ["backlog", "open", "in_progress", "in_review"] as
 export async function decisionRowsForViewer(ctx: Ctx, given: DecisionRow[], inQueue: (row: DecisionRow) => boolean | Promise<boolean>, extra: Record<string, unknown> = {}) {
   const rows = await withDecisionFacts(ctx, given);
   const severity = new Map<string, number | null>();
+  const ended = new Map<string, Promise<boolean>>();
   const out = [];
   for (const r of rows) {
     let worst: number | null = null;
@@ -2662,9 +2665,22 @@ export async function decisionRowsForViewer(ctx: Ctx, given: DecisionRow[], inQu
       }
       worst = severity.get(key) ?? null;
     }
-    out.push({ ...r, ...extra, passed_to: r.passed_to ? { by: r.passed_to.by, id: r.passed_to.id, kind: r.passed_to.kind, ...(r.passed_to.note ? { note: r.passed_to.note } : {}) } : null, in_queue: await inQueue(r), problem_severity: worst });
+    out.push({ ...r, ...extra, passed_to: r.passed_to ? { by: r.passed_to.by, id: r.passed_to.id, kind: r.passed_to.kind, ...(r.passed_to.note ? { note: r.passed_to.note } : {}) } : null, in_queue: !(await askerEnded(ctx, r, ended)) && (await inQueue(r)), problem_severity: worst });
   }
   return out;
+}
+
+/** Whether an open decision's asking session was closed or killed by a person. Such a decision leaves every queue but
+ *  stays answerable from its page and its session; an answer enters the session as a person's message, which reopens
+ *  it (pendingMessages enqueue), and a reopened session's decisions come back to the queue. */
+export function askerEnded(ctx: Ctx, row: Pick<DecisionRow, "status" | "conversation_id">, memo: Map<string, Promise<boolean>> = new Map()): Promise<boolean> {
+  if (row.status !== "pending") return Promise.resolve(false);
+  const key = String(row.conversation_id);
+  if (!memo.has(key)) memo.set(key, (async () => {
+    const conv: Doc<"conversations"> | null = await ctx.db.get(row.conversation_id);
+    return !!conv && (!!conv.inbox_killed_at || isClosedSession(conv));
+  })());
+  return memo.get(key)!;
 }
 
 /** Whether a decision sits in the viewer's own queue: an inbox row of theirs, or (an older row) they asked it. */
