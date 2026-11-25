@@ -2821,7 +2821,13 @@ export function mirrorReplyStreaming(data: { reply_streaming?: unknown }, persis
   if (on === replyStreamLaunch.on) return;
   log(`Live replies ${on ? "on" : "off"} (team feature)`);
   replyStreamLaunch.on = on;
-  persist(on);
+  // The rest of the beat (its commands, the update check) must not hang on
+  // this write: a failed one only costs the mirror at the next boot.
+  try {
+    persist(on);
+  } catch (err) {
+    log(`Live replies: could not save the flag (${err instanceof Error ? err.message : String(err)})`);
+  }
 }
 const hookRefusalsLogged = new Map<string, number>();
 const HOOK_REFUSAL_LOG_EVERY_MS = 10 * 60 * 1000;
