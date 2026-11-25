@@ -26,7 +26,7 @@ const LOCATION = { type: "string", max: 64 } as const;
  *  no trace of who killed it (jx7970z, 2026-10-06). Navigation keys stay out:
  *  they are most of the volume and none of the forensics. */
 export const TRACKED_SHORTCUTS = [
-  "session.kill", "session.stash", "session.stashHide", "session.deferAdvance", "session.dormantAdvance",
+  "session.close", "session.stash", "session.stashHide", "session.deferAdvance", "session.dormantAdvance",
   "session.snooze", "session.pin", "session.markUnread", "session.moveToBucket", "session.rename",
   "ui.undo", "ui.redo", "msg.fork", "conv.favorite",
 ] as const;
@@ -93,7 +93,7 @@ export const CODECAST_EVENTS = defineCatalog({
   first_session_synced: {
     agent_type: {
       type: "string",
-      values: ["claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse"],
+      values: ["claude_code", "codex", "cursor", "gemini", "opencode", "pi", "grok", "muse", "antigravity"],
     },
   },
 

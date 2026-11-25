@@ -223,9 +223,32 @@ function SessionAccountsStatus({ device }: { device: DeviceAccounts }) {
   );
 }
 
-function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
+// The person's one recovery mode, above the machines it applies to. Before
+// they pick one, each machine row still carries its own legacy flags; the
+// freshest local machine's stand in for the choice.
+function RecoverySection({ devices }: { devices: DeviceAccounts[] }) {
+  const local = devices.filter((d) => !d.is_remote);
+  const device = local.find((d) => d.online !== false) ?? local[0];
+  const { recovery } = useAccountRecoveryToggles(device ?? { auto_switch: false });
+  if (!device) return null;
+  return (
+    <SettingsSection title="When a session stops on its own" icon={Zap} padded>
+      <p className="text-meta leading-relaxed text-sol-text-dim">
+        A usage limit, an API error or a crash can stop a session mid-turn. This applies to every
+        machine you run. Changing accounts moves every session on that machine; subagent workers
+        are never continued.
+      </p>
+      <div className="mt-2">
+        <RecoveryModeSelect control={recovery} />
+      </div>
+    </SettingsSection>
+  );
+}
+
+// What recovery last did on one machine: its accounts ran out, or the last
+// switch it made and why.
+function RecoveryStatus({ device }: { device: DeviceAccounts }) {
   const now = useCoarseNow(30_000);
-  const { recovery } = useAccountRecoveryToggles(device);
   const state = device.auto_switch_state;
   // Time-aware: the stamp is only cleared by a re-check that may never run, so
   // past the session window it needs a still-pegged account to stand on.
@@ -233,23 +256,7 @@ function AutoSwitchToggle({ device }: { device: DeviceAccounts }) {
 
   return (
     <>
-      <div className="flex items-start gap-2.5 px-4 py-3 sm:px-5">
-        <Zap
-          className={`mt-0.5 h-4 w-4 shrink-0 ${recovery.mode === "off" ? "text-sol-text-dim" : "text-sol-cyan"}`}
-        />
-        <div className="min-w-0 flex-1">
-          <div className="text-sm font-medium text-sol-text">When a session stops on its own</div>
-          <p className="mt-0.5 text-meta leading-relaxed text-sol-text-dim">
-            A usage limit, an API error or a crash can stop a session mid-turn. Choose whether
-            codecast continues it for you. Changing accounts moves every session on this machine;
-            subagent workers are never continued.
-          </p>
-          <div className="mt-2">
-            <RecoveryModeSelect control={recovery} />
-          </div>
-        </div>
-      </div>
-      {recovery.mode === "auto" && exhausted && (
+      {device.auto_switch && exhausted && (
         <div className="bg-sol-red/10 px-4 py-2 text-meta text-sol-red sm:px-5">
           {exhaustionBannerCopy(device.profiles, now)}
         </div>
@@ -331,11 +338,11 @@ function DeviceAccountsSection({ device }: { device: DeviceAccounts }) {
       {!online && (
         <p className="px-4 py-2.5 text-meta leading-relaxed text-sol-text-dim sm:px-5">
           The daemon on this machine isn't reporting right now (<CopyableCommand cmd="cast restart" /> brings
-          it back). Account switching needs it; the auto-switch setting below still saves.
+          it back). Account switching needs it.
         </p>
       )}
 
-      {!device.is_remote && <AutoSwitchToggle device={device} />}
+      {!device.is_remote && <RecoveryStatus device={device} />}
 
       {orderedProfiles.map((p) => {
           // The lit row is the account sessions run on: the launch profile
@@ -557,6 +564,8 @@ export default function ClaudeAccountsSettings() {
           <div className="mt-2"><CopyableCommand cmd="cast accounts save <name>" /></div>
         </SettingsSection>
       )}
+
+      {data && <RecoverySection devices={data.devices} />}
 
       {data?.devices.map((d) => (
         <DeviceAccountsSection key={d.device_id} device={d} />
