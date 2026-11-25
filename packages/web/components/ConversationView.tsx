@@ -1673,6 +1673,11 @@ const ConversationViewInner = (
   // boot <task-notification> turn AND on the real echo), and rows sharing a key
   // garble the virtualizer — overlapping ghost copies accreting on re-renders.
   const knownMessageIdsRef = useRef<Set<string>>(new Set());
+  // The row a message has just taken from a reply, held from scroll
+  // adjustment until its first re-measure settles: the message can be taller
+  // than the last push (its closing paragraph), and a reader scrolled up
+  // inside it must not be moved (the hold itself is installed below).
+  const replyStreamTakenRef = useRef<{ key: string; until: number } | null>(null);
   const rowKeys = useMemo(() => {
     const handoffKeys = replyStreamHandoffKeysRef.current.keys;
     // The reply drawn here last has left the feed: the message that arrived
@@ -1684,6 +1689,7 @@ const ConversationViewInner = (
       const taker = timeline.find((it) => it.type === 'message' && (it.data as Message).role === 'assistant' && !known.has((it.data as Message)._id) && replyStreamHandedOff(stream, [it.data as Message]));
       if (taker) {
         handoffKeys.set((taker.data as Message)._id, replyStreamRowKey(last.messageId));
+        replyStreamTakenRef.current = { key: replyStreamRowKey(last.messageId), until: Date.now() + 800 };
         lastReplyStreamRef.current = null;
       }
     }
@@ -2016,9 +2022,11 @@ const ConversationViewInner = (
   adjustScrollForResizeRule(virtualizer, (key) => {
     const hold = scrollHoldRef.current;
     const revealRow = revealRowRef.current;
+    const taken = replyStreamTakenRef.current;
     return (!!hold && key === hold.key && Date.now() < hold.until)
       || (!!revealRow && String(key) === revealRow.key && Date.now() < revealRow.until)
-      || (replyStreamKeyRef.current !== null && String(key) === replyStreamKeyRef.current);
+      || (replyStreamKeyRef.current !== null && String(key) === replyStreamKeyRef.current)
+      || (!!taken && String(key) === taken.key && Date.now() < taken.until);
   });
   const rowLookupRef = useRef({ timeline, getItemKey });
   rowLookupRef.current = { timeline, getItemKey };
