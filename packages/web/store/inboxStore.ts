@@ -13660,8 +13660,9 @@ const inboxStoreConfig = (set: any, get: any) => ({
     }
   }),
 
-  // The new-session composer's Mine / Team pill: local until the first send
-  // folds it into createSession (createSessionFromStub).
+  // The new-session composer's Personal | Team switch ("mine" is Personal):
+  // local until the first send folds it into createSession
+  // (createSessionFromStub); only Team is sent.
   setStubTeam: sync(function (this: Draft, id: string, team: "mine" | "team") {
     for (const row of [this.sessions[id], this.conversations[id]] as any[]) if (row) row._team = team;
   }),

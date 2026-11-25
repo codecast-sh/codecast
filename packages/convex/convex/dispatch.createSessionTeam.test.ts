@@ -1,6 +1,7 @@
-// A new session started with the composer's Team pill is born shared with the
-// team; Mine is born private and locked; no pick leaves it to the folder rule.
-// The preview query the pill reads agrees with what the create does.
+// A new session started as Team from the composer's Personal | Team switch is
+// born a team session; Personal sends nothing, so the folder rule decides; an
+// explicit `private` create (not sent by the switch) is private and locked.
+// The preview query the switch reads agrees with what the create does.
 import { describe, expect, test } from "bun:test";
 import { makeFakeDb } from "./testDb";
 import { dispatch } from "./dispatch";
@@ -33,14 +34,14 @@ async function start(db: any, sessionId: string, pick: Record<string, boolean> =
   return db._tables.conversations.find((c: any) => c.session_id === sessionId);
 }
 
-describe("starting a session as Mine or Team", () => {
+describe("starting a session as Team, Personal or private", () => {
   test("Team makes it a team session even where the folder rule keeps it private", async () => {
     const db = seed();
     expect(await start(db, "s-team", { team: true })).toMatchObject({ team_id: TEAM, is_private: false, team_visibility: "full" });
     expect(db._tables.session_team_owners ?? []).toHaveLength(1);
   });
 
-  test("Mine is private and locked even where the folder rule shares it", async () => {
+  test("an explicit private create is private and locked even where the folder rule shares it", async () => {
     const db = seed([{ path_prefix: "/repo", team_id: TEAM, auto_share: true }]);
     expect(await start(db, "s-mine", { private: true })).toMatchObject({ is_private: true, team_visibility: "private" });
   });

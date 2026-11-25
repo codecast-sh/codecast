@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from "bun:test";
 import { useInboxStore } from "../inboxStore";
 
-// The new-session composer's Mine / Team pill (TeamPill) stamps the pick on
-// the local stub (setStubTeam) and createSessionFromStub folds it into the
-// create: Mine as `private`, Team as `team`, no pick as neither, so the folder
-// rule decides on the server. A pick lost on this hop would start a session
-// the person said was theirs as the team's, or the other way round.
+// The new-session composer's Personal | Team switch (TeamSessionSwitch) stamps
+// the pick on the local stub (setStubTeam) and createSessionFromStub folds it
+// into the create: Team as `team`; Personal and no pick send neither, so the
+// folder rule decides on the server. A pick lost on this hop would start a
+// session the person said was theirs as the team's, or the other way round.
 
 const STUB = "stubteampick1";
 
@@ -37,7 +37,7 @@ async function createOpts(): Promise<any> {
   return calls[0];
 }
 
-describe("the new-session Mine / Team pick", () => {
+describe("the new-session Personal | Team pick", () => {
   it("no pick sends neither, so the folder rule decides", async () => {
     seedStub();
     const opts = await createOpts();

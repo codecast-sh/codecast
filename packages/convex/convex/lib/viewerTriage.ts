@@ -38,7 +38,6 @@ export async function recordViewerTriage(ctx: Db, userId: Id<"users">, conversat
   else await ctx.db.insert("session_viewer_triage", { user_id: userId, conversation_id: conversationId, ...patch });
 }
 
-/** Every team session one person has triaged, by conversation id: one read. */
 // One person's triage of the team sessions in their window, by conversation
 // id: one indexed read per windowed session, issued together, so nothing past
 // a cap is ever dropped.

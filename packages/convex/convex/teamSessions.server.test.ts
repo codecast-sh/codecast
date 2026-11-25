@@ -176,11 +176,11 @@ describe("the flag holds for a single added owner too", () => {
   });
 });
 
-describe("review fixes", () => {
+describe("privacy, per-person triage and answers", () => {
   const alertsFor = (w: ReturnType<typeof world>, type: string) =>
     w.db._tables.notifications.filter((n: any) => !n.read && n.type === type).map((n: any) => n.recipient_user_id).sort();
 
-  test("3: a team session cannot be made private, by a person or a sweep", async () => {
+  test("a team session cannot be made private, by a person or a sweep", async () => {
     const w = world();
     await makeTeam(w);
     await expect((setPrivacy as any)._handler(w.ctxAs(JASON), { conversation_id: CONV, is_private: true })).rejects.toThrow(/team session/i);
@@ -190,7 +190,7 @@ describe("review fixes", () => {
     expect(await isSessionOwner(w as any, CONV as any, SAM as any)).toBe(true);
   });
 
-  test("4: adding the team to a session people own takes the people off, so each keeps their own triage", async () => {
+  test("adding the team to a session people own takes the people off, so each keeps their own triage", async () => {
     const w = world({ owners: [JASON, ASHOT] });
     await invoke(addSessionOwner, w.ctxAs(JASON), { owner: "everyone" });
     expect(w.db._tables.session_owners).toHaveLength(0);
@@ -204,7 +204,7 @@ describe("review fixes", () => {
     expect(w.db._tables.session_team_owners).toHaveLength(0);
   });
 
-  test("5: a web or phone composer send clears the team's alerts, and so does answering a permission", async () => {
+  test("a web or phone composer send clears the team's alerts, and so does answering a permission", async () => {
     const w = world();
     await makeTeam(w);
     await deliverSessionNotificationToParties(w.ctxAs(JASON), w.conv(), "session_idle", "Needs input", "Raise it?");
@@ -218,7 +218,7 @@ describe("review fixes", () => {
     expect(alertsFor(w, "permission_request")).toEqual([]);
   });
 
-  test("6: writing in a team session brings it back for the writer", async () => {
+  test("writing in a team session brings it back for the writer", async () => {
     const w = world();
     await makeTeam(w);
     await applyPatches(w.ctxAs(SAM), SAM as any, { conversations: { [CONV]: { inbox_dismissed_at: 3, inbox_pinned_at: 4 } } });
@@ -229,7 +229,7 @@ describe("review fixes", () => {
     expect(row.inbox_pinned_at).toBe(4);
   });
 
-  test("7: a CLI stash of a team session is the stasher's own", async () => {
+  test("a CLI stash of a team session is the stasher's own", async () => {
     const w = world();
     await makeTeam(w);
     await (cliSetSessionVisibility as any)._handler(w.ctxAs(JASON), { session: "jx7team", action: "dismiss" });
@@ -241,7 +241,7 @@ describe("review fixes", () => {
     expect(sams.inbox_stashed_at).toBeNull();
   });
 
-  test("10: an agent account on the team is not an owner of a team session", async () => {
+  test("an agent account on the team is not an owner of a team session", async () => {
     const w = world();
     await makeTeam(w);
     expect(await isSessionOwner(w as any, CONV as any, BOT as any)).toBe(false);
@@ -249,8 +249,8 @@ describe("review fixes", () => {
   });
 });
 
-describe("review round 2", () => {
-  test("1: team sessions have their own window, newest activity first; past it the window says so", async () => {
+describe("the team window and who owns a team session", () => {
+  test("team sessions have their own window, newest activity first; past it the window says so", async () => {
     const w = world();
     // An old session Ashot owns as a person, from before the team ones.
     w.db._tables.conversations.push({ _id: "c-old", short_id: "jx7oldd", user_id: JASON, team_id: TEAM, is_private: false, status: "active", updated_at: 1 });
@@ -269,7 +269,7 @@ describe("review round 2", () => {
     expect((await ownerRowsForUser(w as any, ASHOT as any, 200)).rows.some((x: any) => x.conversation_id === "c-200")).toBe(false);
   });
 
-  test("2: Take ownership removes the team row even after the session moved team; low-level writers never add a person to a team session", async () => {
+  test("Take ownership removes the team row even after the session moved team; low-level writers never add a person to a team session", async () => {
     const w = world();
     w.db._tables.teams.push({ _id: "t-other", name: "Other", invite_code: "O", created_at: 1, features: { team_sessions: true } });
     w.db._tables.team_memberships.push({ _id: "m-other", team_id: "t-other", user_id: JASON, role: "member" });
@@ -283,14 +283,14 @@ describe("review round 2", () => {
     expect(w.db._tables.session_owners.map((r: any) => r.user_id)).toEqual([JASON]);
   });
 
-  test("3: a background hold change never turns a team session personal", async () => {
+  test("a background hold change never turns a team session personal", async () => {
     const w = world();
     await makeTeam(w);
     expect(await applyHoldChange(w.ctxAs(JASON), CONV as any)).toEqual({ change: "keep" });
     expect(w.db._tables.session_team_owners).toHaveLength(1);
   });
 
-  test("4: a teammate who does not run it can stash, restore and kill it from the CLI", async () => {
+  test("a teammate who does not run it can stash, restore and kill it from the CLI", async () => {
     const w = world();
     await makeTeam(w);
     await (cliSetSessionVisibility as any)._handler(w.ctxAs(SAM), { session: "jx7team", action: "dismiss" });
@@ -315,9 +315,9 @@ describe("answered", () => {
   });
 });
 
-describe("review round 3", () => {
+describe("kill, Done and web restore", () => {
 
-  test("1: a kill from the web (killSession, the patch the client sends) ends it for everyone", async () => {
+  test("a kill from the web (killSession, the patch the client sends) ends it for everyone", async () => {
     const w = world();
     await makeTeam(w);
     const at = 1234;
@@ -331,7 +331,7 @@ describe("review round 3", () => {
     expect(w2.conv().inbox_dismissed_at).toBeUndefined();
   });
 
-  test("2: a session's message or a wake is no answer; only a turn a person opened is", async () => {
+  test("a session's message or a wake is no answer; only a turn a person opened is", async () => {
     const w = world();
     await makeTeam(w);
     await deliverSessionNotificationToParties(w.ctxAs(JASON), w.conv(), "session_idle", "Needs input", "Raise it?");
@@ -343,14 +343,14 @@ describe("review round 3", () => {
     expect(w.conv().team_answered_by).toBeUndefined();
   });
 
-  test("3: a Done (completed) team session stays in everyone's window", async () => {
+  test("a Done (completed) team session stays in everyone's window", async () => {
     const w = world();
     await makeTeam(w);
     await makeChangeTrackedDb(w.db).patch(CONV, { status: "completed" });
     expect((await ownerRowsForUser(w as any, SAM as any, 200)).rows.map((r: any) => r.conversation_id)).toEqual([CONV]);
   });
 
-  test("4: a killed team session leaves every window, and a web restore brings it back for everyone", async () => {
+  test("a killed team session leaves every window, and a web restore brings it back for everyone", async () => {
     const w = world();
     await makeTeam(w);
     const at = 77;
@@ -365,8 +365,8 @@ describe("review round 3", () => {
   });
 });
 
-describe("review round 4", () => {
-  test("1: cast undismiss of a killed team session brings it back to the team", async () => {
+describe("undismiss, the agent stopping and co-owner kills", () => {
+  test("cast undismiss of a killed team session brings it back to the team", async () => {
     const w = world();
     await makeTeam(w);
     await (cliSetSessionVisibility as any)._handler(w.ctxAs(JASON), { session: "jx7team", action: "kill" });
@@ -375,7 +375,7 @@ describe("review round 4", () => {
     expect((await ownerRowsForUser(w as any, SAM as any, 200)).rows.map((r: any) => r.conversation_id)).toEqual([CONV]);
   });
 
-  test("2: the agent stopping (completed) leaves a waiting team session with the team", async () => {
+  test("the agent stopping (completed) leaves a waiting team session with the team", async () => {
     const w = world();
     await makeTeam(w);
     await deliverSessionNotificationToParties(w.ctxAs(JASON), w.conv(), "session_idle", "Needs input", "Raise it?");
@@ -383,7 +383,7 @@ describe("review round 4", () => {
     for (const id of [ASHOT, SAM]) expect((await ownerRowsForUser(w as any, id as any, 200)).rows.map((r: any) => r.conversation_id)).toEqual([CONV]);
   });
 
-  test("4: an ordinary co-owner's cast kill stays a viewer hide (no widening outside team sessions)", async () => {
+  test("an ordinary co-owner's cast kill stays a viewer hide (no widening outside team sessions)", async () => {
     const w = world({ owners: [JASON, ASHOT] });
     w.conv().owner_user_id = JASON;
     w.db._tables.inbox_hides = [];
@@ -394,7 +394,7 @@ describe("review round 4", () => {
 });
 
 describe("before the flag goes on for a real team", () => {
-  test("1: making a moved session a team session again belongs to the new team only", async () => {
+  test("making a moved session a team session again belongs to the new team only", async () => {
     const w = world();
     w.db._tables.teams.push({ _id: "t-b", name: "B", invite_code: "B", created_at: 1, features: { team_sessions: true } });
     w.db._tables.team_memberships.push({ _id: "m-jb", team_id: "t-b", user_id: JASON, role: "member" });
@@ -406,7 +406,7 @@ describe("before the flag goes on for a real team", () => {
     expect(await isSessionOwner(w as any, CONV as any, ASHOT as any)).toBe(false);
   });
 
-  test("2: killed team sessions do not use up the window, and one waiting on you stays past it", async () => {
+  test("killed team sessions do not use up the window, and one waiting on you stays past it", async () => {
     const w = world();
     for (let i = 0; i < 200; i++) {
       w.db._tables.conversations.push({ _id: `k-${i}`, user_id: JASON, team_id: TEAM, team_owner_team_id: TEAM, is_private: false, status: "active", updated_at: 1000 + i, inbox_killed_at: 5 });
@@ -420,7 +420,7 @@ describe("before the flag goes on for a real team", () => {
     expect((await ownerRowsForUser(w as any, SAM as any, 200)).rows.map((x: any) => x.conversation_id)).toContain("live");
   });
 
-  test("3: undoing Take ownership from org history makes it a team session again", async () => {
+  test("undoing Take ownership from org history makes it a team session again", async () => {
     const w = world();
     await makeTeam(w);
     const res = await invoke(setSessionOwners, w.ctxAs(SAM), { owners: ["me"] });
@@ -435,8 +435,8 @@ describe("before the flag goes on for a real team", () => {
   });
 });
 
-describe("review of v6", () => {
-  test("1: a team ref names only the session's own team; it never moves a session to another team", async () => {
+describe("team refs and the notification read", () => {
+  test("a team ref names only the session's own team; it never moves a session to another team", async () => {
     const w = world();
     w.db._tables.teams.push({ _id: "t-b", name: "B", invite_code: "B", created_at: 1, features: { team_sessions: true } });
     w.db._tables.team_memberships.push({ _id: "m-jb", team_id: "t-b", user_id: JASON, role: "member" });
@@ -445,7 +445,7 @@ describe("review of v6", () => {
     expect(w.db._tables.session_owners.map((r: any) => r.user_id)).toEqual([JASON]);
   });
 
-  test("2: with no team session in any window, the scan reads no notifications", async () => {
+  test("with no team session in any window, the scan reads no notifications", async () => {
     const w = world();
     w.db._tables.notifications.push({ _id: "n1", recipient_user_id: SAM, conversation_id: CONV, type: "session_idle", read: false, created_at: 1 });
     const reads: string[] = [];
@@ -455,8 +455,8 @@ describe("review of v6", () => {
   });
 });
 
-describe("review of v7", () => {
-  test("1: a teamless session made a team session goes to its runner's team, never the caller's; an empty team ref is refused", async () => {
+describe("teamless sessions, agent accounts and many teams", () => {
+  test("a teamless session made a team session goes to its runner's team, never the caller's; an empty team ref is refused", async () => {
     const w = world({ owners: [JASON, SAM] });
     w.db._tables.teams.push({ _id: "t-b", name: "B", invite_code: "B", created_at: 1, features: { team_sessions: true } });
     w.db._tables.team_memberships.push({ _id: "m-sb", team_id: "t-b", user_id: SAM, role: "member", visibility: "full" });
@@ -468,7 +468,7 @@ describe("review of v7", () => {
     expect(w.conv().team_owner_team_id).toBe(TEAM);
   });
 
-  test("2: an agent account reads no team window at all", async () => {
+  test("an agent account reads no team window at all", async () => {
     const w = world();
     await makeTeam(w);
     const reads: string[] = [];
@@ -478,7 +478,7 @@ describe("review of v7", () => {
     expect(reads).not.toContain("notifications");
   });
 
-  test("3: teams past the tenth count as overflowed, so their sessions are recovered by id", async () => {
+  test("teams past the tenth count as overflowed, so their sessions are recovered by id", async () => {
     const w = world();
     await makeTeam(w);
     const m = w.db._tables.team_memberships;
@@ -498,8 +498,8 @@ describe("review of v7", () => {
   });
 });
 
-describe("review of v8", () => {
-  test("1: a teamless session an agent runs never moves to a team its people are not on", async () => {
+describe("owners, private locks, lookups and truncation", () => {
+  test("a teamless session an agent runs never moves to a team its people are not on", async () => {
     const w = world({ owners: [JASON, ASHOT] });
     w.db._tables.teams.push({ _id: "t-b", name: "B", invite_code: "B", created_at: 1, features: { team_sessions: true } });
     w.db._tables.team_memberships.push({ _id: "m-bb", team_id: "t-b", user_id: BOT, role: "member", visibility: "full" });
@@ -513,7 +513,7 @@ describe("review of v8", () => {
     expect(w.db._tables.session_team_owners).toHaveLength(0);
   });
 
-  test("2: a session the runner locked private opens to the team only by the runner", async () => {
+  test("a session the runner locked private opens to the team only by the runner", async () => {
     const w = world({ owners: [JASON, SAM] });
     w.conv().team_visibility = "private";
     await expect(invoke(setSessionOwners, w.ctxAs(SAM), { owners: ["everyone"] })).rejects.toThrow(/private/);
@@ -522,14 +522,14 @@ describe("review of v8", () => {
     expect(w.conv().team_owner_team_id).toBe(TEAM);
   });
 
-  test("3: a member who does not run it finds a team session by name", async () => {
+  test("a member who does not run it finds a team session by name", async () => {
     const w = world();
     await makeTeam(w);
     const r: any = await computeInboxSessions({ db: w.db } as any, SAM as any, { show_all: true, projection: true, extraConvIds: [CONV], namedOnly: true });
     expect(r.sessions.map((s: any) => String(s._id))).toContain(CONV);
   });
 
-  test("4: teams past the tenth report the inbox as truncated", async () => {
+  test("teams past the tenth report the inbox as truncated", async () => {
     const w = world();
     await makeTeam(w);
     const m = w.db._tables.team_memberships;

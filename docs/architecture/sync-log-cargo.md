@@ -87,10 +87,12 @@ overlay own those fields (D1).
 **Fan out follows access, not routing (review blocker).** The transport's scopes are derived
 from the access facts of the post write document: the owner's user scope always; the
 workspace key's team when the stored key is a team key (never for conversations, whose team
-activity is a separate graduated axis); each explicit grant in their own user scope: a
-task's assignee, and a conversation's session owners other than its runner
+activity is a separate graduated axis); each explicit grant in its own scope: a task's
+assignee and a conversation's person owners other than its runner in their user scope
 (`checkConversationAccess` admits every owner, and a co-owner's triage dispatch is accepted,
-so its ack must land a position in a scope their window tracks; ct-56044). A routing `team_id` whose
+so its ack must land a position in a scope their window tracks; ct-56044), and a team
+session's `team:<id>` grant (`session_team_owners`) in that team's scope, which is the only
+way a conversation reaches a team scope. A routing `team_id` whose
 workspace is `user:<owner>` (private inside a team) therefore never enters the team scope —
 no existence leak, no projected delete probes — and every reader who may read a row holds a
 scope it fans to, which is the property retiring the live lists needs (a task assigned to

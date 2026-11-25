@@ -1281,11 +1281,10 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     const projectId = project?._id ?? null;
     if (project?.team_id && !resolvedTeamId && (await isTeamMember(ctx as any, userId, project.team_id))) resolvedTeamId = project.team_id;
     if (handChannel && String(resolvedTeamId ?? "") !== String(handChannel.team_id)) opts = { ...opts, private: true };
-    // The composer's Team pill, chosen before the first send: share it the way
-    // the header's share control does (buildShareUpdate resolves the team).
-    // Mine rides as `private`, which wins; untouched, the folder rule decides.
-    // Team (the composer's switch): a team session, owned by everyone on the
-    // team and read whole by them. Behind the team's Team sessions feature.
+    // Team (the composer's Personal | Team switch): a team session, owned by
+    // everyone on the team and read whole by them, on the team buildShareUpdate
+    // resolves. Behind the team's Team sessions feature. Personal sends nothing,
+    // so the folder rule decides as it always has.
     let teamSession = false;
     if (opts.team && !opts.private) {
       const share = await buildShareUpdate(ctx, { team_id: resolvedTeamId, git_root: resolvedGitRoot, project_path: resolvedProjectPath, git_remote_url: resolvedGitRemoteUrl }, userId);
