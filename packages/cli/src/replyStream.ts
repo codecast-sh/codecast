@@ -29,6 +29,7 @@ import { randomBytes } from "node:crypto";
 import * as fsp from "node:fs/promises";
 import * as path from "node:path";
 import { REPLY_STREAM_MAX_CHARS, type ReplyStreamPushResult } from "@codecast/shared/contracts";
+import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
 
 export const REPLY_STREAM_HOOK_PATH = "/hook/message-display";
 export const REPLY_STREAM_SETTINGS_FILE = "reply-stream-settings.json";
@@ -44,8 +45,18 @@ const OFF_PAUSE_MS = 10 * 60_000;
 const IDLE_FORGET_MS = 15 * 60_000;
 /** Conversations tracked at once; the one with the oldest batch goes first. */
 const MAX_CONVERSATIONS = 64;
-/** Message ids a conversation has moved past, kept to drop their late batches. */
+/** How long a later line of a message that has not started is held for the
+ *  message's first line. Up to three calls are in flight, so a reordering is
+ *  undone within a few hundred ms; a late final is never claimed. */
+const HOLD_MS = 2_000;
+/** Messages held per conversation, and lines held per message. */
+const MAX_HELD_MESSAGES = 4;
+const MAX_HELD_PARTS = 8;
+/** Ids a conversation moved past, kept so a first line that arrives late
+ *  cannot restart one. Late lines after the first never need it. */
 const MAX_PAST_IDS = 16;
+/** At most one line per conversation in this long about failed pushes. */
+const FAILURE_LOG_EVERY_MS = 5 * 60_000;
 
 export interface MessageDisplayBatch {
   session_id: string;
@@ -118,28 +129,41 @@ export async function ensureReplyStreamSettings(configDir: string, port: number,
   }
 }
 
-let warnedUserSettings = false;
-
 /** What a claude launch line gains: ` --settings <file>`, or "". A
  *  `--settings` in the person's own claude args wins, since a second one would
- *  replace theirs. */
+ *  replace theirs; `ownSettings` hears of each such launch. */
 export function replyStreamLaunchFragment(a: {
   on: boolean;
   agentType: string;
   configuredArgs: string;
   settingsPath: string | null;
   escape: (value: string) => string;
-  log: (msg: string) => void;
+  ownSettings: () => void;
 }): string {
   if (!a.on || a.agentType !== "claude" || !a.settingsPath) return "";
   if (/(^|\s)--settings(\s|=|$)/.test(a.configuredArgs)) {
-    if (!warnedUserSettings) {
-      warnedUserSettings = true;
-      a.log("[REPLY-STREAM] claude args carry their own --settings; sessions launch without live replies");
-    }
+    a.ownSettings();
     return "";
   }
   return ` --settings ${a.escape(a.settingsPath)}`;
+}
+
+/** The conversation a session the daemon started belongs to, from its start
+ *  record (conversation -> { sessionId }). The daemon's conversation cache
+ *  learns a started session only once discovery sees its prompt ready, at
+ *  least 2 s after the launch, and does so on purpose: an earlier entry lets
+ *  delivery paste into a booting prompt. A launch with a prompt is writing its
+ *  first reply by then, and that reply is the one that matters most. */
+export function startedConversationOf(started: ReadonlyMap<string, { sessionId?: string }>, sessionId: string): string | undefined {
+  for (const [conversationId, entry] of started) if (entry.sessionId === sessionId) return conversationId;
+  return undefined;
+}
+
+/** A failed push's reason, for the log: the server's words up to any quoted
+ *  argument, since a validation error quotes the reply's text. */
+export function pushFailureReason(err: unknown): string {
+  const raw = err instanceof Error ? err.message : String(err);
+  return raw.split(/\b(?:Value|Object):/)[0]!.replace(/\s+/g, " ").trim().slice(0, 200);
 }
 
 export interface ReplyStreamPushArgs {
@@ -169,35 +193,54 @@ interface Message {
   startedAt: number;
   seq: number;
   sawFinal: boolean;
-  /** Index 0 came with `final`: the whole message in one batch. */
-  single: boolean;
-  /** What the last written push carried; "" when it was not written. */
-  sent: string;
+  /** A line arrived since the last push started. */
+  changed: boolean;
+  /** What the server last wrote for this message. */
+  written: string;
+}
+
+/** Lines of a message whose first line has not arrived. */
+interface Held {
+  id: string;
+  at: number;
+  parts: Map<number, string>;
+  sawFinal: boolean;
 }
 
 interface Conversation {
   message: Message | null;
+  held: Held[];
+  /** Ids this conversation moved past, newest last. */
   past: string[];
   lastBatchAt: number;
   inFlight: boolean;
   lastPushAt: number;
   pausedUntil: number;
   timer: unknown;
+  failureLoggedAt: number;
 }
 
-function joined(m: Message): string {
+/** The lines from the first up to the first gap, cut at `limit`. */
+function joined(m: Message, limit: number): string {
   let out = "";
-  for (let i = 0; m.parts.has(i); i++) out += m.parts.get(i);
-  return out;
+  for (let i = 0; m.parts.has(i) && out.length < limit; i++) out += m.parts.get(i);
+  return out.slice(0, limit);
 }
 
 /**
  * The reply being written in each conversation, pushed as it grows.
  *
  * State is per conversation, since the server keeps one row per conversation:
- * one current message, and the ids it moved past. Pushes to one conversation
- * go one at a time, at least PUSH_SPACING_MS apart, except that a message's
- * final text goes as soon as the push ahead of it returns.
+ * one current message. Only a message's first line (index 0, not final) makes
+ * it the current one, so a late line of an older message (the final of a
+ * stream the API abandoned hours ago) can never displace it. A later line of a
+ * message that has not started waits HOLD_MS for that first line, which undoes
+ * the reordering of calls in flight at once.
+ *
+ * Pushes to one conversation go one at a time, at least PUSH_SPACING_MS
+ * apart, except that a message's final text goes as soon as the push ahead of
+ * it returns. A paused conversation sends what arrived during the pause when
+ * the pause ends, and schedules nothing when nothing did.
  */
 export class ReplyStreamTracker {
   private readonly conversations = new Map<string, Conversation>();
@@ -225,36 +268,61 @@ export class ReplyStreamTracker {
     const now = this.deps.now();
     this.forgetIdle(now);
     const c = this.touch(conversationId, now);
-    // A late batch of a message this conversation moved past: the final of an
-    // abandoned stream, whose text never reaches the transcript.
-    if (c.past.includes(batch.message_id)) return;
-    if (c.message?.id !== batch.message_id) {
-      if (c.message) {
-        c.past.push(c.message.id);
+    if (!c) return;
+    let m = c.message;
+    if (m?.id !== batch.message_id) {
+      c.held = c.held.filter((h) => now - h.at <= HOLD_MS);
+      if (batch.index > 0) {
+        this.hold(c, batch, now);
+        return;
+      }
+      // A whole message in one batch gains nothing over the transcript and
+      // makes the hand-off ambiguous: it is never published, so it never
+      // displaces the current message either.
+      if (batch.final) return;
+      // A first line can only come late from a call in flight across a
+      // sleep; the ids this conversation moved past keep one from restarting.
+      if (c.past.includes(batch.message_id)) return;
+      if (m) {
+        c.past.push(m.id);
         if (c.past.length > MAX_PAST_IDS) c.past.shift();
       }
-      c.message = { id: batch.message_id, parts: new Map(), startedAt: now, seq: 0, sawFinal: false, single: false, sent: "" };
+      const held = c.held.find((h) => h.id === batch.message_id);
+      c.held = c.held.filter((h) => h !== held);
+      m = c.message = { id: batch.message_id, parts: held?.parts ?? new Map(), startedAt: now, seq: 0, sawFinal: held?.sawFinal ?? false, changed: false, written: "" };
     }
-    const m = c.message;
     m.parts.set(batch.index, batch.delta);
-    if (batch.final) {
-      m.sawFinal = true;
-      if (batch.index === 0) m.single = true;
-    }
+    if (batch.final) m.sawFinal = true;
+    m.changed = true;
     this.pump(conversationId);
   }
 
-  /** The conversation's state, created or moved to the newest end. */
-  private touch(conversationId: string, now: number): Conversation {
+  private hold(c: Conversation, batch: MessageDisplayBatch, now: number): void {
+    let h = c.held.find((x) => x.id === batch.message_id);
+    if (!h) {
+      if (c.held.length >= MAX_HELD_MESSAGES) c.held.shift();
+      h = { id: batch.message_id, at: now, parts: new Map(), sawFinal: false };
+      c.held.push(h);
+    }
+    if (h.parts.size < MAX_HELD_PARTS) h.parts.set(batch.index, batch.delta);
+    if (batch.final) h.sawFinal = true;
+  }
+
+  /** The conversation's state, created or moved to the newest end; null when
+   *  every tracked conversation has a push in flight and none can make room. */
+  private touch(conversationId: string, now: number): Conversation | null {
     let c = this.conversations.get(conversationId);
     if (c) {
       this.conversations.delete(conversationId);
     } else {
-      c = { message: null, past: [], lastBatchAt: now, inFlight: false, lastPushAt: -Infinity, pausedUntil: 0, timer: undefined };
       if (this.conversations.size >= MAX_CONVERSATIONS) {
-        const [oldest] = this.conversations.keys();
-        if (oldest !== undefined) this.forget(oldest);
+        // Never one with a push in flight: forgotten, its next batch would
+        // start a second push for the conversation beside the first.
+        const victim = [...this.conversations].find(([, x]) => !x.inFlight)?.[0];
+        if (victim === undefined) return null;
+        this.forget(victim);
       }
+      c = { message: null, held: [], past: [], lastBatchAt: now, inFlight: false, lastPushAt: -Infinity, pausedUntil: 0, timer: undefined, failureLoggedAt: -Infinity };
     }
     c.lastBatchAt = now;
     this.conversations.set(conversationId, c);
@@ -265,7 +333,7 @@ export class ReplyStreamTracker {
   private forgetIdle(now: number): void {
     for (const [id, c] of this.conversations) {
       if (now - c.lastBatchAt <= IDLE_FORGET_MS) break;
-      this.forget(id);
+      if (!c.inFlight) this.forget(id);
     }
   }
 
@@ -278,11 +346,11 @@ export class ReplyStreamTracker {
   private pump(conversationId: string): void {
     const c = this.conversations.get(conversationId);
     const m = c?.message;
-    if (!c || !m || c.inFlight || m.single) return;
+    if (!c || !m || c.inFlight || !m.changed) return;
     const now = this.deps.now();
-    // Paused: the first batch after the pause sends the whole text so far.
-    if (now < c.pausedUntil) return;
-    const wait = m.sawFinal ? 0 : c.lastPushAt + PUSH_SPACING_MS - now;
+    // Inside a pause, or too soon after the last push: wake when it ends. The
+    // final line skips the spacing, never the pause.
+    const wait = Math.max(c.pausedUntil - now, m.sawFinal ? 0 : c.lastPushAt + PUSH_SPACING_MS - now);
     if (wait > 0) {
       if (c.timer === undefined) {
         c.timer = this.setTimer(() => {
@@ -292,8 +360,11 @@ export class ReplyStreamTracker {
       }
       return;
     }
-    const text = this.deps.redact(joined(m)).slice(0, REPLY_STREAM_MAX_CHARS);
-    if (!text || text === m.sent) return;
+    m.changed = false;
+    // Redaction reads a bounded slice: a secret that straddles the cap is
+    // still whole in it, and a runaway reply costs no more than that.
+    const text = this.deps.redact(joined(m, REPLY_STREAM_MAX_CHARS + SECRET_PAYLOAD_MAX)).slice(0, REPLY_STREAM_MAX_CHARS);
+    if (!text || text === m.written) return;
     if (c.timer !== undefined) {
       this.clearTimer(c.timer);
       c.timer = undefined;
@@ -301,7 +372,6 @@ export class ReplyStreamTracker {
     c.inFlight = true;
     c.lastPushAt = now;
     m.seq += 1;
-    m.sent = text;
     let call: Promise<ReplyStreamPushResult | null>;
     try {
       call = this.deps.push(conversationId, { message_id: m.id, seq: m.seq, started_at: m.startedAt, text });
@@ -312,15 +382,21 @@ export class ReplyStreamTracker {
       .then(
         (r) => r?.state ?? null,
         (err: unknown) => {
-          this.deps.log(`[REPLY-STREAM] push for ${conversationId.slice(0, 12)} failed: ${err instanceof Error ? err.message : String(err)}`);
+          const at = this.deps.now();
+          if (at - c.failureLoggedAt >= FAILURE_LOG_EVERY_MS) {
+            c.failureLoggedAt = at;
+            this.deps.log(`[REPLY-STREAM] push for ${conversationId.slice(0, 12)} failed: ${pushFailureReason(err)}`);
+          }
           return null;
         },
       )
       .then((state) => {
         c.inFlight = false;
-        if (state !== "written") {
-          // Not written, so the next push sends this text again.
-          if (m.sent === text) m.sent = "";
+        if (state === "written") {
+          m.written = text;
+        } else {
+          // Not written: nothing more goes until the pause ends, and then only
+          // if a line arrived meanwhile, carrying the whole text so far.
           c.pausedUntil = this.deps.now() + (state === "off" ? OFF_PAUSE_MS : UNWATCHED_PAUSE_MS);
           if (state === "off") this.deps.log(`[REPLY-STREAM] live replies are off for ${conversationId.slice(0, 12)}'s workspace; pausing 10 min`);
         }

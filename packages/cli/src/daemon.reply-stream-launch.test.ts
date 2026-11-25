@@ -7,7 +7,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
 import { fileURLToPath } from "url";
-import { buildClaudeResumeCommand, replyStreamFragment, replyStreamLaunchForTests } from "./daemon.js";
+import { buildClaudeResumeCommand, daemonHookIngressDeps, mirrorReplyStreaming, replyStreamFragment, replyStreamLaunchForTests } from "./daemon.js";
+import type { MessageDisplayBatch } from "./replyStream.js";
+import { functionBlock } from "./test-helpers/sourceRegion.js";
+import { strictStub } from "./test-helpers/strictStub.js";
 
 const dir = mkdtempSync(join(tmpdir(), "reply-stream-launch-"));
 const SETTINGS = "/Users/O'Brien Smith/.codecast/reply-stream-settings.json";
@@ -22,6 +25,7 @@ function feature(on: boolean, path: string | null = SETTINGS) {
 afterEach(() => {
   replyStreamLaunchForTests.on = false;
   replyStreamLaunchForTests.ensure = realEnsure;
+  replyStreamLaunchForTests.tracker = null;
 });
 afterAll(() => rmSync(dir, { recursive: true, force: true }));
 
@@ -90,5 +94,62 @@ describe("the launch fragment", () => {
     const blankLaunches = source.split("\n").filter((line) => line.includes("const blankCmdText = "));
     expect(blankLaunches).toHaveLength(2);
     for (const line of blankLaunches) expect(line).toContain("${await replyStreamFragment(");
+  });
+});
+
+describe("the heartbeat's answer", () => {
+  function mirror(data: Record<string, unknown>) {
+    const saved: boolean[] = [];
+    mirrorReplyStreaming(data, (on) => saved.push(on));
+    return saved;
+  }
+
+  test("reply_streaming: true turns it on and saves it once", () => {
+    expect(mirror({ reply_streaming: true })).toEqual([true]);
+    expect(replyStreamLaunchForTests.on).toBe(true);
+    expect(mirror({ reply_streaming: true })).toEqual([]);
+  });
+
+  test("an answer without the field, from an older server, turns it off", () => {
+    replyStreamLaunchForTests.on = true;
+    expect(mirror({ claude_backend: null })).toEqual([false]);
+    expect(replyStreamLaunchForTests.on).toBe(false);
+  });
+
+  test("a failed beat leaves it as it was: the mirror reads only a beat that landed, before its commands", () => {
+    const source = readFileSync(fileURLToPath(new URL("./daemon.ts", import.meta.url)), "utf-8");
+    const beat = functionBlock(source, "sendHeartbeat").text;
+    const call = beat.indexOf("mirrorReplyStreaming(data, (on) => patchConfig({ reply_streaming: on }));");
+    expect(source.match(/mirrorReplyStreaming\(/g)).toHaveLength(2); // the definition and this call
+    expect(call).toBeGreaterThan(beat.indexOf("if (!response.ok) {"));
+    expect(call).toBeGreaterThan(beat.indexOf("const data = await response.json();"));
+    expect(call).toBeLessThan(beat.indexOf("executeCommandBatch(data.commands"));
+    expect(beat.indexOf("} catch")).toBeGreaterThan(call);
+  });
+});
+
+describe("the hook route's handoff", () => {
+  const body = (o: Record<string, unknown>) => JSON.stringify({
+    cwd: "/x", delta: "Line.\n", final: false, hook_event_name: "MessageDisplay", index: 0, message_id: "m-1",
+    prompt_id: "p", scratchpad_dir: "/tmp", session_id: "s-1", transcript_path: "/x/s-1.jsonl", turn_id: "t", ...o,
+  });
+
+  test("a MessageDisplay body reaches the tracker parsed; anything else does not", () => {
+    const got: MessageDisplayBatch[] = [];
+    replyStreamLaunchForTests.tracker = strictStub("tracker", { receive: (b: MessageDisplayBatch) => void got.push(b) });
+    const handoff = daemonHookIngressDeps().messageDisplay!;
+    handoff(body({}));
+    handoff(body({ hook_event_name: "Stop" }));
+    handoff("not json");
+    expect(got).toEqual([{ session_id: "s-1", message_id: "m-1", index: 0, final: false, delta: "Line.\n" }]);
+  });
+
+  test("before the tracker exists, a body is dropped quietly", () => {
+    expect(() => daemonHookIngressDeps().messageDisplay!(body({}))).not.toThrow();
+  });
+
+  test("the tracker finds a started session's conversation before discovery links it", () => {
+    const source = readFileSync(fileURLToPath(new URL("./daemon.ts", import.meta.url)), "utf-8");
+    expect(source).toContain("conversationFor: (sessionId) => conversationCache[sessionId] ?? startedConversationOf(startedSessionTmux, sessionId),");
   });
 });

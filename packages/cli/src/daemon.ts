@@ -185,7 +185,7 @@ import {
   removeAccountToken,
 } from "./ccAccounts.js";
 import { STATUSLINE_HOOK_PATH, STATUSLINE_STAMP_DIR } from "./statuslineHook.js";
-import { REPLY_STREAM_HOOK_PATH, ReplyStreamTracker, ensureReplyStreamSettings, parseMessageDisplay, replyStreamLaunchFragment } from "./replyStream.js";
+import { REPLY_STREAM_HOOK_PATH, ReplyStreamTracker, ensureReplyStreamSettings, parseMessageDisplay, replyStreamLaunchFragment, startedConversationOf } from "./replyStream.js";
 import { bindConvexConnectionState } from "./convexConnectionState.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
@@ -2793,9 +2793,10 @@ let legacyHookGrace: { allowed(): boolean } | null = null;
 const replyStreamLaunch = {
   on: false,
   ensure: (): Promise<string | null> => ensureReplyStreamSettings(CONFIG_DIR, hookServerPort, hookToken),
+  tracker: null as Pick<ReplyStreamTracker, "receive"> | null,
 };
 export const replyStreamLaunchForTests = replyStreamLaunch;
-let replyStreamTracker: ReplyStreamTracker | null = null;
+let replyStreamOwnSettingsLogged = false;
 
 /** ` --settings <file>` carrying the MessageDisplay hook for a claude launch,
  *  or "". Appended after the argv allowlist, like grok's rules fragment: the
@@ -2803,7 +2804,24 @@ let replyStreamTracker: ReplyStreamTracker | null = null;
 export async function replyStreamFragment(agentType: string, configuredArgs: string): Promise<string> {
   if (!replyStreamLaunch.on || agentType !== "claude") return "";
   const settingsPath = await replyStreamLaunch.ensure();
-  return replyStreamLaunchFragment({ on: replyStreamLaunch.on, agentType, configuredArgs, settingsPath, escape: shellEscapeForSh, log });
+  return replyStreamLaunchFragment({
+    on: replyStreamLaunch.on, agentType, configuredArgs, settingsPath, escape: shellEscapeForSh,
+    ownSettings: () => {
+      if (replyStreamOwnSettingsLogged) return;
+      replyStreamOwnSettingsLogged = true;
+      log("[REPLY-STREAM] claude args carry their own --settings; sessions launch without live replies");
+    },
+  });
+}
+
+/** The heartbeat's reply_streaming, mirrored. An answer without the field (a
+ *  server from before it) turns it off. Persisted only when it changes. */
+export function mirrorReplyStreaming(data: { reply_streaming?: unknown }, persist: (on: boolean) => void): void {
+  const on = data.reply_streaming === true;
+  if (on === replyStreamLaunch.on) return;
+  log(`Live replies ${on ? "on" : "off"} (team feature)`);
+  replyStreamLaunch.on = on;
+  persist(on);
 }
 const hookRefusalsLogged = new Map<string, number>();
 const HOOK_REFUSAL_LOG_EVERY_MS = 10 * 60 * 1000;
@@ -2956,6 +2974,9 @@ export interface HookIngressDeps {
   permission?: (input: PermissionHookInput, res: http.ServerResponse) => void;
   /** A MessageDisplay hook's body, handed over after the route has answered. */
   messageDisplay?: (body: string) => void;
+  /** The hook token, which the MessageDisplay route demands outright. Absent
+   *  or empty, it admits nobody. */
+  hookToken?: () => string;
 }
 
 export function handleHookIngressHttp(
@@ -3004,20 +3025,29 @@ export function handleHookIngressHttp(
   }
 
   // Live replies (replyStream.ts). Claude Code holds each line on the person's
-  // screen until this answers, so it answers first, with an empty body (show
-  // the text as it is), and only then hands the batch over.
+  // screen until this answers, so once admitted it answers 200 with an empty
+  // body (show the text as it is) on every path, and only then hands over a
+  // body it can use. The one sender is the settings file the daemon wrote,
+  // which always carries the token: no legacy grace, and no file reads.
   if (req.method === "POST" && req.url?.startsWith(REPLY_STREAM_HOOK_PATH)) {
-    const admitted = deps.admit(req);
-    if (!admitted.ok) {
+    const presented = hookBearerToken(req.headers);
+    if (!hookTokenMatches(presented, deps.hookToken?.() ?? "")) {
       req.resume();
-      deps.refuse(REPLY_STREAM_HOOK_PATH, admitted.reason, res);
+      deps.refuse(REPLY_STREAM_HOOK_PATH, presented ? "bad-token" : "no-token", res);
       return true;
     }
-    readHookBody(req, res, REPLY_STREAM_MAX_BODY, (body) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size <= REPLY_STREAM_MAX_BODY) chunks.push(chunk);
+    });
+    req.on("end", () => {
       res.writeHead(200);
       res.end();
+      if (size > REPLY_STREAM_MAX_BODY) return;
       try {
-        deps.messageDisplay?.(body);
+        deps.messageDisplay?.(Buffer.concat(chunks).toString("utf-8"));
       } catch {}
     });
     return true;
@@ -3096,8 +3126,9 @@ export function daemonHookIngressDeps(): HookIngressDeps {
     ...(permissionHookHandler && { permission: permissionHookHandler }),
     messageDisplay: (body) => {
       const batch = parseMessageDisplay(body);
-      if (batch) replyStreamTracker?.receive(batch);
+      if (batch) replyStreamLaunch.tracker?.receive(batch);
     },
+    hookToken: () => hookToken,
   };
 }
 
@@ -5988,6 +6019,10 @@ async function sendHeartbeat(): Promise<void> {
     markHarnessChangesSent(harnessChanges);
 
     const data = await response.json();
+    // Live replies (replyStream.ts): on for any of the user's teams. Before
+    // the beat's commands, so a session this beat starts gets the hook; saved
+    // so a session auto-resumed at the next boot gets it too.
+    mirrorReplyStreaming(data, (on) => patchConfig({ reply_streaming: on }));
     // The device row asks for an update (Settings > Daemon). Taken only when
     // this daemon's own check says a newer release exists, so a daemon that
     // just restarted on the new version never reinstalls it before the row clears.
@@ -6113,15 +6148,6 @@ async function sendHeartbeat(): Promise<void> {
         log(`Claude backend updated from server: ${next ?? "default"}`);
         activeConfig.claude_backend = next;
       }
-    }
-
-    // Live replies (replyStream.ts): on for any of the user's teams. Saved only
-    // when it changes, so a session auto-resumed at boot gets the hook too.
-    const replyStreaming = data.reply_streaming === true;
-    if (replyStreaming !== replyStreamLaunch.on) {
-      log(`Live replies ${replyStreaming ? "on" : "off"} (team feature)`);
-      replyStreamLaunch.on = replyStreaming;
-      patchConfig({ reply_streaming: replyStreaming });
     }
 
     if (data.agent_default_params !== undefined) {
@@ -31702,7 +31728,10 @@ async function main(): Promise<void> {
   // above has awaited since syncService was built, so no upload precedes it.
   syncService.setDeliveryEchoes(deliveryEchoLedger());
   // The last beat's answer, until this boot's first beat: a session resumed
-  // at boot launches before it.
+  // at boot launches before it. Known and accepted: if the feature was turned
+  // off while the daemon was down, the sessions launched before that first
+  // beat still carry the hook; the tracker drops their lines once the beat
+  // says off (on()), and the server answers "off" to any push before that.
   replyStreamLaunch.on = config.reply_streaming === true;
 
   // Open the Convex WebSocket now, before the tmux warm restart. That scan
@@ -33335,10 +33364,10 @@ async function main(): Promise<void> {
   }).catch((err) => log(`[claude-sdk] reattach failed: ${err instanceof Error ? err.message : String(err)}`));
 
   // Streamed through redactSecrets, as the transcript message it hands off to is.
-  replyStreamTracker = new ReplyStreamTracker({
+  replyStreamLaunch.tracker = new ReplyStreamTracker({
     now: Date.now,
     on: () => replyStreamLaunch.on,
-    conversationFor: (sessionId) => conversationCache[sessionId],
+    conversationFor: (sessionId) => conversationCache[sessionId] ?? startedConversationOf(startedSessionTmux, sessionId),
     redact: redactSecrets,
     push: (conversationId, args) => syncService.pushReplyStream({ conversation_id: conversationId, ...args }),
     log,
