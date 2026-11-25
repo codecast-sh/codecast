@@ -84,9 +84,14 @@ const INITIATIVES_READ = 200;
 const PASS_TIMEOUT_MS = 5 * 60_000;
 /** (person, workspace) pairs one sweep runs; the rest wait for the next sweep. */
 export const SWEEP_MAX_PAIRS = 40;
-/** A sweep looks for strays among a pair's newest priorities, a few sessions each (the pass reads as many), and among this many priorities in all. */
-const SWEEP_STRAY_PRIORITIES = 30;
-const SWEEP_STRAY_BUDGET = 200;
+/**
+ * A sweep looks for strays among a pair's newest SWEEP_STRAY_PER_PAIR
+ * priorities, a few sessions each (the pass reads as many), and among
+ * SWEEP_STRAY_BUDGET priorities in all, so pairs with many quiet priorities
+ * cannot use up the probe before the others are looked at.
+ */
+export const SWEEP_STRAY_PER_PAIR = 25;
+export const SWEEP_STRAY_BUDGET = 200;
 /** The most teams a sweep reads for the feature, and members per team. */
 const SWEEP_TEAMS_READ = 2_000;
 const SWEEP_MEMBERS_READ = 500;
@@ -815,8 +820,13 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   if ("refused" in held) {
     // The day's ceiling holds back the model, not letting go of sessions that left: that costs nothing.
     if (held.refused === "daily_ceiling") {
-      const read: PassInputs = await ctx.runQuery(self.passInputs, { ...pair, window_start: gate.cursor_at });
-      if (read.strays.length) await ctx.runMutation(self.releaseStrays, { ...base, cursor_at: gate.cursor_at, strays: read.strays, step_to: gate.cursor_at, record: false });
+      try {
+        const read: PassInputs = await ctx.runQuery(self.passInputs, { ...pair, window_start: gate.cursor_at });
+        if (read.strays.length) await ctx.runMutation(self.releaseStrays, { ...base, cursor_at: gate.cursor_at, strays: read.strays, step_to: gate.cursor_at, record: false });
+      } catch (e) {
+        const error = `letting go of sessions that left failed: ${e instanceof Error ? e.message : String(e)}`.slice(0, 500);
+        await ctx.runMutation(self.recordRun, { ...base, cursor_at: gate.cursor_at, status: "error", error });
+      }
     }
     return { status: "skipped", reason: held.reason };
   }
@@ -952,7 +962,7 @@ export const sweepCandidates = internalQuery({
  */
 async function holdsStray(ctx: { db: any }, vis: SessionVisibility, pair: { user_id: Id<"users">; workspace: string }, now: number, budget: { left: number }): Promise<boolean> {
   if (budget.left <= 0) return false;
-  for (const p of await livePriorities(ctx, pair.user_id, pair.workspace, now, Math.min(SWEEP_STRAY_PRIORITIES, budget.left))) {
+  for (const p of (await livePriorities(ctx, pair.user_id, pair.workspace, now, Math.min(SWEEP_STRAY_PER_PAIR, budget.left))).slice(0, SWEEP_STRAY_PER_PAIR)) {
     if (budget.left-- <= 0) return false;
     const held: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).order("desc").take(PRIORITY_PASS_CAPS.sessions_per_priority);
     for (const c of held) if (!(await inWorkspace(vis, c, pair.user_id, pair.workspace))) return true;

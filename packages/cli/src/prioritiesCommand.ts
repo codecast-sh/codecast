@@ -119,6 +119,7 @@ export function registerPrioritiesCommand(program: Command, deps: PublishDeps): 
       if (options.json) return console.log(JSON.stringify(rows, null, 2));
       if (!rows.length) return console.log(options.all ? "No priorities yet." : "No active priorities. cast priorities ls --all shows the rest.");
       for (const line of formatPriorityLines(rows)) console.log(line);
+      if (res.own_truncated) console.log("Your priorities past the most recently active ones are not listed.");
       if (res.teammates_truncated) console.log("Teammates' priorities past the most recently active ones are not listed.");
     });
 

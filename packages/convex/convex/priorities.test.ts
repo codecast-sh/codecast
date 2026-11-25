@@ -319,6 +319,27 @@ describe("reads", () => {
     expect([sessionSharedWithTeam(log, "t1", {}, { visibility: "full" }), sessionListedToTeam(log, "t1", {}, { visibility: "full" })]).toEqual([true, false]);
   });
 
+  test("the viewer's own are read newest first, at most 200 a status, and the list says when more were there", async () => {
+    const { t, ada, ws, acme } = await world();
+    await t.run(async (ctx) => {
+      for (let i = 0; i < 201; i++) {
+        await ctx.db.insert("priorities", {
+          user_id: ada, workspace: ws, short_id: `pri-${300 + i}`, title: `Old ${i}`, summary: "", status: "done", rank_set_by: "pass",
+          steps: [], first_seen_at: 1, last_active_at: NOW - 100 * DAY + i, done_at: NOW - 100 * DAY + i, pass_at: 1, created_at: 1, updated_at: 1,
+        } as any);
+      }
+    });
+    const res = await t.query(pri.cliList, { api_token: TOKEN, status: "done", team_id: acme });
+    const ids = res.priorities.map((r: any) => r.short_id);
+    expect(res.own_truncated).toBe(true);
+    expect(ids).toHaveLength(200);
+    // pri-4 (done a day ago) and the newest old one are read; the oldest is the one left out.
+    expect(ids).toContain("pri-4");
+    expect(ids).toContain("pri-500");
+    expect(ids).not.toContain("pri-300");
+    expect((await t.query(pri.cliList, { api_token: TOKEN, status: "active", team_id: acme })).own_truncated).toBe(false);
+  });
+
   test("a teammate's done priority shows for 60 days, older only with all or a status", async () => {
     const { t, as, bea, ws, p4 } = await world();
     await t.run(async (ctx) => ctx.db.patch(p4, { last_active_at: NOW - 90 * DAY, done_at: NOW - 90 * DAY }));

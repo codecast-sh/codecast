@@ -42,6 +42,8 @@ export const TEAMMATE_PRIORITIES_CAP = 60;
 export const TEAMMATE_ALL_CAP = 200;
 /** The most of one person's priorities of one status in one workspace any read takes (the active ones a rank orders, a list's own). */
 const OWN_PRIORITIES_READ = 200;
+/** The most of the viewer's own priorities a list reads in one workspace, newest first, before splitting them by status. */
+const OWN_SCAN_READ = 1_000;
 /** The most mapped sessions `show` reads. */
 const SHOW_SESSIONS = 200;
 const MAX_HISTORY_DAYS = 30;
@@ -307,12 +309,13 @@ async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">): Promis
  * The priorities the viewer can read in one workspace (or all of theirs).
  * Merged ones only when asked for by status. Without a status or `all`, done
  * and quiet ones only from the last FINISHED_WINDOW_DAYS. The viewer's own are
- * read whole (up to OWN_PRIORITIES_READ a status); teammates' newest first
- * (by_workspace_status_active), at most TEAMMATE_PRIORITIES_CAP judged
- * (TEAMMATE_ALL_CAP with `all` or a status), and `teammates_truncated` says
- * when more were there.
+ * read newest first (by_user_workspace_active, OWN_SCAN_READ rows a workspace,
+ * at most OWN_PRIORITIES_READ a status), and `own_truncated` says when more
+ * were there; teammates' newest first (by_workspace_status_active), at most
+ * TEAMMATE_PRIORITIES_CAP judged (TEAMMATE_ALL_CAP with `all` or a status),
+ * and `teammates_truncated` says when more were there.
  */
-async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<{ rows: Priority[]; teammates_truncated: boolean }> {
+async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<{ rows: Priority[]; own_truncated: boolean; teammates_truncated: boolean }> {
   const since = Date.now() - FINISHED_WINDOW_DAYS * DAY;
   const windowed = (st: PriorityStatus) => !status && !all && (st === "done" || st === "quiet");
   const cap = status || all ? TEAMMATE_ALL_CAP : TEAMMATE_PRIORITIES_CAP;
@@ -321,19 +324,20 @@ async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefi
   const own: Priority[] = [];
   const theirs: Priority[] = [];
   let truncated = false;
+  let ownTruncated = false;
   for (const key of keys) {
     if (!(await featureOn(key))) continue;
+    // The viewer's own in this workspace, newest first, in one read split by status.
+    const scan: Priority[] = await ctx.db
+      .query("priorities")
+      .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", r.viewer).eq("workspace", key))
+      .order("desc")
+      .take(OWN_SCAN_READ + 1);
+    if (scan.length > OWN_SCAN_READ) ownTruncated = true;
     for (const st of status ? [status] : LISTED_STATUSES) {
-      const mine: Priority[] = windowed(st)
-        ? (await ctx.db
-          .query("priorities")
-          .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", r.viewer).eq("workspace", key).gte("last_active_at", since))
-          .order("desc")
-          .take(OWN_PRIORITIES_READ)).filter((p: Priority) => p.status === st)
-        : await ctx.db
-          .query("priorities")
-          .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", r.viewer).eq("workspace", key).eq("status", st))
-          .take(OWN_PRIORITIES_READ);
+      const ofStatus = scan.slice(0, OWN_SCAN_READ).filter((p) => p.status === st && (!windowed(st) || p.last_active_at >= since));
+      if (ofStatus.length > OWN_PRIORITIES_READ) ownTruncated = true;
+      const mine = ofStatus.slice(0, OWN_PRIORITIES_READ);
       own.push(...mine);
       if (!key.startsWith("team:")) continue;
       // Newest first; the viewer's own come back in this read too, so it reads that many more.
@@ -350,16 +354,16 @@ async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefi
   theirs.sort((a, b) => b.last_active_at - a.last_active_at);
   const judged: Priority[] = [];
   for (const p of theirs.slice(0, cap)) if (await r.canRead(p)) judged.push(p);
-  return { rows: [...own, ...judged], teammates_truncated: truncated || theirs.length > cap };
+  return { rows: [...own, ...judged], own_truncated: ownTruncated, teammates_truncated: truncated || theirs.length > cap };
 }
 
 /**
  * The viewer's own first, then each teammate's; within a person, active
  * before done, quiet and set aside, each in rank order.
  */
-async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string; status?: PriorityStatus; all?: boolean }): Promise<{ priorities: PriorityRow[]; teammates_truncated: boolean }> {
+async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string; status?: PriorityStatus; all?: boolean }): Promise<{ priorities: PriorityRow[]; own_truncated: boolean; teammates_truncated: boolean }> {
   const r = await readerFor(ctx, viewer);
-  const { rows, teammates_truncated } = await visiblePriorities(ctx, r, args.workspace, args.status, !!args.all);
+  const { rows, own_truncated, teammates_truncated } = await visiblePriorities(ctx, r, args.workspace, args.status, !!args.all);
   const names = await ownerNames(ctx, rows);
   const positions = positionsOf(rows);
   const at = (p: Priority) => positions.get(String(p._id)) ?? Infinity;
@@ -374,7 +378,7 @@ async function listFor(ctx: Ctx, viewer: Id<"users">, args: { workspace?: string
     || b.last_active_at - a.last_active_at);
   const out: PriorityRow[] = [];
   for (const p of rows) out.push(rowFor(viewer, p, names.get(String(p.user_id)) ?? "", positions.get(String(p._id)) ?? null, await r.stepsFor(p), await mappedSessions(r, p, listRead(viewer, p)), LIST_SESSIONS));
-  return { priorities: out, teammates_truncated };
+  return { priorities: out, own_truncated, teammates_truncated };
 }
 
 async function byShortId(ctx: Ctx, shortId: string): Promise<Priority | null> {
@@ -624,7 +628,7 @@ export const list = query({
   handler: async (ctx, args): Promise<PriorityRow[]> => {
     const viewer = await getAuthUserId(ctx);
     if (!viewer) return [];
-    // The web reads the rows; teammates_truncated reaches the CLI (cliList).
+    // The web reads the rows; own_truncated and teammates_truncated reach the CLI (cliList).
     return (await listFor(ctx, viewer, args)).priorities;
   },
 });

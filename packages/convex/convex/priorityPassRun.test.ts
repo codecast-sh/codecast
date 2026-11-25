@@ -12,7 +12,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { budgetMonth } from "@codecast/shared/contracts/modelCall";
 import type { MergePlan } from "./lib/priorityPass";
-import { LATE_MARGIN_MS, PRIORITY_PASS_DAILY_USD } from "./priorityPassRun";
+import { LATE_MARGIN_MS, PRIORITY_PASS_DAILY_USD, SWEEP_STRAY_BUDGET } from "./priorityPassRun";
 
 setDefaultTimeout(60_000);
 
@@ -674,6 +674,37 @@ describe("session counts", () => {
     const [p] = await w.priorities();
     await w.t.run((ctx) => ctx.db.patch(log, { priority_id: p._id }));
     expect((await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team })).strays).toEqual([]);
+  });
+
+  test("pairs with many quiet priorities cannot use up the sweep's stray probe before a later pair is looked at", async () => {
+    const w = await world();
+    await w.t.run(async (ctx) => {
+      // Seven dormant pairs, thirty recently finished priorities each, waiting longest.
+      const dormant: Array<[Id<"users">, string]> = [];
+      for (let u = 0; u < 4; u++) {
+        const user = await ctx.db.insert("users", { name: `D${u}` } as any);
+        await ctx.db.insert("team_memberships", { user_id: user, team_id: w.acme, role: "member", joined_at: 1 } as any);
+        dormant.push([user, w.team], [user, `user:${user}`]);
+      }
+      let n = 0;
+      for (const [user, workspace] of dormant.slice(0, 7)) {
+        for (let i = 0; i < 30; i++) {
+          await ctx.db.insert("priorities", {
+            user_id: user, workspace, short_id: `pri-${++n}`, title: "quiet", summary: "", status: "done", rank_set_by: "pass", steps: [],
+            first_seen_at: 1, last_active_at: w.now - 2 * DAY, pass_at: 1, created_at: 1, updated_at: 1,
+          } as any);
+        }
+      }
+      // Ana's team pair, swept last, holds a session since locked private.
+      const p = await ctx.db.insert("priorities", {
+        user_id: w.ana, workspace: w.team, short_id: "pri-999", title: "held", summary: "", status: "active", rank_set_by: "pass", steps: [],
+        first_seen_at: 1, last_active_at: w.now - H, pass_at: 1, created_at: 1, updated_at: 1,
+      } as any);
+      await ctx.db.patch(w.teamConv, { priority_id: p, is_private: true, team_visibility: "private" });
+      await ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: w.now, finished_at: w.now, status: "ok", cursor_at: w.now, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } });
+    });
+    expect(7 * 30).toBeGreaterThan(SWEEP_STRAY_BUDGET);
+    expect(await w.t.query(pass.sweepCandidates, {})).toContainEqual({ user_id: w.ana, workspace: w.team });
   });
 
   test("the sweep's stray probe reads a pair's newest priorities first", async () => {
