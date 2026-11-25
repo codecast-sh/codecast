@@ -19,14 +19,15 @@ export type ChainConversation = {
   forked_from?: string | null;
   handed_off_from_conversation_id?: string | null;
   workflow_run_id?: string | null;
+  is_workflow_primary?: boolean | null;
   agent_task_id?: string | null;
 };
 
 export type ChainLoader<C extends ChainConversation> = {
   conversation: (id: string) => Promise<C | null>;
   canRead: (conversation: C) => Promise<boolean>;
-  /** A workflow run's spawner_conversation_id. */
-  runSpawner: (runId: string) => Promise<string | null>;
+  /** A workflow run's spawner_conversation_id, and whether it only stands in for a session that started the run. */
+  runSpawner: (runId: string) => Promise<{ id: string; standIn: boolean } | null>;
   /** A scheduled task's created_by_conversation_id. */
   scheduleCreator: (agentTaskId: string) => Promise<string | null>;
 };
@@ -41,12 +42,20 @@ async function nextUp<C extends ChainConversation>(
   loader: ChainLoader<C>,
   c: C,
 ): Promise<{ link: ChainLink; id: string } | null> {
-  if (c.spawned_by_conversation_id) return { link: "spawned_by", id: String(c.spawned_by_conversation_id) };
-  if (c.parent_conversation_id) return { link: "parent", id: String(c.parent_conversation_id) };
+  const run = c.workflow_run_id ? await loader.runSpawner(String(c.workflow_run_id)) : null;
+  // A run's station sessions carry no run of their own: they nest under the run's session (spawn.ts runSpawnerOf).
+  const parentRow = !c.workflow_run_id && c.parent_conversation_id ? await loader.conversation(String(c.parent_conversation_id)) : null;
+  const stationOf = parentRow?.is_workflow_primary && parentRow.workflow_run_id ? await loader.runSpawner(String(parentRow.workflow_run_id)) : null;
+  // A stand-in spawner started nothing, and a run's sessions name it as their spawner or parent too: no link climbs to it.
+  const standIn = run?.standIn ? run.id : stationOf?.standIn ? stationOf.id : null;
+  const to = (id: string | null | undefined) => (id && String(id) !== standIn ? String(id) : null);
+  const spawnedBy = to(c.spawned_by_conversation_id);
+  if (spawnedBy) return { link: "spawned_by", id: spawnedBy };
+  const parent = to(c.parent_conversation_id);
+  if (parent) return { link: "parent", id: parent };
   if (c.forked_from) return { link: "forked_from", id: String(c.forked_from) };
   if (c.handed_off_from_conversation_id) return { link: "handed_off", id: String(c.handed_off_from_conversation_id) };
-  const spawner = c.workflow_run_id ? await loader.runSpawner(String(c.workflow_run_id)) : null;
-  if (spawner) return { link: "workflow_run", id: spawner };
+  if (run && !run.standIn) return { link: "workflow_run", id: run.id };
   const creator = c.agent_task_id ? await loader.scheduleCreator(String(c.agent_task_id)) : null;
   if (creator) return { link: "agent_task", id: creator };
   return null;
