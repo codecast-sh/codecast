@@ -1659,6 +1659,7 @@ async function queueTrialRun(ctx: Ctx, userId: Id<"users">, task: Doc<"tasks">, 
     goal_override: task.title,
     ...(like.project_path ? { project_path: like.project_path } : {}),
     ...(like.spawner_conversation_id ? { spawner_conversation_id: like.spawner_conversation_id } : {}),
+    ...(like.spawner_stand_in ? { spawner_stand_in: true } : {}),
     now,
   });
   await ctx.db.patch(run_id, { fresh_branch: true });
