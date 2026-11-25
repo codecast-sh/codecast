@@ -14,6 +14,24 @@ export interface RoleCard {
    *  projects carry), each with its metric read against the target and the
    *  chain up to the top level goal, so the role knows what its area serves. */
   initiatives?: RoleCardInitiative[];
+  /** The people who report to it (org-people.md P2), each with what waits
+   *  on them in its area. Only what the role can already read. */
+  people?: RoleCardPerson[];
+}
+/** One person reporting to a role: their short line (personShortLine) and
+ *  what waits on them in the role's area, in words ("2 decisions waiting over a day"). */
+export interface RoleCardPerson {
+  line: string;
+  waits: string[];
+}
+const PERSON_WAITS = " · waits on them: ";
+/** "Dana @dana · Designer · onboarding · waits on them: 1 decision waiting over a day, 3 open tasks" */
+export function roleCardPersonLine(p: RoleCardPerson): string {
+  return `${p.line}${p.waits.length ? `${PERSON_WAITS}${p.waits.join(", ")}` : ""}`;
+}
+export function parseRoleCardPersonLine(line: string): RoleCardPerson {
+  const at = line.lastIndexOf(PERSON_WAITS);
+  return at < 0 ? { line, waits: [] } : { line: line.slice(0, at), waits: line.slice(at + PERSON_WAITS.length).split(", ") };
 }
 export interface RoleCardInitiative {
   short_id: string;
@@ -35,6 +53,7 @@ export function roleCardLines(r: RoleCard): string[] {
     r.charter ? `Charter: ${r.charter}` : "",
     r.goals.length ? `Goals: ${r.goals.join("; ")}` : "",
     ...(r.initiatives ?? []).map((i) => `Serves: ${roleCardInitiativeLine(i)}`),
+    ...(r.people ?? []).map((p) => `Reports to it: ${roleCardPersonLine(p)}`),
   ].filter(Boolean);
 }
 export function parseRoleCardInitiativeLine(line: string): RoleCardInitiative {

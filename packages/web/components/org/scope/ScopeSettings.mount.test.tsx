@@ -57,7 +57,7 @@ async function verify() {
     await act(async () => {
       root.render(React.createElement(ScopeSettings, {
         tree, role, canEdit, overlaps: [], hostName: "Ashot", model: null, standingId: null, counters: { day: "2026-09-23", hands: 1, wakes: 2, tokens: 3 },
-        onUpdate: (fields: any) => calls.push(`update:${JSON.stringify(fields)}`), onReparent: () => {}, onRetire: () => {},
+        onUpdate: (fields: any) => calls.push(`update:${JSON.stringify(fields)}`), onRetire: () => {},
       } as any));
     });
   };
@@ -158,6 +158,23 @@ async function verify() {
   // ── a viewer who cannot edit: the switch is there to read, not to press ──
   await render({ ...growth, trust: "direct" } as OrgRole, false);
   assert.ok(q<HTMLButtonElement>("[data-autonomy-switch]")!.disabled);
+
+  // ── its people: a person the role reports up to is kept for goals only, and the controls say so ──
+  const upToMe = { ...growth, reports_to: { kind: "user", user_id: "fixture-user-me" }, also_reports_to: undefined } as OrgRole;
+  await render(upToMe);
+  assert.equal(q("[data-report-self]")!.getAttribute("data-report-self"), "goals");
+  assert.ok(text().includes("Keep my goals"));
+  // The people list and the chain read the tree's own row.
+  const onTree = tree.roles.find((r) => r._id === growth._id)!;
+  const kept = { reports_to: onTree.reports_to, reports_user_ids: onTree.reports_user_ids };
+  Object.assign(onTree, { reports_to: upToMe.reports_to, reports_user_ids: ["fixture-user-me"] });
+  await render({ ...upToMe, reports_user_ids: ["fixture-user-me"] } as OrgRole);
+  assert.ok(q("[data-goals-only]"), "a goals-only person is marked in the list");
+  assert.equal(q("[data-report-self]"), null);
+  Object.assign(onTree, { reports_to: { kind: "user", user_id: "fixture-user-sam" }, reports_user_ids: [] });
+  await render({ ...growth, reports_to: { kind: "user", user_id: "fixture-user-sam" } } as OrgRole);
+  assert.equal(q("[data-report-self]")!.getAttribute("data-report-self"), "report");
+  Object.assign(onTree, kept);
 
   await act(async () => { root.unmount(); });
   mock.module("convex/react", () => realConvexReact);

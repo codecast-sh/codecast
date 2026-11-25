@@ -206,3 +206,41 @@ export function projectsWithoutAnOwnerAmongWatchers<P extends LeadProject, R ext
   }
   return out;
 }
+
+/** A manager in the reporting structure: a person or a role. */
+export type OrgPartyRef<U = unknown, R = unknown> = { kind: "user"; user_id: U } | { kind: "role"; role_id: R };
+
+/** Everyone a role reports to, all equal (docs/architecture/org-people.md P3):
+ *  `reports_to`, the line the chart draws it on, then `also_reports_to`.
+ *  Routing reads this; only drawing reads `reports_to` alone. */
+export function roleManagers<P extends OrgPartyRef>(role: { reports_to?: P | null; also_reports_to?: readonly P[] | null }): P[] {
+  const out: P[] = [];
+  const key = (p: P) => (p.kind === "user" ? `user:${String(p.user_id)}` : `role:${String(p.role_id)}`);
+  for (const p of [...(role.reports_to ? [role.reports_to] : []), ...(role.also_reports_to ?? [])]) {
+    if (!out.some((q) => key(q) === key(p))) out.push(p);
+  }
+  return out;
+}
+
+/** The people a role's lines end at: every person above it, along each of its
+ *  equal managers, nearest first (org-people.md P3). `roles` is the
+ *  workspace's roles. A retired role is walked through, as the decision
+ *  ladder walks it (sessionDecisions.buildLadder); a missing one ends its line. */
+export function peopleAboveRole<R extends { _id: unknown; status?: string; reports_to?: OrgPartyRef | null; also_reports_to?: readonly OrgPartyRef[] | null }>(roles: readonly R[], roleId: unknown): string[] {
+  const byId = new Map(roles.map((r) => [String(r._id), r]));
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const queue = [String(roleId)];
+  while (queue.length && seen.size < 64) {
+    const id = queue.shift()!;
+    if (seen.has(id)) continue;
+    seen.add(id);
+    const role = byId.get(id);
+    if (!role) continue;
+    for (const p of roleManagers(role)) {
+      if (p.kind === "role") queue.push(String(p.role_id));
+      else if (!out.includes(String(p.user_id))) out.push(String(p.user_id));
+    }
+  }
+  return out;
+}

@@ -67,7 +67,7 @@ export type OrgWrite = { table: string; id: string; before: Record<string, any>;
 
 const FIELDS: Record<string, string[]> = {
   // A role's own settings too (given name, the handles a rename left, its line, its two switches), so an undo takes back every one a role_edit or its own command moved.
-  org_roles: ["status", "name", "handle", "avatar", "tenure", "review_backend", "reports_to", "scope", "caps", "trust", "anchor_id", "authority", "given_name", "previous_handles", "line_workflow_slug", "hires_freely", "keeps_reports_inside"],
+  org_roles: ["status", "name", "handle", "avatar", "tenure", "review_backend", "reports_to", "also_reports_to", "scope", "caps", "trust", "anchor_id", "authority", "given_name", "previous_handles", "line_workflow_slug", "hires_freely", "keeps_reports_inside"],
   conversations: ["org_role_id", "standing_role_id", "anchor_id", "acting_user_id", "title", "title_is_custom", "seat_previous", "persistent", "status", "inbox_pinned_at"],
   anchors: ["org_role_id", "status"],
   users: ["bot_kind"],
@@ -82,6 +82,8 @@ const FIELDS: Record<string, string[]> = {
   initiatives: ["status", "owner", "project_ids", "parent_initiative_id", "metrics", "scoreboard", "score_history", "why", "done_when", "milestones", "questions", "decisions", "sources"],
   // An accepted upgrade waits on the instance row for the host step (org-hire.md H9); until then the acceptance is the one thing an undo can withdraw.
   org_template_instances: ["pending_upgrade"],
+  // A person's profile (org-people.md P4); never their role, so an undo cannot touch what they may do.
+  team_memberships: ["title", "focus", "labels", "about", "profile_updated"],
 };
 
 // `keys` names fields outside FIELDS that a caller records itself (a session's owners).

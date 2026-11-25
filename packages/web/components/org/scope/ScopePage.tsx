@@ -40,12 +40,12 @@ import { useDiffViewerStore } from "../../../store/diffViewerStore";
 import { RoleFace } from "../RoleFace";
 import { RolePausedNote } from "../RolePausedNote";
 import { RoleFailoverLine } from "../RoleFailoverNote";
-import { parentName } from "../orgMeta";
-import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
+import { parentName, roleManagerNames } from "../orgMeta";
+import type { OrgRole, OrgTree } from "../orgTypes";
 import { useScopeIds } from "../../../hooks/useScopeIds";
 import { ScopePanel } from "./ScopePanel";
 import { ObjectLink } from "../company/SheetFrame";
-import { reportsToNamed } from "../company/sheets/sheetModel";
+import { managersNamed } from "../company/sheets/sheetModel";
 import { useRoleHead } from "../lines/useHeads";
 import { useTeamRosterIdentity } from "../../../hooks/useTeamRoster";
 import { scopeDefaultTab, scopeTabFromParam, scopeWorkViewFromParam, type ScopeTabKey } from "../../../lib/scopeTabs";
@@ -137,7 +137,6 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
   // -------- actions
   const store = useInboxStore.getState;
   const update = useCallback((fields: Parameters<ReturnType<typeof store>["updateOrgRole"]>[1], opts?: { leave_sessions?: boolean }) => { if (role) store().updateOrgRole(role._id, fields, opts); }, [role, store]);
-  const reparent = useCallback((target: OrgParentRef) => { if (role) store().reparentOrgRole(role._id, target); }, [role, store]);
   // Pause and retire live in the header's menu and nowhere else; retire asks
   // first, in one dialog.
   const [retireOpen, setRetireOpen] = useState(false);
@@ -286,7 +285,6 @@ export function ScopePageInner({ id, session, href }: { id: string; session?: Se
       now={now}
       backHref={backHref}
       onUpdate={update}
-      onReparent={reparent}
     />
   );
 
@@ -435,15 +433,15 @@ function retireSentence(role: OrgRole, parent: string): string {
  *  a role spends one row of chrome as a session does (ct-87448). */
 function RoleHeadFacts({ role, tree, onOpen }: { role: OrgRole; tree: OrgTree; onOpen?: () => void }) {
   const head = useRoleHead(role);
-  const members = useTeamRosterIdentity() as Parameters<typeof reportsToNamed>[1];
-  const reportsTo = reportsToNamed(tree, members, role);
+  const members = useTeamRosterIdentity() as Parameters<typeof managersNamed>[1];
+  const reportsTo = managersNamed(tree, members, role);
   const keep = (e: React.MouseEvent) => e.stopPropagation();
   // The state first: it is the one fact that must survive a narrow pane.
   // Whom it reports to and what it carries truncate; since when goes first,
   // then whom it reports to (globals.css, .scope-head-cq).
   const cells = [
     { key: "state", fit: "shrink-0", node: head.facts.state },
-    { key: "to", fit: "min-w-0 scope-head-wide", node: reportsTo ? <span className="inline-flex min-w-0 items-center gap-1" onClick={keep} data-scope-reports-to><span aria-hidden style={{ color: "var(--sol-text-dim)" }}>↳</span><ObjectLink n={reportsTo} /></span> : null },
+    { key: "to", fit: (reportsTo.length > 1 ? "min-w-[8rem]" : "min-w-[5rem]") + " scope-head-wide", node: reportsTo.length ? <span className="inline-flex min-w-0 items-center gap-1" onClick={keep} data-scope-reports-to><span aria-hidden style={{ color: "var(--sol-text-dim)" }}>↳</span><ObjectLink n={reportsTo[0]} />{reportsTo.length > 1 && <span className="shrink-0 text-meta tabular-nums" style={{ color: "var(--sol-text-muted)" }} title={`Reports to ${reportsTo.map((n) => n.title).join(", ")}`} data-scope-more-managers>+{reportsTo.length - 1}</span>}</span> : null },
     // With nothing led or owned, what it carries is its charter: the brief says that whole.
     { key: "measure", fit: "min-w-0 max-w-[260px]", node: head.leads.length + head.goals.length > 0 ? head.lineFacts.measure : null },
     { key: "date", fit: "shrink-0 scope-head-mid", node: head.facts.date },
@@ -510,7 +508,7 @@ function ScopeUnseated({ role, tree, canEdit, hostName, busy, onProvision, onOpe
         <p className="mt-2 text-[13px] leading-relaxed" style={{ color: "var(--sol-text-muted)" }}>
           {charter ? charter : owns.length > 0 ? `This role looks after ${owns.join(", ")}.` : whole ? "This role looks after the whole workspace." : "This role has no area of its own: it runs its check and answers what it is asked."}
           {charter && owns.length > 0 && <> It looks after {owns.join(", ")}.</>}
-          {" "}It reports to <span style={{ color: "var(--sol-text)" }}>{parentName(tree, role.reports_to)}</span>.
+          {" "}It reports to <span style={{ color: "var(--sol-text)" }}>{roleManagerNames(tree, role)}</span>.
         </p>
         {retired ? (
           <p className="mt-3 text-[12.5px]" style={{ color: "var(--sol-text-dim)" }}>Its work is still in the panel beside this page.</p>

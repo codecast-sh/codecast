@@ -20,8 +20,8 @@ import { useLineOpen } from "../lines/lineOpen";
 import { TaskListContent } from "../../../app/tasks/page";
 import type { ScopeRef } from "../../../hooks/useScopeQueries";
 import type { ScopeIds } from "../../../hooks/useScopeIds";
-import type { OrgParentRef, OrgRole, OrgTree } from "../orgTypes";
-import type { OrgUpdateRoleInput } from "../../../store/orgSlice";
+import type { OrgRole, OrgTree } from "../orgTypes";
+import { rolePeopleOnTree, type OrgUpdateRoleInput } from "../../../store/orgSlice";
 import { ScopeFeed } from "./ScopeFeed";
 import { ScopeBriefTab, ScopeCharterTab, ScopeDecisionsTab, ScopeDocsTab, ScopePlansTab, ScopeSessionsTab } from "./ScopeTabs";
 import { TemplateSections } from "../TemplateSections";
@@ -78,7 +78,6 @@ export type ScopePanelProps = {
   now: number;
   backHref: string;
   onUpdate: (fields: OrgUpdateRoleInput, opts?: { leave_sessions?: boolean }) => void;
-  onReparent: (target: OrgParentRef) => void;
 };
 
 export function ScopePanel(p: ScopePanelProps) {
@@ -161,7 +160,7 @@ export function ScopePanel(p: ScopePanelProps) {
           {tab === "decisions" && <ScopeDecisionsTab ids={p.scopeIds} roleId={role?._id ?? null} />}
           {tab === "triggers" && role && <ScopeTriggersTab standingConversationId={p.brief?.role.standing_conversation_id ?? null} />}
           {tab === "settings" && role && (
-            <ScopeSettings tree={tree} role={role} canEdit={p.canEdit} overlaps={p.summary?.overlaps ?? []} hostName={p.hostName} model={p.model} standingId={p.standingId} counters={p.counters} onUpdate={p.onUpdate} onReparent={p.onReparent} history={<RoleHistory roleId={role._id} />} />
+            <ScopeSettings tree={tree} role={role} canEdit={p.canEdit} overlaps={p.summary?.overlaps ?? []} hostName={p.hostName} model={p.model} standingId={p.standingId} counters={p.counters} onUpdate={p.onUpdate} history={<RoleHistory roleId={role._id} />} />
           )}
         </div>
       )}
@@ -183,7 +182,8 @@ function RoleHistory({ roleId }: { roleId: string }) {
  *  row, so the section says where goals go. */
 function viewerGoals(tree: OrgTree, role: OrgRole, people: BriefPerson[] | undefined): BriefPerson | null {
   const me = tree.people.find((x) => x.is_me);
-  if (!people || !me || !(role.reports_user_ids ?? []).includes(me.user_id)) return null;
+  const mine = tree.workspace.kind === "team" ? rolePeopleOnTree(tree, role._id).some((p) => p.user_id === me?.user_id) : (role.reports_user_ids ?? []).includes(me?.user_id ?? "");
+  if (!people || !me || !mine) return null;
   return people.find((x) => x.user_id === me.user_id)
     ?? { user_id: me.user_id, name: me.name, has_section: false, goals: [], sessions_changed: [], sessions_total: 0, stalled_high: 0 };
 }

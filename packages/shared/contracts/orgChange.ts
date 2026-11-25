@@ -11,6 +11,7 @@
 // this one file. Ids are strings here: the shared package knows no Convex.
 
 import { autonomyChangeWords, autonomyOn } from "./roleAutonomy";
+import type { PersonProfile } from "./personProfile";
 import { intentSourceKey, type InitiativeDecision, type InitiativeMilestone, type InitiativeQuestion, type IntentSource } from "./initiative";
 import {
   andList,
@@ -40,7 +41,8 @@ export type OrgLogDoor = (typeof ORG_LOG_DOORS)[number];
 export const ORG_LOG_GESTURES = ["accept_ask", "accept_all", "accept_change", "reply", "save", "drag", "command", "undo", "redo"] as const;
 export type OrgLogGesture = (typeof ORG_LOG_GESTURES)[number];
 
-export type OrgLogSubjectType = "role" | "project" | "plan" | "task" | "session" | "initiative";
+/** `person` is a team membership: the row a profile lives on (org-people.md P4). */
+export type OrgLogSubjectType = "role" | "project" | "plan" | "task" | "session" | "initiative" | "person";
 export type OrgLogSubject = { type: OrgLogSubjectType; id: string; short_id?: string; label: string };
 
 export type OrgPartyRef = { kind: "user"; user_id: string } | { kind: "role"; role_id: string };
@@ -103,6 +105,8 @@ export type OrgLogFields = {
   parent?: OrgSessionParent;
   task_id?: string | null;
   done?: boolean | null;
+  /** A person's profile: the fields that moved, as they stood on each side. */
+  profile?: PersonProfile | null;
 };
 
 /** What the change did beyond its subject. Every part is optional and every
@@ -396,6 +400,8 @@ export function orgLogRowChange(row: OrgLogRow): OrgChange | null {
       const added = (row.after.project_ids ?? []).filter((id) => !(row.before.project_ids ?? []).includes(id));
       return added.length ? { kind: "initiative_projects", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label, projects: added.map((id) => nameOf(row, id, id)) } : null;
     }
+    // The evidence stays on the proposal; the log says what the profile became.
+    case "person_profile": return { kind: "person_profile", person: row.subject.label, name: row.subject.label, ...(row.after.profile ?? {}), ...(row.before.profile ? { before: row.before.profile } : {}), evidence: { window_days: 0, sessions: 0, commits: 0, tasks_closed: 0, decisions_answered: 0, calls_led: 0, projects: [] } };
     case "initiative_owner": return { kind: "initiative_owner", initiative: row.subject.short_id ?? row.subject.label, title: row.subject.label, owner: partyName(row, row.after.owner) ?? "" };
     // The change kind places a goal, writes its words and adds to its lists.
     // A row that did none of those (an entry edited or closed), or that took
@@ -619,7 +625,7 @@ export const ORG_INVERSE_KIND: Record<OrgLogKind, OrgLogKind> = {
   lead: "lead", session: "session",
   // The goals (I1, revised): a set goal is cancelled, never erased; the other two restore their fields.
   initiative: "initiative_cancel", initiative_cancel: "initiative", initiative_projects: "initiative_projects", initiative_owner: "initiative_owner", initiative_shape: "initiative_shape",
-  file: "file", file_session: "file_session", project_meta: "project_meta", plan_status: "plan_status", task_status: "task_status", project_status: "project_status",
+  file: "file", file_session: "file_session", person_profile: "person_profile", project_meta: "project_meta", plan_status: "plan_status", task_status: "task_status", project_status: "project_status",
   // Hiring from a template (org-hire.md): authority restores its list; a hire
   // and an upgrade are recorded, and their way back is the host step.
   authority: "authority", hire: "hire", upgrade: "upgrade",

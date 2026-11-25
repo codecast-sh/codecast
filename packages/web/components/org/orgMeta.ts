@@ -4,10 +4,11 @@ import type { OrgGhostStub } from "./orgLayout";
 // Presentation facts the org surfaces share: how each work state reads, and
 // how a parent reference is named. Data only; the cards render it.
 import { parseThreadStateStatus, type WorkState } from "@codecast/shared/contracts";
-import { describeTenure, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { andList, describeTenure, type OrgChange, type OrgTenureSpec } from "@codecast/shared/contracts/orgProposal";
+import { roleManagers } from "@codecast/shared/contracts/orgLead";
 import type { HealthFlag } from "@codecast/shared/contracts/orgCapacity";
 import { THREAD_STATE_STATUS_META } from "../../lib/threadState";
-import type { OrgParentRef, OrgStandingState, OrgTree, StateCounts } from "./orgTypes";
+import type { OrgParentRef, OrgRole, OrgStandingState, OrgTree, StateCounts } from "./orgTypes";
 import type { OrgHealth } from "./orgStaffingTypes";
 
 export const ORG_STATE_META: Record<WorkState, { label: string; color: string; chip: string }> = {
@@ -81,6 +82,11 @@ export function parentName(tree: OrgTree, ref: OrgParentRef): string {
     : tree.roles.find((r) => r._id === ref.role_id)?.name ?? "a role";
 }
 
+/** Everyone a role reports to, all equal (org-people.md P3), as one phrase. */
+export function roleManagerNames(tree: OrgTree, role: Pick<OrgRole, "reports_to" | "also_reports_to">): string {
+  return andList(roleManagers<OrgParentRef>(role).map((m) => parentName(tree, m)));
+}
+
 /**
  * What each kind of change is, in the reader's words (org-staffing.md S17):
  * the group header the pane shows, and the one sentence that says what
@@ -95,6 +101,7 @@ export const CHANGE_KIND_META: Record<OrgChange["kind"], { label: string; descri
   project_status: { label: "Projects to pause or close", describe: "Marks a project paused, finished or active again." },
   projects: { label: "New or merged projects", describe: "Creates a lasting area of work, or folds one into another." },
   file: { label: "Plans filed under a project", describe: "Puts a plan under the project it belongs to, so the agent looking after that project sees it." },
+  person_profile: { label: "Profiles read from the work", describe: "Writes what a person does here, from their last month of sessions, commits, tasks, decisions and calls. Changes nothing about what they can read or decide." },
   file_session: { label: "Sessions filed where they belong", describe: "Moves a session out of your inbox: under the role that owns its area, onto the task it works, or closed as done." },
   role: { label: "New roles", describe: "Adds a role with a name and an area to look after." },
   charter_edit: { label: "Charter edits", describe: "Changes a passage of a role's charter, or adds or removes a line, leaving the rest as it is." },
@@ -149,6 +156,7 @@ export const CHANGE_KIND_WORD: Record<OrgChange["kind"], string> = {
   role_edit: "settings",
   file: "filing",
   file_session: "session",
+  person_profile: "profile",
   role: "role",
   move: "move",
   scope: "area",

@@ -5,13 +5,13 @@
 export type OrgTarget = { kind: "user"; user_id: string } | { kind: "role"; role_id: string };
 
 export function matchOrgTarget(
-  tree: { roles?: Array<{ _id: string; short_id?: string; handle?: string }>; people?: Array<{ user_id: string; name?: string; is_me?: boolean }> } | null,
+  tree: { roles?: Array<{ _id: string; short_id?: string; handle?: string }>; people?: Array<{ user_id: string; name?: string; handle?: string; is_me?: boolean }> } | null,
   ref: string,
 ): OrgTarget | null {
   const handle = ref.replace(/^@/, "").toLowerCase();
   const role = (tree?.roles ?? []).find((r) => r._id === ref || r.short_id === ref || r.handle === handle);
   if (role) return { kind: "role", role_id: role._id };
   const needle = ref.toLowerCase();
-  const person = (tree?.people ?? []).find((p) => p.user_id === ref || (p.name || "").toLowerCase() === needle || (needle === "me" && p.is_me));
+  const person = (tree?.people ?? []).find((p) => p.user_id === ref || (p.handle && p.handle.toLowerCase() === handle) || (p.name || "").toLowerCase() === needle || (needle === "me" && p.is_me));
   return person ? { kind: "user", user_id: person.user_id } : null;
 }

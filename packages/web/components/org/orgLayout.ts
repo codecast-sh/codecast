@@ -8,6 +8,7 @@
 // wide instead of eight). Roles nest the same way. A stack ends in a cluster
 // card ("+N more") when the parent has more sessions than are loaded.
 import type { OrgPerson, OrgRole, OrgSession, OrgTree, OrgParentRef, StateCounts } from "./orgTypes";
+import { drawnManager, otherManagers } from "../../store/orgTreeMoves";
 import type { OrgChangeKind, OrgChangeStatus } from "./orgStaffingTypes";
 import type { OrgRoleSeat } from "@codecast/shared/contracts/orgProposal";
 import { roleTenureChip, stateWords } from "./orgMeta";
@@ -48,7 +49,7 @@ type GhostDecor = { ghost?: OrgGhostStub; retire?: OrgGhostMeta; move?: OrgGhost
 
 export type OrgLayoutNode =
   // `h` is the card's height at the zoom level the layout was asked for (orgZoom).
-  | ({ id: string; kind: "person"; x: number; y: number; w: number; h: number; person: OrgPerson; collapsed: boolean; hidden: number; overflow: number } & GhostDecor)
+  | ({ id: string; kind: "person"; x: number; y: number; w: number; h: number; person: OrgPerson; collapsed: boolean; hidden: number; overflow: number; /** Managers besides the drawn line (otherManagers): the close card's "also reports to" row. */ alsoReports?: OrgParentRef[] } & GhostDecor)
   | ({ id: string; kind: "role"; x: number; y: number; w: number; h: number; role: OrgRole; collapsed: boolean; hidden: number; overflow: number; tenure?: { short: string; full: string };
       /** Opened in place: the card lists its charter, leads, open tasks and sessions (`open` is what the store had). */ opened?: boolean; open?: RoleOpenDetail } & GhostDecor)
   | ({ id: string; kind: "session"; x: number; y: number; w: number; h: number; session: OrgSession; parent: OrgParentRef; /** What the card says under its title (orgSessionDetail); far, its first line is the summary. */ detail?: OrgSessionDetail; opened?: boolean } & GhostDecor)
@@ -180,7 +181,7 @@ export const wrappedLines = (text: string, chars: number): number => wrapLines(t
 /** How many lines a card's changes take as quiet lines: one each up to the cap, then one more for the rest. */
 export const quietChipLines = (n: number) => (n <= ORG_SIZES.quietChipMax ? n : ORG_SIZES.quietChipMax + 1);
 /** A person's nearer card adds its meta line on a row of its own, its changes as lines, and its running sessions. */
-const personFullExtra = (p: OrgPerson, chips: number) => ORG_SIZES.closeMetaRow + (chips ? Math.max(0, quietChipLines(chips) * ORG_SIZES.quietChipRow + 6 - ORG_SIZES.chipRow) : 0) + runningRows(p);
+const personFullExtra = (p: OrgPerson, chips: number, also: number) => ORG_SIZES.closeMetaRow * (1 + (p.focus ? 1 : 0) + (also ? 1 : 0)) + (chips ? Math.max(0, quietChipLines(chips) * ORG_SIZES.quietChipRow + 6 - ORG_SIZES.chipRow) : 0) + runningRows(p);
 
 type Stack = { parent: OrgParentRef; /** The node the stack hangs under (a person, a role or a project). */ under: string; sessions: OrgSession[]; total: number; counts: StateCounts; hasMoreNode: boolean; fullyLoaded: boolean; /** Loaded sessions the person placed elsewhere on the chart (still this parent's). */ lifted?: number };
 
@@ -189,6 +190,7 @@ type Branch = {
   kind: "person" | "role" | "goal" | "project" | "group" | "mission" | "session";
   w: number;
   h: number;
+  alsoReports?: OrgParentRef[];
   person?: OrgPerson;
   role?: OrgRole;
   /** A session the person placed by hand, drawn as a branch of its own, and the parent it is filed under. */
@@ -290,17 +292,17 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
   const roleIds = new Set(roles.map((r) => r._id));
   const personIds = new Set(people.map((p) => p.user_id));
   const peopleUnder = new Map<string, OrgPerson[]>();
+  // People who report to a role (org-people.md P2) hang under its card.
+  const peopleUnderRole = new Map<string, OrgPerson[]>();
   const topPeople: OrgPerson[] = [];
+  // A person with several managers is drawn once, under the first the chart
+  // holds (drawnManager); their card names the others.
   for (const p of people) {
-    const to = p.reports_to_user_id;
-    if (to && to !== p.user_id && personIds.has(to)) peopleUnder.set(to, [...(peopleUnder.get(to) ?? []), p]);
+    const at = drawnManager(tree, p);
+    if (at?.kind === "role") peopleUnderRole.set(at.role_id, [...(peopleUnderRole.get(at.role_id) ?? []), p]);
+    else if (at && personIds.has(at.user_id)) peopleUnder.set(at.user_id, [...(peopleUnder.get(at.user_id) ?? []), p]);
     else topPeople.push(p);
   }
-  // A loop (refused server side) reaches no top: draw its people as tops.
-  const reached = new Set<string>();
-  const reach = (id: string) => { if (reached.has(id)) return; reached.add(id); for (const r of peopleUnder.get(id) ?? []) reach(r.user_id); };
-  for (const p of topPeople) reach(p.user_id);
-  for (const p of people) if (!reached.has(p.user_id)) { topPeople.push(p); reach(p.user_id); }
 
   const rolesUnderUser = new Map<string, OrgRole[]>();
   const rolesUnderRole = new Map<string, OrgRole[]>();
@@ -315,6 +317,25 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
       orphanRoles.push(r);
     }
   }
+  // A loop (refused server side) reaches no top: draw its people as tops.
+  // Reach walks people and roles together, since either can sit under either.
+  const reached = new Set<string>();
+  const reach = (key: string) => {
+    if (reached.has(key)) return;
+    reached.add(key);
+    const [kind, id] = [key.slice(0, key.indexOf(":")), key.slice(key.indexOf(":") + 1)];
+    if (kind === "user") {
+      for (const r of peopleUnder.get(id) ?? []) reach(`user:${r.user_id}`);
+      for (const r of rolesUnderUser.get(id) ?? []) reach(`role:${r._id}`);
+    } else {
+      for (const r of peopleUnderRole.get(id) ?? []) reach(`user:${r.user_id}`);
+      for (const r of rolesUnderRole.get(id) ?? []) reach(`role:${r._id}`);
+    }
+  };
+  for (const p of topPeople) reach(`user:${p.user_id}`);
+  for (const r of orphanRoles) reach(`role:${r._id}`);
+  for (const p of people) if (!reached.has(`user:${p.user_id}`)) { topPeople.push(p); reach(`user:${p.user_id}`); }
+
   // A role's seat is the role (org-staffing.md S16, S22): its state paints
   // on the role card and its hands stack under it. The anchors table is the
   // seat's storage and nothing here draws a node from it.
@@ -374,6 +395,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
     // A cycle in reports_to (refused server side, but never trust a snapshot)
     // would recurse forever: cut it here.
     const kids = visiting.has(r._id) ? [] : (rolesUnderRole.get(r._id) ?? []).sort(byName);
+    const reports = visiting.has(r._id) ? [] : (peopleUnderRole.get(r._id) ?? []).filter((p) => !visiting.has(personNodeId(p.user_id)));
     visiting.add(r._id);
     // Resolved once, with the whole tree in hand; the row's height already
     // books the tenure row for a program, so the two agree by construction.
@@ -388,28 +410,37 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
       id, kind: "role", w: view.structureOnly ? ORG_SIZES.healthRole.w : ORG_SIZES.role.w, h, role: r,
       ...(tenure ? { tenure } : {}),
       ...(opened ? { opened, open } : {}),
-      children: collapsed ? [] : [...productKids(id), ...kids.map(roleBranch)],
+      children: collapsed ? [] : [...productKids(id), ...kids.map(roleBranch), ...reports.map(personBranch)],
       stack: collapsed || view.structureOnly || view.sessionCards === false ? null : stackFor({ kind: "role", role_id: r._id }, id, r, view, filed, product ? underProject : undefined),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
     // No stack drawn (collapsed, or the map): every session is "not drawn", and the card's tally carries them all.
     b.overflow = b.stack ? Math.max(0, b.stack.total - b.stack.sessions.length) : collapsed || view.sessionCards === false ? r.total : 0;
     visiting.delete(r._id);
-    if (collapsed) b.hidden = kids.length + r.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0) + productKids(id).length;
+    if (collapsed) {
+      visiting.add(r._id);
+      b.hidden = kids.length + r.total + kids.reduce((n, k) => n + subtreeCount(roleBranch(k)), 0) + productKids(id).length
+        + reports.reduce((n, p) => n + 1 + subtreeCount(personBranch(p)), 0);
+      visiting.delete(r._id);
+    }
     return b;
   };
-  const personBranch = (p: OrgPerson): Branch => {
+  function personBranch(p: OrgPerson): Branch {
+    const also = view.structureOnly ? [] : otherManagers(tree, p);
     const id = personNodeId(p.user_id);
     const collapsed = view.collapsed.has(id);
     const kids = (rolesUnderUser.get(p.user_id) ?? []).sort(byName);
     // The same cycle cut as roles: a loop in the snapshot draws nothing twice.
     const reports = (peopleUnder.get(p.user_id) ?? []).filter((r) => !visiting.has(personNodeId(r.user_id)));
     visiting.add(id);
+    // Roles under this person can hold people too, so they are built inside the cut.
+    const roleBranches = collapsed ? [] : kids.map(roleBranch);
     const reportBranches = collapsed ? [] : reports.map(personBranch);
     visiting.delete(id);
     const b: Branch = {
-      id, kind: "person", w: ORG_SIZES.person.w, h: (far ? personFarHeight(p.name, stateWords(p.counts, 2).length > 0) : ORG_SIZES.person.h) + chipRow(id) + (full ? personFullExtra(p, ghosts?.chips[id]?.length ?? 0) : 0), person: p,
-      children: collapsed ? [] : [...productKids(id), ...kids.map(roleBranch), ...reportBranches],
+      id, kind: "person", w: ORG_SIZES.person.w, h: (far ? personFarHeight(p.name, stateWords(p.counts, 2).length > 0, !!p.title, also.length > 0) : ORG_SIZES.person.h) + chipRow(id) + (full ? personFullExtra(p, ghosts?.chips[id]?.length ?? 0, also.length) : 0), person: p,
+      ...(also.length ? { alsoReports: also } : {}),
+      children: collapsed ? [] : [...productKids(id), ...roleBranches, ...reportBranches],
       stack: collapsed || view.structureOnly || view.sessionCards === false ? null : stackFor({ kind: "user", user_id: p.user_id }, id, p, view, filed, product ? underProject : undefined),
       collapsed, hidden: 0, overflow: 0, width: 0, height: 0,
     };
@@ -421,7 +452,7 @@ export function buildBranches(tree: OrgTree, view: OrgLayoutView, ghosts?: Pick<
       visiting.delete(id);
     }
     return b;
-  };
+  }
 
   const roots = [
     ...(product?.mission ? [leaf("mission", MISSION_NODE_ID, product.mission)] : []),
@@ -522,7 +553,7 @@ function pushCard(b: Branch, x: number, y: number, out: OrgLayoutNode[], sz: Ses
     out.push({ ...box, kind: "session", session: s, parent: b.sessionParent!, ...(detail ? { detail } : {}), ...(opened ? { opened } : {}) });
     return;
   }
-  if (b.kind === "person") out.push({ ...box, kind: "person", person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
+  if (b.kind === "person") out.push({ ...box, kind: "person", person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.alsoReports ? { alsoReports: b.alsoReports } : {}) });
   else if (b.kind === "role") out.push({ ...box, kind: "role", role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}), ...(b.opened ? { opened: true, open: b.open } : {}) });
   else if (b.kind === "group") out.push({ ...box, kind: "group", label: b.label ?? "", count: b.count ?? 0 });
   else out.push({ ...box, kind: b.kind, data: b.data ?? {} });
@@ -709,7 +740,7 @@ function layoutOrgColumns(roots: Branch[]): OrgLayout {
   let height = 0;
   const stack = (b: Branch, left: number, top: number, depth: number): { bottom: number; right: number } => {
     const nx = left + depth * ORG_SIZES.columnIndent;
-    if (b.kind === "person") nodes.push({ id: b.id, kind: "person", x: nx, y: top, w: b.w, h: b.h, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow });
+    if (b.kind === "person") nodes.push({ id: b.id, kind: "person", x: nx, y: top, w: b.w, h: b.h, person: b.person!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.alsoReports ? { alsoReports: b.alsoReports } : {}) });
     else nodes.push({ id: b.id, kind: "role", x: nx, y: top, w: b.w, h: b.h, role: b.role!, collapsed: b.collapsed, hidden: b.hidden, overflow: b.overflow, ...(b.tenure ? { tenure: b.tenure } : {}) });
     let y = top + b.h + ORG_SIZES.columnGap;
     let right = nx + b.w;

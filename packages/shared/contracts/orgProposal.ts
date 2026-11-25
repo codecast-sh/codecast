@@ -7,6 +7,8 @@
 
 import { ORG_SESSION_KINDS, sessionDestination, type OrgFileSessionChange } from "./orgSessionFiling";
 export { ORG_SESSION_KINDS, sessionDestination, type OrgFileSessionChange, type OrgSessionDestination } from "./orgSessionFiling";
+import { ORG_PEOPLE_KINDS, describePersonProfile, personProfileChangeError, personProfileClause, PERSON_PROFILE_EFFECT, type OrgPersonProfileChange } from "./orgPersonProfile";
+export { ORG_PEOPLE_KINDS, type OrgPersonProfileChange, type OrgPersonEvidence } from "./orgPersonProfile";
 import { autonomyOn, trustForSwitch } from "./roleAutonomy";
 import { INITIATIVE_METRICS_MAX, INITIATIVE_RECORD_MAX } from "./initiative";
 import { metricWindowNoiseError } from "./metricStanding";
@@ -244,9 +246,9 @@ export type OrgInitiativeShapeChange = { kind: "initiative_shape"; initiative: s
 export type OrgGoalChange = OrgInitiativeChange | OrgInitiativeProjectsChange | OrgInitiativeOwnerChange | OrgInitiativeShapeChange;
 
 export type OrgChange = OrgProposal | OrgScopeChange | OrgBudgetChange | OrgTrustChange | OrgRoutineChange | OrgProjectMetaChange | OrgAdoptChange | OrgFileChange | OrgCharterEditChange | OrgRoleEditChange
-  | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange | OrgAuthorityChange | OrgHireChange | OrgUpgradeChange | OrgGoalChange | OrgFileSessionChange;
+  | OrgPlanStatusChange | OrgTaskStatusChange | OrgProjectStatusChange | OrgAuthorityChange | OrgHireChange | OrgUpgradeChange | OrgGoalChange | OrgFileSessionChange | OrgPersonProfileChange;
 
-export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "charter_edit", "role_edit", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner", "initiative_shape", "file_session"] as const;
+export const ORG_CHANGE_KINDS = [...ORG_PROPOSAL_KINDS, "file", "scope", "budget", "trust", "routine", "project_meta", "adopt", "charter_edit", "role_edit", "plan_status", "task_status", "project_status", "authority", "hire", "upgrade", "initiative", "initiative_projects", "initiative_owner", "initiative_shape", "file_session", "person_profile"] as const;
 /** The kinds the pane groups under "Bring records in line" (S9). */
 export const ORG_SYNC_KINDS: readonly OrgChangeKind[] = ["plan_status", "task_status", "project_status"];
 /** The kinds that set, extend or staff a goal; one ask holds them (I1, revised). */
@@ -279,11 +281,11 @@ export type OrgChangeKind = OrgChange["kind"];
 // under a role the same proposal creates belongs to that role's structure
 // (hire a lead and give it its threads in one approval) and is not counted
 // against the structure cap.
-export type OrgProposalWork = "records" | "structure" | "goals" | "sessions";
-export const ORG_PROPOSAL_WORKS: readonly OrgProposalWork[] = ["records", "structure", "goals", "sessions"];
-export const ORG_PROPOSAL_MAX: Record<OrgProposalWork, number | null> = { records: null, structure: 12, goals: 12, sessions: null };
+export type OrgProposalWork = "records" | "structure" | "goals" | "sessions" | "people";
+export const ORG_PROPOSAL_WORKS: readonly OrgProposalWork[] = ["records", "structure", "goals", "sessions", "people"];
+export const ORG_PROPOSAL_MAX: Record<OrgProposalWork, number | null> = { records: null, structure: 12, goals: 12, sessions: null, people: null };
 export function orgWorkOfChange(c: { kind: string }): OrgProposalWork {
-  return (ORG_SYNC_KINDS as readonly string[]).includes(c.kind) ? "records" : (ORG_GOAL_KINDS as readonly string[]).includes(c.kind) ? "goals" : (ORG_SESSION_KINDS as readonly string[]).includes(c.kind) ? "sessions" : "structure";
+  return (ORG_SYNC_KINDS as readonly string[]).includes(c.kind) ? "records" : (ORG_GOAL_KINDS as readonly string[]).includes(c.kind) ? "goals" : (ORG_SESSION_KINDS as readonly string[]).includes(c.kind) ? "sessions" : ORG_PEOPLE_KINDS.includes(c.kind) ? "people" : "structure";
 }
 /** The handles of the roles the changes create. */
 const createdHandles = (changes: ReadonlyArray<{ change: { kind: string } }>) =>
@@ -314,9 +316,9 @@ export function orgProposalWorkErrors(changes: ReadonlyArray<{ change: { kind: s
   for (const c of changes) {
     if (filingUnderCreated(c.change, created)) continue; const w = orgWorkOfChange(c.change); byWork.set(w, [...(byWork.get(w) ?? []), c.change.kind]); }
   if (byWork.size > 1) {
-    const noun: Record<OrgProposalWork, string> = { records: "record", structure: "structure", goals: "goal", sessions: "session filing" };
+    const noun: Record<OrgProposalWork, string> = { records: "record", structure: "structure", goals: "goal", sessions: "session filing", people: "profile" };
     const parts = ORG_PROPOSAL_WORKS.filter((w) => byWork.has(w)).map((w) => { const kinds = byWork.get(w)!; return `${kinds.length} ${noun[w]} ${kinds.length === 1 ? "change" : "changes"} (${[...new Set(kinds)].join(", ")})`; });
-    return [`a proposal holds one kind of work, and this one mixes ${andList(parts)}: post the records as one proposal, the structure as another, the goals as a third and the session filings as a fourth, each with its own title and summary`];
+    return [`a proposal holds one kind of work, and this one mixes ${andList(parts)}: post the records as one proposal, the structure as another, the goals as a third, the session filings as a fourth and the profiles as a fifth, each with its own title and summary`];
   }
   const [work, kinds] = [...byWork][0];
   const max = ORG_PROPOSAL_MAX[work];
@@ -347,7 +349,7 @@ export const ORG_CHANGE_APPLY_RANK: Record<OrgChangeKind, number> = {
   task_status: 0, plan_status: 1, project_status: 2,
   projects: 3, file: 4, role: 5, project_meta: 6, initiative: 7, initiative_projects: 8, initiative_owner: 9, initiative_shape: 10,
   move: 11, scope: 12, charter_edit: 13, budget: 14, trust: 15, authority: 16, adopt: 17, routine: 18, hire: 19, upgrade: 20, role_edit: 21, retire: 22,
-  file_session: 23,
+  file_session: 23, person_profile: 24,
 };
 const UNRANKED = Math.max(...Object.values(ORG_CHANGE_APPLY_RANK)) + 1;
 
@@ -528,6 +530,7 @@ export function orgChangeError(raw: any): string | null {
     }
     case "file":
       return nonEmpty(raw.plan) && nonEmpty(raw.project) ? null : "file needs a plan ref and a project ref";
+    case "person_profile": return personProfileChangeError(raw);
     case "file_session":
       if (!nonEmpty(raw.session)) return "file_session needs the session's short id";
       if (!optString(raw.title)) return "file_session title is the session's title, a string";
@@ -1050,6 +1053,7 @@ function askWords(names?: OrgAskNames) {
       case "charter_edit": return `${agent(c.handle)}'s charter changes in ${c.edits.length === 1 ? "one place" : `${c.edits.length} places`}; each passage is shown before and after. Its area and its reporting line stay as they are.`;
       case "initiative": return `A new goal, ${c.title.trim()}, appears on the goals page with ${projects(c.projects)} under it${c.owner ? ` and ${parent(c.owner)} as its owner` : " and no owner yet"}${c.parent ? `, feeding ${names?.initiative?.(c.parent) ?? c.parent}` : ""}${c.metrics?.length ? `. It is read against ${metricsWords(c.metrics)}` : ""}. ${recordEffect(c) ? `${fullStop(c.description)} ${recordEffect(c)}` : c.description.trim()}`;
       case "initiative_projects": return `${projects(c.projects)} ${c.projects.length === 1 ? "counts" : "count"} toward the goal from now on, and its owner's area grows to include ${c.projects.length === 1 ? "it" : "them"}.`;
+      case "person_profile": return PERSON_PROFILE_EFFECT;
       case "initiative_owner": return `${parent(c.owner)} drives the goal from now on: its health is what ${c.owner.trim().toLowerCase() === "me" ? "you say" : "they say"}, and the goal's projects join their area.`;
       case "initiative_shape": return `${c.parent !== undefined ? (c.parent ? `The goal feeds ${names?.initiative?.(c.parent) ?? c.parent} from now on, and every role under it sees that chain. ` : "The goal stands on its own at the top level. ") : ""}${c.metrics !== undefined ? (c.metrics.length ? `On track means against ${metricsWords(c.metrics)}; ${c.metrics.every((m) => m.series) ? "the numbers read live" : c.metrics.some((m) => m.series) ? "the live ones read themselves and its owner reports the rest" : "its owner reports the numbers"}. ` : "It is no longer read against a number. ") : ""}${recordEffect(c)}`.trim();
       default: return describeOrgChange(c);
@@ -1219,6 +1223,7 @@ export function orgChangeKey(c: OrgChange): string | null {
     case "project_status": return `project_status:${c.project.trim().toLowerCase()}`;
     case "file": return `file:${c.plan.trim()}`;
     case "file_session": return `file_session:${c.session.trim().toLowerCase()}`;
+    case "person_profile": return `person_profile:${(c.user_id ?? c.person).trim().replace(/^@/, "").toLowerCase()}`;
     case "project_meta": return `project_meta:${c.project.trim().toLowerCase()}`;
     case "charter_edit": return `charter_edit:${h(c.handle)}`;
     case "role_edit": return `role_edit:${h(c.handle)}`;
@@ -1480,6 +1485,7 @@ export function describeOrgChange(c: OrgChange): string {
     case "upgrade": return `upgrade instance ${c.instance} to ${c.template}@${c.to}`;
     case "file": return `file plan ${c.plan} under project ${c.project}`;
     case "file_session": return `file session ${c.session} ${sessionDestination(c.to)?.kind === "done" ? "as done" : `under ${c.to.trim()}`}`;
+    case "person_profile": return describePersonProfile(c);
     case "charter_edit": return `charter ${at(c.handle)}: ${c.edits.map(charterEditTerse).join("; ")}`;
     case "role_edit": return `edit ${at(c.handle)}: ${roleEditTerse(c)}`;
     case "plan_status": return `mark plan ${c.plan} ${c.status}`;
@@ -1644,6 +1650,7 @@ export function changeClauses(c: OrgChange, words: ChangeWords = {}): string[] {
     case "hire": return [`hire ${subject(who(c.handle))} from the template ${c.template} (${c.version}) to lead ${project(c.project)}`];
     case "upgrade": return [`move ${subject(c.instance, "the instance")} to ${c.template} ${c.to}`];
     case "file": return [`put ${subject(plan(c.plan), brief ? "the plan" : "plan")} under the project ${project(c.project)}`];
+    case "person_profile": return [personProfileClause(c)];
     case "file_session": {
       const s = subject(c.title?.trim() || names?.session?.(c.session) || c.session, "the session");
       const to = sessionDestination(c.to);

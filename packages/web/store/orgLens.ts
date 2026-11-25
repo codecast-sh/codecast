@@ -23,7 +23,9 @@ type LensRole = {
   reports_to: { kind: "user"; user_id: string } | { kind: "role"; role_id: string };
   standing?: { conversation_id?: string } | null;
 };
-type LensPerson = { user_id: string; name: string; image?: string; reports_to_user_id?: string };
+type LensPerson = { user_id: string; name: string; image?: string; managers?: Array<{ kind: "user"; user_id: string } | { kind: "role"; role_id: string }> };
+// The people a person reports to (roles aside: the lens folds a role under its own line).
+const personManagerIds = (p: LensPerson): string[] => (p.managers ?? []).flatMap((m) => (m.kind === "user" ? [String(m.user_id)] : []));
 export type OrgLensSources = {
   tasks: Record<string, Pick<TaskItem, "project_id" | "plan_id">>;
   plans: Record<string, Pick<PlanItem, "project_id">>;
@@ -108,18 +110,23 @@ const personReportKey = (userId: string) => `person:${userId}`;
 function reportRootResolver(src: Pick<OrgLensSources, "roles" | "people" | "meId">): { ofRole: (roleId: string | null | undefined) => string | null; ofPerson: (userId: string | null | undefined) => string | null } {
   const { meId } = src;
   const byId = new Map(src.roles.map((r) => [String(r._id), r]));
-  const managerOf = new Map(src.people.map((p) => [String(p.user_id), p.reports_to_user_id ? String(p.reports_to_user_id) : undefined]));
+  const managerOf = new Map(src.people.map((p) => [String(p.user_id), personManagerIds(p)]));
   const personMemo = new Map<string, string | null>();
   const ofPerson = (userId: string | null | undefined): string | null => {
     if (!userId || !meId) return null;
     const start = String(userId);
     if (personMemo.has(start)) return personMemo.get(start)!;
+    // Several managers are equal: the first line up that reaches the viewer decides.
     let root: string | null = null;
-    let cur: string | undefined = start;
-    for (let depth = 0; cur && cur !== meId && depth < 64; depth++) {
-      const up = managerOf.get(cur);
-      if (up === meId) { root = personReportKey(cur); break; }
-      cur = up;
+    const seen = new Set<string>();
+    const todo = [start];
+    while (todo.length && seen.size < 256) {
+      const cur = todo.shift()!;
+      if (cur === meId || seen.has(cur)) continue;
+      seen.add(cur);
+      const ups: string[] = managerOf.get(cur) ?? [];
+      if (ups.includes(meId)) { root = personReportKey(cur); break; }
+      todo.push(...ups);
     }
     personMemo.set(start, root);
     return root;
@@ -178,7 +185,7 @@ export function groupSessionsForOrgLens(
         }),
         ...src.people.flatMap((p): OrgLensGroup[] => {
           const key = personReportKey(String(p.user_id));
-          const list = p.reports_to_user_id === src.meId ? byKey.get(key) : undefined;
+          const list = src.meId && personManagerIds(p).includes(src.meId) ? byKey.get(key) : undefined;
           return list?.length ? [{ key, label: p.name, items: list.sort(byPinThenActivity), userId: String(p.user_id), image: p.image }] : [];
         }),
       ],
@@ -230,7 +237,7 @@ const lensPeopleSigs = new WeakMap<object, string>();
 function lensPeopleSig(people: readonly LensPerson[]): string {
   let sig = lensPeopleSigs.get(people);
   if (sig === undefined) {
-    sig = people.map((p) => `${p.user_id}|${p.name}|${p.image ?? ""}|${p.reports_to_user_id ?? ""}`).join("\n");
+    sig = people.map((p) => `${p.user_id}|${p.name}|${p.image ?? ""}|${(p.managers ?? []).map((m) => (m.kind === "user" ? m.user_id : m.role_id)).join(",")}`).join("\n");
     lensPeopleSigs.set(people, sig);
   }
   return sig;
@@ -247,7 +254,7 @@ export function orgLensWakeSig(state: OrgLensState & { clientState: { ui?: { inb
 export function orgLensAvailable(mode: OrgLensMode, items: InboxSession[], src: OrgLensSources): boolean {
   if (mode === "reports") {
     return !!src.meId && (src.roles.some((r) => r.status !== "retired" && r.reports_to.kind === "user" && r.reports_to.user_id === src.meId)
-      || src.people.some((p) => p.reports_to_user_id === src.meId));
+      || src.people.some((p) => personManagerIds(p).includes(src.meId!)));
   }
   if (mode === "goal") {
     const goals = goalOfProjectMap(src.initiatives);

@@ -25,6 +25,7 @@ const GOOD: Record<OrgChange["kind"], OrgChange> = {
   adopt: { kind: "adopt", handle: "head-of-people", conversation: "jx7abcd" },
   file: { kind: "file", plan: "pl-1", project: "pr-1" },
   file_session: { kind: "file_session", session: "jx7abcd", to: "@growth", title: "Launch thread" },
+  person_profile: { kind: "person_profile", person: "@jason", name: "Jason Benn", title: "Head of Agentic Quality", focus: "evals", evidence: { window_days: 30, sessions: 12, commits: 30, tasks_closed: 4, decisions_answered: 2, calls_led: 1, projects: ["Eval Suite"] } },
   charter_edit: { kind: "charter_edit", handle: "growth", edits: [{ op: "replace", before: "Owns the funnel on budget.", after: "Owns the funnel under budget." }, { op: "add", line: "Reports spend every Monday." }, { op: "remove", before: "Writes the weekly post." }] },
   role_edit: { kind: "role_edit", handle: "growth", name: "Head of Funnel", new_handle: "head-of-funnel", hires_freely: true, paused: false },
   plan_status: { kind: "plan_status", plan: "pl-7", status: "done", reason: "every task closed" },

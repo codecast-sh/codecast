@@ -14,7 +14,9 @@ import { resolveActor } from "./lib/actor";
 import { computeOrgHealth } from "./orgHealth";
 import { userCanAccessRole, userCanAdminRole } from "./lib/orgAccess";
 import { requireWorkspaceCaller } from "./org";
-import { applyOrgChange, roleByRef, type ApplyResult, type Boundary } from "./orgInit";
+import { applyOrgChange, memberByRef, roleByRef, type ApplyResult, type Boundary } from "./orgInit";
+import { ownProfilesOnly, proposedProfile } from "@codecast/shared/contracts/orgPersonProfile";
+import { personName } from "./lib/sessionTell";
 import { roleStartsOnItsOwn } from "./lib/orgCaps";
 import { filesOnlyOwnSessions } from "./lib/orgSessionFiling";
 import { STABILITY } from "@codecast/shared/contracts/orgCapacity";
@@ -103,9 +105,14 @@ export async function findChange(ctx: Ctx, ref: string): Promise<{ change: Chang
   return proposal ? { change, proposal } : null;
 }
 
-async function requireAdmin(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow): Promise<void> {
+/** A team admin decides any change; anyone else only changes that are their
+ *  own: their sessions filed, or their own profile (org-people.md P5).
+ *  `rows` are the changes being decided, the whole proposal when absent. */
+async function requireAdmin(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow, rows?: ReadonlyArray<ChangeRow>): Promise<void> {
   if (await userCanAdminRole(ctx, userId, hostShape(proposal))) return;
-  if (!(await filesOnlyOwnSessions(ctx, userId, await changesOf(ctx, proposal._id)))) throw new Error(`Only ${proposal.short_id}'s author, the workspace owner or a team admin can decide it`);
+  const deciding = rows ?? await changesOf(ctx, proposal._id);
+  if (ownProfilesOnly(String(userId), deciding) || await filesOnlyOwnSessions(ctx, userId, deciding)) return;
+  throw new Error(`Only ${proposal.short_id}'s author, the workspace owner or a team admin can decide it${deciding.some((r) => r.change.kind === "person_profile") ? "; a profile change, also the person it describes" : ""}`);
 }
 
 // ── Create ──────────────────────────────────────────────────────────────────
@@ -122,6 +129,16 @@ async function requireAdmin(ctx: Ctx, userId: Id<"users">, proposal: ProposalRow
  * left as written for the apply step to resolve.
  */
 async function checkedRecordChange<T extends OrgChange>(ctx: Ctx, change: T, seat: Boundary): Promise<T> {
+  // A profile names a member of this team. Who it is and the profile as it
+  // stands travel with the change, so the card reads before and after, and the
+  // person it describes can approve it (requireAdmin).
+  if (change.kind === "person_profile") {
+    if (!seat.team_id) throw new Error("A profile lives on a team membership; propose it in a team workspace");
+    const user = await memberByRef(ctx, seat.scope_user_id as Id<"users">, seat, change.person);
+    const m: any = user ? await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", user._id).eq("team_id", seat.team_id)).first() : null;
+    if (!m || user.is_bot) throw new Error(`person_profile: ${change.person} is not a member of this team`);
+    return { ...change, user_id: String(user._id), name: personName(user), before: proposedProfile(m) };
+  }
   // A charter edit is checked against the charter as it stands now, so a
   // passage that is missing or an edit that breaks the cap is the author's
   // to fix before the person sees it, not a refusal at their approval. A
@@ -532,7 +549,7 @@ export async function performDecideChange(
   const found = await findChange(ctx, args.change_id);
   if (!found) throw new Error(`Change not found: ${args.change_id}`);
   const { change, proposal } = found;
-  await requireAdmin(ctx, userId, proposal);
+  await requireAdmin(ctx, userId, proposal, [change]);
   if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
   if (!decidable(change)) throw new Error(`${proposal.short_id}#${change.seq} is already ${change.status}`);
   // A failed change applies once it changes: the person's edits here, or its author's revise.
@@ -590,7 +607,7 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
   // `lead`: a hire a lead above approved (performDecideHire), whose authority
   // is the line, already checked; never set by a client.
-  if (!args.lead) await requireAdmin(ctx, userId, proposal);
+  if (!args.lead) await requireAdmin(ctx, userId, proposal, args.seqs ? (await changesOf(ctx, proposal._id)).filter((c) => args.seqs!.includes(c.seq)) : undefined);
   if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
   const now = Date.now();
   // `kinds` narrows the sweep ("Accept group" on the pane's records card,
@@ -662,11 +679,11 @@ export async function performAcceptAll(ctx: Ctx & { runMutation?: (ref: any, arg
 export async function performDecideAsk(ctx: Ctx & { runMutation?: (ref: any, args: any) => Promise<any> }, userId: Id<"users">, args: { proposal: string; ask: number; verdict: "accept" | "skip"; seen?: OrgVerdictSeen; from_session?: string; api_token?: string; provision?: boolean; leave_sessions?: boolean }): Promise<any> {
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
-  await requireAdmin(ctx, userId, proposal);
-  if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
   const rows = await changesOf(ctx, proposal._id);
   const asks = resolveOrgAsks(proposal.asks, rows);
   const ask = asks[args.ask];
+  await requireAdmin(ctx, userId, proposal, ask ? rows.filter((c) => ask.seqs.includes(c.seq)) : rows);
+  if (proposal.status !== "open") throw new Error(`${proposal.short_id} is ${proposal.status}`);
   // A revise that empties an earlier ask moves every later one up a place,
   // so a position that no longer exists is a moved list before it is a bad
   // index, and the seqs the card held say which ask the person read.
@@ -1182,7 +1199,8 @@ export async function performReply(
 ): Promise<any> {
   const proposal = await findProposal(ctx, args.proposal);
   if (!proposal) throw new Error(`Proposal not found: ${args.proposal}`);
-  await requireAdmin(ctx, userId, proposal);
+  const answered = (await changesOf(ctx, proposal._id)).filter((c) => (args.items ?? []).some((i) => i.seqs.includes(c.seq) || (i.change_ids ?? []).includes(String(c._id))));
+  await requireAdmin(ctx, userId, proposal, answered.length ? answered : undefined);
   if (proposal.status !== "open") {
     // The same answers arriving again (a window's outbox replaying a reply
     // whose first delivery closed the proposal) ask for what already

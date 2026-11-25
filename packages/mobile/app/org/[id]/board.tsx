@@ -27,7 +27,7 @@ import { useScopeFeedStream } from '@codecast/web/hooks/useScopeFeedStream';
 import { useRoleBrief, type ScopeRef } from '@codecast/web/hooks/useScopeQueries';
 import { compactAge } from '@codecast/web/lib/threadState';
 import { FEED_NEUTRAL_TONE, feedKindsFor, feedStateTone, roleStanding, scopeQueryRef, scopeSeatOf } from '@codecast/web/lib/scopePage';
-import { parentName, standingLineOf } from '@codecast/web/components/org/orgMeta';
+import { roleManagerNames, standingLineOf } from '@codecast/web/components/org/orgMeta';
 import { FEED_KIND_META, type FeedKind, type FeedRow } from '@codecast/web/components/org/scope/scopeTypes';
 import type { OrgRole, OrgTree } from '@codecast/web/components/org/orgTypes';
 import { parseStandingSection, projectsWithLines, standingLineAgeDays, standingLineFor, standingLineStale } from '@codecast/shared/contracts/briefStanding';
@@ -113,8 +113,8 @@ export default function ScopeBoardScreen() {
               {role ? <RoleFace role={role} size={44} /> : <RNView style={[styles.anchorFace, chipTint(Theme.orange)]}><FontAwesome name="sitemap" size={18} color={Theme.orange} /></RNView>}
               <RNView style={{ flex: 1, minWidth: 0 }}>
                 <RNText style={styles.name} numberOfLines={1}>{name}</RNText>
-                <RNText style={styles.dim} numberOfLines={1}>
-                  {role ? `reports to ${parentName(tree, role.reports_to)}` : 'Everything in the workspace, as one scope.'}
+                <RNText style={styles.dim} numberOfLines={3}>
+                  {role ? `reports to ${roleManagerNames(tree, role)}` : 'Everything in the workspace, as one scope.'}
                   {role?.status === 'paused' ? ' · paused' : ''}
                 </RNText>
               </RNView>

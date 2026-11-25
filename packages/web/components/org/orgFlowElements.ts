@@ -58,7 +58,7 @@ export function toFlowNodes(layout: OrgLayoutNode[], selectedId: string | null, 
       ? (n.ghost || n.retire || n.move || n.chips ? { ghost: n.ghost, retire: n.retire, move: n.move, chips: n.chips, ...ghosts } : {})
       : {};
     switch (n.kind) {
-      case "person": return { ...base, data: { ...common, ...decor, person: n.person, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow } };
+      case "person": return { ...base, data: { ...common, ...decor, person: n.person, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow, alsoReports: n.alsoReports } };
       case "role": return { ...base, data: { ...common, ...decor, role: n.role, collapsed: n.collapsed, hidden: n.hidden, overflow: n.overflow, tenure: n.tenure, ledger: ledgers[n.id], opened: n.opened, open: n.open } };
       case "session": return { ...base, data: { ...common, ...decor, session: n.session, parent: n.parent, detail: n.detail, opened: n.opened } };
       case "group": return { ...base, data: { selected: common.selected, label: n.label, count: n.count } };

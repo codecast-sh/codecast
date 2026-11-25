@@ -73,6 +73,10 @@ def relation(msg, convs, short):
     # sender even when the driver is outside the export (a Line run's own
     # session above all) and a stranger with the same prefix is inside it.
     if rc and (lead(rc) or "").startswith(sender): return "parent->worker"
+    # A delivered row names its sender in full (`from_conversation_id`): when
+    # that session is in hand, it is the sender, and no prefix guess is needed.
+    exact = convs.get(msg.get("from_conversation_id") or "")
+    if rc and exact: return place(rc, exact, convs)
     found = [place(rc, sc, convs) for sc in short.get(sender, [])] if rc else []
     return min(found, key=LINE_ORDER.index) if found else "unresolved"
 
@@ -82,8 +86,9 @@ LINE_ORDER = ["parent->worker", "worker->parent", "sibling", "ancestor", "descen
 
 def lead(c):
     """The session that drives this one: a subagent's parent, else whoever
-    spawned it (a plain `cast spawn`, or a Line run handing a station its brief)."""
-    return c.get("parent_conversation_id") or c.get("spawned_by_conversation_id")
+    spawned it (a plain `cast spawn`, or a Line run handing a station its brief),
+    else, for a workflow node's session, the session that ran the workflow."""
+    return c.get("parent_conversation_id") or c.get("spawned_by_conversation_id") or c.get("workflow_spawner")
 
 
 def place(rc, sc, convs):
@@ -231,12 +236,21 @@ def main():
         # Every session's injection record: the guidance split's source for
         # senders whose transcript is not on this machine (saw_guidance).
         convex_data("conversation_context", 100000, os.path.join(exp, "injections.jsonl"))
+        # A workflow node's session records no parent and no short id; its
+        # run names the session that started it (spawner_conversation_id).
+        convex_data("workflow_runs", 100000, os.path.join(exp, "workflow_runs.jsonl"))
 
-    keep = ["_id", "_creationTime", "short_id", "title", "user_id", "parent_conversation_id", "spawned_by_conversation_id", "standing_role_id", "org_role_id", "session_id"]
+    keep = ["_id", "_creationTime", "short_id", "title", "user_id", "parent_conversation_id", "spawned_by_conversation_id", "standing_role_id", "org_role_id", "session_id", "workflow_run_id"]
     convs = {r["_id"]: {k: r.get(k) for k in keep} for r in load_jsonl(os.path.join(exp, "convs.jsonl"))}
+    runs_path = os.path.join(exp, "workflow_runs.jsonl")
+    spawner = {r["_id"]: r.get("spawner_conversation_id") for r in load_jsonl(runs_path)} if os.path.exists(runs_path) else {}
     short = collections.defaultdict(list)
     for c in convs.values():
-        if c.get("short_id"): short[c["short_id"]].append(c)
+        c["workflow_spawner"] = spawner.get(c.get("workflow_run_id") or "")
+        # The short id is the id's own first 7 characters; workflow node
+        # sessions (about one in nine rows) store none.
+        c["short_id"] = c.get("short_id") or c["_id"][:7]
+        short[c["short_id"]].append(c)
     since = (datetime.datetime.now() - datetime.timedelta(days=a.days)).timestamp() * 1000
     msgs = []
     for r in load_jsonl(os.path.join(exp, "pending.jsonl")):

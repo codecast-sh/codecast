@@ -1,4 +1,5 @@
 import { internalMutation, mutation, query } from "./functions";
+import { chainReaches, currentManagers, dropLegacyEntry, mayEditManagersAs, rolePeopleIds, writeManagers } from "./orgPeople";
 import { roleRunner } from "./lib/seatPlace";
 import { internalQuery } from "./_generated/server";
 import { internal } from "./_generated/api";
@@ -550,17 +551,6 @@ async function updateRole(
   return { ...updated, ...(overlaps ? { overlaps } : {}), ...(reports_outside.length ? { reports_outside } : {}), ...(took ? { took_over: { ...took, phrase: takeoverPhrase(updated.handle, took, true) } } : {}), ...(handoffs.length ? { handoffs } : {}) };
 }
 
-// Walk up from `start` through role parents; true when `needle` is an
-// ancestor (or `start` itself). Bounded so a corrupt chain cannot spin.
-async function roleChainReaches(ctx: Ctx, start: any, needle: string): Promise<boolean> {
-  let cur: any = start;
-  for (let depth = 0; cur && depth < MAX_ROLE_DEPTH; depth++) {
-    if (cur._id.toString() === needle) return true;
-    if (cur.reports_to?.kind !== "role") return false;
-    cur = await ctx.db.get(cur.reports_to.role_id);
-  }
-  return false;
-}
 
 export async function performReparentRole(
   ctx: Ctx,
@@ -579,7 +569,7 @@ async function performReparentRoleCore(
   const reports_to = await resolveReportsTo(ctx, userId, role, args.reports_to);
   if (reports_to.kind === "role") {
     const parent = await ctx.db.get(reports_to.role_id);
-    if (await roleChainReaches(ctx, parent, role._id.toString())) {
+    if (await chainReaches(ctx, role.team_id, reports_to, { kind: "role", role_id: role._id })) {
       throw new Error(`Cycle: ${parent.short_id} already reports to ${role.short_id}`);
     }
     // Containment (F1) holds across a move too, under a parent that keeps
@@ -589,6 +579,10 @@ async function performReparentRoleCore(
     if (outside.project_ids.length || outside.plan_ids.length) {
       await refuseOutside(ctx, outside, `Outside the scope of @${parent.handle}`);
     }
+  } else if (await chainReaches(ctx, role.team_id, reports_to, { kind: "role", role_id: role._id })) {
+    // A person may report to a role (org-people.md P2): a role cannot move
+    // under someone who already reports up to it.
+    throw new Error(`Cycle: that person already reports up to @${role.handle}`);
   }
   const now = Date.now();
   // The move lands in the role's history: org.health reads the newest row as
@@ -597,7 +591,10 @@ async function performReparentRoleCore(
   const before = role.reports_to;
   const same = before?.kind === reports_to.kind
     && String(reports_to.kind === "role" ? before.role_id : before.user_id) === String(reports_to.kind === "role" ? reports_to.role_id : reports_to.user_id);
-  await ctx.db.patch(role._id, { reports_to, updated_at: now });
+  // A move redraws one line and keeps the role's other managers (org-people.md
+  // P3); the new line leaves the others' list if it was there.
+  const also = (role.also_reports_to ?? []).filter((p: ReportsTo) => !samePartyRef(p, reports_to));
+  await ctx.db.patch(role._id, { reports_to, also_reports_to: also.length ? also : undefined, updated_at: now });
   if (!same) {
     await ctx.db.insert("org_role_history", {
       role_id: role._id,
@@ -614,6 +611,53 @@ async function performReparentRoleCore(
   await stampStandingReportsTo(ctx, moved, userId);
   await noteRoleChange(ctx, userId, "move", role, moved, { door: args.from_session ? "cli" : "chart", gesture: args.from_session ? "command" : "drag" });
   return moved;
+}
+
+const samePartyRef = (a: ReportsTo, b: ReportsTo) =>
+  a.kind === b.kind && String(a.kind === "user" ? a.user_id : a.role_id) === String(b.kind === "user" ? (b as any).user_id : (b as any).role_id);
+
+export const MAX_ROLE_MANAGERS = 6;
+
+/**
+ * Set everyone a role reports to, all equal (org-people.md P3): the first is
+ * the line the chart draws it on (`reports_to`), the rest `also_reports_to`.
+ * Each is inside the role's workspace, none closes a loop through people or
+ * roles, and the standing session's owners become every person among them.
+ */
+export async function performSetRoleManagers(
+  ctx: Ctx,
+  userId: Id<"users">,
+  args: { role_id: string; managers: ReportsTo[]; note?: string; from_session?: string },
+): Promise<any> {
+  return withOrgChange(ctx, userId, { kind: "move" }, async () => {
+    const role = await requireRole(ctx, userId, args.role_id, "admin");
+    const list = args.managers.filter((p, i) => args.managers.findIndex((q) => samePartyRef(p, q)) === i);
+    if (!list.length) throw new Error("A role reports to at least one person or role");
+    if (list.length > MAX_ROLE_MANAGERS) throw new Error(`A role reports to at most ${MAX_ROLE_MANAGERS} managers`);
+    const extras: ReportsTo[] = [];
+    for (const p of list.slice(1)) {
+      const resolved = await resolveReportsTo(ctx, userId, role, p);
+      if (resolved.kind === "role" && String(resolved.role_id) === String(role._id)) throw new Error("A role cannot report to itself");
+      if (await chainReaches(ctx, role.team_id, resolved, { kind: "role", role_id: role._id })) throw new Error(`Cycle: that manager already reports up to @${role.handle}`);
+      extras.push(resolved);
+    }
+    const before = role.also_reports_to ?? [];
+    const changed = before.length !== extras.length || extras.some((p) => !before.some((q: ReportsTo) => samePartyRef(p, q)));
+    await ctx.db.patch(role._id, { also_reports_to: extras.length ? extras : undefined });
+    if (changed) {
+      await ctx.db.insert("org_role_history", {
+        role_id: role._id, user_id: userId, actor_type: "user", action: "move", field: "also_reports_to",
+        old_value: JSON.stringify(before), new_value: JSON.stringify(extras), created_at: Date.now(),
+      });
+    }
+    const moved = await performReparentRoleCore(ctx, userId, { role_id: args.role_id, reports_to: list[0], note: args.note, from_session: args.from_session });
+    // The core keeps the others; put back the exact list asked for.
+    const others = extras.filter((p) => !samePartyRef(p, moved.reports_to));
+    await ctx.db.patch(role._id, { also_reports_to: others.length ? others : undefined });
+    const final = await ctx.db.get(role._id);
+    await stampStandingReportsTo(ctx, final, userId);
+    return final;
+  });
 }
 
 export type UnseatChoice = "keep" | "retire";
@@ -1079,6 +1123,27 @@ export const reparent = mutation({
   args: { api_token: v.optional(v.string()), role_id: v.string(), reports_to: reportsToValidator, note: v.optional(v.string()), from_session: v.optional(v.string()) },
   handler: async (ctx, { api_token, ...args }) => {
     return performReparentRole(ctx, await requireCaller(ctx, api_token), args);
+  },
+});
+
+// A person's managers changed (orgPeople.reparentPerson): each role they
+// joined or left brings its morning agenda in line with who reports to it.
+export const syncAgendas = internalMutation({
+  args: { role_ids: v.array(v.id("org_roles")) },
+  handler: async (ctx, { role_ids }) => {
+    for (const id of new Set(role_ids.map(String))) {
+      const role = await ctx.db.get(id as Id<"org_roles">);
+      if (role) await syncRoleAgenda(ctx, role, await standingConversationOf(ctx, role), Date.now());
+    }
+  },
+});
+
+// Everyone a role reports to, as a whole list (org-people.md P3): `cast org
+// reparent @role --to a,b` and the role page's managers control.
+export const setManagers = mutation({
+  args: { api_token: v.optional(v.string()), role_id: v.string(), managers: v.array(reportsToValidator), note: v.optional(v.string()), from_session: v.optional(v.string()) },
+  handler: async (ctx, { api_token, ...args }) => {
+    return performSetRoleManagers(ctx, await requireCaller(ctx, api_token), args);
   },
 });
 
@@ -1731,7 +1796,7 @@ export async function stampStandingReportsTo(ctx: Ctx, role: any, actor?: Id<"us
   const { org_role_id } = standingReportsToFields(role);
   const moved = String(standing.org_role_id ?? "") !== String(org_role_id ?? "");
   if (moved) await ctx.db.patch(standing._id, { org_role_id });
-  const owners = await stampSeatOwners(ctx, standing._id, role.reports_to, actor ?? role.host_user_id);
+  const owners = await stampSeatOwners(ctx, standing._id, role, actor ?? role.host_user_id);
   return moved || owners;
 }
 
@@ -2399,7 +2464,10 @@ export const wake = mutation({
   handler: async (ctx, { api_token, ...args }) => performWakeRole(ctx, await requireCaller(ctx, api_token), args),
 });
 // Who reports to a role (org-roles-run-work.md R6). A person may add or
-// remove themself; an admin of the role may name anyone in its boundary.
+// remove themself; an admin of the role may name anyone in its boundary. In a
+// team the fact is each person's managers list (orgPeople.writeManagers,
+// org-people.md P3), so the role and the person read one home; a personal
+// role, which has no memberships, keeps its own list.
 export async function performSetReports(
   ctx: Ctx,
   userId: Id<"users">,
@@ -2408,39 +2476,62 @@ export async function performSetReports(
   const role = await requireRole(ctx, userId, args.role_id, "access");
   if (role.status === "retired") throw new Error("That role is retired");
   const admin = await userCanAdminRole(ctx, userId, role);
+  const held = (role.team_id
+    ? await rolePeopleIds(role, await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", role.team_id)).collect(), await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", role.team_id)).collect())
+    : (role.reports_user_ids ?? []).map(String)) as string[];
   // `set` is the whole list as a surface holds it (the Settings tab): the
-  // difference against the stored row is taken here, where the row is, so
-  // the same per person rule below covers it.
-  const held = (role.reports_user_ids ?? []) as Id<"users">[];
+  // difference against what is stored is taken here, so the same per person
+  // rule below covers it.
   const wanted = args.set ? new Set(args.set.map(String)) : null;
-  const add = wanted ? args.set!.filter((uid) => !held.some((h) => String(h) === String(uid))) : args.add ?? [];
-  const remove = wanted ? held.filter((uid) => !wanted.has(String(uid))) : args.remove ?? [];
+  const add = (wanted ? args.set!.filter((uid) => !held.includes(String(uid))) : args.add ?? []).filter((uid) => !held.includes(String(uid)));
+  const remove = (wanted ? held.filter((uid) => !wanted.has(uid)) : (args.remove ?? []).map(String)).filter((uid) => held.includes(String(uid))) as Id<"users">[];
   if (add.length + remove.length === 0) return role;
-  const names = new Map<string, string>();
   for (const uid of [...add, ...remove]) {
-    if (String(uid) !== String(userId) && !admin) throw new Error("Only an admin of the role may change who reports to it; you may add or remove yourself");
+    // The same rule as the person's page (orgPeople.mayEditManagersAs): one of
+    // their managers may add or remove a role they answer for.
+    if (String(uid) !== String(userId) && !admin && !(role.team_id && (await mayEditManagersAs(ctx, userId, await currentManagers(ctx, role.team_id, uid), [{ kind: "role", role_id: role._id }])))) {
+      throw new Error("Only an admin of the role, one of the person's managers, or the person may change who reports to it");
+    }
     const u = await ctx.db.get(uid);
     if (!u || u.is_bot) throw new Error("Only a person can report to a role");
     if (role.team_id ? !(await isTeamMember(ctx as any, uid, role.team_id)) : String(uid) !== String(role.scope_user_id)) {
       throw new Error(`${u.name ?? u.email ?? "That person"} is not in this workspace`);
     }
-    names.set(String(uid), u.name || u.email?.split("@")[0] || "someone");
   }
-  const current = new Set<string>((role.reports_user_ids ?? []).map(String));
-  for (const uid of remove) current.delete(String(uid));
-  const added = add.filter((uid) => !current.has(String(uid)));
-  for (const uid of added) current.add(String(uid));
+  const me: ReportsTo = { kind: "role", role_id: role._id };
+  if (role.team_id) {
+    for (const uid of add) {
+      // A person the role already reports up to (a founder asking a role they
+      // manage to keep their goals) is not its report: the role keeps their
+      // goals on its own list, and no loop enters anyone's managers.
+      if (await chainReaches(ctx, role.team_id, me, { kind: "user", user_id: uid })) {
+        const fresh: any = await ctx.db.get(role._id);
+        await ctx.db.patch(role._id, { reports_user_ids: [...(fresh?.reports_user_ids ?? []), uid] });
+      } else {
+        await writeManagers(ctx, role.team_id, uid, [...(await currentManagers(ctx, role.team_id, uid)), me]);
+      }
+    }
+    for (const uid of remove) {
+      await writeManagers(ctx, role.team_id, uid, (await currentManagers(ctx, role.team_id, uid)).filter((p) => !samePartyRef(p, me)));
+      // An entry the older list kept only for goals is not in their managers.
+      await dropLegacyEntry(ctx, role._id, uid);
+    }
+  } else {
+    const kept = held.filter((uid) => !remove.some((r) => String(r) === uid));
+    await ctx.db.patch(role._id, { reports_user_ids: [...kept, ...add.map(String)] as Id<"users">[] });
+  }
   const now = Date.now();
-  await ctx.db.patch(role._id, { reports_user_ids: Array.from(current) as Id<"users">[], updated_at: now });
+  const after = [...held.filter((uid) => !remove.some((r) => String(r) === uid)), ...add.map(String)];
+  await ctx.db.patch(role._id, { updated_at: now });
   await ctx.db.insert("org_role_history", {
     role_id: role._id, user_id: userId, actor_type: "user", action: "reports", field: "reports_user_ids",
-    old_value: JSON.stringify((role.reports_user_ids ?? []).map(String)), new_value: JSON.stringify(Array.from(current)), created_at: now,
+    old_value: JSON.stringify(held), new_value: JSON.stringify(after), created_at: now,
   });
   // The morning agenda (S33) follows who reports: armed with the first
   // person, paused with the last.
   const updated = await ctx.db.get(role._id);
   const agenda = await syncRoleAgenda(ctx, updated, await standingConversationOf(ctx, updated), now);
-  return { ...updated, agenda };
+  return { ...updated, reports: after, agenda };
 }
 
 export const setReports = mutation({

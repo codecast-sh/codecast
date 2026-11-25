@@ -668,17 +668,20 @@ describe("web resolution (dispatch patch)", () => {
 
 describe("review wave 1 regressions", () => {
   test("dispatch guard: a resolution patch on a row that is no longer pending is dropped whole", () => {
-    expect(guardClientResolution({ status: "answered" }, { status: "answered", answer_index: 0, resolved_at: 1 })).toEqual({});
+    expect(guardClientResolution({ status: "dismissed" }, { status: "answered", answer_index: 0, resolved_at: 1 })).toEqual({});
+    expect(guardClientResolution({ status: "answered", workflow_run_id: "workflow_runs_1" }, { status: "answered", answer_index: 0, resolved_at: 1 })).toEqual({});
     expect(guardClientResolution({ status: "answered" }, { updated_at: 5 })).toEqual({ updated_at: 5 });
     expect(guardClientResolution({ status: "pending" }, { status: "answered", answer_index: 1 })).toEqual({ status: "answered", answer_index: 1 });
   });
 
-  test("dispatch guard: an answered advisory ask still takes a person's new answer, never a dismiss", () => {
+  test("dispatch guard: an answer on record still takes a person's new answer, never a dismiss", () => {
     const patch = { status: "answered", answer_index: 1, resolved_at: 2 };
     expect(guardClientResolution({ status: "answered", blocking: false, answered_by: { kind: "policy" } }, patch)).toEqual(patch);
     expect(guardClientResolution({ status: "answered", blocking: false, answered_by: { kind: "user" } }, patch)).toEqual(patch);
+    expect(guardClientResolution({ status: "answered", blocking: true, answered_by: { kind: "user" } }, patch)).toEqual(patch);
     expect(guardClientResolution({ status: "answered", blocking: false, answered_by: { kind: "user" } }, { status: "dismissed", resolved_at: 2 })).toEqual({});
-    expect(guardClientResolution({ status: "answered", blocking: true, answered_by: { kind: "user" } }, patch)).toEqual({});
+    expect(guardClientResolution({ status: "answered", blocking: true, category: "access", answered_by: { kind: "user" } } as any, patch)).toEqual({});
+    expect(guardClientResolution({ status: "answered", blocking: true, run: { argv: ["x"], state: "done" }, answered_by: { kind: "user" } } as any, patch)).toEqual({});
     expect(guardClientResolution({ status: "answered", blocking: false, answered_by: { kind: "role" } }, patch)).toEqual({});
     expect(guardClientResolution({ status: "answered", blocking: false, workflow_run_id: "workflow_runs_1", answered_by: { kind: "user" } }, patch)).toEqual({});
     expect(guardClientResolution({ status: "withdrawn", blocking: false }, patch)).toEqual({});

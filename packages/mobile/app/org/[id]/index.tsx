@@ -17,7 +17,7 @@ import { Mono } from '@/constants/fonts';
 import { RoleFace } from '@/components/org/RoleFace';
 import { useSyncOrgTree } from '@/hooks/useSyncOrgTree';
 import { SessionScreen } from '../../session/[id]';
-import { parentName } from '@codecast/web/components/org/orgMeta';
+import { roleManagerNames } from '@codecast/web/components/org/orgMeta';
 import { canEditRole, scopeSeatOf } from '@codecast/web/lib/scopePage';
 import { ledgerLines, roleOnlineLedger } from '@codecast/web/components/consequential/roleOnline';
 import { autonomyOn } from '@codecast/shared/contracts/roleAutonomy';
@@ -118,7 +118,7 @@ export default function RoleScreen() {
         <RNText style={styles.body}>
           {charter ? charter : owns.length > 0 ? `This seat owns ${owns.join(', ')}.` : 'This seat owns the whole workspace.'}
           {charter && owns.length > 0 ? ` It covers ${owns.join(', ')}.` : ''}
-          {' '}It reports to {parentName(tree, role.reports_to)}.
+          {' '}It reports to {roleManagerNames(tree, role)}.
         </RNText>
         {role.status === 'retired' ? (
           <RNText style={styles.note}>This seat is retired. Its board is still here.</RNText>

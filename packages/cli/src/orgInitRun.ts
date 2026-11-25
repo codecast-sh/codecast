@@ -174,6 +174,12 @@ export async function showInputs(deps: OrgInitDeps, options: any): Promise<void>
   for (const g of inputs.git_roots) { const k = g.repo ?? g.git_root; const cur = byRepo.get(k) ?? { sessions: 0, roots: 0 }; cur.sessions += g.sessions; cur.roots++; byRepo.set(k, cur); }
   for (const [repo, v] of byRepo) console.log(`  ${fmt.muted("repo")} ${repo} ${fmt.muted(`· ${v.sessions} sessions${v.roots > 1 ? ` across ${v.roots} checkouts` : ""}`)}`);
   for (const r of inputs.org.roles) console.log(`  ${fmt.muted("role")} @${r.handle} ${r.name} ${fmt.muted(`· ${r.idle ? "idle" : `${r.idle_days}d since a scope event`} · ${r.wakes_7d.total} wakes/7d${r.wakes_7d.days_at_cap ? ` (${r.wakes_7d.days_at_cap} days at cap)` : ""}${r.overlaps.length ? ` · overlaps ${r.overlaps.map((o: any) => `@${o.handle}`).join(", ")}` : ""}`)}`);
+  // What each person did (org-people.md P5): the people pass reads these against each profile.
+  for (const p of inputs.people?.members ?? []) {
+    const counts = `${p.sessions} sessions · ${p.commits} commits · ${p.tasks_closed} tasks closed · ${p.tasks_open} open · ${p.decisions_answered} decisions · ${p.calls_led} calls led`;
+    console.log(`  ${fmt.muted("person")} ${p.name}${p.handle ? ` @${p.handle}` : ""} ${fmt.muted(`· ${p.profile.title || "no profile"} · ${counts}`)}`);
+    if (p.projects.length) console.log(`    ${fmt.muted(p.projects.map((x: any) => `${x.title} ${x.sessions}s/${x.tasks}t`).join(" · "))}`);
+  }
   if (inputs.org.projects_without_role.length) console.log(`  ${fmt.muted("no role:")} ${inputs.org.projects_without_role.map((p: any) => p.title).join(", ")}`);
   // Who answers for the work (I1, I2): the initiatives, then the before count.
   for (const i of inputs.coverage?.initiatives ?? []) {

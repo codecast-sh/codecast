@@ -32,6 +32,7 @@ import {
   type OrgRoleProposal,
 } from "./orgProposal";
 import type { OrgDiffField, OrgPartyRef, OrgScopeIds } from "./orgChange";
+import { evidenceWords, personOf } from "./orgPersonProfile";
 
 // ── Shapes ───────────────────────────────────────────────────────────────────
 
@@ -108,7 +109,7 @@ function valueKey(v: FieldText | null): string {
 }
 
 /** The fields that hold prose, whose before and after read as a passage diff. */
-const PROSE_KEY = /^(charter|says|goal|why|done_when)(:|$)/;
+const PROSE_KEY = /^(charter|says|goal|why|done_when|about)(:|$)/;
 
 // ── The sentence ─────────────────────────────────────────────────────────────
 
@@ -127,6 +128,7 @@ function subjectName(c: OrgChange, names?: OrgAskNames): string | null {
     case "project_meta": return project(c.project);
     case "file": return names?.plan?.(c.plan) ?? c.plan;
     case "file_session": return c.title?.trim() || names?.session?.(c.session) || c.session;
+    case "person_profile": return personOf(c);
     case "upgrade": return c.instance;
     case "plan_status": return c.title?.trim() || names?.plan?.(c.plan) || c.plan;
     case "task_status": return c.title?.trim() || c.task;
@@ -335,6 +337,19 @@ function fieldsOf(c: OrgChange, ctx: ChangeWordsCtx): Draft[] {
       return listRows("projects", "Carried by", NONE.project, c.projects.map(project), [], known("project_ids") ? titles(was!.project_ids) : undefined);
     }
     case "initiative_owner": return [field("owner", "Owned by", "ref", owner(c.owner, NONE.nobody), read("owner", party), !c.owner.trim())];
+    // Each proposed field before and after (the profile as it stood when posted), then what it was read from.
+    case "person_profile": {
+      const had = (k: "title" | "focus" | "about") => (c.before ? words(c.before[k], NONE.unset) : undefined);
+      const prose = (k: "title" | "focus" | "about", lab: string) => (c[k] === undefined ? [] : [field(k, lab, "text", words(c[k], NONE.unset), had(k), !c[k]!.trim())]);
+      return [
+        ...prose("title", "Title"),
+        ...prose("focus", "Focus"),
+        ...(c.labels === undefined ? [] : [field("labels", "Labels", "list", items(c.labels, NONE.nothing), c.before ? items(c.before.labels ?? [], NONE.nothing) : undefined, c.labels.length === 0)]),
+        ...prose("about", "About"),
+        set("evidence", "Read from", "text", text(evidenceWords(c.evidence))),
+        ...(c.evidence.projects.length ? [set("worked_on", "Worked on", "list", items(c.evidence.projects, NONE.project))] : []),
+      ];
+    }
     default: return [];
   }
 }
@@ -450,7 +465,7 @@ const BUCKET_WORDS = {
   priority: ["project priority", "project priorities"], charter: ["project charter", "project charters"],
   move: ["move", "moves"], area: ["area change", "area changes"], retire: ["retirement", "retirements"], rewrite: ["charter rewrite", "charter rewrites"],
   setting: ["setting", "settings"], record: ["record", "records"], goal: ["change to a goal", "changes to goals"],
-  session: ["session filed", "sessions filed"],
+  session: ["session filed", "sessions filed"], profile: ["profile", "profiles"],
 } as const;
 type Bucket = keyof typeof BUCKET_WORDS;
 
@@ -460,6 +475,7 @@ function bucketsOf(c: OrgChange): Bucket[] {
     case "projects": return c.changes.map((x) => (x.op === "create" ? "project" : "merge"));
     case "file": return ["file"];
     case "file_session": return ["session"];
+    case "person_profile": return ["profile"];
     case "project_meta": return [c.goal == null && c.success_metrics == null && c.non_goals == null && c.risks == null && !c.owner && c.priority ? "priority" : "charter"];
     case "move": return ["move"];
     case "scope": return ["area"];

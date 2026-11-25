@@ -134,7 +134,7 @@ export type OrgGraphProps = {
   canDrag?: (node: OrgLayoutNode) => boolean;
   /** Whether a dragged person may go under this person: the halo lights only
    *  where the move is allowed. Absent: anywhere the tree allows. */
-  canDropPerson?: (userId: string, managerId: string) => boolean;
+  canDropPerson?: (userId: string, target: OrgParentRef) => boolean;
   /** The Everything chart: drop a role's card on a person or another role to
    *  have it report there. Absent, its cards do not move. */
   onMoveRole?: (roleId: string, to: OrgParentRef, toTitle: string) => void;
@@ -344,9 +344,9 @@ function OrgGraphInner(props: OrgGraphProps) {
     }
     if (subject.kind === "person") {
       const p = subject.person;
-      if (ref.kind !== "user" || ref.user_id === p.user_id || ref.user_id === p.reports_to_user_id) return false;
-      if (orgPersonReparentMakesCycle(tree, p.user_id, ref.user_id)) return false;
-      return canDropPerson ? canDropPerson(p.user_id, ref.user_id) : true;
+      if ((ref.kind === "user" && ref.user_id === p.user_id) || (p.managers ?? []).some((m) => sameParent(m, ref))) return false;
+      if (orgPersonReparentMakesCycle(tree, p.user_id, ref)) return false;
+      return canDropPerson ? canDropPerson(p.user_id, ref) : true;
     }
     return false;
   }, [byId, tree, canDropPerson, marked, canDrag]);

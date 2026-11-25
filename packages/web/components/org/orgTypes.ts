@@ -33,8 +33,13 @@ export type OrgPerson = {
   image?: string;
   role: "admin" | "member" | "owner";
   is_me: boolean;
-  /** The member this person reports to on the chart, absent at the top. */
-  reports_to_user_id?: string;
+  /** Everyone this person reports to, people and roles, all equal
+   *  (org-people.md P2, P3); absent at the top. */
+  managers?: OrgReportsTo[];
+  /** The short profile (shared/contracts/personProfile.ts). */
+  title?: string;
+  focus?: string;
+  labels?: string[];
   presence?: "online" | "away" | "offline";
   counts: StateCounts;
   sessions: OrgSession[];
@@ -92,6 +97,9 @@ export type OrgRole = {
   handle: string;
   scope: OrgScope;
   reports_to: OrgReportsTo;
+  /** Everyone else it reports to, each equal to reports_to (org-people.md P3);
+   *  reports_to is only the line the chart draws it on. */
+  also_reports_to?: OrgReportsTo[];
   status: "active" | "paused" | "retired";
   charter?: string;
   anchor_id?: string;

@@ -1,4 +1,9 @@
-import { labelsOf, noteOrgChange, recordSubject, roleSubject, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
+import { labelsOf, noteOrgChange, recordSubject, roleSubject, whereOfBoundary, whereOfRecord, whereOfRole, withOrgChange } from "./lib/orgChangeLog";
+import { performSetProfile } from "./orgPeople";
+import { readPeopleEvidence } from "./lib/orgPeopleEvidence";
+import { personName } from "./lib/sessionTell";
+import { PROFILE_FIELDS, proposedProfile, type OrgPersonProfileChange } from "@codecast/shared/contracts/orgPersonProfile";
+import type { PersonProfile } from "@codecast/shared/contracts/personProfile";
 import { syncProjectTriggers } from "./lib/agentTaskRows";
 import { applyFile, applyFileSession, looseSessionsOf } from "./lib/orgSessionFiling";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
@@ -768,7 +773,8 @@ export async function computeAnalysisInputs(ctx: Ctx, userId: Id<"users">, teamI
   const evidence = await Promise.all(org.sessions.long_running.rows.map((r: any) => readSessionEvidence(ctx, r.id, r.started_at, now, work.handoff.projects)));
   org.sessions.long_running.rows = withSessionEvidence(org.sessions.long_running.rows, evidence, work.handoff.projects);
   const landing = await readLanding(ctx, userId, teamId, now, activity.repos, landingRecordsOf(activity.activity));
-  return mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, withLanding(activity.activity, landing), withUnplaced(activity.coverage, await readUnplaced(ctx, userId, teamId, now)), await readStatedGoals(await readGoalCandidates(ctx, userId, teamId, now), org.sessions.long_running.rows, label, ask));
+  const people = await readPeopleEvidence(ctx, userId, teamId, now, await readActivityWork(ctx, userId, teamId, now));
+  return { ...mergeAnalysisInputs(userId, teamId, label, work, org, signals, now, withLanding(activity.activity, landing), withUnplaced(activity.coverage, await readUnplaced(ctx, userId, teamId, now)), await readStatedGoals(await readGoalCandidates(ctx, userId, teamId, now), org.sessions.long_running.rows, label, ask)), people };
 }
 
 // One slice per call, so each read stays inside the execution limit on a
@@ -777,7 +783,7 @@ export const analysisPart = query({
   args: {
     api_token: v.optional(v.string()),
     team_id: v.optional(v.id("teams")),
-    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity"), v.literal("worktasks"), v.literal("use"), v.literal("landing"), v.literal("goals")),
+    part: v.union(v.literal("work"), v.literal("org"), v.literal("signals"), v.literal("activity"), v.literal("worktasks"), v.literal("use"), v.literal("landing"), v.literal("goals"), v.literal("people")),
     work: v.optional(v.any()),
     now: v.optional(v.number()),
     session: v.optional(v.id("conversations")),
@@ -807,6 +813,7 @@ export const analysisPart = query({
     if (args.part === "worktasks") return readActivityWork(ctx, userId, args.team_id, now);
     if (args.part === "activity") return computeAnalysisActivity(ctx, userId, args.team_id, now, { work: args.tasks as WorkTasks | undefined });
     if (args.part === "goals") return readGoalCandidates(ctx, userId, args.team_id, now);
+    if (args.part === "people") return readPeopleEvidence(ctx, userId, args.team_id, now, (args.tasks as WorkTasks | undefined) ?? await readActivityWork(ctx, userId, args.team_id, now));
     if (args.part === "landing") return readLanding(ctx, userId, args.team_id, now, args.repos ?? [], (args.records as RecordRef[] | undefined) ?? []);
     if (!args.work) throw new Error("the org slice needs the work slice's handoff");
     return computeAnalysisOrg(ctx, userId, args.team_id, now, args.work as AnalysisHandoff);
@@ -830,10 +837,12 @@ export const analysisInputs = action({
       unplacedOrUnread(ctx.runQuery((api as any).orgUnplaced.part, { ...args, now })),
     ]);
     if (!work) return null;
-    const [org, signals, goalRead] = await Promise.all([
+    const [org, signals, goalRead, people] = await Promise.all([
       ctx.runQuery(part, { ...args, part: "org", now, work: work.handoff }),
       ctx.runQuery(part, { ...args, part: "signals", now, work: work.handoff }),
       ctx.runQuery(part, { ...args, part: "goals", now }),
+      // What each person did, in its own read budget (org-people.md P5).
+      ctx.runQuery(part, { ...args, part: "people", now, tasks }),
     ]);
     if (!org || !signals) return null;
     const { label, user_id, ...rest } = signals;
@@ -847,7 +856,7 @@ export const analysisInputs = action({
       goalRead ? readStatedGoals(goalRead, org.sessions.long_running.rows, label, goalModelAsk(gate)) : undefined,
     ]);
     org.sessions.long_running.rows = withSessionEvidence(org.sessions.long_running.rows, evidence, work.handoff.projects);
-    return mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity && landing ? withLanding(activity.activity, landing) : activity?.activity, activity?.coverage ? withUnplaced(activity.coverage, unplaced) : undefined, goals);
+    return { ...mergeAnalysisInputs(user_id, args.team_id, label, work, org, rest, now, activity && landing ? withLanding(activity.activity, landing) : activity?.activity, activity?.coverage ? withUnplaced(activity.coverage, unplaced) : undefined, goals), people };
   },
 });
 
@@ -874,15 +883,20 @@ async function resolveReportsTo(ctx: Ctx, userId: Id<"users">, boundary: Boundar
   if (!trimmed || trimmed.toLowerCase() === "me") return { kind: "user" as const, user_id: userId };
   const role = roleByRef(await rolesInBoundary(ctx, boundary), trimmed);
   if (role) return { kind: "role" as const, role_id: role._id as Id<"org_roles"> };
-  // A person inside the boundary: by id, name or email, else by the handle
-  // the roster shows them under (@ashot), read the way chat mentions read it.
+  const person = await memberByRef(ctx, userId, boundary, trimmed);
+  if (person) return { kind: "user" as const, user_id: person._id as Id<"users"> };
+  throw new Error(`reports_to "${trimmed}" is neither a role nor a member of this workspace`);
+}
+
+/** A person inside the boundary: by id, name or email, else by the handle
+ *  the roster shows them under (@ashot), read the way chat mentions read it. */
+export async function memberByRef(ctx: Ctx, userId: Id<"users">, boundary: Boundary, ref: string): Promise<any | null> {
+  const trimmed = ref.trim();
   const candidates: any[] = (boundary.team_id
     ? await Promise.all((await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", boundary.team_id)).collect()).map((m: any) => ctx.db.get(m.user_id)))
     : [await ctx.db.get(userId)]).filter(Boolean);
   const lc = trimmed.toLowerCase();
-  const person = candidates.find((u) => String(u._id) === trimmed || (u.name ?? "").toLowerCase() === lc || (u.email ?? "").toLowerCase() === lc) ?? matchHandle(candidates, trimmed);
-  if (person) return { kind: "user" as const, user_id: person._id as Id<"users"> };
-  throw new Error(`reports_to "${trimmed}" is neither a role nor a member of this workspace`);
+  return candidates.find((u) => String(u._id) === trimmed || (u.name ?? "").toLowerCase() === lc || (u.email ?? "").toLowerCase() === lc) ?? matchHandle(candidates, trimmed);
 }
 
 async function resolveProposalScope(ctx: Ctx, boundary: Boundary, scope: OrgRoleProposal["scope"]) {
@@ -1662,6 +1676,25 @@ export async function applyInitiativeOwner(ctx: Ctx, userId: Id<"users">, bounda
   if (!r) return { status: "applied", note: `${p.owner} already owns ${initiative.short_id} "${initiative.title}"${sources}` };
   return { status: "applied", note: `${p.owner} now owns the goal "${initiative.title}" (${initiative.short_id})${sources}${coverNote(r.scope)}` };
 }
+// A person's profile read from their work (org-people.md P5), through the
+// one profile writer, which lets only the person or a team admin write it.
+export async function applyPersonProfile(ctx: Ctx, userId: Id<"users">, boundary: Boundary, p: OrgPersonProfileChange, _opts: ApplyOpts): Promise<ApplyResult> {
+  const team_id = boundary.team_id;
+  if (!team_id) throw new Error("A profile lives on a team membership; this workspace has no team");
+  const user = (p.user_id ? await ctx.db.get(p.user_id as Id<"users">) : null) ?? (await memberByRef(ctx, userId, boundary, p.person));
+  if (!user) throw new Error(`${p.person} is not a member of this team`);
+  const membership = async () => ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", user._id).eq("team_id", team_id)).first();
+  const was: any = await membership();
+  const r = await performSetProfile(ctx, userId, { team_id, user_id: user._id, ...proposedProfile(p) }, Date.now());
+  const name = personName(user);
+  if (!r.changed) return { status: "applied", note: `${name}'s profile already reads that way` };
+  const now: any = await membership();
+  const moved = PROFILE_FIELDS.filter((k) => JSON.stringify(was?.[k] ?? null) !== JSON.stringify(now?.[k] ?? null));
+  const side = (m: any) => Object.fromEntries(moved.map((k) => [k, m?.[k] ?? null])) as PersonProfile;
+  await noteOrgChange(ctx, userId, whereOfBoundary(boundary, userId), { kind: "person_profile", subject: { type: "person", id: String(was._id), label: name }, before: { profile: side(was) }, after: { profile: side(now) } });
+  return { status: "applied", note: `${name}'s profile: ${moved.join(", ")}` };
+}
+
 /** What the owner role's area gained, and the sessions it took over with it, as the core reported them. */
 const coverNote = (scope: { added: string[]; took_over?: string } | null | undefined) => `${scope?.added.length ? `; the owner now looks after ${scope.added.length} more project${scope.added.length === 1 ? "" : "s"}` : ""}${scope?.took_over ? `; ${scope.took_over}` : ""}`;
 const andListOf = (xs: string[]) => xs.length <= 1 ? xs.join("") : `${xs.slice(0, -1).join(", ")} and ${xs[xs.length - 1]}`;
@@ -1700,6 +1733,7 @@ async function applyOrgChangeCore(ctx: Ctx, userId: Id<"users">, boundary: Bound
     case "initiative_projects": return applyInitiativeProjects(ctx, userId, boundary, change, opts);
     case "initiative_owner": return applyInitiativeOwner(ctx, userId, boundary, change, opts);
     case "initiative_shape": return applyInitiativeShape(ctx, userId, boundary, change, opts);
+    case "person_profile": return applyPersonProfile(ctx, userId, boundary, change, opts);
   }
 }
 
