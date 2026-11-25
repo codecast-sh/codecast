@@ -441,6 +441,7 @@ export function useSyncInboxSessions() {
     if (!isSyncHost) return;
     const store = useInboxStore;
     return startLivenessHold({
+      store,
       now: Date.now,
       hydrated: () => store.getState().clientStateInitialized,
       sessions: () => store.getState().sessions,

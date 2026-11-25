@@ -28,6 +28,8 @@ export function cachedFactsAsOf(sessions: Record<string, { last_heartbeat?: numb
 }
 
 export type LivenessHoldIO = {
+  /** What outlives a remount of the controller (the window's store); defaults to this IO. */
+  store?: object;
   now: () => number;
   /** Store reads and the two transitions. */
   hydrated: () => boolean;
@@ -48,10 +50,24 @@ export type LivenessHoldIO = {
   onStore: (fn: () => void) => () => void;
 };
 
+// When a controller on a store last stopped with its facts current (socket up,
+// nothing held), keyed by LivenessHoldIO.store. The store outlives its
+// feeders: the join flow's SetupScreen mounts them and "Open team" remounts
+// them under the dashboard shell, so the next controller starts on facts the
+// live subscription kept current a moment ago, not a launch from cache
+// (ct-101309: "Syncing" on every page for 18s after joining a team).
+const currentAsOf = new WeakMap<object, number>();
+
 export function startLivenessHold(io: LivenessHoldIO): () => void {
-  let lastAlive = io.now();
+  const store = io.store ?? io;
+  const handedOff = currentAsOf.get(store) ?? null;
+  currentAsOf.delete(store);
+  const sinceHandoff = handedOff == null ? -1 : io.now() - handedOff;
+  const remount = sinceHandoff >= 0 && sinceHandoff <= LIVENESS_SUSPEND_GAP_MS;
+  let lastAlive = remount ? handedOff! : io.now();
   let aliveHidden = io.hidden?.() ?? false;
-  let booted = false;
+  // A remount inherits the stopped controller's facts; only a real launch boots from cache.
+  let booted = remount;
   let probing: AbortController | null = null;
 
   const probe = () => {
@@ -110,6 +126,8 @@ export function startLivenessHold(io: LivenessHoldIO): () => void {
   // follower's placement clock and every session that ran since read as
   // Working until a reload.
   return () => {
+    // Only a controller that read the cache (booted) can vouch for the facts.
+    if (booted && io.connected() && io.heldAt() == null) currentAsOf.set(store, io.now());
     offStore();
     for (const off of offs) off();
     probing?.abort();
