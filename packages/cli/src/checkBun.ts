@@ -31,7 +31,7 @@ import { peakOfPids, recordPeak } from "./watcherMemory.js";
 import { unloadOwnLaunchdJob } from "./launchdJob.js";
 import { isPidAlive } from "./workspace/chrome.js";
 import {
-  ASK_HEARTBEAT_MS, DEAD_GRACE_MS, STUCK_PASS_MS, isWatcherProcess, lockFor, logPath, readWatchState, removeOwnState, repoOf, sleep,
+  checkProject, readChecker, runWatcher, ASK_HEARTBEAT_MS, DEAD_GRACE_MS, STUCK_PASS_MS, isWatcherProcess, lockFor, logPath, readWatchState, removeOwnState, repoOf, sleep,
   lastLogLine, startCheckProcess, startWhenSlotFrees, stopWatcher, watchDir, writeWatchState,
   type CheckProject, type CheckResult, type WatchState,
 } from "./check.js";
@@ -285,6 +285,18 @@ export async function runBunCheck(root: string, project: string, tsconfig: strin
 // ---------------------------------------------------------------------------
 // The ask
 // ---------------------------------------------------------------------------
+
+type AskOpts = { fresh?: boolean; protect?: ReadonlySet<string>; note?: (line: string) => void };
+
+/** One project's answer from whichever checker the tree's config names. */
+export function askCheck(target: CheckProject, root: string, opts: AskOpts): Promise<CheckResult> {
+  return readChecker(root) === "bun" ? checkWithBun(target, root, opts) : checkProject(target, root, opts);
+}
+
+/** The body of `cast check-watch`: a watcher, or with --bun one bun run. */
+export function runCheckProcess(root: string, project: string, tsconfig: string, o: { bun?: string; run?: string }): Promise<void> {
+  return o.bun ? runBunCheck(root, project, tsconfig, o.bun, o.run ?? String(process.pid)) : runWatcher(root, project, tsconfig);
+}
 
 /**
  * The diagnostics for one project from a bun run: one in flight on the same

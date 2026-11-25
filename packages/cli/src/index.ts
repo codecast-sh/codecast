@@ -5643,8 +5643,8 @@ program
 Projects are named in the tree's ${CHECK_CONFIG_REL_PATH} ([projects] name = "path/tsconfig.json");
 with no project given, all of them. Without that file, the tsconfig nearest this directory.
 A project can also be a directory or a tsconfig path. One watcher serves every session on the
-tree and re-checks only what changed, so an answer takes seconds. A top-level checker = "bun"
-in that file runs one \`bun check\` per ask instead (bun 1.4.4+; CAST_CHECK_BUN names the binary).
+tree and re-checks only what changed, so an answer takes seconds. checker = "bun" at its top
+runs one \`bun check\` per ask instead (\`cast guide check\`).
 
   cast check                            every project
   cast check cli web                    two projects by name
@@ -5661,12 +5661,11 @@ Whenever a failure has a next action, the last stderr line is "cast: hint: <next
   .option("--changed-since <ref>", "Only the projects whose program holds a file changed since <ref> (committed or not)")
   .option("--json", "Machine-readable: { project, errors, diagnostics } per project")
   .action(async (projects: string[], o: { fresh?: boolean; json?: boolean; changedSince?: string }) => {
-    const { checkProject, gitLines, projectsTouching, readChecker, repoRoot, resolveProjects, watchDir } = await import("./check.js");
+    const { gitLines, projectsTouching, repoRoot, resolveProjects, watchDir } = await import("./check.js");
+    const { askCheck } = await import("./checkBun.js");
     const root = repoRoot();
     let wanted;
-    let checker;
     try {
-      checker = readChecker(root);
       wanted = resolveProjects(root, projects);
       if (o.changedSince) {
         const changed = [
@@ -5694,8 +5693,7 @@ Whenever a failure has a next action, the last stderr line is "cast: hint: <next
     for (const target of wanted) {
       const project = target.name;
       try {
-        const askOpts = { fresh: o.fresh, protect, note: (line: string) => { if (!o.json) console.error(fmt.muted(`  ${line}`)); } };
-        const r = checker === "bun" ? await (await import("./checkBun.js")).checkWithBun(target, root, askOpts) : await checkProject(target, root, askOpts);
+        const r = await askCheck(target, root, { fresh: o.fresh, protect, note: (line) => { if (!o.json) console.error(fmt.muted(`  ${line}`)); } });
         results.push(r);
         // A watcher's first pass (whoever started it) was built from the tree as it is, so errors
         // that look phantom there are real: suggesting --fresh again would only restart it in a loop.
@@ -5706,7 +5704,7 @@ Whenever a failure has a next action, the last stderr line is "cast: hint: <next
           if (r.diagnostics.trim()) console.log(r.diagnostics.trimEnd());
           const age = r.passAgeMs < 60_000 ? `${Math.round(r.passAgeMs / 1000)}s` : `${Math.round(r.passAgeMs / 60_000)}m`;
           const phantom = phantomCount ? `, ${phantomCount} name${phantomCount === 1 ? "s" : ""} what exists on disk` : "";
-          const how = r.checker === "bun" ? `bun check ${((r.runMs ?? 0) / 1000).toFixed(1)}s${r.started ? "" : ", shared with another ask"}` : `pass ${age} old${r.started ? ", watcher started by this call" : ""}${phantom}`;
+          const how = r.checker ? `bun check ${(r.runMs! / 1000).toFixed(1)}s${r.started ? "" : ", shared"}` : `pass ${age} old${r.started ? ", watcher started by this call" : ""}${phantom}`;
           console.log(`${r.errors === 0 ? fmt.success("✓") : fmt.error("✗")} ${project}: ${r.errors} error${r.errors === 1 ? "" : "s"} ${fmt.muted(`(${how})`)}`);
         }
       } catch (err) {
@@ -5725,15 +5723,11 @@ Whenever a failure has a next action, the last stderr line is "cast: hint: <next
 program
   .command("check-watch <root> <project> <tsconfig>", { hidden: true })
   .description("Run one typecheck watcher in the foreground (internal; `cast check` starts these detached)")
-  .option("--bun <bin>", "Run one `bun check` with this bun instead of watching (checker = \"bun\")")
-  .option("--run <id>", "The bun run's id, which the asks waiting on it read its result by")
+  .option("--bun <bin>", "One bun check run instead")
+  .option("--run <id>", "Its id")
   .action(async (root: string, project: string, tsconfig: string, o: { bun?: string; run?: string }) => {
-    if (o.bun) {
-      const { runBunCheck } = await import("./checkBun.js");
-      return runBunCheck(root, project, tsconfig, o.bun, o.run ?? String(process.pid));
-    }
-    const { runWatcher } = await import("./check.js");
-    await runWatcher(root, project, tsconfig);
+    const { runCheckProcess } = await import("./checkBun.js");
+    await runCheckProcess(root, project, tsconfig, o);
   });
 
 program
