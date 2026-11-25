@@ -182,8 +182,8 @@ describe("the status from GitHub", () => {
     expect(db._tables.pull_requests[0].approval).toMatchObject({ head_sha: HEAD, state: "pending", judged_files: ["outreach/line/change/land.cast"] });
     expect(db._tables.pull_requests[0].approval.judged_key).toMatch(/^[0-9a-f]{40}$/);
     // The whole diff (all 250 files) has its own patch id.
-    expect(db._tables.pull_requests[0].approval.whole_key).toMatch(/^[0-9a-f]{40}$/);
-    expect(db._tables.pull_requests[0].approval.whole_key).not.toBe(db._tables.pull_requests[0].approval.judged_key);
+    expect(db._tables.pull_requests[0].approval.whole_key).toMatch(/^whole:[0-9a-f]{40}$/);
+    expect(db._tables.pull_requests[0].approval.whole_key).not.toBe(`whole:${db._tables.pull_requests[0].approval.judged_key}`);
   });
 
   test("a GitHub read error keeps the engineers the gate last read; a read file replaces them", async () => {
@@ -589,7 +589,7 @@ describe("the approval card", () => {
     expect(await (settle as any)._handler(w.ctx, mech)).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
     const [card] = cards(w.db);
     // Keyed to the whole diff, never to the judged diff's constant "none".
-    expect(card.approval).toMatchObject({ judged_key: "w1", reason: "mechanism" });
+    expect(card.approval).toMatchObject({ judged_key: "whole:w1", reason: "mechanism" });
     await answer(w, card, 20);
     expect(await (settle as any)._handler(w.ctx, mech)).toMatchObject({ state: "success", description: `approved by Ashot (${card.short_id})` });
     // A rebase: new head, the same whole diff.
@@ -600,7 +600,7 @@ describe("the approval card", () => {
     const pushed = "d".repeat(40);
     reviewedAt(w, pushed, true);
     expect(await (settle as any)._handler(w.ctx, { ...mech, head_sha: pushed, whole_key: "w2" })).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
-    expect(cards(w.db).map((c: any) => [c.status, c.approval.judged_key])).toEqual([["answered", "w1"], ["pending", "w2"]]);
+    expect(cards(w.db).map((c: any) => [c.status, c.approval.judged_key])).toEqual([["answered", "whole:w1"], ["pending", "whole:w2"]]);
   });
 
   test("a card about the judged files covers them only: a mechanism a later push adds asks again", async () => {
@@ -616,11 +616,25 @@ describe("the approval card", () => {
     expect(await (settle as any)._handler(w.ctx, { ...args, head_sha: pushed, whole_key: "w2", requested_by: "Jason" })).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
   });
 
+  test("every changed file judged: the two patch ids are equal, and a judged-files card's yes still does not cover a mechanism", async () => {
+    const w = world();
+    const allJudged = { ...args, whole_key: "k1", requested_by: "Jason" };
+    await (settle as any)._handler(w.ctx, allJudged);
+    const [card] = cards(w.db);
+    expect(card.approval).toMatchObject({ judged_key: "k1", reason: "judged" });
+    await answer(w, card, 20);
+    expect(await (settle as any)._handler(w.ctx, allJudged)).toMatchObject({ state: "success" });
+    // The review now calls the same diff a mechanism: the engineer who reads one is carded.
+    reviewedAt(w, HEAD, true);
+    expect(await (settle as any)._handler(w.ctx, allJudged)).toMatchObject({ state: "pending", description: "needs Ashot: the review called it a mechanism" });
+    expect(cards(w.db).at(-1)).toMatchObject({ status: "pending", asked_user_ids: ["u_ashot"], approval: { judged_key: "whole:k1", reason: "mechanism" } });
+  });
+
   test("a Ship on the run's own card approves its judged diff and the whole diff it showed, so it covers a mechanism until code changes", async () => {
-    const gateCard = { _id: "sd_gate", short_id: "sd-7", workflow_run_id: "run1", options: [{ label: "Ship" }, { label: "Revise" }], conversation_id: "c_log", task_id: "t1", approval: { repository: REPO, pr_number: 7, judged_key: "k1", whole_key: "w1", files: args.judged } };
+    const gateCard = { _id: "sd_gate", short_id: "sd-7", workflow_run_id: "run1", options: [{ label: "Ship" }, { label: "Revise" }], conversation_id: "c_log", task_id: "t1", approval: { repository: REPO, pr_number: 7, judged_key: "k1", whole_key: "whole:w1", files: args.judged } };
     const w = world({ workflow_runs: [run(reviewed(true))], session_decisions: [{ ...gateCard, status: "answered" }] });
     await settleCardApproval(w.ctx as any, gateCard as any, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u_jason" as any }, 20);
-    expect(w.db._tables.change_approvals.map((a: any) => a.judged_key)).toEqual(["k1", "w1"]);
+    expect(w.db._tables.change_approvals.map((a: any) => a.judged_key)).toEqual(["k1", "whole:w1"]);
     expect(await (settle as any)._handler(w.ctx, { ...args, whole_key: "w1" })).toMatchObject({ state: "success", description: "approved by Jason Benn (sd-7)" });
     const pushed = "d".repeat(40);
     reviewedAt(w, pushed, true);

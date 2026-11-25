@@ -216,14 +216,15 @@ async function withSides(repository: string, token: string, files: PRPath[], bas
 /**
  * The key of the pull request's whole diff against its merge base (patch-id --verbatim, as the judged diff's): what a
  * card that read the change whole approves, so a pure rebase carries it and any code change asks again. When a file's
- * diff cannot be rebuilt (binary, too large, unreadable), the head itself, so every push asks again.
+ * diff cannot be rebuilt (binary, too large, unreadable), undefined: settle then keys it to the head, so every push
+ * asks again.
  */
-async function wholeKey(repository: string, token: string, paths: PRPath[], base: string, head: string): Promise<string> {
+async function wholeKey(repository: string, token: string, paths: PRPath[], base: string, head: string): Promise<string | undefined> {
   try {
     const all = pathDiffsOf(await withSides(repository, token, paths, base, head, () => true), () => true);
-    return "unreadable" in all ? `head:${head}` : await diffKey(all.diffs);
+    return "unreadable" in all ? undefined : await diffKey(all.diffs);
   } catch {
-    return `head:${head}`;
+    return undefined;
   }
 }
 
@@ -251,7 +252,7 @@ export type PullPeople = {
 export type PullRead =
   | { open: false }
   | { open: true; head_sha: string; unreadable: string; judges?: string[]; people: PullPeople }
-  | { open: true; head_sha: string; judged: string[]; key: string; whole_key: string; judges: string[]; reverts: boolean; requested_by?: string; people: PullPeople };
+  | { open: true; head_sha: string; judged: string[]; key: string; whole_key?: string; judges: string[]; reverts: boolean; requested_by?: string; people: PullPeople };
 
 /** Main's engineers file: `<codecast user id> <name>` a line, blank and "#" lines skipped. */
 export function parseEngineers(text: string): Array<{ user_id: string; name: string }> {
@@ -300,7 +301,7 @@ export async function readPull(repository: string, prNumber: number, token: stri
     const messages = await prMessages(repository, token, prNumber);
     const asker = requestedBy(messages);
     // The Captain's exemption is for a pull request of reverts only: one other commit and it is judged like any.
-    return { open: true, head_sha: head, judged, key, whole_key, judges, reverts: messages.length > 0 && messages.every((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), people };
+    return { open: true, head_sha: head, judged, key, ...(whole_key ? { whole_key } : {}), judges, reverts: messages.length > 0 && messages.every((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), people };
   } catch (error) {
     return { open: true, head_sha: head, unreadable: `GitHub (${(error instanceof Error ? error.message : String(error)).slice(0, 60)})`, people };
   }
@@ -326,7 +327,7 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
   const verdict: ApprovalVerdict & { context: string } = await ctx.runMutation(internal.changeApprovals.settle, {
     repository, pr_number: args.pr_number, head_sha: read.head_sha,
     ...("unreadable" in read ? { unreadable: read.unreadable } : {
-      judged: read.judged, key: read.key, whole_key: read.whole_key,
+      judged: read.judged, key: read.key, ...(read.whole_key ? { whole_key: read.whole_key } : {}),
       ...(read.reverts ? { reverts: true } : {}),
       ...(read.requested_by ? { requested_by: read.requested_by } : {}),
     }),
@@ -507,7 +508,9 @@ export const settle = internalMutation({
     // about the judged files cover those files while their diff is unchanged, never a mechanism. The whole diff's: a card
     // that read the change whole (a mechanism, no review to say, the run's own card) covers all of it while the whole
     // diff is unchanged, so a pure rebase carries it and any code change asks again. Unread, the head stands for it.
-    const wholeKey = args.whole_key ?? `head:${args.head_sha}`;
+    // Whole keys are namespaced (`whole:`, `head:`) apart from judged-diff keys: when every changed file is judged the two
+    // patch ids are equal, and a yes to the judged files must never read as a yes to the change whole.
+    const wholeKey = args.whole_key ? `whole:${args.whole_key}` : `head:${args.head_sha}`;
     const keyed = async (k: string | undefined): Promise<Doc<"change_approvals">[]> => (k === undefined ? [] : (await ctx.db
       .query("change_approvals")
       .withIndex("by_pr_key", (q) => q.eq("repository", repository).eq("pr_number", args.pr_number).eq("judged_key", k))
@@ -561,8 +564,8 @@ export const settle = internalMutation({
       await patchPullRequest(ctx, row._id, {
         approval: {
           head_sha: args.head_sha, state: verdict.state, description: verdict.description,
-          ...(key !== undefined ? { judged_key: key, judged_files: judged } : {}),
-          ...(args.whole_key ? { whole_key: args.whole_key } : {}),
+          // Both keys as approvals bind to them: the run's own card stamps them (lib/changeApprovalRows approvalStampFor).
+          ...(key !== undefined ? { judged_key: key, judged_files: judged, whole_key: wholeKey } : {}),
           ...(run ? { run_id: run._id } : {}),
           ...(typeof mechanism === "boolean" ? { mechanism } : {}),
           ...(captainRevert ? { captain_revert: true } : {}),
