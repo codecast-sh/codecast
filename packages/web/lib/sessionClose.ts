@@ -2,12 +2,15 @@
 // One decision for every Close surface (the card button, session.close, the
 // menu, the phone), so the button never promises what the gesture does not do.
 // Close is dormancy, not retirement: a session in flight (shared
-// closeInFlightReason), or the lead of a nested group any member of which is,
-// is set aside instead of stopped. This file only gathers the facts from the
+// closeInFlightReason), or the lead of a nested group any member of which a
+// close would take down is, is set aside instead of stopped. A close takes down
+// only its Task subagents and teammates (shared cascadeTakesDownRow); a
+// spawned child with its own process stays up. This file only gathers the facts from the
 // rows the client holds; the server gathers the same facts from its database
 // (convex lib/closeAside) and asks the same function. Imports by relative path
 // only: the phone bundles this file (Metro maps `@/` to the mobile package).
 import { closeInFlightReason, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts, type InFlightReason, type LoopState } from "@codecast/shared/contracts";
+import { cascadeTakesDownRow, type HoldFacts } from "@codecast/shared/contracts/closeCascade";
 import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "@codecast/convex/convex/ccAccountsShared";
 import { sessionLiveAt } from "./liveness";
 
@@ -21,6 +24,9 @@ export type CloseFacts = {
   /** A codecast flow run it started, with station sessions of its own, that
    *  has not reported yet. */
   waitingOnRun: boolean;
+  /** Agents under it a stop takes down with it (closeTakesDownOf): its Task
+   *  subagents and teammates. */
+  takesDown: number;
 };
 
 export type CloseKind = "aside" | "awaiting" | "keeps_background" | "keeps_loop" | "keeps_limit" | "keeps_triggers" | "waits_on_run" | "clears";
@@ -40,6 +46,7 @@ export function closeKindOf(f: CloseFacts): CloseKind {
 export const closeSetsAside = (f: CloseFacts) => f.inFlight !== null;
 
 export function closeTooltip(f: CloseFacts): string {
+  const them = f.takesDown === 0 ? "it" : f.takesDown === 1 ? "it and the agent under it" : `it and the ${f.takesDown} agents under it`;
   switch (closeKindOf(f)) {
     case "aside": return "Close: hides it, lets it finish";
     case "awaiting": return "Close: hides it; it still waits on you";
@@ -47,10 +54,10 @@ export function closeTooltip(f: CloseFacts): string {
     case "keeps_loop": return "Close: hides it, keeps its loop running";
     case "keeps_limit": return "Close: hides it, picks up when its limit resets";
     case "keeps_triggers":
-      if (f.triggers === 0) return "Close: stops it, comes back on its next message";
-      return `Close: stops it, keeps its ${f.triggers === 1 ? "trigger, comes back when it fires" : `${f.triggers} triggers, comes back when one fires`}`;
-    case "waits_on_run": return "Close: stops it, comes back when its run reports";
-    case "clears": return "Close: stops it, clears it from the list";
+      if (f.triggers === 0) return `Close: stops ${them}, comes back on its next message`;
+      return `Close: stops ${them}, keeps its ${f.triggers === 1 ? "trigger, comes back when it fires" : `${f.triggers} triggers, comes back when one fires`}`;
+    case "waits_on_run": return `Close: stops ${them}, comes back when its run reports`;
+    case "clears": return `Close: stops ${them}, clears ${f.takesDown ? "them" : "it"} from the list`;
   }
 }
 
@@ -99,20 +106,42 @@ export function inFlightFactsOfRow(row: CloseRow, now: number, pendingSend = fal
   };
 }
 
+/** What a child its lead's close leaves up still holds (shared HoldFacts),
+ *  from the row: its in-flight facts, a live heartbeat, an armed trigger. The
+ *  server gathers the same from its database (convex lib/closeAside holdFactsOnServer). */
+export function holdFactsOfRow(row: CloseRow, now: number): HoldFacts {
+  return {
+    ...inFlightFactsOfRow(row, now),
+    processAlive: rowHeartbeatAliveAt(row, now),
+    triggerArmed: (row.armed_trigger_kind ?? "none") !== "none",
+  };
+}
+
 type NestedRow = CloseRow & Parameters<typeof nestParentIdOf>[0];
 
-/** A member of the nested group under `id` (a Task subagent or a teammate:
- *  the group a close or kill takes down with its lead, nestParentIdOf) is in
- *  flight by the same verdict. */
+/** The members of the nested group under `id` (nestParentIdOf) that a close
+ *  of it takes down: its Task subagents and teammates, not already
+ *  closed or killed. The same rule store closeInDraft stamps by and the
+ *  server's cascade and aside scan read (shared cascadeTakesDownRow). */
+export function closeTakesDownOf(rows: Iterable<NestedRow>, id: string): NestedRow[] {
+  const out: NestedRow[] = [];
+  for (const r of rows) {
+    if (nestParentIdOf(r) === id && cascadeTakesDownRow(r as any, "inbox_dismissed_at", { forceKill: true, close: true, queued: !!r.has_pending })) out.push(r);
+  }
+  return out;
+}
+
+/** A member a close of `id` would take down (closeTakesDownOf) is in flight
+ *  by the same verdict. A spawned child mid-turn is not: the close leaves it up. */
 export function nestedInFlightOf(rows: Iterable<NestedRow>, id: string, now: number): boolean {
-  for (const r of rows) if (nestParentIdOf(r) === id && closeInFlightReason(inFlightFactsOfRow(r, now)) !== null) return true;
-  return false;
+  return closeTakesDownOf(rows, id).some((r) => closeInFlightReason(inFlightFactsOfRow(r, now)) !== null);
 }
 
 /** The facts of one row at `now`. `armedTriggers` is the roster's count of
  *  armed triggers into it; `pendingSend` a send this window has not seen
- *  land; `nestedInFlight` a member of its nested group in flight (nestedInFlightOf). */
-export function closeFactsOf(row: CloseRow, armedTriggers: number, now: number, pendingSend = false, nestedInFlight = false): CloseFacts {
+ *  land; `nestedInFlight` a member of its nested group in flight (nestedInFlightOf);
+ *  `takesDown` how many members a stop takes down (closeTakesDownOf). */
+export function closeFactsOf(row: CloseRow, armedTriggers: number, now: number, pendingSend = false, nestedInFlight = false, takesDown = 0): CloseFacts {
   // The row says a trigger is armed before the roster has loaded it.
   const rowArmed = (row.armed_trigger_kind ?? "none") !== "none" ? 1 : 0;
   const facts = inFlightFactsOfRow(row, now, pendingSend);
@@ -121,5 +150,6 @@ export function closeFactsOf(row: CloseRow, armedTriggers: number, now: number, 
     role: !!row.persistent || !!row.standing_role_id,
     triggers: Math.max(armedTriggers, rowArmed),
     waitingOnRun: runLiveOf(row) && !facts.inProcessRun,
+    takesDown,
   };
 }

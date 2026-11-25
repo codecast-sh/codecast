@@ -190,22 +190,24 @@ describe("a worker waiting in its fleet's queue is a wake", () => {
     expect(kills).toEqual([]);
   });
 
-  test("closing its lead (and the worker, as the client sends) sets both aside and keeps the queued start", async () => {
+  test("closing its lead closes only the lead: the worker has its own process, keeps its queued start and stands as its own card", async () => {
     const s = await withQueued();
     const ts = Date.now();
     await s.as.mutation(api.dispatch.dispatch, { action: "closeSession", args: [String(s.ids.lead)], patches: { conversations: {
       [String(s.ids.lead)]: { inbox_dismissed_at: ts, inbox_closed_at: ts },
-      [String(s.worker)]: { inbox_dismissed_at: ts, inbox_closed_at: ts },
+      [String(s.worker)]: { inbox_adopted_at: ts },
     } } });
     const lead = await s.row(s.ids.lead);
-    expect(lead.inbox_dismissed_at).toBeUndefined();
-    expect(lead.inbox_stashed_at).toBe(ts);
+    expect(lead.inbox_closed_at).toBe(ts);
+    expect(lead.inbox_dismissed_at).toBe(ts);
     const w = await s.row(s.worker);
     expect(w.subagent_slot).toBe("queued");
     expect(w.subagent_queued_start).toBeDefined();
+    expect(w.inbox_adopted_at).toBe(ts);
     // Not reaped: no teardown for the queued worker.
     const kills = await s.t.run(async (ctx) => (await ctx.db.query("daemon_commands").collect()).filter((c: any) => c.command === "kill_session").map((c: any) => JSON.parse(c.args).conversation_id));
     expect(kills).not.toContain(String(s.worker));
     expect(w.inbox_dismissed_at).toBeUndefined();
+    expect(w.inbox_closed_at).toBeUndefined();
   });
 });

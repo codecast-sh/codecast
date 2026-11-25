@@ -269,6 +269,22 @@ describe("applyCargoFields (sync-log-cargo E6)", () => {
     useInboxStore.getState().applyCargoFields("tasks", "t1", {}, ["assignee"]);
     expect((useInboxStore.getState() as any).pending["tasks:t1:assignee"]).toBeUndefined();
   });
+  test("a close adoption the server overrides settles to the server's value when its write is acknowledged", () => {
+    // The client painted inbox_adopted_at; the server's dispatch wrote the row
+    // with its own value (unset) instead, in the same transaction it acks.
+    useInboxStore.setState({
+      sessions: { c1: { _id: "c1", inbox_adopted_at: 77 } },
+      pending: { "sessions:c1:inbox_adopted_at": { type: "field", value: 77, ts: 1, ack: [{ s: "user:u1", p: 5 }] } },
+    } as any);
+    // The log page holding that write: its acks retire first (useSyncChangeFeed),
+    // then its cargo, the server's write of the row, applies over no lock.
+    useInboxStore.getState().retireAckedPending("user:u1", 5);
+    useInboxStore.getState().applyCargoFields("sessions", "c1", {}, ["inbox_adopted_at"]);
+    const s = useInboxStore.getState() as any;
+    expect(s.pending["sessions:c1:inbox_adopted_at"]).toBeUndefined();
+    expect(s.sessions.c1.inbox_adopted_at ?? null).toBeNull();
+  });
+
   test("sessions projection stamps are stripped from cargo like every other channel", () => {
     useInboxStore.setState({ sessions: { c1: { _id: "c1", title: "a" } }, pending: {} } as any);
     useInboxStore.getState().applyCargoFields("sessions", "c1", { title: "b", bucket: "needs_input" } as any, []);

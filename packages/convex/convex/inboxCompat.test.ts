@@ -113,7 +113,7 @@ describe("un-flagged listInboxSessions payload — golden shape", () => {
       "anchor_id", "armed_trigger_kind", "auq_open", "author_avatar", "author_name",
       "awaiting_input", "browser_pane_offer", "cc_account", "character_avatar", "character_name", "claude_backend", "cloud_context_too_large", "cloud_placement", "cloud_placement_progress", "cloud_seed", "cloud_workspace", "codex_account", "context_tokens", "daemon_alive_until", "drawn_icon", "effort", "flow_name", "flow_run_id", "forked_from", "git_branch", "git_remote_url", "git_root",
       "handed_off_from_conversation_id", "handed_off_from_details", "handed_off_to_conversation_id", "handed_off_to_details",
-      "has_pending", "hibernated_at", "hosted_stop", "icon", "icon_color", "idle_summary", "image_preview_url",
+      "has_pending", "headless_launch", "hibernated_at", "hosted_stop", "icon", "icon_color", "idle_summary", "image_preview_url",
       "implementation_session", "inbox_adopted_at", "inbox_closed_at", "inbox_deferred_at", "inbox_dismissed_at", "inbox_killed_at",
       "inbox_pinned_at", "inbox_rest", "inbox_rest_at", "inbox_snoozed_until", "inbox_stash_hidden", "inbox_stashed_at", "is_anchor", "is_connected",
       "is_deferred", "is_favorite", "is_idle", "is_pinned", "is_private",

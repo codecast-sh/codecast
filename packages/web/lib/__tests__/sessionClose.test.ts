@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { IN_FLIGHT_FACT_KEYS } from "@codecast/shared/contracts";
-import { closeFactsOf, closeKindOf, closeSetsAside, closeTooltip, inFlightFactsOfRow, nestedInFlightOf, type CloseFacts } from "../sessionClose";
+import { closeFactsOf, closeKindOf, closeSetsAside, closeTakesDownOf, closeTooltip, inFlightFactsOfRow, nestedInFlightOf, type CloseFacts } from "../sessionClose";
 
 const NOW = 1_800_000_000_000;
-const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ inFlight: null, role: false, triggers: 0, waitingOnRun: false, ...f });
+const facts = (f: Partial<CloseFacts> = {}): CloseFacts => ({ inFlight: null, role: false, triggers: 0, waitingOnRun: false, takesDown: 0, ...f });
 
 // One row per line of the brief's table: what Close does, and the words its tooltip says.
 describe("what Close does to a session", () => {
@@ -48,6 +48,16 @@ describe("what Close does to a session", () => {
     expect(closeTooltip(facts())).toBe("Close: stops it, clears it from the list");
   });
 
+  test("a stop that takes the agents under it down names them, with the count", () => {
+    expect(closeTooltip(facts({ takesDown: 4 }))).toBe("Close: stops it and the 4 agents under it, clears them from the list");
+    expect(closeTooltip(facts({ takesDown: 1 }))).toBe("Close: stops it and the agent under it, clears them from the list");
+    expect(closeTooltip(facts({ takesDown: 2, triggers: 3 }))).toBe("Close: stops it and the 2 agents under it, keeps its 3 triggers, comes back when one fires");
+    expect(closeTooltip(facts({ takesDown: 2, role: true }))).toBe("Close: stops it and the 2 agents under it, comes back on its next message");
+    expect(closeTooltip(facts({ takesDown: 2, waitingOnRun: true }))).toBe("Close: stops it and the 2 agents under it, comes back when its run reports");
+    // A close set aside stops nothing, so it names nothing.
+    expect(closeTooltip(facts({ takesDown: 2, inFlight: "live" }))).toBe("Close: hides it, lets it finish");
+  });
+
   test("no tooltip names the old gestures", () => {
     for (const f of [facts({ inFlight: "live" }), facts({ inFlight: "awaiting" }), facts({ inFlight: "loop" }), facts({ inFlight: "limit" }), facts({ role: true }), facts({ triggers: 2 }), facts({ waitingOnRun: true }), facts()]) {
       expect(closeTooltip(f)).not.toMatch(/kill|hibernat|stash/i);
@@ -76,9 +86,9 @@ describe("the facts of a row", () => {
     expect(reason({ ...settled, agent_type: "claude_code", pending_api_error: true, pending_api_error_kind: "limit", pending_api_error_at: NOW - 30 * 24 * 3_600_000 })).toBeNull();
   });
 
-  test("a lead any member of whose nested group is in flight, by the same verdict, is set aside", () => {
+  test("a lead any Task subagent or teammate of which is in flight, by the same verdict, is set aside", () => {
     const loop = { status: "armed", wakeup_at: NOW + 60_000, event_at: NOW - 1000 };
-    const child = (parent: string, extra: Record<string, unknown>) => ({ ...settled, parent_conversation_id: parent, ...extra });
+    const child = (parent: string, extra: Record<string, unknown>) => ({ ...settled, session_id: `agent-a0a0a0${Buffer.from(parent).toString("hex")}`, is_subagent: true, parent_conversation_id: parent, ...extra });
     const rows = [
       child("busy", { agent_status: "working", updated_at: NOW - 1000 }),
       child("loop", { loop_state: loop }),
@@ -87,12 +97,15 @@ describe("the facts of a row", () => {
       child("queued", { has_pending: true }),
       child("asking", { awaiting_input: true }),
       child("idle", {}),
-      { ...settled, agent_status: "working", updated_at: NOW - 1000, spawned_by_conversation_id: "team", agent_team_name: "crew", agent_name: "worker" },
-      // A cast-spawn worker (spawned_by, no team) is not nested: it never comes down with its spawner.
-      { ...settled, agent_status: "working", updated_at: NOW - 1000, spawned_by_conversation_id: "spawner" },
+      // A teammate goes down with its lead, so mid-turn it holds the close.
+      // Children with a process of their own stay up, so mid-turn they hold
+      // nothing: a nested `cast spawn` worker, a spawned_by-only worker.
+      { ...settled, session_id: "uuid-team", agent_status: "working", updated_at: NOW - 1000, spawned_by_conversation_id: "team", agent_team_name: "crew", agent_name: "worker" },
+      { ...settled, session_id: "ca19ce3d-worker", agent_status: "working", updated_at: NOW - 1000, is_subagent: true, parent_conversation_id: "worker" },
+      { ...settled, session_id: "uuid-spawner", agent_status: "working", updated_at: NOW - 1000, spawned_by_conversation_id: "spawner" },
     ];
     for (const lead of ["busy", "loop", "limit", "flow", "queued", "asking", "team"]) expect([lead, nestedInFlightOf(rows as any, lead, NOW)]).toEqual([lead, true]);
-    for (const lead of ["idle", "spawner"]) expect([lead, nestedInFlightOf(rows as any, lead, NOW)]).toEqual([lead, false]);
+    for (const lead of ["idle", "spawner", "worker"]) expect([lead, nestedInFlightOf(rows as any, lead, NOW)]).toEqual([lead, false]);
     const f = closeFactsOf(settled, 0, NOW, false, true);
     expect(f.inFlight).toBe("nested");
     expect(closeTooltip(f)).toBe("Close: hides it, lets it finish");
@@ -115,11 +128,11 @@ describe("the facts of a row", () => {
     expect(Object.keys(inFlightFactsOfRow(settled, NOW)).sort()).toEqual([...IN_FLIGHT_FACT_KEYS].sort());
   });
 
-  test("a worker waiting in its fleet's queue is a wake: Close sets it, and its lead, aside", () => {
-    const q = { ...settled, message_count: 0, subagent_slot: "queued" };
+  test("a worker waiting in its fleet's queue is a wake: Close sets it aside, but not its lead, whose close leaves it up", () => {
+    const q = { ...settled, session_id: "ca19ce3d-q", message_count: 0, subagent_slot: "queued" };
     expect(closeFactsOf(q, 0, NOW).inFlight).toBe("fleet");
     expect(closeSetsAside(closeFactsOf(q, 0, NOW))).toBe(true);
-    expect(nestedInFlightOf([{ ...q, parent_conversation_id: "lead" }] as any, "lead", NOW)).toBe(true);
+    expect(nestedInFlightOf([{ ...q, is_subagent: true, parent_conversation_id: "lead" }] as any, "lead", NOW)).toBe(false);
     expect(closeFactsOf({ ...settled, subagent_slot: "running" }, 0, NOW).inFlight).toBeNull();
   });
 
@@ -130,6 +143,20 @@ describe("the facts of a row", () => {
     expect(closeTooltip(f)).toBe("Close: hides it, lets its background work finish");
     // A report its daemon no longer heartbeats for vouches for nothing.
     expect(closeFactsOf({ ...bg, last_heartbeat: NOW - 3_600_000 }, 0, NOW).inFlight).toBeNull();
-    expect(nestedInFlightOf([{ ...bg, parent_conversation_id: "lead" }] as any, "lead", NOW)).toBe(true);
+    expect(nestedInFlightOf([{ ...bg, session_id: "agent-a0a0a06267", parent_conversation_id: "lead" }] as any, "lead", NOW)).toBe(true);
+  });
+
+  test("a close takes down the lead's Task subagents and teammates not already closed or killed, and the tooltip counts them", () => {
+    const kid = (sid: string, extra: Record<string, unknown> = {}) => ({ ...settled, _id: sid, session_id: sid, is_subagent: true, parent_conversation_id: "lead", ...extra });
+    const rows = [
+      kid("agent-a0a0a031"), kid("agent-a0a0a032"), kid("agent-a0a0a033"),
+      kid("agent-a0a0a0636c6f736564", { inbox_dismissed_at: 5, inbox_closed_at: 5 }),
+      kid("agent-a0a0a06b696c6c6564", { inbox_dismissed_at: 5, inbox_killed_at: 5 }),
+      kid("ca19ce3d-spawned"),
+      { ...settled, _id: "uuid-mate", session_id: "uuid-mate", spawned_by_conversation_id: "lead", agent_team_name: "crew", agent_name: "reviewer" },
+    ];
+    expect(closeTakesDownOf(rows as any, "lead").map((r: any) => r.session_id)).toEqual(["agent-a0a0a031", "agent-a0a0a032", "agent-a0a0a033", "uuid-mate"]);
+    const f = closeFactsOf(settled, 0, NOW, false, nestedInFlightOf(rows as any, "lead", NOW), closeTakesDownOf(rows as any, "lead").length);
+    expect(closeTooltip(f)).toBe("Close: stops it and the 4 agents under it, clears them from the list");
   });
 });

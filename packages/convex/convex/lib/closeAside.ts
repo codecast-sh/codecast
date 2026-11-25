@@ -3,14 +3,14 @@
 // server's own read of the row, so a close the client guessed wrong never cuts
 // a turn off or drops a wake. Both sides only gather facts and ask the shared
 // closeInFlightReason. Pure reads, no writes.
-import { cascadeTakesDownRow, closeInFlightReason, deriveLiveAt, HEARTBEAT_ALIVE_MS, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts } from "@codecast/shared/contracts";
+import { closeInFlightReason, deriveLiveAt, HEARTBEAT_ALIVE_MS, isLoopFresh, openTasksVouchForWaiting, rowHeartbeatAliveAt, type InFlightFacts } from "@codecast/shared/contracts";
+import { cascadeTakesDownRow, NESTED_GROUP_SCAN, type HoldFacts } from "@codecast/shared/contracts/closeCascade";
 import { isBlockedConversation, isCurrentBlock, nestParentIdOf } from "../ccAccountsShared";
 
 // The nested group a hide of `lead` takes down with it (cleanup.ts
 // cascadeHideToNestedChildren reads exactly this): Task subagents and
 // agent-team teammates, newest first, the same bound on each index. The aside
 // check reads the same list, so the two can never see different children.
-export const NESTED_GROUP_SCAN = 200;
 export async function nestedGroupOf(ctx: { db: any }, lead: any): Promise<any[]> {
   const leadId = String(lead._id);
   const [taskSubs, spawned] = await Promise.all([
@@ -81,8 +81,38 @@ export async function hasDeliverableMessage(ctx: { db: any }, convId: any): Prom
   return false;
 }
 
-/** The shared in-flight facts of one conversation, from the database. */
-export async function inFlightFactsOnServer(ctx: { db: any }, conv: any, now: number): Promise<InFlightFacts> {
+/** What a child its lead's close leaves up still holds (shared HoldFacts),
+ *  from the database: its in-flight facts, its managed session's heartbeat,
+ *  and its armed trigger. The web reads the same off the row (holdFactsOfRow).
+ *  A finished child (completed) whose row says nothing waits for it costs no
+ *  reads: the daemon marked its process gone, as closeSetsAsideOnServer assumes. */
+export async function holdFactsOnServer(ctx: { db: any }, conv: any, now: number): Promise<HoldFacts> {
+  const row = rowInFlightFacts(conv, now);
+  const triggerArmed = (conv.armed_trigger_kind ?? "none") !== "none";
+  if (finishedByRow(conv, now)) {
+    return { ...row, inProcessRun: false, turnLive: false, awaitingInput: false, openBackgroundWork: false, processAlive: false, triggerArmed };
+  }
+  const managed = await managedOf(ctx, conv);
+  return {
+    ...(await inFlightFactsOnServer(ctx, conv, now, conv.message_count ? managed : null)),
+    processAlive: !!managed && rowHeartbeatAliveAt(managed, now),
+    triggerArmed,
+  };
+}
+
+/** A finished child whose row says nothing waits for it: it holds nothing,
+ *  and telling so costs no reads (holdFactsOnServer). */
+export function finishedByRow(conv: any, now: number): boolean {
+  const row = rowInFlightFacts(conv, now);
+  return conv.status === "completed" && (conv.armed_trigger_kind ?? "none") === "none" && !row.queued && !row.loopFresh && !row.limitParked && !row.fleetQueued;
+}
+
+const managedOf = (ctx: { db: any }, conv: any) =>
+  ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id)).first();
+
+/** The shared in-flight facts of one conversation, from the database.
+ *  `preloaded`: its managed session, when the caller has read it already. */
+export async function inFlightFactsOnServer(ctx: { db: any }, conv: any, now: number, preloaded?: any): Promise<InFlightFacts> {
   const { queued: flagged, loopFresh, limitParked, fleetQueued } = rowInFlightFacts(conv, now);
   const queued = flagged || await hasDeliverableMessage(ctx, conv._id);
   let inProcessRun = false;
@@ -93,9 +123,7 @@ export async function inFlightFactsOnServer(ctx: { db: any }, conv: any, now: nu
   let turnLive = false;
   let awaitingInput = false;
   let openBackgroundWork = false;
-  const managed = conv.message_count
-    ? await ctx.db.query("managed_sessions").withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conv._id)).first()
-    : null;
+  const managed = preloaded !== undefined ? preloaded : conv.message_count ? await managedOf(ctx, conv) : null;
   // No process behind it: nothing to cut off mid-turn.
   if (managed) {
     const live = deriveLiveAt({

@@ -5,80 +5,21 @@
 // session without the seat refusal, and the next message or trigger brings it
 // back. Kill still retires.
 import { describe, expect, setDefaultTimeout, test } from "bun:test";
-import { convexTest } from "convex-test";
-import schema from "./schema";
 import { api, internal } from "./_generated/api";
-import { allModules } from "./testModules.testkit";
 import { enqueuePendingMessage, performSessionSend } from "./pendingMessages";
 import { closeSetsAsideOnServer, nestedGroupOf } from "./lib/closeAside";
-import { cascadeTakesDownRow, isClosedSession } from "@codecast/shared/contracts";
+import { isClosedSession } from "@codecast/shared/contracts";
+import { cascadeTakesDownRow } from "@codecast/shared/contracts/closeCascade";
+import { countingDb, expectAside, expectClosed, setup as baseSetup, type Setup } from "./dispatch.close.testkit";
 
 setDefaultTimeout(60_000);
 
-type Setup = { role?: boolean; conv?: Record<string, unknown>; queued?: boolean; queuedRow?: boolean; agent?: string; newest?: Record<string, unknown> };
+// The queued message a test asks for, written here: only pendingMessageWrites.ts
+// inserts pending_messages in convex code (functions.guard.test.ts).
+const queueRow = (ctx: any, c: any, user: any, now: number) =>
+  ctx.db.insert("pending_messages", { conversation_id: c, from_user_id: user, content: "one more thing", status: "pending", created_at: now, retry_count: 0 } as any);
+const setup = (o: Setup = {}) => baseSetup({ ...o, queueRow });
 
-async function setup(o: Setup = {}) {
-  const t = convexTest(schema, allModules);
-  const ids = await t.run(async (ctx) => {
-    const now = Date.now();
-    const user = await ctx.db.insert("users", { emailVerificationTime: 1, name: "Riley" } as any);
-    const role = await ctx.db.insert("org_roles", {
-      short_id: "or-1", scope_type: "user", scope_user_id: user, host_user_id: user, name: "Infrastructure", handle: "infra",
-      scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: user }, status: "active", trust: "direct",
-      caps: { hands_per_day: 10, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true },
-      created_by: user, created_at: now, updated_at: now,
-    } as any);
-    const c = await ctx.db.insert("conversations", {
-      user_id: user, agent_type: "claude_code", started_at: now, updated_at: now - 3_600_000, status: "active", session_id: "s-close", short_id: "jx7clos",
-      title: "Fix the build", message_count: 12, last_message_role: "assistant",
-      ...(o.role ? { standing_role_id: role } : {}),
-      ...(o.queued ? { has_pending_messages: true } : {}),
-      ...o.conv,
-    } as any);
-    if (o.agent) {
-      await ctx.db.insert("managed_sessions", { session_id: "s-close", conversation_id: c, user_id: user, pid: 1, started_at: now - 3_600_000, last_heartbeat: now, agent_status: o.agent, agent_status_updated_at: now } as any);
-    }
-    if (o.newest) await ctx.db.insert("messages", { conversation_id: c, role: "assistant", content: "", timestamp: now, ...o.newest } as any);
-    const task = await ctx.db.insert("agent_tasks", { user_id: user, title: "check CI", prompt: "check CI", schedule_type: "once", mode: "apply", status: "scheduled", retry_count: 0, run_count: 0, created_at: now, run_at: now + 3_600_000, originating_conversation_id: c } as any);
-    const queued = o.queued || o.queuedRow
-      ? await ctx.db.insert("pending_messages", { conversation_id: c, from_user_id: user, content: "one more thing", status: "pending", created_at: now, retry_count: 0 } as any)
-      : null;
-    return { user, role, conv: c, task, queued };
-  });
-  const as = t.withIdentity({ subject: `${ids.user}|test` });
-  const send = (action: string, args: unknown[], patches?: Record<string, Record<string, unknown>>) => {
-    const now = Date.now();
-    return as.mutation(api.dispatch.dispatch, { action, args, patches: { conversations: patches ?? { [ids.conv]: { inbox_dismissed_at: now } } } });
-  };
-  const kills = () => t.run(async (ctx) => (await ctx.db.query("daemon_commands").collect()).filter((c: any) => c.command === "kill_session"));
-  const read = () => t.run(async (ctx) => ({
-    conv: (await ctx.db.get(ids.conv)) as any,
-    task: (await ctx.db.get(ids.task)) as any,
-    queued: ids.queued ? ((await ctx.db.get(ids.queued)) as any) : null,
-    kills: (await ctx.db.query("daemon_commands").collect()).filter((c: any) => c.command === "kill_session"),
-  }));
-  return { t, ids, as, send, read, kills };
-}
-
-// Closed: dismissed with the close marker, torn down keeping its worktree, and
-// nothing that reads as retired.
-function expectClosed(r: { conv: any; task: any; kills: any[] }) {
-  expect(r.conv.inbox_dismissed_at).toBeGreaterThan(0);
-  expect(r.conv.inbox_closed_at).toBe(r.conv.inbox_dismissed_at);
-  expect(JSON.parse(r.kills[0]?.args ?? "{}").keep_workspace).toBe(true);
-  expect(r.conv.inbox_killed_at).toBeUndefined();
-  expect(r.conv.status).not.toBe("completed");
-  expect(r.kills.length).toBe(1);
-  expect(r.task.status).toBe("scheduled");
-  expect(r.task.canceled_on_kill_at).toBeUndefined();
-}
-// Set aside: stashed, nothing stopped.
-function expectAside(r: { conv: any; kills: any[] }) {
-  expect(r.conv.inbox_stashed_at).toBeGreaterThan(0);
-  expect(r.conv.inbox_dismissed_at).toBeUndefined();
-  expect(r.conv.inbox_killed_at).toBeUndefined();
-  expect(r.kills.length).toBe(0);
-}
 
 describe("closeSession stops what has nothing in flight", () => {
   test("an ordinary idle session is stopped and keeps its armed trigger", async () => {
@@ -142,10 +83,10 @@ describe("the server sets aside what the client closed while it is in flight", (
     await s.t.run(async (ctx) => {
       const now = Date.now();
       for (let i = 0; i < 55; i++) {
-        await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: 1, updated_at: 1, status: "active", session_id: `s-old${i}`, message_count: 2, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
+        await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: 1, updated_at: 1, status: "active", session_id: `agent-a0a0a06f6c64${i}`, message_count: 2, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
       }
-      const busy = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: now, updated_at: now, status: "active", session_id: "s-busy", message_count: 3, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
-      await ctx.db.insert("managed_sessions", { session_id: "s-busy", conversation_id: busy, user_id: s.ids.user, pid: 3, started_at: now, last_heartbeat: now, agent_status: "working", agent_status_updated_at: now } as any);
+      const busy = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: now, updated_at: now, status: "active", session_id: "agent-a0a0a062757379", message_count: 3, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
+      await ctx.db.insert("managed_sessions", { session_id: "agent-a0a0a062757379", conversation_id: busy, user_id: s.ids.user, pid: 3, started_at: now, last_heartbeat: now, agent_status: "working", agent_status_updated_at: now } as any);
     });
     await s.send("closeSession", [String(s.ids.conv)]);
     expectAside(await s.read());
@@ -168,8 +109,8 @@ describe("the server sets aside what the client closed while it is in flight", (
     const s = await setup();
     const child = await s.t.run(async (ctx) => {
       const now = Date.now();
-      const c = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: now, updated_at: now - 600_000, status: "active", session_id: "s-bgkid", message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv, last_message_role: "assistant" } as any);
-      await ctx.db.insert("managed_sessions", { session_id: "s-bgkid", conversation_id: c, user_id: s.ids.user, pid: 2, started_at: now, last_heartbeat: now, agent_status: "waiting", agent_status_updated_at: now - 600_000, open_tasks: [{ id: "m1", kind: "monitor", description: "watch CI" }], open_tasks_at: now - 10_000 } as any);
+      const c = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: now, updated_at: now - 600_000, status: "active", session_id: "agent-a0a0a062676b6964", message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv, last_message_role: "assistant" } as any);
+      await ctx.db.insert("managed_sessions", { session_id: "agent-a0a0a062676b6964", conversation_id: c, user_id: s.ids.user, pid: 2, started_at: now, last_heartbeat: now, agent_status: "waiting", agent_status_updated_at: now - 600_000, open_tasks: [{ id: "m1", kind: "monitor", description: "watch CI" }], open_tasks_at: now - 10_000 } as any);
       return c;
     });
     await s.send("closeSession", [String(s.ids.conv)]);
@@ -227,8 +168,8 @@ describe("the server sets aside what the client closed while it is in flight", (
     const s = await setup();
     await s.t.run(async (ctx) => {
       const now = Date.now();
-      const child = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: now, updated_at: now, status: "active", session_id: "s-sub", message_count: 3, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
-      await ctx.db.insert("managed_sessions", { session_id: "s-sub", conversation_id: child, user_id: s.ids.user, pid: 2, started_at: now, last_heartbeat: now, agent_status: "working", agent_status_updated_at: now } as any);
+      const child = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: now, updated_at: now, status: "active", session_id: "agent-a0a0a0737562", message_count: 3, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
+      await ctx.db.insert("managed_sessions", { session_id: "agent-a0a0a0737562", conversation_id: child, user_id: s.ids.user, pid: 2, started_at: now, last_heartbeat: now, agent_status: "working", agent_status_updated_at: now } as any);
     });
     await s.send("closeSession", [String(s.ids.conv)]);
     expectAside(await s.read());
@@ -251,10 +192,10 @@ describe("a lead is in flight when any member of its nested group is", () => {
       const child = await s.t.run(async (ctx) => {
         const t = Date.now();
         const c = await ctx.db.insert("conversations", {
-          user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t - 3_600_000, status: "active", session_id: "s-kid", message_count: 4,
+          user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t - 3_600_000, status: "active", session_id: "agent-a0a0a06b6964", message_count: 4,
           is_subagent: true, parent_conversation_id: s.ids.conv, last_message_role: "assistant", ...f.conv,
         } as any);
-        if (f.agent) await ctx.db.insert("managed_sessions", { session_id: "s-kid", conversation_id: c, user_id: s.ids.user, pid: 9, started_at: t, last_heartbeat: t, agent_status: f.agent, agent_status_updated_at: t } as any);
+        if (f.agent) await ctx.db.insert("managed_sessions", { session_id: "agent-a0a0a06b6964", conversation_id: c, user_id: s.ids.user, pid: 9, started_at: t, last_heartbeat: t, agent_status: f.agent, agent_status_updated_at: t } as any);
         if (f.newest) await ctx.db.insert("messages", { conversation_id: c, role: "assistant", content: "", timestamp: t, tool_calls: [{ id: "q", name: "AskUserQuestion", input: "{}" }] } as any);
         if (f.pending) await ctx.db.insert("pending_messages", { conversation_id: c, from_user_id: s.ids.user, content: "later", status: "pending", created_at: t, retry_count: 0 } as any);
         if (f.run) {
@@ -276,8 +217,8 @@ describe("a lead is in flight when any member of its nested group is", () => {
       const s = await setup();
       const child = await s.t.run(async (ctx) => {
         const t = Date.now();
-        const c = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t, status: "active", session_id: "s-kid", message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
-        await ctx.db.insert("managed_sessions", { session_id: "s-kid", conversation_id: c, user_id: s.ids.user, pid: 9, started_at: t, last_heartbeat: t, agent_status: "working", agent_status_updated_at: t } as any);
+        const c = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t, status: "active", session_id: "agent-a0a0a06b6964", message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
+        await ctx.db.insert("managed_sessions", { session_id: "agent-a0a0a06b6964", conversation_id: c, user_id: s.ids.user, pid: 9, started_at: t, last_heartbeat: t, agent_status: "working", agent_status_updated_at: t } as any);
         return c;
       });
       const t = Date.now();
@@ -297,7 +238,7 @@ describe("a lead is in flight when any member of its nested group is", () => {
   test("a kill of a lead does not override a child the same gesture already decided", async () => {
     const s = await setup();
     const t = Date.now();
-    const child = await s.t.run(async (ctx) => ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t, status: "active", session_id: "s-kid", message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv } as any));
+    const child = await s.t.run(async (ctx) => ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: t, updated_at: t, status: "active", session_id: "agent-a0a0a06b6964", message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv } as any));
     // The child's own stash lands first; the lead's kill cascade must leave it stashed.
     await s.send("killSessions", [[String(child), String(s.ids.conv)]], { [String(child)]: { inbox_stashed_at: t }, [s.ids.conv]: { inbox_dismissed_at: t } });
     const k = (await s.t.run((ctx) => ctx.db.get(child))) as any;
@@ -306,32 +247,6 @@ describe("a lead is in flight when any member of its nested group is", () => {
   });
 });
 
-// A db that counts every read it serves: a get, or one query run (first,
-// take, collect, unique, paginate), however it was built.
-function countingDb(db: any) {
-  const counter = { reads: 0 };
-  const TERMINAL = new Set(["first", "take", "collect", "unique", "paginate"]);
-  const wrapQuery = (q: any): any => new Proxy(q, {
-    get(target, prop) {
-      const v = target[prop];
-      if (typeof v !== "function") return v;
-      return (...args: any[]) => {
-        const out = v.apply(target, args);
-        if (TERMINAL.has(String(prop))) { counter.reads++; return out; }
-        return out && typeof out === "object" && !(out instanceof Promise) ? wrapQuery(out) : out;
-      };
-    },
-  });
-  const wrapped = new Proxy(db, {
-    get(target, prop) {
-      if (prop === "get") return (...args: any[]) => { counter.reads++; return target.get(...args); };
-      if (prop === "query") return (...args: any[]) => wrapQuery(target.query(...args));
-      const v = target[prop];
-      return typeof v === "function" ? v.bind(target) : v;
-    },
-  });
-  return { db: wrapped, counter };
-}
 
 // What the web client sends for a close of the lead (store closeInDraft): a
 // patch for the lead and for each nested child the shared cascade rule takes
@@ -352,13 +267,13 @@ describe("the aside check is cheap on a big finished group", () => {
     const now = Date.now();
     await s.t.run(async (ctx) => {
       const kid = (i: number, extra: Record<string, unknown> = {}) => ctx.db.insert("conversations", {
-        user_id: s.ids.user, agent_type: "claude_code", started_at: i, updated_at: i, status: "completed", session_id: `s-done${i}`,
+        user_id: s.ids.user, agent_type: "claude_code", started_at: i, updated_at: i, status: "completed", session_id: `agent-a0a0a0646f6e65${i}`,
         message_count: 9, is_subagent: true, parent_conversation_id: s.ids.conv, ...extra,
       } as any);
       // The scan reads newest first: 150 finished, then the busy one, then 150 older finished.
       for (let i = 0; i < 150; i++) await kid(i);
-      const busy = await kid(150, { status: "active", session_id: "s-busy", updated_at: now });
-      await ctx.db.insert("managed_sessions", { session_id: "s-busy", conversation_id: busy, user_id: s.ids.user, pid: 7, started_at: now, last_heartbeat: now, agent_status: "working", agent_status_updated_at: now } as any);
+      const busy = await kid(150, { status: "active", session_id: "agent-a0a0a062757379", updated_at: now });
+      await ctx.db.insert("managed_sessions", { session_id: "agent-a0a0a062757379", conversation_id: busy, user_id: s.ids.user, pid: 7, started_at: now, last_heartbeat: now, agent_status: "working", agent_status_updated_at: now } as any);
       for (let i = 151; i < 301; i++) await kid(i);
     });
     const counted = await s.t.run(async (ctx) => {
@@ -383,7 +298,7 @@ describe("the aside check is cheap on a big finished group", () => {
       for (let i = 0; i < 200; i++) {
         const closed = i % 2 === 0;
         const id = await ctx.db.insert("conversations", {
-          user_id: s.ids.user, agent_type: "claude_code", started_at: i, updated_at: i, session_id: `s-m${i}`, message_count: 9,
+          user_id: s.ids.user, agent_type: "claude_code", started_at: i, updated_at: i, session_id: `agent-a0a0a06d${i}`, message_count: 9,
           is_subagent: true, parent_conversation_id: s.ids.conv, last_message_role: "assistant",
           ...(closed ? { status: "active", inbox_dismissed_at: 5, inbox_closed_at: 5 } : { status: "completed" }),
         } as any);
@@ -415,7 +330,7 @@ describe("the aside check is cheap on a big finished group", () => {
     const s = await setup();
     await s.t.run(async (ctx) => {
       for (let i = 0; i < 40; i++) {
-        await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: i, updated_at: i, status: "active", session_id: `s-k${i}`, message_count: 3, is_subagent: true, parent_conversation_id: s.ids.conv, inbox_killed_at: 5, inbox_dismissed_at: 5 } as any);
+        await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: i, updated_at: i, status: "active", session_id: `agent-a0a0a06b${i}`, message_count: 3, is_subagent: true, parent_conversation_id: s.ids.conv, inbox_killed_at: 5, inbox_dismissed_at: 5 } as any);
       }
     });
     const counted = await s.t.run(async (ctx) => {
@@ -487,7 +402,7 @@ describe("close carries through the deferred paths", () => {
       await ctx.db.patch(s.ids.conv, { inbox_dismissed_at: now } as any);
       const out: any[] = [];
       for (let i = 0; i < 3; i++) {
-        const c = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: 1, updated_at: 1, status: "active", session_id: `s-c${i}`, message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
+        const c = await ctx.db.insert("conversations", { user_id: s.ids.user, agent_type: "claude_code", started_at: 1, updated_at: 1, status: "active", session_id: `agent-a0a0a063${i}`, message_count: 4, is_subagent: true, parent_conversation_id: s.ids.conv } as any);
         await ctx.db.insert("agent_tasks", { user_id: s.ids.user, title: `c${i}`, prompt: "p", schedule_type: "once", mode: "apply", status: "scheduled", retry_count: 0, run_count: 0, created_at: 1, run_at: now + 3_600_000, originating_conversation_id: c } as any);
         out.push(c);
       }

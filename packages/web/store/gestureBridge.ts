@@ -39,6 +39,8 @@ export const BRIDGED_FIELDS = [
   "inbox_closed_at",
   "inbox_pinned_at",
   "is_pinned",
+  // A nested row the person or its lead's close adopted (shared isAdoptedChild).
+  "inbox_adopted_at",
 ] as const;
 export type BridgedField = (typeof BRIDGED_FIELDS)[number];
 

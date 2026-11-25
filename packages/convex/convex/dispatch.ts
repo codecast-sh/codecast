@@ -51,7 +51,7 @@ import { AGENT_MODEL_CONFIG, findModelOption, modelAgentKey, fromConvexAgentType
   recordingPressStale,
   recordingPressStaleWords,
 } from "@codecast/shared/contracts";
-import { applyHideTransition, hideBudgetLeft, noteGestureRows } from "./cleanup";
+import { applyHideTransition, closeAdoptionHolds, GROUP_SCAN_COST, hideBudgetLeft, noteGestureRows, spendHideBudget } from "./cleanup";
 import { closeSetsAsideOnServer } from "./lib/closeAside";
 import { isClosePatch } from "@codecast/shared/contracts";
 import { stampBrowserPaneOfferHandled, writeShareLink } from "./conversations";
@@ -288,6 +288,56 @@ const EXPLICIT_KILL_ACTIONS = new Set(["killSession", "killSessions"]);
 // the server to leave the session's triggers and queue alone.
 const EXPLICIT_CLOSE_ACTIONS = new Set(["closeSession", "closeSessions"]);
 
+// A close's adoptions, after every other row of the batch. Each is decided by
+// the cascade's own tests (cleanup.ts closeAdoptionHolds) and lands as the
+// cascade's would: accepted, the client's stamp is written; refused, the row is
+// written with its own value, whose echo settles the client's field lock. One
+// whose lead's row waits in a later batch, or past this transaction's read
+// budget, waits with it, so the client's painted card never blinks out before
+// the server has decided.
+async function decideCloseAdoptions(
+  ctx: HandlerCtx,
+  userId: Id<"users">,
+  rows: Array<[string, Record<string, any>]>,
+  deferred: Record<string, Record<string, Record<string, any>>> | null,
+  canDefer: boolean,
+): Promise<Record<string, Record<string, Record<string, any>>> | null> {
+  const waitingLeads = new Set(Object.keys(deferred?.conversations ?? {}));
+  const windows = new Map<string, Set<string>>();
+  for (const [docKey, fields] of rows) {
+    // Spent: wait for the next batch before reading anything for this one.
+    if (canDefer && hideBudgetLeft(ctx) < 1) {
+      ((deferred ??= {}).conversations ??= {})[docKey] = fields;
+      continue;
+    }
+    const id = ctx.db.normalizeId("conversations", docKey);
+    const child: any = id ? await ctx.db.get(id) : null;
+    if (!child) continue;
+    const mine = String(child.user_id) === String(userId) || child.owner_user_id?.toString() === String(userId)
+      || await isSessionOwner(ctx, child._id, userId);
+    if (!mine) continue;
+    const lead = child.parent_conversation_id ? String(child.parent_conversation_id) : null;
+    // Every decision costs a unit of the read budget, and a lead's first one
+    // its group scan too, so a bulk close of big groups waits in batches.
+    const cost = 1 + (lead && !windows.has(lead) ? GROUP_SCAN_COST : 0);
+    if (canDefer && ((lead && waitingLeads.has(lead)) || hideBudgetLeft(ctx) < cost)) {
+      ((deferred ??= {}).conversations ??= {})[docKey] = fields;
+      continue;
+    }
+    spendHideBudget(ctx, 1);
+    const stamp = fields.inbox_adopted_at;
+    const accepted = await closeAdoptionHolds(ctx, child, stamp, windows);
+    await ctx.db.patch(child._id, { inbox_adopted_at: accepted ? stamp : child.inbox_adopted_at });
+  }
+  return deferred;
+}
+
+// A conversation patch that carries nothing but an adoption stamp.
+function isAdoptionOnly(fields: Record<string, unknown>): boolean {
+  const keys = Object.keys(fields ?? {});
+  return keys.length > 0 && keys.every((k) => k === "inbox_adopted_at");
+}
+
 // Rows one applyPatches transaction applies before it schedules the rest.
 const PATCH_ROWS_INLINE = 25;
 
@@ -316,7 +366,16 @@ export async function applyPatches(
   let bucketViewChanged = false;
   // Every row this gesture names decides for itself: a lead's cascade never
   // writes over one, whatever order the rows come in (cleanup.ts).
-  if (patches.conversations) noteGestureRows(ctx, Object.keys(patches.conversations));
+  const isCloseAdoption = (table: string, fields: Record<string, any>) =>
+    table === "conversations" && !!opts?.close && isAdoptionOnly(fields) && !!fields.inbox_adopted_at;
+  if (patches.conversations) {
+    const rows = Object.entries(patches.conversations);
+    noteGestureRows(ctx, rows.filter(([, f]) => !isCloseAdoption("conversations", f)).map(([id]) => id), rows.filter(([, f]) => isCloseAdoption("conversations", f)).map(([id]) => id));
+  }
+  // A close's adoptions (rows carrying nothing but an adoption stamp) wait for
+  // every other row of the batch, their lead's close among them, and are then
+  // decided by the cascade's own tests (decideCloseAdoptions).
+  const adoptions: Array<[string, Record<string, any>]> = [];
   // A gesture on a lead patches every row of its group, and each conversation
   // row runs its hide or un-kill teardown here. A lead with 175 subagents did
   // all of that in one transaction and passed Convex's 4096-read cap, so it
@@ -331,6 +390,10 @@ export async function applyPatches(
     if (!config) continue;
 
     for (const [docKey, fields] of Object.entries(docs)) {
+      if (isCloseAdoption(table, fields)) {
+        adoptions.push([docKey, fields]);
+        continue;
+      }
       // Hide teardowns share the transaction's budget with the cascade they
       // start (cleanup.ts hideBudgetLeft), so a conversation row waits once it is spent.
       if ((inline-- <= 0 || (table === "conversations" && ("inbox_dismissed_at" in fields || "inbox_stashed_at" in fields) && hideBudgetLeft(ctx) === 0)) && scheduler) {
@@ -446,6 +509,21 @@ export async function applyPatches(
           // and it is the cell the close's undo finds to clear this stash with.
           if ((finalSafe as any).inbox_closed_at == null) (finalSafe as any).inbox_closed_at = (finalSafe as any).inbox_stashed_at;
         }
+        // A close's adoption of a child (the client paints the children its
+        // close leaves standing) is the client's guess. The server decides it:
+        // the lead's cascade adopts within its own window, only while the lead
+        // is still in that close (shared leadStillInClose), from the child's
+        // own facts. So the client's value never lands; the row is written with
+        // the server's own value instead, whose echo settles the client's
+        // field lock (it retires on this write's acknowledgement at the value
+        // it saw). Any rail: a close action, its deferred batch, or a stamp
+        // equal to the lead's close stamp (a stub re-key or a replay).
+        if (table === "conversations" && (finalSafe as any).inbox_adopted_at && (doc as any).parent_conversation_id) {
+          const lead = close ? null : await ctx.db.get((doc as any).parent_conversation_id);
+          if (close || (lead && (finalSafe as any).inbox_adopted_at === lead.inbox_closed_at)) {
+            (finalSafe as any).inbox_adopted_at = (doc as any).inbox_adopted_at;
+          }
+        }
         if (Object.keys(finalSafe).length === 0) continue;
         // Capture the PRE-patch hide state. The un-kill mirror below decides on
         // what the row looked like BEFORE this write, and reading it afterwards
@@ -541,6 +619,7 @@ export async function applyPatches(
       }
     }
   }
+  if (adoptions.length) deferred = await decideCloseAdoptions(ctx, userId, adoptions, deferred, !!scheduler);
   if (deferred) {
     await scheduler.runAfter(0, internal.dispatch.applyDeferredPatches, {
       user_id: userId, patches: deferred, force_kill: opts?.forceKill, close: opts?.close, cause: opts?.cause,

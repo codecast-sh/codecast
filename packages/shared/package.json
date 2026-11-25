@@ -13,6 +13,8 @@
     "./network": "./network/index.ts",
     "./contracts": "./contracts/index.ts",
     "./contracts/agentAccess": "./contracts/agentAccess.ts",
+    "./contracts/closeCascade": "./contracts/closeCascade.ts",
+    "./contracts/claudeSubagentSession": "./contracts/claudeSubagentSession.ts",
     "./contracts/resourceOffloadIntent": "./contracts/resourceOffloadIntent.ts",
     "./contracts/moveRehearsal": "./contracts/moveRehearsal.ts",
     "./contracts/managedPolicy": "./contracts/managedPolicy.ts",

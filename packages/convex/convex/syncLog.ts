@@ -12,6 +12,7 @@
 // Cargo (docs/architecture/sync-log-cargo.md): rows carry the changed fields as
 // a merge patch plus an access stamp; getRange projects each row per caller.
 import { v } from "convex/values";
+import { launchedHeadless } from "@codecast/shared/contracts/closeCascade";
 import { query } from "./_generated/server";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import type { ChangeEntity, ChangeScope } from "./changeLog";
@@ -193,6 +194,8 @@ export function buildCargo(
     if (v === undefined) unset.push(k);
     else patch[k] = v;
   }
+  // cli_flags never rides; the verdict clients read from it does (shared launchedHeadless).
+  if (table === "conversations" && "cli_flags" in fields) patch.headless_launch = launchedHeadless({ cli_flags: fields.cli_flags });
   const base = {
     unset: unset.length ? unset : undefined,
     full: opts.full || undefined,
