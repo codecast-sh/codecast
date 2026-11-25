@@ -81,7 +81,7 @@ import { FindBar } from "./FindBar";
 import { KeyboardShortcutsPanel, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { AppLoader, SlowBootNote } from "./AppLoader";
 import { freshHomeLaunchPending, settleFreshHomeLaunch } from "../store/viewNav";
-import { useInboxStore, useTrackedStore, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, bucketProjectPath, ownCheckoutPath, projectAxisKeys, projectOfFromState, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
+import { useInboxStore, useTrackedStore, selectSessionRailOpen, selectCommentRailOpen, selectSessionRailUserClosed, selectNavCollapsed, selectNavHidden, selectDockShown, bucketProjectPath, ownCheckoutPath, projectAxisKeys, projectOfFromState, resolveSimpleView, resolveInboxCompact, resolveVisualStyle, resolveInboxHome, isModernFocused } from "../store/inboxStore";
 import { newConversationAgentType } from "../lib/defaultAgent";
 import { ConnectToast } from "./simple/ConnectToast";
 import { pathOnMyMachines, savedDefaultProject } from "../lib/machinePicker";
@@ -642,7 +642,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
     s => s.workspace.nav.size,
     s => s.workspace.context.size,
     // The terminal toggle lights while the dock is open.
-    s => s.workspace.dock.pane != null,
+    s => selectDockShown(s),
     s => s.currentConversation?.source,
     s => selectSessionRailOpen(s),
     // Modern focused's inbox board lists every session, so the rail beside it
@@ -1444,8 +1444,8 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
             {!isMobile && (
               <ShortcutTooltip label="Toggle terminal" action="terminal.toggle">
                 <TopbarButton
-                  onClick={(e) => { s.setDockOpen(s.workspace.dock.pane == null); tipActions.whisper('terminal.toggle', e); }}
-                  active={s.workspace.dock.pane != null}
+                  onClick={(e) => { s.setDockOpen(!selectDockShown(s)); tipActions.whisper('terminal.toggle', e); }}
+                  active={selectDockShown(s)}
                   aria-label="Toggle terminal panel"
                   desktopOnly
                 >
