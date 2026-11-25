@@ -1,0 +1,9 @@
+meeteval
+pyannote.metrics
+jiwer
+sherpa-onnx==2.0.2
+onnxruntime
+soundfile
+numpy
+scipy
+websockets

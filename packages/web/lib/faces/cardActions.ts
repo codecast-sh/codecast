@@ -18,6 +18,8 @@ export type CardActions = {
   mute: (card: Live) => void;
   /** Toggles: the card says whether the camera is on now. */
   camera: (card: Live) => void;
+  /** My burst becomes a call, and the people it was for are rung into it. */
+  call: (card: Extract<Live, { kind: "live" }>) => void;
   answer: (card: RingIn) => void;
   decline: (card: RingIn) => void;
   cancel: (card: RingOut) => void;
@@ -40,6 +42,7 @@ export const ENGINE_CARD_ACTIONS: CardActions = {
   end: (c) => hangUp(c.roomKey),
   mute: (c) => void setMuted(!c.muted),
   camera: (c) => void setCamera(!c.cameraOn),
+  call: (c) => void joinWalkieLive(c.roomKey, { name: c.title, ring: c.callTo }),
   answer: (c) => {
     const inv = inviteIn(c);
     if (inv) requestAnswer(inv);

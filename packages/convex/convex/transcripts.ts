@@ -48,9 +48,10 @@ import { findConversationByAnyRefWhere } from "./conversationSessionLookup";
 import {
   addressesAgent,
   agentSpokenNames,
-  FALLBACK_TRANSCRIBE_MODEL,
   HEARTBEAT_ALIVE_MS,
   LIVE_TRANSCRIBE_MODEL,
+  LEGACY_TRANSCRIBE_MODEL,
+  legacyAsrTranscriptionSession,
   MID_TURN_AGENT_STATUSES,
   trustedAgentStatus,
   REC_LEASE_STALE_MS,
@@ -95,6 +96,17 @@ import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import { SEGMENT_WRITE_BATCH, parseTranscriptionSegments, transcribeAudio } from "./lib/recordingTranscription";
 export { parseTranscriptionSegments };
 import { HUDDLE_GRACE_MS, quietSince, withinHuddleGrace } from "./lib/huddleGrace";
+import { callSpeakerValidator, lineSpeakerNames, speakerRoster, speakersForClient } from "./lib/callSpeakers";
+import { campplusEngine, runSpeechPipeline, scribeWordsSource } from "./lib/speechPipeline";
+import {
+  assignedSpeaker,
+  confirmedSpeaker,
+  nextSpeakerKey,
+  speakerLabel,
+  withSpeaker,
+  type SpeakerAssignment,
+  type WireCallSpeaker,
+} from "@codecast/shared/contracts";
 export { HUDDLE_GRACE_MS };
 
 export { asrTranscriptionSession };
@@ -1009,7 +1021,19 @@ export const attachRecording = mutation({
     // an audio blob attached by one seat would publish that seat's mic to the
     // whole room's detail page. Only rec transcripts carry audio.
     if (!isRecRoomKey(t.room_key)) throw new Error("Not a recording");
+    // An upload retried with the same file schedules nothing twice.
+    if (t.recording_storage_id === args.storage_id) return;
     await ctx.db.patch(t._id, { recording_storage_id: args.storage_id });
+    // A team with voice note speakers on reads EVERY voice note again from its
+    // audio (Scribe words on their speakers, our voices named), replacing the
+    // live lines. Everyone else keeps the whisper path below.
+    if (await teamHasFeature(ctx, t.team_id, "voice_speakers")) {
+      // Already diarized: a second pass would renumber the voices under any names given.
+      if (t.speakers?.length) return;
+      await ctx.db.patch(t._id, { transcribe_status: "pending", summary_status: "pending" });
+      await ctx.scheduler.runAfter(0, internal.transcripts.transcribeVoiceNote, { transcript_id: t._id });
+      return;
+    }
     if (!needsServerTranscription(t)) return;
     // A finished recording that produced no words while it ran has none at all
     // unless the server reads them out of the audio. That is every phone
@@ -1265,16 +1289,20 @@ export const SUMMARY_MAX_CHARS = 60_000;
  * attribution out of a placeholder speaker label. The two transcripts are not
  * the same evidence and must not be described to the model as if they were.
  */
-export type CallSummaryKind = "huddle" | "recording";
+export type CallSummaryKind = "huddle" | "recording" | "diarized";
 
-export function callSummaryKind(roomKey: string): CallSummaryKind {
-  return isRecRoomKey(roomKey) ? "recording" : "huddle";
+/** A recording whose voices a speaker engine separated (it has `speakers`)
+ *  is "diarized": its lines carry a name where someone is identified and
+ *  `Speaker N` where nobody is, and the prompt says exactly that. */
+export function callSummaryKind(roomKey: string, speakers?: ReadonlyArray<unknown>): CallSummaryKind {
+  if (!isRecRoomKey(roomKey)) return "huddle";
+  return speakers?.length ? "diarized" : "recording";
 }
 
 /**
  * The transcript text a call summary reads, or null when the call is under
- * SUMMARY_MIN_WORDS and gets no model call. A recording's lines carry no
- * speaker; a long call keeps its last SUMMARY_MAX_CHARS characters.
+ * SUMMARY_MIN_WORDS and gets no model call. An undiarized recording's lines
+ * carry no speaker; a long call keeps its last SUMMARY_MAX_CHARS characters.
  */
 export function callSummarySource(lines: Array<{ speaker: string; text: string }>, kind: CallSummaryKind): string | null {
   if (countWords(lines.map((l) => l.text)) < SUMMARY_MIN_WORDS) return null;
@@ -1295,9 +1323,12 @@ export function callSummaryRequest(
   const durationMin = call.ended_at
     ? Math.max(1, Math.round((call.ended_at - call.started_at) / 60_000))
     : null;
+  const about = durationMin ? `, about ${durationMin} min` : "";
   const preamble = call.kind === "recording"
-    ? `This is the transcript of a meeting recorded on ONE microphone in the room${durationMin ? `, about ${durationMin} min` : ""}. Voices are NOT separated and nobody is identified: attribute something to a person only when the words themselves name them, and otherwise write about what was said, not who said it.`
-    : `This is the transcript of a team huddle (voice call)${durationMin ? `, about ${durationMin} min` : ""}${call.rolling ? ", still going: summarize what has been said so far" : ""}. Speakers are exactly attributed.`;
+    ? `This is the transcript of a meeting recorded on ONE microphone in the room${about}. Voices are NOT separated and nobody is identified: attribute something to a person only when the words themselves name them, and otherwise write about what was said, not who said it.`
+    : call.kind === "diarized"
+      ? `This is the transcript of a meeting recorded on ONE microphone in the room${about}, with the voices separated afterwards. Each line is labeled with its voice: a person's name where they were identified, "Speaker N" where nobody has said who that voice is. Attribute to a named speaker freely; never guess a name for a "Speaker N", unless the words themselves name them.`
+      : `This is the transcript of a team huddle (voice call)${about}${call.rolling ? ", still going: summarize what has been said so far" : ""}. Speakers are exactly attributed.`;
   return {
     model: CHEAP_MODEL,
     // A two-hour call's reply runs past 500 tokens; a cut-off reply has no
@@ -1343,15 +1374,17 @@ export const getForSummary = internalQuery({
       .query("transcript_segments")
       .withIndex("by_transcript_seq", (q) => q.eq("transcript_id", t._id))
       .collect();
+    const nameOf = await lineSpeakerNames(ctx, t);
     return {
       title: t.title,
       room_key: t.room_key,
+      kind: callSummaryKind(t.room_key, t.speakers),
       team_id: t.team_id,
       status: t.status,
       started_at: t.started_at,
       ended_at: t.ended_at,
       participants: t.participants ?? [],
-      lines: segs.map((s) => ({ speaker: s.speaker_name, text: s.text })),
+      lines: segs.map((s) => ({ speaker: nameOf(s), text: s.text })),
     };
   },
 });
@@ -1485,7 +1518,8 @@ async function scheduleHuddleDigest(
       .query("transcript_segments")
       .withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id))
       .collect();
-    summary = formatChunk(segs) || null;
+    const nameOf = await lineSpeakerNames(ctx, t);
+    summary = formatChunk(segs.map((s: Doc<"transcript_segments">) => ({ speaker_name: nameOf(s), text: s.text }))) || null;
   }
   const digest = {
     title: t.title ?? verdict.title ?? null,
@@ -1548,7 +1582,7 @@ export const generateSummary = internalAction({
     // call has its own run.
     const rolling = args.rolling === true;
     if (rolling && t.status !== "live") return;
-    const kind = callSummaryKind(t.room_key);
+    const kind = t.kind;
     const source = callSummarySource(t.lines, kind);
     if (source === null) {
       await ctx.runMutation(internal.transcripts.setSummary, {
@@ -1681,6 +1715,71 @@ export const finishRecordingTranscript = internalMutation({
 });
 
 /**
+ * The batch speech pass's write (lib/speechPipeline.ts, not live yet): the
+ * diarized lines replace the draft the live recognizer left, numbered after
+ * it (seq last_seq+1 on), so an old line reference fails plainly instead of
+ * pointing at a different line. `speakers` gets an entry per voice. A route
+ * that had delivered the whole draft counts the replacement as delivered
+ * too, so an agent never hears the same note twice; one that had not
+ * (an "after" route) receives the diarized lines. A voice note with a single
+ * voice is its creator's own dictation: it is offered as their sample.
+ */
+export const writeSpeechPass = internalMutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    segments: v.array(
+      v.object({ speaker_id: v.string(), speaker_name: v.string(), text: v.string(), t0: v.number(), t1: v.number() }),
+    ),
+    speakers: v.array(callSpeakerValidator),
+  },
+  handler: async (ctx, args): Promise<{ written: boolean }> => {
+    const t = await ctx.db.get(args.transcript_id);
+    if (!t || !isRecRoomKey(t.room_key)) return { written: false };
+    // Once a person has said who a voice is, the lines stay: Scribe's keys
+    // are not stable across runs, so new lines would put that name on
+    // another voice.
+    if ((t.speakers ?? []).some((s) => s.source === "person")) return { written: false };
+    const draft = await ctx.db
+      .query("transcript_segments")
+      .withIndex("by_transcript_seq", (q) => q.eq("transcript_id", t._id))
+      .collect();
+    for (const s of draft) await ctx.db.delete(s._id);
+    let seq = t.last_seq;
+    for (const s of args.segments) {
+      seq++;
+      await ctx.db.insert("transcript_segments", { transcript_id: t._id, seq, ...s });
+    }
+    // Consent is read again at the write: a suggestion stands only for a
+    // person who still has recognition on and is still on the team.
+    const speakers: SpeakerRow[] = [];
+    for (const sp of args.speakers) {
+      const user = sp.user_id ? await ctx.db.get(sp.user_id) : null;
+      const allowed = !!user && user.voice_id_enabled === true && (await isTeamMember(ctx, sp.user_id!, t.team_id));
+      speakers.push(sp.user_id && !allowed ? { key: sp.key, source: sp.source } : sp);
+    }
+    await ctx.db.patch(t._id, {
+      last_seq: seq,
+      speakers,
+      // Only a draft that had lines can have been delivered: with none
+      // (last_seq 0, a phone's note), every route still owes the note.
+      routes: t.routes.map((r) => (t.last_seq > 0 && r.sent_seq >= t.last_seq ? { ...r, sent_seq: seq } : r)),
+    });
+    const voices = new Set(args.segments.map((s) => s.speaker_id));
+    const creator = await ctx.db.get(t.started_by);
+    if (voices.size === 1 && creator?.voice_id_enabled) {
+      await ctx.scheduler.runAfter(0, internal.voiceprints.enrollFromSpeaker, {
+        transcript_id: t._id,
+        key: [...voices][0]!,
+        user_id: t.started_by,
+        kind: "self" as const,
+        match_required: false,
+      });
+    }
+    return { written: true };
+  },
+});
+
+/**
  * Transcribe a recording's uploaded audio.
  *
  * Scheduled by `attachRecording`, once, for a recording that ended with
@@ -1691,53 +1790,122 @@ export const finishRecordingTranscript = internalMutation({
 export const transcribeRecording = internalAction({
   args: { transcript_id: v.id("transcripts") },
   handler: async (ctx, args): Promise<void> => {
-    let ok = false;
-    try {
-      const row = await ctx.runQuery(internal.transcripts.getForTranscription, {
-        transcript_id: args.transcript_id,
-      });
-      if (!row?.storage_id) throw new Error("no audio attached");
-      // A regulated team's recording reaches OpenAI only once it has a BAA (lib/vendorGuard).
-      const gate = { ctx, scope: { row: { table: "transcripts", id: args.transcript_id } } };
-      const audio = await ctx.storage.get(row.storage_id);
-      if (!audio) throw new Error("audio missing from storage");
-      // The extension is what the API reads the container off. A phone records
-      // m4a; the desktop recorder's MediaRecorder gives webm everywhere but
-      // Safari, which gives mp4.
-      const ext = audio.type.includes("webm") ? "webm" : "m4a";
-      const segments = await transcribeAudio(
-        gate,
-        audio,
-        `recording.${ext}`,
-        Math.max(0, (row.ended_at ?? row.started_at) - row.started_at),
-      );
-      if (!segments.length) throw new Error("transcription came back empty");
-      for (let i = 0; i < segments.length; i += SEGMENT_WRITE_BATCH) {
-        await ctx.runMutation(internal.transcripts.appendRecordingSegments, {
-          transcript_id: args.transcript_id,
-          segments: segments.slice(i, i + SEGMENT_WRITE_BATCH),
-        });
-      }
-      ok = true;
-    } catch (err) {
-      console.error("[transcripts] recording transcription failed", String(err).slice(0, 300));
-    }
     await ctx.runMutation(internal.transcripts.finishRecordingTranscript, {
       transcript_id: args.transcript_id,
-      ok,
+      ok: await whisperTranscribe(ctx, args.transcript_id),
     });
   },
 });
 
-export const getForTranscription = internalQuery({
+/** Read a recording's words with whisper-1 and append them. True when words landed. */
+async function whisperTranscribe(ctx: any, transcriptId: Id<"transcripts">): Promise<boolean> {
+  try {
+    const row = await ctx.runQuery(internal.transcripts.getForTranscription, { transcript_id: transcriptId });
+    if (!row?.storage_id) throw new Error("no audio attached");
+    // A regulated team's recording reaches OpenAI only once it has a BAA (lib/vendorGuard).
+    const gate = { ctx, scope: { row: { table: "transcripts", id: transcriptId } } };
+    const audio = await ctx.storage.get(row.storage_id);
+    if (!audio) throw new Error("audio missing from storage");
+    // The extension is what the API reads the container off. A phone records
+    // m4a; the desktop recorder's MediaRecorder gives webm everywhere but
+    // Safari, which gives mp4.
+    const ext = audio.type.includes("webm") ? "webm" : "m4a";
+    const segments = await transcribeAudio(gate, audio, `recording.${ext}`, Math.max(0, (row.ended_at ?? row.started_at) - row.started_at));
+    if (!segments.length) throw new Error("transcription came back empty");
+    for (let i = 0; i < segments.length; i += SEGMENT_WRITE_BATCH) {
+      await ctx.runMutation(internal.transcripts.appendRecordingSegments, {
+        transcript_id: transcriptId,
+        segments: segments.slice(i, i + SEGMENT_WRITE_BATCH),
+      });
+    }
+    return true;
+  } catch (err) {
+    console.error("[transcripts] recording transcription failed", String(err).slice(0, 300));
+    return false;
+  }
+}
+
+/** What the voice note fallback decides on: whether the recording has no
+ *  words of its own, and its audio's size. */
+export const voiceNoteFallback = internalQuery({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args): Promise<{ empty: boolean; size: number | null }> => {
+    const t = await ctx.db.get(args.transcript_id);
+    const meta = t?.recording_storage_id ? await ctx.db.system.get(t.recording_storage_id) : null;
+    return { empty: !!t && t.last_seq === 0, size: meta?.size ?? null };
+  },
+});
+
+/**
+ * A voice note read again from its audio with engine C (lib/speechPipeline:
+ * Scribe v3 words on their speakers, our CAM++ worker naming the voices),
+ * for a team with the `voice_speakers` feature. Scheduled by attachRecording
+ * for every voice note. The pass replaces the live lines and closes the
+ * transcript out. When the worker does not answer, the lines still go on
+ * their speakers with nobody named. When Scribe fails, the note falls back to
+ * what it would have had without the feature: whisper for a note with no
+ * words, its live lines otherwise.
+ */
+export const transcribeVoiceNote = internalAction({
+  args: { transcript_id: v.id("transcripts") },
+  handler: async (ctx, args): Promise<void> => {
+    // One deadline for the whole pass, inside Convex's 10 minute action limit,
+    // so it always reaches finishRecordingTranscript and nothing sits on
+    // "pending": Scribe gets at most 5 min, naming what is left (skipped
+    // under a minute), and whisper runs only if there is time for it.
+    const deadline = Date.now() + VOICE_NOTE_DEADLINE_MS;
+    const gate = { ctx, scope: { row: { table: "transcripts", id: args.transcript_id } } };
+    try {
+      const wrote = await runSpeechPipeline(ctx, { _id: args.transcript_id }, {
+        words: scribeWordsSource(gate),
+        speakers: campplusEngine(),
+        deadline,
+      });
+      if (wrote) return;
+      throw new Error("Scribe heard no words");
+    } catch (err) {
+      console.error("[transcripts] voice note speakers pass failed, falling back", String(err).slice(0, 300));
+    }
+    const fallback: { empty: boolean; size: number | null } = await ctx.runQuery(internal.transcripts.voiceNoteFallback, {
+      transcript_id: args.transcript_id,
+    });
+    // A note with live words keeps them. One with none goes to whisper when
+    // there is time and its audio fits in the action; otherwise it fails
+    // plainly rather than waiting forever.
+    const whisperFits = fallback.size !== null && fallback.size <= WHISPER_MAX_BYTES && deadline - Date.now() >= WHISPER_MIN_MS;
+    if (fallback.empty && !whisperFits) console.error("[transcripts] voice note fallback skipped whisper (time or size)");
+    await ctx.runMutation(internal.transcripts.finishRecordingTranscript, {
+      transcript_id: args.transcript_id,
+      ok: fallback.empty ? whisperFits && (await whisperTranscribe(ctx, args.transcript_id)) : true,
+    });
+  },
+});
+
+/** The whole engine C pass, under Convex's 10 minute action limit. */
+export const VOICE_NOTE_DEADLINE_MS = 9 * 60_000;
+/** Whisper as the fallback needs at least this long. */
+const WHISPER_MIN_MS = 3 * 60_000;
+/** Whisper reads the whole file into the action and uploads it (OpenAI caps it at 25 MB). */
+const WHISPER_MAX_BYTES = 24 * 1024 * 1024;export const getForTranscription = internalQuery({
   args: { transcript_id: v.id("transcripts") },
   handler: async (ctx, args) => {
     const t = await ctx.db.get(args.transcript_id);
     if (!t || !isRecRoomKey(t.room_key)) return null;
+    // Size and type from storage metadata, so the pass decides whether to read
+    // the audio into the action before it does.
+    const meta = t.recording_storage_id ? await ctx.db.system.get(t.recording_storage_id) : null;
     return {
       storage_id: t.recording_storage_id ?? null,
+      size: meta?.size ?? null,
+      content_type: meta?.contentType ?? null,
       started_at: t.started_at,
       ended_at: t.ended_at ?? null,
+      team_id: t.team_id,
+      // The languages the room's seats were set to (a recording has none, so
+      // Scribe detects the language itself).
+      languages: unionTranscribeLanguages(
+        ...(await ctx.db.query("call_members").withIndex("by_room", (q) => q.eq("room_key", t.room_key)).collect()).map((m) => m.languages),
+      ),
     };
   },
 });
@@ -2026,6 +2194,15 @@ async function getCallCore(
     // `participants` (who the scribe heard), so a page lists the listeners
     // from here without matching names.
     guests: await callGuestsOnRecord(ctx, t),
+    // Who each voice of a diarized voice note is (lib/callSpeakers). The
+    // segments below carry their written speaker_name; a client names a line
+    // through resolveLineSpeaker(segment, speakers, roster), so an assignment
+    // made on this device paints every line before the server answers.
+    speakers: speakersForClient(t),
+    // The names of every teammate those speakers name, so a client names
+    // them whatever workspace it is in (callSpeakerRoster lays these over
+    // its own team members).
+    speaker_names: await speakerRoster(ctx, t.speakers),
     segments: segs.map((s: Doc<"transcript_segments">) => ({
       seq: s.seq,
       speaker_id: s.speaker_id,
@@ -2144,7 +2321,8 @@ export async function lineAtMoment(ctx: any, t: Doc<"transcripts">, atMs: number
   const hit = lineSaidAt(near, atMs);
   if (!hit) return null;
   const s = near[hit.index];
-  return { seq: s.seq, speaker_id: s.speaker_id, speaker_name: s.speaker_name, text: s.text, t0: s.t0, t1: s.t1, during: hit.during };
+  const nameOf = await lineSpeakerNames(ctx, t);
+  return { seq: s.seq, speaker_id: s.speaker_id, speaker_name: nameOf(s), text: s.text, t0: s.t0, t1: s.t1, during: hit.during };
 }
 
 async function callRefCore(
@@ -2177,6 +2355,7 @@ async function callRefCore(
       q.eq("transcript_id", t._id).gte("seq", from).lte("seq", to),
     )
     .take(CALL_EXCERPT_MAX_TURNS + 1);
+  const nameOf = await lineSpeakerNames(ctx, t);
   return {
     ...lean,
     turns: {
@@ -2186,7 +2365,7 @@ async function callRefCore(
       segments: segs.slice(0, CALL_EXCERPT_MAX_TURNS).map((s: Doc<"transcript_segments">) => ({
         seq: s.seq,
         speaker_id: s.speaker_id,
-        speaker_name: s.speaker_name,
+        speaker_name: nameOf(s),
         text: s.text,
         t0: s.t0,
         t1: s.t1,
@@ -2266,13 +2445,15 @@ export const webSearchCalls = query({
           .query("transcript_segments")
           .withSearchIndex("search_text", (s) => s.search("text", q).eq("transcript_id", c._id))
           .take(CALL_SEARCH_LINES + 1);
+        // The list row is shaped without speakers; read them only for a call with a hit.
+        const nameOf = await lineSpeakerNames(ctx, rows.length ? ((await ctx.db.get(c._id)) ?? {}) : {});
         return {
           _id: c._id,
           more: rows.length > CALL_SEARCH_LINES,
           lines: rows.slice(0, CALL_SEARCH_LINES).map((r) => ({
             seq: r.seq,
             speaker_id: r.speaker_id,
-            speaker_name: r.speaker_name,
+            speaker_name: nameOf(r),
             text: r.text,
             t0: r.t0,
           })),
@@ -2373,6 +2554,128 @@ export const setRecordingScope = mutation({
       throw new Error("Not a member of that team");
     }
     await ctx.db.patch(t._id, { team_id: args.team_id, rec_shared: true });
+  },
+});
+
+// ── Who spoke in a voice note ─────────────────────────────────────────────
+// A diarized voice note's lines carry a voice key (`spk:<n>`) and
+// `transcripts.speakers` says who each voice is
+// (docs/architecture/speaker-attribution.md). These are a person's
+// corrections: say who a voice is, confirm a voice match's suggestion, move
+// one line to another voice. Whoever may read the recording may correct it
+// (the creator, and the teammates it was shared with); a teammate named must
+// be on the recording's team. The web store's assignCallSpeaker,
+// confirmCallSpeaker and moveCallLineSpeaker paint the same writes first.
+
+type SpeakerRow = NonNullable<Doc<"transcripts">["speakers"]>[number];
+const SPEAKER_NAME_MAX = 80;
+
+/** The voice note a person is correcting, or one throw that names nothing. */
+async function requireSpeakerEditableCall(ctx: any, transcriptId: Id<"transcripts">) {
+  const userId = await getAuthUserId(ctx);
+  if (!userId) throw new Error("Not authenticated");
+  const t: Doc<"transcripts"> | null = await ctx.db.get(transcriptId);
+  // liveDoor off: walking past a live room never lets anyone relabel it.
+  if (!t || !(await canReadCall(ctx, userId, t, { liveDoor: false }))) throw new Error("Call not found");
+  if (!isRecRoomKey(t.room_key)) throw new Error("Only a voice note's speakers can be changed");
+  return { userId, t };
+}
+
+/** Write a person's word on who a voice is, and offer the voice as a sample
+ *  of a teammate who turned recognition on. Consent for a sample from an
+ *  assignment: a person naming their own voice may give a first sample;
+ *  anyone else's assignment only confirms a voice the person already has
+ *  samples of (`match_required`: the engine must score the cluster at or
+ *  above its accept threshold against them, and addSamples refuses a first
+ *  sample), so it is never scheduled for someone with none. */
+async function writePersonSpeaker(ctx: any, t: Doc<"transcripts">, by: Id<"users">, entry: WireCallSpeaker): Promise<void> {
+  const row = { ...entry, by, at: Date.now() } as SpeakerRow;
+  await ctx.db.patch(t._id, { speakers: withSpeaker(t.speakers, row) });
+  if (!row.user_id) return;
+  const person = await ctx.db.get(row.user_id);
+  if (!person?.voice_id_enabled) return;
+  const self = String(row.user_id) === String(by);
+  if (!self && !(await ctx.db.query("voiceprints").withIndex("by_user", (q: any) => q.eq("user_id", row.user_id)).first())) return;
+  await ctx.scheduler.runAfter(0, internal.voiceprints.enrollFromSpeaker, {
+    transcript_id: t._id,
+    key: row.key,
+    user_id: row.user_id,
+    kind: "assigned" as const,
+    match_required: !self,
+  });
+}
+
+/** Say who voice `key` is: a teammate (`user_id`), someone outside the team
+ *  (`name`), or nobody known (`clear`, which also keeps a voice match from
+ *  suggesting it again). Exactly one of the three. Naming two voices as the
+ *  same person is how a person says they are one voice. */
+export const assignSpeaker = mutation({
+  args: {
+    transcript_id: v.id("transcripts"),
+    key: v.string(),
+    user_id: v.optional(v.id("users")),
+    name: v.optional(v.string()),
+    clear: v.optional(v.boolean()),
+  },
+  handler: async (ctx, args) => {
+    const { userId, t } = await requireSpeakerEditableCall(ctx, args.transcript_id);
+    const name = args.name?.trim();
+    const given = [args.user_id !== undefined, args.name !== undefined, args.clear === true].filter(Boolean).length;
+    if (given !== 1) throw new Error("Give exactly one of user_id, name or clear");
+    if (!(t.speakers ?? []).some((s) => s.key === args.key)) throw new Error("No such speaker in this call");
+    if (args.name !== undefined && (!name || name.length > SPEAKER_NAME_MAX)) {
+      throw new Error(`A name is 1 to ${SPEAKER_NAME_MAX} characters`);
+    }
+    if (args.user_id && !(await isTeamMember(ctx, args.user_id, t.team_id))) {
+      throw new Error("That person is not on this call's team");
+    }
+    const assignment: SpeakerAssignment = args.user_id ? { user_id: args.user_id } : name ? { name } : { clear: true };
+    await writePersonSpeaker(ctx, t, userId, assignedSpeaker(args.key, assignment));
+  },
+});
+
+/** Confirm the person a voice match suggested for `key`: the suggestion
+ *  becomes a person's word. A key with nothing to confirm is refused. */
+export const confirmSpeaker = mutation({
+  args: { transcript_id: v.id("transcripts"), key: v.string() },
+  handler: async (ctx, args) => {
+    const { userId, t } = await requireSpeakerEditableCall(ctx, args.transcript_id);
+    const entry = (t.speakers ?? []).find((s) => s.key === args.key);
+    const confirmed = confirmedSpeaker(entry);
+    if (!confirmed) throw new Error("Nothing to confirm for that speaker");
+    // A suggestion made while the person was a member; check they still are.
+    if (confirmed.user_id && !(await isTeamMember(ctx, confirmed.user_id as Id<"users">, t.team_id))) {
+      throw new Error("That person is not on this call's team");
+    }
+    await writePersonSpeaker(ctx, t, userId, confirmed);
+  },
+});
+
+/** Move line `seq` to voice `key`: an existing voice, or the next new one
+ *  (nextSpeakerKey), which starts as an unknown voice. The line's written
+ *  speaker_name becomes that voice's label; who it is stays in `speakers`. */
+export const moveLineSpeaker = mutation({
+  args: { transcript_id: v.id("transcripts"), seq: v.number(), key: v.string() },
+  handler: async (ctx, args) => {
+    const { userId, t } = await requireSpeakerEditableCall(ctx, args.transcript_id);
+    // Only a diarized note has voices to move between: a legacy recording's
+    // `mic` lines would otherwise gain a lone spk:0 and read as diarized.
+    if (!t.speakers?.length) throw new Error("This recording's voices are not separated");
+    const seg = await ctx.db
+      .query("transcript_segments")
+      .withIndex("by_transcript_seq", (q) => q.eq("transcript_id", t._id).eq("seq", args.seq))
+      .first();
+    if (!seg) throw new Error("No such line in this call");
+    const known = (t.speakers ?? []).some((s) => s.key === args.key);
+    if (!known && args.key !== nextSpeakerKey(t.speakers)) throw new Error("No such speaker in this call");
+    if (!known) {
+      await ctx.db.patch(t._id, {
+        speakers: withSpeaker(t.speakers, { ...assignedSpeaker(args.key, { clear: true }), by: userId, at: Date.now() } as SpeakerRow),
+      });
+    }
+    if (seg.speaker_id !== args.key) {
+      await ctx.db.patch(seg._id, { speaker_id: args.key, speaker_name: speakerLabel(args.key) });
+    }
   },
 });
 
@@ -2486,8 +2789,11 @@ export const cliGetCall = query({
     // than the call. An agent learns whether the call is shared, never how
     // to open it; the page's share control is where a person copies a link.
     const { share_token, ...rest } = call;
+    // The CLI prints speaker_name as is: name each line here.
+    const nameOf = await lineSpeakerNames(ctx, t!);
     return {
       ...rest,
+      segments: rest.segments.map((s: { speaker_id: string; speaker_name: string }) => ({ ...s, speaker_name: nameOf(s) })),
       shared: !!share_token,
       video_shared: shareIncludesVideo(t!),
       place: await callPlaceNames(ctx, auth.userId, t!.room_key),
@@ -2499,7 +2805,7 @@ export const cliGetCall = query({
 // ── ASR credentials ───────────────────────────────────────────────────────
 // OpenAI Realtime transcription: the scribe opens one websocket per audio
 // track and streams pcm16; the server returns streaming transcript deltas and
-// VAD speech start/stop events (the gap signal). The browser must never see
+// a completed line for each turn the client commits. The browser must never see
 // OPENAI_API_KEY, so this action mints a short-lived client secret scoped to
 // a transcription session. Authorization = may the caller transcribe the room.
 
@@ -2509,6 +2815,10 @@ export const mintAsrToken = action({
     // Languages this recognizer may emit, ISO-639-1. The client sends the
     // browser's list; we fold and cap it here so a bad tag cannot fail the mint.
     languages: v.optional(v.array(v.string())),
+    // The client finds turn ends in its own audio and commits each one
+    // (asrEndpointer). Absent on builds from before that; they get the legacy
+    // session, which completes lines on server VAD (legacyAsrTranscriptionSession).
+    client_turns: v.optional(v.boolean()),
   },
   handler: async (
     ctx,
@@ -2522,7 +2832,11 @@ export const mintAsrToken = action({
     if (!grant) return { error: "Not authorized for this room" };
     if (grant.refusal) return { error: grant.refusal };
     if (!process.env.OPENAI_API_KEY) return { error: "Transcription is not configured" };
-    let model = LIVE_TRANSCRIBE_MODEL;
+    // gpt-live-transcribe is the only realtime transcription model OpenAI
+    // still supports, so a refusal is reported, never answered with an older
+    // model. The client closes turns itself (asrEndpointer), so any model it
+    // gets back is fed the same way.
+    const model = LIVE_TRANSCRIBE_MODEL;
     let languages = unionTranscribeLanguages(args.languages, grant.languages);
     // GA realtime API: client secrets are minted at /v1/realtime/client_secrets
     // with the session config nested under `session` (audio.input vocabulary).
@@ -2553,19 +2867,16 @@ export const mintAsrToken = action({
       if (!secret) return { error: "ASR session mint returned no secret" };
       return { client_secret: secret };
     };
+    if (!args.client_turns) {
+      const legacy = await mint(legacyAsrTranscriptionSession() as unknown as ReturnType<typeof asrTranscriptionSession>);
+      if ("error" in legacy) return { error: legacy.error };
+      return { client_secret: legacy.client_secret, model: LEGACY_TRANSCRIBE_MODEL, languages: [] };
+    }
     let minted = await mint(asrTranscriptionSession(model, languages));
     // One unsupported language code rejects the whole session. Retry
     // unconstrained so the huddle still gets words; the client keeps its
     // own list for the script filter.
     if ("error" in minted && languages.length) {
-      languages = [];
-      minted = await mint(asrTranscriptionSession(model, languages));
-    }
-    // The live model 400'd the session even without languages (VAD body or
-    // the model itself). The previous recognizer still mints, and it closes
-    // turns on VAD without a client commit.
-    if ("error" in minted) {
-      model = FALLBACK_TRANSCRIBE_MODEL;
       languages = [];
       minted = await mint(asrTranscriptionSession(model, languages));
     }
@@ -2626,6 +2937,7 @@ export const readUnsent = internalQuery({
       if (!p || p.killed) dead.push(r.target);
       else pacing[r.target] = p;
     }
+    const nameOf = await lineSpeakerNames(ctx, t);
     return {
       now,
       dead,
@@ -2646,7 +2958,7 @@ export const readUnsent = internalQuery({
       segments: segs.map((s) => ({
         seq: s.seq,
         speaker_id: s.speaker_id,
-        speaker_name: s.speaker_name,
+        speaker_name: nameOf(s),
         text: s.text,
         // Wall clock of the utterance's end: the offsets are from started_at.
         ended_at: t.started_at + s.t1,

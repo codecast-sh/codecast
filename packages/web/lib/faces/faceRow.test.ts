@@ -499,6 +499,8 @@ describe("the card", () => {
       mute: false,
       words: { stage: "live", badge: "TALKING" },
       hearing: { state: "busy" },
+      // Call turns the burst into a call and rings the person it was for.
+      callTo: [ANN],
     });
     const heard = deriveFaceRow(
       input({ walkie: walkie(burstRoom(DM_ANN), { sending: sendingTo(DM_ANN) }), occupancy: { [DM_ANN]: [seat(ME), seat(ANN)] }, call: call(DM_ANN) }),
@@ -618,6 +620,8 @@ describe("the card", () => {
     );
     expect(row.card).toMatchObject({ kind: "live", mute: true, muted: true, words: { stage: "locked", badge: "ON THE LINE · MUTED" } });
     expect(row.me).toMatchObject({ muted: true, level: null });
+    // Already a call: nothing to upgrade.
+    expect(row.card).not.toHaveProperty("callTo");
   });
 });
 

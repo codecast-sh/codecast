@@ -155,12 +155,10 @@ describe("asrTranscriptionSession", () => {
     });
   });
 
-  test("sends the full VAD object the live mint requires", () => {
-    expect(asrTranscriptionSession(LIVE_TRANSCRIBE_MODEL).audio.input.turn_detection).toEqual({
-      type: "server_vad",
-      threshold: 0.5,
-      prefix_padding_ms: 300,
-      silence_duration_ms: 600,
+  test("asks for no turn detection, which the live model refuses", () => {
+    expect(asrTranscriptionSession(LIVE_TRANSCRIBE_MODEL, ["en"]).audio.input).toEqual({
+      format: { type: "audio/pcm", rate: 24000 },
+      transcription: { model: LIVE_TRANSCRIBE_MODEL, languages: ["en"] },
     });
   });
 });

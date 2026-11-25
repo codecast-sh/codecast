@@ -27,13 +27,18 @@
 // commits the buffer and waits, bounded, for the transcription to come back.
 // `close()` remains what it always was: the abandon path.
 //
-// A huddle never calls finish until hangup. gpt-live-transcribe only emits a
-// completed line after `input_audio_buffer.commit`, so `speech_stopped` is
-// that commit. The previous model closed turns on VAD by itself.
+// TURNS END HERE, NOT ON THE SERVER. gpt-live-transcribe refuses server turn
+// detection and emits a completed line only after `input_audio_buffer.commit`.
+// The endpointer (shared/contracts/asrEndpointer) reads the same PCM this pipe
+// sends, fires the speech start/stop callbacks, and commits each turn it
+// closes. A line's t0/t1 are the endpointer's sample positions on the caller's
+// clock, so a line is stamped when it was said, not when its words came back.
 import { api } from "@codecast/convex/convex/_generated/api";
 import { openWebSocket } from "../openWebSocket";
 import {
   LIVE_TRANSCRIBE_MODEL,
+  createEndpointer,
+  samplesToMs,
   isUnexpectedTranscript,
   localTranscribeLanguages,
   normalizeTranscribeLanguages,
@@ -51,7 +56,9 @@ export type AsrUtterance = {
 };
 
 export type AsrPipeEvents = {
+  /** A turn reached 250 ms of voiced audio (the endpointer's start). */
   onSpeechStart?: () => void;
+  /** The endpointer closed a turn after 600 ms of quiet. */
   onSpeechStop?: () => void;
   onUtterance?: (u: AsrUtterance) => void;
   /** The utterance being spoken RIGHT NOW, revised as each delta lands, and
@@ -70,7 +77,7 @@ export type AsrPipeEvents = {
 };
 
 export type AsrPipe = {
-  /** True between the VAD's speech start and stop. */
+  /** True between the endpointer's speech start and stop. */
   readonly speaking: boolean;
   /**
    * End it properly: stop capturing, send everything still buffered, commit it,
@@ -100,6 +107,8 @@ const SAMPLE_RATE = 24_000;
  *  next to a burst; the cap only exists so a pipe that never connects cannot
  *  grow without limit. */
 const BUFFER_CAP_SAMPLES = SAMPLE_RATE * 30;
+/** The least audio the server accepts in a commit (100 ms). */
+const MIN_COMMIT_SAMPLES = SAMPLE_RATE / 10;
 /** How long a release waits for the last words before giving up on them. */
 const FINISH_TIMEOUT_MS = 2_500;
 
@@ -188,8 +197,18 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
     opts.languages ?? localTranscribeLanguages(),
   );
   let closed = false;
-  let speaking = false;
-  let utteranceStart = 0;
+  // The audio's own clock: the caller's time when sample 0 was fed. Every line
+  // is this plus its sample position, so latency never moves a line.
+  const base = clock();
+  const endpointer = createEndpointer();
+  const at = (sample: number) => base + samplesToMs(sample);
+  // Each commit's span, oldest first, until the server names its item.
+  const pendingSpans: Array<{ t0: number; t1: number }> = [];
+  const itemSpans = new Map<string, { t0: number; t1: number }>();
+  // The latest turn start and the position of the last commit, for a line
+  // with no span of its own (finish's commit, an older server's own turns).
+  let lastStart = 0;
+  let lastCommitAt = 0;
   let ws: WebSocket | null = null;
   // False from the moment `finish` is called: what is buffered by then is
   // exactly what gets committed, so no audio arrives after the commit.
@@ -198,19 +217,21 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
   // The mint refused, the socket died: either way there is nothing left to wait
   // for, so a release stops waiting instead of spending its whole budget.
   let hopeless = false;
-  // Set by the transcription that answers our commit — the one thing `finish`
-  // is actually waiting for.
-  let transcribedSinceCommit = false;
-  // gpt-live-transcribe emits a final transcript only after the client
-  // commits a turn. The previous model closed turns on server VAD by itself,
-  // which is why a huddle (which never calls finish until hangup) used to
-  // show words and a walkie burst still did (finish commits). When the mint
-  // hands back the live model, speech_stopped is the close of a turn and we
-  // have to commit it. An older mint that does not name the model keeps the
-  // old "VAD already committed" path.
-  let commitOnSpeechStop = false;
-  /** PCM that has nowhere to go yet, oldest first. */
-  let buffered: ArrayBuffer[] = [];
+  // Commits the server has not answered yet. `finish` waits for this to reach
+  // zero: a flag would let the answer to an earlier turn release the wait for
+  // the last one, and the last words would be lost.
+  let outstanding = 0;
+  const answered = () => {
+    outstanding = Math.max(0, outstanding - 1);
+  };
+  // Null until the mint answers. A server that still mints an older model
+  // with server VAD closes turns itself, and a second commit from here would
+  // only come back as an empty-buffer error.
+  let clientCommits: boolean | null = null;
+  /** PCM (and turn ends) that have nowhere to go yet, oldest first. */
+  let buffered: Array<ArrayBuffer | "commit"> = [];
+  /** The span of each "commit" in `buffered`, in the same order. */
+  const queuedSpans: Array<{ t0: number; t1: number }> = [];
   let bufferedSamples = 0;
   // The utterance in progress, rebuilt from its deltas. Keyed by item so a new
   // sentence starts from empty rather than from the last one's tail.
@@ -225,29 +246,70 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
     ws!.send(JSON.stringify({ type: "input_audio_buffer.append", audio: b64(pcm) }));
   }
 
-  function feed(pcm: ArrayBuffer) {
-    if (socketOpen()) {
-      append(pcm);
+  function sendCommit(span: { t0: number; t1: number }) {
+    if (clientCommits === false) return;
+    pendingSpans.push(span);
+    outstanding += 1;
+    ws!.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+  }
+
+  function feed(item: ArrayBuffer | "commit", span?: { t0: number; t1: number }) {
+    if (socketOpen() && clientCommits !== null) {
+      if (item === "commit") sendCommit(span!);
+      else append(item);
       return;
     }
-    buffered.push(pcm);
-    bufferedSamples += pcm.byteLength / 2;
+    // A turn that closed before the socket opened commits in order with its
+    // audio, once the socket is there.
+    if (item === "commit") {
+      buffered.push(item);
+      queuedSpans.push(span!);
+      return;
+    }
+    buffered.push(item);
+    bufferedSamples += item.byteLength / 2;
     // Drop the oldest rather than the newest: if a socket takes so long that
     // half a minute has piled up, the recent half minute is the useful one.
     while (bufferedSamples > BUFFER_CAP_SAMPLES && buffered.length > 0) {
-      bufferedSamples -= buffered.shift()!.byteLength / 2;
+      const dropped = buffered.shift()!;
+      if (dropped === "commit") queuedSpans.shift();
+      else bufferedSamples -= dropped.byteLength / 2;
     }
   }
-
   /** Everything said before the socket existed, in the order it was said. */
   function flush() {
     const queued = buffered;
     buffered = [];
     bufferedSamples = 0;
-    for (const pcm of queued) {
+    for (const item of queued) {
       if (!socketOpen()) return;
-      append(pcm);
+      if (item === "commit") sendCommit(queuedSpans.shift()!);
+      else append(item);
     }
+  }
+
+  /** Run the endpointer over PCM about to be sent. A closed turn commits at
+   *  the sample where it closed: the buffer is split there, so a forced cut
+   *  lands on its quiet frame and not at the end of a capture buffer. */
+  function hear(pcm: ArrayBuffer) {
+    const from = endpointer.position;
+    const turns = endpointer.push(new Int16Array(pcm, 0, pcm.byteLength >> 1));
+    let sent = from;
+    for (const ev of turns) {
+      if (ev.type === "start") {
+        lastStart = ev.at;
+        events?.onSpeechStart?.();
+        continue;
+      }
+      if (ev.commitAt > sent) feed(pcm.slice((sent - from) * 2, (ev.commitAt - from) * 2));
+      sent = Math.max(sent, ev.commitAt);
+      lastCommitAt = ev.commitAt;
+      if (!ev.forced) events?.onSpeechStop?.();
+      else lastStart = ev.end;
+      feed("commit", { t0: at(ev.start), t1: at(ev.end) });
+    }
+    if (sent === from) feed(pcm);
+    else if (sent < endpointer.position) feed(pcm.slice((sent - from) * 2));
   }
 
   /** Poll a condition to a deadline. Small and dependency-free on purpose: the
@@ -265,11 +327,11 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
 
   const pipe: AsrPcmSession = {
     get speaking() {
-      return speaking;
+      return !closed && endpointer.speaking;
     },
     feedPcm16(pcm: ArrayBuffer) {
-      if (closed || !capturing || pcm.byteLength === 0) return;
-      feed(pcm);
+      if (closed || !capturing || pcm.byteLength < 2) return;
+      hear(pcm);
     },
     feedInt16(samples: Int16Array, sampleRate: number) {
       if (closed || !capturing) return;
@@ -285,11 +347,20 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
           // A socket still handshaking may yet carry the words: wait for it
           // inside the same budget rather than throwing the burst away.
           await until(socketOpen, deadline);
-          if (socketOpen()) {
+          if (socketOpen() && clientCommits !== null) {
             flush();
-            transcribedSinceCommit = false;
-            ws!.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-            await until(() => transcribedSinceCommit, deadline);
+            // Whatever the endpointer had not closed yet: the open turn, or
+            // the tail since the last commit. Nothing new since the last
+            // commit means nothing to commit; the server would answer an
+            // empty buffer with an error.
+            const tail = endpointer.position - lastCommitAt;
+            if (!clientCommits || tail >= MIN_COMMIT_SAMPLES) {
+              const from = endpointer.turnStart ?? lastCommitAt;
+              if (clientCommits) pendingSpans.push({ t0: at(from), t1: at(endpointer.position) });
+              outstanding += 1;
+              ws!.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+            }
+            await until(() => outstanding === 0, deadline);
           }
         } catch {}
         pipe.close();
@@ -299,7 +370,6 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
     close() {
       if (closed) return;
       closed = true;
-      speaking = false;
       buffered = [];
       bufferedSamples = 0;
       try {
@@ -310,20 +380,28 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
   };
 
   void (async () => {
+    // `client_turns` tells the server this pipe closes its own turns. A server
+    // from before that field throws on it as an unknown argument, and a
+    // production deployment may redact that to "Server Error". So any THROWN
+    // first mint (validation or network) is asked once more without it, and
+    // `clientCommits` follows whatever model comes back. A returned `{ error }`
+    // is the server's answer and is not retried here.
+    let clientTurns = true;
     const tryMint = (args: { room_key: string; languages?: string[] }) =>
       convex
-        .action(api.transcripts.mintAsrToken, args)
-        .catch((err: any) => ({ error: String(err?.message ?? "Could not start transcription") }));
-    // Languages go on the first mint so a mixed room stays constrained. If
-    // that payload is refused — an older server that has no field, or OpenAI
-    // rejecting one tag — retry unconstrained rather than sit on a live
-    // transcript with no recognizer. Auth and "not configured" are the room
-    // or the deployment; a second trip cannot change those.
-    let minted = await tryMint({
-      room_key: roomKey,
-      ...(languages.length ? { languages } : {}),
-    });
+        .action(api.transcripts.mintAsrToken, clientTurns ? { ...args, client_turns: true } : args)
+        .catch((err: any) => ({
+          error: String(err?.message ?? "Could not start transcription"),
+          thrown: true,
+        }));
+    const first = { room_key: roomKey, ...(languages.length ? { languages } : {}) };
+    let minted = await tryMint(first);
     if (closed) return;
+    if (minted?.thrown) {
+      clientTurns = false;
+      minted = await tryMint(first);
+      if (closed) return;
+    }
     if (
       languages.length &&
       typeof minted?.error === "string" &&
@@ -355,7 +433,7 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
     if (Array.isArray(minted.languages) && minted.languages.length) {
       languages = normalizeTranscribeLanguages(minted.languages);
     }
-    commitOnSpeechStop = minted.model === LIVE_TRANSCRIBE_MODEL;
+    clientCommits = minted.model === LIVE_TRANSCRIBE_MODEL;
 
     // Browser websockets cannot set headers; the Realtime API accepts the
     // ephemeral secret as a subprotocol.
@@ -394,20 +472,10 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
       } catch {
         return;
       }
-      if (msg.type === "input_audio_buffer.speech_started") {
-        speaking = true;
-        utteranceStart = clock();
-        events?.onSpeechStart?.();
-      } else if (msg.type === "input_audio_buffer.speech_stopped") {
-        speaking = false;
-        events?.onSpeechStop?.();
-        // Close the turn. gpt-live-transcribe does not emit a completed
-        // transcript on VAD the way gpt-4o-mini-transcribe did; without this
-        // a huddle stays on "Listening" for its whole length.
-        if (commitOnSpeechStop && socketOpen() && capturing && !finishing) {
-          transcribedSinceCommit = false;
-          ws!.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-        }
+      if (msg.type === "input_audio_buffer.committed" && clientCommits) {
+        // Commits are answered in order: the oldest span is this item's.
+        const span = pendingSpans.shift();
+        if (span && msg.item_id) itemSpans.set(String(msg.item_id), span);
       } else if (
         msg.type === "conversation.item.input_audio_transcription.delta" &&
         typeof msg.delta === "string"
@@ -423,7 +491,7 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
         events?.onPartial?.(isUnexpectedTranscript(partialText, languages) ? "" : partialText);
       } else if (msg.type === "conversation.item.input_audio_transcription.completed") {
         // Whatever the words turn out to be, the commit has been answered.
-        transcribedSinceCommit = true;
+        answered();
         partialItem = "";
         partialText = "";
         events?.onPartial?.("");
@@ -431,23 +499,25 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
         if (!text) return;
         // Dropped on purpose, but never in silence: the scribe shows the drop.
         if (isUnexpectedTranscript(text, languages)) return events?.onError?.("Dropped a line outside the call's languages");
-        const t1 = clock();
-        events?.onUtterance?.({ text, t0: utteranceStart || Math.max(0, t1 - 2000), t1 });
+        const item = String(msg.item_id ?? "");
+        const span = itemSpans.get(item) ?? { t0: at(lastStart), t1: at(endpointer.position) };
+        itemSpans.delete(item);
+        events?.onUtterance?.({ text, t0: span.t0, t1: span.t1 });
       } else if (msg.type === "conversation.item.input_audio_transcription.failed") {
         // The server heard the commit and got nothing out of it. Waiting longer
         // would only delay the release.
-        transcribedSinceCommit = true;
+        answered();
         events?.onError?.("Could not make out the words");
       } else if (msg.type === "error") {
         // An error after a commit is the answer to that commit.
-        transcribedSinceCommit = true;
+        answered();
+        if (msg.error?.code === "input_audio_buffer_commit_empty") pendingSpans.shift();
         events?.onError?.(String(msg.error?.message ?? "ASR error").slice(0, 140));
       }
     };
 
     socket.onclose = () => {
       if (closed) return;
-      speaking = false;
       hopeless = true;
       // Same contract as onFailed: this pipe is over. A caller that wants the
       // words back opens a FRESH one (the scribe does exactly that), so holding
