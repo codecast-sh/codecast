@@ -22,6 +22,7 @@ import { modelCallProblem } from "@codecast/shared/contracts/modelCall";
 import { workspaceForConversation } from "./lib/access";
 import { parseWorkspaceKey, workspaceKey } from "./lib/accessKeys";
 import { isTeamMember } from "./privacy";
+import { canReadCall } from "./transcripts";
 import { teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import {
@@ -31,6 +32,7 @@ import {
   parsePriorityPassOutput,
   priorityPassRequest,
   type MergePlan,
+  type PassCall,
   type PassPriority,
   type PassSession,
   type PassTask,
@@ -68,6 +70,12 @@ const PR_LINKS_PER_SESSION = 10;
 /** Pull request rows one pass loads beyond what sessions fold: a row carries its files and can reach 1 MB. */
 const PR_ROWS_READ = 8;
 const PRIORITIES_READ = 200;
+/** The newest calls one pass looks through for the ones the person was in; the prompt keeps fewer (PRIORITY_PASS_CAPS.calls). */
+const CALLS_READ = 30;
+/** A call started this long before the cursor can still have ended after it. */
+const CALL_LONGEST_MS = DAY;
+/** The sessions a priority's count is read from when it has none stored yet. */
+const SESSION_COUNT_READ = 500;
 const INITIATIVES_READ = 200;
 /** How long the model may take: a full prompt and a long reply run minutes. */
 const PASS_TIMEOUT_MS = 5 * 60_000;
@@ -214,6 +222,37 @@ async function sessionPrs(ctx: { db: any }, conv: Doc<"conversations">, budget: 
   return [...out.values()];
 }
 
+/** A standing role's seat, a worker another session started (with its parent's id), or the person's own session. */
+async function sessionKind(ctx: { db: any }, conv: Doc<"conversations">): Promise<Pick<PassSession, "kind" | "parent">> {
+  if (conv.org_role_id || conv.standing_role_id) return { kind: "role" };
+  if (!conv.parent_conversation_id) return { kind: "session" };
+  const parent: Doc<"conversations"> | null = await ctx.db.get(conv.parent_conversation_id);
+  return { kind: "worker", parent: parent ? sessionId(parent) : String(conv.parent_conversation_id) };
+}
+
+/**
+ * The team's calls that ended in (since, until] which the person was in
+ * (spoke, was filmed, or ran the scribe) and may still read, oldest first,
+ * with their summary and action items. A call is a team's record: a personal
+ * workspace has none.
+ */
+async function callsIn(ctx: { db: any }, userId: Id<"users">, teamId: Id<"teams">, since: number, until: number): Promise<PassCall[]> {
+  const rows: Doc<"transcripts">[] = await ctx.db
+    .query("transcripts")
+    .withIndex("by_team_started", (q: any) => q.eq("team_id", teamId).gt("started_at", since - CALL_LONGEST_MS).lte("started_at", until))
+    .order("desc")
+    .take(CALLS_READ);
+  const me = String(userId);
+  const out: PassCall[] = [];
+  for (const t of rows) {
+    if (!t.ended_at || t.ended_at <= since || t.ended_at > until || !(t.summary?.trim() || t.action_items?.length)) continue;
+    const joined = (t.participants ?? []).some((p) => String(p.id) === me) || (t.recorded_people ?? []).some((id) => String(id) === me) || String(t.started_by) === me;
+    if (!joined || !(await canReadCall(ctx, userId, t))) continue;
+    out.push({ id: t.short_id ?? String(t._id), title: t.title ?? "Call", at: t.ended_at, summary: t.summary ?? "", action_items: t.action_items ?? [] });
+  }
+  return out.sort((a, b) => a.at - b.at);
+}
+
 /**
  * Assembles the pass's input for one person in one workspace: what they
  * touched since the cursor, and their priorities now. A session filed under a
@@ -276,6 +315,7 @@ export const passInputs = internalQuery({
       const conv = t.conv;
       sessions.push({
         id: sessionId(conv),
+        ...(await sessionKind(ctx, conv)),
         title: conv.title ?? "",
         first_prompt: conv.first_prompt ?? "",
         pin: conv.thread_state ? { text: conv.thread_state, ...(conv.thread_state_status ? { status: conv.thread_state_status } : {}) } : null,
@@ -335,6 +375,7 @@ export const passInputs = internalQuery({
     const user: Doc<"users"> | null = await ctx.db.get(args.user_id);
     const ws = parseWorkspaceKey(args.workspace);
     const team: Doc<"teams"> | null = ws?.type === "team" ? await ctx.db.get(ws.teamId) : null;
+    const calls = team ? await callsIn(ctx, args.user_id, team._id, cursor_at, until) : [];
     return {
       input: {
         person: user?.name ?? "this person",
@@ -345,6 +386,7 @@ export const passInputs = internalQuery({
         initiatives,
         step_tasks,
         sessions,
+        calls,
       },
       cursor_at,
       more: read.more || truncated,
@@ -526,6 +568,7 @@ export const applyPlan = internalMutation({
         user_id: args.user_id,
         workspace: args.workspace,
         short_id,
+        session_count: 0,
         created_at: now,
         updated_at: now,
       });
@@ -551,13 +594,23 @@ export const applyPlan = internalMutation({
       counts.updated++;
     }
 
+    const mergedInto = new Map<Id<"priorities">, Id<"priorities">>();
     for (const m of plan.merges) {
       const row = await mine(m.short_id);
       const into = await resolve(m.merged_into);
       if (!row || !into || row.status === "set_aside") continue;
       await ctx.db.patch(row._id, { status: "merged", merged_into: into, rank: undefined, updated_at: now });
+      mergedInto.set(row._id, into);
       counts.merged++;
     }
+
+    // Each session move changes two priorities' counts: these are the moves, by priority.
+    const moved = new Map<Id<"priorities">, number>();
+    const move = async (conv: Doc<"conversations">, to: Id<"priorities"> | undefined, step_key: string | undefined) => {
+      if (conv.priority_id) moved.set(conv.priority_id, (moved.get(conv.priority_id) ?? 0) - 1);
+      if (to) moved.set(to, (moved.get(to) ?? 0) + 1);
+      await ctx.db.patch(conv._id, { priority_id: to, priority_step_key: step_key });
+    };
 
     const conversationOf = async (ref: string): Promise<Doc<"conversations"> | null> => {
       const id = ctx.db.normalizeId("conversations", ref);
@@ -570,14 +623,29 @@ export const applyPlan = internalMutation({
       const conv = await conversationOf(s.session);
       const priority = await resolve(s.priority);
       if (!conv || !priority) continue;
-      await ctx.db.patch(conv._id, { priority_id: priority, priority_step_key: s.step_key ?? undefined });
+      await move(conv, priority, s.step_key ?? undefined);
       counts.mapped_sessions++;
     }
     for (const ref of plan.unmap) {
       const conv = await conversationOf(ref);
       const held: Doc<"priorities"> | null = conv?.priority_id ? await ctx.db.get(conv.priority_id) : null;
       if (!conv || (held && (String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace))) continue;
-      await ctx.db.patch(conv._id, { priority_id: undefined, priority_step_key: undefined });
+      await move(conv, undefined, undefined);
+    }
+    // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown.
+    for (const [from, into] of mergedInto) {
+      const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_READ);
+      for (const conv of left) if (inWorkspace(conv, args.user_id, args.workspace)) await move(conv, into, undefined);
+    }
+
+    // Counts follow the moves; a priority with no count yet is counted once.
+    for (const [id, delta] of moved) {
+      const row: Doc<"priorities"> | null = await ctx.db.get(id);
+      if (!row || String(row.user_id) !== String(args.user_id) || row.workspace !== args.workspace) continue;
+      const session_count = row.session_count !== undefined
+        ? Math.max(0, row.session_count + delta)
+        : (await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_READ)).length;
+      if (session_count !== row.session_count) await ctx.db.patch(id, { session_count });
     }
 
     await settleRun(ctx, { ...run, status: "ok", counts });

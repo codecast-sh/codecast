@@ -53,6 +53,8 @@ export const priorityTables = {
     done_at: v.optional(v.number()),
     /** The last pass that wrote it. */
     pass_at: v.number(),
+    /** How many sessions it holds (conversations.priority_id), kept by the pass as it maps them. */
+    session_count: v.optional(v.number()),
     created_at: v.number(),
     updated_at: v.number(),
   })

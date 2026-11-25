@@ -110,10 +110,22 @@ export type PriorityDetail = Omit<PriorityRow, "steps"> & {
 };
 
 /** Typed messages per local day: one lane per priority, and "unassigned" for sessions no priority holds. */
-export type PriorityHistoryLane = { key: string; short_id: string | null; title: string; status: PriorityStatus | null; counts: number[]; total: number };
+export type PriorityHistoryLane = {
+  key: string;
+  short_id: string | null;
+  title: string;
+  status: PriorityStatus | null;
+  /** The priority owner's typing per day (the reader's own lanes: theirs). */
+  counts: number[];
+  total: number;
+  /** A teammate's priority whose owner shares less than their activity with the team: no counts. */
+  counts_hidden?: boolean;
+};
 export type PriorityHistory = {
   days: string[];
   lanes: PriorityHistoryLane[];
   /** Per session short id, the same daily counts: only sessions a priority lane above holds, and the reader can open. */
   sessions?: Record<string, number[]>;
+  /** The read stopped at its cap; the oldest days may be short. */
+  truncated?: boolean;
 };

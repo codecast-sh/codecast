@@ -433,6 +433,87 @@ describe("what a pass may read, and how far", () => {
   });
 });
 
+describe("what the model is told about sessions and calls", () => {
+  test("a standing role's seat reads as a role, a session another started as a worker of its parent", async () => {
+    const w = await world();
+    const { role, worker } = await w.t.run(async (ctx) => {
+      const orgRole = await ctx.db.insert("org_roles", {
+        short_id: "or-1", scope_type: "user", scope_user_id: w.ana, host_user_id: w.ana, name: "Infrastructure", handle: "infra",
+        scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: w.ana }, status: "active", trust: "direct",
+        caps: { hands_per_day: 10, wakes_per_day: 10, tokens_per_day: 1_000_000, line_on: true }, created_by: w.ana, created_at: 1, updated_at: 1,
+      } as any);
+      const conv = (short_id: string, fields: Record<string, unknown>) => ctx.db.insert("conversations", {
+        user_id: w.ana, team_id: w.acme, is_private: false, team_visibility: "full", agent_type: "claude_code", session_id: short_id, short_id,
+        title: `Session ${short_id}`, started_at: 1, updated_at: 1, message_count: 1, status: "active", ...fields,
+      } as any);
+      return { role: await conv("jx7role", { standing_role_id: orgRole }), worker: await conv("jx7work", { parent_conversation_id: w.teamConv }) };
+    });
+    for (const c of [role, worker, w.teamConv]) await w.send(w.ana, c, w.now - H, "work");
+    const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
+    const byId = Object.fromEntries(input.sessions.map((s: any) => [s.id, s]));
+    expect(byId.jx7role).toMatchObject({ kind: "role" });
+    expect(byId.jx7work).toMatchObject({ kind: "worker", parent: "jx7team" });
+    expect(byId.jx7team).toMatchObject({ kind: "session" });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    expect(prompts[0]).toContain('## Session jx7role · "Session jx7role" · role ·');
+    expect(prompts[0]).toContain('## Session jx7work · "Session jx7work" · worker of jx7team ·');
+  });
+
+  test("calls the person was in, ended since the cursor, come with their summary and action items; others' calls and older ones do not", async () => {
+    const w = await world();
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(w.acme, { features: { priorities: true, calls: true } } as any);
+      // A room both are members of: Ana may read every call in it, but was in only the ones she spoke in.
+      const room = `dm:${[String(w.ana), String(w.ben)].sort().join(":")}`;
+      const call = (short_id: string, speaker: Id<"users">, ended_at: number) => ctx.db.insert("transcripts", {
+        room_key: room, team_id: w.acme, started_by: w.ben, status: "ended", started_at: ended_at - 30 * 60_000, ended_at,
+        routes: [], last_seq: 0, short_id, title: `Call ${short_id}`, participants: [{ id: String(speaker), name: "someone" }],
+        summary: `We agreed the grader ships (${short_id}).`, action_items: [`Ana ships the grader (${short_id})`],
+      } as any);
+      await call("cl-1", w.ana, w.now - 2 * H);
+      await call("cl-2", w.ben, w.now - 2 * H);
+      await call("cl-3", w.ana, w.now - 20 * DAY);
+    });
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team });
+    expect(input.calls).toEqual([{ id: "cl-1", title: "Call cl-1", at: w.now - 2 * H, summary: "We agreed the grader ships (cl-1).", action_items: ["Ana ships the grader (cl-1)"] }]);
+    expect((await w.t.query(pass.passInputs, { user_id: w.ana, workspace: `user:${w.ana}` })).input.calls).toEqual([]);
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    expect(prompts[0]).toContain("# Calls they were in since the last pass\n## Call cl-1 · \"Call cl-1\"");
+    expect(prompts[0]).toContain("- Ana ships the grader (cl-1)");
+    expect(prompts[0]).not.toContain("cl-2");
+  });
+});
+
+describe("session counts", () => {
+  test("a pass keeps each priority's session count, a merge moves the loser's unlisted sessions to the survivor, and a priority with no count is counted once", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - H, "work");
+    replyText = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [a] = await w.priorities();
+    expect(a.session_count).toBe(1);
+
+    // A second priority from before counts were kept, holding the old session.
+    const b = await w.t.run(async (ctx) => {
+      const id = await ctx.db.insert("priorities", { user_id: w.ana, workspace: w.team, short_id: "pri-90", title: "Old", summary: "", status: "active", rank: 2, rank_set_by: "pass", steps: [], first_seen_at: 1, last_active_at: 1, pass_at: 1, created_at: 1, updated_at: 1 });
+      await ctx.db.patch(w.oldConv, { priority_id: id, priority_step_key: "s1" });
+      return id;
+    });
+    const plan: MergePlan = { creates: [], updates: [], merges: [{ short_id: "pri-90", merged_into: a.short_id }], sessions: [], unmap: [], notes: [] };
+    await w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at: Date.now(), from_cursor: 1, cursor_at: 1, model: "m", plan });
+    const after = await w.t.run(async (ctx) => ({ a: await ctx.db.get(a._id), b: await ctx.db.get(b), old: await ctx.db.get(w.oldConv) }));
+    expect(after.old).toMatchObject({ priority_id: a._id });
+    expect(after.old?.priority_step_key).toBeUndefined();
+    expect(after.a?.session_count).toBe(2);
+    expect(after.b).toMatchObject({ status: "merged", session_count: 0 });
+
+    // Unmapping a session counts down.
+    await w.t.mutation(pass.applyPlan, { user_id: w.ana, workspace: w.team, started_at: Date.now() + 1, from_cursor: 1, cursor_at: 1, model: "m", plan: { creates: [], updates: [], merges: [], sessions: [], unmap: ["jx7old"], notes: [] } });
+    expect((await w.t.run((ctx) => ctx.db.get(a._id)))?.session_count).toBe(1);
+  });
+});
+
 describe("applyPlan", () => {
   const write = { title: "Mine", summary: "s", status: "active" as const, rank: 1, rank_set_by: "pass" as const, serves: null, steps: [], last_active_at: 1, done_at: null, pass_at: 1 };
 

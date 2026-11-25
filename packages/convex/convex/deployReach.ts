@@ -4,7 +4,7 @@
 // target recorded. The rule is contracts/deployReach; this reads its inputs.
 
 import { v } from "convex/values";
-import { internalQuery, query } from "./functions";
+import { query } from "./functions";
 import type { Doc } from "./_generated/dataModel";
 import { requireUserOrToken } from "./lib/auth";
 import { canAccessPullRequest, workspaceGrantsAccess } from "./lib/access";
@@ -70,41 +70,29 @@ async function reachOf(ctx: any, userId: any, repository: string, change: ReachC
  */
 export const get = query({
   args: { ref: v.string() },
-  handler: async (ctx, args): Promise<(DeployReach & { _id: string; ref: string }) | null> =>
-    refReach(ctx, await requireUserOrToken(ctx, undefined), args.ref),
-});
-
-/** The reach of each of a few refs (a priority's step PRs and commits) as their owner sees them; a ref with none is left out. */
-export const forUser = internalQuery({
-  args: { user_id: v.id("users"), refs: v.array(v.string()) },
-  handler: async (ctx, args): Promise<Array<DeployReach & { _id: string; ref: string }>> => {
-    const refs = [...new Set(args.refs.map((r) => r.trim()))].slice(0, 25);
-    const out = await Promise.all(refs.map((ref) => refReach(ctx, args.user_id, ref)));
-    return out.filter((r): r is DeployReach & { _id: string; ref: string } => !!r);
+  handler: async (ctx, args): Promise<(DeployReach & { _id: string; ref: string }) | null> => {
+    const userId = await requireUserOrToken(ctx, undefined);
+    const ref = args.ref.trim();
+    const pr = PR_REF.exec(ref);
+    if (pr) {
+      const repository = normalizeRepository(pr[1]!);
+      const row: Doc<"pull_requests"> | null = await ctx.db
+        .query("pull_requests")
+        .withIndex("by_repository_number", (q: any) => q.eq("repository", repository).eq("number", Number(pr[2])))
+        .first();
+      if (!row || row.state !== "merged" || !(await canAccessPullRequest(ctx, userId, row))) return null;
+      const sha = row.merge_commit_sha ?? null;
+      const commit = sha ? await commitBySha(ctx, repository, sha) : null;
+      const files = row.files?.length ? row.files.map((f) => f.filename) : commit?.files?.map((f) => f.filename) ?? null;
+      const reach = await reachOf(ctx, userId, repository, { sha, main_at: commit?.main_at ?? null, merged_at: row.merged_at ?? null }, files);
+      return reach ? { ...reach, _id: ref, ref } : null;
+    }
+    const c = COMMIT_REF.exec(ref);
+    if (c) return commitReach(ctx, userId, ref, c[2]!, normalizeRepository(c[1]!));
+    if (BARE_SHA.test(ref)) return commitReach(ctx, userId, ref, ref, null);
+    return null;
   },
 });
-
-async function refReach(ctx: any, userId: any, raw: string): Promise<(DeployReach & { _id: string; ref: string }) | null> {
-  const ref = raw.trim();
-  const pr = PR_REF.exec(ref);
-  if (pr) {
-    const repository = normalizeRepository(pr[1]!);
-    const row: Doc<"pull_requests"> | null = await ctx.db
-      .query("pull_requests")
-      .withIndex("by_repository_number", (q: any) => q.eq("repository", repository).eq("number", Number(pr[2])))
-      .first();
-    if (!row || row.state !== "merged" || !(await canAccessPullRequest(ctx, userId, row))) return null;
-    const sha = row.merge_commit_sha ?? null;
-    const commit = sha ? await commitBySha(ctx, repository, sha) : null;
-    const files = row.files?.length ? row.files.map((f) => f.filename) : commit?.files?.map((f) => f.filename) ?? null;
-    const reach = await reachOf(ctx, userId, repository, { sha, main_at: commit?.main_at ?? null, merged_at: row.merged_at ?? null }, files);
-    return reach ? { ...reach, _id: ref, ref } : null;
-  }
-  const c = COMMIT_REF.exec(ref);
-  if (c) return commitReach(ctx, userId, ref, c[2]!, normalizeRepository(c[1]!));
-  if (BARE_SHA.test(ref)) return commitReach(ctx, userId, ref, ref, null);
-  return null;
-}
 
 /** The reach of each of a few full shas (a team's landed runs, for their sessions' inbox cards): one subscription for all. */
 export const many = query({

@@ -8,6 +8,7 @@ import { allModules } from "./testModules.testkit";
 import { api } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
+import { HISTORY_SENDS_CAP } from "./priorities";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(60_000);
@@ -124,6 +125,14 @@ describe("reads", () => {
     expect(await ids({ status: "done" })).toEqual(["pri-4", "pri-7"]);
   });
 
+  test("a list takes the pass's stored session count and reads only four sessions", async () => {
+    const { t, as, ada, ws, p1 } = await world();
+    await t.run(async (ctx) => ctx.db.patch(p1, { session_count: 120 }));
+    const [first] = await as(ada).query(pri.list, { workspace: ws });
+    expect(first).toMatchObject({ session_count: 120, session_count_more: false });
+    expect(first.sessions.map((s: any) => s.short_id)).toEqual(["jx7pvt3", "jx7one1"]);
+  });
+
   test("show groups the mapped sessions under their steps", async () => {
     const { as, ada } = await world();
     const p = await as(ada).query(pri.show, { short_id: "PRI-1" });
@@ -131,7 +140,7 @@ describe("reads", () => {
     expect(p.other_sessions).toEqual([]);
   });
 
-  test("history counts only the viewer's own typing, per priority and unassigned, never an option pick", async () => {
+  test("history: the viewer's own priorities count their own typing, per priority and unassigned, never an option pick", async () => {
     const { as, ada, bea, ws } = await world();
     const res = await as(ada).query(pri.history, { days: 15, workspace: ws });
     expect(res.days).toHaveLength(15);
@@ -141,14 +150,46 @@ describe("reads", () => {
     expect(lanes.unassigned.total).toBe(1);
     expect(res.lanes.map((l: any) => l.key)).toEqual(["pri-1", "unassigned"]);
 
-    const theirs = await as(bea).query(pri.history, { days: 15 });
-    expect(theirs.lanes.map((l: any) => [l.key, l.total])).toEqual([["pri-1", 3]]);
-    // Per session: the viewer's own typing only, in sessions a lane they see holds (the unassigned session is not listed).
+    // Per session: the same counts, in sessions a lane holds (the unassigned session is not listed).
     const sum = (c: number[]) => c.reduce((a, b) => a + b, 0);
     expect(Object.keys(res.sessions)).toEqual(["jx7one1"]);
     expect(res.sessions.jx7one1).toHaveLength(15);
     expect(sum(res.sessions.jx7one1)).toBe(2);
-    expect(Object.fromEntries(Object.entries(theirs.sessions).map(([k, c]) => [k, sum(c as number[])]))).toEqual({ jx7one1: 3 });
+    expect(res.truncated).toBeUndefined();
+  });
+
+  test("history: a teammate's priority counts its owner's typing while they share activity, and is hidden below that", async () => {
+    const { t, as, ada, bea, acme } = await world();
+    // Bea typed 3 times in Ada's session; Ada's lane shows Ada's 2, never Bea's.
+    const theirs = await as(bea).query(pri.history, { days: 15 });
+    expect(theirs.lanes.map((l: any) => [l.key, l.total, l.counts_hidden])).toEqual([["pri-1", 2, undefined]]);
+    expect(Object.keys(theirs.sessions)).toEqual(["jx7one1"]);
+
+    const membership = await t.run(async (ctx) => (await ctx.db.query("team_memberships").withIndex("by_user_id", (q) => q.eq("user_id", ada)).collect()).find((m) => m.team_id === acme)!._id);
+    await t.run(async (ctx) => ctx.db.patch(membership, { visibility: "activity" } as any));
+    expect((await as(bea).query(pri.history, { days: 15 })).lanes.find((l: any) => l.key === "pri-1").total).toBe(2);
+
+    await t.run(async (ctx) => ctx.db.patch(membership, { visibility: "hidden" } as any));
+    const hidden = await as(bea).query(pri.history, { days: 15 });
+    const lane = hidden.lanes.find((l: any) => l.key === "pri-1");
+    expect(lane).toMatchObject({ total: 0, counts_hidden: true });
+    expect(lane.counts.every((n: number) => n === 0)).toBe(true);
+    expect(hidden.sessions).toEqual({});
+  });
+
+  test("history stops at HISTORY_SENDS_CAP sends and says it was truncated", async () => {
+    const { t, as, ada, acme, c2 } = await world();
+    await t.run(async (ctx) => {
+      const message = await ctx.db.insert("messages", { conversation_id: c2, role: "user", content: "x", timestamp: NOW } as any);
+      for (let i = 0; i < HISTORY_SENDS_CAP; i++) {
+        await ctx.db.insert("user_sends", { user_id: ada, team_id: acme, conversation_id: c2, message_id: message, timestamp: NOW - 1_000 - i, words: 1, text: "x", clipped: false } as any);
+      }
+    });
+    const res = await as(ada).query(pri.history, { days: 15 });
+    expect(res.truncated).toBe(true);
+    // Newest first: the 3,000 just typed, none of the older ones.
+    expect(res.lanes.find((l: any) => l.key === "unassigned").total).toBe(HISTORY_SENDS_CAP);
+    expect(res.lanes.find((l: any) => l.key === "pri-1")).toBeUndefined();
   });
 
   test("the pin line names the priority, its critical path and the session's step; null where the viewer cannot see the priority", async () => {

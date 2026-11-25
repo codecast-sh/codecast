@@ -3,7 +3,7 @@
 // past ones after, a step's sessions and chips, the paints the store's
 // priority actions make and the restore when the server refuses one, and the
 // history strip's day cells.
-import type { PriorityHistory, PriorityRow, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
+import type { PriorityDetail, PriorityHistory, PriorityHistoryLane, PriorityRow, PrioritySession, PriorityStatus, PriorityStep, PriorityStepTier } from "@codecast/shared/contracts/priorities";
 import { heatLevels } from "../components/ActivityHeatmap";
 import { composeLinkHref } from "./composeLink";
 import { serverErrorText } from "./errorCause";
@@ -36,7 +36,10 @@ export function stripLevels(lanes: Iterable<readonly number[]>): number[] {
   return heatLevels(all);
 }
 
-export type { PriorityHistory };
+export type { PriorityDetail, PriorityHistory };
+
+/** A history lane as the page reads it: a teammate may hide their activity (no counts to shade). */
+export type HistoryLaneView = PriorityHistoryLane & { counts_hidden?: boolean };
 
 const sameOwner = (a: PriorityRow, b: PriorityRow) => String(a.user_id) === String(b.user_id) && a.workspace === b.workspace;
 const byRank = (a: PriorityRow, b: PriorityRow) => (a.rank ?? Infinity) - (b.rank ?? Infinity);
@@ -111,13 +114,25 @@ export function rankAtDrop(toIndex: number): number {
 
 export type StepSession = { short_id: string; title: string };
 
-/** The sessions working a step: those the pass mapped to it, then any its refs name. */
-export function stepSessions(row: PriorityRow, step: PriorityStep): StepSession[] {
-  const out: StepSession[] = row.sessions.filter((s) => s.step_key === step.key).map((s) => ({ short_id: s.short_id, title: s.title }));
+/**
+ * The sessions working a step: those mapped to it, then any its refs name. A
+ * list row carries only a priority's newest few sessions, so the open row's
+ * `show` read (every session, by step) is the source once it has answered.
+ */
+export function stepSessions(row: PriorityRow, step: PriorityStep, detail?: PriorityDetail | null): StepSession[] {
+  const mapped: PrioritySession[] = detail
+    ? detail.steps.find((s) => s.key === step.key)?.sessions ?? []
+    : row.sessions.filter((s) => s.step_key === step.key);
+  const out: StepSession[] = mapped.map((s) => ({ short_id: s.short_id, title: s.title }));
   for (const ref of step.refs) {
     if (ref.kind === "session" && !out.some((s) => s.short_id === ref.id)) out.push({ short_id: ref.id, title: "" });
   }
   return out;
+}
+
+/** "+ new session" only on an open step that `show` says no session works: the list's few sessions cannot say so. */
+export function stepNeedsSession(step: PriorityStep, sessions: readonly StepSession[], detail: PriorityDetail | null | undefined): boolean {
+  return !!detail && !step.done && sessions.length === 0;
 }
 
 export function stepTask(step: PriorityStep): string | undefined {
@@ -139,9 +154,9 @@ export function stepCounts(history: PriorityHistory | undefined, sessions: reado
 }
 
 /** The priority's sessions with the most typing first (the most recently updated when the server sent no per-session counts). */
-export function mostActiveSessions(row: PriorityRow, history: PriorityHistory | undefined, limit = 4): StepSession[] {
+export function mostActiveSessions(row: PriorityRow, history: PriorityHistory | undefined, detail?: PriorityDetail | null, limit = 4): StepSession[] {
   const total = (id: string) => (history?.sessions?.[id] ?? []).reduce((a, b) => a + b, 0);
-  return [...row.sessions]
+  return [...(detail?.sessions ?? row.sessions)]
     .sort((a, b) => total(b.short_id) - total(a.short_id) || b.updated_at - a.updated_at)
     .slice(0, limit)
     .map((s) => ({ short_id: s.short_id, title: s.title }));

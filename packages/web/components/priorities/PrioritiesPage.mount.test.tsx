@@ -39,7 +39,13 @@ const ROWS = [
   { ...base, _id: "p5", short_id: "pri-5", title: "Market agents learn from Cam", status: "quiet", rank: null, steps: [], counts: { critical_done: 0, critical_total: 0 } },
   { ...base, _id: "p6", short_id: "pri-6", title: "A meta prompt optimizer", status: "set_aside", rank: null, steps: [], counts: { critical_done: 0, critical_total: 0 } },
 ];
-const HISTORY = { days, lanes: [{ key: "pri-1", short_id: "pri-1", title: "Trusted evals", status: "active", counts: days.map((_, i) => i), total: 105 }] };
+const HISTORY = { days, lanes: [
+  { key: "pri-1", short_id: "pri-1", title: "Trusted evals", status: "active", counts: days.map((_, i) => i), total: 105 },
+  // A lane whose owner hid their activity: its days show, none shaded.
+  { key: "pri-2", short_id: "pri-2", title: "Deploys", status: "active", counts: days.map(() => 0), total: 0, counts_hidden: true },
+] };
+// What the open row's show answers: s2 is worked by a session older than the list's newest three.
+const DETAIL = { ...ROWS[0], steps: ROWS[0].steps.map((st) => ({ ...st, sessions: st.key === "s2" ? [{ short_id: "jx7deep", title: "Re-measure run", step_key: "s2", updated_at: 1 }] : [] })), other_sessions: [] };
 
 const mount = (node: React.ReactNode, path = "/priorities") => mountSurface(<MemoryRouter initialEntries={[path]}>{node}</MemoryRouter>);
 const order = (el: HTMLElement) => [...el.querySelectorAll("[data-priority]")].map((n) => n.getAttribute("data-priority"));
@@ -54,6 +60,7 @@ function drag(el: Element, type: string) {
 test("priorities read in rank order, finished and past after them, and ?open opens a row on its steps", async () => {
   answers["priorities:list"] = ROWS;
   answers["priorities:history"] = HISTORY;
+  answers["priorities:show"] = DETAIL;
   const page = await mount(<PrioritiesPage />, "/priorities?open=pri-1");
   try {
     expect(describeFailures(page)).toBe("");
@@ -70,11 +77,11 @@ test("priorities read in rank order, finished and past after them, and ?open ope
     expect(body.textContent).toContain("Critical path");
     expect(body.textContent).toContain("Polish and follow-ups");
     const compose = [...body.querySelectorAll("a")].map((a) => a.getAttribute("href")).filter((h) => h?.startsWith("/inbox?"));
-    // A done step (s1) needs no new session; the open ones without a session get one.
-    expect(compose).toEqual([
-      `/inbox?${new URLSearchParams({ compose: "Trusted evals: Nightly re-measure" })}`,
-      `/inbox?${new URLSearchParams({ compose: "Trusted evals: Judge dashboard" })}`,
-    ]);
+    // A done step (s1) needs no new session, nor does s2, which show says a session works; s3 gets one.
+    expect(compose).toEqual([`/inbox?${new URLSearchParams({ compose: "Trusted evals: Judge dashboard" })}`]);
+    expect(body.querySelector('[data-step="s2"]')!.textContent).toContain("Re-measure run");
+    // A hidden lane draws its days unshaded.
+    expect(page.container.querySelector('[data-priority="pri-2"] [data-history-strip]')!.getAttribute("data-hidden")).toBe("true");
     // 15 day cells on the row's strip, titled with the day's count.
     const strip = page.container.querySelector('[data-priority="pri-1"] [data-history-strip]')!;
     expect(strip.querySelectorAll("i").length).toBe(15);
@@ -111,6 +118,23 @@ test("dragging a row onto another ranks it there; a step across the line changes
     await act(async () => { drag(critical, "dragover"); });
     await act(async () => { drag(critical, "drop"); });
     expect(calls).toEqual(["rank pri-3 1", "tier pri-1 s2 polish"]);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("Move to ranks a priority from the row menu, without a drag", async () => {
+  const calls: string[] = [];
+  const writes = { rank: (id: string, n: number) => calls.push(`rank ${id} ${n}`), setStepTier: () => {}, setAside: () => {}, restore: () => {} };
+  const page = await mount(<PrioritiesView rows={ROWS as any} history={HISTORY as any} openId={null} onToggleOpen={() => {}} writes={writes as any} />);
+  const { act } = React as any;
+  try {
+    const trigger = page.container.querySelector('li[data-priority="pri-3"] button[aria-label^="More for"]') as HTMLElement;
+    await act(async () => { trigger.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true })); });
+    const items = [...document.querySelectorAll("[data-move-to]")] as HTMLElement[];
+    expect(items.map((i) => i.getAttribute("data-move-to"))).toEqual(["1", "2"]);
+    await act(async () => { items[0].click(); });
+    expect(calls).toEqual(["rank pri-3 1"]);
   } finally {
     await page.unmount();
   }

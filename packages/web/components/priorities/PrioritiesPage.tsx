@@ -20,11 +20,11 @@ import { EntityIdPill } from "../EntityIdPill";
 import { EmptyState } from "../ui/empty-state";
 import { SkeletonRows } from "../ui/skeleton";
 import { PageFrame, PageHeader } from "../ui/page-header";
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../ui/dropdown-menu";
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from "../ui/dropdown-menu";
 import { HistoryStrip } from "./HistoryStrip";
 import {
-  mostActiveSessions, newSessionHref, ownerGroups, pastBadge, rankAtDrop, stepCounts, stepSessions, stripLevels,
-  type OwnerGroup, type PriorityHistory, type PriorityRow, type PriorityWrites,
+  mostActiveSessions, newSessionHref, ownerGroups, pastBadge, rankAtDrop, stepCounts, stepNeedsSession, stepSessions, stripLevels,
+  type HistoryLaneView, type OwnerGroup, type PriorityDetail, type PriorityHistory, type PriorityRow, type PriorityWrites,
 } from "../../lib/priorities";
 
 const api = _api as any;
@@ -105,8 +105,8 @@ export function PrioritiesView({
   writes: PriorityWrites;
 }) {
   const groups = ownerGroups(rows);
-  const lanes = useMemo(() => new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l.counts])), [history]);
-  const levels = useMemo(() => stripLevels(lanes.values()), [lanes]);
+  const lanes = useMemo(() => new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l as HistoryLaneView])), [history]);
+  const levels = useMemo(() => stripLevels([...lanes.values()].filter((l) => !l.counts_hidden).map((l) => l.counts)), [lanes]);
   const days = history?.days ?? [];
   const showOwners = groups.length > 1 || (groups[0] && !groups[0].mine);
   return (
@@ -121,7 +121,7 @@ export function PrioritiesView({
               <h3 className="mb-1.5 mt-5 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Finished and past</h3>
               <div className="space-y-1.5">
                 {g.past.map((r) => (
-                  <PastRow key={r.short_id} row={r} counts={lanes.get(r.short_id)} days={days} levels={levels} writes={writes} />
+                  <PastRow key={r.short_id} row={r} lane={lanes.get(r.short_id)} days={days} levels={levels} writes={writes} />
                 ))}
               </div>
             </>
@@ -150,7 +150,7 @@ function DayHeader({ days }: { days: string[] }) {
 /** An owner's active priorities; the owner drags a row to give it that rank. */
 function ActiveList({ group, lanes, levels, history, openId, onToggleOpen, writes }: {
   group: OwnerGroup;
-  lanes: Map<string, number[]>;
+  lanes: Map<string, HistoryLaneView>;
   levels: number[];
   history: PriorityHistory | undefined;
   openId: string | null;
@@ -186,7 +186,7 @@ function ActiveList({ group, lanes, levels, history, openId, onToggleOpen, write
             onDragStart={(e: DragEvent) => { e.dataTransfer.effectAllowed = "move"; setDragging(r.short_id); }}
             onDragEnd={() => { setDragging(null); setOver(null); }}
           >
-            <ActiveRow row={r} position={i + 1} counts={lanes.get(r.short_id)} days={history?.days ?? []} levels={levels} open={openId === r.short_id} onToggle={() => onToggleOpen(r.short_id)} writes={writes} />
+            <ActiveRow row={r} position={i + 1} total={group.active.length} lane={lanes.get(r.short_id)} days={history?.days ?? []} levels={levels} open={openId === r.short_id} onToggle={() => onToggleOpen(r.short_id)} writes={writes} />
           </div>
           {openId === r.short_id && <PriorityBody row={r} history={history} writes={writes} />}
         </li>
@@ -206,10 +206,12 @@ function CriticalBar({ steps }: { steps: PriorityStep[] }) {
   );
 }
 
-function ActiveRow({ row, position, counts, days, levels, open, onToggle, writes }: {
+function ActiveRow({ row, position, total, lane, days, levels, open, onToggle, writes }: {
   row: PriorityRow;
   position: number;
-  counts: number[] | undefined;
+  /** How many active priorities the owner has: the positions "Move to" offers. */
+  total: number;
+  lane: HistoryLaneView | undefined;
   days: string[];
   levels: number[];
   open: boolean;
@@ -230,14 +232,16 @@ function ActiveRow({ row, position, counts, days, levels, open, onToggle, writes
       <span className="text-right text-ui tabular-nums text-sol-text-muted" title={`${row.counts.critical_done} of ${row.counts.critical_total} critical-path steps done`}>
         {row.counts.critical_done}/{row.counts.critical_total}
       </span>
-      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={counts} levels={levels} /></span>}
-      <RowMenu row={row} writes={writes} />
+      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} hidden={lane?.counts_hidden} levels={levels} /></span>}
+      <RowMenu row={row} position={position} total={total} writes={writes} />
     </div>
   );
 }
 
-function RowMenu({ row, writes }: { row: PriorityRow; writes: PriorityWrites }) {
+/** Set aside or restore, and for an active priority "Move to" each other position: ranking without a drag (touch screens). */
+function RowMenu({ row, writes, position, total = 0 }: { row: PriorityRow; writes: PriorityWrites; position?: number; total?: number }) {
   if (!row.mine) return <span />;
+  const moves = row.status === "active" ? Array.from({ length: total }, (_, i) => i + 1).filter((n) => n !== position) : [];
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
@@ -246,6 +250,15 @@ function RowMenu({ row, writes }: { row: PriorityRow; writes: PriorityWrites }) 
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        {moves.length > 0 && (
+          <>
+            <DropdownMenuLabel>Move to</DropdownMenuLabel>
+            {moves.map((n) => (
+              <DropdownMenuItem key={n} data-move-to={n} onSelect={() => writes.rank(row.short_id, n)}>#{n}</DropdownMenuItem>
+            ))}
+            <DropdownMenuSeparator />
+          </>
+        )}
         {row.status === "active"
           ? <DropdownMenuItem onSelect={() => writes.setAside(row.short_id)}>Set aside</DropdownMenuItem>
           : <DropdownMenuItem onSelect={() => writes.restore(row.short_id)}>Restore</DropdownMenuItem>}
@@ -254,9 +267,9 @@ function RowMenu({ row, writes }: { row: PriorityRow; writes: PriorityWrites }) 
   );
 }
 
-function PastRow({ row, counts, days, levels, writes }: {
+function PastRow({ row, lane, days, levels, writes }: {
   row: PriorityRow;
-  counts: number[] | undefined;
+  lane: HistoryLaneView | undefined;
   days: string[];
   levels: number[];
   writes: PriorityWrites;
@@ -282,7 +295,7 @@ function PastRow({ row, counts, days, levels, writes }: {
           ? <span className="inline-flex items-center rounded-full bg-sol-green px-2.5 py-0.5 text-meta font-semibold text-sol-bg">{pastBadge(row)}</span>
           : <span className="whitespace-nowrap text-meta text-sol-text-dim">{pastBadge(row)}</span>}
       </span>
-      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={counts} levels={levels} muted={!won} /></span>}
+      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} hidden={lane?.counts_hidden} levels={levels} muted={!won} /></span>}
       <RowMenu row={row} writes={writes} />
     </div>
   );
@@ -292,7 +305,9 @@ function PastRow({ row, counts, days, levels, writes }: {
 function PriorityBody({ row, history, writes }: { row: PriorityRow; history: PriorityHistory | undefined; writes: PriorityWrites }) {
   const [dragStep, setDragStep] = useState<string | null>(null);
   const [overTier, setOverTier] = useState<PriorityStepTier | null>(null);
-  const active = mostActiveSessions(row, history);
+  // The list row holds only the newest few sessions; the open row reads every one, by step.
+  const detail = useQueryNoThrow(api.priorities.show, { short_id: row.short_id }, { remember: true }).data as PriorityDetail | null | undefined;
+  const active = mostActiveSessions(row, history, detail);
   const lead = active[0];
   const days = history?.days ?? [];
   const dropOn = (tier: PriorityStepTier) => {
@@ -325,6 +340,7 @@ function PriorityBody({ row, history, writes }: { row: PriorityRow; history: Pri
               row={row}
               step={s}
               history={history}
+              detail={detail}
               days={days}
               dragging={dragStep === s.key}
               onDragStart={row.mine ? () => setDragStep(s.key) : undefined}
@@ -365,16 +381,17 @@ function PriorityBody({ row, history, writes }: { row: PriorityRow; history: Pri
 
 const MAX_STEP_SESSIONS = 3;
 
-function StepLine({ row, step, history, days, dragging, onDragStart, onDragEnd }: {
+function StepLine({ row, step, history, detail, days, dragging, onDragStart, onDragEnd }: {
   row: PriorityRow;
   step: PriorityStep;
   history: PriorityHistory | undefined;
+  detail: PriorityDetail | null | undefined;
   days: string[];
   dragging: boolean;
   onDragStart?: () => void;
   onDragEnd: () => void;
 }) {
-  const sessions = stepSessions(row, step);
+  const sessions = stepSessions(row, step, detail);
   const tasks = step.refs.filter((r) => r.kind === "task");
   const code = step.refs.filter((r) => r.kind === "pr" || r.kind === "commit");
   return (
@@ -399,7 +416,7 @@ function StepLine({ row, step, history, days, dragging, onDragStart, onDragEnd }
           {sessions.slice(0, MAX_STEP_SESSIONS).map((s) => <EntityIdPill key={s.short_id} shortId={s.short_id} type="session" label={s.title || undefined} />)}
           {sessions.length > MAX_STEP_SESSIONS && <span className="text-meta text-sol-text-dim">+{sessions.length - MAX_STEP_SESSIONS}</span>}
           {code.map((c) => <EntityIdPill key={c.id} shortId={c.id} type={c.kind as "pr" | "commit"} certain />)}
-          {sessions.length === 0 && !step.done && (
+          {stepNeedsSession(step, sessions, detail) && (
             <Link
               href={newSessionHref(row, step)}
               className="inline-flex items-center gap-1 rounded-control border border-dashed border-sol-border px-1.5 py-px text-meta text-sol-blue hover:border-sol-blue/50"

@@ -18,6 +18,7 @@ const H = 3_600_000;
 
 const session = (id: string, over: Partial<PassSession> = {}): PassSession => ({
   id,
+  kind: "session",
   title: `Session ${id}`,
   first_prompt: "make the grader trustworthy",
   pin: { text: "Grader faults at 14%", status: "working" },
@@ -57,6 +58,7 @@ const input = (over: Partial<PriorityPassInput> = {}): PriorityPassInput => ({
   initiatives: [{ short_id: "in-5", title: "Trusted evals" }],
   step_tasks: [],
   sessions: [session("a"), session("b")],
+  calls: [],
   ...over,
 });
 
@@ -81,6 +83,32 @@ describe("priority pass prompt", () => {
     expect(prompt).toContain("- in-5 Trusted evals");
     expect(prompt).not.toContain(long);
     expect(omitted).toEqual([]);
+  });
+
+  test("marks role and worker sessions and says what each means", () => {
+    const { system, prompt } = buildPriorityPassPrompt(input({ sessions: [session("r", { kind: "role" }), session("w", { kind: "worker", parent: "p" }), session("p")] }));
+    expect(system).toContain("A session marked as a role is a standing role's seat");
+    expect(system).toContain("it belongs with its parent's priority");
+    expect(prompt).toContain('## Session r · "Session r" · role · last active');
+    expect(prompt).toContain('## Session w · "Session w" · worker of p · last active');
+    expect(prompt).toContain('## Session p · "Session p" · last active');
+  });
+
+  test("calls the person was in come as their own block, capped, and the system prompt says priorities can come from them", () => {
+    const c = PRIORITY_PASS_CAPS;
+    const calls = Array.from({ length: c.calls + 2 }, (_, i) => ({
+      id: `cl-${i}`, title: `Call ${i}`, at: NOW - (20 - i) * H, summary: "s".repeat(c.call_summary_chars * 2),
+      action_items: Array.from({ length: c.call_action_items + 3 }, (_, j) => `item ${i}.${j}`),
+    }));
+    const { system, prompt } = buildPriorityPassPrompt(input({ calls }));
+    expect(system).toContain("A priority can also come from a call");
+    expect(prompt).toContain("# Calls they were in since the last pass");
+    expect(prompt).not.toContain("## Call cl-1 ");
+    expect(prompt).toContain(`## Call cl-${c.calls + 1} · "Call ${c.calls + 1}"`);
+    expect(prompt).toContain(`- item 11.${c.call_action_items - 1}`);
+    expect(prompt).not.toContain(`- item 11.${c.call_action_items}`);
+    expect(prompt).not.toContain("s".repeat(c.call_summary_chars + 1));
+    expect(buildPriorityPassPrompt(input()).prompt).not.toContain("# Calls");
   });
 
   test("sessions past the total budget are left out newest-first and named", () => {

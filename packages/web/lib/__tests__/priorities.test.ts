@@ -4,7 +4,7 @@
 import { describe, expect, test } from "bun:test";
 import type { PriorityStep } from "@codecast/shared/contracts/priorities";
 import {
-  mostActiveSessions, newSessionHref, ownerGroups, paintRank, paintStatus, paintTier, pastBadge, rankAtDrop, stepCounts, stepSessions, writeOrRestore,
+  mostActiveSessions, newSessionHref, ownerGroups, stepNeedsSession, paintRank, paintStatus, paintTier, pastBadge, rankAtDrop, stepCounts, stepSessions, writeOrRestore,
   type PriorityRow,
 } from "../priorities";
 import { parseComposeLink } from "../composeLink";
@@ -131,6 +131,17 @@ describe("steps", () => {
 
   test("a step's sessions are those mapped to it, then those its refs name", () => {
     expect(stepSessions(r, s).map((x) => x.short_id)).toEqual(["jx1", "jx2"]);
+  });
+
+  test("once the open row's show answers, a step's sessions are every one show maps to it", () => {
+    const detail = { ...r, steps: [{ ...s, sessions: [{ short_id: "jx9", title: "Older", step_key: "s1", updated_at: 1 }] }], other_sessions: [] } as any;
+    expect(stepSessions(r, s, detail).map((x) => x.short_id)).toEqual(["jx9", "jx2"]);
+    const bare = step("s5", "critical");
+    // The list's newest few cannot say a step has no session; show can.
+    expect(stepNeedsSession(bare, stepSessions(r, bare), undefined)).toBe(false);
+    expect(stepNeedsSession(bare, stepSessions(r, bare, detail), detail)).toBe(true);
+    expect(stepNeedsSession({ ...bare, done: true }, [], detail)).toBe(false);
+    expect(mostActiveSessions(r, undefined, { ...detail, sessions: [{ short_id: "jx9", title: "Older", step_key: "s1", updated_at: 99 }] }).map((x) => x.short_id)).toEqual(["jx9"]);
   });
 
   test("+ new session opens the composer on the priority and step, its task attached", () => {

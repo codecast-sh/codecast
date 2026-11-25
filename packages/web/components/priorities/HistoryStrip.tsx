@@ -12,6 +12,7 @@ export function HistoryStrip({
   counts,
   levels,
   muted = false,
+  hidden = false,
   size = "row",
 }: {
   days: readonly string[];
@@ -19,22 +20,26 @@ export function HistoryStrip({
   /** Cutoffs shared across the page (stripLevels); left out, the strip's own. */
   levels?: number[];
   muted?: boolean;
+  /** The owner hid their activity: the days show, none shaded. */
+  hidden?: boolean;
   /** row: a priority's row; step: a step's or a session's line, shorter. */
   size?: "row" | "step";
 }) {
-  const cells = stripCells(days, counts);
+  const cells = stripCells(days, hidden ? undefined : counts);
   const cuts = levels ?? heatLevels(cells.map((c) => c.count));
-  const colors = muted ? GREY : HEAT_COLORS;
+  const colors = muted || hidden ? GREY : HEAT_COLORS;
   return (
     <span
       data-history-strip
+      data-hidden={hidden || undefined}
+      title={hidden ? "Activity hidden" : undefined}
       className="grid gap-[3px]"
       style={{ gridTemplateColumns: `repeat(${Math.max(1, days.length)}, minmax(0, 1fr))` }}
     >
       {cells.map((c) => (
         <i
           key={c.day}
-          title={c.title}
+          title={hidden ? undefined : c.title}
           className={size === "row" ? "block h-3.5 rounded-[3px]" : "block h-2 rounded-[2px]"}
           style={{ background: heatColor(c.count, cuts, colors) }}
         />
