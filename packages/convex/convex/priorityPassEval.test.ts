@@ -194,4 +194,27 @@ describe("evalPass", () => {
     expect(sent.map((s) => s.system)).toEqual(["Candidate prompt v2.", PRIORITY_PASS_SYSTEM]);
     expect(sent[0]!.prompt).toBe(sent[1]!.prompt);
   });
+
+  test("a replay sees each session's pin as it stood at the window's end: a later pin is withheld and the newest pin in the window stands in", async () => {
+    const w = await world();
+    const end = w.now - 2 * DAY;
+    await w.send(w.ana, w.teamConv, end - 2 * H, "get grader faults under ten percent");
+    await w.pin(w.ana, w.teamConv, end - H, "Grader faults at 20%");
+    await w.send(w.ana, w.oldConv, end - 2 * H, "start the deploy work");
+    // Both sessions were pinned again after the window; teamConv also has a pin event inside it.
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(w.teamConv, { thread_state: "Grader faults shipped, done", thread_state_at: w.now - H } as any);
+      await ctx.db.patch(w.oldConv, { thread_state: "Deploys live", thread_state_at: w.now - H } as any);
+    });
+    model.reply = () => JSON.stringify({ priorities: [], unassigned: [] });
+    await w.t.action(pass.evalPass, { user_id: w.ana, workspace: w.team, window_start: end - 3 * DAY, window_end: end });
+    const prompt = model.prompts.at(-1)!;
+    expect(prompt).toContain("Grader faults at 20%");
+    expect(prompt).not.toContain("Grader faults shipped, done");
+    expect(prompt).not.toContain("Deploys live");
+
+    // A live pass sees the current pin.
+    const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team, window_start: end - 3 * DAY });
+    expect(input.sessions.find((s: any) => s.id === "jx7team")?.pin).toEqual({ text: "Grader faults shipped, done", status: "working" });
+  });
 });

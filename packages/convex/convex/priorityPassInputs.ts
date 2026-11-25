@@ -253,6 +253,18 @@ export async function livePriorities(ctx: { db: any }, userId: Id<"users">, work
  * team whose data may not go to the model vendor is left out, whichever
  * workspace it reads in.
  */
+/**
+ * A session's pin as it stood at `now`. A calibration replay of a past window
+ * runs with `now` behind the clock: a pin written after it is the future and
+ * is withheld, and the session's newest pin event in the window stands in. A
+ * live pass's `now` is the clock, so it always sees the current pin.
+ */
+function pinAsOf(conv: Doc<"conversations">, events: PassSession["pin_events"], now: number): PassSession["pin"] {
+  if (conv.thread_state && (conv.thread_state_at ?? 0) <= now) return { text: conv.thread_state, ...(conv.thread_state_status ? { status: conv.thread_state_status } : {}) };
+  const last = events.at(-1);
+  return last ? { text: last.text } : null;
+}
+
 export const passInputs = internalQuery({
   args: { user_id: v.id("users"), workspace: v.string(), now: v.optional(v.number()), window_start: v.optional(v.number()) },
   handler: async (ctx, args): Promise<PassInputs> => {
@@ -331,7 +343,7 @@ export const passInputs = internalQuery({
         ...(await sessionKind(ctx, conv)),
         title: conv.title ?? "",
         first_prompt: conv.first_prompt ?? "",
-        pin: conv.thread_state ? { text: conv.thread_state, ...(conv.thread_state_status ? { status: conv.thread_state_status } : {}) } : null,
+        pin: pinAsOf(conv, t.pin_events, now),
         idle_summary: conv.idle_summary ?? null,
         last_active: t.last,
         tasks: await sessionTasks(ctx, conv, args.workspace),
