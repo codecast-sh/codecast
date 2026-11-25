@@ -8,16 +8,17 @@
 import { OnItsWay } from "../changes/OnItsWay";
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Check, CircleDashed, Loader2, RotateCcw, X } from "lucide-react";
+import { Check, CircleDashed, Loader2, Pause, RotateCcw, X } from "lucide-react";
 import { useInboxStore } from "../../store/inboxStore";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { activeTeamIdOf } from "../../lib/activeTeam";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
 import { isMineCommit, mineOnly, orderTargets, prOfSubject, rebuiltOnly, recordTargets, rollbackTarget, sessionWords, sessionsOf, sourceWord, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
-import type { Press } from "./DeployPress";
+import type { Press, RollbackPress } from "./DeployPress";
 import { useDeployPress } from "../../hooks/useDeployPress";
-import { rollBackHere } from "../../lib/deploys/press";
+import { rollBackHere, rollbackOffer } from "../../lib/deploys/press";
+import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import { ageShort } from "../../lib/lineFlow";
 import { DEPLOY_LABELS, FOCUS_PARAMS, commitMatches, deployMatches, filterParams, focusRef, focusRepository, focusSettled, focusTarget, focusWord, pickTarget, reachAnyDeploy, reachDeployOn, targetKey, type DeployFilters, type DeployFocus, type DeployLabel } from "../../lib/deploys/focus";
 import type { ChangeGroupId, ChangeViewer } from "../../lib/changes/rows";
@@ -166,8 +167,8 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
             const waiting = t.queue.known ? t.queue.commits : 0;
             return (
               <li key={t._id}>
-                <button type="button" className="dpp-target" aria-current={picked?._id === t._id ? "true" : undefined} data-tone={tone} onClick={() => setPicked(t._id)} title={targetWords(t, n, tone)} data-deploy-target={t.name}>
-                  <ToneMark tone={tone} />
+                <button type="button" className="dpp-target" aria-current={picked?._id === t._id ? "true" : undefined} data-tone={tone} data-paused={t.pause ? "" : undefined} onClick={() => setPicked(t._id)} title={t.pause ? `paused by ${t.pause.by}` : targetWords(t, n, tone)} data-deploy-target={t.name}>
+                  {t.pause ? <Pause className="dpp-mark" aria-label="Paused" /> : <ToneMark tone={tone} />}
                   <span className="dpp-target-name">{t.name}{repos.size > 1 ? <span className="dpp-repo">{t.repository.split("/").pop()}</span> : null}</span>
                   {waiting ? <span className="dpp-target-n" data-deploy-target-waiting={waiting}>{waiting}</span> : null}
                 </button>
@@ -176,7 +177,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
           })}
         </ul>
       </nav>
-      {picked ? <TargetPane key={picked._id} target={picked} deploys={deploys} now={now} onPress={press.open} openDeploy={initialDeploy ?? null} focus={focus} reach={reach} onClearFocus={clearFocus} labels={labels} onToggleLabel={toggleLabel} filters={filters} onFilters={setFilters} me={me} /> : null}
+      {picked ? <TargetPane key={picked._id} target={picked} deploys={deploys} now={now} onPress={press.open} onPause={() => press.openPause(picked, allTargets)} onRollback={press.openRollback} onLift={() => press.lift(picked)} openDeploy={initialDeploy ?? null} focus={focus} reach={reach} onClearFocus={clearFocus} labels={labels} onToggleLabel={toggleLabel} filters={filters} onFilters={setFilters} me={me} /> : null}
       {press.review}
     </div>
     </div>
@@ -213,7 +214,7 @@ function HeadCi({ ci, url }: { ci: CommitCiState; url: string | null }) {
   return url ? <a className="dpp-headci" data-ci={ci} href={url} target="_blank" rel="noreferrer" data-deploy-ci>{body}</a> : <span className="dpp-headci" data-ci={ci} data-deploy-ci>{ci === "none" ? word : body}</span>;
 }
 
-function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach, onClearFocus, labels, onToggleLabel, filters, onFilters, me }: { target: DeployTargetRow; deploys: ReadonlyArray<TeamDeployRow>; now: number; onPress: (p: Press) => void; openDeploy: string | null; focus: DeployFocus | null; reach: DeployReach | null; onClearFocus: () => void; labels: DeployLabel[]; onToggleLabel: (l: DeployLabel) => void; filters: DeployFilters; onFilters: (f: DeployFilters) => void; me: ChangeViewer }) {
+function TargetPane({ target: t, deploys, now, onPress, onPause, onRollback, onLift, openDeploy, focus, reach, onClearFocus, labels, onToggleLabel, filters, onFilters, me }: { target: DeployTargetRow; deploys: ReadonlyArray<TeamDeployRow>; now: number; onPress: (p: Press) => void; onPause: () => void; onRollback: (p: RollbackPress) => void; onLift: () => void; openDeploy: string | null; focus: DeployFocus | null; reach: DeployReach | null; onClearFocus: () => void; labels: DeployLabel[]; onToggleLabel: (l: DeployLabel) => void; filters: DeployFilters; onFilters: (f: DeployFilters) => void; me: ChangeViewer }) {
   const n = targetNow(t, deploys);
   // Where the linked thing is here: waiting in the queue, or on the deploys that took it out (newest first).
   const focusWaiting = !!focus && t.queue.groups.some((g) => g.commits.some((c) => commitMatches(c, focus)));
@@ -240,7 +241,9 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
   const back = rollbackTarget(n.history, n.live);
   const waiting = t.queue.commits;
   const sessions = t.queue.groups.filter((g) => g.session).length;
-  const blocked = n.open ? `${n.open.short_id || "A deploy"} is going out` : !t.can_deploy ? (t.runs === "push" ? "Deploys itself when main moves" : "No machine publishes it") : waiting === 0 && t.queue.known ? "Nothing waiting" : null;
+  // A workflow target goes back only through codecast's rollback, which pauses production first (DP19).
+  const backPaused = t.workflow ? rollbackOffer(back, t, deploys) : null;
+  const blocked = t.pause ? "Production is paused" : n.open ? `${n.open.short_id || "A deploy"} is going out` : !t.can_deploy ? (t.runs === "push" ? "Deploys itself when main moves" : "No machine publishes it") : waiting === 0 && t.queue.known ? "Nothing waiting" : null;
   return (
     <section className="dpp-main" data-deploy-pane={t.name}>
       <header className="dpp-head">
@@ -265,14 +268,24 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
                   {n.open ? "Going out" : !t.queue.known ? "Deploy main" : `Deploy ${waiting} ${waiting === 1 ? "commit" : "commits"}`}
                 </button>}
           {waiting ? <HeadCi ci={t.queue.head_ci} url={t.queue.head_ci_url} /> : null}
-          {back && (t.can_redeploy_sha || t.can_rollback) && !n.open ? (
+          {backPaused ? (
+            <button type="button" className="dpp-back" aria-haspopup="dialog" onClick={() => onRollback(backPaused)} data-deploy-rollback={t.name}>
+              <RotateCcw className="w-3 h-3" aria-hidden />Roll back to {short(backPaused.of.sha)}
+            </button>
+          ) : !t.workflow && back && (t.can_redeploy_sha || t.can_rollback) && !n.open ? (
             <button type="button" className="dpp-back" onClick={() => onPress({ target: t, action: t.can_rollback ? "rollback" : "redeploy", of: back })} data-deploy-rollback={t.name}>
               <RotateCcw className="w-3 h-3" aria-hidden />Roll back to {short(back.sha)}
+            </button>
+          ) : null}
+          {t.can_pause && !t.pause && !t.record_only ? (
+            <button type="button" className="dpp-back" aria-haspopup="dialog" onClick={onPause} data-deploy-pause={t.repository}>
+              <Pause className="w-3 h-3" aria-hidden />Pause
             </button>
           ) : null}
         </div>
       </header>
 
+      {t.pause ? <Paused p={t.pause} canLift={!!t.can_lift} now={now} onLift={onLift} /> : null}
       {n.open ? <GoingOut d={n.open} now={now} /> : n.failed ? <Failed d={n.failed} /> : null}
       {focus ? <FocusChip focus={focus} waiting={focusWaiting} deploys={focusDeploys} live={n.live} onClear={onClearFocus} /> : null}
       {t.record_only ? null : (
@@ -311,7 +324,9 @@ function TargetPane({ target: t, deploys, now, onPress, openDeploy, focus, reach
               <span className="dpp-dp-by">{d.started_by ?? sourceWord(d)}</span>
               <span className="dpp-age">{ago(now, d.live_at ?? d.created_at)}</span>
               {d._id === n.live?._id ? <span className="dpp-livenow" data-deploy-live-now>Live now</span>
-              : rollBackHere(d, t, deploys) ? (
+              : rollbackOffer(d, t, deploys) ? (
+                <button type="button" className="dpp-row-act" aria-haspopup="dialog" onClick={() => onRollback(rollbackOffer(d, t, deploys)!)} data-deploy-redeploy={d.short_id}><RotateCcw className="w-3 h-3" aria-hidden />Roll back here</button>
+              ) : rollBackHere(d, t, deploys) ? (
                 <button type="button" className="dpp-row-act" onClick={() => onPress(rollBackHere(d, t, deploys)!)} data-deploy-redeploy={d.short_id}><RotateCcw className="w-3 h-3" aria-hidden />Roll back here</button>
               ) : <span />}
               <DeployCarried d={d} />
@@ -492,6 +507,38 @@ function GoingOut({ d, now }: { d: TeamDeployRow; now: number }) {
       {steps.length ? (
         <ol className="dpp-steps">{steps.map((s) => <li key={s.id} data-status={s.status}>{s.id}</li>)}</ol>
       ) : null}
+    </section>
+  );
+}
+
+/** The repository's production pause (DP17): who, when and why, the rollback that made it, what lifts it, and the
+ *  migrations that rule a revert out. Lift for whoever may lift it. */
+export function Paused({ p, canLift, now, onLift }: { p: DeployPauseView; canLift: boolean; now: number; onLift: () => void }) {
+  const u = p.until;
+  return (
+    <section className="dpp-going" data-kind="paused" data-deploy-paused={p.repository}>
+      <Pause className="w-3.5 h-3.5" aria-hidden />
+      <b>Paused</b>
+      <span className="dpp-paused-by">{p.by}</span>
+      <span className="dpp-age">{ago(now, p.at)}</span>
+      {canLift ? <button type="button" className="dpp-back dpp-lift" onClick={onLift} data-deploy-lift={p.repository}>Lift</button> : null}
+      <dl className="dpp-pause-facts">
+        <dt>Why</dt><dd data-deploy-pause-reason>{p.reason}</dd>
+        {p.rollback ? <><dt>Rollback</dt><dd><EntityIdPill shortId={p.rollback} compact /></dd></> : null}
+        <dt>Lifts</dt>
+        <dd data-deploy-pause-lifts>
+          {u ? <>{u.task ? <EntityIdPill shortId={u.task} compact /> : <span className="dpp-dim">its task</span>} {u.kind === "revert" ? "revert" : "fix forward"} green on main</> : `${p.by} or the Release Captain`}
+        </dd>
+        {u?.migrations.length ? (
+          <>
+            <dt>Migrations</dt>
+            <dd className="dpp-pause-warn" role="alert" data-deploy-pause-migrations={u.migrations.length}>
+              <b>No revert: fix forward</b>
+              <ul>{u.migrations.map((m) => <li key={m}><code>{m}</code></li>)}</ul>
+            </dd>
+          </>
+        ) : null}
+      </dl>
     </section>
   );
 }

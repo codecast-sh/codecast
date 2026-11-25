@@ -1028,7 +1028,7 @@ export const CLIENT_SYNC_REGISTRY = {
     persistence: { kind: "collection", key: "deployTargets" },
     hydration: { phase: "deferred" },
     indexes: "_id, workspace",
-    sync: { isDelta: true, deepFields: ["queue", "paths", "live_reader", "last_read"] },
+    sync: { isDelta: true, deepFields: ["queue", "paths", "live_reader", "last_read", "pause", "rollback_inputs"] },
     feeds: ["deployTargets.view"],
   },
   // Every deploy of a team's targets the Deploys page shows: live, going out,

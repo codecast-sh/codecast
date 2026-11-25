@@ -6,6 +6,7 @@
 import { worstCi, type CommitCiState, type DeployTargetPolicy, type QueueGroup, type TargetDevPush } from "@codecast/shared/contracts/deployTargets";
 import { prNumberOf } from "@codecast/shared/changes";
 import type { DeployPushSummary, DeployView } from "@codecast/shared/contracts/deploys";
+import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import type { TargetState } from "../ship/journey";
 
 export type DeployTargetRow = {
@@ -18,12 +19,21 @@ export type DeployTargetRow = {
   policy: DeployTargetPolicy;
   command: string | null;
   rollback: string | null;
+  /** The workflow its deploys run as: codecast rolls such a target back itself, pausing production first (DP19). */
+  workflow?: string | null;
+  /** What that rollback adds to the workflow's inputs; without them codecast cannot send one. */
+  rollback_inputs?: Record<string, string> | null;
   paths: string[];
   can_deploy: boolean;
   can_redeploy_sha: boolean;
   can_rollback: boolean;
   device_id: string | null;
   publisher_user_id: string;
+  /** Its repository's standing pause (DP17): nothing but the rollback that paused it is sent while it stands. */
+  pause?: DeployPauseView | null;
+  /** The viewer may pause, lift and roll back production; lifting is further for whoever paused (can_lift). */
+  can_pause?: boolean;
+  can_lift?: boolean;
   /** No checkout declared it: the page knows it only from its deploy records (no queue, no press). */
   record_only?: boolean;
   last_read?: { sha?: string; version?: string; at: number; error?: string } | null;

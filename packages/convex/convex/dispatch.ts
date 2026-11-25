@@ -1,6 +1,8 @@
 import { internalMutation, mutation, syncAckPositions, syncAckReceipts } from "./functions";
 import { requestDeployCore } from "./deploys";
 import { requestTargetDeployCore } from "./deployTargetRequest";
+import { liftFor, pauseFor } from "./deployPause";
+import { rollbackFor } from "./deployRollback";
 import { noteWriteCause } from "./lifecycleEvents";
 import { heldKeysFor } from "./lib/accessKeys";
 import { addWaitCore, removeWaitCore, type AddWaitInput } from "./taskWaits";
@@ -2067,6 +2069,21 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   deployTarget: async (ctx, userId, [clientKey, teamId, repository, target, action, of]: [string, string, string, string, "deploy" | "redeploy" | "rollback", string | null]) => {
     if (!isServerId(teamId)) throw new ConvexError("The team is still being created");
     return await requestTargetDeployCore(ctx, userId as Id<"users">, { team_id: teamId as Id<"teams">, repository, target, action, ...(of ? { of } : {}), client_key: clientKey });
+  },
+  // "Pause" and "Lift" on the Deploys page (deploys.md DP17): a repository's production, held as the CLI holds it.
+  pauseProduction: async (ctx, userId, [teamId, repository, reason]: [string, string, string]) => {
+    if (!isServerId(teamId)) throw new ConvexError("The team is still being created");
+    return await pauseFor(ctx, userId as Id<"users">, { team_id: teamId as Id<"teams">, repository, reason });
+  },
+  liftProductionPause: async (ctx, userId, [teamId, repository]: [string, string]) => {
+    if (!isServerId(teamId)) throw new ConvexError("The team is still being created");
+    return await liftFor(ctx, userId as Id<"users">, { team_id: teamId as Id<"teams">, repository });
+  },
+  // "Roll back" on the Deploys page for a target whose deploys run as a workflow (DP19): pause, queue the rollback,
+  // file what ends it. The requested deploy supersedes the page's stub by its client key.
+  rollbackProduction: async (ctx, userId, [clientKey, teamId, repository, target, of, reason]: [string, string, string, string, string | null, string]) => {
+    if (!isServerId(teamId)) throw new ConvexError("The team is still being created");
+    return await rollbackFor(ctx, userId as Id<"users">, { team_id: teamId as Id<"teams">, repository, target, ...(of ? { of } : {}), reason, client_key: clientKey });
   },
   // "Stop the run" on a run far past its usual time: it ends as a person's cancel, and its task says so.
   stopLineRun: async (ctx, userId, [runId]: [string]) => {

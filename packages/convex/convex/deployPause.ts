@@ -87,7 +87,7 @@ export async function pauseCore(ctx: any, by: PauseHolder, args: { workspace: st
 }
 
 /** Whether `by` may lift `p`: whoever paused it, or the Release Captain (a role holding the pause authority). */
-function mayLift(p: Doc<"deploy_pauses">, by: PauseHolder): boolean {
+export function mayLift(p: Doc<"deploy_pauses">, by: PauseHolder): boolean {
   if (by.kind === "role") return true;
   return p.by.kind === "person" && String(p.by.user_id) === String(by.user_id);
 }
@@ -115,31 +115,37 @@ export const status = query({
   },
 });
 
+type ScopeArgs = { team_id?: Id<"teams">; repository: string; from_session?: string };
+
+/** Pause a repository's production as the caller (the CLI, the Deploys page): what the pause catches going out stops. */
+export async function pauseFor(ctx: any, userId: Id<"users">, args: ScopeArgs & { reason: string }) {
+  const s = await scopeOf(ctx, userId, args);
+  const by = await requirePauseHolder(ctx, userId, s.team_id, args.from_session);
+  const p = await pauseCore(ctx, by, { ...s, reason: args.reason });
+  // What the pause catches going out stops: a queued deploy at once, a run before its rollout on GitHub.
+  const cancelled = await cancelForPause(ctx, s.workspace, s.repository, by.name, `production paused: ${p.reason}`);
+  return { ...(await pauseViewOf(ctx, p)), cancelled };
+}
+
+/** Lift a repository's pause as the caller: whoever paused it, or the Release Captain. */
+export async function liftFor(ctx: any, userId: Id<"users">, args: ScopeArgs): Promise<{ lifted: boolean; repository: string }> {
+  const s = await scopeOf(ctx, userId, args);
+  const by = await requirePauseHolder(ctx, userId, s.team_id, args.from_session);
+  const p = await activePauseOf(ctx, s.workspace, s.repository);
+  if (!p) return { lifted: false, repository: s.repository };
+  if (!mayLift(p, by)) throw new Error(`${p.by.name} paused production; they or the Release Captain lift it`);
+  await liftCore(ctx, p, by.name);
+  return { lifted: true, repository: s.repository };
+}
+
 export const pause = mutation({
   args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), repository: v.string(), reason: v.string(), from_session: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const userId = await requireUserOrToken(ctx, args.api_token);
-    const s = await scopeOf(ctx, userId, args);
-    const by = await requirePauseHolder(ctx, userId, s.team_id, args.from_session);
-    const p = await pauseCore(ctx, by, { ...s, reason: args.reason });
-    // What the pause catches going out stops: a queued deploy at once, a run before its rollout on GitHub.
-    const cancelled = await cancelForPause(ctx, s.workspace, s.repository, by.name, `production paused: ${p.reason}`);
-    return { ...(await pauseViewOf(ctx, p)), cancelled };
-  },
+  handler: async (ctx, args) => pauseFor(ctx, await requireUserOrToken(ctx, args.api_token), args),
 });
 
 export const lift = mutation({
   args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), repository: v.string(), from_session: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const userId = await requireUserOrToken(ctx, args.api_token);
-    const s = await scopeOf(ctx, userId, args);
-    const by = await requirePauseHolder(ctx, userId, s.team_id, args.from_session);
-    const p = await activePauseOf(ctx, s.workspace, s.repository);
-    if (!p) return { lifted: false, repository: s.repository };
-    if (!mayLift(p, by)) throw new Error(`${p.by.name} paused production; they or the Release Captain lift it`);
-    await liftCore(ctx, p, by.name);
-    return { lifted: true, repository: s.repository };
-  },
+  handler: async (ctx, args) => liftFor(ctx, await requireUserOrToken(ctx, args.api_token), args),
 });
 
 /** A team admin grants (or takes back) a member's pause: founders hold it as admins, engineers by this grant. */

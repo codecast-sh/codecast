@@ -42,7 +42,7 @@ import { checkSuiteCi, ciOf, recordCommitCi, recordGithubDeployStatus, teamKey, 
 import { COMMITS_MAX, commitBySha, deployCommitsOf, mainAtOf, mainCommitsAfter, repositoryArg, targetDeploys, targetRows, targetState, upsertMainCommits } from "./deployTargetsState";
 import { requestTargetDeployCore } from "./deployTargetRequest";
 export { requestTargetDeployCore };
-import { activePauseOf, pauseHolderOf, pauseViewOf } from "./deployPause";
+import { activePauseOf, mayLift, pauseHolderOf, pauseViewOf } from "./deployPause";
 import type { DeployPauseView } from "@codecast/shared/contracts/deployPause";
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
 import { guardedFetch, RefusedHostError } from "./lib/guardedFetch";
@@ -178,15 +178,16 @@ export const view = query({
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return { targets: [] };
     const rows = (await targetRows(ctx, workspace, args.repository ? repositoryArg(args.repository) : undefined)).filter((r) => !args.target || r.name === args.target);
     // Each target carries its repository's pause and whether the viewer may pause, lift and roll back (DP17).
-    const canPause = !!(await pauseHolderOf(ctx, userId, teamId));
-    const pauses = new Map<string, DeployPauseView | null>();
+    const holder = await pauseHolderOf(ctx, userId, teamId);
+    const pauses = new Map<string, { view: DeployPauseView; can_lift: boolean } | null>();
     const targets = [];
     for (const t of rows) {
       if (!pauses.has(t.repository)) {
         const p = await activePauseOf(ctx, workspace, t.repository);
-        pauses.set(t.repository, p ? await pauseViewOf(ctx, p) : null);
+        pauses.set(t.repository, p ? { view: await pauseViewOf(ctx, p), can_lift: !!holder && mayLift(p, holder) } : null);
       }
-      targets.push({ ...(await targetState(ctx, t)), pause: pauses.get(t.repository) ?? null, can_pause: canPause });
+      const p = pauses.get(t.repository);
+      targets.push({ ...(await targetState(ctx, t)), pause: p?.view ?? null, can_pause: !!holder, can_lift: !!p?.can_lift });
     }
     return { team_id: teamId, targets };
   },

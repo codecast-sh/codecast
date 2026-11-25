@@ -8,13 +8,15 @@ import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
 import { cancelForPause, nextCore, send, settle } from "./deployDispatch";
 import { liftEndedPauses, remindCore, rollback } from "./deployRollback";
 import { grant as grantPause, lift as liftPause, pause as pausePause, status as pauseStatus } from "./deployPause";
+import { dispatch } from "./dispatch";
 
 // A repository's deploy targets (docs/architecture/deploys.md DP10 to DP14):
 // published from the checkout, live from whichever path recorded it, the
 // commits on main after the live sha waiting by session with CI, and a deploy
 // of any target asked for from codecast. Synthetic data only.
 
-const TEAM = "team_1" as any;
+// Shaped like a server id, so the Deploys page's dispatch writes take it.
+const TEAM = "team1".padEnd(32, "0") as any;
 const WS = `team:${TEAM}`;
 const ME = "user_me";
 const TOKEN = "cast_targets_token";
@@ -436,6 +438,21 @@ describe("production paused (DP17)", () => {
     expect(t.deploy_pauses[0]).toMatchObject({ lifted_by: "Ana" });
     expect(await (request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "backend" })).toMatchObject({ action: "deploy" });
   });
+
+  test("the Deploys page pauses and lifts through dispatch, and each target says whether its viewer may lift", async () => {
+    const { t, ctx } = await published();
+    t.team_memberships[0].role = "admin";
+    t.team_memberships[1].production_pause = true;
+    const asUser = (user: string) => ({ ...ctx, auth: { getUserIdentity: async () => ({ subject: `${user}|session` }) } });
+    const press = (user: string, action: string, args: unknown[]) => (dispatch as any)._handler(asUser(user), { action, args });
+    expect(await press(ME, "pauseProduction", [TEAM, REPO, "errors spiking"])).toMatchObject({ by: "Ana", reason: "errors spiking", cancelled: [] });
+    expect((await viewOf(ctx, "backend"))[0]).toMatchObject({ pause: { by: "Ana" }, can_pause: true, can_lift: true, workflow: null });
+    const bo = (await (view as any)._handler(ctx, { api_token: BO_TOKEN, team_id: TEAM, target: "backend" })).targets[0];
+    expect(bo).toMatchObject({ can_pause: true, can_lift: false });
+    await expect(press(BO, "liftProductionPause", [TEAM, REPO])).rejects.toThrow(/Ana paused production/);
+    expect(await press(ME, "liftProductionPause", [TEAM, REPO])).toEqual({ lifted: true, repository: REPO });
+    expect((await viewOf(ctx, "backend"))[0]).toMatchObject({ pause: null, can_lift: false });
+  });
 });
 
 describe("codecast's deploy queue through its GitHub app (DP18)", () => {
@@ -488,6 +505,18 @@ describe("codecast's deploy queue through its GitHub app (DP18)", () => {
     running.status = "live";
     // Production is paused, and the rollback that paused it is the one deploy that goes out.
     expect(await nextCore(ctx, WS, "production")).toEqual({ sending: r.deploy });
+  });
+
+  test("the Deploys page's Roll back takes codecast's rollback, and its deploy carries the page's client key", async () => {
+    const { t, ctx } = await production();
+    t.team_memberships[0].role = "admin";
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "m", at: NOW - 40_000 });
+    expect((await viewOf(ctx, "production"))[0]).toMatchObject({ workflow: "deploy.yml", rollback_inputs: { components: "backend-web" } });
+    const asAna = { ...ctx, auth: { getUserIdentity: async () => ({ subject: `${ME}|session` }) } };
+    const r = await (dispatch as any)._handler(asAna, { action: "rollbackProduction", args: ["dp-client-abc", TEAM, REPO, "production", null, "checkout broken"] });
+    expect(r).toMatchObject({ target: "production", sha: sha(1), ending: "revert" });
+    expect(t.deploys.find((x) => x.short_id === r.deploy)).toMatchObject({ action: "rollback", client_key: "dp-client-abc" });
+    expect((await viewOf(ctx, "production"))[0].pause).toMatchObject({ rollback: r.deploy, until: { task: r.task, kind: "revert" } });
   });
 
   test("a pause cancels what waits in the queue and stops a run before rollout; any other cancel is neutral", async () => {

@@ -44,7 +44,7 @@ export type RollbackResult = {
  * Roll a repository's production back to an earlier live deploy (`of`, else the one before the current), as `by`:
  * pause, queue the rollback behind whatever is going out, cancel what the pause catches, and file what ends it.
  */
-export async function rollbackCore(ctx: any, userId: Id<"users">, args: { team_id: Id<"teams">; repository: string; target?: string; of?: string; reason: string; from_session?: string }): Promise<RollbackResult> {
+export async function rollbackCore(ctx: any, userId: Id<"users">, args: { team_id: Id<"teams">; repository: string; target?: string; of?: string; reason: string; from_session?: string; client_key?: string }): Promise<RollbackResult> {
   const workspace = teamKey(args.team_id);
   const by = await requirePauseHolder(ctx, userId, args.team_id, args.from_session);
   const reason = args.reason.trim();
@@ -53,7 +53,7 @@ export async function rollbackCore(ctx: any, userId: Id<"users">, args: { team_i
   if (targets.length !== 1) throw new Error(targets.length ? `More than one target of ${args.repository} runs a workflow; name the target` : `No target of ${args.repository} names the workflow its deploys run as, so codecast cannot send a rollback`);
   const t = targets[0];
 
-  const asked = await requestTargetDeployCore(ctx, userId, { team_id: args.team_id, target: t.name, repository: t.repository, action: "rollback", ...(args.of ? { of: args.of } : {}), actor: by.name.split(/\s+/)[0], paused: true });
+  const asked = await requestTargetDeployCore(ctx, userId, { team_id: args.team_id, target: t.name, repository: t.repository, action: "rollback", ...(args.of ? { of: args.of } : {}), ...(args.client_key ? { client_key: args.client_key } : {}), actor: by.name.split(/\s+/)[0], paused: true });
   const row: Doc<"deploys"> = await ctx.db.get(asked._id as Id<"deploys">);
   // What it takes off production: the commits on main after the commit it puts back, up to what was live.
   const range = row.previous_sha ? await mainCommitsAfter(ctx, t.repository, asked.sha!, row.previous_sha) : { commits: [], known: false };
@@ -100,14 +100,16 @@ export async function rollbackCore(ctx: any, userId: Id<"users">, args: { team_i
 
 export const rollback = mutation({
   args: { api_token: v.optional(v.string()), team_id: v.optional(v.id("teams")), repository: v.string(), target: v.optional(v.string()), of: v.optional(v.string()), reason: v.string(), from_session: v.optional(v.string()) },
-  handler: async (ctx, args) => {
-    const userId = await requireUserOrToken(ctx, args.api_token);
-    const repository = repositoryArg(args.repository);
-    const team_id = args.team_id ?? (await deployTeamFor(ctx, userId, repository));
-    if (!(await workspaceGrantsAccess(ctx, userId, teamKey(team_id)))) throw new Error("Not a member of that team");
-    return await rollbackCore(ctx, userId, { ...args, team_id, repository });
-  },
+  handler: async (ctx, args) => rollbackFor(ctx, await requireUserOrToken(ctx, args.api_token), args),
 });
+
+/** Roll back as the caller (the CLI, the Deploys page): the team it names, else the repository's. */
+export async function rollbackFor(ctx: any, userId: Id<"users">, args: { team_id?: Id<"teams">; repository: string; target?: string; of?: string; reason: string; from_session?: string; client_key?: string }): Promise<RollbackResult> {
+  const repository = repositoryArg(args.repository);
+  const team_id = args.team_id ?? (await deployTeamFor(ctx, userId, repository));
+  if (!(await workspaceGrantsAccess(ctx, userId, teamKey(team_id)))) throw new Error("Not a member of that team");
+  return await rollbackCore(ctx, userId, { ...args, team_id, repository });
+}
 
 // ── what ends a rollback ─────────────────────────────────────────────────────
 

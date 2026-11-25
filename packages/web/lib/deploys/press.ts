@@ -2,15 +2,22 @@
 // ledger its review shows and the store write its confirm makes. The web's
 // review (components/deploys/DeployPress) and the phone's deploy screen both
 // read these, so the two ask with the same facts and send the same request.
+// Pause, Lift and the paused Roll back (deploys.md DP17, DP19) are presses too:
+// a target whose deploys run as a workflow goes back only through codecast's
+// rollback, which pauses production first and says why.
 // Pure of DOM: the phone imports it.
 import { useInboxStore } from "../../store/inboxStore";
+import { isRefusedDispatchError } from "../../store/mutativeMiddleware";
 import { deployTargetLedger } from "../../components/consequential/ledgers";
-import type { SwitchLedger } from "../../components/consequential/ConsequentialSwitch";
+import type { SwitchLedger, SwitchRow } from "../../components/consequential/ConsequentialSwitch";
 import { rollbackTarget, targetNow, type DeployTargetRow, type TeamDeployRow } from "./targets";
 
 export type Press = { target: DeployTargetRow; action: "deploy" | "redeploy" | "rollback"; of: TeamDeployRow | null };
 
 const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 7) : "—");
+
+/** The confirm's word while no reason is written: a pause and a rollback both say why. */
+export const SAY_WHY = "Say why first";
 
 /** What a press sends, from what, its CI and how to undo it, as the confirm shows it. */
 export function pressLedger(p: Press, deploys: ReadonlyArray<TeamDeployRow>): SwitchLedger {
@@ -30,6 +37,8 @@ export function pressLedger(p: Press, deploys: ReadonlyArray<TeamDeployRow>): Sw
     ci: p.action === "deploy" ? p.target.queue.head_ci : "passed",
     runsOn: p.target.runs === "here" ? "The machine that publishes it" : null,
     undo: p.action === "deploy" ? (n.live ? `Roll back to ${short(n.live.sha)}` : null) : back || n.live ? `Deploy ${short(n.live?.sha)} again` : null,
+    // A pause lets only a rollback through.
+    ...(p.target.pause && p.action !== "rollback" ? { blocked: "Production is paused" } : {}),
   });
 }
 
@@ -48,11 +57,117 @@ export function sendPress(p: Press, teamId: string, deploys: ReadonlyArray<TeamD
 }
 
 /** The way back a superseded deploy offers ("Roll back here"): only for one that went live on another sha, on a
- *  target that can go back, while nothing else is going out there. */
+ *  target that can go back, while nothing else is going out there. A target whose deploys run as a workflow goes back
+ *  only through codecast's rollback (rollbackOffer). */
 export function rollBackHere(d: TeamDeployRow, target: DeployTargetRow | undefined, deploys: ReadonlyArray<TeamDeployRow>): Press | null {
-  if (!target || d.status !== "live" || !d.sha) return null;
+  if (!target || target.workflow || d.status !== "live" || !d.sha) return null;
   const n = targetNow(target, deploys);
   if (n.open || d._id === n.live?._id || d.sha === n.live?.sha) return null;
   if (!target.can_redeploy_sha && !target.can_rollback) return null;
   return { target, action: target.can_redeploy_sha ? "redeploy" : "rollback", of: d };
+}
+
+// ── Pause, Lift and the paused Roll back (DP17, DP19) ──────────────────────
+
+/** Roll back a workflow target to an earlier live deploy: it pauses production, and its task says what ends the pause. */
+export type RollbackPress = { target: DeployTargetRow; of: TeamDeployRow };
+
+/** Codecast's Roll back to `d` (the header's, with the deploy before the live one, or a row's "Roll back here"): only
+ *  on a target whose deploys run as a workflow, for a viewer who holds the pause, to a deploy that went live on
+ *  another sha. It queues behind whatever is going out, so a deploy going out does not stop it. */
+export function rollbackOffer(d: TeamDeployRow | null, target: DeployTargetRow | undefined, deploys: ReadonlyArray<TeamDeployRow>): RollbackPress | null {
+  if (!d || !target?.workflow || !target.can_pause || d.status !== "live" || !d.sha) return null;
+  const n = targetNow(target, deploys);
+  if (d._id === n.live?._id || d.sha === n.live?.sha) return null;
+  return { target, of: d };
+}
+
+/** A repository's targets of one team: a pause stands on the repository, so it stops every one of them. */
+const sameRepo = (targets: ReadonlyArray<DeployTargetRow>, t: DeployTargetRow) => targets.filter((x) => x.workspace === t.workspace && x.repository === t.repository && !x.record_only);
+/** What a pause catches going out on the repository: a queued deploy, or a run (cancelled before its rollout). */
+const goingOut = (deploys: ReadonlyArray<TeamDeployRow>, t: DeployTargetRow) => deploys.filter((d) => d.workspace === t.workspace && d.repository === t.repository && (d.status === "requested" || d.status === "running") && !!d.short_id);
+
+/** Pausing a repository's production, as its confirm shows it: what stops, what it cancels, and how it ends. */
+export function pauseLedger(t: DeployTargetRow, targets: ReadonlyArray<DeployTargetRow>, deploys: ReadonlyArray<TeamDeployRow>, reason: string): SwitchLedger {
+  const stops = sameRepo(targets, t);
+  const going = goingOut(deploys, t);
+  return {
+    name: "Pause production",
+    subject: t.repository,
+    shift: ["Deploying", "Paused"],
+    figures: [
+      { value: String(stops.length), label: stops.length === 1 ? "target stops" : "targets stop" },
+      { value: String(going.length), label: going.length === 1 ? "deploy cancelled" : "deploys cancelled", ...(going.length ? { tone: "warn" as const } : {}) },
+    ],
+    rows: [
+      { k: "Stops", v: stops.length === 1 ? stops[0].name : `${stops.length} targets`, ...(stops.length > 1 ? { list: stops.map((x) => x.name) } : {}) },
+      ...(going.length ? [{ k: "Cancels", v: "Queued, or before rollout", tone: "warn" as const, list: going.map((d) => `${d.short_id} to ${d.target}`) }] : []),
+      { k: "Lets through", v: "A rollback" },
+    ],
+    stop: "Lift: you or the Release Captain",
+    confirm: "Pause production",
+    keep: "Not now",
+    ...(reason.trim() ? {} : { blocked: SAY_WHY }),
+  };
+}
+
+/** Codecast's rollback, as its confirm shows it: what goes back live, the pause it leaves, and what ends that. */
+export function rollbackLedger(p: RollbackPress, deploys: ReadonlyArray<TeamDeployRow>, reason: string): SwitchLedger {
+  const t = p.target;
+  const n = targetNow(t, deploys);
+  const rows: SwitchRow[] = [
+    { k: "Pauses", v: `Every deploy of ${t.repository}`, tone: "warn" },
+    ...(n.open ? [{ k: "Going out", v: `${n.open.short_id || "A deploy"}: cancelled before rollout, else waited for`, tone: "warn" as const }] : []),
+    { k: "Files", v: "A task for the Release Captain: revert, or fix forward past a migration" },
+    { k: "Lifts", v: "Once that commit is green on main" },
+    { k: "Goes live", v: "For everyone on it", tone: "warn" },
+  ];
+  return {
+    name: `Roll back ${t.name}`,
+    subject: t.repository,
+    shift: [short(n.live?.sha), short(p.of.sha)],
+    figures: [{ value: short(p.of.sha), label: `goes back live${p.of.short_id ? ` (${p.of.short_id})` : ""}` }],
+    rows,
+    confirm: "Roll back",
+    keep: "Not now",
+    ...(!t.rollback_inputs ? { blocked: `${t.workflow} names no rollback_inputs` } : !reason.trim() ? { blocked: SAY_WHY } : {}),
+  };
+}
+
+/** A refused write takes its paint back: the repository's pause reads as it stood before (and a rollback's stub goes). */
+function restoreOnRefusal(t: DeployTargetRow, dropDeploy?: string) {
+  const prev = t.pause ?? null;
+  const prevLift = !!t.can_lift;
+  return (e: unknown) => {
+    if (isRefusedDispatchError(e)) useInboxStore.getState().setProductionPause(t.team_id, t.repository, prev, prevLift, dropDeploy);
+  };
+}
+
+/** Pause's confirm: every target of the repository reads paused at once. */
+export function sendPause(t: DeployTargetRow, reason: string, by: string): void {
+  useInboxStore.getState().pauseProduction(t.team_id, t.repository, reason.trim(), by).catch(restoreOnRefusal(t));
+}
+
+/** Lift: one press, the repository reads unpaused at once. */
+export function sendLift(t: DeployTargetRow): void {
+  useInboxStore.getState().liftProductionPause(t.team_id, t.repository).catch(restoreOnRefusal(t));
+}
+
+/** Roll back's confirm: the rollback reads requested and production paused at once. The answer names what ends the
+ *  pause (its task, a revert or a fix forward past migrations), laid on the pause as soon as it arrives. */
+export function sendRollback(p: RollbackPress, reason: string, deploys: ReadonlyArray<TeamDeployRow>, startedBy: string): void {
+  const t = p.target;
+  const clientKey = `dp-client-${Math.random().toString(36).slice(2, 10)}`;
+  const n = targetNow(t, deploys);
+  useInboxStore
+    .getState()
+    .rollbackProduction(clientKey, t.team_id, t.repository, t.name, p.of.short_id || null, reason.trim(), { started_by: startedBy, sha: p.of.sha, previous_sha: n.live?.sha ?? null, commits: 0, sessions: [] })
+    .then((r) => {
+      if (!r) return;
+      const s = useInboxStore.getState();
+      const now = (s.deployTargets as Record<string, DeployTargetRow> | undefined)?.[t._id];
+      if (!now?.pause) return;
+      s.setProductionPause(t.team_id, t.repository, { ...now.pause, rollback: r.deploy, until: { task: r.task, kind: r.ending, migrations: r.migrations, commits: r.commits } }, !!now.can_lift);
+    })
+    .catch(restoreOnRefusal(t, clientKey));
 }
