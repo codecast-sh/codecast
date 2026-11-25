@@ -29,7 +29,7 @@ import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { verifyApiToken } from "./apiTokens";
 import { findSessionCommandByRequest, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
-import { DAEMON_COMMAND_TTL_MS, WORK_STARTING_DAEMON_COMMANDS, isReservedDevice, isUnattendedConversation, isTestArtifactPath, repositoryKeyOfRemote } from "@codecast/shared/contracts";
+import { DAEMON_COMMAND_TTL_MS, WORK_STARTING_DAEMON_COMMANDS, isReservedDevice, isUnattendedConversation, isTestArtifactPath, repositoryKeyOfRemote, workspaceFeatureEnabled } from "@codecast/shared/contracts";
 import { activeTeamMembershipFor, canAccessTask, canAccessDoc, workspaceGrantsAccess } from "./lib/access";
 import { patchConversationVisibility } from "./lib/conversationVisibility";
 import { canReleaseCommandClaim, commandVisibleToClaimer, decideCommandClaim } from "./lib/daemonCommandClaim";
@@ -47,7 +47,7 @@ import { bucketTs } from "./presenceState";
 import { backlogFieldsPatch } from "./heartbeatBacklog";
 import { activeEnrollmentTeam, heartbeatTeamPolicy } from "./lib/teamPolicyGuard";
 import { agentCommentLevelValidator } from "./threadReads";
-import { gatedSnippetAvailability } from "./teamFeatures";
+import { gatedSnippetAvailability, userTeams } from "./teamFeatures";
 import { startAccountDeletion } from "./accountDelete";
 import { readLocalViewRevision } from "./localFirstCommands";
 import { daemonLastSeenStale } from "./lib/daemonLiveness";
@@ -809,6 +809,7 @@ export const daemonHeartbeat = mutation({
             .collect(),
           now,
         );
+    const teams = await userTeams(ctx, auth.userId);
 
     return {
       wake_devices: wakeDevices,
@@ -837,7 +838,11 @@ export const daemonHeartbeat = mutation({
       // calls). The daemon reconciles its installed snippets to this on every
       // beat, so a team flipping a feature reaches offline machines when they
       // wake — no pushed command to miss.
-      snippet_availability: await gatedSnippetAvailability(ctx, auth.userId),
+      snippet_availability: gatedSnippetAvailability(teams),
+      // Live replies are on for any of the user's teams, so the daemon knows
+      // whether to install the MessageDisplay hook and push at all. Each push
+      // still checks its own conversation's workspace.
+      reply_streaming: workspaceFeatureEnabled(teams, null, "reply_streaming"),
       capability_desired_revision: (user as any)?.capability_revision ?? 0,
       capabilities_mode: (globalCapMode?.value as string | undefined) ?? (user as any)?.capabilities_mode ?? "dry",
       // The managed policy of the team this device is enrolled in (one point
