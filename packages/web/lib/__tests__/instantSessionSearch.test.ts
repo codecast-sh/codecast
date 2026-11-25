@@ -228,3 +228,35 @@ describe("mid-word summary hits", () => {
     expect(rankSessions(weak, "dent", () => mine, 10, now).map((r) => r._id)).toEqual(["d"]);
   });
 });
+
+// ct-101414: a person who opened a conversation minutes ago and types its name
+// into the palette should land on it first, not on whichever same-named
+// session the server touched most recently. The visit lives in the store's
+// own `recentVisits` list (store/inboxStore.ts, RecentVisit).
+describe("a conversation the person just visited", () => {
+  const now = Date.now();
+  const visitedState = () => ({
+    ...stateWith([
+      // Opened two minutes ago; its agent has been quiet for three hours.
+      session({ _id: "visited", title: "Sidebar polish for the inbox", user_id: "u1", updated_at: now - 3 * 3_600_000 }),
+      // Never opened, but a busy agent keeps bumping it.
+      session({ _id: "busy", title: "Sidebar polish follow-ups", user_id: "u1", updated_at: now - 60_000 }),
+      // Opened too, but the query only lands in its summary.
+      session({ _id: "summary-only", title: "Inbox work", idle_summary: "sidebar polish notes", user_id: "u1", updated_at: now - 30_000 }),
+    ]),
+    recentVisits: [
+      { kind: "session" as const, key: "summary-only", ts: now - 60_000 },
+      { kind: "session" as const, key: "visited", ts: now - 2 * 60_000 },
+    ],
+  });
+
+  test("is the top result when its title matches what was typed", () => {
+    const rows = instantSessionRows(visitedState() as any, "sidebar polish");
+    expect(rows[0]?.conversationId).toBe("visited");
+  });
+
+  test("a visit does not lift a summary-only match above an unvisited title match", () => {
+    const ids = instantSessionRows(visitedState() as any, "sidebar polish").map((r) => r.conversationId);
+    expect(ids.indexOf("busy")).toBeLessThan(ids.indexOf("summary-only"));
+  });
+});
