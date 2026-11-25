@@ -52,7 +52,7 @@ and the protected set `production`, `billing`, `data`, `access`, `external`,
 a grant. The asker's proposal (`cast decide --category`) stands, because only
 the asker knows whose call the answer is: card text describes the situation,
 not who should answer it. No proposal is `review`, so a `review` grant covers
-every agent card asked without a category and the change flow's Ship cards,
+every agent card asked without a category and the change flow's approval cards,
 whose gate declares `review`: granting `review` grants both. A proposal
 outside the vocabulary is `unknown` (the CLI refuses it). Asked again or
 edited without a proposal, a card keeps its category. A decision serving a

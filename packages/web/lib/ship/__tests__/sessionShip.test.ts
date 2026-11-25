@@ -86,7 +86,7 @@ describe("a landed change reads where the deploy records put it", () => {
     expect(m.get("s")).toMatchObject({ words: "Not live yet · production", tone: "wait" });
   });
 
-  test("without a reach yet the card says Landed, and the feeder asks for the newest landed commit of each session", () => {
+  test("without a reach yet the card says Merged, and the feeder asks for the newest landed commit of each session", () => {
     expect(sessionShips([landed], []).get("s")).toMatchObject({ words: "Merged" });
     const older = run("o", "s", { status: "completed", created_at: 0, merge: { sha: "b".repeat(40) } });
     const live = run("l", "t", { status: "completed", merge: { sha: "c".repeat(40) }, node_statuses: [{ node_id: "deploy", status: "completed" }] });

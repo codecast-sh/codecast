@@ -161,7 +161,7 @@ describe("line.cast template", () => {
     expect(stops.map((id) => [graph.nodes.get(id)?.type, graph.nodes.get(id)?.stop])).toEqual([
       ["exit", "$handoff_note"],
       ["exit", "The reviewer rejected the change. $review_note"],
-      ["exit", "Not shipped: CI stayed red after three rounds back to the builder. The last CI brief is the task's latest blocker comment."],
+      ["exit", "Not merged: CI stayed red after three rounds back to the builder. The last CI brief is the task's latest blocker comment."],
     ]);
     // Only the exits are dead ends.
     expect([...graph.nodes.keys()].filter((id) => next(id).length === 0)).toEqual(["exit", ...stops]);
@@ -301,7 +301,7 @@ describe("line.cast template", () => {
     expect(fired("ship", { outcome: "failure", "ship.exit_code": "3", ...UNION_VARS })).toEqual(["rebase"]);
   });
 
-  test("ship: CI red (exit 7) goes back to the builder for three rounds a run, and a fourth red ends it not shipped", () => {
+  test("ship: CI red (exit 7) goes back to the builder for three rounds a run, and a fourth red ends it not merged", () => {
     const red = (rounds: number, category = "code") => ({ outcome: "failure", "ship.exit_code": "7", "ship.json": JSON.stringify({ ci_red_rounds: rounds }), category });
     for (const n of [1, 2, 3]) {
       expect(fired("ship", red(n))).toEqual(["implement"]);
@@ -309,8 +309,8 @@ describe("line.cast template", () => {
     }
     expect(fired("ship", red(4))).toEqual(["ci_red"]);
     expect(fired("ship", red(4, "line"))).toEqual(["ci_red"]);
-    expect(graph.nodes.get("ci_red")?.label).toBe("Not shipped: CI stayed red");
-    expect(graph.nodes.get("ci_red")?.stop).toStartWith("Not shipped: CI stayed red");
+    expect(graph.nodes.get("ci_red")?.label).toBe("Not merged: CI stayed red");
+    expect(graph.nodes.get("ci_red")?.stop).toStartWith("Not merged: CI stayed red");
     // Each builder's prompt names the brief the ship station wrote.
     for (const id of ["implement", "implement_line"]) expect(graph.nodes.get(id)?.prompt).toContain("When Ship sent it back, CI went red on the landing and nothing shipped: the CI brief, the same text as the task's latest blocker comment, is `$run_dir/$run_id-ci-brief.md`.");
   });
@@ -603,7 +603,7 @@ describe("line.cast station scripts", () => {
       ["ship", "run", "--task", "ct-1"],
       // Ship's session merges its pull request later: Land waits for it, an hour at most.
       [...landedCall, "--wait", "3600", "--node", "ship__ship"],
-      ["task", "comment", "ct-1", "Shipped: cast ship run exited 0 and said nothing", "-t", "progress"],
+      ["task", "comment", "ct-1", "Merged: cast ship run exited 0 and said nothing", "-t", "progress"],
     ]);
     fs.rmSync(log);
     const ok = run("ship", { branch, change_files: "web/a.ts", run_id: "run_1", "line.commands.ship": 'echo "squashing" >&2; echo; echo "merged $branch for $task_id ($run_id); deploy pending"' });
@@ -613,14 +613,14 @@ describe("line.cast station scripts", () => {
     expect(refused.code).toBe(1);
     expect(calls()).toEqual([
       landedCall,
-      ["task", "comment", "ct-1", "Shipped: merged codecast/line-ct-1 for ct-1 (run_1); deploy pending", "-t", "progress"],
-      ["task", "comment", "ct-1", "Not shipped: not merged: no green eval gate", "-t", "blocker"],
+      ["task", "comment", "ct-1", "Merged: merged codecast/line-ct-1 for ct-1 (run_1); deploy pending", "-t", "progress"],
+      ["task", "comment", "ct-1", "Not merged: not merged: no green eval gate", "-t", "blocker"],
     ]);
   });
 
   // Nov 21 (ct-98322): the profile's ship command applied the change to a working tree and exited 0. Land said
-  // Shipped and Deploy waited a week for a commit on main that never came.
-  test("ship fails at Not shipped when the land command exited 0 but nothing reached main, and drops a stale merge.json", () => {
+  // Merged and Deploy waited a week for a commit on main that never came.
+  test("ship fails at Not merged when the land command exited 0 but nothing reached main, and drops a stale merge.json", () => {
     const branch = "codecast/line-ct-1";
     const nothing = `Land reported success but ${branch} is not on main: nothing was merged`;
     fs.mkdirSync(runDir(), { recursive: true });
@@ -635,12 +635,12 @@ describe("line.cast station scripts", () => {
     expect(spawned.out.trim().split("\n").pop()).toBe(nothing);
     expect(fs.existsSync(path.join(runDir(), "merge.json"))).toBe(false);
     expect(calls().filter((c) => c[0] === "task")).toEqual([
-      ["task", "comment", "ct-1", `Not shipped: ${nothing}`, "-t", "blocker"],
-      ["task", "comment", "ct-1", `Not shipped: ${nothing}`, "-t", "blocker"],
+      ["task", "comment", "ct-1", `Not merged: ${nothing}`, "-t", "blocker"],
+      ["task", "comment", "ct-1", `Not merged: ${nothing}`, "-t", "blocker"],
     ]);
   });
 
-  test("ship ends at Not shipped without a blocker when Ship's pull request is still open after the wait", () => {
+  test("ship ends at Not merged without a blocker when Ship's pull request is still open after the wait", () => {
     const open = "The ship session's pull request https://github.com/o/r/pull/7 has not merged after 60m, so this run will not deploy the change";
     env.FAKE_NOT_LANDED = open;
     env.FAKE_LANDED_CODE = "2";
@@ -649,7 +649,7 @@ describe("line.cast station scripts", () => {
     delete env.FAKE_LANDED_CODE;
     expect(waited.code).toBe(1);
     expect(waited.out.trim().split("\n").pop()).toBe(open);
-    expect(calls().filter((c) => c[0] === "task")).toEqual([["task", "comment", "ct-1", `Not shipped: ${open}`, "-t", "progress"]]);
+    expect(calls().filter((c) => c[0] === "task")).toEqual([["task", "comment", "ct-1", `Not merged: ${open}`, "-t", "progress"]]);
   });
 
   test("ship passes exit 7 through with the brief the command printed as the run's own builder file, counts the run's rounds, and adds no comment of its own", () => {

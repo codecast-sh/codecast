@@ -33,9 +33,9 @@ export const CHIPS: Chip[] = [
   { id: "rejected", step: "review", label: "Rejected", tone: "end", row: 1 },
   { id: "revise", step: "decide", label: "Revise", tone: "back", row: 0 },
   { id: "dropped", step: "decide", label: "Dropped", tone: "end", row: 1 },
-  { id: "already", step: "land", label: "Already landed", tone: "on", row: 0 },
+  { id: "already", step: "land", label: "Already merged", tone: "on", row: 0 },
   { id: "conflict", step: "land", label: "Conflict", tone: "back", row: 1 },
-  { id: "not-shipped", step: "land", label: "Not shipped", tone: "end", row: 2 },
+  { id: "not-shipped", step: "land", label: "Not merged", tone: "end", row: 2 },
   { id: "deploy-failed", step: "deploy", label: "Deploy failed", tone: "end", row: 0 },
 ];
 export const chipLabel = (c: Chip) => (c.tone === "back" ? `↺ ${c.label}` : c.label);
@@ -70,10 +70,10 @@ export const WAYS_OUT: Record<StepId, { out: string; to: string; tone: ChipTone 
   ],
   land: [
     { out: "Rebase, Land", to: "Deploy", tone: "go" },
-    { out: "Already landed", to: "Deploy", tone: "on" },
+    { out: "Already merged", to: "Deploy", tone: "on" },
     { out: "default branch moved", to: "Rebase again", tone: "on" },
     { out: "Conflict", to: "Resolve conflict, then Check", tone: "back" },
-    { out: "Not shipped", to: "ends", tone: "end" },
+    { out: "Not merged", to: "ends", tone: "end" },
   ],
   deploy: [
     { out: "live", to: "Live", tone: "go" },

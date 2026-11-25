@@ -183,7 +183,7 @@ export const BRANCHING_FLOW: FixtureFlowRow = {
     node("fix_conflict", "Resolve conflict", "agent"),
     node("exit", "Live", "exit"),
     node("dropped", "Dropped", "exit"),
-    node("unshipped", "Not shipped", "exit"),
+    node("unshipped", "Not merged", "exit"),
   ],
   edges: [
     { from: "start", to: "check" },
@@ -236,7 +236,7 @@ export const LAND_FLOW: FixtureFlowRow = {
   fix [label="Fix findings", backend=subject, max_visits=3]
   fix_conflict [label="Resolve conflict", backend=subject, max_visits=3]
   revise [label="Revise", backend=subject, max_visits=3]
-  stopped [shape=Msquare, label="Not landed", stop="$stop_reason"]
+  stopped [shape=Msquare, label="Not merged", stop="$stop_reason"]
 }`,
   nodes: [
     node("start", "start", "start"),
@@ -244,7 +244,7 @@ export const LAND_FLOW: FixtureFlowRow = {
     node("fix_conflict", "Resolve conflict", "agent"),
     node("revise", "Revise", "agent"),
     node("exit", "Merged", "exit"),
-    node("stopped", "Not landed", "exit"),
+    node("stopped", "Not merged", "exit"),
     inLand("pr", "PR", "command", { timeout: 600 }),
     inLand("checks", "CI and review", "parallel_fanout"),
     inLand("ci", "CI", "command", { timeout: 3_600 }),

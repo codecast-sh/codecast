@@ -12,7 +12,7 @@ test("a card on a problem with findings reads as written; an older backend with 
   expect(evidenceGone(undefined)).toBe(false);
 });
 
-test("a Ship card whose problem was emptied recommends Drop and names where the evidence went (tc-18)", () => {
+test("an approval card whose problem was emptied recommends Drop and names where the evidence went (tc-18)", () => {
   const read = cardAsRead({ card, evidence: { findings: 0, conversations: 0, withdrawn: 2, moved_to: ["ct-59425"] } })!;
   expect(read.recommend.verdict).toBe("drop");
   expect(read.recommend.why).toContain("ct-59425");

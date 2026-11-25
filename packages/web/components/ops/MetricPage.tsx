@@ -543,7 +543,7 @@ function useShipMarks(win: Win, own: ChartMark[], source: OpsSource | undefined,
     const deploys = events.filter((e) => e.kind === "deploy").map((e) => ({ at: e.created_at, title: e.title, sha: e.sha, url: e.url, source: e.data?.source_name, source_id: e.source_id }));
     const landed = tasks.filter((t): t is LandedTask => !!t.landed);
     const related = relatedShips({ source, sources, deploys, tasks: landed });
-    const skip = own.filter((m) => m.kind === "ship").map((m) => m.label.replace(/^Landed /, ""));
+    const skip = own.filter((m) => m.kind === "ship").map((m) => m.label.replace(/^Merged /, ""));
     return shipMarks({ deploys: related.deploys, tasks: related.tasks, win, skip });
   }, [events, tasks, win, own, source, sources]);
 }

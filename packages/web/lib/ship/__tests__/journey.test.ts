@@ -335,7 +335,7 @@ describe("landed and deploying", () => {
     expect(j.stages.every((s) => s.state === "done")).toBe(true);
     expect(j.now).toMatchObject({ kind: "live", line: "Live: 4a6e413b2c on backend dp-12, web dp-14." });
   });
-  test("a flow with no Deploy of its own: a merged, finished run reads Landed, done", () => {
+  test("a flow with no Deploy of its own: a merged, finished run reads Merged, done", () => {
     const g = { nodes: [{ id: "start", label: "start", type: "start" }, { id: "check", label: "Check", type: "command" }, { id: "landed", label: "Land", type: "command" }, { id: "exit", label: "Done", type: "exit" }], edges: [{ from: "start", to: "check" }, { from: "check", to: "landed" }, { from: "landed", to: "exit" }] } as any;
     const j = journeyOf(g, run({ status: "completed", current_node_id: "exit", merge: { sha: "4a6e413b2c" }, node_statuses: done("check", "landed") }));
     expect(states(j)).toEqual(["Check:done", "Land:done"]);

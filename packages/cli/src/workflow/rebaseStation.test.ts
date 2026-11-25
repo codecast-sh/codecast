@@ -148,7 +148,7 @@ process.exit(await runLanded(process.cwd(), o as any));
     expect(mergeSha()).toBe(git(work, "rev-parse", "HEAD"));
   });
 
-  test("a land command that exits 0 with nothing on main ends Land at Not shipped", () => {
+  test("a land command that exits 0 with nothing on main ends Land at Not merged", () => {
     const r = ship("echo applied to a working tree");
     expect(r.code).toBe(1);
     expect(r.out).toContain("Land reported success but codecast/line-ct-1 is not on main: nothing was merged");

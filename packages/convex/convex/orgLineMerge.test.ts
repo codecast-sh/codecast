@@ -191,7 +191,7 @@ describe("a merge no role is behind", () => {
   const check = (ctx: any) => checkMergeCore(ctx, HOST as any, "workflow_runs_1");
   const clear = (ctx: any, why = "founder-intent read: ship", head_sha = HEAD) => clearForMergeCore(ctx, HOST as any, { run_id: "workflow_runs_1", why, head_sha }, NOW + 1);
 
-  // A run with no role behind it, no Ship card and no clear stamp. Its observed landing authorizes nothing, so it records.
+  // A run with no role behind it, no approval card and no clear stamp. Its observed landing authorizes nothing, so it records.
   test("a run nothing authorizes may still record an observed landing", async () => {
     const { ctx, run } = solo();
     await expect(check(ctx)).rejects.toThrow("nothing authorizes the merge");

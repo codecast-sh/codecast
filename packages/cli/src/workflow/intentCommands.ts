@@ -44,7 +44,7 @@ export function registerIntentCommands(flow: Command, cliPost: CliPost): void {
   flow
     .command("asker [conversation]", { hidden: true })
     .description("Print a session's chain up to the one that started its work, its originator, and every line a person typed and card a person answered along it (rendered for a model in `text`), as one JSON object")
-    .option("--task <id>", "Also read the chain of the session that filed this task (ct-N) and the task's Ship cards; with no session, the task alone: the chains of the sessions that filed it, are bound to it or handed it off")
+    .option("--task <id>", "Also read the chain of the session that filed this task (ct-N) and the task's approval cards; with no session, the task alone: the chains of the sessions that filed it, are bound to it or handed it off")
     .option("--run <id>", "Also name who started this workflow run (starter_id, starter_name), read from the run itself")
     .option("--record <chars>", "The JSON size to fit (default: what a station records)")
     .action(async (conversation: string | undefined, opts: { task?: string; run?: string; record?: string }) => {

@@ -62,7 +62,7 @@ export type JourneyNow =
   /** `by`: who sent it back when that is not the stage (a person's card answered with Revise). */
   | { kind: "session"; stage: string; note: string; since: number | null; round: number | null; max: number | null; by: string | null }
   | { kind: "gate"; stage: string; mine: boolean; holder: "person" | "role"; who: string | null; decisionId: string | null; prompt: string | null; since: number | null }
-  /** Landed, and its Deploy not going out yet: held on main's CI, waiting for a person to send it, or for targets that go by themselves. */
+  /** Merged, and its Deploy not going out yet: held on main's CI, waiting for a person to send it, or for targets that go by themselves. */
   | { kind: "landed"; sha: string; at: number | null; line: string | null; hold: DeployHold; waits: JourneyWait[] }
   | { kind: "unlanded"; why: string; waits: JourneyWait[] }
   | { kind: "deploying"; targets: string[]; line: string | null; waits: JourneyWait[] }
@@ -611,7 +611,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
       : subject ? "session"
       : deliberate ? "run"
       : "again";
-    // Not landed is said only of a run that ended where its change should have been on main (Deploy found no merge).
+    // Not merged is said only of a run that ended where its change should have been on main (Deploy found no merge).
     if (!sha && stage?.role === "deploy") now = { kind: "unlanded", why: readableWhy(run.fail_reason) ?? "The run ended with no merge recorded", waits: [] };
     else now = { kind: run.fail_reason?.startsWith("Stopped") || atExit ? "stopped" : "failed", stage: stageLabel(stopStage), why: readableWhy(run.fail_reason), fix, session: run.spawner_conversation_id ? String(run.spawner_conversation_id) : null, briefAt: subject ? statusOf(subject)?.started_at ?? null : null, end: atExit && walked.some((id) => id !== at && byId.get(id)?.type !== "exit") ? exit?.label ?? null : null };
   } else if (allLive) now = { kind: "live", targets: liveOn.map((t) => t.name), line };

@@ -662,9 +662,9 @@ describe("a change named by branch from inside a session (ct-85594)", () => {
 
 describe("runEndMessage", () => {
   const g = parseWorkflowSource(`digraph "checked" { graph [label="Checked"] start [shape=Mdiamond] exit [shape=Msquare] start -> exit }`);
-  test("a stop before Land says nothing shipped and how to run it again; one after Land says the change is on main", () => {
+  test("a stop before Land says nothing merged and how to run it again; one after Land says the change is on main", () => {
     expect(runEndMessage(g, { taskId: "ct-1", endLabel: "Fix check", failed: true, failReason: "Stopped: Check sent the change back 3 times and it still does not pass." }))
-      .toBe("The Checked run on ct-1 stopped at Fix check: Check sent the change back 3 times and it still does not pass. The change was not shipped. Run it again with `cast flow run checked` once it is ready.");
+      .toBe("The Checked run on ct-1 stopped at Fix check: Check sent the change back 3 times and it still does not pass. The change was not merged. Run it again with `cast flow run checked` once it is ready.");
     expect(runEndMessage(g, { taskId: "ct-1", endLabel: "Deploy failed", failed: true, failReason: "Stopped: The deploy that carried abc failed: web dp-2 (exit 1).", landed: true }))
       .toBe("The Checked run on ct-1 stopped at Deploy failed: The deploy that carried abc failed: web dp-2 (exit 1). The change is on the default branch; nothing after this stage ran.");
   });

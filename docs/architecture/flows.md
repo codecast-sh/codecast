@@ -625,12 +625,12 @@ its merge through the record `cast line merge` and the Merge station use
 may make it, it spends no merge allowance, says nothing on the task, and fills
 an empty `run.merge` only, never one the Merge station recorded. So
 `run.merge.sha` is the one landed truth whatever path landed the change; a
-record that fails is logged and Land goes on. With none, Land fails at Not shipped ("Land reported success but
+record that fails is logged and Land goes on. With none, Land fails at Not merged ("Land reported success but
 <branch> is not on main: nothing was merged"), so a land command that never
 committed can never send a run on to Deploy. Without a ship command, Land's
 `cast ship run` only starts Ship's session, which merges the pull request
 later: Land waits up to an hour for that merge, naming the pull request on the
-card, and a pull request still open then ends Land at Not shipped with a
+card, and a pull request still open then ends Land at Not merged with a
 progress note naming it and saying this run will not deploy the change, not a
 blocker. A known cost: Land does not park, so that wait
 holds a machine slot for up to the hour. Rebase's already-landed exit writes the file too,

@@ -196,7 +196,7 @@ function server(w: ReturnType<typeof world>) {
     calls.push({ route, body });
     const reply = (v: unknown) => new Response(JSON.stringify(v), { status: 200 });
     if (route === "/cli/work/get") return reply({ title: "Make a.txt good", status: "in_progress" });
-    // The person at the Ship card answers with the world's choice.
+    // The person at the approval card answers with the world's choice.
     // A list answers each posted gate in turn.
     if (route === "/cli/workflow-runs/poll-gate") {
       const gates = calls.filter((c) => c.route === "/cli/workflow-runs/gate").length;
@@ -487,7 +487,7 @@ describe("the shipped change flow", () => {
     const end = s.sent().at(-1).body;
     expect(end).toContain("stopped at Deploy failed");
     expect(end).toContain("The change is on the default branch; nothing after this stage ran.");
-    expect(end).not.toContain("was not shipped");
+    expect(end).not.toContain("was not merged");
   }, 120_000);
 
   test("a session whose fix never turns CI green is briefed three times, then the run stops and says why", async () => {
@@ -551,7 +551,7 @@ describe("when main is red under the change", () => {
 });
 
 describe("a change that edits CI", () => {
-  test("goes to a person's Ship card once the reviewer says ship, with why on the task, and merges on Ship", async () => {
+  test("goes to a person's approval card once the reviewer says ship, with why on the task, and merges on Ship", async () => {
     const w = world({ ci: [CI_CHANGED], review: [SHIP], gate: "S", merge: ["merged"] });
     const s = server(w);
     expect(await run(w)).toBe("completed");
@@ -571,7 +571,7 @@ describe("a change that edits CI", () => {
     expect(count(w.calls(), "flow pr")).toBe(2);
   }, 120_000);
 
-  test("a question typed at the Ship card goes to the reviewer, and the card asks again", async () => {
+  test("a question typed at the approval card goes to the reviewer, and the card asks again", async () => {
     const w = world({ ci: [CI_CHANGED], review: [SHIP, SHIP], gate: ["does this rename the deploy job?", "S"], merge: ["merged"] });
     const s = server(w);
     expect(await run(w)).toBe("completed");
@@ -601,7 +601,7 @@ describe("a change that edits CI", () => {
     expect(s.failReason()).toContain("This change edits CI, so CI can't vouch for it");
   }, 120_000);
 
-  test("one that CI finds red goes back to the session like any red, with no Ship card", async () => {
+  test("one that CI finds red goes back to the session like any red, with no approval card", async () => {
     const w = world({ ci: [{ ...CI_CHANGED, green: false, failing: RED.failing }, GREEN], review: [SHIP, SHIP], gate: "S", merge: ["merged"] });
     const s = server(w);
     expect(await run(w)).toBe("completed");

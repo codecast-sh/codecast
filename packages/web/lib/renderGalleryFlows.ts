@@ -29,7 +29,7 @@ export const GALLERY_FLOW = {
   shipRefused: "galleryshiprunrefused001",
   // The branching flow finished through its cleared route: the stations it never entered read skipped.
   shipCleared: "galleryshiprunclearedrt1",
-  // Landed and held on main's red CI; a change that edits CI, at the person's card off the main path.
+  // Merged and held on main's red CI; a change that edits CI, at the person's card off the main path.
   shipHeld: "galleryshiprunheldmain01",
   shipCiCard: "galleryshipruncicard0001",
   // A flow that is one segment, Land: its findings sent back to the session, and a change at the person's card inside it.
@@ -59,7 +59,7 @@ export const FLOW_SOURCE = `digraph gallery_flaky_fix {
 // The graph as the parser expands it (a backbone's slot filled in place), as a run's push stores it.
 export const FLOW_NODES = [
   { id: "start", label: "start", type: "start", shape: "Mdiamond" },
-  { id: "exit", label: "Shipped", type: "exit", shape: "Msquare" },
+  { id: "exit", label: "Merged", type: "exit", shape: "Msquare" },
   { id: "investigate", label: "Investigate", type: "agent", shape: "box" },
   { id: "review", label: "Review", type: "agent", shape: "box" },
   { id: "implement__reproduce", label: "Reproduce", type: "agent", shape: "box" },

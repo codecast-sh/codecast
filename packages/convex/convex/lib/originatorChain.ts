@@ -149,7 +149,7 @@ export type CiteRun = {
   chain: Array<{ conversation_id: string; short_id: string }>;
   /** The run's task, whose own cards a citation may name. */
   task_id?: string;
-  /** The newest verdict a person gave on the task's Ship cards. */
+  /** The newest verdict a person gave on the task's approval cards. */
   verdict?: { ref: string; at: number; ship: boolean; label: string };
 };
 

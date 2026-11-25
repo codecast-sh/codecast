@@ -143,7 +143,7 @@ export function sessionShips(runs: ReadonlyArray<Run>, deploys: ReadonlyArray<Te
       if (!prev || at > (prev.live_at ?? prev.created_at)) map.set(s.conversation_id, d);
     }
   }
-  // A landed commit is read only through its own reach ("Landed" until it answers): a deploy that carried some commit of
+  // A landed commit is read only through its own reach ("Merged" until it answers): a deploy that carried some commit of
   // the session says nothing about this one. A run that landed without naming its commit can be overtaken only by a
   // deploy of the session's commits made after the run ended.
   const onlyReach = new Set<string>();

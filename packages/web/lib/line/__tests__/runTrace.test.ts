@@ -78,7 +78,7 @@ describe("runTrace", () => {
     expect(s).toMatchObject({ notRun: "the decision was withdrawn", failReason: null });
     const [answered] = runTrace({ steps: {} } as never, { visits: [visit] } as never, { ...withdrawn, gate_answer: "Ship" });
     expect(answered).toMatchObject({ notRun: null, failReason: "The question was withdrawn." });
-    const [noted] = runTrace({ steps: {} } as never, { visits: [{ ...visit, status: "noted", decided: { outcome: "failure", words: "Not landed" } }] } as never, withdrawn);
+    const [noted] = runTrace({ steps: {} } as never, { visits: [{ ...visit, status: "noted", decided: { outcome: "failure", words: "Not merged" } }] } as never, withdrawn);
     expect(noted.notRun).toBe("the decision was withdrawn");
     // One that printed output ran: it refused, it did not skip.
     const ran = { ...withdrawn, node_statuses: [{ node_id: "ship", status: "failed", result_preview: "line: codecast/line-ct-59561 is behind origin/main; rebase it first" }] } as TraceRun;

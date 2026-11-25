@@ -38,7 +38,7 @@ const fixtures: Record<string, { notes: string; label: Record<string, unknown>; 
     ],
   },
   "ship-then-revise": {
-    notes: "Guard (c): 'ship it' typed, then a later Revise on the task's Ship card. Expected to ask.",
+    notes: "Guard (c): 'ship it' typed, then a later Revise on the task's approval card. Expected to ask.",
     label: { clears: false, ship: false },
     typed: [opening, line("jx7a001", 115, "Yes, ship this and shepherd it into production.", "2026-11-21T17:18:00.000Z")],
     cards: [card("sd-2001", { onTask: true }, "Ship the PR numbers and Mine toggle on Deploys?", "Revise", "2026-11-21T19:02:00.000Z", "Dana", "The Mine toggle hides the deploy button for everyone else's groups; keep it visible.")],

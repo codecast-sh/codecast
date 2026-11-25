@@ -44,7 +44,7 @@ describe("line ship station", () => {
     expect(ship(`${behind}; exit 1`)).toBe(1);
     expect(ship(`${behind}; exit 3`)).toBe(3);
     expect(calls()).toEqual([
-      ["task", "comment", "ct-1", "Not shipped: line: codecast/line-ct-1 is behind origin/main; rebase it first", "-t", "blocker"],
+      ["task", "comment", "ct-1", "Not merged: line: codecast/line-ct-1 is behind origin/main; rebase it first", "-t", "blocker"],
       ["task", "comment", "ct-1", "Rebasing again: line: codecast/line-ct-1 is behind origin/main; rebase it first", "-t", "progress"],
     ]);
   });

@@ -38,13 +38,13 @@ export type OriginatorHead = {
     launched_by_program: boolean;
   };
   task?: { short_id: string; chain: ChainEntry[]; stopped?: ChainStop };
-  /** A person's answers to the decision cards the chain's sessions asked, and to the task's Ship cards. */
+  /** A person's answers to the decision cards the chain's sessions asked, and to the task's approval cards. */
   cards: CardLine[];
 };
 
 /**
  * A person's answer to a decision card, read beside their typed lines: the card, the session that asked it (when one
- * on the chain did), whether it is one of the task's Ship cards, its question, the answer and its words, and when.
+ * on the chain did), whether it is one of the task's approval cards, its question, the answer and its words, and when.
  */
 export type CardLine = {
   card: string;
@@ -201,7 +201,7 @@ export const chain = internalQuery({
       head.task = { short_id: task.short_id ?? String(task._id), ...(await taskChains(ctx, userId, task, worked)) };
       if (!start && !head.task.chain.length) return { error: `No session you can read is tied to ${args.task}` };
     }
-    // Cards asked in any session on the chain, then the task's Ship cards: one line per card.
+    // Cards asked in any session on the chain, then the task's approval cards: one line per card.
     const sessions = new Map([...head.chain, ...(head.task?.chain ?? [])].map((h) => [h.conversation_id, h.short_id]));
     const answers = new Map<string, { v: PersonVerdict; session?: string; on_task?: true }>();
     for (const [conversationId, shortId] of sessions) {
@@ -224,7 +224,7 @@ export const chain = internalQuery({
 /**
  * What a cited word (`cast flow intent-verify`, /cli/intent/verify) is checked against: who started the run, every session its
  * change came through as the run's own runner may read them, and the newest verdict a person gave on the task's
- * Ship cards. The chain is walked up from anchors the server reads off the run and its task, never from a session
+ * approval cards. The chain is walked up from anchors the server reads off the run and its task, never from a session
  * the caller names: the session that started the run (startingSession: its spawner, unless that is only the project
  * lead's stand-in, spawner_stand_in, which no walk climbs to either) and the one that filed its task
  * (created_from_conversation). For a run no session started (a plain

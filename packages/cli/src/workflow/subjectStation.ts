@@ -180,7 +180,7 @@ export function runEndMessage(graph: WorkflowGraph, opts: { taskId?: string; end
   }
   const why = (opts.failReason ?? "it failed").replace(/^Stopped:\s*/, "").replace(/\.$/, "");
   // A stop after Land leaves the change on the default branch: only what comes after it did not happen.
-  const after = opts.landed ? "The change is on the default branch; nothing after this stage ran." : `The change was not shipped. Run it again with \`cast flow run ${graph.name}\` once it is ready.`;
+  const after = opts.landed ? "The change is on the default branch; nothing after this stage ran." : `The change was not merged. Run it again with \`cast flow run ${graph.name}\` once it is ready.`;
   return `The ${flow} run${on} stopped at ${opts.endLabel}: ${why}. ${after}`;
 }
 

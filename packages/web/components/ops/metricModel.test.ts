@@ -305,7 +305,7 @@ describe("chart markers", () => {
     expect(marks.map((m) => m.kind)).toEqual(["crossed", "task", "fix", "ship", "recovered", "task", "resolved"]);
     expect(marks[0]).toMatchObject({ href: "/ops/issues/eg-1", sub: "eg-1" });
     expect(marks.find((m) => m.kind === "fix")?.href).toBe("/conversation/c1");
-    expect(marks.find((m) => m.kind === "ship")).toMatchObject({ label: "Landed abcdef1", external: true });
+    expect(marks.find((m) => m.kind === "ship")).toMatchObject({ label: "Merged abcdef1", external: true });
   });
 
   test("a transition row zooms to a window around its moment, never past now", () => {
