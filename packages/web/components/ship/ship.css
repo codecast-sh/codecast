@@ -74,6 +74,7 @@
 .sj-since { color: var(--sol-text-dim); font-variant-numeric: tabular-nums; }
 .sj-sha { font-family: var(--font-mono); font-size: var(--fs-meta); color: var(--sol-text); }
 .sj-now > :is(.sj-act, .sj-btn):first-of-type { margin-left: auto; }
+.sj-now > .sj-act[data-journey-open-card] ~ [data-journey-admin] { margin-left: 0; }
 .sj-note { flex-basis: 100%; margin: 2px 0 0; font-size: 12px; line-height: 1.45; color: var(--sol-text); display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; white-space: pre-line; }
 .sj-gate { flex-basis: 100%; margin-top: 4px; }
 .sj-act, .sj-btn { font-size: 12px; font-weight: 600; padding: 3px 10px; border-radius: 7px; border: 1px solid var(--sj-rule); background: var(--sj-card); color: var(--sol-text); cursor: pointer; white-space: nowrap; text-decoration: none; }

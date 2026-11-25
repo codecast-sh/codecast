@@ -10,7 +10,9 @@ import Link from "next/link";
 import { useInboxStore } from "../../store/inboxStore";
 import { roleRowsOf } from "../../lib/roleRows";
 import { ArrowRight, Check, ChevronDown, CornerDownLeft, Loader2, X } from "lucide-react";
-import { WHO_WORDS, approvalWords, gateWaitWords, holdWords, insideWords, sentBackWords, stopWords, targetsFromLine, waitWords, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState } from "../../lib/ship/journey";
+import { WHO_WORDS, approvalWords, gateWaitWords, holdWords, insideWords, sentBackWords, stopWords, targetsFromLine, waitWords, type InsideRoute, type Journey as JourneyModel, type JourneyStage, type JourneyNow, type JourneyWait, type TargetState, type AdminMoves } from "../../lib/ship/journey";
+import { toast } from "sonner";
+import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { ageShort } from "../../lib/lineFlow";
 import { RunGate } from "../WorkflowContextPanel";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
@@ -191,6 +193,40 @@ function useBriefMessageId(conversationId: string | null, at: number | null): st
   });
 }
 
+/** An admin's moves on a card someone else holds (ct-101446): nudge the holder in a direct message with the card's
+ *  link, or answer it themselves after a review that says whose card it is. The answer is the card itself (RunGate),
+ *  shown once the review is confirmed. */
+function AdminGateMoves({ moves, now, run, now_ms }: { moves: AdminMoves; now: Extract<JourneyNow, { kind: "gate" }>; run: any; now_ms: number }) {
+  const [reviewing, setReviewing] = useState(false);
+  const [answering, setAnswering] = useState(false);
+  const who = now.who ?? "the person who holds it";
+  const card = run?.gate_decision_short_id ?? now.decisionId;
+  const nudge = () => {
+    const store = useInboxStore.getState();
+    const channel = moves.nudge ? store.openDmChannel([moves.nudge]) : null;
+    if (!channel) { toast.error("Chat is off for this team"); return; }
+    store.sendChatMessage(channel, [`This run has waited ${now.since ? ageShort(now_ms - now.since) : "a while"} on your call: ${now.prompt ?? now.stage}`, card ? `${window.location.origin}/decisions/${card}` : null].filter(Boolean).join("\n\n"));
+    toast.success(`Nudged ${who}`);
+  };
+  const ledger: SwitchLedger = {
+    name: "Answer as admin",
+    subject: now.prompt ?? now.stage,
+    shift: null,
+    figures: now.since ? [{ value: ageShort(now_ms - now.since), label: "Waiting" }] : [],
+    rows: [{ k: "Holder", v: who }, { k: "Answered by", v: "You, as admin" }, { k: "Run", v: "Goes on with your answer" }],
+    confirm: "Answer as admin",
+    keep: "Back",
+  };
+  return (
+    <>
+      {moves.nudge ? <button type="button" className="sj-act" onClick={nudge} data-journey-admin data-journey-nudge>Nudge</button> : null}
+      {moves.answer && !answering ? <button type="button" className="sj-act" onClick={() => setReviewing(true)} data-journey-admin data-journey-answer-admin>Answer as admin</button> : null}
+      {reviewing ? <SwitchReview ledger={ledger} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); setAnswering(true); }} /> : null}
+      {answering && run?.gate_decision_id ? <div className="sj-gate"><RunGate run={run} className="w-full" /></div> : null}
+    </>
+  );
+}
+
 /** What is happening now, and the person's part in it. `again` draws Ship again, primary when re-running is the fix. */
 export function JourneyNowBar({ now, run, now_ms, children, again }: { now: JourneyNow; run: any; now_ms: number; children?: React.ReactNode; again?: (primary: boolean) => React.ReactNode }) {
   const since = (at: number | null | undefined) => (at ? <span className="sj-since">{ageShort(now_ms - at)}</span> : null);
@@ -235,6 +271,7 @@ export function JourneyNowBar({ now, run, now_ms, children, again }: { now: Jour
           <span className="sj-what">{now.prompt ?? now.stage}</span>
           {since(now.since)}
           {!now.mine && now.decisionId ? <Link className="sj-act" href={`/decisions/${run?.gate_decision_short_id ?? now.decisionId}`} data-journey-open-card>Open card</Link> : null}
+          {now.admin ? <AdminGateMoves moves={now.admin} now={now} run={run} now_ms={now_ms} /> : null}
           {children}
           {now.mine && run?.gate_decision_id ? <div className="sj-gate"><RunGate run={run} className="w-full" /></div> : null}
         </div>

@@ -12,6 +12,7 @@
 import { foldFlow, passScore, segmentTopOf, SEGMENT_SEP, type FlowEdgeIn, type FlowNodeIn } from "@codecast/shared/contracts/flowPool";
 import { asksIfOf, insideOf, insideOnRun, type RouteBase, type StageInside } from "./segmentInside";
 import { landedSha, parentOf, recordedIds } from "./runRecord";
+import { PROTECTED_CATEGORIES } from "@codecast/shared/contracts/decisionCategory";
 
 export { insideWords, type InsideRoute, type StageInside } from "./segmentInside";
 
@@ -62,7 +63,7 @@ export type JourneyNow =
   /** `by`: who sent it back when that is not the stage (a person's card answered with Revise). `blocked`: the session
    *  pinned blocked, so the run waits for a person, `note` then that pin. */
   | { kind: "session"; stage: string; note: string; since: number | null; round: number | null; max: number | null; by: string | null; blocked: boolean }
-  | { kind: "gate"; stage: string; mine: boolean; holder: "person" | "role"; who: string | null; decisionId: string | null; prompt: string | null; since: number | null }
+  | { kind: "gate"; stage: string; mine: boolean; holder: "person" | "role"; who: string | null; decisionId: string | null; prompt: string | null; since: number | null; admin?: AdminMoves | null }
   /** Merged, and its Deploy not going out yet: held on main's CI, waiting for a person to send it, or for targets that go by themselves. */
   | { kind: "landed"; sha: string; at: number | null; line: string | null; hold: DeployHold; waits: JourneyWait[] }
   | { kind: "unlanded"; why: string; waits: JourneyWait[] }
@@ -102,6 +103,7 @@ type NodeStatus = {
 
 export type JourneyRun = {
   status: string;
+  team_id?: string | null;
   current_node_id?: string | null;
   fail_reason?: string | null;
   gate_prompt?: string | null;
@@ -122,11 +124,26 @@ export type GateDecision = {
   holder?: { kind: "user" | "role"; id: string } | null;
   passed_to?: { kind: "user" | "role"; id: string } | null;
   asked_user_ids?: ReadonlyArray<string> | null;
+  category?: string | null;
 };
 
 /** Who looks at the run, and the run's open card when the store holds it. */
-/** `holder_name`: who answers the open card, by name, when the store knows them. */
-export type JourneyViewer = { id: string | null; decision?: GateDecision | null; holder_name?: string | null };
+/** `holder_name`: who answers the open card, by name, when the store knows them. `admin`: the viewer administers the run's team. */
+export type JourneyViewer = { id: string | null; decision?: GateDecision | null; holder_name?: string | null; admin?: boolean };
+
+/** What an admin who does not hold a run's open card can do from the bar: nudge the person who holds it (their user
+ *  id), and answer it themselves unless its category is a person's alone (production, billing, data, access, external,
+ *  product, limit), which stays with whoever was asked. */
+export type AdminMoves = { nudge: string | null; answer: boolean };
+
+export function adminMovesOf(viewer: JourneyViewer | null | undefined, mine: boolean): AdminMoves | null {
+  const d = viewer?.decision;
+  if (mine || !viewer?.admin || !d) return null;
+  const to = d.passed_to ?? d.holder ?? (d.user_id ? { kind: "user" as const, id: d.user_id } : null);
+  const nudge = to?.kind === "user" && to.id !== viewer.id ? to.id : null;
+  const answer = !(d.category === "limit" || (PROTECTED_CATEGORIES as readonly string[]).includes(d.category ?? ""));
+  return nudge || answer ? { nudge, answer } : null;
+}
 
 /**
  * Whether the viewer may answer a decision: the person it was passed to, else its user holder and the people it was
@@ -579,7 +596,7 @@ export function journeyOf(graph: Graph, run: JourneyRun | null | undefined, targ
   } else if (open) {
     // The card's own step names the bar when it sits off every stage (a card a script asked for); on a stage, the stage.
     const onStage = gateNode ? stageOf(gateNode) : null;
-    now = { kind: "gate", stage: onStage ? stageLabel(onStage.id)! : labelOf(gateNode ?? ""), mine: gateMine, holder: holderOf(viewer?.decision), who: viewer?.holder_name ?? null, decisionId: run.gate_decision_id ?? null, prompt: run.gate_prompt?.split("\n")[0] ?? null, since: statusOf(gateNode)?.started_at ?? null };
+    now = { kind: "gate", stage: onStage ? stageLabel(onStage.id)! : labelOf(gateNode ?? ""), mine: gateMine, holder: holderOf(viewer?.decision), who: viewer?.holder_name ?? null, decisionId: run.gate_decision_id ?? null, prompt: run.gate_prompt?.split("\n")[0] ?? null, since: statusOf(gateNode)?.started_at ?? null, admin: adminMovesOf(viewer, gateMine) };
   } else if (atDeploy) {
     // With no merge recorded yet (one merged by its own script, a run from an older CLI) the bar says the wait and
     // claims neither landed nor not landed: the wait itself records the merge once it finds it on main.
