@@ -281,9 +281,13 @@ export function ModernSessionCardView({
   );
 
   const pinnable = !isForeignSession && !isSetAside;
+  // A row that draws the live toolbar (pin, label, close) is a target for
+  // its chords (data-row-verbs, lib/hoverTarget).
+  const drawsRowVerbs = !isForeignSession && !isSetAside && !onRestore && !!(onPin || onOpenLabels || onClose);
   return (
     <div
       data-session-id={session._id}
+      data-row-verbs={drawsRowVerbs ? session._id : undefined}
       data-active={isActive ? "true" : undefined}
       data-selected={isSelected ? "true" : undefined}
       data-mc={nested ? "nested" : "card"}

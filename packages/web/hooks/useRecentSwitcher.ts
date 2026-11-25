@@ -5,6 +5,7 @@ import { resolveRecentVisits, type ResolvedVisit } from "../lib/recentVisits";
 import { useOpenRecentVisit } from "./useOpenRecentVisit";
 import { useOpenSession } from "./useOpenSession";
 import { useShortcutAction } from "../shortcuts";
+import { noteKeyboardNavigation } from "../lib/hoverTarget";
 
 export type SwitcherState = {
   open: boolean;
@@ -80,6 +81,7 @@ export function useRecentSwitcher() {
     returnFocus.current = null;
     cancel();
     ctrlHeld.current = false;
+    noteKeyboardNavigation();
     if (target) openVisit(target);
   }, [cancel, openVisit]);
 

@@ -6,7 +6,7 @@ import { toast } from "sonner";
 import { isForeignSession } from "../lib/liveEntities";
 import { resolvePaletteTarget } from "../lib/paletteTarget";
 
-import { useCallback } from "react";
+import { useCallback, useEffect } from "react";
 import { useOpenSession } from "../hooks/useOpenSession";
 import { goBackInTrail } from "../hooks/useNavTrail";
 import { isModernStyle } from "../lib/visualStyle";
@@ -23,6 +23,8 @@ import { useUndoWalk } from "../hooks/useUndoWalk";
 import { useTriageActions } from "../components/triage/useTriageActions";
 import { toggleTriageBarCompact } from "../components/triage/graduation";
 import { checkMilestone } from "../tips/useTips";
+import { menuVerb, noteRowVerbActed, rowVerbIds, watchHoverTarget } from "../lib/hoverTarget";
+import { animatedCloseSessions, animatedHideSessions, fileSessionsAsRest, toggleSessionsLikeFirst } from "../store/undoActions";
 import { switchToWorkbench, sortedWorkbenches } from "../lib/workbenchSwitch";
 
 // The session a per-session chord (stash/kill/defer/pin/rename/label) acts on:
@@ -55,12 +57,29 @@ export function focusedActionSessionId(
       : store.sidePanelSessionId);
 }
 
+// The sessions a row verb (close, stash, pin, defer…) acts on (rowVerbIds in
+// lib/hoverTarget): an open context menu's sessions; in pointer mode the row
+// under the pointer, or nothing when no row is there, never the focused card
+// behind it; in keyboard mode the focused card, unless another row shows its
+// hover toolbar. `advance` is false unless the one target is the focused card:
+// acting on another row must not move the view.
+export function rowVerbTarget(
+  store: Parameters<typeof focusedActionSessionId>[0],
+  isOnInboxPage: boolean,
+): { ids: string[]; advance: boolean } | null {
+  const focused = focusedActionSessionId(store, isOnInboxPage);
+  const ids = rowVerbIds(focused);
+  return ids.length ? { ids, advance: ids.length === 1 && ids[0] === focused } : null;
+}
+
 export function useGlobalShortcutActions() {
   const pathname = usePathname();
   const router = useRouter();
   const inboxSource = useInboxStore((s) => s.currentConversation?.source);
   const isOnInboxPage = isInboxSessionView(pathname, inboxSource);
   const openSession = useOpenSession();
+
+  useEffect(() => watchHoverTarget(), []);
 
   useShortcutAction('palette.toggle', useCallback(() => {
     const state = useInboxStore.getState();
@@ -162,70 +181,95 @@ export function useGlobalShortcutActions() {
   // implementation shared with the triage bar's buttons, so a chord and its
   // button can never diverge (advance order, drill-in close, milestones).
   const triage = useTriageActions(isOnInboxPage);
-  const focusedId = useCallback(() =>
-    focusedActionSessionId(useInboxStore.getState(), isOnInboxPage), [isOnInboxPage]);
+  const target = useCallback(() =>
+    rowVerbTarget(useInboxStore.getState(), isOnInboxPage), [isOnInboxPage]);
+
+  // One press, one gesture. A multi-session target comes only from a bulk
+  // context menu, and goes through that menu's own handler where it has one
+  // (its notices included), else the same bulk helper as its items (one undo
+  // entry for the whole selection); a verb with no bulk form (defer,
+  // rename, label) does nothing on a selection. One row goes through the
+  // triage verb shared with the bar. `removed`: the verb takes the row out of
+  // the list (noteRowVerbActed).
+  const runVerb = useCallback((
+    removed: boolean,
+    single: (id: string, advance: boolean) => void,
+    bulk?: (ids: string[]) => void,
+  ) => {
+    const t = target();
+    if (!t) return;
+    if (t.ids.length === 1) single(t.ids[0]!, t.advance);
+    else if (bulk) bulk(t.ids);
+    else return;
+    noteRowVerbActed(removed);
+  }, [target]);
 
   useShortcutAction('session.pin', useCallback(() => {
-    const currentId = focusedId();
-    if (currentId) triage.pin(currentId);
-  }, [focusedId, triage]));
+    runVerb(false, (id) => triage.pin(id), (ids) => toggleSessionsLikeFirst(ids, "pin"));
+  }, [runVerb, triage]));
 
-  // Leave the focused row lit. Deliberately NOT a triage verb: it moves
+  // Leave the row lit. Deliberately NOT a triage verb: it moves
   // nothing and advances nothing — the session stays where it is, wearing the
   // dot, until the next visit acknowledges it.
   useShortcutAction('session.markUnread', useCallback(() => {
-    const currentId = focusedId();
-    if (!currentId) return;
-    useInboxStore.getState().markSessionUnread(currentId);
-    toast.success("Marked unread");
-  }, [focusedId]));
+    const mark = (ids: string[]) => {
+      for (const id of ids) useInboxStore.getState().markSessionUnread(id);
+      toast.success("Marked unread");
+    };
+    runVerb(false, (id) => mark([id]), mark);
+  }, [runVerb]));
 
   useShortcutAction('session.stash', useCallback(() => {
-    const currentId = focusedId();
-    if (currentId) triage.hide(currentId, "stash", "key");
-  }, [focusedId, triage]));
+    runVerb(true, (id, advance) => triage.hide(id, "stash", "key", undefined, advance),
+      (ids) => { const own = menuVerb("stash"); if (own) own(ids); else void animatedHideSessions(ids, "stash"); });
+  }, [runVerb, triage]));
 
   useShortcutAction('session.stashHide', useCallback(() => {
-    const currentId = focusedId();
-    if (currentId) triage.hide(currentId, "stash", "key", { hidden: true });
-  }, [focusedId, triage]));
+    runVerb(true, (id, advance) => triage.hide(id, "stash", "key", { hidden: true }, advance),
+      (ids) => { void animatedHideSessions(ids, "stash", { hidden: true }); });
+  }, [runVerb, triage]));
 
   useShortcutAction('session.close', useCallback(() => {
-    const currentId = focusedId();
-    if (currentId) triage.hide(currentId, "close", "key");
-  }, [focusedId, triage]));
+    runVerb(true, (id, advance) => triage.hide(id, "close", "key", undefined, advance),
+      (ids) => { const own = menuVerb("close"); if (own) own(ids); else void animatedCloseSessions(ids); });
+  }, [runVerb, triage]));
 
   useShortcutAction('session.deferAdvance', useCallback(() => {
-    const currentId = focusedId();
-    if (currentId) triage.park(currentId, "defer", "key");
-  }, [focusedId, triage]));
+    runVerb(true, (id, advance) => triage.park(id, "defer", "key", advance));
+  }, [runVerb, triage]));
 
   useShortcutAction('session.dormantAdvance', useCallback(() => {
-    const currentId = focusedId();
-    if (currentId) triage.park(currentId, "dormant", "key");
-  }, [focusedId, triage]));
+    runVerb(true, (id, advance) => triage.park(id, "dormant", "key", advance),
+      (ids) => { void fileSessionsAsRest(ids, "dormant"); });
+  }, [runVerb, triage]));
 
+  // The page's own conversation is the card snooze falls back to, ahead of
+  // the inbox's focused card; the row rule (an open menu, a hovered row)
+  // still comes first.
   useShortcutAction('session.snooze', useCallback(() => {
     const state = useInboxStore.getState();
-    const target = resolvePaletteTarget(state, pathname);
-    const id = focusedId();
-    const session = target?.targetType === 'session' ? target.targets[0] : id ? state.sessions[id] ?? state.conversations[id] : null;
-    if (session && !session.inbox_killed_at && state.currentUser && !isForeignSession(session, session, state.currentUser._id.toString())) {
-      state.openPalette({ targets: [session], targetType: 'session', mode: 'snooze' });
-    }
-  }, [focusedId, pathname]));
+    const page = resolvePaletteTarget(state, pathname);
+    const pageSession = page?.targetType === 'session' ? page.targets[0] : null;
+    const ids = rowVerbIds(pageSession?._id ?? focusedActionSessionId(state, isOnInboxPage));
+    const sessions = ids
+      .map((id) => (id === pageSession?._id ? pageSession : state.sessions[id] ?? state.conversations[id]))
+      .filter((session) => session && !session.inbox_killed_at && state.currentUser && !isForeignSession(session, session, state.currentUser._id.toString()));
+    if (!sessions.length) return;
+    state.openPalette({ targets: sessions, targetType: 'session', mode: 'snooze' });
+    noteRowVerbActed(false);
+  }, [pathname, isOnInboxPage]));
 
   useShortcutAction('session.rename', useCallback(() => {
-    const store = useInboxStore.getState();
-    const currentId = focusedActionSessionId(store, isOnInboxPage);
-    const session = currentId ? store.sessions[currentId] ?? store.conversations[currentId] : null;
-    if (session) store.openSessionRename(session);
-  }, [isOnInboxPage]));
+    runVerb(false, (id) => {
+      const store = useInboxStore.getState();
+      const session = store.sessions[id] ?? store.conversations[id];
+      if (session) store.openSessionRename(session);
+    });
+  }, [runVerb]));
 
   useShortcutAction('session.moveToBucket', useCallback(() => {
-    const currentId = focusedId();
-    if (currentId) triage.label(currentId);
-  }, [focusedId, triage]));
+    runVerb(false, (id) => triage.label(id));
+  }, [runVerb, triage]));
 
   useShortcutAction('view.switch', useCallback(() => {
     // Straight into the palette's label/project view submenu (no targets —

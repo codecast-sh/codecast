@@ -37,10 +37,12 @@ export function useTriageActions(isOnInboxPage: boolean) {
   // Shared body of stash/close; the only difference is the mode. The teardown
   // a close asks for happens SERVER-side on the hide data transition
   // (dispatch.applyPatches), so neither caller asks for it.
-  const hide = useCallback((id: string, mode: "stash" | "close", source: TriageSource = "key", opts?: HideSessionOpts) => {
+  // `advance: false` acts on a row without moving the selection off the one
+  // the user is viewing (a chord aimed at a hovered row, shortcuts/actions.ts).
+  const hide = useCallback((id: string, mode: "stash" | "close", source: TriageSource = "key", opts?: HideSessionOpts, advance = true) => {
     const store = useInboxStore.getState();
     if (mode === "stash") checkMilestone("m-first-stash");
-    if (!isOnInboxPage) {
+    if (advance && !isOnInboxPage) {
       const ordered = store.visualOrder();
       const idx = ordered.findIndex((s) => s._id === id);
       const next = ordered.slice(idx + 1).find((s) => s._id !== id)
@@ -56,14 +58,14 @@ export function useTriageActions(isOnInboxPage: boolean) {
   // Defer and the rest verdicts (dormant / done / needs input) share one
   // shape: stamp the row, then advance the selection to the next row in
   // visual order (computed BEFORE the stamp — stamping reorders the list).
-  const park = useCallback((id: string, verb: "defer" | UserRest, source: TriageSource = "key") => {
+  const park = useCallback((id: string, verb: "defer" | UserRest, source: TriageSource = "key", advance = true) => {
     const store = useInboxStore.getState();
     const ordered = store.visualOrder();
     const idx = ordered.findIndex((s) => s._id === id);
     const next = ordered[idx + 1] ?? ordered.find((s) => s._id !== id);
     if (verb === "defer") store.deferSession(id);
     else animatedSetSessionRest(id, verb);
-    if (!closeOverlayIfCurrent(id) && next) {
+    if (!closeOverlayIfCurrent(id) && next && advance) {
       if (isOnInboxPage) store.setCurrentSession(next._id);
       else store.selectPanelSession(next._id);
     }

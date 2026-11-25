@@ -49,7 +49,7 @@ export default function ConversationDiffPage() {
   return (
     <AuthGuard>
       <DashboardLayout>
-        <ConversationDiffLayout conversation={conversation as ConversationData} embedded headerExtra={<ConversationSharePopover conversation={conversation as any} canManage={(conversation as any).is_own !== false} />} />
+        <ConversationDiffLayout conversation={conversation as ConversationData} embedded isOwner={(conversation as any).is_own !== false} headerExtra={<ConversationSharePopover conversation={conversation as any} canManage={(conversation as any).is_own !== false} />} />
       </DashboardLayout>
     </AuthGuard>
   );
