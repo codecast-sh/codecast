@@ -39,10 +39,15 @@ export function useFoldingSplit({ target, folded, onPersist, onReset }: {
   const foldedRef = useRef(folded);
   foldedRef.current = folded;
 
+  // The Group's width, as its observer last reported it. Read off the element
+  // instead, a fold right after the commit that asked for it laid out the
+  // page that commit had just written (ct-101461).
+  const widthRef = useRef(typeof ResizeObserver === "undefined" ? -1 : 0);
   const apply = () => {
     const group = groupRef.current;
     const el = elementRef.current;
-    if (!group || !el || el.offsetWidth === 0 || near(group.getLayout(), targetRef.current)) return;
+    const width = widthRef.current < 0 ? el?.offsetWidth : widthRef.current;
+    if (!group || !el || width === 0 || near(group.getLayout(), targetRef.current)) return;
     group.setLayout(targetRef.current);
   };
   useWatchEffect(() => queueMicrotask(apply), [signature(target)]);
@@ -54,10 +59,11 @@ export function useFoldingSplit({ target, folded, onPersist, onReset }: {
   useMountEffect(() => {
     const el = elementRef.current;
     if (!el || typeof ResizeObserver === "undefined") return;
-    let width = el.offsetWidth;
-    const ro = new ResizeObserver(() => {
-      if (el.offsetWidth === width) return;
-      width = el.offsetWidth;
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[entries.length - 1]?.borderBoxSize?.[0];
+      const width = box ? box.inlineSize : el.offsetWidth;
+      if (width === widthRef.current) return;
+      widthRef.current = width;
       setTimeout(apply, 0);
     });
     ro.observe(el);

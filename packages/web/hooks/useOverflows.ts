@@ -1,42 +1,43 @@
 import { useLayoutEffect, useState, type DependencyList, type RefObject } from "react";
 import { flushSync } from "react-dom";
+import { measureInFrame } from "../lib/frameMeasure";
 
-// One observer for every hook, and one batch for every first answer. Every
-// element in a batch is read before any answer is set, so the reads find the
-// layout already computed and none of them forces another. A read per hook in
-// its own effect laid the page out once per mounted row, against a page the
+// One observer for every hook, and one batch for every answer. Every element
+// in a batch is read before any answer is set, so the reads find the layout
+// already computed and none of them forces another. A read per hook in its
+// own effect laid the page out once per mounted row, against a page the
 // transcript had just rewritten.
 //
-// The first answer is read in a microtask after the commit and applied with
-// flushSync, so the clamp is in the DOM before the browser paints. A state set
-// from the observer callback renders on a later task, after paint: a long
-// session message painted at full height, the virtualizer measured it, then it
-// clamped, and near the tail the 900px swing remounted the rows above in a
-// loop that shook the conversation several times a second.
+// The batch is read at the start of the next frame (measureInFrame), beside
+// every other read queued there, and applied with flushSync, so the clamp is
+// in the DOM before the browser paints. Read in a microtask after the commit,
+// it laid out the page the commit had just written, inside the commit's own
+// task (ct-101461). A state set from the observer callback renders on a later
+// task, after paint: a long session message painted at full height, the
+// virtualizer measured it, then it clamped, and near the tail the 900px swing
+// remounted the rows above in a loop that shook the conversation several
+// times a second.
 type Watch = { read: () => boolean; set: (v: boolean) => void };
-const firstAnswers = new Set<Watch>();
-let firstAnswersQueued = false;
+const due = new Set<Watch>();
 
 function answerBeforePaint(w: Watch) {
-  firstAnswers.add(w);
-  if (firstAnswersQueued) return;
-  firstAnswersQueued = true;
-  queueMicrotask(() => {
-    firstAnswersQueued = false;
-    const due = [...firstAnswers];
-    firstAnswers.clear();
-    const answers = due.map((d) => [d, d.read()] as const);
-    flushSync(() => { for (const [d, v] of answers) d.set(v); });
-  });
+  if (due.size === 0) {
+    measureInFrame(() => {
+      const answers = [...due].map((d) => [d, d.read()] as const);
+      due.clear();
+      return answers;
+    }, (answers) => {
+      flushSync(() => { for (const [d, v] of answers) d.set(v); });
+    });
+  }
+  due.add(w);
 }
 const watchesByTarget = new Map<Element, Set<Watch>>();
 let shared: ResizeObserver | null = null;
 
 function observer(): ResizeObserver {
   shared ??= new ResizeObserver((entries) => {
-    const due = new Set<Watch>();
-    for (const e of entries) for (const w of watchesByTarget.get(e.target) ?? []) due.add(w);
-    for (const w of due) w.set(w.read());
+    for (const e of entries) for (const w of watchesByTarget.get(e.target) ?? []) answerBeforePaint(w);
   });
   return shared;
 }
@@ -50,7 +51,7 @@ function watch(w: Watch, targets: Element[]): () => void {
   }
   answerBeforePaint(w);
   return () => {
-    firstAnswers.delete(w);
+    due.delete(w);
     for (const t of targets) {
       const set = watchesByTarget.get(t);
       if (!set) continue;
