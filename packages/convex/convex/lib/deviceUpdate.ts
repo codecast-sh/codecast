@@ -6,6 +6,7 @@
 // A pushed daemon command would expire in five minutes and miss a laptop that
 // was asleep.
 import { v, type Infer } from "convex/values";
+import { compareVersions } from "@codecast/shared/contracts/orgTemplateManifest";
 
 export const distributionValidator = v.union(v.literal("installer"), v.literal("brew"), v.literal("npm"), v.literal("source"));
 export const updateStateValidator = v.union(v.literal("requested"), v.literal("installing"), v.literal("failed"));
@@ -48,7 +49,15 @@ export function selfUpdateBeatPatch(row: Row | null | undefined, beat: Beat): Pa
   // the old answer before the daemon ever saw it (union-line-1, 2026-11-24).
   // A daemon too old to send update_checked_for is taken at its word.
   const checked = beat.update_checked_for === undefined || beat.update_checked_for >= row.update_requested_at || row.update_state !== "requested";
-  if (beat.version === row.update_requested_version || (beat.update_available === "" && checked)) {
+  // A request that names its release is done only when the machine runs it:
+  // a "" from a machine still below it is a stale cache, and every daemon on
+  // 1.1.273 or older sends no update_checked_for to show it (2026-11-24: the
+  // whole fleet on 1.1.272 had each press cleared that way).
+  const asked = row.update_requested_version;
+  const done = asked && isRelease(asked) && isRelease(beat.version)
+    ? compareVersions(beat.version, asked) >= 0
+    : beat.version === asked || (beat.update_available === "" && checked);
+  if (done) {
     return { ...patch, update_requested_version: undefined, update_requested_at: undefined, update_state: undefined, update_error: undefined };
   }
   // Only the run answering THIS request moves its state: a failure left over
@@ -59,6 +68,9 @@ export function selfUpdateBeatPatch(row: Row | null | undefined, beat: Beat): Pa
   }
   return patch;
 }
+
+/** A release version (1.2.3), which compareVersions can order. */
+export const isRelease = (version: string): boolean => /^\d+\.\d+\.\d+$/.test(version);
 
 /** What the beat's reply asks of the daemon: the open request, until it starts. */
 export function updateRequestFor(row: Row | null | undefined): { version: string; at: number } | undefined {

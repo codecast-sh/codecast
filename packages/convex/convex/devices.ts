@@ -1719,10 +1719,14 @@ async function requireOwnDevice(ctx: any, apiToken: string | undefined, deviceId
  * old `force_update` command as well.
  */
 export const requestDeviceUpdate = mutation({
-  args: { api_token: v.optional(v.string()), device_id: v.string() },
+  // `version`: the release the caller read from the manifest (cast devices
+  // update). The request then stays open until the machine runs it, whatever
+  // the daemon's cached check says.
+  args: { api_token: v.optional(v.string()), device_id: v.string(), version: v.optional(v.string()) },
   handler: async (ctx, args) => {
     const { userId, device } = await requireOwnDevice(ctx, args.api_token, args.device_id);
-    return applyDeviceUpdateRequest(ctx, userId, device);
+    if (args.version !== undefined && !isRelease(args.version)) throw new Error(`Not a release version: ${args.version}`);
+    return applyDeviceUpdateRequest(ctx, userId, device, args.version);
   },
 });
 
@@ -1733,12 +1737,12 @@ export async function performRequestDeviceUpdate(ctx: any, userId: Id<"users">, 
   return applyDeviceUpdateRequest(ctx, userId, device);
 }
 
-async function applyDeviceUpdateRequest(ctx: any, userId: Id<"users">, device: any) {
+async function applyDeviceUpdateRequest(ctx: any, userId: Id<"users">, device: any, version?: string) {
   const blocked = selfUpdateBlocked(device);
   if (blocked) throw new Error(`Cannot update this machine from here: ${blocked.toLowerCase()}`);
   const now = Date.now();
   await ctx.db.patch(device._id, {
-    update_requested_version: device.update_available || undefined,
+    update_requested_version: version ?? (device.update_available || undefined),
     update_requested_at: now,
     update_state: "requested" as const,
     update_error: undefined,
