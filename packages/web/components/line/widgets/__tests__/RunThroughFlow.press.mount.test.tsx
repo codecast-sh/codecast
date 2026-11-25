@@ -123,3 +123,21 @@ test("guard: once the press is in the thread, the chip says Starting and the pan
   await click(chip());
   expect(document.querySelector("[data-ship-starting]")).not.toBeNull();
 });
+
+test("a press the session never picks up lets Ship go again after the wait, and the panel says why", async () => {
+  const { jest } = await import("bun:test");
+  jest.useFakeTimers();
+  try {
+    await mount();
+    await click(chip());
+    await click(document.querySelector("[data-run-through-go]")!);
+    const { PRESS_WAIT_MS } = await import("../../../../lib/line/flowMessages");
+    await act(async () => { jest.advanceTimersByTime(PRESS_WAIT_MS + 1); });
+    expect(chip().getAttribute("aria-label")).toBe("Not picked up");
+    await click(chip());
+    expect(document.querySelector("[data-ship-unheard]")?.textContent).toContain("has not received it");
+    expect(document.querySelector("[data-run-through-go]")).not.toBeNull();
+  } finally {
+    jest.useRealTimers();
+  }
+});
