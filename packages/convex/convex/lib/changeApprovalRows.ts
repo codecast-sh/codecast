@@ -176,7 +176,7 @@ const saysYes = (label: unknown) => optionIsShip(label) || /^(yes|build|approve)
 
 /**
  * The engineer's yes recorded before the run built anything (ct-98540): a card asked as the pre-build question
- * (`cast decide --station pre-build` on the run's task, which is what Cam's helpers ask an engineer), answered yes in
+ * (`cast decide --station pre-build` on the run's task; the asker must use that station, recorded on ct-98540), answered yes in
  * person (a user's own answer, not given through a session) by someone main's engineers file lists, before the run's
  * attempt began. The newest such answer, or null. It covers judged paths only, never a mechanism, and binds to the
  * judged diff the run first pushed (changeApprovals.settle records it then).
