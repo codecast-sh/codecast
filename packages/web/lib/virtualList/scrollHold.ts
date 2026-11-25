@@ -15,6 +15,8 @@
 // paints and measures nothing, so a hold that ran out there would never have
 // seen the heights it was waiting for.
 
+import { measureInFrame } from "../frameMeasure";
+
 export type HoldTarget =
   | "bottom"
   | "top"
@@ -70,12 +72,19 @@ export function createScrollHold(v: HoldVirtualizer, getEl: () => HTMLElement | 
     if (typeof document !== "undefined") document.removeEventListener("visibilitychange", onVisibility);
   };
 
-  const apply = () => {
+  // Whether the hold still needs to re-aim: the read half of a re-aim.
+  const due = (): boolean => {
+    const h = hold;
+    const sc = getEl();
+    if (!h || !sc) return false;
+    if (!charge(h) || h.bail?.()) { stop(); return false; }
+    return !holdSatisfied(sc, v, h.target);
+  };
+  const apply = () => { if (due()) aim(); };
+  const aim = () => {
     const h = hold;
     const sc = getEl();
     if (!h || !sc) return;
-    if (!charge(h) || h.bail?.()) { stop(); return; }
-    if (holdSatisfied(sc, v, h.target)) return;
     const count = v.options.count;
     if (h.target === "bottom") {
       if (count > 0) v.scrollToIndex(count - 1, { align: "end" });
@@ -118,7 +127,11 @@ export function createScrollHold(v: HoldVirtualizer, getEl: () => HTMLElement | 
       hold = { target, bail: o.bail, budget: o.holdMs, since: hidden() ? null : Date.now() };
       lastTotal = v.getTotalSize();
       watch(sc);
-      apply();
+      // Aimed at the next frame's start, beside every other layout read
+      // queued there, and still before it paints. Called from a commit's
+      // layout effect, an aim now read the geometry of the page the commit
+      // had just written, a whole forced layout inside the switch (ct-101461).
+      measureInFrame(due, (go) => { if (go) aim(); }, sc.ownerDocument?.defaultView ?? globalThis);
     },
     /** Feed the virtualizer's onChange here. Re-aims only when sizes moved,
      *  in a microtask: onChange fires inside React's commit (a row's measure
