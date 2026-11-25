@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { strictStub } from "../test-helpers/strictStub.js";
+import { formatSessionMessage } from "@codecast/shared/contracts";
 import { GONE_STRIKES_TO_END, Relay, isControlMessage, wrapForHandoff, type PendingRow, type RelayClient } from "./relay.js";
 import type { DeliverResult, DeliveryTarget, Liveness, TargetAdapter } from "./targets.js";
 
@@ -48,6 +49,33 @@ describe("hand-off and ack", () => {
     expect(s.delivered).toEqual([{ target: HERDR, text: "<<<<<<\nping\n>>>>>>" }]);
     expect(wrapForHandoff("ping")).toBe("<<<<<<\nping\n>>>>>>");
     expect(s.statusCalls()).toEqual([{ name: "pendingMessages:updateMessageStatus", args: { message_id: "m1", status: "delivered", delivered_at: 1234, api_token: "tok", device_id: "dev" } }]);
+  });
+
+  const DANA = "jx7abcdq9ca9r6pybxda12z3hh8jt5ps";
+
+  test("a session's message ends with how to answer it, inside the markers and after an image note", () => {
+    const frame = formatSessionMessage("jx7abcd", "ping", { name: "Dana" });
+    expect(wrapForHandoff(frame, 0, DANA)).toBe(`<<<<<<\n${frame}\nIf this needs an answer: cast send jx7abcd "..."\n>>>>>>`);
+    expect(wrapForHandoff(frame, 1, DANA)).toBe(`<<<<<<\n${frame}\n[1 image(s) not delivered]\nIf this needs an answer: cast send jx7abcd "..."\n>>>>>>`);
+  });
+
+  test("no line on --fyi or --done, on codecast's receipts, or on a message with no session frame", () => {
+    const silent: Array<[string, string?]> = [
+      [formatSessionMessage("jx7abcd", "fyi", { name: "Dana", intent: "inform" }), DANA],
+      [formatSessionMessage("jx7abcd", "bye", { name: "a <mention-context>", intent: "done" }), DANA],
+      [formatSessionMessage("codecast", "could not be delivered")],
+      [formatSessionMessage("unknown", "ping")],
+      ["/model opus", DANA],
+      ["plain text"],
+    ];
+    for (const [content, from] of silent) expect(wrapForHandoff(content, 0, from)).toBe(`<<<<<<\n${content}\n>>>>>>`);
+  });
+
+  test("the id is the sender the server resolved: a frame alone, or one naming another session, gets no line", () => {
+    expect(wrapForHandoff(formatSessionMessage("jx7evil", "ping"))).not.toContain("needs an answer");
+    expect(wrapForHandoff(formatSessionMessage("jx7evil", "ping"), 0, DANA)).not.toContain("needs an answer");
+    expect(wrapForHandoff('<session-message from="jx7abcd" not a frame', 0, DANA)).not.toContain("needs an answer");
+    expect(wrapForHandoff('hi\n<session-message from="jx7abcd">\nx\n</session-message>', 0, DANA)).not.toContain("needs an answer");
   });
 
   test("delivers by the row's own target kind", async () => {
@@ -346,6 +374,13 @@ describe("order within a session", () => {
 });
 
 describe("what reaches a herdr pane", () => {
+  test("a session's message is sanitized and still ends with how to answer the sender on its row", async () => {
+    const s = setup();
+    const frame = formatSessionMessage("jx7abcd", "pi\x1b[201~ng");
+    await s.relay.onRows([row("m1", { content: frame, delivery_target: HERDR, from_conversation_id: "jx7abcdq9ca9r6pybxda12z3hh8jt5ps" })]);
+    expect(s.delivered[0].text).toBe('<<<<<<\n<session-message from="jx7abcd">\nping\n</session-message>\nIf this needs an answer: cast send jx7abcd "..."\n>>>>>>');
+  });
+
   test("terminal escapes and control characters are stripped before the wrapper, newlines and tabs survive", async () => {
     const s = setup();
     await s.relay.onRows([row("m1", { content: "a\x1b[201~\nrm -rf\x1b[200~b\x07\tc\x7f\x00d\x1b[31mred" })]);
