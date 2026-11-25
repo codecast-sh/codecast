@@ -54,8 +54,10 @@ digraph change {
   // The reviewer's verdict is what its session pinned, never a file: Verdicts counts it only with this round's nonce.
   verdicts [label="Verdicts", shape=parallelogram, timeout=60, fold=true, script="cast flow verdicts --dir \"$run_dir\" --review \"$review.json\""]
   // On success stdout is merge.json alone, so the run reads $merge.json.sha; a merge with no sha on main refuses (exit 2).
+  // It merges the pull request in the run's pr.json. A run with none there (resumed onto this graph past PR) exits 4
+  // and goes to PR first. Such a run once handed the shell an empty $pr.json.number and ended Not merged (ct-90556).
   merge [label="Merge", shape=parallelogram, timeout=3600,
-    script="d=\"$run_dir\"; rm -f \"$d/merge.json\"; cast flow merge --pr \"$pr.json.number\" --branch \"$branch\" --dir \"$d\" > \"$d/merge.out\" 2> \"$d/merge.log\"; code=$?; if [ \"$code\" -eq 0 ]; then cat \"$d/merge.log\" \"$d/merge.out\" >&2; cat \"$d/merge.json\" || exit 2; else cat \"$d/merge.log\" \"$d/merge.out\"; fi; exit \"$code\""]
+    script="d=\"$run_dir\"; rm -f \"$d/merge.json\"; cast flow merge --branch \"$branch\" --dir \"$d\" > \"$d/merge.out\" 2> \"$d/merge.log\"; code=$?; if [ \"$code\" -eq 0 ]; then cat \"$d/merge.log\" \"$d/merge.out\" >&2; cat \"$d/merge.json\" || exit 2; else cat \"$d/merge.log\" \"$d/merge.out\"; fi; exit \"$code\""]
   // Someone pushed to the branch after this round pushed it: a new round reviews what is there, three times at most.
   moved [label="Branch moved", shape=parallelogram, timeout=60, script="echo \"$verdicts.json.why\""]
   // Merge pushed the branch rebased onto a moved main (rebase.json): CI judges that head under the same review. A head
@@ -131,6 +133,7 @@ digraph change {
   merge -> fix_conflict [condition="outcome = failure and merge.exit_code = 1 and (merge.output contains \" conflicts with \" or merge.output contains \"rebuild the change on\") and change_conversation", label="conflict"]
   merge -> retest       [condition="outcome = failure and merge.exit_code = 3 and retest.visits < 3", label="retest"]
   merge -> moving       [condition="outcome = failure and merge.exit_code = 3", label="main keeps moving"]
+  merge -> pr           [condition="outcome = failure and merge.exit_code = 4", label="no pull request"]
   merge -> unshipped    [label="not merged"]
   retest -> ci   [condition="outcome = success"]
   retest -> pr   [condition="outcome = failure and retest.exit_code = 4", label="pushed after review"]

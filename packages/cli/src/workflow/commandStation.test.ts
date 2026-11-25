@@ -256,3 +256,25 @@ describe("a station that ends on its own", () => {
     expect(ctx["slowok.notes"]).toContain("printed nothing for");
   }, 30_000);
 });
+
+describe("a station that reads another station's result", () => {
+  test("fails before it runs when its graph has no such station, and says which", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "station-procs-"));
+    const ran = path.join(tmp, "ran");
+    const node = { id: "merge", label: "Merge", type: "command", script: `touch ${ran}; cast flow merge --pr "$pr.json.number"` } as WorkflowNode;
+    // An exit code left from the station's last visit must not route this one (merge.exit_code = 3 retests).
+    const ctx: Record<string, string> = { "merge.exit_code": "3" };
+    expect(await executeCommand(node, ctx, tmp, { graceMs }, {}, new Set(["merge", "unshipped"]))).toBe("failure");
+    expect(fs.existsSync(ran)).toBe(false);
+    expect(ctx["merge.output"]).toBe("Merge reads $pr.json.number, but this graph has no station pr, so it did not run");
+    expect(ctx["merge.exit_code"]).toBeUndefined();
+  });
+
+  test("runs as before when the station is its graph's and has not run yet: the placeholder reaches the script", async () => {
+    tmp = fs.mkdtempSync(path.join(os.tmpdir(), "station-procs-"));
+    const node = { id: "intent_gate", type: "command", script: `echo "[$editor.json.founder]"` } as WorkflowNode;
+    const ctx: Record<string, string> = {};
+    expect(await executeCommand(node, ctx, tmp, { graceMs }, {}, new Set(["editor", "intent_gate"]))).toBe("success");
+    expect(ctx["intent_gate.output"]).toBe("[.json.founder]");
+  });
+});

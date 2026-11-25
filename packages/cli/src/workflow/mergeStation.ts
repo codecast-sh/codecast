@@ -25,6 +25,7 @@
 //           files and the default branch's commits
 //   exit 2  refused (or the station crashed): the last line says why, and what a step left deployed
 //   exit 3  retest: CI tested another head, or the default branch's changes interact with the change
+//   exit 4  no pull request: neither --pr nor $run_dir/pr.json names one, so the run has not opened it yet
 
 import * as fs from "node:fs";
 import os from "node:os";
@@ -37,8 +38,9 @@ import { keepEnds } from "./keepEnds";
 import { holdRepoLease, leaseHolder, type RepoLease } from "../land/repoLease.js";
 import { acquiredTree, mainCheckout, noteLanded, noteRestoring, sweepScratchTrees, takeMergeLock, trackStep, type ScratchTree } from "./mergeScratch";
 import { chainBetween, recordRebase, verifyRebaseChain, type RebaseLink } from "./rebaseRecord";
+import { readPr } from "./prStation";
 
-export type MergeStationResult = { code: 0 | 1 | 2 | 3; line: string };
+export type MergeStationResult = { code: 0 | 1 | 2 | 3 | 4; line: string };
 
 export type MergeStationArgs = {
   /** The run's checkout: the repository the scratch tree is made from. */
@@ -449,13 +451,27 @@ Answer with JSON only:
   }
 }
 
+/**
+ * The pull request a Merge station merges: --pr, else the one the PR station wrote to the run's pr.json. A --pr that
+ * is a substitution the run had no value for, whole (`$pr.json.number`) or after the shell read `$pr` (`.json.number`),
+ * names none: a graph whose Merge was reached past no PR station passed one (ct-90556, Nov 25).
+ */
+export function stationPr(given: string | undefined, dir: string): { pr: number } | MergeStationResult {
+  const named = given && !/^(\$\w+)?\.json(\.\w+)+$/.test(given) ? given : undefined;
+  const pr = Number(named ?? readPr(dir)?.number);
+  if (Number.isInteger(pr) && pr > 0) return { pr };
+  if (named !== undefined) return { code: 2, line: `--pr ${named} is not a pull request number` };
+  return { code: 4, line: `no pull request: this run has not opened one (${path.join(dir, "pr.json")} is missing); the change flow's PR station opens it` };
+}
+
 /** `cast flow merge`: the station run from a flow's script, its run named by the run's environment. */
-export async function mergeCommand(opts: { pr: string; branch: string; dir: string; run?: string; cwd: string; post: MergeStationArgs["post"] }): Promise<number> {
+export async function mergeCommand(opts: { pr?: string; branch: string; dir: string; run?: string; cwd: string; post: MergeStationArgs["post"] }): Promise<number> {
   const say = (r: MergeStationResult) => { console.log(r.line); return r.code; };
   const runId = opts.run || process.env.run_id || "";
-  const pr = Number(opts.pr);
   if (!runId) return say({ code: 2, line: "no run: cast flow merge is a station of a flow run (it reads $run_id), or pass --run" });
-  if (!Number.isInteger(pr) || pr <= 0) return say({ code: 2, line: `--pr ${opts.pr} is not a pull request number` });
+  const found = stationPr(opts.pr, opts.dir);
+  if (!("pr" in found)) return say(found);
+  const { pr } = found;
   const head = defaultExec("git", ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], opts.cwd);
   const into = process.env.default_branch || (head.status === 0 ? head.stdout.trim().replace(/^origin\//, "") : "main");
   let repository: string | null = null;
