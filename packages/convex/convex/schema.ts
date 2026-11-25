@@ -890,7 +890,8 @@ export default defineSchema({
     // (guestSuggestions.ts). Each one waits for the owner to send it.
     guest_suggestions: v.optional(v.boolean()),
     // Unread: kept only because older rows carry it. A teammate's message
-    // always waits as a suggestion while an owner is attending (teamSuggestions.ts).
+    // waits as a suggestion while an owner is attending, unless the teammate
+    // is an admin of the session's team (teamSuggestions.ts).
     team_suggestions: v.optional(v.boolean()),
     parent_message_uuid: v.optional(v.string()),
     parent_conversation_id: v.optional(v.id("conversations")),

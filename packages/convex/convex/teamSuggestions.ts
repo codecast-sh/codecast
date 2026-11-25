@@ -5,22 +5,29 @@
 // owner sends it, edits then sends it, or dismisses it. A session nobody is
 // attending keeps direct send, so work never waits on an absent owner.
 //
+// An admin of the session's team never suggests or proposes there: their
+// messages go straight in (adminOfSessionTeam), and they answer its open
+// questions, plan approvals and permission prompts directly, as the runner
+// does (adminAnswers, adminAnswersPrompts). Only those: "Allow all", resume,
+// kill and the other daemon commands stay with the runner and the primary
+// owner (commandsSession), and so does Needs You.
+//
 // "In it" is the roster's own fact (teams.getTeamMembers): the owner's window
 // reports this session as its view (pushRouter.reportPresence, cleared after
 // a long blur or a closed tab) and their presence derives to "active". The
 // web composer reads the same two fields off the roster to say "Suggest"
 // before the press; this module decides at send time.
 //
-// A teammate can also propose an answer to the agent's open question (kind
-// "answer", submitted by the owner as their own reply) or an approve/deny on
-// a pending permission (kind "permission", settled when the owner answers
-// that permission). Decided rows keep their disposition, so the author sees
-// what happened to each one.
+// A teammate who is not an admin can also propose an answer to the agent's
+// open question (kind "answer", submitted by the owner as their own reply) or
+// an approve/deny on a pending permission (kind "permission", settled when the
+// owner answers that permission). Decided rows keep their disposition, so the
+// author sees what happened to each one.
 import { v } from "convex/values";
 import { getAuthUserId } from "@convex-dev/auth/server";
 import { query } from "./functions";
 import type { Doc, Id } from "./_generated/dataModel";
-import { checkConversationAccess, getOwnerMembership, resolveVisibilityMode } from "./privacy";
+import { checkConversationAccess, getOwnerMembership, isTeamAdmin, resolveVisibilityMode } from "./privacy";
 import { effectiveMembershipVisibility } from "./teamVisibility";
 import { derivePresenceState, PRESENCE_FRESH_MS } from "./presenceState";
 import { performSessionSend } from "./pendingMessages";
@@ -107,11 +114,36 @@ export async function viewerSeesDetail(ctx: Ctx, userId: Id<"users">, conversati
 
 /** The people whose press answers the session's cards: the runner and the
  *  primary owner (the client's commandsSession). Assigned owners beyond them
- *  steer by message, so they suggest answers like any teammate. */
+ *  steer by message, so they suggest answers like any teammate. An admin of
+ *  the session's team answers too (adminAnswers), but is not an owner whose
+ *  presence holds anyone's messages. */
 export function answerers(conversation: Doc<"conversations">): Set<string> {
   const ids = new Set<string>([String(conversation.user_id)]);
   if ((conversation as any).owner_user_id) ids.add(String((conversation as any).owner_user_id));
   return ids;
+}
+
+/** Whether this person is an admin of the team the session belongs to. They
+ *  outrank its runner there, so their messages never wait as suggestions
+ *  (web lib/steering.ts adminOfTeam is the client's copy). */
+export async function adminOfSessionTeam(ctx: Ctx, userId: Id<"users">, conversation: Doc<"conversations">): Promise<boolean> {
+  return !!conversation.team_id && await isTeamAdmin(ctx, userId, conversation.team_id);
+}
+
+/** An admin who answers the session's questions and plan approvals directly
+ *  instead of proposing: an admin of its team who reads its detail, on a
+ *  session a person's daemon runs (not a role's standing session or a hosted
+ *  agent). Web lib/steering.ts answerRoles is the client's copy. */
+export async function adminAnswers(ctx: Ctx, userId: Id<"users">, conversation: Doc<"conversations">): Promise<boolean> {
+  if ((conversation as any).standing_role_id || isHostedAgentType((conversation as any).agent_type)) return false;
+  return await adminOfSessionTeam(ctx, userId, conversation) && await viewerSeesDetail(ctx, userId, conversation);
+}
+
+/** The same admin on the session's permission prompts, except on a bot-run
+ *  session, whose prompts only its runner is shown
+ *  (permissions.getPendingPermissions, updatePermissionStatus). */
+export async function adminAnswersPrompts(ctx: Ctx, userId: Id<"users">, conversation: Doc<"conversations">): Promise<boolean> {
+  return await adminAnswers(ctx, userId, conversation) && !(await ctx.db.get(conversation.user_id))?.is_bot;
 }
 
 export function personName(user: any): string {
@@ -150,6 +182,8 @@ export async function steeringOwnerFor(ctx: Ctx, conversation: Doc<"conversation
   // Teammates only: an owner's words are their own, and a share link's
   // grantee sees no roster to tell them the owner is here.
   if ((await checkConversationAccess(ctx, senderId, conversation)) !== "team") return null;
+  // An admin of the session's team outranks its owner there.
+  if (await adminOfSessionTeam(ctx, senderId, conversation)) return null;
   // The composer reads the active team's roster to say "Suggest"; from any
   // other team it cannot see the owner, so it sends directly, as the server does.
   const sender = await ctx.db.get(senderId);
@@ -201,7 +235,16 @@ export async function suggestFromTeammate(
 // `answers`: who presses the real card, refused as a proposer. Questions are
 // answered by the runner and the primary owner (their answer is a message);
 // permission prompts by the runner alone (permissions.updatePermissionStatus).
-async function proposerContext(ctx: Ctx, userId: Id<"users">, conversationId: string, answers: Set<string>) {
+// `adminAnswersIt`: whether an admin of the session's team answers this kind
+// directly (adminAnswers for questions, adminAnswersPrompts for prompts), so
+// is refused as a proposer too.
+async function proposerContext(
+  ctx: Ctx,
+  userId: Id<"users">,
+  conversationId: string,
+  answers: Set<string>,
+  adminAnswersIt: (ctx: Ctx, userId: Id<"users">, conversation: Doc<"conversations">) => Promise<boolean>,
+) {
   const id = ctx.db.normalizeId("conversations", conversationId);
   const conversation: Doc<"conversations"> | null = id ? await ctx.db.get(id) : null;
   if (!conversation) throw new Error("That session is gone");
@@ -209,6 +252,7 @@ async function proposerContext(ctx: Ctx, userId: Id<"users">, conversationId: st
   // Owners and teammates who read the session's detail; a share link's send
   // grant, or a summary-level share, does not reach its prompts.
   if (!(await viewerSeesDetail(ctx, userId, conversation))) throw new Error("You can't propose answers in this session");
+  if (await adminAnswersIt(ctx, userId, conversation)) throw new Error("You're an admin of this team: answer it directly");
   const author = await ctx.db.get(userId);
   if (!author || author.is_bot) throw new Error("Only a person can propose an answer");
   // Proposals on questions or prompts that closed some other way still read
@@ -307,7 +351,7 @@ export function canonicalAnswer(body: string, questions: AskQuestion[]): { body:
 export async function proposeAnswerFor(ctx: Ctx, userId: Id<"users">, conversationId: string, toolUseId: string, body: string, clientKey?: string) {
   const cid = ctx.db.normalizeId("conversations", conversationId);
   const target = cid ? await ctx.db.get(cid) : null;
-  const { conversation, author, live } = await proposerContext(ctx, userId, conversationId, target ? answerers(target) : new Set());
+  const { conversation, author, live } = await proposerContext(ctx, userId, conversationId, target ? answerers(target) : new Set(), adminAnswers);
   const ask = await openAsk(ctx, conversation._id, toolUseId);
   if (!ask || (await answerOnItsWay(ctx, conversation._id, ask.askedAt))) throw new Error("That question was already answered");
   const questions = ask.questions;
@@ -346,7 +390,7 @@ export async function proposePermissionFor(ctx: Ctx, userId: Id<"users">, permis
   if (!permission || permission.status !== "pending") throw new Error("That request was already answered");
   if (decision !== "approved" && decision !== "denied") throw new Error("Unknown answer");
   const owner = await ctx.db.get(permission.conversation_id);
-  const { conversation, author, live } = await proposerContext(ctx, userId, String(permission.conversation_id), new Set(owner ? [String(owner.user_id)] : []));
+  const { conversation, author, live } = await proposerContext(ctx, userId, String(permission.conversation_id), new Set(owner ? [String(owner.user_id)] : []), adminAnswersPrompts);
   const rest = [];
   for (const row of live) {
     if (row.kind === "permission" && String(row.permission_id) === String(permission._id)) {

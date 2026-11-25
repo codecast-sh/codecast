@@ -72,6 +72,17 @@ describe("Needs You follows the command rule", () => {
     expect(placed.counts.dormant).toBe(1);
   });
 
+  it("an admin of the session's team is not asked to unblock a teammate's session", () => {
+    // An admin answers the session's questions and prompts directly
+    // (convex teamSuggestions.ts), but resume and Needs You stay the runner's.
+    const sessions = { [THEIRS]: waiting(THEIRS, { user_id: RUNNER, team_id: "t1" } as Partial<InboxSession>) };
+    const s = { ...state(sessions, "team"), teams: [{ _id: "t1", role: "admin" }] } as unknown as PlaceInboxState;
+    const placed = placeInboxRows(s, { scope: "team", now: NOW });
+    expect(placed.needsInput).toEqual([]);
+    expect(placed.dormant.map((r) => r._id)).toEqual([THEIRS]);
+    expect(waitsOnViewer(sessions[THEIRS], ME)).toBe(false);
+  });
+
   it("a co-owner who is neither runner nor primary owner is not asked to unblock it", () => {
     const sessions = { [THEIRS]: waiting(THEIRS, { user_id: RUNNER, owner_user_id: RUNNER, owned_by_me: true }) };
     const placed = placeInboxRows(state(sessions, "mine"), { scope: "mine", now: NOW });
