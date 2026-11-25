@@ -13,7 +13,8 @@
 //     scores a saved run's produced priorities again, without running the pass.
 //
 // The bar: recall, precision and session mapping at least 0.75, and no step the
-// pass marked done whose golden step is not done. The golden set is real
+// pass marked done whose golden step is not done (a done step that is only part
+// of a golden step claims nothing about the rest of it). The golden set is real
 // content: results go to --out (default ~/.codecast/emergent-goals/calibration/<timestamp>/),
 // never inside the repo. Judge calls go out on the evals' API key.
 
@@ -39,12 +40,25 @@ export type Golden = { person: string; window: [string, string]; priorities: Gol
 export type Produced = { key: string; workspace: string; title: string; summary: string; status: string; steps: Array<{ title: string; tier: string; done: boolean }>; sessions: string[] };
 
 export type Match = { produced: string; golden: string; reason: string };
-export type StepPair = { produced: number; golden: number; reason: string };
+/** The inferred step against the reference step: the same work, one part of it, or more than it. */
+export type StepScope = 'same' | 'narrower' | 'wider';
+export type StepPair = { produced: number; golden: number; scope: StepScope; reason: string };
+
+/**
+ * Whether a pair's done states agree, given scope: a narrower step may be done
+ * while the whole is not (but not the reverse), and a wider one may be open
+ * while the reference step is done (but not the reverse).
+ */
+export function doneAgrees(scope: StepScope, produced: boolean, golden: boolean): boolean {
+  if (scope === 'narrower') return produced || !golden;
+  if (scope === 'wider') return golden || !produced;
+  return produced === golden;
+}
 
 export interface Judge {
   /** Produced priorities that name the same outcome as a golden one; the scorer keeps the first claim on each side. */
   match(produced: Produced[], golden: GoldenPriority[], titles: Map<string, string>): Promise<Match[]>;
-  /** Pairs of (produced critical step, golden critical step) that are the same piece of work, by index. */
+  /** Pairs of (produced critical step, golden critical step) that are the same piece of work or one holds the other, by index. */
   alignSteps(produced: Produced, golden: GoldenPriority): Promise<StepPair[]>;
 }
 
@@ -64,8 +78,9 @@ export type TaskStatus = (ids: string[]) => Promise<Map<string, string>>;
  * golden set labels (and it holds at least one) is out of its scope (the author never looked at that
  * work): it is listed as unlabeled, not counted for or against precision. One
  * whose sessions are mostly standing-role sessions is a false positive and is
- * not offered to the judge. A step falsely done is real unless its golden
- * step's task is done now (the golden set is stale there).
+ * not offered to the judge. A step falsely done is one marked done whose golden
+ * step is not, unless it is only a narrower part of that step; it is real unless
+ * its golden step's task is done now (the golden set is stale there).
  */
 export async function score(golden: Golden, produced: Produced[], read: Map<string, string>, judge: Judge, taskStatus: TaskStatus) {
   const standing = new Set(golden.standing_sessions);
@@ -117,12 +132,12 @@ export async function score(golden: Golden, produced: Produced[], read: Map<stri
       if (!ps[a.produced] || !gs[a.golden] || used.has(a.produced) || usedG.has(a.golden)) continue;
       used.add(a.produced);
       usedG.add(a.golden);
-      out.push({ produced: m.produced, golden: m.golden, produced_step: ps[a.produced]!.title, golden_step: gs[a.golden]!.title, golden_task: gs[a.golden]!.task, produced_done: ps[a.produced]!.done, golden_done: gs[a.golden]!.done, reason: a.reason });
+      out.push({ produced: m.produced, golden: m.golden, produced_step: ps[a.produced]!.title, golden_step: gs[a.golden]!.title, golden_task: gs[a.golden]!.task, produced_done: ps[a.produced]!.done, golden_done: gs[a.golden]!.done, scope: a.scope, reason: a.reason });
     }
     return out;
   }));
   const steps = stepPairs.flat();
-  const flagged = steps.filter((s) => s.produced_done && !s.golden_done);
+  const flagged = steps.filter((s) => s.produced_done && !s.golden_done && s.scope !== 'narrower');
   const statusNow = await taskStatus([...new Set(flagged.flatMap((s) => (s.golden_task ? [s.golden_task] : [])))]);
   const falseDone = flagged.map((s) => {
     const task_status = s.golden_task ? statusNow.get(s.golden_task) ?? null : null;
@@ -135,14 +150,14 @@ export async function score(golden: Golden, produced: Produced[], read: Map<stri
     recall: ratio(recall.matched, recall.of),
     precision: ratio(precision.matched, precision.of),
     sessions: ratio(sessionResults.filter((r) => r.correct).length, sessionResults.length),
-    step_done: ratio(steps.filter((s) => s.produced_done === s.golden_done).length, steps.length),
+    step_done: ratio(steps.filter((s) => doneAgrees(s.scope, s.produced_done, s.golden_done)).length, steps.length),
     false_done: realFalseDone.length,
   };
   const pass = (metrics.recall ?? 0) >= BAR.recall && (metrics.precision ?? 0) >= BAR.precision && (metrics.sessions ?? 0) >= BAR.sessions && metrics.false_done <= BAR.false_done;
   return {
     metrics, pass, recall, precision, unlabeled, standing_like: standingLike, matches,
     sessions: { results: sessionResults, not_read: notRead },
-    steps: { pairs: steps, false_done: realFalseDone, stale_done: staleFalseDone },
+    steps: { pairs: steps, false_done: realFalseDone, stale_done: staleFalseDone, part_done: steps.filter((s) => s.produced_done && !s.golden_done && s.scope === 'narrower') },
   };
 }
 
@@ -154,7 +169,7 @@ const MATCH_SYSTEM = `You compare two lists of one person's priorities over the 
 
 Match an inferred priority to a reference priority when both name the same outcome, even in other words or at a somewhat wider or narrower scope. Sessions both list are evidence, but the outcome decides: two priorities that share a session can still be different outcomes. Inferred priorities are kept per workspace and never span two, so a reference priority whose work spans workspaces may match one inferred priority in each workspace; an inferred priority matches at most one reference priority. Leave a priority unmatched when nothing on the other side is the same outcome. Give one short reason per match.`;
 
-const STEPS_SYSTEM = `You align two critical paths of the same priority: the steps a program inferred and the steps a person checked by hand. Pair an inferred step with the reference step that is the same piece of work, even in other words. Each step pairs at most once. Leave a step unpaired when nothing on the other side is the same work. Give one short reason per pair.`;
+const STEPS_SYSTEM = `You align two critical paths of the same priority: the steps a program inferred and the steps a person checked by hand. Pair an inferred step with the reference step that is the same piece of work, even in other words, or one whose work holds it or is held by it. Give each pair a scope: "same" when both name the same work; "narrower" when the inferred step's work is a piece of the reference step's own work, so that finishing the reference step finishes it too; "wider" when the reference step's work is a piece of the inferred step's. A step that only leads up to or supports the other, such as its design, plan, handoff or a prerequisite, is not a piece of its work: leave that pair out. Use "narrower" sparingly: it excuses an inferred step marked done while the reference step is open, so a wrong "narrower" hides a false claim. When unsure which scope holds, answer "same". In each pair, first give the reason, saying which step's work holds which, then the scope that follows from it. Each step pairs at most once. Leave a step unpaired when nothing on the other side is the same work or holds it.`;
 
 const MATCH_SCHEMA = {
   type: 'object',
@@ -164,7 +179,7 @@ const MATCH_SCHEMA = {
 };
 const STEPS_SCHEMA = {
   type: 'object',
-  properties: { pairs: { type: 'array', items: { type: 'object', properties: { inferred: { type: 'integer' }, reference: { type: 'integer' }, reason: { type: 'string' } }, required: ['inferred', 'reference', 'reason'], additionalProperties: false } } },
+  properties: { pairs: { type: 'array', items: { type: 'object', properties: { inferred: { type: 'integer' }, reference: { type: 'integer' }, reason: { type: 'string' }, scope: { type: 'string', enum: ['same', 'narrower', 'wider'] } }, required: ['inferred', 'reference', 'reason', 'scope'], additionalProperties: false } } },
   required: ['pairs'],
   additionalProperties: false,
 };
@@ -192,7 +207,7 @@ export function modelJudge(apiKey: string) {
     async alignSteps(produced, golden) {
       const list = (steps: Array<{ title: string }>) => steps.map((s, i) => `${i}. ${s.title}`).join('\n');
       const out = await ask(STEPS_SYSTEM, `Priority: "${golden.title}"\n\n# Reference steps\n${list(golden.critical ?? [])}\n\n# Inferred steps\n${list(critical(produced))}`, STEPS_SCHEMA);
-      return (out.pairs ?? []).map((p: any) => ({ produced: p.inferred, golden: p.reference, reason: p.reason }));
+      return (out.pairs ?? []).map((p: any) => ({ produced: p.inferred, golden: p.reference, scope: p.scope, reason: p.reason }));
     },
   };
   return { judge, spent };
@@ -274,21 +289,22 @@ async function main() {
 
   const fmt = (n: number | null) => (n == null ? '  -  ' : n.toFixed(2));
   const titleOf = new Map([...golden.priorities.map((g) => [g.id, g.title] as const), ...produced.map((p) => [p.key, p.title] as const)]);
-  const doneLine = (label: string) => (f: Score['steps']['false_done'][number]) =>
-    `  ${label} ${f.produced} "${f.produced_step}" ~ ${f.golden} "${f.golden_step}" · task ${f.golden_task ?? 'none'}${f.golden_task ? ` (${f.task_status ?? 'not found'} now)` : ''}`;
+  const doneLine = (label: string) => (f: Score['steps']['pairs'][number] & { task_status?: string | null }) =>
+    `  ${label} ${f.produced} "${f.produced_step}" ~ ${f.golden} "${f.golden_step}" · task ${f.golden_task ?? 'none'}${f.golden_task && f.task_status !== undefined ? ` (${f.task_status ?? 'not found'} now)` : ''}`;
   const lines = [
     `window ${args.from}..${args.to} · ${run.scoredNames.join(', ')} · pass ${PRIORITY_PASS_MODEL} · prompt ${args.system_file ? `${args.system_file} ` : ''}${args.system_sha ?? '(not recorded)'} · judge ${JUDGE_MODEL}${rescore ? ' · rescored' : ''}`,
     `recall          ${fmt(s.metrics.recall)}  ${s.recall.matched} of ${s.recall.of} active golden priorities matched   bar ≥ ${BAR.recall}`,
     `precision       ${fmt(s.metrics.precision)}  ${s.precision.matched} of ${s.precision.of} active produced priorities in the golden set's scope matched (${s.unlabeled.length} unlabeled)   bar ≥ ${BAR.precision}`,
     `session mapping ${fmt(s.metrics.sessions)}  ${s.sessions.results.filter((r) => r.correct).length} of ${s.sessions.results.length} labeled sessions in the window (${s.sessions.not_read.length} not read)   bar ≥ ${BAR.sessions}`,
     `step done       ${fmt(s.metrics.step_done)}  over ${s.steps.pairs.length} aligned critical steps`,
-    `false done      ${s.metrics.false_done} real · ${s.steps.stale_done.length} where the golden set is stale   bar = ${BAR.false_done} real`,
+    `false done      ${s.metrics.false_done} real · ${s.steps.stale_done.length} where the golden set is stale · ${s.steps.part_done.length} a done part of an open golden step   bar = ${BAR.false_done} real`,
     `cost            pass $${run.passUsd.toFixed(2)} · judge $${spent.usd.toFixed(2)} (${spent.calls} calls)`,
     ...s.recall.missed.map((id) => `  missed     ${id} "${titleOf.get(id)}"`),
     ...s.precision.unmatched.map((k) => `  unmatched  ${k} "${titleOf.get(k)}"${s.standing_like.includes(k) ? ' (mostly standing sessions)' : ''}`),
     ...s.unlabeled.map((k) => `  unlabeled, needs a person  ${k} "${titleOf.get(k)}"`),
     ...s.steps.false_done.map(doneLine('false done')),
     ...s.steps.stale_done.map(doneLine('stale done')),
+    ...s.steps.part_done.map(doneLine('part done ')),
     `verdict         ${s.pass ? 'PASS' : 'FAIL'}`,
   ];
   console.log(lines.join('\n'));
