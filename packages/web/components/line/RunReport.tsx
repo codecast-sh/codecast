@@ -11,6 +11,7 @@ import { useWorkflowRuns } from "../../hooks/useSyncWorkflows";
 import { causeRunEntries, runOutcome, shortDay, type OutcomeTone, type ReportPhase, type ReportRun, type ReportStep, type ReportTask, type StepState } from "../../lib/line/runReport";
 import { cn } from "../../lib/utils";
 import { runHref } from "../../lib/decisionLinks";
+import { optionIsShip } from "@codecast/shared/contracts/shipAnswer";
 
 const TONE: Record<OutcomeTone, string> = {
   shipped: "text-sol-green",
@@ -45,7 +46,7 @@ export function ReportChip({ href, children, title, tone = "default", external }
 
 /** An answer's tone, from its words: Ship, Revise, Drop. */
 export const answerTone = (answer: string | null | undefined): "ship" | "drop" | "revise" | "default" =>
-  /^(ship|approve merge)\b/i.test(answer ?? "") ? "ship" : /^drop\b/i.test(answer ?? "") ? "drop" : /^revise\b/i.test(answer ?? "") ? "revise" : "default";
+  optionIsShip(answer) ? "ship" : /^drop\b/i.test(answer ?? "") ? "drop" : /^revise\b/i.test(answer ?? "") ? "revise" : "default";
 
 const STEP_MARK: Record<StepState, { icon: typeof Check; cls: string }> = {
   done: { icon: Check, cls: "text-sol-green" },

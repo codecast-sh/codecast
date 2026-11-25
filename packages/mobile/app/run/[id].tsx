@@ -28,6 +28,7 @@ import {
 } from '@codecast/web/lib/line/runReport';
 import { compactAge } from '@codecast/web/lib/threadState';
 import { Text as RNText, TextInput } from '@/components/Themed';
+import { optionIsShip } from '@codecast/shared/contracts/shipAnswer';
 import { Spacing, themedStyles, useTheme, type Palette } from '@/constants/Theme';
 import { codeFont } from '@/constants/fonts';
 import { copyToClipboard } from '@/lib/clipboard';
@@ -70,7 +71,7 @@ function outcomeColor(tone: OutcomeTone, t: Palette): string {
 function statusVisual(status: string, t: Palette): { icon: IconName; label: string; color: string } {
   switch (status) {
     case 'running': return { icon: 'circle-o-notch', label: 'Running', color: t.cyan };
-    case 'paused': return { icon: 'pause-circle', label: 'Waiting', color: t.yellow };
+    case 'paused': return { icon: 'pause-circle', label: 'Waiting for approval', color: t.yellow };
     case 'completed': return { icon: 'check-circle', label: 'Done', color: t.green };
     case 'failed': return { icon: 'times-circle', label: 'Stopped', color: t.red };
     default: return { icon: 'clock-o', label: 'Queued', color: t.textMuted };
@@ -86,7 +87,7 @@ const STEP_MARK: Record<StepState, { icon: IconName; tone: keyof Palette }> = {
 };
 
 const answerColor = (answer: string | null, t: Palette) =>
-  /^(ship|approve merge)\b/i.test(answer ?? '') ? t.green : /^drop\b/i.test(answer ?? '') ? t.red : /^revise\b/i.test(answer ?? '') ? t.yellow : t.textMuted;
+  optionIsShip(answer) ? t.green : /^drop\b/i.test(answer ?? '') ? t.red : /^revise\b/i.test(answer ?? '') ? t.yellow : t.textMuted;
 
 export default function RunScreen() {
   const Theme = useTheme();
@@ -148,7 +149,7 @@ export default function RunScreen() {
 
   // Approved to ship but its landing step refused a branch behind its base: the line's Rebase step lands it.
   const landingOut = (run.node_statuses ?? []).filter((n) => LANDING_STATIONS.has(n.node_id)).map((n) => n.result_preview).find((t) => behindBase(t));
-  const behind = !run.merge && /^(ship|approve merge)\b/i.test(answer ?? '') && run.status === 'failed' ? behindBase(landingOut) : null;
+  const behind = !run.merge && optionIsShip(answer) && run.status === 'failed' ? behindBase(landingOut) : null;
 
   const stop = () => appAlert('Stop this run?', 'It ends now, and its task reads stopped.', [
     { text: 'Keep running', style: 'cancel' },
@@ -240,7 +241,7 @@ export default function RunScreen() {
 
         {run.merge || card ? (
           <RNView style={objectStyles.section}>
-            <SectionLabel>Landed</SectionLabel>
+            <SectionLabel>Merged</SectionLabel>
             <Facts testID="run-landed">
               {run.merge ? (
                 <FactRow label="Merged" icon="code-fork" tone={Theme.green}>

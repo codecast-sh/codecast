@@ -5,9 +5,10 @@
 // person's typed lines (/cli/sessions/originator, /cli/intent/verify), where a
 // Revise on a card undoes an earlier "ship it" and a later "ship it" outranks it.
 import type { Id } from "../_generated/dataModel";
+import { optionIsShip } from "@codecast/shared/contracts/shipAnswer";
 
-// "Approve merge" is the same yes in the words a merge card may use (ct-100350); both read as Ship everywhere.
-export const optionIsShip = (label: unknown): boolean => /^(ship|approve merge)\b/i.test(String(label ?? "").trim());
+// "Approve merge" is the approval card's button and means what "Ship" did (shared/contracts/shipAnswer).
+export { optionIsShip };
 export const isShipAnswer = (card: any): boolean => card.status === "answered" && optionIsShip(card.options?.[card.answer_index ?? -1]?.label);
 export const offersShip = (card: any): boolean => (card.options ?? []).some((o: any) => optionIsShip(o?.label));
 export const cardRef = (card: any): string => card.short_id ?? String(card._id);

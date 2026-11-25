@@ -14,6 +14,7 @@ import { castJson } from '../../adapters/cast';
 import { apiConfig, readConversation, toConvoMessages } from '../../adapters/convo';
 import { REPO_ROOT } from '../../paths';
 import { gate, type Captured, type SurfaceImpl, type SurfaceRequest } from '../../surface';
+import { optionIsShip } from '@codecast/shared/contracts/shipAnswer';
 
 // The intent segment's Read station (intent.cast, flows.md FL4) replayed as a
 // run posts it: the asker's record rendered by the real flowAsker (one
@@ -108,7 +109,7 @@ export function outcomeOf(snap: IntentReadSnap, a: Answer | null): { clears: boo
   if (!a) return { clears: false, why: 'no usable JSON answer' };
   if (!(a.ship && a.in_scope && a.quote)) return { clears: false, why: `ship ${a.ship}, in_scope ${a.in_scope}` };
   const newestOnTask = [...(snap.cards ?? [])].filter((c) => c.on_task).sort((x, y) => y.created_at.localeCompare(x.created_at))[0];
-  const takenBack = (at: string, ref?: string) => !!newestOnTask && newestOnTask.card !== ref && !/^ship\b/i.test(newestOnTask.answer) && newestOnTask.created_at > at;
+  const takenBack = (at: string, ref?: string) => !!newestOnTask && newestOnTask.card !== ref && !optionIsShip(newestOnTask.answer) && newestOnTask.created_at > at;
   if (a.session && a.line > 0) {
     const line = snap.typed.find((t) => t.short_id === a.session && t.line === a.line);
     if (!line) return { clears: false, why: `${a.session}:${a.line} is not a typed line the read was given` };
@@ -157,7 +158,7 @@ const impl: SurfaceImpl = {
       cards.set(d.short_id, {
         card: d.short_id,
         ...(sessionShort ?? prev?.session_short_id ? { session_short_id: sessionShort ?? prev?.session_short_id } : {}),
-        ...(d.workflow_run_id && d.task_id === task._id && (d.options ?? []).some((o: any) => /^ship\b/i.test(String(o?.label ?? ''))) ? { on_task: true as const } : {}),
+        ...(d.workflow_run_id && d.task_id === task._id && (d.options ?? []).some((o: any) => optionIsShip(o?.label)) ? { on_task: true as const } : {}),
         question: String(d.question ?? ''),
         answer: label,
         ...(d.answer_text && d.answer_text.trim() !== label ? { note: d.answer_text } : {}),

@@ -30,6 +30,7 @@ import { compactAge } from "../../lib/threadState";
 import { WorkflowsDashboardContent } from "./dashboard";
 import { useLineForks, type LineForkProject } from "../../hooks/useLineForks";
 import { lineRunKind } from "../../lib/line/lineStations";
+import { runStatusWords } from "../../lib/line/flowFence";
 import { lineSettingsHref } from "../../lib/lineSettings";
 import { CustomizedLineChip } from "../../components/line/CustomizedLineChip";
 import { Button } from "../../components/ui/button";
@@ -304,7 +305,7 @@ function ActiveRunPanel({ run, workflow, onClose }: { run: WorkflowRun; workflow
       <div className="flex items-center justify-between px-3 py-2.5 border-b border-sol-border/20">
         <div className="flex items-center gap-2">
           <StatusIcon className={`w-3.5 h-3.5 flex-shrink-0 ${st.color} ${run.status === "running" ? "animate-spin" : ""}`} />
-          <span className={`text-xs font-semibold capitalize ${st.color}`}>{run.status}</span>
+          <span className={`text-xs font-semibold ${st.color}`}>{runStatusWords(run.status)}</span>
           {(run.status === "running" || run.status === "completed" || run.status === "failed") && (
             <span className="text-meta text-sol-text-dim tabular-nums">
               {formatDuration(run.created_at, run.status !== "running" ? run.updated_at : undefined)}
@@ -419,7 +420,7 @@ function RunsPanel({ workflowId, activeRunId, onSelectRun }: {
               >
                 <StatusIcon className={`w-3 h-3 flex-shrink-0 ${st.color}`} />
                 <span className="text-meta text-sol-text-muted font-mono truncate">{run._id.slice(-8)}</span>
-                <span className={`text-meta ${st.color} capitalize`}>{run.status}</span>
+                <span className={`text-meta ${st.color}`}>{runStatusWords(run.status)}</span>
                 <span className="text-meta text-sol-text-dim ml-auto">{timeAgo(run.created_at)}</span>
               </button>
               <Link
@@ -652,7 +653,7 @@ function RunRow({ run, now, onOpen, forks }: { run: LineRun; now: number; onOpen
         <span className="min-w-0 flex-1">
           <span className="flex items-center gap-1.5 min-w-0">
             <span className="truncate text-[13px] font-medium" style={{ color: "var(--sol-text)" }}>{run.workflow_name || run.workflow_slug || "workflow"}</span>
-            <span className="shrink-0 text-meta px-1.5 min-h-[17px] inline-flex items-center rounded-md border capitalize" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{run.status}</span>
+            <span className="shrink-0 text-meta px-1.5 min-h-[17px] inline-flex items-center rounded-md border" style={{ borderColor: `color-mix(in srgb, ${tone} 45%, transparent)`, color: tone }}>{runStatusWords(run.status)}</span>
             {line?.kind === "customized" && <CustomizedLineChip project={line.project.title} href={lineSettingsHref({ project: line.project, section: "stations" })} />}
             {node && <span className="truncate text-meta" style={{ color: "var(--sol-text-muted)" }}>· {node}</span>}
             {counts.total > 0 && (

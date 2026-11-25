@@ -70,7 +70,7 @@
     },
     {
       "id": "wait_main",
-      "label": "Wait for main",
+      "label": "Wait for green main",
       "shape": "parallelogram",
       "type": "command",
       "timeout": 15000
@@ -246,7 +246,7 @@
     },
     {
       "id": "decide__ship",
-      "label": "Ship",
+      "label": "Approved",
       "shape": "parallelogram",
       "type": "command",
       "segment": "decide",
@@ -610,7 +610,7 @@
     {
       "from": "decide__decide",
       "to": "decide__ship",
-      "label": "[S] Ship :: Lands it on the main branch"
+      "label": "[S] Approve merge :: Merges it; it goes live with the next deploy"
     },
     {
       "from": "decide__decide",
@@ -620,7 +620,7 @@
     {
       "from": "decide__decide",
       "to": "decide__dropped",
-      "label": "[D] Drop :: Closes it unlanded; the session hears your reason"
+      "label": "[D] Drop :: Closes it without merging; the session hears your reason"
     },
     {
       "from": "deploy__live",

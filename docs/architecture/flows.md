@@ -342,8 +342,8 @@ PR → (CI ‖ Review) → Verdicts → Merge → Merged → Deploy → Live
  ↑                       │         │
  ├──── Fix findings ←────┤         ├── Resolve conflict → PR
  │                       │         └── Retest → CI   (at most 3 times)
- │                       ├── Wait for main → Onto main → CI   (at most 2 times)
- └──── Revise ←── Ship card ←── edits CI
+ │                       ├── Wait for green main → Onto main → CI   (at most 2 times)
+ └──── Revise ←── Approval card ←── edits CI
 ```
 
 PR (`cast flow pr`, `workflow/prStation.ts`) starts each round: it deletes
@@ -392,7 +392,7 @@ station's go to the session after the rerun; a review that never arrived (no
 pin, another round's or head's, an unknown word) is asked once more, then
 briefed; a Verdicts station that fails stops at No verdicts. When every CI
 failure also fails on main (`ci.json.blocked_by_main`), nothing is the
-change's to fix: Wait for main (`cast flow wait-main`, `workflow/waitMain.ts`)
+change's to fix: Wait for green main (`cast flow wait-main`, `workflow/waitMain.ts`)
 parks until the default branch's own CI is green at its head, saying how long
 it has waited against its 4h deadline, then `cast flow pr --rebase` puts the
 change onto the new main, pushes it and records the rebase as Merge records
@@ -402,7 +402,7 @@ and CI runs again. It waits at most twice a run; past the deadline the run
 stops at Main stayed red, naming main's red jobs, and the session is never
 briefed for it. A change that edits CI (`ci.json.ci_changed`) is one CI
 cannot vouch for: when CI is green and the reviewer says ship, the run comments why on the task and asks the `decide`
-segment's Ship card; Ship merges, Revise briefs the session with the person's
+segment's approval card; Approve merge merges it (Merged), Revise briefs the session with the person's
 note, Drop ends the run, and a run with no session behind it stops at Needs a
 person. A CI-editing change CI finds red goes back like any red. Anything
 else is one brief to the session (`templates/change/brief.md`) carrying the

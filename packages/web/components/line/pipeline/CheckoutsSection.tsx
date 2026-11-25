@@ -8,8 +8,10 @@
 // worktrees folded into one line. A row opens the checkout in the page's
 // drawer: why it is stuck in words, the files by folder, each writer with its
 // own Tell, each session's work with its own Ship. Ship asks the session to run
-// its change through the repo's change flow (the same message and confirm
-// RunThroughFlow sends from a session's header).
+// its change through the repo's change flow (the same message RunThroughFlow
+// sends from a session's header), in one click; what started follows the press.
+// It confirms first only where the flow asks the person on every run, the
+// checkout is a risk to ship from, or several runs would start at once.
 import { memo, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useCheckouts, useSyncCheckouts } from "../../../hooks/useSyncCheckouts";
@@ -17,7 +19,8 @@ import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useInboxStore } from "../../../store/inboxStore";
 import { SwitchReview } from "../../consequential/ConsequentialSwitch";
 import { shipLedgerFor } from "../../consequential/shipLedger";
-import { runThroughMessage } from "../../../lib/line/flowMessages";
+import { PRESS_WAIT_MS, runThroughMessage } from "../../../lib/line/flowMessages";
+import { approvalOf, shipConfirms } from "../../../lib/ship/journey";
 import { agoWords, drawnFlow, pipelineModel } from "../../../lib/line/pipelineModel";
 import { trackOf } from "../../../lib/line/pipelineView";
 import { checkoutsPage, checkoutsSummary, filesByFolder, type CheckoutSessionView, type CheckoutView } from "../../../lib/line/checkoutsModel";
@@ -62,14 +65,35 @@ export const CheckoutsSection = memo(function CheckoutsSection({ pipeline, teamI
   const lane = useMemo(() => trackOf(pipelineModel(pipeline), "change").filter((it) => !(it.type === "pill" && it.id === null)), [pipeline]);
   const laneLabels = useMemo(() => new Map(lane.flatMap((it) => (it.type === "fork" ? it.branches : [it])).filter((p) => p.id).map((p) => [p.id!, p.label])), [lane]);
   const [shipping, setShipping] = useState<Shipping | null>(null);
+  // The ledger of a ship that went in one click: what started, shown after the press instead of before it.
+  const [shipped, setShipped] = useState<Shipping | null>(null);
   const [openId, setOpenId] = useState<string | null>(null);
   const all = [...page.needs, ...page.ready, ...page.machines.flatMap((m) => [...m.live, ...m.stale.checkouts])];
   const open = openId ? all.find((c) => c.id === openId) ?? null : null;
   const readySessions = page.ready.flatMap((c) => c.finished);
 
-  const shipAll = (c: CheckoutView) => setShipping({ label: c.finished.length === 1 ? c.finished[0].title : `${plural(c.finished.length, "finished session")} in ${c.folder}`, sessions: c.finished, from: fromWords(c) });
+  // Each session is asked once: a second press (a double click, the row's Ship after the drawer's) sends nothing more,
+  // and its buttons say it is starting. A session that starts its run is working, so it leaves the finished list; one
+  // that does not is free to ask again after a minute.
+  const [sent, setSent] = useState<ReadonlySet<string>>(() => new Set());
+  const isSent = (s: CheckoutSessionView) => !!s.conversationId && sent.has(s.conversationId);
+  const send = (sh: Shipping) => {
+    const ids = sh.sessions.map((s) => s.conversationId).filter((id): id is string => !!id && !sent.has(id));
+    if (!ids.length) return;
+    for (const id of ids) useInboxStore.getState().sendMessage(id, runThroughMessage(flow));
+    setSent((prev) => new Set([...prev, ...ids]));
+    setTimeout(() => setSent((prev) => new Set([...prev].filter((id) => !ids.includes(id)))), PRESS_WAIT_MS);
+  };
+  const go = (sh: Shipping) => {
+    sh = { ...sh, sessions: sh.sessions.filter((s) => !isSent(s)) };
+    if (!sh.sessions.length) return;
+    if (shipConfirms(approvalOf(flow), { from: sh.from, runs: sh.sessions.length })) return setShipping(sh);
+    send(sh);
+    setShipped(sh);
+  };
+  const shipAll = (c: CheckoutView) => go({ label: c.finished.length === 1 ? c.finished[0].title : `${plural(c.finished.length, "finished session")} in ${c.folder}`, sessions: c.finished, from: fromWords(c) });
   const ship = () => {
-    for (const s of shipping?.sessions ?? []) if (s.conversationId) useInboxStore.getState().sendMessage(s.conversationId, runThroughMessage(flow));
+    if (shipping) send(shipping);
     setShipping(null);
   };
 
@@ -95,7 +119,7 @@ export const CheckoutsSection = memo(function CheckoutsSection({ pipeline, teamI
             <div className="ck-group" data-group="needs">
               <div className="ck-group-name">Needs you · {page.needs.length}</div>
               <ul className="ck-rows">
-                {page.needs.map((c) => <Row key={c.id} c={c} machine onOpen={setOpenId} now={now}><NeedsAction c={c} onOpen={setOpenId} onShip={shipAll} /></Row>)}
+                {page.needs.map((c) => <Row key={c.id} c={c} machine onOpen={setOpenId} now={now}><NeedsAction c={c} onOpen={setOpenId} onShip={shipAll} sent={c.finished.every(isSent)} /></Row>)}
               </ul>
             </div>
           ) : null}
@@ -112,7 +136,7 @@ export const CheckoutsSection = memo(function CheckoutsSection({ pipeline, teamI
               <ul className="ck-rows">
                 {page.ready.map((c) => (
                   <Row key={c.id} c={c} machine onOpen={setOpenId} now={now}>
-                    <button type="button" className="pv-btn" onClick={() => shipAll(c)} data-checkout-ship>Ship{c.finished.length > 1 ? ` ${c.finished.length}` : ""}</button>
+                    <button type="button" className="pv-btn" onClick={() => shipAll(c)} disabled={c.finished.every(isSent)} data-checkout-ship>{c.finished.every(isSent) ? "Starting…" : `Ship${c.finished.length > 1 ? ` ${c.finished.length}` : ""}`}</button>
                   </Row>
                 ))}
               </ul>
@@ -134,9 +158,10 @@ export const CheckoutsSection = memo(function CheckoutsSection({ pipeline, teamI
       )}
       {open ? (
         <PipelineDrawer label={`Checkout ${open.folder}`} onClose={() => setOpenId(null)}>
-          <CheckoutDetails c={open} now={now} onShip={(s) => setShipping({ label: s.title, sessions: [s], from: fromWords(open) })} />
+          <CheckoutDetails c={open} now={now} isSent={isSent} onShip={(s) => go({ label: s.title, sessions: [s], from: fromWords(open) })} />
         </PipelineDrawer>
       ) : null}
+      {shipped ? <ShippedNote ledger={shipLedgerFor(flow, shipped.label, shipped.sessions.length, { drawn: true, labelOf: (id) => laneLabels.get(id) })} onClose={() => setShipped(null)} /> : null}
       {shipping ? (
         <SwitchReview ledger={shipLedgerFor(flow, shipping.label, shipping.sessions.length, { drawn: true, from: shipping.from, labelOf: (id) => laneLabels.get(id) })} onClose={() => setShipping(null)} onConfirm={ship}>
           <div className="ck-confirm-lane lw-widget" data-ship-lane><PipelineTrack items={lane} small /></div>
@@ -146,8 +171,20 @@ export const CheckoutsSection = memo(function CheckoutsSection({ pipeline, teamI
   );
 });
 
+/** A one-click ship's ledger, after the press: what it started and what may still stop it, dismissed when read. */
+function ShippedNote({ ledger: l, onClose }: { ledger: ReturnType<typeof shipLedgerFor>; onClose: () => void }) {
+  return (
+    <div className="ck-shipped" role="status" data-checkout-shipped>
+      <b>{l.name}</b>
+      <span className="ck-shipped-subject">{l.subject}</span>
+      <ul>{l.rows.map((r) => <li key={r.k}><span>{r.k}</span> {r.v}</li>)}</ul>
+      <button type="button" className="pv-btn" onClick={onClose} data-checkout-shipped-close>OK</button>
+    </div>
+  );
+}
+
 /** What a checkout that needs a person asks of them: tell the writers not yet told, file what nobody wrote, ship, or look. */
-function NeedsAction({ c, onOpen, onShip }: { c: CheckoutView; onOpen: (id: string) => void; onShip: (c: CheckoutView) => void }) {
+function NeedsAction({ c, onOpen, onShip, sent }: { c: CheckoutView; onOpen: (id: string) => void; onShip: (c: CheckoutView) => void; sent: boolean }) {
   if (c.asks) {
     const untold = c.asks.writers.filter((w) => !w.told);
     if (untold.length) {
@@ -160,7 +197,7 @@ function NeedsAction({ c, onOpen, onShip }: { c: CheckoutView; onOpen: (id: stri
     }
     return <span className="ck-told" title={c.level.told ?? undefined}>{c.level.toldBrief}</span>;
   }
-  if (c.finished.length) return <button type="button" className="pv-btn" onClick={() => onShip(c)} data-checkout-ship>Ship{c.finished.length > 1 ? ` ${c.finished.length}` : ""}</button>;
+  if (c.finished.length) return <button type="button" className="pv-btn" onClick={() => onShip(c)} disabled={sent} data-checkout-ship>{sent ? "Starting…" : `Ship${c.finished.length > 1 ? ` ${c.finished.length}` : ""}`}</button>;
   return <button type="button" className="pv-btn" onClick={() => onOpen(c.id)}>Open</button>;
 }
 
@@ -199,7 +236,7 @@ const STATE_WORDS = { working: "working", idle: "idle", finished: "finished" } a
 
 /** A checkout whole, in the drawer: the action it asks for first, where it stands, why it is stuck in words with each
  *  writer's files, and each session's work with its own Ship. */
-function CheckoutDetails({ c, now, onShip }: { c: CheckoutView; now: number; onShip: (s: CheckoutSessionView) => void }) {
+function CheckoutDetails({ c, now, onShip, isSent }: { c: CheckoutView; now: number; onShip: (s: CheckoutSessionView) => void; isSent: (s: CheckoutSessionView) => boolean }) {
   const last = c.asks?.writers.find((w) => !w.told) ?? null;
   const nobodyUntold = !!c.asks && c.asks.nobody.files.length > 0 && !c.asks.nobody.told && !c.unattributed.reading;
   return (
@@ -257,7 +294,7 @@ function CheckoutDetails({ c, now, onShip }: { c: CheckoutView; now: number; onS
           {s.conversationId ? <Link href={`/conversation/${s.conversationId}`} className="pd-run-title">{s.title}</Link> : <span className="pd-run-title">{s.title}</span>}
           <Files paths={s.paths} more={s.more} />
           <span className="pd-dim">{agoWords(s.lastActivity, now)}</span>
-          {s.canShip ? <button type="button" className="pv-btn ck-ship" onClick={() => onShip(s)} data-checkout-ship>Ship</button> : null}
+          {s.canShip ? <button type="button" className="pv-btn ck-ship" onClick={() => onShip(s)} disabled={isSent(s)} data-checkout-ship>{isSent(s) ? "Starting…" : "Ship"}</button> : null}
         </div>
       ))}
       {c.unattributed.paths.length ? (

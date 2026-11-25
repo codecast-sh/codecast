@@ -62,7 +62,7 @@ digraph change {
   // anyone else pushed exits 4, and a new round at PR reviews it.
   retest [label="Retest", shape=parallelogram, timeout=120, script="cast flow pr --refresh --dir \"$run_dir\""]
   // Every CI failure also fails on main: the run parks until main's own CI is green, then CI tests the change on it.
-  wait_main [label="Wait for main", shape=parallelogram, parks=true, timeout=15000,
+  wait_main [label="Wait for green main", shape=parallelogram, parks=true, timeout=15000,
     script="cast flow wait-main --base \"$default_branch\" --deadline 4h --run \"$run_id\" --node wait_main"]
   onto_main [label="Onto main", shape=parallelogram, timeout=600, script="cast flow pr --rebase --base \"$default_branch\" --dir \"$run_dir\" --run \"$run_id\""]
   // CI cannot vouch for a change to CI itself: the card the person answers says so beside the reviewer's note.

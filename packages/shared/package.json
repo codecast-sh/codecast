@@ -20,6 +20,7 @@
     "./contracts/managedPolicy": "./contracts/managedPolicy.ts",
     "./contracts/vendorCoverage": "./contracts/vendorCoverage.ts",
     "./contracts/flowMap": "./contracts/flowMap.ts",
+    "./contracts/shipAnswer": "./contracts/shipAnswer.ts",
     "./contracts/lineFunnel": "./contracts/lineFunnel.ts",
     "./contracts/lineVolume": "./contracts/lineVolume.ts",
     "./contracts/castPlayer": "./contracts/castPlayer.ts",

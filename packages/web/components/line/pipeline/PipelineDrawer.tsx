@@ -41,7 +41,8 @@ export function PipelineDrawer({ label, onClose, children }: { label: string; on
   );
 }
 
-const RUN_WORDS: Record<string, string> = { running: "running", pending: "waiting", paused: "paused", completed: "done", failed: "failed" };
+// A paused run waits on its approval card (pl-1075 Words: "paused" is production's pause).
+const RUN_WORDS: Record<string, string> = { running: "running", pending: "waiting", paused: "waiting for approval", completed: "done", failed: "failed" };
 const KIND_WORDS = { agent: "agent", command: "command", person: "person", rule: "routing", eval: "graded check", deploy: "deploy" } as const;
 
 /** One station: everything about it, and its edits. */

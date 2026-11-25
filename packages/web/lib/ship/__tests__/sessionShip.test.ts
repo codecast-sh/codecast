@@ -12,7 +12,7 @@ describe("runShip", () => {
     expect(runShip(run("r", "c", { current_node_id: "brief", current_node_label: "Fix findings", waiting_on_session: { node_id: "brief" } }))).toMatchObject({ words: "Fixing", tone: "session" });
     expect(runShip(run("r", "c", { status: "completed", current_node_id: "exit", node_statuses: [{ node_id: "deploy__wait", status: "completed" }] }))).toMatchObject({ words: "Live", tone: "ok" });
     // A flow that ends at Land leaves its change on main: finishing it is not going live.
-    expect(runShip(run("r", "c", { status: "completed", current_node_id: "exit", merge: { sha: SHA }, node_statuses: [{ node_id: "land__ship", status: "completed" }] }))).toMatchObject({ words: "Landed", tone: "ok" });
+    expect(runShip(run("r", "c", { status: "completed", current_node_id: "exit", merge: { sha: SHA }, node_statuses: [{ node_id: "land__ship", status: "completed" }] }))).toMatchObject({ words: "Merged", tone: "ok" });
     expect(runShip(run("r", "c", { status: "failed", current_node_id: "unshipped", current_node_label: "Not merged" }))).toMatchObject({ words: "Stopped · Not merged", tone: "bad" });
     expect(runShip(run("r", "c", { status: "failed", current_node_id: "deploy__failed", fail_reason: "Stopped: The deploy that carried abc failed: web dp-9 (x)." }))).toMatchObject({ words: "Deploy failed" });
   });
@@ -20,27 +20,27 @@ describe("runShip", () => {
     const gate = run("r", "c", { status: "paused", user_id: "u1", current_node_id: "decide__decide", gate_decision_id: "d1" });
     expect(runShip(gate, "u1", { user_id: "u1", holder: { kind: "user", id: "u1" } })).toMatchObject({ words: "Your call", tone: "you" });
     expect(runShip(gate, "u1", { user_id: "u0", asked_user_ids: ["u0", "u1"] })).toMatchObject({ words: "Your call" });
-    expect(runShip(gate, "u1", { user_id: "u1", holder: { kind: "role", id: "r1" } })).toMatchObject({ words: "Waiting on a role", tone: "wait" });
+    expect(runShip(gate, "u1", { user_id: "u1", holder: { kind: "role", id: "r1" } })).toMatchObject({ words: "Waiting for approval", tone: "wait" });
     // The run's owner is not who answers: with no card known, never "Your call".
-    expect(runShip(gate, "u1")).toMatchObject({ words: "Waiting on a person" });
+    expect(runShip(gate, "u1")).toMatchObject({ words: "Waiting for approval" });
     expect(runShip({ ...gate, gate_decision_status: "answered" }, "u1", { user_id: "u1" })?.words).not.toBe("Your call");
   });
   test("at Deploy, only a merged sha on the run means the change landed", () => {
-    // A run at Deploy with no merge recorded (merged by its own script, an older CLI) shows its wait, never Not landed.
+    // A run at Deploy with no merge recorded (merged by its own script, an older CLI) shows its wait, never Not merged.
     expect(runShip(run("r", "c", { current_node_id: "deploy__wait" }))).toMatchObject({ words: "Waiting to deploy", tone: "wait" });
     expect(runShip(run("r", "c", { current_node_id: "deploy__wait", node_statuses: [{ node_id: "deploy__wait", started_at: 5, result_preview: "backend: dp-13 sending 4a6e413 (6m of 60m)" }] }))).toMatchObject({ words: "Deploying", tone: "working" });
-    // Not landed only for a run that ended at Deploy with no merge on it.
-    expect(runShip(run("r", "c", { status: "failed", current_node_id: "deploy__unmerged", current_node_label: "Not merged" }))).toMatchObject({ words: "Not landed", tone: "bad" });
+    // Not merged only for a run that ended at Deploy with no merge on it.
+    expect(runShip(run("r", "c", { status: "failed", current_node_id: "deploy__unmerged", current_node_label: "Not merged" }))).toMatchObject({ words: "Not merged", tone: "bad" });
     // Deploying only while a deploy carries it, as the Deploy line says; the run card reads the same words.
     const at = (line: string) => run("r", "c", { current_node_id: "deploy__wait", merge: { sha: "abc" }, node_statuses: [{ node_id: "deploy__wait", started_at: 5, result_preview: line }] });
     expect(runShip(at("backend: dp-13 sending 4a6e413 (6m of 60m)"))).toMatchObject({ words: "Deploying", tone: "working" });
-    expect(runShip(at("backend: waiting on main CI at 9f8e7d6 (red since 1a2b3c4: test-web; held 2m, then 45m)"))).toMatchObject({ words: "Held: main CI red", tone: "wait" });
+    expect(runShip(at("backend: waiting on main CI at 9f8e7d6 (red since 1a2b3c4: test-web; held 2m, then 45m)"))).toMatchObject({ words: "Waiting for green main", tone: "wait" });
     expect(runShip(at("backend: waiting on main CI at 9f8e7d6 (running; held 2m, then 45m)"))).toMatchObject({ words: "Waiting on main CI", tone: "wait" });
     expect(runShip(at("web: waiting for the server to send 4a6e413 once main CI is green (held 3m, then 30m)"))).toMatchObject({ words: "Waiting on main CI", tone: "wait" });
     expect(runShip(at("web: waiting for Release Captain to send it (held 3m, then 1d)"))).toMatchObject({ words: "Waiting for Release Captain to deploy", tone: "wait" });
     expect(runShip(run("r", "c", { current_node_id: "deploy__wait", merge: { sha: "abc" } }))).toMatchObject({ words: "Waiting to deploy", tone: "wait" });
     expect(runShip(run("r", "c", { status: "completed", current_node_id: "ship__landed" }))).toMatchObject({ words: "Done", tone: "ok" });
-    expect(runShip(run("r", "c", { status: "completed", current_node_id: "ship__landed", merge: { sha: "abc" } }))).toMatchObject({ words: "Landed", tone: "ok" });
+    expect(runShip(run("r", "c", { status: "completed", current_node_id: "ship__landed", merge: { sha: "abc" } }))).toMatchObject({ words: "Merged", tone: "ok" });
   });
 });
 
@@ -87,7 +87,7 @@ describe("a landed change reads where the deploy records put it", () => {
   });
 
   test("without a reach yet the card says Landed, and the feeder asks for the newest landed commit of each session", () => {
-    expect(sessionShips([landed], []).get("s")).toMatchObject({ words: "Landed" });
+    expect(sessionShips([landed], []).get("s")).toMatchObject({ words: "Merged" });
     const older = run("o", "s", { status: "completed", created_at: 0, merge: { sha: "b".repeat(40) } });
     const live = run("l", "t", { status: "completed", merge: { sha: "c".repeat(40) }, node_statuses: [{ node_id: "deploy", status: "completed" }] });
     expect(landedShas([older, landed, live])).toEqual([SHA]);
@@ -97,7 +97,7 @@ describe("a landed change reads where the deploy records put it", () => {
 describe("a landed run is never relabeled by an older deploy", () => {
   test("its commit unread yet, a deploy of the session's earlier commits does not make it Live", () => {
     const landed = run("r", "s", { status: "completed", created_at: 10, updated_at: 12, merge: { sha: SHA }, node_statuses: [{ node_id: "land__ship", status: "completed" }] });
-    expect(sessionShips([landed], [dp("dp-1", "live", ["s"], 20, "production")]).get("s")).toMatchObject({ words: "Landed", tone: "ok" });
+    expect(sessionShips([landed], [dp("dp-1", "live", ["s"], 20, "production")]).get("s")).toMatchObject({ words: "Merged", tone: "ok" });
   });
 
   test("a run that named no commit takes only a deploy made after it ended", () => {
@@ -111,6 +111,6 @@ describe("a landed run is never relabeled by an older deploy", () => {
 test("a session's run of a flow that carries no change (an eval, a deploy) is not its ship", () => {
   const change = run("r1", "s", { status: "completed", created_at: 1, merge: { sha: "a".repeat(40) } });
   const evalRun = run("r2", "s", { status: "running", created_at: 2, takes_change: false, current_node_id: "judge" });
-  expect(sessionShips([change, evalRun], []).get("s")).toMatchObject({ words: "Landed", run: "r1" });
+  expect(sessionShips([change, evalRun], []).get("s")).toMatchObject({ words: "Merged", run: "r1" });
   expect(landedShas([change, evalRun])).toEqual(["a".repeat(40)]);
 });

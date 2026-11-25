@@ -8,7 +8,7 @@ digraph ship {
   // Quiet by design: ship.sh prints once the change has landed, after its CI.
   ship [label="Land", shape=parallelogram, timeout=4500, silent=0, script="@line/ship.sh"]
   shipped  [shape=Msquare, label="Shipped"]
-  landed   [shape=Msquare, label="Already landed"]
+  landed   [shape=Msquare, label="Already merged"]
   conflict [shape=Msquare, label="Conflict", stop="The change does not rebase cleanly or fails the check on the default branch. $rebase.output"]
   unshipped [shape=Msquare, label="Not shipped", stop="The change was not shipped. $ship.output"]
   start -> rebase

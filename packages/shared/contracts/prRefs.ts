@@ -117,7 +117,14 @@ export function codecastPrUrl(repository: string, number: number, origin = "http
  * in the label the way GitHub prints it: `test (ubuntu) (push)`.
  */
 export function checkLabel(check: { name: string; event?: string }): string {
-  return check.event ? `${check.name} (${check.event})` : check.name;
+  const name = checkDisplayName(check.name);
+  return check.event ? `${name} (${check.event})` : name;
+}
+
+/** A check's name as people read it: the pr-evals jobs are the "PR eval check" (pl-1075 Words), the rest as GitHub names them. */
+export function checkDisplayName(name: string): string {
+  const m = /^pr-evals(?:-(.+))?$/.exec(name);
+  return m ? (m[1] ? `PR eval check (${m[1]})` : "PR eval check") : name;
 }
 
 export type CheckOutcome = "passed" | "failed" | "pending" | "skipped";

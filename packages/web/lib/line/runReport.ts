@@ -10,6 +10,7 @@ import { threadStateHeadline, threadStateResult } from "@codecast/shared/contrac
 import { choiceWords, closedAtStep, isLiveRun, runEnd } from "@codecast/shared/contracts/causeHistory";
 import { LINE_PHASES, phaseOfStation, type LinePhaseKey } from "@codecast/shared/contracts/linePhases";
 import { HAND_KILLED } from "@codecast/shared/contracts/lineWords";
+import { optionIsShip } from "@codecast/shared/contracts/shipAnswer";
 import { runNodeLine, runNodeRows, scriptLine, type RunNodeRow } from "../workflowRun";
 import { SHIPPED_LINE } from "./shippedLine.generated";
 import { lineRefHref } from "./lineWorkspaceUrl";
@@ -143,7 +144,7 @@ const WORDS: Record<string, { done: string; failed?: string; live?: string }> = 
   card: { done: "Card ready", failed: "Card refused" },
   drop: { done: "Closed the problem" },
   rebase: { done: "Put the change on the default branch", failed: "Could not rebase", live: "Rebasing onto the default branch" },
-  ship: { done: "Landed the change", failed: "Not shipped", live: "Shipping" },
+  ship: { done: "Merged", failed: "Not merged", live: "Merging" },
   merge: { done: "Merged", failed: "Merge refused" },
   watch: { done: "Started the watch" },
 };
@@ -263,7 +264,7 @@ export function landWithoutYesWords(n: { node_id: string; status: string; result
 }
 
 /** What a run that went on past an unanswered card did, in one sentence. */
-export const UNAPPROVED_WORDS = "Not shipped: the run went on past a card nobody answered, so nothing was approved. The card has to be asked again.";
+export const UNAPPROVED_WORDS = "Not merged: the run went on past a card nobody answered, so nothing was approved. The card has to be asked again.";
 
 /** The station's own words: a question it asked, else its outcome's words, else its first sentence. */
 function reportedWords(row: RunNodeRow, report: ReturnType<typeof reportOf>): string | null {
@@ -520,9 +521,9 @@ function stepOf(row: RunNodeRow, run: ReportRun, task?: ReportTask | null, opts:
       id: row.id,
       label: stepLabel(row),
       state: "noted",
-      result: landed ? `Landed by hand${at ? ` ${shortDay(at)}` : ""}` : "Left to a person to land",
+      result: landed ? `Merged by hand${at ? ` ${shortDay(at)}` : ""}` : "Left to a person to merge",
       note: "the flow could not merge it",
-      ...(ref ? { href: `/tasks/${ref}`, hrefTitle: "The task's comments say why the merge was left and what is left to land" } : {}),
+      ...(ref ? { href: `/tasks/${ref}`, hrefTitle: "The task's comments say why the merge was left and what is left to merge" } : {}),
       at: row.completed_at ?? row.started_at,
     };
   }
@@ -648,16 +649,16 @@ export function landingStep(steps: ReadonlyArray<ReportStep>, label: string): Re
   const base = { id: "ship", label, at: last?.at };
   const link = (s?: ReportStep) => (s?.href ? { href: s.href, ...(s.hrefTitle ? { hrefTitle: s.hrefTitle } : {}) } : {});
   const unapproved = steps.find((s) => s.result === UNAPPROVED_STEP);
-  if (unapproved) return { ...base, state: "noted", result: `Not shipped: ${unapproved.note ?? "decision withdrawn unanswered"}, nothing was approved` };
+  if (unapproved) return { ...base, state: "noted", result: `Not merged: ${unapproved.note ?? "decision withdrawn unanswered"}, nothing was approved` };
   const failed = steps.find((s) => s.state === "failed");
-  if (failed) return { ...base, state: "failed", result: NOT_LANDED.test(failed.result) ? failed.result : `Not landed: ${lowerFirst(failed.result)}`, ...(failed.note ? { note: failed.note } : {}), ...link(failed) };
+  if (failed) return { ...base, state: "failed", result: NOT_LANDED.test(failed.result) ? failed.result : `Not merged: ${lowerFirst(failed.result)}`, ...(failed.note ? { note: failed.note } : {}), ...link(failed) };
   const live = steps.find((s) => s.state === "live" || s.state === "waiting");
-  if (live) return { ...base, state: live.state, result: live.state === "live" ? "Landing the change" : live.result, ...link(live) };
+  if (live) return { ...base, state: live.state, result: live.state === "live" ? "Merging" : live.result, ...link(live) };
   const merge = by("merge");
-  if (merge?.state === "noted" && merge.result.startsWith("Landed by hand")) return { ...base, state: "done", result: merge.result, ...(merge.note ? { note: merge.note } : {}), ...link(merge) };
+  if (merge?.state === "noted" && merge.result.startsWith("Merged by hand")) return { ...base, state: "done", result: merge.result, ...(merge.note ? { note: merge.note } : {}), ...link(merge) };
   const noted = steps.find((s) => s.state === "noted");
-  if (noted) return { ...base, state: "noted", result: NOT_LANDED.test(noted.result) ? noted.result : `Not landed: ${lowerFirst(noted.result)}`, ...(noted.note ? { note: noted.note } : {}), ...link(noted) };
-  return { ...base, state: "done", result: "Landed", ...(by("watch") ? { note: lowerFirst(WATCH_WORDS) } : {}), ...link(merge ?? by("ship")) };
+  if (noted) return { ...base, state: "noted", result: NOT_LANDED.test(noted.result) ? noted.result : `Not merged: ${lowerFirst(noted.result)}`, ...(noted.note ? { note: noted.note } : {}), ...link(noted) };
+  return { ...base, state: "done", result: "Merged", ...(by("watch") ? { note: lowerFirst(WATCH_WORDS) } : {}), ...link(merge ?? by("ship")) };
 }
 
 /** `steps` with the landing stations folded into one row where the first of them stood. */
@@ -707,14 +708,14 @@ export function approvalScope(gateNodeId: string | null | undefined, answer: str
 /** A decision closed without an answer, in plain words for its page's
  *  banner: what happened to it first, then what that means for the work.
  *  A card whose run stopped waiting and went on says the fix is built and
- *  not shipped, and that it can be asked again. */
+ *  not merged, and that it can be asked again. */
 export function closedDecisionWords(status: "withdrawn" | "dismissed", run: Pick<ReportRun, "node_statuses"> | null | undefined): { headline: string; detail: string; askAgain: boolean } {
   if (run && shippedUnapproved(run)) {
     const ms = cardTimeoutMs(run);
     const waited = ms != null ? ` after ${took(ms)}` : "";
     return {
       headline: `Withdrawn: the run stopped waiting${waited}; it was never answered`,
-      detail: "The run went on without an approval, so the fix is built but not shipped. Ask again to get a new card for it.",
+      detail: "The run went on without an approval, so the fix is built but not merged. Ask again to get a new card for it.",
       askAgain: true,
     };
   }
@@ -767,7 +768,7 @@ export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.
     return { tone: "waiting", end, text: gate === CARD_GATE_NODE_ID ? "Waiting for your decision." : gate === "plan_gate" ? "Waiting for an answer on the plan." : gate === "ask" ? "Waiting for an answer to the builder's question." : `Waiting for an answer at ${at}.` };
   }
   // Ship answered and the runner has not moved on: approved, waiting on the ship step, not working.
-  if (run.status === "running" && run.current_node_id === CARD_GATE_NODE_ID && run.gate_answer && /^ship$/i.test(choiceWords(run.gate_answer))) return { tone: "waiting", end, text: APPROVED_WORDS };
+  if (run.status === "running" && run.current_node_id === CARD_GATE_NODE_ID && run.gate_answer && optionIsShip(choiceWords(run.gate_answer))) return { tone: "waiting", end, text: APPROVED_WORDS };
   if (run.status === "running") return { tone: "live", end, text: `Working: at ${at}.` };
   // A Workflow tool run has no end of its own to name: its last agent is just the last to finish.
   if (run.run_kind === "workflow" && run.status === "completed") {
@@ -801,7 +802,7 @@ export function runOutcome(run: ReportRun, task?: ReportTask | null, now = Date.
   // A card taken back without an answer ends the run as asked, not as a failure.
   const closed = closedGate(run);
   if (closed && run.gate_node_id === CARD_GATE_NODE_ID) return { tone: "closed", end, text: `Stopped: the decision was ${closed}.` };
-  if (nodeOf(run, "ship")?.status === "failed") return { tone: "failed", end, text: "Not shipped: the ship step failed." };
+  if (nodeOf(run, "ship")?.status === "failed") return { tone: "failed", end, text: "Not merged: the ship step failed." };
   if (task?.review_verdict?.verdict === "reject" && ran(run, "review")) return { tone: "closed", end, text: "Review rejected the change." };
   // Another graph's own end step (AgentWatch's failed_at_build,
   // dissolved_at_prove, refine_rejected) says where and how the run ended.

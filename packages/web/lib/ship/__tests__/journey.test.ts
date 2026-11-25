@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { approvalOf, approvalWords, canAnswer, deployHold, insideWords, journeyOf, journeyStages, journeyWords, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
+import { approvalOf, approvalWords, canAnswer, gateWaitWords, shipConfirms, whoWords, deployHold, insideWords, journeyOf, journeyStages, journeyWords, readableWhy, sentBackWords, targetsFromLine, verdictsOf, waitWords } from "../journey";
 import { landedSha } from "../runRecord";
 import { BRANCHING_FLOW, FANOUT_FLOW, LAND_ASKS, LAND_FLOW, LAND_REPO_FLOW, UNION_CHANGE_FLOW, UNION_FLAT_RUN, UNION_FLAT_SHA } from "../journeyFixtures";
 import { appPool, flowBySlug, pushedFlow } from "../../line/flowPool";
@@ -54,7 +54,7 @@ describe("journeyStages", () => {
     } as any;
     expect(journeyStages(g).map((x) => [x.label, x.role])).toEqual([["Check", "step"], ["Build", "step"], ["Publish", "step"]]);
     expect(journeyWords(journeyOf(g, run({ current_node_id: "publish", node_statuses: [...done("check", "build"), st("publish", "running", 3)] }))).words).toBe("Publish");
-    // A finished run of a flow that lands nothing is done, never "Not landed".
+    // A finished run of a flow that lands nothing is done, never "Not merged".
     expect(journeyWords(journeyOf(g, run({ status: "completed", current_node_id: "exit", node_statuses: done("check", "build", "publish") })))).toEqual({ words: "Done", tone: "ok" });
   });
   test("a fan-out branch longer than one station keeps every station, and Merge and Deploy after the join", () => {
@@ -133,8 +133,8 @@ describe("the fan-out and its verdicts", () => {
     const j = journeyOf(change, run({ current_node_id: "wait_main", node_statuses: [...ROUND, verdicts("wait_main", "blocked_by_main", "ship"), st("wait_main", "running", 22, { visits: 1, result_preview: "Main CI is red at 9f8e7d6 (red since 1a2b3c4): test-web; looking again in 60s" })] }));
     expect(j.stages[1].branches!.map((b) => [b.label, b.state])).toEqual([["CI", "waiting"], ["Review", "done"]]);
     expect(j.stages[1].state).toBe("active");
-    expect(journeyWords(j).words).toBe("Wait for main");
-    expect(j.now).toMatchObject({ kind: "working", stage: "Wait for main", waits: [{ on: "Wait for main", since: 22, deadline: 22 + 15_000_000 }] });
+    expect(journeyWords(j).words).toBe("Wait for green main");
+    expect(j.now).toMatchObject({ kind: "working", stage: "Wait for green main", waits: [{ on: "Wait for green main", since: 22, deadline: 22 + 15_000_000 }] });
   });
   test("round 2 at PR shows nothing after it from round 1", () => {
     const j = journeyOf(change, run({ current_node_id: "pr", node_statuses: [...ROUND.slice(1), verdicts("brief", "red", "changes"), st("brief", "completed", 20), st("pr", "running", 40, { visits: 2 })] }));
@@ -198,8 +198,8 @@ describe("gates", () => {
     expect(journeyWords(mine)).toEqual({ words: "Your call", tone: "you" });
     const theirs = gated(change, CI_CARD, "decide__decide", card({ holder: { kind: "user", id: "u2" }, asked_user_ids: ["u2"] }));
     expect(theirs.stages[1]).toMatchObject({ label: "It edits CI", who: "person" });
-    expect(journeyWords(theirs)).toEqual({ words: "Waiting on a person", tone: "wait" });
-    expect(journeyWords(gated(change, CI_CARD, "decide__decide", null)).words).toBe("Waiting on a person");
+    expect(journeyWords(theirs)).toEqual({ words: "Waiting for approval", tone: "wait" });
+    expect(journeyWords(gated(change, CI_CARD, "decide__decide", null)).words).toBe("Waiting for approval");
   });
   test("a Revise from that card was sent back by the person, not by Verdicts", () => {
     const j = journeyOf(change, run({ current_node_id: "brief", waiting_on_session: { node_id: "brief", since: 20, note: "Revise: say why CI changed" }, node_statuses: [...CI_CARD.slice(0, -1), st("decide__decide", "completed", 15), st("decide__revise", "completed", 18), st("brief", "running", 20)] }));
@@ -221,8 +221,8 @@ describe("gates", () => {
     test("You only when the viewer may answer the card", () => {
       expect(paused(card()).stages[5]).toMatchObject({ state: "waiting", who: "you" });
       expect(journeyWords(paused(card({ holder: { kind: "user", id: "u0" }, asked_user_ids: ["u0", ME] }))).words).toBe("Your call");
-      expect(journeyWords(paused(card({ holder: { kind: "role", id: "r1" } })))).toEqual({ words: "Waiting on a role", tone: "wait" });
-      expect(journeyWords(paused(card({ passed_to: { kind: "user", id: "u2" } }))).words).toBe("Waiting on a person");
+      expect(journeyWords(paused(card({ holder: { kind: "role", id: "r1" } })))).toEqual({ words: "Waiting for approval", tone: "wait" });
+      expect(journeyWords(paused(card({ passed_to: { kind: "user", id: "u2" } }))).words).toBe("Waiting for approval");
       expect(paused(null).stages.some((s) => s.who === "you")).toBe(false);
     });
   });
@@ -303,11 +303,11 @@ describe("landed and deploying", () => {
     expect(silent.now).toMatchObject({ kind: "working", stage: "Deploy", role: "deploy" });
     expect(silent.stages.find((s) => s.role === "land")!.state).toBe("routed");
     expect(journeyWords(silent)).toEqual({ words: "Deploy", tone: "working" });
-    // Ended at Deploy with no merge on it: Not landed. Ended at an earlier stage: stopped there, as before.
+    // Ended at Deploy with no merge on it: Not merged. Ended at an earlier stage: stopped there, as before.
     const unmerged = journeyOf(change, run({ status: "failed", current_node_id: "deploy__unmerged", fail_reason: "Stopped: Nothing was merged: the run has no merged commit, so nothing goes out.", node_statuses: [...MERGED, st("deploy__wait", "failed", 16)] }));
     expect(unmerged.now).toMatchObject({ kind: "unlanded" });
-    expect(journeyWords(unmerged)).toEqual({ words: "Not landed", tone: "bad" });
-    // Finished with no merge on it: done, never Not landed.
+    expect(journeyWords(unmerged)).toEqual({ words: "Not merged", tone: "bad" });
+    // Finished with no merge on it: done, never Not merged.
     expect(journeyOf(change, run({ status: "completed", current_node_id: "merge", node_statuses: NO_SHA })).now.kind).toBe("passed");
     // A run that completed at its end with nothing merged (its change already upstream) is Done, never Live.
     const upstream = journeyOf(change, run({ status: "completed", current_node_id: "exit", merge: null }));
@@ -319,7 +319,7 @@ describe("landed and deploying", () => {
     // Held only when the line says main's CI is red; running, not there yet, or the auto target's ordinary wait is a wait.
     const held = atDeploy("web: live in dp-12; backend: waiting on main CI at 9f8e7d6 (red since 1a2b3c4: test-web; held 22m, then 45m)");
     expect(held.now).toMatchObject({ kind: "landed", hold: { kind: "red" }, waits: [{ on: "Deploy", since: 16, deadline: 16 + 90_900_000 }] });
-    expect(journeyWords(held)).toEqual({ words: "Held: main CI red", tone: "wait" });
+    expect(journeyWords(held)).toEqual({ words: "Waiting for green main", tone: "wait" });
     expect(journeyWords(atDeploy("backend: waiting on main CI at 9f8e7d6 (running; held 2m, then 45m)"))).toEqual({ words: "Waiting on main CI", tone: "wait" });
     expect(journeyWords(atDeploy("backend: waiting on main CI at 9f8e7d6 (no CI yet; held 1m, then 45m)"))).toEqual({ words: "Waiting on main CI", tone: "wait" });
     expect(journeyWords(atDeploy("web: waiting for the server to send 4a6e413 once main CI is green (held 3m, then 30m)"))).toEqual({ words: "Waiting on main CI", tone: "wait" });
@@ -340,7 +340,7 @@ describe("landed and deploying", () => {
     const j = journeyOf(g, run({ status: "completed", current_node_id: "exit", merge: { sha: "4a6e413b2c" }, node_statuses: done("check", "landed") }));
     expect(states(j)).toEqual(["Check:done", "Land:done"]);
     expect(j.now).toMatchObject({ kind: "merged", sha: "4a6e413b2c" });
-    expect(journeyWords(j)).toEqual({ words: "Landed", tone: "ok" });
+    expect(journeyWords(j)).toEqual({ words: "Merged", tone: "ok" });
   });
   test("a finished run shows the stations it never entered as skipped", () => {
     const j = journeyOf(branching, run({ status: "completed", current_node_id: "exit", merge: { sha: "4a6e413b2c" }, node_statuses: done("check__verify", "review__review", "intent", "intent_gate", "cleared", "ship__ship", "ship__shipped", "deploy__wait", "deploy__live") }));
@@ -360,16 +360,16 @@ test("the render gallery's run cards read as the states they stand for", () => {
     return { kind: j.now.kind, words: journeyWords(j).words, states: j.stages.map((s) => s.state), branches: j.stages.find((s) => s.branches)?.branches?.map((b) => b.state) };
   };
   expect(read(GALLERY_FLOW.shipBack)).toMatchObject({ kind: "session", words: "Fixing", branches: ["back", "back"] });
-  expect(read(GALLERY_FLOW.shipDecide, { user_id: "galleryuser0000000000002" })).toMatchObject({ kind: "gate", words: "Waiting on a person" });
+  expect(read(GALLERY_FLOW.shipDecide, { user_id: "galleryuser0000000000002" })).toMatchObject({ kind: "gate", words: "Waiting for approval" });
   expect(read(GALLERY_FLOW.shipDeploy)).toMatchObject({ kind: "deploying", words: "Deploying" });
-  expect(read(GALLERY_FLOW.shipHeld)).toMatchObject({ kind: "landed", words: "Held: main CI red" });
+  expect(read(GALLERY_FLOW.shipHeld)).toMatchObject({ kind: "landed", words: "Waiting for green main" });
   expect(read(GALLERY_FLOW.shipLive)).toMatchObject({ kind: "live", words: "Live" });
   expect(read(GALLERY_FLOW.shipUnlanded)).toMatchObject({ kind: "working", words: "Deploy" });
   expect(read(GALLERY_FLOW.shipBranching, { user_id: ME })).toMatchObject({ kind: "gate", words: "Your call" });
   expect(read(GALLERY_FLOW.shipCleared)).toMatchObject({ kind: "live", states: ["done", "done", "done", "done", "skipped", "skipped", "done", "done", "done"] });
   expect(read(GALLERY_FLOW.shipCiCard, { user_id: ME })).toMatchObject({ kind: "gate", words: "Your call" });
   expect(read(GALLERY_FLOW.shipCiWait)).toMatchObject({ kind: "working", words: "In CI and review", branches: ["active", "active"] });
-  expect(read(GALLERY_FLOW.shipMainRed)).toMatchObject({ kind: "working", words: "Wait for main", branches: ["waiting", "done"] });
+  expect(read(GALLERY_FLOW.shipMainRed)).toMatchObject({ kind: "working", words: "Wait for green main", branches: ["waiting", "done"] });
   expect(read(GALLERY_FLOW.shipRefused)).toMatchObject({ kind: "stopped", words: "Stopped at Merge", states: ["done", "done", "stopped", "idle", "idle"] });
 });
 
@@ -573,5 +573,27 @@ describe("a finished run drawn on a newer version of its flow", () => {
     const j = journeyOf(segmented, run({ status: "running", current_node_id: "merge", node_statuses: [...FLAT.slice(0, 6), st("merge", "running", 12)] }));
     expect(j.now).toMatchObject({ kind: "working", stage: "Land" });
     expect(states(j)).toEqual(["Land:active", "Deploy:idle", "Live:idle"]);
+  });
+});
+
+describe("Ship in one click (pl-1075)", () => {
+  test("a flow that may ask later starts in one click; one that asks every run, a risky checkout or several runs confirm", () => {
+    expect(shipConfirms(approvalOf(change))).toBe(false);
+    expect(shipConfirms(approvalOf(flowBySlug(appPool([], [LAND_REPO_FLOW]), "change")!))).toBe(false);
+    expect(shipConfirms(approvalOf(branching))).toBe(true);
+    expect(shipConfirms({ kind: "never" }, { from: "box, 364 behind main" })).toBe(true);
+    expect(shipConfirms({ kind: "if", when: null }, { runs: 3 })).toBe(true);
+  });
+  test("a run waiting on its card says who answers, and the Release Captain by its title", () => {
+    expect(gateWaitWords("person", "Jason")).toBe("Waiting for approval from Jason");
+    expect(gateWaitWords("person")).toBe("Waiting for approval");
+    expect(whoWords("@release")).toBe("Release Captain");
+    expect(whoWords("@release", [{ handle: "release", name: "Release lead" }])).toBe("Release lead");
+    expect(whoWords("@growth", [{ handle: "growth", name: "Head of Growth" }])).toBe("Head of Growth");
+    const ci = [...ROUND, verdicts("decide", "green", "ship"), st("ci_card", "completed", 14), st("decide", "completed", 15), st("decide__decide", "running", 15)];
+    const r = run({ status: "paused", user_id: ME, current_node_id: "decide__decide", gate_node_id: "decide__decide", gate_decision_id: "d1", gate_prompt: "Ship?", gate_decision_status: "pending", node_statuses: ci });
+    const at = journeyOf(change, r, [], { id: ME, decision: card({ holder: { kind: "user", id: "u2" }, asked_user_ids: ["u2"] }) as any, holder_name: "Ashot" });
+    expect(at.now).toMatchObject({ kind: "gate", mine: false, who: "Ashot" });
+    expect(journeyWords(at)).toEqual({ words: "Waiting for approval from Ashot", tone: "wait" });
   });
 });

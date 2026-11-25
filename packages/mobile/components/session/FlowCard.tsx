@@ -127,11 +127,11 @@ function NowLine({ now, run }: { now: JourneyNow; run: RunRow }) {
       case 'starting': return ['Starting', null, Theme.blue];
       case 'working': return [now.stage, waits(now.waits, now.stage), now.who === 'agent' ? Theme.orange : Theme.blue];
       case 'session': return [sentBackWords(now), now.note || null, Theme.violet];
-      case 'gate': return [now.mine ? 'Your call' : gateWaitWords(now.holder), now.prompt ?? now.stage, Theme.yellow];
-      case 'landed': return [`Landed ${now.sha.slice(0, 7)} · ${holdWords(now.hold).words}`, waits(now.waits, 'Deploy') ?? now.line, Theme.green];
-      case 'merged': return [`Landed ${now.sha.slice(0, 7)}`, null, Theme.green];
+      case 'gate': return [now.mine ? 'Your call' : gateWaitWords(now.holder, now.who), now.prompt ?? now.stage, Theme.yellow];
+      case 'landed': return [`Merged ${now.sha.slice(0, 7)} · ${holdWords(now.hold).words}`, waits(now.waits, 'Deploy') ?? now.line, Theme.green];
+      case 'merged': return [`Merged ${now.sha.slice(0, 7)}`, null, Theme.green];
       case 'passed': return ['Done', null, Theme.green];
-      case 'unlanded': return ['Not landed', [now.why, waits(now.waits)].filter(Boolean).join('\n'), Theme.red];
+      case 'unlanded': return ['Not merged', [now.why, waits(now.waits)].filter(Boolean).join('\n'), Theme.red];
       case 'deploying': return ['Deploying', waits(now.waits, 'Deploy') ?? now.line, Theme.blue];
       case 'live': return ['Live', now.line?.replace(/^Live:\s*/, '') ?? null, Theme.green];
       case 'stopped': case 'failed': return [now.kind === 'failed' && !now.end ? 'Failed' : stopWords(now), now.why, Theme.red];
