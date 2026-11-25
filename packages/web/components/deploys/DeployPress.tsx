@@ -5,13 +5,13 @@
 // a reason inside the same review, and confirm only once one is written.
 import { useState } from "react";
 import { pauseLedger, pressLedger, rollbackLedger, type Press, type RollbackPress } from "../../lib/deploys/press";
-import type { DeployTargetRow, TeamDeployRow } from "../../lib/deploys/targets";
+import type { DeployProductionRow, DeployTargetRow, TeamDeployRow } from "../../lib/deploys/targets";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 
 export type { Press, RollbackPress };
 
-export function PressReview({ press, deploys, onClose, onConfirm }: { press: Press; deploys: ReadonlyArray<TeamDeployRow>; onClose: () => void; onConfirm: () => void }) {
-  return <SwitchReview ledger={pressLedger(press, deploys)} onClose={onClose} onConfirm={onConfirm} />;
+export function PressReview({ press, production, deploys, onClose, onConfirm }: { press: Press; production: DeployProductionRow | undefined; deploys: ReadonlyArray<TeamDeployRow>; onClose: () => void; onConfirm: () => void }) {
+  return <SwitchReview ledger={pressLedger(press, deploys, production)} onClose={onClose} onConfirm={onConfirm} />;
 }
 
 /** A review whose act needs a reason: the reason field sits above its facts, and the confirm waits for it. */

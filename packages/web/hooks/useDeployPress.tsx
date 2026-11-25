@@ -6,18 +6,19 @@
 // Pause and the paused Roll back open a review that asks why; Lift is one press.
 import { useState } from "react";
 import { useInboxStore } from "../store/inboxStore";
-import type { DeployTargetRow, TeamDeployRow } from "../lib/deploys/targets";
+import { productionOf, type DeployProductionRow, type DeployTargetRow, type TeamDeployRow } from "../lib/deploys/targets";
 import { sendLift, sendPause, sendPress, sendRollback } from "../lib/deploys/press";
 import { PauseReview, PressReview, RollbackReview, type Press, type RollbackPress } from "../components/deploys/DeployPress";
 
 type Open = { kind: "press"; press: Press } | { kind: "pause"; target: DeployTargetRow; targets: ReadonlyArray<DeployTargetRow> } | { kind: "rollback"; press: RollbackPress };
 
-export function useDeployPress(teamId: string | null, deploys: ReadonlyArray<TeamDeployRow>) {
+/** `productions` are the team's (useDeployTargets): a press reads its repository's pause there. */
+export function useDeployPress(teamId: string | null, deploys: ReadonlyArray<TeamDeployRow>, productions: ReadonlyArray<DeployProductionRow>) {
   const me = useInboxStore((s) => (s.currentUser as { name?: string } | null)?.name ?? "You");
   const [opened, setOpened] = useState<Open | null>(null);
   const close = () => setOpened(null);
   const review = !opened ? null
-    : opened.kind === "press" ? <PressReview press={opened.press} deploys={deploys} onClose={close} onConfirm={() => { close(); if (teamId) sendPress(opened.press, teamId, deploys, me); }} />
+    : opened.kind === "press" ? <PressReview press={opened.press} production={productionOf(productions, opened.press.target)} deploys={deploys} onClose={close} onConfirm={() => { close(); if (teamId) sendPress(opened.press, teamId, deploys, me); }} />
     : opened.kind === "pause" ? <PauseReview target={opened.target} targets={opened.targets} deploys={deploys} onClose={close} onConfirm={(reason) => { close(); sendPause(opened.target, reason, me); }} />
     : <RollbackReview press={opened.press} deploys={deploys} onClose={close} onConfirm={(reason) => { close(); sendRollback(opened.press, reason, deploys, me); }} />;
   return {

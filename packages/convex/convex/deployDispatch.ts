@@ -11,6 +11,7 @@ import type { Doc, Id } from "./_generated/dataModel";
 import { targetDeploys, targetRows } from "./deployTargetsState";
 import { activePauseOf } from "./deployPause";
 import { reachedRollout } from "@codecast/shared/contracts/deployPause";
+import { recordWorkflowRunDeploy } from "./deployTargetsCi";
 
 const GITHUB_API = "https://api.github.com";
 const MINUTE = 60_000;
@@ -18,6 +19,8 @@ const MINUTE = 60_000;
 const SENDING_STALE_MS = 5 * MINUTE;
 /** A dispatch GitHub took but never started a run for fails after this. */
 const SENT_STALE_MS = 15 * MINUTE;
+/** A deploy that has heard nothing from GitHub this long is read from GitHub itself: its webhook may be lost. */
+const QUIET_MS = 5 * MINUTE;
 /** GitHub's run states that hold the workflow's concurrency group. */
 const GOING = ["queued", "in_progress", "waiting", "requested", "pending"] as const;
 
@@ -65,15 +68,68 @@ export const next = internalMutation({
   handler: async (ctx, args) => nextCore(ctx, args.workspace, args.target),
 });
 
-/** Every GitHub-sent target's queue, run on a schedule: the backstop for a webhook that never came. */
-export const sweep = internalMutation({
-  args: {},
-  handler: async (ctx) => {
-    const rows: Doc<"deploy_targets">[] = (await ctx.db.query("deploy_targets").take(500)).filter((t: Doc<"deploy_targets">) => !t.retired_at && sendsThroughGithub(t));
-    for (const t of rows) await nextCore(ctx, t.workspace, t.name);
-    return rows.length;
-  },
-});
+/**
+ * Every GitHub-sent target's queue, run on a schedule: the backstop for a webhook that never came. A deploy that has
+ * heard nothing from GitHub for QUIET_MS (running, or sent with no run named) is read from GitHub (readRun), so a lost
+ * completion webhook never holds the queue.
+ */
+export async function sweepCore(ctx: any, now = Date.now()): Promise<{ targets: number; read: string[] }> {
+  const rows: Doc<"deploy_targets">[] = (await ctx.db.query("deploy_targets").take(500)).filter((t: Doc<"deploy_targets">) => !t.retired_at && sendsThroughGithub(t));
+  const read: string[] = [];
+  for (const t of rows) {
+    for (const d of await targetDeploys(ctx, t.workspace, t.name, 30)) {
+      const quiet = now - d.updated_at > QUIET_MS;
+      const runGoing = d.status === "running" && !!d.workflow_run;
+      const sentUnnamed = d.status === "requested" && d.dispatch?.state === "sent" && !d.workflow_run;
+      if (quiet && (runGoing || sentUnnamed) && d.repository && d.team_id) {
+        await ctx.scheduler.runAfter(0, internal.deployDispatch.readRun, { deploy: d._id });
+        read.push(d.short_id);
+      }
+    }
+    await nextCore(ctx, t.workspace, t.name, now);
+  }
+  return { targets: rows.length, read };
+}
+
+export const sweep = internalMutation({ args: {}, handler: async (ctx) => sweepCore(ctx) });
+
+/**
+ * The pause that stops this deploy from going out now, if any: any pause on its repository, unless the deploy is the
+ * rollback that paused it.
+ */
+async function pauseStopping(ctx: any, d: Doc<"deploys">): Promise<Doc<"deploy_pauses"> | null> {
+  const pause = d.repository ? await activePauseOf(ctx, d.workspace, d.repository) : null;
+  return pause && pause.rollback !== d.short_id ? pause : null;
+}
+
+/**
+ * The last word before GitHub is asked to dispatch: a pause that came while the deploy was claimed cancels it, as
+ * codecast's cancel, and nothing is sent.
+ */
+export async function mayDispatchCore(ctx: any, deployId: Id<"deploys">): Promise<boolean> {
+  const d: Doc<"deploys"> | null = await ctx.db.get(deployId);
+  if (!d || d.status !== "requested" || d.dispatch?.state !== "sending") return false;
+  const pause = await pauseStopping(ctx, d);
+  if (!pause) return true;
+  const now = Date.now();
+  await ctx.db.patch(d._id, { status: "cancelled", cancel: { by: pause.by.name, at: now, why: `production paused: ${pause.reason}` }, finished_at: now, updated_at: now });
+  return false;
+}
+
+export const mayDispatch = internalMutation({ args: { deploy: v.id("deploys") }, handler: async (ctx, args) => mayDispatchCore(ctx, args.deploy) });
+
+/**
+ * A run that starts while production is paused (one sent before the pause, whose run GitHub named after it) is
+ * cancelled before its rollout, as the pause's own cancel. Called as each run's webhook lands on its deploy.
+ */
+export async function cancelIfPaused(ctx: any, deployShortId: string): Promise<boolean> {
+  const d: Doc<"deploys"> | null = await ctx.db.query("deploys").withIndex("by_short_id", (q: any) => q.eq("short_id", deployShortId)).first();
+  if (!d || d.status !== "running" || !d.workflow_run || d.cancel) return false;
+  const pause = await pauseStopping(ctx, d);
+  if (!pause) return false;
+  await ctx.scheduler.runAfter(0, internal.deployDispatch.cancelRun, { deploy: d._id, by: pause.by.name, why: `production paused: ${pause.reason}` });
+  return true;
+}
 
 /** What sending one deploy needs, while it is still claimed as sending. */
 export const sendJob = internalQuery({
@@ -137,6 +193,8 @@ export const send = internalAction({
       }
       const repo = await gh(auth.token, `/repos/${job.repository}`);
       const branch = repo.ok ? ((await repo.json()) as any)?.default_branch ?? "main" : "main";
+      // A pause may have come since the claim: read it again, last, before anything leaves.
+      if (!(await ctx.runMutation(internal.deployDispatch.mayDispatch, { deploy: args.deploy }))) return "paused";
       const res = await gh(auth.token, `/repos/${job.repository}/actions/workflows/${wf}/dispatches`, { method: "POST", body: JSON.stringify({ ref: branch, inputs: job.inputs }) });
       if (res.status !== 204) { await settle("failed", `GitHub refused the dispatch of ${job.workflow} (${res.status}): ${(await res.text()).slice(0, 500)}`); return "refused"; }
       await settle("sent");
@@ -208,5 +266,56 @@ export const cancelRun = internalAction({
     if (res.status !== 202) return `GitHub refused the cancel (${res.status})`;
     await ctx.runMutation(internal.deployDispatch.markCancelled, { deploy: args.deploy, by: args.by, why: args.why });
     return "cancelled";
+  },
+});
+
+// ── reading a run from GitHub when its webhook is lost (DP18) ────────────────
+
+export const readJob = internalQuery({
+  args: { deploy: v.id("deploys") },
+  handler: async (ctx, args): Promise<{ repository: string; team_id: Id<"teams">; workflow: string; run: string | null; sha: string | null; since: number } | null> => {
+    const d = await ctx.db.get(args.deploy);
+    if (!d || !d.repository || !d.team_id || (d.status !== "running" && d.status !== "requested")) return null;
+    const t = (await targetRows(ctx, d.workspace, d.repository)).find((r: Doc<"deploy_targets">) => r.name === d.target);
+    if (!t?.workflow) return null;
+    return { repository: d.repository, team_id: d.team_id, workflow: t.workflow, run: d.workflow_run ?? null, sha: d.sha ?? null, since: d.dispatch?.at ?? d.created_at };
+  },
+});
+
+/** A run GitHub reported to a reader, recorded exactly as its webhook would have been. */
+export const recordRun = internalMutation({
+  args: { payload: v.any() },
+  handler: async (ctx, args) => recordWorkflowRunDeploy(ctx, args.payload),
+});
+
+/**
+ * Read a quiet deploy's run from GitHub: the run it names, or for a dispatch GitHub never named, the dispatched run
+ * whose run-name carries its sha. What GitHub says is recorded as the webhook would have recorded it.
+ */
+export const readRun = internalAction({
+  args: { deploy: v.id("deploys") },
+  handler: async (ctx, args): Promise<string> => {
+    const job: { repository: string; team_id: Id<"teams">; workflow: string; run: string | null; sha: string | null; since: number } | null = await ctx.runQuery(internal.deployDispatch.readJob, { deploy: args.deploy });
+    if (!job) return "nothing to read";
+    const auth = await installationToken(ctx, job.repository, job.team_id);
+    if (!auth) return "no installation";
+    let run: any = null;
+    if (job.run) {
+      const [id, attempt] = job.run.split("/attempts/");
+      const res = await gh(auth.token, `/repos/${job.repository}/actions/runs/${id}${attempt ? `/attempts/${attempt}` : ""}`);
+      if (!res.ok) return `GitHub answered ${res.status} reading run ${job.run}`;
+      run = await res.json();
+    } else if (job.sha) {
+      const res = await gh(auth.token, `/repos/${job.repository}/actions/workflows/${encodeURIComponent(job.workflow)}/runs?event=workflow_dispatch&per_page=20`);
+      if (!res.ok) return `GitHub answered ${res.status} listing ${job.workflow}'s runs`;
+      const runs: any[] = ((await res.json()) as any)?.workflow_runs ?? [];
+      run = runs.find((r) => String(r.display_title ?? r.name ?? "").includes(job.sha!) && Date.parse(r.created_at) >= job.since - MINUTE) ?? null;
+      if (!run) return "no run names it yet";
+    }
+    if (!run) return "nothing to read";
+    const repo = await gh(auth.token, `/repos/${job.repository}`);
+    const branch = repo.ok ? ((await repo.json()) as any)?.default_branch ?? "main" : "main";
+    await ctx.runMutation(internal.deployDispatch.recordRun, { payload: { workflow_run: run, repository: { full_name: job.repository, default_branch: branch }, workflow: { name: run.name } } });
+    return `${run.status}${run.conclusion ? ` ${run.conclusion}` : ""}`;
   },
 });

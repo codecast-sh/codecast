@@ -318,7 +318,7 @@ export function JourneyView({ journey, run, now_ms, compact, actions, again, tar
  *  landed commit when the caller knows it, else the session, highlighted there), with the press that sends it where it
  *  waits on a person. */
 export function SessionTargets({ teamId, conversationId, line, known: reached, focus }: { teamId: string; conversationId: string; line?: string | null; known?: ReadonlyArray<TargetState>; focus?: DeployFocus | null }) {
-  const { targets, deploys } = useDeployTargets(teamId);
+  const { targets, deploys, productions } = useDeployTargets(teamId);
   // What the store knows about the session's commits, then whatever else the Deploy stage's own line names.
   const mine = useMemo(() => {
     // The landed commit's own reach is the answer: an open deploy is not proof it carries the change.
@@ -332,7 +332,7 @@ export function SessionTargets({ teamId, conversationId, line, known: reached, f
       return open ? { ...t, state: "deploying" as const, deploy: open.short_id || null, at: open.created_at } : t;
     });
   }, [conversationId, targets, deploys, line, reached]);
-  const press = useDeployPress(teamId, deploys);
+  const press = useDeployPress(teamId, deploys, productions);
   if (!mine.length) return null;
   return (
     <ul className="sj-targets" data-session-targets>

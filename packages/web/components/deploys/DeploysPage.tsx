@@ -14,7 +14,7 @@ import { api } from "@codecast/convex/convex/_generated/api";
 import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { activeTeamIdOf } from "../../lib/activeTeam";
 import { useDeployTargets } from "../../hooks/useSyncDeployTargets";
-import { isMineCommit, mineOnly, orderTargets, prOfSubject, rebuiltOnly, recordTargets, rollbackTarget, sessionWords, sessionsOf, sourceWord, targetNow, targetTone, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
+import { isMineCommit, mineOnly, orderTargets, prOfSubject, productionOf, rebuiltOnly, recordTargets, rollbackTarget, sessionWords, sessionsOf, sourceWord, targetNow, targetTone, type DeployProductionRow, type DeployTargetRow, type TeamDeployRow, type TargetTone } from "../../lib/deploys/targets";
 import type { Press, RollbackPress } from "./DeployPress";
 import { useDeployPress } from "../../hooks/useDeployPress";
 import { rollBackHere, rollbackOffer } from "../../lib/deploys/press";
@@ -87,7 +87,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   // The page reads one team's targets; picking another here never moves the app's active team.
   const [teamPick, setTeamPick] = useState<string | null>(initialTeam ?? null);
   const teamId = teamPick ?? where?.team_id ?? activeTeam;
-  const { targets, deploys, ready } = useDeployTargets(teamId);
+  const { targets, deploys, productions, ready } = useDeployTargets(teamId);
   const now = useCoarseNow(30_000);
   // Declared targets, then any target the team's deploy records name that no checkout declared yet.
   const allTargets = useMemo(() => (teamId ? [...targets, ...recordTargets(targets, deploys, teamId)] : targets), [targets, deploys, teamId]);
@@ -135,7 +135,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
   // A deploy link opens at that deploy's target; a change's link opens where its reach says (focusAt), not at the deploy that found the team.
   const want = pickedId ?? (initialDeploy && where ? targetKey(where.target, where.repository) : null) ?? focusAt?._id ?? null;
   const picked = pickTarget(ordered, want);
-  const press = useDeployPress(teamId, deploys);
+  const press = useDeployPress(teamId, deploys, productions);
   const modern = useIsModernStyle();
   const repos = new Set(allTargets.map((t) => t.repository).filter(Boolean));
 
@@ -165,10 +165,11 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
             const n = targetNow(t, deploys);
             const tone = targetTone(t, n);
             const waiting = t.queue.known ? t.queue.commits : 0;
+            const pause = productionOf(productions, t)?.pause;
             return (
               <li key={t._id}>
-                <button type="button" className="dpp-target" aria-current={picked?._id === t._id ? "true" : undefined} data-tone={tone} data-paused={t.pause ? "" : undefined} onClick={() => setPicked(t._id)} title={t.pause ? `paused by ${t.pause.by}` : targetWords(t, n, tone)} data-deploy-target={t.name}>
-                  {t.pause ? <Pause className="dpp-mark" aria-label="Paused" /> : <ToneMark tone={tone} />}
+                <button type="button" className="dpp-target" aria-current={picked?._id === t._id ? "true" : undefined} data-tone={tone} data-paused={pause ? "" : undefined} onClick={() => setPicked(t._id)} title={pause ? `paused by ${pause.by}` : targetWords(t, n, tone)} data-deploy-target={t.name}>
+                  {pause ? <Pause className="dpp-mark" aria-label="Paused" /> : <ToneMark tone={tone} />}
                   <span className="dpp-target-name">{t.name}{repos.size > 1 ? <span className="dpp-repo">{t.repository.split("/").pop()}</span> : null}</span>
                   {waiting ? <span className="dpp-target-n" data-deploy-target-waiting={waiting}>{waiting}</span> : null}
                 </button>
@@ -177,7 +178,7 @@ export function DeploysPage({ initialTarget, initialTeam, initialDeploy, initial
           })}
         </ul>
       </nav>
-      {picked ? <TargetPane key={picked._id} target={picked} deploys={deploys} now={now} onPress={press.open} onPause={() => press.openPause(picked, allTargets)} onRollback={press.openRollback} onLift={() => press.lift(picked)} openDeploy={initialDeploy ?? null} focus={focus} reach={reach} onClearFocus={clearFocus} labels={labels} onToggleLabel={toggleLabel} filters={filters} onFilters={setFilters} me={me} /> : null}
+      {picked ? <TargetPane key={picked._id} target={picked} production={productionOf(productions, picked)} deploys={deploys} now={now} onPress={press.open} onPause={() => press.openPause(picked, allTargets)} onRollback={press.openRollback} onLift={() => press.lift(picked)} openDeploy={initialDeploy ?? null} focus={focus} reach={reach} onClearFocus={clearFocus} labels={labels} onToggleLabel={toggleLabel} filters={filters} onFilters={setFilters} me={me} /> : null}
       {press.review}
     </div>
     </div>
@@ -214,7 +215,7 @@ function HeadCi({ ci, url }: { ci: CommitCiState; url: string | null }) {
   return url ? <a className="dpp-headci" data-ci={ci} href={url} target="_blank" rel="noreferrer" data-deploy-ci>{body}</a> : <span className="dpp-headci" data-ci={ci} data-deploy-ci>{ci === "none" ? word : body}</span>;
 }
 
-function TargetPane({ target: t, deploys, now, onPress, onPause, onRollback, onLift, openDeploy, focus, reach, onClearFocus, labels, onToggleLabel, filters, onFilters, me }: { target: DeployTargetRow; deploys: ReadonlyArray<TeamDeployRow>; now: number; onPress: (p: Press) => void; onPause: () => void; onRollback: (p: RollbackPress) => void; onLift: () => void; openDeploy: string | null; focus: DeployFocus | null; reach: DeployReach | null; onClearFocus: () => void; labels: DeployLabel[]; onToggleLabel: (l: DeployLabel) => void; filters: DeployFilters; onFilters: (f: DeployFilters) => void; me: ChangeViewer }) {
+function TargetPane({ target: t, production, deploys, now, onPress, onPause, onRollback, onLift, openDeploy, focus, reach, onClearFocus, labels, onToggleLabel, filters, onFilters, me }: { target: DeployTargetRow; production: DeployProductionRow | undefined; deploys: ReadonlyArray<TeamDeployRow>; now: number; onPress: (p: Press) => void; onPause: () => void; onRollback: (p: RollbackPress) => void; onLift: () => void; openDeploy: string | null; focus: DeployFocus | null; reach: DeployReach | null; onClearFocus: () => void; labels: DeployLabel[]; onToggleLabel: (l: DeployLabel) => void; filters: DeployFilters; onFilters: (f: DeployFilters) => void; me: ChangeViewer }) {
   const n = targetNow(t, deploys);
   // Where the linked thing is here: waiting in the queue, or on the deploys that took it out (newest first).
   const focusWaiting = !!focus && t.queue.groups.some((g) => g.commits.some((c) => commitMatches(c, focus)));
@@ -242,8 +243,9 @@ function TargetPane({ target: t, deploys, now, onPress, onPause, onRollback, onL
   const waiting = t.queue.commits;
   const sessions = t.queue.groups.filter((g) => g.session).length;
   // A workflow target goes back only through codecast's rollback, which pauses production first (DP19).
-  const backPaused = t.workflow ? rollbackOffer(back, t, deploys) : null;
-  const blocked = t.pause ? "Production is paused" : n.open ? `${n.open.short_id || "A deploy"} is going out` : !t.can_deploy ? (t.runs === "push" ? "Deploys itself when main moves" : "No machine publishes it") : waiting === 0 && t.queue.known ? "Nothing waiting" : null;
+  const backPaused = t.workflow ? rollbackOffer(back, t, production, deploys) : null;
+  const pause = production?.pause ?? null;
+  const blocked = pause ? "Production is paused" : n.open ? `${n.open.short_id || "A deploy"} is going out` : !t.can_deploy ? (t.runs === "push" ? "Deploys itself when main moves" : "No machine publishes it") : waiting === 0 && t.queue.known ? "Nothing waiting" : null;
   return (
     <section className="dpp-main" data-deploy-pane={t.name}>
       <header className="dpp-head">
@@ -277,7 +279,7 @@ function TargetPane({ target: t, deploys, now, onPress, onPause, onRollback, onL
               <RotateCcw className="w-3 h-3" aria-hidden />Roll back to {short(back.sha)}
             </button>
           ) : null}
-          {t.can_pause && !t.pause && !t.record_only ? (
+          {production?.can_pause && !pause && !t.record_only ? (
             <button type="button" className="dpp-back" aria-haspopup="dialog" onClick={onPause} data-deploy-pause={t.repository}>
               <Pause className="w-3 h-3" aria-hidden />Pause
             </button>
@@ -285,7 +287,7 @@ function TargetPane({ target: t, deploys, now, onPress, onPause, onRollback, onL
         </div>
       </header>
 
-      {t.pause ? <Paused p={t.pause} canLift={!!t.can_lift} now={now} onLift={onLift} /> : null}
+      {pause ? <Paused p={pause} canLift={!!production?.can_lift} now={now} onLift={onLift} /> : null}
       {n.open ? <GoingOut d={n.open} now={now} /> : n.failed ? <Failed d={n.failed} /> : null}
       {focus ? <FocusChip focus={focus} waiting={focusWaiting} deploys={focusDeploys} live={n.live} onClear={onClearFocus} /> : null}
       {t.record_only ? null : (
@@ -324,8 +326,8 @@ function TargetPane({ target: t, deploys, now, onPress, onPause, onRollback, onL
               <span className="dpp-dp-by">{d.started_by ?? sourceWord(d)}</span>
               <span className="dpp-age">{ago(now, d.live_at ?? d.created_at)}</span>
               {d._id === n.live?._id ? <span className="dpp-livenow" data-deploy-live-now>Live now</span>
-              : rollbackOffer(d, t, deploys) ? (
-                <button type="button" className="dpp-row-act" aria-haspopup="dialog" onClick={() => onRollback(rollbackOffer(d, t, deploys)!)} data-deploy-redeploy={d.short_id}><RotateCcw className="w-3 h-3" aria-hidden />Roll back here</button>
+              : rollbackOffer(d, t, production, deploys) ? (
+                <button type="button" className="dpp-row-act" aria-haspopup="dialog" onClick={() => onRollback(rollbackOffer(d, t, production, deploys)!)} data-deploy-redeploy={d.short_id}><RotateCcw className="w-3 h-3" aria-hidden />Roll back here</button>
               ) : rollBackHere(d, t, deploys) ? (
                 <button type="button" className="dpp-row-act" onClick={() => onPress(rollBackHere(d, t, deploys)!)} data-deploy-redeploy={d.short_id}><RotateCcw className="w-3 h-3" aria-hidden />Roll back here</button>
               ) : <span />}

@@ -7,7 +7,7 @@ import { normalizeRepository } from "./lib/gitRefs";
 import { resolveTeamForRepository } from "./githubWebhooks";
 import { commitBySha } from "./deployTargetsState";
 import { recordDeployMarker } from "./deploys";
-import { kickDispatch } from "./deployDispatch";
+import { cancelIfPaused, kickDispatch } from "./deployDispatch";
 import { commitCiState, type CommitCiRun, type CommitCiState } from "@codecast/shared/contracts/deployTargets";
 
 export const teamKey = (teamId: Id<"teams">) => `team:${teamId}`;
@@ -327,7 +327,8 @@ export async function recordWorkflowRunDeploy(ctx: any, payload: any): Promise<s
       at: r.status === "running" ? r.started_at : r.at,
     });
     if (deploy) out.push(deploy);
-    // A finished run frees the target's queue (DP18).
+    // A run starting while production is paused stops before its rollout; a finished run frees the queue (DP18).
+    if (r.status === "running" && deploy) await cancelIfPaused(ctx, deploy);
     if (r.status !== "running") await kickDispatch(ctx, t.workspace, t.name);
   }
   return out;

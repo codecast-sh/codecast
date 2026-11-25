@@ -56,8 +56,10 @@ export async function rollbackCore(ctx: any, userId: Id<"users">, args: { team_i
   const asked = await requestTargetDeployCore(ctx, userId, { team_id: args.team_id, target: t.name, repository: t.repository, action: "rollback", ...(args.of ? { of: args.of } : {}), ...(args.client_key ? { client_key: args.client_key } : {}), actor: by.name.split(/\s+/)[0], paused: true });
   const row: Doc<"deploys"> = await ctx.db.get(asked._id as Id<"deploys">);
   // What it takes off production: the commits on main after the commit it puts back, up to what was live.
-  const range = row.previous_sha ? await mainCommitsAfter(ctx, t.repository, asked.sha!, row.previous_sha) : { commits: [], known: false };
-  const ending = range.known ? rollbackEnding(range.commits.map((c) => ({ files: (c.files ?? []).map((f: any) => f.filename) }))) : { kind: "fix_forward" as const, migrations: [] };
+  const range = row.previous_sha ? await mainCommitsAfter(ctx, t.repository, asked.sha!, row.previous_sha) : { commits: [], known: false, truncated: false };
+  // A range codecast could not read whole (unknown, or past its scan) is never called a safe revert.
+  const readWhole = range.known && !range.truncated;
+  const ending = readWhole ? rollbackEnding(range.commits.map((c) => ({ files: (c.files ?? []).map((f: any) => f.filename) }))) : { kind: "fix_forward" as const, migrations: [] };
   const lines = range.commits.map((c) => `- ${c.sha.slice(0, 10)} ${c.message.split("\n")[0].slice(0, 120)}`);
   const captain = await releaseCaptainOf(ctx, args.team_id);
   const task = await createTaskAs(ctx, userId, {
@@ -67,7 +69,7 @@ export async function rollbackCore(ctx: any, userId: Id<"users">, args: { team_i
       "",
       ending.kind === "revert"
         ? "End it with a revert of each commit below, merged to main naming this task."
-        : range.known
+        : readWhole
           ? `End it with a fix forward merged to main naming this task: a revert cannot take back the migrations in its range (${ending.migrations.join(", ")}).`
           : "End it with a fix forward merged to main naming this task: codecast could not read the range it took off, so a revert is not known to be safe.",
       "Production stays paused until that commit is green on main, then the pause lifts itself and production deploys again.",
@@ -127,26 +129,31 @@ async function standingPauses(ctx: any, repository?: string): Promise<Doc<"deplo
 }
 
 /**
- * Lift each rollback's pause whose ending commit is green on main: the first commit on main after the rollback that
- * names its task, once it or a commit after it passed CI (a newer push can cancel the ending commit's own run).
+ * What ends a rollback's pause, as main reads now: the green commit (the first commit after the rollback that names
+ * its task, or a commit after it, whose CI passed; a newer push can cancel the ending commit's own run), still
+ * waiting, or unreadable: main's commits after the rollback are more than codecast reads at once, and the task's
+ * commit is not among those it read, so it may have been missed. An unreadable pause stays, and its reminder says so.
  */
+export async function endingOf(ctx: any, p: Doc<"deploy_pauses">): Promise<{ green: string } | "waiting" | "unreadable"> {
+  if (!p.until) return "waiting";
+  const after = await mainCommitsAfter(ctx, p.repository, p.until.from_sha);
+  if (!after.known) return "waiting";
+  const at = after.commits.findIndex((c) => (c.task_ids ?? []).some((id) => String(id) === String(p.until!.task_id)));
+  if (at < 0) return after.truncated ? "unreadable" : "waiting";
+  const ciWorkflow = (await targetRows(ctx, p.workspace, p.repository)).find((t) => t.ci_workflow)?.ci_workflow;
+  for (const c of after.commits.slice(at).reverse()) if (await greenOnMain(ctx, p.repository, c.sha, ciWorkflow)) return { green: c.sha };
+  return "waiting";
+}
+
+/** Lift each rollback's pause whose ending commit is green on main. */
 export async function liftEndedPauses(ctx: any, repository?: string): Promise<string[]> {
   const lifted: string[] = [];
   for (const p of await standingPauses(ctx, repository)) {
-    if (!p.until) continue;
-    const after = await mainCommitsAfter(ctx, p.repository, p.until.from_sha);
-    if (!after.known) continue;
-    const at = after.commits.findIndex((c) => (c.task_ids ?? []).some((id) => String(id) === String(p.until!.task_id)));
-    if (at < 0) continue;
-    const targets = await targetRows(ctx, p.workspace, p.repository);
-    const ciWorkflow = targets.find((t) => t.ci_workflow)?.ci_workflow;
-    for (const c of after.commits.slice(at).reverse()) {
-      if (!(await greenOnMain(ctx, p.repository, c.sha, ciWorkflow))) continue;
-      await liftCore(ctx, p, "green on main", c.sha);
-      for (const t of targets.filter(sendsThroughGithub)) await kickDispatch(ctx, p.workspace, t.name);
-      lifted.push(p.repository);
-      break;
-    }
+    const ending = await endingOf(ctx, p);
+    if (typeof ending === "string") continue;
+    await liftCore(ctx, p, "green on main", ending.green);
+    for (const t of (await targetRows(ctx, p.workspace, p.repository)).filter(sendsThroughGithub)) await kickDispatch(ctx, p.workspace, t.name);
+    lifted.push(p.repository);
   }
   return lifted;
 }
@@ -163,7 +170,10 @@ export async function remindCore(ctx: any, now = Date.now()): Promise<number> {
     if (now - (p.reminded_at ?? p.created_at) < PAUSE_REMIND_MS) continue;
     if (!inWorkingHours(now, p.team_id ? await teamTimezone(ctx, p.team_id) : "UTC")) continue;
     const view = await pauseViewOf(ctx, p);
-    const message = `Production is still paused (${p.repository}): ${p.reason}. ${view.lifts}`;
+    const lost = (await endingOf(ctx, p)) === "unreadable"
+      ? ` Codecast could not find the commit naming ${view.until?.task ?? "its task"} among main's commits since the rollback (more than it reads at once), so it will not lift by itself: lift it by hand once that commit is green on main.`
+      : "";
+    const message = `Production is still paused (${p.repository}): ${p.reason}. ${view.lifts}${lost}`;
     const captain = p.until && p.team_id ? await releaseCaptainOf(ctx, p.team_id) : null;
     const roleId = captain?._id ?? (p.by.kind === "role" ? p.by.role_id : undefined);
     if (roleId) await tellRole(ctx, roleId, { content: message, client_id: `production-paused:${p._id}:${now}` });

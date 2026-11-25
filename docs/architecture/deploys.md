@@ -640,8 +640,9 @@ authority grant (the Release Captain) when the call comes from its session.
 Lifting is for whoever paused, or the Release Captain.
 
 `cast line deploy status|pause|lift` (`--json` for scripts; deploy.sh reads
-it before it sends) and the Deploys page, where each target carries its
-repository's pause and whether the viewer may pause (`deployTargets.view`).
+it before it sends) and the Deploys page. `deployTargets.view` returns
+each repository's production once (`productions`: its pause, and whether the
+viewer may pause and may lift), never a copy on each target.
 The shared rules are `contracts/deployPause`.
 
 ## DP18. Codecast's deploy queue
@@ -663,12 +664,17 @@ queued, in progress or waiting. A workflow's concurrency group keeps only
 its newest pending run, so a second dispatch would drop the one waiting. So
 a rollback is never refused for a running deploy: it waits in the queue and
 goes out when the run ends (a finished run's webhook runs the queue, and a
-sweep every two minutes is the backstop). While production is paused only
-the rollback that paused it is sent.
+sweep every two minutes is the backstop). A deploy that has heard nothing
+from GitHub for five minutes (running, or sent with no run named) is read
+from GitHub by that sweep and recorded as its webhook would have been, so a
+lost webhook never holds the queue. While production is paused only the
+rollback that paused it is sent: the pause is read again last, just before
+GitHub is asked to dispatch.
 
 A pause stops what it catches: a deploy still queued is cancelled at once,
-and a run that has not reached rollout (no `deploy` or `rollout` job
-started) is cancelled on GitHub. Each carries codecast's `cancel` (who, why,
+one claimed for sending is cancelled at that last read, and a run that has
+not reached rollout (no `deploy` or `rollout` job started) is cancelled on
+GitHub, including a run that starts after the pause (one sent before it). Each carries codecast's `cancel` (who, why,
 when), the only cancel that counts as a pause; a run cancelled anywhere
 else is neutral and is never retried.
 
@@ -688,7 +694,8 @@ order it:
 3. files the commit that will end it to the Release Captain (the role
    holding the pause authority, `@release` first) as a task: a revert of
    each commit, or a fix forward when a migration rules the revert out (or
-   the range could not be read);
+   the range could not be read whole: unknown, or more commits than codecast
+   reads at once);
 4. pauses production with that task as what ends it, replacing any pause
    standing, so only the rollback is sent;
 5. cancels what the pause catches (DP18).
@@ -699,7 +706,10 @@ or a commit after it, passes CI: the run of the target's `ci_workflow`
 (`ci.yml`), else all of the commit's CI. A merge alone does not lift it, or
 a deploy of main's head would ship the change again while its CI runs. The
 webhook of each passing CI run checks, and a sweep every five minutes is the
-backstop. Whoever paused, or the Release Captain, can lift it sooner.
+backstop. When main has more commits since the rollback than codecast reads at
+once and the task's commit is not among them, the pause stays and its
+reminder says the ending commit could not be found, so its lifter lifts it by
+hand. Whoever paused, or the Release Captain, can lift it sooner.
 
 A standing pause reminds whoever lifts it every four hours, on weekdays
 from 9:00 to 18:00 in the team's zone only: a rollback's reminds the

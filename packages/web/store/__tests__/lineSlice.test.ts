@@ -97,62 +97,105 @@ describe("editLineProfile", () => {
 
 describe("production pause on the Deploys page (deploys.md DP17, DP19)", () => {
   const TEAM = "t".repeat(32);
-  const row = (name: string, repository: string, over: Record<string, unknown> = {}) => ({
-    _id: `${repository}#${name}`, workspace: `team:${TEAM}`, team_id: TEAM, name, repository, runs: "here", policy: "press", command: "x", rollback: null, paths: [],
-    can_deploy: true, can_redeploy_sha: true, can_rollback: false, device_id: "d", publisher_user_id: "u", pause: null, can_pause: true, can_lift: false,
+  const WS = `team:${TEAM}`;
+  const target = (name: string, repository: string, over: Record<string, unknown> = {}) => ({
+    _id: `${repository}#${name}`, workspace: WS, team_id: TEAM, name, repository, runs: "here", policy: "press", command: "x", rollback: null, paths: [],
+    can_deploy: true, can_redeploy_sha: true, can_rollback: false, device_id: "d", publisher_user_id: "u",
     queue: { known: true, truncated: false, commits: 0, untouched: 0, head_sha: "h", head_ci: "passed", head_ci_url: null, shown: 0, groups: [] }, ...over,
   });
-  const live = { _id: "dp_live", workspace: `team:${TEAM}`, target: "production", repository: "acme/app", short_id: "dp-9", status: "live", action: "deploy", rollback_of: null, sha: "2".repeat(40), previous_sha: null, version: null, url: null, started_by: null, note: null, commits: 0, sessions: [], created_at: 2, live_at: 2, finished_at: null };
+  const production = (repository: string, over: Record<string, unknown> = {}) => ({ _id: repository, workspace: WS, team_id: TEAM, repository, pause: null, can_pause: true, can_lift: false, ...over });
+  const live = { _id: "dp_live", workspace: WS, target: "production", repository: "acme/app", short_id: "dp-9", status: "live", action: "deploy", rollback_of: null, sha: "2".repeat(40), previous_sha: null, version: null, url: null, started_by: null, note: null, commits: 0, sessions: [], created_at: 2, live_at: 2, finished_at: null };
   const before = { ...live, _id: "dp_before", short_id: "dp-8", sha: "1".repeat(40), created_at: 1, live_at: 1 };
   const refused = (msg: string) => () => { throw new Error(`[CONVEX M(dispatch:dispatch)] Server Error\nUncaught Error: ${msg}`); };
+  const settle = () => new Promise((r) => setTimeout(r, 20));
   const targets = () => s().deployTargets as Record<string, any>;
+  const prod = (repository: string) => s().deployProductions[repository];
+  const locks = () => Object.keys(s().pending).filter((k) => k.startsWith("deployProductions:"));
+  /** What the feed says next: the server's rows for the productions it names. */
+  const echo = (...rows: Array<Record<string, unknown>>) => s().syncTable("deployProductions", rows, { isDelta: true });
+  const standing = { repository: "acme/app", by: "Bo", reason: "deploy broke", at: 1, lifts: "Bo or the Release Captain lifts it.", rollback: null, until: null };
   beforeEach(() => {
     useInboxStore.setState({
-      deployTargets: { "acme/app#production": row("production", "acme/app", { workflow: "deploy.yml", rollback_inputs: { components: "backend-web" } }), "acme/app#web": row("web", "acme/app"), "acme/site#site": row("site", "acme/site") },
+      deployTargets: { "acme/app#production": target("production", "acme/app", { workflow: "deploy.yml", rollback_inputs: { components: "backend-web" } }), "acme/app#web": target("web", "acme/app"), "acme/site#site": target("site", "acme/site") },
+      deployProductions: { "acme/app": production("acme/app"), "acme/site": production("acme/site") },
       teamDeploys: { dp_live: live, dp_before: before },
     } as any);
   });
 
-  it("Pause paints every target of the repository paused by the viewer, and rides the pause write", () => {
+  it("Pause paints the repository's one production row, and rides the pause write", () => {
     sendPause(targets()["acme/app#web"], "  errors spiking ", "Ana");
-    expect(targets()["acme/app#production"].pause).toMatchObject({ by: "Ana", reason: "errors spiking", until: null });
-    expect(targets()["acme/app#web"].can_lift).toBe(true);
-    expect(targets()["acme/site#site"].pause).toBeNull();
+    expect(prod("acme/app").pause).toMatchObject({ by: "Ana", reason: "errors spiking", until: null });
+    expect(prod("acme/app").can_lift).toBe(true);
+    expect(prod("acme/site").pause).toBeNull();
+    // The targets hold no copy of it.
+    for (const t of Object.values(targets())) expect("pause" in t || "can_lift" in t).toBe(false);
     expect(calls.at(-1)).toEqual(["pauseProduction", [TEAM, "acme/app", "errors spiking", "Ana"]]);
   });
 
-  it("a refused pause or lift takes its paint back", async () => {
+  it("the server's pause replaces the painted one, and its can_lift retires the lock", async () => {
+    sendPause(targets()["acme/app#web"], "errors spiking", "Ana");
+    await settle();
+    expect(locks()).toEqual(["deployProductions:acme/app:can_lift"]);
+    const server = { repository: "acme/app", by: "Ana Lee", reason: "errors spiking", at: 42, lifts: "Ana Lee or the Release Captain lifts it.", rollback: null, until: null };
+    echo(production("acme/app", { pause: server, can_lift: true }));
+    expect(prod("acme/app").pause).toEqual(server);
+    expect(locks()).toEqual([]);
+  });
+
+  it("a refused pause or lift puts can_lift back, and the feed's next word is the pause", async () => {
     reply = refused("Production is already paused by Bo: deploy broke");
     sendPause(targets()["acme/app#web"], "errors spiking", "Ana");
-    await new Promise((r) => setTimeout(r, 20));
-    expect(targets()["acme/app#web"].pause).toBeNull();
-    const standing = { repository: "acme/app", by: "Bo", reason: "deploy broke", at: 1, lifts: "", rollback: null, until: null };
-    s().setProductionPause(TEAM, "acme/app", standing, false);
+    await settle();
+    expect(prod("acme/app").can_lift).toBe(false);
+    expect(locks()).toEqual([]);
+    // `pause` is unprotected: the refused paint stands until the feed next speaks, which replaces it.
+    expect(prod("acme/app").pause).toMatchObject({ by: "Ana" });
+    echo(production("acme/app", { pause: standing, can_lift: true }));
+    expect(prod("acme/app").pause).toEqual(standing);
+
     reply = refused("Bo paused production; they or the Release Captain lift it");
     sendLift(targets()["acme/app#web"]);
-    expect(targets()["acme/app#web"].pause).toBeNull();
-    await new Promise((r) => setTimeout(r, 20));
-    expect(targets()["acme/app#production"].pause).toEqual(standing);
+    expect(prod("acme/app").pause).toBeNull();
+    await settle();
+    expect(prod("acme/app").can_lift).toBe(true);
+    expect(locks()).toEqual([]);
     expect(calls.at(-1)?.[0]).toBe("liftProductionPause");
   });
 
-  it("Roll back paints the rollback requested and production paused, then lays what ends it from the answer", async () => {
+  it("Lift holds through a stale push until the server says lifted", async () => {
+    useInboxStore.setState({ deployProductions: { ...s().deployProductions, "acme/app": production("acme/app", { pause: standing, can_lift: true }) } } as any);
+    sendLift(targets()["acme/app#web"]);
+    await settle();
+    echo(production("acme/app", { pause: standing, can_lift: true }));
+    expect(prod("acme/app").can_lift).toBe(false);
+    echo(production("acme/app"));
+    expect(prod("acme/app")).toMatchObject({ pause: null, can_lift: false });
+    expect(locks()).toEqual([]);
+  });
+
+  it("Roll back paints the rollback requested and production paused; what ends it arrives with the echo", async () => {
     reply = () => ({ deploy: "dp-10", target: "production", sha: "1".repeat(40), task: "ct-5", ending: "fix_forward", commits: 2, migrations: ["drizzle/0007_x.sql"], cancelled: [] });
     const t = targets()["acme/app#production"];
     sendRollback({ target: t, of: before as any }, "checkout broken", Object.values(s().teamDeploys) as any, "Ana");
     const stub = Object.values(s().teamDeploys).find((d: any) => d.client_key) as any;
     expect(stub).toMatchObject({ action: "rollback", status: "requested", rollback_of: "dp-8", sha: "1".repeat(40), previous_sha: "2".repeat(40) });
-    expect(targets()["acme/app#web"].pause).toMatchObject({ by: "Ana", reason: "Rollback: checkout broken", until: { task: null } });
+    expect(prod("acme/app").pause).toMatchObject({ by: "Ana", reason: "Rollback dp-8: checkout broken", rollback: null, until: { task: null } });
     expect(calls.at(-1)).toEqual(["rollbackProduction", [stub.client_key, TEAM, "acme/app", "production", "dp-8", "checkout broken", expect.anything()]]);
-    await new Promise((r) => setTimeout(r, 20));
-    expect(targets()["acme/app#web"].pause).toMatchObject({ rollback: "dp-10", until: { task: "ct-5", kind: "fix_forward", migrations: ["drizzle/0007_x.sql"], commits: 2 } });
+    await settle();
+    // Nothing lays the answer on by hand: the feed carries it.
+    expect(prod("acme/app").pause.until.task).toBeNull();
+    const server = { repository: "acme/app", by: "Ana", reason: "Rollback dp-8: checkout broken", at: 42, lifts: "It lifts itself once ct-5's fix forward is green on main; Ana or the Release Captain can lift it sooner.", rollback: "dp-10", until: { task: "ct-5", kind: "fix_forward", migrations: ["drizzle/0007_x.sql"], commits: 2 } };
+    echo(production("acme/app", { pause: server, can_lift: true }));
+    expect(prod("acme/app").pause).toEqual(server);
+    expect(locks()).toEqual([]);
   });
 
-  it("a refused rollback takes back its stub and its pause", async () => {
+  it("a refused rollback takes back its requested deploy and can_lift", async () => {
     reply = refused("No target of acme/app names the workflow its deploys run as");
     sendRollback({ target: targets()["acme/app#production"], of: before as any }, "checkout broken", Object.values(s().teamDeploys) as any, "Ana");
-    await new Promise((r) => setTimeout(r, 20));
+    await settle();
     expect(Object.values(s().teamDeploys).some((d: any) => d.client_key)).toBe(false);
-    expect(targets()["acme/app#production"].pause).toBeNull();
+    expect(prod("acme/app").can_lift).toBe(false);
+    expect(locks()).toEqual([]);
   });
 });

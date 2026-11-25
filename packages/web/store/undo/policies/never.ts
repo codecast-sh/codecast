@@ -353,7 +353,7 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   pauseProduction: never("production control: it stops sends and cancels what is queued; Lift is the way back, and a cancel is not undone"),
   liftProductionPause: never("production control: sends go again at once; Pause is the way back"),
   rollbackProduction: never("ships code: it pauses production, queues a rollback and files its task; deploying again once lifted is the way back"),
-  setProductionPause: INTERNAL,
+  removeDeployStub: never("internal: takes back a deploy the server refused, which never landed"),
   removeTaskStub: never("internal: takes back a create the server refused, which never landed"),
   askLineAgent: never("machine control: it files the cause and starts its run in one write; cancelling the run is the way back"),
   tryLineStep: never("machine control: the graph's machine runs each chosen case at once; the try's rows are its record"),

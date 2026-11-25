@@ -45,17 +45,16 @@ export type LineSliceActions = {
    *  requested; the server row supersedes the stub by its client key (convex deploys requestDeployCore). */
   /** Deploy, redeploy or roll back one of a team's targets (Deploys page); the requested deploy paints at once. */
   deployTarget: (clientKey: string, teamId: string, repository: string, target: string, action: "deploy" | "redeploy" | "rollback", of: string | null, stub: DeployStub) => Promise<{ _id: string; short_id: string } | null | undefined>;
-  /** "Pause" on the Deploys page (deploys.md DP17): every target of the repository reads paused by `by` at once
-   *  (convex deployPause pauseFor). */
+  /** "Pause" on the Deploys page (deploys.md DP17): the repository's production row, and so every target of it, reads
+   *  paused by `by` at once (convex deployPause pauseFor). */
   pauseProduction: (teamId: string, repository: string, reason: string, by: string) => Promise<(DeployPauseView & { cancelled: string[] }) | null | undefined>;
-  /** "Lift": the repository's targets read unpaused at once (convex deployPause liftFor). */
+  /** "Lift": the repository's production reads unpaused at once (convex deployPause liftFor). */
   liftProductionPause: (teamId: string, repository: string) => Promise<{ lifted: boolean; repository: string } | null | undefined>;
   /** "Roll back" on a target whose deploys run as a workflow (DP19): the rollback paints as requested and the repository
    *  as paused at once; the server row supersedes the stub by its client key (convex deployRollback rollbackFor). */
   rollbackProduction: (clientKey: string, teamId: string, repository: string, target: string, of: string | null, reason: string, stub: DeployStub) => Promise<RollbackResult | null | undefined>;
-  /** Lay a repository's pause on its targets without a write: what the server answered, or, for a refused pause, lift
-   *  or rollback, what stood before it (with the refused rollback's stub taken back). */
-  setProductionPause: (teamId: string, repository: string, pause: DeployPauseView | null, canLift: boolean, dropDeploy?: string | null) => void;
+  /** Take back a requested deploy the server refused, which never landed (as removeTaskStub does for a task). */
+  removeDeployStub: (clientKey: string) => void;
   /** Stop a live run (convex workflow_runs cancelRunByPerson): it ends at once, as a person's cancel. */
   stopLineRun: (runId: string) => Promise<{ ok: true } | null | undefined>;
   labelDecision: (runId: string, nodeId: string, verdict: LabelVerdict | null, note?: string | null) => void;
@@ -95,9 +94,10 @@ function deployStubRow(clientKey: string, teamId: string, repository: string, ta
   };
 }
 
-/** Each of a team's targets on one repository: a pause stands on the repository, so every one of them carries it. */
-function repoTargets(rows: Record<string, any>, teamId: string, repository: string): any[] {
-  return Object.values(rows).filter((t) => t?.workspace === `team:${teamId}` && t.repository === repository);
+/** A team's production row for one repository (store deployProductions, keyed by the repository). */
+function productionRow(rows: Record<string, any> | undefined, teamId: string, repository: string): any | undefined {
+  const row = rows?.[repository];
+  return row?.workspace === `team:${teamId}` ? row : undefined;
 }
 
 export type LineGraphEditInput = { node: string; field?: "prompt" | "script"; text: string; base_hash?: string | null; base_text?: string | null };
@@ -203,29 +203,41 @@ export function createLineSlice(): LineSliceActions {
       this.teamDeploys[clientKey] = deployStubRow(clientKey, teamId, repository, target, action, of, stub);
     }) as LineSliceActions["deployTarget"],
 
-    // "Pause": the repository reads paused by the viewer on every target at once, as the server's pause will say.
-    pauseProduction: asyncAction(function (this: { deployTargets: Record<string, any> }, teamId: string, repository: string, reason: string, by: string) {
-      const pause: DeployPauseView = { repository, by, reason: reason.trim(), at: Date.now(), lifts: `${by} or the Release Captain lifts it.`, rollback: null, until: null };
-      for (const t of repoTargets(this.deployTargets, teamId, repository)) { t.pause = pause; t.can_lift = true; }
+    // "Pause": the repository's production reads paused by the viewer at once. The pause itself is the server's to stamp
+    // (deployProductions leaves `pause` unprotected), so its echo replaces this one; `can_lift` holds until it echoes,
+    // and a refusal puts it back.
+    pauseProduction: asyncAction(function (this: { deployProductions: Record<string, any> }, teamId: string, repository: string, reason: string, by: string) {
+      const row = productionRow(this.deployProductions, teamId, repository);
+      if (!row) return;
+      row.pause = { repository, by, reason: reason.trim(), at: Date.now(), lifts: `${by} or the Release Captain lifts it.`, rollback: null, until: null } satisfies DeployPauseView;
+      row.can_lift = true;
     }) as LineSliceActions["pauseProduction"],
 
-    // "Lift": the repository's targets read unpaused at once.
-    liftProductionPause: asyncAction(function (this: { deployTargets: Record<string, any> }, teamId: string, repository: string) {
-      for (const t of repoTargets(this.deployTargets, teamId, repository)) { t.pause = null; t.can_lift = false; }
+    // "Lift": the repository's production reads unpaused at once.
+    liftProductionPause: asyncAction(function (this: { deployProductions: Record<string, any> }, teamId: string, repository: string) {
+      const row = productionRow(this.deployProductions, teamId, repository);
+      if (!row) return;
+      row.pause = null;
+      row.can_lift = false;
     }) as LineSliceActions["liftProductionPause"],
 
-    // "Roll back": the rollback reads requested and the repository paused for it at once; what ends the pause (its task,
-    // revert or fix forward) is the server's to name, so it reads as not yet filed until the answer.
-    rollbackProduction: asyncAction(function (this: { deployTargets: Record<string, any>; teamDeploys: Record<string, any> }, clientKey: string, teamId: string, repository: string, target: string, of: string | null, reason: string, stub: DeployStub) {
+    // "Roll back": the rollback reads requested and the repository paused for it at once. Its dp-N and what ends the
+    // pause (its task, a revert or a fix forward) are the server's to name, so they read as not yet filed until the echo.
+    rollbackProduction: asyncAction(function (this: { deployProductions: Record<string, any>; teamDeploys: Record<string, any> }, clientKey: string, teamId: string, repository: string, target: string, of: string | null, reason: string, stub: DeployStub) {
       this.teamDeploys[clientKey] = deployStubRow(clientKey, teamId, repository, target, "rollback", of, stub);
-      const pause: DeployPauseView = { repository, by: stub.started_by, reason: `Rollback: ${reason.trim()}`, at: Date.now(), lifts: "", rollback: null, until: { task: null, kind: "revert", migrations: [], commits: 0 } };
-      for (const t of repoTargets(this.deployTargets, teamId, repository)) { t.pause = pause; t.can_lift = true; }
+      const row = productionRow(this.deployProductions, teamId, repository);
+      if (!row) return;
+      const sooner = `${stub.started_by} or the Release Captain`;
+      row.pause = {
+        repository, by: stub.started_by, reason: `Rollback${of ? ` ${of}` : ""}: ${reason.trim()}`, at: Date.now(),
+        lifts: `It lifts itself once its task's revert is green on main; ${sooner} can lift it sooner.`, rollback: null, until: { task: null, kind: "revert", migrations: [], commits: 0 },
+      } satisfies DeployPauseView;
+      row.can_lift = true;
     }) as LineSliceActions["rollbackProduction"],
 
-    setProductionPause: sync(function (this: { deployTargets: Record<string, any>; teamDeploys: Record<string, any> }, teamId: string, repository: string, pause: DeployPauseView | null, canLift: boolean, dropDeploy?: string | null) {
-      for (const t of repoTargets(this.deployTargets, teamId, repository)) { t.pause = pause; t.can_lift = canLift; }
-      if (dropDeploy) delete this.teamDeploys[dropDeploy];
-    }) as LineSliceActions["setProductionPause"],
+    removeDeployStub: sync(function (this: { teamDeploys: Record<string, any> }, clientKey: string) {
+      if (this.teamDeploys[clientKey]?.client_key === clientKey) delete this.teamDeploys[clientKey];
+    }) as LineSliceActions["removeDeployStub"],
 
     // "Stop the run": the run reads ended on the draft, as the server's cancel leaves it.
     stopLineRun: asyncAction(function (this: { workflowRuns: Record<string, any> }, runId: string) {

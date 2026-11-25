@@ -13,7 +13,7 @@ import { useInboxStore } from '@codecast/web/store/inboxStore';
 import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { useDeployTargets } from '@codecast/web/hooks/useSyncDeployTargets';
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
-import { deploysOf, rebuiltOnly, sessionWords, sessionsOf, sourceWord, targetNow, teamRowOfView, type TeamDeployRow } from '@codecast/web/lib/deploys/targets';
+import { deploysOf, productionOf, rebuiltOnly, sessionWords, sessionsOf, sourceWord, targetNow, teamRowOfView, type TeamDeployRow } from '@codecast/web/lib/deploys/targets';
 import { fmtClock, fmtDuration } from '@codecast/web/components/triggerCadence';
 import { compactAge } from '@codecast/web/lib/threadState';
 import { changeGroups, hasChangeNames, originWords, shownNames, type ChangeGroup } from '@codecast/web/components/deploys/deployRecord';
@@ -67,7 +67,7 @@ export default function DeployScreen() {
   const where = useQueryNoThrow(api.deployRefs.whereIs, id ? { ref: id } : 'skip');
   const served = where.data as { team_id: string | null } | null | undefined;
   const teamId = served?.team_id ?? (cached?.workspace?.startsWith('team:') ? cached.workspace.slice(5) : null);
-  const { targets, deploys, ready } = useDeployTargets(teamId);
+  const { targets, deploys, productions, ready } = useDeployTargets(teamId);
   const me = useInboxStore((s) => (s.currentUser as { name?: string } | null)?.name ?? 'You');
   const listed = deploys.find((x) => x.short_id === id) ?? cached;
   // The team's feed holds its newest deploys; an older one is read alone, as is one whose push names what it
@@ -96,7 +96,7 @@ export default function DeployScreen() {
   // Sending this sha live again changes what everyone on the target runs: it asks with the web's ledger first.
   const rollBack = () => {
     if (!back || !teamId) return;
-    const l = pressLedger(back, deploys);
+    const l = pressLedger(back, deploys, productionOf(productions, back.target));
     appAlert(`${l.name}: ${l.subject}`, ledgerLines(l).join('\n'), [
       { text: l.keep ?? 'Not now', style: 'cancel' },
       { text: l.confirm, style: 'destructive', onPress: () => sendPress(back, teamId, deploys, me) },

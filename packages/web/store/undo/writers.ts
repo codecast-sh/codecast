@@ -250,6 +250,7 @@ export const LOCAL_ONLY_UNDO_KEYS: Record<string, string> = {
   anchors: "Written only by setAnchorCleanChat, which re-sends the seat its opening and is never undoable.",
   capabilityBindings: "Written only by bindCapability, a create; creates are never undoable.",
   checkouts: "Written only by askCheckout, which sends a message or files a finding and is never undoable.",
+  deployProductions: "Written only by pauseProduction, liftProductionPause and rollbackProduction, which stop, start or roll back production and are never undoable.",
   decisionStacks:
     "Written by reorderStack and setStackPolicy, whose specs carry an inverse naming the prior order or policy; removeFromStack and the stack creates are never undoable.",
   handledDecisions:

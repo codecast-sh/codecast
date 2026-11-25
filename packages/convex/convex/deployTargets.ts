@@ -177,19 +177,17 @@ export const view = query({
     const workspace = teamKey(teamId);
     if (!(await workspaceGrantsAccess(ctx, userId, workspace))) return { targets: [] };
     const rows = (await targetRows(ctx, workspace, args.repository ? repositoryArg(args.repository) : undefined)).filter((r) => !args.target || r.name === args.target);
-    // Each target carries its repository's pause and whether the viewer may pause, lift and roll back (DP17).
-    const holder = await pauseHolderOf(ctx, userId, teamId);
-    const pauses = new Map<string, { view: DeployPauseView; can_lift: boolean } | null>();
     const targets = [];
-    for (const t of rows) {
-      if (!pauses.has(t.repository)) {
-        const p = await activePauseOf(ctx, workspace, t.repository);
-        pauses.set(t.repository, p ? { view: await pauseViewOf(ctx, p), can_lift: !!holder && mayLift(p, holder) } : null);
-      }
-      const p = pauses.get(t.repository);
-      targets.push({ ...(await targetState(ctx, t)), pause: p?.view ?? null, can_pause: !!holder, can_lift: !!p?.can_lift });
+    for (const t of rows) targets.push(await targetState(ctx, t));
+    // Production's controls, once per repository (DP17): its standing pause and whether the viewer may pause, lift
+    // and roll back.
+    const holder = await pauseHolderOf(ctx, userId, teamId);
+    const productions: Array<{ repository: string; pause: DeployPauseView | null; can_pause: boolean; can_lift: boolean }> = [];
+    for (const repository of new Set(rows.map((t) => t.repository))) {
+      const p = await activePauseOf(ctx, workspace, repository);
+      productions.push({ repository, pause: p ? await pauseViewOf(ctx, p) : null, can_pause: !!holder, can_lift: !!p && !!holder && mayLift(p, holder) });
     }
-    return { team_id: teamId, targets };
+    return { team_id: teamId, targets, productions };
   },
 });
 

@@ -10,7 +10,7 @@ import { useInboxStore } from "../../store/inboxStore";
 import { isRefusedDispatchError } from "../../store/mutativeMiddleware";
 import { deployTargetLedger } from "../../components/consequential/ledgers";
 import type { SwitchLedger, SwitchRow } from "../../components/consequential/ConsequentialSwitch";
-import { rollbackTarget, targetNow, type DeployTargetRow, type TeamDeployRow } from "./targets";
+import { rollbackTarget, targetNow, type DeployProductionRow, type DeployTargetRow, type TeamDeployRow } from "./targets";
 
 export type Press = { target: DeployTargetRow; action: "deploy" | "redeploy" | "rollback"; of: TeamDeployRow | null };
 
@@ -19,8 +19,9 @@ const short = (sha: string | null | undefined) => (sha ? sha.slice(0, 7) : "—"
 /** The confirm's word while no reason is written: a pause and a rollback both say why. */
 export const SAY_WHY = "Say why first";
 
-/** What a press sends, from what, its CI and how to undo it, as the confirm shows it. */
-export function pressLedger(p: Press, deploys: ReadonlyArray<TeamDeployRow>): SwitchLedger {
+/** What a press sends, from what, its CI and how to undo it, as the confirm shows it. `production` is the target's
+ *  repository's (productionOf): its pause blocks the press. */
+export function pressLedger(p: Press, deploys: ReadonlyArray<TeamDeployRow>, production: DeployProductionRow | undefined): SwitchLedger {
   const n = targetNow(p.target, deploys);
   const back = rollbackTarget(n.history, n.live);
   const sessions = p.action === "deploy" ? p.target.queue.groups.flatMap((g) => (g.session ? [g.session.title || g.session.short_id || "Untitled session"] : [])) : [];
@@ -38,7 +39,7 @@ export function pressLedger(p: Press, deploys: ReadonlyArray<TeamDeployRow>): Sw
     runsOn: p.target.runs === "here" ? "The machine that publishes it" : null,
     undo: p.action === "deploy" ? (n.live ? `Roll back to ${short(n.live.sha)}` : null) : back || n.live ? `Deploy ${short(n.live?.sha)} again` : null,
     // A pause lets only a rollback through.
-    ...(p.target.pause && p.action !== "rollback" ? { blocked: "Production is paused" } : {}),
+    ...(production?.pause && p.action !== "rollback" ? { blocked: "Production is paused" } : {}),
   });
 }
 
@@ -73,10 +74,10 @@ export function rollBackHere(d: TeamDeployRow, target: DeployTargetRow | undefin
 export type RollbackPress = { target: DeployTargetRow; of: TeamDeployRow };
 
 /** Codecast's Roll back to `d` (the header's, with the deploy before the live one, or a row's "Roll back here"): only
- *  on a target whose deploys run as a workflow, for a viewer who holds the pause, to a deploy that went live on
- *  another sha. It queues behind whatever is going out, so a deploy going out does not stop it. */
-export function rollbackOffer(d: TeamDeployRow | null, target: DeployTargetRow | undefined, deploys: ReadonlyArray<TeamDeployRow>): RollbackPress | null {
-  if (!d || !target?.workflow || !target.can_pause || d.status !== "live" || !d.sha) return null;
+ *  on a target whose deploys run as a workflow, for a viewer who holds the pause (the target's production says), to a
+ *  deploy that went live on another sha. It queues behind whatever is going out, so a deploy going out does not stop it. */
+export function rollbackOffer(d: TeamDeployRow | null, target: DeployTargetRow | undefined, production: DeployProductionRow | undefined, deploys: ReadonlyArray<TeamDeployRow>): RollbackPress | null {
+  if (!d || !target?.workflow || !production?.can_pause || d.status !== "live" || !d.sha) return null;
   const n = targetNow(target, deploys);
   if (d._id === n.live?._id || d.sha === n.live?.sha) return null;
   return { target, of: d };
@@ -134,40 +135,30 @@ export function rollbackLedger(p: RollbackPress, deploys: ReadonlyArray<TeamDepl
   };
 }
 
-/** A refused write takes its paint back: the repository's pause reads as it stood before (and a rollback's stub goes). */
-function restoreOnRefusal(t: DeployTargetRow, dropDeploy?: string) {
-  const prev = t.pause ?? null;
-  const prevLift = !!t.can_lift;
-  return (e: unknown) => {
-    if (isRefusedDispatchError(e)) useInboxStore.getState().setProductionPause(t.team_id, t.repository, prev, prevLift, dropDeploy);
-  };
-}
+// Each paints the repository's one production row (store deployProductions); its echo replaces the paint, and a
+// refused write lifts the paint's lock (lineSlice).
 
-/** Pause's confirm: every target of the repository reads paused at once. */
+/** Pause's confirm: the repository, and so every target of it, reads paused at once. */
 export function sendPause(t: DeployTargetRow, reason: string, by: string): void {
-  useInboxStore.getState().pauseProduction(t.team_id, t.repository, reason.trim(), by).catch(restoreOnRefusal(t));
+  void useInboxStore.getState().pauseProduction(t.team_id, t.repository, reason.trim(), by).catch(() => {});
 }
 
 /** Lift: one press, the repository reads unpaused at once. */
-export function sendLift(t: DeployTargetRow): void {
-  useInboxStore.getState().liftProductionPause(t.team_id, t.repository).catch(restoreOnRefusal(t));
+export function sendLift(t: Pick<DeployTargetRow, "team_id" | "repository">): void {
+  void useInboxStore.getState().liftProductionPause(t.team_id, t.repository).catch(() => {});
 }
 
-/** Roll back's confirm: the rollback reads requested and production paused at once. The answer names what ends the
- *  pause (its task, a revert or a fix forward past migrations), laid on the pause as soon as it arrives. */
+/** Roll back's confirm: the rollback reads requested and production paused at once; the echo names what ends the
+ *  pause (its task, a revert or a fix forward past migrations). A refused rollback takes its requested deploy back,
+ *  as a refused create takes back its stub. */
 export function sendRollback(p: RollbackPress, reason: string, deploys: ReadonlyArray<TeamDeployRow>, startedBy: string): void {
   const t = p.target;
   const clientKey = `dp-client-${Math.random().toString(36).slice(2, 10)}`;
   const n = targetNow(t, deploys);
-  useInboxStore
+  void useInboxStore
     .getState()
     .rollbackProduction(clientKey, t.team_id, t.repository, t.name, p.of.short_id || null, reason.trim(), { started_by: startedBy, sha: p.of.sha, previous_sha: n.live?.sha ?? null, commits: 0, sessions: [] })
-    .then((r) => {
-      if (!r) return;
-      const s = useInboxStore.getState();
-      const now = (s.deployTargets as Record<string, DeployTargetRow> | undefined)?.[t._id];
-      if (!now?.pause) return;
-      s.setProductionPause(t.team_id, t.repository, { ...now.pause, rollback: r.deploy, until: { task: r.task, kind: r.ending, migrations: r.migrations, commits: r.commits } }, !!now.can_lift);
-    })
-    .catch(restoreOnRefusal(t, clientKey));
+    .catch((e) => {
+      if (isRefusedDispatchError(e)) useInboxStore.getState().removeDeployStub(clientKey);
+    });
 }
