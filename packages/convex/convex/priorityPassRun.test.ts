@@ -630,12 +630,68 @@ describe("session counts", () => {
     expect(await w.t.query(pass.sweepCandidates, {})).toContainEqual({ user_id: w.ana, workspace: w.team });
     const asked = prompts.length;
     const res = await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
-    expect(res).toMatchObject({ status: "ok", cost_usd: 0 });
+    expect(res).toMatchObject({ status: "skipped", reason: "nothing_new" });
     expect(prompts.length).toBe(asked);
+    // Recorded as skipped (it asked no model): it neither counts as a paid run nor trips the runNow throttle.
+    const last = (await w.runs()).sort((a: any, b: any) => b.started_at - a.started_at)[0];
+    expect(last).toMatchObject({ status: "skipped", error: "nothing new; let go of 1 session that left this workspace" });
     expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
     expect((await w.t.run((ctx) => ctx.db.get(p._id)))?.session_count).toBe(0);
     // Nothing left to let go: the next sweep leaves the team pair alone.
     expect(await w.t.query(pass.sweepCandidates, {})).not.toContainEqual({ user_id: w.ana, workspace: w.team });
+  });
+
+  test("a pair past its daily ceiling still lets go of sessions that left: that asks no model", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "work");
+    replyText = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    await w.t.run(async (ctx) => {
+      await ctx.db.patch(w.teamConv, { is_private: true, team_visibility: "private" });
+      await ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace: w.team, started_at: w.now - 2 * H, finished_at: w.now - 2 * H, status: "ok", cursor_at: w.now - 2 * H, model: "m", cost_usd: 5, counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } });
+    });
+    const asked = prompts.length;
+    expect(await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).toMatchObject({ status: "skipped", reason: expect.stringContaining("spent today") });
+    expect(prompts.length).toBe(asked);
+    expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
+  });
+
+  test("a workflow's run log is never a pass input, nor a stray of the team priority holding it", async () => {
+    const w = await world();
+    const log = await w.t.run(async (ctx) => {
+      const run = await ctx.db.insert("workflow_runs", { user_id: w.ana, workflow_name: "w", status: "completed", node_statuses: [], created_at: 1, updated_at: 1 } as any);
+      return ctx.db.patch(w.oldConv, { is_workflow_primary: true, workflow_run_id: run }).then(() => w.oldConv);
+    });
+    await w.send(w.ana, log, w.now - 2 * H, "machine output");
+    for (const workspace of [w.team, `user:${w.ana}`]) {
+      const { input } = await w.t.query(pass.passInputs, { user_id: w.ana, workspace });
+      expect(input.sessions.map((s: any) => s.id)).not.toContain("jx7old");
+    }
+    // Mapped earlier, it stays: it counts in the team's workspace, so it is no stray.
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "work");
+    replyText = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [p] = await w.priorities();
+    await w.t.run((ctx) => ctx.db.patch(log, { priority_id: p._id }));
+    expect((await w.t.query(pass.passInputs, { user_id: w.ana, workspace: w.team })).strays).toEqual([]);
+  });
+
+  test("the sweep's stray probe reads a pair's newest priorities first", async () => {
+    const w = await world();
+    await w.t.run(async (ctx) => {
+      const priority = (short_id: string, last_active_at: number) => ctx.db.insert("priorities", {
+        user_id: w.ana, workspace: w.team, short_id, title: short_id, summary: "", status: "done", rank_set_by: "pass", steps: [],
+        first_seen_at: 1, last_active_at, pass_at: 1, created_at: 1, updated_at: 1,
+      } as any);
+      // Thirty-one older ones first, then the one that moved an hour ago, holding a session since locked private.
+      for (let i = 0; i < 31; i++) await priority(`pri-${i + 1}`, w.now - 10 * DAY);
+      const recent = await priority("pri-99", w.now - H);
+      await ctx.db.patch(w.teamConv, { priority_id: recent, is_private: true, team_visibility: "private" });
+      for (const workspace of [w.team, `user:${w.ana}`]) {
+        await ctx.db.insert("priority_pass_runs", { user_id: w.ana, workspace, started_at: w.now, finished_at: w.now, status: "ok", cursor_at: w.now, model: "m", counts: { created: 0, updated: 0, merged: 0, mapped_sessions: 0 } });
+      }
+    });
+    expect(await w.t.query(pass.sweepCandidates, {})).toEqual([{ user_id: w.ana, workspace: w.team }]);
   });
 
   test("a session made private and mapped by the personal pass leaves the team priority's count true", async () => {

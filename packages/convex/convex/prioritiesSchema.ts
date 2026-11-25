@@ -62,6 +62,10 @@ export const priorityTables = {
   })
     .index("by_user_workspace_status", ["user_id", "workspace", "status"])
     .index("by_workspace_status", ["workspace", "status"])
+    // Newest first where recency decides what is read: one person's priorities
+    // (the pass, the sweep's stray probe) and a workspace's by status (lists).
+    .index("by_user_workspace_active", ["user_id", "workspace", "last_active_at"])
+    .index("by_workspace_status_active", ["workspace", "status", "last_active_at"])
     .index("by_short_id", ["short_id"]),
 
   // One run of the pass for one (person, workspace). A run reserves its row as

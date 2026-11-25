@@ -37,8 +37,11 @@ const LIST_COUNT_CAP = 50;
  * ones its row counts ("4+" past that).
  */
 const TEAMMATE_SESSIONS = 4;
-/** The most teammates' priorities one list judges, the most recently active first; past that it says `teammates_truncated`. */
+/** The most teammates' priorities one list judges, the most recently active first (more with `all` or a status); past that it says `teammates_truncated`. */
 export const TEAMMATE_PRIORITIES_CAP = 60;
+export const TEAMMATE_ALL_CAP = 200;
+/** The most of one person's priorities of one status in one workspace any read takes (the active ones a rank orders, a list's own). */
+const OWN_PRIORITIES_READ = 200;
 /** The most mapped sessions `show` reads. */
 const SHOW_SESSIONS = 200;
 const MAX_HISTORY_DAYS = 30;
@@ -209,7 +212,7 @@ async function positionOf(ctx: Ctx, p: Priority): Promise<number | null> {
   const active: Priority[] = await ctx.db
     .query("priorities")
     .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", p.user_id).eq("workspace", p.workspace).eq("status", "active"))
-    .collect();
+    .take(OWN_PRIORITIES_READ);
   return positionsOf(active).get(String(p._id)) ?? null;
 }
 
@@ -302,31 +305,52 @@ async function echo(ctx: Ctx, viewer: Id<"users">, id: Id<"priorities">): Promis
 
 /**
  * The priorities the viewer can read in one workspace (or all of theirs).
- * Merged ones only when asked for by status; without a status or `all`, done
- * and quiet ones only from the last FINISHED_WINDOW_DAYS. Teammates' are
- * judged the most recently active first, at most TEAMMATE_PRIORITIES_CAP.
+ * Merged ones only when asked for by status. Without a status or `all`, done
+ * and quiet ones only from the last FINISHED_WINDOW_DAYS. The viewer's own are
+ * read whole (up to OWN_PRIORITIES_READ a status); teammates' newest first
+ * (by_workspace_status_active), at most TEAMMATE_PRIORITIES_CAP judged
+ * (TEAMMATE_ALL_CAP with `all` or a status), and `teammates_truncated` says
+ * when more were there.
  */
 async function visiblePriorities(ctx: Ctx, r: Reader, workspace: string | undefined, status: PriorityStatus | undefined, all: boolean): Promise<{ rows: Priority[]; teammates_truncated: boolean }> {
   const since = Date.now() - FINISHED_WINDOW_DAYS * DAY;
-  const recent = (p: Priority) => all || (p.status !== "done" && p.status !== "quiet") || (p.done_at ?? p.last_active_at) >= since;
+  const windowed = (st: PriorityStatus) => !status && !all && (st === "done" || st === "quiet");
+  const cap = status || all ? TEAMMATE_ALL_CAP : TEAMMATE_PRIORITIES_CAP;
   const featureOn = featureCheck(ctx);
   const keys = workspace ? (r.held.has(workspace) ? [workspace] : []) : [...r.held];
   const own: Priority[] = [];
   const theirs: Priority[] = [];
+  let truncated = false;
   for (const key of keys) {
     if (!(await featureOn(key))) continue;
     for (const st of status ? [status] : LISTED_STATUSES) {
+      const mine: Priority[] = windowed(st)
+        ? (await ctx.db
+          .query("priorities")
+          .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", r.viewer).eq("workspace", key).gte("last_active_at", since))
+          .order("desc")
+          .take(OWN_PRIORITIES_READ)).filter((p: Priority) => p.status === st)
+        : await ctx.db
+          .query("priorities")
+          .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", r.viewer).eq("workspace", key).eq("status", st))
+          .take(OWN_PRIORITIES_READ);
+      own.push(...mine);
+      if (!key.startsWith("team:")) continue;
+      // Newest first; the viewer's own come back in this read too, so it reads that many more.
+      const limit = cap + mine.length;
       const rows: Priority[] = await ctx.db
         .query("priorities")
-        .withIndex("by_workspace_status", (q: any) => q.eq("workspace", key).eq("status", st))
-        .collect();
-      for (const p of rows) if (status || recent(p)) (isOwner(r.viewer, p) ? own : theirs).push(p);
+        .withIndex("by_workspace_status_active", (q: any) => (windowed(st) ? q.eq("workspace", key).eq("status", st).gte("last_active_at", since) : q.eq("workspace", key).eq("status", st)))
+        .order("desc")
+        .take(limit + 1);
+      if (rows.length > limit) truncated = true;
+      for (const p of rows.slice(0, limit)) if (!isOwner(r.viewer, p)) theirs.push(p);
     }
   }
   theirs.sort((a, b) => b.last_active_at - a.last_active_at);
   const judged: Priority[] = [];
-  for (const p of theirs.slice(0, TEAMMATE_PRIORITIES_CAP)) if (await r.canRead(p)) judged.push(p);
-  return { rows: [...own, ...judged], teammates_truncated: theirs.length > TEAMMATE_PRIORITIES_CAP };
+  for (const p of theirs.slice(0, cap)) if (await r.canRead(p)) judged.push(p);
+  return { rows: [...own, ...judged], teammates_truncated: truncated || theirs.length > cap };
 }
 
 /**
@@ -541,7 +565,7 @@ async function doRank(ctx: Ctx, viewer: Id<"users">, shortId: string, rank: numb
   const active: Priority[] = await ctx.db
     .query("priorities")
     .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", viewer).eq("workspace", p.workspace).eq("status", "active"))
-    .collect();
+    .take(OWN_PRIORITIES_READ);
   const others = active.filter((r) => String(r._id) !== String(p._id));
   const to = Math.min(rank, active.length);
   let next = to;
@@ -578,7 +602,7 @@ async function doSetAside(ctx: Ctx, viewer: Id<"users">, shortId: string, aside:
   const active: Priority[] = await ctx.db
     .query("priorities")
     .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", viewer).eq("workspace", p.workspace).eq("status", "active"))
-    .collect();
+    .take(OWN_PRIORITIES_READ);
   const last = Math.max(0, ...active.filter((r) => r.rank_set_by === "pass").map((r) => r.rank ?? 0));
   await ctx.db.patch(p._id, { status: "active", rank: last + 1, rank_set_by: "pass", updated_at: now });
   return echo(ctx, viewer, p._id);

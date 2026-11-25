@@ -9,7 +9,7 @@ import { api } from "./_generated/api";
 import { hashToken } from "./apiTokens";
 import { teamFeatureOffMessage } from "./lib/teamFeatureGuard";
 import { HISTORY_SENDS_CAP, TEAMMATE_PRIORITIES_CAP } from "./priorities";
-import { sessionListedToTeam } from "./lib/prioritySessionVisibility";
+import { sessionListedToTeam, sessionSharedWithTeam } from "./lib/prioritySessionVisibility";
 import type { Id } from "./_generated/dataModel";
 
 setDefaultTimeout(60_000);
@@ -312,10 +312,20 @@ describe("reads", () => {
     expect([await unassigned(`team:${acme}`), await unassigned(`user:${ada}`)]).toEqual([0, 1]);
   });
 
-  test("a workflow's run log is never listed to the team", () => {
+  test("a workflow's run log counts in its team's workspace but is never listed to a teammate", () => {
     const conv = { user_id: "u1", team_id: "t1", is_private: false, team_visibility: "full", started_at: NOW } as any;
-    expect(sessionListedToTeam(conv, "t1", {}, { visibility: "full" })).toBe(true);
-    expect(sessionListedToTeam({ ...conv, is_workflow_primary: true, workflow_run_id: "w1" }, "t1", {}, { visibility: "full" })).toBe(false);
+    const log = { ...conv, is_workflow_primary: true, workflow_run_id: "w1" };
+    expect([sessionSharedWithTeam(conv, "t1", {}, { visibility: "full" }), sessionListedToTeam(conv, "t1", {}, { visibility: "full" })]).toEqual([true, true]);
+    expect([sessionSharedWithTeam(log, "t1", {}, { visibility: "full" }), sessionListedToTeam(log, "t1", {}, { visibility: "full" })]).toEqual([true, false]);
+  });
+
+  test("a teammate's done priority shows for 60 days, older only with all or a status", async () => {
+    const { t, as, bea, ws, p4 } = await world();
+    await t.run(async (ctx) => ctx.db.patch(p4, { last_active_at: NOW - 90 * DAY, done_at: NOW - 90 * DAY }));
+    const ids = async (args: any) => (await as(bea).query(pri.list, { workspace: ws, ...args })).map((r: any) => r.short_id);
+    expect(await ids({})).not.toContain("pri-4");
+    expect(await ids({ all: true })).toContain("pri-4");
+    expect(await ids({ status: "done" })).toEqual(["pri-4"]);
   });
 
   test("a co-owner of a session sees no pin line for a personal priority", async () => {

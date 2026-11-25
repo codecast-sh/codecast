@@ -25,7 +25,7 @@ import { isTeamMember } from "./privacy";
 import { canReadCall } from "./transcripts";
 import { isRestricted } from "./chatAccess";
 import { isStandingSession } from "./lib/orgOwnership";
-import { parseRoomKey } from "@codecast/shared/contracts";
+import { isRunLog, parseRoomKey } from "@codecast/shared/contracts";
 import { teamHasFeature, workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { vendorRefusalFromDb } from "./lib/vendorGuard";
 import {
@@ -84,8 +84,14 @@ const INITIATIVES_READ = 200;
 const PASS_TIMEOUT_MS = 5 * 60_000;
 /** (person, workspace) pairs one sweep runs; the rest wait for the next sweep. */
 export const SWEEP_MAX_PAIRS = 40;
-/** A sweep looks for strays among a pair's newest priorities, a few sessions each (the pass reads as many). */
+/** A sweep looks for strays among a pair's newest priorities, a few sessions each (the pass reads as many), and among this many priorities in all. */
 const SWEEP_STRAY_PRIORITIES = 30;
+const SWEEP_STRAY_BUDGET = 200;
+/** The most teams a sweep reads for the feature, and members per team. */
+const SWEEP_TEAMS_READ = 2_000;
+const SWEEP_MEMBERS_READ = 500;
+/** The most runs of one pair in a day a reservation reads. */
+const RUNS_OF_DAY_READ = 500;
 const SWEEP_STAGGER_MS = 5_000;
 
 /** Typed messages and pins a sweep reads per pair to see whether anything moved there. */
@@ -96,8 +102,6 @@ const RECENT_RUNS = 30;
 export const RESERVATION_TTL_MS = 15 * MINUTE;
 // Codegen catches up on the next push.
 const self = (internal as any).priorityPassRun;
-
-const LIVE_STATUSES = ["active", "done", "quiet", "set_aside"] as const;
 
 type Counts = { created: number; updated: number; merged: number; mapped_sessions: number };
 const NO_COUNTS: Counts = { created: 0, updated: 0, merged: 0, mapped_sessions: 0 };
@@ -287,6 +291,31 @@ async function callsIn(ctx: { db: any }, vis: SessionVisibility, userId: Id<"use
 }
 
 /**
+ * One person's priorities in one workspace the pass reads, newest first: every
+ * active and set-aside one, and the done or quiet ones that moved within
+ * PRIORITY_PASS_CAPS.finished_days (older ones the prompt hides are left out
+ * whole), at most `limit` of each.
+ */
+async function livePriorities(ctx: { db: any }, userId: Id<"users">, workspace: string, now: number, limit: number): Promise<Doc<"priorities">[]> {
+  const open: Doc<"priorities">[] = [];
+  for (const status of ["active", "set_aside"] as const) {
+    open.push(...(await ctx.db
+      .query("priorities")
+      .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).eq("status", status))
+      .take(limit)));
+  }
+  const recent: Doc<"priorities">[] = await ctx.db
+    .query("priorities")
+    .withIndex("by_user_workspace_active", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).gte("last_active_at", now - PRIORITY_PASS_CAPS.finished_days * DAY))
+    .order("desc")
+    .take(open.length + 2 * limit);
+  const finished = recent.filter((p) => p.status === "done" || p.status === "quiet");
+  const done = finished.filter((p) => p.status === "done").slice(0, limit);
+  const quiet = finished.filter((p) => p.status === "quiet").slice(0, limit);
+  return [...open, ...done, ...quiet].sort((a, b) => b.last_active_at - a.last_active_at);
+}
+
+/**
  * Assembles the pass's input for one person in one workspace: what they
  * touched since the cursor, and their priorities now. A session filed under a
  * team whose data may not go to the model vendor is left out, whichever
@@ -321,7 +350,8 @@ export const passInputs = internalQuery({
       const key = String(id);
       if (!convs.has(key)) {
         const conv: Doc<"conversations"> | null = await ctx.db.get(id);
-        convs.set(key, conv && (await inWorkspace(vis, conv, args.user_id, args.workspace)) && (await mayRead(conv)) ? conv : null);
+        // A workflow's run log is machine output, not the person's work: never an input (and never a stray either).
+        convs.set(key, conv && !isRunLog(conv) && (await inWorkspace(vis, conv, args.user_id, args.workspace)) && (await mayRead(conv)) ? conv : null);
       }
       return convs.get(key)!;
     };
@@ -362,17 +392,8 @@ export const passInputs = internalQuery({
       });
     }
 
-    // The person's priorities in this workspace, with their newest sessions;
-    // one the prompt hides (done or quiet for a month) is left out whole.
-    const hiddenBefore = now - PRIORITY_PASS_CAPS.finished_days * DAY;
-    const rows: Doc<"priorities">[] = [];
-    for (const status of LIVE_STATUSES) {
-      const found: Doc<"priorities">[] = await ctx.db
-        .query("priorities")
-        .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", args.user_id).eq("workspace", args.workspace).eq("status", status))
-        .take(PRIORITIES_READ);
-      rows.push(...found.filter((p) => !((p.status === "done" || p.status === "quiet") && p.last_active_at < hiddenBefore)));
-    }
+    // The person's priorities in this workspace, with their newest sessions.
+    const rows = await livePriorities(ctx, args.user_id, args.workspace, now, PRIORITIES_READ);
     const priorities: PassPriority[] = [];
     const strays: Id<"conversations">[] = [];
     const stepTaskIds = new Set<string>();
@@ -444,7 +465,8 @@ const runsOfDay = (ctx: { db: any }, userId: Id<"users">, workspace: string, now
   ctx.db
     .query("priority_pass_runs")
     .withIndex("by_user_workspace_started", (q: any) => q.eq("user_id", userId).eq("workspace", workspace).gte("started_at", now - DAY))
-    .collect();
+    .order("desc")
+    .take(RUNS_OF_DAY_READ);
 
 /**
  * Why a run of the pair may not start now, in the words a person reads, or
@@ -572,6 +594,72 @@ function rowFields(w: Record<string, unknown>, insert = false): Record<string, u
 }
 
 /**
+ * Moves sessions between priorities and then counts again, from the index,
+ * every priority a session moved to or from, so a count that drifted heals:
+ * the person's own in any workspace (a session made private leaves a team
+ * priority from the personal pass).
+ */
+function sessionMover(ctx: { db: any }) {
+  const moved = new Map<Id<"priorities">, number>();
+  const move = async (conv: Doc<"conversations">, to: Id<"priorities"> | undefined, step_key: string | undefined) => {
+    if (conv.priority_id) moved.set(conv.priority_id, (moved.get(conv.priority_id) ?? 0) - 1);
+    if (to) moved.set(to, (moved.get(to) ?? 0) + 1);
+    await ctx.db.patch(conv._id, { priority_id: to, priority_step_key: step_key });
+  };
+  const recount = async (userId: Id<"users">) => {
+    for (const [id, delta] of moved) {
+      const row: Doc<"priorities"> | null = await ctx.db.get(id);
+      if (!row || String(row.user_id) !== String(userId)) continue;
+      const held = (await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_CAP + 1)).length;
+      const capped = held > SESSION_COUNT_CAP;
+      const session_count = capped ? Math.max(SESSION_COUNT_CAP, (row.session_count ?? 0) + delta) : held;
+      if (session_count !== row.session_count || capped !== !!row.session_count_capped) {
+        await ctx.db.patch(id, { session_count, session_count_capped: capped || undefined });
+      }
+    }
+  };
+  return { move, recount };
+}
+
+/** A session that left this workspace lets go of the priority here, so its new workspace's pass can map it. Returns how many let go. */
+async function letGoStrays(
+  ctx: { db: any },
+  vis: SessionVisibility,
+  move: (conv: Doc<"conversations">, to: undefined, step_key: undefined) => Promise<void>,
+  pair: { user_id: Id<"users">; workspace: string },
+  strays: Id<"conversations">[],
+): Promise<number> {
+  let n = 0;
+  for (const id of strays) {
+    const conv: Doc<"conversations"> | null = await ctx.db.get(id);
+    const held: Doc<"priorities"> | null = conv?.priority_id ? await ctx.db.get(conv.priority_id) : null;
+    if (!conv || !held || (await inWorkspace(vis, conv, pair.user_id, pair.workspace)) || String(held.user_id) !== String(pair.user_id) || held.workspace !== pair.workspace) continue;
+    await move(conv, undefined, undefined);
+    n++;
+  }
+  return n;
+}
+
+/**
+ * A pass with nothing new to read that still finds sessions which left the
+ * workspace: lets them go without asking the model. Settles its run as
+ * skipped (it asked no model, so it neither trips the runNow throttle nor
+ * spends the day's ceiling) at `step_to`; with `record` false (a run already
+ * settled, as by the daily ceiling) it writes no run row.
+ */
+export const releaseStrays = internalMutation({
+  args: { ...runRowArgs, strays: v.array(v.id("conversations")), step_to: v.number(), record: v.boolean() },
+  handler: async (ctx, args): Promise<number> => {
+    const { strays, step_to, record, ...run } = args;
+    const { move, recount } = sessionMover(ctx);
+    const n = await letGoStrays(ctx, sessionVisibility(ctx), move, args, strays);
+    await recount(args.user_id);
+    if (record) await settleRun(ctx, { ...run, cursor_at: Math.max(run.cursor_at, step_to), status: "skipped", error: `nothing new; let go of ${plural(n, "session")} that left this workspace` });
+    return n;
+  },
+});
+
+/**
  * Writes one pass's plan, atomically, with its run row at `cursor_at`. Re-checks
  * what the plan cannot know: a priority belongs to this person and workspace,
  * a session is theirs and in this workspace, and anything the person set while
@@ -644,13 +732,7 @@ export const applyPlan = internalMutation({
       counts.merged++;
     }
 
-    // Each session move changes two priorities' counts: these are the moves, by priority.
-    const moved = new Map<Id<"priorities">, number>();
-    const move = async (conv: Doc<"conversations">, to: Id<"priorities"> | undefined, step_key: string | undefined) => {
-      if (conv.priority_id) moved.set(conv.priority_id, (moved.get(conv.priority_id) ?? 0) - 1);
-      if (to) moved.set(to, (moved.get(to) ?? 0) + 1);
-      await ctx.db.patch(conv._id, { priority_id: to, priority_step_key: step_key });
-    };
+    const { move, recount } = sessionMover(ctx);
 
     const conversationOf = async (ref: string): Promise<Doc<"conversations"> | null> => {
       const id = ctx.db.normalizeId("conversations", ref);
@@ -672,31 +754,14 @@ export const applyPlan = internalMutation({
       if (!conv || (held && (String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace))) continue;
       await move(conv, undefined, undefined);
     }
-    // A session that left this workspace lets go of the priority here, so its new workspace's pass can map it.
-    for (const id of strays ?? []) {
-      const conv: Doc<"conversations"> | null = await ctx.db.get(id);
-      const held: Doc<"priorities"> | null = conv?.priority_id ? await ctx.db.get(conv.priority_id) : null;
-      if (!conv || !held || (await inWorkspace(vis, conv, args.user_id, args.workspace)) || String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace) continue;
-      await move(conv, undefined, undefined);
-    }
+    await letGoStrays(ctx, vis, move, args, strays ?? []);
     // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown.
     for (const [from, into] of mergedInto) {
       const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_CAP);
       for (const conv of left) if (await inWorkspace(vis, conv, args.user_id, args.workspace)) await move(conv, into, undefined);
     }
 
-    // Every priority a session moved to or from is counted again from the index, so a count that drifted heals:
-    // the person's own in any workspace (a session made private leaves a team priority from the personal pass).
-    for (const [id, delta] of moved) {
-      const row: Doc<"priorities"> | null = await ctx.db.get(id);
-      if (!row || String(row.user_id) !== String(args.user_id)) continue;
-      const held = (await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_CAP + 1)).length;
-      const capped = held > SESSION_COUNT_CAP;
-      const session_count = capped ? Math.max(SESSION_COUNT_CAP, (row.session_count ?? 0) + delta) : held;
-      if (session_count !== row.session_count || capped !== !!row.session_count_capped) {
-        await ctx.db.patch(id, { session_count, session_count_capped: capped || undefined });
-      }
-    }
+    await recount(args.user_id);
 
     await settleRun(ctx, { ...run, status: "ok", counts });
     return counts;
@@ -747,7 +812,14 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
     return { status: "skipped", reason: "feature_off" };
   }
   const held: Reservation = await ctx.runMutation(self.reserve, { ...base, cursor_at: gate.cursor_at, run_now: !!args.now });
-  if ("refused" in held) return { status: "skipped", reason: held.reason };
+  if ("refused" in held) {
+    // The day's ceiling holds back the model, not letting go of sessions that left: that costs nothing.
+    if (held.refused === "daily_ceiling") {
+      const read: PassInputs = await ctx.runQuery(self.passInputs, { ...pair, window_start: gate.cursor_at });
+      if (read.strays.length) await ctx.runMutation(self.releaseStrays, { ...base, cursor_at: gate.cursor_at, strays: read.strays, step_to: gate.cursor_at, record: false });
+    }
+    return { status: "skipped", reason: held.reason };
+  }
   const run_id = held.run_id;
 
   let read: PassInputs;
@@ -762,9 +834,10 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const { cursor_at } = read;
   if (!read.input.sessions.length && !read.input.calls.length && !args.force && read.strays.length) {
     // Nothing new, but sessions a priority here holds have left the workspace: let them go without asking the model.
-    const plan: MergePlan = { creates: [], updates: [], merges: [], sessions: [], unmap: [], notes: [] };
-    const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: read.read_to, from_cursor: cursor_at, cost_usd: 0, plan, strays: read.strays });
-    return counts ? { status: "ok", counts, cost_usd: 0 } : { status: "skipped", reason: "superseded" };
+    await ctx.runMutation(self.releaseStrays, { ...base, run_id, cursor_at, strays: read.strays, step_to: read.read_to, record: true });
+    const chained = read.more && (args.chain ?? 0) + 1 < MAX_CHAINED_RUNS;
+    if (chained) await ctx.scheduler.runAfter(CHAIN_DELAY_MS, self.runPass, { ...pair, chain: (args.chain ?? 0) + 1 });
+    return { status: "skipped", reason: "nothing_new", ...(chained ? { chained } : {}) };
   }
   if (!read.input.sessions.length && !read.input.calls.length && !args.force) {
     // Nothing of this workspace's in what was read: the cursor moves past it, so other workspaces' activity is not read again.
@@ -835,15 +908,16 @@ export const sweepCandidates = internalQuery({
     const now = Date.now();
     const vis = sessionVisibility(ctx);
     const pairs = new Map<string, { user_id: Id<"users">; workspace: string }>();
-    for (const team of await ctx.db.query("teams").collect()) {
+    for (const team of await ctx.db.query("teams").take(SWEEP_TEAMS_READ)) {
       if (!team.features?.priorities || !(await teamHasFeature(ctx, team._id, "priorities"))) continue;
-      const members = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", team._id)).collect();
+      const members = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", team._id)).take(SWEEP_MEMBERS_READ);
       for (const m of members) {
         for (const workspace of [`team:${team._id}`, `user:${m.user_id}`]) pairs.set(`${m.user_id}|${workspace}`, { user_id: m.user_id, workspace });
       }
     }
     // Longest waiting first, so a capped sweep never starves the same pairs.
     const waiting = await Promise.all([...pairs.values()].map(async (p) => ({ ...p, cursor: await cursorFor(ctx, p.user_id, p.workspace, now) })));
+    const strayBudget = { left: SWEEP_STRAY_BUDGET };
     waiting.sort((a, b) => a.cursor - b.cursor);
     const out: Array<{ user_id: Id<"users">; workspace: string }> = [];
     for (const { cursor, ...pair } of waiting) {
@@ -864,25 +938,24 @@ export const sweepCandidates = internalQuery({
           break;
         }
       }
-      if (picked || (await holdsStray(ctx, vis, pair, now))) out.push(pair);
+      if (picked || (await holdsStray(ctx, vis, pair, now, strayBudget))) out.push(pair);
     }
     return out;
   },
 });
 
-/** Whether one of the pair's newest priorities holds a session that has left its workspace (passInputs' strays, read the same way). */
-async function holdsStray(ctx: { db: any }, vis: SessionVisibility, pair: { user_id: Id<"users">; workspace: string }, now: number): Promise<boolean> {
-  const hiddenBefore = now - PRIORITY_PASS_CAPS.finished_days * DAY;
-  for (const status of LIVE_STATUSES) {
-    const rows: Doc<"priorities">[] = await ctx.db
-      .query("priorities")
-      .withIndex("by_user_workspace_status", (q: any) => q.eq("user_id", pair.user_id).eq("workspace", pair.workspace).eq("status", status))
-      .take(SWEEP_STRAY_PRIORITIES);
-    for (const p of rows) {
-      if ((p.status === "done" || p.status === "quiet") && p.last_active_at < hiddenBefore) continue;
-      const held: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).order("desc").take(PRIORITY_PASS_CAPS.sessions_per_priority);
-      for (const c of held) if (!(await inWorkspace(vis, c, pair.user_id, pair.workspace))) return true;
-    }
+/**
+ * Whether one of the pair's newest priorities holds a session that has left
+ * its workspace (passInputs' strays, read the same way), spending at most
+ * `budget.left` priorities of the sweep's probe. A stray past the budget waits
+ * for the pair's next pass.
+ */
+async function holdsStray(ctx: { db: any }, vis: SessionVisibility, pair: { user_id: Id<"users">; workspace: string }, now: number, budget: { left: number }): Promise<boolean> {
+  if (budget.left <= 0) return false;
+  for (const p of await livePriorities(ctx, pair.user_id, pair.workspace, now, Math.min(SWEEP_STRAY_PRIORITIES, budget.left))) {
+    if (budget.left-- <= 0) return false;
+    const held: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", p._id)).order("desc").take(PRIORITY_PASS_CAPS.sessions_per_priority);
+    for (const c of held) if (!(await inWorkspace(vis, c, pair.user_id, pair.workspace))) return true;
   }
   return false;
 }
@@ -1033,7 +1106,7 @@ export const evalTargets = internalQuery({
     const id = ctx.db.normalizeId("users", args.user);
     const user: Doc<"users"> | null = id ? await ctx.db.get(id) : await ctx.db.query("users").withIndex("email", (q: any) => q.eq("email", args.user)).first();
     if (!user) throw new Error(`no user ${args.user}`);
-    const memberships: Doc<"team_memberships">[] = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", user._id)).collect();
+    const memberships: Doc<"team_memberships">[] = await ctx.db.query("team_memberships").withIndex("by_user_id", (q: any) => q.eq("user_id", user._id)).take(SWEEP_MEMBERS_READ);
     const workspaces = [{ workspace: `user:${user._id}`, name: "personal" }];
     for (const m of memberships) {
       const team: Doc<"teams"> | null = await ctx.db.get(m.team_id);
