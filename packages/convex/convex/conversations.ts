@@ -12488,7 +12488,8 @@ const DISMISS_PAGE_ROWS = 100;
 // sessions the prompt counted and listed, never a set re-derived by age here.
 // An age sweep also took the session the person had open and any old row the
 // window did not hold, so the number on the button stopped matching what was
-// acted on (ct-98161). Never a row pinned or snoozed in the meantime. A row the
+// acted on (ct-98161). Never a row pinned or snoozed in the meantime. A team
+// session is dismissed for the caller alone (session_viewer_triage). A row the
 // caller runs or owns (the owner set, as the dispatch patch gate and every
 // other triage gesture read it) gets the stamp, unless it is already dismissed;
 // `at` is the stamp the web wrote optimistically, so the server's echo matches
@@ -12508,6 +12509,12 @@ export async function dismissSessionsExactly(
     const id = ctx.db.normalizeId("conversations", raw);
     const conv = id ? await ctx.db.get(id) : null;
     if (!conv || conv.inbox_pinned_at || conv.inbox_snoozed_until) continue;
+    // A team session is cleared for this person only (lib/viewerTriage).
+    if (await isTeamOwnedConversation(ctx, conv._id, conv)) {
+      await recordViewerTriage(ctx, userId, conv._id, { inbox_dismissed_at: at });
+      dismissed++;
+      continue;
+    }
     if (!(await isRunnerOrOwner(ctx, conv, userId))) {
       if (await hideConversationForViewer(ctx, userId, conv, "dismiss", at)) dismissed++;
       continue;

@@ -150,6 +150,31 @@ describe("the web's markSessionsDismissed dispatch", () => {
     vi.useRealTimers();
   });
 
+  test("a team session is dismissed for the caller alone, and the row keeps no stamp", async () => {
+    vi.useFakeTimers();
+    const t = convexTest(schema, allModules);
+    const ids = await t.run(async (ctx) => {
+      const me = await ctx.db.insert("users", { name: "Ann", email: "ann@x.dev" } as any);
+      const team = await ctx.db.insert("teams", { name: "Team", created_at: old } as any);
+      const conv = await ctx.db.insert("conversations", {
+        user_id: me, agent_type: "claude_code", session_id: crypto.randomUUID(), started_at: old, updated_at: old,
+        message_count: 1, is_private: false, team_id: team, team_owner_team_id: team, status: "completed",
+      } as any);
+      await ctx.db.insert("session_team_owners", { conversation_id: conv, team_id: team, added_by: me, added_at: old });
+      return { me, conv };
+    });
+    const at = Date.now();
+    await t.withIdentity({ subject: `${ids.me}|session` }).mutation(api.dispatch.dispatch, { action: "markSessionsDismissed", args: [[ids.conv]], result: at });
+    await t.finishAllScheduledFunctions(vi.runAllTimers);
+    const { stamp, triage } = await t.run(async (ctx) => ({
+      stamp: ((await ctx.db.get(ids.conv)) as any)?.inbox_dismissed_at,
+      triage: (await ctx.db.query("session_viewer_triage").collect()).map((r: any) => [r.user_id, r.inbox_dismissed_at]),
+    }));
+    expect(stamp).toBeUndefined();
+    expect(triage).toEqual([[ids.me, at]]);
+    vi.useRealTimers();
+  });
+
   test("the undo the web sends back clears exactly the sweep's rows and changes no other", async () => {
     vi.useFakeTimers();
     const t = convexTest(schema, allModules);
