@@ -31,6 +31,17 @@ describe("dormantWakeLabel", () => {
     expect(dormantWakeLabel({ kind: "claim", what: null, back: NOW - 1 }, NOW))
       .toEqual({ what: "nothing scheduled", when: "yours now", warn: DORMANT_CLAIM_TITLE });
   });
+
+  test("on a teammate's session the words name its owner, never the viewer", () => {
+    expect(dormantWakeLabel({ kind: "claim", what: null, back: NOW + 30 * 60_000 }, NOW, "Ann"))
+      .toEqual({ what: "nothing scheduled", when: "back to Ann in 30m", warn: "The agent named a wake nothing here can see. It returns to Ann if nothing happens." });
+    expect(dormantWakeLabel({ kind: "claim", what: null, back: NOW - 1 }, NOW, "Ann").when).toBe("with Ann now");
+    expect(dormantWakeLabel({ kind: "parked" }, NOW, "Ann").what).toBe("parked by Ann");
+    expect(dormantWakeLabel({ kind: "run" }, NOW, "Ann").when).toBe("when it ends or asks Ann");
+    const stale = dormantWakeLabel({ kind: "unconfirmed", wake: "wait", since: NOW - 3 * 86_400_000 }, NOW, "Ann");
+    expect(stale.when).toBe("with Ann now");
+    expect(stale.warn).toContain("it is Ann's to check");
+  });
 });
 
 describe("sessionTriggerRows", () => {
