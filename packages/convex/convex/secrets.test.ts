@@ -2,66 +2,17 @@
 // the workspaces the caller holds, a ciphertext is bound to its workspace, an
 // agent's read is recorded against its session, and a request filled by a
 // person wakes the asking session without the value in the message.
-import { afterAll, afterEach, beforeAll, expect, setDefaultTimeout, test } from "bun:test";
-import { convexTest } from "convex-test";
+import { expect, setDefaultTimeout, test } from "bun:test";
 import { anyApi } from "convex/server";
-import schema from "./schema";
 import { hashToken } from "./apiTokens";
-import { allModules } from "./testModules.testkit";
 import { decryptSecret, encryptSecret } from "./secrets";
-import { APPROVE_FOR_SESSION, SECRET_APPROVAL_TTL_MS, isPresenceRequired } from "@codecast/shared/contracts/secrets";
-import { seedPresence } from "./passkeys.testkit";
+import { SECRET_APPROVAL_TTL_MS, isPresenceRequired } from "@codecast/shared/contracts/secrets";
 import { formatVaultDeclined, parseVaultReady } from "@codecast/shared/contracts";
+import { ANA_TOKEN, BEN_TOKEN, CAT_TOKEN, STRIPE, answer, api, read, seed, touch, useVaultTestEnv } from "./secrets.testkit";
 import { isHumanOnlyCategory } from "./lib/decisionCategory";
 
 setDefaultTimeout(60_000);
-
-const api = anyApi as any;
-const KEY_ENV = "CONNECTION_SECRETS_KEY";
-const ANA_TOKEN = "a".repeat(64);
-const BEN_TOKEN = "b".repeat(64);
-const CAT_TOKEN = "c".repeat(64);
-const STRIPE = "sk_" + "test_51HsecretVALUEdoNotLeak9876";
-
-let previousKey: string | undefined;
-beforeAll(() => {
-  previousKey = process.env[KEY_ENV];
-  process.env[KEY_ENV] = "test-deployment-key-0123456789abcdef";
-});
-afterAll(() => {
-  if (previousKey === undefined) delete process.env[KEY_ENV];
-  else process.env[KEY_ENV] = previousKey;
-});
-
-const backends: any[] = [];
-afterEach(async () => {
-  for (const t of backends.splice(0)) await t.finishAllScheduledFunctions?.(() => {}).catch?.(() => {});
-});
-
-async function seed() {
-  const t = convexTest(schema, allModules);
-  backends.push(t);
-  const now = Date.now();
-  const ids = await t.run(async (ctx) => {
-    const acme = await ctx.db.insert("teams", { name: "Acme", created_at: now, invite_code: "a" } as any);
-    const beta = await ctx.db.insert("teams", { name: "Beta", created_at: now, invite_code: "b" } as any);
-    const ana = await ctx.db.insert("users", { name: "Ana" } as any);
-    const ben = await ctx.db.insert("users", { name: "Ben" } as any);
-    const cat = await ctx.db.insert("users", { name: "Cat" } as any);
-    for (const u of [ana, ben]) await ctx.db.insert("team_memberships", { user_id: u, team_id: acme, role: "member", joined_at: now } as any);
-    await ctx.db.insert("team_memberships", { user_id: cat, team_id: beta, role: "member", joined_at: now } as any);
-    for (const [u, tok] of [[ana, ANA_TOKEN], [ben, BEN_TOKEN], [cat, CAT_TOKEN]] as const) {
-      await ctx.db.insert("api_tokens", { user_id: u, token_hash: await hashToken(tok), name: "cli", created_at: now, last_used_at: now } as any);
-    }
-    const conv = await ctx.db.insert("conversations", {
-      user_id: ana, team_id: acme, agent_type: "claude_code", session_id: "sess-ana-1", short_id: "jx7ana1", title: "Wire up billing",
-      started_at: now, updated_at: now, message_count: 3, is_private: false, status: "active", project_path: "/repo",
-    } as any);
-    return { acme, beta, ana, ben, cat, conv };
-  });
-  const as = (u: string) => t.withIdentity({ subject: `${u}|test` });
-  return { t, ...ids, as };
-}
+useVaultTestEnv();
 
 const allText = async (t: any) => JSON.stringify(await t.run(async (ctx: any) => ({
   pending: await ctx.db.query("pending_messages").collect(),
@@ -264,18 +215,6 @@ test("the redaction version moves on every value write and delete, and the event
 });
 
 const SEED = "JBSWY3DPEHPK3PXP";
-const read = (t: any, refs: string[], extra: Record<string, unknown> = {}) =>
-  t.action(api.secrets.cliRead, { api_token: ANA_TOKEN, refs, conversation: "jx7ana1", purpose: "run", ...extra });
-/** The Touch ID grant string a person's press on the web carries, for one secret. */
-const touch = async (t: any, as: (u: string) => any, user: string, action: "reveal" | "ask_first_off" | "touch_id_off", ref: string) =>
-  seedPresence(t, user, action, (await as(user).query(api.secrets.show, { ref }))._id);
-/** A person answers on the web, signed in: the only way an Ask first decision settles. An Approve comes with its Touch ID grant. */
-const answer = async (t: any, as: (u: string) => any, user: string, decision: string, index: number) => {
-  const row = await t.run(async (ctx: any) => (await ctx.db.query("session_decisions").collect()).find((d: any) => d.short_id === decision));
-  const grant = row.options[index]?.label === APPROVE_FOR_SESSION ? await seedPresence(t, user, "approve", String(row._id)) : undefined;
-  return as(user).mutation(api.sessionDecisions.resolve, { decision_id: row._id, status: "answered", answer_index: index, grant });
-};
-
 test("Ask first: an agent's read files one decision for the session, Approve lets that session read, Deny asks again", async () => {
   const { t, as, ana, ben, acme, conv } = await seed();
   await as(ana).action(api.secrets.create, { name: "stripe-live", kind: "key", payload: { value: STRIPE }, team_id: acme });
@@ -523,92 +462,6 @@ test("refresh refuses a stale write-back with a distinct answer", async () => {
   const stale = await t.action(api.secrets.refresh, { api_token: ANA_TOKEN, ref: "app", payload: { cookies: [{ ...cookie, value: "cookie-3" }], captured_from: "agent-browser" }, expected_updated_at: seen });
   expect(stale).toMatchObject({ stale: true, value_updated_at: ok.value_updated_at, message: expect.stringMatching(/read it again/) });
   expect((await as(ana).action(api.secrets.reveal, { ref: "app" })).payload.cookies[0].value).toBe("cookie-2");
-});
-
-test("Touch ID is its own switch: it gates reveal, Approve and turning a guard off, and Ask first works without it", async () => {
-  const { t, as, ana, acme } = await seed();
-  await as(ana).action(api.secrets.create, { name: "stripe-live", kind: "key", payload: { value: STRIPE }, team_id: acme });
-  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: true });
-  const decisions = () => t.run(async (ctx: any) => ctx.db.query("session_decisions").collect());
-
-  // Ask first without Touch ID: reveal and Approve are one press each, no grant.
-  expect(await as(ana).action(api.secrets.reveal, { ref: "stripe-live" })).toEqual({ payload: { value: STRIPE } });
-  await read(t, ["stripe-live"]);
-  const [first] = await decisions();
-  expect(first.touch_id).toBeUndefined();
-  await as(ana).mutation(api.sessionDecisions.resolve, { decision_id: first._id, status: "answered", answer_index: 0 });
-  expect((await read(t, ["stripe-live"])).secrets[0].payload).toEqual({ value: STRIPE });
-
-  // Touch ID on from a token; off only from a signed-in person, with a grant.
-  expect(await t.mutation(api.secrets.setTouchId, { api_token: ANA_TOKEN, ref: "stripe-live", touch_id: true })).toMatchObject({ touch_id: true });
-  expect((await t.mutation(api.secrets.setTouchId, { api_token: ANA_TOKEN, ref: "stripe-live", touch_id: false })).error).toMatch(/Only a person turns Touch ID off/);
-  expect((await as(ana).query(api.secrets.show, { ref: "stripe-live" })).touch_id).toBe(true);
-
-  // Re-armed, the next decision carries touch_id and its Approve takes a grant.
-  expect(isPresenceRequired(await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false }))).toBe(true);
-  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false, grant: await touch(t, as, ana, "ask_first_off", "stripe-live") });
-  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: true });
-  await read(t, ["stripe-live"]);
-  const gated = (await decisions()).find((d: any) => d.status === "pending");
-  expect(gated.touch_id).toBe(true);
-  await expect(as(ana).mutation(api.sessionDecisions.resolve, { decision_id: gated._id, status: "answered", answer_index: 0 })).rejects.toThrow(/presence_required/);
-
-  // Touch ID off takes its own grant, and clears the flag on the open decision, whose Approve is then one press.
-  expect(isPresenceRequired(await as(ana).mutation(api.secrets.setTouchId, { ref: "stripe-live", touch_id: false }))).toBe(true);
-  const off = await touch(t, as, ana, "touch_id_off", "stripe-live");
-  expect(await as(ana).mutation(api.secrets.setTouchId, { ref: "stripe-live", touch_id: false, grant: off })).toMatchObject({ touch_id: false });
-  expect((await t.run(async (ctx: any) => ctx.db.get(gated._id))).touch_id).toBeUndefined();
-  await as(ana).mutation(api.sessionDecisions.resolve, { decision_id: gated._id, status: "answered", answer_index: 0 });
-  expect((await read(t, ["stripe-live"])).secrets[0].payload).toEqual({ value: STRIPE });
-  expect(await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false })).toMatchObject({ ask_first: false });
-});
-
-test("a read of several Ask first secrets files one decision: one Approve and one Touch ID open them all", async () => {
-  const { t, as, ana, acme } = await seed();
-  for (const name of ["stripe-live", "prod-db", "plain"]) await as(ana).action(api.secrets.create, { name, kind: "key", payload: { value: `${name}-value-123456` }, team_id: acme });
-  for (const name of ["stripe-live", "prod-db"]) await as(ana).mutation(api.secrets.setAskFirst, { ref: name, ask_first: true });
-  await as(ana).mutation(api.secrets.setTouchId, { ref: "prod-db", touch_id: true });
-
-  const held = await read(t, ["stripe-live", "prod-db", "plain"]);
-  expect(held.secrets).toBeUndefined();
-  expect(held.approvals.map((a: any) => a.secret)).toEqual(["stripe-live", "prod-db"]);
-  expect(new Set(held.approvals.map((a: any) => a.decision)).size).toBe(1);
-  const decisions = await t.run(async (ctx: any) => ctx.db.query("session_decisions").collect());
-  expect(decisions.length).toBe(1);
-  expect(decisions[0].question).toBe("Wire up billing asks to use stripe-live and prod-db");
-  expect(decisions[0].touch_id).toBe(true);
-  // A repeat reuses it.
-  expect((await read(t, ["stripe-live", "prod-db"])).approvals.every((a: any) => a.decision === held.needs_approval.decision)).toBe(true);
-  expect(await t.run(async (ctx: any) => (await ctx.db.query("session_decisions").collect()).length)).toBe(1);
-
-  // One grant for the decision approves both.
-  await expect(as(ana).mutation(api.sessionDecisions.resolve, { decision_id: decisions[0]._id, status: "answered", answer_index: 0 })).rejects.toThrow(/presence_required/);
-  await answer(t, as, ana, held.needs_approval.decision, 0);
-  const ok = await read(t, ["stripe-live", "prod-db", "plain"]);
-  expect(ok.secrets.map((x: any) => x.payload.value)).toEqual(["stripe-live-value-123456", "prod-db-value-123456", "plain-value-123456"]);
-  expect((await t.run(async (ctx: any) => ctx.db.query("secret_approvals").collect())).map((a: any) => a.status)).toEqual(["approved", "approved"]);
-});
-
-test("switching off Ask first on one secret of a batched decision keeps it open for the rest", async () => {
-  const { t, as, ana, acme } = await seed();
-  for (const name of ["stripe-live", "prod-db"]) {
-    await as(ana).action(api.secrets.create, { name, kind: "key", payload: { value: `${name}-value-123456` }, team_id: acme });
-    await as(ana).mutation(api.secrets.setAskFirst, { ref: name, ask_first: true });
-  }
-  await as(ana).mutation(api.secrets.setTouchId, { ref: "stripe-live", touch_id: true });
-  const held = await read(t, ["stripe-live", "prod-db"], { why: "refund order 123\n\nand check the ledger" });
-  expect((await t.run(async (ctx: any) => ctx.db.query("session_decisions").first())).touch_id).toBe(true);
-  await as(ana).mutation(api.secrets.setAskFirst, { ref: "stripe-live", ask_first: false, grant: await touch(t, as, ana, "ask_first_off", "stripe-live") });
-  const [decision] = await t.run(async (ctx: any) => ctx.db.query("session_decisions").collect());
-  expect(decision.status).toBe("pending");
-  expect(decision.short_id).toBe(held.needs_approval.decision);
-  // It names only what it still waits on, and no longer asks for the dropped secret's Touch ID.
-  expect(decision.question).toBe("Wire up billing asks to use prod-db");
-  expect(decision.context_md).toStartWith("Why: refund order 123\n\nand check the ledger\n\nprod-db (");
-  expect(decision.context_md).not.toContain("stripe-live");
-  expect(decision.touch_id).toBeUndefined();
-  await as(ana).mutation(api.sessionDecisions.resolve, { decision_id: decision._id, status: "answered", answer_index: 0 });
-  expect((await read(t, ["stripe-live", "prod-db"])).secrets.length).toBe(2);
 });
 
 test("Ask first is a person's control: a token cannot turn it off or answer its decision, from a session or a plain shell", async () => {

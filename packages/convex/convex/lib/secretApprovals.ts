@@ -3,12 +3,13 @@
 // approval decision through it, and secrets.ts records every event with it,
 // so neither imports the other's module graph.
 
-import { APPROVE_FOR_SESSION } from "@codecast/shared/contracts/secrets";
+import { APPROVE_FOR_SESSION, SECRET_APPROVAL_TTL_MS, type SecretReadPurpose } from "@codecast/shared/contracts/secrets";
 import type { Doc, Id } from "../_generated/dataModel";
 import { consumePresence, presenceRefusal } from "./presence";
 import { isSessionOwner } from "../sessionOwners";
 
 type Ctx = { db: any };
+type SecretRow = Doc<"secrets">;
 
 // The redaction version is one counter per workspace, bumped on every change
 // to what the daemon's redaction feed holds (a value written or deleted, an
@@ -147,4 +148,62 @@ export async function settleSecretApproval(
       decision_id: row._id,
     });
   }
+}
+
+// ── Ask first decisions ─────────────────────────────────────────────────────
+
+const PURPOSE_PHRASE: Record<SecretReadPurpose, string> = {
+  get: "read it",
+  run: "run a command with it",
+  env: "export it into a shell",
+  otp: "make a 2FA code",
+  signin: "sign in",
+};
+
+/** "a", "a and b", "a, b and c". */
+export const joinNames = (names: string[]) => (names.length < 2 ? names.join("") : `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`);
+
+/** The secrets an Ask first decision still waits on: every pending approval filed on it. */
+export async function approvalSecrets(ctx: Ctx, decisionId: Id<"session_decisions">): Promise<SecretRow[]> {
+  const rows = await ctx.db.query("secret_approvals").withIndex("by_decision", (q: any) => q.eq("decision_id", decisionId)).collect();
+  const pending = rows.filter((a: Doc<"secret_approvals">) => a.status === "pending");
+  return (await Promise.all(pending.map((a: Doc<"secret_approvals">) => ctx.db.get(a.secret_id)))).filter(Boolean);
+}
+
+export const ASKS_TO_USE = " asks to use ";
+
+/** What Approve grants, naming every secret the decision covers. */
+function approvalSubject(rows: SecretRow[]): string {
+  const named = joinNames(rows.map((r) => `${r.name} (${r.short_id})`));
+  const subject = rows.length > 1 ? `${named} are Ask first in the Vault. Approve lets this session read all of them` : `${named} is Ask first in the Vault. Approve lets this session read it`;
+  return `${subject} until the session ends, for ${SECRET_APPROVAL_TTL_MS / 3_600_000} hours at most, and a new value asks again.`;
+}
+
+/** An Ask first decision's context: the agent's why first (its own words), then what Approve grants. */
+export function approvalContext(rows: SecretRow[], purpose: SecretReadPurpose, why: string | undefined): string {
+  const site = purpose === "signin" ? rows.find((r) => r.sites?.[0])?.sites?.[0] : undefined;
+  const reason = why?.trim() ? `Why: ${why.trim()}` : `To ${site ? `sign in to ${site}` : PURPOSE_PHRASE[purpose]}.`;
+  return `${reason}\n\n${approvalSubject(rows)}`;
+}
+
+/**
+ * Rewrite an open Ask first decision to the secrets it still waits on: its
+ * question and context name only those, and it asks for Touch ID only while
+ * one of them has it on. False when none is left, so the caller withdraws it.
+ */
+export async function refreshApprovalDecision(ctx: Ctx, decisionId: Id<"session_decisions">): Promise<boolean> {
+  const rows = await approvalSecrets(ctx, decisionId);
+  if (!rows.length) return false;
+  const decision = await ctx.db.get(decisionId);
+  if (decision?.status !== "pending") return true;
+  const at = decision.question.indexOf(ASKS_TO_USE);
+  const question = at < 0 ? decision.question : decision.question.slice(0, at + ASKS_TO_USE.length) + joinNames(rows.map((r) => r.name));
+  const old = decision.context_md ?? "";
+  const cut = old.lastIndexOf("\n\n");
+  const context_md = `${cut < 0 ? old : old.slice(0, cut)}\n\n${approvalSubject(rows)}`;
+  const touch_id = rows.some((r) => r.touch_id) || undefined;
+  if (question !== decision.question || context_md !== decision.context_md || touch_id !== decision.touch_id) {
+    await ctx.db.patch(decisionId, { question, context_md, touch_id, updated_at: Date.now() });
+  }
+  return true;
 }
