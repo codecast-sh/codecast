@@ -6,7 +6,7 @@
 // rank it and a step across the line between Critical path and Polish, and
 // sets a priority aside or brings it back; the pass never overrides those.
 // Finished priorities stay listed, won; quiet and set-aside ones grey.
-import { useMemo, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, Check, ChevronRight, GripVertical, Loader2, MoreHorizontal, Play, Plus, Target } from "lucide-react";
@@ -16,6 +16,7 @@ import { useQueryNoThrow } from "../../hooks/useQueryNoThrow";
 import { useActiveWorkspaceKey } from "../../hooks/useWorkspaceCollection";
 import { usePriorities, usePriorityListMeta, usePriorityWrites, useRunPriorities, useSyncPriorities } from "../../hooks/usePriorities";
 import { useCoarseNow } from "../../hooks/useCoarseNow";
+import { useInboxStore } from "../../store/inboxStore";
 import { Button } from "../ui/button";
 import { SwitchReview, type SwitchLedger } from "../consequential/ConsequentialSwitch";
 import { cn } from "../../lib/utils";
@@ -53,13 +54,41 @@ export default function PrioritiesPage() {
 
   const router = useRouter();
   const params = useSearchParams();
-  const openId = params?.get("open") ?? null;
-  const toggleOpen = (shortId: string) => {
+  // The open row is the URL's ?open=. A bare /priorities (the sidebar's
+  // fixed href) falls back to the row last left open in this workspace,
+  // painted at once and written back into the URL; one that no longer
+  // exists opens nothing.
+  const urlOpenId = params?.get("open") ?? null;
+  const rememberedId = useInboxStore((s) => (workspace ? s.clientState.ui?.priorities_open?.[workspace] : undefined) ?? null);
+  const restoreId = !urlOpenId && rememberedId && rows.some((r) => r.short_id === rememberedId) ? rememberedId : null;
+  const openId = urlOpenId ?? restoreId;
+  const remember = (shortId: string | null) => {
+    if (!workspace) return;
+    const { clientState, updateClientUI } = useInboxStore.getState();
+    const { [workspace]: _prev, ...rest } = clientState.ui?.priorities_open ?? {};
+    updateClientUI({ priorities_open: shortId ? { ...rest, [workspace]: shortId } : rest });
+  };
+  const openHref = (shortId: string | null) => {
     const next = new URLSearchParams(params?.toString() ?? "");
-    if (openId === shortId) next.delete("open");
-    else next.set("open", shortId);
+    if (shortId) next.set("open", shortId);
+    else next.delete("open");
     const qs = next.toString();
-    router.replace(qs ? `/priorities?${qs}` : "/priorities");
+    return qs ? `/priorities?${qs}` : "/priorities";
+  };
+  // A link that names a row (shared, reloaded) becomes what a return restores;
+  // a restored row goes back into the URL so it reads as it did when left.
+  // Only a row of this workspace is remembered, so a switch that keeps the
+  // URL never files another workspace's row here.
+  const urlRowHere = !!urlOpenId && rows.some((r) => r.short_id === urlOpenId);
+  useEffect(() => {
+    if (urlRowHere && urlOpenId !== rememberedId) remember(urlOpenId);
+    else if (restoreId) router.replace(openHref(restoreId));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlRowHere, urlOpenId, restoreId, workspace]);
+  const toggleOpen = (shortId: string) => {
+    const next = openId === shortId ? null : shortId;
+    remember(next);
+    router.replace(openHref(next));
   };
 
   const behindChip = behind ? <BehindChip label={behind} /> : undefined;

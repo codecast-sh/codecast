@@ -60,3 +60,63 @@ test("returning to Priorities from the sidebar keeps the row the person had open
     await page.unmount();
   }
 }, 60_000);
+
+const { useInboxStore } = await import("../../store/inboxStore");
+const remembered = () => (useInboxStore.getState().clientState.ui as any)?.priorities_open ?? {};
+
+async function mountAt(url: string) {
+  const page = await mountSurface(
+    <MemoryRouter initialEntries={[url]}>
+      <Routes>
+        <Route path="/priorities" element={<PrioritiesPage />} />
+        <Route path="/goals" element={<Elsewhere />} />
+      </Routes>
+      <Link to="/goals" data-sidebar-goals>Goals</Link>
+    </MemoryRouter>,
+  );
+  const { act } = React as any;
+  const click = async (sel: string) => { await act(async () => { (page.container.querySelector(sel) as HTMLElement).click(); }); };
+  const openRow = () => page.container.querySelector("[data-priority-body]")?.closest("[data-priority]")?.getAttribute("data-priority") ?? null;
+  const roundTrip = async () => { await click("[data-sidebar-goals]"); await click("[data-sidebar-priorities]"); };
+  return { page, click, openRow, roundTrip };
+}
+
+test("a closed row stays closed, and the last row opened is the one restored", async () => {
+  const { page, click, openRow, roundTrip } = await mountAt("/priorities");
+  try {
+    if (openRow()) await click(`li[data-priority="${openRow()}"] button`);
+    await click('li[data-priority="pri-1"] button');
+    await click('li[data-priority="pri-2"] button');
+    expect(openRow()).toBe("pri-2");
+    await roundTrip();
+    expect(openRow()).toBe("pri-2");
+    await click('li[data-priority="pri-2"] button');
+    expect(openRow()).toBeNull();
+    await roundTrip();
+    expect(page.container.querySelector("[data-priority]")).not.toBeNull();
+    expect(openRow()).toBeNull();
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("a link that names a row wins, and stale memory opens nothing", async () => {
+  const link = await mountAt("/priorities?open=pri-1");
+  try {
+    expect(link.openRow()).toBe("pri-1");
+    await link.roundTrip();
+    expect(link.openRow()).toBe("pri-1");
+  } finally {
+    await link.page.unmount();
+  }
+  expect(Object.keys(remembered())).toEqual([`team:${TEAM_ID}`]);
+  useInboxStore.getState().updateClientUI({ priorities_open: { ...remembered(), [`team:${TEAM_ID}`]: "pri-gone" } } as any);
+  const stale = await mountAt("/priorities");
+  try {
+    expect(describeFailures(stale.page)).toBe("");
+    expect(stale.page.container.querySelector("[data-priority]")).not.toBeNull();
+    expect(stale.openRow()).toBeNull();
+  } finally {
+    await stale.page.unmount();
+  }
+}, 60_000);
