@@ -23,6 +23,7 @@ import { execSync, spawn, spawnSync } from "../proc.js";
 import { codecastPath } from "../codecastDir.js";
 import { worktreeEnv } from "../worktreeEnv.js";
 import { isPortFree } from "./ports.js";
+import { etimeSecs } from "../sim/reap.js";
 import { memoryDeath, oomKillCount, thisMachineTooSmall } from "../repoNeed.js";
 import type { ServiceSpec, WorkspaceManifest } from "./types.js";
 
@@ -42,6 +43,10 @@ export interface DevRecord {
   cwd: string;
   log: string;
   startedAt: string;
+  /** When it was last in use: a reap pass saw a client (devReap.ts), or `cast dev` reused it. */
+  lastUsedAt?: string;
+  /** Set when the daemon stopped it: the record stays as a tombstone so status and logs still answer. */
+  stopped?: { at: string; reason: string };
 }
 
 export type DevStatus =
@@ -49,7 +54,8 @@ export type DevStatus =
   | { name: string; state: "started"; record: DevRecord }
   | { name: string; state: "external"; port: number; url: string }
   | { name: string; state: "shared"; url: string }
-  | { name: string; state: "stopped" }
+  /** stoppedBy: the daemon stopped it (devReap.ts), when and why. */
+  | { name: string; state: "stopped"; stoppedBy?: { at: string; reason: string } }
   | { name: string; state: "failed"; reason: string; record?: DevRecord; logTail?: string };
 
 const DEFAULT_PORT = 3000;
@@ -79,7 +85,7 @@ export function checkoutRoot(cwd = process.cwd()): string {
 /** The server `cast dev` runs for this checkout under `name`, if it is still alive. */
 export function runningDevServer(checkout: string, name = "web"): DevRecord | null {
   const record = readRecord(checkout, name);
-  return record && isAlive(record.pid) ? record : null;
+  return record && serverAlive(record) ? record : null;
 }
 
 export function devStateDir(checkout: string): string {
@@ -111,6 +117,39 @@ export function isAlive(pid: number): boolean {
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === "EPERM";
   }
+}
+
+/** Whether any process is left in a process group. */
+export function groupAlive(pgid: number): boolean {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/**
+ * Whether the record's process group is still the one `cast dev` started. A
+ * living leader must have started when the record says (a pid the kernel
+ * handed out again would be younger). A dead leader with members left is the
+ * old group: the kernel does not reuse a pid that still names a group.
+ */
+export function stillOurs(record: DevRecord): boolean {
+  if (!isAlive(record.pid)) return true;
+  // Elapsed time, not ps's start time: that one is printed in the local zone.
+  const etime = (spawnSync("ps", ["-o", "etime=", "-p", String(record.pid)], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] }).stdout ?? "").trim();
+  return !!etime && Math.abs(Date.now() - etimeSecs(etime) * 1000 - Date.parse(record.startedAt)) < 2 * 60_000;
+}
+
+/**
+ * Whether the server a record names still runs. Its group, not its leader: a
+ * `bun run dev` wrapper can die (or be killed alone) while its vite child
+ * keeps serving, and that is still this checkout's server, never a reason to
+ * start a second one beside it.
+ */
+export function serverAlive(record: DevRecord): boolean {
+  return !record.stopped && groupAlive(record.pid) && stillOurs(record);
 }
 
 /** Expand $VAR / ${VAR} from env; unknown names stay as written. */
@@ -357,7 +396,12 @@ export async function ensureService(svc: DevService, opts: StartOptions): Promis
   const portVar = `PORT_${svc.portName.toUpperCase()}`;
   const probeAt = (port: number) => readyProbe(svc.spec, port, { ...env, [portVar]: String(port) });
   const existing = readRecord(opts.checkout, svc.name);
-  if (existing && isAlive(existing.pid)) return waitReady(svc, existing, probeAt, opts);
+  if (existing && serverAlive(existing)) {
+    // Asked for: in use now, whether or not a client connects before the next reap pass.
+    const used = { ...existing, lastUsedAt: new Date().toISOString() };
+    writeRecord(opts.checkout, used);
+    return waitReady(svc, used, probeAt, opts);
+  }
   if (existing) clearRecord(opts.checkout, svc.name);
 
   const { port, assigned } = await choosePort(svc, opts.manifest, env);
@@ -380,6 +424,8 @@ export async function ensureService(svc: DevService, opts: StartOptions): Promis
 
   const log = path.join(devStateDir(opts.checkout), `${svc.name}.log`);
   fs.mkdirSync(path.dirname(log), { recursive: true });
+  // The last run's output (a crash banner, the daemon's stop line) survives one restart.
+  try { fs.renameSync(log, `${log}.prev`); } catch { /* no earlier log */ }
   const fd = fs.openSync(log, "w");
   const command = svc.spec.start!;
   const oomBefore = oomKillCount();
@@ -429,7 +475,7 @@ async function waitReady(svc: DevService, record: DevRecord, probeAt: ProbeAt, o
   let lastNote = 0;
   let held: string | undefined;
   while (Date.now() - start < limitMs) {
-    if (!isAlive(record.pid)) {
+    if (!serverAlive(record)) {
       clearRecord(opts.checkout, svc.name);
       return { name: svc.name, state: "failed", reason: "the server exited", record, logTail: tailFile(record.log, 30) };
     }
@@ -457,7 +503,8 @@ export async function serviceStatus(svc: DevService, checkout: string, manifest:
   const env: Record<string, string | undefined> = { ...process.env, ...worktreeEnv(checkout), ...manifest.env };
   if (svc.spec.mode === "shared") return { name: svc.name, state: "shared", url: expandVars(svc.spec.url ?? "", env) };
   const found = readRecord(checkout, svc.name);
-  if (found && isAlive(found.pid)) {
+  if (found?.stopped) return { name: svc.name, state: "stopped", stoppedBy: found.stopped };
+  if (found && serverAlive(found)) {
     const where = await ownPort(found, checkout);
     if (!("port" in where)) return { name: svc.name, state: "failed", reason: `running, but ${where.refused}`, record: found };
     const record = movedTo(found, where.port, checkout);
@@ -467,20 +514,23 @@ export async function serviceStatus(svc: DevService, checkout: string, manifest:
   return { name: svc.name, state: "stopped" };
 }
 
-/** Stop a service this checkout started: TERM its process group, KILL after 5s. */
+/**
+ * Stop a service this checkout started: TERM its whole process group (a dead
+ * wrapper's vite child included), KILL after 5s, and wait for the group to go
+ * before clearing the record.
+ */
 export async function stopService(svc: DevService, checkout: string): Promise<boolean> {
   const record = readRecord(checkout, svc.name);
-  if (!record) return false;
-  const signal = (sig: NodeJS.Signals) => {
-    try { process.kill(-record.pid, sig); } catch { try { process.kill(record.pid, sig); } catch { /* gone */ } }
-  };
-  if (isAlive(record.pid)) {
+  if (!record || record.stopped) return false;
+  const signal = (sig: NodeJS.Signals) => { try { process.kill(-record.pid, sig); } catch { /* gone */ } };
+  if (serverAlive(record)) {
     if (svc.spec.stop) {
       spawn("bash", ["-c", svc.spec.stop], { cwd: checkout, stdio: "ignore", env: { ...process.env, PORT: String(record.port) } });
     }
     signal("SIGTERM");
-    for (let i = 0; i < 50 && isAlive(record.pid); i++) await new Promise((r) => setTimeout(r, 100));
-    if (isAlive(record.pid)) signal("SIGKILL");
+    for (let i = 0; i < 50 && groupAlive(record.pid); i++) await new Promise((r) => setTimeout(r, 100));
+    if (groupAlive(record.pid)) signal("SIGKILL");
+    for (let i = 0; i < 20 && groupAlive(record.pid); i++) await new Promise((r) => setTimeout(r, 100));
   }
   clearRecord(checkout, svc.name);
   return true;

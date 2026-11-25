@@ -123,7 +123,9 @@ elsewhere `cast dev` takes the first free port from that entry's `base` (else
 3000). Both `PORT_<NAME>` and `PORT` hold it. `ready_check` (`http:<port>/path`
 or `tcp:<port>`, `$VARS` expanded) decides when it is up; the default is any HTTP
 answer at `/`. `stop` is optional: `cast dev stop` ends the process group either
-way.
+way. The daemon also ends it when the checkout is gone, its runner crashed, or
+no client (an open tab counts) has connected for 2 hours awake; `cast dev status`
+says why, and `cast dev` starts it again.
 
 When no `[services.web]` is declared, detection supplies one for a web framework
 app (Vite, Next, Astro, Remix, SvelteKit, Nuxt, Angular, Vue CLI) at the root or
