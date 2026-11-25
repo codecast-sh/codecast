@@ -45,7 +45,7 @@ export function useRefLifecycle(type: string | null | undefined, entity: any, { 
   }, [isPr, isCommit, entity, reachRef, row]);
 }
 
-/** A pull request pill's look (lib/changes/prPill): its glyph, whether it has settled, and whether something broke. */
+/** A pull request pill's look (lib/changes/prPill): its state glyph and the lifecycle's word. */
 export function usePrPillLook(entity: any, { reach = true } = {}): PrPillLook | null {
   const lifecycle = useRefLifecycle("pr", entity, { reach });
   return entity ? prPillLook(entity, lifecycle) : null;

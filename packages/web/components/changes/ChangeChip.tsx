@@ -1,6 +1,9 @@
 "use client";
 // A change wherever one is named (docs/architecture/changes.md CH3): its
-// vehicle and name, the five-stage track, and the one word for now. The hover
+// vehicle and name, the five-stage track, and the now's glyph in its tone. The
+// now's word is the hover card's headline, never a label after the name: a
+// reference in a sentence reads its state from the track, the glyph and the
+// color. A row whose cell is the state (`bare`) keeps the word. The hover
 // card is the whole journey. Every surface draws a change through this, so a
 // branch, a pull request, a commit and a checkout's pass read alike.
 import { memo, type ReactNode } from "react";
@@ -45,6 +48,17 @@ const NODE: Record<StageState, LucideIcon | null> = {
   stopped: Ban,
   idle: null,
 };
+
+/** The now's state as a glyph in its tone: what a reference says where a row would say a word. Idle has none. */
+function NowGlyph({ lifecycle }: { lifecycle: Lifecycle }) {
+  const Icon = NODE[lifecycle.now.state];
+  return (
+    <>
+      {Icon ? <Icon className="chg-now" aria-hidden strokeWidth={lifecycle.now.state === "failed" ? 3 : 2.5} /> : null}
+      <span className="sr-only">{lifecycle.now.word}{lifecycle.now.detail ? `, ${lifecycle.now.detail}` : ""}</span>
+    </>
+  );
+}
 
 function Stage({ s, isNow }: { s: LifecycleStage; isNow: boolean }) {
   const Icon = NODE[s.state];
@@ -137,7 +151,7 @@ export const ChangeChip = memo(function ChangeChip({ lifecycle, label, links, wr
   writers?: ReadonlyArray<{ title: string | null; state: string; href?: string | null }>;
   at?: number | null;
   hover?: boolean;
-  /** Only the track and the word: for a row that already names the change. */
+  /** Only the track and the word: for a row that already names the change, where the state is the cell. */
   bare?: boolean;
   className?: string;
 }) {
@@ -148,8 +162,12 @@ export const ChangeChip = memo(function ChangeChip({ lifecycle, label, links, wr
       {bare ? null : <Glyph className="chg-glyph" aria-hidden strokeWidth={2.25} />}
       {bare ? null : <span className="chg-name" data-mono={MONO[v.kind] ? "" : undefined}>{label ?? vehicleName(v)}</span>}
       <ChangeTrack lifecycle={lifecycle} />
-      <span className="chg-word">{lifecycle.now.word}<NowTime lifecycle={lifecycle} at={at} className="chg-time" /></span>
-      {lifecycle.now.detail ? <span className="chg-detail">{lifecycle.now.detail}</span> : null}
+      {bare ? (
+        <>
+          <span className="chg-word">{lifecycle.now.word}<NowTime lifecycle={lifecycle} at={at} className="chg-time" /></span>
+          {lifecycle.now.detail ? <span className="chg-detail">{lifecycle.now.detail}</span> : null}
+        </>
+      ) : <NowGlyph lifecycle={lifecycle} />}
     </>
   );
   const aria = `${vehicleName(v)}: ${lifecycle.now.word}, at ${STAGE_LABEL[lifecycle.now.stage]}`;
@@ -165,15 +183,14 @@ export const ChangeChip = memo(function ChangeChip({ lifecycle, label, links, wr
 });
 
 /**
- * A reference pill's state after its name (a pull request, a commit): the chip's track and word with no chrome of its
- * own, so `#4501` in a message reads exactly as its row on the Branches page does.
+ * A reference pill's state after its name (a pull request, a commit): the chip's track and glyph with no chrome of its
+ * own, so `#4501` in a message reads as the same change a branch's chip does.
  */
 export const ChangeSegment = memo(function ChangeSegment({ lifecycle }: { lifecycle: Lifecycle }) {
   return (
     <span className="chg-seg" data-tone={lifecycle.now.tone} data-change-segment={lifecycle.now.stage}>
       <ChangeTrack lifecycle={lifecycle} />
-      <span className="chg-word">{lifecycle.now.word}<NowTime lifecycle={lifecycle} at={null} className="chg-time" /></span>
-      {lifecycle.now.detail ? <span className="chg-detail">{lifecycle.now.detail}</span> : null}
+      <NowGlyph lifecycle={lifecycle} />
     </span>
   );
 });

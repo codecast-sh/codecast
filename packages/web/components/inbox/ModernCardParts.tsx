@@ -10,7 +10,8 @@ import { projectDotClass, workspaceColorOf } from "../../lib/projectColors";
 import { WORK_PROJECT_SEP } from "../../lib/workProjectSig";
 import { workProjectChipKey } from "../../store/workProjects";
 import { clickProjectChip } from "../../store/chipFilterClicks";
-import { prPath, shepherdStyle } from "../../lib/externalEvents";
+import { accentVar, prPath, shepherdStyle } from "../../lib/externalEvents";
+import { PR_STATE_GLYPH } from "../PrStatusChip";
 import { isDefaultBranch, sessionRepository } from "../../lib/repoNavigation";
 import { repoTreeHref } from "../../lib/repoView";
 import { cleanTitle } from "../../lib/conversationProcessor";
@@ -90,9 +91,20 @@ export function ModernBranchChip({ session, showBranch, className = "" }: { sess
   const pr = session.pr_status;
   if (pr) {
     const href = prPath({ repository: pr.repository, number: pr.number });
-    const words = shepherdStyle(pr.state).phrase;
-    const body = <><GitPullRequest aria-hidden className="w-3 h-3 shrink-0" /><span className="tabular-nums shrink-0">#{pr.number}</span><span className="truncate">{words}</span></>;
-    const title = `${pr.repository} #${pr.number}${pr.title ? ` — ${pr.title}` : ""}`;
+    // What it waits on is a glyph after the number; the words are its tooltip.
+    const style = shepherdStyle(pr.state);
+    const glyph = PR_STATE_GLYPH[pr.state ?? ""] ?? {};
+    const Pr = glyph.pr ?? GitPullRequest;
+    const After = glyph.after;
+    const body = (
+      <>
+        <Pr aria-hidden className="w-3 h-3 shrink-0" />
+        <span className="tabular-nums shrink-0">#{pr.number}</span>
+        {After ? <After aria-hidden data-pr-state={pr.state} className="w-3 h-3 shrink-0" style={{ color: accentVar(style.accent) }} /> : null}
+        <span className="sr-only">{style.phrase}</span>
+      </>
+    );
+    const title = `${pr.repository} #${pr.number}${pr.title ? ` — ${pr.title}` : ""}\n${style.phrase}`;
     return href
       ? <Link href={href} data-mc-chip="pr" title={title} onClick={stop} className={`${CHIP} ${PRESS} ${className}`}>{body}</Link>
       : <span data-mc-chip="pr" title={title} className={`${CHIP} ${className}`}>{body}</span>;

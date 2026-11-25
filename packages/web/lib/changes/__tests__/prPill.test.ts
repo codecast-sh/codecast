@@ -19,23 +19,6 @@ describe("a pull request pill says its state in its glyph", () => {
     expect(look({ state: "closed", closed_at: 1 }).glyph).toBe("closed");
   });
 
-  test("a pull request that stopped moving dims; one still on its way does not", () => {
-    expect(look({}).settled).toBe(false);
-    expect(look({ state: "merged", merged_at: 1 }, "live").settled).toBe(true);
-    expect(look({ state: "merged", merged_at: 1 }).settled).toBe(true);
-    expect(look({ state: "closed", closed_at: 1 }).settled).toBe(true);
-    expect(look({ state: "merged", merged_at: 1 }, "going_out").settled).toBe(false);
-  });
-
-  test("a red dot marks what broke or was sent back, and a broken one never dims", () => {
-    expect(look({ mergeable_state: "dirty" }).alert).toBe(true);
-    expect(look({ checks_state: "failure" }).alert).toBe(true);
-    expect(look({ review_decision: "changes_requested" }).alert).toBe(true);
-    expect(look({ checks_state: "pending" }).alert).toBe(false);
-    const failed = look({ state: "merged", merged_at: 1 }, "failed");
-    expect([failed.alert, failed.settled]).toEqual([true, false]);
-  });
-
   test("the lifecycle's word stays for the label", () => {
     expect(look({ mergeable_state: "dirty" }).word).toBe("conflicts");
     expect(look({ state: "merged", merged_at: 1 }, "live").word).toBe("live");

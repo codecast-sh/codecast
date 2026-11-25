@@ -1149,12 +1149,11 @@ export function EntityIdPill({
   const deployV = type === "deploy" && entity ? deployLook(entity, Date.now()) : null;
   // A merged pull request or a commit carries how far it has gone toward production, on its hover card.
   const cardReach = entity && ((isPr && entity.state === "merged") || isCommit) ? repoObjectRefOf(type!, entity, 40) : null;
-  // A pull request says its state in one color: the glyph, a dim once settled, a red dot when something broke.
+  // A pull request's glyph is its state (open, draft, merged or closed); the lifecycle's word is its label and tooltip.
   const prLook = usePrPillLook(isPr ? entity : null, { reach: !bare });
-  // A commit says where it stands in words after its name; a bare one keeps its whole title.
-  const saysState = !bare && isCommit && !!entity;
-  // An answered decision and a finished pull request dim alike.
-  const settled = decisionSettled || !!prLook?.settled;
+  // A pull request or commit says where it stands after its name, as its change's track and glyph; a bare one keeps its whole title.
+  const saysState = !bare && (isPr || isCommit) && !!entity;
+  const settled = decisionSettled;
 
   // Who a session IS (session-characters.md S3): once a session wears a
   // character or a role, the reference reads as that person — the face in
@@ -1355,15 +1354,14 @@ export function EntityIdPill({
             {((isSession && status === "active") || (isTrigger && status === "running")) && (
               <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-green" />
             )}
-            {prLook?.alert && <span data-pr-alert className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-sol-red" />}
           </span>
           {/* The label, not the icon, gives the pill its baseline, so the
               text sits on the line with the words around it. */}
           {/* A pill that carries its state cuts its title, so the state stays on the line with it. */}
           <span className={wide ? "self-baseline min-w-0 truncate leading-tight" : saysState ? "self-baseline min-w-0 max-w-[28ch] truncate leading-tight" : flows ? "entity-ref__label" : "self-baseline"}>{pillLabel}</span>
           {deployV && <DeployPillSuffix deploy={entity} />}
-          {/* A commit says where it stands as its change: the Branches page's track and word. */}
-          {isCommit && entity ? <RefChangeSegment type="commit" entity={entity} /> : null}
+          {/* A pull request or commit says where it stands as its change: the Branches page's track, and the now's glyph. */}
+          {saysState ? <RefChangeSegment type={isPr ? "pr" : "commit"} entity={entity} /> : null}
         </Link>
       </PopoverAnchor>
       {/* The other half of the pill: the caret opens the full page in a band

@@ -69,14 +69,15 @@ the writer sessions, and links to the pull request, run and deploys.
   branch on its own (at most eight names a conversation), and draws as a
   pushed branch when it has commits main lacks. A pull request or commit
   reference (`owner/repo#N`, `owner/repo@sha`, `#N`) keeps its pill and its
-  hover card. A pull request's pill is one color and says its state without
-  words (`prPillLook`): its glyph is open, draft, merged or closed; it dims
-  like an answered decision once it stops moving (live, landed with nothing
-  to deploy, or closed); and a red dot on the glyph marks one that broke or
-  was sent back (conflicts, failing checks, changes asked, a failed deploy or
-  a rollback). The lifecycle's word is its label and tooltip. A commit, after
-  its name, draws the same track and word the Branches page gives it
-  (`useRefLifecycle`), once its deploy reach is read.
+  hover card, and says its state without words. A pull request's glyph is
+  open, draft, merged or closed (`prPillLook`). After its name, a pull
+  request, and a commit once its deploy reach is read, draws the same track
+  the Branches page gives it, then the now's glyph in its tone
+  (`useRefLifecycle`, `ChangeSegment`). The lifecycle's word is the label,
+  the tooltip and the hover card's headline, never text on the line. The
+  same rule holds for every reference in prose: a branch's chip draws its
+  track and glyph, a deploy pill its state icon and, while it moves, its
+  elapsed time.
 - **Branches page**: the lifecycle grid (`ChangeBoard`): a row per change,
   the five stages as columns with one track across them, each cell's two
   words under its slice, grouped by who acts next: Needs attention (red, blue,
