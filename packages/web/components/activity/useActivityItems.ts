@@ -53,6 +53,17 @@ const NO_DECISIONS: Record<string, SessionDecisionItem> = {};
 
 export type ActivityItems = { items: ActivityItem[]; loose: PrThread[] };
 
+// The feed query's activity window (conversations.ts: updated_at inside five
+// minutes). The heartbeat term it also counts covers only the viewer's own
+// sessions, which read their liveness from the store instead.
+const FEED_ACTIVE_WINDOW_MS = 5 * 60 * 1000;
+
+/** Whether a feed row is live at `now`, not at the moment the query ran. */
+export function isLiveFeedRow(conv: Pick<Conversation, "is_active" | "updated_at" | "is_own">, now: number): boolean {
+  if (!conv.is_active) return false;
+  return !!conv.is_own || now - conv.updated_at < FEED_ACTIVE_WINDOW_MS;
+}
+
 export function useActivityItems(rows: readonly Conversation[], opts: { teamId: string | null; teamMode: boolean }): ActivityItems {
   const now = useCoarseNow(15_000);
   const viewer = useViewerIdentity();
@@ -113,8 +124,11 @@ export function useActivityItems(rows: readonly Conversation[], opts: { teamId: 
         title = sessionCardTitle(own);
       } else {
         // A teammate's row carries liveness and nothing finer: running now,
-        // an ask waiting on someone, or neither.
-        status = pendingAsk ? "needs_you" : conv.is_active ? "working" : "idle";
+        // an ask waiting on someone, or neither. The row's is_active is what
+        // the server computed when the feed query last ran, and Convex re-runs
+        // it only when data changes, so a session that stopped keeps its stale
+        // true. Re-judge it against the clock with the server's own rule.
+        status = pendingAsk ? "needs_you" : isLiveFeedRow(conv, now) ? "working" : "idle";
         reason = pendingAsk ? "Decision" : null;
         line = sessionCardSummary({ subtitle: conv.visibility_mode === "minimal" ? null : conv.subtitle }) || conv.activity_summary?.trim() || "";
         title = cleanTitle(conv.title || "Untitled");
