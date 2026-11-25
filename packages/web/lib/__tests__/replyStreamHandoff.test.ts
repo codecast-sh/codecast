@@ -6,7 +6,7 @@ import {
   REPLY_STREAM_HANDOFF_STAMP_SLACK_MS,
   REPLY_STREAM_STALE_MS,
 } from "@codecast/shared/contracts";
-import { replyStreamFresh, replyStreamHandedOff, replyStreamReceivedAt, replyStreamSlotSig, type StoredReplyStream } from "../replyStreamHandoff";
+import { replyStreamCanBeMessage, replyStreamFresh, replyStreamHandedOff, replyStreamReceivedAt, replyStreamSlotSig, type StoredReplyStream } from "../replyStreamHandoff";
 
 const T0 = 1_800_000_000_000;
 
@@ -92,6 +92,31 @@ describe("replyStreamHandedOff by stamp", () => {
 
   test("a blank assistant row stamped after the start is not a text row", () => {
     expect(replyStreamHandedOff(stream("Writing"), [assistant("  \n", T0 + 100)])).toBe(false);
+  });
+});
+
+describe("only a row that can be the stream's message hands it off", () => {
+  // Rows the server or the daemon inserts into a live conversation at its own
+  // "now", each with the stream's very opening, so neither rule could tell
+  // them apart by text or time.
+  const opening = "The workflow is running; I will report when the review lands.";
+  const inserted = {
+    "a workflow event": assistant(opening, T0 + 2_000, { subtype: "workflow_event" }),
+    "a scheduled task result": assistant(opening, T0 + 2_000, { subtype: "scheduled_task_result" }),
+    "an interactive prompt's prose": assistant(opening, T0 + 2_000, { message_uuid: "interactive-prompt-s1-abc123-prose" }),
+    "an interactive prompt's card": assistant(opening, T0 + 2_000, { message_uuid: "interactive-prompt-s1-abc123" }),
+    "a limit-dialog banner": assistant(opening, T0 + 2_000, { message_uuid: "limit-dialog-s1-abc123-492000" }),
+  };
+  for (const [kind, row] of Object.entries(inserted)) {
+    test(`${kind} does not`, () => {
+      expect(replyStreamCanBeMessage(row)).toBe(false);
+      expect(replyStreamHandedOff(stream(opening), [row])).toBe(false);
+    });
+  }
+  test("the transcript's own row does, after any of them", () => {
+    const real = assistant(`${opening}\n\nStill going.`, T0 + 300, { message_uuid: "0f8fad5b-d9cb-469f-a165-70867728950e" });
+    expect(replyStreamCanBeMessage(real)).toBe(true);
+    expect(replyStreamHandedOff(stream(opening), [...Object.values(inserted), real].sort((a, b) => a.timestamp - b.timestamp))).toBe(true);
   });
 });
 
