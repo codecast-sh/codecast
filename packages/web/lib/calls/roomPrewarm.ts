@@ -45,7 +45,7 @@
 import { ConnectionState, RemoteParticipant, RemoteTrack, Room, RoomEvent, Track } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { useInboxStore } from "../../store/inboxStore";
-import { huddleRoomOptions } from "./livekitMedia";
+import { huddleRoomOptions, MIC_PUBLISH_OPTIONS } from "./livekitMedia";
 import { readJoinPrefs } from "./joinPrefs";
 import { roomRecordingOn } from "./roomRecordingFields";
 
@@ -228,9 +228,7 @@ async function publishMutedMic(room: Room, mine: number): Promise<void> {
     clone = shared.clone();
     // Silent before it is published, not after.
     clone.enabled = false;
-    const pub = await room.localParticipant.publishTrack(clone, {
-      source: Track.Source.Microphone,
-    });
+    const pub = await room.localParticipant.publishTrack(clone, MIC_PUBLISH_OPTIONS);
     await pub.mute();
     // ONCE IT IS PUBLISHED IT IS THE ROOM'S, and this module must not touch it
     // again. A press landing in the middle of this hands the room to `joinCall`

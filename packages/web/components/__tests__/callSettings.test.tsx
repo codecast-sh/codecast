@@ -60,15 +60,23 @@ describe("call settings", () => {
     const sw = switches(await renderToMarkup(<CallSettings />));
     expect(sw["Camera on when I join"]).toBe(true);
     expect(sw["Microphone on when I join"]).toBe(true);
+    expect(sw["Noise cancellation"]).toBe(true);
     expect(sw["Microphone opens before I press"]).toBe(true);
     expect(sw["Sound effects"]).toBe(true);
   });
 
   test("an explicit off is shown off", async () => {
-    ui = { call_camera_on: false, call_mic_on: false, call_mic_auto_open: false, sounds_enabled: false };
+    ui = {
+      call_camera_on: false,
+      call_mic_on: false,
+      call_noise_cancellation: false,
+      call_mic_auto_open: false,
+      sounds_enabled: false,
+    };
     const sw = switches(await renderToMarkup(<CallSettings />));
     expect(sw["Camera on when I join"]).toBe(false);
     expect(sw["Microphone on when I join"]).toBe(false);
+    expect(sw["Noise cancellation"]).toBe(false);
     expect(sw["Microphone opens before I press"]).toBe(false);
     expect(sw["Sound effects"]).toBe(false);
   });
@@ -76,7 +84,7 @@ describe("call settings", () => {
   test("carries every block: join, devices, walkie, sounds", async () => {
     ui = {};
     const html = await renderToMarkup(<CallSettings />);
-    for (const t of ["When I join a call", "Microphone", "Open before I press", "Devices", "Walkie", "Sounds", "Let teammates talk to me"]) {
+    for (const t of ["When I join a call", "Microphone", "Noise cancellation", "Open before I press", "Devices", "Walkie", "Sounds", "Let teammates talk to me"]) {
       expect(html).toContain(t);
     }
     // The meeting block is the desktop's; in a browser it renders nothing.

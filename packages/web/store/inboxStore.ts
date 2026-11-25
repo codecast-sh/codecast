@@ -2232,6 +2232,10 @@ export type ClientUI = {
   // check first (HuddleStartDialog). Absent means ON; stamped LWW, like the
   // join prefs above it.
   call_device_check?: boolean;
+  // Whether enhanced neural noise cancellation (Krisp) runs on the published
+  // microphone track. Absent means ON; an explicit false falls back to single-layer
+  // browser noiseSuppression. Stamped LWW, like the join prefs above it.
+  call_noise_cancellation?: boolean;
   // Whether stopping a turn that has subagents running asks first, listing
   // them (StopConfirm). Absent means ask; stamped LWW, about the person.
   confirm_stop_subagents?: boolean;

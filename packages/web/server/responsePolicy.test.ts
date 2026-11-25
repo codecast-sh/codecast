@@ -75,9 +75,12 @@ test("reporting documents are capped per hour, then resume in the next hour", as
 test("the draft policy names every source the app loads from", () => {
   const directive = (name: string) => DOCUMENT_POLICY.split("; ").find(d => d.startsWith(`${name} `)) ?? "";
   expect(directive("connect-src")).toContain("wss://convex.codecast.sh");
+  expect(directive("connect-src")).toContain("https://*.livekit.io");
   expect(directive("connect-src")).toContain("https://us.i.posthog.com");
   expect(directive("connect-src")).toContain("ws://127.0.0.1:*");
+  expect(directive("script-src")).toContain("'wasm-unsafe-eval'");
   expect(directive("script-src")).toContain("https://us-assets.i.posthog.com");
+  expect(directive("worker-src")).toBe("worker-src 'self' blob:");
   expect(directive("font-src")).toContain("https://fonts.gstatic.com");
   expect(directive("frame-src")).toContain("https:");
   expect(directive("frame-ancestors")).toBe("frame-ancestors 'self' https://local.codecast.sh");

@@ -16,7 +16,20 @@ import { Room, RoomEvent, Track, ConnectionState } from "livekit-client";
 import type { Participant, RemoteParticipant, LocalParticipant } from "livekit-client";
 import { getLivekit, ensureLivekitGlobals, callsNativeAvailable } from "./livekitNative";
 
-// AudioSession from the guarded native module (null on a binary that lacks it).
+const MOBILE_AUDIO_PUBLISH = {
+  audioPreset: { maxBitrate: 96_000, priority: "high" as const },
+  dtx: false,
+  red: true,
+};
+
+const MOBILE_AUDIO_CAPTURE = {
+  echoCancellation: true,
+  noiseSuppression: true,
+  voiceIsolation: false,
+  autoGainControl: true,
+  sampleRate: { ideal: 48_000 },
+  channelCount: { ideal: 1 },
+};
 const audioSession = () => getLivekit()?.AudioSession ?? null;
 import { api } from "@codecast/convex/convex/_generated/api";
 import { convex } from "../convex";
@@ -244,12 +257,26 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
     const { url, token } = await convex.action(api.calls.mintAccessToken, { room_key: roomKey });
     if (superseded()) return;
     if (!opts.callKitManaged) {
+      const lk = getLivekit();
+      if (lk?.AudioSession?.configureAudio) {
+        await lk.AudioSession.configureAudio({
+          android: lk.AndroidAudioTypePresets
+            ? { audioTypeOptions: lk.AndroidAudioTypePresets.communication }
+            : undefined,
+          ios: { defaultOutput: snap.speakerOn ? "speaker" : "earpiece" },
+        } as any).catch(() => {});
+      }
       await audioSession()!.startAudioSession();
       if (superseded()) return;
     }
     callKitOwnsAudio = !!opts.callKitManaged;
 
-    const r = new Room({ adaptiveStream: { pixelDensity: "screen" }, dynacast: true });
+    const r = new Room({
+      adaptiveStream: { pixelDensity: "screen" },
+      dynacast: true,
+      audioCaptureDefaults: MOBILE_AUDIO_CAPTURE,
+      publishDefaults: MOBILE_AUDIO_PUBLISH,
+    });
     room = r;
     currentRoomKey = roomKey;
 
@@ -279,11 +306,13 @@ export async function joinCall(roomKey: string, opts: JoinOpts = {}): Promise<vo
 
     await r.connect(url, token);
     if (superseded(r)) return;
-    // Speaker is the phone default for a huddle (people talk hands-free at a
-    // desk); the earpiece toggle re-routes the live session.
-    void applyAudioRoute(snap.speakerOn);
+    // Speaker is the phone default when holding the device with no headset;
+    // `explicit: false` uses `defaultToSpeaker` instead of `force_speaker` so
+    // connected AirPods/Bluetooth headsets keep the call rather than being
+    // overridden onto the phone's speaker.
+    void applyAudioRoute(snap.speakerOn, { explicit: false });
     // The shoulder-tap contract: join silent, one tap to speak.
-    await r.localParticipant.setMicrophoneEnabled(!snap.muted);
+    await r.localParticipant.setMicrophoneEnabled(!snap.muted, undefined, MOBILE_AUDIO_PUBLISH);
     if (superseded(r)) return;
     emit({ phase: "connected" });
     startHeartbeat(roomKey);
@@ -341,7 +370,7 @@ export async function setMuted(muted: boolean): Promise<void> {
   emit({ muted, pending: room && !muted ? "mic" : null });
   if (room) {
     try {
-      await room.localParticipant.setMicrophoneEnabled(!muted);
+      await room.localParticipant.setMicrophoneEnabled(!muted, undefined, MOBILE_AUDIO_PUBLISH);
       emit({ pending: null });
     } catch (err: any) {
       emit({ muted: true, pending: null, error: "Microphone access is off — allow it in Settings › Codecast" });
@@ -384,28 +413,31 @@ export async function flipCamera(): Promise<void> {
   }
 }
 
-// Route the LIVE session (configureAudio's ios.defaultOutput is only a
-// pre-connect default that the native auto policy overrides): the mode
-// switch (voiceChat = earpiece-preferring, videoChat = speaker-preferring)
-// comes first because a category/mode change clears any existing output
-// override, then the explicit override on top.
-async function applyAudioRoute(speakerOn: boolean): Promise<void> {
+// Route the LIVE session: `voiceChat` enables iOS's full hardware VoiceProcessingIO
+// (AEC + AGC + speech noise suppression), without `mixWithOthers` (which weakens
+// voice-processing exclusivity) or `allowBluetoothA2DP` (which splits A2DP output
+// from HFP input). On initial join (`explicit: false`), `defaultToSpeaker` sends
+// sound to the speaker ONLY when no Bluetooth/wired headset is connected; an
+// explicit tap on the Speaker toggle (`explicit: true`) forces the built-in speaker.
+async function applyAudioRoute(speakerOn: boolean, opts?: { explicit?: boolean }): Promise<void> {
   const AudioSession = audioSession();
   if (!AudioSession) return;
   try {
     await AudioSession.setAppleAudioConfiguration({
       audioCategory: "playAndRecord",
-      audioCategoryOptions: ["allowBluetooth", "allowBluetoothA2DP", "allowAirPlay", "mixWithOthers"],
-      audioMode: speakerOn ? "videoChat" : "voiceChat",
+      audioCategoryOptions: speakerOn
+        ? ["allowBluetooth", "allowAirPlay", "defaultToSpeaker"]
+        : ["allowBluetooth", "allowAirPlay"],
+      audioMode: "voiceChat",
     } as any);
-    await AudioSession.selectAudioOutput(speakerOn ? "force_speaker" : "default");
+    await AudioSession.selectAudioOutput(speakerOn && opts?.explicit ? "force_speaker" : "default");
   } catch {}
 }
 
 export async function setSpeaker(on: boolean): Promise<void> {
   emit({ speakerOn: on });
   if (snap.phase === "connected" || snap.phase === "connecting") {
-    await applyAudioRoute(on);
+    await applyAudioRoute(on, { explicit: true });
   }
 }
 

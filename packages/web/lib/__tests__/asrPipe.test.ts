@@ -10,7 +10,12 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { openAsrPipe, openAsrPcmSession } from "../calls/asrPipe";
+import {
+  __resetAsrCaptureForTest,
+  floatTo16,
+  openAsrPipe,
+  openAsrPcmSession,
+} from "../calls/asrPipe";
 
 // ── the browser, in as much as this file touches it ────────────────────────
 
@@ -96,6 +101,7 @@ class FakeWebSocket {
 const originals: Record<string, any> = {};
 
 beforeEach(() => {
+  __resetAsrCaptureForTest();
   FakeWebSocket.live = [];
   FakeAudioContext.live = [];
   for (const name of ["WebSocket", "AudioContext", "MediaStream"]) {
@@ -109,6 +115,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  __resetAsrCaptureForTest();
   for (const [name, value] of Object.entries(originals)) (globalThis as any)[name] = value;
 });
 
@@ -500,5 +507,82 @@ describe("asrPcmSession: a caller that already has samples", () => {
     ws.open();
     expect(ws.appends()).toEqual([240]);
     session.close();
+  });
+
+  test("floatTo16 box-averages 48 kHz -> 24 kHz instead of aliasing Nyquist noise into speech", () => {
+    // Alternating +1/-1 at 48 kHz is 24 kHz Nyquist hiss. Point-sampling read
+    // every even index (+1 -> +32767 full-scale buzz); box-averaging cancels pairs.
+    const nyquist = new Float32Array(480);
+    for (let i = 0; i < nyquist.length; i++) nyquist[i] = i % 2 === 0 ? 1 : -1;
+    const out = new Int16Array(floatTo16(nyquist, 48_000));
+    expect(out.length).toBe(240);
+    expect(out.every((v) => v === 0)).toBe(true);
+  });
+});
+
+describe("asrPipe: shared AudioContext and off-main-thread AudioWorklet", () => {
+  test("four concurrent huddle tracks share one AudioContext and close it when the last leaves", () => {
+    const never = () => new Promise(() => {}) as any;
+    const pipes = [1, 2, 3, 4].map(() =>
+      openAsrPipe({ convex: { action: never }, roomKey: "dm:a:b", track: TRACK, clock: () => 0 }),
+    );
+    expect(FakeAudioContext.live.length).toBe(1);
+    expect(FakeAudioContext.live[0]!.closed).toBe(false);
+
+    pipes[0]!.close();
+    pipes[1]!.close();
+    pipes[2]!.close();
+    expect(FakeAudioContext.live[0]!.closed).toBe(false);
+
+    pipes[3]!.close();
+    expect(FakeAudioContext.live[0]!.closed).toBe(true);
+  });
+
+  test("upgrades capture from bootstrap ScriptProcessor to AudioWorkletNode once the module loads", async () => {
+    let scriptDisconnected = false;
+    const workletNodes: Array<{ port: { onmessage: ((e: any) => void) | null }; disconnected: boolean }> = [];
+    class WorkletAudioContext extends FakeAudioContext {
+      audioWorklet = {
+        addModule: async () => {},
+      };
+      override createScriptProcessor() {
+        const proc = super.createScriptProcessor();
+        return {
+          ...proc,
+          disconnect() {
+            scriptDisconnected = true;
+          },
+        };
+      }
+    }
+    class FakeAudioWorkletNode {
+      port = { onmessage: null as ((e: any) => void) | null };
+      disconnected = false;
+      constructor() {
+        workletNodes.push(this);
+      }
+      connect() {}
+      disconnect() {
+        this.disconnected = true;
+      }
+    }
+    const prevWorklet = (globalThis as any).AudioWorkletNode;
+    (globalThis as any).AudioContext = WorkletAudioContext;
+    (globalThis as any).AudioWorkletNode = FakeAudioWorkletNode;
+    try {
+      const h = open();
+      for (let i = 0; i < 6; i++) await Promise.resolve();
+      expect(workletNodes.length).toBe(1);
+      expect(scriptDisconnected).toBe(true);
+
+      workletNodes[0]!.port.onmessage?.({ data: frame(160) });
+      const ws = await h.connect();
+      ws.open();
+      expect(ws.appends()).toEqual([160]);
+      h.pipe.close();
+      expect(workletNodes[0]!.disconnected).toBe(true);
+    } finally {
+      (globalThis as any).AudioWorkletNode = prevWorklet;
+    }
   });
 });

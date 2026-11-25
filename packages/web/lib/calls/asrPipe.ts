@@ -104,13 +104,27 @@ const BUFFER_CAP_SAMPLES = SAMPLE_RATE * 30;
 const FINISH_TIMEOUT_MS = 2_500;
 
 // PCM16 mono downsample from the AudioContext rate to 24k, base64-encoded
-// the way input_audio_buffer.append wants it.
-function floatTo16(input: Float32Array, inRate: number): ArrayBuffer {
+// the way input_audio_buffer.append wants it. Box-averaging each output window
+// filters frequencies above the 12 kHz Nyquist limit instead of folding them
+// back into speech as aliasing noise.
+export function floatTo16(input: Float32Array, inRate: number): ArrayBuffer {
+  if (!(inRate > 0) || input.length === 0) return new ArrayBuffer(0);
   const ratio = inRate / SAMPLE_RATE;
   const outLen = Math.floor(input.length / ratio);
   const out = new Int16Array(outLen);
+  if (ratio <= 1) {
+    for (let i = 0; i < outLen; i++) {
+      const v = input[Math.floor(i * ratio)]!;
+      out[i] = Math.max(-1, Math.min(1, v)) * 0x7fff;
+    }
+    return out.buffer;
+  }
   for (let i = 0; i < outLen; i++) {
-    const v = input[Math.floor(i * ratio)];
+    const start = Math.floor(i * ratio);
+    const end = Math.min(input.length, Math.max(start + 1, Math.floor((i + 1) * ratio)));
+    let sum = 0;
+    for (let j = start; j < end; j++) sum += input[j]!;
+    const v = sum / (end - start);
     out[i] = Math.max(-1, Math.min(1, v)) * 0x7fff;
   }
   return out.buffer;
@@ -137,7 +151,17 @@ function int16To24k(input: Int16Array, inRate: number): ArrayBuffer {
   const ratio = inRate / SAMPLE_RATE;
   const outLen = Math.floor(input.length / ratio);
   const out = new Int16Array(outLen);
-  for (let i = 0; i < outLen; i++) out[i] = input[Math.floor(i * ratio)]!;
+  if (ratio <= 1) {
+    for (let i = 0; i < outLen; i++) out[i] = input[Math.floor(i * ratio)]!;
+    return out.buffer;
+  }
+  for (let i = 0; i < outLen; i++) {
+    const start = Math.floor(i * ratio);
+    const end = Math.min(input.length, Math.max(start + 1, Math.floor((i + 1) * ratio)));
+    let sum = 0;
+    for (let j = start; j < end; j++) sum += input[j]!;
+    out[i] = Math.round(sum / (end - start));
+  }
   return out.buffer;
 }
 
@@ -436,6 +460,140 @@ export function openAsrPcmSession(opts: AsrSessionOpts): AsrPcmSession {
   return pipe;
 }
 
+// ── shared AudioContext + AudioWorklet capture ────────────────────────────
+//
+// A scribed huddle taps every participant's track simultaneously. Opening a
+// separate AudioContext + main-thread ScriptProcessorNode per participant put
+// 6+ CoreAudio output graphs and synchronous DSP callbacks on the voice-host
+// renderer's main thread alongside video, FaceDetector and WebRTC.
+//
+// All live ASR pipes now share ONE reference-counted AudioContext (closed the
+// instant the last pipe lets go, so an idle tab holds zero hardware handles)
+// and run capture off the main thread in an AudioWorkletNode where supported.
+// While the worklet module loads on the first cold pipe (~5ms) — or in test/old
+// environments without AudioWorklet — a ScriptProcessorNode captures from t=0
+// and hands off seamlessly once the worklet is ready, so no first syllable is lost.
+
+const WORKLET_NAME = "codecast-asr-tap";
+const WORKLET_SOURCE = `
+class CodecastAsrTap extends AudioWorkletProcessor {
+  constructor() {
+    super();
+    this._buf = new Float32Array(2048);
+    this._pos = 0;
+  }
+  process(inputs) {
+    const ch = inputs[0] && inputs[0][0];
+    if (!ch || ch.length === 0) return true;
+    let offset = 0;
+    while (offset < ch.length) {
+      const space = this._buf.length - this._pos;
+      const take = Math.min(space, ch.length - offset);
+      this._buf.set(ch.subarray(offset, offset + take), this._pos);
+      this._pos += take;
+      offset += take;
+      if (this._pos === this._buf.length) {
+        const out = this._buf;
+        this.port.postMessage(out, [out.buffer]);
+        this._buf = new Float32Array(2048);
+        this._pos = 0;
+      }
+    }
+    return true;
+  }
+}
+registerProcessor("${WORKLET_NAME}", CodecastAsrTap);
+`;
+
+type SharedCaptureContext = {
+  ctx: AudioContext;
+  ctor: unknown;
+  refs: number;
+  mute: GainNode;
+  workletReady: boolean;
+  workletLoading: Promise<boolean> | null;
+};
+
+let sharedCapture: SharedCaptureContext | null = null;
+let workletBlobUrl: string | null = null;
+
+function getWorkletBlobUrl(): string | null {
+  if (workletBlobUrl) return workletBlobUrl;
+  if (typeof Blob !== "function" || typeof URL?.createObjectURL !== "function") return null;
+  try {
+    workletBlobUrl = URL.createObjectURL(new Blob([WORKLET_SOURCE], { type: "application/javascript" }));
+    return workletBlobUrl;
+  } catch {
+    return null;
+  }
+}
+
+function acquireCaptureContext(): SharedCaptureContext {
+  const Ctor = AudioContext;
+  if (sharedCapture && sharedCapture.ctor === Ctor && (sharedCapture.ctx as any).state !== "closed" && !(sharedCapture.ctx as any).closed) {
+    sharedCapture.refs += 1;
+    void Promise.resolve(sharedCapture.ctx.resume?.()).catch(() => {});
+    return sharedCapture;
+  }
+  const ctx = new Ctor();
+  void Promise.resolve(ctx.resume?.()).catch(() => {});
+  const mute = ctx.createGain();
+  mute.gain.value = 0;
+  mute.connect(ctx.destination);
+  sharedCapture = {
+    ctx,
+    ctor: Ctor,
+    refs: 1,
+    mute,
+    workletReady: false,
+    workletLoading: null,
+  };
+  return sharedCapture;
+}
+
+function releaseCaptureContext(entry: SharedCaptureContext): void {
+  entry.refs = Math.max(0, entry.refs - 1);
+  if (entry.refs > 0) return;
+  if (sharedCapture === entry) sharedCapture = null;
+  try {
+    entry.mute.disconnect();
+  } catch {}
+  try {
+    void entry.ctx.close();
+  } catch {}
+}
+
+function ensureWorkletLoaded(entry: SharedCaptureContext): Promise<boolean> {
+  if (entry.workletReady) return Promise.resolve(true);
+  if (entry.workletLoading) return entry.workletLoading;
+  if (typeof AudioWorkletNode !== "function" || typeof entry.ctx.audioWorklet?.addModule !== "function") {
+    return Promise.resolve(false);
+  }
+  const url = getWorkletBlobUrl();
+  if (!url) return Promise.resolve(false);
+  entry.workletLoading = entry.ctx.audioWorklet.addModule(url).then(
+    () => {
+      entry.workletReady = true;
+      return true;
+    },
+    () => false,
+  );
+  return entry.workletLoading;
+}
+
+export function __resetAsrCaptureForTest(): void {
+  if (!sharedCapture) return;
+  const entry = sharedCapture;
+  sharedCapture = null;
+  entry.refs = 0;
+  try {
+    entry.mute.disconnect();
+  } catch {}
+  try {
+    void entry.ctx.close();
+  } catch {}
+}
+
 /**
  * Open a recognizer on one track. Returns synchronously WITH THE MICROPHONE
  * ALREADY BEING READ — the mint and the socket settle behind it, and `close()`
@@ -457,19 +615,34 @@ export function openAsrPipe(opts: {
   languages?: string[];
 }): AsrPipe {
   const { track, events } = opts;
-  let actx: AudioContext | null = null;
-  let node: ScriptProcessorNode | null = null;
+  let shared: SharedCaptureContext | null = null;
+  let scriptNode: ScriptProcessorNode | null = null;
+  let workletNode: AudioWorkletNode | null = null;
   let source: MediaStreamAudioSourceNode | null = null;
+  let dropped = false;
 
   function dropCapture() {
+    if (dropped) return;
+    dropped = true;
     try {
-      node?.disconnect();
-      source?.disconnect();
-      void actx?.close();
+      if (scriptNode) scriptNode.onaudioprocess = null;
+      scriptNode?.disconnect();
     } catch {}
-    actx = null;
-    node = null;
+    try {
+      if (workletNode?.port) workletNode.port.onmessage = null;
+      workletNode?.disconnect();
+    } catch {}
+    try {
+      source?.disconnect();
+    } catch {}
+    scriptNode = null;
+    workletNode = null;
     source = null;
+    if (shared) {
+      const entry = shared;
+      shared = null;
+      releaseCaptureContext(entry);
+    }
   }
 
   const session = openAsrPcmSession({
@@ -487,31 +660,59 @@ export function openAsrPipe(opts: {
     },
   });
 
+  function attachWorklet(entry: SharedCaptureContext, src: MediaStreamAudioSourceNode): boolean {
+    if (typeof AudioWorkletNode !== "function" || !entry.workletReady) return false;
+    try {
+      const wn = new AudioWorkletNode(entry.ctx, WORKLET_NAME, {
+        numberOfInputs: 1,
+        numberOfOutputs: 1,
+        channelCount: 1,
+      });
+      wn.port.onmessage = (e: MessageEvent<Float32Array>) => {
+        if (dropped || !e.data) return;
+        session.feedPcm16(floatTo16(e.data, entry.ctx.sampleRate));
+      };
+      src.connect(wn);
+      wn.connect(entry.mute);
+      workletNode = wn;
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   try {
     const stream = new MediaStream([track]);
-    const ac = new AudioContext();
-    actx = ac;
-    // A context built outside a gesture starts suspended and its processor
-    // never runs; the walkie's press IS a gesture, so this only matters for a
-    // pipe opened from a timer.
-    void Promise.resolve(ac.resume?.()).catch(() => {});
-    const src = ac.createMediaStreamSource(stream);
+    const entry = acquireCaptureContext();
+    shared = entry;
+    const src = entry.ctx.createMediaStreamSource(stream);
     source = src;
-    // ScriptProcessor over AudioWorklet deliberately: one file, no worklet
-    // module fetch, and 4096-frame buffers (~85ms at 48k) are fine for ASR.
-    const proc = ac.createScriptProcessor(4096, 1, 1);
-    node = proc;
-    proc.onaudioprocess = (e) => {
-      session.feedPcm16(floatTo16(e.inputBuffer.getChannelData(0), ac.sampleRate));
-    };
-    src.connect(proc);
-    // A ScriptProcessor only runs when connected toward the destination;
-    // route through a zero-gain node so nothing is audible.
-    const mute = ac.createGain();
-    mute.gain.value = 0;
-    proc.connect(mute);
-    mute.connect(ac.destination);
+
+    if (!attachWorklet(entry, src)) {
+      // Synchronous t=0 capture while AudioWorklet loads (or permanently in
+      // environments without AudioWorklet, including unit tests).
+      const proc = entry.ctx.createScriptProcessor(4096, 1, 1);
+      scriptNode = proc;
+      proc.onaudioprocess = (e) => {
+        if (dropped) return;
+        session.feedPcm16(floatTo16(e.inputBuffer.getChannelData(0), entry.ctx.sampleRate));
+      };
+      src.connect(proc);
+      proc.connect(entry.mute);
+
+      void ensureWorkletLoaded(entry).then((ready) => {
+        if (!ready || dropped || shared !== entry || !source || workletNode) return;
+        if (attachWorklet(entry, source)) {
+          try {
+            if (scriptNode) scriptNode.onaudioprocess = null;
+            scriptNode?.disconnect();
+          } catch {}
+          scriptNode = null;
+        }
+      });
+    }
   } catch {
+    dropCapture();
     // No capture path at all (an AudioContext the browser refused). The
     // recognizer will report nothing, which the caller already treats as a
     // burst without words rather than a failed burst.

@@ -8,6 +8,7 @@ import { useCallback, useRef, useState } from "react";
 import { Check, ChevronUp, Mic, Video, type LucideIcon } from "lucide-react";
 import { grantDeviceNames, listDevices, switchDevice } from "../../lib/calls/callManager";
 import { chosenDevice } from "../../lib/calls/joinPrefs";
+import { bluetoothHfpConflict } from "../../lib/calls/bluetoothAudioHint";
 import { DEVICE_RANK_KEY, type DeviceKind } from "../../lib/calls/deviceRank";
 import { useInboxStore } from "../../store/inboxStore";
 import { useMountEffect } from "../../hooks/useMountEffect";
@@ -132,9 +133,44 @@ export function MicSelect({ className = "" }: { className?: string }) {
   );
 }
 
+/** One-click escape from Bluetooth HFP when both mic and speaker are on the
+ *  same Bluetooth headphones and a built-in or USB mic is plugged in. */
+export function BluetoothMicHint({
+  mics,
+  speakers,
+  chosenMicId,
+  chosenSpeakerId,
+  onUseMic,
+}: {
+  mics: MediaDeviceInfo[];
+  speakers: MediaDeviceInfo[];
+  chosenMicId?: string;
+  chosenSpeakerId?: string;
+  onUseMic: (deviceId: string) => void;
+}) {
+  const conflict = bluetoothHfpConflict(mics, speakers, chosenMicId, chosenSpeakerId);
+  if (!conflict) return null;
+  return (
+    <div className="flex items-center justify-between gap-2.5 rounded-md bg-sol-bg-alt px-2.5 py-1.5 text-xs">
+      <span className="min-w-0 truncate text-sol-text-muted" title={`${conflict.headsetName} mic lowers headphone audio quality`}>
+        {conflict.headsetName} mic muffles headphone audio
+      </span>
+      <button
+        type="button"
+        onClick={() => onUseMic(conflict.altMic.deviceId)}
+        className={`shrink-0 rounded-md border border-sol-border px-2 py-0.5 text-xs text-sol-text hover:border-sol-text-muted ${modernButton({ variant: "outline", size: "sm" })}`}
+      >
+        Use {conflict.altMicName}
+      </button>
+    </div>
+  );
+}
+
 /** Every device as a select, for the call settings panel. */
 export function DeviceRows({ compact = false }: { compact?: boolean }) {
   const { lists, refresh } = useDeviceLists();
+  const chosenMic = useChosenId("audioinput", lists?.audioinput);
+  const chosenSpeaker = useChosenId("audiooutput", lists?.audiooutput);
   if (!lists) return null;
   if (KINDS.every((k) => lists[k].length === 0)) {
     return <p className="text-xs leading-relaxed text-sol-text-muted">No microphone, speaker or camera found on this machine.</p>;
@@ -145,6 +181,13 @@ export function DeviceRows({ compact = false }: { compact?: boolean }) {
       {KINDS.map((k) => (
         <DeviceSelect key={k} kind={k} devices={lists[k]} compact={compact} />
       ))}
+      <BluetoothMicHint
+        mics={lists.audioinput}
+        speakers={lists.audiooutput}
+        chosenMicId={chosenMic}
+        chosenSpeakerId={chosenSpeaker}
+        onUseMic={(id) => void switchDevice("audioinput", id)}
+      />
     </>
   );
 }
@@ -195,6 +238,8 @@ const CHIPS: Array<{ kind: Kind; icon: LucideIcon; menu: Kind[] }> = [
  */
 export function DeviceChips({ footer }: { footer?: React.ReactNode }) {
   const { lists, refresh } = useDeviceLists();
+  const chosenMic = useChosenId("audioinput", lists?.audioinput);
+  const chosenSpeaker = useChosenId("audiooutput", lists?.audiooutput);
   const [open, setOpen] = useState<Kind | null>(null);
   const root = useRef<HTMLDivElement>(null);
   // A click outside or Escape closes the open picker; nothing listens while closed.
@@ -226,6 +271,15 @@ export function DeviceChips({ footer }: { footer?: React.ReactNode }) {
           {CHIPS.find((c) => c.kind === open)!.menu.map((k) => (
             <DeviceList key={k} kind={k} devices={lists[k]} />
           ))}
+          {open === "audioinput" && (
+            <BluetoothMicHint
+              mics={lists.audioinput}
+              speakers={lists.audiooutput}
+              chosenMicId={chosenMic}
+              chosenSpeakerId={chosenSpeaker}
+              onUseMic={(id) => void switchDevice("audioinput", id)}
+            />
+          )}
           {open === "videoinput" && footer}
         </div>
       )}

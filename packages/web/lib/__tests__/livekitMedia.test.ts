@@ -4,7 +4,16 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import { huddleRoomOptions, SCREEN_SHARE_CAPTURE, SCREEN_SHARE_ENCODING, SCREEN_SHARE_PUBLISH } from "../calls/livekitMedia";
+import {
+  AUDIO_PUBLISH_DEFAULTS,
+  HUDDLE_AUDIO_PRESET,
+  huddleRoomOptions,
+  MIC_PUBLISH_OPTIONS,
+  micConstraints,
+  SCREEN_SHARE_CAPTURE,
+  SCREEN_SHARE_ENCODING,
+  SCREEN_SHARE_PUBLISH,
+} from "../calls/livekitMedia";
 
 describe("huddle LiveKit media", () => {
   test("adaptive stream asks for device pixels, not CSS pixels", () => {
@@ -32,6 +41,33 @@ describe("huddle LiveKit media", () => {
     expect(opts.videoCaptureDefaults).toEqual({ deviceId: { ideal: "cam-2" } });
     expect(opts.audioOutput).toEqual({ deviceId: "out-3" });
     expect(huddleRoomOptions({}).audioOutput).toBeUndefined();
+    // "default" must not trigger setSinkId("default"), which can break macOS AEC.
+    expect(huddleRoomOptions({ speakerDeviceId: "default" }).audioOutput).toBeUndefined();
+  });
+
+  test("audio publishes full-band 96 kbps Opus with RED and no DTX syllable clipping", () => {
+    const pub = huddleRoomOptions({}).publishDefaults;
+    expect(HUDDLE_AUDIO_PRESET).toEqual({ maxBitrate: 96_000, priority: "high" });
+    expect(pub?.audioPreset).toEqual(HUDDLE_AUDIO_PRESET);
+    expect(pub?.dtx).toBe(false);
+    expect(pub?.red).toBe(true);
+    expect(MIC_PUBLISH_OPTIONS).toMatchObject(AUDIO_PUBLISH_DEFAULTS);
+  });
+
+  test("mic capture asks for 48 kHz mono and explicitly turns off voiceIsolation double-filtering", () => {
+    expect(micConstraints()).toEqual({
+      echoCancellation: true,
+      noiseSuppression: true,
+      voiceIsolation: false,
+      autoGainControl: true,
+      sampleRate: { ideal: 48_000 },
+      channelCount: { ideal: 1 },
+    });
+    expect(micConstraints("mic-2", { noiseSuppression: false })).toMatchObject({
+      noiseSuppression: false,
+      voiceIsolation: false,
+      deviceId: { ideal: "mic-2" },
+    });
   });
 
   test("join and prewarm both build the room through huddleRoomOptions", () => {
