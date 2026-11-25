@@ -32,6 +32,8 @@ Nothing new to learn. Ask for a typecheck the way you would anyway ("typecheck t
 
 A repository with more than one TypeScript program (a web app, a server and a command line tool, say) can list them by name in a small file in the repo, `.codecast/check.toml`. Agents can then check one by name ("typecheck the server") or all of them at once. Without the list, an agent checks the configuration closest to the folder it's working in, which may not be the program its change reaches.
 
+The same file can switch a repository from the shared watcher to `bun check` (bun 1.4.4 or newer), which checks a whole program in seconds: each check then runs once and exits, checks of the same files share one run, and a few run at a time, queued like first builds.
+
 You don't need to write the file yourself. Ask an agent: "set up codecast typecheck for every TypeScript project in this repo". Point each entry at the configuration the project's own typecheck script uses, and keep the file in git so every copy of the repo has it.
 
 ## Worktrees
