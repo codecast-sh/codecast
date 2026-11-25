@@ -246,11 +246,19 @@ export function locateVault(configDir: string, localPath: string): VaultLocation
     if (abs !== root && !abs.startsWith(root + path.sep)) continue;
     if (!best || root.length > best.root.length) best = v;
   }
+  const dir = stat.isDirectory() ? abs : path.dirname(abs);
   if (best) {
+    // A checkout inside a folder that is not one (a vault at /tmp or ~/src
+    // holding tens of thousands of files) opens as its own vault: its git,
+    // its language servers and a tree of its own size.
+    const bestRoot = best.root.replace(/\/$/, "");
+    if (!fs.existsSync(path.join(bestRoot, ".git"))) {
+      const repo = gitRootAbove(dir, bestRoot);
+      if (repo && repo !== bestRoot) return located(addVault(configDir, repo));
+    }
     return located(findVault(configDir, best.id) ?? best);
   }
 
-  const dir = stat.isDirectory() ? abs : path.dirname(abs);
   const root = gitRootAbove(dir) ?? dir;
   // A vault at the filesystem root would scan the whole disk; nothing anyone
   // links to legitimately lives directly under it.
@@ -258,13 +266,14 @@ export function locateVault(configDir: string, localPath: string): VaultLocation
   return located(addVault(configDir, root));
 }
 
-/** The nearest ancestor (inclusive) holding a `.git`, or null outside any checkout. */
-function gitRootAbove(dir: string): string | null {
+/** The nearest ancestor (inclusive) holding a `.git`, or null outside any
+ *  checkout; with `stop`, none above it is looked at. */
+function gitRootAbove(dir: string, stop?: string): string | null {
   let cur = dir;
   for (;;) {
     if (fs.existsSync(path.join(cur, ".git"))) return cur;
     const parent = path.dirname(cur);
-    if (parent === cur) return null;
+    if (parent === cur || cur === stop) return null;
     cur = parent;
   }
 }

@@ -8,6 +8,8 @@ import {
   isVaultPathIgnored,
   isVaultPathRepoIgnored,
   isVaultDocumentPath,
+  isVaultTextBody,
+  isVaultWritablePath,
   normalizeVaultPath,
   probeProjectVault,
   realVaultRoot,
@@ -107,11 +109,7 @@ describe("vaultRelativePath", () => {
 });
 
 describe("scope predicates", () => {
-  test("writes stay narrow even though reads see every file", () => {
-    // The read side has no extension list at all — the ignore rules are the
-    // only scope gate (see the scanVault tests below). Writes did NOT widen
-    // with it: code is served read-only on purpose, so PUT and the create op
-    // still accept only markdown and the attachment set.
+  test("the document set is markdown and attachments, and stays the mirror's scope", () => {
     expect(isVaultDocumentPath("a.md")).toBe(true);
     expect(isVaultDocumentPath("a.MARKDOWN")).toBe(true);
     expect(isVaultDocumentPath("a.png")).toBe(true);
@@ -119,6 +117,24 @@ describe("scope predicates", () => {
     expect(isVaultDocumentPath("a.sh")).toBe(false);
     expect(isVaultDocumentPath("src/index.ts")).toBe(false);
     expect(isVaultDocumentPath("bun.lock")).toBe(false);
+  });
+
+  test("writable paths are documents plus anything not binary by extension", () => {
+    for (const p of ["a.md", "a.png", "src/index.ts", "bun.lock", "Makefile", "bin/run", ".env", "id_rsa.key", "x.prisma"]) {
+      expect(isVaultWritablePath(p)).toBe(true);
+    }
+    for (const p of ["a.zip", "lib/x.DYLIB", "fonts/x.woff2", "bun.lockb", "data.sqlite", "app.wasm", "deck.pptx"]) {
+      expect(isVaultWritablePath(p)).toBe(false);
+    }
+  });
+
+  test("a text body is valid UTF-8 with no NUL", () => {
+    expect(isVaultTextBody(Buffer.from("plain\r\n"))).toBe(true);
+    expect(isVaultTextBody(Buffer.from("\uFEFFbom, emoji \u{1F600}, accents \u00e9"))).toBe(true);
+    expect(isVaultTextBody(Buffer.alloc(0))).toBe(true);
+    expect(isVaultTextBody(Buffer.from("a\u0000b"))).toBe(false);
+    expect(isVaultTextBody(Buffer.from([0x61, 0xc3]))).toBe(false); // truncated sequence
+    expect(isVaultTextBody(Buffer.from([0xff, 0xfe, 0x61, 0x00]))).toBe(false); // UTF-16LE
   });
 
   test("content types let the browser render attachments", () => {
@@ -243,6 +259,15 @@ describe("repo scope", () => {
     expect(isVaultPathIgnored(repo, ".github/CONTRIBUTING.md")).toBe(false);
     expect(isVaultPathIgnored(repo, "docs/guide.md")).toBe(false);
     expect(isVaultPathIgnored(repo, "README.md")).toBe(false);
+  });
+
+  test("segment rules ignore letter case, and the always-ignored set survives allowIgnored", () => {
+    for (const p of [".GIT/hooks/pre-commit", "Node_Modules/x/a.js", ".Obsidian/app.json"]) {
+      expect(isVaultPathIgnored(repo, p)).toBe(true);
+      expect(resolveVaultPath(repo, p, { allowIgnored: true })).toBeNull();
+    }
+    expect(isVaultPathRepoIgnored(repo, "DIST/bundle.md")).toBe(true);
+    expect(isVaultPathIgnored(repo, ".GitHub/CONTRIBUTING.md")).toBe(false);
   });
 
   test("the same names stay visible in a plain vault", () => {

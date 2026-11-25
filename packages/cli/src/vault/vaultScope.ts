@@ -7,6 +7,7 @@
 //
 // No vault module may re-implement any of this.
 
+import { isUtf8 } from "buffer";
 import * as crypto from "crypto";
 import * as fs from "fs";
 import * as fsp from "fs/promises";
@@ -15,6 +16,7 @@ import {
   isAllowedProseDotDir,
   isRepoIgnoredSegment,
   isVaultAssetPath,
+  isVaultBinaryPath,
   isVaultIgnoredPath,
   isVaultMarkdownPath,
   VAULT_DOC_DIRS,
@@ -30,7 +32,12 @@ const MAX_DEPTH = 16;
  *  long stretches without opening thousands of file descriptors. */
 const SCAN_CONCURRENCY = 8;
 
-const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+/** macOS and Windows ship case-insensitive filesystems: `A.ts` and `a.ts` name
+ *  one file, so path comparisons and per-path locks fold case there. */
+export const CASE_INSENSITIVE_FS = process.platform === "darwin" || process.platform === "win32";
+
+/** A path or segment as this filesystem compares it. */
+export const foldCase = (s: string): string => (CASE_INSENSITIVE_FS ? s.toLowerCase() : s);
 
 /**
  * Content identity for a vault file: a 16-hex sha256 prefix. This ONE digest is
@@ -47,23 +54,34 @@ export function vaultContentHash(data: Buffer | string): string {
  * The vault as a DOCUMENT COLLECTION: markdown plus the attachments it embeds.
  * This is the narrow set — everything else in the folder is context around it.
  *
- * Local READS are no longer restricted to this. A vault root is often a code
- * repository, and a tree that lists `docs/` while hiding `src/` tells the user
- * something false about the folder they opened — so every file that survives
- * the ignore rules (isVaultPathIgnored: node_modules, dot directories,
- * .gitignore, the repo ignores) can be read, and the browser decides what it
- * renders. Code is shown READ-ONLY: the value here is the linked-notes layer,
- * and competing with the user's real editor is a losing game.
- *
- * Two callers must keep asking the narrow question, and widening reads must
- * never widen either by accident:
- *   - WRITES (PUT /vault/file, the create op) — nothing may write code.
- *   - The Convex MIRROR — it exists so notes can be read from another device.
- *     It pushes a metadata row per file, so admitting the whole tree would
- *     enumerate a private repo's filenames and sizes off this machine.
+ * Reads and writes are wider than this: a vault root is often a code
+ * repository, every in-scope file can be read, and every text file can be
+ * edited (isVaultWritablePath). The one caller that must keep asking the narrow
+ * question is the Convex MIRROR — it exists so notes can be read from another
+ * device, and it pushes a metadata row per file, so admitting the whole tree
+ * would enumerate a private repo's filenames and sizes off this machine.
  */
 export function isVaultDocumentPath(relPath: string): boolean {
   return isVaultMarkdownPath(relPath) || isVaultAssetPath(relPath);
+}
+
+/**
+ * Which paths PUT /vault/file and the create/rename/delete ops may touch: the
+ * document set, plus any file whose extension does not mark it binary. The
+ * extension only rules a path out; for a non-document path the bytes must also
+ * pass isVaultTextBody, so a binary with an unlisted extension is still
+ * refused. Scope (ignored paths, traversal, symlinks) is resolveVaultPath's
+ * job, not this one's.
+ */
+export function isVaultWritablePath(relPath: string): boolean {
+  return isVaultDocumentPath(relPath) || !isVaultBinaryPath(relPath);
+}
+
+/** True when the bytes are text an editor produced: valid UTF-8 with no NUL.
+ *  NUL is the check git and grep use for "binary", and no source file has one.
+ *  isUtf8 validates without decoding, so a 25 MB body costs no throwaway string. */
+export function isVaultTextBody(data: Uint8Array): boolean {
+  return !data.includes(0) && isUtf8(data);
 }
 
 // ---------------------------------------------------------------------------
@@ -148,7 +166,11 @@ function repoScopeFor(realRoot: string): RepoScope {
     try {
       const file = path.join(realRoot, ".gitignore");
       if (fs.statSync(file).size <= GITIGNORE_MAX_BYTES) {
-        ({ names, paths } = parseGitignore(fs.readFileSync(file, "utf-8")));
+        const parsed = parseGitignore(fs.readFileSync(file, "utf-8"));
+        // Stored folded so `SECRETS.env` cannot dodge a `secrets.env` line on
+        // a filesystem where they are one file.
+        names = new Set([...parsed.names].map(foldCase));
+        paths = new Set([...parsed.paths].map(foldCase));
       }
     } catch {}
   }
@@ -208,8 +230,8 @@ export function isVaultPathRepoIgnored(root: string, relPath: string): boolean {
     // hand — untracked is not uninteresting. The segment rules above still
     // apply inside, which is what keeps `.claude/worktrees/` out.
     if (isAllowedProseDotDir(seg)) continue;
-    if (scope.names.has(seg)) return true;
-    if (scope.paths.has(prefix)) return true;
+    if (scope.names.has(foldCase(seg))) return true;
+    if (scope.paths.has(foldCase(prefix))) return true;
   }
   return false;
 }
@@ -324,8 +346,8 @@ function realpathDeepest(target: string): string {
 }
 
 function sameOrInside(root: string, candidate: string): boolean {
-  const a = CASE_INSENSITIVE_FS ? root.toLowerCase() : root;
-  const b = CASE_INSENSITIVE_FS ? candidate.toLowerCase() : candidate;
+  const a = foldCase(root);
+  const b = foldCase(candidate);
   return b === a || b.startsWith(a.endsWith(path.sep) ? a : a + path.sep);
 }
 
@@ -348,8 +370,9 @@ export function realVaultRoot(root: string): string {
  * file to create.
  *
  * `allowIgnored` admits what the repo rules hide (a listing from
- * `scanVault(root, { includeIgnored: true })`), for READS only. The always-
- * ignored set and every traversal/symlink rule still apply.
+ * `scanVault(root, { includeIgnored: true })`): every read, and a write whose
+ * request opted in with `ignored=1`. The always-ignored set and every
+ * traversal/symlink rule still apply.
  */
 export function resolveVaultPath(
   root: string,

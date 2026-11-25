@@ -37,11 +37,15 @@ import type {
   VaultWsEvent,
   VaultWsHello,
 } from "@codecast/shared/contracts";
-import { moveToTrash, writeVaultFile } from "./vaultFs.js";
+import { createVaultFile, moveToTrash, withPathLock, writeVaultFile } from "./vaultFs.js";
+import { invalidateGitStatus } from "../code/codeGit.js";
 import { findVault, listVaults, locateVault, setVaultNoteCount } from "./vaultRegistry.js";
 import {
+  foldCase,
   isRepoVaultRoot,
   isVaultDocumentPath,
+  isVaultTextBody,
+  isVaultWritablePath,
   normalizeVaultPath,
   resolveVaultPath,
   revealCommand,
@@ -54,7 +58,8 @@ import { mintVaultCapability, redactVaultUrl, vaultCapabilityAllows } from "./va
 import { VaultWatchHub, type VaultWatchHubOptions } from "./vaultWatcher.js";
 
 const VAULT_WS_PATH = "/vault/ws";
-/** A note is text and an attachment is a picture, not a disk image. */
+/** A source file or a note is text and an attachment is a picture, not a disk
+ *  image. */
 const MAX_WRITE_BYTES = 25 * 1024 * 1024;
 const MAX_OP_BYTES = 256 * 1024;
 
@@ -91,16 +96,16 @@ export async function readBody(req: http.IncomingMessage, limit: number): Promis
 }
 
 /** Resolve a request's vault + path together: both must check out before any
- *  filesystem call happens. Reads take any in-scope path; `writableOnly` is the
- *  narrower markdown+attachment set that PUT and the create op insist on. */
+ *  filesystem call happens. Reads take any in-scope path; `writable` narrows it
+ *  to isVaultWritablePath, the set PUT and the create op insist on. */
 function scoped(
   vault: VaultInfo,
   rawPath: string | null,
-  opts: { writableOnly?: boolean; allowIgnored?: boolean } = {},
+  opts: { writable?: boolean; allowIgnored?: boolean } = {},
 ): { rel: string; abs: string } | null {
   const rel = normalizeVaultPath(rawPath ?? "");
   if (rel === null || rel === "") return null;
-  if (opts.writableOnly && !isVaultDocumentPath(rel)) return null;
+  if (opts.writable && !isVaultWritablePath(rel)) return null;
   const abs = resolveVaultPath(vault.root, rel, { allowIgnored: opts.allowIgnored });
   if (!abs) return null;
   return { rel, abs };
@@ -145,8 +150,8 @@ async function handleGetFile(
   rawPath: string | null,
 ): Promise<void> {
   // Reads admit ignored paths: the tree can list them (scan?ignored=1), and a
-  // row that 404s on click is worse than no row. Writes never do — see
-  // handlePutFile/handleOp, which keep the strict scope.
+  // row that 404s on click is worse than no row. Writes admit them only when
+  // the request opts in (handlePutFile/handleOp).
   const target = scoped(vault, rawPath, { allowIgnored: true });
   if (!target) return sendJson(res, 400, headers, { error: "bad path" });
   let stat: fs.Stats;
@@ -176,59 +181,82 @@ async function handleGetFile(
   res.end(data);
 }
 
+/** The one refusal a writable path can still earn from its bytes: source must
+ *  be text. Documents are exempt, since an attachment is binary on purpose. */
+function refusesBody(rel: string, body: Buffer): boolean {
+  return !isVaultDocumentPath(rel) && !isVaultTextBody(body);
+}
+
 async function handlePutFile(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   headers: Record<string, string>,
   vault: VaultInfo,
   rawPath: string | null,
+  allowIgnored: boolean,
+  force: boolean,
 ): Promise<void> {
-  const target = scoped(vault, rawPath, { writableOnly: true });
+  const target = scoped(vault, rawPath, { writable: true, allowIgnored });
   if (!target) return sendJson(res, 400, headers, { error: "bad path" });
   const body = await readBody(req, MAX_WRITE_BYTES);
   if (!body) return sendJson(res, 413, headers, { error: "too large" });
+  if (refusesBody(target.rel, body)) return sendJson(res, 415, headers, { error: "binary" });
 
   const ifMatch = (req.headers["if-match"] as string | undefined)?.replace(/"/g, "").trim();
   const baseMtimeRaw = req.headers["x-vault-base-mtime"] as string | undefined;
   const baseMtime = baseMtimeRaw ? Number(baseMtimeRaw) : NaN;
   const hasGuard = !!ifMatch || Number.isFinite(baseMtime);
 
-  let current: { data: Buffer; stat: fs.Stats } | null = null;
-  try {
-    const stat = await fsp.stat(target.abs);
-    if (stat.isFile()) current = { data: await fsp.readFile(target.abs), stat };
-  } catch {}
+  // Read, compare and write as one step per file. Without the lock two saves
+  // carrying the same If-Match both pass the compare and the second silently
+  // overwrites the first, which is the exact loss the guard exists to stop.
+  await withPathLock(target.abs, async () => {
+    const stat = await fsp.stat(target.abs).then((st) => (st.isFile() ? st : null), () => null);
 
-  if (hasGuard) {
-    // The guard is what stops a stale editor tab from silently overwriting a
-    // change made on disk (or by another tab) since it last read the file.
-    const currentEtag = current ? vaultContentHash(current.data) : null;
-    const currentMtime = current ? Math.round(current.stat.mtimeMs) : null;
-    const mismatch = ifMatch
-      ? ifMatch !== currentEtag
-      : currentMtime === null || currentMtime !== Math.round(baseMtime);
-    if (mismatch) {
-      res.writeHead(409, {
-        ...headers,
-        ...vaultResponseSecurityHeaders(target.rel),
-        "Content-Type": current ? vaultContentType(target.rel) : "application/json",
-        ETag: currentEtag ?? "",
-        "X-Vault-Mtime": String(currentMtime ?? 0),
-        "X-Vault-Size": String(current?.stat.size ?? 0),
-      });
-      res.end(current ? current.data : JSON.stringify({ error: "conflict" }));
-      return;
+    // A file someone marked read-only (generated code, a checked-out lock file)
+    // is not replaced just because its directory is writable; the editor has
+    // to ask the person and resend with force=1, as VS Code and vim do.
+    if (stat && !force && !(await fsp.access(target.abs, fs.constants.W_OK).then(() => true, () => false))) {
+      return sendJson(res, 403, headers, { error: "read-only" });
     }
-  }
 
-  const stat = await writeVaultFile(target.abs, body);
-  const written: VaultWriteResponse = {
-    path: target.rel,
-    mtime: Math.round(stat.mtimeMs),
-    size: stat.size,
-    etag: vaultContentHash(body),
-  };
-  sendJson(res, 200, headers, written);
+    if (hasGuard) {
+      // The guard is what stops a stale editor tab from silently overwriting a
+      // change made on disk (or by another tab) since it last read the file.
+      // Only a guarded save reads the current bytes: an unguarded one would
+      // hold the lock through a full read nobody uses.
+      const current = stat ? { data: await fsp.readFile(target.abs), stat } : null;
+      const currentEtag = current ? vaultContentHash(current.data) : null;
+      const currentMtime = current ? Math.round(current.stat.mtimeMs) : null;
+      const mismatch = ifMatch
+        ? ifMatch !== currentEtag
+        : currentMtime === null || currentMtime !== Math.round(baseMtime);
+      if (mismatch) {
+        res.writeHead(409, {
+          ...headers,
+          ...vaultResponseSecurityHeaders(target.rel),
+          "Content-Type": current ? vaultContentType(target.rel) : "application/json",
+          ETag: currentEtag ?? "",
+          "X-Vault-Mtime": String(currentMtime ?? 0),
+          "X-Vault-Size": String(current?.stat.size ?? 0),
+        });
+        res.end(current ? current.data : JSON.stringify({ error: "conflict" }));
+        return;
+      }
+    }
+
+    const after = await writeVaultFile(target.abs, body);
+    // The gutter and the tree colors read git status next; a cached status
+    // from before this write would show the file as it was.
+    invalidateGitStatus(vault.id);
+    const written: VaultWriteResponse = {
+      path: target.rel,
+      mtime: Math.round(after.mtimeMs),
+      size: after.size,
+      etag: vaultContentHash(body),
+    };
+    sendJson(res, 200, headers, written);
+  });
 }
 
 async function handleOp(
@@ -236,6 +264,7 @@ async function handleOp(
   res: http.ServerResponse,
   headers: Record<string, string>,
   vault: VaultInfo,
+  allowIgnored: boolean,
 ): Promise<void> {
   const raw = await readBody(req, MAX_OP_BYTES);
   if (!raw) return sendJson(res, 413, headers, { error: "too large" });
@@ -246,19 +275,19 @@ async function handleOp(
     return sendJson(res, 400, headers, { error: "bad request" });
   }
 
-  const target = scoped(vault, op?.path ?? null);
+  const target = scoped(vault, op?.path ?? null, { allowIgnored });
   if (!target) return sendJson(res, 400, headers, { error: "bad path" });
 
   // One stat answers "does it exist" and "what is it"; null when it is absent.
   const statOrNull = (p: string) => fsp.stat(p).catch(() => null);
   const targetStat = await statOrNull(target.abs);
 
-  // Code files are READ-ONLY, and a rename or a trash is a write. They became
-  // visible so the tree tells the truth about the folder; nothing here may
-  // move or destroy them. Directories are exempt: a folder is not a code file,
-  // and reorganising folders is an ordinary vault operation whatever they hold.
+  // A rename or a trash is a write, so a file must be one PUT could write: a
+  // binary in a source tree (a .zip, a font, a compiled object) is shown, never
+  // moved or destroyed from here. Directories are exempt: reorganising folders
+  // is an ordinary operation whatever they hold.
   if (op.op === "rename" || op.op === "delete") {
-    if (targetStat?.isFile() && !isVaultDocumentPath(target.rel)) {
+    if (targetStat?.isFile() && !isVaultWritablePath(target.rel)) {
       return sendJson(res, 400, headers, { error: "read-only" });
     }
   }
@@ -284,41 +313,63 @@ async function handleOp(
     return sendJson(res, 200, headers, { ok: true });
   }
 
+  // Create, rename and delete take the per-path lock a PUT holds and re-check
+  // existence inside it, so a save racing one of them sees a settled file.
   if (op.op === "create") {
-    if (!isVaultDocumentPath(target.rel)) return sendJson(res, 400, headers, { error: "bad path" });
-    if (targetStat) return sendJson(res, 409, headers, { error: "exists" });
-    await fsp.mkdir(path.dirname(target.abs), { recursive: true });
-    await fsp.writeFile(target.abs, op.content ?? "");
-    const stat = await fsp.stat(target.abs);
-    return sendJson(res, 200, headers, { ok: true, file: entryFor(target.rel, stat) });
+    if (!isVaultWritablePath(target.rel)) return sendJson(res, 400, headers, { error: "bad path" });
+    const content = Buffer.from(op.content ?? "");
+    if (refusesBody(target.rel, content)) return sendJson(res, 415, headers, { error: "binary" });
+    return withPathLock(target.abs, async () => {
+      let stat: fs.Stats;
+      try {
+        stat = await createVaultFile(target.abs, content);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === "EEXIST") return sendJson(res, 409, headers, { error: "exists" });
+        throw err;
+      }
+      invalidateGitStatus(vault.id);
+      sendJson(res, 200, headers, { ok: true, file: entryFor(target.rel, stat) });
+    });
   }
 
   if (op.op === "rename") {
-    const dest = scoped(vault, op.to ?? null);
+    const dest = scoped(vault, op.to ?? null, { allowIgnored });
     if (!dest) return sendJson(res, 400, headers, { error: "bad path" });
-    if (!targetStat) return sendJson(res, 404, headers, { error: "not found" });
-    // "exists" must not block a case-only rename ("notes" → "Notes"): on the
-    // case-insensitive filesystems macOS ships, the destination exists
-    // because dest IS the source. Same-inode means same entry — let it through.
-    const destStat = await statOrNull(dest.abs);
-    if (destStat) {
-      const same = targetStat.ino === destStat.ino && target.abs.toLowerCase() === dest.abs.toLowerCase();
-      if (!same) return sendJson(res, 409, headers, { error: "exists" });
-    }
-    await fsp.mkdir(path.dirname(dest.abs), { recursive: true });
-    await fsp.rename(target.abs, dest.abs);
-    const stat = await fsp.stat(dest.abs);
-    return sendJson(res, 200, headers, { ok: true, file: entryFor(dest.rel, stat) });
+    return withPathLock([target.abs, dest.abs], async () => {
+      const source = await statOrNull(target.abs);
+      if (!source) return sendJson(res, 404, headers, { error: "not found" });
+      // The read-only rule holds both ways: a file renamed to a binary name
+      // (a.ts to a.dylib) could never be renamed back or trashed from here.
+      if (source.isFile() && !isVaultWritablePath(dest.rel)) {
+        return sendJson(res, 400, headers, { error: "bad path" });
+      }
+      // "exists" must not block a case-only rename ("notes" → "Notes"): on the
+      // case-insensitive filesystems macOS ships, the destination exists
+      // because dest IS the source. Same-inode means same entry — let it through.
+      const destStat = await statOrNull(dest.abs);
+      if (destStat) {
+        const same = source.ino === destStat.ino && foldCase(target.abs) === foldCase(dest.abs);
+        if (!same) return sendJson(res, 409, headers, { error: "exists" });
+      }
+      await fsp.mkdir(path.dirname(dest.abs), { recursive: true });
+      await fsp.rename(target.abs, dest.abs);
+      const stat = await fsp.stat(dest.abs);
+      invalidateGitStatus(vault.id);
+      sendJson(res, 200, headers, { ok: true, file: entryFor(dest.rel, stat) });
+    });
   }
 
   if (op.op === "delete") {
-    if (!targetStat) return sendJson(res, 404, headers, { error: "not found" });
-    try {
-      moveToTrash(vault.root, target.abs);
-    } catch {
-      return sendJson(res, 500, headers, { error: "could not move to trash" });
-    }
-    return sendJson(res, 200, headers, { ok: true });
+    return withPathLock(target.abs, async () => {
+      if (!(await statOrNull(target.abs))) return sendJson(res, 404, headers, { error: "not found" });
+      try {
+        moveToTrash(vault.root, target.abs);
+      } catch {
+        return sendJson(res, 500, headers, { error: "could not move to trash" });
+      }
+      invalidateGitStatus(vault.id);
+      sendJson(res, 200, headers, { ok: true });
+    });
   }
 
   sendJson(res, 400, headers, { error: "unknown op" });
@@ -412,10 +463,12 @@ export function handleVaultHttp(
       return handleGetFile(res, headers, vault, params.get("path"));
     }
     if (req.method === "PUT" && parsed.pathname === "/vault/file") {
-      return handlePutFile(req, res, headers, vault, params.get("path"));
+      return handlePutFile(
+        req, res, headers, vault, params.get("path"), params.get("ignored") === "1", params.get("force") === "1",
+      );
     }
     if (req.method === "POST" && parsed.pathname === "/vault/op") {
-      return handleOp(req, res, headers, vault);
+      return handleOp(req, res, headers, vault, params.get("ignored") === "1");
     }
     sendJson(res, 404, headers, { error: "not found" });
   };

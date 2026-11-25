@@ -323,6 +323,31 @@ describe("locateVault", () => {
     expect(located?.entry).toMatchObject({ path: "videos/out/clip.mp4", size: 3, ignored: true });
   });
 
+  test("a checkout inside a vault that is not one opens as its own vault", () => {
+    // A big folder registered as a vault (/tmp, ~/src) holding a repo.
+    const big = addVault(configDir, base, "Big");
+    const repo = path.join(base, "scratch", "repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(repo, "src"), { recursive: true });
+    fs.writeFileSync(path.join(repo, "src", "a.ts"), "a\n");
+    const located = locateVault(configDir, path.join(repo, "src", "a.ts"));
+    expect(located).toMatchObject({ vault: { root: repo }, rel: "src/a.ts" });
+    expect(located!.vault.id).not.toBe(big.id);
+    // A loose file in the big vault stays in it.
+    fs.writeFileSync(path.join(base, "loose.md"), "x\n");
+    expect(locateVault(configDir, path.join(base, "loose.md"))?.vault.id).toBe(big.id);
+  });
+
+  test("a repo vault keeps paths inside nested checkouts", () => {
+    const repo = path.join(base, "repo");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    const nested = path.join(repo, "vendor", "lib");
+    fs.mkdirSync(path.join(nested, ".git"), { recursive: true });
+    fs.writeFileSync(path.join(nested, "x.ts"), "x\n");
+    const vault = addVault(configDir, repo, "Repo");
+    expect(locateVault(configDir, path.join(nested, "x.ts"))).toMatchObject({ vault: { id: vault.id }, rel: "vendor/lib/x.ts" });
+  });
+
   test("refuses a path directly under the filesystem root", () => {
     expect(locateVault(configDir, path.parse(base).root)).toBeNull();
   });

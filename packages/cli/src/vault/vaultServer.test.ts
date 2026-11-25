@@ -12,6 +12,7 @@ import { WebSocket } from "ws";
 import { VAULT_MAX_SERVE_BYTES } from "@codecast/shared/contracts";
 import type { VaultScanResponse, VaultWriteResponse, VaultWsEvent } from "@codecast/shared/contracts";
 import { attachTerminalServer } from "../terminal/terminalServer.js";
+import { createVaultFile } from "./vaultFs.js";
 import { addVault } from "./vaultRegistry.js";
 import { clearRepoScopeCache } from "./vaultScope.js";
 import { attachVaultServer, handleVaultHttp, type VaultServerOptions } from "./vaultServer.js";
@@ -221,7 +222,7 @@ describe("GET /vault/roots and /vault/scan", () => {
     expect((await api("/vault/locate?path=relative/nope.md")).status).toBe(404);
   });
 
-  test("?ignored=1 lists a repo's hidden paths flagged, readable but not writable", async () => {
+  test("?ignored=1 lists a repo's hidden paths flagged, readable, writable only on opt-in", async () => {
     // Turn the fixture into a repo: a .git entry is the whole test.
     fs.mkdirSync(path.join(root, ".git"), { recursive: true });
     fs.mkdirSync(path.join(root, "dist"), { recursive: true });
@@ -247,9 +248,10 @@ describe("GET /vault/roots and /vault/scan", () => {
     const read = await api(filePath("dist/bundle.md"));
     expect(read.status).toBe(200);
     expect(await read.text()).toBe("generated\n");
-    // ...but not written, renamed or trashed: ignored means read-only.
+    // ...but not written or trashed unless the request opts in.
     expect((await api(filePath("dist/bundle.md"), { method: "PUT", body: "edited" })).status).toBe(400);
     expect((await postOp({ op: "delete", path: "dist/bundle.md" })).status).toBe(400);
+    expect(fs.readFileSync(path.join(root, "dist", "bundle.md"), "utf-8")).toBe("generated\n");
   });
 
   test("a plain vault reports repo:false and lists the same tree either way", async () => {
@@ -365,6 +367,120 @@ describe("PUT /vault/file", () => {
     expect(fs.existsSync(path.join(root, "notes/gone.md"))).toBe(false);
   });
 
+  test("two PUTs carrying the same If-Match: exactly one lands, the other is a 409", async () => {
+    const etag = (await api(filePath("notes/one.md"))).headers.get("ETag")!;
+    const put = (body: string) =>
+      api(filePath("notes/one.md"), { method: "PUT", body, headers: { "If-Match": etag } });
+    const results = await Promise.all([put("from tab A\n"), put("from tab B\n")]);
+    const statuses = results.map((r) => r.status).sort();
+    expect(statuses).toEqual([200, 409]);
+
+    const loser = results.find((r) => r.status === 409)!;
+    const onDisk = fs.readFileSync(path.join(root, "notes/one.md"), "utf-8");
+    expect(["from tab A\n", "from tab B\n"]).toContain(onDisk);
+    // The loser sees the winner's bytes and their identity, ready to merge.
+    expect(await loser.text()).toBe(onDisk);
+    const winner = (await results.find((r) => r.status === 200)!.json()) as VaultWriteResponse;
+    expect(loser.headers.get("ETag")).toBe(winner.etag);
+    expect(Number(loser.headers.get("X-Vault-Mtime"))).toBe(winner.mtime);
+  });
+
+  test("writes a source file byte for byte, CRLF and BOM included", async () => {
+    const bytes = Buffer.from("\uFEFFconst a = 1;\r\nconst b = 2;\r\n\n", "utf8");
+    const res = await api(filePath("src/mixed.ts"), { method: "PUT", body: bytes });
+    expect(res.status).toBe(200);
+    expect(fs.readFileSync(path.join(root, "src/mixed.ts")).equals(bytes)).toBe(true);
+    // An extensionless script is source too.
+    expect((await api(filePath("bin/run"), { method: "PUT", body: "#!/bin/sh\n" })).status).toBe(200);
+  });
+
+  test("a save keeps the file's mode bits", async () => {
+    const script = path.join(root, "notes/build.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho one\n");
+    fs.chmodSync(script, 0o750);
+    const res = await api(filePath("notes/build.sh"), { method: "PUT", body: "#!/bin/sh\necho two\n" });
+    expect(res.status).toBe(200);
+    expect(fs.statSync(script).mode & 0o777).toBe(0o750);
+    expect(fs.readFileSync(script, "utf-8")).toBe("#!/bin/sh\necho two\n");
+    // No temp file is left behind.
+    expect(fs.readdirSync(path.join(root, "notes")).filter((n) => n.endsWith(".tmp"))).toEqual([]);
+  });
+
+  test("a save to a hard-linked file keeps the link", async () => {
+    const a = path.join(root, "notes/shared.txt");
+    const b = path.join(root, "notes/shared-link.txt");
+    fs.writeFileSync(a, "old\n");
+    fs.linkSync(a, b);
+    expect((await api(filePath("notes/shared.txt"), { method: "PUT", body: "new\n" })).status).toBe(200);
+    expect(fs.readFileSync(b, "utf-8")).toBe("new\n");
+    expect(fs.statSync(a).ino).toBe(fs.statSync(b).ino);
+  });
+
+  test("refuses binary bodies and binary extensions for source paths", async () => {
+    const nul = await api(filePath("src/a.ts"), { method: "PUT", body: "a\u0000b" });
+    expect(nul.status).toBe(415);
+    expect((await nul.json()).error).toBe("binary");
+    const badUtf8 = await api(filePath("src/b.ts"), { method: "PUT", body: Buffer.from([0x61, 0xff, 0xfe, 0x62]) });
+    expect(badUtf8.status).toBe(415);
+    expect((await api(filePath("lib/x.dylib"), { method: "PUT", body: "text" })).status).toBe(400);
+    expect((await api(filePath("fonts/x.woff2"), { method: "PUT", body: "text" })).status).toBe(400);
+    expect(fs.existsSync(path.join(root, "src"))).toBe(false);
+    // Documents are unchanged: an attachment is binary on purpose.
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0xff]);
+    expect((await api(filePath("notes/new.png"), { method: "PUT", body: png })).status).toBe(200);
+    expect(fs.readFileSync(path.join(root, "notes/new.png")).equals(png)).toBe(true);
+  });
+
+  test("a repo-ignored path is writable with ignored=1, the always-ignored set never", async () => {
+    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(root, "node_modules/pkg"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".gitignore"), "generated\n");
+    clearRepoScopeCache();
+    const putIgnored = (rel: string, body: string) =>
+      api(`${filePath(rel)}&ignored=1`, { method: "PUT", body });
+
+    for (const rel of [".env", "dist/app.js", "generated/schema.ts"]) {
+      expect((await api(filePath(rel), { method: "PUT", body: "x\n" })).status).toBe(400);
+      expect((await putIgnored(rel, "x\n")).status).toBe(200);
+      expect(fs.readFileSync(path.join(root, rel), "utf-8")).toBe("x\n");
+    }
+    for (const rel of [".git/config", "node_modules/pkg/index.js", ".obsidian/app.json"]) {
+      expect((await putIgnored(rel, "x\n")).status).toBe(400);
+      expect(fs.existsSync(path.join(root, rel))).toBe(false);
+    }
+  });
+
+  test("the always-ignored set holds in any letter case", async () => {
+    fs.mkdirSync(path.join(root, ".git/hooks"), { recursive: true });
+    fs.mkdirSync(path.join(root, "node_modules/x"), { recursive: true });
+    fs.writeFileSync(path.join(root, ".gitignore"), "secrets.env\n");
+    clearRepoScopeCache();
+    for (const rel of [".GIT/hooks/pre-commit", "Node_Modules/x/a.js", ".Obsidian/app.json"]) {
+      expect((await api(filePath(rel), { method: "PUT", body: "x\n" })).status).toBe(400);
+      expect((await api(`${filePath(rel)}&ignored=1`, { method: "PUT", body: "x\n" })).status).toBe(400);
+    }
+    expect(fs.readdirSync(path.join(root, ".git/hooks"))).toEqual([]);
+    expect(fs.readdirSync(path.join(root, "node_modules/x"))).toEqual([]);
+    // A .gitignore name cannot be dodged by case where the filesystem folds it.
+    if (process.platform === "darwin" || process.platform === "win32") {
+      expect((await api(filePath("SECRETS.env"), { method: "PUT", body: "x\n" })).status).toBe(400);
+    }
+  });
+
+  test("a read-only file is refused unless the save forces it", async () => {
+    const locked = path.join(root, "notes/generated.ts");
+    fs.writeFileSync(locked, "old\n");
+    fs.chmodSync(locked, 0o444);
+    const refused = await api(filePath("notes/generated.ts"), { method: "PUT", body: "new\n" });
+    expect(refused.status).toBe(403);
+    expect((await refused.json()).error).toBe("read-only");
+    expect(fs.readFileSync(locked, "utf-8")).toBe("old\n");
+    const forced = await api(`${filePath("notes/generated.ts")}&force=1`, { method: "PUT", body: "new\n" });
+    expect(forced.status).toBe(200);
+    expect(fs.readFileSync(locked, "utf-8")).toBe("new\n");
+    expect(fs.statSync(locked).mode & 0o777).toBe(0o444);
+  });
+
   test("refuses a path outside the vault", async () => {
     const res = await api(filePath("../escape.md"), { method: "PUT", body: "x" });
     expect(res.status).toBe(400);
@@ -378,26 +494,77 @@ describe("POST /vault/op", () => {
     expect(fs.statSync(path.join(root, "notes/fresh")).isDirectory()).toBe(true);
   });
 
-  test("a code file cannot be written, renamed or trashed", async () => {
-    // Code became visible so the tree tells the truth about the folder. Every
-    // write path stays shut: read-only has to mean read-only, or the surface
-    // trashes source files from a notes browser.
-    const before = fs.readFileSync(path.join(root, "notes/ignore.txt"), "utf-8");
-
-    expect((await postOp({ op: "create", path: "notes/new.ts", content: "x" })).status).toBe(400);
-    expect(fs.existsSync(path.join(root, "notes/new.ts"))).toBe(false);
-
-    const put = await api(filePath("notes/ignore.txt"), { method: "PUT", body: "clobbered" });
-    expect(put.status).toBe(400);
-
-    const renamed = await postOp({ op: "rename", path: "notes/ignore.txt", to: "notes/moved.txt" });
+  test("a binary file cannot be renamed or trashed", async () => {
+    fs.writeFileSync(path.join(root, "notes/archive.zip"), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0]));
+    const renamed = await postOp({ op: "rename", path: "notes/archive.zip", to: "notes/moved.zip" });
     expect(renamed.status).toBe(400);
     expect((await renamed.json()).error).toBe("read-only");
+    expect((await postOp({ op: "delete", path: "notes/archive.zip" })).status).toBe(400);
+    expect((await postOp({ op: "create", path: "notes/new.zip", content: "x" })).status).toBe(400);
+    expect(fs.existsSync(path.join(root, "notes/archive.zip"))).toBe(true);
+  });
 
-    const deleted = await postOp({ op: "delete", path: "notes/ignore.txt" });
-    expect(deleted.status).toBe(400);
+  test("create, rename and delete a source file", async () => {
+    const created = await postOp({ op: "create", path: "src/foo.ts", content: "export const a = 1;\r\n" });
+    expect(created.status).toBe(200);
+    expect((await created.json()).file).toMatchObject({ path: "src/foo.ts", size: 21 });
+    expect(fs.readFileSync(path.join(root, "src/foo.ts"), "utf-8")).toBe("export const a = 1;\r\n");
+    expect((await postOp({ op: "create", path: "src/foo.ts", content: "clobber" })).status).toBe(409);
+    expect((await postOp({ op: "create", path: "src/nul.ts", content: "a\u0000b" })).status).toBe(415);
+    expect(fs.existsSync(path.join(root, "src/nul.ts"))).toBe(false);
 
-    expect(fs.readFileSync(path.join(root, "notes/ignore.txt"), "utf-8")).toBe(before);
+    const renamed = await postOp({ op: "rename", path: "src/foo.ts", to: "src/bar.ts" });
+    expect(renamed.status).toBe(200);
+    expect(fs.existsSync(path.join(root, "src/foo.ts"))).toBe(false);
+    expect(fs.readFileSync(path.join(root, "src/bar.ts"), "utf-8")).toBe("export const a = 1;\r\n");
+
+    const home = path.join(base, "home-src");
+    fs.mkdirSync(path.join(home, ".Trash"), { recursive: true });
+    process.env.HOME = home;
+    try {
+      expect((await postOp({ op: "delete", path: "src/bar.ts" })).status).toBe(200);
+    } finally {
+      process.env.HOME = REAL_HOME;
+    }
+    expect(fs.existsSync(path.join(root, "src/bar.ts"))).toBe(false);
+    expect(fs.readFileSync(path.join(home, ".Trash", "bar.ts"), "utf-8")).toBe("export const a = 1;\r\n");
+  });
+
+  test("a file cannot be renamed to a binary name", async () => {
+    fs.mkdirSync(path.join(root, "src"), { recursive: true });
+    fs.writeFileSync(path.join(root, "src/a.ts"), "a\n");
+    const res = await postOp({ op: "rename", path: "src/a.ts", to: "src/a.dylib" });
+    expect(res.status).toBe(400);
+    expect(fs.existsSync(path.join(root, "src/a.ts"))).toBe(true);
+    expect(fs.existsSync(path.join(root, "src/a.dylib"))).toBe(false);
+  });
+
+  test("create never replaces a file another writer made first", async () => {
+    // Another process (cast files, an outside editor) is invisible to the
+    // daemon's path lock; createVaultFile's O_EXCL is what has to catch it.
+    const abs = path.join(root, "src/race.ts");
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, "theirs\n");
+    await expect(createVaultFile(abs, "mine\n")).rejects.toMatchObject({ code: "EEXIST" });
+    expect(fs.readFileSync(abs, "utf-8")).toBe("theirs\n");
+  });
+
+  test("ops on a repo-ignored path need ignored=1; .git and node_modules never open", async () => {
+    fs.mkdirSync(path.join(root, ".git"), { recursive: true });
+    fs.mkdirSync(path.join(root, "node_modules"), { recursive: true });
+    clearRepoScopeCache();
+    const opIgnored = (body: unknown) =>
+      api(`/vault/op?vault=${vaultId}&ignored=1`, { method: "POST", body: JSON.stringify(body) });
+
+    expect((await postOp({ op: "create", path: ".env", content: "A=1\n" })).status).toBe(400);
+    expect((await opIgnored({ op: "create", path: ".env", content: "A=1\n" })).status).toBe(200);
+    expect(fs.readFileSync(path.join(root, ".env"), "utf-8")).toBe("A=1\n");
+    expect((await opIgnored({ op: "rename", path: ".env", to: "dist/.env" })).status).toBe(200);
+
+    expect((await opIgnored({ op: "create", path: ".git/hooks/pre-commit", content: "x" })).status).toBe(400);
+    expect((await opIgnored({ op: "create", path: "node_modules/x.js", content: "x" })).status).toBe(400);
+    expect((await opIgnored({ op: "rename", path: "dist/.env", to: ".git/env" })).status).toBe(400);
+    expect(fs.existsSync(path.join(root, ".git/hooks/pre-commit"))).toBe(false);
   });
 
   test("a folder still renames, whatever it holds", async () => {

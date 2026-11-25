@@ -11,7 +11,18 @@ import { create } from "zustand";
 import type { ConvexReactClient } from "convex/react";
 import type { VaultFileEntry, VaultInfo, VaultWsEvent } from "@codecast/shared/contracts";
 import { isVaultMarkdownPath, VAULT_MAX_PREVIEW_BYTES } from "@codecast/shared/contracts";
-import { lastDiscoveryFailure, loopbackFailureReason, type LoopbackUnreachableReason } from "../lib/terminal/endpoint";
+import { getTerminalEndpoint, lastDiscoveryFailure, loopbackFailureReason, type LoopbackUnreachableReason } from "../lib/terminal/endpoint";
+import {
+  bindVaultToHost,
+  hostEndpoint,
+  hostOfEndpoint,
+  hostOfVault,
+  onHostEndpointChange,
+  reestablishHost,
+  setHostEstablisher,
+  setLocalEndpoint,
+} from "../lib/vault/hosts/routes";
+import { hostVaultName } from "../lib/vault/hosts/hostVaults";
 import {
   fetchRemoteBody,
   fetchRemoteNotes,
@@ -85,6 +96,10 @@ export interface VaultBody {
   content: string;
   mtime: number;
   etag: string;
+  /** Bytes the daemon served with this content. The browser's decode drops a
+   *  BOM and masks undecodable bytes, so the code editor reads both off this,
+   *  never off the scan's row, which can describe a different version. */
+  size?: number;
 }
 
 /** What a rename did to the links pointing at the renamed file. */
@@ -104,9 +119,40 @@ export interface RenameReport {
  *  Named so the teaching panel can bind to it instead of restating the members
  *  — a new discovery outcome must not be able to drift out of the UI. */
 
+/** Where the forward to a cloud host stands. */
+export type HostConnectionState = "connecting" | "connected" | "unreachable";
+
+/** A host link that could not reach its host and opened this machine's
+ *  checkout instead: the header offers the host again from that vault. */
+export interface HostFallback {
+  deviceId: string;
+  /** The path on the host the link named. */
+  hostAbs: string;
+  /** The local vault that opened in its place. */
+  localVaultId: string;
+}
+
 interface VaultState {
   connection: VaultConnection;
+  /** The ACTIVE vault's daemon: this machine's, or the forward to the cloud
+   *  host the vault lives on. Every reader that pairs it with activeVaultId
+   *  gets the right machine; requests are routed per vault underneath anyway
+   *  (lib/vault/hosts/routes.ts). */
   endpoint: VaultEndpoint | null;
+  /** This machine's daemon, whatever vault is open. */
+  localEndpoint: VaultEndpoint | null;
+  /** Cloud hosts this window has opened a forward to, by device id. The
+   *  endpoints themselves live in memory in lib/vault/hosts/routes.ts. */
+  hostStates: Record<string, HostConnectionState>;
+  hostFallback: HostFallback | null;
+  setHostFallback: (fallback: HostFallback | null) => void;
+  /** Open (or reuse) the forward to the machine `deviceId`. "local" when it is
+   *  this machine; "unreachable" when this machine's daemon cannot forward to
+   *  it (not one of its hosts, asleep, no daemon here). */
+  connectHost: (deviceId: string) => Promise<"local" | "host" | "unreachable">;
+  /** A vault a host's daemon located: joins the list bound to that host, so
+   *  every request for it goes there. Never cached across reloads. */
+  adoptHostVault: (vault: VaultInfo, deviceId: string) => void;
   vaults: VaultInfo[];
   activeVaultId: string | null;
   /** Vault-relative path → entry, for the active vault. */
@@ -172,8 +218,13 @@ interface VaultState {
   /** Whether the active vault's root is a git checkout, per the last scan. */
   isRepo: boolean;
   /** Pull a non-markdown file's text on demand. Markdown bodies all arrive with
-   *  the scan; code is fetched only when someone opens it. */
-  loadTextBody: (path: string) => Promise<void>;
+   *  the scan; code is fetched only when someone opens it. Declines past
+   *  `maxBytes` (the preview cap unless the caller, the code editor, says). */
+  loadTextBody: (path: string, opts?: { maxBytes?: number }) => Promise<void>;
+  /** A version some writer outside the store put on disk (the code editor's
+   *  own compare-and-swap save): the body and its etag, and the row's size and
+   *  mtime, so the watcher's echo of that write is recognized as ours. */
+  adoptBody: (vaultId: string, path: string, body: VaultBody) => void;
   /** Path whose explorer row should be in inline-rename mode. Set by the store
    *  so a freshly created note lands in rename regardless of which surface
    *  (header button, row context menu) created it. */
@@ -423,7 +474,8 @@ const SHOW_ALL_KEY = "cast_vault_show_all";
 
 /**
  * Whether a vault opens showing everything on disk. The default follows what
- * the folder IS: a code project whose tree hides its own source is the wrong
+ * the folder IS (a discovered project, or any git checkout once the scan says
+ * so): a code project whose tree hides its own source is the wrong
  * first impression, and a notes folder full of dotfiles is too. An explicit
  * choice, once made, outranks both.
  */
@@ -455,8 +507,8 @@ function writeVaultFlag(key: string, vaultId: string, value: boolean): void {
   } catch {}
 }
 
-function readShowAllFiles(vaultId: string, vaults: VaultInfo[]): boolean {
-  return readVaultFlag(SHOW_ALL_KEY, vaultId) ?? vaults.find((v) => v.id === vaultId)?.kind === "project";
+function readShowAllFiles(vaultId: string, vaults: VaultInfo[], isRepo = false): boolean {
+  return readVaultFlag(SHOW_ALL_KEY, vaultId) ?? (isRepo || vaults.find((v) => v.id === vaultId)?.kind === "project");
 }
 
 function readShowIgnoredFiles(vaultId: string): boolean {
@@ -480,12 +532,19 @@ async function fetchBodies(
     while (queue.length) {
       const path = queue.shift();
       if (!path) return;
+      const before = useVaultStore.getState().bodies[path];
       try {
         const file = await readVaultFile(ep, vaultId, path);
         const s = useVaultStore.getState();
         if (s.activeVaultId !== vaultId) return;
-        if (file) {
-          const body: VaultBody = { content: file.content, mtime: file.mtime, etag: file.etag };
+        const now = s.bodies[path];
+        // A body written while this read was in flight (a save, a recreate's
+        // guarded PUT) wins unless the read is strictly newer: the read may
+        // have caught the disk mid-sequence, before that write landed.
+        if (file && now && now !== before && file.mtime <= now.mtime) {
+          useVaultStore.setState((st) => ({ loadingPaths: omit(st.loadingPaths, path) }));
+        } else if (file) {
+          const body: VaultBody = { content: file.content, mtime: file.mtime, etag: file.etag, size: file.size };
           useVaultStore.setState((st) => ({
             bodies: { ...st.bodies, [path]: body },
             loadingPaths: omit(st.loadingPaths, path),
@@ -660,6 +719,16 @@ async function createThenRename(
   return path;
 }
 
+/** Whether an open code editor holds this file. A checkout or an agent's
+ *  delete-and-rewrite brings a file back as an 'add' after the 'removed'
+ *  dropped its body, and an editor still open on it needs the text again.
+ *  The editor registers this when its chunk loads (lib/code/fileSync.ts), so
+ *  the store never imports CodeMirror and holds no list of its own. */
+let codeBodyHeld: (vaultId: string, path: string) => boolean = () => false;
+export function setCodeBodyHolder(held: (vaultId: string, path: string) => boolean): void {
+  codeBodyHeld = held;
+}
+
 function applyWsEvent(ev: VaultWsEvent) {
   const s = useVaultStore.getState();
   const vaultId = s.activeVaultId;
@@ -686,17 +755,21 @@ function applyWsEvent(ev: VaultWsEvent) {
     },
   }));
   // Markdown is always held, so it always refetches. A code file refetches only
-  // when we already have its body — i.e. someone has it open — which keeps a
-  // repo's build output from pulling megabytes through here.
+  // when someone has it open (its body is held, or an editor holds the file
+  // after a 'removed' dropped the body), which keeps a repo's build output
+  // from pulling megabytes through here.
   const isMarkdown = isVaultMarkdownPath(ev.path);
   const known = s.bodies[ev.path];
-  if (s.endpoint && (isMarkdown || known)) {
+  if (s.endpoint && (isMarkdown || known || codeBodyHeld(vaultId, ev.path))) {
     // Skip refetch when the change is our own write echo (same mtime already stored).
     if (!known || known.mtime !== ev.mtime) {
       void fetchBodies(s.endpoint, vaultId, [ev.path], { persist: isMarkdown });
     }
   }
 }
+
+/** Tests: deliver a watcher event as the subscription would. */
+export const _applyVaultWsEventForTests = (ev: VaultWsEvent) => applyWsEvent(ev);
 
 /** The file table without the rows a scan flagged ignored. */
 function withoutIgnored(files: Record<string, VaultFileEntry>): Record<string, VaultFileEntry> {
@@ -742,6 +815,9 @@ async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void
     bodies: nextBodies,
     scannedAt: scan.scanned_at,
     isRepo: scan.repo,
+    // A git checkout is a code project whatever registered it (a /files?path=
+    // link, `cast vault add`), and only the scan knows the root is one.
+    showAllFiles: readShowAllFiles(vaultId, s.vaults, scan.repo),
     connection: "connected",
     loadingPaths: loading,
   });
@@ -751,9 +827,56 @@ async function syncActiveVault(ep: VaultEndpoint, vaultId: string): Promise<void
   await fetchBodies(ep, vaultId, toFetch);
 }
 
+/** The endpoint requests for `vaultId` start from: its host's forward, or
+ *  this machine's daemon. */
+function endpointFor(vaultId: string | null, local: VaultEndpoint | null): VaultEndpoint | null {
+  const host = hostOfVault(vaultId);
+  return host ? hostEndpoint(host) : local;
+}
+
+/** This machine's daemon: `localEndpoint`, or an `endpoint` set without it
+ *  (by anything that predates the field) unless that one reaches a host. */
+export function localEndpointOf(s: Pick<VaultState, "localEndpoint" | "endpoint">): VaultEndpoint | null {
+  return s.localEndpoint ?? (s.endpoint && !hostOfEndpoint(s.endpoint) ? s.endpoint : null);
+}
+
+/** The vaults this machine's daemon serves, the only ones the boot cache
+ *  and the last-vault pointer may name: a host vault needs its forward. */
+function localOnly(vaults: VaultInfo[]): VaultInfo[] {
+  return vaults.filter((v) => !hostOfVault(v.id));
+}
+
 export const useVaultStore = create<VaultState>((set, get) => ({
   connection: "idle",
   endpoint: null,
+  localEndpoint: null,
+  hostStates: {},
+  hostFallback: null,
+  setHostFallback: (fallback) => set({ hostFallback: fallback }),
+  connectHost: async (deviceId) => {
+    const local = localEndpointOf(get());
+    if (local?.deviceId === deviceId) return "local";
+    const setState = (state: HostConnectionState) => set((s) => ({ hostStates: { ...s.hostStates, [deviceId]: state } }));
+    // The forward is opened by this machine's daemon; with none, there is no way in.
+    if (!local || !convexRef) {
+      setState("unreachable");
+      return "unreachable";
+    }
+    if (get().hostStates[deviceId] !== "connected") setState("connecting");
+    const ep = await reestablishHost(deviceId);
+    setState(ep ? "connected" : "unreachable");
+    return ep ? "host" : "unreachable";
+  },
+  adoptHostVault: (vault, deviceId) => {
+    bindVaultToHost(vault.id, deviceId);
+    set((s) => {
+      const named = { ...vault, name: hostVaultName(vault.name, deviceId) };
+      const at = s.vaults.findIndex((v) => v.id === vault.id);
+      if (at >= 0 && s.vaults[at].name === named.name) return {};
+      const vaults = at >= 0 ? s.vaults.map((v, i) => (i === at ? named : v)) : [...s.vaults, named];
+      return { vaults, ...(s.activeVaultId === vault.id ? { endpoint: hostEndpoint(deviceId) } : {}) };
+    });
+  },
   vaults: readCachedVaults(),
   remoteVaults: [],
   isRemote: false,
@@ -811,7 +934,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     set((s) => {
       if (s.vaults.some((v) => v.id === vault.id)) return {};
       const vaults = [...s.vaults, vault];
-      writeCachedVaults(vaults);
+      writeCachedVaults(localOnly(vaults));
       return { vaults };
     }),
   clearRenameReport: () => set({ lastRenameReport: null }),
@@ -903,15 +1026,26 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     set((s) => ({ showIgnoredFiles: false, files: { ...withoutIgnored(s.files), ...s.linkedFiles } }));
   },
 
-  loadTextBody: async (path) => {
+  loadTextBody: async (path, opts) => {
     const { endpoint, activeVaultId, bodies, files, loadingPaths } = get();
     if (!endpoint || !activeVaultId) return;
     if (bodies[path] || loadingPaths[path]) return;
     // Decline BEFORE the round trip: the scan already told us how big it is, so
     // a 40MB bundle never crosses the wire, let alone reaches the highlighter.
-    if ((files[path]?.size ?? 0) > VAULT_MAX_PREVIEW_BYTES) return;
+    if ((files[path]?.size ?? 0) > (opts?.maxBytes ?? VAULT_MAX_PREVIEW_BYTES)) return;
     set((s) => ({ loadingPaths: { ...s.loadingPaths, [path]: true } }));
     await fetchBodies(endpoint, activeVaultId, [path], { persist: false });
+  },
+  adoptBody: (vaultId, path, body) => {
+    if (get().activeVaultId !== vaultId) return;
+    set((s) => {
+      const row = s.files[path];
+      return {
+        bodies: { ...s.bodies, [path]: body },
+        files: row ? { ...s.files, [path]: { ...row, mtime: body.mtime, size: body.size ?? row.size } } : s.files,
+      };
+    });
+    if (isVaultMarkdownPath(path)) stageBody(vaultId, path, body);
   },
   setRenameTarget: (path) => set({ renameTarget: path }),
 
@@ -960,6 +1094,14 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 
   connect: async (convex, opts) => {
     convexRef = convex;
+    // Reopening a host's forward goes through this machine's daemon and the
+    // relay: the same lookup the terminal uses for a cloud pane. Only a
+    // forward counts; this machine's own endpoint is never a host's.
+    setHostEstablisher(async (deviceId) => {
+      const ep = await getTerminalEndpoint(convex, { deviceId });
+      const local = localEndpointOf(useVaultStore.getState());
+      return ep && ep.deviceId === deviceId && ep.port !== local?.port ? ep : null;
+    });
     const st = get();
     if (st.connection === "discovering") return;
     // The picker before anything else: this is synchronous, so the list of
@@ -1002,7 +1144,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       // selectVault paints it and leaves connection as "cached"; only a truly
       // never-seen vault lands on the no-daemon teaching state.
       const remembered = get().activeVaultId ?? readLastVaultId();
-      set({ endpoint: null, unreachableReason: lastDiscoveryFailure(), unreachableDetail: null });
+      setLocalEndpoint(null);
+      set({ endpoint: null, localEndpoint: null, unreachableReason: lastDiscoveryFailure(), unreachableDetail: null });
       if (remembered && !get().scannedAt) {
         await get().selectVault(remembered);
       }
@@ -1023,15 +1166,26 @@ export const useVaultStore = create<VaultState>((set, get) => ({
       // browser rejected) used to be reported as "too old", which sent people
       // to update a daemon that was already current.
       const status = e instanceof VaultRequestError ? e.status : 0;
+      setLocalEndpoint(ep);
       set((s) => ({
         connection: s.scannedAt ? "cached" : "no-daemon",
-        endpoint: ep,
+        endpoint: endpointFor(s.activeVaultId, ep),
+        localEndpoint: ep,
         unreachableReason: loopbackFailureReason(status),
         unreachableDetail: e instanceof Error ? e.message : String(e),
       }));
       return;
     }
-    set({ endpoint: ep, vaults, unreachableReason: "none", unreachableDetail: null });
+    setLocalEndpoint(ep);
+    // Host vaults opened in this window stay listed: a rediscovery of this
+    // machine's daemon says nothing about them.
+    set((s) => ({
+      endpoint: endpointFor(s.activeVaultId, ep),
+      localEndpoint: ep,
+      vaults: [...vaults, ...s.vaults.filter((v) => hostOfVault(v.id) && !vaults.some((l) => l.id === v.id))],
+      unreachableReason: "none",
+      unreachableDetail: null,
+    }));
     // Seeds the picker on the next cold boot, before discovery answers.
     writeCachedVaults(vaults);
 
@@ -1048,7 +1202,8 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 
   selectVault: async (vaultId) => {
     const prev = get().activeVaultId;
-    writeLastVaultId(vaultId);
+    const host = hostOfVault(vaultId);
+    if (!host) writeLastVaultId(vaultId);
     // Dispose the old subscription up front — never after the awaits below,
     // where a concurrent select could already have subscribed the new vault.
     wsDispose?.();
@@ -1057,7 +1212,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     // boot sets activeVaultId straight from the IDB cache, so by the time
     // selectVault runs for the remembered vault `prev` already equals it — and
     // a project vault would have opened with the toggle off.
-    set({ showAllFiles: readShowAllFiles(vaultId, get().vaults), showIgnoredFiles: readShowIgnoredFiles(vaultId) });
+    set({
+      showAllFiles: readShowAllFiles(vaultId, get().vaults),
+      showIgnoredFiles: readShowIgnoredFiles(vaultId),
+      // A vault this path opens is a daemon's, never the mirror openRemoteVault left behind.
+      isRemote: false,
+      endpoint: endpointFor(vaultId, localEndpointOf(get())),
+    });
     if (prev !== vaultId) {
       set({
         activeVaultId: vaultId,
@@ -1126,6 +1287,10 @@ export const useVaultStore = create<VaultState>((set, get) => ({
         if (useVaultStore.getState().connection === "cached") set({ connection: "connected" });
       }),
       onStale: guarded(() => {
+        // A host's subscription reopens the forward itself before each retry
+        // (subscribeVaultEvents); rediscovering this machine's daemon would
+        // not help it.
+        if (host) return;
         wsDispose?.();
         wsDispose = null;
         if (convexRef) void useVaultStore.getState().connect(convexRef, { force: true });
@@ -1214,7 +1379,7 @@ export const useVaultStore = create<VaultState>((set, get) => ({
     }));
     try {
       const res = await writeVaultFile(endpoint, activeVaultId, path, content, guard || undefined);
-      const body: VaultBody = { content, mtime: res.mtime, etag: res.etag };
+      const body: VaultBody = { content, mtime: res.mtime, etag: res.etag, size: res.size };
       set((s) => ({
         bodies: { ...s.bodies, [path]: body },
         files: { ...s.files, [path]: { path, mtime: res.mtime, size: res.size } },
@@ -1431,3 +1596,13 @@ export const useVaultStore = create<VaultState>((set, get) => ({
 if (typeof window !== "undefined" && import.meta.env?.DEV) {
   (window as any).__vaultStore = useVaultStore;
 }
+
+// A host's forward reopened on a new port, or was lost: the header's state
+// follows, and the active vault's endpoint is the new one.
+onHostEndpointChange((deviceId, ep) => {
+  const s = useVaultStore.getState();
+  useVaultStore.setState({
+    hostStates: { ...s.hostStates, [deviceId]: ep ? "connected" : "unreachable" },
+    ...(ep && hostOfVault(s.activeVaultId) === deviceId ? { endpoint: ep } : {}),
+  });
+});

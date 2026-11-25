@@ -1,13 +1,21 @@
-// Vault search pane: the left sidebar's second tab, Obsidian's search panel.
+// Vault search pane: the left sidebar's second tab.
 //
-// Three layers, deliberately separate: the operator parser (lib/vault/
+// Two searches behind one box. A vault on this machine (the daemon reachable)
+// searches every file with ripgrep: components/code/search/ProjectSearchPanel
+// draws that, with replace and the results editor. A remote mirror, or a
+// query written with the notes operators (`tag:x`, `path:x`, `file:x`), runs
+// the notes search below. The box stays mounted across the switch, so typing
+// an operator never drops focus.
+//
+// The notes search has three layers, deliberately separate: the operator parser (lib/vault/
 // searchQuery) turns the typed string into a plain query plus filters, the
 // block-granular index (lib/vault/searchIndex) ranks and returns matches with
 // their line and snippet, and this file only arranges and paints them. A
 // result is grouped by file because that's the unit the reader navigates in;
 // the lines under it are why the file is there.
 
-import { memo, useCallback, useMemo, useState } from "react";
+import { memo, useCallback, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import {
   ChevronRight,
   ChevronsDownUp,
@@ -27,8 +35,30 @@ import {
   parseVaultQuery,
 } from "../../lib/vault/searchQuery";
 import { useVaultStore } from "../../store/vaultStore";
+import { useMountEffect } from "../../hooks/useMountEffect";
+import { filesHref } from "../../lib/vault/vaultHref";
+import { projectSearch, registerProjectSearchCommands } from "../../lib/code/search/controller";
+import { usesNoteOperators } from "../../lib/code/search/query";
+import { whenIdle } from "../../lib/code/idle";
+import {
+  CodeSearchToggles,
+  ProjectSearchPanel,
+  ReplaceDisclosure,
+  handleSearchOptionKey,
+  openActiveOrFirst,
+  useProjectSearch,
+} from "../code/search/ProjectSearchPanel";
+import { KeyCap } from "../KeyCap";
 import { BookmarkToggle } from "./VaultBookmarksPane";
 import { noteDisplayName } from "./VaultExplorer";
+
+// `search.project` (vim's :grep/:Rg, Cmd-Shift-H), `search.next` and
+// `search.prev` work wherever Files is open, Search tab shown or not.
+registerProjectSearchCommands();
+// The editor's own search keys (F4, Cmd-Shift-H) ride the editor chunk.
+if (typeof window !== "undefined") {
+  void whenIdle(() => import("../../lib/code/search/editorKeys").then((m) => m.registerSearchEditorKeys()), 4000).catch(() => {});
+}
 
 /** Matches shown per file before the "N more" toggle. Obsidian shows a similar
  *  handful — enough to judge relevance, short enough that ten files still fit. */
@@ -173,18 +203,18 @@ function TeachingState() {
   );
 }
 
-export const VaultSearchPane = memo(function VaultSearchPane({
+/** The notes index's search: a remote mirror's, or a query with operators. */
+function NotesSearch({
+  raw,
   activePath,
   onNavigate,
-  inputRef,
+  enterRef,
 }: {
+  raw: string;
   activePath: string | null;
   onNavigate: (path: string, line?: number) => void;
-  inputRef?: React.RefObject<HTMLInputElement | null>;
+  enterRef: React.MutableRefObject<(() => boolean) | null>;
 }) {
-  // The query lives in the store so a saved-search bookmark can put one here.
-  const raw = useVaultStore((s) => s.searchQuery);
-  const setRaw = useVaultStore((s) => s.setSearchQuery);
   const query = useDebounce(raw, 150);
   const version = useVaultIndexVersion();
   const bodies = useVaultStore((s) => s.bodies);
@@ -263,50 +293,15 @@ export const VaultSearchPane = memo(function VaultSearchPane({
 
   const totalMatches = results?.reduce((acc, r) => acc + r.matches.length, 0) ?? 0;
 
-  return (
-    <div className="h-full flex flex-col min-h-0">
-      <div className="px-2 py-2 border-b border-sol-border/30">
-        <div className="flex items-center gap-1.5 px-2 py-1 rounded bg-sol-bg border border-sol-border/40 focus-within:border-sol-cyan transition-colors">
-          <Search className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />
-          <input
-            ref={inputRef}
-            value={raw}
-            onChange={(e) => setRaw(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape" && raw) {
-                e.stopPropagation();
-                setRaw("");
-              } else if (e.key === "Enter" && results?.length) {
-                const top = results[0];
-                onNavigate(top.path, top.matches[0]?.line);
-              }
-            }}
-            placeholder="Search vault"
-            spellCheck={false}
-            autoComplete="off"
-            className="flex-1 min-w-0 bg-transparent outline-none text-[12px] text-sol-text placeholder:text-sol-text-dim"
-          />
-          {raw.trim() && (
-            <BookmarkToggle
-              target={{ kind: "search", query: raw.trim() }}
-              label="Bookmark this search"
-              size="w-3.5 h-3.5"
-              className="flex-shrink-0"
-            />
-          )}
-          {raw && (
-            <button
-              type="button"
-              aria-label="Clear search"
-              onClick={() => setRaw("")}
-              className="text-sol-text-dim hover:text-sol-text"
-            >
-              <X className="w-3 h-3" />
-            </button>
-          )}
-        </div>
-      </div>
+  enterRef.current = () => {
+    const top = results?.[0];
+    if (!top) return false;
+    onNavigate(top.path, top.matches[0]?.line);
+    return true;
+  };
 
+  return (
+    <>
       {results && results.length > 0 && (
         <div className="flex items-center gap-2 px-3 py-1 border-b border-sol-border/20 text-mark uppercase tracking-wide text-sol-text-dim">
           <span className="tabular-nums">
@@ -347,6 +342,164 @@ export const VaultSearchPane = memo(function VaultSearchPane({
           ))
         )}
       </div>
+    </>
+  );
+}
+
+/** Small key legend for an empty code search. */
+function CodeSearchKeys() {
+  const rows: [string[], string][] = [
+    [["↵"], "Open"],
+    [["F4"], "Next match"],
+    [["⇧", "F4"], "Previous"],
+    [["⌥", "C"], "Case"],
+    [["⌥", "W"], "Word"],
+    [["⌥", "R"], "Regex"],
+  ];
+  return (
+    <div className="grid grid-cols-[auto_1fr] items-center gap-x-3 gap-y-1.5 px-4 py-5 text-meta text-sol-text-dim">
+      {rows.map(([keys, label]) => (
+        <div key={label} className="contents">
+          <span className="flex justify-end gap-0.5">
+            {keys.map((k) => (
+              <KeyCap key={k}>{k}</KeyCap>
+            ))}
+          </span>
+          <span>{label}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export const VaultSearchPane = memo(function VaultSearchPane({
+  activePath,
+  onNavigate,
+  inputRef,
+}: {
+  activePath: string | null;
+  onNavigate: (path: string, line?: number) => void;
+  inputRef?: React.RefObject<HTMLInputElement | null>;
+}) {
+  // The query lives in the store so a saved-search bookmark can put one here.
+  const raw = useVaultStore((s) => s.searchQuery);
+  const setRaw = useVaultStore((s) => s.setSearchQuery);
+  const local = useVaultStore((s) => !!s.endpoint && !s.isRemote);
+  const vaultId = useVaultStore((s) => s.activeVaultId);
+  const codeMode = local && !usesNoteOperators(raw);
+  const search = useProjectSearch();
+  const ownRef = useRef<HTMLInputElement | null>(null);
+  const boxRef = inputRef ?? ownRef;
+  const paneRef = useRef<HTMLDivElement | null>(null);
+  const enterRef = useRef<(() => boolean) | null>(null);
+  const router = useRouter();
+
+  // Until the workspace shell handles `file.open`, a match opens through the
+  // page's own ?f=&l= navigation, column included.
+  useMountEffect(() => {
+    projectSearch.navigate = (path, line, column) => router.push(`${filesHref({ path })}&l=${line}:${column}`);
+  });
+
+  // Every change to the box (or the vault) searches again, debounced, aborting
+  // the search before; a remount with the same text keeps the results.
+  useWatchEffect(() => {
+    if (!codeMode) {
+      projectSearch.cancel();
+      return;
+    }
+    const text = raw.trim() ? raw : "";
+    // Against what was last asked, not what last ran: typing a character and
+    // deleting it inside the debounce must cancel the search in between.
+    if (text !== projectSearch.wanted() || !projectSearch.get().results) projectSearch.schedule(text);
+  }, [codeMode, raw]);
+  useWatchEffect(() => {
+    if (codeMode && projectSearch.get().text) projectSearch.rerun();
+  }, [vaultId]);
+
+  // `search.project` asked for the box (vim's :grep with no pattern, Cmd-Shift-H).
+  useWatchEffect(() => {
+    if (projectSearch.focusRequest <= projectSearch.focusHandled) return;
+    projectSearch.focusHandled = projectSearch.focusRequest;
+    requestAnimationFrame(() => boxRef.current?.select());
+  }, [projectSearch.focusRequest]);
+
+  const focusList = () => {
+    const list = paneRef.current?.querySelector<HTMLElement>('[role="tree"]');
+    if (!list) return;
+    const first = projectSearch.get().results?.rows()[0];
+    if (first && !projectSearch.get().active) projectSearch.set({ active: first.key });
+    list.focus();
+  };
+
+  return (
+    <div ref={paneRef} className="h-full flex flex-col min-h-0">
+      <div className={`${codeMode ? "pl-0.5 pr-2 pt-2 pb-1.5" : "px-2 py-2 border-b border-sol-border/30"}`}>
+        <div className="flex items-center gap-0.5">
+          {codeMode && <ReplaceDisclosure state={search} />}
+          <div
+            className={`flex flex-1 min-w-0 items-center gap-1.5 px-2 py-1 rounded bg-sol-bg border transition-colors focus-within:border-sol-cyan ${
+              codeMode && search.results?.error ? "border-sol-red/60" : "border-sol-border/40"
+            }`}
+          >
+            {!codeMode && <Search className="w-3.5 h-3.5 flex-shrink-0 text-sol-text-dim" />}
+            <input
+              ref={boxRef}
+              value={raw}
+              onChange={(e) => setRaw(e.target.value)}
+              onKeyDown={(e) => {
+                if (codeMode && handleSearchOptionKey(e)) return;
+                if (codeMode && e.key.toLowerCase() === "h" && e.shiftKey && (e.metaKey || e.ctrlKey)) {
+                  e.preventDefault();
+                  projectSearch.set({ replaceOpen: !search.replaceOpen });
+                } else if (e.key === "Escape" && raw) {
+                  e.stopPropagation();
+                  setRaw("");
+                } else if (e.key === "Enter") {
+                  if (codeMode) openActiveOrFirst(search);
+                  else enterRef.current?.();
+                } else if (e.key === "ArrowDown" && codeMode) {
+                  e.preventDefault();
+                  focusList();
+                }
+              }}
+              placeholder={codeMode ? "Search files" : "Search vault"}
+              spellCheck={false}
+              autoComplete="off"
+              aria-label="Search"
+              className="flex-1 min-w-0 bg-transparent outline-none text-[12px] text-sol-text placeholder:text-sol-text-dim"
+            />
+            {raw.trim() && !codeMode && (
+              <BookmarkToggle
+                target={{ kind: "search", query: raw.trim() }}
+                label="Bookmark this search"
+                size="w-3.5 h-3.5"
+                className="flex-shrink-0"
+              />
+            )}
+            {raw && !codeMode && (
+              <button
+                type="button"
+                aria-label="Clear search"
+                onClick={() => setRaw("")}
+                className="text-sol-text-dim hover:text-sol-text"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
+            {codeMode && <CodeSearchToggles state={search} />}
+          </div>
+        </div>
+      </div>
+
+      {codeMode ? (
+        raw.trim() || search.replaceOpen ? (
+          <ProjectSearchPanel state={search} inputRef={boxRef} />
+        ) : (
+          <CodeSearchKeys />
+        )
+      ) : (
+        <NotesSearch raw={raw} activePath={activePath} onNavigate={onNavigate} enterRef={enterRef} />
+      )}
     </div>
   );
 });

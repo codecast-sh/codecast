@@ -112,6 +112,10 @@ const HANDLE_SHAPE: Record<EntityRefType, RegExp | null> = {
   source: /^src-\d+$/i,
   // A product recording, or a moment or stretch of it (rp-12, rp-12@1:23).
   replay: new RegExp(`^(?:rp-\\d+|${REPLAY_REF_SOURCE})$`, "i"),
+  // An Ops issue (an error, failed job, failing check or metric alert) and a
+  // metric watch take digits only, like the other Ops handles.
+  issue: /^eg-\d+$/i,
+  metric: /^mw-\d+$/i,
   // `dp` takes digits only, like the other short prefixes: a deploy.
   deploy: /^dp-\d+$/i,
   // `sec` too (sec-4): a Vault secret.
@@ -325,6 +329,8 @@ export const ENTITY_REF_ACCENT: Record<EntityRefType, string> = {
   call: "--sol-red",
   source: "--sol-orange",
   replay: "--sol-magenta",
+  issue: "--sol-red",
+  metric: "--sol-violet",
   deploy: "--sol-green",
   secret: "--sol-yellow",
   flow: "--sol-cyan",

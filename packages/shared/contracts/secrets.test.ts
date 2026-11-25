@@ -258,6 +258,11 @@ describe("env and redaction", () => {
     expect(got).not.toContain("ana");
   });
 
+  test("prose that says password or account is not read as a .netrc", () => {
+    const got = redactionValuesOf("file", { content: "# Passwords\n\nUse a password manager for everything.\nOne account settings page per person.\n" });
+    for (const v of ["manager", "settings"]) expect(got).not.toContain(v);
+  });
+
   test("a sign-in redacts its session cookies, never consent or preference words", () => {
     const cookie = (name: string, value: string, httpOnly = false) => ({ name, value, domain: ".acme.dev", path: "/", secure: true, httpOnly });
     const cookies = [

@@ -1,22 +1,17 @@
-// Read-only view for everything that isn't markdown: images, code and plain
-// text, and an honest dead end for the rest.
-//
-// READ-ONLY IS DELIBERATE, not a stage on the way to an editor. Markdown keeps
-// the whole reading/live/source experience because the linked-notes layer is
-// what this surface is for; source files are here so the tree tells the truth
-// about the folder you opened, and competing with someone's real editor is a
-// losing game. There is no write path from this component — no autosave, no
-// CodeMirror, no PUT — and the daemon refuses writes to these paths anyway
-// (vaultScope.isVaultDocumentPath).
+// The view for everything that isn't markdown: text files open in the code
+// editor (components/code, loaded lazily), images, media and PDFs draw
+// themselves, and anything else gets an honest dead end.
 
-import { memo, useMemo } from "react";
+import { lazy, memo, Suspense, useState } from "react";
 import { useWatchEffect } from "../../hooks/useWatchEffect";
 import { FileQuestion, FileWarning } from "lucide-react";
 import { VAULT_MAX_PREVIEW_BYTES, vaultFileKind } from "@codecast/shared/contracts";
-import { highlightCode, languageForPath } from "../../lib/codeLanguage";
+import { CODE_EDITOR_MAX_BYTES } from "../../lib/code/limits";
 import { vaultAssetUrl } from "../../lib/vault/client";
 import { useVaultStore } from "../../store/vaultStore";
+import { bufferKey, useCodeStore } from "../../store/codeStore";
 import { VaultFileHeader, RevealButton } from "./VaultFileHeader";
+import { CodeFileBar } from "../code/CodeFileBar";
 import { useVaultEntryState } from "./useVaultEntry";
 import { buttonVariants } from "../ui/button";
 
@@ -63,62 +58,73 @@ function NoPreview({
   );
 }
 
-/** Code with a line-number gutter. Prism does the highlighting — the same
- *  grammars the app's code blocks use, so a `.ts` file reads identically here
- *  and in a conversation. */
-const CodeText = memo(function CodeText({ content, path }: { content: string; path: string }) {
-  const lines = useMemo(() => content.split("\n"), [content]);
-  const html = useMemo(
-    () => highlightCode(content, languageForPath(path)),
-    [content, path],
-  );
-  // Highlighting spans lines, so the gutter is a separate column beside ONE
-  // <pre> rather than a per-line grid — a multi-line template literal or block
-  // comment would otherwise have its markup cut at every line boundary.
-  return (
-    <div className="flex text-[12.5px] leading-[1.55] font-mono overflow-x-auto rounded border border-sol-border/30 bg-sol-bg-alt/40">
-      <div
-        aria-hidden
-        className="flex-shrink-0 select-none text-right py-3 px-3 text-sol-text-dim/50 border-r border-sol-border/30 tabular-nums"
-      >
-        {lines.map((_, i) => (
-          <div key={i}>{i + 1}</div>
-        ))}
-      </div>
-      <pre className="flex-1 min-w-0 py-3 px-3 !m-0 !border-0 !bg-transparent">
-        {html ? (
-          <code className="text-sol-text-secondary" dangerouslySetInnerHTML={{ __html: html }} />
-        ) : (
-          <code className="text-sol-text-secondary">{content}</code>
-        )}
-      </pre>
-    </div>
-  );
-});
+// The editor is its own chunk: nobody who only browses images pays for
+// CodeMirror. Files prewarms it once the browser is idle, so the first source
+// file opens without waiting on the download.
+const loadCodeFileView = () => import("../code/CodeFileView");
+const CodeFileView = lazy(loadCodeFileView);
+if (typeof window !== "undefined") {
+  const prewarm = () => void loadCodeFileView().catch(() => {});
+  if (typeof requestIdleCallback === "function") requestIdleCallback(prewarm, { timeout: 5000 });
+  else setTimeout(prewarm, 2000);
+}
 
-export const VaultFileView = memo(function VaultFileView({ path }: { path: string }) {
+export const VaultFileView = memo(function VaultFileView({ path, line }: { path: string; line?: string | null }) {
   const entry = useVaultStore((s) => s.files[path]);
   const entryState = useVaultEntryState(path);
   const body = useVaultStore((s) => s.bodies[path]);
-  const loading = useVaultStore((s) => !!s.loadingPaths[path]);
   const endpoint = useVaultStore((s) => s.endpoint);
   const vaultId = useVaultStore((s) => s.activeVaultId);
+  const isRemote = useVaultStore((s) => s.isRemote);
+  const connection = useVaultStore((s) => s.connection);
+  // Unsaved edits keep the editor on screen whatever disk does, so the file can
+  // be written back (or merged with what returns) rather than stranded.
+  const unsaved = useCodeStore((s) => !!vaultId && !!s.dirty[bufferKey(vaultId, path)]);
 
   const kind = vaultFileKind(path);
   const size = entry?.size ?? 0;
-  const tooLarge = size > VAULT_MAX_PREVIEW_BYTES;
+  const tooLarge = size > (kind === "text" ? CODE_EDITOR_MAX_BYTES : VAULT_MAX_PREVIEW_BYTES);
   const title = path.slice(path.lastIndexOf("/") + 1);
 
-  // Text arrives on demand — unlike notes, which are all held from the scan.
-  // The store declines above the cap on its own, so this asks unconditionally.
+  // Text arrives on demand, unlike notes, which are all held from the scan:
+  // from the local daemon, or from the mirror for a vault on another machine.
   // `endpoint` is a dep on purpose: a cached boot paints this view before the
-  // daemon handshake lands, and the store can't fetch without an endpoint —
-  // the ask has to repeat once there is one.
+  // daemon handshake lands, and the ask has to repeat once there is one.
+  // A read that came back with nothing is remembered for that version of the
+  // entry, so the editor stays mounted until a read has actually failed, "not
+  // asked yet" never flashes as "couldn't read", and a file that returns (an
+  // add or change event) is read again.
+  const readKey = `${path}@${entry?.mtime ?? ""}`;
+  const [failedRead, setFailedRead] = useState<string | null>(null);
   useWatchEffect(() => {
-    if (kind === "text" && !body && endpoint) void useVaultStore.getState().loadTextBody(path);
-  }, [kind, path, !!body, endpoint]);
+    if (kind !== "text" || body) return;
+    const store = useVaultStore.getState();
+    const read = isRemote
+      ? store.loadRemoteBody(path)
+      : endpoint
+        ? store.loadTextBody(path, { maxBytes: CODE_EDITOR_MAX_BYTES })
+        : null;
+    void read?.then(
+      () => {
+        const s = useVaultStore.getState();
+        if (!s.bodies[path] && !s.loadingPaths[path]) setFailedRead(readKey);
+      },
+      () => setFailedRead(readKey),
+    );
+  }, [kind, readKey, !!body, endpoint, isRemote]);
+  // No daemon and none coming: no read will run, so say so rather than load
+  // forever. A cached boot is not that: the daemon is still being reached (the
+  // page says so in its banner), and the read runs once the endpoint lands.
+  const unreachable = !isRemote && !endpoint && connection === "no-daemon";
+  const readFailedRaw = !body && !unsaved && (failedRead === readKey || unreachable);
+  const missing = entryState === "missing";
+  // A text path with nothing on disk, in a vault this machine writes: the
+  // editor stays (CodeFileView opens an empty buffer under that name, created
+  // by the first save, or keeps a buffer the file was deleted under).
+  const newFile = missing && kind === "text" && !isRemote && !!endpoint && !!vaultId;
+  const readFailed = !newFile && readFailedRaw;
 
-  if (entryState === "missing") {
+  if (missing && !newFile && !(kind === "text" && unsaved)) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-2 text-sol-text-muted">
         <FileQuestion className="w-8 h-8 opacity-30" />
@@ -156,10 +162,14 @@ export const VaultFileView = memo(function VaultFileView({ path }: { path: strin
       }
     }
     if (kind === "text") {
-      if (body) return <CodeText content={body.content} path={path} />;
-      if (loading) return <div className="text-sm text-sol-text-dim py-8">Loading file…</div>;
-      // No body and not loading means the fetch never ran or came back empty.
-      // Only the scan's own size can tell "empty" from "we don't have it" —
+      if (!readFailed) {
+        return (
+          <Suspense fallback={null}>
+            <CodeFileView path={path} line={line} missing={missing} newFile={newFile} />
+          </Suspense>
+        );
+      }
+      // Only the scan's own size can tell "empty" from "we don't have it":
       // calling a failed read "empty" would be a quiet lie about the file.
       return (
         <div className="text-sm text-sol-text-dim py-8">
@@ -177,21 +187,24 @@ export const VaultFileView = memo(function VaultFileView({ path }: { path: strin
     );
   };
 
+  // A text file fills the pane and scrolls inside the editor, which renders
+  // only what is on screen; everything else scrolls as a page. One compact row
+  // names the file; the editor owns the rest of the height. A text file keeps
+  // this layout while its body loads, so the editor is never rebuilt.
+  if (kind === "text" && !tooLarge && !readFailed) {
+    return (
+      <div className="h-full flex flex-col min-h-0 overflow-hidden">
+        <CodeFileBar path={path} />
+        <div className="flex-1 min-h-0">{renderBody()}</div>
+      </div>
+    );
+  }
+
   return (
     <div className="h-full overflow-y-auto" data-vault-note-scroll>
-      {/* Code fills the pane: lines are wide and nobody reads them as prose.
-          Notes (VaultNoteView) keep a measured reading column. */}
       <div className={kind === "text" ? "px-6 pr-10 py-5" : "max-w-4xl mx-auto px-8 py-6"}>
         <VaultFileHeader path={path} title={title} />
-
         {renderBody()}
-
-        {kind === "text" && body && !tooLarge && (
-          <div className="mt-4 pt-2 border-t border-sol-border/20 flex items-center gap-3 text-meta text-sol-text-dim">
-            <span className="tabular-nums">{formatSize(size)}</span>
-            <span>Read-only</span>
-          </div>
-        )}
       </div>
     </div>
   );
