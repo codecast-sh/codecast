@@ -150,6 +150,7 @@ export function AnchorConversation({ conversationId, hideHeader, seedOwnership =
         onJumpToTimestamp={jumpToTimestamp}
         targetMessageId={targetMessageId}
         targetNonce={request?.nonce}
+        liveTail={!targetMode}
         onTargetSettled={onTargetSettled}
         isOwner={seedOwnership || !!(conversation as { is_own?: boolean }).is_own}
         showMessageInput

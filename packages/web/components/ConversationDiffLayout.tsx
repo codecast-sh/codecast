@@ -58,6 +58,8 @@ export interface ConversationDiffLayoutProps {
   targetMessageId?: string;
   targetNonce?: number;
   isJumpingToTarget?: boolean;
+  /** ConversationViewProps.liveTail: the messages are the store's live tail. */
+  liveTail?: boolean;
   onTargetSettled?: ConversationViewProps["onTargetSettled"];
   isOwner?: boolean;
   guest?: boolean;
@@ -114,6 +116,7 @@ export function ConversationDiffLayout({
   targetMessageId,
   targetNonce,
   isJumpingToTarget,
+  liveTail,
   onTargetSettled,
   onClearHighlight,
   isOwner,
@@ -297,6 +300,7 @@ export function ConversationDiffLayout({
     targetMessageId,
     targetNonce,
     isJumpingToTarget,
+    liveTail,
     onTargetSettled,
     isOwner,
     guest,

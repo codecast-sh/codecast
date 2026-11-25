@@ -134,6 +134,7 @@ function GuestConversationView({
     jumpToTimestamp,
     effectiveTargetMessageId,
     isJumpingToTarget,
+    targetMode,
   } = useConversationMessages(id, jumpTargetId ?? targetMessageId, highlightQuery, undefined, undefined, true);
 
   // The guest frame has no app chrome, so the header carries the way in: the
@@ -183,6 +184,7 @@ function GuestConversationView({
             showMessageInput={false}
             targetMessageId={effectiveTargetMessageId}
             isJumpingToTarget={isJumpingToTarget}
+            liveTail={!targetMode}
             highlightQuery={highlightQuery}
             onClearHighlight={() => {
               const url = new URL(window.location.href);

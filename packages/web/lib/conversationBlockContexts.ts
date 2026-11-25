@@ -29,5 +29,6 @@ export const HostedCardShownContext = createContext<boolean>(false);
 
 // Identity of the message a markdown body belongs to, provided by the
 // conversation view (MessageIdentityProvider). Absent on surfaces with no
-// conversation: share pages, docs.
-export const MessageIdentity = createContext<{ conversationId: string; messageId: string } | null>(null);
+// conversation: share pages, docs. `live`: a reply still being written, whose
+// messageId names no message yet, so nothing may attach to it.
+export const MessageIdentity = createContext<{ conversationId: string; messageId: string; live?: boolean } | null>(null);

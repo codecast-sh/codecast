@@ -24,13 +24,16 @@ export { DIFF_FENCE, parseCastDiff };
 export function MessageIdentityProvider({
   conversationId,
   messageId,
+  live,
   children,
 }: {
   conversationId: string;
   messageId: string;
+  /** A reply still being written: its diffs take no comments yet. */
+  live?: boolean;
   children: ReactNode;
 }) {
-  const value = useMemo(() => ({ conversationId, messageId }), [conversationId, messageId]);
+  const value = useMemo(() => ({ conversationId, messageId, live }), [conversationId, messageId, live]);
   return <MessageIdentity.Provider value={value}>{children}</MessageIdentity.Provider>;
 }
 
@@ -80,12 +83,12 @@ function DiffFileCard({
   identity,
 }: {
   file: DiffFileSection;
-  identity: { conversationId: string; messageId: string } | null;
+  identity: { conversationId: string; messageId: string; live?: boolean } | null;
 }) {
   const [expanded, setExpanded] = useState(false);
   const statusMeta = getFileStatus(file.status);
   const language = languageFromPath(file.path);
-  const commentContext = identity
+  const commentContext = identity && !identity.live
     ? {
         conversationId: identity.conversationId,
         anchorKey: `diff:${identity.messageId}:${file.path}`,
