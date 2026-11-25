@@ -194,7 +194,7 @@ describe("startedSessionGuard", () => {
 
   test("the blank restart shares the boot window and reschedules delivery", () => {
     const anchor = source.indexOf("[REMOTE] Started fresh session ${tmuxSession} for conversation");
-    const region = source.slice(anchor - 4500, anchor + 600);
+    const region = source.slice(anchor - 4700, anchor + 600);
     expect(region).not.toContain("60_000");
     expect(region).toContain('startedSessionGuard(existingStarted, false) === "skip_booting"');
     expect(region).toContain('clearConversationDeliveryAndResumeState(conversationId, undefined, "resume_session_blank")');

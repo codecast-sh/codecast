@@ -183,6 +183,12 @@ crons.interval(
 );
 
 crons.interval(
+  "prune reply streams",
+  { hours: 1 },
+  internal.replyStreams.prune
+);
+
+crons.interval(
   "refresh plan timestamps from session insights",
   { hours: 6 },
   internal.taskMining.refreshPlanTimestamps

@@ -17,7 +17,7 @@ import { deviceId } from "./remote/device.js";
 import { hashPath } from "./hash.js";
 import { isManagedExcludedPath, POLICY_EXCLUDED_SESSION } from "./config/managedPolicy.js";
 import { currentTranscriptDeadline } from "./workers/ingestDeadline.js";
-import type { OpenTaskReport, AgentStatus, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
+import type { OpenTaskReport, AgentStatus, ReplyStreamPushResult, TriggerFiringSource, TriggerPrecheckResult } from "@codecast/shared/contracts";
 import { argumentValidationProblem, withoutDeliveryId } from "@codecast/shared/contracts";
 import type { DeliveryEchoLedger } from "./deliveryEchoLedger.js";
 import { MAX_USER_FILE_SIZE, fileBasename, mediaTypeForFile } from "@codecast/shared/files";
@@ -440,9 +440,11 @@ export class SyncService {
   // wait exceeds ADD_MESSAGES_BATCH_TIMEOUT_MS, so callers time out while
   // their abandoned entries still run, retries re-enqueue duplicates, and
   // sync clogs against a perfectly healthy backend.
-  private mutate(name: string, args: Record<string, unknown>): Promise<any> {
+  // `backoff: false` keeps a caller's refusal out of the shared backoff, so a
+  // write nothing waits on (a live reply) can never pause message sync.
+  private mutate(name: string, args: Record<string, unknown>, { backoff = true } = {}): Promise<any> {
     return this.client.mutation(name as any, args, { skipQueue: true }).catch((err: unknown) => {
-      if (isWriteBudgetRefusal(err)) this.writeBudget.refused();
+      if (backoff && isWriteBudgetRefusal(err)) this.writeBudget.refused();
       throw err;
     });
   }
@@ -488,6 +490,21 @@ export class SyncService {
       path: folder,
       ...opts,
     });
+  }
+
+  /** A live reply's text so far (replyStream.ts). It can never delay message
+   *  sync: it is not throttled, it sends nothing while the deployment's write
+   *  budget has paused bulk sync, and a refusal of its own does not feed that
+   *  pause. Null for both budget cases, which the tracker reads as "nobody is
+   *  watching"; any other failure rejects, so the tracker can say why. */
+  async pushReplyStream(args: { conversation_id: string; message_id: string; seq: number; started_at: number; text: string }): Promise<ReplyStreamPushResult | null> {
+    if (this.writeBudget.waitMs() > 0) return null;
+    try {
+      return await this.mutate("replyStreams:push", { api_token: this.apiToken, ...args }, { backoff: false });
+    } catch (err) {
+      if (isWriteBudgetRefusal(err)) return null;
+      throw err;
+    }
   }
 
   async recordPeerLink(link: { from_device_id: string; to_device_id: string; mode: "direct" | "relay"; ok: boolean; reason?: string; bytes?: number }): Promise<void> {

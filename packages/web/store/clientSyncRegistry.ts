@@ -1625,6 +1625,14 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     feeds: ["userSends.fullText"],
   },
+  // The reply Claude Code is writing in the open conversation
+  // (replyStreams.get), keyed by conversation id, with the browser's receipt
+  // time as `received_at` (hooks/useSyncReplyStream). Never persisted: a
+  // reload asks again, and a cached partial reply is a lie once it lands.
+  replyStreams: {
+    sync: { isDelta: true },
+    feeds: ["replyStreams.get"],
+  },
   // The viewer's device roster (listDevices), keyed by device_id. Persisted so
   // /capabilities, device chips and the terminal picker paint at boot. The
   // path-seeding gate (pathOnMyMachines) reads it only once a LIVE push has
@@ -2403,6 +2411,8 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   mySends: "shared",
   mySendSearch: "local",
   mySendText: "local",
+  // Fed per view by the window showing the conversation.
+  replyStreams: "local",
   machineRoster: "shared",
   accountPool: "shared",
   teamMachines: "shared",

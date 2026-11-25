@@ -185,6 +185,7 @@ import {
   removeAccountToken,
 } from "./ccAccounts.js";
 import { STATUSLINE_HOOK_PATH, STATUSLINE_STAMP_DIR } from "./statuslineHook.js";
+import { REPLY_STREAM_HOOK_PATH, ReplyStreamTracker, ensureReplyStreamSettings, parseMessageDisplay, replyStreamLaunchFragment, startedConversationOf } from "./replyStream.js";
 import { bindConvexConnectionState } from "./convexConnectionState.js";
 import { CursorWatcher, type CursorSessionEvent, cursorWatcherDecision, probeCursorAccess, defaultCursorPath } from "./cursorWatcher.js";
 import { buildDisclaimShellPrefix } from "./disclaim.js";
@@ -2784,6 +2785,50 @@ function terminalToken(): string {
 // hookAdmission.ts for how a script installed before this shipped is upgraded.
 let hookToken = "";
 let legacyHookGrace: { allowed(): boolean } | null = null;
+
+// Live replies (replyStream.ts). `on` mirrors the heartbeat's reply_streaming,
+// read back from config at boot; `ensure` writes the --settings file a launch
+// names, and a test swaps it to stay off the real config dir. The tracker
+// exists once main() has the conversation cache and the sync service.
+const replyStreamLaunch = {
+  on: false,
+  ensure: (): Promise<string | null> => ensureReplyStreamSettings(CONFIG_DIR, hookServerPort, hookToken),
+  tracker: null as Pick<ReplyStreamTracker, "receive"> | null,
+};
+export const replyStreamLaunchForTests = replyStreamLaunch;
+let replyStreamOwnSettingsLogged = false;
+
+/** ` --settings <file>` carrying the MessageDisplay hook for a claude launch,
+ *  or "". Appended after the argv allowlist, like grok's rules fragment: the
+ *  path is shell-escaped, never matched against SAFE_ARG_RE. */
+export async function replyStreamFragment(agentType: string, configuredArgs: string): Promise<string> {
+  if (!replyStreamLaunch.on || agentType !== "claude") return "";
+  const settingsPath = await replyStreamLaunch.ensure();
+  return replyStreamLaunchFragment({
+    on: replyStreamLaunch.on, agentType, configuredArgs, settingsPath, escape: shellEscapeForSh,
+    ownSettings: () => {
+      if (replyStreamOwnSettingsLogged) return;
+      replyStreamOwnSettingsLogged = true;
+      log("[REPLY-STREAM] claude args carry their own --settings; sessions launch without live replies");
+    },
+  });
+}
+
+/** The heartbeat's reply_streaming, mirrored. An answer without the field (a
+ *  server from before it) turns it off. Persisted only when it changes. */
+export function mirrorReplyStreaming(data: { reply_streaming?: unknown }, persist: (on: boolean) => void): void {
+  const on = data.reply_streaming === true;
+  if (on === replyStreamLaunch.on) return;
+  log(`Live replies ${on ? "on" : "off"} (team feature)`);
+  replyStreamLaunch.on = on;
+  // The rest of the beat (its commands, the update check) must not hang on
+  // this write: a failed one only costs the mirror at the next boot.
+  try {
+    persist(on);
+  } catch (err) {
+    log(`Live replies: could not save the flag (${err instanceof Error ? err.message : String(err)})`);
+  }
+}
 const hookRefusalsLogged = new Map<string, number>();
 const HOOK_REFUSAL_LOG_EVERY_MS = 10 * 60 * 1000;
 
@@ -2863,6 +2908,7 @@ function startVaultMirror(): void {
 // sessions to another saved account — visible, reversible, and it costs the
 // forger nothing to instead post the same thing as a real session.
 const STATUSLINE_MAX_BODY = 64 * 1024;
+const REPLY_STREAM_MAX_BODY = 256 * 1024;
 const STATUSLINE_LOG_EVERY_MS = 10 * 60 * 1000;
 const statusLineLogged = new Map<string, number>();
 
@@ -2932,6 +2978,11 @@ export interface HookIngressDeps {
    *  Absent until boot registers it: the route answers 503 and the hook falls
    *  back to reporting status. */
   permission?: (input: PermissionHookInput, res: http.ServerResponse) => void;
+  /** A MessageDisplay hook's body, handed over after the route has answered. */
+  messageDisplay?: (body: string) => void;
+  /** The hook token, which the MessageDisplay route demands outright. Absent
+   *  or empty, it admits nobody. */
+  hookToken?: () => string;
 }
 
 export function handleHookIngressHttp(
@@ -2975,6 +3026,35 @@ export function handleHookIngressHttp(
         const launchToken = req.headers[PERMISSION_LAUNCH_TOKEN_HEADER.toLowerCase()];
         deps.permission(typeof launchToken === "string" && launchToken ? { ...input, launchToken } : input, res);
       }
+    });
+    return true;
+  }
+
+  // Live replies (replyStream.ts). Claude Code holds each line on the person's
+  // screen until this answers, so once admitted it answers 200 with an empty
+  // body (show the text as it is) on every path, and only then hands over a
+  // body it can use. The one sender is the settings file the daemon wrote,
+  // which always carries the token: no legacy grace, and no file reads.
+  if (req.method === "POST" && req.url?.startsWith(REPLY_STREAM_HOOK_PATH)) {
+    const presented = hookBearerToken(req.headers);
+    if (!hookTokenMatches(presented, deps.hookToken?.() ?? "")) {
+      req.resume();
+      deps.refuse(REPLY_STREAM_HOOK_PATH, presented ? "bad-token" : "no-token", res);
+      return true;
+    }
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size <= REPLY_STREAM_MAX_BODY) chunks.push(chunk);
+    });
+    req.on("end", () => {
+      res.writeHead(200);
+      res.end();
+      if (size > REPLY_STREAM_MAX_BODY) return;
+      try {
+        deps.messageDisplay?.(Buffer.concat(chunks).toString("utf-8"));
+      } catch {}
     });
     return true;
   }
@@ -3050,6 +3130,11 @@ export function daemonHookIngressDeps(): HookIngressDeps {
     deliver: (sessionId, data) => hookStatusGate.deliver(sessionId, data),
     statusLine: handleStatusLinePost,
     ...(permissionHookHandler && { permission: permissionHookHandler }),
+    messageDisplay: (body) => {
+      const batch = parseMessageDisplay(body);
+      if (batch) replyStreamLaunch.tracker?.receive(batch);
+    },
+    hookToken: () => hookToken,
   };
 }
 
@@ -5940,6 +6025,10 @@ async function sendHeartbeat(): Promise<void> {
     markHarnessChangesSent(harnessChanges);
 
     const data = await response.json();
+    // Live replies (replyStream.ts): on for any of the user's teams. Before
+    // the beat's commands, so a session this beat starts gets the hook; saved
+    // so a session auto-resumed at the next boot gets it too.
+    mirrorReplyStreaming(data, (on) => patchConfig({ reply_streaming: on }));
     // The device row asks for an update (Settings > Daemon). Taken only when
     // this daemon's own check says a newer release exists, so a daemon that
     // just restarted on the new version never reinstalls it before the row clears.
@@ -7868,6 +7957,10 @@ async function executeRemoteCommand(
           break;
         }
 
+        // Live replies: the tmux launch only, never the SDK host above. Before
+        // the prompt, which is claude's positional argument.
+        cmdText += await replyStreamFragment(agentType, getConfiguredAgentArgs(agentType, config));
+
         // A message already waiting for this conversation (a spawn's brief)
         // rides the launch command as claude's prompt argument. Pasted into
         // the composer it would reach the model wrapped as third party text,
@@ -9393,7 +9486,7 @@ async function executeRemoteCommand(
             const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs(blankAgentType, config, blankSessionId));
             // Same account rule as every other Claude launch (blankLaunchAccount).
             const blankAccount = blankAgentType === "claude" ? await blankLaunchAccount(conversationId) : { prefix: "" as string, account: undefined as string | undefined };
-            const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession, blankSessionId))} ${[blankBinary, ...safeBlankArgs].join(" ")}`;
+            const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession, blankSessionId))} ${[blankBinary, ...safeBlankArgs].join(" ")}${await replyStreamFragment(blankAgentType, getAgentArgs(config, "claude") ?? "")}`;
             try {
               await tmuxExec(["new-session", "-d", ...TMUX_SIZE_ARGS, "-s", tmuxSession, "-c", cwd], { timeout: 5000 });
               // Tag like the other creation paths so this session is discoverable
@@ -26479,7 +26572,8 @@ export async function buildClaudeResumeCommand(a: {
   // credential the refresh gate protects. Attribute what happens, not what
   // was asked for.
   const { prefix: resumeAccountPrefix, account: resumeAccount } = launchAccountPrefix(pinnedAccount, log);
-  const resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}`;
+  const replyStream = await replyStreamFragment("claude", getAgentArgs(config, "claude") ?? "");
+  const resumeCmd = `${launchBinary("claude", { warn: log })} --resume ${resumeId}${modelFlag}${effortFlag}${extraFlags ? " " + extraFlags : ""}${replyStream}`;
   if (a.keychain) {
     // The active profile already runs on the keychain, so only another account is displaced.
     const displacedAccount = resumeAccount !== undefined && resumeAccount !== activeProfileName() ? resumeAccount : undefined;
@@ -27673,7 +27767,7 @@ async function startFreshSessionForDelivery(
   const safeBlankArgs = sanitizeBinaryArgs(buildBlankLaunchArgs("claude", config, blankSessionId));
   // Same account rule as every other Claude launch (blankLaunchAccount).
   const blankAccount = await blankLaunchAccount(conversationId);
-  const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession, blankSessionId))} ${["claude", ...safeBlankArgs].join(" ")}`;
+  const blankCmdText = `${blankAccount.prefix}${AGENT_ENV_SCRUB}${launchTokenEnv(launchTokenLedger().issue(tmuxSession, blankSessionId))} ${["claude", ...safeBlankArgs].join(" ")}${await replyStreamFragment("claude", getAgentArgs(config, "claude") ?? "")}`;
 
   // The lookups above took time; a start_session that arrived during them owns the launch.
   const raced = startedSessionTmux.get(conversationId);
@@ -31639,6 +31733,12 @@ async function main(): Promise<void> {
   // Every echo this daemon uploads names the delivery it settles. Nothing
   // above has awaited since syncService was built, so no upload precedes it.
   syncService.setDeliveryEchoes(deliveryEchoLedger());
+  // The last beat's answer, until this boot's first beat: a session resumed
+  // at boot launches before it. Known and accepted: if the feature was turned
+  // off while the daemon was down, the sessions launched before that first
+  // beat still carry the hook; the tracker drops their lines once the beat
+  // says off (on()), and the server answers "off" to any push before that.
+  replyStreamLaunch.on = config.reply_streaming === true;
 
   // Open the Convex WebSocket now, before the tmux warm restart. That scan
   // awaits every managed pane (133s for 135 sessions on 2026-09-15) and used
@@ -33268,6 +33368,16 @@ async function main(): Promise<void> {
     }
     if (convs.length) log(`[claude-sdk] reattached ${convs.length} host(s)`);
   }).catch((err) => log(`[claude-sdk] reattach failed: ${err instanceof Error ? err.message : String(err)}`));
+
+  // Streamed through redactSecrets, as the transcript message it hands off to is.
+  replyStreamLaunch.tracker = new ReplyStreamTracker({
+    now: Date.now,
+    on: () => replyStreamLaunch.on,
+    conversationFor: (sessionId) => conversationCache[sessionId] ?? startedConversationOf(startedSessionTmux, sessionId),
+    redact: redactSecrets,
+    push: (conversationId, args) => syncService.pushReplyStream({ conversation_id: conversationId, ...args }),
+    log,
+  });
 
   setHookStatusSink((sessionId, data) => {
     // One gate for every effect below. handleStatusData applies the same launch

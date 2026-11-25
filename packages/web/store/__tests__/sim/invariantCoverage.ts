@@ -54,8 +54,7 @@ export const NOT_COMPARED: Readonly<Record<string, string>> = {
   opsReplayTallies: "a browse's counts, fed by the same replays.browse answer as opsReplays, which INV-fixpoint compares; the sim's feed table holds one key per query, so it feeds opsReplays only",
   opsReplayTimelines: "a replay's timeline, fed per view by useSyncOpsReplay, which the sim does not mount",
   liveHeads: "an artifact's head revision and draft, fanned out of the same liveArtifacts.elementsSince answer as liveElements, which INV-fixpoint compares; the sim's feed table holds one key per query, so it feeds liveElements only",
-  livePresence: "who is in an artifact now, fed per view by useSyncLiveArtifact (no registered feed, never persisted), which the sim does not mount",
-};
+  livePresence: "who is in an artifact now, fed per view by useSyncLiveArtifact (no registered feed, never persisted), which the sim does not mount",};
 
 /**
  * Every classified key that no invariant compares and NOT_COMPARED does not
