@@ -170,12 +170,12 @@ describe("claiming the frontier (TG7)", () => {
   const claim = (ctx: any, args: any = {}) => claimFrontier(ctx, { api_token: TOKEN, ...args });
   const status = (tables: any, shortId: string) => tables.tasks.find((t: any) => t.short_id === shortId).status;
 
-  // The caller's own session, and a teammate session that owns ct-1 and is
-  // still working (touched just now).
-  const sessions = () => ({
+  // The caller's own session, and a teammate session still working (touched
+  // just now) that, unless `otherOwnsCt1` is false, owns ct-1.
+  const sessions = (otherOwnsCt1 = true) => ({
     conversations: [
       { _id: "c_me", user_id: USER, session_id: "sess-me", short_id: "jme0001", is_private: true, status: "active", updated_at: NOW },
-      { _id: "c_other", user_id: USER, session_id: "sess-other", short_id: "jot0001", is_private: true, status: "active", updated_at: NOW, active_task_id: "task_ct-1" },
+      { _id: "c_other", user_id: USER, session_id: "sess-other", short_id: "jot0001", is_private: true, status: "active", updated_at: NOW, ...(otherOwnsCt1 ? { active_task_id: "task_ct-1" } : {}) },
     ],
     managed_sessions: [],
     entity_conversations: [],
@@ -211,7 +211,7 @@ describe("claiming the frontier (TG7)", () => {
   });
 
   test("an agent's task is a session's to claim, never a person's", async () => {
-    const { ctx, tables } = await makeCtx([task("ct-1", { assignee: "agent:claude" })], sessions());
+    const { ctx, tables } = await makeCtx([task("ct-1", { assignee: "agent:claude" })], sessions(false));
     expect(await claim(ctx)).toMatchObject({ task: null });
     const direct = await claimNextReady._handler(ctx, { api_token: TOKEN, candidates: ["ct-1"] });
     expect(direct.skipped).toEqual([{ short_id: "ct-1", reason: "assigned to an agent" }]);
@@ -271,7 +271,7 @@ describe("claiming the frontier (TG7)", () => {
     const { ctx } = await makeCtx([
       task("ct-1", { updated_at: stale, created_at: stale }),
       task("ct-2", { ephemeral: true, created_from_conversation: "c_other" }),
-    ], sessions());
+    ], sessions(false));
     expect(await claim(ctx, { conversation_id: "sess-me" })).toMatchObject({ task: null, stale_passed: 1 });
     expect((await claim(ctx, { conversation_id: "sess-me", stale: true })).task?.short_id).toBe("ct-1");
     expect((await claim(ctx, { conversation_id: "sess-other" })).task?.short_id).toBe("ct-2");
