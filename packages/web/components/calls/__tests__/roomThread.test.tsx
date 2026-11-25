@@ -680,3 +680,31 @@ test("an agent's chip carries its video avatar switch where the team has faces, 
   expect(off.container.querySelector(".rt-chip button[aria-pressed]")).toBeNull();
   await off.unmount();
 });
+
+// ct-101368: the stage rail mounts the thread with surface="stage" and no
+// selection (CallStage's ThreadRail), and a spoken turn there must still do
+// what the same turn does on the call page: a click selects it, and the
+// selection can be sent to the room's agent.
+test("on the stage rail a spoken turn can be selected and sent to the agent", async () => {
+  useInboxStore.setState({ currentUser: { _id: "u-me" }, liveRooms: [], sessions: {} } as any);
+  window.localStorage.setItem("codecast.roomThread.words.stage", "full");
+  const segments = [
+    seg(0, "Ada", "it's like a pretty delicate balance", 0),
+    seg(1, "Bob", "the co-working engineering lead", 30_000),
+  ];
+  // Exactly the props ThreadRail passes (CallStage.tsx).
+  const r = await render(
+    <RoomThread roomKey={ROOM} call={call({ segments })} rows={[]} liveTranscriptId="t1" surface="stage" seated />,
+  );
+  const turns = [...r.container.querySelectorAll<HTMLElement>("[data-turn]")];
+  expect(turns.length).toBe(2);
+  expect(turns.map((t) => t.getAttribute("role"))).toEqual(["button", "button"]);
+  await act(async () => {
+    turns[0].dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true }));
+  });
+  expect(r.container.querySelector('[data-turn="0"]')?.getAttribute("aria-pressed")).toBe("true");
+  const send = [...r.container.querySelectorAll("button")].find((b) => /send to agent/i.test(b.textContent ?? ""));
+  expect(send).toBeTruthy();
+  window.localStorage.removeItem("codecast.roomThread.words.stage");
+  await r.unmount();
+});
