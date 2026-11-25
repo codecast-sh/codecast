@@ -440,9 +440,11 @@ export class SyncService {
   // wait exceeds ADD_MESSAGES_BATCH_TIMEOUT_MS, so callers time out while
   // their abandoned entries still run, retries re-enqueue duplicates, and
   // sync clogs against a perfectly healthy backend.
-  private mutate(name: string, args: Record<string, unknown>): Promise<any> {
+  // `backoff: false` keeps a caller's refusal out of the shared backoff, so a
+  // write nothing waits on (a live reply) can never pause message sync.
+  private mutate(name: string, args: Record<string, unknown>, { backoff = true } = {}): Promise<any> {
     return this.client.mutation(name as any, args, { skipQueue: true }).catch((err: unknown) => {
-      if (isWriteBudgetRefusal(err)) this.writeBudget.refused();
+      if (backoff && isWriteBudgetRefusal(err)) this.writeBudget.refused();
       throw err;
     });
   }
@@ -490,15 +492,18 @@ export class SyncService {
     });
   }
 
-  /** A live reply's text so far (replyStream.ts). Never throttled, so message
-   *  sync never waits behind it; null while the write budget is paused and on
-   *  any failure, which the tracker reads as "nobody is watching". */
+  /** A live reply's text so far (replyStream.ts). It can never delay message
+   *  sync: it is not throttled, it sends nothing while the deployment's write
+   *  budget has paused bulk sync, and a refusal of its own does not feed that
+   *  pause. Null for both budget cases, which the tracker reads as "nobody is
+   *  watching"; any other failure rejects, so the tracker can say why. */
   async pushReplyStream(args: { conversation_id: string; message_id: string; seq: number; started_at: number; text: string }): Promise<ReplyStreamPushResult | null> {
     if (this.writeBudget.waitMs() > 0) return null;
     try {
-      return await this.mutate("replyStreams:push", { api_token: this.apiToken, ...args });
-    } catch {
-      return null;
+      return await this.mutate("replyStreams:push", { api_token: this.apiToken, ...args }, { backoff: false });
+    } catch (err) {
+      if (isWriteBudgetRefusal(err)) return null;
+      throw err;
     }
   }
 

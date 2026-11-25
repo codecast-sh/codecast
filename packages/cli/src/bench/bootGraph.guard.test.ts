@@ -540,7 +540,8 @@ describe("command groups stay off the boot graph", () => {
     // 4857 (2026-11-25): the messaging-only onboarding gate and `cast relay --stop` in index.ts (#149) (+1).
     // 4861 the same day: live replies, contracts/replyStream.ts (+3) and SyncService.pushReplyStream with the
     // reply_streaming config mirror (+1).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4861);
+    // 4862 the same day: a live reply's push stays out of the write-budget backoff (syncService.ts +1).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4862);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

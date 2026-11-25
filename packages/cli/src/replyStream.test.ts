@@ -3,6 +3,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { REPLY_STREAM_MAX_CHARS, type ReplyStreamPushResult } from "@codecast/shared/contracts";
+import { SECRET_PAYLOAD_MAX } from "@codecast/shared/contracts/secrets";
 import {
   REPLY_STREAM_SETTINGS_FILE,
   ReplyStreamTracker,
@@ -10,6 +11,7 @@ import {
   parseMessageDisplay,
   replyStreamLaunchFragment,
   replyStreamSettingsJson,
+  startedConversationOf,
   type ReplyStreamPushArgs,
 } from "./replyStream.js";
 import { shellEscapeForSh } from "./supervision.js";
@@ -70,6 +72,7 @@ function rig(opts: {
     tracker,
     pushes,
     logs,
+    timers,
     texts: () => pushes.map((p) => p.args.text),
     batch: (index: number, delta: string, final = false, message_id = "M1", session_id = "S") =>
       tracker.receive({ session_id, message_id, index, final, delta }),
@@ -222,6 +225,72 @@ describe("joining a message's batches", () => {
   });
 });
 
+describe("which message is current", () => {
+  test("a late final of an id long gone never displaces the message being written", async () => {
+    const r = rig();
+    r.batch(0, "old-0 ", false, "M1");
+    r.batch(1, "old-1 ", false, "M1"); // M1 is abandoned mid-stream
+    await r.answer(WRITTEN);
+    await r.advance(400);
+    await r.answer(WRITTEN);
+    // Text before and after many tool calls: far more ids than any list of past ids keeps.
+    for (let k = 2; k <= 40; k++) {
+      await r.advance(400);
+      r.batch(0, `m${k}a `, false, `M${k}`);
+      r.batch(1, `m${k}b`, true, `M${k}`);
+      await r.answer(WRITTEN);
+      await r.answer(WRITTEN);
+    }
+    await r.advance(400);
+    r.batch(0, "cur-0 ", false, "CUR");
+    await r.answer(WRITTEN);
+    await r.advance(400);
+    const before = r.pushes.length;
+    r.batch(7, "late final of M1", true, "M1"); // hours later
+    r.batch(1, "cur-1 ", false, "CUR");
+    await r.answer(WRITTEN);
+    await r.advance(400);
+    r.batch(2, "cur-2", true, "CUR");
+    await r.answer(WRITTEN);
+    expect(r.pushes.slice(before).map((p) => [p.args.message_id, p.args.text])).toEqual([
+      ["CUR", "cur-0 cur-1 "],
+      ["CUR", "cur-0 cur-1 cur-2"],
+    ]);
+  });
+
+  test("a late single-batch final of an unknown id never displaces it either", async () => {
+    const r = rig();
+    r.batch(0, "cur-0 ", false, "CUR");
+    await r.answer(WRITTEN);
+    await r.advance(400);
+    r.batch(0, "a whole abandoned reply", true, "GONE");
+    r.batch(1, "cur-1", true, "CUR");
+    await r.answer(WRITTEN);
+    expect(r.texts()).toEqual(["cur-0 ", "cur-0 cur-1"]);
+  });
+
+  test("a later line that beats its message's first line is held for it", async () => {
+    const r = rig();
+    r.batch(0, "one\n", false, "PREV");
+    await r.answer(WRITTEN);
+    await r.advance(400);
+    r.batch(1, "B\n", false, "NEXT");
+    r.batch(2, "C\n", false, "NEXT");
+    expect(r.pushes.length).toBe(1);
+    await r.advance(500);
+    r.batch(0, "A\n", false, "NEXT");
+    expect(r.pushes.at(-1)!.args).toMatchObject({ message_id: "NEXT", seq: 1, text: "A\nB\nC\n" });
+  });
+
+  test("one held past 2 s is let go: the message shows its first line until the next fills in", async () => {
+    const r = rig();
+    r.batch(1, "B\n", false, "NEXT");
+    await r.advance(2001);
+    r.batch(0, "A\n", false, "NEXT");
+    expect(r.texts()).toEqual(["A\n"]);
+  });
+});
+
 describe("coalescing", () => {
   test("one push in flight, 300 ms between starts", async () => {
     const r = rig();
@@ -262,7 +331,7 @@ describe("coalescing", () => {
 });
 
 describe("answers", () => {
-  test("unwatched pauses 3 s, then the next push carries the whole text so far", async () => {
+  test("unwatched pauses 3 s, then what arrived during it goes as the whole text so far", async () => {
     const r = rig();
     r.batch(0, "a\n");
     await r.answer({ state: "unwatched" });
@@ -272,8 +341,39 @@ describe("answers", () => {
     await r.advance(999);
     expect(r.pushes.length).toBe(1);
     await r.advance(1);
-    r.batch(3, "d\n");
-    expect(r.texts()).toEqual(["a\n", "a\nb\nc\nd\n"]);
+    expect(r.texts()).toEqual(["a\n", "a\nb\nc\n"]);
+  });
+
+  test("a final that arrives inside a pause goes when the pause ends", async () => {
+    const r = rig();
+    r.batch(0, "a ");
+    await r.answer(null);
+    r.batch(1, "b");
+    r.batch(2, " end", true);
+    await r.advance(60_000);
+    expect(r.texts()).toEqual(["a ", "a b end"]);
+  });
+
+  test("a spacing wake that falls inside a pause is carried to the pause's end", async () => {
+    const r = rig();
+    r.batch(0, "a\n");
+    r.batch(1, "b\n");
+    await r.answer({ state: "unwatched" });
+    await r.advance(2999);
+    expect(r.pushes.length).toBe(1);
+    await r.advance(1);
+    expect(r.texts()).toEqual(["a\n", "a\nb\n"]);
+  });
+
+  test("unwatched with nothing new schedules nothing", async () => {
+    const r = rig();
+    r.batch(0, "a\n");
+    r.batch(1, "b", true);
+    await r.answer(WRITTEN);
+    await r.answer({ state: "unwatched" });
+    expect(r.timers).toEqual([]);
+    await r.advance(60_000);
+    expect(r.pushes.length).toBe(2);
   });
 
   test("text that was not written is sent again after the pause", async () => {
@@ -298,8 +398,7 @@ describe("answers", () => {
     r.batch(2, "c\n");
     expect(r.pushes.length).toBe(1);
     await r.advance(1);
-    r.batch(3, "d\n");
-    expect(r.texts()).toEqual(["a\n", "a\nb\nc\nd\n"]);
+    expect(r.texts()).toEqual(["a\n", "a\nb\nc\n"]);
     expect(r.logs.some((l) => l.includes("off"))).toBe(true);
   });
 
@@ -313,14 +412,33 @@ describe("answers", () => {
       r.batch(2, "c\n");
       expect(r.pushes.length).toBe(1);
       await r.advance(1);
-      r.batch(3, "d\n");
-      expect(r.texts()).toEqual(["a\n", "a\nb\nc\nd\n"]);
+      expect(r.texts()).toEqual(["a\n", "a\nb\nc\n"]);
       await r.answer(WRITTEN);
       await r.advance(300);
-      r.batch(4, "e", true);
-      expect(r.texts().at(-1)).toBe("a\nb\nc\nd\ne");
+      r.batch(3, "e", true);
+      expect(r.texts().at(-1)).toBe("a\nb\nc\ne");
     });
   }
+
+  test("a failed push is logged once per conversation per 5 minutes, without the reply's text", async () => {
+    const r = rig({ conversationFor: (s) => `conv-${s}` });
+    const refusal = () => new Error('[CONVEX M(replyStreams:push)] Server Error\nArgumentValidationError: bad\nValue: {"text":"the secret reply"}');
+    r.batch(0, "the secret reply\n", false, "M1", "S1");
+    await r.answer(refusal());
+    await r.advance(3000);
+    r.batch(1, "more\n", false, "M1", "S1");
+    await r.answer(refusal());
+    r.batch(0, "other\n", false, "M1", "S2");
+    await r.answer(new Error("Uncaught Error: Unauthorized: can only stream replies to your own conversations"));
+    expect(r.logs.length).toBe(2);
+    expect(r.logs[0]).toContain("ArgumentValidationError: bad");
+    expect(r.logs[1]).toContain("Unauthorized");
+    expect(r.logs.join("\n")).not.toContain("secret reply");
+    await r.advance(5 * 60_000);
+    r.batch(2, "again\n", false, "M1", "S1");
+    await r.answer(refusal());
+    expect(r.logs.length).toBe(3);
+  });
 
   test("a push that throws before returning a promise does not escape or wedge", async () => {
     const r = rig({ throwOnce: true });
@@ -344,6 +462,17 @@ describe("redaction and the cap", () => {
     const r = rig({ redact: (t) => t.replace(/k/g, "kk") });
     r.batch(0, "k".repeat(REPLY_STREAM_MAX_CHARS / 2 + 10));
     expect(r.texts()[0]!.length).toBe(REPLY_STREAM_MAX_CHARS);
+  });
+
+  test("redaction reads a bounded slice of a runaway reply", async () => {
+    const seen: number[] = [];
+    const r = rig({ redact: (t) => (seen.push(t.length), t) });
+    const line = "x".repeat(100_000);
+    for (let i = 0; i < 12; i++) r.batch(i, line);
+    await r.answer(WRITTEN);
+    await r.advance(400);
+    expect(Math.max(...seen)).toBe(REPLY_STREAM_MAX_CHARS + SECRET_PAYLOAD_MAX);
+    expect(r.texts().at(-1)!.length).toBe(REPLY_STREAM_MAX_CHARS);
   });
 });
 
@@ -377,6 +506,33 @@ describe("what is tracked", () => {
     const r = rig({ conversationFor: (s) => `conv-${s}` });
     for (let i = 0; i < 70; i++) r.batch(0, "", false, "M", `S${i}`);
     expect(r.tracker.size).toBe(64);
+  });
+
+  test("a conversation with a push in flight is never evicted, so it never has two", async () => {
+    const r = rig({ conversationFor: (s) => `conv-${s}` });
+    r.batch(0, "x ", false, "M1", "S0");
+    r.batch(1, "y", false, "M1", "S0");
+    for (let k = 1; k <= 64; k++) r.batch(0, "", false, "M", `S${k}`);
+    r.batch(0, "x2 ", false, "N1", "S0");
+    r.batch(1, "y2", false, "N1", "S0");
+    expect(r.pushes.filter((p) => p.conversationId === "conv-S0" && !p.settled).length).toBe(1);
+    await r.answer(WRITTEN);
+    await r.advance(400);
+    expect(r.texts().at(-1)).toBe("x2 y2");
+  });
+
+  test("when every tracked conversation has a push in flight, a new one waits its turn", () => {
+    const r = rig({ conversationFor: (s) => `conv-${s}` });
+    for (let k = 0; k < 64; k++) r.batch(0, "a", false, "M", `S${k}`);
+    r.batch(0, "b", false, "M", "S64");
+    expect(r.tracker.size).toBe(64);
+    expect(r.pushes.length).toBe(64);
+  });
+
+  test("a started session's conversation comes from its start record", () => {
+    const started = new Map([["conv-1", { sessionId: "sess-1" }], ["conv-2", {}]]);
+    expect(startedConversationOf(started, "sess-1")).toBe("conv-1");
+    expect(startedConversationOf(started, "sess-2")).toBeUndefined();
   });
 });
 
@@ -437,29 +593,29 @@ describe("the settings file", () => {
 });
 
 describe("replyStreamLaunchFragment", () => {
-  const base = { on: true, agentType: "claude", configuredArgs: "", settingsPath: "/Users/me/.codecast/reply-stream-settings.json", escape: shellEscapeForSh };
+  const base = { on: true, agentType: "claude", configuredArgs: "", settingsPath: "/Users/me/.codecast/reply-stream-settings.json", escape: shellEscapeForSh, ownSettings: () => {} };
 
   test("claude with the feature on gets --settings", () => {
-    expect(replyStreamLaunchFragment({ ...base, log: () => {} })).toBe(" --settings '/Users/me/.codecast/reply-stream-settings.json'");
+    expect(replyStreamLaunchFragment({ ...base })).toBe(" --settings '/Users/me/.codecast/reply-stream-settings.json'");
   });
 
   test("off, another agent, or no file: nothing", () => {
-    expect(replyStreamLaunchFragment({ ...base, on: false, log: () => {} })).toBe("");
-    expect(replyStreamLaunchFragment({ ...base, agentType: "codex", log: () => {} })).toBe("");
-    expect(replyStreamLaunchFragment({ ...base, settingsPath: null, log: () => {} })).toBe("");
+    expect(replyStreamLaunchFragment({ ...base, on: false })).toBe("");
+    expect(replyStreamLaunchFragment({ ...base, agentType: "codex" })).toBe("");
+    expect(replyStreamLaunchFragment({ ...base, settingsPath: null })).toBe("");
   });
 
-  test("the person's own --settings wins, logged once", () => {
-    const logs: string[] = [];
-    const log = (m: string) => logs.push(m);
-    expect(replyStreamLaunchFragment({ ...base, configuredArgs: "--model opus --settings ~/mine.json", log })).toBe("");
-    expect(replyStreamLaunchFragment({ ...base, configuredArgs: "--settings=/x.json", log })).toBe("");
-    expect(replyStreamLaunchFragment({ ...base, configuredArgs: "--settingsfoo", log })).toBe(" --settings '/Users/me/.codecast/reply-stream-settings.json'");
-    expect(logs.length).toBe(1);
+  test("the person's own --settings wins, and the caller hears of each such launch", () => {
+    let heard = 0;
+    const ownSettings = () => void heard++;
+    expect(replyStreamLaunchFragment({ ...base, configuredArgs: "--model opus --settings ~/mine.json", ownSettings })).toBe("");
+    expect(replyStreamLaunchFragment({ ...base, configuredArgs: "--settings=/x.json", ownSettings })).toBe("");
+    expect(replyStreamLaunchFragment({ ...base, configuredArgs: "--settingsfoo", ownSettings })).toBe(" --settings '/Users/me/.codecast/reply-stream-settings.json'");
+    expect(heard).toBe(2);
   });
 
   test("a path with spaces and quotes is shell-escaped", () => {
-    expect(replyStreamLaunchFragment({ ...base, settingsPath: "/Users/O'Brien Smith/.codecast/reply-stream-settings.json", log: () => {} }))
+    expect(replyStreamLaunchFragment({ ...base, settingsPath: "/Users/O'Brien Smith/.codecast/reply-stream-settings.json" }))
       .toBe(` --settings '/Users/O'\\''Brien Smith/.codecast/reply-stream-settings.json'`);
   });
 });
