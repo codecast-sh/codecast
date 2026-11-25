@@ -5,8 +5,8 @@
 // derived on the web rather than written here, is in
 // @codecast/shared/contracts/replyStream.
 //
-// COST. A push writes only while someone has the conversation open and the
-// feature is on, into a row with one writer, and never touches the
+// COST. A push writes only while a page showing the conversation holds the
+// row's lease (watch) and the feature is on. Nothing here touches the
 // conversation document or `messages`, so a streaming reply re-runs only the
 // queries that read this row.
 
@@ -16,17 +16,20 @@ import { query, mutation, internalMutation } from "./functions";
 import { requireUserOrToken } from "./lib/auth";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { checkConversationAccess } from "./privacy";
-import { PRESENCE_FRESH_MS } from "./presencePolicy";
 import { redactSecrets } from "./redact";
 import {
   REPLY_STREAM_LOAD_MAX_AGE_MS,
   REPLY_STREAM_MAX_CHARS,
+  REPLY_STREAM_WATCH_MS,
   withoutOpenKeyBlock,
   type ReplyStreamPushResult,
   type ReplyStreamRow,
 } from "@codecast/shared/contracts";
 
 const PRUNE_AFTER_MS = 60 * 60 * 1000;
+/** A renewal is written only when the lease has this much less left than a
+ *  fresh one. */
+const WATCH_WRITE_EVERY_MS = 30_000;
 
 /** The daemon's push of one reply's text so far. Answers whether it was
  *  written, so the daemon can stop pushing to a conversation nobody watches
@@ -55,23 +58,21 @@ export const push = mutation({
     }
 
     const now = Date.now();
-    // A closed tab never clears its presence row, so the range is everyone
-    // whose last view was this conversation: capped, like attendingOwner's.
-    const viewers = await ctx.db
-      .query("user_presence")
-      .withIndex("by_viewing_conversation", (q) => q.eq("viewing_conversation_id", args.conversation_id))
-      .take(50);
-    if (!viewers.some((p) => now - p.last_seen < PRESENCE_FRESH_MS)) return { state: "unwatched" };
-
     const row = await ctx.db
       .query("reply_streams")
       .withIndex("by_conversation", (q) => q.eq("conversation_id", args.conversation_id))
       .first();
+    // Written only while a page showing the conversation holds the row's
+    // lease (watch). Presence could not answer this: it keeps one viewed
+    // conversation per person, and every other window they have open
+    // overwrites it.
+    if (!row || (row.watch_until ?? 0) <= now) return { state: "unwatched" };
+
     // A late or reordered push: an older line of this message, or an older
     // message. Only a row still being written orders anything: started_at is
     // the pushing machine's clock, and a session that moved to a machine
     // whose clock runs behind must not be shut out by the row it left.
-    const live = row && now - row.updated_at <= REPLY_STREAM_LOAD_MAX_AGE_MS;
+    const live = now - row.updated_at <= REPLY_STREAM_LOAD_MAX_AGE_MS;
     if (live && ((row.message_id === args.message_id && args.seq <= row.seq) || args.started_at < row.started_at)) {
       return { state: "written" };
     }
@@ -82,10 +83,40 @@ export const push = mutation({
     let text = args.text.slice(0, REPLY_STREAM_MAX_CHARS);
     if (/[\ud800-\udbff]$/.test(text)) text = text.slice(0, -1);
     text = withoutOpenKeyBlock(redactSecrets(text));
-    const fields = { message_id: args.message_id, text, seq: args.seq, started_at: args.started_at, updated_at: now };
-    if (row) await ctx.db.patch(row._id, fields);
-    else await ctx.db.insert("reply_streams", { conversation_id: args.conversation_id, user_id: userId, ...fields });
+    await ctx.db.patch(row._id, { message_id: args.message_id, text, seq: args.seq, started_at: args.started_at, updated_at: now });
     return { state: "written" };
+  },
+});
+
+/** A page showing the conversation says so, about once a minute while it is
+ *  open and visible (ReplyStreamFeeder): the lease pushes are written under.
+ *  It creates the conversation's row, empty, when there is none. Any number
+ *  of windows and people may hold it; it only ever extends. */
+export const watch = mutation({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<null> => {
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
+    const conv = await ctx.db.get(args.conversation_id);
+    // Whoever may read the conversation's messages may watch it (get's rule).
+    if (!conv || (await checkConversationAccess(ctx, userId, conv)) === "denied") return null;
+    if (!(await workspaceHasFeature(ctx, { team_id: conv.team_id, user_id: conv.user_id }, "reply_streaming"))) return null;
+    const now = Date.now();
+    const until = now + REPLY_STREAM_WATCH_MS;
+    const row = await ctx.db
+      .query("reply_streams")
+      .withIndex("by_conversation", (q) => q.eq("conversation_id", args.conversation_id))
+      .first();
+    if (!row) {
+      await ctx.db.insert("reply_streams", {
+        conversation_id: args.conversation_id, user_id: conv.user_id,
+        message_id: "", text: "", seq: 0, started_at: 0, updated_at: now, watch_until: until,
+      });
+    } else if ((row.watch_until ?? 0) < until - WATCH_WRITE_EVERY_MS) {
+      // Several windows renewing in the same half minute cost one write.
+      await ctx.db.patch(row._id, { watch_until: until });
+    }
+    return null;
   },
 });
 
@@ -101,7 +132,8 @@ export const get = query({
       .first();
     // Before the conversation is read: a finished reply's row then depends on
     // nothing a busy conversation keeps changing.
-    if (!row || Date.now() - row.updated_at > REPLY_STREAM_LOAD_MAX_AGE_MS) return null;
+    // A row that is only being watched holds no text yet.
+    if (!row || !row.text || Date.now() - row.updated_at > REPLY_STREAM_LOAD_MAX_AGE_MS) return null;
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return null;
     // listMessagesTail's rule: a teammate holding only Summary access is "denied".
@@ -117,17 +149,19 @@ export const get = query({
   },
 });
 
-/** Drop rows no push has touched for an hour (crons.ts). The web stops
- *  drawing a row long before that; the next reply recreates it. */
+/** Drop rows no push has touched for an hour and nobody is watching
+ *  (crons.ts). The web stops drawing a row long before that; the next watch
+ *  recreates it. */
 export const prune = internalMutation({
   args: {},
   handler: async (ctx) => {
-    const cutoff = Date.now() - PRUNE_AFTER_MS;
+    const now = Date.now();
     const rows = await ctx.db
       .query("reply_streams")
-      .withIndex("by_updated_at", (q) => q.lt("updated_at", cutoff))
+      .withIndex("by_updated_at", (q) => q.lt("updated_at", now - PRUNE_AFTER_MS))
       .take(500);
-    for (const r of rows) await ctx.db.delete(r._id);
-    return { deleted: rows.length };
+    const gone = rows.filter((r) => (r.watch_until ?? 0) <= now);
+    for (const r of gone) await ctx.db.delete(r._id);
+    return { deleted: gone.length };
   },
 });

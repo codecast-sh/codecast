@@ -54,6 +54,13 @@ export const REPLY_STREAM_HANDOFF_STAMP_SLACK_MS = 1_000;
  *  less this, so a reply that stopped long ago is not drawn afresh on reload. */
 export const REPLY_STREAM_CLOCK_ALLOWANCE_MS = 5_000;
 
+/** How long one "this conversation is on screen" from a page keeps its pushes
+ *  written. Long enough to ride out a missed renewal. */
+export const REPLY_STREAM_WATCH_MS = 150_000;
+
+/** How often a page showing a conversation renews that. */
+export const REPLY_STREAM_WATCH_RENEW_MS = 60_000;
+
 // A key block whose END line the stream has not reached. Redaction matches a
 // key block whole, so until it closes its body would read as plain text.
 const OPEN_KEY_BLOCK = /-----BEGIN [A-Z0-9 ]*KEY-----(?![\s\S]*-----END [A-Z0-9 ]*KEY-----)[\s\S]*$/;
