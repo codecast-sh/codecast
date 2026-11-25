@@ -302,3 +302,35 @@ test("a refused switch says why under the rows; a blank or non-Claude session sh
     storeState.sessionCommands = {};
   }
 });
+
+// ct-101398: picking an effort level is a pick, like picking a model: it
+// closes the menu. The chips were plain buttons inside the menu content, so a
+// pick left it open and the person had to click the page to dismiss it.
+test("picking an effort chip commits the effort and closes the menu", () => {
+  const h = React.createElement;
+  const openChanges: boolean[] = [];
+  const picks: Array<{ model?: string; effort?: string }> = [];
+  if (root) React.act(() => root!.unmount());
+  root = createRoot(document.getElementById("root")!);
+  function Harness() {
+    const [open, setOpen] = React.useState(true);
+    return h(menu.DropdownMenu, { open, modal: false, onOpenChange: (o: boolean) => { openChanges.push(o); setOpen(o); } },
+      h(menu.DropdownMenuTrigger, { asChild: true }, h("button", null, "badge")),
+      h(menu.DropdownMenuContent, null,
+        h(mod.SessionControlPanel, {
+          conversationId: "conv1", agentType: "claude_code", model: "claude-opus-4-8", effort: "high",
+          messageCount: 12, onModelSelect: (sel) => picks.push(sel), onClose: () => {},
+        }),
+      ),
+    );
+  }
+  React.act(() => root!.render(h(Harness)));
+  React.act(() => {});
+  const panel = q("[data-session-control-panel]")!;
+  const chip = [...panel.querySelectorAll<HTMLElement>("button, [role=menuitem]")].find((el) => el.textContent?.trim() === "low")!;
+  expect(chip).toBeTruthy();
+  click(chip);
+  expect(picks).toEqual([{ effort: "low" }]);
+  expect(openChanges).toContain(false);
+  expect(q("[data-session-control-panel]")).toBeNull();
+});
