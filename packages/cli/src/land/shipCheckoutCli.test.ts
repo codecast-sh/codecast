@@ -6,7 +6,8 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { parseManifestText } from "../workspace/manifest.js";
-import { checkoutFlowArgs, runCheckoutCommand, shipKeyRefusal, steerPlan } from "./shipCheckoutCli.js";
+import { checkoutFlowArgs, runCheckoutCommand, steerPlan } from "./shipCheckoutCli.js";
+import { shipKeyRefusal } from "./shipCheckout.js";
 import { defaultMessage, type ShipGroup, type ShipPlan } from "./shipCheckout.js";
 
 const group = (id: string, over: Partial<ShipGroup> = {}): ShipGroup => ({

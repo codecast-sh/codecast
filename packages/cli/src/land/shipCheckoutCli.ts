@@ -8,7 +8,7 @@ import { spawnSync } from "../proc.js";
 import { formatAgeShort } from "../publishCommand.js";
 import { git } from "../wipSnapshot.js";
 import { inboxRoster } from "./cli.js";
-import { makePlan, planPath, runPlan, shipSpec, type Log, type ShipGroup, type ShipOutcome, type ShipPlan } from "./shipCheckout.js";
+import { makePlan, planPath, runPlan, shipKeyRefusal, shipSpec, type Log, type ShipGroup, type ShipOutcome, type ShipPlan } from "./shipCheckout.js";
 import { holdRepoLease, leaseHolder, leaseRouteMissing, type LeasePost } from "./repoLease.js";
 
 /** The repository's lease for the ship's before-push deploys and push. A server that cannot be asked about it (one older
@@ -160,17 +160,6 @@ export function shipPassBody(plan: ShipPlan, r: ShipOutcome, repository: string,
     })),
     started_at: startedAt,
   };
-}
-
-/**
- * A ship refuses a [ship] key this cast does not read, where every other reader of the manifest reads past it: the
- * key may route the pass (a newer cast's setting, or a typo of `flow`), and skipping it would push straight past the
- * flow's checks and review.
- */
-export function shipKeyRefusal(spec: { ignored?: string[] }): string | null {
-  if (!spec.ignored?.length) return null;
-  const keys = spec.ignored.map((k) => `'${k}'`).join(", ");
-  return `.codecast/workspace.toml: [ship] ${keys} ${spec.ignored.length > 1 ? "are not keys" : "is not a key"} this cast reads, so it does not ship: a newer cast's setting? cast update; a typo? fix it`;
 }
 
 /**

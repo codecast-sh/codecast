@@ -333,12 +333,13 @@ key instead, and a pressed deploy of that repository fails on them: raise
 it (`gate` and `rollout` came after `ci` and `finish`, which 1.1.235 reads).
 
 `[ship]` is the one workspace.toml table read the same way from 1.1.284:
-workspace acquire and every other reader skip a `[ship]` key they do not
-know. `cast ship` alone still refuses it, naming the key (a newer cast's
-setting? cast update; a typo? fix it), because a skipped key may be how the
-pass is routed, and skipping a misspelled `flow` would push straight past the
-flow's checks and review. CLIs before 1.1.284 refuse it everywhere with the
-whole manifest, so a repository adds a `[ship]` key only once
+workspace acquire and the other readers skip a `[ship]` key they do not
+know. `cast ship` and the merge station's before-merge deploys still refuse
+it, naming the key (a newer cast's setting? cast update; a typo? fix it),
+because a skipped key may route the pass or name its deploys: a misspelled
+`flow` would push past the flow's review, and a misspelled `deploy` would
+merge a client before its backend. CLIs before 1.1.284 refuse it everywhere
+with the whole manifest, so a repository adds a `[ship]` key only once
 `min_cli_version` reaches a release that reads it.
 
 ## DP11. Every way a target goes live leaves a dp-N

@@ -204,6 +204,18 @@ describe("cast flow merge: before-merge steps", () => {
     } finally { s.done(); }
   }, T);
 
+  test("main's [ship] holding a key this cast does not read (a misspelled deploy table) refuses (exit 2) and merges nothing", async () => {
+    const s = setup();
+    try {
+      s.onMain({ ".codecast/workspace.toml": `[[ship.deploys]]\nname = "convex"\nwhen = ["api/**"]\nrun = "deploy"\nstage = "before_push"\n` });
+      const head = s.branch("api/route.ts", "export {}\n");
+      s.ci(head);
+      const r = await s.run({ runStep: async () => { throw new Error("no step runs"); } });
+      expect(r).toEqual({ code: 2, line: ".codecast/workspace.toml: [ship] 'deploys' is not a key this cast reads, so it does not ship: a newer cast's setting? cast update; a typo? fix it" });
+      expect(s.merged()).toBe(false);
+    } finally { s.done(); }
+  }, T);
+
   test("a merge an earlier attempt landed before it could finish: rerun, it sends the before-merge steps again from main and records them", async () => {
     const s = setup();
     try {
