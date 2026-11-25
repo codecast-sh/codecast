@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { Conversation } from "../../lib/conversationRow";
 import type { ExternalEventRecord } from "../../lib/externalEventRecord";
 import {
-  filterItems, filterLoose, groupActivity, indexOutcomes, keepStableItems, loosePrs, makeItem, needsList, nowStrip,
+  filterItems, filterLoose, groupActivity, indexOutcomes, keepStableItems, loosePrs, makeItem, needsList, nowStrip, waitingMessageId,
   peopleFacets, prFromStatus, prThreads, projectFacets, summarize, withLivePr, NO_OUTCOMES,
   type ActivityActor, type ActivityItem,
 } from "./activityModel";
@@ -172,5 +172,22 @@ describe("the view in the address", () => {
   test("a face toggles", () => {
     expect(togglePerson(["a"], "b")).toEqual(["a", "b"]);
     expect(togglePerson(["a", "b"], "a")).toEqual(["b"]);
+  });
+});
+
+describe("waitingMessageId (ct-101350)", () => {
+  const server = (id: string) => id.startsWith("kh");
+  test("the newest server-held reply with text", () => {
+    expect(waitingMessageId([
+      { _id: "kh1", role: "assistant", content: "Older" },
+      { _id: "kh2", role: "user", content: "Go" },
+      { _id: "kh3", role: "assistant", content: "Which branch?" },
+      { _id: "kh4", role: "assistant", content: "  " },
+      { _id: "tmp-1", role: "assistant", content: "Local", _isOptimistic: true },
+    ], server)).toBe("kh3");
+  });
+  test("nothing held: no anchor", () => {
+    expect(waitingMessageId(undefined, server)).toBeNull();
+    expect(waitingMessageId([{ _id: "kh1", role: "user", content: "Hi" }], server)).toBeNull();
   });
 });

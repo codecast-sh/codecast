@@ -39,13 +39,27 @@ describe("Answer lands on the ask", () => {
     const href = hrefOf(item({ outcomes: { ...NO_OUTCOMES, decisions: [decision({ shortId: null })] } }));
     expect(href).not.toBeNull();
     expect(href).not.toBe(`/conversation/${CONV}`);
+    expect(href).toBe("/decisions/kd7decisionid000000000000000001");
   });
 
   test("the viewer's own needs_you session marks the waiting message, not the bare conversation", () => {
-    const href = hrefOf(item({ isOwn: true, status: "needs_you" }));
+    const href = hrefOf(item({ isOwn: true, status: "needs_you", askMessageId: "kh7waitingreply00000000000000001" }));
     expect(href).not.toBeNull();
     expect(href).not.toBe(`/conversation/${CONV}`);
     expect(href!.startsWith(`/conversation/${CONV}`)).toBe(true);
+    expect(href).toBe(`/conversation/${CONV}#msg-kh7waitingreply00000000000000001`);
+  });
+
+  test("an own error session offers Restart, not Answer (kept)", () => {
+    const it = item({ isOwn: true, status: "error" });
+    expect(hrefOf(it)).toBeNull();
+    const html = renderToStaticMarkup(<MemoryRouter><ActivityActions item={it} /></MemoryRouter>);
+    expect(html).toContain("data-activity-action=\"restart\"");
+  });
+
+  test("a row that waits on nobody shows no Answer (kept)", () => {
+    expect(hrefOf(item({ isOwn: true, status: "working" }))).toBeNull();
+    expect(hrefOf(item({ isOwn: false, status: "needs_you" }))).toBeNull();
   });
 
   test("Open still opens the bare conversation (kept)", () => {
