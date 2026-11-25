@@ -27,11 +27,12 @@ export function shownPlace(st: ShownState): { scope: string; path: string } | nu
 
 // The one-shot intents a move declares before it happens. A history step is
 // known from popstate; the back control says where it is going.
-const intent: { traverseAt: number; back: { key: string; at: number; move: "back" | "up" } | null } = { traverseAt: 0, back: null };
+const intent: { traverseAt: number; back: { key: string; at: number; move: "back" | "up" | "forward" } | null } = { traverseAt: 0, back: null };
 
-/** The back control is about to go to `path`: along the trail ("back"), or up
- *  to the page's parent when there was none ("up"). */
-export function noteTrailBack(path: string, move: "back" | "up" = "back"): void {
+/** The back control is about to go to `path`: along the trail ("back"), up
+ *  to the page's parent when there was none ("up"), or Forward is retracing
+ *  a Back to the page it left ("forward"). */
+export function noteTrailBack(path: string, move: "back" | "up" | "forward" = "back"): void {
   intent.back = { key: placeKey(path), at: Date.now(), move };
 }
 

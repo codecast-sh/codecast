@@ -1414,7 +1414,7 @@ function DashboardLayoutInner({ children, hideSidebar }: DashboardLayoutProps) {
                 </ShortcutTooltip>
                 <ShortcutTooltip label="Forward" action="nav.forward">
                   <TopbarButton
-                    onClick={(e) => { window.history.forward(); tipActions.whisper('nav.forward', e); }}
+                    onClick={(e) => { dispatchAction("nav.forward"); tipActions.whisper('nav.forward', e); }}
                     aria-label="Go forward"
                   >
                     <ChevronRight />

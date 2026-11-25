@@ -2,7 +2,7 @@ import { useCallback, useMemo, useSyncExternalStore } from "react";
 import { useRouter } from "next/navigation";
 import { useInboxStore } from "../store/inboxStore";
 import { useTabContext } from "../lib/tabParams";
-import { backEntry, subscribeTrail, trailOf, trailVersion } from "../lib/navTrail";
+import { backEntry, forwardEntry, subscribeTrail, trailOf, trailVersion } from "../lib/navTrail";
 import { noteTrailBack, shownPlace } from "../lib/navTrailRecorder";
 import { canonicalPlacePath, placeOf, placeSessionId } from "../lib/navPlace";
 import { placeNamesOf, placeTitle } from "../lib/placeTitle";
@@ -79,6 +79,19 @@ export function goBackInTrail(push: (path: string) => void): void {
   }
   noteTrailBack(target.path, target.fromTrail ? "back" : "up");
   goToPlace(target.path, push, (id) => openSessionFromBack(id, push));
+}
+
+/** The nav.forward shortcut in Modern: back to the page the last Back left in
+ *  the active tab, else history (a browser Back's page is still ahead there). */
+export function goForwardInTrail(push: (path: string) => void): void {
+  const shown = shownPlace(useInboxStore.getState());
+  const dest = shown ? forwardEntry(shown.scope) : null;
+  if (!dest) {
+    window.history.forward();
+    return;
+  }
+  noteTrailBack(dest, "forward");
+  goToPlace(dest, push, (id) => openSessionFromBack(id, push));
 }
 
 /**

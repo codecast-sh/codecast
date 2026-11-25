@@ -16,7 +16,7 @@ afterAll(() => {
   restoreGlobals();
 });
 
-const { stepTrail, backEntry, recordTrail, trailOf, _resetTrailForTests, TRAIL_CAP } = await import("../navTrail");
+const { stepTrail, backEntry, recordTrail, trailOf, forwardEntry, _resetTrailForTests, TRAIL_CAP } = await import("../navTrail");
 const { placeOf, placeSection, placeKey, crumbsForTitle } = await import("../navPlace");
 
 const walk = (paths: Array<[string, "push" | "traverse" | "back" | "up"]>) =>
@@ -114,6 +114,19 @@ describe("the per-tab store", () => {
     _resetTrailForTests();
     expect(trailOf("tab-a").map((e) => [e.path, e.title])).toEqual([["/tasks", "Tasks"], ["/tasks/ct-1", "Fix login"]]);
     expect(dom.window.localStorage.length).toBe(0);
+  });
+
+  test("Forward retraces Back, and a new move drops what was ahead (ct-101480)", () => {
+    recordTrail("tab-a", "/tasks", "push");
+    recordTrail("tab-a", "/plans", "push");
+    recordTrail("tab-a", "/tasks", "back");
+    expect(forwardEntry("tab-a")).toBe("/plans");
+    recordTrail("tab-a", "/plans", "forward");
+    expect(forwardEntry("tab-a")).toBeNull();
+    expect(paths(trailOf("tab-a") as any)).toEqual(["/tasks", "/plans"]);
+    recordTrail("tab-a", "/tasks", "back");
+    recordTrail("tab-a", "/docs", "push");
+    expect(forwardEntry("tab-a")).toBeNull();
   });
 
   test("another browser tab starts with no trail", () => {
