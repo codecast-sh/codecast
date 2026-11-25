@@ -4226,6 +4226,15 @@ cliRoute("/cli/objects/update", async (ctx, body) => ctx.runMutation((api as any
 cliRoute("/cli/objects/get", async (ctx, body) => ctx.runQuery((api as any).modObjects.cliGet, body));
 cliRoute("/cli/objects/list", async (ctx, body) => ctx.runQuery((api as any).modObjects.cliList, body));
 cliRoute("/cli/objects/kinds", async (ctx, body) => ctx.runQuery((api as any).modObjects.cliKinds, body));
+// Priorities (priorities.ts): what each person is driving at, and their own controls over it.
+cliRoute("/cli/priorities/list", async (ctx, body) => ctx.runQuery((api as any).priorities.cliList, body));
+cliRoute("/cli/priorities/show", async (ctx, body) => ctx.runQuery((api as any).priorities.cliShow, body));
+cliRoute("/cli/priorities/history", async (ctx, body) => ctx.runQuery((api as any).priorities.cliHistory, body));
+cliRoute("/cli/priorities/rank", async (ctx, body) => ctx.runMutation((api as any).priorities.cliRank, body));
+cliRoute("/cli/priorities/step", async (ctx, body) => ctx.runMutation((api as any).priorities.cliSetStepTier, body));
+cliRoute("/cli/priorities/set-aside", async (ctx, body) => ctx.runMutation((api as any).priorities.cliSetAside, body));
+cliRoute("/cli/priorities/restore", async (ctx, body) => ctx.runMutation((api as any).priorities.cliRestore, body));
+cliRoute("/cli/priorities/run", async (ctx, body) => ctx.runMutation((api as any).priorities.cliRun, body));
 
 // Mods' local halves (convex/modLocal.ts): the daemon's side of the bridge
 cliRoute("/cli/mods/local", async (ctx, body) => ctx.runQuery((api as any).modLocal.cliLocalMods, body));

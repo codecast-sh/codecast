@@ -6,6 +6,7 @@ import {
   buildPriorityPassPrompt,
   matchSteps,
   mergePriorities,
+  orderPriorities,
   parsePriorityPassOutput,
   type PassPriority,
   type PassSession,
@@ -198,7 +199,7 @@ describe("merging a pass into the list", () => {
     ]);
   });
 
-  test("never overwrites a rank the person set; pass-ranked active priorities follow theirs in the proposed order", () => {
+  test("never overwrites a rank the person set; the pass's ranks are an order among its own, in the proposed order", () => {
     const inp = input({
       priorities: [
         priority("pri-1", { rank: 2, rank_set_by: "person" }),
@@ -215,11 +216,11 @@ describe("merging a pass into the list", () => {
     ]));
     const patch = (id: string) => plan.updates.find((u) => u.short_id === id)?.patch;
     expect(patch("pri-1")!.rank).toBeUndefined();
-    expect(patch("pri-3")!.rank).toBe(3);
-    expect(patch("pri-2")!.rank).toBe(4);
-    expect(plan.creates[0].rank).toBe(5);
+    expect(patch("pri-3")!.rank).toBe(1);
+    expect(patch("pri-2")!.rank).toBe(2);
+    expect(plan.creates[0].rank).toBe(3);
     // Not proposed this pass, still active and pass-ranked: it follows the proposed ones.
-    expect(patch("pri-4")).toEqual({ rank: 6 });
+    expect(patch("pri-4")).toEqual({ rank: 4 });
   });
 
   test("never overwrites a tier the person set; matches steps by key, then shared refs, then title", () => {
@@ -512,5 +513,46 @@ describe("re-check fixes", () => {
     expect(prompt).not.toContain("Long quiet");
     expect(prompt).toContain("Recently quiet");
     expect(prompt).toContain("(1 more done or quiet for over 30 days, not shown.)");
+  });
+});
+
+describe("orderPriorities", () => {
+  type Row = PassPriority & { updated_at: number };
+  const row = (short_id: string, rank: number | null, over: Partial<Row> = {}): Row => ({ ...priority(short_id, { rank }), updated_at: 0, ...over });
+  const order = (rows: Row[]) => orderPriorities(rows).map(({ row, position }) => `${position}:${row.short_id}`);
+
+  test("a rank the person set is a fixed slot; the pass's fill the rest in its order, and a later pass reorders only its own", () => {
+    const rows = [1, 2, 3, 4, 5, 6].map((n) => row(`pri-${n}`, n));
+    // The person drags pri-5 to #3.
+    rows[4] = { ...rows[4], rank: 3, rank_set_by: "person" };
+    expect(order(rows)).toEqual(["1:pri-1", "2:pri-2", "3:pri-5", "4:pri-3", "5:pri-4", "6:pri-6"]);
+
+    const plan = mergePriorities(input({ priorities: rows }), out(
+      ["pri-6", "pri-4", "pri-3", "pri-2", "pri-1", "pri-5"].map((id, i) => proposal({ short_id: id, title: `Priority ${id}`, rank: i + 1 })),
+    ));
+    const after = rows.map((r) => ({ ...r, ...(plan.updates.find((u) => u.short_id === r.short_id)?.patch as Partial<Row>) }));
+    expect(after.find((r) => r.short_id === "pri-5")).toMatchObject({ rank: 3, rank_set_by: "person" });
+    expect(order(after)).toEqual(["1:pri-6", "2:pri-4", "3:pri-5", "4:pri-3", "5:pri-2", "6:pri-1"]);
+  });
+
+  test("two person slots colliding: the more recently set wins, the other moves to the next free slot", () => {
+    const rows = [
+      row("pri-1", 2, { rank_set_by: "person", updated_at: 100 }),
+      row("pri-2", 2, { rank_set_by: "person", updated_at: 200 }),
+      row("pri-3", 1),
+      row("pri-4", 2),
+    ];
+    expect(order(rows)).toEqual(["1:pri-3", "2:pri-2", "3:pri-1", "4:pri-4"]);
+  });
+
+  test("only active priorities are ordered; unranked ones come last, most recently active first; positions stay dense", () => {
+    const rows = [
+      row("pri-1", null, { last_active_at: NOW - 10 * H }),
+      row("pri-2", null, { last_active_at: NOW - H }),
+      row("pri-3", 9, { rank_set_by: "person" }),
+      row("pri-4", 1, { status: "set_aside" }),
+      row("pri-5", null, { status: "done" }),
+    ];
+    expect(order(rows)).toEqual(["1:pri-2", "2:pri-1", "3:pri-3"]);
   });
 });

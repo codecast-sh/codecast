@@ -688,8 +688,10 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     }
   }
 
-  // Ranks: the person's stand; active priorities the pass ranks follow them, the reply's in its proposed order, then the rest in their old order.
-  let rank = Math.max(0, ...rows.filter((r) => r.write.rank_set_by === "person" && r.write.rank != null).map((r) => r.write.rank!));
+  // Ranks: the person's stand as fixed slots; the pass's are a relative order among its own active
+  // priorities (the reply's in its proposed order, then the rest in their old order), which
+  // orderPriorities fits around the person's slots.
+  let rank = 0;
   const order = (r: Row): [number, number, number] => (r.proposal ? [0, r.proposal.rank, r.order] : [1, r.prior?.rank ?? Number.MAX_SAFE_INTEGER, 0]);
   const passRanked = rows.filter((r) => r.write.rank_set_by !== "person" && r.write.status === "active").sort((a, b) => {
     const [x, y] = [order(a), order(b)];
@@ -723,4 +725,39 @@ export function mergePriorities(input: PriorityPassInput, output: PriorityPassOu
     plan.sessions.push({ session, ...m });
   }
   return plan;
+}
+
+// ---------------------------------------------------------------- order
+
+export type RankedRow = { status: PriorityStatus; rank?: number | null; rank_set_by: PrioritySetBy; updated_at: number; last_active_at: number };
+
+/**
+ * The display order of one person's active priorities in one workspace, each
+ * with its effective position (1-based). A rank the person set is a fixed
+ * slot: the priority sits at exactly that position. When two claim one slot,
+ * the most recently set wins (by `updated_at`, the nearest stand-in for when
+ * the rank was set) and the other moves down to the next free slot. The pass's
+ * ranks are only a relative order among its own priorities, which fill the
+ * free slots in that order (unranked last, the most recently active first).
+ * Other statuses are left out.
+ */
+export function orderPriorities<T extends RankedRow>(rows: T[]): Array<{ row: T; position: number }> {
+  const active = rows.filter((r) => r.status === "active");
+  const pinned = active.filter((r) => r.rank_set_by === "person" && r.rank != null)
+    .sort((a, b) => a.rank! - b.rank! || b.updated_at - a.updated_at);
+  const flowing = active.filter((r) => !pinned.includes(r))
+    .sort((a, b) => (a.rank ?? Infinity) - (b.rank ?? Infinity) || b.last_active_at - a.last_active_at);
+  const slots = new Map<number, T>();
+  for (const r of pinned) {
+    let at = Math.max(1, r.rank!);
+    while (slots.has(at)) at++;
+    slots.set(at, r);
+  }
+  let next = 1;
+  for (const r of flowing) {
+    while (slots.has(next)) next++;
+    slots.set(next, r);
+  }
+  // A person's slot past the end leaves no gap: positions are dense.
+  return [...slots.entries()].sort(([a], [b]) => a - b).map(([, row], i) => ({ row, position: i + 1 }));
 }
