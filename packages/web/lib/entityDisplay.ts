@@ -264,9 +264,14 @@ export function useEntityResolution(rawRef: string, typeProp?: EntityType): Enti
   const proposalFeed = useSyncOrgProposal(live && type === "proposal" ? changeRef?.proposal ?? rawId : null);
   const proposalRow = useInboxStore((s) => (live && type === "proposal" ? findEntityInStore(s, "proposal", rawId) : undefined));
   const proposal = type === "proposal" ? (proposalFeed.ready ? proposalRow ?? null : undefined) : undefined;
-  // A decision (`sd-N` or Convex id) seeds from the viewer's queue in the
-  // store; the query keeps it live and covers rows the queue has dropped.
-  const { data: decision } = useQueryNoThrow(api.sessionDecisions.get, live && type === "decision" ? { decision_id: rawId } : "skip");
+  // A decision (`sd-N` or Convex id) reads its row in the store when the
+  // store holds one (the viewer's queue, the line's or the team's open
+  // decisions): that row is the decision's one home, where an answer lands the
+  // moment it is clicked, so an embedded card shows it registered before the
+  // server echoes (ct-101298). The query covers a decision no feed holds.
+  const decisionRow = useInboxStore((s) => (live && type === "decision" ? findEntityInStore(s, "decision", rawId) : undefined));
+  const { data: decisionServed } = useQueryNoThrow(api.sessionDecisions.get, live && type === "decision" ? { decision_id: rawId } : "skip");
+  const decision = decisionRow ?? decisionServed;
   // A pull request or commit reference resolves by repository and number/sha,
   // or by Convex id. No-throw for the same client/deploy-skew reason as
   // triggers: a `owner/repo#482` in prose must read as text, not crash.
