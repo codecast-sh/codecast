@@ -1881,8 +1881,10 @@ diffs-container {
 .simple-view [data-sv-sticky] .text-sm { font-size: var(--fs-ui); }
 
 /* The message body indent under the avatar row flattens — the card itself
-   is the container now. */
-.simple-view [data-sv-feed] [id^="msg-"] .pl-8 {
+   is the container now. A reply still being written (ReplyStreamTail) has no
+   msg- id yet and must sit exactly where its message will. */
+.simple-view [data-sv-feed] [id^="msg-"] .pl-8,
+.simple-view [data-sv-feed] [data-cc-message="assistant"] .pl-8 {
   padding-left: 0;
 }
 
