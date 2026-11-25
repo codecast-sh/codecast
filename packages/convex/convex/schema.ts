@@ -9006,6 +9006,9 @@ export default defineSchema({
     // The session that ran `cast workflow run`: session nodes spawn under it
     // (spawned_by, and so its org role) whichever process executes the run.
     spawner_conversation_id: v.optional(v.id("conversations")),
+    // The spawner is only the project lead's standing session, given to a run no session started (createFromCli):
+    // the intent check (flows.md FL11) reads such a run as one no session started.
+    spawner_stand_in: v.optional(v.boolean()),
     // The run is waiting on the session its change came from (flows.md FL4): the station that sent it work, since
     // when, and what it sent, cut short. Cleared when the session settles and when the run ends.
     waiting_on_session: v.optional(v.object({ node_id: v.string(), conversation_id: v.string(), since: v.number(), note: v.string() })),

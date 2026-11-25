@@ -982,12 +982,36 @@ ask that person (Union's land runs it before a mechanism or gate-edit card)
 and routes on its exit, `cleared` when the starter's word covers the change
 and `ask` otherwise. It writes nothing to the run.
 
-Asker reads, in the order they were said, the words people typed into the
-sessions the change came through and their answers to the decision cards
-those sessions and the task asked (an answer a person gave on a card counts
-like a line they typed; an agent's or a policy's does not), and the run's
-starter (`cast flow asker $change_conversation --task --run`: the chain walk
-and provenance of `originator.ts`). Only a message's typed part counts
+Asker (`cast flow asker [$change_conversation] --task --run`, the chain walk
+and provenance of `originator.ts`) reads three things. The first is the words
+people typed into the sessions the change came through, in the order they
+said them. The second is their answers to the decision cards those sessions
+and the task asked. A person's answer on a card counts like a line they
+typed; an agent's or a policy's does not. The third is the run's starter.
+
+Which sessions it reads depends on how the run started:
+
+- A run that names a session (`$change_conversation`) reads that session's
+  chain and the chain of the session that filed the task. A run from a plain
+  shell names the task's live bound or handoff session.
+- A run that names none, because every such session is killed or
+  unreadable, reads what Verify walks. A run a session started reads its
+  spawner's chain and the filing session's.
+- A run no session started reads the task alone. `createFromCli` gives a run
+  that names no spawner the project lead's standing session and marks it
+  `spawner_stand_in`. No chain climbs to a stand-in, not even from the run's
+  own hands, whose spawner link names it.
+
+The task's sessions are the one that filed it, then those its change came
+through (`lib/taskOwner`): the sessions bound to it (`active_task_id`, set by
+a start or a move to in progress) and those that handed it off (a `Handoff:`
+review comment). Up to twelve of the newest count, never one reviewing the
+task, and each is walked up its own chain. A session that only linked itself
+to the task (a `cast task update` that does not move it to in progress) is
+none of them. A task no session the reader can read is tied to fails the
+read.
+
+Only a message's typed part counts
 (`typedPart`): what a composer send handed over as typed
 (`pending_messages.typed_text`, never the quotes, mention context or
 attachments folded around it; a joint send hands over none, and merging two
@@ -1013,9 +1037,11 @@ change inside what they asked for. Verify then sends `cast flow intent-verify
 --cite <session>:<line>` (or `--card sd-N`) `--quote --head --record`, and the
 server is the gate (`/cli/intent/verify`, `verifyCitation` and
 `verifyCardCitation`): the caller is the run's own runner; the cited line or
-card was said on the run's change chain (walked from the run's spawner and the
-session that filed its task, as the run's starter may read them; task
-comments name no anchor) or, for a card, on the run's task; a line is typed,
+card was said on a chain the server walks itself, as the run's starter may
+read them, never from a session the caller names: from the session that
+started the run and the one that filed its task, or, for a run no session
+started, from the task's filing, bound and handoff sessions (any other task
+comment names no anchor) or, for a card, on the run's task; a line is typed,
 a card was answered by a person; that person is `run.user_id` and no agent
 account; the line's typed part or the card's answer holds the quote with
 whitespace folded; and no person answered other than Ship on the task's Ship
@@ -1028,7 +1054,8 @@ head}`, the cite `<session>:<line>` or `card:sd-N`, the starter the server
 checked and the commit Change diffed) for the composing flow to read. Every
 other ending is `ask`, after one task comment saying why (`Intent asks a
 person: ...`: the model's why, the server's refusal, or the failure): no
-session behind the change, a branch that does not resolve, a failed script
+session or task behind the change, a task no session is tied to, a branch
+that does not resolve, a failed script
 or call, an answer that is not JSON, ship false, out of scope, or a refused
 citation. Asker removes any earlier intent.json first, so a leftover file
 never reads as a verified word.
