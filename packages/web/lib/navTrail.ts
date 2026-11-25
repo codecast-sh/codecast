@@ -22,8 +22,9 @@ export type TrailEntry = { path: string; title?: string; ts: number };
 /** How the place on screen changed: a move, a browser history step (back or
  *  forward), the back control's own step along the trail, or its step up to
  *  a page's parent when there was no trail (a cold link): the parent takes
- *  the page's entry, so Back from the list does not lead into the item again. */
-export type TrailMove = "push" | "traverse" | "back" | "up";
+ *  the page's entry, so Back from the list does not lead into the item again.
+ *  "forward" is Forward retracing a Back: it steps like a move. */
+export type TrailMove = "push" | "traverse" | "back" | "up" | "forward";
 
 const STORAGE_KEY = "codecast.navTrail.v1";
 /** Older entries fall off the front: the way back is what matters, and forty
@@ -142,13 +143,35 @@ export function trailOf(scope: string): readonly TrailEntry[] {
   return trails()[scope] ?? [];
 }
 
+// The pages Back left, per scope, so Forward retraces them: Back pushes the
+// page it leaves, Forward pops it, and any other move to another place drops
+// them all, as a browser's Forward does after a new page. Memory only: a
+// reload starts with nothing ahead, and Forward falls back to history.
+const ahead: Record<string, string[]> = {};
+
+/** Where Forward goes in `scope`: the last page Back left there. */
+export function forwardEntry(scope: string): string | null {
+  const list = ahead[scope];
+  return list?.length ? list[list.length - 1] : null;
+}
+
+function stepAhead(scope: string, from: string | undefined, path: string, move: TrailMove): void {
+  if (!from || placeKey(from) === placeKey(path)) return;
+  const list = ahead[scope] ?? [];
+  if (move === "back" || move === "up") ahead[scope] = [...list, from].slice(-TRAIL_CAP);
+  else if (move === "forward" && list.length && placeKey(list[list.length - 1]) === placeKey(path)) ahead[scope] = list.slice(0, -1);
+  else delete ahead[scope];
+}
+
 /** Record that `scope` now shows `path`. `live` names the scopes that still
  *  exist (the open app tabs), so a closed tab's trail is dropped. */
 export function recordTrail(scope: string, path: string, move: TrailMove, title?: string, live?: readonly string[]): void {
   const all = trails();
   const cur = all[scope] ?? [];
+  stepAhead(scope, cur[cur.length - 1]?.path, path, move);
   const next = stepTrail(cur, path, move, Date.now(), title);
   const stale = live ? Object.keys(all).filter((k) => k !== scope && !live.includes(k)) : [];
+  for (const k of stale) delete ahead[k];
   if (next === cur && stale.length === 0) return;
   const out: Trails = { ...all, [scope]: next };
   for (const k of stale) delete out[k];
@@ -172,4 +195,5 @@ export function _resetTrailForTests(): void {
   state.trails = null;
   state.version = 0;
   state.listeners = [];
+  for (const k of Object.keys(ahead)) delete ahead[k];
 }
