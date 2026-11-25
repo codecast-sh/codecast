@@ -13,6 +13,9 @@
 #   listRowsHoldStill     list rows run no infinite animation
 #   transcriptRowsNoLayers  transcript rows are not compositor layers
 #   keys dispatch         a typed key that matches no shortcut never queries the DOM
+#   paletteTypingBudget   a key in ⌘K that changes no result moves no palette
+#                         row, scrolls nothing and reads no layout (cmdk is
+#                         patched to move only rows out of order)
 set -euo pipefail
 root="$(cd "$(dirname "$0")/../../.." && pwd)"
 cd "$root/packages/web"
@@ -27,6 +30,7 @@ bun test --isolate --timeout 120000 \
   components/__tests__/transcriptRowsNoLayers.guard.test.ts \
   hooks/__tests__/useConvexSync.typingDefer.mount.test.tsx \
   lib/__tests__/inputQuiet.test.ts \
-  lib/__tests__/holdTextareaTextNode.mount.test.tsx
+  lib/__tests__/holdTextareaTextNode.mount.test.tsx \
+  components/__tests__/paletteTypingBudget.mount.test.tsx
 cd "$root/platform/packages/keys"
 bun test src/dispatch.test.ts

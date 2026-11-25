@@ -137,3 +137,28 @@ test("a key that changes no result leaves the palette's DOM alone, scrolls nothi
   expect({ scrollsIntoViewWhileTyping: scrolls.length }).toEqual({ scrollsIntoViewWhileTyping: 0 });
   expect({ layoutReadsWhileTyping: reads }).toEqual({ layoutReadsWhileTyping: [] });
 }, 120_000);
+
+// A key that does change the results still ranks them as cmdk always has:
+// every shown row matches the final query, rows within a group run best
+// score first, and the selection is the first row, so Enter acts on the final
+// query's best match. cmdk now moves a row only when it is out of that order
+// (patches/cmdk@1.1.1.patch).
+test("a key that narrows the results still ranks every row in its group by the final query", async () => {
+  const { paletteItemScore } = await import("../../lib/paletteActions");
+  Object.getOwnPropertyDescriptor(w.HTMLInputElement.prototype, "value")!.set!.call(input, "");
+  const propsKey = Object.keys(input).find((k) => k.startsWith("__reactProps"))!;
+  await act(async () => { (input as any)[propsKey].onChange?.({ target: input, currentTarget: input, nativeEvent: new w.Event("input") }); });
+  await settle();
+  const query = "sess";
+  for (const ch of query) { await act(async () => typeChar(ch)); await settle(); }
+  expect(input.value).toBe(query);
+  const score = (row: Element) => paletteItemScore(row.getAttribute("data-value") ?? "", query);
+  const groups = Array.from(container.querySelectorAll("[cmdk-group]")).filter((g) => g.querySelector("[cmdk-item]"));
+  expect(groups.length).toBeGreaterThan(1);
+  for (const group of groups) {
+    const scores = Array.from(group.querySelectorAll("[cmdk-item]")).map(score);
+    expect(scores.every((s) => s > 0)).toBe(true);
+    expect(scores).toEqual([...scores].sort((a, b) => b - a));
+  }
+  expect(container.querySelector('[cmdk-item][aria-selected="true"]')).toBe(container.querySelector("[cmdk-item]:not([aria-disabled='true'])"));
+}, 120_000);
