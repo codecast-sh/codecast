@@ -996,7 +996,7 @@ export const CLIENT_SYNC_REGISTRY = {
     // A node's session is a join that moves no scalar on the row (a feed with
     // budget attaches it where another had none), so the nodes compare by content.
     sync: { isDelta: true, deepFields: ["node_statuses", "superseded"] },
-    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.byIds", "workflow_runs.listRuns", "sessionFlowRuns.forConversation", "sessionFlowRuns.forTeam"],
+    feeds: ["workflow_runs.listDynamicRuns", "workflow_runs.listForWorkflow", "workflow_runs.get", "workflow_runs.byIds", "workflow_runs.listRuns", "sessionFlowRuns.forConversation", "sessionFlowRuns.forTeam", "sessionFlowRuns.ofSession"],
   },
   // Signals (the-line-end-to-end.md LE3, LE13): the active workspace's last
   // two weeks, bodies left out, and every finding of a problem opened in the
@@ -1320,6 +1320,17 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { kind: "singleton" },
     feeds: ["wallet.mine"],
   },
+  // The viewer's own voice samples (voiceprints.myVoiceprint): how many and
+  // when, never the samples. The switch itself is currentUser.voice_id_enabled.
+  // setVoiceIdEnabled (off) and deleteMyVoiceprints zero it on the draft first.
+  myVoiceprint: {
+    writtenBy: ["voiceprints"],
+    persistence: { kind: "meta", key: "myVoiceprint" },
+    hydration: { phase: "deferred", merge: "fill" },
+    localFirst: true,
+    sync: { kind: "singleton" },
+    feeds: ["voiceprints.myVoiceprint"],
+  },
   // The org tree (people, roles, anchors, top sessions per parent): one
   // server-derived snapshot for the active workspace. Singleton; the store's
   // SYNC_REGISTRY strips generated_at so a no-op push doesn't wake the page.
@@ -1391,6 +1402,18 @@ export const CLIENT_SYNC_REGISTRY = {
     sync: { isDelta: true },
     indexes: "_id, batch",
     feeds: ["orgChanges.get"],
+  },
+  // The long version of each person opened (org-people.md P4): about, the
+  // projects they decide for, when the profile last changed. Keyed
+  // "<team>:<user>" (store/orgProfile.ts); the short fields and reporting
+  // lines stay on the tree's person row. localFirst: setOrgPersonProfile
+  // writes `about` on the draft and the lock holds it until the echo.
+  orgPersonDetails: {
+    persistence: { kind: "collection", key: "orgPersonDetails" },
+    hydration: { phase: "deferred" },
+    localFirst: true,
+    sync: { isDelta: true },
+    feeds: ["orgPeople.person"],
   },
   // Timeline lanes. Both queries are windows (commits: 2×limit newest,
   // PRs: 50 by updated_at), so delta overlays accumulate history.
@@ -1975,10 +1998,24 @@ export const CLIENT_SYNC_REGISTRY = {
     feeds: ["meetingCalendar.getSettings"],
     writtenBy: ["meetingCalendar"],
   },
+  // One call with its segments (transcripts.webGetCall). localFirst for a
+  // voice note's speaker corrections (assignCallSpeaker, confirmCallSpeaker,
+  // moveCallLineSpeaker): they assign `speakers` and `segments` whole on the
+  // draft, and the field locks hold them over a push computed before the
+  // write committed, until the server's echo matches by value (the server
+  // sends speakers in wireSpeakers shape, so it does). `routes` is left
+  // unprotected: setCallAgentFace edits a route in place, and a live call's
+  // route watermarks move under any lock. `speakers` and `segments` are
+  // compared by content: a correction made on another device changes only
+  // them, and a push whose scalars all match would otherwise be dropped. A
+  // live call's push differs in last_seq first, so it never pays for that.
   callDetails: {
     persistence: { kind: "collection", key: "callDetails" },
     hydration: { phase: "deferred" },
-    sync: { isDelta: true },
+    localFirst: true,
+    unprotectedFields: ["routes"],
+    sync: { isDelta: true, deepFields: ["speakers", "segments"] },
+    writtenBy: ["transcripts"],
   },
   clientState: {
     persistence: { kind: "meta", key: "clientState" },
@@ -2489,6 +2526,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   anchors: "shared",
   sessionThreads: "shared",
   wallet: "shared",
+  myVoiceprint: "shared",
   orgTree: "shared",
   viewerRoles: "shared",
   orgHealth: "shared",
@@ -2496,6 +2534,7 @@ export const REPLICATION_CLASSIFICATION: Record<ClientSyncStoreKey, "shared" | "
   orgProposalChanges: "shared",
   orgLog: "shared",
   orgLogRows: "shared",
+  orgPersonDetails: "shared",
   commits: "shared",
   pullRequests: "shared",
   pullRequestDetails: "local",

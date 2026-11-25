@@ -203,6 +203,9 @@ function fakeElectron({ packaged = false } = {}) {
     dock: { setIcon: () => {} },
     requestSingleInstanceLock: () => true,
     setAsDefaultProtocolClient: () => {},
+    setAppUserModelId(id) {
+      this.appUserModelId = id;
+    },
     isDefaultProtocolClient: () => true,
     hides: 0,
     hide() {
