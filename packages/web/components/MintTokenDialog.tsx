@@ -389,8 +389,12 @@ export function MintTokenDialog({ device, profile: initialProfile, onClose }: { 
             )}
           </div>
           <div className="flex items-center gap-2">
-            {pending && (device.profiles?.length ?? 0) > 1 && (
-              <Button size="sm" variant="ghost" disabled={busy !== null} onClick={() => cancel(true)} className="h-7 px-2 text-meta">
+            {/* A rejected mint (most often the browser signed into another
+                account) fails the same way on a plain retry, so it offers the
+                other saved accounts too; nothing is running to cancel then. */}
+            {(pending || (rejected && !choosingAccount)) && (device.profiles?.length ?? 0) > 1 && (
+              <Button size="sm" variant="ghost" disabled={busy !== null}
+                onClick={() => pending ? cancel(true) : (setChoosingAccount(true), setStartedAt(null))} className="h-7 px-2 text-meta">
                 Use a different account
               </Button>
             )}
