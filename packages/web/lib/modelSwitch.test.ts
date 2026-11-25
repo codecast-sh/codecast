@@ -108,11 +108,27 @@ describe("model changes for other agents", () => {
       pendingMessages: {},
       convCommand: (async (...args: unknown[]) => { commands.push(args); }) as any,
     });
-    await commitModelChange({ conversationId: convId, agentType, current: { model: "old" }, sel: { model: "default" }, blank: false, notify: () => {} });
-    expect(commands).toEqual([[convId, "switchSessionAgent", { model: "default" }]]);
+    await commitModelChange({ conversationId: convId, agentType, current: { model: "old" }, sel: { model: "default" }, blank: false, notify: () => {}, restart: true });
+    expect(commands).toEqual([[convId, "switchSessionAgent", { model: "default", restart: true }]]);
     expect(useInboxStore.getState().sessions[convId].model).toBeUndefined();
     expect(useInboxStore.getState().pendingMessages[convId]).toBeUndefined();
     expect(modelSwitchMessages(agentType, { model: "default", effort: "high" })).toEqual([]);
+  });
+
+  // ct-101395: the switch kills and relaunches the agent, so it starts only
+  // after the session panel's restart confirm; any other initiator refuses.
+  it("refuses an unconfirmed live codex switch before stamping or sending", async () => {
+    const commands: unknown[] = [];
+    useInboxStore.setState({
+      sessions: { [convId]: { _id: convId, model: "gpt-5.6-sol", effort: "high", message_count: 4 } } as any,
+      conversations: {},
+      convCommand: (async (...args: unknown[]) => { commands.push(args); }) as any,
+    });
+    const notes: string[] = [];
+    await commitModelChange({ conversationId: convId, agentType: "codex", current: { model: "gpt-5.6-sol", effort: "high" }, sel: { effort: "low" }, blank: false, notify: message => notes.push(message) });
+    expect(commands).toEqual([]);
+    expect(useInboxStore.getState().sessions[convId].effort).toBe("high");
+    expect(notes).toEqual(["Changing the model or effort restarts this agent: confirm it from the session panel"]);
   });
 
   it("restores the previous choice if the switch is rejected", async () => {
@@ -122,7 +138,7 @@ describe("model changes for other agents", () => {
       convCommand: (async () => { throw new Error("Switch rejected"); }) as any,
     });
     const notes: string[] = [];
-    await commitModelChange({ conversationId: convId, agentType: "codex", current: { model: "gpt-5.6-sol", effort: "high" }, sel: { model: "gpt-6-astra" }, blank: false, notify: message => notes.push(message) });
+    await commitModelChange({ conversationId: convId, agentType: "codex", current: { model: "gpt-5.6-sol", effort: "high" }, sel: { model: "gpt-6-astra" }, blank: false, notify: message => notes.push(message), restart: true });
     expect(useInboxStore.getState().sessions[convId].model).toBe("gpt-5.6-sol");
     expect(notes).toEqual(["Switch rejected"]);
   });

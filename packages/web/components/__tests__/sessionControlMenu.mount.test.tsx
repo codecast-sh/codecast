@@ -335,3 +335,55 @@ test("one click on a live codex session's effort chip does not restart the agent
     storeState.sessions.conv1.agent_type = "claude_code";
   }
 });
+
+// ct-101395, the fix: the restart waits on the shared consequential review,
+// which names the restart and, while the agent works, the turn it cuts off.
+const withCodex = (fn: () => void | Promise<void>, row: Record<string, unknown> = {}) => async () => {
+  const prev = { ...storeState.sessions.conv1 };
+  Object.assign(storeState.sessions.conv1, { agent_type: "codex", ...row });
+  try { await fn(); } finally { storeState.sessions.conv1 = prev; }
+};
+const effortChip = (level: string) => qa("[data-session-control-panel] button").find((b) => b.textContent?.trim() === level)!;
+
+test("the three state lines: live claude in place, live codex restarts, blank codex at launch (ct-101395)", withCodex(() => {
+  mount({ agentType: "codex", model: "gpt-5.5", effort: "medium", messageCount: 12 });
+  expect(q("[data-session-state]")!.textContent).toBe("Live session · a pick restarts Codex");
+  mount({ agentType: "codex", model: "gpt-5.5", effort: "medium", messageCount: 0 });
+  expect(q("[data-session-state]")!.textContent).toContain("apply at launch");
+  storeState.sessions.conv1.agent_type = "claude_code";
+  mount();
+  expect(q("[data-session-state]")!.textContent).toContain("Live session · picks apply in place");
+}));
+
+test("a live codex effort pick: cancel sends nothing, confirm sends one restart pick (ct-101395)", withCodex(() => {
+  const { modelPicks, closes } = mount({ agentType: "codex", model: "gpt-5.5", effort: "medium", messageCount: 12 });
+  click(effortChip("high"));
+  const review = q("[data-switch-review]")!;
+  expect(review).toBeTruthy();
+  expect(review.getAttribute("data-switch-review")).toBe("Restart Codex");
+  expect(review.textContent).toContain("Killed, relaunched");
+  expect(q("[data-switch-alert]")).toBeNull();
+  click(q("[data-switch-cancel]")!);
+  expect(q("[data-switch-review]")).toBeNull();
+  expect(modelPicks).toEqual([]);
+
+  click(effortChip("high"));
+  expect(q("[data-switch-confirm]")!.textContent).toContain("Restart on high effort");
+  click(q("[data-switch-confirm]")!);
+  expect(modelPicks).toEqual([{ effort: "high" }]);
+  expect(closes).toEqual([1]);
+}));
+
+test("a codex session mid-turn: the review says the turn is cut off (ct-101395)", withCodex(() => {
+  mount({ agentType: "codex", model: "gpt-5.5", effort: "medium", messageCount: 12 });
+  click(effortChip("high"));
+  expect(q("[data-switch-alert]")!.textContent).toContain("turn cut off");
+  expect(q("[data-switch-row='Lost']")!.textContent).toContain("Unfinished turns");
+}, { is_idle: false }));
+
+test("a live claude effort pick still applies at once, with no review (ct-101395)", () => {
+  const { modelPicks } = mount();
+  click(effortChip("low"));
+  expect(q("[data-switch-review]")).toBeNull();
+  expect(modelPicks).toEqual([{ effort: "low" }]);
+});

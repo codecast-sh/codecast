@@ -201,7 +201,7 @@ describe("same-agent model changes", () => {
 
   test("carries Codex model and effort through the restart command", async () => {
     const db = seedAgent("codex", "gpt-5.6-sol");
-    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, model: "gpt-6-astra", effort: "ultra" });
+    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, model: "gpt-6-astra", effort: "ultra", restart: true });
     const resume = db._tables.daemon_commands.find((row: any) => row.command === "resume_session");
     expect(JSON.parse(resume.args)).toMatchObject({ agent_type: "codex", model: "gpt-6-astra", effort: "ultra", switch_agent: true });
     expect(db._tables.conversations).toHaveLength(1);
@@ -210,7 +210,7 @@ describe("same-agent model changes", () => {
   test.each(["opencode", "pi", "grok"])("uses native resume to retain %s history", async agent => {
     const db = seedAgent(agent, "old");
     const model = agent === "grok" ? "grok-4.6" : "openai/gpt-5.4";
-    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, model });
+    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, model, restart: true });
     const resume = db._tables.daemon_commands.find((row: any) => row.command === "resume_session");
     const args = JSON.parse(resume.args);
     expect(args).toMatchObject({ agent_type: agent, model, session_id: "sess-claude-1" });
@@ -220,8 +220,8 @@ describe("same-agent model changes", () => {
 
   test("coalesces a second effort selection into the pending model switch", async () => {
     const db = seedAgent("codex", "gpt-5.6-sol");
-    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, model: "gpt-6-astra" });
-    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, effort: "ultra" });
+    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, model: "gpt-6-astra", restart: true });
+    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, effort: "ultra", restart: true });
     const resumes = db._tables.daemon_commands.filter((row: any) => row.command === "resume_session");
     expect(resumes).toHaveLength(1);
     expect(JSON.parse(resumes[0].args)).toMatchObject({ model: "gpt-6-astra", effort: "ultra" });
@@ -231,13 +231,56 @@ describe("same-agent model changes", () => {
 test("queues a fresh switch after the daemon already claimed the earlier selection", async () => {
   const db = seedConv();
   Object.assign(db._tables.conversations[0], { agent_type: "codex", model: "gpt-5.6-sol" });
-  await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, model: "gpt-6-astra" });
+  await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, model: "gpt-6-astra", restart: true });
   const first = db._tables.daemon_commands.find((row: any) => row.command === "resume_session");
   first.claimed_by = "daemon-boot";
-  await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, effort: "ultra" });
+  await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, effort: "ultra", restart: true });
   const resumes = db._tables.daemon_commands.filter((row: any) => row.command === "resume_session");
   expect(resumes).toHaveLength(2);
   expect(JSON.parse(resumes[1].args)).toMatchObject({ model: "gpt-6-astra", effort: "ultra" });
+});
+
+// ct-101395: a model or effort change on a live session of an agent that takes
+// them only at launch is a kill and relaunch, which cuts off a turn in flight.
+// It starts only when the caller says the person confirmed the restart.
+describe("a launch-configured agent's live model change needs a confirmed restart", () => {
+  const seedCodex = () => {
+    const db = seedConv();
+    Object.assign(db._tables.conversations[0], { agent_type: "codex", model: "gpt-5.6-sol", effort: "high" });
+    return db;
+  };
+
+  test("without the acknowledgment it refuses and writes nothing", async () => {
+    const db = seedCodex();
+    const patch = spyOn(db, "patch");
+    await expect((switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, effort: "ultra" }))
+      .rejects.toThrow(/restarts this Codex session; confirm the restart first/);
+    expect(patch).not.toHaveBeenCalled();
+    patch.mockRestore();
+    expect(db._tables.daemon_commands).toHaveLength(0);
+    expect(db._tables.messages).toHaveLength(0);
+    expect(db._tables.conversations[0]).toMatchObject({ model: "gpt-5.6-sol", effort: "high", message_count: 4 });
+  });
+
+  test("with the acknowledgment it kills then resumes on the new effort", async () => {
+    const db = seedCodex();
+    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, effort: "ultra", restart: true });
+    expect(db._tables.daemon_commands.map((row: any) => row.command)).toEqual(["kill_session", "resume_session"]);
+    expect(db._tables.conversations[0].effort).toBe("ultra");
+  });
+
+  test("a live claude session's change needs no acknowledgment (it applies in place)", async () => {
+    const db = seedConv();
+    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, effort: "high" });
+    expect(db._tables.daemon_commands.filter((row: any) => row.command === "kill_session")).toHaveLength(0);
+  });
+
+  test("a blank codex session's change needs no acknowledgment (it applies at launch)", async () => {
+    const db = seedCodex();
+    db._tables.conversations[0].message_count = 0;
+    await (switchSessionAgent as any)._handler(ctxFor(db), { conversation_id: CONV, effort: "ultra" });
+    expect(db._tables.conversations[0].effort).toBe("ultra");
+  });
 });
 
 // The row's agent_type is a promise the daemon must keep. Switching a session

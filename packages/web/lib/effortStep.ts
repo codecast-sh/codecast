@@ -8,7 +8,7 @@ import {
 import { useInboxStore } from "../store/inboxStore";
 import { withoutUndo } from "../store/undoStack";
 import { liveSessionMetaOf } from "../hooks/useLiveSessionMeta";
-import { canControlModel, modelOptionKey } from "./modelSwitch";
+import { canControlModel, modelOptionKey, needsRestartConfirm } from "./modelSwitch";
 import { commitModelChange } from "./modelSwitchWeb";
 
 // Raising and lowering a session's effort one level at a time, from the keys
@@ -82,6 +82,12 @@ export function stepEffort(viewId: string, dir: 1 | -1, blank: boolean): boolean
   const conversationId = store.resolveLiveSessionId(viewId);
   const live = liveSessionMetaOf(store, conversationId);
   const agentType = live?.agentType ?? "claude_code";
+  // A live launch-configured agent restarts on an effort change: that goes
+  // through the session panel's confirm, never a bare key press.
+  if (needsRestartConfirm(agentType, blank)) {
+    toast("Changing effort restarts this agent: confirm it from the session panel");
+    return true;
+  }
   const levels = effortLevelsFor(agentType, live?.model, live?.sessionId, blank);
   if (levels.length === 0) {
     toast("This agent takes no effort level from codecast");
