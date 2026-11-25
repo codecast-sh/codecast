@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { computeDaemonBuildId, findRepoRoot } from "../src/daemonBuildIdCompute.js";
 
 const args = process.argv.slice(2);
 const target = args.find((arg) => arg.startsWith("--target="))?.split("=")[1];
@@ -88,6 +89,13 @@ const run = (command: string, argv: string[]) => {
 };
 
 const packageVersion = () => JSON.parse(fs.readFileSync(path.join(import.meta.dir, "../package.json"), "utf8")).version as string;
+/**
+ * The daemon build id of the tree being compiled, as the define that carries it
+ * into the bundle (src/daemonBuildId.ts). Hashed here rather than committed, so
+ * it always matches what was compiled and no two changes conflict on it.
+ */
+export const daemonBuildIdDefine = (id = computeDaemonBuildId(findRepoRoot()).id) => ["--define", `CODECAST_DAEMON_BUILD_ID=${JSON.stringify(id)}`];
+
 const signIdentity = () => (process.env.CODECAST_SKIP_SIGN === "1" ? undefined : process.env.CODECAST_SIGN_IDENTITY);
 
 /** Sign the way the browser icon helper is signed, then prove the signature reads back. */
@@ -232,7 +240,7 @@ if (import.meta.main) {
       fs.writeFileSync(COMPUTER_HELPER_PAYLOAD, "");
     }
     console.error(`browser extension: ${await packBrowserExtension()} bytes embedded`);
-    run(process.execPath, ["build", ...args, ...workerBuildArgs(path.join(import.meta.dir, "../src")), ...(SPLIT_COMPILED_BUILDS ? ["--splitting"] : []), ...EXTERNAL_WS, "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`]);
+    run(process.execPath, ["build", ...args, ...workerBuildArgs(path.join(import.meta.dir, "../src")), ...(SPLIT_COMPILED_BUILDS ? ["--splitting"] : []), ...EXTERNAL_WS, "--define", `CODECAST_MAC_ICON_HELPER=${JSON.stringify(helper)}`, ...daemonBuildIdDefine()]);
     if (SPLIT_COMPILED_BUILDS) dropChunkSourcemaps();
   } finally {
     // Leave the tracked placeholder empty again: the payload belongs in the

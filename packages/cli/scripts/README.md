@@ -32,9 +32,10 @@ Hand-run harnesses that check what no unit test can reach: a real Claude Code pa
 
 ## Everything else
 
-- Build and release, called by `package.json`, `deploy.sh` and the release workflows: `build-binaries.sh`, `build-with-native.ts`, `make-formula.sh`, `deploy.sh`, `stamp-daemon-build-id.ts`, `computer-helper-release.ts`, `guard-no-src-shadow.sh`.
+- Build and release, called by `package.json`, `deploy.sh` and the release workflows: `build-binaries.sh`, `build-with-native.ts`, `make-formula.sh`, `deploy.sh`, `computer-helper-release.ts`, `guard-no-src-shadow.sh`.
 - Remote Mac setup, documented in `docs/remote-sessions.md`: `mac-full-setup.sh`, `mac-daemon-bootstrap.sh`.
 - `codecast-local`: runs the CLI from source (linked into `~/.local/bin`, see the CLI README).
+- `stamp-daemon-build-id.ts`: prints the daemon build id the source hashes to, for a source daemon's restart checks (`src/sourceRestart.ts`).
 - Generators for the web's snapshots of shipped flows: `gen-shipped-flows.ts`, `gen-shipped-line.ts` (`src/workflow/shippedFlows.ts`, `shippedLine.ts`).
 - `run-interactive.ts`: runs a command as a one-shot launchd job at Interactive priority (`src/interactiveJob.ts`).
 - `fugitive-git`: the git shim `cast blame` points vim-fugitive at (`src/blame.ts`).
