@@ -54,6 +54,7 @@ import { cssZoomOf } from "../lib/cssZoom";
 import { RevealAncestryCtx, RevealInBandCtx, useHostsReveal, useOpenReveal, useRevealAncestryWith } from "../lib/revealHost";
 import { MenuKeyCaps, ShortcutTooltip } from "./KeyboardShortcutsHelp";
 import { animatedHideSession, toggleSessionsLikeFirst } from "../store/undoActions";
+import { MenuTarget, noteRowVerbActed, rowVerbIds } from "../lib/hoverTarget";
 import { toast } from "sonner";
 import { toastWriteError } from "../lib/dispatchBinding";
 import { goalCanPause, goalCanResume, goalFrameLine, goalObjectiveProblem, goalMessageBody, parseGoalCommand, sessionGoalOf } from "@codecast/shared/contracts/sessionGoal";
@@ -2261,7 +2262,16 @@ const ConversationViewInner = (
     const url = token ? `${shareOrigin()}/share/${token}` : `${shareOrigin()}/conversation/${conversation?._id}`;
     copyToClipboard(url).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy"));
   }, [conversation?._id]);
-  usePaneShortcutAction('conv.copyLink', copyConversationLink);
+  // A row verb: a session menu's Copy link advertises this chord, so an open
+  // menu or a hovered row is the target ahead of this conversation.
+  usePaneShortcutAction('conv.copyLink', useCallback(() => {
+    const own = conversation?._id ? String(conversation._id) : null;
+    const ids = rowVerbIds(own, { foreignOk: true });
+    if (ids.length !== 1) return;
+    if (ids[0] === own) copyConversationLink();
+    else copyToClipboard(`${shareOrigin()}/conversation/${ids[0]}`).then(() => toast.success("Link copied")).catch(() => toast.error("Failed to copy"));
+    noteRowVerbActed(false);
+  }, [conversation?._id, copyConversationLink]));
   // A share-link viewer resolves this conversation's session references
   // through it, so its shared workers name and open (ReferenceScopeContext).
   const scopeConvId = conversation?._id ? String(conversation._id) : null;
@@ -2272,9 +2282,20 @@ const ConversationViewInner = (
     [scopeConvId, viaShare, scopeToken],
   );
 
+  // The header's session menu advertises the rename, favorite and copy-link
+  // chords for this conversation; open, it holds them (MenuTarget; for a
+  // teammate or a guest only copy link, which changes nothing), and a chord
+  // pressed from it closes it as its own item would.
+  const [sessionMenuOpen, setSessionMenuOpen] = useState(false);
+
+  // A row verb: a row's star advertises this chord, so an open session menu
+  // or a hovered row is the target ahead of this conversation (lib/hoverTarget).
   usePaneShortcutAction('conv.favorite', useCallback(() => {
-    if (!conversation || !isOwner) return;
-    toggleSessionsLikeFirst([conversation._id], "favorite");
+    const own = conversation && isOwner ? String(conversation._id) : null;
+    const ids = rowVerbIds(own);
+    if (!ids.length) return;
+    toggleSessionsLikeFirst(ids, "favorite");
+    noteRowVerbActed(false);
   }, [conversation, isOwner]));
 
   // `r` = quote. With text selected inside a reply it quotes THAT selection (the
@@ -4605,7 +4626,7 @@ const ConversationViewInner = (
                     the row's only plain actions. */}
                 {headerExtra}
 
-                <DropdownMenu>
+                <DropdownMenu open={sessionMenuOpen} onOpenChange={setSessionMenuOpen}>
                   <DropdownMenuTrigger asChild>
                     {/* data-cc-keep: the Minimal style rests the header on the
                         title, the live status and this menu; the rest of the
@@ -4617,6 +4638,7 @@ const ConversationViewInner = (
                     </button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
+                    <MenuTarget ids={conversation?._id ? [String(conversation._id)] : []} foreign={!isOwner || guest} open={sessionMenuOpen} onDone={() => setSessionMenuOpen(false)} />
                     {/* The full command surface: what the header squeeze sheds
                         (globals.css, cq-sq*) stays reachable here. */}
                     <DropdownMenuLabel className="text-mark uppercase tracking-wide text-sol-text-dim">Copy</DropdownMenuLabel>

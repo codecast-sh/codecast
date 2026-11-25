@@ -135,6 +135,7 @@ export function FeedCard({ conv, showActor, onNavigate, projectColor, shareTeamI
     <div
       data-flip-key={conv._id}
       {...{ [FEED_CARD_ATTR]: conv._id }}
+      data-row-verbs={triage.rowVerbs}
       onClick={(e) => { if (!feedCardSelect(conv._id, e)) open(); }}
       onContextMenu={triage.onContextMenu}
       data-hidden-from-team={hiddenFromTeam || undefined}

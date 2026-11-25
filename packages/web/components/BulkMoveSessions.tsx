@@ -20,11 +20,12 @@ import { toast } from "sonner";
 import { ArrowRightLeft, Archive, CheckCircle2, CircleDot, Moon, Square, Tag, X } from "lucide-react";
 import { DeviceDot, DeviceIcon, RUNNING_HERE_ROW, RunningHereTag, deviceDisplayName, deviceWakesOnUse } from "./DeviceBadge";
 import { useBulkMoveSessions, useMoveTargets } from "../hooks/useBulkMoveSessions";
-import { CtxHeader, CtxItem, CtxSeparator, CtxSub, CtxSubContent, CtxSubTrigger } from "./ui/context-menu";
+import { CtxHeader, CtxItem, CtxMenuClose, CtxSeparator, CtxSub, CtxSubContent, CtxSubTrigger } from "./ui/context-menu";
 import { useInboxStore, isConvexId, sortLabels, type InboxSession } from "../store/inboxStore";
 import { getLabelColor } from "../lib/labelColors";
 import { labelSessions } from "../lib/labelSessions";
 import { fileSessionsAsRest } from "../store/undoActions";
+import { useMenuTarget } from "../lib/hoverTarget";
 import { SwitchReview } from "./consequential/ConsequentialSwitch";
 import { killReviewOf } from "./consequential/killReview";
 import type { TaskRow } from "./triggerTasks";
@@ -119,6 +120,10 @@ export function BulkSessionMenuItems({
   onClear?: () => void;
 }) {
   const n = sessions.length;
+  // While this menu is open its chords act on the selection it was opened
+  // for; one that acts closes the menu and clears the selection, as an item does.
+  const closeMenu = React.useContext(CtxMenuClose);
+  useMenuTarget(sessions.map((s) => s._id), () => { closeMenu?.(); onClear?.(); }, { verbs: { stash: onStash, close: onClose } });
   return (
     <>
       <CtxHeader title={`${n} sessions selected`} />

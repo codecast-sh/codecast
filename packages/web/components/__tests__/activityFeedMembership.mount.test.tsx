@@ -119,3 +119,25 @@ test("a role seat the viewer hosts gets its bot's pill, never a second one of th
     await act(async () => root.unmount()); el.remove();
   }
 }, 30_000);
+
+// A feed card that draws the hover toolbar (your live inbox session) is a
+// target for its chords; any other card is not (lib/hoverTarget).
+test("only a triageable feed card carries data-row-verbs", async () => {
+  const mine = row("mine", ME, "Alexander");
+  useInboxStore.setState({
+    currentUser: { _id: ME, name: "Alexander" }, clientStateInitialized: true,
+    clientState: { ui: { active_team_id: TEAM } }, teams: [{ _id: TEAM, features: { org: true } }],
+    teamMembers: roster([ME, "jonathan"]), externalEvents: {},
+    feedConversations: { [`${TEAM}|`]: [mine, row("theirs", "jonathan", "Jonathan")] }, feedHasMore: { [`${TEAM}|`]: false }, feedCursors: { [`${TEAM}|`]: null },
+    sessions: { mine: { ...mine, team_id: TEAM } },
+  } as any);
+  const el = document.createElement("div"); document.body.appendChild(el);
+  const root = createRoot(el);
+  try {
+    await act(async () => root.render(<MemoryRouter><ActivityFeed mode="team" /></MemoryRouter>));
+    expect(el.textContent).toContain("Jonathan session");
+    expect([...el.querySelectorAll("[data-row-verbs]")].map((n) => n.getAttribute("data-row-verbs"))).toEqual(["mine"]);
+  } finally {
+    await act(async () => root.unmount()); el.remove();
+  }
+}, 30_000);

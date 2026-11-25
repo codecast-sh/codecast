@@ -34,7 +34,7 @@ export function useFeedCardTriage(id: string, own: boolean, open: () => void) {
   });
   const ticked = useInboxSelection((sel) => !off && sel.ids.includes(id));
   const menu = useContextMenu<null>();
-  if (!triageable) return { ticked: false, onContextMenu: undefined, overlay: null };
+  if (!triageable) return { ticked: false, onContextMenu: undefined, overlay: null, rowVerbs: undefined };
   const session = useInboxStore.getState().sessions[id]!;
   const overlay = (
     <>
@@ -47,7 +47,9 @@ export function useFeedCardTriage(id: string, own: boolean, open: () => void) {
       <ContextMenu state={menu}>{() => <FeedCardMenu id={id} open={open} />}</ContextMenu>
     </>
   );
-  return { ticked, onContextMenu: (e: React.MouseEvent) => menu.open(e, null), overlay };
+  // The card draws the hover toolbar, so it is a target for its chords
+  // (data-row-verbs, lib/hoverTarget).
+  return { ticked, onContextMenu: (e: React.MouseEvent) => menu.open(e, null), overlay, rowVerbs: id };
 }
 
 // Mounted only while the menu is open, so the trigger-notice subscription

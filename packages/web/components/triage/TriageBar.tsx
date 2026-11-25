@@ -153,6 +153,9 @@ export function TriageBar() {
   return (
     <div
       data-triage-bar
+      // Its verbs advertise the chords for the card it acts on: hovering the
+      // bar makes that card the chords' target (lib/hoverTarget).
+      data-row-verbs={activeId ?? undefined}
       className={cn(
         "cq-container flex-shrink-0 hidden md:block select-none",
         "text-meta text-sol-text-dim bg-sol-bg transition-colors duration-500",

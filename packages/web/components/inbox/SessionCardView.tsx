@@ -207,6 +207,9 @@ export function SessionCardView({
   // under the gradient and buttons, still clickable on its exposed half.
   // Stashed/killed rows don't animate at all: their restore cluster sits at
   // the title line, stacked above the thumb, and both stay clickable as-is.
+  // A row that draws the hover toolbar is a target for its chords
+  // (data-row-verbs, lib/hoverTarget).
+  const drawsRowVerbs = !isForeignSession && !!(onClose || onDefer || onPin);
   const thumbHoverShift =
     !isForeignSession && !(onRestore || onKill) && (onClose || onDefer || onPin)
       ? "group-hover:-translate-x-[14px]"
@@ -251,6 +254,7 @@ export function SessionCardView({
     return (
       <div
         data-session-id={session._id}
+        data-row-verbs={drawsRowVerbs ? session._id : undefined}
         data-active={isActive ? "true" : undefined}
         data-selected={isSelected ? "true" : undefined}
         {...dragProps}
@@ -411,6 +415,7 @@ export function SessionCardView({
   return (
     <div
       data-session-id={session._id}
+      data-row-verbs={drawsRowVerbs ? session._id : undefined}
       data-active={isActive ? "true" : undefined}
       data-selected={isSelected ? "true" : undefined}
       data-sv-viewed={viewers.length > 0 ? viewers.length : undefined}

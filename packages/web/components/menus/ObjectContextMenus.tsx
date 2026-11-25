@@ -37,7 +37,8 @@ import {
   Lock,
 } from "lucide-react";
 import { toast } from "sonner";
-import { CtxItem, CtxHeader, CtxSeparator, CtxSub, CtxSubTrigger, CtxSubContent } from "../ui/context-menu";
+import { CtxItem, CtxHeader, CtxMenuClose, CtxSeparator, CtxSub, CtxSubTrigger, CtxSubContent } from "../ui/context-menu";
+import { useMenuTarget } from "../../lib/hoverTarget";
 import { SessionAccountLine } from "../conversation/SessionAccountLabel";
 import {
   PRIORITY_OPTIONS,
@@ -440,6 +441,11 @@ export function SessionMenuItems({
   onPickCharacter?: () => void;
 }) {
   const id = session._id;
+  // While this menu is open its chords act on this session (on a teammate's,
+  // only the ones that change nothing, like Copy link); one that acts closes
+  // the menu.
+  const closeMenu = React.useContext(CtxMenuClose);
+  useMenuTarget([id], closeMenu ?? undefined, { foreign: !!isForeign });
   const prefs = identityPrefsNow();
   // The card's row can predate a toggle; the store says what the star shows now.
   const isFavorite = isFavoriteInStore(useInboxStore.getState(), id);

@@ -82,6 +82,10 @@ const SURFACE = cn(
   "text-sol-text",
 );
 
+/** Closes the open context menu, for what inside it acts without an item's
+ *  select (a row verb's chord, lib/hoverTarget useMenuTarget). */
+export const CtxMenuClose = React.createContext<(() => void) | null>(null);
+
 /** Render at the list/page root; rows call `state.open(e, payload)`. */
 export function ContextMenu<T>({
   state,
@@ -105,7 +109,7 @@ export function ContextMenu<T>({
         />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" sideOffset={2} collisionPadding={8} className={SURFACE}>
-        {children(menu.payload)}
+        <CtxMenuClose.Provider value={close}>{children(menu.payload)}</CtxMenuClose.Provider>
       </DropdownMenuContent>
     </DropdownMenu>,
     document.body,
