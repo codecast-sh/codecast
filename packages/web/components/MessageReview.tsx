@@ -26,7 +26,7 @@ import { getQuoteUnits, quoteUnitAt, unitTop } from "../lib/quoteUnits";
 import { createReviewComment, exitReviewMode, setBlockVerdict, undoLastVerdict } from "../lib/reviewActions";
 import { quoteSelectionIntoReply } from "../lib/quoteSelection";
 import { stepReviewBlock } from "../lib/reviewNav";
-import { altChordDirection, matchesAction } from "../shortcuts";
+import { altChordDirection, isMac, matchesAction } from "../shortcuts";
 import { useCollectionRows } from "../hooks/useCollectionRows";
 import { quoteDraftsOn } from "../lib/quoteDraftWire";
 import { useCurrentUser } from "../hooks/useCurrentUser";
@@ -926,7 +926,7 @@ export function CommentEditor({
   // hands ownership over while this textarea is still mounted; a late blur must
   // not then shut the editor that just opened.
   // `refocus`: hand focus back to the region only on an explicit close (Esc,
-  // Enter, the footer buttons). A blur-driven close means focus already went where
+  // ⌘/Ctrl+Enter, the footer buttons). A blur-driven close means focus already went where
   // the user pointed it — the composer via ⌃M, another card — and yanking it
   // back would undo that gesture.
   const close = useCallback((refocus: boolean) => {
@@ -990,8 +990,9 @@ export function CommentEditor({
           }}
           onKeyDown={(e) => {
             e.stopPropagation();
-            // Enter saves like every other composer; Shift+Enter breaks the line.
-            if (e.key === "Enter" && !e.shiftKey) {
+            // A note can run to paragraphs, so plain Enter adds a line (the
+            // browser's default) and ⌘/Ctrl+Enter saves and closes (ct-101440).
+            if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
               e.preventDefault();
               save(true);
             } else if (onStep && (e.key === "ArrowUp" || e.key === "ArrowDown")) {
@@ -1018,6 +1019,7 @@ export function CommentEditor({
           </button>
           <button type="button" className="cc-comment-btn cc-comment-btn-primary" onMouseDown={(e) => e.preventDefault()} onClick={() => save(true)}>
             Save
+            <KeyCap size="xs">{isMac ? "⌘" : "Ctrl"}</KeyCap>
             <KeyCap size="xs">↵</KeyCap>
           </button>
         </div>
