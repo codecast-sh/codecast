@@ -178,6 +178,22 @@ const STATE_LIFT: Partial<Record<WorkState, number>> = { needs_input: 3, working
 const SHELF_COST: Record<NonNullable<SessionStanding["shelf"]>, number> = { snoozed: 2, stashed: 2.5, dismissed: 4, killed: 4 };
 const SUB_COST = 4;
 const TEAMMATE_COST = 1.5;
+/** A session the person opened this recently is what a typed name most likely
+ *  means: getting back to it should take one search, whatever its agent's
+ *  clock says. The lift reorders a tier and never crosses one, so a visit
+ *  never lifts a summary-only hit above a title that names the query. */
+const VISIT_WINDOW_MS = 30 * 60_000;
+const VISIT_LIFT = 3;
+
+/** When the person last opened each session, for the visits inside the
+ *  window (store `recentVisits`). Empty when none qualify. */
+export function recentSessionVisits(visits: ReadonlyArray<{ kind: string; key: string; ts: number }> | undefined, now = Date.now()): Map<string, number> {
+  const out = new Map<string, number>();
+  for (const v of visits ?? []) {
+    if (v.kind === "session" && now - v.ts <= VISIT_WINDOW_MS && !out.has(v.key)) out.set(v.key, v.ts);
+  }
+  return out;
+}
 
 /** The state a row surfaces, for its mark and its lift: an ask or live work
  *  only, never on a row set aside, and never a worker's ask (it reports to the
@@ -238,8 +254,10 @@ export function sessionRankScore(
   standing: SessionStanding,
   updatedAt: number,
   now: number,
+  visitedAt?: number,
 ): number {
   const ageHours = Math.max(0, now - (updatedAt || 0)) / 3_600_000;
+  const visited = visitedAt != null && now - visitedAt <= VISIT_WINDOW_MS;
   return (
     match.tier * TIER_SPAN +
     match.exact * 0.5 +
@@ -247,7 +265,8 @@ export function sessionRankScore(
     (STATE_LIFT[standingMark(standing) ?? "idle"] ?? 0) +
     (standing.shelf ? SHELF_COST[standing.shelf] : 0) +
     (standing.sub ? SUB_COST : 0) +
-    (standing.mine ? 0 : TEAMMATE_COST)
+    (standing.mine ? 0 : TEAMMATE_COST) -
+    (visited ? VISIT_LIFT : 0)
   );
 }
 
@@ -258,12 +277,14 @@ export function rankSessions<T extends HaystackRow & { title?: string; updated_a
   standingOf: (row: T) => SessionStanding,
   cap: number,
   now = Date.now(),
+  visits?: Map<string, number>,
 ): T[] {
   const ranked: Array<{ row: T; score: number; tier: number }> = [];
   for (const row of rows) {
     const match = sessionMatchTier(row, lowerQuery);
     if (!match) continue;
-    ranked.push({ row, tier: match.tier, score: sessionRankScore(match, standingOf(row), row.updated_at ?? 0, now) });
+    const visitedAt = row._id ? visits?.get(String(row._id)) : undefined;
+    ranked.push({ row, tier: match.tier, score: sessionRankScore(match, standingOf(row), row.updated_at ?? 0, now, visitedAt) });
   }
   const kept = dropWeakHits(ranked);
   kept.sort((a, b) => a.score - b.score || (b.row.updated_at ?? 0) - (a.row.updated_at ?? 0));
@@ -295,7 +316,10 @@ export type InstantSearchOpts = {
 };
 
 export function instantSessionRows(
-  state: Parameters<typeof filterInboxScopeFromState>[0] & { currentUser?: { _id: unknown } | null },
+  state: Parameters<typeof filterInboxScopeFromState>[0] & {
+    currentUser?: { _id: unknown } | null;
+    recentVisits?: ReadonlyArray<{ kind: string; key: string; ts: number }>;
+  },
   query: string,
   cap = 12,
   opts: InstantSearchOpts = {},
@@ -306,6 +330,7 @@ export function instantSessionRows(
   const meId = state.currentUser?._id?.toString?.() ?? null;
 
   const now = Date.now();
+  const visits = recentSessionVisits(state.recentVisits, now);
   const ranked: Array<{ row: SessionSearchRow; rank: number; tier: number }> = [];
   for (const conv of Object.values(filterInboxScopeFromState(state))) {
     if (conv.is_subagent) continue;
@@ -315,7 +340,7 @@ export function instantSessionRows(
     const title = sessionCardTitle(conv);
     ranked.push({
       tier: match.tier,
-      rank: sessionRankScore(match, sessionStanding(conv, meId, conv), conv.updated_at || 0, now),
+      rank: sessionRankScore(match, sessionStanding(conv, meId, conv), conv.updated_at || 0, now, visits.get(conv._id)),
       row: {
         conversationId: conv._id,
         title,
@@ -357,11 +382,12 @@ export function useInstantSessionRows(typed: string, cap = 12, opts: InstantSear
   const mineOnly = !!opts.mineOnly;
   const sig = useInboxStore((s) => (active ? searchableSessionsSig(s.sessions) : ""));
   const scope = useInboxStore((s) => s.clientState.ui?.inbox_scope ?? "mine");
+  const visits = useInboxStore((s) => (active ? s.recentVisits : null));
   return useMemo(
     () => (active ? instantSessionRows(useInboxStore.getState() as any, query, cap, { mineOnly }) : []),
     // sig/scope stand in for the store read inside; query drives the match.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [active, sig, scope, query, cap, mineOnly],
+    [active, sig, scope, visits, query, cap, mineOnly],
   );
 }
 
