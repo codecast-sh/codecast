@@ -42,6 +42,7 @@ import {
   HEARS,
   buildPassages,
   clip,
+  flatTurns,
   mergeTimeline,
   type Passage,
   type ThreadRow,
@@ -53,6 +54,8 @@ import "./roomThread.css";
 import { CallTasks, makeCallTask, useCallTasks } from "./CallTasks";
 import { taskForItem } from "../../lib/calls/followThrough";
 import { AgentFaceToggle, DensityControl, WorkingDots, type Density } from "./RoomThreadControls";
+import { TurnSelectionBar, useTurnSelection } from "./TurnSelection";
+import { useCoarsePointer } from "../../hooks/useIsPhone";
 
 // THE HUDDLE HAS ONE THREAD. Everything that happens in a room lands here in
 // time order: what people SAID (the transcript, folded into passages so it
@@ -123,7 +126,7 @@ export const RoomThread = memo(function RoomThread({
   surface,
   seated,
   panel,
-  selection,
+  selection: givenSelection,
   sinceAt,
   focus,
   onOpenedSession,
@@ -287,6 +290,26 @@ export const RoomThread = memo(function RoomThread({
     [chatRows, callId, sinceAnchor, endedAt],
   );
   const timeline = useMemo(() => mergeTimeline(passages, visibleRows), [passages, visibleRows]);
+
+  // The stage rail selects turns the way the call page does (the page hands
+  // its own selection in, since its clicks also seek the video): a click
+  // picks a turn, another extends to it, and the bar sends them to an agent
+  // or copies a link. The rail has no media, so a click only selects.
+  const stageTurns = useMemo(() => flatTurns(passages), [passages]);
+  const stageSel = useTurnSelection();
+  const coarse = useCoarsePointer();
+  useWatchEffect(() => stageSel.clear(), [callId]);
+  const ownsSelection = !givenSelection && surface === "stage" && !recording;
+  const selection: RoomThreadSelection | undefined =
+    givenSelection ??
+    (ownsSelection
+      ? {
+          isSelected: stageSel.isSelected,
+          onTurnClick: (i) => stageSel.pick(i),
+          onTurnHold: stageSel.hold,
+          hint: stageSel.count === 0 ? (coarse ? "Press and hold · select" : "Click · select a turn · click another · extend") : null,
+        }
+      : undefined);
 
   const routes = call?.routes ?? [];
   // After the call the routes are history: the chips still say who was in
@@ -921,6 +944,10 @@ export const RoomThread = memo(function RoomThread({
           </div>
         ))}
       </div>
+
+      {ownsSelection && call && (
+        <TurnSelectionBar call={call} turns={stageTurns} selection={stageSel} live={!ended} onSent={(what) => toast(what)} />
+      )}
 
       {/* The pill sits above the foot whatever the composer's height, and
           above the list's edge when there is no composer. */}
