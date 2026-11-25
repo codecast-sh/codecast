@@ -749,7 +749,7 @@ click
 EOF
 \`\`\`
 
-\`cast preview <url>\` shows the page to the human beside this session, from whichever machine serves it. The dev server command comes from \`[services.*]\` in \`.codecast/workspace.toml\` or is detected from the app's \`dev\` script; when neither works, declare it there. \`cast dev logs\` shows its output, \`cast dev stop\` ends it.
+\`cast preview <url>\` shows the page to the human beside this session, from whichever machine serves it. The dev server command comes from \`[services.*]\` in \`.codecast/workspace.toml\` or is detected from the app's \`dev\` script; when neither works, declare it there. \`cast dev logs\` shows its output, \`cast dev stop\` ends it. The daemon stops one nobody has connected to for 2 hours; \`cast dev\` starts it again.
 
 A flow stops at the first failing step and reports what ran and what never did (\`--keep-going\` continues past it). Scope reads on big apps (\`snapshot -i -s\`, \`get text <sel>\`, \`text <sel>\`); \`diff snapshot\` prints only what changed since your last one. \`cast browser help <cmd>\` prints a verb's flags.
 

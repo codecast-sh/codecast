@@ -79,7 +79,7 @@ function printStatus(s: DevStatus): void {
       console.log(`${fmt.success(icons.check)} ${name} ${fmt.highlight(s.url)}  ${fmt.muted("shared")}`);
       break;
     case "stopped":
-      console.log(`${fmt.muted("-")} ${name} ${fmt.muted("stopped")}`);
+      console.log(`${fmt.muted("-")} ${name} ${fmt.muted(s.stoppedBy ? `stopped by the codecast daemon at ${new Date(s.stoppedBy.at).toLocaleString()}: ${s.stoppedBy.reason}` : "stopped")}`);
       break;
     case "failed":
       console.log(`${fmt.error(icons.cross)} ${name} ${s.reason}`);
@@ -103,7 +103,10 @@ Services come from .codecast/workspace.toml ([services.<name>]), or are detected
   cast dev web               only the service named web
   cast dev status            what runs here, starting nothing
   cast dev logs web -n 200   the last 200 lines of web's output (-f to follow)
-  cast dev stop web`)
+  cast dev stop web
+
+The daemon stops a server whose checkout is gone, whose runner crashed, or that
+had no client (an open tab counts) for 2 hours awake; cast dev starts it again.`)
     .action(async (names: string[], o: { timeout?: string; json?: boolean }) => {
       const timeoutSec = o.timeout === undefined ? undefined : Number(o.timeout);
       if (timeoutSec !== undefined && !(timeoutSec > 0)) {
@@ -150,6 +153,15 @@ Services come from .codecast/workspace.toml ([services.<name>]), or are detected
         const stopped = await stopService(svc, checkout);
         console.log(stopped ? `${fmt.success(icons.check)} ${svc.name} stopped` : fmt.muted(`- ${svc.name} was not running`));
       }
+    });
+
+  dev.command("reap")
+    .description("Stop dev servers nobody can use: tree gone, runner crashed, or no client for 2h (the daemon runs this)")
+    .option("--dry-run", "Say what would stop, stop nothing")
+    .action(async (o: { dryRun?: boolean }) => {
+      const { reapDevServers } = await import("./devReap.js");
+      const lines = await reapDevServers({ dryRun: o.dryRun, log: (line) => console.log(line) });
+      if (lines.length === 0) console.log("nothing to reap");
     });
 
   dev.command("logs")

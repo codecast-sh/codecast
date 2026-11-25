@@ -22158,6 +22158,8 @@ async function runHeartbeatMaintenance(): Promise<void> {
     await reapOrphanEngines().catch((e) => reaperLog(`engine reap failed: ${(e as Error)?.message ?? e}`, false));
     // And the pool simulators nobody holds (sim/reap.ts).
     await reapIdleSimulators().catch((e) => reaperLog(`simulator reap failed: ${(e as Error)?.message ?? e}`, false));
+    // And the `cast dev` servers nobody can use (workspace/devReap.ts).
+    await reapDevServers().catch((e) => reaperLog(`dev server reap failed: ${(e as Error)?.message ?? e}`, false));
   }
 
   // Keep each session's working tree recoverable from another machine. See
@@ -23560,6 +23562,15 @@ async function reapIdleSimulators(): Promise<void> {
   const { executablePath, args } = selfExecInfo("sim", "reap");
   const { stdout } = await _execFileAsync(executablePath, args, { timeout: 120_000, env: scrubAgentEnv({ ...process.env }) });
   for (const line of String(stdout ?? "").split("\n")) if (line.trim() && !/nothing to reap/.test(line)) reaperLog(`simulators: ${line.trim()}`);
+}
+
+// A `cast dev` server runs detached and outlives its session; nothing else
+// stops one. Runs as a child like the reaps above, so its lsof reads stay off
+// this loop.
+async function reapDevServers(): Promise<void> {
+  const { executablePath, args } = selfExecInfo("dev", "reap");
+  const { stdout } = await _execFileAsync(executablePath, args, { timeout: 120_000, env: scrubAgentEnv({ ...process.env }) });
+  for (const line of String(stdout ?? "").split("\n")) if (line.trim() && !/nothing to reap/.test(line)) reaperLog(`dev servers: ${line.trim()}`);
 }
 
 async function reapIdleOrphanTerminals(): Promise<void> {
