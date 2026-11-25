@@ -8,7 +8,7 @@ import { devServices, devStateDir, ensureService, readRecord, serviceStatus, tcp
 import type { WorkspaceManifest } from "./types.js";
 import {
   IDLE_STOP_MS, SWEEP_GAP_MS, awakeSince, clientCount, devServerExit, inCodecastWorktree, logSaysCrashed, looksLikeDevServer, orphanExit, orphanTreeGone,
-  parseLsofTcp, parseProcNetEstablished, parsePs, readLogEnd, reapDevServers, sweepFile, treeClients,
+  parseLsofTcp, parseProcNetClients, parsePs, readLogEnd, reapDevServers, sweepFile, treeClients,
 } from "./devReap.js";
 import { pollUntil } from "../test-helpers/pollUntil.js";
 
@@ -95,13 +95,21 @@ describe("parsing", () => {
     ]);
   });
 
-  test("/proc/net/tcp ESTABLISHED rows as local ports", () => {
-    const text = [
+  test("/proc/net/tcp connected rows as local ports, a not-yet-accepted client included", () => {
+    // Read on Linux from a Bun.serve on 47500 with one client that has sent nothing: the
+    // server side sits in SYN_RECV (03) under TCP_DEFER_ACCEPT; the client's own row is 01.
+    const tcp = [
       "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
-      "   0: 0100007F:0C81 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 111",
-      "   1: 0100007F:0C81 0100007F:C350 01 00000000:00000000 00:00000000 00000000  1000        0 112",
+      "   0: 0100007F:8128 0100007F:B98C 01 00000000:00000000 00:00000000 00000000  1000        0 111",
     ].join("\n");
-    expect(parseProcNetEstablished(text)).toEqual([3201]);
+    const tcp6 = [
+      "  sl  local_address                         remote_address                        st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode",
+      "   0: 00000000000000000000000000000000:B98C 00000000000000000000000000000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 112",
+      "   1: 0000000000000000FFFF00000100007F:B98C 0000000000000000FFFF00000100007F:8128 03 00000000:00000000 00:00000000 00000000  1000        0 0",
+    ].join("\n");
+    const ports = [...parseProcNetClients(tcp), ...parseProcNetClients(tcp6)];
+    expect(ports).toEqual([0x8128, 47500]);
+    expect(ports.filter((p) => p === 47500)).toHaveLength(1);
   });
 
   test("ps rows carry their age", () => {

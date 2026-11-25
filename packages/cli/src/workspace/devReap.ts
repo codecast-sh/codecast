@@ -141,12 +141,17 @@ export function readLogEnd(file: string, maxBytes = LOG_SCAN_BYTES): string {
   }
 }
 
-/** ESTABLISHED rows of /proc/net/tcp or tcp6, as their local ports. */
-export function parseProcNetEstablished(text: string): number[] {
+/**
+ * Connected rows of /proc/net/tcp or tcp6, as their local ports: ESTABLISHED
+ * (01), and SYN_RECV (03), where Linux keeps a connection Bun's server has
+ * not accepted yet: it sets TCP_DEFER_ACCEPT, so a client that has sent
+ * nothing stays there, and it is still a client.
+ */
+export function parseProcNetClients(text: string): number[] {
   const out: number[] = [];
   for (const line of text.split("\n").slice(1)) {
     const cols = line.trim().split(/\s+/);
-    if (cols[3] === "01") out.push(parseInt(cols[1].split(":")[1], 16));
+    if (cols[3] === "01" || cols[3] === "03") out.push(parseInt(cols[1].split(":")[1], 16));
   }
   return out;
 }
@@ -169,7 +174,7 @@ export function parseLsofTcp(out: string): { pid: number; local: number; state: 
 
 /**
  * Clients connected to the servers of one process group (or of the given
- * processes in it): accepted connections on a port they listen on. Their own
+ * processes in it): connections to a port they listen on. Their own
  * outbound connections do not count. Null when the sockets cannot be read.
  */
 export function clientCount(pgid: number, pids?: number[]): number | null {
@@ -180,8 +185,8 @@ export function clientCount(pgid: number, pids?: number[]): number | null {
     const ports = new Set(listening.map((l) => l.port));
     if (ports.size === 0) return 0;
     try {
-      const est = [...parseProcNetEstablished(fs.readFileSync("/proc/net/tcp", "utf-8")), ...parseProcNetEstablished(fs.readFileSync("/proc/net/tcp6", "utf-8"))];
-      return est.filter((p) => ports.has(p)).length;
+      const connected = [...parseProcNetClients(fs.readFileSync("/proc/net/tcp", "utf-8")), ...parseProcNetClients(fs.readFileSync("/proc/net/tcp6", "utf-8"))];
+      return connected.filter((p) => ports.has(p)).length;
     } catch {
       return null;
     }
