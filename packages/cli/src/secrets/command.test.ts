@@ -407,6 +407,17 @@ describe("cast vault on the wire", () => {
       expect(h.calls).toEqual([]);
       await expect(h.run("ask-first", "stripe-live", "maybe")).rejects.toThrow("exit 1");
     });
+
+    test("touch-id on posts at once; off is a person's, on the Vault page, and never reaches the backend", async () => {
+      h.answer = (_p, b) => ({ id: "x", short_id: "sec-4", name: "stripe-live", touch_id: b.touch_id });
+      await h.run("touch-id", "stripe-live", "on");
+      expect(h.calls).toEqual([{ path: "/cli/vault/touch-id", body: { ref: "stripe-live", touch_id: true } }]);
+      expect(h.out()).toContain("touch id on");
+      h.calls.length = 0;
+      await expect(h.run("touch-id", "stripe-live", "off")).rejects.toThrow("exit 1");
+      expect(h.out()).toContain("Only a person turns Touch ID off");
+      expect(h.calls).toEqual([]);
+    });
   });
 
   describe("restore", () => {

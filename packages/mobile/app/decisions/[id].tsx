@@ -1,5 +1,5 @@
 import { useCallback, useMemo, useState } from 'react';
-import { approvesPersonsAct } from '@codecast/shared/contracts/commandRun';
+import { approveNeedsPresence } from '@codecast/shared/contracts/commandRun';
 import { KeyboardAvoidingView, Platform, ScrollView, StyleSheet, TouchableOpacity, View } from 'react-native';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import * as Haptics from 'expo-haptics';
@@ -139,7 +139,7 @@ export default function DecisionScreen() {
           ) : null}
           {reportSlug ? <LinkRow label="Open the report" onPress={() => openLink(pageShareUrl(reportSlug))} /> : null}
 
-          <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} guarded={(i) => approvesPersonsAct(source, i)} />
+          <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} guarded={(i) => approveNeedsPresence(source, i)} />
 
           {kind === 'single' && !writing ? (
             <TouchableOpacity onPress={() => patchDraft({ otherOpen: true })} hitSlop={8}>

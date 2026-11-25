@@ -5,7 +5,7 @@
 // report, and the answers right there, or the answer once it is settled.
 // Answering is the store's answerDecision, so the card flips the moment it
 // is pressed and the asking session wakes with the answer.
-import { RUN_OPTION, SKIP_OPTION, approveNeedsPresence, approvesPersonsAct, fallbackLine } from '@codecast/shared/contracts/commandRun';
+import { RUN_OPTION, SKIP_OPTION, approveNeedsPresence, fallbackLine } from '@codecast/shared/contracts/commandRun';
 import { approvalButtonLabel } from '@codecast/shared/contracts/assistant';
 import { useCallback, useRef } from 'react';
 import { Pressable, StyleSheet, View } from 'react-native';
@@ -149,7 +149,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
               onPress={() => answer({ index: i })}
               style={[styles.compact, i === (row.blocking ? -1 : row.default_option) && { borderColor: Theme.text }]}
             >
-              {approvesPersonsAct(row, i) ? <Feather name="lock" size={11} color={Theme.textMuted} /> : null}
+              {approveNeedsPresence(row, i) ? <Feather name="lock" size={11} color={Theme.textMuted} /> : null}
               <Text style={styles.compactText} numberOfLines={1}>{o.label}</Text>
             </Pressable>
           )) : (
@@ -204,7 +204,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
             onAnswer={answer}
             look={look}
             proceedingWith={row.blocking ? undefined : row.default_option}
-            guarded={(i) => approvesPersonsAct(row, i)}
+            guarded={(i) => approveNeedsPresence(row, i)}
           />
           {kind === 'single' && writing ? (
             <View style={{ gap: 8 }}>

@@ -588,10 +588,28 @@ function registerManageVerbs(vault: Command, deps: PublishDeps): void {
     .option(...JSON_OPTION)
     .action(restoreAction(deps));
 
+  registerGuardVerb(vault, deps, {
+    verb: "ask-first", field: "ask_first", label: "Ask first",
+    what: "an agent's read waits on a person's approval, once per session",
+    done: "each session's read waits on a person's approval",
+  });
+  registerGuardVerb(vault, deps, {
+    verb: "touch-id", field: "touch_id", label: "Touch ID",
+    what: "revealing the value, approving a read of it and turning a guard off take a fingerprint",
+    done: "reveals, approvals and turning a guard off take a fingerprint",
+  });
+}
+
+/**
+ * A guard switch on a secret: Ask first or Touch ID. On posts at once. Off is a
+ * person's, on the Vault page, since this CLI's token is the one the gated
+ * agent holds, so it never reaches the backend.
+ */
+function registerGuardVerb(vault: Command, deps: PublishDeps, g: { verb: string; field: "ask_first" | "touch_id"; label: string; what: string; done: string }): void {
   helpText(
-    vault.command("ask-first"),
-    "Turn Ask first on: an agent's read waits on a person's approval, once per session. Only a person turns it off, on the Vault page",
-    ", since this CLI's token is the one the gated agent holds\n\nExample: cast vault ask-first stripe-live on",
+    vault.command(g.verb),
+    `Turn ${g.label} on: ${g.what}. Only a person turns it off, on the Vault page`,
+    `, since this CLI's token is the one the gated agent holds\n\nExample: cast vault ${g.verb} stripe-live on`,
   )
     .argument("<name>", "Name or sec-N")
     .argument("<on>", "on (off is refused here: a person turns it off on the Vault page)")
@@ -599,11 +617,11 @@ function registerManageVerbs(vault: Command, deps: PublishDeps): void {
     .option(...PERSONAL_OPTION)
     .option(...JSON_OPTION)
     .action(async (name: string, state: string, o: WorkspacePick & { json?: boolean }) => {
-      if (state === "off") fail(`Only a person turns Ask first off: switch it off in ${name}'s panel on the Vault page`);
-      if (state !== "on") fail(`Ask first takes on: cast vault ask-first ${name} on`);
+      if (state === "off") fail(`Only a person turns ${g.label} off: switch it off in ${name}'s panel on the Vault page`);
+      if (state !== "on") fail(`${g.label} takes on: cast vault ${g.verb} ${name} on`);
       const ref = await pinRef(deps, name, o);
-      const res = await apiPost(deps, "/cli/vault/ask-first", { ref, ask_first: true });
-      emit(o.json, res, () => `${fmt.success("ask first on")} ${fmt.id(res.short_id)} ${res.name}${fmt.muted("  each session's read waits on a person's approval")}`);
+      const res = await apiPost(deps, `/cli/vault/${g.verb}`, { ref, [g.field]: true });
+      emit(o.json, res, () => `${fmt.success(`${g.label.toLowerCase()} on`)} ${fmt.id(res.short_id)} ${res.name}${fmt.muted(`  ${g.done}`)}`);
     });
 }
 

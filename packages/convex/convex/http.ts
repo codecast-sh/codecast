@@ -4251,6 +4251,7 @@ cliRoute("/cli/vault/request", async (ctx, body) => ctx.runMutation((api as any)
 cliRoute("/cli/vault/fulfill", async (ctx, body) => ctx.runAction((api as any).secrets.fulfill, body));
 cliRoute("/cli/vault/rm", async (ctx, body) => ctx.runMutation((api as any).secrets.remove, body));
 cliRoute("/cli/vault/ask-first", async (ctx, body) => ctx.runMutation((api as any).secrets.setAskFirst, body));
+cliRoute("/cli/vault/touch-id", async (ctx, body) => ctx.runMutation((api as any).secrets.setTouchId, body));
 cliRoute("/cli/vault/versions", async (ctx, body) => ctx.runQuery((api as any).secrets.versions, body));
 cliRoute("/cli/vault/restore", async (ctx, body) => ctx.runAction((api as any).secrets.restore, body));
 cliRoute("/cli/vault/redaction-values", async (ctx, body) => ctx.runAction((api as any).secrets.redactionValues, body));

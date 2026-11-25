@@ -244,9 +244,10 @@ item; no path reads `team_id` for access.
   `get`/`run`/`otp` render as a compact "used stripe-test" card that never
   shows a value.
 - **CLI.** `cast vault` (list), `add`, `rotate`, `fill`, `get`, `run`, `env`,
-  `otp`, `request`, `rm`, `show`, `save-signin`, `restore`, `ask-first`. JSON
-  with `--json` on every verb. `ls` and `show` print the health state, `+2fa`,
-  `ask-first` and how many earlier values are kept.
+  `otp`, `request`, `rm`, `show`, `save-signin`, `restore`, `ask-first`,
+  `touch-id`. JSON with `--json` on every verb. `ls` and `show` print the
+  health state, `+2fa`, `ask-first`, `touch-id` and how many earlier values
+  are kept.
 - **Browser.** `cast browser open` injects a matching saved sign-in into the
   Chrome the session drives (the human's own through the extension, or the
   agent browser) before navigating; `cast vault save-signin <site>` (and the
@@ -438,7 +439,8 @@ approving an Ask first decision that covers it and switching either guard off
 each take an assertion; with it off, those are one press (an agent-driven tab
 still holds them, `lib/agentTabGuard`). Removing a passkey and adding a second
 one always take one (decision sd-1359). Deny and dismiss stay one press, and
-switching either guard on needs nothing. Secrets made before the split have
+switching either guard on needs nothing (the panel's switch, or `cast vault
+touch-id <name> on`; off is refused from a token, as for Ask first). Secrets made before the split have
 Touch ID off. The decision an Ask first read files carries `touch_id` while
 one of its secrets has it on (`askFirstGate`, kept in step by `setTouchId`),
 which is how every client knows whether its Approve asks
