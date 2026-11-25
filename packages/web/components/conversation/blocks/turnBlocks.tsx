@@ -76,7 +76,7 @@ import { linkifyMentions } from "../../../lib/conversationMarkdown";
 import { renderAssistantBody } from "../../../lib/renderAssistantBody";
 import { PENDING_BOOT_GRACE_MS, PENDING_HOSTED_STALL_MS, PENDING_IDLE_GRACE_MS, PENDING_RESUME_GRACE_MS, PENDING_RETRY_AFTER_MS } from "../pendingSend";
 import { ApiErrorCard } from "../sessionChrome";
-import { MessageDecisionReview } from "../../decisions/MessageDecisionReview";
+import { MessageDecisionReview, QuotedDecision } from "../../decisions/MessageDecisionReview";
 import { followRestoredConversation } from "../../../lib/followRestoredConversation";
 import type { CondensedReceipt, ImageData, MessageFeedDensity, ParsedContextBlock, ReceiptEntry, TaskRecordMaps, ToolCall, ToolCallChangeSelection, ToolResult } from "../types";
 import { COMPACT_TAIL_HEIGHT } from "../../../lib/conversationTurnDefaults";
@@ -202,7 +202,7 @@ function CancelPendingButton({ onClick, disabled, quiet = false }: { onClick: ()
 }
 
 
-function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision, bubble, screenRecording }: { content: string; decision?: DecisionAnswerMessage; /** A screen recording sent with these words: its player under them. */ screenRecording?: ParsedScreenRecording; /** Clean mode's chat bubble: right-aligned, no name row. */ bubble?: boolean; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
+function UserPromptImpl({ content, timestamp, messageId, conversationId, collapsed, userName, avatarUrl, onOpenComments, isHighlighted, shareSelectionMode, isSelectedForShare, onToggleShareSelection, onStartShareSelection, onForkFromMessage, forkChildren, messageUuid, images, onBranchSwitch, activeBranchId, loadingBranchId, isPending, isQueued, agentStatus, mainDivergentPreview, decision, quotedDecision, bubble, screenRecording }: { content: string; decision?: DecisionAnswerMessage; /** The decision these words discuss (sd-N): drawn under them, open and answerable. */ quotedDecision?: string; /** A screen recording sent with these words: its player under them. */ screenRecording?: ParsedScreenRecording; /** Clean mode's chat bubble: right-aligned, no name row. */ bubble?: boolean; timestamp: number; messageId: string; conversationId?: Id<"conversations">; collapsed?: boolean; userName?: string; avatarUrl?: string | null; onOpenComments?: (messageId: string) => void; isHighlighted?: boolean; shareSelectionMode?: boolean; isSelectedForShare?: boolean; onToggleShareSelection?: (messageId: string) => void; onStartShareSelection?: (messageId: string) => void; onForkFromMessage?: (messageUuid: string) => void; forkChildren?: ForkChild[]; messageUuid?: string; images?: ImageData[]; onBranchSwitch?: (messageUuid: string, convId: string | null) => void; activeBranchId?: string | null; loadingBranchId?: string | null; isPending?: boolean; isQueued?: boolean; agentStatus?: LiveAgentStatus; mainDivergentPreview?: string }) {
   const relativeTime = useRelativeTime();
   // A hosted conversation has no machine or process: its pending notes speak
   // of the assistant picking the message up, not of delivery to an agent.
@@ -662,6 +662,11 @@ function UserPromptImpl({ content, timestamp, messageId, conversationId, collaps
           return <MessageMarkdown content={displayContent} userText />;
         })()}
       </div> : null}
+      {!effectivelyCollapsed && quotedDecision && (
+        <div className={`${indent} max-w-[44rem]`}>
+          <QuotedDecision refId={quotedDecision} />
+        </div>
+      )}
       {!effectivelyCollapsed && screenRecording && (
         <div className={`${indent} mt-2`}>
           <ScreenRecordingCard recording={screenRecording} />

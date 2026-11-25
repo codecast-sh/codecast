@@ -199,3 +199,30 @@ function Walk({ refs, at, isOpen, meId, onMove, onClose }: {
     </div>
   );
 }
+
+// A person's words about one decision, quoted in the session that presents it
+// (<decision-discussion>): the decision itself under the bubble, so it opens
+// and answers right where it was discussed. Reads the queue row when the
+// viewer holds it, else feeds and reads its page row.
+export function QuotedDecision({ refId }: { refId: string }) {
+  const ref = refId.toLowerCase();
+  const meId = useInboxStore((s) => s.currentUser?._id as string | undefined);
+  const decision = useInboxStore((s) => rowOf(s, ref));
+  const inQueue = useInboxStore((s) => !!queueRow(s, ref));
+  const askedOf = useInboxStore((s) => {
+    const d = rowOf(s, ref);
+    if (!d || askedOfViewer(d, meId)) return undefined;
+    const detail = (s.decisionDetails as Record<string, DecisionDetailItem>)[d._id];
+    return detail?.asked_users?.map((u) => u.name).join(", ") || undefined;
+  });
+  return (
+    <>
+      {!inQueue && <DetailFeed id={ref} />}
+      {decision ? (
+        <div data-quoted-decision={ref} className="not-prose mt-2">
+          <DecisionCompactCard decision={decision} showTask askedOf={askedOf} />
+        </div>
+      ) : null}
+    </>
+  );
+}

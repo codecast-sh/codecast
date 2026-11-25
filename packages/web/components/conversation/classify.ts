@@ -293,7 +293,7 @@ const STICKY_NOISE_PREFIXES = ["[Request interrupted", "<task-notification>", "Y
 // A person's words delivered under a wrapper that names them: the sender and
 // the body the bubble draws. The message navigator reads the sender from here
 // too, so a wrapper added here is attributed in both places.
-export function directUserOf(t: string): { from: string; body: string } | null {
+export function directUserOf(t: string): { from: string; body: string; decision?: string } | null {
   // A joint turn (send together, or merged queue rows): one bubble naming
   // every author; UserPrompt draws each part under its own name.
   const joint = parseJointMessage(t);
@@ -304,8 +304,12 @@ export function directUserOf(t: string): { from: string; body: string } | null {
   // comment on the task this session owns, or a person discussing a decision
   // the session presents: their words under a quote of the row, task or
   // decision they were looking at; the reply note for the agent stays out.
-  const quoted = parseProposalMessage(t) ?? parseTaskCommentMessage(t) ?? parseDecisionDiscussion(t);
+  const quoted = parseProposalMessage(t) ?? parseTaskCommentMessage(t);
   if (quoted) return { from: quoted.from, body: quoted.about ? `> ${quoted.about}\n\n${quoted.body}` : quoted.body };
+  // A quoted decision keeps its id, so the bubble can draw the decision itself
+  // under the words: open it, answer it, right where it was discussed.
+  const discussion = parseDecisionDiscussion(t);
+  if (discussion) return { from: discussion.from, body: discussion.about ? `> ${discussion.about}\n\n${discussion.body}` : discussion.body, ...(discussion.decision ? { decision: discussion.decision } : {}) };
   // A person talking with a project's line from its workspace's chat: their
   // words, the brief and the reply note left out of the bubble.
   const lineChat = parseLineChat(t);

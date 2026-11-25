@@ -423,7 +423,9 @@ export type UserMessageKind =
   | { kind: 'session_message'; from: string; body: string; name?: string; variant?: 'agent'; intent?: SessionMessageIntent }
   // A person typed this into the session from the dashboard (<user-message
   // from="Name">): a normal user bubble attributed to that person.
-  | { kind: 'direct_user'; from: string; body: string }
+  // `decision`: the decision a person was discussing (<decision-discussion>),
+  // drawn under their words so it opens and answers in place.
+  | { kind: 'direct_user'; from: string; body: string; decision?: string }
   | { kind: 'huddle_summary'; huddle: HuddleSummaryTag }
   // A screen recording the person sent: the player over its timed words.
   | { kind: 'screen_recording'; recording: ParsedScreenRecording }

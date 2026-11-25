@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { classifyUserMessage } from "./classify";
-import { formatDecisionDiscussion } from "@codecast/shared/contracts";
+import { formatDecisionDiscussion, parseDecisionDiscussion } from "@codecast/shared/contracts";
 
 // ct-101382: a person's words about a decision, delivered into the session that
 // presents it, quote that decision. The row must keep which decision it is, so
@@ -19,5 +19,12 @@ describe("a decision quoted inside a conversation", () => {
       .filter(([k]) => k !== "body" && k !== "from" && k !== "kind")
       .some(([, v]) => JSON.stringify(v ?? null).includes("sd-614"));
     expect(carried).toBe(true);
+  });
+
+  test("strips the About header when the decision is named with spaces", () => {
+    const raw = `<decision-discussion decision="sd-614" from="Ada">\nAbout Retire verified_pending ("Ship, Revise or Drop"):\n\nwhat does Revise send back?\n</decision-discussion>`;
+    const parsed = parseDecisionDiscussion(raw)!;
+    expect(parsed.about).toBe('About Retire verified_pending ("Ship, Revise or Drop"):');
+    expect(parsed.body).toBe("what does Revise send back?");
   });
 });

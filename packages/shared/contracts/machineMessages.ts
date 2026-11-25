@@ -402,7 +402,8 @@ export function parseDecisionDiscussion(rawContent: string | null | undefined): 
   let body = m[2].trim();
   body = body.replace(/\n*\(A question about [\s\S]*\)\s*$/, "").trim();
   let about: string | null = null;
-  const head = body.match(/^(About \S+ \("[^\n]*"\):)\s*\n+/);
+  // The header names the decision however it was recorded: a short id or a title with spaces.
+  const head = body.match(/^(About [^\n]+? \("[^\n]*"\):)\s*\n+/);
   if (head) { about = head[1]; body = body.slice(head[0].length).trim(); }
   return { decision: attr("decision"), from: attr("from").trim(), about, body };
 }
