@@ -1,9 +1,10 @@
 // The intent segment's two commands (templates/intent.cast), hidden under `cast flow`:
 //
-//   cast flow asker <conversation> [--task ct-N] [--run <id>]
+//   cast flow asker [conversation] [--task ct-N] [--run <id>]
 //     what the Read station reads (flowAsker.ts): who started a change's line
 //     of work, what people typed along it and their card answers, each with its
 //     provenance, so a person's own "ship it" can be told from a program's relay.
+//     A task alone reads the sessions tied to it.
 //
 //   cast flow intent-verify <run> (--cite <session:line> | --card sd-N) --quote <words> --head <sha> --record <file>
 //     whether the line or card answer the Read station cited is the run
@@ -41,14 +42,18 @@ export async function intentVerify(cliPost: CliPost, run: string, o: IntentVerif
 
 export function registerIntentCommands(flow: Command, cliPost: CliPost): void {
   flow
-    .command("asker <conversation>", { hidden: true })
+    .command("asker [conversation]", { hidden: true })
     .description("Print a session's chain up to the one that started its work, its originator, and every line a person typed and card a person answered along it (rendered for a model in `text`), as one JSON object")
-    .option("--task <id>", "Also read the chain of the session that filed this task (ct-N), and the task's Ship cards")
+    .option("--task <id>", "Also read the chain of the session that filed this task (ct-N) and the task's Ship cards; with no session, the task alone: the chains of the sessions that filed it, are bound to it or handed it off")
     .option("--run <id>", "Also name who started this workflow run (starter_id, starter_name), read from the run itself")
     .option("--record <chars>", "The JSON size to fit (default: what a station records)")
-    .action(async (conversation: string, opts: { task?: string; run?: string; record?: string }) => {
+    .action(async (conversation: string | undefined, opts: { task?: string; run?: string; record?: string }) => {
+      if (!conversation && !opts.task) {
+        console.error("Name a session or a task (--task ct-N)");
+        process.exit(1);
+      }
       const read = await cliPost("/cli/sessions/originator", {
-        conversation_id: conversation, ...(opts.task ? { task: opts.task } : {}), ...(opts.run ? { run_id: opts.run } : {}),
+        ...(conversation ? { conversation_id: conversation } : {}), ...(opts.task ? { task: opts.task } : {}), ...(opts.run ? { run_id: opts.run } : {}),
       });
       console.log(JSON.stringify(fitAskerRecord(read, opts.record ? Number(opts.record) : undefined)));
     });
