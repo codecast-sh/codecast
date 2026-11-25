@@ -5,7 +5,7 @@
 // re-exports these, so the two never form a cycle: a module wrapper that
 // imports a gate that imports the module wrapper dies at load ("Cannot access
 // 'mutation' before initialization") in every test that reaches it.
-import type { Id } from "../_generated/dataModel";
+import type { Doc, Id } from "../_generated/dataModel";
 import {
   TEAM_FEATURES,
   workspaceFeatureEnabled,
@@ -57,12 +57,17 @@ export async function workspaceHasFeature(
 ): Promise<boolean> {
   if (scope.team_id) return teamHasFeature(ctx, scope.team_id, key);
   if (!scope.user_id) return false;
+  return workspaceFeatureEnabled(await userTeams(ctx, scope.user_id), null, key);
+}
+
+/** Every team the user belongs to (null where a membership outlived its
+ *  team). Load once and derive each per-user feature answer from it. */
+export async function userTeams(ctx: DbCtx, userId: Id<"users">): Promise<Array<Doc<"teams"> | null>> {
   const memberships = await ctx.db
     .query("team_memberships")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", scope.user_id))
+    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
     .collect();
-  const teams = await Promise.all(memberships.map((m: any) => ctx.db.get(m.team_id)));
-  return workspaceFeatureEnabled(teams, null, key);
+  return Promise.all(memberships.map((m: any) => ctx.db.get(m.team_id)));
 }
 
 /** The message a caller sees when a feature is off — the same words on the
@@ -99,22 +104,14 @@ export async function requireWorkspaceFeature(
 }
 
 /**
- * Which feature-gated agent snippets this user's teams make available: for
- * every snippet some team feature names, whether at least one of the user's
- * teams has that feature on. Ungated snippets are not listed — the daemon
- * only reconciles what appears here. Rides on the heartbeat response so a
+ * Which feature-gated agent snippets a user's teams (userTeams) make
+ * available: for every snippet some team feature names, whether at least one
+ * of the teams has that feature on. Ungated snippets are not listed — the
+ * daemon only reconciles what appears here. Rides on the heartbeat response so a
  * machine that was asleep when a team flipped a feature converges on its next
  * beat instead of missing a pushed command.
  */
-export async function gatedSnippetAvailability(
-  ctx: DbCtx,
-  userId: Id<"users">,
-): Promise<Record<string, boolean>> {
-  const memberships = await ctx.db
-    .query("team_memberships")
-    .withIndex("by_user_id", (q: any) => q.eq("user_id", userId))
-    .collect();
-  const teams = await Promise.all(memberships.map((m: any) => ctx.db.get(m.team_id)));
+export function gatedSnippetAvailability(teams: Array<Doc<"teams"> | null>): Record<string, boolean> {
   return attachedAvailability(TEAM_FEATURE_CATALOG, teams, (f) => f.snippets);
 }
 

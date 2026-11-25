@@ -22,6 +22,7 @@ export {
   requireTeamFeature,
   requireWorkspaceFeature,
   gatedSnippetAvailability,
+  userTeams,
 } from "./lib/teamFeatureGuard";
 
 const teamFeatureKeyValidator = v.union(
