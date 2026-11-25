@@ -73,7 +73,7 @@ describe("priority pass prompt", () => {
     const { system, prompt, omitted } = buildPriorityPassPrompt(inp);
     expect(system).toContain("You follow; you never steer.");
     expect(prompt).toContain("pri-1 · \"Priority pri-1\" · active · rank 1 (set by the person)");
-    expect(prompt).toContain("s1 [critical, set by the person] Step s1 · task ct-1 (done)");
+    expect(prompt).toContain("pri-1/s1 [critical, set by the person] Step s1 · task ct-1 (done)");
     expect(prompt).toContain("## Session a");
     expect(prompt).toContain('ct-2 "judge" (open)');
     expect(prompt).toContain("o/r#4 (merged)");
@@ -417,10 +417,10 @@ describe("review fixes", () => {
     expect(prompt).not.toContain("old8 ");
     expect(prompt).toContain("; and 4 older");
     expect(prompt).not.toContain("Long finished");
-    expect(prompt).toContain("(1 more finished over 30 days ago, not shown.)");
-    // A priorities block that fills the budget leaves no room for sessions.
+    expect(prompt).toContain("(1 more done or quiet for over 30 days, not shown.)");
+    // A priorities block over the whole budget still leaves the sessions their floor.
     const huge = priority("pri-3", { summary: "z".repeat(PRIORITY_PASS_CAPS.prompt_chars) });
-    expect(buildPriorityPassPrompt(input({ priorities: [huge] })).omitted).toEqual(["a", "b"]);
+    expect(buildPriorityPassPrompt(input({ priorities: [huge] })).omitted).toEqual([]);
   });
 
   test("quiet by the clock: an active priority untouched for a week goes quiet; a quiet one holding a touched session is active again", () => {
@@ -460,5 +460,57 @@ describe("review fixes", () => {
     }, input());
     expect(output!.unassigned).toEqual([]);
     expect(dropped).toEqual(["unassigned: a is mapped to a priority"]);
+  });
+});
+
+describe("re-check fixes", () => {
+  const repro = () => input({
+    priorities: [
+      priority("pri-1", { steps: [step("s1", { title: "Ship API", tier_set_by: "person" })] }),
+      priority("pri-2", { steps: [step("s1", { title: "Grader faults", tier: "polish", tier_set_by: "person" })], sessions: [held("c", "s1")] }),
+    ],
+  });
+  const expected = [["s1", "Ship API", "critical", "person"], ["s2", "Grader faults", "polish", "person"]];
+
+  test("step keys repeat across a merge: a bare key that names the absorbed step does not take the survivor's step", () => {
+    const plan = mergePriorities(repro(), out([proposal({ short_id: "pri-1", merges: ["pri-2"], steps: [{ key: "s1", title: "Grader faults", tier: "critical", refs: [] }] })]));
+    expect(plan.updates[0].patch.steps!.map((s) => [s.key, s.title, s.tier, s.tier_set_by])).toEqual([expected[1], expected[0]]);
+    expect(plan.sessions).toEqual([{ session: "c", priority: "pri-1", step_key: "s2" }]);
+  });
+
+  test("a qualified key names its own priority's step, and the prompt prints keys qualified", () => {
+    const inp = repro();
+    expect(buildPriorityPassPrompt(inp).prompt).toContain("pri-2/s1 [polish, set by the person] Grader faults");
+    const plan = mergePriorities(inp, out([proposal({ short_id: "pri-1", merges: ["pri-2"], steps: [{ key: "pri-1/s1", title: "Ship the API", tier: "polish", refs: [] }, { key: "pri-2/s1", title: "Grader faults", tier: "critical", refs: [] }], sessions: [{ session: "a", step: "pri-1/s1" }] })]));
+    expect(plan.updates[0].patch.steps!.map((s) => [s.key, s.tier, s.tier_set_by])).toEqual([["s1", "critical", "person"], ["s2", "polish", "person"]]);
+    expect(plan.sessions).toEqual([{ session: "a", priority: "pri-1", step_key: "s1" }, { session: "c", priority: "pri-1", step_key: "s2" }]);
+  });
+
+  test("the parser refuses a merge of a set-aside priority, so a later proposal keeps its short id", () => {
+    const inp = input({ priorities: [priority("pri-1"), priority("pri-2", { status: "set_aside" })] });
+    const { output, dropped } = parsePriorityPassOutput({
+      priorities: [
+        { short_id: "pri-1", title: "A", summary: "x", status: "active", merges: ["pri-2"], serves: null, rank: 1, steps: [], sessions: [] },
+        { short_id: "pri-2", title: "B", summary: "x", status: "active", serves: null, rank: 2, steps: [], sessions: [{ session: "a" }] },
+      ],
+      unassigned: [],
+    }, inp);
+    expect(output!.priorities.map((p) => [p.short_id, p.merges])).toEqual([["pri-1", undefined], ["pri-2", undefined]]);
+    expect(dropped).toEqual(["priority 1: merge of pri-2, which the person set aside"]);
+    expect(mergePriorities(inp, output!).creates).toEqual([]);
+  });
+
+  test("a session the reply leaves unassigned is not carried over by a merge", () => {
+    const inp = input({ priorities: [priority("pri-1"), priority("pri-2", { sessions: [held("c"), held("d")] })] });
+    const plan = mergePriorities(inp, out([proposal({ short_id: "pri-1", merges: ["pri-2"] })], [{ session: "c", kind: "standing" }]));
+    expect(plan.unmap).toEqual(["c"]);
+    expect(plan.sessions).toEqual([{ session: "d", priority: "pri-1", step_key: null }]);
+  });
+
+  test("quiet priorities older than 30 days are left out of the prompt too", () => {
+    const { prompt } = buildPriorityPassPrompt(input({ priorities: [priority("pri-1", { status: "quiet", title: "Long quiet", last_active_at: NOW - 40 * 24 * H }), priority("pri-2", { status: "quiet", title: "Recently quiet", last_active_at: NOW - 10 * 24 * H })] }));
+    expect(prompt).not.toContain("Long quiet");
+    expect(prompt).toContain("Recently quiet");
+    expect(prompt).toContain("(1 more done or quiet for over 30 days, not shown.)");
   });
 });
