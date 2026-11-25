@@ -42,9 +42,11 @@ import { addVerbHelp, type VerbHelpSpec } from "./verbHelp.js";
 import { verbTypoNextStep } from "./commandSuggestion.js";
 import { runPublishUnwatch, runPublishWatch } from "./publishWatch.js";
 import { jsonText, parseKeyValue, readInlinePageData, readPageData, runPublishData, runPublishState, type StateWrite } from "./publishData.js";
-import { PAGE_DATA_FILE } from "@codecast/shared/contracts/pageData";
+import { PAGE_DATA_FILE, parsePageDataDeclaration } from "@codecast/shared/contracts/pageData";
 import { captureMotionThumb, renderMotion, splitMotionOutputs, staleRenderNote } from "./publishMotion.js";
 import { captureThumb } from "./publishThumb.js";
+import { appInstallLine, parsePageTarget, runPublishApps, runPublishInstall, runPublishUninstall, type GateKeys } from "./publishApps.js";
+import type { PageApp } from "@codecast/shared/contracts/pageApp";
 
 const WATCH_DEBOUNCE_MS = 400;
 
@@ -181,6 +183,7 @@ export function printPublishResult(
   title: string,
   access?: Record<string, unknown>,
   showsVideo?: boolean,
+  app?: PageApp | null,
 ): void {
   console.log(`${fmt.success(icons.check)} ${fmt.highlight(title)}  ${versionLine(result)}`);
   console.log(`  ${fmt.accent(result.url)}`);
@@ -197,6 +200,9 @@ export function printPublishResult(
   }
   if (result.data) {
     console.log(`  ${fmt.label("data:")} ${result.data.queries} live quer${result.data.queries === 1 ? "y" : "ies"} in ${result.data.workspace}; check them with \`cast publish data ${result.url.split("/").pop()}\``);
+  }
+  if (app) {
+    console.log(`  ${fmt.label("app:")} ${appInstallLine(result.url.split("/").pop()!, app)}`);
   }
   if (showsVideo) {
     console.log(`  ${fmt.label("video:")} plays in the cast player; \`cast publish video\` covers chapters and styling it to the page`);
@@ -309,7 +315,7 @@ async function runOpen(deps: PublishDeps, target: string, json: boolean): Promis
 // backend surface.
 
 /** Find one of the caller's artifacts by slug, absolute path, or path suffix. */
-async function resolveRow(deps: PublishDeps, target: string): Promise<ArtifactLsRow> {
+export async function resolveRow(deps: PublishDeps, target: string): Promise<ArtifactLsRow> {
   const result = await apiPost(deps, "/cli/artifacts/list", {}, { read: true });
   const rows: ArtifactLsRow[] = result.artifacts ?? [];
   const abs = fs.existsSync(target) ? path.resolve(target) : null;
@@ -495,6 +501,16 @@ async function runLinks(deps: PublishDeps, target: string, json: boolean): Promi
   console.log(`${fmt.label("live:")}   ${row.url}?live=1 ${fmt.muted("(auto-reloads on new versions)")}`);
 }
 
+// ── installed apps ──────────────────────────────────────────────────────────
+
+/** The page an install verb names: a URL or slug as given (with the gate keys a URL carries), else one of your pages by path. */
+async function resolveAppTarget(deps: PublishDeps, target: string): Promise<{ slug: string; title?: string; gate: GateKeys }> {
+  const named = fs.existsSync(target) ? null : parsePageTarget(target);
+  if (named) return named;
+  const row = await resolveRow(deps, target);
+  return { slug: row.slug, title: row.title, gate: {} };
+}
+
 // ── publish + watch ──────────────────────────────────────────────────────────
 
 interface PublishOptions {
@@ -618,7 +634,7 @@ export async function publishOnce(
   absPath: string,
   options: PublishOptions,
   extra: { access?: Record<string, unknown>; sessionRef?: string; withThumb: boolean; forceNew: boolean; exitOnError: boolean },
-): Promise<{ result: any; title: string; showsVideo: boolean; skipped: NonNullable<PublishPayload["skipped"]> }> {
+): Promise<{ result: any; title: string; showsVideo: boolean; skipped: NonNullable<PublishPayload["skipped"]>; app: PageApp | null }> {
   const payload = buildPublishPayload(absPath, options.title);
   await uploadMedia(deps, payload);
   await uploadLargeFiles(deps, payload);
@@ -633,7 +649,14 @@ export async function publishOnce(
     { exitOnError: extra.exitOnError },
   );
   const page = payload.content ?? (payload.entryHtmlPath ? fs.readFileSync(payload.entryHtmlPath, "utf-8") : "");
-  return { result, title: payload.title, showsVideo: pageUsesPlayer(page), skipped: payload.skipped ?? [] };
+  return { result, title: payload.title, showsVideo: pageUsesPlayer(page), skipped: payload.skipped ?? [], app: declaredApp(payload.data) };
+}
+
+/** The app block a page's declaration carries, checked; null without one. */
+export function declaredApp(data: unknown): PageApp | null {
+  if (!data) return null;
+  const parsed = parsePageDataDeclaration(data);
+  return parsed.ok ? (parsed.app ?? null) : null;
 }
 
 const EDGE_WARM_TIMEOUT_MS = 3_000;
@@ -683,9 +706,10 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
   let result: any;
   let title: string;
   let showsVideo = false;
+  let app: PageApp | null = null;
   try {
     let skipped: NonNullable<PublishPayload["skipped"]>;
-    ({ result, title, showsVideo, skipped } = await publishOnce(deps, absPath, options, {
+    ({ result, title, showsVideo, skipped, app } = await publishOnce(deps, absPath, options, {
       access,
       sessionRef,
       withThumb: true,
@@ -705,7 +729,7 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
   } else if (options.url) {
     console.log(result.url);
   } else {
-    printPublishResult(result, title, access, showsVideo);
+    printPublishResult(result, title, access, showsVideo, app);
   }
   await warmEdge(deps, result, access);
   if (options.open && result?.url) await open(result.url).catch(() => {});
@@ -770,8 +794,8 @@ async function runPublish(deps: PublishDeps, target: string, options: PublishOpt
 
 // ── registration ─────────────────────────────────────────────────────────────
 
-const PUBLISH_VERBS = ["ls", "rm", "rollback", "open", "versions", "comments", "viewers", "links", "set", "data", "state", "watch", "unwatch", "video"];
-const PUBLISH_USAGE = "Usage: cast publish <file.html|file.md|dir> [--title T] [--task ct-N]; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | state | watch | unwatch | video (each takes <slug|path>; cast publish --help)";
+const PUBLISH_VERBS = ["ls", "rm", "rollback", "open", "versions", "comments", "viewers", "links", "set", "data", "state", "watch", "unwatch", "video", "install", "uninstall", "apps"];
+const PUBLISH_USAGE = "Usage: cast publish <file.html|file.md|dir> [--title T] [--task ct-N]; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | state | watch | unwatch | video | install | uninstall | apps (each takes <slug|path>; cast publish --help)";
 
 const GATE_FLAGS = ["--password", "--password-stdin", "--no-password", "--email-gate", "--no-email-gate", "--expires", "--edit-mode", "--session", "--no-session", "--comments", "--no-comments"];
 
@@ -799,13 +823,21 @@ export const PUBLISH_VERB_HELP: Record<string, VerbHelpSpec> = {
     note: "An event trigger (cast trigger ls shows it). --prompt replaces the default brief; --spawn runs each wake in a fresh session instead.",
   },
   unwatch: { usage: "cast publish unwatch <slug|url|path> [--all]", summary: "Stop this session's watch of a page (--all: every watch of yours on it)", flags: ["--all"] },
+  install: {
+    usage: "cast publish install <slug|url|path> [--json]",
+    summary: "Open Codecast's install sheet for a page on this computer, where the person picks its permissions and confirms",
+    flags: ["--json"],
+    note: "The CLI never installs or grants anything. A URL's gate keys (?k=, ?e=, ?m=) go along; your own pages need none.",
+  },
+  uninstall: { usage: "cast publish uninstall <slug|url|path> [--json]", summary: "Ask Codecast to remove a page installed as an app; the person confirms there", flags: ["--json"] },
+  apps: { usage: "cast publish apps [--json]", summary: "The pages installed as apps on this computer, with the version and permissions each was granted", flags: ["--json"] },
   video: { usage: "cast publish video", summary: "How a page plays video in the cast player: chapters, styling, and hosting", note: "Run it bare to print the guide. A page with a <video> or <cast-player> publishes like any other." },
 };
 
 export function registerPublishCommand(program: Command, deps: PublishDeps): void {
   addVerbHelp(program.command("publish"), PUBLISH_VERB_HELP)
     .description(commandGroup("publish").description)
-    .argument("[target]", "file.html, file.md, or a directory; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | state | watch | unwatch | video")
+    .argument("[target]", "file.html, file.md, or a directory; or a subcommand: ls | rm | rollback | open | versions | comments | viewers | links | set | data | state | watch | unwatch | video | install | uninstall | apps")
     .argument("[args...]", "subcommand arguments")
     .option("--title <title>", stdinText("Override the page title (default: <title> tag / first heading / filename)"))
     .option("--new", "Publish under a fresh URL even if this path was published before")
@@ -847,6 +879,17 @@ export function registerPublishCommand(program: Command, deps: PublishDeps): voi
       }
       if (target === "ls") return runLs(deps, json);
       if (target === "video" && !fs.existsSync(target)) return void console.log(CAST_PLAYER_GUIDE);
+      if (target === "apps" && !fs.existsSync(target)) return runPublishApps(deps.getCliEndpoint().siteUrl, json);
+      if ((target === "install" || target === "uninstall") && !fs.existsSync(target)) {
+        if (!args[0]) {
+          console.error(fmt.error(`Usage: ${PUBLISH_VERB_HELP[target].usage}`));
+          process.exit(1);
+        }
+        const page = await resolveAppTarget(deps, args[0]);
+        const { siteUrl } = deps.getCliEndpoint();
+        if (target === "install") return runPublishInstall(page, siteUrl, json);
+        return runPublishUninstall(page.slug, siteUrl, json);
+      }
       if (target === "rm") {
         if (!args[0]) {
           console.error(fmt.error("Usage: cast publish rm <slug|path>"));

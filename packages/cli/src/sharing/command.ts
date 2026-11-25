@@ -12,6 +12,7 @@ import {
   formatSessionCount,
   startOfDay,
   summarizeShareImpact,
+  readShareImpact,
   describeTeammates,
   type PathShareSummary,
 } from "@codecast/shared/team";
@@ -90,7 +91,7 @@ async function exactCounts(deps: Deps, folders: string[], extra: Record<string, 
   const parts = await Promise.all(
     batches.map((batch) => apiPost(deps, "/cli/sharing/impact", { path_prefixes: batch, day_start: startOfDay(), ...extra }, { read: true }).catch(() => ({}))),
   );
-  return Object.assign({}, ...parts);
+  return Object.assign({}, ...parts.map((part) => readShareImpact(part as Record<string, PathShareSummary>)));
 }
 
 type State = { overview: Overview; rows: FolderRow[]; home: string };

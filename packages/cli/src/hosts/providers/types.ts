@@ -39,4 +39,11 @@ export interface HostProvider {
   inspect(host: CloudHost): HostInspection;
   stop(host: CloudHost): void;
   start?(host: CloudHost, hooks: HostBootHooks): Promise<HostBoot>;
+  /** The machine runs but its OS is hung (EC2's instance status check failing). */
+  impaired?(host: CloudHost): boolean;
+  /** Restart the OS of a running machine, keeping its disk. */
+  reboot?(host: CloudHost): void;
+  /** Let `publicKey` log in as the host's user for the next minute, without
+   *  holding the key the host was launched with (EC2 Instance Connect). */
+  grantKey?(host: CloudHost, publicKey: string): void;
 }

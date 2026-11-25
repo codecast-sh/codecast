@@ -64,6 +64,35 @@ describe("resolveLocalProjectPath", () => {
     expect(result?.path).toBe("/Users/dev/src/server/packages/x");
   });
 
+  test("prefers the primary checkout over a more recently used worktree", async () => {
+    // A role seat pulled from a cloud host once landed in another session's
+    // worktree (912 commits behind, with its uncommitted edits) because that
+    // worktree was the most recent git_root recorded for the remote.
+    const worktree = "/Users/ashot/src/union-mobile-ct91614/.codecast/worktrees/union-mobile";
+    const primary = "/Users/ashot/src/union-mobile";
+    const result = await resolveLocalProjectPath({
+      projectPath: "/home/ubuntu/work/union-mobile",
+      gitRoot: "/home/ubuntu/work/union-mobile",
+      gitRemoteUrl: remote,
+      findCandidates: async () => [worktree, "/Users/ashot/src/um-linked", primary],
+      exists: (p) => p === worktree || p === primary || p === "/Users/ashot/src/um-linked",
+      isWorktree: (p) => p !== primary,
+    });
+    expect(result?.path).toBe(primary);
+  });
+
+  test("uses a worktree when it is the only checkout", async () => {
+    const worktree = "/Users/ashot/src/repo/.codecast/worktrees/x";
+    const result = await resolveLocalProjectPath({
+      projectPath: "/home/ubuntu/work/repo",
+      gitRoot: "/home/ubuntu/work/repo",
+      gitRemoteUrl: remote,
+      findCandidates: async () => [worktree],
+      exists: (p) => p === worktree,
+    });
+    expect(result?.path).toBe(worktree);
+  });
+
   test("falls back to repo root when the subpath is missing in the local checkout", async () => {
     const result = await resolveLocalProjectPath({
       projectPath: "/Users/ec2-user/src/server/packages/missing",

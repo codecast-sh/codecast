@@ -523,6 +523,7 @@ function readMcpFrom(
   scope: CapabilityScope,
   client: InventoryItem["client"],
   sink?: UnreadablePath[],
+  needsAuth?: ReadonlySet<string>,
 ): InventoryItem[] {
   const doc = readJson(file, sink);
   if (!isRecord(doc) || !isRecord(doc.mcpServers)) return [];
@@ -547,10 +548,24 @@ function readMcpFrom(
         // important thing to show before enabling one, so it is carried here
         // rather than re-read at render time.
         ...(command ? { command: [command, ...args].join(" ") } : {}),
+        // The client last found this server asking for a sign-in.
+        ...(url && needsAuth?.has(name) ? { auth: "needed" } : {}),
       },
     });
   }
   return out;
+}
+
+/** Servers Claude Code last found asking for a sign-in: the keys of its
+ *  `~/.claude/mcp-needs-auth-cache.json`. A hint for the UI, never a verdict,
+ *  so an absent or unreadable cache is simply no hint. */
+export function claudeMcpNeedsAuth(home: string): Set<string> {
+  try {
+    const doc = JSON.parse(fs.readFileSync(path.join(home, ".claude", "mcp-needs-auth-cache.json"), "utf-8"));
+    return new Set(isRecord(doc) ? Object.keys(doc) : []);
+  } catch {
+    return new Set();
+  }
 }
 
 // -------------------------------------------------------------- other clients
@@ -995,10 +1010,11 @@ function inventorySteps(home: string, projectPath?: string): { steps: InventoryS
   const claudeMcp = AGENT_CLIENTS.claude.agentFileTargets?.mcpConfig;
   if (claudeMcp) {
     const userMcp = fromHomeTemplate(home, claudeMcp.user);
-    steps.push({ label: userMcp, run: () => { items.push(...readMcpFrom(userMcp, "user", "claude", unreadable)); } });
+    const needsAuth = claudeMcpNeedsAuth(home);
+    steps.push({ label: userMcp, run: () => { items.push(...readMcpFrom(userMcp, "user", "claude", unreadable, needsAuth)); } });
     if (projectPath && claudeMcp.project) {
       const projectMcp = path.join(projectPath, claudeMcp.project);
-      steps.push({ label: projectMcp, run: () => { items.push(...readMcpFrom(projectMcp, "project", "claude", unreadable)); } });
+      steps.push({ label: projectMcp, run: () => { items.push(...readMcpFrom(projectMcp, "project", "claude", unreadable, needsAuth)); } });
     }
   }
 

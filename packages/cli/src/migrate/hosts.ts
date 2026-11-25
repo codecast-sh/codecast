@@ -6,12 +6,14 @@
 import * as fs from "node:fs";
 import { ensureUp, hostForDevice, readHosts, toRemoteHost, type CloudHost } from "../browser/cloudHost.js";
 import { learnHostDeviceId } from "../cloud/prepare.js";
+import { adoptHostForDevice } from "../hosts/adopt.js";
 import { readPushableCredentialAsync, remoteClaudeLoginLive, type RemoteHost } from "../remote/session-move.js";
 
 /**
  * Wakes and resolves the cloud host behind a device id, once per process:
  * from the registry, else by asking each host this machine provisioned that
- * has not reported its device id yet. Throws when this machine cannot reach it.
+ * has not reported its device id yet, else by adopting the host another of
+ * the person's machines launched. Throws when this machine cannot reach it.
  */
 export function hostResolver(log: (line: string) => void): (deviceId: string) => Promise<{ cloud: CloudHost; host: RemoteHost }> {
   const hosts = new Map<string, { cloud: CloudHost; host: RemoteHost }>();
@@ -33,9 +35,9 @@ export function hostResolver(log: (line: string) => void): (deviceId: string) =>
         }
       }
     }
-    if (!cloud) {
-      throw new Error(`this machine has no registered cloud host for device ${deviceId.slice(0, 8)} (cast hosts ls); only the machine that provisioned the host can move sessions to or from it`);
-    }
+    // Another of the person's machines launched it: register it here from
+    // its device row and let this machine's key in (hosts/adopt.ts).
+    if (!cloud) cloud = await adoptHostForDevice(deviceId, log);
     const up = await ensureUp(cloud, (m) => log(`  ${cloud!.id}: ${m}`));
     const host = toRemoteHost(up);
     const learned = await learnHostDeviceId(up, host);

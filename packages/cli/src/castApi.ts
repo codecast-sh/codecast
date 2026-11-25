@@ -102,21 +102,33 @@ export async function apiUpload(
   return readApiResult(response, urlPath, opts);
 }
 
+/**
+ * A backend answer's body as JSON, or why it could not be read. A success with no body (a handler that returned
+ * nothing, or a proxy in front of a slow backend) took the request: its answer is null, never a failure. Reading it
+ * as one once stopped a flow's deploy wait from inside a best-effort progress post.
+ */
+export function parseApiAnswer(urlPath: string, response: { ok: boolean; status: number }, text: string, opts: { read?: boolean } = {}): { result: any } | { failure: string } {
+  if (response.ok && !text.trim()) return { result: null };
+  try {
+    return { result: JSON.parse(text) };
+  } catch {
+    return { failure: nonJsonError(urlPath, response.status, text, opts) };
+  }
+}
+
 async function readApiResult(
   response: Response,
   urlPath: string,
   opts: { read?: boolean; exitOnError?: boolean; describeError?: (error: string) => string },
 ): Promise<any> {
   const text = await response.text();
-  let result: any;
-  try {
-    result = JSON.parse(text);
-  } catch {
-    const message = nonJsonError(urlPath, response.status, text, opts);
-    if (opts.exitOnError === false) throw new Error(message);
-    console.error(message);
+  const parsed = parseApiAnswer(urlPath, response, text, opts);
+  if ("failure" in parsed) {
+    if (opts.exitOnError === false) throw new Error(parsed.failure);
+    console.error(parsed.failure);
     process.exit(1);
   }
+  const result = parsed.result;
   // A failure the backend itself answers (out of memory, a timeout) has no
   // `error` field, only Convex's `code`, so the status decides too.
   const raw = result?.error ?? (response.ok ? null : result?.code ?? `HTTP ${response.status}`);

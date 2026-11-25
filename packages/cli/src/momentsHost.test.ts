@@ -172,7 +172,16 @@ describe("one daemon pass", () => {
     const kept = path.join(shadowDir(), "product-app", "mo-t_81.json");
     const old = (Date.now() - 31 * 24 * 60 * 60_000) / 1000;
     fs.utimesSync(kept, old, old);
+    // Someone else's folder and notes under a source are left alone, and do not stop the prune.
+    const foreign = path.join(shadowDir(), "product-app", "m-scratch");
+    fs.mkdirSync(foreign, { recursive: true });
+    const note = path.join(shadowDir(), "product-app", "build.ts");
+    fs.writeFileSync(note, "");
+    fs.utimesSync(foreign, old, old);
+    fs.utimesSync(note, old, old);
     expect(pruneHostMoments(Date.now())).toBe(1);
     expect(fs.existsSync(kept)).toBe(false);
+    expect(fs.existsSync(foreign)).toBe(true);
+    expect(fs.existsSync(note)).toBe(true);
   });
 });

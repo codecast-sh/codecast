@@ -412,6 +412,8 @@ import { handleMemoryHttp } from "./memory/memoryServer.js";
 import { handleEvalsHttp, stopEvalsBridge } from "./evals/evalsServer.js";
 import { startFocusSentinel } from "./browser/focusSentinel.js";
 import { attachVaultServer, handleVaultHttp, vaultWatchHub, type VaultServerOptions } from "./vault/vaultServer.js";
+import { attachLspServer, handleLspHttp } from "./code/lsp/lspServer.js";
+import { handleCodeHttp } from "./code/codeServer.js";
 import { VaultMirror, httpMirrorTransport } from "./vault/vaultMirror.js";
 import { enumerateLocalRootsAsync, MAX_PROJECT_ROOTS } from "./projectRoots.js";
 import { buildStableContext, ensureStableHookForLaunch, prepareLaunchStableContext, recordStableContext, refreshStableCache, warmStableCaches, STABLE_WARM_EVERY_MS, type BuildStableContextOptions, type BuiltStableContext } from "./stableContext.js";
@@ -3290,6 +3292,8 @@ function startHookServer(): http.Server {
 
     if (handleTerminalHttp(req, res, terminalServerOptions())) return;
     if (handleVaultHttp(req, res, vaultServerOptions())) return;
+    if (handleCodeHttp(req, res, { ...vaultServerOptions(), blameAuth: () => activeConfig || readConfig() })) return;
+    if (handleLspHttp(req, res, vaultServerOptions())) return;
     if (handleBrowserFocusHttp(req, res, terminalServerOptions())) return;
     if (handleNotificationHttp(req, res, terminalServerOptions())) return;
     if (handleFsBrowseHttp(req, res, terminalServerOptions())) return;
@@ -3302,6 +3306,7 @@ function startHookServer(): http.Server {
 
   terminalServerHandle = attachTerminalServer(server, terminalServerOptions());
   vaultServerHandle = attachVaultServer(server, vaultServerOptions());
+  attachLspServer(server, vaultServerOptions());
   // Browser watch rides the same server, token and origin rules — a viewer
   // that can reach the terminal can watch the managed browser's tabs.
   watchServerHandle = attachWatchServer(server, terminalServerOptions());

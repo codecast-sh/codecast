@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { isOlderBackendRefusal } from "./castApi.js";
+import { isOlderBackendRefusal, parseApiAnswer } from "./castApi.js";
 
 describe("isOlderBackendRefusal", () => {
   test("reads the validator's refusal of a field this backend does not know", () => {
@@ -17,5 +17,19 @@ describe("isOlderBackendRefusal", () => {
   test("leaves every other failure alone", () => {
     expect(isOlderBackendRefusal(new Error("Task ct-9 not found"))).toBe(false);
     expect(isOlderBackendRefusal(new Error("API error (500): conversation_id missing"), "conversation_id")).toBe(false);
+  });
+});
+
+describe("parseApiAnswer", () => {
+  test("a success with no body is an empty answer, not a failure", () => {
+    expect(parseApiAnswer("/cli/workflow-runs/progress", { ok: true, status: 200 }, "")).toEqual({ result: null });
+    expect(parseApiAnswer("/cli/x", { ok: true, status: 200 }, "  \n")).toEqual({ result: null });
+  });
+  test("JSON reads as JSON", () => {
+    expect(parseApiAnswer("/cli/x", { ok: true, status: 200 }, '{"ok":true}')).toEqual({ result: { ok: true } });
+  });
+  test("a failure or a non-JSON success still fails, with the route", () => {
+    expect(parseApiAnswer("/cli/x", { ok: false, status: 502 }, "")).toHaveProperty("failure");
+    expect((parseApiAnswer("/cli/x", { ok: true, status: 200 }, "<html>") as { failure: string }).failure).toContain("API error (200)");
   });
 });

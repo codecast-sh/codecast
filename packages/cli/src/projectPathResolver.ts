@@ -59,6 +59,9 @@ export interface ResolveInput {
   findCandidates: (gitRemoteUrl: string) => Promise<string[]>;
   // Optional file-existence check (overridable for tests)
   exists?: (p: string) => boolean;
+  // Is this checkout a linked worktree rather than the repo's primary checkout?
+  // (overridable for tests)
+  isWorktree?: (p: string) => boolean;
 }
 
 export interface ResolveResult {
@@ -71,6 +74,16 @@ export interface ResolveResult {
 
 const defaultExists = (p: string): boolean => {
   try { return fs.existsSync(p) && fs.statSync(p).isDirectory(); } catch { return false; }
+};
+
+// Where `cast ws`, orchestrate and conductor put worktrees: <repo>/.codecast|.claude|.conductor/...
+const WORKTREE_DIR_RE = /^(.*?)\/\.(?:claude|codecast|conductor)(?:\/|$)/;
+
+// A linked worktree carries a `.git` FILE pointing at the primary checkout's
+// git dir; the primary checkout carries a `.git` directory.
+const defaultIsWorktree = (p: string): boolean => {
+  if (WORKTREE_DIR_RE.test(p)) return true;
+  try { return fs.statSync(path.join(p, ".git")).isFile(); } catch { return false; }
 };
 
 // Resolves a (possibly foreign) project path to a path that exists on this
@@ -105,7 +118,13 @@ export async function resolveLocalProjectPath(
     ? projectPath.slice(gitRoot.length)
     : "";
 
-  const candidates = await input.findCandidates(gitRemoteUrl);
+  // Candidates arrive most-recently-used first, and a worktree another session
+  // just used often leads: it holds that session's branch and uncommitted
+  // edits and can be far behind main. A session placed on this machine goes to
+  // the primary checkout when one exists, and to a worktree only when none does.
+  const isWorktree = input.isWorktree ?? defaultIsWorktree;
+  const found = await input.findCandidates(gitRemoteUrl);
+  const candidates = [...found.filter((c) => !isWorktree(c)), ...found.filter((c) => isWorktree(c))];
   for (const candidate of candidates) {
     if (!candidate || !exists(candidate)) continue;
     const candidateFull = subpath ? path.join(candidate, subpath) : candidate;
@@ -186,7 +205,7 @@ export function resolveLocalRepoPath(input: LocalRepoInput): string | null {
   // (which always exists), so every dead worktree resumed in ~/.claude — the
   // wrong directory, and the project then mislabels as the home dir. Only
   // reached because remotePath itself is already gone (checked above).
-  const worktreeParent = remotePath.match(/^(.*?)\/\.(?:claude|codecast|conductor)(?:\/|$)/)?.[1];
+  const worktreeParent = remotePath.match(WORKTREE_DIR_RE)?.[1];
   if (worktreeParent && worktreeParent !== input.home && exists(worktreeParent)) {
     return worktreeParent;
   }

@@ -120,7 +120,7 @@ describe("line profile (LP2)", () => {
   test("[line.deploy] takes a command, a target and a known trigger", () => {
     const err = (t: string) => { try { parseLineProfileText(t); } catch (e) { return (e as Error).message; } return null; };
     expect(err(`[line.deploy]\ntrigger = "nightly"`)).toContain("person, role, schedule, count");
-    expect(err(`[line.deploy]\nwhen = "now"`)).toContain('unknown key "when"');
+    expect(parseLineProfileText(`[line.deploy]\nwhen = "now"`).warnings.join("\n")).toContain('unknown key "when"');
     const r = resolveLineProfile(parseLineProfileText(`[line.deploy]\ncommand = "./deploy.sh"\n`).values);
     expect(r.profile.deploy).toEqual({ command: "./deploy.sh", target: null, trigger: "person" });
     expect(r.sources["deploy.command"]).toBe("file");
@@ -152,13 +152,18 @@ describe("line profile (LP2)", () => {
     expect(err(`[line.caps]\nstations = 4`)?.message).toContain("[line.caps.stations] must be a table");
   });
 
-  test("unknown keys are refused with where they are", () => {
+  test("unknown keys are ignored with a warning naming where they are, so a newer profile never stops an older cast", () => {
+    const warn = (t: string) => { const r = parseLineProfileText(t, ".codecast/line.toml"); return r.warnings.join("\n"); };
+    expect(warn(`[line]\nprojet = "X"`)).toContain('[line] has unknown key "projet", ignored');
+    expect(warn(`[line.commands]\nverify = "x"`)).toContain('[line.commands] has unknown key "verify"');
+    expect(warn(`[line.caps]\nhands = 3`)).toContain('[line.caps] has unknown key "hands"');
+    expect(warn(`[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\nowner = "x"`)).toContain('[[line.finders]] #1 has unknown key "owner"');
+    expect(warn(`[verify]\ncommand = "x"`)).toContain('the file has unknown key "verify"');
+    expect(parseLineProfileText(`[line]\nproject = "P"\nfuture_key = ["x"]`).values.project).toBe("P");
+  });
+
+  test("malformed values are refused with where they are", () => {
     const err = (t: string) => { try { parseLineProfileText(t, ".codecast/line.toml"); } catch (e) { return e as Error; } return null; };
-    expect(err(`[line]\nprojet = "X"`)?.message).toBe('.codecast/line.toml: [line] has unknown key "projet" (known: team, project, principles, prompting, size_budget, watch_days, commands, caps, merge, deploy, finders, ci_paths)');
-    expect(err(`[line.commands]\nverify = "x"`)?.message).toContain('[line.commands] has unknown key "verify"');
-    expect(err(`[line.caps]\nhands = 3`)?.message).toContain('[line.caps] has unknown key "hands"');
-    expect(err(`[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\nowner = "x"`)?.message).toContain('[[line.finders]] #1 has unknown key "owner"');
-    expect(err(`[verify]\ncommand = "x"`)?.message).toContain('the file has unknown key "verify"');
     expect(err(`[line]\nsize_budget = "big"`)?.message).toContain("[line] size_budget must be a positive integer");
     expect(err(`[[line.finders]]\nid = "a"\nsource = "s"\nkind = "crash"\nfingerprint = "f"`)?.message).toContain('names unknown kind "crash"');
     expect(err(`[[line.finders]]\nid = "a"\nsource = "s"\nkind = "bug"\nfingerprint = "f"\n[[line.finders]]\nid = "a"\nsource = "t"\nkind = "bug"\nfingerprint = "g"`)?.message).toContain('repeats id "a"');

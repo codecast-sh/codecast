@@ -119,14 +119,20 @@ export function keepOnHost(claim: MomentClaim, output: string, version: string, 
   return file;
 }
 
-/** Host-kept bodies past 30 days go, the same retention codecast storage has. */
+/**
+ * Host-kept bodies past 30 days go, the same retention codecast storage has.
+ * Only the `<moment>.json` files keepOnHost writes: anything else under the
+ * shadow root was put there by someone else and is not ours to remove.
+ */
 export function pruneHostMoments(now: number): number {
   let removed = 0;
   const root = shadowDir();
-  for (const source of fs.existsSync(root) ? fs.readdirSync(root) : []) {
-    const dir = path.join(root, source);
-    for (const name of fs.statSync(dir).isDirectory() ? fs.readdirSync(dir) : []) {
-      const file = path.join(dir, name);
+  for (const source of fs.existsSync(root) ? fs.readdirSync(root, { withFileTypes: true }) : []) {
+    if (!source.isDirectory()) continue;
+    const dir = path.join(root, source.name);
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (!entry.isFile() || !entry.name.endsWith(".json")) continue;
+      const file = path.join(dir, entry.name);
       if (now - fs.statSync(file).mtimeMs > MOMENT_LIMITS.retention_ms) {
         fs.rmSync(file, { force: true });
         removed++;

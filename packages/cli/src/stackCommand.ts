@@ -20,7 +20,7 @@
 //
 // Routes: /cli/stack/<verb> in http.ts (decisionStacks.ts).
 import type { Command } from "commander";
-import { nonJsonError, type PublishDeps } from "./castApi.js";
+import { parseApiAnswer, type PublishDeps } from "./castApi.js";
 import { cliFetch } from "./cliHttp.js";
 import { fmt } from "./colors.js";
 import { commandGroup } from "./commandGroups.js";
@@ -139,13 +139,9 @@ async function stackApi(deps: PublishDeps, verb: string, body: Record<string, un
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: apiToken, ...body }),
   });
-  const text = await response.text();
-  let result: any;
-  try {
-    result = JSON.parse(text);
-  } catch {
-    fail(nonJsonError(`/cli/stack/${verb}`, response.status, text, { read: verb === "ls" || verb === "show" }));
-  }
+  const parsed = parseApiAnswer(`/cli/stack/${verb}`, response, await response.text(), { read: verb === "ls" || verb === "show" });
+  if ("failure" in parsed) fail(parsed.failure);
+  const result = parsed.result;
   if (result?.error) fail(String(result.error));
   return result;
 }

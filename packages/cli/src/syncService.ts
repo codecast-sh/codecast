@@ -9,6 +9,7 @@ import { recoveringWebSocket } from "@codecast/shared/network";
 import { readFile, stat } from "node:fs/promises";
 import * as os from "node:os";
 import * as nodePath from "node:path";
+import { createHash } from "node:crypto";
 import { lookupByHash, lookupByPath, storeUpload } from "./imageCache.js";
 import { decodeImageBase64, detectImageMediaType, hashImageBytes } from "./imagePayload.js";
 import { countingSemaphore } from "./semaphore.js";
@@ -66,6 +67,8 @@ const MAX_FILES_PER_MESSAGE = 10;
 // made an image-heavy sync chunk slower than the live file grew, so the session
 // never caught up. Bounded so a burst can't stampede the backend.
 const IMAGE_UPLOAD_CONCURRENCY = 6;
+// Distinct contents uploadBytes remembers (a storage id string each).
+const UPLOADS_BY_CONTENT_MAX = 2_000;
 
 const MIN_REQUEST_INTERVAL_MS = 100;
 
@@ -402,6 +405,8 @@ export class SyncService {
     mediaType: string;
     storageId: string;
   }>();
+  // Storage objects by content (uploadBytes), oldest first.
+  private uploadsByContent = new Map<string, Promise<string | null>>();
   // Serializes addMessages per conversation. The server's addMessages reads+patches
   // the conversation document on every batch, so two addMessages for the SAME
   // conversation running at once collide on that one doc — Convex OCC-retries the
@@ -770,6 +775,29 @@ export class SyncService {
 
   // The login flow's sign-in URL (the code-paste one), so a person on another
   // device can open it and paste the code back (submitLoginCode).
+  // An MCP server sign-in on this machine (mcp_login command): the
+  // authorization URL its CLI printed, then the outcome (convex/mcpLogin.ts).
+  async reportMcpLoginUrl(startedAt: number, url: string): Promise<void> {
+    await this.throttle();
+    await this.mutate("mcpLogin:reportUrl" as any, { api_token: this.apiToken, device_id: deviceId(), started_at: startedAt, url });
+  }
+
+  async reportMcpLoginNotice(startedAt: number, notice: string): Promise<void> {
+    await this.throttle();
+    await this.mutate("mcpLogin:reportNotice" as any, { api_token: this.apiToken, device_id: deviceId(), started_at: startedAt, notice });
+  }
+
+  async completeMcpLogin(startedAt: number, status: "confirmed" | "rejected", reason?: string): Promise<void> {
+    await this.throttle();
+    await this.mutate("mcpLogin:complete" as any, {
+      api_token: this.apiToken,
+      device_id: deviceId(),
+      started_at: startedAt,
+      status,
+      ...(reason ? { reason } : {}),
+    });
+  }
+
   async reportLoginFlowUrl(url: string): Promise<void> {
     await this.throttle();
     await this.mutate("accountSwitch:reportLoginFlowUrl" as any, {
@@ -1113,8 +1141,37 @@ export class SyncService {
    * any authenticated caller, and storage holds a PDF as happily as a PNG — so
    * images and sent files share this one leg. Callers own their own validation
    * and size caps before they get here; `label` only names the thing in logs.
+   *
+   * The same bytes reuse one storage object. Agents read the same screenshot
+   * again and again, and a batch often carries one image several times: on
+   * 2026-11-23/24, 20 of the 32 GB uploaded were content prod already held, 97%
+   * of the repeats within an hour of the first (ct-60898). Self-hosted Convex
+   * never deletes a blob, so every repeat was permanent disk. Keyed by content
+   * and type, holding the in-flight upload so concurrent copies share it; a
+   * failed upload is forgotten so the next attempt tries again. Message images
+   * are never deleted from storage, so a shared id cannot be pulled out from
+   * under another message.
    */
   async uploadBytes(bytes: Uint8Array, mediaType: string, label = "File", timeoutMs = this.imageUploadTimeoutMs): Promise<string | null> {
+    const key = `${mediaType}:${createHash("sha256").update(bytes).digest("hex")}`;
+    const known = this.uploadsByContent.get(key);
+    if (known) {
+      // Refresh recency so a hot image outlives the cap.
+      this.uploadsByContent.delete(key);
+      this.uploadsByContent.set(key, known);
+      return known;
+    }
+    const upload = this.putBytes(bytes, mediaType, label, timeoutMs);
+    this.uploadsByContent.set(key, upload);
+    if (this.uploadsByContent.size > UPLOADS_BY_CONTENT_MAX) {
+      this.uploadsByContent.delete(this.uploadsByContent.keys().next().value!);
+    }
+    const storageId = await upload;
+    if (!storageId && this.uploadsByContent.get(key) === upload) this.uploadsByContent.delete(key);
+    return storageId;
+  }
+
+  private async putBytes(bytes: Uint8Array, mediaType: string, label: string, timeoutMs: number): Promise<string | null> {
     try {
       const uploadUrl = await withTimeout(
         this.mutate(

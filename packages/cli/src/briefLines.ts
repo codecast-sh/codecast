@@ -4,6 +4,7 @@
 // carries its handoff status and review verdict.
 import { unplacedLines } from "./orgUnplacedLines.js";
 import { c } from "./colors.js";
+import { reportWaitsWords, type ReportWaits } from "@codecast/shared/contracts/personProfile";
 import { goalStateLine, type GoalProgress } from "@codecast/shared/contracts/roleGoals";
 import { isWholeWorkspaceRole } from "@codecast/shared/contracts/orgLead";
 import { usedOf } from "@codecast/shared/contracts/orgCapacity";
@@ -113,6 +114,31 @@ export function briefPeopleLines(people: BriefPersonRow[], now: number): string[
   return out;
 }
 
+// The people who report to the role as the chart holds them (org-people.md
+// P2): each one's short line, what of the area waits on them, then the
+// decisions past a day and the open tasks by id, so the check can ask.
+export type BriefReportRow = {
+  line: string;
+  waits: ReportWaits;
+  decisions: Array<{ short_id: string | null; question: string; created_at: number }>;
+  tasks: Array<{ short_id: string; title: string; status: string; updated_at: number }>;
+};
+export const BRIEF_REPORT_ITEMS_MAX = 5;
+
+export function briefReportLines(reports: BriefReportRow[], now: number): string[] {
+  if (!reports.length) return [];
+  const out = [`  people who report to it:`];
+  for (const r of reports) {
+    const waits = reportWaitsWords(r.waits);
+    out.push(`    ${r.line}${waits.length ? ` ${c.yellow}· ${waits.join(", ")}${c.reset}` : ` ${c.dim}· nothing waits on them${c.reset}`}`);
+    for (const d of r.decisions.slice(0, BRIEF_REPORT_ITEMS_MAX)) out.push(`      ${c.dim}${d.short_id ?? "decision"}${c.reset} ${d.question} ${c.dim}· asked ${formatDateSmart(d.created_at, now)}${c.reset}`);
+    for (const t of r.tasks.slice(0, BRIEF_REPORT_ITEMS_MAX)) out.push(`      ${c.dim}${t.short_id}${c.reset} ${t.title} ${c.dim}· ${t.status}${c.reset}`);
+    const more = Math.max(0, r.decisions.length - BRIEF_REPORT_ITEMS_MAX) + Math.max(0, r.tasks.length - BRIEF_REPORT_ITEMS_MAX);
+    if (more) out.push(`      ${c.dim}and ${more} more${c.reset}`);
+  }
+  return out;
+}
+
 // The charter block of `cast brief`: the humans' statement of the job, which
 // every frame tells the role to read here. Absent charter says so.
 export function briefCharterLines(charter: string): string[] {
@@ -182,7 +208,8 @@ export function briefTextLines(brief: any, now: number): string[] {
     ...briefChatLines(brief.chat, brief.role.handle),
     `  today: ${usedOf(u.wakes, u.caps.wakes_per_day)} wakes · ${usedOf(u.hands, u.caps.hands_per_day)} sessions started · ${usedOf(u.tokens, u.caps.tokens_per_day)} tokens${u.uncounted_sessions ? ` ${c.dim}(tokens not counted for ${u.uncounted_sessions} session${u.uncounted_sessions === 1 ? "" : "s"})${c.reset}` : ""}`,
     ...(f.hands.length ? [`  sessions under it:`, ...f.hands.map(briefHandLine)] : []),
-    ...(f.people?.length ? [`  people who report to it:`, ...briefPeopleLines(f.people, now)] : []),
+    ...briefReportLines(f.reports ?? [], now),
+    ...(f.people?.length ? [`  ${f.reports?.length ? "their goals and sessions" : "people who report to it"}:`, ...briefPeopleLines(f.people, now)] : []),
     ...briefCharterLines(String(brief.charter ?? "")),
     // How to move them, only for an area read by a number (contracts/metricClimb).
     ...(briefServesNumbers(f) ? ["", ...metricClimbLines().map((line, i) => (i === 0 ? `  ${c.bold}${line}${c.reset}` : `  ${line}`))] : []),

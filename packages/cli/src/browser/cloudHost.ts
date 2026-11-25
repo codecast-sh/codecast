@@ -334,6 +334,10 @@ export async function ensureUp(
   // Where the boot is, for a person watching it (WAKE_PHASES): a session
   // waiting on this host shows each one as it passes.
   onPhase: (phase: WakePhase) => void = () => {},
+  // A public key to let in through the provider for each attempt and then
+  // add to the host's authorized_keys: how a laptop that did not launch the
+  // host gets in the first time (hosts/adopt.ts).
+  opts: { grantKey?: string } = {},
 ): Promise<CloudHost> {
   const provider = hostProvider(host);
   if (!provider.start) return host;
@@ -374,9 +378,12 @@ export async function ensureUp(
   // A host that was already running has booted: if it does not answer within
   // a slow handshake or two its OS is gone (AWS "impaired", 2026-10-24), and a
   // caller with a fallback (cloud-first spawns) should not wait 6 minutes for it.
-  const sshDeadline = Date.now() + (wasRunning ? 90_000 : host.platform === "darwin" ? 25 * 60_000 : 6 * 60_000);
+  const bootLeash = host.platform === "darwin" ? 25 * 60_000 : 6 * 60_000;
+  let sshDeadline = Date.now() + (wasRunning ? 90_000 : bootLeash);
+  let rebooted = false;
   for (;;) {
     try {
+      if (opts.grantKey) provider.grantKey?.(host, opts.grantKey);
       execFileSync(
         "ssh",
         [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "StrictHostKeyChecking=accept-new",
@@ -397,7 +404,21 @@ export async function ensureUp(
         socket = socketFor(dial);
         continue;
       }
-      if (Date.now() > sshDeadline) throw new Error(`${host.id} is running but never accepted SSH at ${address}`);
+      if (Date.now() > sshDeadline) {
+        // A running host whose OS hung (out of memory, a kernel stall) never
+        // answers again on its own, and its daemon is dead with it: every
+        // later wake would wait here and fail the same way. Restart it once.
+        if (!rebooted && provider.reboot && provider.impaired?.(host)) {
+          onProgress(`${host.id} is running but its OS is not responding (instance status impaired); rebooting it`);
+          provider.reboot(host);
+          rebooted = true;
+          onPhase("booting");
+          sshDeadline = Date.now() + bootLeash;
+          await new Promise((r) => setTimeout(r, 30_000));
+          continue;
+        }
+        throw new Error(`${host.id} is running but never accepted SSH at ${address}${rebooted ? " (even after a reboot)" : ""}`);
+      }
       onProgress("waiting for it to accept connections…");
       onPhase("ssh_wait");
       await new Promise((r) => setTimeout(r, 5000));
@@ -408,6 +429,7 @@ export async function ensureUp(
   // dial can prefer it (or stop preferring it, once the host leaves). A laptop
   // with no tailnet of its own could not use the answer, so it does not ask.
   onPhase("ssh_up");
+  if (opts.grantKey) authorizeKey(host, dial, socket, opts.grantKey);
   const tailnet = localTailnet() ? learnHostTailnet(host, dial, socket) : host.tailnet;
 
   // Only these fields: a field-level patch under the registry lock, so a
@@ -426,6 +448,18 @@ function learnHostTailnet(host: CloudHost, dial: string, socket: string): Tailne
     "-o", "ControlMaster=auto", "-o", `ControlPath=${socket}`, "-o", "ControlPersist=120",
     sshDestination({ ...host, address: dial }), HOST_TAILNET_COMMAND], { encoding: "utf-8", timeout: 15_000, stdio: ["ignore", "pipe", "ignore"] });
   return r.status === 0 ? readHostTailnet(r.stdout) : host.tailnet;
+}
+
+/** Add `publicKey` to the host user's authorized_keys, once, over the open control socket. */
+function authorizeKey(host: CloudHost, dial: string, socket: string, publicKey: string): void {
+  const line = publicKey.trim();
+  const quoted = `'${line.replace(/'/g, `'\\''`)}'`;
+  const r = spawnSync("ssh", [...sshIdentity(host), "-o", "IdentitiesOnly=yes", "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
+    "-o", "ControlMaster=auto", "-o", `ControlPath=${socket}`, "-o", "ControlPersist=120",
+    sshDestination({ ...host, address: dial }),
+    `mkdir -p ~/.ssh && chmod 700 ~/.ssh && touch ~/.ssh/authorized_keys && (grep -qxF ${quoted} ~/.ssh/authorized_keys || echo ${quoted} >> ~/.ssh/authorized_keys)`],
+    { timeout: 20_000, stdio: "ignore" });
+  if (r.status !== 0) throw new Error(`${host.id}: could not add this machine's key to authorized_keys`);
 }
 
 /** Put a host to sleep. This is what makes idle cost nothing. */

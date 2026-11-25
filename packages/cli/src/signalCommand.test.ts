@@ -223,11 +223,11 @@ describe("cast signal on the wire", () => {
     const repo = fs.mkdtempSync(path.join(os.tmpdir(), "signal-profile-"));
     fs.mkdirSync(path.join(repo, ".git"));
     fs.mkdirSync(path.join(repo, ".codecast"));
-    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nprojet = "Agent Quality"\n`);
+    fs.writeFileSync(path.join(repo, ".codecast", "line.toml"), `[line]\nsize_budget = "big"\n`);
     process.env.CODECAST_CWD = repo;
     await expect(run("add", "--source", "person", "--kind", "bug", "--title", "x")).rejects.toThrow(/exit 1/);
     expect(calls).toHaveLength(0);
-    expect(logs.join("\n")).toContain('[line] has unknown key "projet"');
+    expect(logs.join("\n")).toContain("[line] size_budget must be a positive integer");
     fs.rmSync(repo, { recursive: true, force: true });
   });
 

@@ -141,4 +141,14 @@ export const awsProvider: HostProvider = {
       healSecurityGroup: true,
     }, hooks);
   },
+  impaired(host) {
+    const status = aws(["ec2", "describe-instance-status", "--instance-ids", host.id], host.region, host.profile)?.InstanceStatuses?.[0];
+    return status?.InstanceStatus?.Status === "impaired";
+  },
+  reboot(host) {
+    aws(["ec2", "reboot-instances", "--instance-ids", host.id], host.region, host.profile);
+  },
+  grantKey(host, publicKey) {
+    aws(["ec2-instance-connect", "send-ssh-public-key", "--instance-id", host.id, "--instance-os-user", host.user, "--ssh-public-key", publicKey], host.region, host.profile);
+  },
 };

@@ -38,7 +38,7 @@ import * as fs from "fs";
 import * as http from "http";
 import * as path from "path";
 import { Option, type Command } from "commander";
-import { apiPost, nonJsonError, type PublishDeps } from "./castApi.js";
+import { apiPost, parseApiAnswer, type PublishDeps } from "./castApi.js";
 import { buildPublishPayload } from "./publish.js";
 import { commentOnDecision } from "./decideComment.js";
 import { stdinText } from "./sendBody.js";
@@ -575,13 +575,9 @@ async function decideApi(deps: PublishDeps, body: Record<string, unknown>, route
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: apiToken, ...body }),
   });
-  const text = await response.text();
-  let result: any;
-  try {
-    result = JSON.parse(text);
-  } catch {
-    fail(nonJsonError(route, response.status, text, { read }));
-  }
+  const parsed = parseApiAnswer(route, response, await response.text(), { read });
+  if ("failure" in parsed) fail(parsed.failure);
+  const result = parsed.result;
   if (result?.error) explainResolved(new Error(String(result.error)), result);
   return result;
 }
