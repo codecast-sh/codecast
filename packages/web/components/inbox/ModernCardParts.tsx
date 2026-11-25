@@ -1,6 +1,6 @@
 import type React from "react";
 import Link from "next/link";
-import { CornerUpLeft, ArrowRight, GitBranch, GitPullRequest, MessageSquare, Square, Tag, Users, Workflow } from "lucide-react";
+import { Columns2, CornerUpLeft, ArrowRight, GitBranch, GitPullRequest, MessageSquare, Square, Tag, Users, Workflow } from "lucide-react";
 import { runHref } from "../../lib/decisionLinks";
 import { badgeVariants } from "../ui/badge";
 import { Button } from "../ui/button";
@@ -222,9 +222,10 @@ const TOOL = "pointer-events-auto text-sol-text-dim";
  *  own ground: shown on hover and while the card holds keyboard focus. One
  *  row, so no card height clips it. A live card ends on Close; a set-aside
  *  card (stashed, snoozed, closed) offers Restore and its remove instead. */
-export function ModernCardToolbar({ session, onPin, onLabel, onClose, onRestore, onKill, restoreLabel = "Restore", killLabel = "Kill" }: {
+export function ModernCardToolbar({ session, onPin, onOpenBeside, onLabel, onClose, onRestore, onKill, restoreLabel = "Restore", killLabel = "Kill" }: {
   session: InboxSession;
   onPin?: (e: React.MouseEvent) => void;
+  onOpenBeside?: () => void;
   onLabel?: () => void;
   onClose?: () => void;
   onRestore?: () => void;
@@ -232,7 +233,7 @@ export function ModernCardToolbar({ session, onPin, onLabel, onClose, onRestore,
   restoreLabel?: string;
   killLabel?: string;
 }) {
-  if (!onPin && !onLabel && !onClose && !onRestore && !onKill) return null;
+  if (!onPin && !onOpenBeside && !onLabel && !onClose && !onRestore && !onKill) return null;
   const pinned = !!session.is_pinned;
   return (
     <div data-mc-tools className="mc-tools absolute right-0 top-0 z-[3] flex items-center gap-0.5 pl-8 pr-1.5 pt-1.5 pb-1 opacity-0 pointer-events-none transition-opacity group-hover:opacity-100 group-focus-within:opacity-100">
@@ -240,6 +241,13 @@ export function ModernCardToolbar({ session, onPin, onLabel, onClose, onRestore,
         <ShortcutTooltip label={pinned ? "Unpin" : "Pin"} action="session.pin">
           <Button variant="ghost" size="icon-xs" aria-label={pinned ? "Unpin" : "Pin"} onClick={(e) => { stop(e); onPin(e); }} className={`${TOOL} ${pinned ? "text-sol-magenta" : "hover:text-sol-magenta"}`}>
             <ModernPinGlyph filled={pinned} />
+          </Button>
+        </ShortcutTooltip>
+      )}
+      {onOpenBeside && (
+        <ShortcutTooltip label="Open beside">
+          <Button variant="ghost" size="icon-xs" aria-label="Open beside" onClick={(e) => { stop(e); onOpenBeside(); }} className={`${TOOL} hover:text-sol-cyan`}>
+            <Columns2 aria-hidden className="w-3.5 h-3.5" />
           </Button>
         </ShortcutTooltip>
       )}

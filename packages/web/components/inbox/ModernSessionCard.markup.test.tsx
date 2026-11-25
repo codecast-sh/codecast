@@ -167,10 +167,10 @@ describe("the Modern session card", () => {
     expect(active).toContain("line-clamp-2");
   });
 
-  test("the toolbar is one row: Pin, Label, then Close last; no Stash or Kill on a live card; a set-aside card offers Restore and its remove", () => {
+  test("the toolbar is one row: Pin, Open beside, Label, then Close last; no Stash or Kill on a live card; a set-aside card offers Restore and its remove", () => {
     const html = render({ _id: "c-tools" });
     const tools = html.slice(html.indexOf("data-mc-tools"));
-    expect(tools.match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Pin"', 'aria-label="Label session"', 'aria-label="Close"']);
+    expect(tools.match(/aria-label="[^"]*"/g)).toEqual(['aria-label="Pin"', 'aria-label="Open beside"', 'aria-label="Label session"', 'aria-label="Close"']);
     expect(tools).not.toMatch(/aria-label="(Stash|Kill|Kill Session)"/);
     expect(html.match(/data-mc-tools/g)).toHaveLength(1);
     expect(html).toMatch(/data-mc-tools[^>]*class="[^"]*flex items-center/);

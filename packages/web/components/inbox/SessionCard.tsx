@@ -32,6 +32,7 @@ import { hostedRowTitle } from "../../lib/hostedRowTitle";
 import { SessionCardView, type SessionCardChrome, type SessionCardViewProps } from "./SessionCardView";
 import { ModernSessionCardView } from "./ModernSessionCard";
 import { useIsModernStyle } from "../../hooks/useVisualStyle";
+import { openConversationBeside } from "../../hooks/useOpenLinkedSession";
 import { useInboxSelection } from "../../lib/inboxSelection";
 import { sessionShipSig, sessionShipFromSig } from "../../hooks/useSessionShipState";
 import { sessionPullRequestsSig, titledSessionPullRequests } from "../../lib/sessionPullRequests";
@@ -389,6 +390,7 @@ export const SessionCard = memo(function SessionCard({
       selecting={selecting}
       onToggleSelect={toggleSelect}
       onPin={handlePin}
+      onOpenBeside={openConversationBeside}
       onNavigateToSession={onNavigateToSession}
       onToggleFavorite={toggleFavorite}
       onOpenLabels={openLabels}

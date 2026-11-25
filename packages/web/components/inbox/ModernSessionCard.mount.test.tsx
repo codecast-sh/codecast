@@ -112,10 +112,10 @@ describe("the Modern card, mounted", () => {
     expect(host.querySelector("[data-sv-title]")!.textContent).toBe("Fix the auth race");
   });
 
-  test("its three actions sit in one row, Close last, and each reaches its handler", async () => {
+  test("its four actions sit in one row, Close last, and each reaches its handler", async () => {
     const tools = host.querySelector("[data-mc-tools]")!;
     const buttons = [...tools.querySelectorAll("button")];
-    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Pin", "Label session", "Close"]);
+    expect(buttons.map((b) => b.getAttribute("aria-label"))).toEqual(["Pin", "Open beside", "Label session", "Close"]);
     // One row: every action is a direct child of the toolbar, which lays
     // them out side by side (flex, no wrap, no column).
     expect(buttons.every((b) => b.parentElement === tools)).toBe(true);

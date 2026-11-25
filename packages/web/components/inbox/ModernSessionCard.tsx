@@ -104,6 +104,7 @@ export function ModernSessionCardView({
   onSelect,
   onClose,
   onPin,
+  onOpenBeside,
   onRestore,
   onKill,
   onNavigateToSession,
@@ -286,7 +287,7 @@ export function ModernSessionCardView({
   const pinnable = !isForeignSession && !isSetAside;
   // A row that draws the live toolbar (pin, label, close) is a target for
   // its chords (data-row-verbs, lib/hoverTarget).
-  const drawsRowVerbs = !isForeignSession && !isSetAside && !onRestore && !!(onPin || onOpenLabels || onClose);
+  const drawsRowVerbs = !isForeignSession && !isSetAside && !onRestore && !!(onPin || onOpenBeside || onOpenLabels || onClose);
   return (
     <div
       data-session-id={session._id}
@@ -389,6 +390,7 @@ export function ModernSessionCardView({
           <ModernCardToolbar
             session={session}
             onPin={pinnable && onPin ? (e) => onPin(session._id, e) : undefined}
+            onOpenBeside={onOpenBeside && (() => onOpenBeside(session._id))}
             onLabel={!nested && onOpenLabels ? () => onOpenLabels(session) : undefined}
             onClose={onClose && (() => onClose(session._id))}
           />

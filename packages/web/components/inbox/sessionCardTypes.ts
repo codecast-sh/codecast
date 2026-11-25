@@ -130,6 +130,9 @@ export type SessionCardViewProps = {
   onClose?: (id: string) => void;
   onDefer?: (id: string) => void;
   onPin?: (id: string, e: React.MouseEvent) => void;
+  /** Open the session as a pane beside what is on stage, so a page and the
+   *  session's composer share the screen (ct-101410). */
+  onOpenBeside?: (id: string) => void;
   onRestore?: (id: string) => void;
   onKill?: (id: string) => void;
   /** The implementation session's link. */

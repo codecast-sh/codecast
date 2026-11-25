@@ -100,6 +100,7 @@ export function SessionCardView({
   onClose,
   onDefer,
   onPin,
+  onOpenBeside,
   onRestore,
   onKill,
   onNavigateToSession,
@@ -775,7 +776,7 @@ export function SessionCardView({
       )}
       </div>
       {!isForeignSession && (onClose || onDefer || onPin) && (
-        <CardHoverToolbar session={session} labels fadeGround={fadeGround} onPin={onPin} onOpenLabels={onOpenLabels} onClose={onClose} />
+        <CardHoverToolbar session={session} labels fadeGround={fadeGround} onPin={onPin} onOpenBeside={onOpenBeside} onOpenLabels={onOpenLabels} onClose={onClose} />
       )}
       {!isForeignSession && (onRestore || onKill) && (
         <CardRestoreCluster session={session} variant={variant} isStashed={isStashed} onKill={onKill} onRestore={onRestore} />

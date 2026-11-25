@@ -1,7 +1,7 @@
 import React, { useState } from "react";
 import { KEEP_DRAG_OFF_CARD } from "../../lib/keepOffCard";
 import { useLabelColor } from "../../lib/labelColors";
-import { Tag, UserCheck, CheckSquare, Square } from "lucide-react";
+import { Columns2, Tag, UserCheck, CheckSquare, Square } from "lucide-react";
 import { formatRelative, formatDateFull } from "../../lib/utils";
 import { sessionCardTitle } from "../../lib/sessionCard";
 import { sessionStartupState } from "../../lib/sessionLifecycle";
@@ -322,13 +322,14 @@ export function CardPinMark({ session, onPin }: { session: InboxSession; onPin?:
   );
 }
 
-/** The hover toolbar on a live card: pin, label, close. A card too short for
+/** The hover toolbar on a live card: pin, open beside, label, close. A card too short for
  *  them in one column wraps them into a second, so Close is never clipped. */
 export function CardHoverToolbar({
   session,
   labels,
   fadeGround,
   onPin,
+  onOpenBeside,
   onOpenLabels,
   onClose,
 }: {
@@ -337,6 +338,7 @@ export function CardHoverToolbar({
   labels: boolean;
   fadeGround: string | null;
   onPin?: (id: string, e: React.MouseEvent) => void;
+  onOpenBeside?: (id: string) => void;
   onOpenLabels?: (session: InboxSession) => void;
   onClose?: (id: string) => void;
 }) {
@@ -352,6 +354,17 @@ export function CardHoverToolbar({
                 className={`p-1 rounded transition-colors pointer-events-auto ${session.is_pinned ? "text-sol-magenta hover:opacity-70" : "text-sol-text-dim hover:text-sol-magenta"}`}
               >
                 <PinGlyph filled={!!session.is_pinned} />
+              </button>
+            </ShortcutTooltip>
+          )}
+          {onOpenBeside && (
+            <ShortcutTooltip label="Open beside" side="left">
+              <button
+                aria-label="Open beside"
+                onClick={(e) => { e.stopPropagation(); onOpenBeside(session._id); }}
+                className="p-1 rounded text-sol-text-dim hover:text-sol-cyan transition-colors pointer-events-auto"
+              >
+                <Columns2 className="w-3.5 h-3.5" />
               </button>
             </ShortcutTooltip>
           )}
