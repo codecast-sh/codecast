@@ -493,6 +493,10 @@ export const daemonHeartbeat = mutation({
     // A newer release the daemon could update to; "" once it checked and found
     // none, absent before its first check (and from older daemons).
     update_available: v.optional(v.string()),
+    // The newest update request the daemon read the release manifest for (0:
+    // none yet), so its cached "" never answers a request made after that
+    // answer (lib/deviceUpdate.ts). Absent from older daemons.
+    update_checked_for: v.optional(v.number()),
     // Self update (lib/deviceUpdate.ts): can this install replace its binary,
     // how it was installed, and its run for the row's update request.
     can_self_update: v.optional(v.boolean()),

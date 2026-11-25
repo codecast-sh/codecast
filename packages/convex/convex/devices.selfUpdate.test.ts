@@ -76,6 +76,31 @@ describe("the request through heartbeats", () => {
     expect(row(db).update_requested_at).toBeUndefined();
   });
 
+  test("a cached '' from before the request leaves it open and hands it over; the daemon's read for it clears it", async () => {
+    // union-line-1, 2026-11-24: two presses after 1.1.273 shipped, each cleared
+    // on the next beat by a check made before the release, unseen by the daemon.
+    const db = await fixture({ can_self_update: true, update_available: undefined });
+    await press(db);
+    const at = row(db).update_requested_at;
+    const r1 = await beat(db, { update_available: "", update_checked_for: 0 });
+    expect(r1.update_request).toEqual({ version: "latest", at });
+    expect(row(db).update_state).toBe("requested");
+
+    const r2 = await beat(db, { update_available: "", update_checked_for: at });
+    expect(r2.update_request).toBeUndefined();
+    expect(row(db).update_requested_at).toBeUndefined();
+  });
+
+  test("once a run for the request started, the restarted daemon's first '' clears it", async () => {
+    const db = await fixture({ can_self_update: true, update_available: undefined });
+    await press(db);
+    const at = row(db).update_requested_at;
+    await beat(db, { update_available: "1.1.0", update_checked_for: at, update_status: { state: "installing", at } });
+    expect(row(db).update_state).toBe("installing");
+    await beat(db, { version: "1.1.0", update_available: "", update_checked_for: 0 });
+    expect(row(db).update_requested_at).toBeUndefined();
+  });
+
   test("reports can_self_update and distribution on the row", async () => {
     const db = await fixture();
     await beat(db, { can_self_update: false, distribution: "source" });
@@ -88,6 +113,18 @@ describe("selfUpdateBeatPatch", () => {
     const patch = selfUpdateBeatPatch({ update_requested_at: 5, update_state: "requested" }, { version: "1.0.0", update_available: "" });
     expect(patch).toMatchObject({ update_state: undefined, update_requested_at: undefined });
     expect("update_state" in patch).toBe(true);
+  });
+
+  test("a '' answers a request only from a read made for it or once its run started; an older daemon's '' always does", () => {
+    const req = { update_requested_at: 5, update_state: "requested" as const };
+    const nothingNewer = (checkedFor: number | undefined, row: Record<string, unknown> = req) =>
+      "update_requested_at" in selfUpdateBeatPatch(row, { version: "1.0.0", update_available: "", update_checked_for: checkedFor });
+    expect(nothingNewer(0)).toBe(false);
+    expect(nothingNewer(4)).toBe(false);
+    expect(nothingNewer(5)).toBe(true);
+    expect(nothingNewer(0, { ...req, update_state: "installing" })).toBe(true);
+    expect(nothingNewer(0, { ...req, update_state: "failed" })).toBe(true);
+    expect(nothingNewer(undefined)).toBe(true);
   });
 
   test("no request: nothing to hand to the daemon", () => {

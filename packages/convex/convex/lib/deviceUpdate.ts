@@ -28,6 +28,8 @@ type Row = {
 type Beat = {
   version: string;
   update_available?: string;
+  /** The newest request this daemon read the release manifest for (0: none yet); absent from older daemons. */
+  update_checked_for?: number;
   can_self_update?: boolean;
   distribution?: Distribution;
   update_status?: { state: "installing" | "failed"; error?: string; at?: number };
@@ -40,8 +42,13 @@ export function selfUpdateBeatPatch(row: Row | null | undefined, beat: Beat): Pa
   if (beat.distribution !== undefined) patch.distribution = beat.distribution;
   if (!row?.update_requested_at) return patch;
   // Done: the machine runs the version asked for, or its own check finds
-  // nothing newer. The request clears itself.
-  if (beat.version === row.update_requested_version || beat.update_available === "") {
+  // nothing newer. That check answers from a cache up to a day old, so its ""
+  // counts only once the daemon has read the manifest for this request or
+  // started a run for it: a request made just after a release was cleared on
+  // the old answer before the daemon ever saw it (union-line-1, 2026-11-24).
+  // A daemon too old to send update_checked_for is taken at its word.
+  const checked = beat.update_checked_for === undefined || beat.update_checked_for >= row.update_requested_at || row.update_state !== "requested";
+  if (beat.version === row.update_requested_version || (beat.update_available === "" && checked)) {
     return { ...patch, update_requested_version: undefined, update_requested_at: undefined, update_state: undefined, update_error: undefined };
   }
   // Only the run answering THIS request moves its state: a failure left over

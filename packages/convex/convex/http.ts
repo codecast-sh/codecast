@@ -2409,7 +2409,7 @@ http.route({
 
     try {
       const body = await request.json();
-      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, line_slots, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, wsl_distro, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, cloud_agent_blocks, settings, model_inventory, update_available, can_self_update, distribution, update_status, team_host, tailnet } = body;
+      const { api_token, version, platform, pid, autostart_enabled, has_tmux, boot_id, local_project_roots, git_plane, line_slots, git_pubkey, pending_sync_count, oldest_pending_ms, pending_sync_messages, pending_sync_conversations, sync_no_progress_ms, daemon_started_at, loop_freeze_ms, loop_freeze_1h_ms, loop_freeze_max_ms, loop_freeze_top, device_id, device_label, device_hostname, wsl_distro, is_remote_device, input_idle_ms, cc_accounts, codex_usage, codex_accounts, provider_key_pubkey, managed_provider_ids, cloud_agent_blocks, settings, model_inventory, update_available, update_checked_for, can_self_update, distribution, update_status, team_host, tailnet } = body;
 
       if (!api_token || !version || !platform) {
         return new Response(JSON.stringify({ error: "Missing required fields" }), {
@@ -2455,6 +2455,7 @@ http.route({
         settings,
         model_inventory,
         update_available: typeof update_available === "string" ? update_available : undefined,
+        update_checked_for: typeof update_checked_for === "number" ? update_checked_for : undefined,
         can_self_update: typeof can_self_update === "boolean" ? can_self_update : undefined,
         distribution: ["installer", "brew", "npm", "source"].includes(distribution) ? distribution : undefined,
         update_status: update_status && (update_status.state === "installing" || update_status.state === "failed")
