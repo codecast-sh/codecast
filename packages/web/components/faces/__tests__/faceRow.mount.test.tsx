@@ -475,6 +475,65 @@ describe("two densities, one row", () => {
     expect(drags).toEqual([]);
   });
 
+  test("shrunk to faces, a still press on the call's strip opens the call; a drag, a face or a control in it does not, and the toolbar stays under the hand", async () => {
+    const drags: boolean[] = [];
+    const proto = dom.window.HTMLElement.prototype as any;
+    proto.setPointerCapture ??= () => {};
+    proto.releasePointerCapture ??= () => {};
+    proto.hasPointerCapture ??= () => false;
+    const Pointer = (dom.window as any).PointerEvent ?? dom.window.MouseEvent;
+    let opened = 0;
+    const chrome = { onExpand: () => opened++, onClose() {}, closeWord: "Hide", closeTitle: "Hide" };
+    const row = rowOf([me(), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" })], [link(ANN, "call")]);
+    const h = await mount(
+      <FloatingFaceRow row={row} viewerId={ME} bridge={{ setInteractive() {}, setContentSize() {}, setDragging: (on: boolean) => drags.push(on) }} chrome={chrome}>
+        <div className="strip-body">Ann<button type="button" className="strip-btn">End</button></div>
+      </FloatingFaceRow>,
+    );
+    const press = async (el: Element, moveBy: number) => {
+      await act(async () => {
+        el.dispatchEvent(new Pointer("pointerdown", { bubbles: true, button: 0, pointerId: 1, screenX: 100, screenY: 100 }));
+        dom.window.document.dispatchEvent(new Pointer("pointermove", { bubbles: true, pointerId: 1, screenX: 100 + moveBy, screenY: 100 }));
+        el.dispatchEvent(new Pointer("pointerup", { bubbles: true, button: 0, pointerId: 1, screenX: 100 + moveBy, screenY: 100 }));
+        el.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true, cancelable: true }));
+      });
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 5));
+      });
+    };
+    // A drag from the strip moves the window and opens nothing.
+    await press(h.q(".strip-body")!, 60);
+    expect(drags).toEqual([true, false]);
+    expect(opened).toBe(0);
+    // A control inside the strip keeps its press.
+    await press(h.q(".strip-btn")!, 0);
+    expect(opened).toBe(0);
+    // A still press on a face pins its card, not the call.
+    await press(h.q(`.face-seat[data-face-id="${ANN}"] .face`)!, 0);
+    expect(h.q("[data-member-card]")?.textContent ?? "").toContain("Ann");
+    expect(opened).toBe(0);
+    // A still press on the strip is the way back, toolbar or not.
+    expect(h.q(".face-row-chrome")).toBeNull();
+    await press(h.q(".strip-body")!, 0);
+    expect(opened).toBe(1);
+    // With the pointer in, a still press on the strip or a face leaves
+    // Expand drawn past the 400 ms hide.
+    await act(async () => {
+      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mousemove", { bubbles: true, clientX: 0, clientY: 0 }));
+    });
+    await press(h.q(".strip-body")!, 0);
+    await press(h.q(`.face-seat[data-face-id="${ANN}"] .face`)!, 0);
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 600));
+    });
+    expect(h.q('[data-chrome-btn="open"]')).not.toBeNull();
+    // The pointer leaving still takes the toolbar away.
+    await act(async () => {
+      dom.window.document.dispatchEvent(new dom.window.MouseEvent("mouseleave"));
+    });
+    expect(h.q(".face-row-chrome")).toBeNull();
+  });
+
   test("pointed at, the float's others circle opens them as a stack, and a press spreads them", async () => {
     const row = rowOf([me({ state: "live-with-me" as FaceState }), entry(ANN, "Ann", { state: "live-with-me", tier: "linked" }), entry(BO, "Bo"), entry(CY, "Cy")], [link(ANN, "call")]);
     const h = await mount(<FloatingFaceRow row={row} viewerId={ME} bridge={{ setInteractive() {}, setContentSize() {}, setDragging() {} }} />);
