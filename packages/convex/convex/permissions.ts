@@ -383,6 +383,12 @@ export const getPendingPermissions = query({
       .filter((p) => p.created_at > cutoff)
       .sort((a, b) => a.created_at - b.created_at);
     if (runner) return live;
+    // An admin of the session's team answers, so reads what the runner reads
+    // (the safety check, removals, intent, subagent) without the rule data:
+    // keeping a rule is the runner's alone (updatePermissionStatus).
+    if (await adminAnswersPrompts(ctx, userId, conversation)) {
+      return live.map(({ rule_request: _rules, suggestions: _suggestions, ...row }) => row);
+    }
     // What a proposer needs to pick an answer, with secrets in the command
     // redacted the way the transcript's own tool inputs are.
     return live.map((p) => ({

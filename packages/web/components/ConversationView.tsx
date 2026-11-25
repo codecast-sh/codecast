@@ -16,7 +16,7 @@ import { BranchCodeLink } from "./repo/RepositoryLinks";
 import { captureException } from "@sentry/react";
 import { RefreshCw as PaletteRestart, Copy as PaletteCopy, Search as PaletteSearch, MessageCircleQuestion as PaletteAsk, Eye as PaletteEye, Pin as PalettePin, GitBranch as PaletteBranch, Rows3 as PaletteRows } from "lucide-react";
 import { usePaletteSessionCommands } from "../lib/paletteSessionCommands";
-import { adminOfTeam } from "../lib/steering";
+import { answerRoles } from "../lib/steering";
 import Link from "next/link";
 import { dragCarriesPane } from "../lib/stage";
 import { useRouter } from "next/navigation";
@@ -144,7 +144,7 @@ import { composerPresenceEnabled, hasCoPresent } from "../lib/composerPresence";
 import { ConversationViewers } from "./presence/ViewerFaces";
 import { anchorFromRects } from "../lib/follow";
 import { normalizeCastCategory, buildBrowserRowMap, sameBrowserRowMap, type BrowserRowInput, type BrowserRowState } from "./castCommand";
-import { useInboxStore, isConvexId, isIdleLandingStub, newProjectStartedBy, newProjectHref, viewerCommandsSession, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
+import { useInboxStore, isConvexId, isIdleLandingStub, newProjectStartedBy, newProjectHref, computeNewDividerIndex, convBucketMap, type BucketItem, type ForkChild, type InboxSession, resolveSimpleView, resolveVisualStyle } from "../store/inboxStore";
 import { DispatchNotWiredError, isParkedDispatchError } from "../store/mutativeMiddleware";
 import { useCurrentUser } from "../hooks/useCurrentUser";
 import { useForkNavigationStore } from "../store/forkNavigationStore";
@@ -661,29 +661,19 @@ const ConversationViewInner = (
 
   const { user: currentUser } = useCurrentUser();
   const effectiveIsOwner = isOwner;
-  // The session's own questions (AskUserQuestion, plan approval) are answered
-  // by the runner's daemon: their controls are live only for the people the
-  // server lets command it (commandsSession), and for an admin of the
-  // session's team, who never proposes (convex teamSuggestions.ts). Being an
-  // admin grants only that: no resume, no other commands, no Needs You.
-  const commandsThis = viewerCommandsSession(conversation as any, currentUser?._id);
-  const teamAdmin = useInboxStore((s) => adminOfTeam(s.teams, (conversation as any)?.team_id));
-  const canAnswerSession = commandsThis || teamAdmin;
-  // A teammate's press on a question or a permission becomes a proposal the
-  // owner submits; the owner sees those proposals on the same cards
-  // (components/conversation/teamProposals, convex teamSuggestions.ts). An
-  // admin who does not command the session is on neither side: they answer.
+  // The session's own questions (AskUserQuestion, plan approval) and its
+  // permission prompts are answered by the people the server lets command it
+  // (commandsSession) and by an admin of the session's team, who never
+  // proposes; a teammate's press becomes a proposal the owner submits, and
+  // the owner sees those proposals on the same cards
+  // (components/conversation/teamProposals, convex teamSuggestions.ts). Being
+  // an admin grants only that: no Allow all, no resume, no Needs You.
+  const myTeams = useInboxStore((s) => s.teams);
+  const meId = currentUser?._id ? String(currentUser._id) : null;
+  const roles = useMemo(() => answerRoles(conversation as any, meId, myTeams), [conversation, meId, myTeams]);
+  const canAnswerSession = roles.canAnswer;
   const proposalConvId = conversation?._id && isConvexId(String(conversation._id)) ? String(conversation._id) : null;
-  const proposalRole = !proposalConvId
-    ? null
-    : commandsThis
-    ? "owner" as const
-    : teamAdmin
-    ? null
-    : ((conversation as any)?.access_level === "team" && !["summary", "minimal", "private"].includes((conversation as any)?.team_visibility))
-      || (conversation as any)?.access_level === "owner"
-    ? "teammate" as const
-    : null;
+  const proposalRole = roles.proposalRole;
   const proposalOwnerName = (conversation as any)?.user?.name || (conversation as any)?.user?.email?.split("@")[0] || "the owner";
   const teamProposals = useMemo<TeamProposalRole>(
     () => (proposalConvId && proposalRole ? { conversationId: proposalConvId, role: proposalRole, ownerName: proposalOwnerName } : null),
@@ -693,7 +683,7 @@ const ConversationViewInner = (
   // session's team; anyone else who sees them (a teammate, the owner of a
   // session another account runs) proposes, and keeps their composer.
   const isRunner = !!currentUser?._id && String((conversation as any)?.user_id) === String(currentUser._id);
-  const permissionRole = !proposalConvId || !currentUser?._id ? null : isRunner ? "runner" as const : teamAdmin ? "admin" as const : "proposer" as const;
+  const permissionRole = roles.permissionRole;
   useSyncPendingSuggestions(proposalConvId ?? "", proposalRole === "owner", currentUser?._id ? String(currentUser._id) : null);
   useSyncMyTeamSuggestions(proposalConvId ?? "", currentUser?._id ? String(currentUser._id) : null, !!proposalConvId && !isRunner);
   // Per-message sender attribution, through lib/messageSender so the bubbles,
@@ -5729,6 +5719,7 @@ const ConversationViewInner = (
               onAllowAll={
                 (conversation?.agent_type ?? "claude_code") === "claude_code" &&
                 effectiveIsOwner &&
+                roles.allowAll &&
                 conversation?.status === "active" &&
                 effectiveMode !== "bypassPermissions"
                   ? handleEnableBypass
