@@ -20,6 +20,14 @@ import { useDeployReach } from "../hooks/useDeployReach";
 import { REACH_LOOK, type DeployTone } from "../lib/deploys/deployPill";
 import { REACH_ICON } from "../lib/deploys/deployLook";
 import { PR_STATE_GLYPH } from "../lib/prStateGlyph";
+import { prViewHref } from "../lib/prView";
+
+/** Where a chip opens its pull request: a chip that says its checks are red
+ *  opens the Checks tab, where the failures and "Send all failing" are. */
+function chipHref(repository: string, number: number, state: string): string | null {
+  const page = prPath({ repository, number });
+  return page && (state === "failing" || state === "ci_red") ? prViewHref(repository, number, "checks") : page;
+}
 
 const TONE_ACCENT: Record<DeployTone, ExternalEventAccent> = { green: "green", yellow: "yellow", red: "red", orange: "orange", muted: "muted", dim: "muted" };
 
@@ -50,7 +58,7 @@ export function PrStatusChip({
   const Pr = glyph.pr ?? GitPullRequest;
   const After = glyph.after;
   const icon = size === "panel" ? "w-3 h-3" : "w-2.5 h-2.5";
-  const href = prPath({ repository: status.repository, number: status.number });
+  const href = chipHref(status.repository, status.number, state);
   const body = (
     <>
       <Pr aria-hidden className={`${icon} shrink-0`} />
@@ -115,9 +123,14 @@ function linkedPrHover(pr: LinkedPr): string {
   return `${pr.repository} #${pr.number}${pr.title ? ` — ${pr.title}` : ""}\n${state[0].toUpperCase()}${state.slice(1)}${ci}\n${how}`;
 }
 
+/** An open pull request whose checks failed reads "failing", whatever else it is. */
+function linkedPrFailing(pr: LinkedPr): boolean {
+  return pr.ci === "failure" && pr.state === "open";
+}
+
 function LinkedChip({ pr, size, plain }: { pr: LinkedPr; size: "card" | "panel"; plain?: boolean }) {
   const look = LINKED_PR_LOOK[pr.state];
-  const failing = pr.ci === "failure" && pr.state === "open";
+  const failing = linkedPrFailing(pr);
   return (
     <PrStatusChip
       size={size}
@@ -183,7 +196,7 @@ export function LinkedPrChips({
           <PopoverContent align="end" className="w-[min(24rem,calc(100vw-1.5rem))] p-1" {...KEEP_OFF_CARD}>
             <div className="max-h-[min(22rem,60vh)] overflow-y-auto" data-linked-prs-list>
               {shown.map((pr) => {
-                const href = prPath({ repository: pr.repository, number: pr.number });
+                const href = chipHref(pr.repository, pr.number, linkedPrFailing(pr) ? "failing" : pr.state);
                 const row = "flex items-center gap-2 px-2 py-1 rounded min-w-0";
                 const body = (
                   <>
