@@ -11,7 +11,7 @@ import { withoutUndo } from "../store/undoStack";
 import { useCoarseNow } from "../hooks/useCoarseNow";
 import { BELOW_SM } from "../hooks/useIsPhone";
 import { useMediaQuery } from "../hooks/useMediaQuery";
-import { LinkedPrChips, PrStatusChip } from "./PrStatusChip";
+import { LinkedPrChips, PrStack, PrStatusChip } from "./PrStatusChip";
 import { sessionPullRequestsSig, titledSessionPullRequests, type LinkedPr } from "../lib/sessionPullRequests";
 import { TextWithMentions } from "./EntityIdPill";
 import { threadStateView, THREAD_STATE_STATUS_META, type ThreadStateView } from "../lib/threadState";
@@ -168,7 +168,6 @@ export function ThreadStatePanelView({
   // measuring the unclamped body would always read "fits" and eat the control
   // that collapses it back.
   const [expanded, setExpanded] = useState(false);
-  const narrow = useMediaQuery(BELOW_SM);
   const bodyRef = useRef<HTMLDivElement>(null);
   useWatchEffect(() => setExpanded(false), [conversationId]);
   const overflows = useLayoutFlag(bodyRef, (el) => el.scrollHeight > el.clientHeight + 1, [threadState, collapsed], !expanded);
@@ -191,8 +190,7 @@ export function ThreadStatePanelView({
     return (
       <div className="relative z-20 bg-sol-bg pt-1.5">
         <div className="mx-auto conv-col px-2 sm:px-4 pb-1.5 flex items-center gap-1 flex-wrap">
-          <PrStatusChip status={prStatus} size="panel" />
-          <LinkedPrChips prs={otherPrs} size="panel" max={4} inCard={false} />
+          <PrStack shepherd={prStatus} prs={otherPrs} />
         </div>
       </div>
     );
@@ -248,9 +246,7 @@ export function ThreadStatePanelView({
                 <span data-cc-tech className={`ml-auto mt-[3px] shrink-0 text-meta ${tone.meta}`}>{view.stamp}</span>
               )}
             </button>
-            <PrStatusChip status={prStatus} size="panel" className="shrink-0" />
-            {/* A phone has room for the count, not the chips: it opens them. */}
-            <LinkedPrChips prs={otherPrs} size="panel" max={narrow ? (prStatus ? 0 : 1) : 2} className="shrink-0" inCard={false} />
+            <PrStack shepherd={prStatus} prs={otherPrs} />
             <div className="flex items-center shrink-0">
               {canClear && (
                 <button

@@ -276,7 +276,9 @@ describe("the link connection", () => {
     const legacy = path.join(home, ".codecast/browser/laptop-link.json");
     child.stdin.write('{"v":1}\n');
     const deadline = Date.now() + 20_000;
-    while (!fs.existsSync(file) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
+    // The remote side creates each file before it writes it, so wait for the content, not the name.
+    const holds = (p: string) => fs.existsSync(p) && fs.readFileSync(p, "utf-8") === '{"v":1}\n';
+    while (!(holds(file) && holds(legacy)) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 20));
     expect(fs.readFileSync(file, "utf-8")).toBe('{"v":1}\n');
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
     expect(fs.readFileSync(legacy, "utf-8")).toBe('{"v":1}\n');
