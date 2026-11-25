@@ -58,6 +58,9 @@ count_messages() {
 if [ ! -f "$DIR/$SESSION_ID.json" ]; then
   [ "$EVENT" = "Stop" ] || return 0
   [ "\${STOP_ACTIVE:-false}" = "true" ] && return 0
+  # A session the daemon never synced (its folder is outside the sync scope)
+  # has nothing to pin a state on, and \`cast state\` refuses it.
+  grep -qF "\\"$SESSION_ID\\"" "$CC_DIR/conversations.json" 2>/dev/null || return 0
   count_messages
   [ "$COUNT" -ge ${THREAD_STATE_RECRUIT_MSGS} ] || return 0
   mkdir -p "$DIR/recruited"
