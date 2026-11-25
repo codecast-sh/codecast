@@ -5,18 +5,24 @@
 // starter's own word covers the change, Ask otherwise.
 //
 // Asker reads every line a person typed into the sessions the change came
-// through (`cast flow asker`: briefs, relays and agent text never appear), each
-// person's answers to the decision cards those sessions or the task asked, and
-// who started the run, from the run itself. Change is the diff, as the judge
+// through and the one that filed its task; a run started from a plain shell on
+// a task alone reads the task's sessions (the one that filed it, those bound to
+// it or that handed it off) (`cast flow asker`: briefs, relays and agent text never
+// appear), each person's answers to the decision cards those sessions or the
+// task asked, and who started the run, from the run itself. Change is the diff, as the judge
 // reads it. Read is a model that answers whether a line or card answer of the
 // starter's tells this work to ship, and whether the change stays inside what
 // they asked for, citing the line (or the card) and quoting it. Verify (or
 // Verify card) hands the citation to the server (`cast flow intent-verify`),
-// which accepts it only when it is the starter's own word on the change's chain
-// or task and holds the quote; code, not the model, is the gate. The check
+// which accepts it only when it is the starter's own word on a chain the server
+// walks from the session that started the run and its task's filing session
+// (for a run no session started, whose spawner is at most the project lead's
+// stand-in, the task's sessions), or on a card of the task, and holds
+// the quote; code, not the model, is the gate. The check
 // writes nothing to the run.
 //
-// Every other ending is Ask: no session behind the change, a failed script or
+// Every other ending is Ask: no session or task behind the change, a task no
+// session is tied to, a failed script or
 // model call, an answer that is not JSON, ship false, out of scope, or a
 // citation the server refuses. Each says why on the task in one comment first
 // (the model's why, the server's refusal, or the failure), so a read that never
@@ -34,7 +40,7 @@ digraph intent {
   graph [kind="segment", label="Intent", description="Whether the person who started the run already said to ship this change, in their own words, checked against the record", takes="task,branch"]
   start [shape=Mdiamond]
   asker [label="Asker", shape=parallelogram, timeout=120,
-    script="rm -f $run_dir/intent.json $run_dir/intent-head; _conv=$change_conversation; _task=$task_id; [ -n \"$_conv\" ] || { echo 'no session started this change'; exit 1; }; cast flow asker \"$_conv\" ${_task:+--task \"$_task\"} --run $run_id"]
+    script="rm -f $run_dir/intent.json $run_dir/intent-head; _conv=$change_conversation; _task=$task_id; [ -n \"$_conv$_task\" ] || { echo 'no session or task behind this change'; exit 1; }; cast flow asker ${_conv:+\"$_conv\"} ${_task:+--task \"$_task\"} --run $run_id"]
   change [label="Change", shape=parallelogram, timeout=120,
     script="_base=$diff_base; _head=\"$(git rev-parse --verify --quiet $branch^{commit})\" || { echo \"the branch $branch does not resolve to a commit here\"; exit 1; }; mkdir -p $run_dir && printf '%s\\n' \"$_head\" > $run_dir/intent-head && cast flow blind diff --base \"${_base:-origin/$default_branch}\" --head \"$_head\" --redact $branch $worktree $change_session $change_conversation"]
   read [label="Read", shape=note, model="claude-opus-5-5", max_tokens=2000, prompt="@intent/asker.md"]
