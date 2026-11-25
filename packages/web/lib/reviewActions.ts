@@ -117,7 +117,7 @@ function takeBatch(conversationId: string, messageId: string | undefined, firstI
   const quoteIds = sending && quoteDraftsOn(s) ? taken.filter((c) => isRecordedQuote(conversationId, c)).map((c) => c.id) : [];
   const sent = new Set(quoteIds);
   if (messageId) {
-    taken.forEach((c) => s.removeReviewComment(conversationId, c.id, sent.has(c.id)));
+    taken.forEach((c) => s.removeReviewComment(conversationId, c.id, sent.has(c.id) ? "sent" : undefined));
   } else {
     s.clearReviewComments(conversationId, quoteIds);
     s.setReviewTarget(null);

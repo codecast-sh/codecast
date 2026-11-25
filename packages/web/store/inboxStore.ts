@@ -6437,7 +6437,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   addReviewComment: (conversationId: string, comment: PendingComment) => void;
   commitReviewComment: (conversationId: string, id: string, body: string) => void;
   /** `sent`: the item rides a message that stamps its record, so the record stays. */
-  removeReviewComment: (conversationId: string, id: string, sent?: boolean) => void;
+  /** `how`: "sent" when a send took it (its server draft goes with the send), "person" when someone removed it by hand (undoable). */
+  removeReviewComment: (conversationId: string, id: string, how?: "sent" | "person") => void;
   applyReviewVerdict: (conversationId: string, item: PendingComment) => void;
   clearReviewVerdict: (conversationId: string, id: string) => void;
   /** `sent`: ids riding a message that stamps their records, which stay. */
@@ -10421,11 +10422,11 @@ const inboxStoreConfig = (set: any, get: any) => ({
     delete c.verdictAt;
     afterCommit(() => mirrorQuoteBatch(get(), conversationId, [id]));
   }),
-  removeReviewComment: sync(function (this: Draft, conversationId: string, id: string, sent?: boolean) {
+  removeReviewComment: sync(function (this: Draft, conversationId: string, id: string, how?: "sent" | "person") {
     const list = this.reviewComments[conversationId] ?? [];
     const removed = list.find((c) => c.id === id);
     if (!removed) return;
-    if (!sent && isRecordedQuote(conversationId, removed)) afterCommit(() => mirrorQuoteBatch(get(), conversationId, [], [id]));
+    if (how !== "sent" && isRecordedQuote(conversationId, removed)) afterCommit(() => mirrorQuoteBatch(get(), conversationId, [], [id]));
     const next = list.filter((c) => c.id !== id);
     if (next.length) this.reviewComments[conversationId] = next;
     else delete this.reviewComments[conversationId];

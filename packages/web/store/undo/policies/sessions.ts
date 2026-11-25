@@ -1,4 +1,5 @@
-// Undo policy for sessions, the inbox, buckets, favorites and decisions.
+// Undo policy for sessions, the inbox, buckets, favorites, decisions and the
+// quotes a person removes from a conversation's review batch.
 //
 // Most of these ride the patch rail: the engine captures every cell the action
 // wrote (the snooze a triage verb clears, title_is_custom, the favorites
@@ -11,6 +12,8 @@ import { isClosePatch, type UserRest } from "@codecast/shared/contracts";
 import type { UndoPolicy } from "../policy";
 import { counted, quoted, sessionTitle } from "../labels";
 import { keepConversationRows } from "../thinConversation";
+import { isRecordedQuote, quoteDraftsOn, toQuoteDraftWire } from "../../../lib/quoteDraftWire";
+import type { PendingComment } from "../../../lib/quoteFormat";
 
 export const USER_REST_LABEL: Record<UserRest, string> = {
   needs_input: "Needs you",
@@ -155,7 +158,31 @@ function manualOrderLabel(ctx: UndoCtx): string | null {
   return moved.length === 1 ? `Moved ${sessionTitle(ctx.before, moved[0]!)}` : `Moved ${counted(moved.length, "session")}`;
 }
 
+// A quote waiting in a review batch, removed by hand (a key on the message, the
+// chip's Remove): one stray x or ⌫ took the quote and its note with it. The
+// batch is local, so the cells carry it back (reviewComments and the review
+// target are window keys the engine otherwise skips). A recorded quote also
+// had its server draft dropped; the inverse saves it again, carrying the cells.
+// Removals a send or a cleanup makes pass no "person" and are not recorded.
+const REVIEW_KEYS = ["reviewComments", "reviewMessageId", "reviewActiveBlock"] as const;
+const removedQuote = (ctx: UndoCtx): PendingComment | undefined =>
+  ((ctx.before?.reviewComments?.[ctx.args[0] as string] ?? []) as PendingComment[]).find((c) => c.id === ctx.args[1]);
+
+const removeQuoteSpec: UndoSpec = {
+  label: (ctx) => (ctx.args[2] === "person" && removedQuote(ctx) ? "Removed a quote" : null),
+  captureKeys: REVIEW_KEYS,
+  toast: true,
+  inverse: (ctx) => {
+    const batch = ctx.args[0] as string;
+    const quote = removedQuote(ctx);
+    if (!quote || !quoteDraftsOn(ctx.before) || !isRecordedQuote(batch, quote)) return null;
+    if (!ctx.changes.some((c) => c.store === "reviewComments" && c.id === batch)) return null;
+    return [{ action: "saveQuoteDrafts", args: [batch, [toQuoteDraftWire(quote)]], runDraft: false }];
+  },
+};
+
 export const SESSIONS_UNDO_POLICY: UndoPolicy = {
+  removeReviewComment: { spec: removeQuoteSpec },
   // clientState is ignored for every other spec; this one captures it.
   updateClientUI: { spec: { label: manualOrderLabel, captureKeys: ["clientState"] } },
   deferSession: onSession("Deferred"),
