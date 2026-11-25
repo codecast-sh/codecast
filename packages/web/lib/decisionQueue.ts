@@ -47,6 +47,8 @@ export type QueueItem = {
   // The asking session's name as the decision row recorded it, for a session
   // this client holds no row for.
   sessionTitle?: string;
+  // Where the asking session runs, as the decision row recorded it (source "decide").
+  projectPath?: string;
   question: string;
   // Authored payload (source "decide") — otherwise recovered context.
   contextMd?: string;
@@ -309,6 +311,7 @@ export function decisionQueueItems(
       conversationId: d.conversation_id,
       session: sessions[d.conversation_id],
       sessionTitle: d.session_title,
+      projectPath: d.project_path,
       question: d.question,
       contextMd: d.context_md,
       options: d.options,

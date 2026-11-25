@@ -183,6 +183,38 @@ describe("warmRowsFromState", () => {
   });
 });
 
+describe("warmRowsFromState: the decision queue", () => {
+  // A decision row opens the asking session's transcript, which is often a
+  // teammate's or a worker's that sits in no inbox and may have no store row.
+  it("warms every asking session first, fetching the row when the store lacks it", async () => {
+    const { warmRowsFromState } = await import("../inboxWarm");
+    const me = "user1";
+    const inbox = "jx7fffffffffffffffffffffffffffff";
+    const held = "jx7ggggggggggggggggggggggggggggg";
+    const absent = "jx7hhhhhhhhhhhhhhhhhhhhhhhhhhhhh";
+    const ask = (id: string, conv: string, at: number) => ({ _id: id, conversation_id: conv, status: "pending", blocking: true, question: "Q?", options: [], asked_user_ids: [me], created_at: at });
+    useInboxStore.setState({
+      currentUser: { _id: me } as any,
+      sessions: {
+        [inbox]: { _id: inbox, session_id: "s", agent_type: "claude_code", message_count: 3, is_idle: true, has_pending: false, started_at: Date.now(), updated_at: Date.now(), title: "Mine" } as any,
+        [held]: { _id: held, session_id: "t", agent_type: "claude_code", message_count: 9, user_id: "teammate", inbox_dismissed_at: Date.now(), started_at: Date.now(), updated_at: Date.now(), title: "Teammate's" } as any,
+      },
+      sessionDecisions: { d1: ask("d1", held, 1), d2: ask("d2", absent, 2) } as any,
+      messages: {}, pagination: {},
+      clientState: {} as any,
+    });
+    try {
+      const rows = warmRowsFromState(useInboxStore.getState());
+      const ids = rows.map((r) => r.id);
+      expect(ids.slice(0, 2).sort()).toEqual([absent, held].sort());
+      expect(rows.find((r) => r.id === held)?.serverCount).toBe(9);
+      expect(rows.find((r) => r.id === absent)?.serverCount).toBeNull();
+    } finally {
+      useInboxStore.setState({ sessions: {}, sessionDecisions: {}, messages: {}, pagination: {}, clientState: {} as any, currentUser: null as any });
+    }
+  });
+});
+
 describe("startWarmLoop", () => {
   // A follower window gets its rows from the host's replication stream, not
   // from a feeder, and holds its own message cache. A row that lands after the

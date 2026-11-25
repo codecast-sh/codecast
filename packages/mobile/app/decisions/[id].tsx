@@ -8,7 +8,8 @@ import { Spacing, BorderRadius, themedStyles, useTheme } from '@/constants/Theme
 import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { QueueChip, askingSessionLine } from '@/components/decisions/QueueMeta';
-import { openLink } from '@/lib/links';
+import { PageEmbed } from '@/components/PageEmbed';
+import { decisionWords } from '@codecast/shared/contracts/changeCard';
 import { rosterEscalationTargets, useInboxStore, type DecisionAnswerInput, type SessionDecisionItem } from '@codecast/web/store/inboxStore';
 import { windowOrgTree } from '@codecast/web/store/orgSlice';
 import { useDecisionQueue } from '@codecast/web/hooks/useDecisionQueue';
@@ -21,8 +22,8 @@ import { AnswerButton, AnswerControls, appAnswerLook } from '@/components/decisi
 import { decisionAnswerLabel } from '@codecast/shared/contracts';
 
 import { DecisionThread } from '@/components/decisions/DecisionThread';
+import { FlowContext } from '@/components/flow/FlowContext';
 import { useDecisionAnswer } from '@/components/decisions/DecisionCard';
-import { pageShareUrl } from '@codecast/shared/entities';
 import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 
 // One `cast decide` at a time. The queue (useDecisionQueue) is the same model
@@ -92,12 +93,15 @@ export default function DecisionScreen() {
   const defaultOption = item ? item.defaultOption : row?.default_option;
   const contextMd = item ? item.contextMd : row?.context_md;
   const reportSlug = item ? item.reportSlug : row?.report_slug;
-  const docBody = detail?.doc?.content?.trim();
+  const words = decisionWords(contextMd, detail?.doc?.content);
   const otherText = draft.otherText ?? '';
   // A typed answer is the rare path: its box opens on request, or holds a saved draft.
   const writing = !!draft.otherOpen || !!otherText;
 
   const title = queued ? `${position + 1} of ${decideQueue.length}` : 'Decision';
+  // A gate on a flow: the whole flow around the station that asks, every station one tap away.
+  const runId = row?.workflow_run_id ?? null;
+  const flow = runId ? <FlowContext runId={runId} focus={{ decisionId: row?._id ?? decisionId, nodeId: row?.gate_node_id }} /> : null;
 
   // Settled: say how, and move on.
   if (!item) {
@@ -110,6 +114,7 @@ export default function DecisionScreen() {
         <ScrollView style={{ backgroundColor: Theme.bg }} contentContainerStyle={styles.body}>
           <Text style={styles.question}>{source.question}</Text>
           <Text style={styles.muted}>{settled}</Text>
+          {flow}
           {nextId ? <AnswerButton look={look} label="Next decision" onPress={goNext} /> : null}
         </ScrollView>
       </>
@@ -129,15 +134,15 @@ export default function DecisionScreen() {
               <Text style={styles.session} numberOfLines={1}>{askingSessionLine(item)} ›</Text>
             </TouchableOpacity>
           ) : null}
+          {flow}
 
           {/* The reasoning folds, so the answers stay in reach without scrolling. */}
-          {contextMd || (docBody && docBody !== contextMd?.trim()) ? (
-            <CollapsibleBody fadeColor={Theme.bg} height={150}>
-              {contextMd ? <MarkdownContent text={contextMd} baseStyle={styles.context} /> : null}
-              {docBody && docBody !== contextMd?.trim() ? <MarkdownContent text={docBody} baseStyle={styles.context} /> : null}
+          {words ? (
+            <CollapsibleBody fadeColor={Theme.bg} height={150} labels={['Read the whole decision', 'Show less']} toggleColor={Theme.blue}>
+              <MarkdownContent text={words} baseStyle={styles.context} />
             </CollapsibleBody>
           ) : null}
-          {reportSlug ? <LinkRow label="Open the report" onPress={() => openLink(pageShareUrl(reportSlug))} /> : null}
+          {reportSlug ? <PageEmbed slug={reportSlug} decision={decisionId} kicker="Report" height={360} /> : null}
 
           <AnswerControls decisionId={decisionId} decision={{ options, form: source.form, kind }} onAnswer={answer} look={look} proceedingWith={blocking ? undefined : defaultOption} guarded={(i) => approveNeedsPresence(source, i)} />
 
@@ -212,15 +217,15 @@ function HandoffPanel({ mode, decisionId, holderKey, onDone }: { mode: 'pass' | 
   const [to, setTo] = useState<string | null>(null);
   const meId = useInboxStore((s) => String(s.currentUser?._id ?? ''));
   const members = useInboxStore(teamMembersOf);
-  const orgPeople = useInboxStore((s) => windowOrgTree(s)?.people);
+  const orgTree = useInboxStore((s) => windowOrgTree(s));
   const passDecision = useInboxStore((s) => s.passDecision);
   const escalateDecision = useInboxStore((s) => s.escalateDecision);
   const people = useMemo(() => (members ?? []).filter((m: any) => !m.is_bot && String(m._id) !== meId && holderKey !== `user:${m._id}`), [members, meId, holderKey]);
   const nameOf = (id: string) => { const m = (members ?? []).find((u: any) => String(u._id) === id); return m?.name ?? m?.email ?? 'a teammate'; };
   const upTo = useMemo(() => {
     const owner = holderKey?.startsWith('user:') ? holderKey.slice(5) : meId;
-    return rosterEscalationTargets(owner, orgPeople, members);
-  }, [holderKey, meId, orgPeople, members]);
+    return rosterEscalationTargets(owner, orgTree, members);
+  }, [holderKey, meId, orgTree, members]);
   const escalating = mode === 'escalate';
   const ready = escalating ? !!note.trim() && upTo.length > 0 : !!to;
   const send = () => {
@@ -259,14 +264,6 @@ function HandoffPanel({ mode, decisionId, holderKey, onDone }: { mode: 'pass' | 
   );
 }
 
-function LinkRow({ label, onPress }: { label: string; onPress: () => void }) {
-  return (
-    <TouchableOpacity onPress={onPress} hitSlop={6}>
-      <Text style={styles.link}>{label} ↗</Text>
-    </TouchableOpacity>
-  );
-}
-
 const styles = themedStyles((Theme) => StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   body: { padding: Spacing.lg, gap: Spacing.md, paddingBottom: Spacing.xxxl * 2 },
@@ -274,7 +271,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   session: { fontSize: 12, color: Theme.textMuted0 },
   context: { fontSize: 14, lineHeight: 21, color: Theme.textSecondary },
   muted: { fontSize: 13, color: Theme.textMuted },
-  link: { fontSize: 13, color: Theme.blue },
   input: {
     fontSize: 15,
     color: Theme.text,

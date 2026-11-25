@@ -27,6 +27,7 @@ import { CHEAP_MODEL } from "./lib/anthropic";
 import { syncDecisionInbox } from "./lib/decisionInbox";
 import { withdrawCore } from "./sessionDecisions";
 import { allRolesInBoundary } from "./lib/orgAccess";
+import { rolePeopleIds } from "./orgPeople";
 import { projectLeadOf } from "@codecast/shared/contracts/orgLead";
 import {
   AREAS_CARD_LEAVE,
@@ -203,6 +204,7 @@ export const askAreasAgain = internalMutation({
 async function areaSignals(ctx: Ctx, teamId: Id<"teams">, projectIds: Set<string>): Promise<AreaSignal[]> {
   const signals: AreaSignal[] = [];
   const roles = (await allRolesInBoundary(ctx, { team_id: teamId })).filter((r: any) => r.status !== "retired");
+  const memberships = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect();
   for (const pid of projectIds) {
     const project = await ctx.db.get(pid as Id<"projects">);
     const lead = projectLeadOf(project, roles);
@@ -215,7 +217,7 @@ async function areaSignals(ctx: Ctx, teamId: Id<"teams">, projectIds: Set<string
   for (const r of roles) {
     for (const pid of (r.scope?.project_ids ?? []).map(String)) {
       if (!projectIds.has(pid)) continue;
-      for (const u of r.reports_user_ids ?? []) signals.push({ project_id: pid, user_id: String(u), kind: "kept" });
+      for (const u of rolePeopleIds(r, memberships, roles)) signals.push({ project_id: pid, user_id: u, kind: "kept" });
     }
   }
   const answered: Doc<"session_decisions">[] = await ctx.db.query("session_decisions").withIndex("by_team_status_created", (q: any) => q.eq("team_id", teamId).eq("status", "answered")).order("desc").take(300);

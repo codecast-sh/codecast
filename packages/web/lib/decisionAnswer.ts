@@ -13,23 +13,29 @@ export type AnswerView = { picked: number[]; order: number[]; values: Record<str
 export const ANSWER_WORDS = {
   send: "Send this answer",
   proceeding: "Proceeding with this",
+  onRecord: "Current answer",
   openPage: "Open its page",
   yes: "Yes",
   no: "No",
 } as const;
 
-type DecisionShape = Pick<SessionDecisionItem, "options" | "form" | "kind">;
+type DecisionShape = Pick<SessionDecisionItem, "options" | "form" | "kind"> & Partial<Pick<SessionDecisionItem, "status" | "answer_index" | "answer_json">>;
 
 /** The draft read against the decision as it stands now: an edited decision
  *  (cast decide edit) can drop options under a draft, and a form field the
  *  reader has not touched reads as its type's empty value. */
 export function answerView(decision: DecisionShape, draft: Partial<AnswerDraft>): AnswerView {
   const optionCount = decision.options.length;
-  const picked = (draft.picked ?? []).filter((n) => n < optionCount);
-  const order = draft.order?.length === optionCount ? draft.order : decision.options.map((_, i) => i);
+  // An answered decision opened to change it starts from the answer on record.
+  const answered = decision.status === "answered";
+  const recorded = answered ? (Array.isArray(decision.answer_json) ? decision.answer_json : decision.answer_index !== undefined ? [decision.answer_index] : []) : [];
+  const recordedValues = answered && decision.answer_json && typeof decision.answer_json === "object" && !Array.isArray(decision.answer_json) ? decision.answer_json : {};
+  const picked = (draft.picked ?? (decision.kind === "multi" ? recorded : [])).filter((n) => n < optionCount);
+  const recordedOrder = decision.kind === "rank" && recorded.length === optionCount ? recorded : null;
+  const order = draft.order?.length === optionCount ? draft.order : recordedOrder ?? decision.options.map((_, i) => i);
   const values: Record<string, any> = {};
   for (const f of decision.form?.fields ?? []) {
-    values[f.key] = draft.values?.[f.key] ?? (f.type === "bool" ? false : f.type === "select" ? (f.options?.[0] ?? "") : "");
+    values[f.key] = draft.values?.[f.key] ?? recordedValues[f.key] ?? (f.type === "bool" ? false : f.type === "select" ? (f.options?.[0] ?? "") : "");
   }
   return { picked, order, values };
 }

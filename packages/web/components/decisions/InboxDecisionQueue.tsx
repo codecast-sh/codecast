@@ -14,6 +14,9 @@ import { WorkspaceTile } from "../identity/WorkspaceTile";
 import { ACTIVE_CARD_CLASS } from "../inbox/sessionCardTypes";
 import { PriorityRankChip } from "../inbox/PriorityRankChip";
 import { rankLabelOf, sortByPriority, type PriorityRankLabel, type PriorityStanding } from "../../store/priorityOrder";
+import { projectRootOf } from "../../lib/recentProjectPaths";
+import { compactAge } from "../../lib/threadState";
+import { useCoarseNow } from "../../hooks/useCoarseNow";
 
 // The inbox panel's Decisions section IS the decision queue: one row per
 // decision waiting on the viewer, numbered in the order the stepper walks
@@ -34,6 +37,13 @@ const advisorySig = (d: SessionDecisionItem) => `${d.status}:${d.blocking ? 1 : 
 const SHOWN_ASKS = 8;
 
 type Group = { conversationId: string; title: string; project?: string; asks: { item: QueueItem; n: number }[]; session?: InboxSession };
+
+// The repository the session runs in, named the way the rail names it; a
+// managed worktree folds to the repository it hangs off.
+const projectOf = (session?: InboxSession, recorded?: string) => {
+  const path = session?.git_root || session?.project_path || recorded;
+  return path ? getProjectName(projectRootOf(path)) : undefined;
+};
 
 const stepHref = (conversationId: string, key?: string) =>
   `/decisions?s=${conversationId}${key ? `&d=${encodeURIComponent(key)}` : ""}`;
@@ -70,6 +80,7 @@ export function InboxDecisionQueue({
   const numbered = useMemo(() => fullQueue.map((item, i) => ({ item, n: i + 1 })).filter(({ item }) => !matches || matches(item.conversationId)), [fullQueue, matches]);
   const queue = useMemo(() => numbered.map(({ item }) => item), [numbered]);
   const cursor = useDecisionQueueCursor();
+  const now = useCoarseNow(60_000);
   const meId = useInboxStore((s) => s.currentUser?._id as string | undefined);
   const showAgent = useInboxStore((s) => s.clientState.ui?.show_agent_icon !== false);
   const advisoryRows = useCollectionRows<SessionDecisionItem>("sessionDecisions", { where: advisoryWhere, sig: advisorySig });
@@ -83,7 +94,7 @@ export function InboxDecisionQueue({
         g = {
           conversationId: item.conversationId,
           title: item.session?.title || item.sessionTitle || "Session",
-          project: item.session?.project_path ? getProjectName(item.session.project_path) : undefined,
+          project: projectOf(item.session, item.projectPath),
           asks: [],
           session: item.session,
         };
@@ -129,6 +140,7 @@ export function InboxDecisionQueue({
                   <span className={`w-5 shrink-0 text-center tabular-nums font-mono text-mark ${here ? "text-sol-cyan" : "text-sol-text-dim"}`}>{n}</span>
                   <span className="truncate">{item.source === "permission" ? `Permission: ${item.question}` : item.question}</span>
                   {item.heldByRole && <span className="shrink-0 text-meta text-sol-text-dim">lead</span>}
+                  <span className="ml-auto shrink-0 pl-1 tabular-nums text-meta text-sol-text-dim" title={`Asked ${new Date(item.createdAt).toLocaleString()}`} data-decision-queue-age>{compactAge(now - item.createdAt)}</span>
                 </Link>
               );
             })}
@@ -152,7 +164,7 @@ export function InboxDecisionQueue({
           lit={session._id === activeSessionId}
           row={session}
           title={session.title || "Session"}
-          project={session.project_path ? getProjectName(session.project_path) : undefined}
+          project={projectOf(session)}
           onSelect={(e) => onSelectSession(session, e)}
           showAgent={showAgent}
           rank={rankOf(session._id, session)}
@@ -194,7 +206,7 @@ function QueueCard({ id, lit, row, title, project, href, onSelect, showAgent, ra
     <>
       <span className="flex h-5 w-5 shrink-0 items-center justify-center"><WorkspaceTile row={row ?? {}} size={20} showAgent={showAgent} /></span>
       <span className="min-w-0 truncate text-body font-medium text-sol-text">{title}</span>
-      {project && <span className="shrink-0 text-meta text-sol-text-dim">{project}</span>}
+      {project && <span className="ml-auto shrink-0 max-w-[45%] truncate text-meta text-sol-text-dim" data-decision-queue-project>{project}</span>}
       {rank !== undefined && <PriorityRankChip rank={rank} />}
     </>
   );

@@ -979,7 +979,7 @@ export function ChangeCardAnswer({
   // An advisory ask's agent went on with its default before anyone answered.
   const pending = decision.status === "pending";
   const wentAhead = pending && !decision.blocking ? verdictAt(decision.default_option) : undefined;
-  // An answer on record that a new pick replaces (advisoryAnswerOpen).
+  // An answer on record that a new pick replaces (answerOpenToChange).
   const current = pending ? undefined : verdictAt(decision.answer_index);
 
   // The card's suggested note (its author's ask) is where a Revise starts; the person edits or sends it.

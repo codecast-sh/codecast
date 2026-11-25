@@ -19,7 +19,8 @@ import { MarkdownContent } from '@/components/MarkdownRenderer';
 import { CollapsibleBody } from '@/components/CollapsibleBody';
 import { QueueChip, askingSessionLine } from '@/components/decisions/QueueMeta';
 import { AnswerButton, AnswerControls, appAnswerLook } from '@/components/decisions/AnswerControls';
-import { openLink } from '@/lib/links';
+import { PageEmbed } from '@/components/PageEmbed';
+import { decisionWords } from '@codecast/shared/contracts/changeCard';
 import { confirmPresence } from '@/lib/presence';
 import { useInboxStore, type DecisionAnswerInput, type SessionDecisionItem } from '@codecast/web/store/inboxStore';
 import { decisionQueueItems } from '@codecast/web/lib/decisionQueue';
@@ -28,7 +29,6 @@ import { useSyncDecisionDetail, useDecisionDetail } from '@codecast/web/hooks/us
 import { useCoarseNow } from '@codecast/web/hooks/useCoarseNow';
 import type { AnswerDraft } from '@codecast/web/lib/decisionAnswer';
 import { decisionAnswerLabel } from '@codecast/shared/contracts';
-import { pageShareUrl } from '@codecast/shared/entities';
 import { appAlert } from '@/lib/popups';
 
 
@@ -70,18 +70,20 @@ export function useDecisionAnswer(source: Parameters<typeof approveNeedsPresence
   }, [source, decisionId, after]);
 }
 
-/** The decision a reference names, from the store first, then its detail feed. */
-function useDecisionRow(ref: string): SessionDecisionItem | undefined {
+/** The decision a reference names, from the store first, then its detail feed, with everything it says about itself
+ *  (its context and its attached document, decisionWords). */
+function useDecisionRow(ref: string): { row: SessionDecisionItem | undefined; words: string } {
   useSyncDecisionDetail(ref);
   const detail = useDecisionDetail(ref);
-  return useInboxStore((s) => s.sessionDecisions[ref] ?? Object.values(s.sessionDecisions).find((d) => d.short_id === ref)) ?? detail?.decision;
+  const row = useInboxStore((s) => s.sessionDecisions[ref] ?? Object.values(s.sessionDecisions).find((d) => d.short_id === ref)) ?? detail?.decision;
+  return { row, words: decisionWords(row?.context_md, detail?.doc?.content) };
 }
 
 export function DecisionCard({ decisionRef, docked = false }: { decisionRef: string; docked?: boolean }) {
   const Theme = useTheme();
   const router = useRouter();
   const now = useCoarseNow(60_000);
-  const row = useDecisionRow(decisionRef);
+  const { row, words } = useDecisionRow(decisionRef);
   const session = useInboxStore((s) => (row ? s.sessions[row.conversation_id] : undefined));
   const item = row?.status === 'pending' ? decisionQueueItems({ [row._id]: row }, session ? { [row.conversation_id]: session } : {})[0] : undefined;
   const decisionId = row?._id ?? decisionRef;
@@ -163,7 +165,7 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
             <Text style={styles.footerText}>Dismiss</Text>
           </Pressable>
           <Pressable onPress={open} hitSlop={8}>
-            <Text style={styles.footerText}>{row.context_md?.trim() || row.report_slug ? 'Why ›' : 'More ›'}</Text>
+            <Text style={styles.footerText}>{words || row.report_slug ? 'Why ›' : 'More ›'}</Text>
           </Pressable>
         </View>
       </View>
@@ -188,16 +190,12 @@ export function DecisionCard({ decisionRef, docked = false }: { decisionRef: str
         </View>
       ) : (
         <>
-          {row.context_md?.trim() ? (
-            <CollapsibleBody fadeColor={fade} height={docked ? 72 : 110}>
-              <MarkdownContent text={row.context_md} baseStyle={styles.context} />
+          {words ? (
+            <CollapsibleBody fadeColor={fade} height={docked ? 72 : 110} labels={['Read the whole decision', 'Show less']} toggleColor={Theme.blue}>
+              <MarkdownContent text={words} baseStyle={styles.context} />
             </CollapsibleBody>
           ) : null}
-          {row.report_slug ? (
-            <Pressable onPress={() => openLink(pageShareUrl(row.report_slug!))} hitSlop={6}>
-              <Text style={styles.link}>Open the report ↗</Text>
-            </Pressable>
-          ) : null}
+          {row.report_slug ? <PageEmbed slug={row.report_slug} decision={row._id} kicker="Report" height={220} /> : null}
           <AnswerControls
             decisionId={decisionId}
             decision={{ options, form: row.form, kind }}
@@ -258,7 +256,6 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   session: { fontSize: 12, color: Theme.textMuted0, marginTop: 3 },
   context: { fontSize: 13.5, lineHeight: 20, color: Theme.textSecondary },
   muted: { fontSize: 13, color: Theme.textMuted },
-  link: { fontSize: 13, color: Theme.blue },
   settled: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   input: {
     minHeight: 48,

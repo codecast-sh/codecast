@@ -165,6 +165,9 @@
 .decision-card .decision-card-body :where(pre) { margin: 0.4em 0; }
 .decision-card .decision-card-body > :first-child { margin-top: 0; }
 .decision-card .decision-card-body > :last-child { margin-bottom: 0; }
+/* The way to the whole body reads as a link: it is how the decision is read, not a footnote. */
+.decision-card .decision-read-more { color: var(--sol-blue); }
+.decision-card .decision-read-more:hover { color: var(--sol-text); }
 
 /* The call to action: the decision a task is held on. A tint and a warm edge,
    no shout — the card is already the only thing between the reader and the
