@@ -541,7 +541,8 @@ describe("command groups stay off the boot graph", () => {
     // 4861 the same day: live replies, contracts/replyStream.ts (+3) and SyncService.pushReplyStream with the
     // reply_streaming config mirror (+1).
     // 4862 the same day: a live reply's push stays out of the write-budget backoff (syncService.ts +1).
-    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4862);
+    // 4863 the same day: the contract's watch lease and open-key-block rule (contracts/replyStream.ts +1).
+    expect(Math.round(graph.totalBytes / 1024), "KB of source on index.ts's static graph").toBeLessThanOrEqual(4863);
   }, GRAPH_WALK_TIMEOUT);
 
   test("main.ts, the process entry, reaches only the fast path", () => {

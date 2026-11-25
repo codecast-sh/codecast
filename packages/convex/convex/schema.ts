@@ -8179,6 +8179,9 @@ export default defineSchema({
     seq: v.number(),
     started_at: v.number(),
     updated_at: v.number(),
+    // Until when a page showing the conversation has asked for it
+    // (replyStreams.watch); pushes are written only before then.
+    watch_until: v.optional(v.number()),
   }).index("by_conversation", ["conversation_id"]).index("by_updated_at", ["updated_at"]),
 
   // Live screen of one tmux pane on one machine — the transport that lets the

@@ -4,10 +4,9 @@ import schema from "./schema";
 import { api, internal } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
-import { PRESENCE_FRESH_MS } from "./presencePolicy";
 import { redactSecrets } from "./redact";
 import { CONVERSATION_ROW_TABLES } from "./lib/conversationRows";
-import { REPLY_STREAM_LOAD_MAX_AGE_MS, REPLY_STREAM_MAX_CHARS } from "@codecast/shared/contracts";
+import { REPLY_STREAM_LOAD_MAX_AGE_MS, REPLY_STREAM_MAX_CHARS, REPLY_STREAM_WATCH_MS } from "@codecast/shared/contracts";
 
 const TOKEN = "owner-token";
 const OTHER_TOKEN = "other-token";
@@ -40,14 +39,8 @@ async function seed(opts: { flag?: boolean; ownerLevel?: string; personal?: bool
 
 type Seeded = Awaited<ReturnType<typeof seed>>;
 
-async function view(s: Seeded, lastSeen = Date.now()) {
-  await s.t.run(async (ctx) => {
-    await ctx.db.insert("user_presence", {
-      user_id: s.owner, surface: "web", last_seen: lastSeen, last_input_at: lastSeen, focused: true, updated_at: lastSeen,
-      viewing_conversation_id: s.conversation,
-    });
-  });
-}
+// A page showing the conversation: the owner's, renewing the row's lease.
+const view = (s: Seeded) => s.t.withIdentity({ subject: s.owner }).mutation(api.replyStreams.watch, { conversation_id: s.conversation });
 
 const push = (s: Seeded, over: Partial<{ message_id: string; seq: number; started_at: number; text: string; api_token: string }> = {}) =>
   s.t.mutation(api.replyStreams.push, {
@@ -70,11 +63,23 @@ describe("push", () => {
     expect(await rows(s)).toHaveLength(0);
   });
 
-  test("a presence row older than the freshness bound is not a viewer", async () => {
+  test("a lease that ran out is nobody viewing: the push writes nothing", async () => {
     const s = await seed({ flag: true });
-    await view(s, Date.now() - PRESENCE_FRESH_MS - 1);
+    await view(s);
+    const [row] = await rows(s);
+    await s.t.run((ctx) => ctx.db.patch(row._id, { watch_until: Date.now() - 1 }));
     expect(await push(s)).toEqual({ state: "unwatched" });
-    expect(await rows(s)).toHaveLength(0);
+    expect((await rows(s))[0]).toMatchObject({ message_id: "", text: "" });
+  });
+
+  test("presence naming another conversation, or none, changes nothing: the lease decides", async () => {
+    const s = await seed({ flag: true });
+    await view(s);
+    // Another of the person's windows reports no view at all.
+    await s.t.run((ctx) => ctx.db.insert("user_presence", {
+      user_id: s.owner, surface: "web", last_seen: Date.now(), last_input_at: Date.now(), focused: true, updated_at: Date.now(),
+    }));
+    expect(await push(s)).toEqual({ state: "written" });
   });
 
   test("a fresh viewer: writes, advances, ignores late pushes, and moves to a newer message", async () => {
@@ -152,7 +157,7 @@ describe("push", () => {
     const s = await seed({ flag: true });
     await view(s);
     await expect(push(s, { api_token: OTHER_TOKEN })).rejects.toThrow(/Unauthorized/);
-    expect(await rows(s)).toHaveLength(0);
+    expect((await rows(s))[0].text).toBe("");
   });
 
   test("a personal conversation is on when any of the owner's teams has the flag", async () => {
@@ -203,7 +208,70 @@ describe("get", () => {
   });
 });
 
+describe("watch", () => {
+  const watchAs = (s: Seeded, user?: any) =>
+    (user ? s.t.withIdentity({ subject: user }) : s.t).mutation(api.replyStreams.watch, { conversation_id: s.conversation });
+
+  test("creates the row, empty, with a lease; get still reads null until text is pushed", async () => {
+    const s = await seed({ flag: true });
+    const before = Date.now();
+    await watchAs(s, s.owner);
+    const [row] = await rows(s);
+    expect(row).toMatchObject({ conversation_id: s.conversation, user_id: s.owner, message_id: "", text: "", seq: 0 });
+    expect(row.watch_until!).toBeGreaterThanOrEqual(before + REPLY_STREAM_WATCH_MS);
+    const read = () => s.t.withIdentity({ subject: s.owner }).query(api.replyStreams.get, { conversation_id: s.conversation });
+    expect(await read()).toBeNull();
+    await push(s, { text: "Hello" });
+    expect(await read()).toMatchObject({ text: "Hello" });
+  });
+
+  test("a renewal soon after another writes nothing; a later one extends the lease and keeps the text", async () => {
+    const s = await seed({ flag: true });
+    await watchAs(s, s.owner);
+    await push(s, { text: "Hello" });
+    const [first] = await rows(s);
+    await watchAs(s, s.fullMate);
+    expect((await rows(s))[0].watch_until).toBe(first.watch_until);
+    await s.t.run((ctx) => ctx.db.patch(first._id, { watch_until: Date.now() + 60_000 }));
+    await watchAs(s, s.owner);
+    const [renewed] = await rows(s);
+    expect(renewed.watch_until!).toBeGreaterThan(Date.now() + 60_000);
+    expect(renewed).toMatchObject({ message_id: "m1", text: "Hello", seq: 1 });
+    expect(await rows(s)).toHaveLength(1);
+  });
+
+  test("only someone who may read the messages holds the lease, and only with the feature on", async () => {
+    const s = await seed({ flag: true, ownerLevel: "summary" });
+    await watchAs(s);
+    await watchAs(s, s.other);
+    await watchAs(s, s.summaryMate);
+    expect(await rows(s)).toHaveLength(0);
+    expect(await push(s)).toEqual({ state: "unwatched" });
+
+    const off = await seed();
+    await watchAs(off, off.owner);
+    expect(await rows(off)).toHaveLength(0);
+  });
+
+  test("a teammate with full access watching is enough for the owner's daemon to write", async () => {
+    const s = await seed({ flag: true, ownerLevel: "full" });
+    await watchAs(s, s.fullMate);
+    expect(await push(s)).toEqual({ state: "written" });
+  });
+});
+
 describe("prune", () => {
+  test("keeps a row someone is watching, however long since its last push", async () => {
+    const s = await seed();
+    await s.t.run(async (ctx) => {
+      const base = { conversation_id: s.conversation, user_id: s.owner, message_id: "m", text: "t", seq: 1, started_at: 1, updated_at: Date.now() - 61 * 60_000 };
+      await ctx.db.insert("reply_streams", { ...base, message_id: "watched", watch_until: Date.now() + 60_000 });
+      await ctx.db.insert("reply_streams", { ...base, message_id: "lapsed", watch_until: Date.now() - 60_000 });
+    });
+    expect(await s.t.mutation(internal.replyStreams.prune, {})).toEqual({ deleted: 1 });
+    expect((await rows(s)).map((r) => r.message_id)).toEqual(["watched"]);
+  });
+
   test("deletes rows untouched for an hour and keeps fresh ones", async () => {
     const s = await seed();
     await s.t.run(async (ctx) => {
