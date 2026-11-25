@@ -29,6 +29,16 @@ test("the composer textarea caps its height on --composer-max-h and scrolls past
   expect(source).toMatch(/data-chat-input\s+data-composer-field/);
 });
 
+// Deleting a whole draft makes Chrome lay the empty field-sizing textarea out
+// at zero lines for an instant, before the placeholder line returns. The chat
+// transcript above grew by that line, clamped its scrollTop, and was left a
+// line above the bottom once the box regrew. A one-line floor removes the flash.
+test("the composer textarea never lays out shorter than one line", () => {
+  const textareaClass = source.match(/style=\{FIELD_SIZING_STYLE\}\s+className=\{`([^`]+)`\}/)?.[1]?.split(/\s+/) ?? [];
+  expect(textareaClass).toContain("min-h-[calc(1lh+0.5rem)]");
+  expect(textareaClass).toContain("py-1");
+});
+
 test("the expanded editor box is bound by the same cap and is the field in that mode", () => {
   expect(source).toContain('composeMode ? "min-h-[min(40vh,var(--composer-max-h,40vh))] max-h-[var(--composer-max-h,45vh)]"');
   expect(source).toContain('data-composer-field={composeMode ? "" : undefined}');
