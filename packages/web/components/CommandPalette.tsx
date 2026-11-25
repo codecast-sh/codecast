@@ -50,7 +50,7 @@ import { useOpenRecentVisit } from "../hooks/useOpenRecentVisit";
 import { isNonTabRoute } from "../src/compat/tabRouting";
 import { score, matchScore } from "../hooks/useMentionQuery";
 import { collapseSameTitle } from "../lib/mentionRanking";
-import { sessionSearchHaystack, mergeSearchRows, rankSessions, sessionStanding, type SessionStanding } from "../lib/instantSessionSearch";
+import { sessionSearchHaystack, mergeSearchRows, rankSessions, recentSessionVisits, sessionStanding, type SessionStanding } from "../lib/instantSessionSearch";
 import { agentAccent } from "../lib/agentColors";
 import { startHandoff, HANDOFF_EXPLAINER } from "../lib/handoffWeb";
 import { channelDisplayName, dmCounterpart, lineAuthorFor, memberName, type LineAuthorFields } from "../lib/chatViews";
@@ -1800,8 +1800,11 @@ function CommandPaletteImpl({ standalone = false }: { standalone?: boolean }) {
     const pool = q && favorites?.length ? withFavorites(recentPool, favorites, pick?.exclude) : recentPool;
     // One ranking for every session search (lib/instantSessionSearch): how
     // directly the words name it, then where it stands and how recent it is.
-    return rankSessions(pool, q, standingOf, q ? RECENT_RENDER_CAP : RECENT_IDLE_CAP);
-  }, [recentPool, rankQuery, standingOf, favorites, pick]);
+    // A session opened minutes ago leads its tier: a typed name most likely
+    // means the one the person just left.
+    const now = Date.now();
+    return rankSessions(pool, q, standingOf, q ? RECENT_RENDER_CAP : RECENT_IDLE_CAP, now, q ? recentSessionVisits(recentVisits, now) : undefined);
+  }, [recentPool, rankQuery, standingOf, favorites, pick, recentVisits]);
   // The machine most recents run on goes unsaid; a row names its machine only
   // when it runs somewhere else (a cloud host, the other laptop).
   const machineRoster = useInboxStore((s) => (open ? s.machineRoster : EMPTY_ROSTER)) as Device[];
