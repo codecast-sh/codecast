@@ -1,4 +1,5 @@
 import { useLayoutEffect, type RefObject } from "react";
+import { measureInFrame } from "../lib/frameMeasure";
 
 /**
  * Progressive shedding for a single-line toolbar row whose content varies.
@@ -61,22 +62,30 @@ export function useSqueezeToFit(
   useLayoutEffect(() => {
     const row = rowRef.current;
     if (!row) return;
-    let raf = 0;
+    let queued = false;
+    let live = true;
     let lastWidth = -1;
     let lastLevel = 0;
 
-    const fit = () => {
-      raf = 0;
-      lastLevel = applySqueeze(row, maxLevel, lastLevel);
-    };
+    // Fitted at the next frame's start, beside every other layout read queued
+    // there, and still before it paints. Fitted in the layout effect, the
+    // first trial laid out the page the commit had just written, a forced
+    // layout inside every switch or diff toggle that mounted the header row
+    // (ct-101461). The trials themselves write and read in turn, so they run
+    // as one read step.
     const schedule = () => {
-      if (!raf) raf = requestAnimationFrame(fit);
+      if (queued) return;
+      queued = true;
+      measureInFrame(() => {
+        queued = false;
+        if (live) lastLevel = applySqueeze(row, maxLevel, lastLevel);
+      });
     };
 
-    fit();
-    lastWidth = row.clientWidth;
-    const ro = new ResizeObserver(() => {
-      const w = row.clientWidth;
+    schedule();
+    // The observer reports the width itself, so reading it costs no layout.
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[entries.length - 1]?.contentRect.width ?? -1;
       if (w === lastWidth) return;
       lastWidth = w;
       schedule();
@@ -93,7 +102,7 @@ export function useSqueezeToFit(
     return () => {
       ro.disconnect();
       mo?.disconnect();
-      if (raf) cancelAnimationFrame(raf);
+      live = false;
     };
   }, [rowRef, maxLevel, contentKey]);
 }

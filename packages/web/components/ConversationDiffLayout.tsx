@@ -1,6 +1,6 @@
 import { useState, useRef, useMemo, Suspense } from "react";
 import { useMountEffect } from "../hooks/useMountEffect";
-import { useDragGatedLayoutPersist } from "../hooks/useDragGatedLayoutPersist";
+import { useFoldingSplit } from "../hooks/useFoldingSplit";
 import { useWatchEffect } from "../hooks/useWatchEffect";
 import { useEventListener } from "../hooks/useEventListener";
 import { Panel, Group, Separator } from "react-resizable-panels";
@@ -33,6 +33,7 @@ import { useFollowSurface } from "../hooks/useFollowSurface";
 
 const MOBILE_BREAKPOINT = 768;
 const DEFAULT_DIFF_LAYOUT = { content: 40, diff: 60 };
+const FOLDED_LAYOUT = { "content-panel": 100, "diff-panel": 0 };
 
 type Layout = { [key: string]: number };
 
@@ -259,10 +260,18 @@ export function ConversationDiffLayout({
     }
   });
 
-  const groupElRef = useRef<HTMLDivElement | null>(null);
-  const handleLayoutChange = useDragGatedLayoutPersist((newLayout) => {
-    updateLayout("conversation_diff", { content: newLayout["content-panel"] || 40, diff: newLayout["diff-panel"] || 60 });
-  }, groupElRef);
+  const seam = useFoldingSplit({
+    target: diffPanelOpen && !hideDiff ? layout : FOLDED_LAYOUT,
+    folded: !diffPanelOpen || !!hideDiff,
+    onPersist: (newLayout) => {
+      // The diff side stays collapsible while open, so opening and closing it
+      // never re-registers the panel (a whole layout of the page each time).
+      // A drag that collapses it closes the diff, and keeps the split it had.
+      if ((newLayout["diff-panel"] ?? 0) < 1) { useDiffViewerStore.getState().setDiffPanelOpen(false); return; }
+      updateLayout("conversation_diff", { content: newLayout["content-panel"] || 40, diff: newLayout["diff-panel"] || 60 });
+    },
+    onReset: () => updateLayout("conversation_diff", DEFAULT_DIFF_LAYOUT),
+  });
 
   // Element props handed to the memoized ConversationView must keep identity
   // across this component's own re-renders, or the memo never holds.
@@ -347,53 +356,54 @@ export function ConversationDiffLayout({
     );
   }
 
-  // Desktop: diff panel closed - simple layout
-  if (!diffPanelOpen || hideDiff) {
-    return (
-      <div className={`${heightClass} w-full overflow-y-auto relative`}>
-        <ConversationView {...conversationViewProps} />
-      </div>
-    );
-  }
-
-  // Desktop: diff panel open - resizable panels. The comment rail docks at
-  // this layout's right edge, past the diff, rather than between the
-  // conversation and the diff; the panels make room for it.
+  // Desktop: one resizable Group whether the diff is open or not, with the
+  // diff side folded to nothing while it is closed. The transcript keeps its
+  // place in the tree, so opening or closing the diff moves a seam instead of
+  // remounting the whole conversation and a fresh Group (ct-101461: each
+  // toggle laid the page out half a dozen times while they mounted). The
+  // fold, the drag-gated persist and the double-click reset are the shared
+  // split's (hooks/useFoldingSplit.ts). The comment rail docks at this
+  // layout's right edge, past the diff, while the diff shows; the panels make
+  // room for it. While it is folded the conversation hosts the rail itself.
+  const open = diffPanelOpen && !hideDiff;
   return (
-    <div className={`${heightClass} w-full relative overflow-x-clip`} style={commentRailW ? { paddingRight: commentRailW } : undefined}>
+    <div className={`${heightClass} w-full relative overflow-x-clip`} style={open && commentRailW ? { paddingRight: commentRailW } : undefined}>
       <Group
         orientation="horizontal"
-        onLayoutChange={handleLayoutChange}
-        elementRef={groupElRef}
-        defaultLayout={layout}
+        disabled={!open}
+        groupRef={seam.groupRef}
+        elementRef={seam.elementRef}
+        defaultLayout={seam.defaultLayout}
+        onLayoutChange={seam.onLayoutChange}
         className="h-full"
       >
         {/* Conversation Panel */}
         <Panel id="content-panel" minSize="15%">
           <div className="h-full relative overflow-y-auto">
-
-            <ConversationView {...conversationViewProps} hostsCommentRail={false} />
+            <ConversationView {...conversationViewProps} hostsCommentRail={!open} />
           </div>
         </Panel>
 
         {/* Resize handle - on LEFT of timeline */}
-        <Separator className="cc-split" />
+        <Separator className={`cc-split${open ? "" : " is-hidden"}`} onDoubleClick={seam.onSeparatorDoubleClick} />
 
         {/* Timeline + Diff Panel */}
-        <Panel id="diff-panel" minSize="20%">
-          <div className="h-full flex">
-            {/* Timeline Strip */}
-            <div className="w-10 h-full border-r border-sol-border bg-sol-bg-alt/30 relative flex-shrink-0">
-              <TimelineStrip conversationRef={conversationRef} />
+        <Panel id="diff-panel" minSize="20%" collapsible collapsedSize={0} style={{ overflow: "hidden" }}>
+          {open && (
+            <div className="h-full flex">
+              {/* Timeline Strip */}
+              <div className="w-10 h-full border-r border-sol-border bg-sol-bg-alt/30 relative flex-shrink-0">
+                <TimelineStrip conversationRef={conversationRef} />
+              </div>
+              {/* Diff Content */}
+              <div className="flex-1 h-full min-w-0">
+                <DiffPane conversation={conversation} />
+              </div>
             </div>
-            {/* Diff Content */}
-            <div className="flex-1 h-full min-w-0">
-              <DiffPane conversation={conversation} />
-            </div>
-          </div>
+          )}
         </Panel>
       </Group>
-      {conversation && (
+      {open && conversation && (
         <Suspense fallback={null}>
           <CommentDock conversationId={conversation._id.toString()} onJumpToMessage={(id) => conversationRef.current?.scrollToMessage(id)} />
         </Suspense>

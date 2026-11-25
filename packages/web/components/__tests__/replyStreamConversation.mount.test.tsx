@@ -66,7 +66,9 @@ class SizeObserver {
     const h = heightOf(el);
     this.callback([{ target: el, contentRect: { height: h, width: 700 }, contentBoxSize: [{ blockSize: h, inlineSize: 700 }], borderBoxSize: [{ blockSize: h, inlineSize: 700 }] } as unknown as ResizeObserverEntry], this as unknown as ResizeObserver);
   }
-  observe(el: Element) { this.targets.add(el); queueMicrotask(() => { if (this.targets.has(el) && el.isConnected) this.report(el); }); }
+  // A browser reports a new target after the frame's animation callbacks and
+  // layout, not in the task that observed it.
+  observe(el: Element) { this.targets.add(el); requestAnimationFrame(() => setTimeout(() => { if (this.targets.has(el) && el.isConnected) this.report(el); }, 0)); }
   unobserve(el: Element) { this.targets.delete(el); }
   disconnect() { this.targets.clear(); sizeObservers.delete(this); }
 }

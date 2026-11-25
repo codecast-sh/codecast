@@ -16,7 +16,7 @@ for (const key of ["window", "document", "navigator", "HTMLElement", "HTMLButton
   const v = (dom.window as any)[key];
   if (v !== undefined) Object.defineProperty(globalThis, key, { value: v, configurable: true, writable: true });
 }
-// Like a browser's, the observer answers once for each element it starts watching (hooks/useOverflows waits on that first answer).
+// Like a browser's, the observer answers once for each element it starts watching.
 (globalThis as any).ResizeObserver = class {
   constructor(private cb: (entries: { target: Element }[]) => void) {}
   observe(target: Element) { queueMicrotask(() => this.cb([{ target }])); }
@@ -341,8 +341,8 @@ test("every text field clamps at two lines with show all and show less, except t
   child.done();
   // op-903's charter runs to 1449 characters: the word appears, and opens the whole text.
   const long = mount({ card: cardOf(ORG_LONG_CHARTER_FIXTURE_PROPOSAL.changes, "Partnerships lead", ORG_RECORDS_FIXTURE_LIVE), ordinal: 2, onAnswer });
-  // The clamp measures on the observer's first answer after the commit (hooks/useOverflows).
-  await React.act(async () => {});
+  // The clamp measures at the start of the frame after the commit, before it paints (hooks/useOverflows).
+  await React.act(async () => { await new Promise((r) => requestAnimationFrame(r)); });
   const charter = field("charter");
   expect(charter.previousElementSibling!.textContent).toBe("Charter");
   const more = () => charter.querySelector<HTMLElement>("[data-field-more]")!;

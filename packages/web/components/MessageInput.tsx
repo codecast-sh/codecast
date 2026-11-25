@@ -11,7 +11,8 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 import { isMac, hasOpenModal, altChordDirection } from "../shortcuts";
 import { armJointSend, disarmJointSend, jointSendReady, takeJointSend } from "../lib/jointSend";
 import { useQueryNoThrow } from "../hooks/useQueryNoThrow";
-import { createPortal } from "react-dom";
+import { createPortal, flushSync } from "react-dom";
+import { measureInFrame } from "../lib/frameMeasure";
 import { compressImage } from "../lib/compressImage";
 import { captureError } from "../lib/analytics";
 import { uploadBlobToStorage } from "../lib/uploadBlob";
@@ -1367,7 +1368,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // The keystroke only measures text on a canvas, which never touches the
   // page. The font and the room beside the controls change with layout (a
   // resize, a button arriving or leaving), not with typing, so they are read
-  // in a ResizeObserver callback, where layout is already fresh. Read per
+  // when a ResizeObserver reports a change (below). Read per
   // keystroke instead, they forced a synchronous layout of the whole page on
   // every key: tens of ms each beside a long transcript.
   const measureCtxRef = useRef<CanvasRenderingContext2D | null>(null);
@@ -1378,7 +1379,7 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
   // long ghost and crushed the field to a couple of characters a line.
   const ghostTextRef = useRef<string | null>(null);
   ghostTextRef.current = ghostText;
-  const measureFitsBesideControls = useCallback(() => {
+  const fitsBesideControlsNow = useCallback(() => {
     const typed = messageRef.current;
     const text = typed || ghostTextRef.current || textareaRef.current?.placeholder || "";
     let fits = !text.includes("\n");
@@ -1393,9 +1394,10 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     // One character of slack so subpixel rounding never lets the browser
     // wrap text we measured as fitting.
     if (fits && text && ctx && room != null) fits = ctx.measureText(text).width <= room - ctx.measureText("M").width;
-    setFitsBesideControls(fits);
+    return fits;
   }, []);
-  const readControlsGeometry = useCallback(() => {
+  const measureFitsBesideControls = useCallback(() => { setFitsBesideControls(fitsBesideControlsNow()); }, [fitsBesideControlsNow]);
+  const readControlsGeometry = useCallback((): boolean | undefined => {
     const ta = textareaRef.current;
     const row = controlsRowRef.current;
     if (!ta || !row) return;
@@ -1410,8 +1412,8 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const buttons = (Array.from(sendRef.current?.children ?? []) as HTMLElement[]).filter((b) => !b.querySelector("[data-composer-expand]") && !b.matches("[data-composer-expand]"));
     const controls = buttons.reduce((w, b) => w + b.offsetWidth, 0) + Math.max(0, buttons.length - 1) * 4 + 28 + 4;
     controlsRoomRef.current = row.clientWidth - controls - 8;
-    measureFitsBesideControls();
-  }, [measureFitsBesideControls]);
+    return fitsBesideControlsNow();
+  }, [fitsBesideControlsNow]);
   useLayoutEffect(measureFitsBesideControls, [message, ghostText, measureFitsBesideControls]);
   // The row and every button in the cluster are observed, and the button set
   // is re-observed whenever it changes (the expand button comes and goes with
@@ -1420,7 +1422,19 @@ export const MessageInput = memo(function MessageInput({ conversationId, status,
     const row = controlsRowRef.current;
     if (!row) return;
     const cluster = sendRef.current;
-    const resize = new ResizeObserver(readControlsGeometry);
+    // Read at the next frame's start with every other queued layout read, and
+    // applied after them with flushSync, so the tuck still lands before that
+    // frame paints. Read in the callback, it laid the page out again behind
+    // the observers that had just written to it, on every switch and send
+    // (ct-101461).
+    let queued = false;
+    const resize = new ResizeObserver(() => {
+      if (queued) return;
+      queued = true;
+      measureInFrame(() => { queued = false; return readControlsGeometry(); }, (fits) => {
+        if (fits !== undefined) flushSync(() => setFitsBesideControls(fits));
+      });
+    });
     const observeAll = () => {
       resize.disconnect();
       resize.observe(row);
