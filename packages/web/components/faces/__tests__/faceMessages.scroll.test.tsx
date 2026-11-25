@@ -74,13 +74,11 @@ test("a new line scrolls the card's messages to the bottom, even once the card h
   expect(host.querySelectorAll(".fc-row")).toHaveLength(30);
   expect(Array.from(host.querySelectorAll(".fc-text")).at(-1)?.textContent).toBe("line 30");
   expect(top).toBe(900);
-  const bubbles = host.querySelectorAll<HTMLButtonElement>("button.fc-msg");
-  expect(bubbles).toHaveLength(30);
-  for (const index of [0, 1, 29]) {
-    await act(async () => bubbles[index].click());
-    expect(openChat).toHaveBeenLastCalledWith(`/chat/${DM}?m=m${index + 1}`);
-  }
-  expect(leave).toHaveBeenCalledTimes(3);
+  expect(host.querySelectorAll(".fc-msg")).toHaveLength(30);
+  // The lines stay put (ct-101375); the head's arrow opens chat on their last line.
+  await act(async () => host.querySelector<HTMLButtonElement>("button.fc-open")!.click());
+  expect(openChat).toHaveBeenLastCalledWith(`/chat/${DM}?m=m29`);
+  expect(leave).toHaveBeenCalledTimes(1);
   host.remove();
 });
 

@@ -356,12 +356,14 @@ export function FaceMessages({
             return (
               <div key={r.id} className="fc-row" data-me={r.me ? "1" : undefined} data-run={run ? "1" : undefined}>
                 {sep && <Place row={r} onOpen={() => openRow(r)} />}
-                <button type="button" className="fc-msg" onClick={() => openRow(r)} title="Jump to message in chat" data-new={isNew(r) ? "1" : undefined} data-failed={r.failed ? "1" : undefined}>
+                {/* A line is read here, not a way out: the page stays put while you
+                    reply (ct-101375). The place above a run and the head's arrow open chat. */}
+                <div className="fc-msg" data-new={isNew(r) ? "1" : undefined} data-failed={r.failed ? "1" : undefined}>
                   <span className="fc-text">
                     <Preview text={r.text} />
                   </span>
                   {(tail || r.failed) && <span className="fc-at-time">{r.failed ? "not sent" : timeAgo(r.at)}</span>}
-                </button>
+                </div>
               </div>
             );
           })}
@@ -386,7 +388,18 @@ export function FaceMessages({
               }
             }}
           />
-          <KeyCap size="xs">↵</KeyCap>
+          <button
+            type="button"
+            className="fc-send"
+            onClick={() => {
+              send();
+              inputRef.current?.focus({ preventScroll: true });
+            }}
+            aria-label="Send"
+            title="Send"
+          >
+            <KeyCap size="xs">↵</KeyCap>
+          </button>
         </div>
       )}
     </div>
