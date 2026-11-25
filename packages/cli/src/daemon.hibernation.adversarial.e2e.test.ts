@@ -155,7 +155,19 @@ for (const mode of ["pass", "command"] as const) describe.skipIf(!hasTmux())(`${
     const child = childPids.at(-1)!;
     expect(() => process.kill(child, 0)).not.toThrow();
     expect(await acquireSessionProcessOwnership(f.h.sessionId)).toBe("owned");
-    if (recorder === "old") noteSubagentActivity(`/fake/${f.h.sessionId}/subagents/child.jsonl`, Date.now() - 60 * 60_000);
+    if (recorder === "old") {
+      // A subagent that went quiet an hour ago, on disk and in the recorder, so
+      // the history gates pass and the process check is the one that refuses.
+      const parentDir = path.join(path.dirname(f.h.jsonlPath), f.h.sessionId); roots.push(parentDir);
+      const transcript = path.join(parentDir, "subagents", "agent-a1.jsonl");
+      fs.mkdirSync(path.dirname(transcript), { recursive: true });
+      fs.writeFileSync(transcript, "{}\n");
+      const hourAgo = new Date(Date.now() - 60 * 60_000);
+      fs.utimesSync(transcript, hourAgo, hourAgo);
+      noteSubagentActivity(transcript, hourAgo.getTime());
+    }
+    expect(await f.io.inspectTarget!(f.h.sessionId, f.h.tmuxSession, f.conv)).toBeNull();
+    expect(takeTargetRefusal(f.h.sessionId)).toBe("agent-has-children");
     await refused(f);
     expect(() => process.kill(child, 0)).not.toThrow();
   }, 30000);

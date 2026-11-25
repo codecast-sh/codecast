@@ -186,14 +186,44 @@ Automatic parking ships off:
 { "max_live_sessions": 0, "hibernate_idle_ms": 0 }
 ```
 
-The proposed 60-session cap and two-hour idle threshold have no approval. Manual
-parking still goes through the safety gate. Working or mid-turn sessions,
-pending questions, pinned or attached sessions, pending delivery, live children
-and uncertain identity are not eligible. A skipped kill reports skipped.
-The daemon reports parked only after a positive guarded kill acknowledgment,
-confirmed pane absence and unchanged reservation. Wake clears the parked state.
-These checks reduce risk; they do not justify a zero-risk claim about concurrent
-OS and backend observations.
+The proposed 60-session cap and two-hour idle threshold have no approval. The
+policy lives in `packages/cli/src/hibernation.ts`, the gates in `daemon.ts`, and
+the transcript scan in `hibernationWork.ts`. Manual parking (`cast hibernate`)
+goes through the same gates. A session stays awake while any of these holds:
+
+- It is working, mid-turn, waiting on background work, attached, pinned, has a
+  pending question or pending delivery, or its identity is uncertain.
+- A subagent or workflow run wrote its transcript under the session's
+  `subagents/` folder in the last 10 minutes (`live-subagents`). The daemon
+  reads this from disk, so it holds across a daemon restart. Unknown counts as
+  active.
+- The transcript shows a background task, an async agent or a resumed agent
+  with no completion notice yet (`open-background-work`), or an agent call with
+  no answer (`background-work-unproven`).
+- A teammate the current process spawned has not shut down (`team-active`).
+- The park would kill a process beyond the agent and its own servers
+  (`agent-has-children`, `park-reaches-beyond-agent`).
+
+The idle-terminal reaper reads the same verdict on in-process work
+(`inProcessWorkRefusal`) before it retires a pane, logs its refusals as
+`reaper refused …`, and shares the park's hour of backoff. Agents, teammates and
+background jobs started by an earlier process of the session are ignored. In-process work died with that process. An orphaned job
+the park would reach still refuses through the kill-set check, and one it
+would not reach keeps running.
+
+Every refusal writes one line to `~/.codecast/reaper.log`:
+`hibernation refused <session> tmux=<name> conv=<conversation>: <reason>`. The
+session then sits out the picks for an hour, and the pass line counts it as
+`refused-recently(<reason>)×N`.
+
+To turn parking off, remove `hibernate_idle_ms` (and `max_live_sessions`) from
+`~/.codecast/config.json`, or set `"hibernate_dry_run": true` to log what it
+would park, then run `cast restart`.
+
+A skipped kill reports skipped. The daemon reports parked only after a positive
+guarded kill acknowledgment, confirmed pane absence and unchanged reservation.
+Wake clears the parked state. These checks reduce risk; they do not justify a
+zero-risk claim about concurrent OS and backend observations.
 
 ### Sessions that die mid-work are revived
 
@@ -214,37 +244,6 @@ Each pass revives at most three sessions, so a mass death drains over a few
 passes instead of resuming the whole fleet at once. Every decision is logged
 as a `Watchdog:` line in `daemon.log`, and the budget lives in
 `~/.codecast/revives.json` so daemon restarts do not reset it.
-
-### Release candidate parking fallback
-
-Historical: `4c84473f9` sits on side branches and never landed on main. Main
-has no `parking-safety-unavailable` refusal; it runs the guarded hibernation
-pass in `daemon.ts` with its policy in `hibernation.ts` (ct-47710 done), still
-off by default.
-
-Candidate commit `4c84473f9` deliberately does not include the full E1/E2 parking
-safety closure or F worker migration. Its shared manual/automatic policy returns
-`parking-safety-unavailable` unless an existing never-rule gives a more specific
-reason. The direct `parkAs: "hibernated"` teardown also returns before any IO or
-tracking changes. Thus even nonzero limits cannot park a session in this
-candidate; defaults off are not its only protection. An absent pane reports
-skipped unless this daemon already remembers a park.
-
-Ordinary cleanup, resume, injection and account switching remain separate from
-this refusal. Their unchanged code is not newly certified safe by parking tests.
-The candidate does not repair historical or other-daemon late park stamps. That
-requires the full E2 status watermark, heartbeat ordering and applied-ACK
-contract, together with the E1 ownership/cancellation/commit boundary before
-parking can be enabled again.
-
-The owned fallback passed 112 socket-free tests and both account-patch orders.
-Release integration passed 129 socket-free tests with 539 assertions. After the
-test-only status typing fix in `95f644d49`, the repository CLI typecheck passed.
-The updated real-pane suite was not part of this local fallback receipt; its CI
-status belongs to the release owner. These checks are separate from the later
-human-authorized orphan-reaper review above, which exercised the development
-tree, not this candidate. F3 and final load acceptance remain open; this record
-is not publication approval.
 
 ## Freeze SLO
 

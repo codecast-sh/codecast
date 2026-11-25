@@ -19,17 +19,16 @@ import { descendantRows, type ProcRow } from "./processTable.js";
 // and "no idle bar" for the age, so a daemon nobody configured never parks a
 // session by surprise.
 //
-// The fleet plan settles on 60 live sessions and two hours of awake idle, and
-// those are the values to set here once the inbox reads a parked session as
-// parked rather than as a crashed one. Until then the knobs ship off and a
-// person turns them on in config.json. See config/types.ts.
+// The knobs ship off and a person turns them on in config.json (see
+// config/types.ts). The web app reads a parked session as parked: its composer
+// and row say "hibernated, resumes on send", and the sessions page files it
+// under Hibernated.
 //
-// Shipping off is a deliberate deviation from the plan, not an oversight: on a
-// fleet of about 200 a cap of 60 parks roughly 140 sessions over the first few
-// hours, and every one of them reads as an ordinary cold session until the
-// inbox learns the parked state. The founder holds the open decision on the
-// value (cast decide k97v0wxs85cg7z6gq5s7g2p3ks8drt7t); do not raise these
-// numbers before it is answered.
+// The fleet plan proposes 60 live sessions and two hours of awake idle as the
+// defaults. On a fleet of about 200 that parks roughly 140 sessions over the
+// first few hours. The founder's decision on shipping it on
+// (cast decide k97v0wxs85cg7z6gq5s7g2p3ks8drt7t) was answered with a question,
+// not a default; do not raise these numbers until it is settled.
 export const DEFAULT_MAX_LIVE_SESSIONS = 0;
 export const DEFAULT_HIBERNATE_IDLE_MS = 0;
 
@@ -43,7 +42,25 @@ export const HIBERNATE_MAX_PER_PASS = 5;
 // produced any activity yet.
 export const HIBERNATE_RESUME_GRACE_MS = 10 * 60 * 1000;
 
+// A subagent runs as a child process inside its parent's pane tree, and the
+// teardown takes that tree down, so the parent outlives the child. Ten minutes
+// of silence in the child's transcript covers a child between two tool calls;
+// past that a finished child stops protecting its parent. A child still inside
+// its turn is caught elsewhere: the parent's turn is not over (status-working),
+// a background agent stays open until its notification, and a child process
+// fails the park's process checks (hibernationChildHistoryIsClear, which also
+// reads this window from the subagent transcripts on disk).
 export const HIBERNATE_SUBAGENT_QUIET_MS = 10 * 60 * 1000;
+
+/**
+ * Whether a subagent of the session wrote within the quiet window. Infinity
+ * (the daemon never saw one write) is quiet. NaN (the daemon lost track of
+ * subagent writes) counts as active: every caller kills the whole process
+ * tree, so not knowing is not quiet.
+ */
+export function subagentRecentlyActive(agoMs: number): boolean {
+  return !(agoMs >= HIBERNATE_SUBAGENT_QUIET_MS);
+}
 
 // How long a session the daemon's gates refused stays out of the picks. The
 // picks are the longest idle first and the order is deterministic, so without
@@ -122,16 +139,21 @@ export function hibernationBlockReason(c: HibernationCandidate): string | null {
   // The pane belongs to another session too (a parent running its subagent
   // inside its own process): killing it takes down a session we did not pick.
   if (c.sharedPane !== false) return "shared-pane";
-  // A subagent this session launched is still producing. It has no pane of its
-  // own: it runs as a child process inside this pane's tree, so the teardown
-  // would kill it mid-turn and nothing would ever report its result.
-  if (c.subagentActiveAgoMs !== Infinity) return "live-subagents";
+  // A subagent of this session wrote within the quiet window. It has no pane
+  // of its own: it runs as a child process inside this pane's tree, so the
+  // teardown would kill it mid-turn and nothing would ever report its result.
+  if (subagentRecentlyActive(c.subagentActiveAgoMs)) return "live-subagents";
   if (Number.isNaN(c.resumedAgoMs)) return "resume-unknown";
   if (c.resumedAgoMs < HIBERNATE_RESUME_GRACE_MS) return "recently-resumed";
   // Work is on its way to this session; parking it would trade the pane for a
   // resume on the very next delivery.
   if (c.messagesInFlight !== false) return "in-flight-messages";
   return null;
+}
+
+/** The pass line's skip for a session still backing off from a refusal. */
+export function refusedRecentlySkip(reason: string): string {
+  return `refused-recently(${reason})`;
 }
 
 /**
@@ -150,7 +172,8 @@ export function hibernationBlockReason(c: HibernationCandidate): string | null {
 export function selectHibernationCandidates(
   candidates: HibernationCandidate[],
   policy: HibernationPolicy,
-  refusedRecently: ReadonlySet<string> = new Set(),
+  /** Session id to the reason the daemon's gates refused it within the backoff. */
+  refusedRecently: ReadonlyMap<string, string> = new Map(),
 ): { picked: HibernationCandidate[]; skips: string[] } {
   const skips: string[] = [];
   const eligible: HibernationCandidate[] = [];
@@ -159,8 +182,9 @@ export function selectHibernationCandidates(
     if (reason) skips.push(reason);
     // Refused by the daemon's gates within HIBERNATE_REFUSAL_BACKOFF_MS: it
     // still counts toward the fleet size, but it yields its pick to the next
-    // longest idle session so one stubborn head cannot starve the pass.
-    else if (refusedRecently.has(c.sessionId)) skips.push("refused-recently");
+    // longest idle session so one stubborn head cannot starve the pass. The
+    // skip names the refusal, so the pass line says why it stays awake.
+    else if (refusedRecently.has(c.sessionId)) skips.push(refusedRecentlySkip(refusedRecently.get(c.sessionId)!));
     else eligible.push(c);
   }
 

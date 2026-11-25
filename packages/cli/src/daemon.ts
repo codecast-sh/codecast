@@ -59,16 +59,19 @@ import {
   HIBERNATE_MAX_PER_PASS,
   HIBERNATE_REFUSAL_BACKOFF_MS,
   HIBERNATE_RESUME_GRACE_MS,
+  HIBERNATE_SUBAGENT_QUIET_MS,
   agentForeignDescendants,
   hibernationBlockReason,
   parkTargetsBeyondAgent,
+  refusedRecentlySkip,
   selectHibernationCandidates,
+  subagentRecentlyActive,
   type HibernationCandidate,
   type HibernationPolicy,
 } from "./hibernation.js";
 import { scanOpenBackgroundTasksInto, type OpenTaskInfo, type OpenTaskTimes, type PendingTaskCall } from "./backgroundTaskScan.js";
 import { parseWorkflowJournal, snapshotIsCurrent, workflowHostGone, workflowRunLastActivity } from "./workflowRunLive.js";
-import { HibernationWorkScan, subagentFilesAccounted } from "./hibernationWork.js";
+import { HibernationWorkScan } from "./hibernationWork.js";
 import { governor, sampleLoad, describeLoad, readGovernorState, writeGovernorState, SAMPLE_INTERVAL_MS as GOVERNOR_SAMPLE_INTERVAL_MS } from "./loadGovernor.js";
 import { REVIVE_CANDIDATE_STATUSES, REVIVE_MAX_PER_PASS, recentRevives, isStationHandOpening, stationHandsFirst, REVIVE_MESSAGE, lastSignOfLifeMs, midWorkReviveDecision, priorRevives, recordRevive, unrecordRevive, reviveClientId, statusFileExpired } from "./midWorkRevive.js";
 import { TurnClaimLedger, TurnClaimRecovery, awaitingResume, claimTransition, type ClaimFacts, type TurnClaim } from "./turnClaims.js";
@@ -12341,29 +12344,39 @@ export async function cwdMatchCandidates(
 // processSessionFile is the one function every append passes through.
 const subagentActivityByParent = new Map<string, number>();
 const SUBAGENT_ACTIVITY_MAX_ENTRIES = 500;
-let subagentCoverageLost = false;
+// The last write the full map had to drop. A parent it never recorded reads
+// NaN (unknown) until that write is past the quiet window, then Infinity again:
+// a dropped write can only have been recent for that long.
+let subagentCoverageLostAt = -Infinity;
 
 export function noteSubagentActivity(filePath: string, at: number = Date.now()): void {
   const parent = subagentParentSessionFromPath(filePath);
   if (!parent) return;
   if (!subagentActivityByParent.has(parent) && subagentActivityByParent.size >= SUBAGENT_ACTIVITY_MAX_ENTRIES) {
-    subagentCoverageLost = true;
-    return;
+    // Entries past the quiet window protect nobody: make room from them first.
+    for (const [seenParent, seen] of subagentActivityByParent) {
+      if (at - seen >= HIBERNATE_SUBAGENT_QUIET_MS) subagentActivityByParent.delete(seenParent);
+    }
+    if (subagentActivityByParent.size >= SUBAGENT_ACTIVITY_MAX_ENTRIES) {
+      subagentCoverageLostAt = Math.max(subagentCoverageLostAt, at);
+      return;
+    }
   }
   subagentActivityByParent.set(parent, Math.max(at, subagentActivityByParent.get(parent) ?? -Infinity));
 }
 
 /** How long since a subagent of `sessionId` produced output. Infinity when the
- *  daemon has never seen one write. */
+ *  daemon holds no write of one inside the quiet window. */
 export function subagentActiveAgoMs(sessionId: string, now: number = Date.now()): number {
   const seen = subagentActivityByParent.get(sessionId);
-  return seen === undefined ? (subagentCoverageLost ? NaN : Infinity) : now - seen;
+  if (seen !== undefined) return now - seen;
+  return now - subagentCoverageLostAt < HIBERNATE_SUBAGENT_QUIET_MS ? NaN : Infinity;
 }
 
 /** Test seam: forget every recorded subagent append. */
 export function resetSubagentActivityForTests(): void {
   subagentActivityByParent.clear();
-  subagentCoverageLost = false;
+  subagentCoverageLostAt = -Infinity;
 }
 
 // Marks a finished Task subagent completed after its transcript goes quiet,
@@ -23163,7 +23176,7 @@ export type StampedPaneReapFacts = {
   pendingMessages: boolean;
   /** A resume or a delivery is landing in the pane right now. */
   deliveryActive: boolean;
-  /** A subagent of this session is still writing its own transcript. */
+  /** A subagent of this session wrote its own transcript within the quiet window (subagentRecentlyActive). */
   subagentsLive: boolean;
   /** Hibernation or a send holds the tmux target. */
   targetLocked: boolean;
@@ -23644,11 +23657,23 @@ async function reapIdleOrphanTerminals(): Promise<void> {
       openBackgroundWork: hasOpenBackgroundWork(sessionId),
       pendingMessages: !!lifecycle?.hasPendingMessages,
       deliveryActive: productionHibernationIo.deliveryActive(sessionId, convId),
-      subagentsLive: subagentActiveAgoMs(sessionId) !== Infinity,
+      subagentsLive: subagentRecentlyActive(subagentActiveAgoMs(sessionId)),
       targetLocked: tmuxTargetLocks.has(cand.tmux) || tmuxTargetLocks.has(`=${cand.tmux}`),
       resumedAgoMs: now - (lastResumeAt.get(sessionId) ?? -Infinity),
     });
     if (!eligibility.eligible) { skips.push(eligibility.reason!); continue; }
+    // Work inside the agent's process (a teammate, a subagent, a background
+    // task) dies with it, five idle hours or not: the same verdict the park
+    // reads, and the same hour of backoff once it refuses, so a refused pane's
+    // transcript is not scanned again every pass.
+    const transcript = findReapTranscript(sessionId, now);
+    if (transcript?.agentType === "claude") {
+      const recent = hibernationRefusals.get(sessionId);
+      if (recent && now - recent.at < HIBERNATE_REFUSAL_BACKOFF_MS) { skips.push(refusedRecentlySkip(recent.reason)); continue; }
+      const startMs = await paneAgentStartMs(cand.pane?.pid, sessionId);
+      const work = await inProcessWorkRefusal(sessionId, transcript.path, startMs).catch(() => "evidence-unavailable");
+      if (work) { skips.push(work); noteHibernationRefusal("reaper", { sessionId, tmux: cand.tmux, conversationId: convId }, work, now); continue; }
+    }
     // A closed session keeps its worktree: it wakes into its own folder.
     const closed = !!lifecycle && isClosedSession({ inbox_closed_at: lifecycle.inboxClosedAt, inbox_dismissed_at: lifecycle.inboxDismissedAt, inbox_killed_at: lifecycle.inboxKilledAt });
     const gcWorktree = cand.kind === "stamped" && !closed && !!(lifecycle?.inboxKilledAt || lifecycle?.inboxDismissedAt);
@@ -23810,7 +23835,7 @@ export async function inspectHibernationTarget(sessionId: string, tmux: string, 
   if (!claims || judgeProcessIdentity({ sessionId, argvId, claims, processStartSec }).verdict !== "owned") return refuseTarget(sessionId, "process-not-owned");
   const newestClaim = claims.reduce((latest, claim) => Math.max(latest, claim.ts), -Infinity);
   if (claims.some(c => c.ts >= processStartSec - 5 && c.sessionId !== sessionId && c.ts === newestClaim)) return refuseTarget(sessionId, "process-claimed-by-other");
-  if (!await hibernationChildHistoryIsClear(sessionId)) return null; // reason recorded inside
+  if (!await hibernationChildHistoryIsClear(sessionId, processStartSec * 1000)) return null; // reason recorded inside
   // Read the table again, after the slow checks above, and make the final
   // judgement on that one: the agent must still be there, still be ours, still
   // name this session, and still be running nothing of its own.
@@ -23823,27 +23848,46 @@ export async function inspectHibernationTarget(sessionId: string, tmux: string, 
   return { session, pane, pid: panePid, agentPid, start: match[1], stamp, conversationStamp };
 }
 
-async function hibernationChildHistoryIsClear(sessionId: string): Promise<boolean> {
-  if (subagentActiveAgoMs(sessionId) !== Infinity) { refuseTarget(sessionId, "live-subagents"); return false; }
+async function hibernationChildHistoryIsClear(sessionId: string, processStartMs: number): Promise<boolean> {
+  if (subagentRecentlyActive(subagentActiveAgoMs(sessionId))) { refuseTarget(sessionId, "live-subagents"); return false; }
   const file = findReapTranscript(sessionId);
   if (!file || file.agentType !== "claude") { refuseTarget(sessionId, "not-a-claude-transcript"); return false; }
-  const dir = path.join(path.dirname(file.path), sessionId, "subagents");
-  let subagentFiles: string[] = [];
+  const reason = await inProcessWorkRefusal(sessionId, file.path, processStartMs);
+  if (reason) { refuseTarget(sessionId, reason); return false; }
+  return true;
+}
+
+/**
+ * Why stopping this Claude session's process would cut work running inside it
+ * (a subagent, a teammate, a workflow run, a background task), or null. The one
+ * verdict both teardowns read: the hibernation park and the idle reaper.
+ * `processStartMs` is when the agent's current process started; -Infinity when
+ * unknown, which counts all of the transcript's work as this process's.
+ * Throws when the transcript cannot be parsed.
+ */
+export async function inProcessWorkRefusal(sessionId: string, transcriptPath: string, processStartMs: number): Promise<string | null> {
+  if (subagentRecentlyActive(subagentActiveAgoMs(sessionId))) return "live-subagents";
+  // Subagents, teammates and workflow runs all execute inside the agent's own
+  // process and write their transcripts under this folder, so its newest write
+  // is the recorder's question answered from disk. It holds across a daemon
+  // restart, which empties the recorder. Having run one is not live work: a
+  // child it left running is caught by the process checks, and a background
+  // task or a live teammate by the scan below.
+  let newestSubagentWriteMs: number | null;
   try {
-    subagentFiles = await fs.promises.readdir(dir);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "ENOENT") { refuseTarget(sessionId, "subagent-dir-unreadable"); return false; }
-  }
+    newestSubagentWriteMs = await newestWriteUnder(path.join(path.dirname(transcriptPath), sessionId, "subagents"));
+  } catch { return "subagent-dir-unreadable"; }
+  if (newestSubagentWriteMs !== null && subagentRecentlyActive(Date.now() - newestSubagentWriteMs)) return "live-subagents";
   // Read it a window at a time, the way primeOpenTaskScan reads the same file
   // for the same kind of question. Reading it whole instead cost 111 MB of heap
   // on a 55 MB transcript, which is why this gate used to refuse anything over
   // 1 MB rather than answer — and 63% of live transcripts here are over it, so
   // the biggest sessions, the ones worth parking most, could never park.
-  const work = new HibernationWorkScan(sessionId);
-  const stat = await fs.promises.stat(file.path);
+  const work = new HibernationWorkScan(sessionId, processStartMs);
+  const stat = await fs.promises.stat(transcriptPath);
   for (let at = 0; at < stat.size; ) {
-    const { content, bytesConsumed } = await readIngestWindow(file.path, at, stat.size - at, { step: SCAN_CHUNK_BYTES });
-    if (!bytesConsumed) { refuseTarget(sessionId, "transcript-incomplete"); return false; }
+    const { content, bytesConsumed } = await readIngestWindow(transcriptPath, at, stat.size - at, { step: SCAN_CHUNK_BYTES });
+    if (!bytesConsumed) return "transcript-incomplete";
     for (const line of content.split("\n")) {
       if (!line.trim()) continue;
       work.consume(JSON.parse(line));
@@ -23853,15 +23897,38 @@ async function hibernationChildHistoryIsClear(sessionId: string): Promise<boolea
   }
   // The file must not have moved under the scan: a window read after an append
   // would have covered bytes the earlier windows never saw.
-  const after = await fs.promises.stat(file.path);
-  if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) { refuseTarget(sessionId, "transcript-changed-while-read"); return false; }
-  const reason = work.reason();
-  if (reason) { refuseTarget(sessionId, reason); return false; }
-  // A subagent's transcript is fine to leave behind once the scan saw that
-  // agent launched and ended; any other file there is a subagent nothing in
-  // this transcript accounts for (a forked skill, a teammate), so it refuses.
-  if (!subagentFilesAccounted(subagentFiles, work)) { refuseTarget(sessionId, "has-subagent-history"); return false; }
-  return true;
+  const after = await fs.promises.stat(transcriptPath);
+  if (after.size !== stat.size || after.mtimeMs !== stat.mtimeMs) return "transcript-changed-while-read";
+  return work.reason();
+}
+
+/** When the agent in this pane started, from the process table; -Infinity when that cannot be told. */
+async function paneAgentStartMs(panePid: number | undefined, sessionId: string): Promise<number> {
+  if (!panePid) return -Infinity;
+  const procs = await snapshotProcessTableAsync({ timeout: 3000 }).catch(() => [] as ProcRow[]);
+  const pane = procs.find(p => p.pid === panePid);
+  const agentPid = pane ? resolveAgentPid(procs, panePid, pane.command, sessionId) : null;
+  const startedAt = procs.find(p => p.pid === agentPid)?.startedAt;
+  const ms = startedAt ? Date.parse(startedAt) : NaN;
+  return Number.isFinite(ms) ? ms : -Infinity;
+}
+
+/** The newest file mtime anywhere under `dir`, or null when it is absent or holds no file. Throws when it cannot be read. */
+async function newestWriteUnder(dir: string): Promise<number | null> {
+  let entries: fs.Dirent[];
+  try {
+    entries = await fs.promises.readdir(dir, { withFileTypes: true });
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+  let newest: number | null = null;
+  for (const entry of entries) {
+    const at = path.join(dir, entry.name);
+    const mtimeMs = entry.isDirectory() ? await newestWriteUnder(at) : (await fs.promises.stat(at)).mtimeMs;
+    if (mtimeMs !== null && (newest === null || mtimeMs > newest)) newest = mtimeMs;
+  }
+  return newest;
 }
 
 function hibernationLocalUnchanged(cand: HibernationCandidate, io: HibernationPassIo, reservation: HibernationReservation): boolean {
@@ -23950,8 +24017,11 @@ async function attemptHibernation(cand: HibernationCandidate, io: HibernationPas
       },
     };
     if (!await boundary.revalidate()) return "evidence-changed";
+    takeTargetRefusal(cand.sessionId);
+    // The teardown names its refusal (a busy pane, a kill set that reaches
+    // beyond the agent) where it can, so the pass line says which.
     return await io.park(cand.sessionId, cand.tmux, cand.conversationId, Math.round(cand.awakeIdleMs / 3600000), boundary)
-      ? null : "teardown-refused";
+      ? null : takeTargetRefusal(cand.sessionId) ?? "teardown-refused";
   })).catch(err => {
     log(`[HIBERNATE] refused ${cand.sessionId}: ${String(err)}`);
     return "evidence-unavailable";
@@ -23995,14 +24065,15 @@ export async function parkPlanRefusal(plan: Awaited<ReturnType<typeof tmuxSessio
 async function parkHibernationTerminal(sessionId: string, tmux: string, convId: string | undefined, idleHours: number, boundary: HibernationBoundary): Promise<boolean> {
   const { target } = boundary;
   const { stdout: pane } = await boundary.terminal(["capture-pane", "-p", "-J", "-t", target.pane, "-S", "-25"]);
-  if (paneTeardownBlock(detectSessionAgentType(sessionId), pane)) return false;
+  const paneBlock = paneTeardownBlock(detectSessionAgentType(sessionId), pane);
+  if (paneBlock) { refuseTarget(sessionId, paneBlock); return false; }
   // What the session started, read while the pane still roots it: once the
   // pane is gone its tool shells, MCP servers and the tmux sessions its agent
   // opened have no parent left to find them by. Stopped only once parked, and
   // only what a fresh table still shows unchanged.
   const leftovers = await tmuxSessionReapPlan(tmux).catch(() => null);
   const refusal = await parkPlanRefusal(leftovers, target).catch(() => "kill-set-unreadable");
-  if (refusal) { reaperLog(`HIBERNATE refused ${tmux}: ${refusal}`, false); return false; }
+  if (refusal) { reaperLog(`HIBERNATE refused ${tmux}: ${refusal}`, false); refuseTarget(sessionId, refusal); return false; }
   if (!await boundary.revalidate() || !boundary.unchanged()) return false;
   const checks = [
     `#{==:#{session_id},${target.session}}`, `#{==:#{pane_id},${target.pane}}`,
@@ -24327,9 +24398,7 @@ async function migrateLegacyPanesToFleet(io: HibernationPassIo = productionHiber
   const candidates = await collectHibernationCandidates(io);
   if (!candidates) return 0;
   const now = Date.now();
-  for (const [sessionId, at] of hibernationRefusedAt) {
-    if (now - at >= HIBERNATE_REFUSAL_BACKOFF_MS) hibernationRefusedAt.delete(sessionId);
-  }
+  const refused = liveHibernationRefusals(now);
   const skips: string[] = [];
   const known = new Set(candidates.map((c) => c.tmux));
   for (const id of legacy) if (!known.has(id)) skips.push("no-candidate");
@@ -24351,7 +24420,7 @@ async function migrateLegacyPanesToFleet(io: HibernationPassIo = productionHiber
     const ago = turnAgo.get(c.sessionId);
     const reason = ago === undefined ? "no-transcript"
       : ago < FLEET_MIGRATE_IDLE_MS ? "turn-within-1h"
-      : hibernationRefusedAt.has(c.sessionId) ? "refused-recently"
+      : refused.has(c.sessionId) ? refusedRecentlySkip(refused.get(c.sessionId)!)
       : hibernationBlockReason(c);
     if (reason) skips.push(reason);
     return !reason;
@@ -24362,8 +24431,7 @@ async function migrateLegacyPanesToFleet(io: HibernationPassIo = productionHiber
   for (const cand of picks) {
     const refusal = await attemptHibernation(cand, io);
     if (refusal) {
-      hibernationRefusedAt.set(cand.sessionId, now);
-      reaperLog(`fleet migration: ${cand.sessionId.slice(0, 8)} refused: ${refusal}`, false);
+      noteHibernationRefusal("fleet migration", cand, refusal, now);
       continue;
     }
     const resumed = await autoResumeSession(cand.sessionId, "", readTitleCache(), undefined, cand.conversationId, "claude");
@@ -24374,10 +24442,36 @@ async function migrateLegacyPanesToFleet(io: HibernationPassIo = productionHiber
   return moved;
 }
 
-// When the gates last refused each session, so the next passes offer their
-// picks to someone else (HIBERNATE_REFUSAL_BACKOFF_MS). Memory only: a restart
-// costs one pass of repeated refusals, which is what every pass cost before.
-const hibernationRefusedAt = new Map<string, number>();
+// When and why the gates last refused each session, so the next passes offer
+// their picks to someone else (HIBERNATE_REFUSAL_BACKOFF_MS) and the pass line
+// can say why those sessions stay awake. Memory only: a restart costs one pass
+// of repeated refusals, which is what every pass cost before.
+const hibernationRefusals = new Map<string, { at: number; reason: string }>();
+
+/** Session id to refusal reason for every refusal still inside the backoff. */
+function liveHibernationRefusals(now: number): Map<string, string> {
+  const live = new Map<string, string>();
+  for (const [sessionId, refusal] of hibernationRefusals) {
+    if (now - refusal.at >= HIBERNATE_REFUSAL_BACKOFF_MS) hibernationRefusals.delete(sessionId);
+    else live.set(sessionId, refusal.reason);
+  }
+  return live;
+}
+
+// One reaper.log line per refusal. The backoff keeps the session from being
+// tried again for an hour, so this is at most one line per session an hour,
+// and it is the only place that names which session a gate stopped. The idle
+// reaper records its in-process-work refusals here too: the same fact keeps
+// both teardowns off the session for the same hour.
+function noteHibernationRefusal(pass: string, cand: Pick<HibernationCandidate, "sessionId" | "tmux" | "conversationId">, reason: string, at: number): void {
+  hibernationRefusals.set(cand.sessionId, { at, reason });
+  reaperLog(`${pass} refused ${cand.sessionId.slice(0, 8)} tmux=${cand.tmux} conv=${cand.conversationId?.slice(0, 12) ?? "none"}: ${reason}`, false);
+}
+
+/** Test seam: forget every recorded refusal. */
+export function resetHibernationRefusalsForTests(): void {
+  hibernationRefusals.clear();
+}
 
 // `io` overrides only the parts a test needs; everything else stays real, so
 // the end-to-end test runs the actual tmux listing and the actual teardown.
@@ -24393,15 +24487,12 @@ export async function runHibernationPass(overrides: Partial<HibernationPassIo> =
   if (candidates.length === 0) return 0;
 
   const passAt = Date.now();
-  for (const [sessionId, at] of hibernationRefusedAt) {
-    if (passAt - at >= HIBERNATE_REFUSAL_BACKOFF_MS) hibernationRefusedAt.delete(sessionId);
-  }
-  const { picked, skips } = selectHibernationCandidates(candidates, policy, new Set(hibernationRefusedAt.keys()));
+  const { picked, skips } = selectHibernationCandidates(candidates, policy, liveHibernationRefusals(passAt));
   if (policy.dryRun) {
     const would: string[] = [];
     for (const cand of picked) {
       const refusal = await previewHibernation(cand, io);
-      if (refusal) { skips.push(refusal); hibernationRefusedAt.set(cand.sessionId, passAt); }
+      if (refusal) { skips.push(refusal); noteHibernationRefusal("hibernation DRY RUN", cand, refusal, passAt); }
       else would.push(`${cand.sessionId.slice(0, 8)}@${Math.round(cand.awakeIdleMs / 3600000)}h`);
     }
     reaperLog(`hibernation DRY RUN: ${candidates.length} live, cap=${policy.maxLive}, would park ${would.length}${would.length ? ` (${would.join(", ")})` : ""}, skipped: ${summarizeReapSkips(skips)}`, false);
@@ -24410,7 +24501,7 @@ export async function runHibernationPass(overrides: Partial<HibernationPassIo> =
   let hibernated = 0;
   for (const cand of picked) {
     const refusal = await attemptHibernation(cand, io);
-    if (refusal) { skips.push(refusal); hibernationRefusedAt.set(cand.sessionId, passAt); }
+    if (refusal) { skips.push(refusal); noteHibernationRefusal("hibernation", cand, refusal, passAt); }
     else hibernated++;
   }
   // File-only, like the reaper's pass line: this fires every ~5 min.
