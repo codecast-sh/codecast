@@ -133,7 +133,7 @@ describe("team read keys", () => {
     expect(sessions).toEqual([
       {
         id: expect.any(String),
-        owner: { id: String(ada), name: "Ada", github_username: null },
+        owner: { id: String(ada), name: "Ada", github_username: null, email: null },
         agent: "claude_code",
         branch: "feat/x",
         repo: "acme/api",
@@ -155,6 +155,20 @@ describe("team read keys", () => {
     // A cursor keeps the window it was given: last week's session is out on every page.
     const week = await readAll(t, key, `&since=${NOW - 8 * 24 * HOUR}&until=${NOW - 6 * 24 * HOUR}`);
     expect(week.sessions.map((s) => s.title)).toEqual(["Ada last week"]);
+  });
+
+  test("a member who never set a name is known by the email the roster shows", async () => {
+    const { t, team, as, ada } = await setup();
+    const nameless = await t.run(async (ctx) => {
+      const id = await ctx.db.insert("users", { email: "nameless@acme.dev" } as any);
+      await ctx.db.insert("team_memberships", { user_id: id, team_id: team, role: "member", visibility: "full", joined_at: 1 } as any);
+      return id;
+    });
+    await session(t, nameless, { team_id: team, title: "Nameless work" });
+    const { key } = await mint(as(ada), team);
+
+    const { sessions } = await readAll(t, key);
+    expect(sessions.map((s) => s.owner)).toEqual([{ id: String(nameless), name: null, github_username: null, email: "nameless@acme.dev" }]);
   });
 
   test("a row says when an agent started the session", async () => {

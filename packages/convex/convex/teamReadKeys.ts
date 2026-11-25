@@ -202,7 +202,7 @@ export const recordUse = internalMutation({
 export type TeamSessionRow = {
   id: string;
   /** The person the session is assigned to, else the member who runs it. */
-  owner: { id: string; name: string | null; github_username: string | null };
+  owner: { id: string; name: string | null; github_username: string | null; email: string | null };
   agent: string;
   branch: string | null;
   /** owner/name of a GitHub remote. */
@@ -269,7 +269,12 @@ export const sessionsForKey = internalQuery({
       const owner = roster.get(String(c.owner_user_id)) ?? roster.get(String(c.user_id))!;
       sessions.push({
         id: c.short_id ?? String(c._id),
-        owner: { id: String(owner._id), name: owner.name ?? null, github_username: owner.github_username ?? null },
+        owner: {
+          id: String(owner._id),
+          name: owner.name ?? null,
+          github_username: owner.github_username ?? null,
+          email: owner.name || owner.github_username ? null : (owner.email ?? null),
+        },
         agent: c.agent_type,
         branch: c.git_branch ?? null,
         repo: repositoryFromRemote(c.git_remote_url),
