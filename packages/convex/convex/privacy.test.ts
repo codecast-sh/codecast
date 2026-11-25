@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { profileConversationVisible, buildShareUpdate, buildPathRestampUpdate, resolveCreationPrivacy, isConversationTeamVisible, canOwnerOrTeamAccess, createTeamFeedFilter, getProfileVisibilityPredicate, resolveVisibilityMode } from "./privacy";
+import { profileConversationVisible, buildShareUpdate, buildPathRestampUpdate, buildWorkspaceMoveUpdate, resolveCreationPrivacy, isConversationTeamVisible, canOwnerOrTeamAccess, createTeamFeedFilter, getProfileVisibilityPredicate, resolveVisibilityMode } from "./privacy";
 import { makeFakeDb } from "./testDb";
 
 // Regression for the profile-feed privacy leak: a teammate's profile page
@@ -482,5 +482,32 @@ describe("membership visibility history is read per conversation", () => {
     expect(resolveVisibilityMode(undefined, filter.getVisibilityFor(newConv), true)).toBe("full");
     // A conversation's own override still wins over the membership split.
     expect(resolveVisibilityMode("full", filter.getVisibilityFor(oldConv), true)).toBe("full");
+  });
+});
+
+// A person moving their conversation into another workspace (ct-101478).
+describe("buildWorkspaceMoveUpdate", () => {
+  const A = "teamA" as any, B = "teamB" as any;
+  test("into another team replaces the team, shares it, and keeps a summary/full level", () => {
+    expect(buildWorkspaceMoveUpdate({ team_id: A, is_private: false, team_visibility: "summary" }, B)).toEqual({ team_id: B, is_private: false, auto_shared: undefined });
+  });
+  test("a private lock comes off when it moves into a team", () => {
+    expect(buildWorkspaceMoveUpdate({ team_id: A, is_private: true, team_visibility: "private" }, A)).toEqual({ team_id: A, is_private: false, auto_shared: undefined, team_visibility: undefined });
+  });
+  test("to Personal: private, no team", () => {
+    expect(buildWorkspaceMoveUpdate({ team_id: A, is_private: false }, null)).toEqual({ team_id: undefined, is_private: true, team_visibility: "private", auto_shared: undefined });
+  });
+  test("already there is a no-op", () => {
+    expect(buildWorkspaceMoveUpdate({ team_id: B, is_private: false, team_visibility: "full" }, B)).toBeNull();
+    expect(buildWorkspaceMoveUpdate({ is_private: true, team_visibility: "private" }, null)).toBeNull();
+  });
+  test("a moved row stays put: the next path restamp leaves it alone", () => {
+    const moved = { team_id: B, is_private: false, ...buildWorkspaceMoveUpdate({ team_id: A, is_private: false, auto_shared: true }, B) } as any;
+    const mappings = [{ path_prefix: "/Users/a/src", team_id: A, auto_share: true }] as any;
+    // Control: the same mapping does move an auto-shared row that nobody moved.
+    expect(buildPathRestampUpdate({ team_id: B, is_private: false, auto_shared: true } as any, mappings, "/Users/a/src/app")).not.toBeNull();
+    expect(buildPathRestampUpdate(moved, mappings, "/Users/a/src/app")).toBeNull();
+    const personal = { ...buildWorkspaceMoveUpdate({ team_id: A, is_private: false, auto_shared: true }, null) } as any;
+    expect(buildPathRestampUpdate(personal, mappings, "/Users/a/src/app")).toBeNull();
   });
 });

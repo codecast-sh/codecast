@@ -37,7 +37,7 @@ import type { DeviceSnippetChange, ProviderKeyCommand } from "@codecast/shared/c
 import { upsertBinding } from "./capabilityBindings";
 import { Id } from "./_generated/dataModel";
 import { checkRateLimit } from "./rateLimit";
-import { resolveTeamForPath, buildShareUpdate, isTeamMember } from "./privacy";
+import { resolveTeamForPath, buildShareUpdate, buildWorkspaceMoveUpdate, isTeamMember } from "./privacy";
 import { applyMembershipVisibilityChange } from "./teams";
 import { isTeamVisibilityLevel } from "./teamVisibility";
 import { resumeConversationSession } from "./daemonCommandUtils";
@@ -90,9 +90,9 @@ import { RECEIPT_OWNS_SERVER_WRITE, hasReceiptCommandId, receiptCommandId, recei
 import { deleteRecordingRun } from "./callRecordings";
 import { addSessionTeamOwnerRow, isSessionOwner, setSessionOwnerRows } from "./sessionOwners";
 import { canUseTeamSessions } from "./lib/teamFeatureGuard";
-import { VIEWER_TRIAGE_FIELDS, isTeamOwnedConversation, recordViewerTriage, refuseHidingTeamSession } from "./lib/viewerTriage";
+import { TEAM_SESSION_STAYS_SHARED, VIEWER_TRIAGE_FIELDS, isTeamOwnedConversation, recordViewerTriage, refuseHidingTeamSession } from "./lib/viewerTriage";
 import { hideConversationForViewer, unhideConversationForViewer } from "./inboxHides";
-import { patchCommentWithRevision } from "./commentViewWrites";
+import { advanceCommentsAccessRevision, patchCommentWithRevision } from "./commentViewWrites";
 import { getComment } from "./commentStore";
 import type { CommentId } from "./lib/conversationCommentRows";
 import { canAccessConversation, canAccessProject, canAccessTask, requireTeamMembership } from "./lib/access";
@@ -1765,6 +1765,25 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
       ...updates,
       team_visibility: visibility ?? undefined,
     });
+  },
+
+  // Move one of the owner's conversations into a team's workspace, or to
+  // Personal (null). One conversation per dispatch: patchConversationVisibility
+  // reads the owner's linked work for each row, and a bulk move of many rows
+  // in one transaction would hit the read limit (ct-101478).
+  moveSessionToWorkspace: async (ctx, userId, [convId, teamId]: [string, string | null]) => {
+    const id = ctx.db.normalizeId("conversations", convId);
+    if (!id) return; // a local stub the server never saw
+    const conv = await ctx.db.get(id);
+    if (!conv) throw new Error("Conversation not found");
+    if (conv.user_id.toString() !== userId.toString()) throw new Error("Unauthorized: can only move your own conversations");
+    const target = teamId == null ? null : ctx.db.normalizeId("teams", teamId);
+    if (teamId != null && (!target || !(await isTeamMember(ctx as any, userId, target)))) throw new Error("You are not a member of that team");
+    const updates = buildWorkspaceMoveUpdate(conv, target);
+    if (!updates) return;
+    if (await isTeamOwnedConversation(ctx as any, conv._id, conv)) throw new Error(TEAM_SESSION_STAYS_SHARED);
+    await patchConversationVisibility(ctx, conv, updates, userId);
+    await advanceCommentsAccessRevision(ctx as any, conv);
   },
 
   // Delegate to tasks.webUpdate so every task-write rule lives in one place:

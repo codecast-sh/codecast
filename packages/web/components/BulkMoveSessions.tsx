@@ -17,7 +17,7 @@
 
 import React from "react";
 import { toast } from "sonner";
-import { ArrowRightLeft, Archive, CheckCircle2, CircleDot, Moon, Square, Tag, X } from "lucide-react";
+import { ArrowRightLeft, Archive, Briefcase, CheckCircle2, CircleDot, Lock, Moon, Square, Tag, Users, X } from "lucide-react";
 import { DeviceDot, DeviceIcon, RUNNING_HERE_ROW, RunningHereTag, deviceDisplayName, deviceWakesOnUse } from "./DeviceBadge";
 import { useBulkMoveSessions, useMoveTargets } from "../hooks/useBulkMoveSessions";
 import { CtxHeader, CtxItem, CtxMenuClose, CtxSeparator, CtxSub, CtxSubContent, CtxSubTrigger } from "./ui/context-menu";
@@ -28,6 +28,7 @@ import { fileSessionsAsRest } from "../store/undoActions";
 import { useMenuTarget } from "../lib/hoverTarget";
 import { SwitchReview } from "./consequential/ConsequentialSwitch";
 import { killReviewOf } from "./consequential/killReview";
+import { moveSessionsToWorkspace, planWorkspaceMove, workspaceMoveLedgerFor } from "../lib/workspaceMove";
 import type { TaskRow } from "./triggerTasks";
 
 /** The device rows of a "Move to…" submenu: laptops, team machines, then cloud hosts. */
@@ -68,6 +69,57 @@ export function MoveToDeviceItems({ sessions, onDone }: { sessions: any[]; onDon
   );
 }
 
+
+/** The workspace rows of a "Move to…" menu: each of my teams, then Personal
+ *  (lib/workspaceMove). Into a team widens who reads them, so it opens the
+ *  review; to Personal narrows it and is one press. */
+export function MoveToWorkspaceItems({ sessions, onDone }: { sessions: any[]; onDone?: () => void }) {
+  const teams = useInboxStore((s) => s.teams) as Array<{ _id: string; name?: string }>;
+  const [reviewing, setReviewing] = React.useState<{ _id: string; name: string } | null>(null);
+  const move = (teamId: string | null, name: string) => { setReviewing(null); moveSessionsToWorkspace(sessions, teamId, name); onDone?.(); };
+  if (planWorkspaceMove(sessions, null).own.length === 0) return <CtxItem disabled>Only your own sessions move between workspaces</CtxItem>;
+  const row = (teamId: string | null, name: string, icon: React.ComponentType<{ className?: string }>) => {
+    const here = planWorkspaceMove(sessions, teamId).movers.length === 0;
+    return (
+      <CtxItem
+        key={teamId ?? "personal"}
+        icon={icon}
+        disabled={here}
+        trailing={here ? <span className="ml-2 text-meta text-sol-text-dim">Here</span> : undefined}
+        // The review is mounted by this menu, so the menu stays open behind it.
+        onSelect={(e) => { if (teamId) { e.preventDefault(); setReviewing({ _id: teamId, name }); } else move(null, name); }}
+        data-move-workspace={teamId ?? "personal"}
+      >
+        {name}
+      </CtxItem>
+    );
+  };
+  return (
+    <>
+      {teams.filter((t) => t?._id).map((t) => row(String(t._id), t.name || "Team", Users))}
+      {row(null, "Personal", Lock)}
+      {reviewing && (
+        <SwitchReview
+          ledger={workspaceMoveLedgerFor(sessions, reviewing)}
+          onClose={() => setReviewing(null)}
+          onConfirm={() => move(reviewing._id, reviewing.name)}
+        />
+      )}
+    </>
+  );
+}
+
+/** "Move to workspace" as a submenu, beside "Move to machine". */
+export function MoveToWorkspaceSubmenu({ sessions }: { sessions: any[] }) {
+  return (
+    <CtxSub>
+      <CtxSubTrigger icon={Briefcase}>{sessions.length > 1 ? `Move ${sessions.length} sessions to workspace` : "Move to workspace"}</CtxSubTrigger>
+      <CtxSubContent>
+        <MoveToWorkspaceItems sessions={sessions} />
+      </CtxSubContent>
+    </CtxSub>
+  );
+}
 
 /** The label rows of a "Label…" menu: every label, then remove and new. */
 function LabelItems({ sessions, onDone }: { sessions: any[]; onDone?: () => void }) {
@@ -128,6 +180,7 @@ export function BulkSessionMenuItems({
     <>
       <CtxHeader title={`${n} sessions selected`} />
       <MoveToDeviceSubmenu sessions={sessions} />
+      <MoveToWorkspaceSubmenu sessions={sessions} />
       <CtxItem
         icon={ArrowRightLeft}
         onSelect={() => useInboxStore.getState().openPalette({ targets: sessions, targetType: "session", mode: "device" })}
@@ -209,6 +262,10 @@ export function InboxSelectionBar({
             </button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end" className={CTX_SURFACE}>
+            <CtxHeader title="Workspace" />
+            <MoveToWorkspaceItems sessions={sessions} onDone={onClear} />
+            <CtxSeparator />
+            <CtxHeader title="Machine" />
             <MoveToDeviceItems sessions={sessions} onDone={onClear} />
           </DropdownMenuContent>
         </DropdownMenu>

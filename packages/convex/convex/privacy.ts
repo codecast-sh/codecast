@@ -642,6 +642,32 @@ export async function buildShareUpdate(
   return updates;
 }
 
+// A person moving their conversation into another workspace (ct-101478): a
+// team means routed to it and shared there; null means Personal (private, no
+// team). Unlike buildShareUpdate this replaces an existing team. auto_shared
+// comes off because the move is the person's choice: buildPathRestampUpdate
+// and the mapping backfill then leave the row where they put it. A team move
+// keeps a summary/full level and only drops a "private" lock. Returns null
+// when the row is already there.
+export function buildWorkspaceMoveUpdate(
+  conversation: { team_id?: Id<"teams">; is_private?: boolean; auto_shared?: boolean; team_visibility?: string },
+  teamId: Id<"teams"> | null,
+): Record<string, unknown> | null {
+  if (teamId === null) {
+    const already = !conversation.team_id && conversation.is_private !== false && conversation.team_visibility === "private" && !conversation.auto_shared;
+    return already ? null : { team_id: undefined, is_private: true, team_visibility: "private", auto_shared: undefined };
+  }
+  const already = conversation.team_id?.toString() === teamId.toString() && conversation.is_private === false
+    && !conversation.auto_shared && conversation.team_visibility !== "private";
+  if (already) return null;
+  return {
+    team_id: teamId,
+    is_private: false,
+    auto_shared: undefined,
+    ...(conversation.team_visibility === "private" ? { team_visibility: undefined } : {}),
+  };
+}
+
 // Team/privacy is resolved once at creation from whatever path exists at that
 // instant — but several flows mint the conversation before the real path is
 // known (quick-create pre-warm, web-started stubs) and stamp project_path /
