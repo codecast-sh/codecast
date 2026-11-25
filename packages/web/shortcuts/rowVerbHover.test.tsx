@@ -216,12 +216,34 @@ test("(d) typing in the composer with an armed child: the chord acts on the chil
   composer.blur();
 });
 
-test("keyboard navigation does not disarm the row showing its toolbar", () => {
+// Click F, j to G, chord: G, as before this branch. The keyboard is driving
+// until the pointer really moves again.
+test("keyboard navigation hands the chord to the focused card until the pointer moves", () => {
   moveOver("child-close");
   pressNext();
   focusLead();
   pressClose();
-  expect(calls).toEqual(["close:child:false"]);
+  expect(calls).toEqual(["close:lead:true"]);
+  // A row sliding under the still pointer changes nothing.
+  slideUnder("other-title");
+  pressClose();
+  expect(calls).toEqual(["close:lead:true", "close:lead:true"]);
+  // A real move hands it back to the pointer.
+  moveOver("child-close");
+  pressClose();
+  expect(calls).toEqual(["close:lead:true", "close:lead:true", "close:child:false"]);
+});
+
+test("compose.focus is navigation too; typing is not", () => {
+  moveOver("child-close");
+  press("m", "KeyM", { ctrlKey: true }); // compose.focus
+  pressClose();
+  expect(calls).toEqual(["close:lead:true"]);
+  moveOver("child-close");
+  const composer = document.getElementById("composer") as HTMLTextAreaElement;
+  composer.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "a", bubbles: true }));
+  pressClose();
+  expect(calls).toEqual(["close:lead:true", "close:child:false"]);
 });
 
 test("a pointer event without movement does not arm a row", () => {

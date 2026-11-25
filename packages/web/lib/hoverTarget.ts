@@ -5,13 +5,17 @@
 //
 // The rule, in order:
 // 1. An open session menu's sessions: the menu advertises the chords.
-// 2. The armed row: a row the pointer really moved onto (the screen position
+// 2. The focused card, when a navigation key moved the view since the pointer
+//    last moved (j/k, compose focus, any shortcut that is not a row verb):
+//    the keyboard is driving, as before this rule existed.
+// 3. The armed row: a row the pointer really moved onto (the screen position
 //    changed), still under it. Scrolling, a drag or a cancelled pointer
 //    disarms it; a row that slides under a still pointer never arms.
-// 3. Nothing, when another row shows its toolbar (:hover) and is not the
+// 4. Nothing, when another row shows its toolbar (:hover) and is not the
 //    focused card: the key must not act behind the row advertising it.
-// 4. The focused card, as before: the pointer over the transcript, between
+// 5. The focused card, as before: the pointer over the transcript, between
 //    rows or off the list leaves the chord where it always went.
+// Typing is not navigation: an armed row stays the target while you type.
 //
 // A row is an element carrying data-row-verbs="<session id>": only rows that
 // draw the hover toolbar carry it (inbox cards, sub-rows, feed cards, the
@@ -25,6 +29,8 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 const ROW = "[data-row-verbs]";
 
 let hovered: Element | null = null;
+// A navigation key moved the view since the pointer last really moved.
+let navigatedSinceMove = false;
 // The sessions an open context menu was opened on ([] once a chord acted from
 // it), how to dismiss it, the menu's own bulk handlers (so a chord says what
 // the item says), and whether the session is a teammate's (whose menu offers
@@ -48,6 +54,7 @@ function onPointerMove(e: PointerEvent) {
   if (e.screenX === lastX && e.screenY === lastY) return;
   lastX = e.screenX;
   lastY = e.screenY;
+  navigatedSinceMove = false;
   hovered = (e.target as Element | null)?.closest?.(ROW) ?? null;
 }
 
@@ -82,7 +89,25 @@ export function watchHoverTarget(): () => void {
   return () => {
     for (const [type, fn] of on) document.removeEventListener(type, fn, true);
     hovered = null;
+    navigatedSinceMove = false;
   };
+}
+
+// The shortcuts that act on a row. Every other shortcut pressed is navigation
+// (noteShortcutUsed).
+const ROW_VERB_ACTIONS: ReadonlySet<string> = new Set([
+  "session.close", "session.stash", "session.stashHide", "session.deferAdvance",
+  "session.dormantAdvance", "session.pin", "session.markUnread", "session.snooze",
+  "session.rename", "session.moveToBucket", "conv.favorite", "conv.copyLink",
+]);
+
+/** A shortcut's key was pressed and handled (ShortcutProvider). Anything but
+ *  a row verb moved the view or focus: the focused card is the target until
+ *  the pointer moves, and the hovered row is disarmed. */
+export function noteShortcutUsed(action: string): void {
+  if (ROW_VERB_ACTIONS.has(action)) return;
+  navigatedSinceMove = true;
+  hovered = null;
 }
 
 /** Held by a session context menu while it is open: row verbs act on these
@@ -148,6 +173,7 @@ export function noteRowVerbActed(removed: boolean): void {
  *  offers it too. */
 export function rowVerbIds(focused: string | null | undefined, { foreignOk = false } = {}): string[] {
   if (menuTarget) return menuTarget.foreign && !foreignOk ? [] : menuTarget.ids;
+  if (navigatedSinceMove) return focused ? [focused] : [];
   const armed = hoverTargetId();
   if (armed) return [armed];
   const shown = visiblyHoveredRowId();
