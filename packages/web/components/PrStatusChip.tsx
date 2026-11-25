@@ -9,10 +9,7 @@
 // also shows how far it has gone toward production, as the reach's glyph.
 import React, { useState } from "react";
 import Link from "next/link";
-import {
-  Check, CheckCheck, CircleX, Clock, Eye, FilePen, GitCompareArrows, GitMerge, GitPullRequest, GitPullRequestClosed,
-  GitPullRequestDraft, TriangleAlert, type LucideIcon,
-} from "lucide-react";
+import { GitPullRequest } from "lucide-react";
 import { accentSoft, accentVar, prPath, shepherdStyle, type ExternalEventAccent } from "../lib/externalEvents";
 import { CI_WORDS, LINKED_PR_LOOK, showsCi, type LinkedPr, type LinkedPrCi } from "../lib/sessionPullRequests";
 import type { PrStatus } from "../store/inboxStore";
@@ -22,26 +19,7 @@ import { repoObjectId } from "../lib/entityLinks";
 import { useDeployReach } from "../hooks/useDeployReach";
 import { REACH_LOOK, type DeployTone } from "../lib/deploys/deployPill";
 import { REACH_ICON } from "../lib/deploys/deployLook";
-
-/**
- * A pull request's state as the chip draws it: the PR glyph its state calls for, and a glyph after the number for
- * what it waits on. Every state a chip can wear (a shepherd's, or a linked PR's own) is here; the words stay in
- * shepherdStyle and LINKED_PR_LOOK for tooltips and screen readers.
- */
-export const PR_STATE_GLYPH: Record<string, { pr?: LucideIcon; after?: LucideIcon }> = {
-  review_pending: { after: Eye },
-  changes_requested: { after: FilePen },
-  ci_pending: { after: Clock },
-  ci_red: { after: CircleX },
-  failing: { after: CircleX },
-  behind: { after: GitCompareArrows },
-  conflicts: { after: TriangleAlert },
-  approved: { after: Check },
-  ready: { after: CheckCheck },
-  draft: { pr: GitPullRequestDraft },
-  merged: { pr: GitMerge },
-  closed: { pr: GitPullRequestClosed },
-};
+import { PR_STATE_GLYPH } from "../lib/prStateGlyph";
 
 const TONE_ACCENT: Record<DeployTone, ExternalEventAccent> = { green: "green", yellow: "yellow", red: "red", orange: "orange", muted: "muted", dim: "muted" };
 

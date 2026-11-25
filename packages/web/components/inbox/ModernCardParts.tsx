@@ -11,7 +11,7 @@ import { WORK_PROJECT_SEP } from "../../lib/workProjectSig";
 import { workProjectChipKey } from "../../store/workProjects";
 import { clickProjectChip } from "../../store/chipFilterClicks";
 import { accentVar, prPath, shepherdStyle } from "../../lib/externalEvents";
-import { PR_STATE_GLYPH } from "../PrStatusChip";
+import { PR_STATE_GLYPH } from "../../lib/prStateGlyph";
 import { isDefaultBranch, sessionRepository } from "../../lib/repoNavigation";
 import { repoTreeHref } from "../../lib/repoView";
 import { cleanTitle } from "../../lib/conversationProcessor";
