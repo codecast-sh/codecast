@@ -23,18 +23,18 @@ import { CLAUDE_VERSIONED_BINARY_RE } from "./stableClaudeBinary.js";
  *  `uid` is the owning user, absent when the table was parsed from output that
  *  did not carry the column. A kill decision treats absent as "not mine".
  *
- *  `pgid`, `startedAt` and `capturedAtMs` are the process IDENTITY, and they are
- *  what makes a delayed SIGKILL safe: a pid alone is a slot the kernel reuses,
- *  so a pid observed before a grace window and found alive after it may be a
- *  different program by then. All three are absent when the table came from
- *  output without those columns, and every identity check fails closed on
- *  absence — no proof, no hard kill. */
+ *  `startedAt` and `capturedAtMs` are the process IDENTITY, and they are what
+ *  makes a delayed SIGKILL safe: a pid alone is a slot the kernel reuses, so a
+ *  pid observed before a grace window and found alive after it may be a
+ *  different program by then. Both are absent when the table came from output
+ *  without those columns, and every identity check fails closed on absence —
+ *  no proof, no hard kill. */
 export type ProcRow = {
   pid: number;
   ppid: number;
   uid?: number;
-  /** Process group id. Part of the identity because a survivor that kept its
-   *  pid but joined a new group is a different process. */
+  /** Process group id. Not part of the identity: a process may change its own
+   *  group (setsid, `set -m`) at any moment, and is the same process after. */
   pgid?: number;
   /** `ps lstart` with runs of spaces collapsed ("Tue Aug 25 05:04:18 2026").
    *  Compared verbatim, so a locale-dependent parse never decides a kill. */
@@ -105,9 +105,9 @@ export function parseProcessTable(stdout: string, capturedAtMs?: number): ProcRo
 // The owner column rides along because the daemon's hourly sweep kills stale
 // tmux servers unattended, and on a shared box (the EC2 Mac mini, the Linux
 // agent hosts) another user's server on the default socket is not ours to touch.
-// pgid and lstart ride along because killProcessTree escalates to SIGKILL after
-// a grace window, and by then a pid is only evidence when its start time and
-// process group still agree (ct-49537).
+// lstart rides along because killProcessTree escalates to SIGKILL after a
+// grace window, and by then a pid is only evidence when its start time still
+// agrees (ct-49537).
 // The terminal rides along for reapTargets: on macOS as a device number, since
 // `tty` names it by searching /dev, which is slow under load (resourceMonitor.ts).
 const PS_ARGS = ["-axww", "-o", `pid=,ppid=,pgid=,uid=,${process.platform === "darwin" ? "tdev" : "tty"}=,lstart=,command=`];
@@ -641,14 +641,16 @@ export function bornBeforeCaptureSecond(row: ProcRow): boolean {
 /**
  * Is the process at `snapshot.pid` right now still the one we snapshotted?
  *
- * Pid, start time and process group must all agree, and the snapshot's start
- * time must be older than its capture second. Anything missing fails closed:
- * a table without the identity columns cannot license a SIGKILL.
+ * Pid and start time must agree, and the snapshot's start time must be older
+ * than its capture second: a process that took the pid since was born after
+ * the capture, so its start time differs. The process group is no part of it,
+ * since a process read just before its own setsid() is still that process.
+ * Anything missing fails closed: a table without the identity columns cannot
+ * license a SIGKILL.
  */
 export function sameProcess(snapshot: ProcRow, live: ProcRow | null | undefined): boolean {
   if (!live || live.pid !== snapshot.pid) return false;
   if (!snapshot.startedAt || snapshot.startedAt !== live.startedAt) return false;
-  if (snapshot.pgid === undefined || snapshot.pgid !== live.pgid) return false;
   return bornBeforeCaptureSecond(snapshot);
 }
 
@@ -671,8 +673,8 @@ export interface KillTreeResult {
  * the first signal. That is the whole point: a pid is a slot the kernel reuses,
  * and between the SIGTERM and the SIGKILL there is a window in which the pid we
  * are about to hard kill can belong to somebody else. The row carries the start
- * time, the process group and the capture instant that make the second signal
- * provably aimed at the first signal's target (ct-49537).
+ * time and the capture instant that make the second signal provably aimed at
+ * the first signal's target (ct-49537).
  *
  * Killing a tmux server or an agent alone leaks its tree, so callers pass the
  * root AND its descendants, descendants first.
