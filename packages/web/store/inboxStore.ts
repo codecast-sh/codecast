@@ -6591,6 +6591,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   applyUndoPatches: (patches: Record<string, Record<string, Record<string, any>>>) => void;
   toggleFavorite: (id: string) => void;
   setPrivacy: (id: string, isPrivate: boolean) => void;
+  /** Move one of my conversations into a team's workspace, or to Personal (null). */
+  moveSessionToWorkspace: (id: string, teamId: string | null) => void;
   /** "Anyone with the link" on (a freshly minted token) or off (null). */
   setShareLink: (id: string, token: string | null) => void;
   /** Let anonymous viewers of the share link suggest messages for this session. */
@@ -12030,6 +12032,23 @@ const inboxStoreConfig = (set: any, get: any) => ({
     patchConversationRows(this, id, (c) => {
       c.is_private = isPrivate;
       if (isPrivate) c.team_visibility = "private";
+    });
+  }),
+
+  // The same patch the server builds (convex privacy.ts buildWorkspaceMoveUpdate),
+  // so the card leaves one workspace and lands in the other at once.
+  moveSessionToWorkspace: action(function (this: Draft, id: string, teamId: string | null) {
+    patchConversationRows(this, id, (c) => {
+      c.auto_shared = undefined;
+      if (teamId === null) {
+        c.team_id = undefined;
+        c.is_private = true;
+        c.team_visibility = "private";
+      } else {
+        c.team_id = teamId;
+        c.is_private = false;
+        if (c.team_visibility === "private") c.team_visibility = undefined;
+      }
     });
   }),
 

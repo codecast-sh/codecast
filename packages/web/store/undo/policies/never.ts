@@ -340,6 +340,9 @@ export const NEVER_UNDO_POLICY: UndoPolicy = {
   setShareLink: SHARING,
   setGuestSuggestions: SHARING,
   setTeamMembershipVisibility: SHARING,
+  // The inverse cannot rebuild a row that was private but routed to a team;
+  // moving it back is the same control.
+  moveSessionToWorkspace: SHARING,
 
   // The project's line.toml, written on the checkout's machine by the daemon
   editLineProfile: never("machine control: the daemon rewrites the project's line.toml on its host, and the field is set back in the same settings control"),
