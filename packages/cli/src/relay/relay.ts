@@ -1,3 +1,4 @@
+import { SESSION_MESSAGE_OPEN_TAG } from "@codecast/shared/contracts";
 import { parsePollMessage } from "../pollMessage.js";
 import { sanitizeForTerminal } from "./sanitize.js";
 import type { DeliveryTarget, TargetAdapter } from "./targets.js";
@@ -6,6 +7,7 @@ export type PendingRow = {
   _id: string;
   content: string;
   session_id?: string;
+  from_conversation_id?: string;
   delivery_target?: DeliveryTarget;
   image_storage_id?: string;
   image_storage_ids?: string[];
@@ -32,9 +34,16 @@ type OwedStatus = "delivered" | "failed" | "undeliverable";
 export const GONE_STRIKES_TO_END = 2;
 export const HERDR_END_GRACE_MS = 3 * 60_000;
 
-export function wrapForHandoff(content: string, imageCount = 0): string {
+function replyHint(content: string, fromConversationId?: string): string {
+  const open = content.match(SESSION_MESSAGE_OPEN_TAG)?.[0];
+  const from = fromConversationId?.slice(0, 7);
+  if (!from || !open?.startsWith(`<session-message from="${from}"`) || / intent="(inform|done)"/.test(open)) return "";
+  return `\nIf this needs an answer: cast send ${from} "..."`;
+}
+
+export function wrapForHandoff(content: string, imageCount = 0, fromConversationId?: string): string {
   const note = imageCount > 0 ? `\n[${imageCount} image(s) not delivered]` : "";
-  return `<<<<<<\n${content}${note}\n>>>>>>`;
+  return `<<<<<<\n${content}${note}${replyHint(content, fromConversationId)}\n>>>>>>`;
 }
 
 export function isControlMessage(content: string): boolean {
@@ -140,7 +149,7 @@ export class Relay {
     const images = row.image_storage_ids?.length ?? (row.image_storage_id ? 1 : 0);
     if (images > 0) this.deps.log(`message ${row._id}: ${images} image(s) skipped, delivering text only`);
     const content = row.delivery_target.kind === "herdr" ? sanitizeForTerminal(row.content) : row.content;
-    const result = await this.deps.adapter.deliver(row.delivery_target, wrapForHandoff(content, images));
+    const result = await this.deps.adapter.deliver(row.delivery_target, wrapForHandoff(content, images, row.from_conversation_id));
     if (result.kind === "ok") {
       this.owed.set(row._id, "delivered");
       this.goneStrikes.delete(row.session_id);
