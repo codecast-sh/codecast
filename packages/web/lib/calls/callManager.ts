@@ -1,6 +1,7 @@
 import { isMediaDenial, mediaFailureReason, participantTiles, type ParticipantTile } from "./callMedia";
 import { teamMembersOf } from "../activeTeam";
 export { mediaFailureReason, listDevices, grantDeviceNames, type ParticipantTile } from "./callMedia";
+export { getMicLevel, subscribeMicLevel } from "./localMicLevel";
 // The media plane's one owner. Exactly one LiveKit Room lives here (module
 // singleton, never in React state, never in the store); components render
 // from the store's ephemeral `call` slice and call these methods. Convex
@@ -20,7 +21,6 @@ import {
   Room,
   RoomEvent,
   Track,
-  createAudioAnalyser,
 } from "livekit-client";
 import { api } from "@codecast/convex/convex/_generated/api";
 import { toast } from "sonner";
@@ -57,7 +57,7 @@ import { shouldRejoinAfterDisconnect, shouldYieldCallOnDisconnect } from "./call
 import { track as trackEvent } from "../analytics";
 import { bindCallCursors } from "./callCursors";
 import { focusExistingHuddle, huddleInOtherWindow } from "./huddleWindow";
-import { readMeterLevel } from "./walkieMeter";
+import { getMicLevel, startLevelMeter, stopLevelMeter } from "./localMicLevel";
 import { peekOsPermissions, permissionHint, refreshOsPermissions } from "../osPermissions";
 import {
   soundCallJoin,
@@ -165,61 +165,6 @@ function rebuildTiles() {
   const next: ParticipantTile[] = room ? participantTiles(room) : [];
   tilesSnapshot = tilesOverride ?? next;
   for (const cb of tileSubscribers) cb();
-}
-
-// ── local mic level ───────────────────────────────────────────────────────
-// Own-mic level for the dock meter. Polled from an AnalyserNode on the local
-// mic track (livekit-client's createAudioAnalyser), fanned out through the
-// same subscribe/snapshot pattern as tiles — a level is a 20fps signal and
-// has no business in the store (every write would re-render every subscriber
-// of the call slice).
-let micLevel = 0;
-const levelSubscribers = new Set<() => void>();
-let levelTimer: ReturnType<typeof setInterval> | null = null;
-let levelCleanup: (() => void) | null = null;
-
-export function subscribeMicLevel(cb: () => void): () => void {
-  levelSubscribers.add(cb);
-  return () => levelSubscribers.delete(cb);
-}
-export function getMicLevel(): number {
-  return micLevel;
-}
-
-function stopLevelMeter() {
-  if (levelTimer) clearInterval(levelTimer);
-  levelTimer = null;
-  levelCleanup?.();
-  levelCleanup = null;
-  if (micLevel !== 0) {
-    micLevel = 0;
-    for (const cb of levelSubscribers) cb();
-  }
-}
-
-function startLevelMeter() {
-  stopLevelMeter();
-  const pub = room?.localParticipant.getTrackPublication(Track.Source.Microphone);
-  const track = pub?.track;
-  if (!track || track.kind !== Track.Kind.Audio) return;
-  try {
-    const { analyser, cleanup } = createAudioAnalyser(track as any, {
-      fftSize: 256,
-      smoothingTimeConstant: 0.6,
-    });
-    const bytes = new Uint8Array(analyser.fftSize);
-    levelCleanup = cleanup;
-    levelTimer = setInterval(() => {
-      // Muted → analyser reads silence anyway, but skip the work and pin 0 so
-      // the meter reads honestly the instant the user mutes.
-      const muted = useInboxStore.getState().call.muted;
-      const v = muted ? 0 : readMeterLevel(analyser, bytes);
-      if (Math.abs(v - micLevel) > 0.02 || (v === 0 && micLevel !== 0)) {
-        micLevel = v;
-        for (const cb of levelSubscribers) cb();
-      }
-    }, 50);
-  } catch {}
 }
 
 // ── lifecycle ─────────────────────────────────────────────────────────────
@@ -658,7 +603,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     r.on(RoomEvent.LocalTrackPublished, (pub) => {
       rebuildTiles();
       if (pub.source === Track.Source.Microphone) {
-        startLevelMeter();
+        startLevelMeter(room);
         if (r === room) void syncRoomNoiseCancellation(r, readJoinPrefs().noiseCancellation);
       }
     });
@@ -800,7 +745,7 @@ async function joinCallHere(roomKey: string, opts?: JoinOpts): Promise<void> {
     await seated;
     if (seatError) throw seatError;
     if (superseded(r)) return;
-    startLevelMeter();
+    startLevelMeter(room);
     setCall({ phase: "connected", reconnecting: false });
     if (!rejoin) soundCallJoin();
     startHeartbeat(roomKey);
