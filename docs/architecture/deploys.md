@@ -321,16 +321,26 @@ them: where a deploy of a `here` target runs. A target the checkout stops
 declaring is retired, not deleted. Every reader (the CLI, the server, the
 Deploys page) parses through `contracts/deployTargets`.
 
-The targets have their own file because every released CLI validates
-workspace.toml strictly (an unknown key in `[[ship.deploy]]`, `[ship]` or at
-the top level refuses the whole manifest, and with it `cast ship` and
-workspace acquire). Keep workspace.toml to the keys the oldest CLI in use
-reads. deploy.toml is read past that: a target key this CLI does not know is
+The targets have their own file because released CLIs validate
+workspace.toml strictly (an unknown key in `[[ship.deploy]]` or at the top
+level refuses the whole manifest, and with it `cast ship` and workspace
+acquire). Keep workspace.toml to the keys the oldest CLI in use reads.
+deploy.toml is read past that: a target key this CLI does not know is
 ignored and named (`cast line deploy targets` prints it), so a file written
 for a newer CLI still deploys. CLIs before 1.1.249 refuse an unknown target
 key instead, and a pressed deploy of that repository fails on them: raise
 `min_cli_version` to a release that knows a key before any repository writes
 it (`gate` and `rollout` came after `ci` and `finish`, which 1.1.235 reads).
+
+`[ship]` is the one workspace.toml table read the same way from 1.1.284:
+workspace acquire and the other readers skip a `[ship]` key they do not
+know. `cast ship` and the merge station's before-merge deploys still refuse
+it, naming the key (a newer cast's setting? cast update; a typo? fix it),
+because a skipped key may route the pass or name its deploys: a misspelled
+`flow` would push past the flow's review, and a misspelled `deploy` would
+merge a client before its backend. CLIs before 1.1.284 refuse it everywhere
+with the whole manifest, so a repository adds a `[ship]` key only once
+`min_cli_version` reaches a release that reads it.
 
 ## DP11. Every way a target goes live leaves a dp-N
 

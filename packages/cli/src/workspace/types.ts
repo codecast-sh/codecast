@@ -204,6 +204,8 @@ export interface ShipSpec {
    * Set, `cast ship checkout` pushes nothing itself: the flow's stages check, land and deploy the pass.
    */
   flow?: string;
+  /** Keys of [ship] this cast does not know (a newer cast's), read past and named rather than refused. */
+  ignored?: string[];
 }
 
 export interface ShipDeployStep {

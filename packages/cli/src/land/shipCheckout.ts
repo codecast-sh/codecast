@@ -105,6 +105,17 @@ export async function upstreamRef(root: string): Promise<string> {
 }
 
 /**
+ * A ship, and a merge that runs its before-merge deploys, refuse a [ship] key this cast does not read, where other
+ * readers of the manifest read past it: the key may route the pass or name its deploys (a newer cast's setting, or a
+ * typo of `flow` or `deploy`), and skipping it would push past the flow's review or land a client before its backend.
+ */
+export function shipKeyRefusal(spec: { ignored?: string[] }): string | null {
+  if (!spec.ignored?.length) return null;
+  const keys = spec.ignored.map((k) => `'${k}'`).join(", ");
+  return `.codecast/workspace.toml: [ship] ${keys} ${spec.ignored.length > 1 ? "are not keys" : "is not a key"} this cast reads, so it does not ship: a newer cast's setting? cast update; a typo? fix it`;
+}
+
+/**
  * The checkout's [ship] table. Read from the file alone: detection has nothing to say about shipping. Each step a
  * target of .codecast/deploy.toml names carries that target, so the ship records a deploy of it (deploys.md DP11);
  * a deploy.toml that cannot be read tags nothing and never stops a ship (`cast line deploy targets` reports it).

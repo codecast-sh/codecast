@@ -31,7 +31,7 @@ import os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { defaultExec, landedSha, mergePullRequest, undoneChanges, type Exec, type Wait } from "../lineMerge.js";
-import { deploysFor, runShell, shipSpec, type Log } from "../land/shipCheckout.js";
+import { deploysFor, runShell, shipKeyRefusal, shipSpec, type Log } from "../land/shipCheckout.js";
 import type { ShipDeployStep } from "../workspace/types.js";
 import { keepEnds } from "./keepEnds";
 import { holdRepoLease, leaseHolder, type RepoLease } from "../land/repoLease.js";
@@ -93,8 +93,9 @@ export async function runMergeStation(args: MergeStationArgs): Promise<MergeStat
 }
 
 /** The before-merge steps as the default branch's own line profile names them at `onto`: a change never decides
- *  its own deploys by editing them. */
-function mainSteps(exec: Exec, at: string, onto: string): ShipDeployStep[] {
+ *  its own deploys by editing them. A [ship] key this cast does not read refuses: it may be a misspelled deploy table,
+ *  and merging without its steps would land a client before its backend. */
+function mainSteps(exec: Exec, at: string, onto: string): { steps: ShipDeployStep[]; refused: string | null } {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "merge-profile-"));
   try {
     fs.mkdirSync(path.join(dir, ".codecast"));
@@ -102,7 +103,9 @@ function mainSteps(exec: Exec, at: string, onto: string): ShipDeployStep[] {
       const r = exec("git", ["show", `${onto}:.codecast/${file}`], at);
       if (r.status === 0) fs.writeFileSync(path.join(dir, ".codecast", file), r.stdout);
     }
-    return shipSpec(dir).deploy.filter((s) => s.stage === "before_push");
+    const spec = shipSpec(dir);
+    const refused = shipKeyRefusal(spec);
+    return { steps: refused ? [] : spec.deploy.filter((s) => s.stage === "before_push"), refused };
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -252,7 +255,9 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
       const fresh = latest();
       if (!fresh) return refuse(`merged as ${short(already)}, but git fetch origin ${into} failed, so its before-merge deploys were not checked`);
       const files = lines(git(at, "diff-tree", "-r", "--name-only", "--no-commit-id", "--no-renames", `${already}^`, already).stdout);
-      const steps = deploysFor(mainSteps(exec, at, fresh), files);
+      const main = mainSteps(exec, at, fresh);
+      if (main.refused) return refuse(`merged as ${short(already)}, but its before-merge deploys were not checked: ${main.refused}`);
+      const steps = deploysFor(main.steps, files);
       if (steps.length) {
         const refused = await takeLease();
         if (refused) return refuse(`merged as ${short(already)}, but ${refused}`);
@@ -307,7 +312,9 @@ async function mergeStation(args: MergeStationArgs): Promise<MergeStationResult>
 
       // The before-merge steps the change's files call for, run from the rebased tree: the client lands on the
       // default branch the moment the merge does, so a backend it calls goes out first.
-      const steps = deploysFor(mainSteps(exec, at, onto), files);
+      const main = mainSteps(exec, at, onto);
+      if (main.refused) return await fail(2, main.refused);
+      const steps = deploysFor(main.steps, files);
       if (steps.length) {
         const refused = await takeLease();
         if (refused) return await fail(2, refused);

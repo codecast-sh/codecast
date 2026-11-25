@@ -8,7 +8,7 @@ import { spawnSync } from "../proc.js";
 import { formatAgeShort } from "../publishCommand.js";
 import { git } from "../wipSnapshot.js";
 import { inboxRoster } from "./cli.js";
-import { makePlan, planPath, runPlan, shipSpec, type Log, type ShipGroup, type ShipOutcome, type ShipPlan } from "./shipCheckout.js";
+import { makePlan, planPath, runPlan, shipKeyRefusal, shipSpec, type Log, type ShipGroup, type ShipOutcome, type ShipPlan } from "./shipCheckout.js";
 import { holdRepoLease, leaseHolder, leaseRouteMissing, type LeasePost } from "./repoLease.js";
 
 /** The repository's lease for the ship's before-push deploys and push. A server that cannot be asked about it (one older
@@ -190,7 +190,10 @@ async function runCast(args: string[], cwd: string): Promise<number> {
 export async function runCheckoutCommand(opts: CheckoutOptions, record?: (body: Record<string, unknown>) => Promise<any>, runFlow: (args: string[], cwd: string) => Promise<number> = runCast, post?: LeasePost): Promise<void> {
   const startedAt = Date.now();
   const root = (await git(process.cwd(), ["rev-parse", "--show-toplevel"]));
-  const flow = shipSpec(root).flow;
+  const spec = shipSpec(root);
+  const refused = shipKeyRefusal(spec);
+  if (refused) throw new Error(refused);
+  const flow = spec.flow;
   const flowArgs = checkoutFlowArgs(flow, opts);
   if (flowArgs) {
     log(`[ship] flow = "${flow}": running the pass through it (cast ${flowArgs.join(" ")})`);
