@@ -7,12 +7,16 @@ const realNow = Date.now;
 let now;
 let store;
 let background;
+let sentUa;
+let sentAuth;
 
 beforeEach(() => {
   now = 1_000_000;
   Date.now = () => now;
   store = new Map();
   background = [];
+  sentUa = [];
+  sentAuth = [];
   // The PoP's cache: the worker puts by origin address and matches by request.
   globalThis.caches = {
     default: {
@@ -33,6 +37,8 @@ function stubOrigin(extra = {}) {
   const calls = [];
   globalThis.fetch = async (url, init) => {
     calls.push({ url: String(url), cache: init?.cache });
+    sentUa.push(init?.headers?.["User-Agent"] ?? null);
+    sentAuth.push(init?.headers?.Authorization ?? null);
     return new Response(`body ${calls.length}`, {
       status: extra.status ?? 200,
       headers: { "Cache-Control": "max-age=14400", ...(extra.headers ?? {}) },
@@ -251,5 +257,73 @@ describe("artifact edge cache", () => {
     const calls = stubOrigin();
     expect((await get("/nope")).status).toBe(404);
     expect(calls).toEqual([]);
+  });
+
+  const HOST_UA = "Mozilla/5.0 (Macintosh) AppleWebKit/605.1.15 CodecastApp/1.1.253 (abcdefghijkl)";
+  const getAs = (path, ua) => worker.fetch(new Request(`https://a.codecast.sh${path}`, { headers: { "User-Agent": ua } }), {}, ctx);
+
+  test("an installed app's host bypasses the cache both ways and is the only request whose user agent reaches the origin", async () => {
+    const calls = stubOrigin();
+    // A browser's copy is held...
+    await getAs("/abcdefghijkl", "Mozilla/5.0 Chrome/140");
+    expect(sentUa).toEqual([null]);
+    // ...and never answers the host, which goes to the origin with its user agent.
+    const host = await getAs("/abcdefghijkl", HOST_UA);
+    expect(host.headers.get("X-Edge-Cache")).toBe("BYPASS");
+    expect(host.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(host.headers.get("Vary")).toBe("User-Agent");
+    expect(await host.text()).toBe("body 2");
+    expect(sentUa).toEqual([null, HOST_UA]);
+    // The host's answer was not stored: the browser still gets its own copy.
+    const browser = await getAs("/abcdefghijkl", "Mozilla/5.0 Chrome/140");
+    expect(browser.headers.get("X-Edge-Cache")).toBe("HIT");
+    expect(await browser.text()).toBe("body 1");
+    expect(browser.headers.get("Vary")).toBe("User-Agent");
+    // Assets under the slug bypass too.
+    await getAs("/abcdefghijkl/app.js", HOST_UA);
+    expect(calls.map((c) => c.url).at(-1)).toBe("https://convex.codecast.sh/cli/a/abcdefghijkl/app.js");
+    expect(sentUa.at(-1)).toBe(HOST_UA);
+  });
+
+  test("a host user agent naming another page is a browser here", async () => {
+    stubOrigin();
+    await get("/zzzzzzzzzzzz");
+    const res = await getAs("/zzzzzzzzzzzz", HOST_UA);
+    expect(res.headers.get("X-Edge-Cache")).toBe("HIT");
+    expect(sentUa).toEqual([null]);
+  });
+
+  const getWith = (path, headers) => worker.fetch(new Request(`https://a.codecast.sh${path}`, { headers }), {}, ctx);
+
+  test("the installed-app info (?app=1) is never held, so a republish shows on the next poll", async () => {
+    const calls = stubOrigin();
+    const first = await get("/abcdefghijkl?app=1");
+    expect(first.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(first.headers.get("X-Edge-Cache")).toBeNull();
+    const second = await get("/abcdefghijkl?app=1");
+    expect(await second.text()).toBe("body 2");
+    expect(calls).toHaveLength(2);
+    expect(store.size).toBe(0);
+  });
+
+  test("an identity token (i=) is a gate: never held in the shared cache", async () => {
+    const calls = stubOrigin();
+    const res = await get("/abcdefghijkl?i=tok");
+    expect(res.headers.get("Cache-Control")).toBe("private, max-age=60, stale-while-revalidate=300");
+    await get("/abcdefghijkl?i=tok");
+    expect(calls).toHaveLength(2);
+    expect(store.size).toBe(0);
+  });
+
+  test("the app's sign-in reaches the origin only on answers nothing here holds", async () => {
+    stubOrigin();
+    const auth = { Authorization: "Bearer jwt" };
+    await getWith("/abcdefghijkl?app=1", auth);
+    await getWith("/abcdefghijkl", { ...auth, "User-Agent": HOST_UA });
+    expect(sentAuth).toEqual(["Bearer jwt", "Bearer jwt"]);
+    // A page that is held goes upstream without it, so its copy is the anonymous page.
+    await getWith("/abcdefghijkl", auth);
+    await getWith("/abcdefghijkl?k=x", auth);
+    expect(sentAuth.slice(2)).toEqual([null, null]);
   });
 });

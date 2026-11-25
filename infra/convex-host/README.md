@@ -86,6 +86,23 @@ The tail starts from "now" whenever it restarts, so a restart leaves a gap of
 seconds. The current hour's file is still open: it reads up to the last
 5-second flush and then zcat warns "unexpected end of file", which is expected. Its admin key lives only in `/srv/convex-logtail/.env`.
 
+## Disk the backend never gives back
+
+The self-hosted backend never deletes a blob from `/srv/convex/data/storage`
+(upstream calls `delete_object` only for exports), and each backend process
+leaves its scratch directory in `/srv/convex/data/tmp` when it dies. On
+2026-11-24 (ct-60898) that was 378 GB of replaced search segments, 72 GB of old
+source packages, 9 GB of deleted files and ~67 GB of dead processes' tmp dirs.
+
+- `storage-gc.py` (run on the host as root) lists blobs no retained revision of
+  `_index`, `_source_packages`/`_modules`/`_external_deps_packages` or
+  `_file_storage` names and that are older than 7 days. It is a dry run unless
+  given `--quarantine <dir>` (rename aside) or `--delete`, and it re-reads the
+  references before removing anything.
+- A `.tmp*` directory under `data/tmp` created before the running backend's
+  `docker inspect -f '{{.State.StartedAt}}' convex-backend-1` belongs to a dead
+  process. The live one grows ~6 GB a day until the next restart.
+
 ## What the backend can reach from inside
 
 Mods and deploy-target readers make server-side fetches to addresses users

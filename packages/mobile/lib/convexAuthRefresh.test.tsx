@@ -1,6 +1,6 @@
 // Drives the real (patched) @convex-dev/auth client through the refresh
 // failures that signed phones out and then refused their next sign-in
-// (patches/convex-auth-refresh.mjs). Convex is a fake that records setAuth and
+// (patches/convex-auth-refresh-keep.mjs and convex-auth-refresh.mjs). Convex is a fake that records setAuth and
 // answers fetchToken the way the real auth manager does.
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test';
 import React from 'react';
@@ -79,7 +79,7 @@ async function mount(client: any, storage: ReturnType<typeof memoryStorage>) {
 }
 
 describe('patched @convex-dev/auth refresh', () => {
-  it('keeps the refresh token when the refresh call fails on the network', async () => {
+  it('keeps the refresh token, and rejects nothing, when every refresh call fails on the network', async () => {
     const storage = memoryStorage({ [JWT]: 'old-jwt', [REFRESH]: 'refresh-1' });
     const { client, setAuthCalls } = fakeConvex(() => ({}));
     let calls = 0;
@@ -93,7 +93,8 @@ describe('patched @convex-dev/auth refresh', () => {
     await act(async () => {
       await setAuthCalls[0].fetchToken({ forceRefreshToken: true }).catch((e) => { error = e; });
     });
-    expect(error).toBeInstanceOf(TypeError);
+    // A failure in transit is no logout: the attempts run out quietly and the token stays.
+    expect(error).toBeUndefined();
     expect(calls).toBe(3);
     expect(storage.items[REFRESH]).toBe('refresh-1');
   }, 10_000);

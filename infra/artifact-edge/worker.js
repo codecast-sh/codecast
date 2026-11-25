@@ -27,6 +27,14 @@
 //
 // Origin redirects (e.g. bundle trailing-slash normalization) point at the
 // origin's path — rewrite Location back onto this host's.
+//
+// An installed app's host (docs/architecture/installed-apps.md) sends a user
+// agent ending in " CodecastApp/<ver> (<slug>)". The origin answers it with a
+// different page (no bar, a sandbox with allow-same-origin) that a browser
+// must never get. So a host request never touches this cache and is the only
+// request whose User-Agent reaches the origin; every other origin fetch
+// carries none, so a stored copy is always the browser page. Every page
+// answer also says Vary: User-Agent, so no cache past this one swaps them.
 
 const ORIGIN = "https://convex.codecast.sh";
 const SLUG_RE = /^[A-Za-z0-9]{6,32}$/;
@@ -36,13 +44,18 @@ const STALE = 300;
 const UNCACHED_POLICY = "private, no-store";
 // Viewing capabilities that appear in the query string. A request holding one
 // is authorization-dependent and must not be answered from a shared cache.
-const GATE_PARAMS = ["m", "k", "e"];
-// Answers that are live or single-use whatever the gates say.
-const LIVE_PARAMS = ["edit", "download"];
+// `i` is a page identity token (#i=): it names a viewer, so it gates too.
+const GATE_PARAMS = ["m", "k", "e", "i"];
+// Answers that are live or single-use whatever the gates say. `app=1` is the
+// installed-app info a host polls for the page's version: a held copy would
+// hide a republish for up to FRESH + STALE seconds.
+const LIVE_PARAMS = ["edit", "download", "app"];
 // A page, an asset, the bundle redirect, a media redirect. Errors and the
 // "not found" page are never held: a page published a moment ago must appear.
 const STORED_STATUSES = new Set([200, 301, 302]);
 const STORED_AT = "X-Edge-Fetched-At";
+// PAGE_HOST_UA_RE in packages/shared/contracts/pageEdge.ts; keep them equal.
+const HOST_UA_RE = / CodecastApp\/([0-9A-Za-z.+-]{1,32}) \(([A-Za-z0-9]{1,64})\)$/;
 
 /** What a browser may do with a copy fetched `age` seconds ago: the same
  * fresh-then-stale shape as the origin's policy, cut to what is left of it.
@@ -58,10 +71,14 @@ export function browserPolicy(age, scope = "public", pinned = false) {
   return `${scope}, max-age=${fresh}, stale-while-revalidate=${left - fresh}`;
 }
 
-async function fromOrigin(url) {
+/** `headers` is what the request carries upstream: nothing for an answer this
+ * worker may hold, so a held copy never depends on who asked. */
+async function fromOrigin(url, headers) {
   // The zone's cache is bypassed: the copy this worker keeps is the only one,
   // so its age is the whole age of what a viewer gets.
-  const upstream = await fetch(url, { redirect: "manual", cache: "no-store" });
+  const init = { redirect: "manual", cache: "no-store" };
+  if (headers) init.headers = headers;
+  const upstream = await fetch(url, init);
   // Re-wrap so the response is mutable and the Location rewrite can be made.
   const res = new Response(upstream.body, upstream);
   const loc = res.headers.get("Location");
@@ -69,8 +86,9 @@ async function fromOrigin(url) {
   return res;
 }
 
-function answer(res, policy, state) {
+function answer(res, policy, state, page = false) {
   const out = new Response(res.body, res);
+  if (page) out.headers.set("Vary", "User-Agent");
   // The browser policy is always written here, never passed through: the
   // zone's Browser Cache TTL rewrites every subrequest's Cache-Control (even
   // the origin's `private, no-store`) to four hours before this worker can
@@ -94,6 +112,10 @@ export default {
     let live = false;
     let gated = false;
     let pinned = false;
+    let hostUa = null;
+    // The app's sign-in (?app=1 reads the viewer from it). Forwarded only on
+    // answers nothing here holds: the host bypass and live requests.
+    const auth = request.headers.get("Authorization");
     if (RUNTIME_RE.test(reqUrl.pathname)) {
       originUrl = `${ORIGIN}${reqUrl.pathname}`;
     } else {
@@ -106,6 +128,8 @@ export default {
       if (tail.length > 600 || tail.includes("..")) {
         return new Response("Invalid artifact path", { status: 404 });
       }
+      const ua = request.headers.get("User-Agent") ?? "";
+      if (HOST_UA_RE.exec(ua)?.[2] === slug) hostUa = ua;
       const has = (p) => reqUrl.searchParams.has(p);
       gated = GATE_PARAMS.some(has);
       pinned = /^v\d+$/.test(reqUrl.searchParams.get("r") ?? "");
@@ -116,15 +140,19 @@ export default {
       originUrl = `${ORIGIN}/cli/a/${slug}${tailPath}${search}`;
     }
 
+    const page = !RUNTIME_RE.test(reqUrl.pathname);
+    // An installed app's host: straight to the origin with its user agent, never held.
+    if (hostUa) return answer(await fromOrigin(originUrl, { "User-Agent": hostUa, ...(auth ? { Authorization: auth } : {}) }), UNCACHED_POLICY, "BYPASS", true);
+
     // A page behind a gate is never held here, but the browser that holds its
     // token may keep it as long as an open page: same bound, private scope.
     // Reopening a gated decision report then costs no request at all.
     if (gated && !live && request.method === "GET") {
       const res = await fromOrigin(originUrl);
-      return answer(res, STORED_STATUSES.has(res.status) ? browserPolicy(0, "private", pinned) : UNCACHED_POLICY);
+      return answer(res, STORED_STATUSES.has(res.status) ? browserPolicy(0, "private", pinned) : UNCACHED_POLICY, undefined, page);
     }
     const cache = request.method === "GET" && !gated && !live ? globalThis.caches?.default : undefined;
-    if (!cache) return answer(await fromOrigin(originUrl), UNCACHED_POLICY);
+    if (!cache) return answer(await fromOrigin(originUrl, live && auth ? { Authorization: auth } : undefined), UNCACHED_POLICY, undefined, page);
 
     // Keyed by the origin's address, so both path shapes share one entry, but
     // under this host: fetch and the Cache API share one store, and a copy
@@ -145,13 +173,13 @@ export default {
     const held = await cache.match(key);
     const age = held ? (Date.now() - Number(held.headers.get(STORED_AT))) / 1000 : Infinity;
     // A pinned copy shows one version for good: held for the whole bound, never refreshed behind a reader.
-    if (held && age < (pinned ? FRESH + STALE : FRESH)) return answer(held, browserPolicy(age, "public", pinned), "HIT");
+    if (held && age < (pinned ? FRESH + STALE : FRESH)) return answer(held, browserPolicy(age, "public", pinned), "HIT", page);
     if (held && age < FRESH + STALE) {
       const work = refresh().catch(() => {});
       if (ctx) ctx.waitUntil(work);
-      return answer(held, browserPolicy(age), "STALE");
+      return answer(held, browserPolicy(age), "STALE", page);
     }
     const fresh = await refresh();
-    return answer(fresh.res, fresh.held ? browserPolicy(0, "public", pinned) : "no-store", "MISS");
+    return answer(fresh.res, fresh.held ? browserPolicy(0, "public", pinned) : "no-store", "MISS", page);
   },
 };
