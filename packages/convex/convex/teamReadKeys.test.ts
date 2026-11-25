@@ -133,7 +133,7 @@ describe("team read keys", () => {
     expect(sessions).toEqual([
       {
         id: expect.any(String),
-        owner: { id: String(ada), name: "Ada", github_username: null, email: "ada@acme.dev" },
+        owner: { id: String(ada), name: "Ada", github_username: null, email: null },
         agent: "claude_code",
         branch: "feat/x",
         repo: "acme/api",

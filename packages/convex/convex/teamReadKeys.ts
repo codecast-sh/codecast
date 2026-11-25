@@ -273,7 +273,8 @@ export const sessionsForKey = internalQuery({
           id: String(owner._id),
           name: owner.name ?? null,
           github_username: owner.github_username ?? null,
-          email: owner.email ?? null,
+          // Only a member with neither a name nor a GitHub username, who has nothing else to be known by
+          email: owner.name || owner.github_username ? null : (owner.email ?? null),
         },
         agent: c.agent_type,
         branch: c.git_branch ?? null,
