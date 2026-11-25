@@ -374,3 +374,20 @@ test("the route shows the feature-off landing while the workspace has Priorities
     await page.unmount();
   }
 }, 60_000);
+
+test("a step's title and a finished priority's row open what they stand for (ct-101411)", async () => {
+  answers["priorities:show"] = DETAIL;
+  const page = await mount(<PrioritiesView rows={ROWS as any} history={HISTORY as any} openId="pri-1" onToggleOpen={() => {}} writes={{} as any} />);
+  try {
+    const opens = (el: Element | null) => !!el?.closest("a[href], button");
+    // The step titled "Grader faults under 10%" stands for ct-12: its title opens it.
+    const stepTitle = [...page.container.querySelectorAll('[data-step="s1"] [title]')].find((n) => n.getAttribute("title") === "Grader faults under 10%") ?? null;
+    expect(stepTitle).not.toBeNull();
+    // A finished priority's title opens it (expands or links), as an active one's does.
+    const pastTitle = page.container.querySelector('[data-priority="pri-4"] [data-past-title]');
+    expect(pastTitle).not.toBeNull();
+    expect({ stepTitleOpens: opens(stepTitle), pastRowOpens: opens(pastTitle) }).toEqual({ stepTitleOpens: true, pastRowOpens: true });
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
