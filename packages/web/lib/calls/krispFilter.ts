@@ -111,6 +111,28 @@ async function ensureRunningAudioContext(room: Room, track: LocalAudioTrack): Pr
   return ctx.state !== "closed";
 }
 
+// krisp-noise-filter 0.4.6's `onPublish` is
+// `async onPublish(r) { this.#A.onPublish(r), this.setEnabled(!0) }`: it fires
+// `setEnabled(true)` without awaiting it, and `setEnabled` rejects with
+// WASM_OR_WORKER_NOT_READY while the worker/WASM is still loading. That call
+// comes from our own code and from livekit-client's TrackProcessorUpdate
+// listener, so neither caller can catch it. Shadow `setEnabled` and `onPublish`
+// on the instance so every promise they return already has a handler; callers
+// that await still see the rejection and fall back to browser suppression.
+function markRejectionsHandled<P extends object>(processor: P): P {
+  const proc = processor as any;
+  for (const key of ["setEnabled", "onPublish"] as const) {
+    const original = proc[key];
+    if (typeof original !== "function") continue;
+    proc[key] = function (...args: unknown[]) {
+      const result = original.apply(proc, args);
+      if (result && typeof result.catch === "function") result.catch(() => {});
+      return result;
+    };
+  }
+  return processor;
+}
+
 // Serialize attach/detach per LocalAudioTrack so a join and a LocalTrackPublished
 // event arriving in the same turn never instantiate two processors on one mic.
 const inFlight = new WeakMap<object, Promise<boolean>>();
@@ -179,7 +201,7 @@ async function reconcileTrack(room: Room, track: LocalAudioTrack, enabled: boole
     return false;
   }
 
-  const processor = mod.KrispNoiseFilter({ quality: "high" });
+  const processor = markRejectionsHandled(mod.KrispNoiseFilter({ quality: "high" }));
   try {
     await track.setProcessor(processor as any);
     // If the track was already published before setProcessor ran, Room's
