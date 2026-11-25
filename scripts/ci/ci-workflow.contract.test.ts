@@ -91,22 +91,19 @@ describe("ci.yml job graph", () => {
     }
   });
 
-  test("the composite action caches the bun store and installs only after", () => {
+  test("the composite action sets bun up, then installs from the registry with no cache to restore", () => {
     const steps: any[] = setupBun.runs.steps;
     expect(setupBun.runs.using).toBe("composite");
     expect(Object.keys(setupBun.inputs)).toEqual(["deps", "bun-version"]);
     expect(setupBun.inputs.deps.default).toBe("install");
     expect(String(setupBun.inputs["bun-version"].default)).toMatch(/^\d+\.\d+\.\d+$/);
     const bun = steps.findIndex((step) => String(step.uses ?? "").startsWith("oven-sh/setup-bun@"));
-    const cache = steps.findIndex((step) => String(step.uses ?? "").startsWith("actions/cache@"));
     const install = steps.findIndex((step) => step.run === "bun install");
     expect(bun).toBe(0);
     expect(steps[bun].with["bun-version"]).toBe("${{ inputs.bun-version }}");
-    expect(cache).toBeGreaterThan(bun);
-    expect(steps[cache].if).toBe("inputs.deps != 'none'");
-    expect(steps[cache].with.path).toBe("~/.bun/install/cache");
-    expect(steps[cache].with.key).toBe("bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}");
-    expect(install).toBeGreaterThan(cache);
+    // Restoring the 950 MB install cache took 24s; a cold install takes 10 to 15s.
+    expect(steps.some((step) => String(step.uses ?? "").startsWith("actions/cache"))).toBe(false);
+    expect(install).toBeGreaterThan(bun);
     expect(steps[install].if).toBe("inputs.deps == 'install'");
   });
 });
@@ -215,29 +212,51 @@ describe("code_paths", () => {
 // or it drifts red unnoticed (bun test strips types). A program counts when one
 // of the packages the typecheck job filters to runs it from its own script.
 describe("typecheck", () => {
-  // A known gap, not a second toolchain: packages/mobile has no `typecheck`
-  // script, so nothing in CI typechecks it. `cast check mobile` is its only
-  // check. Drop it from this list when the package gains the script and the
-  // job's filter gains the package.
+  // A known gap, not a second toolchain: packages/mobile is not typechecked in
+  // CI. `cast check mobile` is its only check. Drop it from this list when the
+  // job's matrix gains it.
   const NOT_IN_TYPECHECK_JOB = ["mobile"];
   const checkToml = Bun.TOML.parse(
     readFileSync(new URL("../../.codecast/check.toml", import.meta.url), "utf8"),
   ) as { projects: Record<string, string> };
-  const typecheckRun: string = jobs.typecheck.steps.find((step: any) =>
-    String(step.run ?? "").startsWith("bun run typecheck"),
-  ).run;
+  const groups: Array<{ key: string; programs: string }> = jobs.typecheck.strategy.matrix.include;
+  const run: string = jobs.typecheck.steps.find((step: any) => step.name === "Typecheck").run;
 
-  test("covers every program in .codecast/check.toml", () => {
-    for (const [name, tsconfig] of Object.entries(checkToml.projects)) {
-      if (NOT_IN_TYPECHECK_JOB.includes(name)) continue;
-      const pkgDir = tsconfig.split("/").slice(0, 2).join("/");
-      const pkg = JSON.parse(readFileSync(new URL(`../../${pkgDir}/package.json`, import.meta.url), "utf8"));
-      expect(typecheckRun, `${name}: ${pkg.name} filtered`).toContain(`--filter=${pkg.name}`);
-      const rel = tsconfig.slice(pkgDir.length + 1);
-      const script: string = pkg.scripts?.typecheck ?? "";
-      const runsIt = script.includes(`-p ${rel}`) || (rel === "tsconfig.json" && /tsc --noEmit(?! -p)/.test(script));
-      expect(runsIt, `${name}: ${pkg.name} typecheck script runs ${rel}`).toBe(true);
-    }
+  test("covers every program in .codecast/check.toml exactly once", () => {
+    const programs = groups.flatMap((g) => g.programs.split(" ")).sort();
+    const expected = Object.keys(checkToml.projects).filter((p) => !NOT_IN_TYPECHECK_JOB.includes(p)).sort();
+    expect(programs).toEqual(expected);
+    expect(new Set(groups.map((g) => g.key)).size).toBe(groups.length);
+  });
+
+  test("checks each program against the tsconfig check.toml names, incrementally", () => {
+    expect(run).toContain("for program in ${{ matrix.programs }}");
+    expect(run).toContain(".codecast/check.toml");
+    expect(run).toContain("--incremental --tsBuildInfoFile");
+    expect(run).toContain('|| status=1');
+  });
+
+  test("restores build info on every run and saves it only from a push", () => {
+    const restore = jobs.typecheck.steps.find((step: any) => String(step.uses ?? "").startsWith("actions/cache/restore@"));
+    const save = jobs.typecheck.steps.find((step: any) => String(step.uses ?? "").startsWith("actions/cache/save@"));
+    expect(restore.with["restore-keys"]).toBe("tsbuildinfo-${{ matrix.key }}-");
+    expect(save.if).toBe("github.event_name == 'push' && success()");
+    expect(save.with.key).toBe(restore.with.key);
+  });
+});
+
+// Test shards come from scripts/ci/test-shards.ts, which puts every file of a
+// suite in exactly one shard (its own test), filled by recorded time.
+describe("test shards", () => {
+  test("test-web and test-cli run the files test-shards.ts gives their shard", () => {
+    const web = jobs["test-web"].steps.find((step: any) => step.name === "Unit tests (web package)").run;
+    expect(web).toContain("scripts/ci/test-shards.ts packages/web ${{ matrix.shard }}/");
+    expect(web).toContain("$files");
+    const cli = jobs["test-cli"].steps.find((step: any) => step.name === "Unit tests (cli package)").run;
+    expect(cli).toContain("scripts/ci/test-shards.ts packages/cli ${{ matrix.part }}");
+    expect(cli).toContain("$files");
+    // The shard list is taken before bun runs, so a failing script fails the step rather than running nothing.
+    expect(web.indexOf('files="$(bun')).toBeLessThan(web.indexOf("bun test"));
   });
 });
 
@@ -301,7 +320,7 @@ describe("advisory jobs", () => {
     for (const job of ADVISORY_JOBS) {
       expect(jobs[job].needs, `${job} needs`).toEqual(["code_paths"]);
       const gate = String(jobs[job].if ?? "");
-      expect(gate, `${job} if`).toMatch(/^needs\.code_paths\.outputs\.(\w+) == 'true'$/);
+      expect(gate, `${job} if`).toMatch(/^(github\.event_name == 'push' && )?needs\.code_paths\.outputs\.(\w+) == 'true'$/);
       expect(Object.keys(jobs.code_paths.outputs)).toContain(gate.match(/outputs\.(\w+)/)![1]);
     }
   });
@@ -447,7 +466,7 @@ describe("injection suites", () => {
     expect(classify.run).toContain("--injection-only");
     const steps: any[] = jobs["test-cli"].steps;
     const suites = steps.find((step) => String(step.name ?? "").startsWith("Injection suites"));
-    expect(suites.if).toBe("needs.code_paths.outputs.run_test_injection == 'true'");
+    expect(suites.if).toBe("matrix.part == 'e2e' && needs.code_paths.outputs.run_test_injection == 'true'");
     for (const step of steps) expect(String(step.run ?? ""), step.name).not.toContain("git diff");
   });
 });

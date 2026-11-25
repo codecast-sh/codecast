@@ -1,10 +1,23 @@
 #!/usr/bin/env node
-import { readdir, readFile, writeFile } from "node:fs/promises";
-import { join } from "node:path";
-import { gzipSync, brotliCompressSync, constants } from "node:zlib";
+// zlib's async calls run on libuv's thread pool, four threads unless told
+// otherwise. Size it to the machine before the first async call creates it, so
+// every core compresses at once: one file at a time took 3m40s on Railway.
+import { statSync } from "node:fs";
+import { availableParallelism } from "node:os";
+const THREADS = availableParallelism();
+process.env.UV_THREADPOOL_SIZE ??= String(THREADS);
+const { readdir, readFile, writeFile } = await import("node:fs/promises");
+const { join } = await import("node:path");
+const { promisify } = await import("node:util");
+const zlib = await import("node:zlib");
+const { constants } = zlib;
+const brotli = promisify(zlib.brotliCompress);
+const gzip = promisify(zlib.gzip);
 
 const DIST = new URL("../dist/", import.meta.url).pathname;
-const EXT = new Set([".js", ".css", ".html", ".svg", ".json", ".map", ".txt"]);
+// Source maps are left raw: only devtools fetch them, they are 102 MB of the
+// 185 MB dist, and the server serves a file raw when it has no .br or .gz.
+const EXT = new Set([".js", ".css", ".html", ".svg", ".json", ".txt"]);
 const MIN_BYTES = 1024;
 
 async function walk(dir) {
@@ -25,23 +38,34 @@ function shouldCompress(path) {
 
 const files = (await walk(DIST)).filter(shouldCompress);
 let kept = 0, total = 0, brBytes = 0, gzBytes = 0;
-for (const f of files) {
+async function compress(f) {
   const buf = await readFile(f);
-  if (buf.length < MIN_BYTES) continue;
-  const br = brotliCompressSync(buf, {
-    params: {
-      [constants.BROTLI_PARAM_QUALITY]: 11,
-      [constants.BROTLI_PARAM_SIZE_HINT]: buf.length,
-    },
-  });
-  const gz = gzipSync(buf, { level: 9 });
-  if (br.length < buf.length * 0.95) await writeFile(`${f}.br`, br);
-  if (gz.length < buf.length * 0.95) await writeFile(`${f}.gz`, gz);
+  if (buf.length < MIN_BYTES) return;
+  const [br, gz] = await Promise.all([
+    brotli(buf, {
+      params: {
+        [constants.BROTLI_PARAM_QUALITY]: 11,
+        [constants.BROTLI_PARAM_SIZE_HINT]: buf.length,
+      },
+    }),
+    gzip(buf, { level: 9 }),
+  ]);
+  await Promise.all([
+    br.length < buf.length * 0.95 ? writeFile(`${f}.br`, br) : null,
+    gz.length < buf.length * 0.95 ? writeFile(`${f}.gz`, gz) : null,
+  ]);
   kept++;
   total += buf.length;
   brBytes += br.length;
   gzBytes += gz.length;
 }
+// Largest first, so one big file never starts last and runs alone.
+const queue = files.map((f) => [f, statSync(f).size]).sort((a, b) => b[1] - a[1]).map(([f]) => f);
+await Promise.all(
+  Array.from({ length: THREADS }, async () => {
+    for (let f; (f = queue.shift()); ) await compress(f);
+  }),
+);
 console.log(
   `precompress: ${kept} files, raw=${(total / 1024).toFixed(0)} KiB → br=${(brBytes / 1024).toFixed(0)} KiB (${((1 - brBytes / total) * 100).toFixed(0)}%), gz=${(gzBytes / 1024).toFixed(0)} KiB (${((1 - gzBytes / total) * 100).toFixed(0)}%)`
 );

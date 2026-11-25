@@ -1,0 +1,30 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "build": {
+    "builder": "RAILPACK",
+    "buildCommand": "bunx turbo run build --filter=@codecast/web",
+    "watchPatterns": [
+      "/**",
+      "!/packages/cli/**",
+      "!/packages/mobile/**",
+      "!/packages/evals/**",
+      "!/packages/playground/**",
+      "!/packages/browser-extension/**",
+      "!/packages/vscode-extension/**",
+      "!/docs/**",
+      "!/evals/**",
+      "!/infra/**",
+      "!/plugins/**",
+      "!/.github/**",
+      "!/.claude-plugin/**",
+      "!/.cast-help/**",
+      "!/.codecast/**",
+      "!/AGENTS.md",
+      "!/CLAUDE.md",
+      "!/CHANGELOG.md",
+      "!**/__tests__/**",
+      "!**/*.test.ts",
+      "!**/*.test.tsx"
+    ]
+  }
+}

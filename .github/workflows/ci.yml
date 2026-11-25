@@ -187,26 +187,56 @@ jobs:
     if: needs.code_paths.outputs.run_typecheck == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    # The programs in .codecast/check.toml over three jobs of about equal
+    # cold time (web alone, ~200s; the others pair up below it). mobile is
+    # left out: `cast check mobile` is its only check (see the contract test).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { key: web, programs: web }
+          - { key: cli-evals, programs: cli evals }
+          - { key: convex-sim-playground, programs: convex sim playground }
+    name: typecheck (${{ matrix.programs }})
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - uses: ./.github/actions/setup-bun
 
-      # Each package's own `typecheck` script, which runs the programs
-      # .codecast/check.toml points `cast check` at, except mobile:
-      # packages/mobile has no `typecheck` script, so CI does not typecheck it
-      # and `cast check mobile` is its only check. cli's widens rootDir to the
-      # repo root because it imports the convex generated api. web's also runs
-      # the sim program (its app tsconfig excludes tests), and evals is its own
-      # program over its code plus the convex and cli files it imports, and
-      # playground is its shell plus its own Convex deployment's functions.
-      - name: Typecheck (cli + web + sim + convex + evals + playground)
+      # tsc --incremental keeps what it learned about every file in a build
+      # info file, and checks only what a change can reach when it finds one.
+      # main saves its build info after every push; any run starts from the
+      # newest one. A stale or missing one costs time, never correctness: tsc
+      # re-reads every file and re-checks those whose content changed.
+      - name: Restore build info
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/tsbuildinfo
+          key: tsbuildinfo-${{ matrix.key }}-${{ github.sha }}
+          restore-keys: tsbuildinfo-${{ matrix.key }}-
+
+      - name: Typecheck
         # web's program outgrew V8's default ~4 GB heap: on 2026-11-08 its tsc
-        # died in GC at 4029 MB (exit 134). 6 GB leaves room on the 16 GB
-        # runner for the other programs turbo runs beside it.
+        # died in GC at 4029 MB (exit 134).
         env:
           NODE_OPTIONS: --max-old-space-size=6144
-        run: bun run typecheck --filter=@codecast/cli --filter=@codecast/web --filter=@codecast/convex --filter=@codecast/evals --filter=@codecast/playground
+        # Each program's tsconfig is the one .codecast/check.toml names for it.
+        run: |
+          status=0
+          for program in ${{ matrix.programs }}; do
+            tsconfig="$(bun -e "console.log(Bun.TOML.parse(await Bun.file('.codecast/check.toml').text()).projects['$program'])")"
+            echo "::group::$program ($tsconfig)"
+            node_modules/.bin/tsc --noEmit --incremental --tsBuildInfoFile "$RUNNER_TEMP/tsbuildinfo/$program.tsbuildinfo" -p "$tsconfig" || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+      - name: Save build info
+        if: github.event_name == 'push' && success()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/tsbuildinfo
+          key: tsbuildinfo-${{ matrix.key }}-${{ github.sha }}
 
   lint:
     needs: [code_paths]
@@ -218,8 +248,27 @@ jobs:
 
       - uses: ./.github/actions/setup-bun
 
+      # The same arrangement as the typecheck's build info: eslint keeps each
+      # file's result keyed by its content and the config, main saves the
+      # cache after every push, and a run lints only the files that differ.
+      - name: Restore lint cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/eslintcache
+          key: eslintcache-${{ github.sha }}
+          restore-keys: eslintcache-
+
+      # packages/web is the only package with a lint script.
       - name: Lint (eslint flat config)
-        run: bun run lint
+        working-directory: packages/web
+        run: node_modules/.bin/eslint . --cache --cache-strategy content --cache-location "$RUNNER_TEMP/eslintcache/web"
+
+      - name: Save lint cache
+        if: github.event_name == 'push' && success()
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: ${{ runner.temp }}/eslintcache
+          key: eslintcache-${{ github.sha }}
 
   test-convex:
     needs: [code_paths]
@@ -239,9 +288,16 @@ jobs:
     needs: [code_paths]
     if: needs.code_paths.outputs.run_test_web == 'true'
     runs-on: ubuntu-latest
-    # The four shards below run one after another: 19.5 minutes together on
-    # 2026-10-25, when the old 20 minute cap cancelled a run whose shards all passed.
-    timeout-minutes: 35
+    timeout-minutes: 20
+    # Shards run side by side, one runner each, so the suite costs its slowest
+    # shard. One process per shard also bounds memory: bun keeps every isolated
+    # file's global alive until its process exits, and the whole suite in one
+    # process climbed past 11 GB and was killed (exit 143).
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    name: test-web (${{ matrix.shard }}/4)
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -249,39 +305,41 @@ jobs:
 
       - name: Unit tests (web package)
         working-directory: packages/web
-        # --isolate: a fresh global per file. bun otherwise runs the whole suite
-        # in one process, where `mock.module` substitutions are permanent and a
-        # jsdom window installed on globalThis outlives the file that made it.
-        # One mount test then decides what hundreds of later files see, so a
-        # test passes alone and fails in the suite depending on file order.
-        # Four shards, one process each, run one after another: bun keeps every
-        # isolated file's global alive until its process exits (a file that
-        # imports the store holds ~8 MB after a full GC), so the whole suite in
-        # one process climbed past 11 GB, stalled in memory pressure and was
-        # terminated (exit 143) mid-file. A shard ends its process and frees it.
+        # --parallel: a fresh global per file (it implies --isolate), with the
+        # files spread over one worker per CPU. bun otherwise runs the whole
+        # suite in one global, where `mock.module` substitutions are permanent
+        # and a jsdom window installed on globalThis outlives the file that
+        # made it. scripts/ci/test-shards.ts fills each shard by recorded time.
         # SIM_OUT: where the multiplayer sim writes each run's report and
         # events (docs/architecture/sync-sim.md), uploaded below on failure.
         env:
           SIM_OUT: ${{ runner.temp }}/sim
         run: |
-          status=0
-          for shard in 1 2 3 4; do
-            echo "test-web shard $shard/4"
-            bun test --isolate --shard=$shard/4 || status=1
-          done
-          exit $status
+          files="$(bun ../../scripts/ci/test-shards.ts packages/web ${{ matrix.shard }}/4)"
+          # shellcheck disable=SC2086 # one argument per file
+          bun test --parallel --reporter=junit --reporter-outfile=${{ runner.temp }}/junit.xml $files
 
       # The exact counts behind the perf benches (packages/web/perf/README.md).
       # Plain bun, not bun test: the test preload stands in for the diff viewer.
       - name: Perf budgets (web)
+        if: matrix.shard == 1
         working-directory: packages/web
         run: scripts/perf-budgets.sh
+
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junit-web-${{ matrix.shard }}
+          path: ${{ runner.temp }}/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload sim artifacts
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sim-artifacts
+          name: sim-artifacts-${{ matrix.shard }}
           path: ${{ runner.temp }}/sim
           if-no-files-found: ignore
           retention-days: 14
@@ -291,6 +349,13 @@ jobs:
     if: needs.code_paths.outputs.run_test_cli == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
+    # The unit suite in three shards side by side, and the evals, e2e and
+    # injection suites on a fourth runner of their own.
+    strategy:
+      fail-fast: false
+      matrix:
+        part: ["1/3", "2/3", "3/3", "e2e"]
+    name: test-cli (${{ matrix.part }})
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
@@ -300,6 +365,7 @@ jobs:
       - uses: ./.github/actions/setup-bun
 
       - name: Unit tests (cli package)
+        if: matrix.part != 'e2e'
         working-directory: packages/cli
         # Exclude the e2e suite — it has its own step with --rerun-each for
         # resilience against tmux-resource flake under CI runner load.
@@ -313,15 +379,20 @@ jobs:
         # A suite whose output stands still for 4 minutes is hung (ct-71000): the
         # watchdog prints what each process is doing and stops it, rather than
         # the job spending the rest of its timeout with nothing said.
-        run: bash ../../scripts/ci/quiet-watchdog.sh 240 -- bun test src/ --parallel --bail=5
+        run: |
+          files="$(bun ../../scripts/ci/test-shards.ts packages/cli ${{ matrix.part }})"
+          # shellcheck disable=SC2086 # one argument per file
+          bash ../../scripts/ci/quiet-watchdog.sh 240 -- bun test --parallel --bail=5 --reporter=junit --reporter-outfile=${{ runner.temp }}/junit.xml $files
 
       # The eval home (packages/evals). Its tests make no network or model
       # calls; real replays run only from ./evals on a laptop.
       - name: Unit tests (evals package)
+        if: matrix.part == 'e2e'
         working-directory: packages/evals
-        run: bun test src/
+        run: bun test --parallel src/
 
       - name: E2E messaging pipeline (real tmux + fake-claude shim)
+        if: matrix.part == 'e2e'
         working-directory: packages/cli
         # Up to 3 full-suite attempts to absorb tmux-resource flake from
         # running 10 fresh sessions back-to-back on a contended runner.
@@ -363,7 +434,7 @@ jobs:
       # code_paths decides whether this runs, from the same changed-path list
       # that gates the jobs (touchesInjection in scripts/ci/changed-path-scope.ts).
       - name: Injection suites (captured frames; real-client cells skip without agent binaries)
-        if: needs.code_paths.outputs.run_test_injection == 'true'
+        if: matrix.part == 'e2e' && needs.code_paths.outputs.run_test_injection == 'true'
         working-directory: packages/cli
         # Same three-attempt shape as the E2E step above, and for the same
         # reason: spawning agent TUIs back-to-back on a contended runner is
@@ -397,6 +468,15 @@ jobs:
           done
           echo "::error::Injection suites failed all 3 attempts — likely a real regression"
           exit 1
+
+      - name: Upload test timings
+        if: always() && matrix.part != 'e2e'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: junit-cli-${{ strategy.job-index }}
+          path: ${{ runner.temp }}/junit.xml
+          if-no-files-found: ignore
+          retention-days: 7
 
   # platform/packages is the vendored mirror of the shared @platform/* packages,
   # and it is what Railway, the CLI release workflow and the desktop build ship
@@ -536,7 +616,10 @@ jobs:
   computer-macos:
     name: cast computer + macOS-only cli tests (macOS, advisory)
     needs: [code_paths]
-    if: needs.code_paths.outputs.run_test_cli == 'true'
+    # Pushes to main only: the free plan runs five macOS jobs at once, and this
+    # lane on every pull request kept the CLI release's macOS build queued for
+    # 5 to 10 minutes. It still builds its green streak on main.
+    if: github.event_name == 'push' && needs.code_paths.outputs.run_test_cli == 'true'
     continue-on-error: true
     runs-on: macos-15
     timeout-minutes: 45

@@ -31,6 +31,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: cli-release
@@ -431,6 +432,32 @@ jobs:
             fi
           done < /tmp/cli-object-snapshot.tsv
 
+      # The CI gate for a release (deploy.toml's cli target leaves it here): the
+      # cut builds and signs while CI runs on the same commit, and nothing is
+      # published until CI's verify job is green on it. A red or missing verdict
+      # within 40 minutes fails the release before any public object is written.
+      - name: Wait for CI on the source commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          for _ in $(seq 1 160); do
+            run_id=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?head_sha=$SOURCE_COMMIT&event=push&per_page=5" \
+              --jq '.workflow_runs | sort_by(.created_at) | last | .id // empty')
+            if [[ -n "$run_id" ]]; then
+              verdict=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$run_id/jobs?per_page=100" \
+                --jq '[.jobs[] | select(.name == "verify")][0] | "\(.status) \(.conclusion)"')
+              case "$verdict" in
+                "completed success") echo "CI verify is green on $SOURCE_COMMIT (run $run_id)"; exit 0 ;;
+                completed*) echo "::error::CI verify ended ${verdict#completed } on $SOURCE_COMMIT (run $run_id)"; exit 1 ;;
+              esac
+            fi
+            sleep 15
+          done
+          echo "::error::CI reached no verdict on $SOURCE_COMMIT in 40 minutes"
+          exit 1
+
       - name: Stage immutable release objects
         env:
           AWS_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
@@ -498,29 +525,35 @@ jobs:
           )
           prefix=$(cat /tmp/cli-release-prefix)
           mkdir -p /tmp/cli-public
-          for artifact in "${artifacts[@]}"; do
+          # All six at once. A stalled transfer (under 100 kB/s for 30s) is
+          # dropped and retried rather than held to the 15 minute cap, which
+          # one release spent waiting on a single download.
+          verify_one() {
+            local artifact="$1" expected actual
             expected=$(sha256sum "/tmp/cli-release/$artifact" | awk '{print $1}')
-            matched=false
             for attempt in $(seq 1 10); do
               if curl -fsSL \
                 --retry 3 --retry-all-errors \
                 --connect-timeout 20 --max-time 900 \
+                --speed-limit 100000 --speed-time 30 \
                 -H 'Cache-Control: no-cache' \
                 "https://dl.codecast.sh/$prefix/$artifact" \
                 -o "/tmp/cli-public/$artifact"; then
                 actual=$(sha256sum "/tmp/cli-public/$artifact" | awk '{print $1}')
-                if [[ "$actual" == "$expected" ]]; then
-                  matched=true
-                  break
-                fi
+                [[ "$actual" == "$expected" ]] && return 0
               fi
               sleep 15
             done
-            if [[ "$matched" != true ]]; then
-              echo "::error::$artifact immutable public checksum did not converge"
-              exit 1
-            fi
+            echo "::error::$artifact immutable public checksum did not converge"
+            return 1
+          }
+          pids=()
+          for artifact in "${artifacts[@]}"; do
+            verify_one "$artifact" & pids+=("$!")
           done
+          failed=0
+          for pid in "${pids[@]}"; do wait "$pid" || failed=1; done
+          exit "$failed"
 
       - name: Revalidate main and atomically publish version commit and tag
         id: version_commit
