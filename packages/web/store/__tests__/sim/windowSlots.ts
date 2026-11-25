@@ -50,6 +50,8 @@ export const WINDOW_SLOTS: Record<string, SlotClass> = {
   "store/inboxStore.ts:hydrationEpoch": "window",
   // A server-deleted session the prune skipped while it was open: per-store hide state.
   "store/inboxStore.ts:deferredDeletedSessions": "window",
+  // A Vault Approve's answer message, held until that window's own answerDecision dispatch lands.
+  "store/inboxStore.ts:heldAnswerDeliveries": "window",
   // The placement caches: each browser window keeps its own, and every key
   // checks that window's state refs, so they travel with the window and its
   // next turn may reuse them.
@@ -325,7 +327,7 @@ type InboxSlots = ReturnType<InboxBindings["get"]>;
 // The inboxStore window bindings declared as const collections: set() refills
 // them in place, and the store's own setter reassigns the rest. A binding
 // missing here is never restored, which realm.selftest's round trip catches.
-const INBOX_CONST_COLLECTIONS = ["recentlyRequestedPendingMessages", "resolvedSessionPreparations", "_userMsgsProbed", "_idbHydrating", "deferredDeletedSessions", "_placedMemo", "_visibleMemo", "retiredAckTs"] as const;
+const INBOX_CONST_COLLECTIONS = ["recentlyRequestedPendingMessages", "resolvedSessionPreparations", "_userMsgsProbed", "_idbHydrating", "deferredDeletedSessions", "heldAnswerDeliveries", "_placedMemo", "_visibleMemo", "retiredAckTs"] as const;
 
 // inboxStore exports its live window bindings; the copying lives here. A
 // snapshot copies the const collections and both levels of _heldOverlayFacts
@@ -354,6 +356,7 @@ function inboxStoreSeam(b: InboxBindings): SlotSeam {
       hydrationEpoch: 0,
       _lastParityCheckAt: 0,
       deferredDeletedSessions: new Set(),
+      heldAnswerDeliveries: new Map(),
       _membershipKey: null,
       _membershipVal: null,
       _visibleMemo: new Map(),

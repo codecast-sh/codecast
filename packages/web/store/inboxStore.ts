@@ -17277,7 +17277,7 @@ if (!survivingInboxStore) useInboxStore.subscribe((state, prev) => {
 // turn (sim/windowSlots.ts copies them). Nothing in production calls these.
 export const __createInboxStoreForTests = createInboxStore;
 const windowBindings = () => ({
-  _heldOverlayFacts, recentlyRequestedPendingMessages, resolvedSessionPreparations, recentThawTimer, _userMsgsProbed, _idbHydrating, hydrationEpoch, _lastParityCheckAt, deferredDeletedSessions,
+  _heldOverlayFacts, recentlyRequestedPendingMessages, resolvedSessionPreparations, recentThawTimer, _userMsgsProbed, _idbHydrating, hydrationEpoch, _lastParityCheckAt, deferredDeletedSessions, heldAnswerDeliveries,
   _membershipKey, _membershipVal, _visibleMemo, _pendingSendSigRef, _pendingSendSig, _placementDeadlineMemo, _placedMemo, retiredAckTs,
 });
 /** The live per-window bindings (collections by reference), and set() for the ones a window swaps by value. */
