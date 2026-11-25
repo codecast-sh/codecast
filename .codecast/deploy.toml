@@ -40,15 +40,16 @@ runs = "push"
 when = ["packages/web/**", "packages/shared/**", "platform/**"]
 live = "github-status:codecast - web"
 
-# Cut in CI once CI on the commit is green; live once dl.codecast.sh/latest.json names
-# the commit (CLAUDE.md, CLI releases). Then every machine is made to update to it.
+# Cut in CI as soon as it is sent, building while CI runs on the same commit; the
+# finalize workflow publishes nothing until CI's verify job is green there. Live once
+# dl.codecast.sh/latest.json names the commit (CLAUDE.md, CLI releases). Then every
+# machine is made to update to it.
 [[target]]
 name = "cli"
 when = ["packages/cli/**", "packages/shared/**", "platform/**"]
 run = "scripts/cut-cli-release.sh"
 live = "json:https://dl.codecast.sh/latest.json#sourceCommit,version"
 policy = "release"
-ci = "cast line deploy ci --workflow ci.yml"
 finish = "cast force-update $version"
 
 # An OTA update to every channel, after the backend it calls is live. The app bundles

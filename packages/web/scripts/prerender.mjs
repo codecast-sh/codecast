@@ -108,12 +108,14 @@ function stripShellMeta(shell) {
 }
 
 async function main() {
-  // 1. SSR build
-  execFileSync(
-    process.execPath,
-    [join(WEB_ROOT, "node_modules", "vite", "bin", "vite.js"), "build", "-c", "vite.prerender.config.ts"],
-    { cwd: WEB_ROOT, stdio: "inherit" },
-  );
+  // 1. SSR build, unless scripts/build.mjs ran it beside the client build.
+  if (!process.argv.includes("--ssr-built")) {
+    execFileSync(
+      process.execPath,
+      [join(WEB_ROOT, "node_modules", "vite", "bin", "vite.js"), "build", "-c", "vite.prerender.config.ts"],
+      { cwd: WEB_ROOT, stdio: "inherit" },
+    );
+  }
 
   const entryMod = await import(pathToFileURL(join(WEB_ROOT, "dist-ssr", "prerender-entry.mjs")).href);
   const { render, SEO_ROUTES, SITE_URL, buildBlogFeed, BLOG_FEED_PATH, cardHeading, cardImagePath, CODECAST_MONO_MARK } = entryMod;
