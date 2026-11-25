@@ -159,7 +159,8 @@ describe("cast dev never calls another checkout's server its own", () => {
   function writeDevRecord(checkout: string, record: Partial<DevRecord> & { pid: number; port: number }): void {
     fs.mkdirSync(devStateDir(checkout), { recursive: true });
     fs.writeFileSync(path.join(devStateDir(checkout), "web.json"), JSON.stringify({
-      name: "web", url: `http://localhost:${record.port}`, command: "", cwd: checkout, log: path.join(tmp, "none.log"), startedAt: "", ...record,
+      // startedAt is now: each caller records a process it just spawned, and a record only names a process that started when it says.
+      name: "web", url: `http://localhost:${record.port}`, command: "", cwd: checkout, log: path.join(tmp, "none.log"), startedAt: new Date().toISOString(), ...record,
     }));
   }
 

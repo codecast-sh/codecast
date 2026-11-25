@@ -35,7 +35,7 @@ import * as path from "node:path";
 import { spawnSync } from "../proc.js";
 import { codecastPath } from "../codecastDir.js";
 import { etimeSecs } from "../sim/reap.js";
-import { isAlive, tcpListeners, type DevRecord } from "./dev.js";
+import { groupAlive, isAlive, stillOurs, tcpListeners, type DevRecord } from "./dev.js";
 
 /**
  * Two hours with no client connected. An open tab holds vite's HMR websocket,
@@ -196,34 +196,6 @@ export function clientCount(pgid: number, pids?: number[]): number | null {
   const rows = parseLsofTcp(r.stdout ?? "").filter((s) => mine(s.pid));
   const ports = new Set(rows.filter((s) => s.state === "LISTEN").map((s) => s.local));
   return rows.filter((s) => s.state === "ESTABLISHED" && ports.has(s.local)).length;
-}
-
-function groupAlive(pgid: number): boolean {
-  try {
-    process.kill(-pgid, 0);
-    return true;
-  } catch (e) {
-    return (e as NodeJS.ErrnoException).code === "EPERM";
-  }
-}
-
-function etimeOf(pid: number): number | null {
-  const r = spawnSync("ps", ["-o", "etime=", "-p", String(pid)], { encoding: "utf-8", stdio: ["ignore", "pipe", "ignore"] });
-  const t = (r.stdout ?? "").trim();
-  return t ? etimeSecs(t) : null;
-}
-
-/**
- * Whether the record's process group is still the one `cast dev` started. A
- * living leader must have started when the record says (a pid the kernel
- * handed out again would be younger). A dead leader with members left is the
- * old group: the kernel does not reuse a pid that still names a group.
- */
-function stillOurs(record: DevRecord): boolean {
-  if (!isAlive(record.pid)) return true;
-  const etime = etimeOf(record.pid);
-  if (etime === null) return false;
-  return Math.abs(Date.now() - etime * 1000 - Date.parse(record.startedAt)) < 2 * 60_000;
 }
 
 async function stopGroup(pgid: number): Promise<void> {

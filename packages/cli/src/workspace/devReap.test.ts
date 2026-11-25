@@ -4,7 +4,9 @@ import * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
-import { devServices, devStateDir, ensureService, readRecord, serviceStatus, tcpListeners, type DevRecord } from "./dev.js";
+import {
+  devServices, devStateDir, ensureService, groupAlive, isAlive, readRecord, runningDevServer, serviceStatus, stopService, tcpListeners, type DevRecord,
+} from "./dev.js";
 import type { WorkspaceManifest } from "./types.js";
 import {
   IDLE_STOP_MS, SWEEP_GAP_MS, awakeSince, clientCount, devServerExit, inCodecastWorktree, logSaysCrashed, looksLikeDevServer, orphanExit, orphanTreeGone,
@@ -182,7 +184,6 @@ describe("reapDevServers on real servers", () => {
     browser: { enabled: false, headless: true, cdpPort: { base: 9222, range: 100 } }, backend: "local",
   });
 
-  const groupAlive = (pgid: number) => { try { process.kill(-pgid, 0); return true; } catch { return false; } };
 
   /**
    * A server laid out as `cast dev` leaves one: a detached group whose leader
@@ -269,6 +270,27 @@ describe("reapDevServers on real servers", () => {
       expect(JSON.parse(fs.readFileSync(sweepFile(), "utf-8"))).toEqual({ at: later, awakeSince: later });
       expect(groupAlive(record.pid)).toBe(true);
       expect(readRecord(checkout, "web")?.stopped).toBeUndefined();
+    } finally {
+      try { process.kill(-record.pid, "SIGKILL"); } catch { /* gone */ }
+    }
+  }, 60_000);
+
+  test("a dead wrapper with its server still up: cast dev reuses it, cast dev stop ends the group", async () => {
+    const { checkout, record } = await start(47490);
+    try {
+      process.kill(record.pid, "SIGKILL"); // the bun run dev wrapper dies alone; its child keeps serving
+      await pollUntil(() => !isAlive(record.pid), "the wrapper to die");
+      expect(groupAlive(record.pid)).toBe(true);
+      const m = manifest(47490);
+      const svc = devServices(m)[0];
+      expect(runningDevServer(checkout)?.pid).toBe(record.pid);
+      const reused = await ensureService(svc, { checkout, manifest: m, timeoutSec: 30 });
+      expect(reused.state).toBe("running");
+      if (reused.state === "running") expect(reused.record.pid).toBe(record.pid);
+      expect(new Set((tcpListeners({ port: 47490 }) ?? []).map((l) => l.pgid))).toEqual(new Set([record.pid]));
+      expect(await stopService(svc, checkout)).toBe(true);
+      expect(groupAlive(record.pid)).toBe(false);
+      expect(readRecord(checkout, "web")).toBeNull();
     } finally {
       try { process.kill(-record.pid, "SIGKILL"); } catch { /* gone */ }
     }
