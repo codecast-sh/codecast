@@ -8180,9 +8180,10 @@ export default defineSchema({
     started_at: v.number(),
     updated_at: v.number(),
     // Until when a page showing the conversation has asked for it
-    // (replyStreams.watch); pushes are written only before then.
+    // (replyStreamLease.watch); pushes are written only before then, and the
+    // row is pruned an hour after.
     watch_until: v.optional(v.number()),
-  }).index("by_conversation", ["conversation_id"]).index("by_updated_at", ["updated_at"]),
+  }).index("by_conversation", ["conversation_id"]).index("by_watch_until", ["watch_until"]),
 
   // Live screen of one tmux pane on one machine — the transport that lets the
   // terminal split watch a pane the browser cannot reach on loopback (an agent
