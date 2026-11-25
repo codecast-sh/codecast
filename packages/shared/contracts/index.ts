@@ -8,6 +8,7 @@ export * from "./hibernation";
 export * from "./openTasks";
 export * from "./pendingStatus";
 export * from "./daemonCommands";
+export * from "./mcpLogin";
 export * from "./rewindFiles";
 export * from "./sshAttach";
 export * from "./agentClients";
@@ -67,6 +68,7 @@ export * from "./managedPolicy";
 export * from "./vendorCoverage";
 export * from "./stableContext";
 export * from "./vaultProtocol";
+export * from "./codeProtocol";
 export * from "./vaultMirror";
 export * from "./terminalStream";
 export * from "./replyStream";
@@ -76,6 +78,9 @@ export * from "./recordingAudio";
 export * from "./transcribeLanguage";
 export * from "./callPush";
 export * from "./transcriptChunk";
+// Who said each line of a voice note: the one resolver every surface names a
+// diarized line through, and the words-to-lines rule of the batch pass.
+export * from "./speakers";
 export * from "./callLinks";
 // A call's recordings (LiveKit Egress files) and the one rule that finds the
 // file and offset showing a moment of the call; and guests, the people who
@@ -151,3 +156,4 @@ export * from "./systemResources";
 export * from "./resourceOffloadPolicy";
 export * from "./testArtifacts";
 // Codecast for outside agents (MCP): the address, the read tools, what a connection can do.
+export * from "./speakerTurns";

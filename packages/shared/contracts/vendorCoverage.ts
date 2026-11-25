@@ -17,6 +17,8 @@ export const VENDORS = {
   // Agent faces in calls (infra/call-face-worker): Tavus speaks the session's
   // replies; the live voice behind a face is OpenAI's realtime model.
   tavus: { name: "Tavus", receives: "content", feature: "Agent faces" },
+  // Voice notes' words and who spoke them (Scribe, the voice_speakers batch pass).
+  elevenlabs: { name: "ElevenLabs", receives: "content", feature: "Voice note speakers" },
   // The team's own accounts: the team's agreement with the vendor governs them.
   slack: { name: "Slack", receives: "team-account", feature: "Slack" },
   github: { name: "GitHub", receives: "team-account", feature: "GitHub" },
@@ -53,6 +55,7 @@ export const FEATURE_VENDORS: Partial<Record<TeamFeatureKey, readonly ContentVen
   agent_faces: ["tavus"],
   agent_realtime: ["openai"],
   close_advice: ["anthropic"],
+  voice_speakers: ["elevenlabs"],
 };
 
 /** The vendor a team feature still lacks a BAA with, or null when it has every one it needs. */

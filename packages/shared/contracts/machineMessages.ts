@@ -1,7 +1,7 @@
 import { isContextRecoveryPrompt } from "./handoffPrompt";
 import type { AreaChange } from "./orgAreas";
-import { parseRoleCardInitiativeLine, roleCardLines, type RoleCard } from "./roleCard";
-export { roleCardInitiativeLine, roleCardLines, type RoleCard, type RoleCardInitiative } from "./roleCard";
+import { parseRoleCardInitiativeLine, parseRoleCardPersonLine, roleCardLines, type RoleCard } from "./roleCard";
+export { roleCardInitiativeLine, roleCardLines, roleCardPersonLine, type RoleCard, type RoleCardInitiative, type RoleCardPerson } from "./roleCard";
 // The summary Claude Code writes when it compacts a conversation, synced as a
 // user-role row. It covers everything before it, so a transcript rebuilt from
 // codecast starts at the latest one (cli jsonlGenerator), a full-context park
@@ -549,6 +549,8 @@ export function parseScheduledTask(rawContent: string | null | undefined): Sched
     };
     const serves = rc[2].split("\n").filter((l) => l.startsWith("Serves: ")).map((l) => parseRoleCardInitiativeLine(l.slice("Serves: ".length)));
     if (serves.length) role.initiatives = serves;
+    const people = rc[2].split("\n").filter((l) => l.startsWith("Reports to it: ")).map((l) => parseRoleCardPersonLine(l.slice("Reports to it: ".length)));
+    if (people.length) role.people = people;
   }
   let waiting: WaitingSession | null = null;
   const w = body.match(/^\s*<waiting-session((?:\s+[a-z-]+="[^"]*")*)\s*>([\s\S]*?)<\/waiting-session>\s*/);

@@ -30,6 +30,58 @@ export function countMatches(content: string, terms: string[]): number {
   return count;
 }
 
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
+const INLINE_CODE = /(`+)[\s\S]*?\1/g;
+const LINK_REFERENCE = /^ {0,3}\[[^\]\n]+\]:\s*\S.*$/gm;
+// `![alt](dest)` draws an image, `[text](dest)` draws only its text; the
+// destination (and an optional "title") never reaches the page.
+const IMAGE = /!\[[^\]\n]*\]\([^)\n]*\)/g;
+const LINK = /\[([^\]\n]*)\]\([^)\n]*\)/g;
+
+function dropLinkTargets(prose: string): string {
+  return prose.replace(LINK_REFERENCE, "").replace(IMAGE, "").replace(LINK, "$1");
+}
+
+/**
+ * The text of a markdown body that the transcript actually draws, as far as
+ * search is concerned: link and image destinations and reference definitions
+ * are dropped, code (fenced or inline) is kept as written. The server counts
+ * hits in this text, so the counter only promises hits the renderer can mark.
+ */
+export function drawnText(markdown: string): string {
+  if (!markdown.includes("](") && !markdown.includes("]:")) return markdown;
+  const out: string[] = [];
+  let prose: string[] = [];
+  let fence: string | null = null;
+  const flushProse = () => {
+    if (prose.length === 0) return;
+    const text = prose.join("\n");
+    let last = 0;
+    let rebuilt = "";
+    for (const m of text.matchAll(INLINE_CODE)) {
+      rebuilt += dropLinkTargets(text.slice(last, m.index)) + m[0];
+      last = m.index! + m[0].length;
+    }
+    out.push(rebuilt + dropLinkTargets(text.slice(last)));
+    prose = [];
+  };
+  for (const line of markdown.split("\n")) {
+    const open = FENCE.exec(line)?.[1];
+    if (fence) {
+      out.push(line);
+      if (open && open[0] === fence[0] && open.length >= fence.length) fence = null;
+    } else if (open) {
+      flushProse();
+      out.push(line);
+      fence = open;
+    } else {
+      prose.push(line);
+    }
+  }
+  flushProse();
+  return out.join("\n");
+}
+
 export { tokenizeQuery, normalizeQueryQuotes, type QueryToken } from "./tokenize";
 export * from "./sessionQuery";
 export * from "./terms";

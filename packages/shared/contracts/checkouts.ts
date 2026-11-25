@@ -151,6 +151,7 @@ function mergeNote(m: LevelMerge | undefined): string | null {
  * file; the upstream commits. An ask sent from elsewhere (the pipeline page) has none of that, so it names every file
  * and, for each, the `git show` of upstream's version, quoted for the shell. One wording for both, so a writer reads
  * the same ask whoever sends it.
+ * `sender` is the name the ask's card shows, since no session sends it.
  */
 export function levelAskWords(
   r: { path: string; upstream: string | null; behind: number | null },
@@ -158,7 +159,7 @@ export function levelAskWords(
   mine: string[],
   local: LevelAskLocal | null,
   opts: { host: string; whose: "session" | "nobody" },
-): { title: string; body: string } {
+): { title: string; body: string; sender: string } {
   const upstream = r.upstream ?? "origin/main";
   const name = r.path.replace(/\/+$/, "").split("/").pop() || r.path;
   const n = mine.length;
@@ -188,7 +189,8 @@ export function levelAskWords(
     `Edit only the files named here${local?.list ? " and in the list" : ""}. ${LEVEL_FORBID}`,
     `Once ${one ? "it carries" : "they carry"} upstream's change, the next level sweep (within a minute) moves the checkout by itself.`,
   ].join("\n");
-  return { title, body };
+  // Who the ask reads as from: no session sent it, so the card names the sweep and its machine.
+  return { title, body, sender: `Checkout sweep on ${opts.host}` };
 }
 
 /**

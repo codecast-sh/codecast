@@ -19,7 +19,7 @@ import { CALL_TIME_SOURCE, formatCallTime, parseCallTime } from "../contracts/ca
 import { parseReplayRef, replayRefId, type ReplayRef } from "../contracts/replayPlayer";
 import { parseReplayT, replayTParam } from "../replay/events";
 
-export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay" | "role" | "person" | "deploy" | "secret" | "flow" | "priority";
+export type EntityType = "task" | "plan" | "session" | "doc" | "project" | "initiative" | "proposal" | "trigger" | "decision" | "pr" | "commit" | "call" | "source" | "replay" | "issue" | "metric" | "role" | "person" | "deploy" | "secret" | "flow" | "priority";
 
 /** The public web origin that serves codecast object pages. */
 export const CODECAST_BASE_URL = "https://codecast.sh";
@@ -80,6 +80,10 @@ export const ENTITY_ROUTE: Record<EntityType, string> = {
   // A product recording is an Ops page of its own (`/ops/replays/rp-N`), and
   // a moment of it opens there at that time (`?t=<seconds>`, see entityRoute).
   replay: "/ops/replays",
+  // An Ops issue (`eg-N`: an error, failed job, failing check or metric alert)
+  // and a metric watch (`mw-N`) are Ops pages of their own.
+  issue: "/ops/issues",
+  metric: "/ops/metrics",
   // A deploy opens on the Deploys page at its target, the deploy open (`/deploys?deploy=dp-N`, see entityRoute).
   deploy: "/deploys",
   // A Vault secret opens on the Vault page with its panel (`/vault?s=sec-N`):
@@ -109,6 +113,8 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
   cl: "call",
   src: "source",
   rp: "replay",
+  eg: "issue",
+  mw: "metric",
   dp: "deploy",
   or: "role",
   pj: "project",
@@ -124,7 +130,7 @@ export const SHORT_ID_PREFIX: Record<string, EntityType> = {
  * followed by base 36 (`pj-mf3k2a`), and "pj" is no word. Every matcher below derives
  * from this, so the rule holds on every surface at once.
  */
-const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src", "rp", "or", "dp", "sec", "pri"]);
+const DIGITS_ONLY_PREFIX: ReadonlySet<string> = new Set(["in", "op", "sd", "cl", "src", "rp", "eg", "mw", "or", "dp", "sec", "pri"]);
 
 /**
  * URL path segment → entity type. Several segments alias to one type
@@ -542,20 +548,32 @@ function stripGitSuffix(name: string): string {
  * Anything after the object (`/files`, `/checks`, a fragment) is dropped: it
  * addresses a view of the object, and the object is what the reference names.
  */
-/** `/ops/replays/<rp-N or id>[?t=<seconds>]`: a replay, or the moment of it the
+/** The Ops objects with pages of their own, by path segment under `/ops`. */
+const OPS_OBJECT_SEGMENT: Record<string, { type: "replay" | "issue" | "metric"; prefix: string }> = {
+  replays: { type: "replay", prefix: "rp" },
+  issues: { type: "issue", prefix: "eg" },
+  metrics: { type: "metric", prefix: "mw" },
+};
+
+/** `/ops/replays/<rp-N or id>[?t=<seconds>]`, `/ops/issues/<eg-N or id>`,
+ *  `/ops/metrics/<mw-N or id>`: an Ops object, or for a replay the moment the
  *  link opens at. The rest of `/ops` addresses a source (by query) or a view. */
-function parseReplayPath(segs: string[], search: string): string | null {
-  if (segs.length !== 3 || segs[0].toLowerCase() !== "ops" || segs[1].toLowerCase() !== "replays") return null;
+function parseOpsObjectPath(segs: string[], search: string): { type: "replay" | "issue" | "metric"; id: string } | null {
+  if (segs.length !== 3 || segs[0].toLowerCase() !== "ops") return null;
+  const kind = OPS_OBJECT_SEGMENT[segs[1].toLowerCase()];
+  if (!kind) return null;
   let id: string;
   try {
     id = decodeURIComponent(segs[2]).trim();
   } catch {
     id = segs[2].trim();
   }
-  if (!/^rp-\d+$/i.test(id) && !isConvexId(id)) return null;
+  const short = new RegExp(`^${kind.prefix}-\\d+$`, "i").test(id);
+  if (!short && !isConvexId(id)) return null;
+  if (kind.type !== "replay") return { type: kind.type, id: short ? id.toLowerCase() : id };
   // ?t is seconds (or a clock, or 1h2m3s), as the replay page reads it (shared/replay parseReplayT).
   const atMs = search ? (parseReplayT(new URLSearchParams(search).get("t"))?.t ?? null) : null;
-  return /^rp-/i.test(id) ? replayRefId(id.toLowerCase(), atMs) : id;
+  return { type: "replay", id: short ? replayRefId(id.toLowerCase(), atMs) : id };
 }
 
 function parseRepoObjectPath(segs: string[], github: boolean): RepoObjectRef | null {
@@ -1031,8 +1049,8 @@ export function parseEntityUrl(
   if (segs.length < 1) return null;
   const repoObject = parseRepoObjectPath(segs, false);
   if (repoObject) return { type: repoObject.type, id: repoObjectId(repoObject) };
-  const replay = parseReplayPath(segs, search);
-  if (replay) return { type: "replay", id: replay };
+  const opsObject = parseOpsObjectPath(segs, search);
+  if (opsObject) return opsObject;
   // `/org/<ref>` is a goal, project, role or person's sheet (objectHref).
   const orgObject = segs.length === 2 && segs[0].toLowerCase() === "org" ? orgObjectOfRef(segs[1]) : null;
   if (orgObject) return { type: orgObject.kind, id: orgObject.ref };

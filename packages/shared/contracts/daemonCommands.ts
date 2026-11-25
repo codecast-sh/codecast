@@ -95,6 +95,13 @@ export const DAEMON_COMMANDS = [
   // banner), and enqueue "continue" to each so the delivery rail resumes them
   // on the new account.
   "switch_account",
+  // Sign in to a remote MCP server on this machine (shared/contracts/mcpLogin.ts):
+  // run the agent CLI's own `mcp login <server> --no-browser` in a pane, report
+  // its authorization URL, type in the redirect address the person pasted, and
+  // report the outcome (convex/mcpLogin.ts). args: { started_at, client,
+  // server, cwd? } to start, { started_at, callback } to finish, { started_at,
+  // cancel: true } to stop. Old daemons: "Unknown command".
+  "mcp_login",
   // User clicked "Update now" on the in-app desktop-update banner: apply the
   // published desktop release immediately (force quit + swap + relaunch), rather
   // than waiting for the next app quit. Old daemons: "Unknown command".

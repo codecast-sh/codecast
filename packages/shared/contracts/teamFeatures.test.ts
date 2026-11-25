@@ -1,5 +1,5 @@
 import { describe, expect, it } from "bun:test";
-import { DEFAULT_TEAM_FEATURES, TEAM_FEATURES, teamFeatureEnabled, undecidedSetupFeatures, workspaceFeatureEnabled, workspaceFeatureState } from "./teamFeatures";
+import { DEFAULT_TEAM_FEATURES, TEAM_FEATURES, personalSettingOn, teamFeatureEnabled, undecidedSetupFeatures, workspaceFeatureEnabled, workspaceFeatureState } from "./teamFeatures";
 
 // The org feature is seated per team AND per person, and the personal
 // workspace has no flag row. The rule that decides whose personal org exists
@@ -53,5 +53,23 @@ describe("undecidedSetupFeatures", () => {
     expect(keys({ features: { chat: false, calls: true } })).not.toContain("calls");
     expect(keys({ features: { ...DEFAULT_TEAM_FEATURES } })).toEqual([]);
     expect(keys(null)).toEqual([]);
+  });
+});
+
+// Suggested replies: a team sets the default, and each person's own choice wins.
+describe("personalSettingOn", () => {
+  const on = { _id: "t1", features: { composer_suggestions: true } };
+  const off = { _id: "t2", features: {} };
+  it("follows the active team's flag for a person who never chose", () => {
+    expect(personalSettingOn(undefined, [on, off], "t1", "composer_suggestions")).toBe(true);
+    expect(personalSettingOn(undefined, [on, off], "t2", "composer_suggestions")).toBe(false);
+  });
+  it("lets the person's own choice win either way", () => {
+    expect(personalSettingOn(false, [on], "t1", "composer_suggestions")).toBe(false);
+    expect(personalSettingOn(true, [off], "t2", "composer_suggestions")).toBe(true);
+  });
+  it("borrows the flag in the personal workspace from any of the person's teams", () => {
+    expect(personalSettingOn(undefined, [off, on], null, "composer_suggestions")).toBe(true);
+    expect(personalSettingOn(undefined, [off], null, "composer_suggestions")).toBe(false);
   });
 });

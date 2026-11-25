@@ -163,6 +163,11 @@ export type ShortcutAction =
   | 'call.find'
   | 'vault.toggleEdit'
   | 'vault.sourceMode'
+  | 'code.quickOpen'
+  | 'code.closeTab'
+  | 'code.reopenTab'
+  | 'code.splitRight'
+  | 'code.tabSwitcher'
   | 'evals.attribute'
   | 'evalsRun.nextSeed'
   | 'evalsRun.prevSeed'
@@ -264,6 +269,18 @@ export const SHORTCUTS: ShortcutDef[] = [
   // so this chord only has to open the list from rest.
   { key: 'alt+r', mac: 'ctrl+r', action: 'recents.open', skipInputCheck: true, description: 'Search recently viewed' },
 
+  // The code workspace in Files (components/code/workspace). Each handler
+  // declines outside it, so the chord falls through to its app-wide use:
+  // Close editor tab acts while an editor tab is open and focus is in the
+  // Files surface holding the workspace (the editor, the tree, the search
+  // pane: [data-files-surface]), as Zed and VS Code close the editor tab from
+  // their sidebars. With no editor tab open it closes the app tab below.
+  { key: 'ctrl+p', mac: 'meta+p', action: 'code.quickOpen', skipInputCheck: true, description: 'Go to file' },
+  { key: 'ctrl+w', mac: 'meta+w', action: 'code.closeTab', skipInputCheck: true, description: 'Close editor tab' },
+  { key: 'ctrl+shift+t', mac: 'meta+shift+t', action: 'code.reopenTab', skipInputCheck: true, description: 'Reopen closed editor tab' },
+  { key: 'ctrl+alt+\\', mac: 'meta+\\', action: 'code.splitRight', skipInputCheck: true, description: 'Split editor right' },
+  // Fixed: the workspace reads Ctrl+Tab itself, ahead of the recently viewed walk.
+  { key: 'ctrl+tab', action: 'code.tabSwitcher', skipInputCheck: true, fixed: true, description: 'Switch editor tab (most recent first)' },
   { key: 'ctrl+t', mac: 'meta+t', action: 'tab.new', skipInputCheck: true, description: 'New tab' },
   { key: 'ctrl+w', mac: 'meta+w', action: 'tab.close', skipInputCheck: true, description: 'Close tab' },
   // shift+bracket arrives as '[' or '{' depending on browser/layout — register
@@ -534,15 +551,14 @@ export const SHORTCUTS: ShortcutDef[] = [
   // the context while it is the active pane and its handlers decline
   // otherwise. Escape fires from the filter field too, so it can clear it.
   { key: 't', action: 'changes.today', when: 'changes', noRepeat: true, description: 'Back to today' },
-  { key: 'j', action: 'changes.next', when: 'changes', description: 'Next story' },
-  { key: 'k', action: 'changes.prev', when: 'changes', description: 'Previous story' },
-  { key: 'e', action: 'changes.evidence', when: 'changes', noRepeat: true, description: 'Open or close the story' },
-  { key: 'enter', action: 'changes.evidence', when: 'changes', noRepeat: true, description: 'Open or close the story' },
-  { key: 'o', action: 'changes.open', when: 'changes', noRepeat: true, description: 'Open the story session, else its largest commit' },
+  { key: 'j', action: 'changes.next', when: 'changes', description: 'Next change' },
+  { key: 'k', action: 'changes.prev', when: 'changes', description: 'Previous change' },
+  { key: 'enter', action: 'changes.evidence', when: 'changes', noRepeat: true, description: 'Open or close the change' },
+  { key: 'o', action: 'changes.open', when: 'changes', noRepeat: true, description: 'Open the session behind the change, else its largest commit' },
   { key: 'r', action: 'changes.risks', when: 'changes', noRepeat: true, description: 'Risks only' },
   { key: '/', action: 'changes.filter', when: 'changes', noRepeat: true, description: 'Filter stories' },
   { key: 'c', action: 'changes.copyLink', when: 'changes', noRepeat: true, description: 'Copy a link to the story' },
-  { key: 'escape', action: 'changes.escape', when: 'changes', skipInputCheck: true, description: 'Clear the filter text and leave the field, else close the evidence, then clear filters' },
+  { key: 'escape', action: 'changes.escape', when: 'changes', skipInputCheck: true, description: 'Clear the filter text and leave the field, else close the open change, then clear filters' },
   // The Evals area (components/evals, spec 4). Its walks use the list
   // context (j/k/Enter); these are the verbs an Evals view adds. Each page
   // activates the context while it is the active pane.

@@ -8,7 +8,12 @@
 // height its content needs ("codecast:height") so the frame can fit it.
 //
 // The bootstrap only declares variables and never styles elements, so a page
-// that ignores the tokens looks exactly as it did before. It rewrites its own
+// that ignores the tokens looks exactly as it did before. The one exception is
+// the canvas of a framed page that paints none of its own: a frame shows the
+// host through it, so a page written for a white tab (dark text, no
+// background) would put that text on a dark host. When the page's text sits on
+// the same side of light and dark as the host's --sol-bg, it gets the backdrop
+// a tab would have given it; a page whose text follows the tokens stays clear. It rewrites its own
 // <style> rather than setting inline properties, so a page's later :root rules
 // still win. Pure strings: imported by the Convex serve route and by web.
 
@@ -27,6 +32,15 @@ export const PAGE_PARK_MESSAGE = "codecast:park";
 // Escape pressed inside a framed page: a host that lets people step into the
 // page (a board) steps back out, since the key never reaches the host itself.
 export const PAGE_ESCAPE_MESSAGE = "codecast:escape";
+// A wheel over a page that takes no pointer (a board's page before it is
+// entered): the host forwards it so the page scrolls in place. x and y are the
+// pointer in the page's own CSS pixels; the page scrolls the innermost element
+// under it that can still move that way, else the document.
+export const PAGE_WHEEL_MESSAGE = "codecast:wheel";
+// The page's half of it, as script text every page runs: a markdown page carries its own script and calls
+// ccWheel(m) from its message listener just as the bootstrap does.
+export const PAGE_WHEEL_JS = `function ccCanScroll(n,dx,dy){var c=getComputedStyle(n),y=/(auto|scroll|overlay)/.test(c.overflowY),x=/(auto|scroll|overlay)/.test(c.overflowX);return (dy>0&&y&&n.scrollTop+n.clientHeight<n.scrollHeight-1)||(dy<0&&y&&n.scrollTop>0)||(dx>0&&x&&n.scrollLeft+n.clientWidth<n.scrollWidth-1)||(dx<0&&x&&n.scrollLeft>0);}
+function ccWheel(m){var r=document.documentElement,b=document.body,dx=+m.dx||0,dy=+m.dy||0,n=document.elementFromPoint(+m.x||0,+m.y||0);while(n&&n!==b&&n!==r&&!ccCanScroll(n,dx,dy))n=n.parentElement;(n&&n!==b&&n!==r?n:(document.scrollingElement||r)).scrollBy({left:dx,top:dy,behavior:"instant"});}`;
 export const PAGE_GATE_SIGNAL = `<script>try{if(window.parent!==window)window.parent.postMessage({type:${JSON.stringify(PAGE_GATE_MESSAGE)}},"*")}catch(e){}</script>`;
 
 /** The tokens a framed page receives, by name without the leading dashes. */
@@ -82,11 +96,16 @@ const DEFAULT_CSS =
 const BOOT_SCRIPT = `(function(){
 var s=document.getElementById("cc-page-theme"),d=document.documentElement,D=${JSON.stringify(PAGE_THEME_DEFAULTS)},F=${JSON.stringify(FONT_MONO)};
 if(!s)return;
-function put(mode,tokens){var c=":root{";for(var k in tokens){if(/^sol-[a-z0-9-]+$/.test(k))c+="--"+k+":"+String(tokens[k]).replace(/[;{}<>]/g,"")+";";}s.textContent=c+"--font-mono:"+F+";}";if(mode)d.setAttribute("data-codecast-theme",mode);}
+function put(mode,tokens){var c=":root{";for(var k in tokens){if(/^sol-[a-z0-9-]+$/.test(k))c+="--"+k+":"+String(tokens[k]).replace(/[;{}<>]/g,"")+";";}s.textContent=c+"--font-mono:"+F+";}";if(mode)d.setAttribute("data-codecast-theme",mode);backdrop();}
+function rgba(c){c=String(c||"").trim();var h=/^#([0-9a-f]{3,8})$/i.exec(c);if(h){h=h[1];if(h.length<6)h=h.replace(/./g,"$&$&");return [parseInt(h.slice(0,2),16),parseInt(h.slice(2,4),16),parseInt(h.slice(4,6),16),h.length>6?parseInt(h.slice(6,8),16)/255:1];}var m=/^(rgba?|color)\\(\\s*(?:srgb\\s+)?([^)]*)\\)$/i.exec(c);if(!m)return null;var p=m[2].split(/[\\s,\\/]+/).filter(Boolean).map(function(v){return v.slice(-1)==="%"?parseFloat(v)/100:parseFloat(v);});var k=m[1].toLowerCase()==="color"?255:1;return [p[0]*k,p[1]*k,p[2]*k,p.length>3?p[3]:1];}
+function dark(c){return (0.2126*c[0]+0.7152*c[1]+0.0722*c[2])/255<0.5;}
+var bd=null;function backdrop(){try{paint();}catch(e){}}function paint(){if(!framed||!document.body)return;if(!bd){bd=document.createElement("style");bd.id="cc-page-backdrop";(document.head||d).appendChild(bd);}bd.textContent="";var html=rgba(getComputedStyle(d).backgroundColor),body=rgba(getComputedStyle(document.body).backgroundColor);if((html&&html[3]>0)||(body&&body[3]>0))return;var ink=rgba(getComputedStyle(document.body).color),under=rgba(getComputedStyle(d).getPropertyValue("--sol-bg"));if(!ink||!under||dark(ink)!==dark(under))return;bd.textContent="html{background-color:"+(dark(ink)?"#ffffff":D.dark["sol-bg"])+"}";}
 try{var t=new URLSearchParams(location.search).get("theme");if(t==="dark"||t==="light")put(t,D[t]);}catch(e){}
 var framed=false;try{framed=window.self!==window.top;}catch(e){framed=true;}
+${PAGE_WHEEL_JS}
 function hush(root){var all=root.querySelectorAll("*");for(var i=0;i<all.length;i++){var n=all[i];if((n.tagName==="VIDEO"||n.tagName==="AUDIO")&&!n.paused)try{n.pause();}catch(e){}if(n.shadowRoot)hush(n.shadowRoot);}}
-window.addEventListener("message",function(e){var m=e.data;if(e.source===window.parent&&m&&m.type===${JSON.stringify(PAGE_PARK_MESSAGE)}){hush(document);return;}if(e.source!==window.parent||!m||m.type!==${JSON.stringify(PAGE_THEME_MESSAGE)})return;var mode=m.theme==="dark"||m.theme==="light"?m.theme:null;if(m.tokens&&typeof m.tokens==="object")put(mode,m.tokens);else if(mode)put(mode,D[mode]);});
+window.addEventListener("message",function(e){var m=e.data;if(e.source===window.parent&&m&&m.type===${JSON.stringify(PAGE_PARK_MESSAGE)}){hush(document);return;}if(e.source===window.parent&&m&&m.type===${JSON.stringify(PAGE_WHEEL_MESSAGE)}){ccWheel(m);return;}if(e.source!==window.parent||!m||m.type!==${JSON.stringify(PAGE_THEME_MESSAGE)})return;var mode=m.theme==="dark"||m.theme==="light"?m.theme:null;if(m.tokens&&typeof m.tokens==="object")put(mode,m.tokens);else if(mode)put(mode,D[mode]);});
+if(framed){if(document.body)backdrop();document.addEventListener("DOMContentLoaded",backdrop);window.addEventListener("load",backdrop);}
 if(framed)window.addEventListener("keydown",function(e){if(e.key==="Escape"&&!e.defaultPrevented)try{window.parent.postMessage({type:${JSON.stringify(PAGE_ESCAPE_MESSAGE)}},"*")}catch(x){}});
 if(!framed||typeof ResizeObserver==="undefined")return;
 var last=0;function report(){var b=document.body;if(!b||!innerWidth||!innerHeight)return;var h=Math.ceil(b.getBoundingClientRect().bottom+window.scrollY+(parseFloat(getComputedStyle(b).marginBottom)||0));if(d.scrollHeight>innerHeight)h=Math.max(h,d.scrollHeight);if(h>0&&h!==last){last=h;var pm=document.querySelector('meta[name="codecast:height"]'),p=pm?parseInt(pm.getAttribute("content")||"",10):NaN;window.parent.postMessage({type:${JSON.stringify(PAGE_HEIGHT_MESSAGE)},height:h,preferred:p>0?p:null},"*");}}
