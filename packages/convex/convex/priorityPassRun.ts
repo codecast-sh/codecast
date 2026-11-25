@@ -108,6 +108,8 @@ export type PassInputs = {
   more: boolean;
   /** Where the cursor goes when every returned session is read. */
   read_to: number;
+  /** Sessions a priority here still holds that have left this workspace (made private, moved): applyPlan lets them go. */
+  strays: Id<"conversations">[];
 };
 
 export type PassResult = {
@@ -368,6 +370,7 @@ export const passInputs = internalQuery({
       rows.push(...found.filter((p) => !((p.status === "done" || p.status === "quiet") && p.last_active_at < hiddenBefore)));
     }
     const priorities: PassPriority[] = [];
+    const strays: Id<"conversations">[] = [];
     const stepTaskIds = new Set<string>();
     for (const p of rows) {
       const held: Doc<"conversations">[] = await ctx.db
@@ -376,7 +379,10 @@ export const passInputs = internalQuery({
         .order("desc")
         .take(PRIORITY_PASS_CAPS.sessions_per_priority);
       const readable: Doc<"conversations">[] = [];
-      for (const c of held) if (inWorkspace(c, args.user_id, args.workspace) && (await mayRead(c))) readable.push(c);
+      for (const c of held) {
+        if (!inWorkspace(c, args.user_id, args.workspace)) strays.push(c._id);
+        else if (await mayRead(c)) readable.push(c);
+      }
       priorities.push({
         short_id: p.short_id,
         title: p.title,
@@ -419,6 +425,7 @@ export const passInputs = internalQuery({
       cursor_at,
       more: read.more || truncated,
       read_to: truncated ? Math.max(cursor_at, firstAfter(byFirst[SESSIONS_READ], cursor_at) - 1) : read.read_to,
+      strays,
     };
   },
 });
@@ -570,9 +577,9 @@ function rowFields(w: Record<string, unknown>, insert = false): Record<string, u
  * that run has since changed.
  */
 export const applyPlan = internalMutation({
-  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any() },
+  args: { ...runRowArgs, from_cursor: v.number(), plan: v.any(), strays: v.optional(v.array(v.id("conversations"))) },
   handler: async (ctx, args): Promise<Counts | null> => {
-    const { plan: raw, from_cursor, ...run } = args;
+    const { plan: raw, from_cursor, strays, ...run } = args;
     const recent = await recentRuns(ctx, args.user_id, args.workspace);
     if (recent.some((r) => r.status === "ok" && r.finished_at > args.started_at)) {
       await settleRun(ctx, { ...run, cursor_at: from_cursor, status: "skipped", error: "superseded" });
@@ -660,16 +667,24 @@ export const applyPlan = internalMutation({
       if (!conv || (held && (String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace))) continue;
       await move(conv, undefined, undefined);
     }
+    // A session that left this workspace lets go of the priority here, so its new workspace's pass can map it.
+    for (const id of strays ?? []) {
+      const conv: Doc<"conversations"> | null = await ctx.db.get(id);
+      const held: Doc<"priorities"> | null = conv?.priority_id ? await ctx.db.get(conv.priority_id) : null;
+      if (!conv || !held || inWorkspace(conv, args.user_id, args.workspace) || String(held.user_id) !== String(args.user_id) || held.workspace !== args.workspace) continue;
+      await move(conv, undefined, undefined);
+    }
     // A merged priority's sessions the plan did not list (the input shows only its newest) go to the survivor, step unknown.
     for (const [from, into] of mergedInto) {
       const left: Doc<"conversations">[] = await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", from)).take(SESSION_COUNT_CAP);
       for (const conv of left) if (inWorkspace(conv, args.user_id, args.workspace)) await move(conv, into, undefined);
     }
 
-    // Every priority a session moved to or from is counted again from the index, so a count that drifted heals.
+    // Every priority a session moved to or from is counted again from the index, so a count that drifted heals:
+    // the person's own in any workspace (a session made private leaves a team priority from the personal pass).
     for (const [id, delta] of moved) {
       const row: Doc<"priorities"> | null = await ctx.db.get(id);
-      if (!row || String(row.user_id) !== String(args.user_id) || row.workspace !== args.workspace) continue;
+      if (!row || String(row.user_id) !== String(args.user_id)) continue;
       const held = (await ctx.db.query("conversations").withIndex("by_priority", (q: any) => q.eq("priority_id", id)).take(SESSION_COUNT_CAP + 1)).length;
       const capped = held > SESSION_COUNT_CAP;
       const session_count = capped ? Math.max(SESSION_COUNT_CAP, (row.session_count ?? 0) + delta) : held;
@@ -771,7 +786,7 @@ async function pass(ctx: any, args: PassArgs): Promise<PassResult> {
   const { output, dropped } = parsePriorityPassOutput(reply.json, input);
   if (!output) return fail(`unreadable reply: ${dropped.join("; ")}`, true);
   const plan = mergePriorities(input, output);
-  const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan });
+  const counts: Counts | null = await ctx.runMutation(self.applyPlan, { ...base, run_id, cursor_at: readTo, from_cursor: cursor_at, cost_usd: reply.cost_usd, plan, strays: read.strays });
   if (!counts) return { status: "skipped", reason: "superseded", cost_usd: reply.cost_usd };
   const chain = (args.chain ?? 0) + 1;
   const chained = left && chain < MAX_CHAINED_RUNS;

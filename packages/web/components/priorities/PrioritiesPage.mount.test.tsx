@@ -41,8 +41,6 @@ const ROWS = [
 ];
 const HISTORY = { days, lanes: [
   { key: "pri-1", short_id: "pri-1", title: "Trusted evals", status: "active", counts: days.map((_, i) => i), total: 105 },
-  // A lane whose owner hid their activity: its days show, none shaded.
-  { key: "pri-2", short_id: "pri-2", title: "Deploys", status: "active", counts: days.map(() => 0), total: 0, counts_hidden: true },
 ] };
 // What the open row's show answers: s2 is worked by a session older than the list's newest three.
 const DETAIL = { ...ROWS[0], steps: ROWS[0].steps.map((st) => ({ ...st, sessions: st.key === "s2" ? [{ short_id: "jx7deep", title: "Re-measure run", step_key: "s2", updated_at: 1 }] : [] })), other_sessions: [] };
@@ -80,8 +78,10 @@ test("priorities read in rank order, finished and past after them, and ?open ope
     // A done step (s1) needs no new session, nor does s2, which show says a session works; s3 gets one.
     expect(compose).toEqual([`/inbox?${new URLSearchParams({ compose: "Trusted evals: Judge dashboard" })}`]);
     expect(body.querySelector('[data-step="s2"]')!.textContent).toContain("Re-measure run");
-    // A hidden lane draws its days unshaded.
-    expect(page.container.querySelector('[data-priority="pri-2"] [data-history-strip]')!.getAttribute("data-hidden")).toBe("true");
+    // A priority with no history lane still draws its days, none shaded.
+    const empty = page.container.querySelector('[data-priority="pri-2"] [data-history-strip]')!;
+    expect(empty.querySelectorAll("i").length).toBe(15);
+    expect(empty.innerHTML).not.toContain("--sol-green");
     // 15 day cells on the row's strip, titled with the day's count.
     const strip = page.container.querySelector('[data-priority="pri-1"] [data-history-strip]')!;
     expect(strip.querySelectorAll("i").length).toBe(15);
@@ -131,6 +131,23 @@ test("a teammate's open priority offers no new session on its empty steps", asyn
     const body = page.container.querySelector("[data-priority-body]")!;
     expect(body.textContent).toContain("Judge dashboard");
     expect([...body.querySelectorAll("a")].filter((a) => a.getAttribute("href")?.startsWith("/inbox?"))).toEqual([]);
+  } finally {
+    await page.unmount();
+  }
+}, 60_000);
+
+test("a teammate's priority with sessions but no history counts draws its sessions and empty strips", async () => {
+  delete answers["priorities:show"];
+  const teammate = { ...ROWS[0], mine: false, user_id: "teammate", owner: "Bea", sessions: [{ short_id: "jx7bea1", title: "Bea's grader run", step_key: "s2", updated_at: 5 }] };
+  const page = await mount(<PrioritiesView rows={[teammate] as any} history={{ days, lanes: [] } as any} openId="pri-1" onToggleOpen={() => {}} writes={{} as any} />);
+  try {
+    expect(describeFailures(page)).toBe("");
+    expect(page.text()).toContain("Bea");
+    const body = page.container.querySelector("[data-priority-body]")!;
+    expect(body.querySelector('[data-step="s2"]')!.textContent).toContain("Bea's grader run");
+    const strips = [...page.container.querySelectorAll("[data-history-strip]")];
+    expect(strips.length).toBeGreaterThan(0);
+    for (const strip of strips) expect(strip.innerHTML).not.toContain("--sol-green");
   } finally {
     await page.unmount();
   }

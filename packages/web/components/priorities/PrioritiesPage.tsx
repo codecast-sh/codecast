@@ -106,7 +106,7 @@ export function PrioritiesView({
 }) {
   const groups = ownerGroups(rows);
   const lanes = useMemo(() => new Map((history?.lanes ?? []).map((l) => [l.short_id ?? l.key, l as PriorityHistoryLane])), [history]);
-  const levels = useMemo(() => stripLevels([...lanes.values()].filter((l) => !l.counts_hidden).map((l) => l.counts)), [lanes]);
+  const levels = useMemo(() => stripLevels([...lanes.values()].map((l) => l.counts)), [lanes]);
   const days = history?.days ?? [];
   const showOwners = groups.length > 1 || (groups[0] && !groups[0].mine);
   return (
@@ -232,7 +232,7 @@ function ActiveRow({ row, position, total, lane, days, levels, open, onToggle, w
       <span className="text-right text-ui tabular-nums text-sol-text-muted" title={`${row.counts.critical_done} of ${row.counts.critical_total} critical-path steps done`}>
         {row.counts.critical_done}/{row.counts.critical_total}
       </span>
-      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} hidden={lane?.counts_hidden} truncated={lane?.truncated} levels={levels} /></span>}
+      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} truncated={lane?.truncated} levels={levels} /></span>}
       <RowMenu row={row} position={position} total={total} writes={writes} />
     </div>
   );
@@ -295,7 +295,7 @@ function PastRow({ row, lane, days, levels, writes }: {
           ? <span className="inline-flex items-center rounded-full bg-sol-green px-2.5 py-0.5 text-meta font-semibold text-sol-bg">{pastBadge(row)}</span>
           : <span className="whitespace-nowrap text-meta text-sol-text-dim">{pastBadge(row)}</span>}
       </span>
-      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} hidden={lane?.counts_hidden} truncated={lane?.truncated} levels={levels} muted={!won} /></span>}
+      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} truncated={lane?.truncated} levels={levels} muted={!won} /></span>}
       <RowMenu row={row} writes={writes} />
     </div>
   );

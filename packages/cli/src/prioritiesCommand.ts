@@ -73,8 +73,7 @@ export function formatPriorityDetail(p: PriorityDetail, now = Date.now()): strin
 
 /**
  * One line per lane: id, title, its owner (a teammate's lane), a sparkline and
- * the total typed. A hidden lane says so instead of a count, and a lane whose
- * read was cut marks its total with "+".
+ * the total typed; a lane whose read was cut marks its total with "+".
  */
 export function formatHistory(res: PriorityHistory): string[] {
   if (!res.lanes.length) return [`Nothing typed in the last ${res.days.length} days.`];
@@ -86,8 +85,7 @@ export function formatHistory(res: PriorityHistory): string[] {
   return [
     head,
     ...res.lanes.map((l) => {
-      const tail = l.counts_hidden ? `${"".padEnd(res.days.length)}  hidden` : `${sparkline(l.counts).padEnd(res.days.length)}  ${l.total}${l.truncated ? "+" : ""} typed`;
-      return `${(l.key === "unassigned" ? "" : l.key).padEnd(keyWidth)}  ${clip(l.title, titleWidth).padEnd(titleWidth)}${ownerCol(l.owner)}  ${tail}`;
+      return `${(l.key === "unassigned" ? "" : l.key).padEnd(keyWidth)}  ${clip(l.title, titleWidth).padEnd(titleWidth)}${ownerCol(l.owner)}  ${sparkline(l.counts).padEnd(res.days.length)}  ${l.total}${l.truncated ? "+" : ""} typed`;
     }),
   ];
 }

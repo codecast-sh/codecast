@@ -583,6 +583,38 @@ describe("session counts", () => {
     expect((await w.t.run((ctx) => ctx.db.get(a._id)))?.session_count).toBe(1);
   });
 
+  test("a session made private lets go of its team priority: the team pass unmaps it and the team count drops", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "work");
+    replyText = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [p] = await w.priorities();
+    expect(p.session_count).toBe(1);
+    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { is_private: true, team_visibility: "private" }));
+    // The next team pass, for other team work, finds the session gone from the team.
+    await w.send(w.ana, w.oldConv, w.now - 8 * 60_000, "other team work");
+    replyText = () => JSON.stringify({ priorities: [], unassigned: [] });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team })).status).toBe("ok");
+    expect((await w.conversation(w.teamConv))?.priority_id).toBeUndefined();
+    expect((await w.t.run((ctx) => ctx.db.get(p._id)))?.session_count).toBe(0);
+  });
+
+  test("a session made private and mapped by the personal pass leaves the team priority's count true", async () => {
+    const w = await world();
+    await w.send(w.ana, w.teamConv, w.now - 2 * H, "work");
+    replyText = () => JSON.stringify({ priorities: [proposal()], unassigned: [] });
+    await w.t.action(pass.runPass, { user_id: w.ana, workspace: w.team });
+    const [team] = await w.priorities();
+    await w.t.run((ctx) => ctx.db.patch(w.teamConv, { is_private: true, team_visibility: "private" }));
+    await w.send(w.ana, w.teamConv, w.now - 8 * 60_000, "now private work");
+    replyText = () => JSON.stringify({ priorities: [proposal({ title: "Private work" })], unassigned: [] });
+    expect((await w.t.action(pass.runPass, { user_id: w.ana, workspace: `user:${w.ana}` })).status).toBe("ok");
+    const personal = (await w.priorities()).find((x: any) => x.workspace === `user:${w.ana}`)!;
+    expect((await w.conversation(w.teamConv))?.priority_id).toBe(personal._id);
+    expect(personal.session_count).toBe(1);
+    expect((await w.t.run((ctx) => ctx.db.get(team._id)))?.session_count).toBe(0);
+  });
+
   test("a count that drifted is counted again when a pass touches the priority, and deleting a mapped session counts it down", async () => {
     const w = await world();
     await w.send(w.ana, w.teamConv, w.now - H, "work");

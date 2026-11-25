@@ -61,6 +61,8 @@ async function world() {
     const c2 = await conv("jx7two2", {});
     const c3 = await conv("jx7pvt3", { priority_id: p1, priority_step_key: "s1", is_private: true, team_visibility: "private" });
     const c4 = await conv("jx7per4", { priority_id: personal });
+    // A teammate reads a priority only through a session of it listed to the team: one each for pri-2..4.
+    for (const [short_id, priority_id] of [["jx7two5", p2], ["jx7thr6", p3], ["jx7fou7", p4]] as const) await conv(short_id, { priority_id, updated_at: NOW - 2 * DAY });
 
     const send = async (user: Id<"users">, c: Id<"conversations">, timestamp: number, extra: Record<string, unknown> = {}) => {
       const message = await ctx.db.insert("messages", { conversation_id: c, role: "user", content: "x", timestamp } as any);
@@ -203,9 +205,27 @@ describe("reads", () => {
     expect((await as(bea).query(pri.history, { days: 15 })).lanes.map((l: any) => [l.key, l.total])).toEqual([["pri-1", 1]]);
     // Ada's own view is unchanged.
     expect((await as(ada).query(pri.history, { days: 15 })).lanes.find((l: any) => l.key === "pri-1").total).toBe(2);
+    // Every session of her priorities began while she was hidden: none is listed, so Bea sees no priority of hers.
+    await t.run(async (ctx) => ctx.db.patch(membership, { visibility_history: [{ before: Date.now() + 60_000, visibility: "hidden" }] } as any));
+    expect((await as(bea).query(pri.list, {})).map((r: any) => r.short_id)).toEqual([]);
+    expect((await as(bea).query(pri.history, { days: 15 })).lanes).toEqual([]);
   });
 
-  test("history caps each person's read separately and marks only their lanes truncated", async () => {
+  test("history: a teammate's lane skips messages in a session no longer visible to the team", async () => {
+    const { t, as, bea, c1, p1, ada, acme } = await world();
+    await t.run(async (ctx) => {
+      await ctx.db.insert("conversations", {
+        user_id: ada, team_id: acme, agent_type: "claude_code", session_id: "s8", short_id: "jx7vis8", title: "still shared",
+        started_at: NOW, updated_at: NOW - DAY, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p1,
+      } as any);
+      await ctx.db.patch(c1, { is_private: true, team_visibility: "private" });
+    });
+    // pri-1 still reads (through the shared session), but Ada's typing in the now-private one is not counted.
+    expect((await as(bea).query(pri.list, {})).map((r: any) => r.short_id)).toContain("pri-1");
+    expect((await as(bea).query(pri.history, { days: 15 })).lanes).toEqual([]);
+  });
+
+  test("history: the viewer's own read takes at most half the budget, and a cut marks every visible lane of theirs", async () => {
     const { t, as, ada, bea, acme, c2 } = await world();
     await t.run(async (ctx) => {
       const message = await ctx.db.insert("messages", { conversation_id: c2, role: "user", content: "x", timestamp: NOW } as any);
@@ -213,12 +233,58 @@ describe("reads", () => {
         await ctx.db.insert("user_sends", { user_id: ada, team_id: acme, conversation_id: c2, message_id: message, timestamp: NOW - 1_000 - i, words: 1, text: "x", clipped: false } as any);
       }
     });
-    const res = await as(ada).query(pri.history, { days: 15 });
-    // Newest first: the 3,000 just typed, none of the older ones.
-    expect(res.lanes.map((l: any) => [l.key, l.total, l.truncated])).toEqual([["unassigned", HISTORY_SENDS_CAP, true]]);
-    // Bea's own read is not cut by Ada's: her lanes for Ada's priorities say Ada's read was.
+    const res = await as(ada).query(pri.history, { days: 15, workspace: `team:${acme}` });
+    // Newest first: half the budget of what she just typed, none of the older ones.
+    expect(res.lanes.map((l: any) => [l.key, l.total, l.truncated])).toEqual([
+      ["pri-1", 0, true], ["pri-2", 0, true], ["pri-3", 0, true], ["pri-4", 0, true], ["unassigned", HISTORY_SENDS_CAP / 2, true],
+    ]);
+    // Bea, who typed nothing, gives Ada's share the whole budget: still cut, and only Ada's lanes say so.
     const theirs = await as(bea).query(pri.history, { days: 15 });
     expect(theirs.lanes.map((l: any) => [l.key, l.total, l.truncated])).toEqual([["pri-1", 0, true], ["pri-2", 0, true], ["pri-3", 0, true], ["pri-4", 0, true]]);
+  });
+
+  test("history: many sharing teammates split what the viewer leaves, never past the budget", async () => {
+    const { t, as, ada, bea, acme, ws, c1 } = await world();
+    const TEAMMATE_SENDS = 1_600;
+    await t.run(async (ctx) => {
+      const dee = await ctx.db.insert("users", { name: "Dee" } as any);
+      await ctx.db.insert("team_memberships", { user_id: dee, team_id: acme, role: "member", joined_at: 1 } as any);
+      const p = await ctx.db.insert("priorities", {
+        user_id: dee, workspace: ws, short_id: "pri-20", title: "Dee's", summary: "", status: "active", rank_set_by: "pass",
+        steps: [], first_seen_at: NOW, last_active_at: NOW, pass_at: NOW, created_at: NOW, updated_at: NOW,
+      } as any);
+      const c = await ctx.db.insert("conversations", {
+        user_id: dee, team_id: acme, agent_type: "claude_code", session_id: "dee", short_id: "jx7dee9", title: "dee",
+        started_at: NOW, updated_at: NOW, message_count: 1, is_private: false, team_visibility: "full", status: "active", priority_id: p,
+      } as any);
+      for (const [user, conv] of [[ada, c1], [dee, c]] as const) {
+        const message = await ctx.db.insert("messages", { conversation_id: conv, role: "user", content: "x", timestamp: NOW } as any);
+        for (let i = 0; i < TEAMMATE_SENDS; i++) {
+          await ctx.db.insert("user_sends", { user_id: user, team_id: acme, conversation_id: conv, message_id: message, timestamp: NOW - 1_000 - i, words: 1, text: "x", clipped: false } as any);
+        }
+      }
+    });
+    const res = await as(bea).query(pri.history, { days: 15 });
+    const lane = (key: string) => res.lanes.find((l: any) => l.key === key);
+    // Bea's own read used 3; the two teammates split the rest evenly.
+    const share = Math.floor((HISTORY_SENDS_CAP - 3) / 2);
+    expect([lane("pri-1").total, lane("pri-1").truncated, lane("pri-20").total, lane("pri-20").truncated]).toEqual([share, true, share, true]);
+    expect(res.lanes.reduce((sum: number, l: any) => sum + l.total, 0)).toBeLessThanOrEqual(HISTORY_SENDS_CAP);
+  });
+
+  test("a priority someone cannot see answers the same whether or not its feature is on", async () => {
+    const { t } = await world();
+    expect(await t.query(pri.cliShow, { api_token: CY_TOKEN, short_id: "pri-6" })).toEqual({ error: "no priority pri-6 you can see" });
+    expect(await t.query(pri.cliShow, { api_token: CY_TOKEN, short_id: "pri-1" })).toEqual({ error: "no priority pri-1 you can see" });
+  });
+
+  test("a teammate sharing summaries sees the sessions of a priority, its count and its chips", async () => {
+    const { t, as, bea, c1 } = await world();
+    await t.run(async (ctx) => ctx.db.patch(c1, { team_visibility: "summary" }));
+    const [row] = await as(bea).query(pri.list, {});
+    expect(row).toMatchObject({ short_id: "pri-1", session_count: 1 });
+    expect(row.sessions.map((s: any) => s.short_id)).toEqual(["jx7one1"]);
+    expect((await as(bea).query(pri.show, { short_id: "pri-1" })).steps.find((s: any) => s.key === "s2").sessions.map((s: any) => s.short_id)).toEqual(["jx7one1"]);
   });
 
   test("the pin line names the priority, its critical path and the session's step; null where the viewer cannot see the priority", async () => {
