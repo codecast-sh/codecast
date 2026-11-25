@@ -19,12 +19,13 @@ import { overlayConversationId } from "../store/workspace";
 import { focusComposer } from "../lib/composerControl";
 import { isPeopleWindow } from "../lib/desktop";
 import { oldestBlocked } from "../lib/decisionQueue";
-import { useShortcutAction } from "./ShortcutProvider";
+import { subscribeShortcutUsed, useShortcutAction } from "./ShortcutProvider";
+import { claimKeys } from "./keyOwnership";
 import { useUndoWalk } from "../hooks/useUndoWalk";
 import { useTriageActions } from "../components/triage/useTriageActions";
 import { toggleTriageBarCompact } from "../components/triage/graduation";
 import { checkMilestone } from "../tips/useTips";
-import { menuVerb, noteRowVerbActed, rowVerbIds, watchHoverTarget } from "../lib/hoverTarget";
+import { menuVerb, noteKeyboardNavigation, noteRowVerbActed, rowVerbIds, watchHoverTarget } from "../lib/hoverTarget";
 import { animatedCloseSessions, animatedHideSessions, fileSessionsAsRest, toggleSessionsLikeFirst } from "../store/undoActions";
 import { switchToWorkbench, sortedWorkbenches } from "../lib/workbenchSwitch";
 
@@ -72,6 +73,11 @@ export function rowVerbTarget(
   return ids.length ? { ids, advance: ids.length === 1 && ids[0] === focused } : null;
 }
 
+// Every input to focusedActionSessionId, whichever page it is read on.
+function focusSignature(store: Parameters<typeof focusedActionSessionId>[0]): string {
+  return [overlayConversationId(store.workspace), store.heldViewId, store.viewingDismissedId, store.currentSessionId, store.sidePanelSessionId].join("|");
+}
+
 export function useGlobalShortcutActions() {
   const pathname = usePathname();
   const router = useRouter();
@@ -80,6 +86,18 @@ export function useGlobalShortcutActions() {
   const openSession = useOpenSession();
 
   useMountEffect(() => watchHoverTarget());
+  // A key that moved the focused card hands row chords to it until the pointer
+  // moves (lib/hoverTarget). The focus is read before each key (a claim that
+  // takes nothing, run ahead of the dispatcher) and again after its handler:
+  // store reads only, no DOM, so typing stays cheap.
+  useMountEffect(() => {
+    let before = "";
+    const releaseClaim = claimKeys(() => { before = focusSignature(useInboxStore.getState()); return false; });
+    const unsubscribe = subscribeShortcutUsed(() => {
+      if (focusSignature(useInboxStore.getState()) !== before) noteKeyboardNavigation();
+    });
+    return () => { releaseClaim(); unsubscribe(); };
+  });
 
   useShortcutAction('palette.toggle', useCallback(() => {
     const state = useInboxStore.getState();

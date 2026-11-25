@@ -10,7 +10,6 @@ import { createShortcutRuntime } from "./runtime";
 import { shortcutCatalog } from "./registry";
 import { KEY_OWNERSHIP } from "./keyOwnership";
 import { onShortcutUsed } from "../tips/useTips";
-import { noteShortcutUsed } from "../lib/hoverTarget";
 import { useTabActive } from "../hooks/usePagePresence";
 import type { ShortcutAction } from "./registry";
 import { track } from "../lib/analytics";
@@ -32,7 +31,6 @@ const runtime = createShortcutRuntime(shortcutCatalog, {
   ...KEY_OWNERSHIP,
   onShortcutUsed: (action: ShortcutAction) => {
     onShortcutUsed(action);
-    noteShortcutUsed(action);
     if (trackedShortcuts.has(action)) track("shortcut_used", { action: action as (typeof TRACKED_SHORTCUTS)[number] });
     for (const fn of [...usedListeners]) fn(action);
   },

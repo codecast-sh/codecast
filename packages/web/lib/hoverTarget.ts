@@ -5,9 +5,10 @@
 //
 // The rule, in order:
 // 1. An open session menu's sessions: the menu advertises the chords.
-// 2. The focused card, when a navigation key moved the view since the pointer
-//    last moved (j/k, compose focus, any shortcut that is not a row verb):
-//    the keyboard is driving, as before this rule existed.
+// 2. The focused card, when a key moved the focused card since the pointer
+//    last moved (j/k, a jump, back): the keyboard is driving, as before this
+//    rule existed. A key that leaves the focused card where it was (undo,
+//    the palette, a toggle) changes nothing here.
 // 3. The armed row: a row the pointer really moved onto (the screen position
 //    changed), still under it. Scrolling, a drag or a cancelled pointer
 //    disarms it; a row that slides under a still pointer never arms.
@@ -29,7 +30,7 @@ import { useWatchEffect } from "../hooks/useWatchEffect";
 const ROW = "[data-row-verbs]";
 
 let hovered: Element | null = null;
-// A navigation key moved the view since the pointer last really moved.
+// A key moved the focused card since the pointer last really moved.
 let navigatedSinceMove = false;
 // The sessions an open context menu was opened on ([] once a chord acted from
 // it), how to dismiss it, the menu's own bulk handlers (so a chord says what
@@ -93,19 +94,10 @@ export function watchHoverTarget(): () => void {
   };
 }
 
-// The shortcuts that act on a row. Every other shortcut pressed is navigation
-// (noteShortcutUsed).
-const ROW_VERB_ACTIONS: ReadonlySet<string> = new Set([
-  "session.close", "session.stash", "session.stashHide", "session.deferAdvance",
-  "session.dormantAdvance", "session.pin", "session.markUnread", "session.snooze",
-  "session.rename", "session.moveToBucket", "conv.favorite", "conv.copyLink",
-]);
-
-/** A shortcut's key was pressed and handled (ShortcutProvider). Anything but
- *  a row verb moved the view or focus: the focused card is the target until
- *  the pointer moves, and the hovered row is disarmed. */
-export function noteShortcutUsed(action: string): void {
-  if (ROW_VERB_ACTIONS.has(action)) return;
+/** A key moved the focused card (shortcuts/actions.ts compares it across
+ *  each handled shortcut): the focused card is the target until the pointer
+ *  moves, and the hovered row is disarmed. */
+export function noteKeyboardNavigation(): void {
   navigatedSinceMove = true;
   hovered = null;
 }
