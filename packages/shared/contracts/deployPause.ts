@@ -26,7 +26,7 @@ export function rollbackEnding(commits: ReadonlyArray<{ files?: readonly string[
 }
 
 /** A run job that rolls out: once one has started, a cancel no longer stops the deploy cleanly. */
-const ROLLOUT_JOB_RE = /^(deploy|rollout)\b/i;
+const ROLLOUT_JOB_RE = /^(deploy|rollout)(\s|$)/i;
 
 /** Whether a deploy run has reached rollout, from its jobs (GitHub's jobs API). */
 export function reachedRollout(jobs: ReadonlyArray<{ name: string; status: string; conclusion?: string | null }>): boolean {

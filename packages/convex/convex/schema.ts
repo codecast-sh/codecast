@@ -5198,6 +5198,8 @@ export default defineSchema({
       // A deploy took off what the recipient's uncommitted push had put on its
       // target (deploys.noticeDroppedWork). Entity is the dropping deploy.
       v.literal("deploy_dropped_work"),
+      // Production is still paused and the recipient lifts it (deployPause.remindPauses), in working hours.
+      v.literal("production_paused"),
       // The last blocker of a task assigned to the recipient cleared and no
       // session owns it (taskWaits.onUnblocked, task-graph.md TG2).
       v.literal("task_unblocked"),

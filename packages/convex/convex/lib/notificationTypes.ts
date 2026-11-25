@@ -87,6 +87,8 @@ export const NOTIFICATION_TYPE = v.union(
   v.literal("cause_reopened"),
   // A deploy took off what the recipient's uncommitted push put on its target.
   v.literal("deploy_dropped_work"),
+  // Production is still paused and the recipient lifts it.
+  v.literal("production_paused"),
   // A task assigned to the recipient is unblocked and no session owns it.
   v.literal("task_unblocked"),
   // Someone outside a decision's people answered it for them.

@@ -671,3 +671,37 @@ and a run that has not reached rollout (no `deploy` or `rollout` job
 started) is cancelled on GitHub. Each carries codecast's `cancel` (who, why,
 when), the only cancel that counts as a pause; a run cancelled anywhere
 else is neutral and is never retried.
+
+## DP19. Rolling production back
+
+`cast line deploy rollback [dp-N] --reason "<why>"` (and Roll back on the
+Deploys page) puts an earlier live deploy's commit back on the repository's
+workflow target: the one before the live deploy, or the one named
+(`deployRollback.rollbackCore`). It is held like a pause (DP17), and in
+order it:
+
+1. queues the rollback (DP18) with the target's `rollback_inputs`, behind
+   whatever is going out;
+2. reads what it takes off production, the commits on main after the
+   commit it puts back up to the live one, and whether any carries a
+   migration (a path under `migrations/` or `drizzle/`);
+3. files the commit that will end it to the Release Captain (the role
+   holding the pause authority, `@release` first) as a task: a revert of
+   each commit, or a fix forward when a migration rules the revert out (or
+   the range could not be read);
+4. pauses production with that task as what ends it, replacing any pause
+   standing, so only the rollback is sent;
+5. cancels what the pause catches (DP18).
+
+A deploy request for a rollback that skips this is refused. The pause lifts
+itself once the first commit on main after the rollback that names its task,
+or a commit after it, passes CI: the run of the target's `ci_workflow`
+(`ci.yml`), else all of the commit's CI. A merge alone does not lift it, or
+a deploy of main's head would ship the change again while its CI runs. The
+webhook of each passing CI run checks, and a sweep every five minutes is the
+backstop. Whoever paused, or the Release Captain, can lift it sooner.
+
+A standing pause reminds whoever lifts it every four hours, on weekdays
+from 9:00 to 18:00 in the team's zone only: a rollback's reminds the
+Release Captain of its task, any other the one who paused
+(`production_paused`).

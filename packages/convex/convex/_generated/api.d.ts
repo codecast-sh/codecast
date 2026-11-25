@@ -155,6 +155,7 @@ import type * as deployCarries from "../deployCarries.js";
 import type * as deployDispatch from "../deployDispatch.js";
 import type * as deployPause from "../deployPause.js";
 import type * as deployReach from "../deployReach.js";
+import type * as deployRollback from "../deployRollback.js";
 import type * as deployRefs from "../deployRefs.js";
 import type * as deploySchema from "../deploySchema.js";
 import type * as deployTargetRequest from "../deployTargetRequest.js";
@@ -1002,6 +1003,7 @@ declare const fullApi: ApiFromModules<{
   deployDispatch: typeof deployDispatch;
   deployPause: typeof deployPause;
   deployReach: typeof deployReach;
+  deployRollback: typeof deployRollback;
   deployRefs: typeof deployRefs;
   deploySchema: typeof deploySchema;
   deployTargetRequest: typeof deployTargetRequest;

@@ -22,7 +22,7 @@ import { COMMITS_MAX, commitBySha, deployCommitsOf, devPushOver, mainCommitsAfte
 export async function requestTargetDeployCore(
   ctx: any,
   userId: Id<"users">,
-  args: { team_id: Id<"teams">; target: string; repository?: string; action?: "deploy" | "redeploy" | "rollback"; of?: string; sha?: string; here?: boolean; cli?: boolean; client_key?: string; request_id?: string; actor?: string },
+  args: { team_id: Id<"teams">; target: string; repository?: string; action?: "deploy" | "redeploy" | "rollback"; of?: string; sha?: string; here?: boolean; cli?: boolean; client_key?: string; request_id?: string; actor?: string; paused?: boolean },
 ): Promise<{ _id: string; short_id: string; target: string; action: string; sha: string | null; commits: number }> {
   const workspace = teamKey(args.team_id);
   if (!(await workspaceGrantsAccess(ctx, userId, workspace))) throw new Error("Not a member of that team");
@@ -40,6 +40,8 @@ export async function requestTargetDeployCore(
   // deploy when no machine publishes the target.
   const viaGithub = !args.here && sendsThroughGithub(t) && (action === "rollback" || !t.device_id || !t.root);
   if (!args.here && !viaGithub && (!t.device_id || !t.root)) throw new Error(`No machine publishes ${name}, so nothing can run it`);
+  // Codecast's rollback pauses production first and names what ends it (deployRollback.rollbackCore, DP19).
+  if (viaGithub && action === "rollback" && !args.paused) throw new Error(`A rollback of ${name} pauses production first: cast line deploy rollback --reason "<why>", or Roll back on the Deploys page`);
   const deploys = await targetDeploys(ctx, workspace, name);
   const open = deploys.find((d) => (d.status === "requested" || d.status === "running") && (!d.repository || d.repository === t.repository));
   // A rollback queues behind what is going out instead of being refused.

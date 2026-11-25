@@ -1,4 +1,4 @@
-// `cast line deploy status|pause|lift|grant` (docs/architecture/deploys.md DP17): production paused, by whom and
+// `cast line deploy status|pause|lift|rollback|grant` (docs/architecture/deploys.md DP17 to DP19): production paused, by whom and
 // why, and who lifts it. deploy.sh reads `status --json` before it sends anything.
 
 import type { Command } from "commander";
@@ -52,6 +52,23 @@ export function registerDeployPauseCommands(deploy: Command, deps: GroupDeps): v
       const options = cmd.optsWithGlobals();
       const r = await post("/cli/deploys/pause/lift", { repository: await repositoryOf(options), from_session: fromSession() });
       console.log(r.lifted ? `${r.repository}: production's pause lifted` : `${r.repository}: production was not paused`);
+    });
+
+  deploy
+    .command("rollback")
+    .description("Roll production back to an earlier deploy (the one before the live one, or the one named): pause first, redeploy it behind whatever is going out, and file the revert or fix forward that ends the pause to the Release Captain")
+    .argument("[deploy]", "The earlier deploy (dp-N) to put back")
+    .requiredOption("--reason <why>", "Why production is rolled back")
+    .option("--target <name>", "The target, when more than one of this repository runs a workflow")
+    .option("--repository <owner/name>", "The repository (default: this checkout's GitHub origin)")
+    .option("--json", "Machine-readable output")
+    .action(async (of: string | undefined, _o: any, cmd: any) => {
+      const options = cmd.optsWithGlobals();
+      const r = await post("/cli/deploys/rollback", { repository: await repositoryOf(options), reason: options.reason, ...(of ? { of } : {}), ...(options.target ? { target: options.target } : {}), from_session: fromSession() });
+      if (options.json) return void console.log(JSON.stringify(r, null, 2));
+      console.log(`${r.deploy}: rolling ${r.target} back to ${String(r.sha).slice(0, 10)}, taking ${r.commits} commit${r.commits === 1 ? "" : "s"} off; it goes out once nothing else is`);
+      if (r.migrations.length) console.error(`! Its range holds migrations (${r.migrations.join(", ")}): a revert cannot take them back, so ${r.task} asks for a fix forward`);
+      console.log(`Production is paused until ${r.task}'s ${r.ending === "revert" ? "revert" : "fix forward"} is green on main${r.cancelled.length ? `; cancelled ${r.cancelled.join(", ")}` : ""}`);
     });
 
   deploy

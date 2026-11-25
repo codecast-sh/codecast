@@ -57,6 +57,8 @@ export const PREFERENCE_MAP: Record<string, string> = {
   // A deploy took off what the person's own push put live: addressed to them
   // by name, a mention's class.
   deploy_dropped_work: "mention",
+  // Production is still paused, addressed to the person who lifts it.
+  production_paused: "mention",
   // Someone acted on a question addressed to you by name: a mention's class.
   decision_answered_for_you: "mention",
   // A decision handed to you by name, with a note: a mention's class too.

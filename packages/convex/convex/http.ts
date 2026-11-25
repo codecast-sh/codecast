@@ -3486,6 +3486,7 @@ cliRoute("/cli/deploys/pause/status", async (ctx, body) => ctx.runQuery(api.depl
 cliRoute("/cli/deploys/pause", async (ctx, body) => ctx.runMutation(api.deployPause.pause, body));
 cliRoute("/cli/deploys/pause/lift", async (ctx, body) => ctx.runMutation(api.deployPause.lift, body));
 cliRoute("/cli/deploys/pause/grant", async (ctx, body) => ctx.runMutation(api.deployPause.grant, body));
+cliRoute("/cli/deploys/rollback", async (ctx, body) => ctx.runMutation(api.deployRollback.rollback, body));
 cliRoute("/cli/deploys/target/for-deploy", async (ctx, body) => ctx.runQuery(api.deployTargets.forDeploy, body));
 cliRoute("/cli/deploys/main-commits", async (ctx, body) => ctx.runMutation(api.deployTargets.reportMainCommits, body));
 cliRoute("/cli/deploys/ship-pass", async (ctx, body) => ctx.runMutation(api.deployTargets.recordShipPass, body), { forwardDeviceId: true });

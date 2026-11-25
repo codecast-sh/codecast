@@ -6,6 +6,7 @@ import { checkSuiteCi, recordCommitCi, recordGithubDeployStatus, stampMainOrder,
 import { recordDeployMarker } from "./deploys";
 import { liveReaderUrlRefusal } from "./lib/liveReaderUrl";
 import { cancelForPause, nextCore, send, settle } from "./deployDispatch";
+import { liftEndedPauses, remindCore, rollback } from "./deployRollback";
 import { grant as grantPause, lift as liftPause, pause as pausePause, status as pauseStatus } from "./deployPause";
 
 // A repository's deploy targets (docs/architecture/deploys.md DP10 to DP14):
@@ -472,29 +473,34 @@ describe("codecast's deploy queue through its GitHub app (DP18)", () => {
 
   test("a rollback queues behind the running deploy instead of being refused, and goes out with the rollback inputs once it ends", async () => {
     const { t, ctx } = await production();
+    t.team_memberships[0].role = "admin";
     await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "m", at: NOW - 40_000 });
     await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "github: Deploy", workflow_run: "80", url: "https://github.com/acme/app/actions/runs/80", status: "running", at: NOW - 30_000 });
     const running = t.deploys.find((x) => x.workflow_run === "80");
-    const r = await ask(ctx, { action: "rollback" });
-    expect(r).toMatchObject({ action: "rollback", sha: sha(1) });
-    const rb = t.deploys.find((x) => x.short_id === r.short_id);
+    // Codecast's rollback is the one way back: a bare rollback request would skip its pause.
+    await expect(ask(ctx, { action: "rollback" })).rejects.toThrow(/pauses production first/);
+    const r = await (rollback as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, reason: "errors spiking" });
+    expect(r).toMatchObject({ target: "production", sha: sha(1) });
+    const rb = t.deploys.find((x) => x.short_id === r.deploy);
+    expect(rb).toMatchObject({ action: "rollback", status: "requested" });
     expect(rb.dispatch.inputs).toEqual({ sha: sha(1), actor: "Ana", components: "backend-web" });
     expect(await nextCore(ctx, WS, "production")).toEqual({ waiting: `${running.short_id} is going out` });
     running.status = "live";
-    expect(await nextCore(ctx, WS, "production")).toEqual({ sending: r.short_id });
+    // Production is paused, and the rollback that paused it is the one deploy that goes out.
+    expect(await nextCore(ctx, WS, "production")).toEqual({ sending: r.deploy });
   });
 
   test("a pause cancels what waits in the queue and stops a run before rollout; any other cancel is neutral", async () => {
     const { t, ctx, scheduled } = await production();
-    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "m", at: NOW - 40_000 });
-    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "github: Deploy", workflow_run: "81", url: "https://github.com/acme/app/actions/runs/81", status: "running", at: NOW - 30_000 });
-    const queued = await ask(ctx, { action: "rollback" });
+    const queued = await ask(ctx);
+    // A run another path dispatched for an earlier commit: a deploy of its own, going out.
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(1), repository: REPO, source: "github: Deploy", workflow_run: "81", url: "https://github.com/acme/app/actions/runs/81", status: "running", at: NOW - 30_000 });
     const out = await cancelForPause(ctx, WS, REPO, "Ana", "production paused: errors");
     expect(out).toHaveLength(2);
     expect(t.deploys.find((x) => x.short_id === queued.short_id)).toMatchObject({ status: "cancelled", cancel: { by: "Ana", why: "production paused: errors" } });
     expect(scheduled.some((c) => c.args?.why === "production paused: errors" && c.args?.deploy)).toBe(true);
     // A run cancelled anywhere else carries no codecast cancel.
-    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "github: Deploy", workflow_run: "81", url: "https://github.com/acme/app/actions/runs/81", status: "cancelled", at: NOW });
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(1), repository: REPO, source: "github: Deploy", workflow_run: "81", url: "https://github.com/acme/app/actions/runs/81", status: "cancelled", at: NOW });
     expect(t.deploys.find((x) => x.workflow_run === "81")).toMatchObject({ status: "cancelled" });
     expect(t.deploys.find((x) => x.workflow_run === "81").cancel).toBeUndefined();
   });
@@ -529,5 +535,71 @@ describe("codecast's deploy queue through its GitHub app (DP18)", () => {
     } finally {
       globalThis.fetch = realFetch;
     }
+  });
+});
+
+describe("rolling production back (DP19)", () => {
+  const PROD = { name: "production", command: "./deploy.sh --sha $sha", runs: "here", live: { kind: "marker" }, policy: "press", paths: [], workflow: "deploy.yml", rollback_inputs: { components: "backend-web" }, ci_workflow: "ci.yml" };
+  const CAPTAIN = { _id: "role_rc", short_id: "or-1", scope_type: "team", team_id: TEAM, host_user_id: ME, name: "Release Captain", handle: "release", scope: { project_ids: [], plan_ids: [] }, reports_to: { kind: "user", user_id: ME }, status: "active", authority: [{ id: "production-pause", kind: "write", label: "Pause", granted_by: ME, granted_at: 1 }] };
+
+  async function rolledBack(files2: string[]) {
+    const t = await seed();
+    t.team_memberships[0].role = "admin";
+    t.org_roles.push(CAPTAIN);
+    const ctx = ctxFor(t);
+    await (publish as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, targets: [PROD] });
+    await pushMain(t, ctx, [{ n: 1, files: ["api/a.ts"] }, { n: 2, files: files2 }], NOW - 60_000);
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(1), repository: REPO, source: "m", at: NOW - 50_000 });
+    await recordDeployMarker(ctx, { workspace: WS, team_id: TEAM, target: "production", sha: sha(2), repository: REPO, source: "m", at: NOW - 40_000 });
+    const r = await (rollback as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, repository: REPO, reason: "checkout broken" });
+    return { t, ctx, r };
+  }
+  const ci = (t: Record<string, any[]>, n: number, status: string, conclusion?: string) =>
+    t.commit_ci.push({ _id: `ci_${n}_${t.commit_ci.length}`, workspace: WS, team_id: TEAM, repository: REPO, sha: sha(n), name: "CI", kind: "workflow", path: ".github/workflows/ci.yml", run_id: `r${t.commit_ci.length}`, status, ...(conclusion ? { conclusion } : {}), started_at: NOW + t.commit_ci.length, updated_at: NOW });
+
+  test("a rollback pauses production first and files the revert of what it took off to the Release Captain", async () => {
+    const { t, ctx, r } = await rolledBack(["api/b.ts"]);
+    expect(r).toMatchObject({ ending: "revert", commits: 1, migrations: [] });
+    const task = t.tasks.find((x) => x.short_id === r.task);
+    expect(task.title).toBe(`Revert what rollback ${r.deploy} took off production`);
+    expect(task.description).toContain(`${sha(2).slice(0, 10)} change 2`);
+    expect(String(task.assignee)).toBe("role_rc");
+    expect(t.deploy_pauses[0]).toMatchObject({ rollback: r.deploy, until: { kind: "revert", shas: [sha(2)] }, by: { kind: "person", name: "Ana" } });
+    await expect((request as any)._handler(ctx, { api_token: TOKEN, team_id: TEAM, target: "production" })).rejects.toThrow(/Production is paused by Ana: Rollback/);
+  });
+
+  test("a range holding a migration is ended by a fix forward, never a revert", async () => {
+    const { t, r } = await rolledBack(["api/b.ts", "backend/drizzle/0007_add_col.sql"]);
+    expect(r).toMatchObject({ ending: "fix_forward", migrations: ["backend/drizzle/0007_add_col.sql"] });
+    expect(t.tasks.find((x) => x.short_id === r.task).title).toBe(`Fix forward what rollback ${r.deploy} took off production`);
+  });
+
+  test("the pause lifts itself once the commit naming its task is green on main, not when it merges", async () => {
+    const { t, ctx, r } = await rolledBack(["api/b.ts"]);
+    const taskId = t.tasks.find((x) => x.short_id === r.task)._id;
+    await pushMain(t, ctx, [{ n: 3, files: ["api/b.ts"], tasks: [taskId] }], NOW + 1_000);
+    expect(await liftEndedPauses(ctx, REPO)).toEqual([]);
+    ci(t, 3, "in_progress");
+    expect(await liftEndedPauses(ctx, REPO)).toEqual([]);
+    ci(t, 3, "completed", "failure");
+    expect(await liftEndedPauses(ctx, REPO)).toEqual([]);
+    ci(t, 3, "completed", "success");
+    expect(await liftEndedPauses(ctx, REPO)).toEqual([REPO]);
+    expect(t.deploy_pauses[0]).toMatchObject({ lifted_by: "green on main", lifted_on: sha(3) });
+  });
+
+  test("a standing pause reminds whoever lifts it only inside the team's working hours", async () => {
+    const { t, ctx } = await rolledBack(["api/b.ts"]);
+    t.teams[0].timezone = "America/Los_Angeles";
+    const saturdayNoon = Date.parse("2026-11-28T20:00:00Z");
+    const wednesdayNight = Date.parse("2026-11-25T07:00:00Z");
+    t.deploy_pauses[0].created_at = wednesdayNight - 5 * 3_600_000;
+    expect(await remindCore(ctx, saturdayNoon)).toBe(0);
+    expect(await remindCore(ctx, wednesdayNight)).toBe(0);
+    expect(t.deploy_pauses[0].reminded_at).toBeUndefined();
+    const wednesdayMorning = Date.parse("2026-11-25T18:00:00Z");
+    expect(await remindCore(ctx, wednesdayMorning)).toBe(1);
+    expect(t.deploy_pauses[0].reminded_at).toBe(wednesdayMorning);
+    expect(await remindCore(ctx, wednesdayMorning + 3_600_000)).toBe(0);
   });
 });
