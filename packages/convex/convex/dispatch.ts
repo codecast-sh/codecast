@@ -183,7 +183,7 @@ const TABLE_CONFIG: Record<string, TableConfig> = {
 
 const PATCH_ONLY_ACTIONS = new Set([
   "answerDecision", "applyWorkbench", "clearCurrentConversation", "clearSelection",
-  "clearSidePanelSession", "closeSidePanel", "closeTab", "deferSession",
+  "clearSidePanelSession", "closeSidePanel", "closeTab", "deferSession", "discardReviewComment",
   "initPagination", "injectSession", "markKilling", "navigateToSession", "openSidePanel", "openTab",
   "adoptSession", "patchConversation", "pinSession", "renameSession", "requestNavigate",
   "saveCurrentTabState", "selectPanelSession", "setActiveBucketFilter",
