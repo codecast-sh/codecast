@@ -42,6 +42,18 @@ export const REPLY_STREAM_HANDOFF_SKEW_MS = 60_000;
  *  it off. */
 export const REPLY_STREAM_HANDOFF_PREFIX_CHARS = 200;
 
+/** An assistant text message stamped no earlier than this before the stream's
+ *  start hands it off whatever its text: sync can rewrite a message's opening
+ *  (an image link, an error banner), and then the text no longer matches.
+ *  Measured, a streamed message is stamped after its first line arrives; the
+ *  text before a tool call is stamped seconds before the next stream starts. */
+export const REPLY_STREAM_HANDOFF_STAMP_SLACK_MS = 1_000;
+
+/** How far the browser's clock may run ahead of the server's before a row
+ *  just pushed reads as old. A row first seen is as old as the server says,
+ *  less this, so a reply that stopped long ago is not drawn afresh on reload. */
+export const REPLY_STREAM_CLOCK_ALLOWANCE_MS = 5_000;
+
 /** What a push answers: written; nobody has the conversation open, so nothing
  *  was written; or the feature is off for the conversation's workspace. */
 export type ReplyStreamPushResult = { state: "written" | "unwatched" | "off" };
