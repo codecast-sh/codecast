@@ -13,6 +13,7 @@ export const MOBILE_SETTINGS_SECTIONS = [
   'about',
   'plan',
   'mail',
+  'voice',
 ] as const;
 
 export type MobileSettingsSection = (typeof MOBILE_SETTINGS_SECTIONS)[number];

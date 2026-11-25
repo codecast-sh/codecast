@@ -14,6 +14,7 @@ import { LANE_COPY } from '@codecast/web/components/simple/lane';
 import { PlanPage } from '@/components/hosted/PlanPage';
 import { MailPage } from '@/components/hosted/MailPage';
 import { VaultPage } from './VaultPage';
+import { VoicePage } from './VoicePage';
 import { useTeamRosterIdentity } from '@codecast/web/hooks/useTeamRoster';
 import { peopleOf } from '@codecast/shared/team/memberKind';
 import { Text as RNText, TextInput } from '@/components/Themed';
@@ -559,6 +560,7 @@ export const SETTINGS_PAGES: Record<string, { title: string; Page: ComponentType
   about: { title: 'About', Page: AboutPage },
   plan: { title: 'Plan', Page: PlanPage },
   mail: { title: LANE_COPY.connections.mail, Page: MailPage },
+  voice: { title: 'Voice', Page: VoicePage },
 } satisfies Record<MobileSettingsSection, { title: string; Page: ComponentType }>;
 
 const styles = themedStyles((Theme) => StyleSheet.create({

@@ -13,7 +13,7 @@
 // lights its line by (segmentAt). A huddle's video plays on the web only for
 // now, and the screen says so with the way there.
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   FlatList,
@@ -24,7 +24,9 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import FontAwesome from '@expo/vector-icons/FontAwesome';
+import * as Haptics from 'expo-haptics';
 import { useInboxStore } from '@codecast/web/store/inboxStore';
+import { isParkedDispatchError } from '@codecast/web/store/mutativeMiddleware';
 import { useCallDetail, useCallPlaces } from '@codecast/web/hooks/useSyncCalls';
 import { isCallLive } from '@codecast/web/lib/calls/callStatus';
 import { callTitle } from '@codecast/web/lib/calls/roomLabels';
@@ -33,14 +35,35 @@ import { useQueryNoThrow } from '@codecast/web/hooks/useQueryNoThrow';
 import { useCallRecordings } from '@codecast/web/lib/calls/callRecordingsFeed';
 import { playableFiles, videoAt } from '@codecast/web/lib/calls/callVideo';
 import { api as _api } from '@codecast/convex/convex/_generated/api';
-import { isRecRoomKey, parseCallAnchor, parseCallMomentParam, segmentAt } from '@codecast/shared/contracts';
+import {
+  assignmentForVoice,
+  callSpeakerRoster,
+  hasVoiceSpeakers,
+  isRecRoomKey,
+  moveLineTarget,
+  parseCallAnchor,
+  parseCallMomentParam,
+  recordingSpeakers,
+  resolveLineSpeaker,
+  segmentAt,
+  type SpeakerAssignment,
+  type SpeakerChoice,
+} from '@codecast/shared/contracts';
+import { memberListSig, rosterIdentity, useViewerIdentity } from '@codecast/web/hooks/useTeamRoster';
+import { teamMembersOf } from '@codecast/web/lib/activeTeam';
 import { buildEntityUrl, callRefId, formatCallTime, isConvexId } from '@codecast/shared/entities';
 import { openWebPage } from '@/lib/links';
+import { showActionSheet } from '@/lib/popups';
+import { showNotice } from '@/lib/undoBar';
+import { copyToClipboard } from '@/lib/clipboard';
 import { Text as RNText } from '@/components/Themed';
 import { Theme, Spacing, FontSize, BorderRadius, CHROME_FONT_CAP, themedStyles, useTheme } from '@/constants/Theme';
 import { recordingState } from '@/lib/recordingStatus';
 import { optionalNative } from '@/lib/optionalNative';
 import { LivePulse, LiveRoomAction, useCallsOn, useLiveRooms } from '@/components/calls/LiveRooms';
+import { SpeakerRow } from '@/components/calls/SpeakerRow';
+import { SpeakerSheet, type SpeakerSheetTarget } from '@/components/calls/SpeakerSheet';
+import { speakerTint } from '@/components/calls/speakerTint';
 
 // Same lazy probe as lib/calls/ringtone.ts and lib/recorder.ts: a JS bundle
 // newer than the installed binary must lose the player, not the screen.
@@ -161,6 +184,56 @@ export default function RecordingDetailScreen() {
   const waiting = state && state !== 'ready' && !(live && huddle) ? WAITING_COPY[state] : null;
   const segments = call?.segments ?? [];
 
+  // Who said each line of a voice note: its voices (spk:<n>) are named once
+  // in call.speakers and every line resolves through that, so one assignment
+  // renames every line in the same tick (the store's actions write the draft).
+  // The active team's people (whom a voice may be assigned to), woken only
+  // when who they are changes, never on presence heartbeats.
+  const membersSig = useInboxStore((s: any) => memberListSig(teamMembersOf(s)));
+  const team = useMemo(() => rosterIdentity(teamMembersOf(useInboxStore.getState())), [membersSig]); // eslint-disable-line react-hooks/exhaustive-deps -- the sig stands in for the churny array
+  const viewer = useViewerIdentity();
+  const teammates = useMemo(
+    () => (viewer && !team.some((m) => m._id === viewer._id) ? [viewer, ...team] : team),
+    [team, viewer],
+  );
+  // Names only: the server's names for the recording's team, then the roster.
+  const speakerNames = call?.speaker_names;
+  const roster = useMemo(() => callSpeakerRoster({ speaker_names: speakerNames }, teammates), [speakerNames, teammates]);
+  const voices = !!call && !huddle && hasVoiceSpeakers(segments);
+  const speakers = call?.speakers;
+  const chips = useMemo(() => (voices ? recordingSpeakers(segments, speakers, roster) : []), [voices, segments, speakers, roster]);
+  const [sheet, setSheet] = useState<SpeakerSheetTarget | null>(null);
+  // The draft already shows the change; only a write that is truly lost says so
+  // (a parked one is queued and delivers on the next drain).
+  const saved = (p: unknown) =>
+    Promise.resolve(p).catch((e) => {
+      if (!isParkedDispatchError(e)) showNotice("Couldn't save who said that");
+    });
+  const store = () => useInboxStore.getState();
+  const assign = (key: string, a: SpeakerAssignment) => saved(store().assignCallSpeaker(id!, key, a));
+  const confirmVoice = (key: string) => {
+    void Haptics.selectionAsync();
+    void saved(store().confirmCallSpeaker(id!, key));
+  };
+  const pickSpeaker = (t: SpeakerSheetTarget, choice: SpeakerChoice) => {
+    void Haptics.selectionAsync();
+    if (t.kind === 'line') {
+      const to = moveLineTarget(speakers, choice);
+      if (to.key !== t.key) void saved(store().moveCallLineSpeaker(id!, t.seq, to.key));
+      if (to.assign) void assign(to.key, to.assign);
+      return;
+    }
+    const a = assignmentForVoice(speakers, choice);
+    if (a) void assign(t.key, a);
+  };
+  const lineMenu = (item: any) =>
+    showActionSheet(undefined, [
+      ...(voices
+        ? [{ label: 'Said by…', onPress: () => setSheet({ kind: 'line', key: item.speaker_id, seq: item.seq, text: item.text }) }]
+        : []),
+      { label: 'Copy text', onPress: () => void copyToClipboard(item.text) },
+    ]);
+
   // The line the link named, marked until the person plays or taps.
   const focusIndex = (() => {
     if (!segments.length) return null;
@@ -258,6 +331,8 @@ export default function RecordingDetailScreen() {
         <FlatList
           ref={list}
           data={segments}
+          // A voice renamed changes no line, only who each line resolves to.
+          extraData={chips}
           onScrollToIndexFailed={(info) => {
             // Lines not measured yet: land near, then exactly once they are.
             list.current?.scrollToOffset({ offset: info.averageItemLength * info.index, animated: false });
@@ -276,7 +351,8 @@ export default function RecordingDetailScreen() {
           }}
           contentContainerStyle={styles.listContent}
           ListHeaderComponent={
-            <RNView style={styles.head}>
+            <>
+            <RNView style={[styles.head, styles.headTop]}>
               <RNText style={styles.when}>
                 {/* Seconds are noise on a line about a meeting. */}
                 {new Date(call.started_at).toLocaleString(undefined, {
@@ -303,6 +379,16 @@ export default function RecordingDetailScreen() {
                 </RNView>
               ) : null}
 
+            </RNView>
+
+            {/* Edge to edge, so the chips scroll under the screen's edges. */}
+            {chips.length ? (
+              <RNView style={styles.speakerRow}>
+                <SpeakerRow chips={chips} onOpen={(key) => setSheet({ kind: 'voice', key })} onConfirm={confirmVoice} />
+              </RNView>
+            ) : null}
+
+            <RNView style={[styles.head, styles.headRest]}>
               {videoUrl ? (
                 <RNView style={styles.videoNote}>
                   <RNText style={[styles.hint, styles.videoText]}>
@@ -350,17 +436,31 @@ export default function RecordingDetailScreen() {
                 <RNText style={[styles.blockLabel, styles.transcriptLabel]}>TRANSCRIPT</RNText>
               ) : null}
             </RNView>
+            </>
           }
           renderItem={({ item, index }: { item: any; index: number }) => {
             const here = (position >= item.t0 && position < item.t1) || (marked && !playing && item.seq === focusSeq);
-            // A huddle has many voices: a line names who said it when the
-            // speaker changes. A recording is one microphone and names nobody.
-            const speaker = huddle && segments[index - 1]?.speaker_id !== item.speaker_id
-              ? speakerShortName(item.speaker_name, item.speaker_id)
-              : null;
+            // A line names who said it when the speaker changes: a huddle's
+            // members, and a voice note's voices once they were told apart.
+            // A legacy recording is one microphone and names nobody.
+            const turn = segments[index - 1]?.speaker_id !== item.speaker_id;
+            const who = voices && turn ? resolveLineSpeaker(item, speakers, roster) : null;
+            const speaker = huddle && turn ? speakerShortName(item.speaker_name, item.speaker_id) : null;
             return (
               <>
-              {speaker ? (
+              {who ? (
+                <TouchableOpacity
+                  onPress={() => setSheet({ kind: 'voice', key: who.key })}
+                  activeOpacity={0.6}
+                  style={styles.turnHead}
+                  accessibilityRole="button"
+                  accessibilityLabel={`${who.suggested ? `Maybe ${who.name}` : who.name}. Change who this is`}
+                >
+                  <RNText style={[styles.speaker, styles.turnName, { color: speakerTint(Theme, who.key) }, who.suggested && styles.turnSuggested]}>
+                    {who.suggested ? `${who.name}?` : who.name}
+                  </RNText>
+                </TouchableOpacity>
+              ) : speaker ? (
                 <RNText style={[styles.speaker, { color: (Theme as any)[speakerColor(String(item.speaker_id)).replace('text-sol-', '')] }]}>
                   {speaker}
                 </RNText>
@@ -371,8 +471,9 @@ export default function RecordingDetailScreen() {
                   setMarked(false);
                   seekTo(item.t0);
                 }}
+                onLongPress={() => lineMenu(item)}
                 activeOpacity={0.6}
-                disabled={!url}
+                disabled={!url && !voices}
               >
                 <RNText style={styles.lineTime}>{formatCallTime(item.t0)}</RNText>
                 <RNText style={styles.lineText}>{item.text}</RNText>
@@ -382,6 +483,14 @@ export default function RecordingDetailScreen() {
           }}
         />
       )}
+      <SpeakerSheet
+        target={sheet}
+        chips={chips}
+        teammates={teammates}
+        onPick={pickSpeaker}
+        onConfirm={confirmVoice}
+        onClose={() => setSheet(null)}
+      />
     </SafeAreaView>
   );
 }
@@ -415,10 +524,16 @@ const styles = themedStyles((Theme) => StyleSheet.create({
     paddingHorizontal: Spacing.lg,
     paddingTop: Spacing.md,
   },
+  turnHead: { alignSelf: 'flex-start' },
+  turnName: { paddingBottom: 2 },
+  turnSuggested: { fontStyle: 'italic', fontWeight: '400' },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: Spacing.xxl },
 
   listContent: { paddingBottom: Spacing.xxxl },
   head: { padding: Spacing.lg, gap: Spacing.lg },
+  headTop: { paddingBottom: 0 },
+  headRest: { paddingTop: Spacing.lg },
+  speakerRow: { paddingTop: Spacing.lg },
   when: { fontSize: FontSize.xs, color: Theme.textMuted0 },
 
   player: {

@@ -26,6 +26,7 @@ import { AgentLogoSvg } from '@/components/AgentLogo';
 import { ConversationSkeleton } from '@/components/SkeletonLoader';
 import { MobileAgentSpeaker, MobileIdentityFace, MobileSessionIdentityLine, useSessionIdentityRow } from '@/components/identity';
 import { RoleFace } from '@/components/org/RoleFace';
+import { SessionFlowContext } from '@/components/flow/FlowContext';
 import { useInboxStore, isConvexId, retryPendingSend } from '@codecast/web/store/inboxStore';
 import { CODECAST_BASE_URL, sharePath } from '@codecast/shared/entities';
 import { sessionIdentity } from '@codecast/web/lib/sessionIdentity';
@@ -111,7 +112,7 @@ import { hostedConnectionWords } from '@codecast/web/components/conversation/Hos
 import { useLinkDown } from '@/hooks/useLinkDown';
 import { answerNote, conversationTitle } from '@codecast/web/components/simple/lane';
 import { useConversationApprovals, useConversationWorking } from '@codecast/web/components/simple/useLane';
-import { agentDisplayName, agentSupportsFork, contextWindowTokens, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, policyTeamOf, sessionEscalationCaption, stripPastedContent, stripCompactionProvenance, isPollResponsePayload, type VaultReadyMessage } from '@codecast/shared/contracts';
+import { agentDisplayName, agentSupportsFork, contextWindowTokens, isHostedAgentType, parseDecisionAnswer, ACTIVE_AGENT_STATUSES, DECISION_ANSWER_TAG_RE, SAFETY_BLOCK_HINT, CLOUD_AGENT_ACTION_SUBTYPE, parseScheduledTask, policyTeamOf, sessionEscalationCaption, stripPastedContent, stripCompactionProvenance, isPollResponsePayload, personalSettingOn, type VaultReadyMessage } from '@codecast/shared/contracts';
 import { DELIVERY_FAILED_SUBTYPE, parseDeliveryFailedNotice } from '@codecast/shared/contracts/deliveryFailed';
 import { MarkdownContent, CodeBlockWithCopy, linkifyPlainText } from '@/components/MarkdownRenderer';
 import { AnsiText } from '@/components/CodeText';
@@ -277,6 +278,7 @@ type ConversationData = {
   compaction_count?: number;
   fork_children?: ForkChild[];
   parent_conversation_id?: string | null;
+  workflow_run_id?: string | null;
   forked_from?: string;
   forked_from_details?: {
     conversation_id: string;
@@ -1134,7 +1136,7 @@ function SessionMessageBlock({ from, name, body, timestamp, variant, intent }: {
           <EntityPill shortId={from} />
         ) : (
           <RNView style={[styles.sessionMessageBadge, isAgentReport && { borderColor: accent + '4d', backgroundColor: accent + '1a' }]}>
-            <RNText style={[styles.sessionMessageBadgeText, isAgentReport && { color: accent }]}>{(isAgentReport ? from : name) || 'another session'}</RNText>
+            <RNText style={[styles.sessionMessageBadgeText, isAgentReport && { color: accent }]}>{(isAgentReport ? from : name) || 'codecast'}</RNText>
           </RNView>
         )}
         {intentLabel && (
@@ -2658,9 +2660,10 @@ function MessageInput({ conversationId, isActive, isOwner, draft, autoFocus, hos
     ? allowanceOut ?? hostedComposerWords(hostedLast, waitsOnAnswer)
     : isActive ? MOBILE_COMPOSER_PLACEHOLDER.active : MOBILE_COMPOSER_PLACEHOLDER.idle;
 
-  // The suggested reply (off-by-default pref, same stamped key as web) shows
-  // in the empty box where the words would go; Use fills the box with it.
-  const suggestionsOn = useInboxStore((s) => s.clientState?.ui?.composer_suggestions === true);
+  // The suggested reply (the person's own setting, else the workspace's team
+  // default, same rule as web) shows in the empty box where the words would
+  // go; Use fills the box with it.
+  const suggestionsOn = useInboxStore((s) => personalSettingOn(s.clientState?.ui?.composer_suggestions, s.teams || [], s.clientState?.ui?.active_team_id, 'composer_suggestions'));
   const suggestion = useComposerSuggestion({
     conversationId: conversationId as string,
     idle: !agentWorking,
@@ -4689,6 +4692,13 @@ export function SessionScreen({ id, message: highlightMessageParam, focus: focus
             </RNView>
             {/* Under the owners model: the agents this session owns. */}
             {!hosted && isConvexId(conversation._id) && <SessionAgentsList conversationId={String(conversation._id)} />}
+            {/* A station or a run's own session: the whole flow it works in, every station one tap away. */}
+            <SessionFlowContext
+              conversationId={String(conversation._id)}
+              ownRunId={conversation.workflow_run_id}
+              parentId={conversation.parent_conversation_id}
+              style={styles.floatingFlowContext}
+            />
             {searchVisible && (
               <RNView style={[styles.searchBar, styles.floatingSearchBar]}>
                 <FontAwesome name="search" size={12} color={Theme.textDim} style={{ marginRight: 8 }} />
@@ -6159,6 +6169,10 @@ const styles = themedStyles((Theme, look) => StyleSheet.create({
     borderRadius: 8,
     marginHorizontal: 12,
     marginBottom: 8,
+  },
+  floatingFlowContext: {
+    marginHorizontal: 8,
+    marginVertical: 6,
   },
   floatingSearchBar: {
     marginTop: 6,

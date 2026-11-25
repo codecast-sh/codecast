@@ -68,6 +68,9 @@ export const MOBILE_ENTITY_ROUTE: Partial<Record<EntityType, string>> = {
   // A product source and a recording (`rp-12`, or a moment of one, `rp-12@1:23`).
   source: '/source',
   replay: '/replay',
+  // An Ops issue (`eg-N`) and a metric watch (`mw-N`).
+  issue: '/issue',
+  metric: '/metric',
   commit: '/commit',
   deploy: '/deploy',
   // A flow of the pool by its slug (`flow:change`), and an org proposal (`op-55`, or one change of it, `op-55#3`).

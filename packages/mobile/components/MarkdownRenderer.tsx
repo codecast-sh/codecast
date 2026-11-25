@@ -29,6 +29,7 @@ import { CONVERSATION_FENCE_LANG } from '@codecast/web/lib/conversationFence';
 import { ConversationFence } from './ConversationFence';
 import { EntityPill } from './EntityPill';
 import { MentionedCode } from './ChangeText';
+import { PageEmbed } from './PageEmbed';
 import { pushRunRefs, runOrLink } from './DeployRunRefs';
 import { ProposalCard } from './org/ProposalCard';
 import { DecisionCard } from './decisions/DecisionCard';
@@ -433,7 +434,10 @@ function SoloRefCard({ solo, isUser }: { solo: SoloRef; isUser: boolean }) {
     host = u.hostname.replace(/^www\./, '');
     path = (u.pathname + u.search).replace(/\/$/, '');
   } catch {}
-  const kicker = parsePublishedPageUrl(solo.url) ? 'Published page' : parseClaudeArtifactUrl(solo.url) ? 'Claude artifact' : null;
+  // A published page shows itself, live, rather than a link to it.
+  const published = parsePublishedPageUrl(solo.url);
+  if (published) return <PageEmbed slug={published.slug} caption={solo.caption} kicker="Published page" />;
+  const kicker = parseClaudeArtifactUrl(solo.url) ? 'Claude artifact' : null;
   const card = (
     <TouchableOpacity
       activeOpacity={0.7}

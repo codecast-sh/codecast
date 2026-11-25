@@ -27,6 +27,7 @@ import { startedBefore } from "./pathStats";
 import { isStaff } from "./lib/staff";
 import { recordAuthorityEvent } from "./lib/authorityEvents";
 import { verifyApiToken } from "./apiTokens";
+import { shareImpactKey } from "@codecast/shared/team";
 import { findSessionCommandByRequest, resumeConversationSession } from "./daemonCommandUtils";
 import { resolveTeamForPath, resolveCreationPrivacy, getProfileVisibilityPredicate, isTeamMember, profilePublicSessionVisible, conversationRepository, matchDirectoryMapping, type DirectoryMapping } from "./privacy";
 import { DAEMON_COMMAND_TTL_MS, WORK_STARTING_DAEMON_COMMANDS, isReservedDevice, isUnattendedConversation, isTestArtifactPath, repositoryKeyOfRemote, workspaceFeatureEnabled } from "@codecast/shared/contracts";
@@ -3213,7 +3214,7 @@ export const shareImpactForPaths = query({
         .withIndex("by_user_path", (q) => q.eq("user_id", userId).eq("path", prefix))
         .first();
       if (!stats || stats.computed_at === 0) continue;
-      out[prefix] = {
+      out[shareImpactKey(prefix)] = {
         count: stats.count,
         first_started_at: stats.first_started_at ?? null,
         last_started_at: stats.last_started_at ?? null,

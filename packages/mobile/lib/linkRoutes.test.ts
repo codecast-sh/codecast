@@ -333,6 +333,12 @@ describe('source, replay and Ops issue links', () => {
     expect(mobileRouteForUrl('https://codecast.sh/ops/issues/eg-2242')).toBe('/issue/eg-2242');
     expect(mobileRouteForUrl('/ops/issues/eg-2242')).toBe('/issue/eg-2242');
   });
+
+  test('an issue and a metric watch reference open their phone screens', () => {
+    expect(mobileEntityRoute('issue', 'eg-2242')).toBe('/issue/eg-2242');
+    expect(mobileEntityRoute('metric', 'mw-12')).toBe('/metric/mw-12');
+    expect(mobileRouteForUrl('https://codecast.sh/ops/metrics/mw-12')).toBe('/metric/mw-12');
+  });
 });
 
 describe('mobileNotificationRoute', () => {

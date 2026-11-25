@@ -30,6 +30,7 @@ import { bindCloseAdviceCall } from '@codecast/web/lib/closeAdviceBar';
 import { AuthProvider, useAuth } from '@/lib/auth';
 import { TextSizeProvider } from '@/hooks/useTextSize';
 import { convexAuthStorageKey } from '@/lib/cachePrincipal';
+import { createAuthStorage } from '@/lib/authStorage';
 import { usePushNotifications } from '@/hooks/usePushNotifications';
 import { noteRouteSegments } from '@/lib/tabNavigation';
 import { useLiveActivity } from '@/hooks/useLiveActivity';
@@ -60,30 +61,12 @@ class OverlayErrorBoundary extends Component<{ children: ReactNode }, { failed: 
 }
 
 
-// Keychain failures must degrade to "signed out", never hang auth: a rejected
-// getItem propagates into @convex-dev/auth's boot read, which is fired as
-// `void readStateFromStorage()` — the rejection is swallowed, isLoading stays
-// true forever, and the user is soft-locked on the skeleton inbox with no way
-// to reach the login screen.
-const secureStorage = {
-  getItem: async (key: string) => {
-    try {
-      return await SecureStore.getItemAsync(key);
-    } catch {
-      return null;
-    }
-  },
-  setItem: async (key: string, value: string) => {
-    try {
-      await SecureStore.setItemAsync(key, value);
-    } catch {}
-  },
-  removeItem: async (key: string) => {
-    try {
-      await SecureStore.deleteItemAsync(key);
-    } catch {}
-  },
-};
+// The keychain-backed token store; see lib/authStorage for why a read that
+// fails while the phone is locked waits for the foreground.
+const secureStorage = createAuthStorage(SecureStore, {
+  current: () => AppState.currentState,
+  onChange: (listener) => AppState.addEventListener('change', listener),
+});
 
 // Dev-only auth injection for simulator e2e harnesses (driven over the Hermes
 // inspector): writes a minted token pair into the SAME storage the auth

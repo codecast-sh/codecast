@@ -25,6 +25,11 @@ import { gateWaitWords, holdWords, sentBackWords, stageNote, stopWords, waitWord
 import type { FlowEdit } from '@codecast/shared/contracts/flowEdit';
 import { asGitDiff, editDrawing, editLines, editRun, liveDeploy, type EditMark } from '@codecast/web/lib/line/flowEditCard';
 import { CastDiff } from '@/components/CastDiff';
+import { DecisionCard } from '@/components/decisions/DecisionCard';
+import { mobileRouteForUrl } from '@/lib/linkRoutes';
+import { openAppRoute } from '@/lib/links';
+import { flowContext } from '@codecast/web/lib/flowContext';
+import { runHref } from '@codecast/web/lib/decisionLinks';
 import { useSessionFlowRuns } from '@codecast/web/hooks/useSyncWorkflows';
 import { MessageIdentity } from '@codecast/web/lib/conversationBlockContexts';
 import { runShip } from '@codecast/web/lib/ship/sessionShip';
@@ -55,16 +60,60 @@ export function FlowCard({ slug }: { slug: string }) {
   return <FlowBody flow={flow} run={null} library={library} />;
 }
 
-export function FlowRunCard({ runId }: { runId: string }) {
+/** Where a run card's steps open: each step's station (its session, or the decision it asked), and the run itself. */
+type RunLinks = { stepHref: (stepId: string) => string | undefined; runHref: string; open: (href: string) => void };
+
+/** A run on its flow. `onOpen` takes over navigation (a sheet closes itself first); by default a tap opens the screen. */
+export function FlowRunCard({ runId, onOpen }: { runId: string; onOpen?: (route: string) => void }) {
+  const router = useRouter();
   const run = useWorkflowRun(runId) as RunRow | null | undefined;
   const { flow, library } = useRunFlow(run);
-  if (!run || !flow) return null;
-  if (flow.kind === 'line' && takesSessionChange(flow)) return <ShipBody flow={flow} run={run} />;
-  return <FlowBody flow={flow} run={run} library={library} />;
+  const links = useMemo((): RunLinks | null => {
+    if (!run || !flow) return null;
+    // The stations as the web's flow strip reads them (lib/flowContext); a step that groups a segment opens its latest station that ran.
+    const stations = flowContext(run as any, flow).stations.filter((st) => st.href);
+    return {
+      stepHref: (stepId) => [...stations].reverse().find((st) => st.id === stepId || st.id.startsWith(`${stepId}__`))?.href,
+      runHref: runHref(run._id),
+      open: (href) => {
+        const route = mobileRouteForUrl(href);
+        if (route) (onOpen ? onOpen(route) : openAppRoute(router, route));
+      },
+    };
+  }, [run, flow, onOpen, router]);
+  if (!run || !flow || !links) return null;
+  if (flow.kind === 'line' && takesSessionChange(flow)) return <ShipBody flow={flow} run={run} links={links} />;
+  return <FlowBody flow={flow} run={run} library={library} links={links} />;
+}
+
+/** The card's name: a press opens the run when the card draws one. */
+function CardName({ label, links }: { label: string; links?: RunLinks | null }) {
+  const Theme = useTheme();
+  const text = <RNText style={[styles.name, { color: links ? Theme.violet : Theme.text }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{label}</RNText>;
+  if (!links) return text;
+  return (
+    <Pressable onPress={() => links.open(links.runHref)} hitSlop={8} style={({ pressed }) => [styles.namePress, pressed && { opacity: 0.6 }]} accessibilityRole="link" accessibilityLabel={`Open the ${label} run`} testID="flow-card-run">
+      {text}
+      <Feather name="chevron-right" size={13} color={Theme.violet} />
+    </Pressable>
+  );
+}
+
+/** A step row: pressable when its station opens somewhere, with a chevron saying so. */
+function StepRow({ href, links, style, children, testID }: { href?: string; links?: RunLinks | null; style: any; children: React.ReactNode; testID?: string }) {
+  const Theme = useTheme();
+  if (!href || !links) return <RNView style={style} testID={testID}>{children}</RNView>;
+  return (
+    <Pressable onPress={() => links.open(href)} hitSlop={4} style={({ pressed }) => [style, pressed && { opacity: 0.6 }]} accessibilityRole="link" testID={testID}>
+      {children}
+      <RNView style={{ flex: 1 }} />
+      <Feather name="chevron-right" size={13} color={Theme.textDim} />
+    </Pressable>
+  );
 }
 
 /** A session's change on its way to live: one row per stage with who acts there, then what is happening now. */
-function ShipBody({ flow, run }: { flow: AppFlow; run: RunRow }) {
+function ShipBody({ flow, run, links }: { flow: AppFlow; run: RunRow; links: RunLinks }) {
   const Theme = useTheme();
   const router = useRouter();
   const viewer = useJourneyViewer(run as any);
@@ -88,17 +137,17 @@ function ShipBody({ flow, run }: { flow: AppFlow; run: RunRow }) {
   return (
     <RNView style={[styles.card, { borderColor: Theme.border, backgroundColor: Theme.bgAlt }]}>
       <RNView style={styles.head}>
-        <RNText style={[styles.name, { color: Theme.text }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{flow.label}</RNText>
+        <CardName label={flow.label} links={links} />
         {run.task_short_id ? <RNText style={[styles.task, codeFont, { color: Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{run.task_short_id}</RNText> : null}
       </RNView>
       <RNView style={styles.steps}>
         {journey.stages.map((s) => (
           <RNView key={s.id} style={{ opacity: s.state === 'idle' || s.state === 'skipped' ? 0.55 : 1 }}>
-            <RNView style={styles.step}>
+            <StepRow href={links.stepHref(s.id)} links={links} style={styles.step} testID={`flow-card-step-${s.id}`}>
               <Feather name={icon[s.state]} size={13} color={tone[s.state]} />
               <RNText style={[styles.stepName, { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.label}</RNText>
               <RNText style={[styles.who, { color: s.state === 'back' ? Theme.violet : Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{whoWords(s)}</RNText>
-            </RNView>
+            </StepRow>
             {/* A segment's inside, in a few words: the steps a passing run takes through it. */}
             {s.inside ? <RNText style={[styles.who, { marginLeft: 20, color: Theme.textDim }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{insideWords(s.inside)}</RNText> : null}
             {result(s, 20)}
@@ -153,7 +202,8 @@ function NowLine({ now, run, whole }: { now: JourneyNow; run: RunRow; whole: boo
       case 'starting': return ['Starting', null, Theme.blue];
       case 'working': return [now.stage, waits(now.waits, now.stage), now.who === 'agent' ? Theme.orange : Theme.blue];
       case 'session': return [sentBackWords(now), [now.ask?.question, now.note].filter(Boolean).join('\n') || null, now.blocked ? Theme.yellow : Theme.violet];
-      case 'gate': return [now.mine ? 'Your call' : gateWaitWords(now.holder, now.who), now.prompt ?? now.stage, Theme.yellow];
+      // The decision under the line carries the question; the line says only where the run waits.
+      case 'gate': return [now.mine ? 'Your call' : gateWaitWords(now.holder, now.who), now.mine && now.decisionId ? `at ${now.stage}` : now.prompt ?? now.stage, Theme.yellow];
       case 'landed': return [`Merged ${now.sha.slice(0, 7)} · ${holdWords(now.hold).words}`, waits(now.waits, 'Deploy') ?? now.line, Theme.green];
       case 'merged': return [`${now.end ?? 'Merged'} ${now.sha.slice(0, 7)}`, now.why ?? null, Theme.green];
       case 'passed': return ['Done', null, Theme.green];
@@ -176,6 +226,7 @@ function NowLine({ now, run, whole }: { now: JourneyNow; run: RunRow; whole: boo
           <RNText style={[styles.saveText, { color: Theme.blue }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{action.label}</RNText>
         </Pressable>
       ) : null}
+      {now.kind === 'gate' && now.mine && now.decisionId ? <RNView style={{ marginTop: 8 }}><DecisionCard decisionRef={now.decisionId} /></RNView> : null}
     </RNView>
   );
 }
@@ -192,7 +243,7 @@ function LibraryAction({ library }: { library: FlowLibraryState }) {
   );
 }
 
-function FlowBody({ flow, run, library }: { flow: AppFlow; run: RunRow | null; library: FlowLibraryState }) {
+function FlowBody({ flow, run, library, links }: { flow: AppFlow; run: RunRow | null; library: FlowLibraryState; links?: RunLinks | null }) {
   const Theme = useTheme();
   const model = useMemo(() => flowDiagram(flow), [flow]);
   const states = useMemo(() => stepStates(model, run), [model, run]);
@@ -214,12 +265,12 @@ function FlowBody({ flow, run, library }: { flow: AppFlow; run: RunRow | null; l
     const routes = run ? s.side.filter((r) => runReached(run, r.toId)) : s.side;
     return (
       <RNView key={s.id} style={{ marginLeft: depth * 14, opacity: run && st === 'idle' ? 0.5 : 1 }}>
-        <RNView style={styles.step}>
+        <StepRow href={links?.stepHref(s.id)} links={links} style={styles.step} testID={`flow-card-step-${s.id}`}>
           <Feather name={WHO[s.kind].icon} size={13} color={Theme.textMuted} />
           <RNText style={[styles.stepName, { color: s.slot?.filled === 'empty' ? Theme.textMuted : Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.label}</RNText>
           <RNText style={[styles.who, { color: s.slot?.filled === 'generated' ? Theme.violet : Theme.textMuted }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{s.slot?.filled === 'empty' ? 'slot' : s.slot?.filled === 'generated' ? 'written here' : WHO[s.kind].word}</RNText>
           {m.icon ? <Feather name={m.icon} size={12} color={m.color} /> : null}
-        </RNView>
+        </StepRow>
         {routes.map((r, i) => <Route key={i} r={r} stopped={!!run && r.tone === 'stop'} />)}
       </RNView>
     );
@@ -228,7 +279,7 @@ function FlowBody({ flow, run, library }: { flow: AppFlow; run: RunRow | null; l
   return (
     <RNView style={[styles.card, { borderColor: Theme.border, backgroundColor: Theme.bgAlt }]}>
       <RNView style={styles.head}>
-        <RNText style={[styles.name, { color: Theme.text }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>{flow.label}</RNText>
+        <CardName label={flow.label} links={links} />
         {flow.base ? <RNText style={[styles.task, { color: Theme.textMuted }]} numberOfLines={1} maxFontSizeMultiplier={CHROME_FONT_CAP}>on {flow.base}</RNText> : null}
         <RNView style={{ flex: 1 }} />
         {state ? <RNText style={[styles.state, { color: tone[state.tone] }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>{state.words}</RNText> : null}
@@ -387,6 +438,7 @@ const styles = StyleSheet.create({
   card: { marginVertical: 6, borderWidth: StyleSheet.hairlineWidth, borderRadius: 10, overflow: 'hidden' },
   head: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 10, paddingVertical: 8 },
   name: { fontSize: 13, fontWeight: '600', flexShrink: 1 },
+  namePress: { flexDirection: 'row', alignItems: 'center', gap: 2, flexShrink: 1 },
   state: { fontSize: 11, fontWeight: '600' },
   task: { fontSize: 11 },
   steps: { paddingHorizontal: 12, paddingBottom: 10, gap: 10 },

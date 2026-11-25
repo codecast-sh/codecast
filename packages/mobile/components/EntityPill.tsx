@@ -50,6 +50,8 @@ const TYPE_LABEL: Record<EntityType, string> = {
   call: 'Call',
   source: 'Source',
   replay: 'Replay',
+  issue: 'Issue',
+  metric: 'Metric',
   deploy: 'Deploy',
   role: 'Role',
   person: 'Person',
@@ -75,6 +77,8 @@ const TYPE_COLOR: Record<EntityType, string> = {
   call: Theme.red,
   source: Theme.orange,
   replay: Theme.magenta,
+  issue: Theme.red,
+  metric: Theme.violet,
   deploy: Theme.green,
   role: Theme.violet,
   person: Theme.green,
@@ -98,6 +102,8 @@ const TYPE_ICON: Record<EntityType, React.ComponentProps<typeof Feather>['name']
   call: 'phone',
   source: 'radio',
   replay: 'film',
+  issue: 'alert-triangle',
+  metric: 'activity',
   deploy: 'upload-cloud',
   role: 'hexagon',
   person: 'user',
@@ -216,6 +222,9 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   // A replay, or a moment of it (`rp-12@1:23`): the replay is the row, the time rides the label.
   const replayRef = type === 'replay' ? parseReplayRef(rawId) : null;
   const replay = useQueryNoThrow(api.replays.webGetReplay, type === 'replay' && !named ? { ref: replayRef?.replay ?? rawId } : 'skip').data;
+  // An Ops issue (`eg-N`) and a metric watch (`mw-N`), named by their title and name.
+  const issue = useQueryNoThrow(api.ingest.webGetGroup, type === 'issue' && !named ? { ref: rawId } : 'skip').data;
+  const metric = useQueryNoThrow(api.metrics.webGetWatch, type === 'metric' && !named ? { ref: rawId } : 'skip').data;
   // A deploy's state is the point of its pill, so it reads live whatever the store holds (`dp-N`, or its Actions run).
   const deploy = useQueryNoThrow(api.deploys.get, type === 'deploy' ? { ref: rawId } : 'skip').data;
 
@@ -233,7 +242,7 @@ export function EntityPill({ shortId, type: typeProp, id: idProp, fallback, to }
   const priorityRefused = type === 'priority' && priorityFeed.refused;
   const priority = priorityRefused ? null : priorityRow;
 
-  const served: any = type === 'priority' ? priority : type === 'proposal' ? proposal : type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : type === 'source' ? source : type === 'replay' ? replay : type === 'deploy' ? deploy : undefined;
+  const served: any = type === 'priority' ? priority : type === 'proposal' ? proposal : type === 'task' ? task : type === 'plan' ? plan : isSession ? session : type === 'trigger' ? trigger : type === 'doc' ? doc : type === 'call' ? call : type === 'source' ? source : type === 'replay' ? replay : type === 'issue' ? issue : type === 'metric' ? metric : type === 'deploy' ? deploy : undefined;
 
   const entity: any = priorityRefused ? null : served ?? seed;
   const deployState = type === 'deploy' && entity ? deployPillState(entity) : null;

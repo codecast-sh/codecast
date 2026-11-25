@@ -94,6 +94,19 @@ export async function openWebPage(absolute: string): Promise<void> {
   }
 }
 
+/**
+ * Open a URL in the system browser (Safari), leaving the app. Only for the
+ * reader's own explicit ask, such as a published page's Open in browser:
+ * every other codecast destination opens its screen here.
+ */
+export async function openInBrowser(url: string): Promise<void> {
+  try {
+    await Linking.openURL(url);
+  } catch {
+    // Nothing can open it: stay put rather than surfacing a native error.
+  }
+}
+
 /** The in-app browser sheet; resolves when it closes (on Android, once it opened). */
 export function openInAppBrowser(url: string): Promise<WebBrowser.WebBrowserResult> {
   return WebBrowser.openBrowserAsync(url, {

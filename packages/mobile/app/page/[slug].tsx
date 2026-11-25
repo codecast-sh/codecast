@@ -39,7 +39,7 @@ import { Mono, uiFace } from '@/constants/fonts';
 import { ObjectHeader, ObjectMissing } from '@/components/objects/ObjectParts';
 import { ChatAvatar } from '@/components/chat/MessageRow';
 import { CONVEX_ORIGIN } from '@/lib/convex';
-import { openLink } from '@/lib/links';
+import { openInBrowser, openLink } from '@/lib/links';
 import { optionalNative } from '@/lib/optionalNative';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -121,11 +121,13 @@ export default function PageScreen() {
   }, [sheetOpen, artifactId, page?.comments.length]);
 
   if (!slug) return <ObjectMissing what="Page" loading={false} />;
-  if (!info || info.missing) return <ObjectMissing what="Page" id={slug} loading={!info} />;
+  const shareUrl = pageShareUrl(slug);
+  const browse = () => void openInBrowser(shareUrl);
+  if (!info) return <ObjectMissing what="Page" loading />;
+  if (info.missing) return <ObjectMissing what="Page" id={slug} loading={false} action={{ label: 'Open in browser', onPress: browse }} />;
 
   const title = info.title || page?.title || 'Published page';
-  const shareUrl = pageShareUrl(slug);
-  const header = <ObjectHeader type={null} link={shareUrl} title={title} />;
+  const header = <ObjectHeader type={null} link={shareUrl} title={title} menu={[{ label: 'Open in browser', onPress: browse }]} />;
 
   if (info.locked) {
     return (
@@ -134,13 +136,15 @@ export default function PageScreen() {
         <RNView style={styles.center}>
           <Feather name="lock" size={26} color={Theme.textMuted0} />
           <RNText style={styles.dim}>Locked for this account</RNText>
+          <BrowserButton onPress={browse} />
         </RNView>
       </>
     );
   }
 
   const origin = pageServingOrigin(CONVEX_ORIGIN);
-  const src = pageEmbedUrl(CONVEX_ORIGIN, slug, getActiveScheme(), pageGateKeys(info), info.version);
+  // appHost: the page's own bar and theme button stand down, since this screen carries both.
+  const src = pageEmbedUrl(CONVEX_ORIGIN, slug, getActiveScheme(), pageGateKeys(info), info.version, true);
   const commentsOff = !!served?.comments_disabled;
 
   const send = () => {
@@ -189,7 +193,7 @@ export default function PageScreen() {
             <TouchableOpacity style={styles.sheetHead} onPress={() => setSheetOpen(false)} activeOpacity={0.7} testID="page-comments-close">
               <Feather name="message-square" size={13} color={Theme.cyan} />
               <RNText style={styles.sheetTitle} maxFontSizeMultiplier={CHROME_FONT_CAP}>
-                {`${open.length} open`}{resolved.length ? ` · ${resolved.length} resolved` : ''}
+                {threads.length ? `${open.length} open${resolved.length ? ` · ${resolved.length} resolved` : ''}` : 'Comments'}
               </RNText>
               <RNView style={styles.flex} />
               <Feather name="chevron-down" size={16} color={Theme.textMuted} />
@@ -245,18 +249,30 @@ export default function PageScreen() {
             )}
           </KeyboardAvoidingView>
         ) : (
-          <TouchableOpacity style={[styles.bar, { paddingBottom: insets.bottom + 10 }]} onPress={() => setSheetOpen(true)} activeOpacity={0.7} testID="page-comments-open">
-            <Feather name="message-square" size={14} color={open.length ? Theme.cyan : Theme.textMuted} />
-            <RNText style={[styles.barText, open.length > 0 && { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>
-              {open.length ? `${open.length} open` : 'Comments'}
-            </RNText>
-            {resolved.length ? <RNText style={styles.dim} maxFontSizeMultiplier={CHROME_FONT_CAP}>{`${resolved.length} resolved`}</RNText> : null}
-            <RNView style={styles.flex} />
-            <Feather name="chevron-up" size={16} color={Theme.textMuted} />
-          </TouchableOpacity>
+          <RNView style={[styles.bar, { paddingBottom: insets.bottom + 8 }]}>
+            <TouchableOpacity style={styles.barComments} onPress={() => setSheetOpen(true)} activeOpacity={0.7} testID="page-comments-open">
+              <Feather name="message-square" size={15} color={open.length ? Theme.cyan : Theme.textMuted} />
+              <RNText style={[styles.barText, open.length > 0 && { color: Theme.text }]} maxFontSizeMultiplier={CHROME_FONT_CAP}>
+                {open.length ? `${open.length} open` : 'Comments'}
+              </RNText>
+              {resolved.length ? <RNText style={styles.dim} maxFontSizeMultiplier={CHROME_FONT_CAP}>{`${resolved.length} resolved`}</RNText> : null}
+            </TouchableOpacity>
+            <BrowserButton onPress={browse} />
+          </RNView>
         )}
       </RNView>
     </>
+  );
+}
+
+/** Leaves the app for Safari with the page's public address. */
+function BrowserButton({ onPress }: { onPress: () => void }) {
+  const Theme = useTheme();
+  return (
+    <TouchableOpacity style={styles.browserBtn} onPress={onPress} activeOpacity={0.6} accessibilityRole="link" testID="page-open-browser">
+      <Feather name="external-link" size={14} color={Theme.text} />
+      <RNText style={styles.browserText} maxFontSizeMultiplier={CHROME_FONT_CAP}>Open in browser</RNText>
+    </TouchableOpacity>
   );
 }
 
@@ -311,19 +327,25 @@ const styles = themedStyles((Theme) => StyleSheet.create({
   dim: { color: Theme.textMuted, fontSize: 13 },
   pad: { padding: Spacing.lg, textAlign: 'center' },
   bar: {
-    flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: Spacing.lg, paddingTop: 10,
+    flexDirection: 'row', alignItems: 'center', gap: 10, paddingLeft: Spacing.lg, paddingRight: Spacing.md, paddingTop: 8,
     backgroundColor: Theme.bgAlt, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: Theme.border,
   },
+  barComments: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 8, minHeight: 36 },
   barText: { color: Theme.textMuted, fontSize: 14, fontFamily: uiFace(Mono.semiBold) },
+  browserBtn: {
+    flexDirection: 'row', alignItems: 'center', gap: 6, height: 34, paddingHorizontal: 12, borderRadius: 17,
+    backgroundColor: Theme.card, borderWidth: StyleSheet.hairlineWidth, borderColor: Theme.border,
+  },
+  browserText: { color: Theme.text, fontSize: 13, fontFamily: uiFace(Mono.semiBold) },
   sheet: {
-    position: 'absolute', left: 0, right: 0, bottom: 0, height: '62%',
+    position: 'absolute', left: 0, right: 0, bottom: 0, maxHeight: '62%',
     backgroundColor: Theme.bgAlt, borderTopLeftRadius: 14, borderTopRightRadius: 14,
     borderTopWidth: StyleSheet.hairlineWidth, borderColor: Theme.border,
     shadowColor: '#000', shadowOpacity: 0.18, shadowRadius: 12, shadowOffset: { width: 0, height: -3 }, elevation: 12,
   },
   sheetHead: { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: Spacing.lg, paddingVertical: 12 },
   sheetTitle: { color: Theme.text, fontSize: 14, fontFamily: uiFace(Mono.semiBold) },
-  sheetBody: { flex: 1 },
+  sheetBody: { flexGrow: 0, flexShrink: 1 },
   sheetContent: { paddingHorizontal: Spacing.md, paddingBottom: Spacing.md, gap: 8 },
   card: { backgroundColor: Theme.card, borderRadius: 10, borderWidth: 1, borderColor: Theme.border, padding: 10, gap: 8 },
   cardResolved: { opacity: 0.7 },

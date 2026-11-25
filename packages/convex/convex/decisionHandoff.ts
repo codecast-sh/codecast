@@ -32,6 +32,9 @@ import { findDecision, userMayRead } from "./lib/decisionAccess";
 import { resolveAskedPeople } from "./lib/decisionAudience";
 import { recordHandoffEntry } from "./decisionThread";
 import { approvalHandoffRefusal } from "./lib/changeApprovalRows";
+import { managersMap, type OrgParty } from "./orgPeople";
+import { peopleAboveRole } from "@codecast/shared/contracts/orgLead";
+import { tellRole } from "./pendingMessages";
 import { HOSTED_ANSWER_REFUSED, refreshHolder, rerouteRow, syncDecisionInbox, tellHearingRole } from "./sessionDecisions";
 
 type Ctx = { db: any; scheduler?: any };
@@ -122,9 +125,11 @@ export async function passCore(ctx: Ctx, userId: Id<"users">, decisionId: string
   return { passed: true };
 }
 
-// Who an escalation reaches (escalationTargetIds): the owner's manager, else
-// the workspace's admins, read from this workspace's memberships. The owner is
-// the person holding it now, else the caller.
+// Who an escalation reaches (org-people.md P3): every one of the owner's
+// managers at once, all equal. A person manager gets the card in their queue;
+// a role manager is told (escalationRoles) and the person above it gets the
+// card, so a person can always answer. No manager: the workspace's admins
+// (escalationTargetIds). The owner is the person holding it now, else the caller.
 export async function escalationTargets(ctx: Ctx, teamId: Id<"teams">, ownerId: Id<"users">, byId?: Id<"users">): Promise<Id<"users">[]> {
   const memberships = await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect();
   const members = [];
@@ -132,11 +137,24 @@ export async function escalationTargets(ctx: Ctx, teamId: Id<"teams">, ownerId: 
     const u = await ctx.db.get(m.user_id);
     if (u) members.push({ user_id: String(m.user_id), role: m.role, is_bot: !!u.is_bot });
   }
-  const managerId = memberships.find((m: any) => String(m.user_id) === String(ownerId))?.reports_to_user_id;
-  return escalationTargetIds(String(ownerId), managerId ? String(managerId) : null, members, byId ? String(byId) : undefined) as Id<"users">[];
+  const roles: any[] = await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect();
+  const managerIds: string[] = [];
+  for (const p of await escalationManagers(ctx, teamId, ownerId, memberships)) {
+    for (const id of p.kind === "user" ? [String(p.user_id)] : peopleAboveRole(roles, p.role_id)) {
+      if (!managerIds.includes(id)) managerIds.push(id);
+    }
+  }
+  return escalationTargetIds(String(ownerId), managerIds, members, byId ? String(byId) : undefined) as Id<"users">[];
 }
 
-export async function escalateCore(ctx: Ctx, userId: Id<"users">, decisionId: string, rawNote: string | undefined): Promise<{ escalated: true; to: Id<"users">[] } | { error: string }> {
+async function escalationManagers(ctx: Ctx, teamId: Id<"teams">, ownerId: Id<"users">, memberships?: any[]): Promise<OrgParty[]> {
+  const all: any[] = memberships ?? await ctx.db.query("team_memberships").withIndex("by_team_id", (q: any) => q.eq("team_id", teamId)).collect();
+  const roles: any[] = await ctx.db.query("org_roles").withIndex("by_team", (q: any) => q.eq("team_id", teamId)).collect();
+  return managersMap(all, new Set(roles.filter((r) => r.status !== "retired").map((r) => String(r._id))), roles).get(String(ownerId)) ?? [];
+}
+
+
+export async function escalateCore(ctx: Ctx, userId: Id<"users">, decisionId: string, rawNote: string | undefined): Promise<{ escalated: true; to: Id<"users">[]; roles?: Array<{ id: Id<"org_roles">; handle: string }> } | { error: string }> {
   const note = cleanNote(rawNote);
   if (!note) return { error: ESCALATE_NOTE_REQUIRED };
   const open = await openForHandoff(ctx, userId, decisionId);
@@ -146,6 +164,17 @@ export async function escalateCore(ctx: Ctx, userId: Id<"users">, decisionId: st
   const ownerId = (row.holder?.kind === "user" ? row.holder.id : userId) as Id<"users">;
   const approvalRefusal = approvalHandoffRefusal(row as any);
   if (approvalRefusal) return { error: approvalRefusal };
+  // A person whose one manager is a role escalates to that role: it is
+  // passed to the role's thread with the note, and the role answers or hands
+  // it up its chain. A role with no running session to hear it falls through
+  // to the person above the role.
+  const managers = await escalationManagers(ctx, teamId, ownerId);
+  const sole = managers.length === 1 && managers[0].kind === "role" ? managers[0] : null;
+  if (sole && !(row.holder?.kind === "role" && String(row.holder.id) === String(sole.role_id))) {
+    const role: any = await ctx.db.get(sole.role_id);
+    const passed = await passCore(ctx, userId, decisionId, { kind: "role", id: String(sole.role_id) }, note);
+    if ("passed" in passed) return { escalated: true, to: [], roles: [{ id: sole.role_id, handle: role.handle }] };
+  }
   const to = await escalationTargets(ctx, teamId, ownerId, userId);
   if (to.length === 0) return { error: String(ownerId) === String(userId) ? "Nobody is above you: no manager and no other admin in this workspace" : "Nobody else is above the owner: take it yourself instead" };
   const now = Date.now();
@@ -163,7 +192,16 @@ export async function escalateCore(ctx: Ctx, userId: Id<"users">, decisionId: st
   await syncDecisionInbox(ctx, row._id, to, now, true, { announce: false });
   await noticeHandoff(ctx, row, "decision_escalated", userId, to, note);
   await recordHandoffEntry(ctx, row, { event: "escalated", by: userId, to: { kind: "user", ids: to.map(String) }, note, at: now });
-  return { escalated: true, to };
+  // Each role among several equal managers hears it and may recommend; the
+  // people above them hold the card (escalationTargets).
+  const roles: Array<{ id: Id<"org_roles">; handle: string }> = [];
+  for (const p of sole ? [] : managers) {
+    if (p.kind !== "role") continue;
+    const role: any = await ctx.db.get(p.role_id);
+    const told = await tellRole(ctx, p.role_id, { content: `A person who reports to you escalated ${row.short_id ?? "a decision"}: "${row.question.split("\n")[0].slice(0, 160)}". Their note: ${note}. Read it with cast decide show ${row.short_id ?? ""}; recommend with cast decide recommend. The first answer settles it.`, from_conversation_id: row.conversation_id });
+    if (told && role) roles.push({ id: p.role_id, handle: role.handle });
+  }
+  return { escalated: true, to, ...(roles.length ? { roles } : {}) };
 }
 
 // A person takes back a pass or an escalation: the decision returns to the
@@ -223,6 +261,7 @@ export const escalateForCli = mutation({
     if ("error" in r) return r;
     const row = await findDecision(ctx, args.decision_id);
     const names = [];
+    for (const role of r.roles ?? []) names.push(`@${role.handle}`);
     for (const id of r.to) { const u = await ctx.db.get(id); names.push(u?.name ?? u?.email ?? "a teammate"); }
     return { escalated: true, short_id: row?.short_id, to: names };
   },

@@ -37,8 +37,10 @@ export function BottomSheet({
       supportedOrientations={['portrait', 'portrait-upside-down', 'landscape-left', 'landscape-right']}
     >
       <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
-        <Pressable style={styles.backdrop} onPress={onClose}>
-          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]} onPress={() => {}}>
+        <Pressable style={styles.backdrop} onPress={onClose} accessible={false}>
+          {/* Catches taps so they don't close the sheet, but is no element of its
+              own: VoiceOver and UI tests reach each row inside. */}
+          <Pressable style={[styles.sheet, { paddingBottom: insets.bottom + 16 }]} onPress={() => {}} accessible={false}>
             <View style={styles.grabber} />
             {children}
           </Pressable>
