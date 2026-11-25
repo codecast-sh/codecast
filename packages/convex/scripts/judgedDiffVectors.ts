@@ -1,7 +1,7 @@
 // THE JUDGED-DIFF KEY'S GOLDEN VECTORS, cut by real git (ct-100350).
 //
 // Builds a scratch repository, makes each case's main and head, and records two things per case: the key git itself
-// gives (`git diff --no-renames <merge-base> <head> -- <judged> | git patch-id --stable`, what Union's bash runs) and
+// gives (`git diff --no-renames <merge-base> <head> -- <judged> | git patch-id --verbatim`, what Union's bash runs) and
 // what GitHub would say about the same pull request (its per-file status, patch, modes, and a rename's two texts).
 // convex/lib/judgedDiff.test.ts feeds the GitHub side to the server's rebuild and requires git's key back, so the two
 // implementations cannot drift apart without a red test.
@@ -73,7 +73,7 @@ function judgedOf(mb: string, head: string): string[] {
 function gitKey(mb: string, head: string, paths?: string[]): string {
   if (paths && !paths.length) return "none";
   const diff = git([...DIFF, "--no-renames", mb, head, ...(paths ? ["--", ...paths] : [])]);
-  return git(["patch-id", "--stable"], diff).trim().split(" ")[0] || "none";
+  return git(["patch-id", "--verbatim"], diff).trim().split(" ")[0] || "none";
 }
 
 const cases: any[] = [];
@@ -105,6 +105,11 @@ record("a rebase over unrelated main commits keeps the key", main2, git(["rev-pa
 write({ "outreach/line/change/land.cast": LAND.replace("line 2\n", "line 2 on main\n").replace("line 20\n", "line 20 changed\n").replace("line 30\n", "line 30 too\n") });
 record("editing a judged file again changes the key", main2, commit("edit again"), { differs_from: "edits a judged file" });
 
+// 3b. The same judged edit, re-indented only: whitespace is part of the key, so it asks again.
+git(["checkout", "-q", "-b", "reindent", main2]);
+write({ "outreach/line/change/land.cast": LAND.replace("line 2\n", "line 2 on main\n").replace("line 20\n", "  line 20 changed\n") });
+record("re-indenting a judged edit changes the key", main2, commit("reindent"), { differs_from: "edits a judged file" });
+
 // 4. Only unjudged files.
 git(["checkout", "-q", "-b", "docs", main2]);
 write({ "docs/a.md": lines(6) });
@@ -133,7 +138,7 @@ for (const c of cases) {
 }
 
 console.log(JSON.stringify({
-  definition: "key = git patch-id --stable of `git -c diff.algorithm=myers diff --no-renames <merge-base(main, head)> <head> -- <judged paths>`, \"none\" when no path is judged. Judged: an entry of main's judges.txt names the path, or ends in / and prefixes it; blank and # lines skipped, lines trimmed.",
+  definition: "key = git patch-id --verbatim of `git -c diff.algorithm=myers diff --no-renames <merge-base(main, head)> <head> -- <judged paths>`, \"none\" when no path is judged. Judged: an entry of main's judges.txt names the path, or ends in / and prefixes it; blank and # lines skipped, lines trimmed.",
   git_version: git(["--version"]).trim(),
   judges: JUDGES,
   cases,

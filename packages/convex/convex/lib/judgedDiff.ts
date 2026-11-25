@@ -1,12 +1,12 @@
 // The judged diff and its key: what a person's approval of a change is bound to (ct-100350, sd-4635). The key is
-// `git patch-id --stable` of the diff of the judged files alone,
+// `git patch-id --verbatim` of the diff of the judged files alone,
 //
-//   git diff --no-renames <merge-base(main, head)> <head> -- <judged paths> | git patch-id --stable
+//   git diff --no-renames <merge-base(main, head)> <head> -- <judged paths> | git patch-id --verbatim
 //
-// so it ignores line numbers, hunk positions and whitespace: a rebase over unrelated work on main keeps it, and any
-// change to what a judged file's diff says asks again. Union's bash computes it from git itself; the server rebuilds
+// so it ignores line numbers and hunk positions but never whitespace: a rebase over unrelated work on main keeps it,
+// and any change to what a judged file's diff says, re-indenting included, asks again. Union's bash computes it from git itself; the server rebuilds
 // the same diff from GitHub's per-file patches (changeApprovals.ts) and hashes it with the port of git's algorithm
-// below. judgedDiff.vectors.json holds cases cut by real `git patch-id --stable` (scripts/judgedDiffVectors.ts).
+// below. judgedDiff.vectors.json holds cases cut by real `git patch-id --verbatim` (scripts/judgedDiffVectors.ts).
 //
 // A judges file lists one entry a line, as Union's gate.sh reads it: the exact path; a directory written with its
 // trailing "/", which covers everything under it; or `name#key` (`package.json#scripts`), which covers any file named
@@ -95,14 +95,11 @@ export function requestedBy(messages: ReadonlyArray<string>): string | null {
   return null;
 }
 
-// ── git patch-id --stable ──
+// ── git patch-id --verbatim ──
 
 async function sha1(bytes: Uint8Array): Promise<Uint8Array> {
   return new Uint8Array(await crypto.subtle.digest("SHA-1", bytes as Uint8Array<ArrayBuffer>));
 }
-
-/** git's remove_space: every isspace() byte goes (space, \t, \n, \v, \f, \r). */
-const removeSpace = (line: string) => line.replace(/[ \t\n\v\f\r]/g, "");
 
 /** git's scan_hunk_header: the line counts of "@@ -a[,b] +c[,d] @@", each 1 when left out. */
 function hunkCounts(line: string): [number, number] | null {
@@ -111,12 +108,13 @@ function hunkCounts(line: string): [number, number] | null {
 }
 
 /**
- * `git patch-id --stable` of one diff (builtin/patch-id.c get_one_patchid, stable, not verbatim): each file's lines
- * are hashed with whitespace removed, its `index` line, hunk headers and "\ No newline" lines left out, and the
- * files' SHA-1s are summed bytewise with carry, so their order does not matter. A binary file's patch would hash
- * its abbreviated blob ids, which nothing here can match, so callers never feed one. Null for an empty diff.
+ * `git patch-id --verbatim` of one diff (builtin/patch-id.c get_one_patchid; --verbatim also sums per file, as
+ * --stable does): each file's lines are hashed exactly as written, newline included, so a change of whitespace alone
+ * (re-indented YAML or Python) is a different id. Its `index` line and hunk headers are left out, and the files'
+ * SHA-1s are summed bytewise with carry, so their order does not matter. A binary file's patch would hash its
+ * abbreviated blob ids, which nothing here can match, so callers never feed one. Null for an empty diff.
  */
-export async function patchIdStable(diff: string): Promise<string | null> {
+export async function patchIdVerbatim(diff: string): Promise<string | null> {
   const result = new Uint8Array(20);
   let chunk: string[] = [];
   let any = false;
@@ -130,9 +128,16 @@ export async function patchIdStable(diff: string): Promise<string | null> {
       carry >>= 8;
     }
   };
+  // git reads whole lines, each with its newline; a final newline starts no line of its own.
+  const lines = diff.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
   let before = -1, after = -1, patchlen = 0;
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("\\ ") && line.length + 1 > 12) continue;
+  for (const line of lines) {
+    const whole = `${line}\n`;
+    if (line.startsWith("\\ ") && whole.length > 12) {
+      chunk.push(whole);
+      continue;
+    }
     if (!patchlen && !line.startsWith("diff ")) continue;
     if (before === -1) {
       if (line.startsWith("index ")) continue;
@@ -148,9 +153,8 @@ export async function patchIdStable(diff: string): Promise<string | null> {
     }
     if (line[0] === "-" || line[0] === " ") before--;
     if (line[0] === "+" || line[0] === " ") after--;
-    const kept = removeSpace(line);
-    patchlen += kept.length;
-    chunk.push(kept);
+    patchlen += whole.length;
+    chunk.push(whole);
     any = true;
   }
   if (!any) return null;
@@ -255,11 +259,11 @@ export function pathDiffsOf(files: ReadonlyArray<GitHubFile>, keep: (path: strin
   return { diffs };
 }
 
-/** patch-id --stable of several paths' diffs, or "none" when there are none. */
+/** patch-id --verbatim of several paths' diffs, or "none" when there are none. */
 export async function diffKey(diffs: ReadonlyArray<PathDiff>): Promise<string> {
   if (!diffs.length) return NO_JUDGED_PATHS;
   const sorted = [...diffs].sort((a, b) => compareBytes(a.path, b.path));
-  return (await patchIdStable(sorted.map(gitDiffText).join(""))) ?? NO_JUDGED_PATHS;
+  return (await patchIdVerbatim(sorted.map(gitDiffText).join(""))) ?? NO_JUDGED_PATHS;
 }
 
 /** The commits a message says it reverts: git's own `This reverts commit <sha>` line, full shas only. */

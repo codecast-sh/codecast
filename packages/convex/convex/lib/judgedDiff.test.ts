@@ -1,9 +1,9 @@
 // The judged-diff key against real git (judgedDiff.vectors.json, cut by scripts/judgedDiffVectors.ts): what the
-// server rebuilds from GitHub's per-file patches must hash to the patch id `git patch-id --stable` gave for the same
+// server rebuilds from GitHub's per-file patches must hash to the patch id `git patch-id --verbatim` gave for the same
 // pull request, which is what Union's bash computes.
 import { describe, expect, test } from "bun:test";
 import vectors from "./judgedDiff.vectors.json";
-import { diffKey, gitDiffText, isJudged, judgedPaths, keyChanged, keyEntriesFor, mayBeJudged, ownerOf, parseJudges, parseOwners, patchIdStable, pathDiffsOf, pathsOf, requestedBy, revertedShas, type GitHubFile } from "./judgedDiff";
+import { diffKey, gitDiffText, isJudged, judgedPaths, keyChanged, keyEntriesFor, mayBeJudged, ownerOf, parseJudges, parseOwners, patchIdVerbatim, pathDiffsOf, pathsOf, requestedBy, revertedShas, type GitHubFile } from "./judgedDiff";
 
 const entries = parseJudges(vectors.judges);
 
@@ -23,7 +23,7 @@ describe("judges file", () => {
   });
 });
 
-describe("golden vectors from git patch-id --stable", () => {
+describe("golden vectors from git patch-id --verbatim", () => {
   for (const c of vectors.cases as any[]) {
     test(c.name, async () => {
       const got = await serverKey(c.files);
@@ -46,11 +46,11 @@ describe("what cannot be rebuilt exactly is never guessed", () => {
   });
 });
 
-test("the patch-id port reads git's own diff text: hunk numbers and whitespace do not count", async () => {
-  const a = await patchIdStable(gitDiffText({ path: "f", base_mode: "100644", head_mode: "100644", hunks: "@@ -1,2 +1,2 @@\n a\n-b\n+c" }));
-  const b = await patchIdStable(gitDiffText({ path: "f", base_mode: "100644", head_mode: "100644", hunks: "@@ -40,2 +41,2 @@ context\n  a\n-b \n+c\t" }));
-  expect(a).toBe(b);
-  expect(await patchIdStable("")).toBeNull();
+test("the patch-id port reads git's own diff text: hunk numbers do not count, whitespace does", async () => {
+  const id = (hunks: string) => patchIdVerbatim(gitDiffText({ path: "f", base_mode: "100644", head_mode: "100644", hunks }));
+  expect(await id("@@ -1,2 +1,2 @@\n a\n-b\n+c")).toBe(await id("@@ -40,2 +41,2 @@ context\n a\n-b\n+c"));
+  expect(await id("@@ -1,2 +1,2 @@\n a\n-b\n+c")).not.toBe(await id("@@ -1,2 +1,2 @@\n a\n-b\n+  c"));
+  expect(await patchIdVerbatim("")).toBeNull();
   expect(await diffKey([])).toBe("none");
 });
 

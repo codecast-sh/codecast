@@ -1,5 +1,5 @@
 {
-  "definition": "key = git patch-id --stable of `git -c diff.algorithm=myers diff --no-renames <merge-base(main, head)> <head> -- <judged paths>`, \"none\" when no path is judged. Judged: an entry of main's judges.txt names the path, or ends in / and prefixes it; blank and # lines skipped, lines trimmed.",
+  "definition": "key = git patch-id --verbatim of `git -c diff.algorithm=myers diff --no-renames <merge-base(main, head)> <head> -- <judged paths>`, \"none\" when no path is judged. Judged: an entry of main's judges.txt names the path, or ends in / and prefixes it; blank and # lines skipped, lines trimmed.",
   "git_version": "git version 2.56.1",
   "judges": "# What a person approves before it merges.\n\noutreach/line/change/\noutreach/deploy.sh\n  outreach/ci.sh  \n",
   "cases": [
@@ -8,7 +8,7 @@
       "judged": [
         "outreach/line/change/land.cast"
       ],
-      "key": "ca7d704ef99f9a89e0a6793353370e63ebc6eae7",
+      "key": "8d8c6d9556c3b8b027d68285cc6a37a6a6e0927c",
       "files": [
         {
           "filename": "docs/a.md",
@@ -37,7 +37,7 @@
       "judged": [
         "outreach/line/change/land.cast"
       ],
-      "key": "ca7d704ef99f9a89e0a6793353370e63ebc6eae7",
+      "key": "8d8c6d9556c3b8b027d68285cc6a37a6a6e0927c",
       "files": [
         {
           "filename": "docs/a.md",
@@ -67,7 +67,7 @@
       "judged": [
         "outreach/line/change/land.cast"
       ],
-      "key": "b4fb349642454c25e4cce9c6ffc89fb1d613bbed",
+      "key": "11e1bd49fe76ae85cee0a3b5bc5add6bf5d173c5",
       "files": [
         {
           "filename": "docs/a.md",
@@ -86,6 +86,26 @@
           "additions": 2,
           "deletions": 2,
           "patch": "@@ -17,7 +17,7 @@ line 16\n line 17\n line 18\n line 19\n-line 20\n+line 20 changed\n line 21\n line 22\n line 23\n@@ -27,7 +27,7 @@ line 26\n line 27\n line 28\n line 29\n-line 30\n+line 30 too\n line 31\n line 32\n line 33",
+          "base_mode": "100644",
+          "head_mode": "100644"
+        }
+      ],
+      "differs_from": "edits a judged file"
+    },
+    {
+      "name": "re-indenting a judged edit changes the key",
+      "judged": [
+        "outreach/line/change/land.cast"
+      ],
+      "key": "95d674968181e70f55e569244284ffd70ef29d79",
+      "files": [
+        {
+          "filename": "outreach/line/change/land.cast",
+          "status": "modified",
+          "sha": "92a5393e2a054f7692444d9e26fa2b4ee154dc07",
+          "additions": 1,
+          "deletions": 1,
+          "patch": "@@ -17,7 +17,7 @@ line 16\n line 17\n line 18\n line 19\n-line 20\n+  line 20 changed\n line 21\n line 22\n line 23",
           "base_mode": "100644",
           "head_mode": "100644"
         }
@@ -115,7 +135,7 @@
         "outreach/line/change/land.cast",
         "outreach/line/change/land2.cast"
       ],
-      "key": "d2b943a847d658e072ca7a42d0f6d9e95beb23c2",
+      "key": "7307e9b83a7af4b2b28706d0bd3c103ec8f05f73",
       "files": [
         {
           "filename": "outreach/line/change/land2.cast",
@@ -137,7 +157,7 @@
         "outreach/ci.sh",
         "outreach/line/change/judges.txt"
       ],
-      "key": "39538311dabd57af7da67a75ba273d79391b29fa",
+      "key": "63ddae04fa24e69a47ceae6baeeda41e8d589374",
       "files": [
         {
           "filename": "outreach/ci.sh",
@@ -166,7 +186,7 @@
         "outreach/line/change/empty.cast",
         "outreach/line/change/land.cast"
       ],
-      "key": "4ed7373bd2c59100ef045596ad9f5c943430a747",
+      "key": "6a77d3b172787cb85ea976fe1928820e2cc32ff0",
       "files": [
         {
           "filename": "outreach/line/change/empty.cast",
