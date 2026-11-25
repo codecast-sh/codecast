@@ -161,6 +161,25 @@ export function recordUpdateFailure(version: string): void {
 /** Printed where an update was asked for on a managed install. */
 export const MANAGED_UPDATE_NOTE = `cast was installed by your organization (${process.execPath}); it updates when your MDM installs a newer Codecast.pkg.`;
 
+/** A download that disagrees with the manifest it was read against: a CDN
+ *  serving the new manifest before the new binary (1.1.263, 2026-11-23). */
+export const isReleaseRace = (error?: string): boolean =>
+  !!error && (error.startsWith("checksum_mismatch_") || error === "download_incomplete");
+
+/** One updater run, and one more after a pause when the download raced the
+ *  manifest. Each run loads the manifest again, so the retry checks the binary
+ *  against what the release says now. */
+export async function updateWithRetry(
+  run: () => Promise<{ success: boolean; error?: string; version?: string }>,
+  pause: () => Promise<void> = () => new Promise((r) => setTimeout(r, 5000)),
+): Promise<{ success: boolean; error?: string; version?: string }> {
+  const first = await run();
+  if (first.success || !isReleaseRace(first.error)) return first;
+  console.error(`Update download did not match the release (${first.error}); fetching the manifest again`);
+  await pause();
+  return run();
+}
+
 export async function performUpdate(): Promise<{ success: boolean; error?: string }> {
   // A root-owned binary (Codecast.pkg from an MDM) is not this user's to
   // replace; the organization ships the next version (managedInstall.ts).
@@ -168,7 +187,7 @@ export async function performUpdate(): Promise<{ success: boolean; error?: strin
     console.error(MANAGED_UPDATE_NOTE);
     return { success: false, error: "managed_install" };
   }
-  const result = await updater.performUpdate();
+  const result = await updateWithRetry(() => updater.performUpdate());
   // Callers print their own "Update failed" line without the reason, so name it
   // here. Dev mode is a refusal, not a failure, and stays quiet.
   if (!result.success && result.error && result.error !== "dev_mode") {

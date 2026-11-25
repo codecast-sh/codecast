@@ -983,11 +983,19 @@ and routes on its exit, `cleared` when the starter's word covers the change
 and `ask` otherwise. It writes nothing to the run.
 
 Asker reads, in the order they were said, the words people typed into the
-sessions the change came through and their answers to the decision cards
-those sessions and the task asked (an answer a person gave on a card counts
-like a line they typed; an agent's or a policy's does not), and the run's
-starter (`cast flow asker $change_conversation --task --run`: the chain walk
-and provenance of `originator.ts`). Only a message's typed part counts
+sessions the change came through and the sessions tied to its task, and their
+answers to the decision cards those sessions and the task asked (an answer a
+person gave on a card counts like a line they typed; an agent's or a policy's
+does not), and the run's starter (`cast flow asker [$change_conversation]
+--task --run`: the chain walk and provenance of `originator.ts`). Beside a
+session, the task contributes the session that filed it. A run started from
+a plain shell on a task whose working sessions have ended carries no
+`$change_conversation` and reads the task alone: the session that filed it,
+those bound to it (`active_task_id`) and those that handed it off (a
+`Handoff:` review comment), up to twelve of the newest, never one reviewing
+it, each walked up its own chain; a session that only touched the task (a
+`cast task update`) is none of them, and a task no session it can read is
+tied to fails the read. Only a message's typed part counts
 (`typedPart`): what a composer send handed over as typed
 (`pending_messages.typed_text`, never the quotes, mention context or
 attachments folded around it; a joint send hands over none, and merging two
@@ -1013,9 +1021,10 @@ change inside what they asked for. Verify then sends `cast flow intent-verify
 --cite <session>:<line>` (or `--card sd-N`) `--quote --head --record`, and the
 server is the gate (`/cli/intent/verify`, `verifyCitation` and
 `verifyCardCitation`): the caller is the run's own runner; the cited line or
-card was said on the run's change chain (walked from the run's spawner and the
-session that filed its task, as the run's starter may read them; task
-comments name no anchor) or, for a card, on the run's task; a line is typed,
+card was said on a chain the server walks itself, from the run's spawner and
+the sessions tied to its task, as the run's starter may read them (never from
+a session the caller names, and a task comment names none unless it is a
+handoff) or, for a card, on the run's task; a line is typed,
 a card was answered by a person; that person is `run.user_id` and no agent
 account; the line's typed part or the card's answer holds the quote with
 whitespace folded; and no person answered other than Ship on the task's Ship
@@ -1028,7 +1037,8 @@ head}`, the cite `<session>:<line>` or `card:sd-N`, the starter the server
 checked and the commit Change diffed) for the composing flow to read. Every
 other ending is `ask`, after one task comment saying why (`Intent asks a
 person: ...`: the model's why, the server's refusal, or the failure): no
-session behind the change, a branch that does not resolve, a failed script
+session or task behind the change, a task no session is tied to, a branch
+that does not resolve, a failed script
 or call, an answer that is not JSON, ship false, out of scope, or a refused
 citation. Asker removes any earlier intent.json first, so a leftover file
 never reads as a verified word.

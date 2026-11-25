@@ -76,7 +76,9 @@ project owner), capped per person across every line they answer for.
 
 A person's earlier word can be their answer. When the person who started a
 run already told the work to ship, in a line they typed into a session the
-change came through or in their own answer to a decision card, and the change
+change came through or one tied to its task (the session that filed it, or
+one that worked it or handed it off, so a run started on a task alone reads
+them too), or in their own answer to a decision card, and the change
 stays inside what they asked for, a flow need not ask them again: the intent
 check (flows.md FL11) says so, and a flow that composes it routes on it
 (Union's land runs it before a mechanism or gate-edit card). A program's words
