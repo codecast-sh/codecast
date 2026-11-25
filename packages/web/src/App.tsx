@@ -44,6 +44,7 @@ const BlogAgentsTogether = lazy(() => import("@/app/(marketing)/blog/claude-code
 const BlogFromYourPhone = lazy(() => import("@/app/(marketing)/blog/claude-code-from-your-phone/page"));
 const BlogOwnChrome = lazy(() => import("@/app/(marketing)/blog/agents-in-your-own-chrome/page"));
 const BlogSoftwareFactory = lazy(() => import("@/app/(marketing)/blog/the-software-factory/page"));
+const BlogBoardOnEveryCall = lazy(() => import("@/app/(marketing)/blog/a-board-on-every-call/page"));
 const BlogHistoryOnDayOne = lazy(() => import("@/app/(marketing)/blog/claude-code-history-on-day-one/page"));
 const BlogChartReply = lazy(() => import("@/app/(marketing)/blog/the-chart-in-the-reply/page"));
 const BlogQuestions = lazy(() => import("@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page"));
@@ -262,6 +263,7 @@ export function App() {
               <Route path="blog/claude-code-cursor-codex" element={<E name="BlogAgentsTogether"><BlogAgentsTogether /></E>} />
               <Route path="blog/agents-in-your-own-chrome" element={<E name="BlogOwnChrome"><BlogOwnChrome /></E>} />
               <Route path="blog/the-software-factory" element={<E name="BlogSoftwareFactory"><BlogSoftwareFactory /></E>} />
+              <Route path="blog/a-board-on-every-call" element={<E name="BlogBoardOnEveryCall"><BlogBoardOnEveryCall /></E>} />
               <Route path="blog/claude-code-history-on-day-one" element={<E name="BlogHistoryOnDayOne"><BlogHistoryOnDayOne /></E>} />
               <Route path="blog/claude-code-from-your-phone" element={<E name="BlogFromYourPhone"><BlogFromYourPhone /></E>} />
               <Route path="blog/the-chart-in-the-reply" element={<E name="BlogChartReply"><BlogChartReply /></E>} />

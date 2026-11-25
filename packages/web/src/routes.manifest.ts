@@ -118,6 +118,7 @@ const BlogAgentsTogether = lazy(() => import("@/app/(marketing)/blog/claude-code
 const BlogFromYourPhone = lazy(() => import("@/app/(marketing)/blog/claude-code-from-your-phone/page"));
 const BlogOwnChrome = lazy(() => import("@/app/(marketing)/blog/agents-in-your-own-chrome/page"));
 const BlogSoftwareFactory = lazy(() => import("@/app/(marketing)/blog/the-software-factory/page"));
+const BlogBoardOnEveryCall = lazy(() => import("@/app/(marketing)/blog/a-board-on-every-call/page"));
 const BlogHistoryOnDayOne = lazy(() => import("@/app/(marketing)/blog/claude-code-history-on-day-one/page"));
 const BlogChartReply = lazy(() => import("@/app/(marketing)/blog/the-chart-in-the-reply/page"));
 const BlogQuestions = lazy(() => import("@/app/(marketing)/blog/the-questions-your-agents-save-for-you/page"));
@@ -338,6 +339,7 @@ export const ROUTES: RouteEntry[] = [
   { path: "blog/claude-code-cursor-codex", component: cast(BlogAgentsTogether), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/agents-in-your-own-chrome", component: cast(BlogOwnChrome), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-software-factory", component: cast(BlogSoftwareFactory), layout: "marketing", guestOk: true, guestKind: "public" },
+  { path: "blog/a-board-on-every-call", component: cast(BlogBoardOnEveryCall), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/claude-code-history-on-day-one", component: cast(BlogHistoryOnDayOne), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/claude-code-from-your-phone", component: cast(BlogFromYourPhone), layout: "marketing", guestOk: true, guestKind: "public" },
   { path: "blog/the-chart-in-the-reply", component: cast(BlogChartReply), layout: "marketing", guestOk: true, guestKind: "public" },

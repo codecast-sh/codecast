@@ -20,6 +20,16 @@ export type BlogPost = {
 
 export const POSTS: BlogPost[] = [
   {
+    slug: "a-board-on-every-call",
+    title: "A board on every call, kept by the agent in the room",
+    dek: "When an agent joins a Codecast huddle, the call gets a board, pinned on everyone's stage beside the faces. As people talk, the agent puts the conversation on it: the topics, the numbers it checked in the code, the options, what was decided and who owns what. Everyone edits the same board at once, and it stays with the call when the call ends.",
+    author: "the codecast team",
+    date: "2026-11-25",
+    dateLabel: "November 25, 2026",
+    readingMinutes: 9,
+    cover: { src: "/blog/a-board-on-every-call/cover.jpg", alt: "A Codecast board from a planning call: frames for the launch, why search is slow, options, what was decided, who does what and what is still open, with a published chart of search latency placed beside the notes" },
+  },
+  {
     slug: "the-software-factory",
     title: "The software factory",
     dek: "Codecast turns what your product reports, from errors and analytics to failing checks and evals, into a small set of problems, has a flow your team owns prove and fix each one, and brings you one card per change. Shipped fixes are watched, and anything that comes back reopens. Here is the whole loop on our own product, with one change from error to card.",
