@@ -86,13 +86,42 @@ async function walkFrom(ctx: any, userId: Id<"users">, start: Conv) {
   return { chain, stopped, root: hops[hops.length - 1].conversation };
 }
 
-/** The chain of the session that filed a task, as far as `userId` may read it. */
-async function filingChain(ctx: any, userId: Id<"users">, task: Doc<"tasks">): Promise<{ chain: ChainEntry[]; stopped?: ChainStop }> {
-  const filedIn = task.created_from_conversation ? await ctx.db.get(task.created_from_conversation as Id<"conversations">) : null;
-  if (!filedIn) return { chain: [] };
-  if (!(await canOwnerOrTeamAccess(ctx, userId, filedIn))) return { chain: [], stopped: "access_denied" };
-  const walk = await walkFrom(ctx, userId, filedIn);
-  return { chain: walk.chain, ...(walk.stopped ? { stopped: walk.stopped } : {}) };
+/** The most sessions bound to or handing off a task that its chains start from, the newest kept. */
+export const TASK_SESSION_ANCHORS = 12;
+
+/**
+ * The sessions tied to a task, each one a server-written field, never a name a client passes: the one that filed it
+ * (created_from_conversation), those that bound it or handed it off (conversation_ids, which tasks.update records for
+ * the session behind a start or a handoff), and those whose handoff comment is on it (a handoff from another
+ * workspace leaves only the comment). A session reviewing the task is none of them.
+ */
+async function taskAnchors(ctx: any, task: Doc<"tasks">): Promise<Conv[]> {
+  const handoffs = (await ctx.db.query("task_comments").withIndex("by_task_id", (q: any) => q.eq("task_id", task._id)).collect())
+    .filter((c: any) => c.conversation_id && c.comment_type === "review" && HANDOFF_COMMENT.test(c.text))
+    .sort((a: any, b: any) => a.created_at - b.created_at)
+    .map((c: any) => String(c.conversation_id));
+  const worked = [...new Set([...(task.conversation_ids ?? []).map(String), ...handoffs])].slice(-TASK_SESSION_ANCHORS);
+  const ids = [...new Set([...(task.created_from_conversation ? [String(task.created_from_conversation)] : []), ...worked])];
+  const out: Conv[] = [];
+  for (const id of ids) {
+    const conv = await ctx.db.get(id as Id<"conversations">);
+    if (conv && String(conv.review_of_task_id ?? "") !== String(task._id)) out.push(conv);
+  }
+  return out;
+}
+
+/** The chains up from every session tied to a task (taskAnchors), merged, as far as `userId` may read them. */
+async function taskChains(ctx: any, userId: Id<"users">, task: Doc<"tasks">): Promise<{ chain: ChainEntry[]; stopped?: ChainStop }> {
+  const chain = new Map<string, ChainEntry>();
+  let stopped: ChainStop | undefined;
+  for (const anchor of await taskAnchors(ctx, task)) {
+    if (chain.has(String(anchor._id))) continue;
+    if (!(await canOwnerOrTeamAccess(ctx, userId, anchor))) { stopped ??= "access_denied"; continue; }
+    const walk = await walkFrom(ctx, userId, anchor);
+    for (const hop of walk.chain) if (!chain.has(hop.conversation_id)) chain.set(hop.conversation_id, hop);
+    stopped ??= walk.stopped;
+  }
+  return { chain: [...chain.values()], ...(stopped ? { stopped } : {}) };
 }
 
 /** Who started a run (workflow_runs.user_id), read from the run itself. */
@@ -101,36 +130,51 @@ async function starterOf(ctx: any, run: Doc<"workflow_runs">) {
   return { starter_id: String(run.user_id), starter_name: nameOf(row), starter_is_bot: !!row?.is_bot };
 }
 
-/** The chain from a session to its originator, a task's filing session's chain when one is named, and who started the run when one is. */
+/**
+ * The chain from a session to its originator, the chains of the sessions tied to a task when one is named, and who
+ * started the run when one is. With a task and no session (a run started from a plain shell on a task whose working
+ * sessions have ended), the task's chains are the whole read, and a task no session is tied to is an error.
+ */
 export const chain = internalQuery({
-  args: { api_token: v.string(), conversation_id: v.string(), task: v.optional(v.string()), run_id: v.optional(v.string()) },
+  args: { api_token: v.string(), conversation_id: v.optional(v.string()), task: v.optional(v.string()), run_id: v.optional(v.string()) },
   handler: async (ctx, args): Promise<(OriginatorHead & Partial<Awaited<ReturnType<typeof starterOf>>>) | { error: string }> => {
-    const access = await readableConversation(ctx, args.api_token, args.conversation_id);
-    if ("error" in access) return { error: access.error ?? "Access denied" };
-    const userId = access.user._id;
+    let userId: Id<"users">;
+    let start: Conv | null = null;
+    if (args.conversation_id !== undefined) {
+      const access = await readableConversation(ctx, args.api_token, args.conversation_id);
+      if ("error" in access) return { error: access.error ?? "Access denied" };
+      userId = access.user._id;
+      start = access.conv;
+    } else {
+      if (!args.task) return { error: "Name a session or a task" };
+      const auth = await verifyApiToken(ctx, args.api_token);
+      if (!auth) return { error: "Unauthorized" };
+      userId = auth.userId as Id<"users">;
+    }
     const runId = args.run_id ? ctx.db.normalizeId("workflow_runs", args.run_id) : null;
     const run = runId ? await ctx.db.get(runId) : null;
     if (args.run_id && (!run || !(await canReadRun(ctx, userId, run)))) return { error: `Run ${args.run_id} not found` };
-    const walk = await walkFrom(ctx, userId, access.conv);
-    const author = walk.root.author_user_id ?? walk.root.user_id;
-    const authorRow = await ctx.db.get(author);
-    const head: OriginatorHead = {
-      chain: walk.chain,
-      ...(walk.stopped ? { stopped: walk.stopped } : {}),
-      originator: {
+    const head: OriginatorHead = { chain: [], cards: [] };
+    if (start) {
+      const walk = await walkFrom(ctx, userId, start);
+      const author = walk.root.author_user_id ?? walk.root.user_id;
+      const authorRow = await ctx.db.get(author);
+      head.chain = walk.chain;
+      if (walk.stopped) head.stopped = walk.stopped;
+      head.originator = {
         conversation_id: String(walk.root._id),
         short_id: shortIdOf(walk.root),
         user_id: String(author),
         user_name: nameOf(authorRow),
         is_bot: !!authorRow?.is_bot,
         launched_by_program: launchedByProgram(walk.root),
-      },
-      cards: [],
-    };
+      };
+    }
     const task = args.task ? await findTaskByRef(ctx, args.task) : null;
     if (args.task) {
       if (!task || !(await canAccessTask(ctx, userId, task))) return { error: `Task ${args.task} not found` };
-      head.task = { short_id: task.short_id ?? String(task._id), ...(await filingChain(ctx, userId, task)) };
+      head.task = { short_id: task.short_id ?? String(task._id), ...(await taskChains(ctx, userId, task)) };
+      if (!start && !head.task.chain.length) return { error: `No session you can read is tied to ${args.task}` };
     }
     // Cards asked in any session on the chain, then the task's Ship cards: one line per card.
     const sessions = new Map([...head.chain, ...(head.task?.chain ?? [])].map((h) => [h.conversation_id, h.short_id]));

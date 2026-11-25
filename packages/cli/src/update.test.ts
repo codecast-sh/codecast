@@ -171,6 +171,53 @@ describe("cast update download", () => {
   });
 });
 
+describe("a download that raced the manifest is tried once more", () => {
+  /** curl that lands `served[i]` on its i-th call (the last one after that). */
+  function servingExec(calls: Call[], files: Map<string, Uint8Array>, served: Uint8Array[]) {
+    return ((file: string, args: string[]) => {
+      calls.push({ file, args: [...args] });
+      files.set(args[args.indexOf("-o") + 1], served[Math.min(calls.length - 1, served.length - 1)]!);
+      return args[args.length - 1];
+    }) as unknown as typeof import("./proc.js").execFileSync;
+  }
+  const STALE = enc.encode("OLD CDN COPY OF THE BINARY");
+  const noPause = async () => {};
+
+  it("installs on the second run when the first download did not match the checksum", async () => {
+    const calls: Call[] = [];
+    let files!: Map<string, Uint8Array>;
+    const h = await harness({}, ((f: string, a: string[]) => servingExec(calls, files, [STALE, NEW])(f, a)) as any);
+    files = h.files;
+    expect(await updateWithRetry(() => h.updater.performUpdate(), noPause)).toEqual({ success: true, version: "9.9.9" });
+    expect(calls).toHaveLength(2);
+    expect(h.installed()).toBe(dec.decode(NEW));
+  });
+
+  it("gives up with the checksum error after one retry, leaving the old binary", async () => {
+    const calls: Call[] = [];
+    let files!: Map<string, Uint8Array>;
+    const h = await harness({}, ((f: string, a: string[]) => servingExec(calls, files, [STALE])(f, a)) as any);
+    files = h.files;
+    expect(await updateWithRetry(() => h.updater.performUpdate(), noPause)).toEqual({ success: false, error: "checksum_mismatch_darwin-arm64" });
+    expect(calls).toHaveLength(2);
+    expect(h.installed()).toBe("OLD");
+  });
+
+  it("does not retry a failure that is not a race", async () => {
+    const calls: Call[] = [];
+    const h = await harness({}, fakeExec(calls, new Map(), { fail: 22 }));
+    expect((await updateWithRetry(() => h.updater.performUpdate(), noPause)).error).toBe("download_curl_22");
+    expect(calls).toHaveLength(1);
+  });
+
+  it("names the race errors", () => {
+    expect(isReleaseRace("checksum_mismatch_linux-x64")).toBe(true);
+    expect(isReleaseRace("download_incomplete")).toBe(true);
+    expect(isReleaseRace("download_curl_22")).toBe(false);
+    expect(isReleaseRace(undefined)).toBe(false);
+  });
+});
+
 describe("cast update refuses a manifest it cannot trust before curl runs", () => {
   const cases: Array<[string, Partial<{ url: string; sha256: string; size: number }>, string]> = [
     ["a URL off the release origin", { url: "https://dl.codecast.sh.evil.net/codecast-darwin-arm64" }, "bad_binary_url_darwin-arm64"],
