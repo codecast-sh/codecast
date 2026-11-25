@@ -3,7 +3,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
-import { decide, evaluate, mechanismOf, mergeAsApp, settle, sweep, type ApprovalFacts } from "./changeApprovals";
+import { decide, evaluate, mechanismOf, mergeAsApp, notePosted, settle, sweep, type ApprovalFacts } from "./changeApprovals";
 import { HOST_TOKEN_PERMISSIONS } from "./githubApp";
 import { claimPress, settleCardApproval } from "./lib/changeApprovalRows";
 import { processPRSynchronizeEvent } from "./githubWebhooks";
@@ -91,6 +91,7 @@ function github(opts: { judges?: string; statusAfter?: string } = {}) {
     { method: "GET", match: /\/pulls\/7\/files\?/, reply: (url) => { const page = Number(/[?&]page=(\d+)/.exec(url)![1]); return { json: files.slice((page - 1) * 100, page * 100) }; } },
     { method: "GET", match: /\/contents\/outreach\/line\/change\/judges\.txt\?ref=main/, reply: () => ({ text: opts.judges ?? "# judged\noutreach/line/change/\n" }) },
     { method: "GET", match: /\/contents\/outreach\/line\/change\/owners\.txt/, reply: () => ({ text: "outreach/line/ Ashot\n" }) },
+    { method: "GET", match: /\/contents\/outreach\/line\/change\/engineers\.txt/, reply: () => ({ text: "# id name\nash Ashot\n" }) },
     { method: "GET", match: /\/compare\/main\.\.\./, reply: () => ({ json: { merge_base_commit: { sha: MB } } }) },
     { method: "GET", match: /\/pulls\/7\/commits/, reply: () => ({ json: [{ commit: { message: "Edit land\n\nRequested-by: Samvit" } }] }) },
     { method: "POST", match: /\/graphql$/, reply: (_u, body) => {
@@ -129,6 +130,7 @@ function actionCtx(db: any) {
       const mod: any = await import("./changeApprovals");
       if (name === "changeApprovals:settle") return mod.settle._handler(mutCtx, args);
       if (name === "changeApprovals:noteUnposted") return mod.noteUnposted._handler(mutCtx, args);
+      if (name === "changeApprovals:notePosted") return mod.notePosted._handler(mutCtx, args);
       throw new Error(`unexpected mutation ${name}`);
     },
     runAction: async (ref: any, args: any) => {
@@ -320,21 +322,42 @@ describe("the run behind it", () => {
     expect(await (settle as any)._handler(other, { ...args, reverts: true })).toMatchObject({ state: "pending" });
   });
 
-  test("for a change Cam asked for, the engineer's yes before the build approves it, and a card would be the engineer's, never Cam's", async () => {
-    const users = [{ _id: "cam", name: "Cameron Musgrave" }, { _id: "ash", name: "Ashot" }];
-    const yes = (who: string, at: number) => ({ _id: `sd_${who}`, short_id: `sd-${who}`, task_id: "t1", status: "answered", options: [{ label: "Yes" }, { label: "No" }], answer_index: 0, answered_by: { kind: "user", id: who }, resolved_at: at });
-    const asked = { ...args, requested_by: "Cameron", area_owner: "Samvit" };
-    const later = { ...base, created_at: 100, node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 102 }], review_verdict: { ...base.review_verdict, attempt: 100 } };
-    const approved = ctxOf({ workflow_runs: [later], users, session_decisions: [yes("ash", 50)] });
-    expect(await (settle as any)._handler(approved, asked)).toMatchObject({ state: "success", description: "approved by Ashot (sd-ash)" });
-    // Cam's own yes, or one given after the build began, is no engineer's pre-build yes; the card names the area's owner.
-    const notYet = ctxOf({ workflow_runs: [later], users, session_decisions: [yes("cam", 50), yes("ash", 150)] });
+  test("for a change Cam asked for (by codecast's record), an engineer's in-person yes before the build approves its judged files only, bound to that diff", async () => {
+    const users = [{ _id: "cam", name: "Cameron Musgrave" }, { _id: "ash", name: "Ashot" }, { _id: "sam", name: "Samvit" }];
+    const tasks = [{ _id: "t1", user_id: "cam" }];
+    const yes = (who: string, at: number, over: Record<string, any> = {}) => ({ _id: `sd_${who}_${at}`, short_id: `sd-${who}`, task_id: "t1", status: "answered", options: [{ label: "Yes" }, { label: "No" }], answer_index: 0, answered_by: { kind: "user", id: who }, resolved_at: at, ...over });
+    const engineers = [{ user_id: "ash", name: "Ashot" }];
+    const asked = { ...args, area_owner: "Samvit", engineers };
+    const later = { ...base, created_at: 100, node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 102 }], review_verdict: { ...base.review_verdict, attempt: 100 }, pr: { ...base.pr } };
+    const approved = ctxOf({ workflow_runs: [later], users, tasks, session_decisions: [yes("ash", 50)] });
+    expect(await (settle as any)._handler(approved, asked)).toMatchObject({ state: "success", description: "approved by Ashot, sd-ash before the build (Ship press)" });
+    expect(approved.db._tables.change_approvals[0]).toMatchObject({ source: "engineer_yes", judged_key: "k1", user_id: "ash" });
+    // A later judged diff that differs asks again; a mechanism still needs its own engineer approval.
+    expect(await (settle as any)._handler(approved, { ...asked, key: "k2", head_sha: "d".repeat(40) })).toMatchObject({ state: "pending" });
+    const mech = ctxOf({ workflow_runs: [{ ...later, review_verdict: { ...later.review_verdict, mechanism: true } }], users, tasks, session_decisions: [yes("ash", 50)] });
+    expect(await (settle as any)._handler(mech, asked)).toMatchObject({ state: "pending", description: "needs an engineer or Samvit: the review called it a mechanism" });
+    // Cam's own yes, one given after the build began, one given through a session, or a non-engineer's: none counts.
+    const notYet = ctxOf({ workflow_runs: [later], users, tasks, session_decisions: [yes("cam", 50), yes("ash", 150), yes("ash", 40, { answered_by: { kind: "user", id: "ash", via: "c1" } }), yes("sam", 30)] });
     expect(await (settle as any)._handler(notYet, asked)).toMatchObject({ state: "pending", description: "needs Samvit: edits outreach/line/change/land.cast" });
+    // Not Cam's change by codecast's record: a Cameron trailer unlocks nothing.
+    const notCam = ctxOf({ workflow_runs: [later], users, tasks: [{ _id: "t1", user_id: "sam" }], session_decisions: [yes("ash", 50)] });
+    expect(await (settle as any)._handler(notCam, { ...asked, requested_by: "Cameron" })).toMatchObject({ state: "pending" });
   });
 
-  test("the same verdict on the same head is not posted again; a new head is", async () => {
+  test("a card that showed no judged diff approves nothing when Shipped", async () => {
     const c = ctxOf({ workflow_runs: [base], users: [] });
+    const unstamped = { _id: "sd1", workflow_run_id: "run1", options: [{ label: "Ship" }], conversation_id: "c1" };
+    await settleCardApproval(c as any, unstamped as any, { status: "answered", answer_index: 0 }, { kind: "user", user_id: "u1" as any }, 10);
+    expect(c.db._tables.change_approvals).toEqual([]);
+  });
+
+  test("only what GitHub accepted counts as posted: an unconfirmed status is posted again, a confirmed one is not", async () => {
+    const c = ctxOf({ workflow_runs: [base], users: [] });
+    const first = await (settle as any)._handler(c, args);
+    expect(first.unchanged).toBe(false);
+    // Not yet confirmed (the POST failed or never ran): the sweep posts it again.
     expect((await (settle as any)._handler(c, args)).unchanged).toBe(false);
+    await (notePosted as any)._handler(c, { repository: REPO, pr_number: 7, head_sha: HEAD, state: first.state, description: first.description });
     expect((await (settle as any)._handler(c, args)).unchanged).toBe(true);
     expect((await (settle as any)._handler(c, { ...args, head_sha: "d".repeat(40) })).unchanged).toBe(false);
   });
@@ -353,4 +376,18 @@ describe("the run behind it", () => {
 test("a token minted for a machine can never post a status or a check", () => {
   expect(Object.keys(HOST_TOKEN_PERMISSIONS)).not.toContain("statuses");
   expect(Object.keys(HOST_TOKEN_PERMISSIONS)).not.toContain("checks");
+});
+
+test("the Release Captain's exemption needs every commit of the pull request to be a revert", async () => {
+  const captain = { _id: "run1", user_id: "agent", created_at: 1, org_role_id: "role1", node_statuses: [], pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 } };
+  const revert = { commit: { message: `Revert "x"\n\nThis reverts commit ${"c".repeat(40)}.` } };
+  const outcome = async (commits: any[]) => {
+    github();
+    // Ahead of github()'s own commits route, so this list is the one read.
+    routes.unshift({ method: "GET", match: /\/pulls\/7\/commits/, reply: () => ({ json: commits }) });
+    const db = makeFakeDb(structuredClone({ github_app_installations: [installation], pull_requests: [prRow], workflow_runs: [captain], org_roles: [{ _id: "role1", handle: "release", name: "Release Captain" }], change_approvals: [], users: [] }));
+    return ((await (evaluate as any)._handler(actionCtx(db).ctx, { repository: REPO, pr_number: 7, post: false })) as any).state;
+  };
+  expect(await outcome([revert, revert])).toBe("success");
+  expect(await outcome([revert, { commit: { message: "Also change the gate" } }])).toBe("pending");
 });

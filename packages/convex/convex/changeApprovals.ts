@@ -32,7 +32,7 @@ import { requireInstallationRevoker } from "./githubApp";
 import { fetchPRFiles, PR_FILES_CAP, type PRPath } from "./githubApi";
 import { patchPullRequest } from "./prShepherd";
 import { coveredHeads, runAttempt } from "./orgLineMerge";
-import { approvalContext, gateOf, isCamRequest, isReleaseCaptain, preBuildYes } from "./lib/changeApprovalRows";
+import { approvalContext, askerOf, gateOf, isCam, isReleaseCaptain, preBuildYes } from "./lib/changeApprovalRows";
 import { diffKey, isJudged, judgedPaths, keyChanged, keyEntriesFor, ownerOf, parseJudges, parseOwners, pathDiffsOf, pathsOf, requestedBy, revertedShas, type GitHubFile } from "./lib/judgedDiff";
 
 const GITHUB = "https://api.github.com";
@@ -185,7 +185,15 @@ async function prMessages(repository: string, token: string, prNumber: number): 
 export type PullRead =
   | { open: false }
   | { open: true; head_sha: string; unreadable: string; judges?: string[] }
-  | { open: true; head_sha: string; judged: string[]; key: string; judges: string[]; reverts: boolean; requested_by?: string; area_owner?: string };
+  | { open: true; head_sha: string; judged: string[]; key: string; judges: string[]; engineers: Array<{ user_id: string; name: string }>; reverts: boolean; requested_by?: string; area_owner?: string };
+
+/** Main's engineers file beside the judges file: `<codecast user id> <name>` a line, blank and "#" lines skipped. */
+export function parseEngineers(text: string): Array<{ user_id: string; name: string }> {
+  return text.split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#")).flatMap((l) => {
+    const m = /^(\S+)\s+(.+)$/.exec(l);
+    return m ? [{ user_id: m[1], name: m[2].trim() }] : [];
+  });
+}
 
 /** Everything the rule reads from GitHub for one pull request. Never throws past the head: a failure is unreadable. */
 export async function readPull(repository: string, prNumber: number, token: string, judgesPath: string): Promise<PullRead> {
@@ -215,7 +223,10 @@ export async function readPull(repository: string, prNumber: number, token: stri
     const ownersPath = `${judgesPath.includes("/") ? judgesPath.slice(0, judgesPath.lastIndexOf("/") + 1) : ""}owners.txt`;
     const ownersFile = await rest(`${GITHUB}/repos/${repository}/contents/${encodePath(ownersPath)}?ref=${encodeURIComponent(main)}`, token, { accept: "application/vnd.github.raw+json" });
     const owner = ownersFile.status === 404 ? null : ownerOf(judged.length ? judged : changed, parseOwners(ownersFile.text ?? ""));
-    return { open: true, head_sha: head, judged, key, judges, reverts: messages.some((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), ...(owner ? { area_owner: owner } : {}) };
+    const engineersFile = await rest(`${GITHUB}/repos/${repository}/contents/${encodePath(ownersPath.replace(/owners\.txt$/, "engineers.txt"))}?ref=${encodeURIComponent(main)}`, token, { accept: "application/vnd.github.raw+json" });
+    const engineers = engineersFile.status === 404 ? [] : parseEngineers(engineersFile.text ?? "");
+    // The Captain's exemption is for a pull request of reverts only: one other commit and it is judged like any.
+    return { open: true, head_sha: head, judged, key, judges, engineers, reverts: messages.length > 0 && messages.every((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), ...(owner ? { area_owner: owner } : {}) };
   } catch (error) {
     return { open: true, head_sha: head, unreadable: `GitHub (${(error instanceof Error ? error.message : String(error)).slice(0, 60)})` };
   }
@@ -245,6 +256,7 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
       ...(read.reverts ? { reverts: true } : {}),
       ...(read.requested_by ? { requested_by: read.requested_by } : {}),
       ...(read.area_owner ? { area_owner: read.area_owner } : {}),
+      engineers: read.engineers,
     }),
     ...(read.judges ? { judges: read.judges } : {}),
   });
@@ -263,6 +275,7 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
   } catch (error) {
     return unposted(`status not posted: ${error instanceof Error ? error.message : String(error)}`);
   }
+  await ctx.runMutation(internal.changeApprovals.notePosted, { repository, pr_number: args.pr_number, head_sha: read.head_sha, state: verdict.state, description: verdict.description });
   return { ...done, posted: true };
 }
 
@@ -367,6 +380,7 @@ export const settle = internalMutation({
     reverts: v.optional(v.boolean()),
     requested_by: v.optional(v.string()),
     area_owner: v.optional(v.string()),
+    engineers: v.optional(v.array(v.object({ user_id: v.string(), name: v.string() }))),
     judges: v.optional(v.array(v.string())),
   },
   handler: async (ctx, args): Promise<ApprovalVerdict & { context: string; unchanged: boolean }> => {
@@ -386,9 +400,20 @@ export const settle = internalMutation({
       if (press && !press.revoked_at && press.judged_key === undefined && run.pr?.first_head_sha === args.head_sha && judged.every((p) => press.files.includes(p))) {
         await ctx.db.patch(press._id, { pr_number: args.pr_number, judged_key: key, head_sha: args.head_sha });
       }
-      const held: Doc<"change_approvals">[] = await ctx.db.query("change_approvals").withIndex("by_run", (q) => q.eq("workflow_run_id", run._id)).collect();
-      for (const a of held) {
-        if (a.source === "card" && !a.revoked_at && a.judged_key === undefined) await ctx.db.patch(a._id, { pr_number: args.pr_number, judged_key: key, head_sha: args.head_sha });
+    }
+
+    // A change Cam asked for (codecast's own record of who asked, never a commit trailer): an engineer's in-person yes
+    // before the build approves its judged files, bound to the judged diff the run first pushed; never a mechanism.
+    const engineers = args.engineers ?? [];
+    const camAsked = !!run && isCam(await askerOf(ctx, run));
+    const engineerYes = camAsked ? await preBuildYes(ctx, run, engineers) : null;
+    if (engineerYes && key !== undefined && run.pr?.first_head_sha === args.head_sha) {
+      const tied = await ctx.db.query("change_approvals").withIndex("by_run", (q) => q.eq("workflow_run_id", run._id)).collect();
+      if (!tied.some((a) => a.source === "engineer_yes" && String(a.decision_id) === String(engineerYes.decision_id))) {
+        await ctx.db.insert("change_approvals", {
+          repository, pr_number: args.pr_number, judged_key: key, files: judged, user_id: engineerYes.user_id, source: "engineer_yes",
+          workflow_run_id: run._id, ...(run.task_id ? { task_id: run.task_id } : {}), decision_id: engineerYes.decision_id, head_sha: args.head_sha, created_at: Date.now(),
+        });
       }
     }
 
@@ -398,14 +423,11 @@ export const settle = internalMutation({
       .collect()).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at);
     const cardRow = approvals.find((a) => a.source === "card");
     const pressRow = approvals.find((a) => a.source === "ship_press");
-    // A change Cam asked for: the engineer's yes, given before anything was built (ct-98540), is the approval, and any
-    // card is that engineer's, never Cam's.
-    const camAsked = isCamRequest(args.requested_by);
-    const engineerYes = camAsked && run ? await preBuildYes(ctx, run) : null;
-    const card = cardRow
-      ? { who: await nameOf(ctx, cardRow.user_id), ref: cardRow.decision_id ? ((await ctx.db.get(cardRow.decision_id))?.short_id ?? "its card") : "its card" }
-      : engineerYes ? { who: await nameOf(ctx, engineerYes.user_id), ref: engineerYes.ref } : null;
-    const press = pressRow ? { who: await nameOf(ctx, pressRow.user_id) } : null;
+    const yesRow = approvals.find((a) => a.source === "engineer_yes");
+    const refOf = async (a: Doc<"change_approvals">) => (a.decision_id ? ((await ctx.db.get(a.decision_id))?.short_id ?? "its card") : "its card");
+    const card = cardRow ? { who: await nameOf(ctx, cardRow.user_id), ref: await refOf(cardRow) } : null;
+    // A press and an engineer's pre-build yes both cover the judged files of their diff, never a mechanism.
+    const press = pressRow ? { who: await nameOf(ctx, pressRow.user_id) } : yesRow ? { who: `${await nameOf(ctx, yesRow.user_id)}, ${await refOf(yesRow)} before the build` } : null;
     // Who a card goes to, by name (cards to a person, never a role): the presser for judged files their press did not
     // list; else the work's Requested-by person, the session's owner, the area's owner. A mechanism: an engineer, or
     // the area's owner. Codecast cannot yet tell an engineer from anyone else, so it names the area's owner beside.
@@ -413,9 +435,9 @@ export const settle = internalMutation({
     const spawner: any = run?.spawner_conversation_id ? await ctx.db.get(run.spawner_conversation_id) : null;
     const presserName = presser ? await nameOf(ctx, presser.user_id) : null;
     const judgedNeeds = camAsked
-      ? (engineerYes ? await nameOf(ctx, engineerYes.user_id) : null) ?? args.area_owner ?? "an engineer"
+      ? (engineerYes ? await nameOf(ctx, engineerYes.user_id) : null) ?? args.area_owner ?? (engineers[0]?.name ?? "an engineer")
       : presserName ?? args.requested_by ?? (spawner ? await nameOf(ctx, spawner.user_id) : null) ?? args.area_owner ?? "a person";
-    const needs = { judged: judgedNeeds, mechanism: camAsked && engineerYes ? judgedNeeds : `an engineer${args.area_owner ? ` or ${args.area_owner}` : ""}` };
+    const needs = { judged: judgedNeeds, mechanism: `an engineer${args.area_owner ? ` or ${args.area_owner}` : ""}` };
     const role: any = run?.org_role_id ? await ctx.db.get(run.org_role_id) : null;
     const captainRevert = !!args.reverts && isReleaseCaptain(role);
 
@@ -425,19 +447,33 @@ export const settle = internalMutation({
     const verdict = decide(facts)!;
 
     const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).collect();
-    // The same words already posted on this head: posting them again changes nothing on GitHub (the sweep's case).
+    // The same words GitHub already accepted on this head: posting them again changes nothing (the sweep's case).
+    // `posted` is written only after a POST succeeds (notePosted), so anything not confirmed is posted again.
     const before = rows[0]?.approval;
-    const unchanged = !!before && before.head_sha === args.head_sha && before.state === verdict.state && before.description === verdict.description;
+    const unchanged = !!before?.posted && before.posted.head_sha === args.head_sha && before.posted.state === verdict.state && before.posted.description === verdict.description;
     for (const pr of rows) {
       await patchPullRequest(ctx, pr._id, {
         approval: {
           head_sha: args.head_sha, state: verdict.state, description: verdict.description,
           ...(key !== undefined ? { judged_key: key, judged_files: judged } : {}),
           ...(run ? { run_id: run._id } : {}),
+          ...(pr.approval?.posted ? { posted: pr.approval.posted } : {}),
         },
       });
     }
     return { ...verdict, context: approvalContext(gate.mode), unchanged };
+  },
+});
+
+/** GitHub accepted the status: what it now shows, so an identical one is not posted again. */
+export const notePosted = internalMutation({
+  args: { repository: v.string(), pr_number: v.number(), head_sha: v.string(), state: v.string(), description: v.string() },
+  handler: async (ctx, args) => {
+    const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", args.repository).eq("number", args.pr_number)).collect();
+    for (const pr of rows) {
+      if (!pr.approval) continue;
+      await patchPullRequest(ctx, pr._id, { approval: { ...pr.approval, posted: { head_sha: args.head_sha, state: args.state, description: args.description } } });
+    }
   },
 });
 
@@ -526,13 +562,23 @@ export const recordPress = mutation({
   },
 });
 
-/** The judges file's entries for Ship's confirm, as last read from main; null when the repository is not opted in. */
+/**
+ * The judges file's entries for Ship's confirm, as last read from main: only for someone in the workspace the opted-in
+ * installation belongs to (its team's members, or a personal install's owner). Null otherwise, and when not opted in.
+ */
 export const judgesFor = query({
   args: { repository: v.string() },
   handler: async (ctx, args): Promise<string[] | null> => {
-    if (!(await getAuthUserId(ctx))) return null;
+    const userId = await getAuthUserId(ctx);
+    if (!userId) return null;
     const gate = await gateOf(ctx, args.repository);
-    return gate ? gate.judges ?? [] : null;
+    if (!gate) return null;
+    const installation = await ctx.db.get(gate.installation_row);
+    if (!installation) return null;
+    const allowed = installation.team_id
+      ? !!(await ctx.db.query("team_memberships").withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", installation.team_id!)).first())
+      : String(installation.scope_user_id ?? "") === String(userId);
+    return allowed ? gate.judges ?? [] : null;
   },
 });
 

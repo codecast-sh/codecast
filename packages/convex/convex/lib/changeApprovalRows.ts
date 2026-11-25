@@ -46,6 +46,25 @@ export async function scheduleApprovalPost(ctx: { db: any; scheduler: any }, rep
   return true;
 }
 
+/**
+ * From a webhook action (a pull request opened or pushed to): work its status out again and post it, when its
+ * repository is opted in. Pending from the moment it opens whenever it needs a person; every push re-posts, since a
+ * new head carries no status until codecast posts one.
+ */
+export async function postApprovalFromAction(ctx: { runQuery: any; scheduler: any }, repository: string, prNumber: number): Promise<void> {
+  if (await ctx.runQuery(internal.changeApprovals.gateFor, { repository })) {
+    await ctx.scheduler.runAfter(0, internal.changeApprovals.evaluate, { repository, pr_number: prNumber, post: true });
+  }
+}
+
+/** A push to the default branch that changed the judges file: every open pull request's judged paths may have moved. */
+export async function repostOnJudgesPush(ctx: { db: any; scheduler: any }, repository: string, commits: any[]): Promise<boolean> {
+  const gate = await gateOf(ctx, repository);
+  if (!gate || !commits.some((c) => [...(c.added ?? []), ...(c.modified ?? []), ...(c.removed ?? [])].includes(gate.judges_path))) return false;
+  await ctx.scheduler.runAfter(0, internal.changeApprovals.evaluateOpen, { repository });
+  return true;
+}
+
 /** Re-post the status of the pull request a run opened, when it has one. */
 export async function scheduleRunApprovalPost(ctx: { db: any; scheduler: any }, run: { pr?: { repository: string; number: number } | null }): Promise<boolean> {
   return run.pr ? scheduleApprovalPost(ctx, run.pr.repository, run.pr.number) : false;
@@ -104,12 +123,13 @@ export async function settleCardApproval(
   if (!offered) return;
   const ship = verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label);
   if (ship) {
-    const repository = row.approval?.repository ?? run.pr?.repository;
-    if (!repository) return;
-    await ctx.db.insert("change_approvals", {
-      repository,
-      ...(row.approval ? { pr_number: row.approval.pr_number, judged_key: row.approval.judged_key } : {}),
-      files: row.approval?.files ?? [],
+    // Only a card that showed a judged diff ({pr, judged_key, files}) approves, and only that diff: an unstamped card's
+    // Ship approves nothing, and the status asks again.
+    if (row.approval) await ctx.db.insert("change_approvals", {
+      repository: row.approval.repository,
+      pr_number: row.approval.pr_number,
+      judged_key: row.approval.judged_key,
+      files: row.approval.files,
       user_id: by.user_id,
       source: "card",
       conversation_id: row.conversation_id,
@@ -129,27 +149,44 @@ export async function settleCardApproval(
 export const isReleaseCaptain = (role: { handle?: string; name?: string } | null | undefined): boolean =>
   !!role && (role.handle === "release" || role.handle === "release-captain" || /^release captain$/i.test(String(role.name ?? "").trim()));
 
-/** A change Cam (Cameron) asked for, by the Requested-by line its commits carry. */
-export const isCamRequest = (requestedBy: string | null | undefined): boolean => /^cam(eron)?\b/i.test(String(requestedBy ?? "").trim());
+/** Cam (Cameron), by the codecast account's own name. */
+export const isCam = (user: { name?: string | null } | null | undefined): boolean => /^cam(eron)?\b/i.test(String(user?.name ?? "").trim());
+
+/**
+ * Who asked for the run's work, by codecast's own record: the task's owner, else the person who started the session
+ * that asked for the run. Never a commit trailer, which an agent writes.
+ */
+export async function askerOf(ctx: { db: any }, run: { task_id?: Id<"tasks">; spawner_conversation_id?: Id<"conversations"> } | null): Promise<any | null> {
+  const task: any = run?.task_id ? await ctx.db.get(run.task_id) : null;
+  if (task?.user_id) return await ctx.db.get(task.user_id);
+  const conversation: any = run?.spawner_conversation_id ? await ctx.db.get(run.spawner_conversation_id) : null;
+  if (!conversation) return null;
+  for (const id of [conversation.author_user_id, conversation.user_id]) {
+    const u: any = id ? await ctx.db.get(id) : null;
+    if (u && !u.is_bot) return u;
+  }
+  return null;
+}
 
 /** A yes to building it: an approval card's Ship or Approve merge, or a plain Yes, Build or Approve. */
 const saysYes = (label: unknown) => optionIsShip(label) || /^(yes|build|approve)\b/i.test(String(label ?? "").trim());
 
 /**
- * The engineer's yes recorded before the run built anything (ct-98540): a card on the run's task, answered yes by a
- * person who is not Cam, before the run's attempt began. The newest such answer, or null.
+ * The engineer's yes recorded before the run built anything (ct-98540): a card about the run's task, answered yes in
+ * person (a user's own answer, not given through a session) by someone main's engineers file lists, before the run's
+ * attempt began. The newest such answer, or null. It covers judged paths only, never a mechanism, and binds to the
+ * judged diff the run first pushed (changeApprovals.settle records it then).
  */
-export async function preBuildYes(ctx: { db: any }, run: { task_id?: Id<"tasks">; created_at: number; visits_reset_at?: number }): Promise<{ user_id: Id<"users">; ref: string } | null> {
-  if (!run.task_id) return null;
+export async function preBuildYes(ctx: { db: any }, run: { task_id?: Id<"tasks">; created_at: number; visits_reset_at?: number }, engineers: ReadonlyArray<{ user_id: string }>): Promise<{ user_id: Id<"users">; ref: string; decision_id: Id<"session_decisions"> } | null> {
+  if (!run.task_id || !engineers.length) return null;
   const cards: any[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", run.task_id).eq("status", "answered")).order("desc").take(50);
   // The run's attempt began here (orgLineMerge.runAttempt).
   const startedAt = run.visits_reset_at ?? run.created_at;
   for (const d of cards) {
-    if (d.answered_by?.kind !== "user" || (d.resolved_at ?? Infinity) > startedAt) continue;
+    if (d.answered_by?.kind !== "user" || d.answered_by.via || (d.resolved_at ?? Infinity) > startedAt) continue;
+    if (!engineers.some((e) => e.user_id === String(d.answered_by.id))) continue;
     if (!saysYes(d.options?.[d.answer_index ?? -1]?.label)) continue;
-    const who: any = await ctx.db.get(d.answered_by.id);
-    if (!who || isCamRequest(who.name)) continue;
-    return { user_id: who._id, ref: d.short_id ?? "its card" };
+    return { user_id: d.answered_by.id, ref: d.short_id ?? "its card", decision_id: d._id };
   }
   return null;
 }
