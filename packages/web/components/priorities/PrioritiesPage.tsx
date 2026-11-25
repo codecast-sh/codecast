@@ -6,7 +6,7 @@
 // rank it and a step across the line between Critical path and Polish, and
 // sets a priority aside or brings it back; the pass never overrides those.
 // Finished priorities stay listed, won; quiet and set-aside ones grey.
-import { useMemo, useState, type DragEvent, type ReactNode } from "react";
+import { useMemo, useState, type CSSProperties, type DragEvent, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { AlertTriangle, Check, ChevronRight, GripVertical, Loader2, MoreHorizontal, Play, Plus, Target } from "lucide-react";
@@ -145,9 +145,19 @@ export function NoPrioritiesYet({ nextPass, running, onRun }: { nextPass: string
   );
 }
 
-/** The grid every priority row and the day header share, so the strips line up. */
-const ROW_GRID = "grid grid-cols-[28px_minmax(0,1fr)_auto_24px] items-center gap-3 sm:grid-cols-[28px_minmax(0,1fr)_96px_40px_24px] md:grid-cols-[28px_minmax(0,1fr)_96px_40px_minmax(0,300px)_24px]";
-const STEP_GRID = "grid grid-cols-[14px_18px_minmax(0,1fr)] items-start gap-2 md:grid-cols-[14px_18px_minmax(0,1fr)_minmax(0,300px)]";
+/**
+ * The grid every priority row, the day header and each open row's steps
+ * share, so the strips line up. Columns join by the LIST's width, not the
+ * window's (the list sits beside the inbox panel): from 28rem the
+ * critical-path bar, from 36rem the 15-day strip. The strip is one width for
+ * the whole page (--pri-strip): what the list has past a title's room
+ * (26rem), between 9rem and 300px. A fixed-maximum column would take its
+ * 300px before a title got any.
+ */
+const ROW_GRID = "grid grid-cols-[28px_minmax(0,1fr)_auto_24px] items-center gap-3 [@container(min-width:28rem)]:grid-cols-[28px_minmax(0,1fr)_96px_40px_24px] [@container(min-width:36rem)]:grid-cols-[28px_minmax(0,1fr)_96px_40px_var(--pri-strip)_24px]";
+const STEP_GRID = "grid grid-cols-[14px_18px_minmax(0,1fr)] items-start gap-2 [@container(min-width:36rem)]:grid-cols-[14px_18px_minmax(0,1fr)_var(--pri-strip)]";
+/** The list's width less a row's fixed columns, gaps and padding (17rem) and a title's room (26rem). */
+const STRIP_WIDTH = { containerType: "inline-size", "--pri-strip": "clamp(9rem, calc(100cqw - 43rem), 300px)" } as CSSProperties;
 
 export function PrioritiesView({
   rows,
@@ -168,7 +178,7 @@ export function PrioritiesView({
   const days = history?.days ?? [];
   const showOwners = groups.length > 1 || (groups[0] && !groups[0].mine);
   return (
-    <div data-priorities className="space-y-6">
+    <div data-priorities className="space-y-6" style={STRIP_WIDTH}>
       {groups.map((g) => (
         <section key={g.user_id} data-owner={g.user_id}>
           {showOwners && <h2 className="mb-2 text-ui font-semibold text-sol-text">{g.mine ? "You" : g.owner || "Teammate"}</h2>}
@@ -176,7 +186,9 @@ export function PrioritiesView({
           <ActiveList group={g} lanes={lanes} levels={levels} history={history} openId={openId} onToggleOpen={onToggleOpen} writes={writes} />
           {g.past.length > 0 && (
             <>
-              <h3 className="mb-1.5 mt-5 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">Finished and past</h3>
+              <h3 className="mb-1.5 mt-5 text-mark font-semibold uppercase tracking-wide text-sol-text-dim">
+                Finished and past{showOwners && !g.mine && <span className="font-normal"> · {g.owner || "Teammate"}</span>}
+              </h3>
               <div className="space-y-1.5">
                 {g.past.map((r) => (
                   <PastRow key={r.short_id} row={r} lane={lanes.get(r.short_id)} days={days} levels={levels} writes={writes} />
@@ -192,13 +204,16 @@ export function PrioritiesView({
 
 function DayHeader({ days }: { days: string[] }) {
   return (
-    <div aria-hidden className={cn(ROW_GRID, "hidden px-3 pb-1 text-mark text-sol-text-dim md:grid")}>
+    <div aria-hidden className={cn(ROW_GRID, "hidden px-3 pb-1 text-mark text-sol-text-dim [@container(min-width:36rem)]:grid")}>
       <span />
       <span />
       <span>Critical path</span>
       <span />
       <span className="grid gap-[3px] text-center" style={{ gridTemplateColumns: `repeat(${days.length}, minmax(0, 1fr))` }}>
-        {days.map((d) => <span key={d}>{Number(d.slice(8))}</span>)}
+        {days.map((d, i) => (
+          // Every other day's number while the strip is too narrow for all fifteen.
+          <span key={d} className={i % 2 ? "[@container(max-width:58rem)]:invisible" : undefined}>{Number(d.slice(8))}</span>
+        ))}
       </span>
       <span />
     </div>
@@ -256,7 +271,7 @@ function ActiveList({ group, lanes, levels, history, openId, onToggleOpen, write
 function CriticalBar({ steps }: { steps: PriorityStep[] }) {
   const critical = steps.filter((s) => s.tier === "critical");
   return (
-    <span className="hidden max-w-[96px] gap-0.5 sm:flex">
+    <span className="hidden max-w-[96px] gap-0.5 [@container(min-width:28rem)]:flex">
       {critical.map((s) => (
         <i key={s.key} className={cn("block h-2.5 min-w-[3px] max-w-[11px] flex-1 rounded-[2px]", s.done ? "bg-sol-green" : "bg-sol-text/10")} />
       ))}
@@ -290,7 +305,7 @@ function ActiveRow({ row, position, total, lane, days, levels, open, onToggle, w
       <span className="text-right text-ui tabular-nums text-sol-text-muted" title={`${row.counts.critical_done} of ${row.counts.critical_total} critical-path steps done`}>
         {row.counts.critical_done}/{row.counts.critical_total}
       </span>
-      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} truncated={lane?.truncated} levels={levels} /></span>}
+      {days.length > 0 && <span className="hidden [@container(min-width:36rem)]:block"><HistoryStrip days={days} counts={lane?.counts} truncated={lane?.truncated} levels={levels} /></span>}
       <RowMenu row={row} position={position} total={total} writes={writes} />
     </div>
   );
@@ -344,16 +359,17 @@ function PastRow({ row, lane, days, levels, writes }: {
       )}
     >
       <span />
+      {/* The title takes the room it needs first; the goal it served gets what is left, clipped, never over the title. */}
       <span className={cn("flex min-w-0 items-center gap-2", !won && "text-sol-text-muted")}>
-        <span className={cn("truncate text-body", won ? "font-semibold text-sol-text" : "font-medium")} title={row.title}>{row.title}</span>
-        {row.serves && <span className="hidden shrink-0 sm:inline"><EntityIdPill shortId={row.serves} type="initiative" compact /></span>}
+        <span data-past-title className={cn("max-w-full shrink-0 truncate text-body", won ? "font-semibold text-sol-text" : "font-medium")} title={row.title}>{row.title}</span>
+        {row.serves && <span data-past-serves className="hidden min-w-0 overflow-hidden text-meta [@container(min-width:28rem)]:inline-flex"><EntityIdPill shortId={row.serves} type="initiative" compact /></span>}
       </span>
-      <span className="justify-self-end sm:col-span-2">
+      <span className="justify-self-end [@container(min-width:28rem)]:col-span-2">
         {won
           ? <span className="inline-flex items-center rounded-full bg-sol-green px-2.5 py-0.5 text-meta font-semibold text-sol-bg">{pastBadge(row)}</span>
           : <span className="whitespace-nowrap text-meta text-sol-text-dim">{pastBadge(row)}</span>}
       </span>
-      {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={lane?.counts} truncated={lane?.truncated} levels={levels} muted={!won} /></span>}
+      {days.length > 0 && <span className="hidden [@container(min-width:36rem)]:block"><HistoryStrip days={days} counts={lane?.counts} truncated={lane?.truncated} levels={levels} muted={!won} /></span>}
       <RowMenu row={row} writes={writes} />
     </div>
   );
@@ -411,7 +427,7 @@ function PriorityBody({ row, history, writes }: { row: PriorityRow; history: Pri
     );
   };
   return (
-    <div data-priority-body className="border-t border-sol-border/40 px-3 pb-3 pt-2 sm:pl-[52px] md:pr-12">
+    <div data-priority-body className="border-t border-sol-border/40 px-3 pb-3 pt-2 [@container(min-width:28rem)]:pl-[52px] [@container(min-width:36rem)]:pr-12">
       {row.summary && <p className="text-ui text-sol-text-muted">{row.summary}</p>}
       {(row.serves || lead) && (
         <div className="mt-2 flex flex-wrap items-center gap-1.5">
@@ -426,9 +442,9 @@ function PriorityBody({ row, history, writes }: { row: PriorityRow; history: Pri
           <h4 className="mb-1 text-meta font-semibold text-sol-text">Most active sessions</h4>
           <ul>
             {active.map((s) => (
-              <li key={s.short_id} className="grid grid-cols-[minmax(0,1fr)] items-center gap-2 py-0.5 md:grid-cols-[minmax(0,1fr)_minmax(0,300px)]">
+              <li key={s.short_id} className="grid grid-cols-[minmax(0,1fr)] items-center gap-2 py-0.5 [@container(min-width:36rem)]:grid-cols-[minmax(0,1fr)_var(--pri-strip)]">
                 <span className="min-w-0"><EntityIdPill shortId={s.short_id} type="session" label={s.title || undefined} /></span>
-                {days.length > 0 && <span className="hidden md:block"><HistoryStrip days={days} counts={stepCounts(history, [s])} size="step" /></span>}
+                {days.length > 0 && <span className="hidden [@container(min-width:36rem)]:block"><HistoryStrip days={days} counts={stepCounts(history, [s])} size="step" /></span>}
               </li>
             ))}
           </ul>
@@ -508,7 +524,7 @@ function StepLine({ row, step, history, detail, days, dragging, onDragStart, onD
           )}
         </div>
       </div>
-      {days.length > 0 && <span className="hidden pt-1.5 md:block"><HistoryStrip days={days} counts={stepCounts(history, sessions)} size="step" /></span>}
+      {days.length > 0 && <span className="hidden pt-1.5 [@container(min-width:36rem)]:block"><HistoryStrip days={days} counts={stepCounts(history, sessions)} size="step" /></span>}
     </li>
   );
 }
