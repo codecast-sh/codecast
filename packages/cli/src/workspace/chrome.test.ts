@@ -48,19 +48,35 @@ afterEach(async () => {
 // ---------------------------------------------------------------------------
 
 describe("keychainArgs", () => {
-  test("a macOS home without a login keychain gets the mock keychain flag", () => {
-    expect(keychainArgs({ HOME: tmpDir }, "darwin")).toEqual(["--use-mock-keychain"]);
-  });
-
-  test("a macOS home with a login keychain keeps the real keychain", () => {
+  const chrome = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
+  const cft = path.join(chromeForTestingDir("/u"), "158.0.8127.36", "chrome-mac-arm64", "Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing");
+  const withLoginKeychain = () => {
     const dir = path.join(tmpDir, "Library", "Keychains");
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(path.join(dir, "login.keychain-db"), "");
-    expect(keychainArgs({ HOME: tmpDir }, "darwin")).toEqual([]);
+  };
+
+  test("a macOS home without a login keychain gets the mock keychain flag", () => {
+    expect(keychainArgs(null, { HOME: tmpDir }, "darwin")).toEqual(["--use-mock-keychain"]);
+    expect(keychainArgs(chrome, { HOME: tmpDir }, "darwin")).toEqual(["--use-mock-keychain"]);
+  });
+
+  test("Google Chrome in a macOS home with a login keychain keeps the real keychain", () => {
+    withLoginKeychain();
+    expect(keychainArgs(null, { HOME: tmpDir }, "darwin")).toEqual([]);
+    expect(keychainArgs(chrome, { HOME: tmpDir }, "darwin")).toEqual([]);
+  });
+
+  // Its unsigned build never matches the "Chromium Safe Storage" item's access
+  // list, so the real keychain meant a login-password dialog on every launch.
+  test("Chrome for Testing always gets the mock keychain, even with a login keychain", () => {
+    withLoginKeychain();
+    expect(keychainArgs(cft, { HOME: tmpDir }, "darwin")).toEqual(["--use-mock-keychain"]);
   });
 
   test("other platforms never pass the flag", () => {
-    expect(keychainArgs({ HOME: tmpDir }, "linux")).toEqual([]);
+    expect(keychainArgs(null, { HOME: tmpDir }, "linux")).toEqual([]);
+    expect(keychainArgs(cft, { HOME: tmpDir }, "linux")).toEqual([]);
   });
 });
 
