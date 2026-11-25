@@ -2483,6 +2483,29 @@ export type ClientState = {
 
 type Draft = InboxStoreState;
 
+// Take one quote out of a review batch: removeReviewComment (sends, cleanups)
+// and discardReviewComment (the person) share it.
+function dropReviewComment(draft: Draft, get: () => any, conversationId: string, id: string, sent?: boolean): void {
+  const list = draft.reviewComments[conversationId] ?? [];
+  const removed = list.find((c) => c.id === id);
+  if (!removed) return;
+  if (!sent && isRecordedQuote(conversationId, removed)) afterCommit(() => mirrorQuoteBatch(get(), conversationId, [], [id]));
+  const next = list.filter((c) => c.id !== id);
+  if (next.length) draft.reviewComments[conversationId] = next;
+  else delete draft.reviewComments[conversationId];
+  // If the removed comment's editor was open, close it.
+  if (draft.reviewEditingId === id) draft.reviewEditingId = null;
+  // When the review-target message has no quotes left, drop the target so its
+  // active-block highlight overlay stops painting (handles both the last quote
+  // overall and the last quote on the target message of a multi-message batch).
+  const targetMsg = draft.reviewMessageId;
+  if (targetMsg && removed.messageId === targetMsg && !next.some((c) => c.messageId === targetMsg)) {
+    draft.reviewMessageId = null;
+    draft.reviewActiveBlock = 0;
+    draft.reviewEditingId = null;
+  }
+}
+
 // -- Helpers --
 
 // Out of the active inbox buckets for either reason (dismissed or stashed).
@@ -6438,6 +6461,8 @@ interface InboxStoreState extends ChatSliceState, OrgSliceState, InitiativeSlice
   commitReviewComment: (conversationId: string, id: string, body: string) => void;
   /** `sent`: the item rides a message that stamps its record, so the record stays. */
   removeReviewComment: (conversationId: string, id: string, sent?: boolean) => void;
+  /** The person removing a quote by hand (a key on the message, the chip's Remove): removeReviewComment, undoable. */
+  discardReviewComment: (conversationId: string, id: string) => void;
   applyReviewVerdict: (conversationId: string, item: PendingComment) => void;
   clearReviewVerdict: (conversationId: string, id: string) => void;
   /** `sent`: ids riding a message that stamps their records, which stay. */
@@ -10422,24 +10447,14 @@ const inboxStoreConfig = (set: any, get: any) => ({
     afterCommit(() => mirrorQuoteBatch(get(), conversationId, [id]));
   }),
   removeReviewComment: sync(function (this: Draft, conversationId: string, id: string, sent?: boolean) {
-    const list = this.reviewComments[conversationId] ?? [];
-    const removed = list.find((c) => c.id === id);
-    if (!removed) return;
-    if (!sent && isRecordedQuote(conversationId, removed)) afterCommit(() => mirrorQuoteBatch(get(), conversationId, [], [id]));
-    const next = list.filter((c) => c.id !== id);
-    if (next.length) this.reviewComments[conversationId] = next;
-    else delete this.reviewComments[conversationId];
-    // If the removed comment's editor was open, close it.
-    if (this.reviewEditingId === id) this.reviewEditingId = null;
-    // When the review-target message has no quotes left, drop the target so its
-    // active-block highlight overlay stops painting (handles both the last quote
-    // overall and the last quote on the target message of a multi-message batch).
-    const targetMsg = this.reviewMessageId;
-    if (targetMsg && removed.messageId === targetMsg && !next.some((c) => c.messageId === targetMsg)) {
-      this.reviewMessageId = null;
-      this.reviewActiveBlock = 0;
-      this.reviewEditingId = null;
-    }
+    dropReviewComment(this, get, conversationId, id, sent);
+  }),
+  // The same removal, made by the person. An action() so the undo engine
+  // records it (store/undo/policies/sessions.ts): one stray x or ⌫ on the
+  // message must not take a quote and its note for good. The server half is
+  // patch-only (dispatch.ts PATCH_ONLY_ACTIONS); the batch never leaves here.
+  discardReviewComment: action(function (this: Draft, conversationId: string, id: string) {
+    dropReviewComment(this, get, conversationId, id);
   }),
   clearReviewComments: sync(function (this: Draft, conversationId: string, sent?: string[]) {
     const list = this.reviewComments[conversationId];

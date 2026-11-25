@@ -521,7 +521,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
       } else if (key === "x" || key === "Delete" || key === "Backspace") {
         if (blockComments.length) {
           e.preventDefault();
-          useInboxStore.getState().removeReviewComment(conversationId, blockComments[blockComments.length - 1].id);
+          useInboxStore.getState().discardReviewComment(conversationId, blockComments[blockComments.length - 1].id);
         }
       } else if (key === "Escape") {
         e.preventDefault();
@@ -727,7 +727,7 @@ function MessageReviewImpl({ conversationId, messageId, content, renderBlock, li
                   placement={placements.get(c.id)}
                   active={isReviewTarget && activeBlock === c.blockIndex}
                   onEdit={() => useInboxStore.getState().setReviewEditingId(c.id)}
-                  onRemove={() => { setPeekBlock(null); useInboxStore.getState().removeReviewComment(conversationId, c.id); }}
+                  onRemove={() => { setPeekBlock(null); useInboxStore.getState().discardReviewComment(conversationId, c.id); }}
                   onPeek={() => setPeekBlock(drawnBlock(c))}
                   onPeekEnd={() => setPeekBlock(null)}
                 />
@@ -872,6 +872,35 @@ const SentQuoteChip = memo(function SentQuoteChip({
   );
 });
 
+/**
+ * Is the caret on the first (`up`) or last visual line of the textarea? Lines
+ * wrap, so this measures rather than counting "\n": an unstyled copy of the
+ * textarea at the same width holds the text up to the end of the caret's word
+ * (a word moves to the next line whole, so a cut mid-word would measure short)
+ * and its height is compared with one line's and with the whole text's.
+ * Runs only on an arrow keydown, never while typing.
+ */
+function caretOnEdgeLine(el: HTMLTextAreaElement, up: boolean): boolean {
+  const { value, selectionStart: at } = el;
+  const wordEnd = value.slice(at).search(/\s/);
+  const head = value.slice(0, wordEnd === -1 ? value.length : at + wordEnd);
+  const probe = el.cloneNode(false) as HTMLTextAreaElement;
+  Object.assign(probe.style, {
+    position: "absolute", visibility: "hidden", pointerEvents: "none", left: "0", top: "0",
+    boxSizing: "border-box", width: `${el.offsetWidth}px`, height: "0px", minHeight: "0", maxHeight: "none", overflow: "hidden",
+  });
+  probe.removeAttribute("id");
+  probe.tabIndex = -1;
+  (el.parentNode ?? document.body).appendChild(probe);
+  const heightOf = (text: string) => { probe.value = text; return probe.scrollHeight; };
+  try {
+    const headHeight = heightOf(head);
+    return up ? headHeight <= heightOf("x") : headHeight >= heightOf(value);
+  } finally {
+    probe.remove();
+  }
+}
+
 export function CommentEditor({
   conversationId,
   comment,
@@ -964,11 +993,12 @@ export function CommentEditor({
   // inside this one: on the first line ↑ steps back, on the last line ↓ steps
   // forward, and in between the arrows edit text as usual. That is how a list of
   // fields behaves everywhere else, and it is what "I can't go up and down while
-  // typing a note" was asking for. A selection always belongs to the textarea.
+  // typing a note" was asking for. A line is what the person sees, so a single
+  // paragraph that wraps has several (caretOnEdgeLine). A selection always
+  // belongs to the textarea.
   const arrowLeavesNote = useCallback((el: HTMLTextAreaElement, up: boolean) => {
     if (el.selectionStart !== el.selectionEnd) return false;
-    const at = el.selectionStart;
-    return up ? el.value.lastIndexOf("\n", at - 1) === -1 : el.value.indexOf("\n", at) === -1;
+    return caretOnEdgeLine(el, up);
   }, []);
 
   return (
