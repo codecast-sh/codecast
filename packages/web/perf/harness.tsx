@@ -14,7 +14,7 @@ import { indexedDB, IDBKeyRange } from "fake-indexeddb";
 
 // The -modern workloads are the same inbox with the Modern style on (its
 // session card, ModernSessionCardView, and section header): the same budgets.
-export type Workload = "switch" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
+export type Workload = "switch" | "diff-toggle" | "send" | "append" | "inbox-load" | "inbox-heartbeat" | "inbox-load-modern" | "inbox-heartbeat-modern" | "diff";
 export type Counts = Record<string, number>;
 export type Report = { counts: Counts; detail: Record<string, string[]> };
 
@@ -38,7 +38,25 @@ const isViewport = (el: Element) => el.hasAttribute("data-sv-feed") || el.hasAtt
 const heightOf = (el: Element) => ((el as HTMLElement).style?.height === "0px" ? 0 : isViewport(el) ? VIEWPORT : ROW);
 // A virtualized feed is as tall as its spacer says.
 const scrollHeightOf = (el: Element) => el.hasAttribute("data-sv-feed") ? Math.max(VIEWPORT, Number.parseFloat(el.querySelector<HTMLElement>('div[style*="position: relative"][style*="height"]')?.style.height || "0")) : heightOf(el);
-const geometry = (name: string, value: (el: HTMLElement) => number) => ({ get(this: HTMLElement) { layoutReads.push(readSite(name)); return value(this); }, configurable: true });
+// A read forces layout in a browser only when the DOM changed since the page
+// was last laid out: by the last forced read, or by the last frame. The
+// document and every shadow root are watched; a change marks layout dirty, and
+// the next read is counted forced and lays it out again. A frame
+// (requestAnimationFrame) lays the page out, so reads at its start are free.
+// Many forced reads in one action is layout thrashing: each one is a full
+// synchronous reflow of the page in Chrome.
+let forcedReads: string[] = [];
+let layoutDirty = false;
+const layoutWatch = new w.MutationObserver(() => { layoutDirty = true; });
+const watchLayout = (node: Node) => layoutWatch.observe(node, { subtree: true, childList: true, attributes: true, characterData: true });
+watchLayout(w.document);
+const layoutRead = (name: string) => {
+  const site = readSite(name);
+  layoutReads.push(site);
+  if (layoutWatch.takeRecords().length > 0 || layoutDirty) forcedReads.push(site);
+  layoutDirty = false;
+};
+const geometry = (name: string, value: (el: HTMLElement) => number) => ({ get(this: HTMLElement) { layoutRead(name); return value(this); }, configurable: true });
 Object.defineProperties(w.HTMLElement.prototype, {
   offsetHeight: geometry("offsetHeight", heightOf),
   offsetWidth: geometry("offsetWidth", () => 700),
@@ -60,7 +78,7 @@ Object.defineProperties(w.HTMLElement.prototype, {
   },
 });
 w.HTMLElement.prototype.getBoundingClientRect = function (this: HTMLElement) {
-  layoutReads.push(readSite("getBoundingClientRect"));
+  layoutRead("getBoundingClientRect");
   const h = heightOf(this);
   return { x: 0, y: 0, top: 0, left: 0, right: 700, bottom: h, width: 700, height: h, toJSON() {} };
 };
@@ -68,7 +86,7 @@ w.HTMLElement.prototype.scrollTo = function (this: HTMLElement, x: any, y?: numb
 w.HTMLElement.prototype.scrollIntoView = () => {};
 w.HTMLCanvasElement.prototype.getContext = () => ({ font: "", measureText: (t: string) => ({ width: t.length * 7 }) });
 const realComputedStyle = w.getComputedStyle.bind(w);
-const getComputedStyle = (el: Element, pseudo?: string) => { layoutReads.push(readSite("getComputedStyle")); return realComputedStyle(el, pseudo); };
+const getComputedStyle = (el: Element, pseudo?: string) => { layoutRead("getComputedStyle"); return realComputedStyle(el, pseudo); };
 w.getComputedStyle = getComputedStyle;
 // Shadow roots made during a measured action are watched from the moment they
 // exist, so a viewer that draws (or redraws) inside one is counted.
@@ -76,6 +94,7 @@ let onShadowRoot: ((root: ShadowRoot) => void) | null = null;
 const realAttachShadow = w.Element.prototype.attachShadow;
 w.Element.prototype.attachShadow = function (this: Element, init: ShadowRootInit) {
   const shadow = realAttachShadow.call(this, init);
+  watchLayout(shadow);
   onShadowRoot?.(shadow);
   return shadow;
 };
@@ -129,11 +148,15 @@ for (const [key, value] of Object.entries({
   Event: w.Event, CustomEvent: w.CustomEvent, KeyboardEvent: w.KeyboardEvent, MouseEvent: w.MouseEvent, WheelEvent: w.WheelEvent, FocusEvent: w.FocusEvent,
   MutationObserver: w.MutationObserver, CSSStyleSheet, DOMRect: w.DOMRect, DOMParser: w.DOMParser, customElements: w.customElements, getComputedStyle,
   ResizeObserver: SizeObserver, IntersectionObserver: NoopObserver, matchMedia: w.matchMedia,
-  requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => cb(performance.now()), 0),
+  requestAnimationFrame: (cb: FrameRequestCallback) => setTimeout(() => { layoutWatch.takeRecords(); layoutDirty = false; cb(performance.now()); }, 0),
   cancelAnimationFrame: (id: any) => clearTimeout(id),
   requestIdleCallback: (cb: any) => setTimeout(() => cb({ didTimeout: false, timeRemaining: () => 50 }), 0),
   cancelIdleCallback: (id: any) => clearTimeout(id),
   IS_REACT_ACT_ENVIRONMENT: true,
+  // Chrome's answer (the replays that time these actions are Chrome's): the
+  // composer sizes itself with field-sizing, so the Safari fallback that
+  // measures it in script never runs.
+  CSS: { supports: (prop: string, value?: string) => prop === "field-sizing" && value === "content", escape: (s: string) => s },
 })) Object.defineProperty(globalThis, key, { value, configurable: true, writable: true });
 (URL as any).createObjectURL ??= () => "blob:perf";
 (URL as any).revokeObjectURL ??= () => {};
@@ -326,6 +349,7 @@ async function measure(action: () => Promise<void>): Promise<Report> {
   renderMs = 0;
   rendered = new Map();
   layoutReads = [];
+  forcedReads = [];
   convexAsked = { subscribe: [], query: [], mutation: [], action: [] };
   let storeWrites = 0;
   const storeKeys = new Set<string>();
@@ -348,13 +372,14 @@ async function measure(action: () => Promise<void>): Promise<Report> {
   mo.disconnect();
   unsub();
   const reads = layoutReads;
+  const forced = forcedReads;
   return {
     counts: {
-      commits, storeWrites, domMutations: mutations, layoutReads: reads.length,
+      commits, storeWrites, domMutations: mutations, layoutReads: reads.length, forcedLayouts: forced.length,
       convexSubscribes: convexAsked.subscribe.length, convexQueries: convexAsked.query.length,
       convexMutations: convexAsked.mutation.length, convexActions: convexAsked.action.length,
     },
-    detail: { renderMs: [renderMs.toFixed(2)], layoutReads: [...new Set(reads)], layoutReadKinds: tally(reads.map((r) => r.split(" ")[0])), storeKeys: [...storeKeys], rendered: [...rendered].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} x${n}`), ...convexAsked },
+    detail: { renderMs: [renderMs.toFixed(2)], layoutReads: [...new Set(reads)], layoutReadKinds: tally(reads.map((r) => r.split(" ")[0])), forcedLayouts: tally(forced.map((r) => r.replace(/\(\/\S*\/packages\/web\//, "(").replace(/:\d+\)$/, ")"))), storeKeys: [...storeKeys], rendered: [...rendered].sort((a, b) => b[1] - a[1]).map(([name, n]) => `${name} x${n}`), ...convexAsked },
   };
 }
 
@@ -388,6 +413,64 @@ async function setupSwitch(): Promise<Bench> {
   return {
     run: () => measure(async () => { await show(current === a ? b : a); await settle(); }),
     reset: async () => { await settle(); },
+  };
+}
+
+// Opening or closing the diff panel beside an open conversation of 200 cached
+// messages over 2,000 sessions: one press of the toggle, until the panel is in
+// (or out of) the page.
+async function setupDiffToggle(): Promise<Bench> {
+  const { InboxConversation } = await import("../app/inbox/QueuePageClient");
+  const { useDiffViewerStore } = await import("../store/diffViewerStore");
+  seedStore(2000);
+  const a = convId(1);
+  useInboxStore.getState().setMessages(a, messages(a, 200), { hasMoreAbove: true, initialized: true });
+  mount();
+  await render(<InboxConversation sessionId={a} isIdle autoFocusInput={false} />);
+  await until(() => host.textContent!.includes(`Last line of answer 199 in ${a.slice(-6)}`), `conversation ${a} to paint`);
+  await settle();
+  const toggle = async () => { await act(async () => { useDiffViewerStore.getState().toggleDiffPanel(); }); await settle(); };
+  // Open and close once, so every measured press is a warm one.
+  await toggle();
+  await toggle();
+  return { run: () => measure(toggle), reset: () => settle() };
+}
+
+// Sending a message from the composer of an open conversation of 200 cached
+// messages over 2,000 sessions: the text is typed (untimed), then Enter is
+// pressed and the page settles with the sent message on screen.
+async function setupSend(): Promise<Bench> {
+  const { InboxConversation } = await import("../app/inbox/QueuePageClient");
+  seedStore(2000);
+  const a = convId(1);
+  useInboxStore.getState().setMessages(a, messages(a, 200), { hasMoreAbove: true, initialized: true });
+  mount();
+  await render(<InboxConversation sessionId={a} isIdle autoFocusInput={false} />);
+  await until(() => host.textContent!.includes(`Last line of answer 199 in ${a.slice(-6)}`), `conversation ${a} to paint`);
+  await settle();
+  const setValue = Object.getOwnPropertyDescriptor(w.HTMLTextAreaElement.prototype, "value")!.set!;
+  let n = 0;
+  const type = async (text: string) => {
+    const ta = host.querySelector("textarea")!;
+    await act(async () => { ta.focus(); setValue.call(ta, text); ta.dispatchEvent(new w.Event("input", { bubbles: true })); });
+    await settle();
+  };
+  const send = async (text: string) => {
+    const ta = host.querySelector("textarea")!;
+    await act(async () => { ta.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true })); });
+    // Drawn in the transcript (not just still in the box), and the box empty.
+    await until(() => ta.value === "" && [...host.querySelectorAll("[data-vkey]")].some((row) => row.textContent!.includes(text)), "the sent message to draw");
+    await settle();
+  };
+  await type("Warm-up send 0, untimed.");
+  await send("Warm-up send 0, untimed.");
+  return {
+    run: async () => {
+      const text = `Measured send ${++n}: look at the sync layer again.`;
+      await type(text);
+      return measure(() => send(text));
+    },
+    reset: () => settle(),
   };
 }
 
@@ -564,6 +647,8 @@ async function setupDiff(): Promise<Bench> {
 
 const setups: Record<Workload, () => Promise<Bench>> = {
   switch: setupSwitch,
+  "diff-toggle": setupDiffToggle,
+  send: setupSend,
   append: setupAppend,
   "inbox-load": () => setupInboxLoad(),
   "inbox-heartbeat": () => setupInboxHeartbeat(),

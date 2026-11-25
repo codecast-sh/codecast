@@ -17,7 +17,7 @@ import type { Report, Workload } from "./harness";
 const only = process.argv[2] as Workload | undefined;
 if (!only) {
   let failed = 0;
-  for (const workload of ["switch", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
+  for (const workload of ["switch", "diff-toggle", "send", "append", "inbox-load", "inbox-heartbeat", "inbox-load-modern", "inbox-heartbeat-modern", "diff"]) {
     const child = Bun.spawnSync(["bun", import.meta.path, workload], { stdout: "inherit", stderr: "inherit" });
     if (child.exitCode !== 0) failed++;
   }
@@ -62,9 +62,38 @@ await test("switch", "a warm conversation switch fetches no history and opens th
       storeWrites: 2,
       // The pane swaps its subtrees; nothing else on the page moves. Six rows
       // of overscan each side (ConversationView) set how many it mounts.
-      domMutations: 21,
+      // (19 since the harness answers CSS.supports as Chrome does: the
+      // composer's Safari height fallback no longer writes its style.)
+      domMutations: 19,
     });
   }
+});
+
+// ct-101461: a switch, a diff panel toggle and a send each stalled Chrome for
+// a quarter to a third of a second, most of it forced layout. The page must be
+// laid out once after an action anyway; every further read that follows a DOM
+// write lays the whole page out again, synchronously. So an action may force
+// layout at most once: reads batched before writes, or moved to the frame.
+// The failure names each forcing read by its file and line.
+function atMostOneForcedLayout(r: Report) {
+  if (r.counts.forcedLayouts <= 1) return;
+  throw new Error(`${r.counts.forcedLayouts} forced layouts (a layout read after a DOM write), at most 1 allowed:\n  ${r.detail.forcedLayouts.join("\n  ")}`);
+}
+
+await test("switch", "a warm conversation switch forces layout at most once", async () => {
+  await setup("switch");
+  for (const r of await twice()) atMostOneForcedLayout(r);
+});
+
+await test("diff-toggle", "opening or closing the diff panel forces layout at most once", async () => {
+  await setup("diff-toggle");
+  // Open, then close.
+  for (const r of await twice()) atMostOneForcedLayout(r);
+});
+
+await test("send", "sending a message forces layout at most once", async () => {
+  await setup("send");
+  for (const r of await twice()) atMostOneForcedLayout(r);
 });
 
 await test("append", "a message arriving in an open conversation writes the store once and asks the server for nothing", async () => {

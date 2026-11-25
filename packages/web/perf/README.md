@@ -9,14 +9,14 @@ Both drive `harness.tsx`: the real components mounted in jsdom over a synthetic 
 
 | Case | Workload | Exact counts (budgets.ts) |
 | --- | --- | --- |
-| switch conversation (warm) | Two conversations of 200 cached messages, both visited, over 2,000 sessions; switch until the last answer is on screen | 0 one-shot fetches, 15 subscriptions opened, 2 store writes, 21 DOM mutation records |
+| switch conversation (warm) | Two conversations of 200 cached messages, both visited, over 2,000 sessions; switch until the last answer is on screen | 0 one-shot fetches, 15 subscriptions opened, 2 store writes, 19 DOM mutation records |
 | a message arrives in an open conversation | One conversation of 200 cached messages on screen, over 2,000 sessions; one more row appended through `mergeMessages` (the path a streamed answer takes) until its text is drawn | 1 store write, 0 fetches, 0 subscriptions opened |
 | load an inbox of 5000 sessions | `SessionListPanel` mounting over 5,000 sessions | 51 cards drawn, 2 subscriptions, 0 fetches |
 | heartbeat in an inbox of 5000 sessions | A liveness overlay payload (`applyMineLivenessPayload`) shaped like the server's: the viewer's 600 newest sessions, each with its facts and placement stamps, plus the projection envelope, all freshly decoded; only one drawn session's heartbeat moved | 0 commits, 0 DOM mutations, 0 layout reads |
 | the same two, Modern style (`inbox-load-modern`, `inbox-heartbeat-modern`; budgets only) | The panel under the Modern theme context, drawing `ModernSessionCardView` and its section header | the same counts: 51 cards, 2 subscriptions; 0 commits, 0 DOM mutations, 0 layout reads |
 | open a long diff | A 1,560-line TypeScript file with 52 changed lines, shown whole and highlighted, in a warm app, mounted at the top of a scroller a viewport (800px) tall | 2 commits, 18 DOM mutation records, 32 layout reads, 0 store writes, 150 of 1,612 rows drawn |
 
-The budgets also check that a rename arriving through the feed reaches its card.
+The budgets also check that a rename arriving through the feed reaches its card, and that a warm switch, a diff panel toggle (`diff-toggle`) and a send from the composer (`send`) each force layout at most once (ct-101461). A forced layout is a layout read made after a DOM write since the page was last laid out (by the last forced read or the last animation frame): each one is a synchronous reflow of the whole page in Chrome. The harness answers `CSS.supports` as Chrome does, so the composer's Safari-only measuring fallback stays off.
 
 DOM mutations are counted under the mounted tree and inside every shadow root from the moment it is attached (the harness wraps `attachShadow`). The diff viewer draws its lines in a shadow root outside React, so the diff's 18 records are its host going in plus the viewer's own draw; a redraw would add to them. A diff over 200 rows draws windowed (`components/diff/virtualizer.ts`): the harness gives that diff's scroller (`data-perf-viewport`) the viewport's height and reports each element the Virtualizer observes as on screen, as a browser's IntersectionObserver does on observe. The 32 layout reads are the windowing's own: finding the scroller and measuring it and the file's offset in it.
 
