@@ -86,13 +86,42 @@ async function walkFrom(ctx: any, userId: Id<"users">, start: Conv) {
   return { chain, stopped, root: hops[hops.length - 1].conversation };
 }
 
-/** The chain of the session that filed a task, as far as `userId` may read it. */
-async function filingChain(ctx: any, userId: Id<"users">, task: Doc<"tasks">): Promise<{ chain: ChainEntry[]; stopped?: ChainStop }> {
-  const filedIn = task.created_from_conversation ? await ctx.db.get(task.created_from_conversation as Id<"conversations">) : null;
-  if (!filedIn) return { chain: [] };
-  if (!(await canOwnerOrTeamAccess(ctx, userId, filedIn))) return { chain: [], stopped: "access_denied" };
-  const walk = await walkFrom(ctx, userId, filedIn);
-  return { chain: walk.chain, ...(walk.stopped ? { stopped: walk.stopped } : {}) };
+/** The most sessions bound to or handing off a task that its chains start from, the newest kept. */
+export const TASK_SESSION_ANCHORS = 12;
+
+/**
+ * The sessions tied to a task, each one a server-written field, never a name a client passes: the one that filed it
+ * (created_from_conversation), those that bound it or handed it off (conversation_ids, which tasks.update records for
+ * the session behind a start or a handoff), and those whose handoff comment is on it (a handoff from another
+ * workspace leaves only the comment). A session reviewing the task is none of them.
+ */
+async function taskAnchors(ctx: any, task: Doc<"tasks">): Promise<Conv[]> {
+  const handoffs = (await ctx.db.query("task_comments").withIndex("by_task_id", (q: any) => q.eq("task_id", task._id)).collect())
+    .filter((c: any) => c.conversation_id && c.comment_type === "review" && HANDOFF_COMMENT.test(c.text))
+    .sort((a: any, b: any) => a.created_at - b.created_at)
+    .map((c: any) => String(c.conversation_id));
+  const worked = [...new Set([...(task.conversation_ids ?? []).map(String), ...handoffs])].slice(-TASK_SESSION_ANCHORS);
+  const ids = [...new Set([...(task.created_from_conversation ? [String(task.created_from_conversation)] : []), ...worked])];
+  const out: Conv[] = [];
+  for (const id of ids) {
+    const conv = await ctx.db.get(id as Id<"conversations">);
+    if (conv && String(conv.review_of_task_id ?? "") !== String(task._id)) out.push(conv);
+  }
+  return out;
+}
+
+/** The chains up from every session tied to a task (taskAnchors), merged, as far as `userId` may read them. */
+async function taskChains(ctx: any, userId: Id<"users">, task: Doc<"tasks">): Promise<{ chain: ChainEntry[]; stopped?: ChainStop }> {
+  const chain = new Map<string, ChainEntry>();
+  let stopped: ChainStop | undefined;
+  for (const anchor of await taskAnchors(ctx, task)) {
+    if (chain.has(String(anchor._id))) continue;
+    if (!(await canOwnerOrTeamAccess(ctx, userId, anchor))) { stopped ??= "access_denied"; continue; }
+    const walk = await walkFrom(ctx, userId, anchor);
+    for (const hop of walk.chain) if (!chain.has(hop.conversation_id)) chain.set(hop.conversation_id, hop);
+    stopped ??= walk.stopped;
+  }
+  return { chain: [...chain.values()], ...(stopped ? { stopped } : {}) };
 }
 
 /** Who started a run (workflow_runs.user_id), read from the run itself. */
