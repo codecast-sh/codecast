@@ -17,7 +17,8 @@
 //              required checks alone; no revert is recognised from its diff.
 //   who        the status names the person a card goes to: a judged file the press did not list, the person who
 //              pressed; other work, its Requested-by person, else the session's owner, else the area's owner from the
-//              owners file beside the judges file (`path-prefix  person`); a mechanism, an engineer or that owner.
+//              owners file beside the judges file (`<path-prefix> <user id> <name>`), else the pull request's
+//              author; a mechanism, an engineer or that owner.
 //
 // Nothing posts for a repository until an admin opts it in (setGate), "shadow" first, under its own context.
 import { v } from "convex/values";
@@ -32,8 +33,8 @@ import { requireInstallationRevoker } from "./githubApp";
 import { fetchPRFiles, PR_FILES_CAP, type PRPath } from "./githubApi";
 import { patchPullRequest } from "./prShepherd";
 import { coveredHeads, runAttempt } from "./orgLineMerge";
-import { approvalContext, askerOf, gateOf, isCam, isReleaseCaptain, preBuildYes } from "./lib/changeApprovalRows";
-import { askReviewForMechanism, cardPeople, postApprovalCard, type CardReason } from "./lib/changeApprovalCards";
+import { approvalContext, askerOf, changeJudgedFiles, gateOf, isCam, isReleaseCaptain, mayReadGate, preBuildYes } from "./lib/changeApprovalRows";
+import { askReviewForMechanism, cardPeople, cardStale, postApprovalCard, withdrawApprovalCard, type CardReason } from "./lib/changeApprovalCards";
 import { diffKey, isJudged, judgedPaths, keyChanged, keyEntriesFor, ownerOf, parseJudges, parseOwners, pathDiffsOf, pathsOf, requestedBy, revertedShas, type GitHubFile } from "./lib/judgedDiff";
 
 const GITHUB = "https://api.github.com";
@@ -212,8 +213,8 @@ async function prMessages(repository: string, token: string, prNumber: number): 
 export type PullPeople = {
   title: string;
   author_login: string | null;
-  /** The area's owner by main's owners file (`path-prefix  First-name`), or null when it has none for these paths. */
-  area_owner: string | null;
+  /** The area's owner by main's owners file (lib/judgedDiff parseOwners), or null when the file or its area is missing. */
+  area_owner: { user_id: string; name: string } | null;
   /** Main's engineers file: one `<codecast user id> <name>` a line. */
   engineers: Array<{ user_id: string; name: string }>;
 };
@@ -426,7 +427,7 @@ export const settle = internalMutation({
     people: v.optional(v.object({
       title: v.string(),
       author_login: v.optional(v.string()),
-      area_owner: v.optional(v.string()),
+      area_owner: v.optional(v.object({ user_id: v.string(), name: v.string() })),
       engineers: v.array(v.object({ user_id: v.string(), name: v.string() })),
     })),
   },
@@ -500,8 +501,10 @@ export const settle = internalMutation({
     // A review that finished without a mechanism answer is asked again, once per head.
     const askedReview = run && mechanism === null && before?.review_asked !== args.head_sha
       && (await askReviewForMechanism(ctx, run, args.head_sha, `${repository}#${args.pr_number}`, runAttempt(run)));
-    // The one card a person is asked, per judged diff and question.
+    // The one card a person is asked, per judged diff and question; the one it replaces is taken back first.
     const reason: CardReason | null = cardReason(facts);
+    const stale = cardStale(before?.card_key, { diff: key ?? args.head_sha, reason, success: verdict.state === "success" });
+    if (stale && before?.card_id) await withdrawApprovalCard(ctx, before.card_id, now, "The pull request's judged diff or what it waits on changed; a new card asks if anything is needed.");
     const posted = reason ? await postApprovalCard(ctx, {
       repository, pr_number: args.pr_number, head_sha: args.head_sha, key, judged, reason, to: to[reason], run, pr,
       title: args.people?.title ?? pr?.title ?? "", before_key: before?.card_key, now,
@@ -515,7 +518,7 @@ export const settle = internalMutation({
           ...(run ? { run_id: run._id } : {}),
           ...(typeof mechanism === "boolean" ? { mechanism } : {}),
           ...(captainRevert ? { captain_revert: true } : {}),
-          ...(posted ? { card_key: posted.card_key, card_id: posted.card_id } : before?.card_key ? { card_key: before.card_key, ...(before.card_id ? { card_id: before.card_id } : {}) } : {}),
+          ...(posted ? { card_key: posted.card_key, card_id: posted.card_id } : before?.card_key && !stale ? { card_key: before.card_key, ...(before.card_id ? { card_id: before.card_id } : {}) } : {}),
           ...(askedReview ? { review_asked: args.head_sha } : before?.review_asked ? { review_asked: before.review_asked } : {}),
           ...(before?.engineer_told ? { engineer_told: true } : {}),
         },
@@ -610,22 +613,22 @@ export const recordPress = mutation({
 });
 
 /**
- * The judges file's entries for Ship's confirm, as last read from main: only for someone in the workspace the opted-in
- * installation belongs to (its team's members, or a personal install's owner). Null otherwise, and when not opted in.
+ * What Ship lists beside its button for a session's change: the judges file's entries as last read from main, and the
+ * judged files the change touches with the sessions that wrote them (lib/changeApprovalRows changeJudgedFiles). Only
+ * for someone who can see the session and is in the workspace the opted-in installation belongs to; null otherwise,
+ * and when not opted in.
  */
-export const judgesFor = query({
-  args: { repository: v.string() },
-  handler: async (ctx, args): Promise<string[] | null> => {
+export const shipList = query({
+  args: { conversation_id: v.id("conversations") },
+  handler: async (ctx, args): Promise<{ judges: string[]; files: Array<{ path: string; writers: string[] }> } | null> => {
     const userId = await getAuthUserId(ctx);
     if (!userId) return null;
-    const gate = await gateOf(ctx, args.repository);
-    if (!gate) return null;
-    const installation = await ctx.db.get(gate.installation_row);
-    if (!installation) return null;
-    const allowed = installation.team_id
-      ? !!(await ctx.db.query("team_memberships").withIndex("by_user_team", (q) => q.eq("user_id", userId).eq("team_id", installation.team_id!)).first())
-      : String(installation.scope_user_id ?? "") === String(userId);
-    return allowed ? gate.judges ?? [] : null;
+    const conversation = await ctx.db.get(args.conversation_id);
+    if (!conversation || !(await canAccessConversation(ctx as any, userId, conversation as any))) return null;
+    const repository = repositoryKeyOfRemote(conversation.git_remote_url);
+    const gate = repository ? await gateOf(ctx, repository) : null;
+    if (!gate || !(await mayReadGate(ctx, userId, gate))) return null;
+    return { judges: gate.judges ?? [], files: await changeJudgedFiles(ctx, conversation, gate) };
   },
 });
 

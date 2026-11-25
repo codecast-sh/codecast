@@ -5,7 +5,7 @@ import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
 import { decide, evaluate, mechanismOf, mergeAsApp, settle, sweep, type ApprovalFacts } from "./changeApprovals";
 import { HOST_TOKEN_PERMISSIONS } from "./githubApp";
-import { claimPress, noticeCaptainRevertMerged, settleCardApproval } from "./lib/changeApprovalRows";
+import { changeJudgedFiles, claimPress, gateOf, noticeCaptainRevertMerged, settleCardApproval } from "./lib/changeApprovalRows";
 import { processPRSynchronizeEvent } from "./githubWebhooks";
 import { merge } from "./prCli";
 
@@ -93,7 +93,7 @@ function github(opts: { judges?: string } = {}) {
     { method: "GET", match: /\/pulls\/7$/, reply: () => ({ json: { changed_files: files.length, state: "open", head: { sha: HEAD, ref: "feature" }, base: { ref: "main", repo: { default_branch: "main" } } } }) },
     { method: "GET", match: /\/pulls\/7\/files\?/, reply: (url) => { const page = Number(/[?&]page=(\d+)/.exec(url)![1]); return { json: files.slice((page - 1) * 100, page * 100) }; } },
     { method: "GET", match: /\/contents\/outreach\/line\/change\/judges\.txt\?ref=main/, reply: () => ({ text: opts.judges ?? "# judged\noutreach/line/change/\n" }) },
-    { method: "GET", match: /\/contents\/outreach\/line\/change\/owners\.txt/, reply: () => ({ text: "outreach/line/ Ashot\n" }) },
+    { method: "GET", match: /\/contents\/outreach\/line\/change\/owners\.txt/, reply: () => ({ text: "outreach/line/ ash Ashot\n" }) },
     { method: "GET", match: /\/contents\/outreach\/line\/change\/engineers\.txt/, reply: () => ({ text: "# id name\nash Ashot\n" }) },
     { method: "GET", match: /\/compare\/main\.\.\./, reply: () => ({ json: { merge_base_commit: { sha: MB } } }) },
     { method: "GET", match: /\/pulls\/7\/commits/, reply: () => ({ json: [{ commit: { message: "Edit land\n\nRequested-by: Samvit" } }] }) },
@@ -347,7 +347,7 @@ describe("the run behind it", () => {
     const tasks = [{ _id: "t1", user_id: "cam" }];
     const yes = (who: string, at: number, over: Record<string, any> = {}) => ({ _id: `sd_${who}_${at}`, short_id: `sd-${who}`, task_id: "t1", status: "answered", station: "pre-build", options: [{ label: "Yes" }, { label: "No" }], answer_index: 0, answered_by: { kind: "user", id: who }, resolved_at: at, ...over });
     const engineers = [{ user_id: "ash", name: "Ashot" }];
-    const asked = { ...args, people: { title: "t", area_owner: "Samvit", engineers } };
+    const asked = { ...args, people: { title: "t", area_owner: { user_id: "sam", name: "Samvit" }, engineers } };
     const later = { ...base, created_at: 100, node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 102 }], review_verdict: { ...base.review_verdict, attempt: 100 }, pr: { ...base.pr } };
     const approved = ctxOf({ workflow_runs: [later], users, tasks, session_decisions: [yes("ash", 50)] });
     expect(await (settle as any)._handler(approved, asked)).toMatchObject({ state: "success", description: "approved by Ashot, sd-ash before the build (Ship press)" });
@@ -415,7 +415,7 @@ describe("the approval card", () => {
     const db = makeFakeDb(structuredClone({ github_app_installations: [installation], pull_requests: [prRow], change_approvals: [], users, team_memberships: memberships, conversations, anchors: [{ _id: "a1", team_id: "team1", conversation_id: "c_anchor" }], session_decisions: [], decision_inbox: [], task_comments: [{ _id: "tc1", task_id: "t1", comment_type: "review", text: "Verdict: ship. It edits land.cast.", created_at: 5 }], pending_messages: [], workflow_runs: [run()], ...tables }));
     return { db, ctx: { db, scheduler: { runAfter: async () => {} } } };
   };
-  const people = { title: "Edit land", area_owner: "Ashot", engineers: [{ user_id: "u_jason", name: "Jason" }] };
+  const people = { title: "Edit land", area_owner: { user_id: "u_ashot", name: "Ashot" }, engineers: [{ user_id: "u_jason", name: "Jason" }] };
   const args = { repository: REPO, pr_number: 7, head_sha: HEAD, judged: ["outreach/line/change/land.cast"], key: "k1", people };
   const cards = (db: any) => db._tables.session_decisions.filter((d: any) => d.approval_card);
 
@@ -431,6 +431,49 @@ describe("the approval card", () => {
     // A changed judged diff is a new question.
     await (settle as any)._handler(w.ctx, { ...args, key: "k2" });
     expect(cards(w.db)).toHaveLength(2);
+  });
+
+  test("a changed judged diff withdraws the open card and asks with a new one; the old one can approve nothing", async () => {
+    const w = world();
+    await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason" });
+    const [first] = cards(w.db);
+    // The review is asked again on a new head of the same diff: the card stands.
+    w.db._tables.workflow_runs[0] = { ...w.db._tables.workflow_runs[0], ...reviewed(undefined) };
+    await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason", head_sha: "c".repeat(40) });
+    expect(cards(w.db).map((c: any) => c.status)).toEqual(["pending"]);
+    // The judged diff changed while the review is still out: the card asks about a diff the pull request no longer has.
+    await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason", key: "k2", head_sha: "c".repeat(40) });
+    expect(cards(w.db).map((c: any) => c.status)).toEqual(["withdrawn"]);
+    expect(w.db._tables.pull_requests[0].approval.card_id).toBeUndefined();
+    // The review answers: one new card, for k2, and only it is open.
+    w.db._tables.workflow_runs[0] = { ...w.db._tables.workflow_runs[0], ...reviewed(false), review_verdict: { ...reviewed(false).review_verdict, head_sha: "c".repeat(40) } };
+    await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason", key: "k2", head_sha: "c".repeat(40) });
+    expect(cards(w.db).map((c: any) => [c.status, c.approval.judged_key])).toEqual([["withdrawn", "k1"], ["pending", "k2"]]);
+    expect(w.db._tables.change_approvals).toEqual([]);
+    // A withdrawn card's settle (the withdrawal itself) neither approves nor revokes.
+    await settleCardApproval(w.ctx as any, first, { status: "withdrawn" }, { kind: "user", user_id: "host" as any }, 40);
+    expect(w.db._tables.change_approvals).toEqual([]);
+  });
+
+  test("an approval that lands another way withdraws the open card", async () => {
+    const w = world();
+    await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason" });
+    w.db._tables.change_approvals.push({ _id: "p9", repository: REPO, pr_number: 7, judged_key: "k1", source: "ship_press", files: args.judged, user_id: "u_jason", created_at: 50 });
+    expect(await (settle as any)._handler(w.ctx, { ...args, requested_by: "Jason" })).toMatchObject({ state: "success" });
+    expect(cards(w.db).map((c: any) => c.status)).toEqual(["withdrawn"]);
+  });
+
+  test("the area's owner is the owners file's user id; with no owners file, the pull request's author", async () => {
+    const byId = world({ workflow_runs: [] });
+    await (settle as any)._handler(byId.ctx, args);
+    expect(cards(byId.db)[0].asked_user_ids).toEqual(["u_ashot"]);
+    const author = world({ workflow_runs: [], users: [...users, { _id: "u_gh", name: "Pat", github_username: "pat-gh" }] });
+    expect(await (settle as any)._handler(author.ctx, { ...args, people: { title: "Bump", author_login: "pat-gh", engineers: [] } })).toMatchObject({ description: "needs a review by Pat: no codecast run reviewed it" });
+    expect(cards(author.db)[0].asked_user_ids).toEqual(["u_gh"]);
+    // An id this deployment does not know is named in the status and carded to nobody.
+    const unknown = world({ workflow_runs: [] });
+    expect(await (settle as any)._handler(unknown.ctx, { ...args, people: { ...people, area_owner: { user_id: "not-an-id", name: "Samvit" } } })).toMatchObject({ description: "needs a review by Samvit: no codecast run reviewed it" });
+    expect(cards(unknown.db)).toEqual([]);
   });
 
   test("agent work with nobody's press goes to its Requested-by person; a mechanism to an engineer presser, else the area's owner", async () => {
@@ -485,4 +528,35 @@ describe("the approval card", () => {
     expect(await noticeCaptainRevertMerged(w.ctx as any, w.db._tables.pull_requests[0])).toBe(true);
     expect(await noticeCaptainRevertMerged(w.ctx as any, w.db._tables.pull_requests[0])).toBe(false);
   });
+});
+
+test("Ship's list: the pull request's judged diff and the checkout's uncommitted judged files, each by the sessions that wrote it", async () => {
+  const inst = { ...installation, approval_gate: [{ ...installation.approval_gate[0], judges: ["outreach/line/change/", "outreach/deploy.sh"] }] };
+  const pr = (id: string, over: Record<string, any>) => ({ ...prRow, _id: id, linked_session_ids: ["c_me", "c_other"], approval: { head_sha: HEAD, state: "pending", description: "x", judged_key: "k", judged_files: ["outreach/line/change/land.cast"] }, ...over });
+  const db = makeFakeDb({
+    github_app_installations: [inst],
+    // An open pull request at the head its judged diff was worked out for; a closed one and a stale one list nothing.
+    pull_requests: [
+      pr("pr1", {}),
+      pr("pr2", { number: 8, state: "closed", approval: { head_sha: HEAD, state: "pending", description: "x", judged_files: ["outreach/line/change/closed.cast"] } }),
+      pr("pr3", { number: 9, head_sha: "e".repeat(40), approval: { head_sha: HEAD, state: "pending", description: "x", judged_files: ["outreach/line/change/stale.cast"] } }),
+    ],
+    pull_request_sessions: ["pr1", "pr2", "pr3"].map((p, i) => ({ _id: `l${i}`, pull_request_id: p, conversation_id: "c_me" })),
+    conversations: [{ _id: "c_me", git_root: "/repo" }, { _id: "c_other", git_root: "/wt" }],
+    // The other linked session edited it in its own checkout; this session only recorded it in a commit.
+    file_changes: [
+      { _id: "f1", conversation_id: "c_other", file_path: "/wt/outreach/line/change/land.cast", change_type: "edit", timestamp: 1 },
+      { _id: "f2", conversation_id: "c_me", file_path: "/repo/outreach/line/change/land.cast", change_type: "commit", timestamp: 2 },
+    ],
+    checkouts: [
+      { _id: "k1", workspace: "team:team1", repository: REPO, path: "/repo/", report: { uncommitted: { sessions: [{ conversation_id: "c_third", paths: ["outreach/line/change/gate.sh", "docs/x.md"] }], unattributed: ["outreach/deploy.sh"] } } },
+      { _id: "k2", workspace: "team:team1", repository: REPO, path: "/elsewhere", report: { uncommitted: { sessions: [{ conversation_id: "c_far", paths: ["outreach/line/change/far.cast"] }], unattributed: [] } } },
+    ],
+  });
+  const gate = (await gateOf({ db }, REPO))!;
+  expect(await changeJudgedFiles({ db }, { _id: "c_me" as any, git_root: "/repo" }, gate)).toEqual([
+    { path: "outreach/deploy.sh", writers: [] },
+    { path: "outreach/line/change/gate.sh", writers: ["c_third"] },
+    { path: "outreach/line/change/land.cast", writers: ["c_other"] },
+  ]);
 });

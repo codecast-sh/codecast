@@ -5212,7 +5212,7 @@ const ConversationViewInner = (
       {/* A typed "ship" on a change that touches judged files: the one-click approval of that list (ct-100350). */}
       {conversation && !guest && (
         <ErrorBoundary name="ShipApprovalPrompt" level="inline" fallback={null}>
-          <ShipApprovalPrompt conversationId={conversation._id.toString()} sessionTitle={conversation.title ?? "this session"} />
+          <ShipApprovalPrompt conversationId={conversation._id.toString()} />
         </ErrorBoundary>
       )}
       <div className={`flex-1 min-h-0 relative flex ${isImageLightboxActive ? "invisible" : ""}`}>

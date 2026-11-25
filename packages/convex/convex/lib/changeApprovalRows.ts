@@ -8,6 +8,7 @@ import { internal } from "../_generated/api";
 import { normalizeRepository, repositoryOwner } from "@codecast/shared/contracts";
 import { optionIsShip } from "./taskVerdicts";
 import { emitNotification } from "../notificationRouter";
+import { mayBeJudged } from "./judgedDiff";
 
 export type ApprovalGate = {
   installation_id: number;
@@ -39,6 +40,65 @@ export async function gateOf(ctx: { db: any }, repository: string): Promise<Appr
     if (entry) return { installation_id: row.installation_id, installation_row: row._id, repository: repo, judges_path: entry.judges_path, mode: entry.mode, ...(entry.judges ? { judges: entry.judges } : {}), ...(entry.engineers ? { engineers: entry.engineers } : {}) };
   }
   return null;
+}
+
+/** Whether `userId` may read an opted-in gate: a member of the installation's team, or a personal install's owner. */
+export async function mayReadGate(ctx: { db: any }, userId: Id<"users">, gate: ApprovalGate): Promise<boolean> {
+  const installation = await ctx.db.get(gate.installation_row);
+  if (!installation) return false;
+  return installation.team_id
+    ? !!(await ctx.db.query("team_memberships").withIndex("by_user_team", (q: any) => q.eq("user_id", userId).eq("team_id", installation.team_id)).first())
+    : String(installation.scope_user_id ?? "") === String(userId);
+}
+
+/** At most this many judged files a Ship list names, and pull requests of the session it reads. */
+const SHIP_LIST_MAX = 100;
+const SHIP_LIST_PRS = 20;
+
+/**
+ * The judged files a session's change touches, each with the sessions codecast knows wrote it, for the list beside
+ * Ship: the judged diff of each open pull request the session is linked to (as worked out for its head), by the
+ * linked sessions that edited each file; and the uncommitted judged files its checkout reports, by the session that
+ * wrote each last (none for a file no session wrote). The web adds the session's own edits from its transcript.
+ */
+export async function changeJudgedFiles(
+  ctx: { db: any },
+  conversation: { _id: Id<"conversations">; git_root?: string },
+  gate: ApprovalGate,
+): Promise<Array<{ path: string; writers: string[] }>> {
+  const judges = gate.judges ?? [];
+  const writers = new Map<string, Set<string>>();
+  const add = (path: string, by?: string | null) => {
+    const set = writers.get(path) ?? new Set<string>();
+    if (by) set.add(by);
+    writers.set(path, set);
+  };
+  const links: any[] = await ctx.db.query("pull_request_sessions").withIndex("by_conversation", (q: any) => q.eq("conversation_id", conversation._id)).take(SHIP_LIST_PRS);
+  for (const link of links) {
+    const pr: Doc<"pull_requests"> | null = await ctx.db.get(link.pull_request_id);
+    const a = pr?.approval;
+    if (!pr || pr.state !== "open" || normalizeRepository(pr.repository) !== gate.repository || !a?.judged_files || a.head_sha !== pr.head_sha) continue;
+    // Who wrote each: a session linked to the pull request with an edit of the file in its own checkout.
+    const linked: any[] = (await Promise.all((pr.linked_session_ids ?? []).slice(0, 10).map((id) => ctx.db.get(id)))).filter((c: any) => c?.git_root);
+    for (const path of a.judged_files.slice(0, SHIP_LIST_MAX)) {
+      add(path);
+      for (const s of linked) {
+        const edits: any[] = await ctx.db.query("file_changes").withIndex("by_file_path", (q: any) => q.eq("file_path", `${s.git_root.replace(/\/+$/, "")}/${path}`)).order("desc").take(20);
+        if (edits.some((e) => String(e.conversation_id) === String(s._id) && e.change_type !== "commit")) add(path, String(s._id));
+      }
+    }
+  }
+  const installation = await ctx.db.get(gate.installation_row);
+  const root = conversation.git_root?.replace(/\/+$/, "");
+  if (root && installation?.team_id) {
+    const rows: any[] = await ctx.db.query("checkouts").withIndex("by_workspace_repository", (q: any) => q.eq("workspace", `team:${installation.team_id}`).eq("repository", gate.repository)).take(500);
+    for (const row of rows.filter((r) => r.path.replace(/\/+$/, "") === root)) {
+      const uncommitted = row.report?.uncommitted;
+      for (const s of uncommitted?.sessions ?? []) for (const p of s.paths ?? []) if (mayBeJudged(p, judges)) add(p, s.conversation_id);
+      for (const p of uncommitted?.unattributed ?? []) if (mayBeJudged(p, judges)) add(p);
+    }
+  }
+  return [...writers].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)).slice(0, SHIP_LIST_MAX).map(([path, by]) => ({ path, writers: [...by] }));
 }
 
 /** Work the pull request's status out again and post it, when its repository is opted in. */
@@ -211,7 +271,8 @@ async function settleApprovalCard(
   by: { kind: string; user_id?: Id<"users"> },
   now: number,
 ): Promise<void> {
-  if (by.kind !== "user" || !by.user_id) return;
+  // A card codecast took back (its diff changed) approves and revokes nothing; another card asks in its place.
+  if (verdict.status === "withdrawn" || by.kind !== "user" || !by.user_id) return;
   const a = row.approval;
   if (verdict.status === "answered" && optionIsShip(row.options[verdict.answer_index ?? -1]?.label)) {
     await ctx.db.insert("change_approvals", {
@@ -237,7 +298,7 @@ export async function noticeCaptainRevertMerged(ctx: { db: any }, pr: Doc<"pull_
   if (!a?.captain_revert || a.engineer_told || !(a.judged_files?.length || a.mechanism)) return false;
   const gate = await gateOf(ctx, pr.repository);
   const engineer = gate?.engineers?.[0];
-  const id = engineer ? ctx.db.normalizeId?.("users", engineer.user_id) ?? engineer.user_id : null;
+  const id = engineer ? ctx.db.normalizeId("users", engineer.user_id) : null;
   if (!id || !(await ctx.db.get(id))) return false;
   const what = a.judged_files?.length ? `touches ${a.judged_files.slice(0, 3).join(", ")}${a.judged_files.length > 3 ? ` (+${a.judged_files.length - 3})` : ""}` : "is a mechanism by its review";
   await emitNotification(ctx as any, {

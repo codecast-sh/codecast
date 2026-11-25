@@ -33,6 +33,7 @@ import { HEADER_CHIP } from "../../../lib/headerChip";
 import { useCoarseNow } from "../../../hooks/useCoarseNow";
 import { useJourneyViewer } from "../../../hooks/useJourneyViewer";
 import { usePressApproval } from "../../../hooks/usePressApproval";
+import { judgedFileWords } from "../../../lib/ship/judgedEdits";
 import "../../ship/ship.css";
 
 /** Shown only where the workspace has Flows on: off, the button is gone with the rest of the feature. */
@@ -134,7 +135,7 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
           </PopoverContent>
         </Popover>
       )}
-      {reviewing ? <SwitchReview ledger={shipLedgerFor(reviewing, sessionTitle, 1, { approves: approval.files })} onClose={() => setReviewing(null)} onConfirm={() => send(reviewing)} /> : null}
+      {reviewing ? <SwitchReview ledger={shipLedgerFor(reviewing, sessionTitle, 1, { approves: approval.files?.map(judgedFileWords) })} onClose={() => setReviewing(null)} onConfirm={() => send(reviewing)} /> : null}
     </>
   );
 }
@@ -238,7 +239,7 @@ export function ShipAgainButton({ flow, conversationId, sessionTitle, primary }:
     <>
       <button type="button" className="sj-btn" data-primary={primary ? "" : undefined} data-quiet={primary ? undefined : ""} data-ship-again disabled={sent} aria-busy={sent || undefined}
         onClick={() => { if (sent) return; if (shipConfirms(approvalOf(flow))) setReviewing(true); else send(); }}>{sent ? "Starting…" : "Ship again"}</button>
-      {reviewing ? <SwitchReview ledger={shipLedgerFor(flow, sessionTitle, 1, { approves: approval.files })} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); send(); }} /> : null}
+      {reviewing ? <SwitchReview ledger={shipLedgerFor(flow, sessionTitle, 1, { approves: approval.files?.map(judgedFileWords) })} onClose={() => setReviewing(false)} onConfirm={() => { setReviewing(false); send(); }} /> : null}
     </>
   );
 }

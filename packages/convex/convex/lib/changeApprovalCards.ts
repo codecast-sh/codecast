@@ -1,12 +1,14 @@
 // The person codecast's approval status waits on, and the one approval card it posts them (ct-100350 items 5, 6, 8).
 // Cards go to a person, never a role:
 //   judged files   the person whose Ship press did not list them; else the work's Requested-by person, else the
-//                  session's owner; else the area's owner by main's owners file; else the pull request's author.
+//                  session's owner; else the area's owner by main's owners file (judgedDiff parseOwners); else the
+//                  pull request's author.
 //   a mechanism    the presser when main's engineers file lists them; else the area's owner; else the author.
 //   no review      (no codecast run behind it) the area's owner, else the author.
 //   Cam's changes  the engineer whose yes came before the build; else the area's owner, else the first engineer;
 //                  never Cam.
-// A review that gave no mechanism answer is asked again, never carded. One card per judged diff and question.
+// A review that gave no mechanism answer is asked again, never carded. One card per judged diff and question, and at
+// most one open per pull request: a card whose diff or question no longer stands is withdrawn.
 // Approval cards count against no open-card cap: codecast has none per person (a role's caps.cards counts runs).
 import type { Doc, Id } from "../_generated/dataModel";
 import { nextShortId } from "../counters";
@@ -14,6 +16,7 @@ import { syncDecisionInbox } from "./decisionInbox";
 import { enqueuePendingMessage } from "../pendingMessages";
 import { findConversationByAnyRef } from "../conversationSessionLookup";
 import { isCam } from "./changeApprovalRows";
+import { withdrawCore } from "../sessionDecisions";
 
 export type CardReason = "judged" | "mechanism" | "review" | "unreadable";
 export type Person = { user_id: Id<"users"> | null; name: string };
@@ -22,12 +25,13 @@ const firstName = (name: string | null | undefined) => String(name ?? "").trim()
 const nameOfUser = (u: any): string => u?.name || u?.github_username || u?.email?.split("@")[0] || "a person";
 
 async function personOf(ctx: { db: any }, userId: Id<"users"> | string | null | undefined): Promise<Person | null> {
-  const id = userId ? (ctx.db.normalizeId?.("users", String(userId)) ?? userId) : null;
+  // A user id read from a file may be no id at all here: get() would throw on it.
+  const id = userId ? ctx.db.normalizeId("users", String(userId)) : null;
   const u: any = id ? await ctx.db.get(id) : null;
   return u ? { user_id: u._id, name: nameOfUser(u) } : null;
 }
 
-/** A member of the team by first name (the owners file and Requested-by name people that way). */
+/** A member of the team by first name (Requested-by names people that way). */
 async function memberNamed(ctx: { db: any }, teamId: Id<"teams"> | undefined, name: string | null | undefined): Promise<Person | null> {
   const want = firstName(name);
   if (!teamId || !want) return null;
@@ -52,12 +56,13 @@ export async function cardPeople(ctx: { db: any }, a: {
   /** Cam asked for it, by codecast's own record (changeApprovalRows.askerOf), never a commit trailer. */
   camAsked: boolean;
   requested_by?: string;
-  area_owner?: string;
+  area_owner?: { user_id: string; name: string };
   author_login?: string;
   engineers: Array<{ user_id: string; name: string }>;
   engineerYes: { user_id: Id<"users"> } | null;
 }): Promise<Record<CardReason, Person>> {
-  const owner = a.area_owner ? (await memberNamed(ctx, a.teamId, a.area_owner)) ?? { user_id: null, name: a.area_owner } : null;
+  // The owners file names its person by codecast user id: one this deployment does not know is said, never carded.
+  const owner = a.area_owner ? (await personOf(ctx, a.area_owner.user_id)) ?? { user_id: null, name: a.area_owner.name } : null;
   const author = await githubUser(ctx, a.author_login);
   const nobody: Person = { user_id: null, name: "a person" };
   const press: any = a.run?.pressed_approval_id ? await ctx.db.get(a.run.pressed_approval_id) : null;
@@ -104,6 +109,30 @@ const WHY: Record<CardReason, string> = {
   unreadable: "Codecast could not read enough of it to tell, so a person approves.",
 };
 
+/** What a card asks about: the judged diff (or, unreadable, the head) and the question. */
+export const cardKeyOf = (diff: string, reason: CardReason) => `${diff}:${reason}`;
+const diffOfCardKey = (cardKey: string) => cardKey.slice(0, cardKey.lastIndexOf(":"));
+
+/**
+ * Whether the card a pull request holds open stops standing: it asked another question or about another diff, or the
+ * status no longer waits on a person. While the status waits only on the review's mechanism answer, the card for this
+ * same diff stays.
+ */
+export function cardStale(held: string | undefined, now: { diff: string; reason: CardReason | null; success: boolean }): boolean {
+  if (!held) return false;
+  if (now.reason) return held !== cardKeyOf(now.diff, now.reason);
+  return now.success || diffOfCardKey(held) !== now.diff;
+}
+
+/**
+ * Takes back a pending approval card that no longer stands. Its answer could approve nothing new (an approval binds to
+ * the diff the card showed), but nobody is asked about a diff the pull request no longer has.
+ */
+export async function withdrawApprovalCard(ctx: { db: any; scheduler: any }, cardId: Id<"session_decisions">, now: number, why: string): Promise<void> {
+  const row: any = await ctx.db.get(cardId);
+  if (row?.status === "pending") await withdrawCore(ctx as any, row, now, undefined, why);
+}
+
 /**
  * Posts the one approval card a pending status owes `to`, unless one was already posted for this judged diff and
  * question (`card_key`). Returns the key and card, or null when nothing was posted (no such person, nowhere to ask,
@@ -113,7 +142,7 @@ export async function postApprovalCard(ctx: { db: any }, a: {
   repository: string; pr_number: number; head_sha: string; key: string | undefined; judged: string[];
   reason: CardReason; to: Person; run: any | null; pr: Doc<"pull_requests"> | null; title: string; before_key?: string; now: number;
 }): Promise<{ card_key: string; card_id: Id<"session_decisions"> } | null> {
-  const card_key = `${a.key ?? a.head_sha}:${a.reason}`;
+  const card_key = cardKeyOf(a.key ?? a.head_sha, a.reason);
   if (!a.to.user_id || a.before_key === card_key) return null;
   const conversation = await askingConversation(ctx, a.run, a.pr);
   if (!conversation) return null;
