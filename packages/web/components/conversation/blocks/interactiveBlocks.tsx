@@ -297,20 +297,31 @@ function AskUserQuestionInner(props: AskUserQuestionProps) {
 }
 
 // A teammate's press on an open question proposes that answer to the owner
-// (convex teamSuggestions.proposeAnswerFor). The card stays open, so another
-// pick replaces the proposal until the owner answers.
+// (convex teamSuggestions.proposeAnswerFor). While that proposal stands (or the
+// owner went with it) the card stays settled on what they picked, with the
+// proposal's status under it. It opens again only when the proposal is gone:
+// withdrawn, refused by the server, or passed over by the owner.
 function TeammateAskUserQuestion(props: AskUserQuestionProps) {
   const ctx = useTeamProposalRole()!;
-  const [rev, setRev] = useState(0);
   const propose = useInboxStore((s) => s.proposeAnswer);
   const withdraw = useInboxStore((s) => s.withdrawTeamSuggestion);
   const me = useMyName();
   const mine = useMyProposalFor((r) => r.kind === "answer" && r.tool_use_id === props.tool.id);
-  const reopen = () => { forgetModernAskSent(props.tool.id); _askUserSentState.delete(props.tool.id); setRev((r) => r + 1); };
+  const held = mine?.status === "pending" || mine?.status === "sent";
+  const [rev, setRev] = useState(() => {
+    // Mounting onto a standing proposal (a reload, a scroll back): settled.
+    if (held) { markModernAskSent(props.tool.id); if (!_askUserSentState.has(props.tool.id)) _askUserSentState.set(props.tool.id, {}); }
+    return 0;
+  });
+  const [wasHeld, setWasHeld] = useState(held);
+  if (held !== wasHeld) {
+    setWasHeld(held);
+    // The press already settled the card; only a proposal that went away reopens it.
+    if (!held) { forgetModernAskSent(props.tool.id); _askUserSentState.delete(props.tool.id); setRev((r) => r + 1); }
+  }
   const onPropose = (payload: string) => {
     const key = newProposalKey();
     proposeOrExplain(propose(ctx.conversationId, props.tool.id, payload, key, me), key, ctx.conversationId);
-    reopen();
   };
   return (
     <>

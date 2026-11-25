@@ -92,6 +92,12 @@ test("a teammate's submitted answer does not come back as an unanswered Needs yo
   // with what they chose and wrote wiped.
   expect(byText("Submit answers 0/2")?.outerHTML ?? null).toBeNull();
   expect(host.querySelectorAll('[data-cc-ask="needs_you"]').length).toBe(0);
+  expect(host.querySelector('[data-my-proposal="pending"]')).not.toBeNull();
+
+  // Withdrawing the proposal hands the question back to them, open.
+  act(() => { byText("Withdraw")!.click(); });
+  expect(host.querySelectorAll('[data-cc-ask="needs_you"]').length).toBe(2);
+  expect(byText("Submit answers 0/2")).toBeDefined();
 
   act(() => root.unmount());
   host.remove();
