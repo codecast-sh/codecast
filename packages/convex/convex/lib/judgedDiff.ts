@@ -190,26 +190,6 @@ export function wholeFileHunk(text: string, side: "+" | "-"): string {
   return [header, ...lines.map((l) => side + l), ...(noNewline ? ["\\ No newline at end of file"] : [])].join("\n");
 }
 
-/**
- * The diff that undoes `d`: sides and modes swapped, each hunk's counts swapped and its "+" and "-" lines flipped. In a
- * run of changed lines git prints the removals first, so the flipped run is put back in that order, as `git diff -R`
- * prints it.
- */
-export function invertPathDiff(d: PathDiff): PathDiff {
-  const out: string[] = [];
-  let removed: string[] = [], added: string[] = [];
-  const endRun = () => { out.push(...removed, ...added); removed = []; added = []; };
-  for (const line of d.hunks ? d.hunks.split("\n") : []) {
-    const m = /^@@ -(\d+(?:,\d+)?) \+(\d+(?:,\d+)?) @@(.*)$/.exec(line);
-    if (line.startsWith("+")) removed.push("-" + line.slice(1));
-    else if (line.startsWith("-")) added.push("+" + line.slice(1));
-    else if (line.startsWith("\\ ")) (added.length ? added : removed).push(line);
-    else { endRun(); out.push(m ? `@@ -${m[2]} +${m[1]} @@${m[3]}` : line); }
-  }
-  endRun();
-  return { path: d.path, base_mode: d.head_mode, head_mode: d.base_mode, hunks: out.join("\n") };
-}
-
 /** The blob of an empty file: an added or deleted empty file has no patch and needs none. */
 export const EMPTY_BLOB = "e69de29bb2d1d6434b8b29ae775ad8c2e48c5391";
 

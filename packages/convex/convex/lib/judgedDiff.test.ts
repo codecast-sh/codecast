@@ -3,7 +3,7 @@
 // pull request, which is what Union's bash computes.
 import { describe, expect, test } from "bun:test";
 import vectors from "./judgedDiff.vectors.json";
-import { diffKey, gitDiffText, invertPathDiff, isJudged, judgedPaths, keyChanged, keyEntriesFor, mayBeJudged, ownerOf, parseJudges, parseOwners, patchIdStable, pathDiffsOf, pathsOf, requestedBy, revertedShas, type GitHubFile } from "./judgedDiff";
+import { diffKey, gitDiffText, isJudged, judgedPaths, keyChanged, keyEntriesFor, mayBeJudged, ownerOf, parseJudges, parseOwners, patchIdStable, pathDiffsOf, pathsOf, requestedBy, revertedShas, type GitHubFile } from "./judgedDiff";
 
 const entries = parseJudges(vectors.judges);
 
@@ -32,15 +32,6 @@ describe("golden vectors from git patch-id --stable", () => {
     });
   }
 
-  test("a true revert: the pull request's whole diff has the patch id of its commit's inverse", async () => {
-    const c: any = (vectors.cases as any[]).find((x) => x.reverts);
-    const whole = pathDiffsOf(c.files, () => true);
-    const commit = pathDiffsOf(c.reverts.commit_files, () => true);
-    if ("unreadable" in whole || "unreadable" in commit) throw new Error("unreadable");
-    expect(await diffKey(whole.diffs)).toBe(c.reverts.whole_key);
-    expect(await diffKey(commit.diffs.map(invertPathDiff))).toBe(c.reverts.whole_key);
-    expect(await diffKey(commit.diffs)).not.toBe(c.reverts.whole_key);
-  });
 });
 
 describe("what cannot be rebuilt exactly is never guessed", () => {

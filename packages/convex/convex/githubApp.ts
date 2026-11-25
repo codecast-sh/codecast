@@ -127,6 +127,10 @@ export function mintRepositoryName(repository: string | undefined): string | und
   return parseOwnerRepo(repository)?.split("/")[1];
 }
 
+// What a token minted for a machine (a cloud host's git credential) may do. Never statuses or checks: codecast's
+// `approval` status is posted only from this backend (changeApprovals.ts), so no host can mark its own change
+// approved (ct-100350). Push access is contents: write, which GitHub also lets merge a pull request; only a ruleset
+// that requires the approval status from this app stops that (ct-98548).
 export const HOST_TOKEN_PERMISSIONS = { contents: "write", workflows: "write", pull_requests: "write" } as const;
 
 export const getInstallationToken = internalAction({

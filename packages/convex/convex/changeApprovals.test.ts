@@ -3,7 +3,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { getFunctionName } from "convex/server";
 import { makeFakeDb } from "./testDb";
-import { decide, evaluate, mechanismOf, mergeAsApp, settle, type ApprovalFacts } from "./changeApprovals";
+import { decide, evaluate, mechanismOf, mergeAsApp, settle, sweep, type ApprovalFacts } from "./changeApprovals";
+import { HOST_TOKEN_PERMISSIONS } from "./githubApp";
 import { claimPress, settleCardApproval } from "./lib/changeApprovalRows";
 import { processPRSynchronizeEvent } from "./githubWebhooks";
 import { merge } from "./prCli";
@@ -19,8 +20,8 @@ describe("decide", () => {
   test("what could not be read is pending on a person", () => {
     expect(decide({ opted: true, unreadable: "main's judges.txt" })).toEqual({ state: "pending", description: "could not read main's judges.txt; a person approves" });
   });
-  test("a true revert needs nobody, even before the review", () => {
-    expect(decide(facts({ revert_of: "c".repeat(40), mechanism: null, judged: ["x"] }))?.state).toBe("success");
+  test("a Release Captain's revert merges on CI alone, even before any review", () => {
+    expect(decide(facts({ captain_revert: true, mechanism: null, judged: ["x"] }))).toEqual({ state: "success", description: "the Release Captain's revert: CI's required checks decide" });
   });
   test("nothing is success before the review's mechanism answer exists", () => {
     expect(decide(facts({ mechanism: null }))).toEqual({ state: "pending", description: "waiting for the review's mechanism answer" });
@@ -304,4 +305,52 @@ describe("merging as codecast's app", () => {
     expect(out.error).toMatch(/status on .* is pending/);
     expect(calls.some((c) => c.method === "PUT")).toBe(false);
   });
+});
+
+describe("the run behind it", () => {
+  const reviewed = { node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 2 }], review_verdict: { node_id: "review", verdict: "ship", head_sha: HEAD, mechanism: false, at: 3, attempt: 1 } };
+  const base = { _id: "run1", user_id: "agent", created_at: 1, task_id: "t1", pr: { repository: REPO, number: 7, first_head_sha: HEAD, head_sha: HEAD, at: 1 }, ...reviewed };
+  const ctxOf = (tables: Record<string, any[]>) => ({ db: makeFakeDb({ github_app_installations: [installation], pull_requests: [prRow], change_approvals: [], ...tables }), scheduler: { runAfter: async () => {} } });
+  const args = { repository: REPO, pr_number: 7, head_sha: HEAD, judged: ["outreach/line/change/land.cast"], key: "k1" };
+
+  test("the Release Captain's revert needs no card; anyone else's revert is judged like any change", async () => {
+    const captain = ctxOf({ workflow_runs: [{ ...base, org_role_id: "role1" }], org_roles: [{ _id: "role1", handle: "release", name: "Release Captain" }] });
+    expect(await (settle as any)._handler(captain, { ...args, reverts: true })).toMatchObject({ state: "success" });
+    const other = ctxOf({ workflow_runs: [{ ...base, org_role_id: "role2" }], org_roles: [{ _id: "role2", handle: "growth", name: "Head of Growth" }] });
+    expect(await (settle as any)._handler(other, { ...args, reverts: true })).toMatchObject({ state: "pending" });
+  });
+
+  test("for a change Cam asked for, the engineer's yes before the build approves it, and a card would be the engineer's, never Cam's", async () => {
+    const users = [{ _id: "cam", name: "Cameron Musgrave" }, { _id: "ash", name: "Ashot" }];
+    const yes = (who: string, at: number) => ({ _id: `sd_${who}`, short_id: `sd-${who}`, task_id: "t1", status: "answered", options: [{ label: "Yes" }, { label: "No" }], answer_index: 0, answered_by: { kind: "user", id: who }, resolved_at: at });
+    const asked = { ...args, requested_by: "Cameron", area_owner: "Samvit" };
+    const later = { ...base, created_at: 100, node_statuses: [{ node_id: "review", status: "completed", session_id: "s", started_at: 102 }], review_verdict: { ...base.review_verdict, attempt: 100 } };
+    const approved = ctxOf({ workflow_runs: [later], users, session_decisions: [yes("ash", 50)] });
+    expect(await (settle as any)._handler(approved, asked)).toMatchObject({ state: "success", description: "approved by Ashot (sd-ash)" });
+    // Cam's own yes, or one given after the build began, is no engineer's pre-build yes; the card names the area's owner.
+    const notYet = ctxOf({ workflow_runs: [later], users, session_decisions: [yes("cam", 50), yes("ash", 150)] });
+    expect(await (settle as any)._handler(notYet, asked)).toMatchObject({ state: "pending", description: "needs Samvit: edits outreach/line/change/land.cast" });
+  });
+
+  test("the same verdict on the same head is not posted again; a new head is", async () => {
+    const c = ctxOf({ workflow_runs: [base], users: [] });
+    expect((await (settle as any)._handler(c, args)).unchanged).toBe(false);
+    expect((await (settle as any)._handler(c, args)).unchanged).toBe(true);
+    expect((await (settle as any)._handler(c, { ...args, head_sha: "d".repeat(40) })).unchanged).toBe(false);
+  });
+
+  test("the sweep works out every open pull request of each opted-in repository, a few seconds apart", async () => {
+    const scheduled: Array<[number, any]> = [];
+    const ctx: any = {
+      runQuery: async (ref: any, a: any) => (getFunctionName(ref) === "changeApprovals:optedRepositories" ? [REPO] : a.repository === REPO ? [7, 8] : []),
+      scheduler: { runAfter: async (ms: number, _ref: any, a: any) => { scheduled.push([ms, a.pr_number]); } },
+    };
+    expect(await (sweep as any)._handler(ctx, {})).toEqual({ repositories: 1, pulls: 2 });
+    expect(scheduled).toEqual([[0, 7], [3000, 8]]);
+  });
+});
+
+test("a token minted for a machine can never post a status or a check", () => {
+  expect(Object.keys(HOST_TOKEN_PERMISSIONS)).not.toContain("statuses");
+  expect(Object.keys(HOST_TOKEN_PERMISSIONS)).not.toContain("checks");
 });

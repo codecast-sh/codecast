@@ -124,3 +124,32 @@ export async function settleCardApproval(
   }
   await scheduleRunApprovalPost(ctx, run);
 }
+
+/** The Release Captain role (pl-1075 Words), by its handle or its title: whose revert merges on CI alone. */
+export const isReleaseCaptain = (role: { handle?: string; name?: string } | null | undefined): boolean =>
+  !!role && (role.handle === "release" || role.handle === "release-captain" || /^release captain$/i.test(String(role.name ?? "").trim()));
+
+/** A change Cam (Cameron) asked for, by the Requested-by line its commits carry. */
+export const isCamRequest = (requestedBy: string | null | undefined): boolean => /^cam(eron)?\b/i.test(String(requestedBy ?? "").trim());
+
+/** A yes to building it: an approval card's Ship or Approve merge, or a plain Yes, Build or Approve. */
+const saysYes = (label: unknown) => optionIsShip(label) || /^(yes|build|approve)\b/i.test(String(label ?? "").trim());
+
+/**
+ * The engineer's yes recorded before the run built anything (ct-98540): a card on the run's task, answered yes by a
+ * person who is not Cam, before the run's attempt began. The newest such answer, or null.
+ */
+export async function preBuildYes(ctx: { db: any }, run: { task_id?: Id<"tasks">; created_at: number; visits_reset_at?: number }): Promise<{ user_id: Id<"users">; ref: string } | null> {
+  if (!run.task_id) return null;
+  const cards: any[] = await ctx.db.query("session_decisions").withIndex("by_task", (q: any) => q.eq("task_id", run.task_id).eq("status", "answered")).order("desc").take(50);
+  // The run's attempt began here (orgLineMerge.runAttempt).
+  const startedAt = run.visits_reset_at ?? run.created_at;
+  for (const d of cards) {
+    if (d.answered_by?.kind !== "user" || (d.resolved_at ?? Infinity) > startedAt) continue;
+    if (!saysYes(d.options?.[d.answer_index ?? -1]?.label)) continue;
+    const who: any = await ctx.db.get(d.answered_by.id);
+    if (!who || isCamRequest(who.name)) continue;
+    return { user_id: who._id, ref: d.short_id ?? "its card" };
+  }
+  return null;
+}

@@ -126,18 +126,6 @@ chmodSync(join(dir, "outreach/line/change/land.cast"), 0o755);
 write({ "outreach/line/change/empty.cast": "" });
 record("a mode change and an empty file", main2, commit("mode"));
 
-// 8. A true revert of a commit already on main: its whole diff is that commit's inverse.
-git(["checkout", "-q", "main"]);
-write({ "outreach/line/change/land.cast": LAND.replace("line 2\n", "line 2 on main\n").replace("line 10\n", "line 10 risky\n"), "docs/a.md": lines(9) });
-const risky = commit("risky change");
-git(["checkout", "-q", "-b", "revert", risky]);
-git(["revert", "--no-edit", risky]);
-const reverted = git(["rev-parse", "HEAD"]).trim();
-const wholePr = gitKey(risky, reverted);
-const inverse = git(["patch-id", "--stable"], git([...DIFF, "--no-renames", risky, `${risky}^`])).trim().split(" ")[0];
-if (wholePr !== inverse) throw new Error("a true revert's diff should carry its commit's inverse patch id");
-record("a true revert", risky, reverted, { reverts: { sha_is_on_main: true, whole_key: wholePr, commit_files: githubFiles(`${risky}^`, risky) } });
-
 const byName = new Map(cases.map((c) => [c.name, c]));
 for (const c of cases) {
   if (c.same_key_as && byName.get(c.same_key_as).key !== c.key) throw new Error(`${c.name}: key should match ${c.same_key_as}`);

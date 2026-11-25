@@ -13,8 +13,8 @@
 //              it, a changed judged diff asks again.
 //   mechanism  the reviewer's answer counts only from a reviewer station codecast saw finish, on the head (or a head
 //              the run's own rebase made of it). Until one exists the status is pending: there is no default.
-//   revert     a pull request whose patch id is that of `git diff C C^` for one commit C on main that is not itself a
-//              revert needs no approval.
+//   revert     a Release Captain's revert (the run's role, and git's revert line on its commits) merges on CI's
+//              required checks alone; no revert is recognised from its diff.
 //   who        the status names the person a card goes to: a judged file the press did not list, the person who
 //              pressed; other work, its Requested-by person, else the session's owner, else the area's owner from the
 //              owners file beside the judges file (`path-prefix  person`); a mechanism, an engineer or that owner.
@@ -32,8 +32,8 @@ import { requireInstallationRevoker } from "./githubApp";
 import { fetchPRFiles, PR_FILES_CAP, type PRPath } from "./githubApi";
 import { patchPullRequest } from "./prShepherd";
 import { coveredHeads, runAttempt } from "./orgLineMerge";
-import { approvalContext, gateOf } from "./lib/changeApprovalRows";
-import { diffKey, invertPathDiff, isJudged, judgedPaths, keyChanged, keyEntriesFor, ownerOf, parseJudges, parseOwners, pathDiffsOf, pathsOf, requestedBy, revertedShas, type GitHubFile, type PathDiff } from "./lib/judgedDiff";
+import { approvalContext, gateOf, isCamRequest, isReleaseCaptain, preBuildYes } from "./lib/changeApprovalRows";
+import { diffKey, isJudged, judgedPaths, keyChanged, keyEntriesFor, ownerOf, parseJudges, parseOwners, pathDiffsOf, pathsOf, requestedBy, revertedShas, type GitHubFile } from "./lib/judgedDiff";
 
 const GITHUB = "https://api.github.com";
 /** GitHub cuts a status description at 140 characters. */
@@ -47,8 +47,8 @@ export type ApprovalFacts =
   | {
       opted: true;
       judged: string[];
-      /** The commit on main this pull request exactly undoes. */
-      revert_of?: string;
+      /** A revert the Release Captain's run made: CI's required checks alone decide it. */
+      captain_revert?: boolean;
       /** The review's answer: true a mechanism, false not, null not said (or not yet seen finished). */
       mechanism: boolean | null;
       /** A person's Ship on the run's card, for this judged diff. */
@@ -83,7 +83,7 @@ function pathList(paths: string[], room: number): string {
 export function decide(f: ApprovalFacts): ApprovalVerdict | null {
   if (!f.opted) return null;
   if ("unreadable" in f) return { state: "pending", description: fit(`could not read ${f.unreadable}; a person approves`) };
-  if (f.revert_of) return { state: "success", description: fit(`reverts ${f.revert_of.slice(0, 10)}, already on main`) };
+  if (f.captain_revert) return { state: "success", description: "the Release Captain's revert: CI's required checks decide" };
   if (f.mechanism === null) return { state: "pending", description: "waiting for the review's mechanism answer" };
   if (!f.judged.length && !f.mechanism) return { state: "success", description: "no judged paths; the review: not a mechanism" };
   if (f.card) return { state: "success", description: fit(`approved by ${f.card.who} (${f.card.ref})`) };
@@ -171,22 +171,6 @@ async function withSides(repository: string, token: string, files: PRPath[], bas
   });
 }
 
-async function commitFiles(repository: string, token: string, sha: string): Promise<{ parent: string | null; message: string; files: PRPath[] }> {
-  const files: PRPath[] = [];
-  let parent: string | null = null;
-  let message = "";
-  for (let page = 1; files.length < PR_FILES_CAP; page++) {
-    const r = await rest(`${GITHUB}/repos/${repository}/commits/${sha}?per_page=100&page=${page}`, token);
-    if (r.status === 404) return { parent: null, message: "", files: [] };
-    parent = r.json.parents?.[0]?.sha ?? null;
-    message = String(r.json.commit?.message ?? "");
-    const batch: any[] = r.json.files ?? [];
-    files.push(...batch.map((f) => ({ filename: f.filename, status: f.status, ...(f.sha ? { sha: f.sha } : {}), ...(f.previous_filename ? { previous_filename: f.previous_filename } : {}), ...(typeof f.patch === "string" ? { patch: f.patch } : {}), additions: f.additions ?? 0, deletions: f.deletions ?? 0 })));
-    if (batch.length < 100) break;
-  }
-  return { parent, message, files };
-}
-
 async function prMessages(repository: string, token: string, prNumber: number): Promise<string[]> {
   const commits: any[] = [];
   for (let page = 1; page <= 3; page++) {
@@ -198,32 +182,10 @@ async function prMessages(repository: string, token: string, prNumber: number): 
   return commits.map((c) => String(c.commit?.message ?? ""));
 }
 
-/**
- * The commit C on main whose `git diff C C^` has this pull request's whole patch id, among those its commits say they
- * revert; C must not itself be a revert, so undoing an undo is asked about like any change.
- */
-async function revertOf(repository: string, token: string, messages: string[], main: string, mb: string, head: string, files: PRPath[]): Promise<string | null> {
-  const named = [...new Set(messages.flatMap(revertedShas))].slice(0, 3);
-  if (!named.length) return null;
-  const whole = pathDiffsOf(await withSides(repository, token, files, mb, head, () => true), () => true);
-  if ("unreadable" in whole) return null;
-  const wholeKey = await diffKey(whole.diffs);
-  for (const sha of named) {
-    const onMain = await rest(`${GITHUB}/repos/${repository}/compare/${sha}...${encodeURIComponent(main)}`, token);
-    if (onMain.status === 404 || !["ahead", "identical"].includes(onMain.json?.status)) continue;
-    const c = await commitFiles(repository, token, sha);
-    if (!c.parent || !c.files.length || revertedShas(c.message).length) continue;
-    const undone = pathDiffsOf(await withSides(repository, token, c.files, c.parent, sha, () => true), () => true);
-    if ("unreadable" in undone) continue;
-    if ((await diffKey(undone.diffs.map((d: PathDiff) => invertPathDiff(d)))) === wholeKey) return sha;
-  }
-  return null;
-}
-
 export type PullRead =
   | { open: false }
   | { open: true; head_sha: string; unreadable: string; judges?: string[] }
-  | { open: true; head_sha: string; judged: string[]; key: string; revert_of?: string; judges: string[]; requested_by?: string; area_owner?: string };
+  | { open: true; head_sha: string; judged: string[]; key: string; judges: string[]; reverts: boolean; requested_by?: string; area_owner?: string };
 
 /** Everything the rule reads from GitHub for one pull request. Never throws past the head: a failure is unreadable. */
 export async function readPull(repository: string, prNumber: number, token: string, judgesPath: string): Promise<PullRead> {
@@ -249,12 +211,11 @@ export async function readPull(repository: string, prNumber: number, token: stri
     if ("unreadable" in rebuilt) return { open: true, head_sha: head, unreadable: `${rebuilt.unreadable}'s diff`, judges };
     const key = await diffKey(rebuilt.diffs);
     const messages = await prMessages(repository, token, prNumber);
-    const revert = await revertOf(repository, token, messages, main, mb, head, pr.paths).catch(() => null);
     const asker = requestedBy(messages);
     const ownersPath = `${judgesPath.includes("/") ? judgesPath.slice(0, judgesPath.lastIndexOf("/") + 1) : ""}owners.txt`;
     const ownersFile = await rest(`${GITHUB}/repos/${repository}/contents/${encodePath(ownersPath)}?ref=${encodeURIComponent(main)}`, token, { accept: "application/vnd.github.raw+json" });
     const owner = ownersFile.status === 404 ? null : ownerOf(judged.length ? judged : changed, parseOwners(ownersFile.text ?? ""));
-    return { open: true, head_sha: head, judged, key, judges, ...(revert ? { revert_of: revert } : {}), ...(asker ? { requested_by: asker } : {}), ...(owner ? { area_owner: owner } : {}) };
+    return { open: true, head_sha: head, judged, key, judges, reverts: messages.some((m) => revertedShas(m).length > 0), ...(asker ? { requested_by: asker } : {}), ...(owner ? { area_owner: owner } : {}) };
   } catch (error) {
     return { open: true, head_sha: head, unreadable: `GitHub (${(error instanceof Error ? error.message : String(error)).slice(0, 60)})` };
   }
@@ -268,7 +229,7 @@ export function statusesRefusal(permissions: Record<string, string> | undefined)
 
 // ── The work ──
 
-export type Evaluation = { opted: false } | { opted: true; open: false } | ({ opted: true; open: true; head_sha: string; context: string; posted: boolean; reason?: string } & ApprovalVerdict);
+export type Evaluation = { opted: false } | { opted: true; open: false } | ({ opted: true; open: true; head_sha: string; context: string; posted: boolean; unchanged?: boolean; reason?: string } & ApprovalVerdict);
 
 async function evaluateCore(ctx: any, args: { repository: string; pr_number: number; post: boolean }): Promise<Evaluation & { token?: string }> {
   const repository = normalizeRepository(args.repository);
@@ -277,11 +238,11 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
   const minted: { token: string; permissions?: Record<string, string> } = await ctx.runAction(internal.githubApp.getInstallationToken, { installation_id: gate.installation_id });
   const read = await readPull(repository, args.pr_number, minted.token, gate.judges_path);
   if (!read.open) return { opted: true, open: false };
-  const verdict: ApprovalVerdict & { context: string } = await ctx.runMutation(internal.changeApprovals.settle, {
+  const { unchanged, ...verdict }: ApprovalVerdict & { context: string; unchanged: boolean } = await ctx.runMutation(internal.changeApprovals.settle, {
     repository, pr_number: args.pr_number, head_sha: read.head_sha,
     ...("unreadable" in read ? { unreadable: read.unreadable } : {
       judged: read.judged, key: read.key,
-      ...(read.revert_of ? { revert_of: read.revert_of } : {}),
+      ...(read.reverts ? { reverts: true } : {}),
       ...(read.requested_by ? { requested_by: read.requested_by } : {}),
       ...(read.area_owner ? { area_owner: read.area_owner } : {}),
     }),
@@ -295,6 +256,8 @@ async function evaluateCore(ctx: any, args: { repository: string; pr_number: num
     return { ...done, posted: false, reason };
   };
   if (refusal) return unposted(refusal);
+  // Idempotent: a head whose status already reads this way is not posted again.
+  if (unchanged) return { ...done, posted: true, unchanged: true };
   try {
     await rest(`${GITHUB}/repos/${repository}/statuses/${read.head_sha}`, minted.token, { method: "POST", body: { state: verdict.state, description: verdict.description, context: verdict.context } });
   } catch (error) {
@@ -309,6 +272,39 @@ export const evaluate = internalAction({
   handler: async (ctx, args): Promise<Evaluation> => {
     const { token: _token, ...out } = await evaluateCore(ctx, { ...args, post: args.post ?? true }) as any;
     return out;
+  },
+});
+
+/** How many open pull requests one sweep reads per repository, and how far apart their reads start. */
+const SWEEP_PRS = 100;
+const SWEEP_SPACING_MS = 3_000;
+
+/**
+ * The periodic sweep (crons.ts): every opted-in repository's open pull requests are worked out again, so a dropped
+ * webhook or a deploy mid-event never leaves one pending with nobody told. Reads start a few seconds apart, and a
+ * status that already reads the same on its head is not posted again.
+ */
+export const sweep = internalAction({
+  args: {},
+  handler: async (ctx): Promise<{ repositories: number; pulls: number }> => {
+    const repositories: string[] = await ctx.runQuery(internal.changeApprovals.optedRepositories, {});
+    let n = 0;
+    for (const repository of repositories) {
+      const numbers: number[] = await ctx.runQuery(internal.changeApprovals.openNumbers, { repository });
+      for (const pr_number of numbers.slice(0, SWEEP_PRS)) {
+        await ctx.scheduler.runAfter(n++ * SWEEP_SPACING_MS, internal.changeApprovals.evaluate, { repository, pr_number, post: true });
+      }
+    }
+    return { repositories: repositories.length, pulls: n };
+  },
+});
+
+/** Every repository an installation opted in, once each. */
+export const optedRepositories = internalQuery({
+  args: {},
+  handler: async (ctx): Promise<string[]> => {
+    const rows = await ctx.db.query("github_app_installations").take(1000);
+    return [...new Set(rows.filter((r) => !r.suspended_at).flatMap((r) => (r.approval_gate ?? []).map((g) => normalizeRepository(g.repository))))];
   },
 });
 
@@ -368,12 +364,12 @@ export const settle = internalMutation({
     unreadable: v.optional(v.string()),
     judged: v.optional(v.array(v.string())),
     key: v.optional(v.string()),
-    revert_of: v.optional(v.string()),
+    reverts: v.optional(v.boolean()),
     requested_by: v.optional(v.string()),
     area_owner: v.optional(v.string()),
     judges: v.optional(v.array(v.string())),
   },
-  handler: async (ctx, args): Promise<ApprovalVerdict & { context: string }> => {
+  handler: async (ctx, args): Promise<ApprovalVerdict & { context: string; unchanged: boolean }> => {
     const repository = normalizeRepository(args.repository);
     const gate = await gateOf(ctx, repository);
     if (!gate) throw new Error(`${repository} is not opted in to the approval status`);
@@ -402,23 +398,36 @@ export const settle = internalMutation({
       .collect()).filter((a) => !a.revoked_at).sort((a, b) => b.created_at - a.created_at);
     const cardRow = approvals.find((a) => a.source === "card");
     const pressRow = approvals.find((a) => a.source === "ship_press");
-    const card = cardRow ? { who: await nameOf(ctx, cardRow.user_id), ref: cardRow.decision_id ? ((await ctx.db.get(cardRow.decision_id))?.short_id ?? "its card") : "its card" } : null;
+    // A change Cam asked for: the engineer's yes, given before anything was built (ct-98540), is the approval, and any
+    // card is that engineer's, never Cam's.
+    const camAsked = isCamRequest(args.requested_by);
+    const engineerYes = camAsked && run ? await preBuildYes(ctx, run) : null;
+    const card = cardRow
+      ? { who: await nameOf(ctx, cardRow.user_id), ref: cardRow.decision_id ? ((await ctx.db.get(cardRow.decision_id))?.short_id ?? "its card") : "its card" }
+      : engineerYes ? { who: await nameOf(ctx, engineerYes.user_id), ref: engineerYes.ref } : null;
     const press = pressRow ? { who: await nameOf(ctx, pressRow.user_id) } : null;
     // Who a card goes to, by name (cards to a person, never a role): the presser for judged files their press did not
     // list; else the work's Requested-by person, the session's owner, the area's owner. A mechanism: an engineer, or
     // the area's owner. Codecast cannot yet tell an engineer from anyone else, so it names the area's owner beside.
     const presser: any = run?.pressed_approval_id ? await ctx.db.get(run.pressed_approval_id) : null;
     const spawner: any = run?.spawner_conversation_id ? await ctx.db.get(run.spawner_conversation_id) : null;
-    const judgedNeeds = presser ? await nameOf(ctx, presser.user_id)
-      : args.requested_by ?? (spawner ? await nameOf(ctx, spawner.user_id) : null) ?? args.area_owner ?? "a person";
-    const needs = { judged: judgedNeeds, mechanism: `an engineer${args.area_owner ? ` or ${args.area_owner}` : ""}` };
+    const presserName = presser ? await nameOf(ctx, presser.user_id) : null;
+    const judgedNeeds = camAsked
+      ? (engineerYes ? await nameOf(ctx, engineerYes.user_id) : null) ?? args.area_owner ?? "an engineer"
+      : presserName ?? args.requested_by ?? (spawner ? await nameOf(ctx, spawner.user_id) : null) ?? args.area_owner ?? "a person";
+    const needs = { judged: judgedNeeds, mechanism: camAsked && engineerYes ? judgedNeeds : `an engineer${args.area_owner ? ` or ${args.area_owner}` : ""}` };
+    const role: any = run?.org_role_id ? await ctx.db.get(run.org_role_id) : null;
+    const captainRevert = !!args.reverts && isReleaseCaptain(role);
 
     const facts: ApprovalFacts = args.unreadable !== undefined
       ? { opted: true, unreadable: args.unreadable }
-      : { opted: true, judged, ...(args.revert_of ? { revert_of: args.revert_of } : {}), mechanism: run ? mechanismOf(run, args.head_sha) : null, card, press, needs };
+      : { opted: true, judged, ...(captainRevert ? { captain_revert: true } : {}), mechanism: run ? mechanismOf(run, args.head_sha) : null, card, press, needs };
     const verdict = decide(facts)!;
 
     const rows = await ctx.db.query("pull_requests").withIndex("by_repository_number", (q) => q.eq("repository", repository).eq("number", args.pr_number)).collect();
+    // The same words already posted on this head: posting them again changes nothing on GitHub (the sweep's case).
+    const before = rows[0]?.approval;
+    const unchanged = !!before && before.head_sha === args.head_sha && before.state === verdict.state && before.description === verdict.description;
     for (const pr of rows) {
       await patchPullRequest(ctx, pr._id, {
         approval: {
@@ -428,7 +437,7 @@ export const settle = internalMutation({
         },
       });
     }
-    return { ...verdict, context: approvalContext(gate.mode) };
+    return { ...verdict, context: approvalContext(gate.mode), unchanged };
   },
 });
 
