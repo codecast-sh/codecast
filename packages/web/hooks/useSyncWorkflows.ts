@@ -242,3 +242,22 @@ export function useSessionFlowRuns(conversationId: string | null | undefined): a
   const rows = useWorkflowRuns(where);
   return rows.length || ready ? rows.slice().sort((a, b) => (b.created_at ?? 0) - (a.created_at ?? 0)) : undefined;
 }
+
+/** Feeder: the run a session works in (convex sessionFlowRuns.ofSession): its own run, or its parent log's for a station. */
+export function useSyncSessionRun(conversationId: string | null | undefined) {
+  return useSyncCollection("workflowRuns", api.sessionFlowRuns.ofSession, entityIdArgs("conversation_id", conversationId ?? undefined));
+}
+
+/** Reader: the run a session works in, matched in the store by the session's own pointer or by a station that ran as
+ *  this session (undefined while cold, null when the session works in no run). */
+export function useSessionRun(conversationId: string | null | undefined, ownRunId?: string | null): any | null | undefined {
+  const { ready } = useSyncSessionRun(conversationId);
+  const where = useMemo(() => (r: any) => !!conversationId && (
+    (!!ownRunId && r._id === ownRunId) ||
+    (r.node_statuses ?? []).some((n: any) => String(n.session?._id ?? "") === conversationId)
+  ), [conversationId, ownRunId]);
+  const rows = useWorkflowRuns(where);
+  if (!conversationId) return null;
+  if (rows[0]) return rows[0];
+  return ready ? null : undefined;
+}

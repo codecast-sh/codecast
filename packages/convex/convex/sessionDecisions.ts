@@ -22,7 +22,7 @@ import { canAccessConversation, canAccessTask, computeWorkspaceKey } from "./lib
 import { isTeamMember, teamVisibleConvTeam } from "./privacy";
 import { withDecisionFacts } from "./lib/decisionRowFacts";
 import { decisionTeamOf } from "./lib/decisionTeam";
-import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, advisoryAnswerOpen, isHostedAgentType, isClosedSession } from "@codecast/shared/contracts";
+import { pickAnsweredDecision, formatDecisionAnswer, decisionAnswerClientId, answerOpenToChange, isHostedAgentType, isClosedSession } from "@codecast/shared/contracts";
 import type { Doc, Id } from "./_generated/dataModel";
 import { emitNotification } from "./notificationRouter";
 import { nextShortId } from "./counters";
@@ -54,6 +54,7 @@ import { pendingApproval, secretApprovalRefusal, settleSecretApproval } from "./
 import { applyCommandRunReport, commandRunRefusal, settleCommandRun } from "./lib/commandRuns";
 import { RUN_OPTION, RUN_OPTIONS, parseRunCommand, type CommandRun } from "@codecast/shared/contracts/commandRun";
 import { proposalAnswersError } from "@codecast/shared/contracts/expectations";
+import { roleManagers } from "@codecast/shared/contracts/orgLead";
 import { invalidImpact } from "@codecast/shared/contracts/decisionImpact";
 import { reopenTaskWaits, scheduleDecisionSettle } from "./taskWaits";
 import { currentDecisions, decisionSuperseded, newLineMemo, type LineMemo } from "./lib/superseded";
@@ -268,11 +269,11 @@ async function carriedHops(ctx: Ctx, conversationId: Id<"conversations">, taskId
 // asked: an agent account (users.is_bot) runs sessions but reads no queue, so
 // an unowned session it runs has no people here and routeFor finds them.
 //
-// `firstPersonId` is the person the reporting line ends at, when the caller
-// wants them in (routeFor): the first person above a hand's role, so a
-// manager sees questions from work that reports to them, and the person a
-// lead's role reports to, who may not be the host its seat runs on.
-export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<"users">): Promise<Id<"users">[]> {
+// `above` is the people the reporting lines end at, when the caller wants
+// them in (routeFor): every person above a hand's role, so each manager sees
+// questions from work that reports to them, and every person a lead's role
+// reports to, who may not be the host its seat runs on.
+export async function peopleFor(ctx: Ctx, conversation: any, above?: Id<"users"> | Id<"users">[]): Promise<Id<"users">[]> {
   const owners = await listSessionPartyIds(ctx, conversation._id);
   // The join table is canonical. A stale owner_user_id cache (the runner
   // after the seat was assigned away) must not keep questions on that person.
@@ -281,7 +282,7 @@ export async function peopleFor(ctx: Ctx, conversation: any, firstPersonId?: Id<
     const implicit = conversation.owner_user_id ?? (await humanStarterUser(ctx, conversation))?._id;
     if (implicit) ids.push(implicit);
   }
-  if (firstPersonId) ids.push(firstPersonId);
+  ids.push(...(Array.isArray(above) ? above : above ? [above] : []));
   return Array.from(new Set(ids.map(String))) as Id<"users">[];
 }
 
@@ -332,18 +333,22 @@ async function routeForSession(ctx: Ctx, conversation: any, now: number, task?: 
   const parent = conversation.standing_role_id ? role?.reports_to : undefined;
   const first = parent ? (parent.kind === "role" ? await ctx.db.get(parent.role_id) : null) : role;
   const ladder = await buildLadder(ctx, first, now);
-  // A sub-lead's seat has no person owner (org-staffing.md S28): the person
-  // its line ends at answers, never whoever happened to start the seat. A
+  // A sub-lead's seat has no person owner (org-staffing.md S28): the people
+  // its lines end at answer, never whoever happened to start the seat. A
   // line that ends at no person falls to the project lead or the admins below.
+  // A lead's own question reaches every person its role reports to; a hand's,
+  // every person the ladder's lines end at (org-people.md P3).
   const people = parent?.kind === "role"
-    ? (Array.from(new Set([...(await listSessionOwnerIds(ctx, conversation._id)), ...(ladder.firstPersonId ? [ladder.firstPersonId] : [])].map(String))) as Id<"users">[])
-    : await peopleFor(ctx, conversation, parent?.kind === "user" ? parent.user_id : ladder.firstPersonId);
+    ? (Array.from(new Set([...(await listSessionOwnerIds(ctx, conversation._id)), ...ladder.people].map(String))) as Id<"users">[])
+    : await peopleFor(ctx, conversation, conversation.standing_role_id
+      ? (role ? roleManagers(role).flatMap((p) => (p.kind === "user" ? [p.user_id] : [])) : [])
+      : ladder.people);
   const hears = first && (await reachableRole(ctx, first._id)) ? first : null;
   if (people.length > 0) return { role, ladder, people, hears };
   const lead = await projectLeadRole(ctx, task);
   const leadLadder = lead ? await buildLadder(ctx, lead, now) : null;
-  if (lead && leadLadder?.firstPersonId) {
-    return { role, ladder: leadLadder, people: [leadLadder.firstPersonId], hears: (await reachableRole(ctx, lead._id)) ? lead : null };
+  if (lead && leadLadder?.people.length) {
+    return { role, ladder: leadLadder, people: leadLadder.people, hears: (await reachableRole(ctx, lead._id)) ? lead : null };
   }
   return { role, ladder, people: await workspaceAdmins(ctx, conversation.team_id), hears };
 }
@@ -356,7 +361,7 @@ async function routeForSession(ctx: Ctx, conversation: any, now: number, task?: 
  */
 export async function routeToRole(ctx: Ctx, role: Doc<"org_roles">, now: number) {
   const ladder = await buildLadder(ctx, role, now);
-  const people = ladder.firstPersonId ? [ladder.firstPersonId] : await workspaceAdmins(ctx, role.team_id);
+  const people = ladder.people.length ? ladder.people : await workspaceAdmins(ctx, role.team_id);
   return { ladder, people, hears: (await reachableRole(ctx, role._id)) ? role : null };
 }
 
@@ -953,12 +958,12 @@ export async function settleClientResolution(
   presence?: string,
 ) {
   if (patch.status !== "answered" && patch.status !== "dismissed") return;
-  // A person changing an advisory answer (advisoryAnswerOpen): the client sent
+  // A person changing an answer on record (answerOpenToChange): the client sent
   // the new answer into the session, and the side effects already ran when
   // the row first settled, so the row only learns who answered last, and the
   // waits it met carry the new answer (taskWaits.restateAnswer).
   if (row.status !== "pending") {
-    if (patch.status === "answered" && advisoryAnswerOpen(row)) {
+    if (patch.status === "answered" && answerOpenToChange(row)) {
       await ctx.db.patch(row._id, { answered_by: { kind: "user", id: String(userId) }, resolved_by: userId, resolved_at: now });
       await scheduleDecisionSettle(ctx as any, row, { user_id: userId });
     }
@@ -979,13 +984,13 @@ export async function settleClientResolution(
 // The dispatch rail's pending guard (first writer wins on every rail): a
 // resolution patch on a row that is no longer pending is dropped whole, so a
 // web answer cannot overwrite what a role already wrote. The one exception is
-// a new answer on an advisory ask (advisoryAnswerOpen): the agent went ahead
-// on its default, and a person may still change its course.
+// a person changing an answer on record (answerOpenToChange): the new answer
+// reaches the agent as one more message and changes its course.
 // Pure, so it is unit tested without the dispatch mutation.
 const RESOLUTION_FIELDS = ["status", "answer_index", "answer_text", "answer_json", "resolved_at"];
 export function guardClientResolution(doc: { status?: string; blocking?: boolean; workflow_run_id?: unknown; answered_by?: { kind: string } | null }, safe: Record<string, any>): Record<string, any> {
   if (doc.status === "pending") return safe;
-  if (safe.status === "answered" && advisoryAnswerOpen(doc as any)) return safe;
+  if (safe.status === "answered" && answerOpenToChange(doc as any)) return safe;
   return RESOLUTION_FIELDS.some((f) => f in safe) ? {} : safe;
 }
 

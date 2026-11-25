@@ -581,6 +581,8 @@ details.lw-include > summary span:last-child { color: var(--lw-ink-3); }
 .fd-routes-more { position: relative; z-index: 1; font: inherit; font-size: var(--lw-fs-2xs); color: var(--lw-ink-3); background: var(--lw-paper); border: 0; padding: 0 3px; border-radius: 3px; cursor: pointer; white-space: nowrap; }
 .fd-routes-more:hover, .fd-routes-more[aria-expanded="true"] { color: var(--lw-ink-2); text-decoration: underline; }
 .fd-routes-more { align-self: flex-start; }
+.fd-route-tail { display: inline-flex; align-items: center; }
+.fd-routes-stops { color: color-mix(in srgb, var(--lw-bad) 75%, var(--lw-ink-3)); }
 .fd-ways { position: fixed; z-index: 60; margin: 0; padding: 6px 0; list-style: none; width: max-content; max-width: 300px; background: var(--lw-card); border: 1px solid var(--lw-rule); border-radius: 8px; box-shadow: 0 8px 24px -8px color-mix(in srgb, var(--sol-text) 28%, transparent); }
 .fd-way { display: flex; flex-direction: column; gap: 1px; padding: 4px 12px; font-size: var(--lw-fs-sm); }
 .fd-way-what { color: var(--lw-ink); font-weight: 600; }

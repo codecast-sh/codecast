@@ -107,7 +107,7 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
   const onOpenChange = (o: boolean) => { setOpen(o); if (!o) setAgain(false); };
   // The chip stays in the header at every width (the squeeze sheds its words, never the chip): Ship is one press away.
   const trigger = (
-    <button type="button" className={`${HEADER_CHIP} shp-chip`} aria-label={chip.words} title={chip.words} data-tone={chip.tone} data-run-through data-ship-state={journey?.now.kind ?? "none"}>
+    <button type="button" className={`cq-sq6 ${HEADER_CHIP} shp-chip`} aria-label={chip.words} title={chip.words} data-tone={chip.tone} data-run-through data-ship-state={journey?.now.kind ?? "none"}>
       {chip.tone === "idle" ? <Rocket className="w-3 h-3" /> : <i className="shp-chip-dot" aria-hidden />}
       <span className="cq-sq2">{chip.words}</span>
     </button>
@@ -134,7 +134,9 @@ function ShipButton({ conversationId, sessionTitle }: { conversationId: string; 
       ) : (
         <Popover open={open} onOpenChange={onOpenChange}>
           <PopoverTrigger asChild>{trigger}</PopoverTrigger>
-          <PopoverContent align="end" className="w-[600px] max-w-[calc(100vw-2rem)] p-0 border-sol-border bg-sol-bg overflow-hidden" data-run-through-pool>
+          <PopoverContent align="end" className="w-[600px] max-w-[calc(100vw-2rem)] max-h-[var(--radix-popover-content-available-height)] p-0 border-sol-border bg-sol-bg overflow-x-hidden overflow-y-auto outline-none" data-run-through-pool
+            // Focus lands on the panel, not its first stage: a ring on a stage read as that stage being picked.
+            onOpenAutoFocus={(e) => { e.preventDefault(); (e.currentTarget as HTMLElement | null)?.focus({ preventScroll: true }); }} tabIndex={-1}>
             {panel}
           </PopoverContent>
         </Popover>

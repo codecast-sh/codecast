@@ -14743,7 +14743,7 @@ roleGroup
     const remove = await people(options.remove);
     const result = await cliPost("/cli/role/reports", { role_id, add, remove, from_session: callingSession() });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
-    const n = result.reports_user_ids?.length ?? 0;
+    const n = result.reports?.length ?? result.reports_user_ids?.length ?? 0;
     console.log(`${c.green}✓${c.reset} ${n} ${n === 1 ? "person reports" : "people report"} to @${result.handle}${add.length ? `; it will ask ${add.length === 1 ? "the new person" : "each new person"} for their goals` : ""}`);
   });
 
@@ -14959,13 +14959,13 @@ org
     };
     console.log(`${c.bold}${tree.workspace.name || workspaceLabel(ws)}${c.reset}${tree.truncated ? ` ${c.yellow}(counts cover the newest sessions only: the scan hit its row cap)${c.reset}` : ""}`);
     for (const p of tree.people) {
-      console.log(`  ${c.cyan}${p.name}${c.reset}${p.is_me ? " (you)" : ""} ${c.dim}· ${p.role} · ${p.presence ?? "offline"} · ${orgTally(p.counts)}${c.reset}`);
+      console.log(`  ${c.cyan}${p.name}${c.reset}${p.is_me ? " (you)" : ""} ${c.dim}·${p.title ? ` ${p.title} ·` : ""} ${p.role} · ${p.presence ?? "offline"} · ${orgTally(p.counts)}${c.reset}`);
       sessionLines(p);
     }
     for (const r of tree.roles) {
-      const parent = r.reports_to.kind === "role"
-        ? (tree.roles.find((x: any) => x._id === r.reports_to.role_id)?.name ?? r.reports_to.role_id)
-        : (tree.people.find((x: any) => x.user_id === r.reports_to.user_id)?.name ?? "a person");
+      const parent = [r.reports_to, ...(r.also_reports_to ?? [])].map((m: any) => m.kind === "role"
+        ? (tree.roles.find((x: any) => x._id === m.role_id)?.name ?? m.role_id)
+        : (tree.people.find((x: any) => x.user_id === m.user_id)?.name ?? "a person")).join(", ");
       console.log(`  ${c.magenta}${r.name}${c.reset} ${c.dim}@${r.handle} · ${r.short_id} · ${r.status} · reports to ${parent} · ${orgTally(r.counts)}${c.reset}`);
       if (r.standing) console.log(`      ${c.dim}standing:${orgStandingLine(r.standing)}${c.reset}`);
       sessionLines(r);
@@ -14991,13 +14991,69 @@ org
     const role = (tree?.roles ?? []).find((r: any) => r.short_id === ref || r._id === ref || r.handle === handle);
     if (!role) failNoRole(`No role "${ref}" in ${workspaceLabel(ws)}.`, tree, ref, await roleElsewhere(ref, ws));
     const page = await cliPost("/cli/org/sessions-under", { ...workspaceArgs(ws), parent: { kind: "role", role_id: role._id }, limit: 200 });
-    if (options.json) { console.log(JSON.stringify({ ...role, sessions: page.sessions }, null, 2)); return; }
+    const { roleReportLines } = await import("@codecast/shared/contracts/personProfile");
+    const people = roleReportLines(role._id, tree.people ?? []);
+    if (options.json) { console.log(JSON.stringify({ ...role, people, sessions: page.sessions }, null, 2)); return; }
     console.log(`${c.bold}${role.name}${c.reset} ${c.dim}@${role.handle} · ${role.short_id} · ${role.status}${c.reset}`);
     if (role.charter) console.log(`  ${role.charter}`);
     const { briefScopeLine, briefPlanLines } = await import("./briefLines.js");
     console.log(`  ${c.dim}scope: ${briefScopeLine(role.scope_names, role.handle)}${c.reset}`);
+    if (people.length) {
+      console.log(`  people who report to it:`);
+      for (const line of people) console.log(`    ${line}`);
+    }
     console.log(`  ${c.dim}${orgTally(role.counts)}${c.reset}`);
     for (const s of page.sessions) console.log(orgSessionLine(s));
+  });
+
+org
+  .command("people")
+  .description("Everyone in the workspace, one line each: title, what they look after, who they report to")
+  .option("--team <name|id>", "Team workspace (default: the active workspace)")
+  .option("--json", "Machine-readable output")
+  .action(async (options: any) => {
+    const ws = await readWorkspace(options.team);
+    const roles = await cliPost("/cli/org/roles", workspaceArgs(ws));
+    if (!roles) { console.error(`No org in ${workspaceLabel(ws)}: you are not a member, or the org is off for it.`); process.exit(1); }
+    const { personShortLine } = await import("@codecast/shared/contracts/personProfile");
+    const nameOf = (m: any) => m.kind === "role"
+      ? `@${roles.roles.find((r: any) => r._id === m.role_id)?.handle ?? "role"}`
+      : roles.people.find((p: any) => p.user_id === m.user_id)?.name ?? "a teammate";
+    const people = roles.people.map((p: any) => ({ ...p, reports_to: (p.managers ?? []).map(nameOf).join(", ") || undefined }));
+    if (options.json) { console.log(JSON.stringify(people, null, 2)); return; }
+    for (const p of people) console.log(`  ${personShortLine(p)}${p.labels?.length && p.focus ? ` ${c.dim}#${p.labels.join(" #")}${c.reset}` : ""}`);
+    if (people.some((p: any) => !p.title)) console.log(`${c.dim}Set a profile: cast org person @handle --title "..." --focus "..."${c.reset}`);
+  });
+
+org
+  .command("person")
+  .description("One person, the long version: title, focus, labels, what they own and how to bring them something, the projects they decide for, who they report to and who reports to them. With flags, edits the profile (your own, or anyone's as an admin)")
+  .argument("<person>", "@handle, name, or me")
+  .option("--title <text>", "Short title, under 60 characters (\"\" clears)")
+  .option("--focus <text>", "One line: what they look after (\"\" clears)")
+  .option("--labels <list>", "Comma separated labels, e.g. sales,design (\"\" clears)")
+  .option("--about <text|->", "The long version in markdown: what they own, what to bring them and what not, how and when to reach them; - reads stdin (\"\" clears)")
+  .option("--team <name|id>", "Team workspace (default: the active workspace)")
+  .option("--json", "Machine-readable output")
+  .action(async (ref: string, options: any) => {
+    const ws = await readWorkspace(options.team);
+    if (ws.kind !== "team") { console.error("Profiles belong to a team's members. Name the team: --team <name>"); process.exit(1); }
+    const target = await resolveOrgTarget(ref, ws);
+    if (target.kind !== "user") { console.error(`${ref} is a role. A role's charter: cast org show ${ref}`); process.exit(1); }
+    const edit: Record<string, unknown> = {};
+    if (options.title !== undefined) edit.title = options.title;
+    if (options.focus !== undefined) edit.focus = options.focus;
+    if (options.labels !== undefined) edit.labels = String(options.labels).split(",");
+    if (options.about !== undefined) edit.about = options.about === "-" ? readStdinBody() : options.about;
+    if (Object.keys(edit).length) {
+      const r = await cliPost("/cli/org/person/set", { ...workspaceArgs(ws), user_id: target.user_id, ...edit });
+      if (!options.json) console.log(r?.changed ? `${c.green}Profile updated.${c.reset}` : `${c.dim}Nothing changed.${c.reset}`);
+    }
+    const p = await cliPost("/cli/org/person", { ...workspaceArgs(ws), user_id: target.user_id });
+    if (!p) { console.error(`No person "${ref}" in ${workspaceLabel(ws)}.`); process.exit(1); }
+    if (options.json) { console.log(JSON.stringify(p, null, 2)); return; }
+    const { personLongLines } = await import("@codecast/shared/contracts/personProfile");
+    console.log(personLongLines(p).join("\n"));
   });
 
 org
@@ -15019,20 +15075,27 @@ org
 
 org
   .command("reparent")
-  .description("Move a role or a session under another role or person")
-  .argument("<subject>", "A role (or-N or @handle) or a session (id or short id)")
-  .requiredOption("--to <target>", "A role (or-N or @handle) or a person (name, id, or me)")
+  .description("Move a role, a person or a session under another role or person")
+  .argument("<subject>", "A role (or-N or @handle), a person (@handle, name, or me), or a session (id or short id)")
+  .requiredOption("--to <target>", "A role (or-N or @handle) or a person (name, id, or me). For a role or a person, a comma list sets everyone it reports to, all equal (the first is where the chart draws it); for a person, none clears it")
   .option("--note <text>", stdinText("A line the agent reads with the move, after \"You now report to X\""))
   .option("--team <name|id>", "Team workspace (default: the active workspace)")
   .option("--json", "Machine-readable output")
   .action(async (subject: string, options: any) => {
     const ws = await readWorkspace(options.team);
-    const target = await resolveOrgTarget(options.to, ws);
-    const isRole = /^or-\d+$/.test(subject) || subject.startsWith("@");
+    const isOrg = /^or-\d+$/.test(subject) || subject.startsWith("@") || subject === "me";
     const from_session = callingSession();
-    const result = isRole
-      ? await cliPost("/cli/org/reparent", { role_id: (await resolveOrgTarget(subject, ws) as any).role_id, reports_to: target, note: options.note, from_session })
-      : await cliPost("/cli/org/reparent-session", { conversation_id: subject, target, note: options.note, from_session });
+    const who = isOrg ? await resolveOrgTarget(subject, ws) : null;
+    if (who?.kind === "user" && ws.kind !== "team") { console.error("People report to someone inside a team. Name the team: --team <name>"); process.exit(1); }
+    const list = who && options.to.trim().toLowerCase() !== "none" ? String(options.to).split(",").map((t: string) => t.trim()).filter(Boolean) : [];
+    if (who?.kind === "role" && !list.length) { console.error("A role reports to at least one person or role."); process.exit(1); }
+    const targets = who ? await Promise.all(list.map((t: string) => resolveOrgTarget(t, ws))) : [await resolveOrgTarget(options.to, ws)];
+    const target = targets[0];
+    const result = who?.kind === "user"
+      ? await cliPost("/cli/org/reparent-person", { ...workspaceArgs(ws), user_id: who.user_id, managers: targets })
+      : who?.kind === "role"
+        ? await cliPost("/cli/org/role-managers", { role_id: who.role_id, managers: targets, note: options.note, from_session })
+        : await cliPost("/cli/org/reparent-session", { conversation_id: subject, target, note: options.note, from_session });
     if (options.json) { console.log(JSON.stringify(result, null, 2)); return; }
     console.log(`${c.green}✓${c.reset} ${subject} now reports to ${options.to}${toldSuffix(result?.told)}`);
   });
@@ -17231,14 +17294,10 @@ async function cliPost(urlPath: string, body: Record<string, any>, opts?: { time
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ api_token: apiToken, ...body }),
   }, opts);
-  const text = await response.text();
-  let result: any;
-  try {
-    result = JSON.parse(text);
-  } catch {
-    const { nonJsonError } = await import("./castApi.js");
-    fail(nonJsonError(urlPath, response.status, text), "");
-  }
+  const { parseApiAnswer } = await import("./castApi.js");
+  const parsed = parseApiAnswer(urlPath, response, await response.text());
+  if ("failure" in parsed) return fail(parsed.failure, "");
+  const result = parsed.result;
   if (result?.error) fail(cliErrorMessage(result.error));
   return result;
 }

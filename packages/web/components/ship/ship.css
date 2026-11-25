@@ -64,6 +64,8 @@
 .sj-who { font-size: var(--fs-meta); line-height: 1.2; color: var(--sj-who-c); white-space: nowrap; }
 .sj-stage[data-state="idle"] .sj-who { opacity: .8; }
 .sj-round { color: var(--sol-text-dim); margin-left: 3px; }
+/* Under who acts, not beside it: six stages leave no room for both on one line. */
+.sj-who .sj-round { display: block; margin-left: 0; }
 .sj-pulse { width: 8px; height: 8px; border-radius: 999px; background: var(--sj-who-c, var(--sol-blue)); animation: sj-pulse 1.6s ease-in-out infinite; }
 .sj-wait { width: 8px; height: 8px; border-radius: 2px; background: var(--sj-wait); }
 @keyframes sj-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: .45; transform: scale(.8); } }

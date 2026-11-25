@@ -43,7 +43,7 @@ test("the overview's track: only the passing path, a count on the pill a change 
   // A "+" in each gap between stations, none inside the fork.
   expect(change.match(/data-pt-add/g)?.length).toBe(4);
   // Side routes live in the drawer: none of their words reach the track.
-  expect(change).not.toMatch(/other ways|sends|loop/i);
+  expect(change).not.toMatch(/fd-routes-more|\d+ more|sends|loop/i);
   const release = renderToStaticMarkup(<PipelineTrack items={trackOf(m, "release")} />);
   expect(release).toContain('data-kind="none"');
   expect(release).toContain(">passes<");

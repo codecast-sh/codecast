@@ -7,7 +7,7 @@
 // rail. A branch that ends the run is an end of its own, shaped like the
 // flow's end; a loop to another station names that station. The model is
 // lib/line/flowDiagram.ts; this only draws it.
-import { createContext, memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { createContext, memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useWatchEffect } from "../../../hooks/useWatchEffect";
 import { leftWords } from "../../../lib/ship/stationResult";
@@ -70,11 +70,13 @@ const STATE_MARK: Record<StepState, string> = { idle: "", done: "✓", current: 
 
 /** `marks`: what a pipeline says on each step beside its name (who changed it, when it runs, what stands on it now), by step id.
  *  `diagram`: the flow's model as the host already shaped it (a pipeline lane says a shared route once), else the flow's own. */
-/** `quietRoutes`: the passing path leads; each step's other ways fold into one "N other ways" that opens on hover or press
+/** `quietRoutes`: the passing path leads; each step's other ways fold into one "N more · N stops" line that opens on a press
  *  (a pipeline, where the path is what a person reads), and a fan-out always shows its branches by name. */
+/** `foldWays`: the same fold of each step's other ways, with the drawing otherwise as it is (a flow card or the library:
+ *  pressing a step opens every way it leaves in the station panel). */
 /** `onAdd`: the arrow before each passing-path step is a "+" that proposes a station there, after the step before it
  *  (null: before the first step). */
-export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact = false, picked = null, onPick, marks, diagram, quietRoutes = false, onAdd }: { flow: ShippedFlow; run?: RunLike; compact?: boolean; marks?: Readonly<Record<string, StepMark>>; diagram?: FlowDiagramModel; quietRoutes?: boolean; onAdd?: (afterId: string | null) => void } & Partial<Pick>) {
+export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact = false, picked = null, onPick, marks, diagram, quietRoutes = false, foldWays = false, onAdd }: { flow: ShippedFlow; run?: RunLike; compact?: boolean; marks?: Readonly<Record<string, StepMark>>; diagram?: FlowDiagramModel; quietRoutes?: boolean; foldWays?: boolean; onAdd?: (afterId: string | null) => void } & Partial<Pick>) {
   const model = useMemo(() => diagram ?? flowDiagram(flow), [diagram, flow]);
   const states = useMemo(() => stepStates(model, run), [model, run]);
   // While the session the change came from fixes what a stage found (its fix station runs), the Session it opens on is where the run is.
@@ -123,6 +125,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
     <OwnRun.Provider value={!!model.own}>
     <Marks.Provider value={marks ?? null}>
     <QuietRoutes.Provider value={quietRoutes}>
+    <FoldWays.Provider value={quietRoutes || foldWays}>
     <RailTo.Provider value={railTo}>
     <div ref={fit} className="fd" data-quiet={quietRoutes ? "" : undefined} data-compact={compact ? "" : undefined} data-has-run={run ? "" : undefined} data-pickable={onPick ? "" : undefined} data-returns={lastReturn >= 0 ? "" : undefined} data-rows={split ? "2" : undefined}>
       <div className="fd-rows">
@@ -140,6 +143,7 @@ export const FlowDiagram = memo(function FlowDiagram({ flow, run = null, compact
       </div>
     </div>
     </RailTo.Provider>
+    </FoldWays.Provider>
     </QuietRoutes.Provider>
     </Marks.Provider>
     </OwnRun.Provider>
@@ -234,10 +238,12 @@ const returnsTo = (step: DiagramStep, railTo: string): boolean => step.side.some
 const dropsToRail = (step: DiagramStep, railTo: string) =>
   step.kind === "parallel" || (step.kind === "segment" && step.inner.length > 1) ? step.side.some((r) => ridesRail(r, railTo)) : returnsTo(step, railTo);
 
-/** Whether each step's other ways fold into one quiet line (FlowDiagram `quietRoutes`). */
+/** Whether the drawing is a pipeline's, where the path leads (FlowDiagram `quietRoutes`). */
 const QuietRoutes = createContext(false);
 /** Whether the run drawn is an own-results round's (ownRound.ts): only its steps say on hover what their result said. */
 const OwnRun = createContext(false);
+/** Whether each step's other ways fold into one line that opens them (`quietRoutes` or `foldWays`). */
+const FoldWays = createContext(false);
 
 /** A pipeline's marks by step id; null for a plain flow. */
 const Marks = createContext<Readonly<Record<string, StepMark>> | null>(null);
@@ -277,7 +283,7 @@ const RailTo = createContext<string>(SESSION_WORDS);
  * took, red only where it stopped.
  */
 function Routes({ routes, run }: { routes: SideRoute[]; run: RunLike }) {
-  const quiet = useContext(QuietRoutes);
+  const quiet = useContext(FoldWays);
   const railTo = useContext(RailTo);
   const shown = run ? routes.filter((r) => runReached(run, r.toId)) : routes;
   if (!shown.length) return null;
@@ -286,12 +292,8 @@ function Routes({ routes, run }: { routes: SideRoute[]; run: RunLike }) {
   if (quiet && !run) {
     const rail = shown.filter((r) => ridesRail(r, railTo));
     const rest = shown.filter((r) => !ridesRail(r, railTo));
-    return (
-      <>
-        {rail.length ? <RouteList routes={rail} run={run} /> : null}
-        {rest.length ? <OtherWays routes={rest} /> : null}
-      </>
-    );
+    const more = rest.length ? <OtherWays routes={rest} /> : null;
+    return rail.length ? <RouteList routes={rail} run={run} tail={more} /> : more;
   }
   return <RouteList routes={shown} run={run} />;
 }
@@ -302,6 +304,7 @@ function OtherWays({ routes }: { routes: SideRoute[] }) {
   const [at, setAt] = useState<{ left: number; top: number } | null>(null);
   const button = useRef<HTMLButtonElement | null>(null);
   const list = useRef<HTMLUListElement | null>(null);
+  const stops = routes.filter((r) => !r.leadsTo && r.tone === "stop").length;
   useWatchEffect(() => {
     if (!at) return;
     const close = () => setAt(null);
@@ -326,7 +329,11 @@ function OtherWays({ routes }: { routes: SideRoute[] }) {
   };
   return (
     <>
-      <button ref={button} type="button" className="fd-routes-more" aria-expanded={!!at} onClick={toggle}>{routes.length} other {routes.length === 1 ? "way" : "ways"}</button>
+      <button ref={button} type="button" className="fd-routes-more" aria-expanded={!!at} onClick={toggle}>
+        {routes.length > stops ? `${routes.length - stops} more` : null}
+        {routes.length > stops && stops ? " · " : null}
+        {stops ? <span className="fd-routes-stops">{stops} {stops === 1 ? "stop" : "stops"}</span> : null}
+      </button>
       {at && typeof document !== "undefined" ? createPortal(
         <ul ref={list} className="fd-ways lw-widget" style={{ left: at.left, top: at.top }} role="list">
           {routes.map((r, i) => (
@@ -342,7 +349,8 @@ function OtherWays({ routes }: { routes: SideRoute[] }) {
   );
 }
 
-function RouteList({ routes: shown, run }: { routes: SideRoute[]; run: RunLike }) {
+/** `tail`: what follows the chips in their row (a step's folded other ways). */
+function RouteList({ routes: shown, run, tail }: { routes: SideRoute[]; run: RunLike; tail?: ReactNode }) {
   const railTo = useContext(RailTo);
   return (
     <ul className="fd-routes">
@@ -358,6 +366,7 @@ function RouteList({ routes: shown, run }: { routes: SideRoute[]; run: RunLike }
           </li>
         );
       })}
+      {tail ? <li className="fd-route-tail">{tail}</li> : null}
     </ul>
   );
 }

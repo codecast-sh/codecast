@@ -128,9 +128,11 @@ export function WorkflowRunPanel({ run, workflow, defaultExpanded = false }: { r
 // card for the run's gate_decision_id from the sessionDecisions store; a link
 // to the decision page until the row lands; the stored prompt only for a run
 // that predates gates as decisions.
-export function RunGate({ run, className }: {
+export function RunGate({ run, className, embedded = false }: {
   run: { gate_decision_id?: string; gate_decision_short_id?: string; gate_prompt?: string; gate_response?: string };
   className?: string;
+  /** The host frames it already: the decision draws without a box of its own. */
+  embedded?: boolean;
 }) {
   const gateDecisionId = run.gate_decision_id;
   // The queue feed holds the row when the viewer was asked; the per view
@@ -144,7 +146,7 @@ export function RunGate({ run, className }: {
   return (
     <div className={className ?? "space-y-1.5"} data-run-gate={gateDecisionId ?? ""}>
       {gateDecision ? (
-        <DecisionCompactCard decision={gateDecision} showTask={false} />
+        <DecisionCompactCard decision={gateDecision} showTask={false} embedded={embedded} />
       ) : gateDecisionId ? (
         <Link
           href={`/decisions/${run.gate_decision_short_id ?? gateDecisionId}`}

@@ -47,14 +47,16 @@ export const OriginTrail = memo(function OriginTrail({ decision, task: taskProp,
   const nav = useLineNav();
   const who = useFinderName();
   // Wake on the fields drawn: the decision's state and its problem's title, never the whole collections.
-  const taskOf = (st: any): any => { const t = taskProp ?? (decision ? st.sessionDecisions[decision]?.task_id : null); return t ? st.tasks[t] : null; };
+  // A decision the queue feeds left out (superseded, or asked of someone else) is still in its detail row.
+  const decOf = (st: any): any => (decision ? (st.sessionDecisions[decision] ?? st.decisionDetails?.[decision]?.decision ?? null) : null);
+  const taskOf = (st: any): any => { const t = taskProp ?? decOf(st)?.task_id; return t ? st.tasks[t] : null; };
   const s = useTrackedStore([
-    (st) => { const x = decision ? (st.sessionDecisions as any)[decision] : null; return x ? `${x.status}|${x.task_id ?? ""}|${x.session_title ?? ""}` : null; },
+    (st) => { const x = decOf(st); return x ? `${x.status}|${x.task_id ?? ""}|${x.session_title ?? ""}` : null; },
     (st) => { const t = taskOf(st); return t ? `${t._id}|${t.title}|${t.short_id ?? ""}` : null; },
     // A card asked outside the line: the asking session's own work (its bound task, else its plan).
-    (st) => { const c = decision ? (st.sessionDecisions as any)[decision]?.conversation_id : null; const x = c ? (st.sessions as any)[c] : null; return x ? `${x.active_task?.short_id ?? ""}|${x.active_plan?.short_id ?? ""}` : null; },
+    (st) => { const c = decOf(st)?.conversation_id; const x = c ? (st.sessions as any)[c] : null; return x ? `${x.active_task?.short_id ?? ""}|${x.active_plan?.short_id ?? ""}` : null; },
   ]);
-  const d = decision ? ((s.sessionDecisions as any)[decision] ?? null) : null;
+  const d = decOf(s);
   const task = taskOf(s);
   const taskId: string | null = taskProp ?? d?.task_id ?? null;
   useSyncTaskSignals(taskId);

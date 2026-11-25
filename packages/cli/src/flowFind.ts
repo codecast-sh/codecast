@@ -10,7 +10,11 @@ import { BUILTIN_WORKFLOW_TEMPLATES } from "./workflow/templates.js";
 import type { DirectoryWorkspace } from "./directoryTeam.js";
 import type { FlowDeps } from "./flowCommand.js";
 
-export type FoundFlow = PoolFlow & { source: string };
+export type FoundFlow = PoolFlow & {
+  source: string;
+  /** Where a repo flow read from the default branch sits there (`origin/main:.codecast/flows/change.cast`); its `file` is the cached copy. */
+  at?: string;
+};
 
 /** A session's 7-character codecast id, from whatever id the caller holds (its codecast id, or its agent's session id). */
 export async function shortSessionId(session: string | null, deps: FlowDeps): Promise<string | null> {

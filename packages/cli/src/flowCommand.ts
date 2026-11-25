@@ -15,11 +15,12 @@ import * as path from "node:path";
 import { holdUntil, libraryTree, liveFlowLines, namesLiveFlow, variantChangeLines, variantChanges, variantSummary, type LibraryNode, type LiveFlow, type VariantChanges } from "./flowLibrary.js";
 import type { WorkflowGraph } from "./workflow/types.js";
 import { graphExtends, parseWorkflowSource } from "./workflow/parser.js";
-import { flowLine } from "./workflow/flowPool.js";
+import { describeFlow, flowLine } from "./workflow/flowPool.js";
 import type { Workspace } from "./resolveWorkspace.js";
 import { choiceOption } from "./argChecks.js";
 import { staleShipFlow } from "./workflow/staleRepoFlow.js";
 import { PERSONAL_FLOW_SLUG } from "@codecast/shared/contracts/flowPool";
+import { flowAtDefaultWords, repoFlowAtDefault } from "./workflow/repoFlowAtDefault.js";
 import { registerFlowStations } from "./flowStations.js";
 import { registerFlowEditCommand } from "./flowEditCommand.js";
 import { registerFlowAwaitDeployCommand } from "./flowAwaitDeployCommand.js";
@@ -174,8 +175,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         console.log(dim(`\nIts flow ${name} is not in this team's library, so its stations cannot be read here.`));
         return;
       }
-      const found = await findFlow(name, deps, pool);
-      const stale = staleShipFlow(found, deps.realCwd());
+      const found = flowAsDefaultHasIt(name, await findFlow(name, deps, pool), deps.realCwd(), { fetch: false, reading: true });
+      // The shipped personal Ship stands in for `change`: a checkout cut before the repo's own change flow landed says so.
+      const stale = found.slug === PERSONAL_FLOW_SLUG ? staleShipFlow(found, deps.realCwd()) : null;
       if (stale) console.error(`! ${stale}`);
       const spineLive = live ?? lives.flows.find((l) => l.flow.slug === found.slug) ?? null;
       const base = found.extends ? baseOf(found, pool) : null;
@@ -187,7 +189,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
         for (const line of liveFlowLines(spineLive, { top: 10, bold, dim })) console.log(line);
         console.log("");
       }
-      const home = found.where === "team" ? `the team's${found.by ? `, from ${found.by}` : ""}` : found.where === "pushed" ? "yours, published" : found.file ? `${found.where} · ${path.relative(deps.realCwd(), found.file)}` : found.where;
+      const home = found.where === "team" ? `the team's${found.by ? `, from ${found.by}` : ""}` : found.where === "pushed" ? "yours, published" : found.at ? `${found.where} · ${found.at}` : found.file ? `${found.where} · ${path.relative(deps.realCwd(), found.file)}` : found.where;
       console.log(`${bold(found.label)}  ${dim(`${found.kind === "line" ? "flow" : found.kind} · ${home}`)}`);
       if (found.description) console.log(found.description);
       console.log(dim(`takes: ${found.takes.join(", ")}`));
@@ -332,13 +334,15 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       const slug = named ?? (opts.library ? read.libraryDefault ?? read.defaultFlow! : read.defaultFlow!).slug;
       if (!named && !opts.json) console.error(`${dim("No flow named:")} running ${bold(slug)}, the workspace's default`);
       // --library names the library's flow of that name: `change` stays the shipped change, never the personal Ship.
-      const found = await findFlow(slug, deps, opts.library ? read.library : read.flows, { exact: !!opts.library });
+      const listed = await findFlow(slug, deps, opts.library ? read.library : read.flows, { exact: !!opts.library });
+      // A repo flow runs as the default branch has it; the shipped personal Ship is checked against the repo's own gate below.
+      const found = opts.library || listed.slug === PERSONAL_FLOW_SLUG ? listed : flowAsDefaultHasIt(slug, listed, cwd);
       // The shipped personal Ship, or a flow built on it, runs only where personal is established.
       const { ships: shipsPersonal, refusal } = personalShipOf(found, cwd, where.personal);
       if (refusal) { console.error(`✗ ${refusal}`); process.exit(1); }
       // Said only of a flow named by name: a path names its own file, which nothing stands in for.
       if (named && !/[/\\]|\.cast$/.test(named) && found.slug !== named && !opts.json) console.error(`${dim("No team shares this directory:")} ${named} runs ${bold(found.slug)}, the personal Ship (a repo's own .codecast/flows/${named}.cast would run instead)`);
-      const stale = opts.library && found.slug !== PERSONAL_FLOW_SLUG ? null : staleShipFlow(found, cwd);
+      const stale = found.slug === PERSONAL_FLOW_SLUG ? staleShipFlow(found, cwd) : null;
       if (stale) { console.error(`✗ ${stale}`); process.exit(1); }
       if (found.errors.length) { console.error(`✗ ${found.slug} does not run: ${found.errors.join("; ")}`); process.exit(1); }
       const empty = found.stations.filter((s) => s.slot?.filled === "empty");
@@ -475,7 +479,7 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       // The change on its own branch and worktree, named as the run's isolated stations name theirs.
       const worktree = runSlug(graph, { task_id: task }, "run");
       const runDir = lineRunDir(top, worktree);
-      const { writeFrozenChange, originTip, freezeSessionChange } = await import("./workflow/flowChange.js");
+      const { writeFrozenChange, branchHead, freezeSessionChange } = await import("./workflow/flowChange.js");
       let change: import("./workflow/flowChange.js").FrozenChange | null = null;
       // A worktree an earlier run of this change made, read before its branch moves (workflow/runBranch.ts earlierRunTree).
       const { earlierRunTree } = await import("./workflow/runBranch.js");
@@ -483,10 +487,9 @@ export function registerFlowCommands(program: Command, deps: FlowDeps): Command 
       let earlier: string | null = null;
       try { earlier = earlierRunTree((await cast(["ws", "path", worktree], top)).out.trim(), resets); } catch (err) { console.error((err as Error).message); process.exit(1); }
       if (branch) {
-        const head = spawnSync("git", ["-C", top, "rev-parse", branch], { encoding: "utf-8" }).stdout.trim();
-        if (!head) { console.error(`No branch ${branch} here`); process.exit(1); }
+        const { head, remote_tip: remoteTip } = await branchHead(top, branch);
+        if (!head) { console.error(`No branch ${branch} here or on origin`); process.exit(1); }
         const { branchChangePaths } = await import("./workflow/flowChangeFile.js");
-        const remoteTip = await originTip(top, branch);
         // The files the branch changes, so a station gated on paths (when=) runs when they say it should.
         change = { source: opts.pr ? "pr" : "branch", ...(await callingSubject(deps, typeof opts.session === "string" ? opts.session : asker, task)), base: head, tip: head, ...(remoteTip ? { remote_tip: remoteTip } : {}), branch, worktree, paths: branchChangePaths(top, branch), shared: [], held: [] };
       } else if (opts.checkout) {
@@ -741,6 +744,22 @@ async function readLive(deps: FlowDeps, at: PoolAt): Promise<{ flows: LiveFlow[]
  * A flow this session wrote on stdin, kept for what comes next: where its file is (run it again, or edit it,
  * by that path) and pushed as the session's own draft graph, so the transcript draws it before any run.
  */
+/**
+ * A flow named in a checkout, as the repo's default branch has it (workflow/repoFlowAtDefault.ts, flows.md FL2): the
+ * checkout's copy only when it is the default branch's or holds edits of its own. A path or a graph on stdin runs as
+ * given. Says on stderr when the copy that runs is not the checkout's file as it stands.
+ */
+function flowAsDefaultHasIt(ref: string, found: FoundFlow, cwd: string, opts: { fetch?: boolean; reading?: boolean } = {}): FoundFlow {
+  const abs = path.resolve(cwd, ref);
+  if (ref === "-" || (fs.existsSync(abs) && fs.statSync(abs).isFile())) return found;
+  const at = repoFlowAtDefault(found.slug, cwd, found.where === "repo" ? found.file : null, opts);
+  const said = flowAtDefaultWords(found.slug, at);
+  // A run never falls back to a copy the default branch has replaced; a read shows it, marked.
+  if (at.use === "unparsed" && !opts.reading) { console.error(`✗ ${said}`); process.exit(1); }
+  if (said) console.error(at.use === "unparsed" ? `! ${said}` : dim(`  ${said}`));
+  return at.use === "default" ? { ...describeFlow(found.slug, at.source, "repo", at.file), source: at.source, at: `${at.ref}:${at.rel}` } : found;
+}
+
 async function keepSessionFlow(f: Pick<FoundFlow, "file" | "slug">, deps: FlowDeps): Promise<void> {
   if (!f.file) return;
   console.log(dim(`kept at ${path.relative(deps.realCwd(), f.file)}`));

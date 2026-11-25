@@ -341,6 +341,22 @@ export async function originTip(root: string, branch: string): Promise<string> {
 }
 
 /**
+ * The commit a run of a named branch starts from, and that branch made local when it lives only on origin. A branch
+ * pushed from another machine has no local ref here; without one, the worktree the run makes would create the branch
+ * fresh from this checkout's HEAD, and the change would vanish (a rebase of it onto the default branch is empty, which
+ * reads as "already landed"). Empty when neither this checkout nor origin has the branch.
+ */
+export async function branchHead(root: string, branch: string): Promise<{ head: string; remote_tip: string }> {
+  const remote_tip = await originTip(root, branch);
+  let head = await git(root, ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`]).catch(() => "");
+  if (!head && remote_tip) {
+    await git(root, ["branch", "--quiet", "--no-track", branch, remote_tip]);
+    head = remote_tip;
+  }
+  return { head, remote_tip };
+}
+
+/**
  * The upstream commit when it holds every one of `paths` as the checkout holds them now (a file gone from both is
  * held too), so a change with nothing left uncommitted (another pass shipped it, or the level sweep pulled it in) has
  * landed; else null.
