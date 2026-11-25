@@ -60,6 +60,7 @@ import { orgRoleTokenTables } from "./orgRoleTokensSchema";
 import { liveFlowTables } from "./liveFlowsSchema";
 import { flowMapTables } from "./flowMapSchema";
 import { sessionFlowTables } from "./sessionFlowsSchema";
+import { priorityTables } from "./prioritiesSchema";
 import { landedChangeTables } from "./landedChangesSchema";
 import { slackTables } from "./slackSchema";
 import { callRoomTables } from "./callRoomSchema";
@@ -161,6 +162,7 @@ export default defineSchema({
   ...liveFlowTables,
   ...flowMapTables,
   ...sessionFlowTables,
+  ...priorityTables,
   ...landedChangeTables,
   ...slackTables,
   ...passkeyTables,
@@ -1021,6 +1023,11 @@ export default defineSchema({
     // message takes the pin down and leaves the report and its time standing.
     thread_state_result: v.optional(v.string()),
     thread_state_result_at: v.optional(v.number()),
+    // The priority the priorities pass mapped this session to, and the step of
+    // it the session serves (prioritiesSchema.ts). Written only by the pass;
+    // drives the priority line under the pinned state.
+    priority_id: v.optional(v.id("priorities")),
+    priority_step_key: v.optional(v.string()),
     // The page an agent offered as a pane (`cast browser pane <url>`). One
     // latest offer, never a list: an agent that started three dev servers is
     // telling the reader about the newest, and a queue of dead addresses reads

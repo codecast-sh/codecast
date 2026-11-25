@@ -30,10 +30,14 @@ export type AccessStamp = {
   access_grants?: string[];
 };
 
+// Tables whose rows only their owner reads, whatever workspace they are filed under.
+const OWNER_ONLY_TABLES: ReadonlySet<string> = new Set(["priority_pass_runs", "thread_state_events"]);
+
 /** Pure stamp from a document that already carries its stored workspace key. */
 export function accessStampFromDoc(table: string, doc: any): AccessStamp | null {
   if (!doc?.user_id) return null;
   const stamp: AccessStamp = { access_owner: String(doc.user_id) };
+  if (OWNER_ONLY_TABLES.has(table)) return stamp;
   if (table !== "conversations" && typeof doc.workspace === "string" && doc.workspace) {
     stamp.access_key = doc.workspace;
   }
@@ -55,7 +59,7 @@ export function isUserGrant(assignee: unknown): assignee is string {
  */
 export async function accessStampFor(ctx: AccessCtx, table: string, doc: any): Promise<AccessStamp | null> {
   const stamp = accessStampFromDoc(table, doc);
-  if (!stamp) return null;
+  if (!stamp || OWNER_ONLY_TABLES.has(table)) return stamp;
   if (table === "conversations") {
     // Person owners grant to themselves; an owning team grants to whoever
     // holds its key, so a member who joins later reads it with no re-stamp.

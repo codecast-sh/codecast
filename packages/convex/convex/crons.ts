@@ -553,6 +553,15 @@ crons.cron(
 );
 
 crons.interval(
+  // Pin trail rows older than 30 days (prioritiesSchema.ts): the priorities
+  // pass reads only what came after its last run.
+  "prune old thread state events",
+  { hours: 24 },
+  (internal as any).threadStateEvents.prune,
+  {}
+);
+
+crons.interval(
   // Event samples older than 30 days (external-data.md X3, X11).
   "prune old event samples",
   { hours: 6 },
