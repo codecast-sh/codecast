@@ -38,5 +38,6 @@ describe("a typed ship", () => {
     expect(["ship it once CI is green", "don't ship", "shipping"].some(saysShip)).toBe(false);
     expect(typedShip([{ _id: "1", role: "user", content: "ship it" }, { _id: "2", role: "assistant", content: "on it" }])).toBe("1");
     expect(typedShip([{ _id: "1", role: "user", content: "ship it" }, { _id: "3", role: "user", content: "wait" }])).toBeNull();
+    expect(typedShip([{ _id: "1", role: "user", content: "ship it" }, { _id: "4", role: "user", content: "", tool_results: [{ tool_use_id: "t", content: "ok" }] }])).toBe("1");
   });
 });

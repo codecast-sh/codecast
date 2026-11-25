@@ -2,6 +2,7 @@
 // beside the button, so the confirm lists them and the press records exactly that list (convex changeApprovals.ts).
 import { mayBeJudged } from "@codecast/convex/convex/lib/judgedDiff";
 import { toolRowKind } from "../modernRow";
+import { isNoiseUserMessage } from "../conversationProcessor";
 
 type Message = { tool_calls?: ReadonlyArray<{ name?: string; input?: string } | null> | null };
 
@@ -59,11 +60,12 @@ export function saysShip(text: string | null | undefined): boolean {
   return /^\s*(yes[,.!]?\s+)?ship(\s+(it|this|that))?\s*[.!]*\s*$/i.test(String(text ?? ""));
 }
 
-/** The newest message a person typed in the thread, when it says ship: its id, else null. */
-export function typedShip(messages: ReadonlyArray<{ _id?: string; role?: string; content?: string | null }>): string | null {
+/** The newest message a person typed in the thread, when it says ship: its id, else null. A tool's result and a
+ *  harness notice ride as user rows too; neither is typed, so the agent's work after "ship" keeps the list up. */
+export function typedShip(messages: ReadonlyArray<{ _id?: string; role?: string; content?: string | null; tool_results?: ReadonlyArray<unknown> | null }>): string | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const m = messages[i];
-    if (m.role !== "user") continue;
+    if (m.role !== "user" || m.tool_results?.length || isNoiseUserMessage(m.content)) continue;
     return saysShip(m.content) && m._id ? String(m._id) : null;
   }
   return null;
