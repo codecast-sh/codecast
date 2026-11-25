@@ -211,6 +211,11 @@ export interface Config extends CloudSessionSyncSettings {
   // beat, so a hand `--disable` sticks until the team flips again); the
   // install wizard skips a snippet known to be off for every team.
   snippet_availability?: Record<string, boolean>;
+  // Last heartbeat-reported reply_streaming: whether any of this user's teams
+  // has live replies on. A mirror of the server's answer, kept so a session
+  // auto-resumed at boot, before the first beat, still gets the hook
+  // (replyStream.ts). Not a user setting.
+  reply_streaming?: boolean;
   // How much of each capability the installed sections carry: "full" (the
   // default) writes the whole guide into CLAUDE.md, "stub" writes what the
   // capability is and when to reach for it and leaves the flags to
