@@ -191,7 +191,7 @@ export function PrioritiesView({
               </h3>
               <div className="space-y-1.5">
                 {g.past.map((r) => (
-                  <PastRow key={r.short_id} row={r} lane={lanes.get(r.short_id)} days={days} levels={levels} writes={writes} />
+                  <PastRow key={r.short_id} row={r} lane={lanes.get(r.short_id)} days={days} levels={levels} history={history} open={openId === r.short_id} onToggle={() => onToggleOpen(r.short_id)} writes={writes} />
                 ))}
               </div>
             </>
@@ -340,11 +340,15 @@ function RowMenu({ row, writes, position, total = 0 }: { row: PriorityRow; write
   );
 }
 
-function PastRow({ row, lane, days, levels, writes }: {
+/** A finished or past priority: its title opens it on its steps, as an active one's does. */
+function PastRow({ row, lane, days, levels, history, open, onToggle, writes }: {
   row: PriorityRow;
   lane: PriorityHistoryLane | undefined;
   days: string[];
   levels: number[];
+  history: PriorityHistory | undefined;
+  open: boolean;
+  onToggle: () => void;
   writes: PriorityWrites;
 }) {
   const won = row.status === "done";
@@ -352,25 +356,27 @@ function PastRow({ row, lane, days, levels, writes }: {
     <div
       data-priority={row.short_id}
       data-status={row.status}
-      className={cn(
-        ROW_GRID,
-        "rounded-lg border px-3 py-2",
-        won ? "border-sol-green/40 bg-sol-green/[0.07]" : "border-sol-border/50 bg-transparent",
-      )}
+      className={cn("rounded-lg border", won ? "border-sol-green/40 bg-sol-green/[0.07]" : "border-sol-border/50 bg-transparent")}
     >
-      <span />
-      {/* The title takes the room it needs first; the goal it served gets what is left, clipped, never over the title. */}
-      <span className={cn("flex min-w-0 items-center gap-2", !won && "text-sol-text-muted")}>
-        <span data-past-title className={cn("max-w-full shrink-0 truncate text-body", won ? "font-semibold text-sol-text" : "font-medium")} title={row.title}>{row.title}</span>
-        {row.serves && <span data-past-serves className="hidden min-w-0 overflow-hidden whitespace-nowrap text-meta [&_*]:!whitespace-nowrap [@container(min-width:28rem)]:inline-flex"><EntityIdPill shortId={row.serves} type="initiative" compact /></span>}
-      </span>
-      <span className="justify-self-end [@container(min-width:28rem)]:col-span-2">
-        {won
-          ? <span className="inline-flex items-center rounded-full bg-sol-green px-2.5 py-0.5 text-meta font-semibold text-sol-bg">{pastBadge(row)}</span>
-          : <span className="whitespace-nowrap text-meta text-sol-text-dim">{pastBadge(row)}</span>}
-      </span>
-      {days.length > 0 && <span className="hidden [@container(min-width:36rem)]:block"><HistoryStrip days={days} counts={lane?.counts} truncated={lane?.truncated} levels={levels} muted={!won} /></span>}
-      <RowMenu row={row} writes={writes} />
+      <div className={cn(ROW_GRID, "px-3 py-2")}>
+        <span />
+        {/* The title takes the room it needs first; the goal it served gets what is left, clipped, never over the title. */}
+        <span className={cn("flex min-w-0 items-center gap-2", !won && "text-sol-text-muted")}>
+          <button type="button" data-past-title onClick={onToggle} aria-expanded={open} className={cn("max-w-full shrink-0 truncate text-left text-body", won ? "font-semibold text-sol-text" : "font-medium")} title={row.title}>
+            <ChevronRight aria-hidden className={cn("mr-1.5 inline size-3.5 align-[-2px] text-sol-text-dim transition-transform", open && "rotate-90")} />
+            {row.title}
+          </button>
+          {row.serves && <span data-past-serves className="hidden min-w-0 overflow-hidden whitespace-nowrap text-meta [&_*]:!whitespace-nowrap [@container(min-width:28rem)]:inline-flex"><EntityIdPill shortId={row.serves} type="initiative" compact /></span>}
+        </span>
+        <span className="justify-self-end [@container(min-width:28rem)]:col-span-2">
+          {won
+            ? <span className="inline-flex items-center rounded-full bg-sol-green px-2.5 py-0.5 text-meta font-semibold text-sol-bg">{pastBadge(row)}</span>
+            : <span className="whitespace-nowrap text-meta text-sol-text-dim">{pastBadge(row)}</span>}
+        </span>
+        {days.length > 0 && <span className="hidden [@container(min-width:36rem)]:block"><HistoryStrip days={days} counts={lane?.counts} truncated={lane?.truncated} levels={levels} muted={!won} /></span>}
+        <RowMenu row={row} writes={writes} />
+      </div>
+      {open && <PriorityBody row={row} history={history} writes={writes} />}
     </div>
   );
 }
@@ -506,7 +512,9 @@ function StepLine({ row, step, history, detail, days, dragging, onDragStart, onD
       </span>
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-1">
-          <div className={cn("min-w-0 truncate text-ui font-medium", step.done ? "text-sol-text-muted" : "text-sol-text")} title={step.title}>{step.title}</div>
+          {tasks[0]
+            ? <Link href={`/tasks/${tasks[0].id}`} className={cn("min-w-0 truncate text-ui font-medium hover:underline", step.done ? "text-sol-text-muted" : "text-sol-text")} title={step.title}>{step.title}</Link>
+            : <div className={cn("min-w-0 truncate text-ui font-medium", step.done ? "text-sol-text-muted" : "text-sol-text")} title={step.title}>{step.title}</div>}
           {onMoveTier && <StepMenu step={step} onMoveTier={onMoveTier} />}
         </div>
         <div className="mt-1 flex flex-wrap items-center gap-1.5">
