@@ -171,6 +171,11 @@ export function ComposerFoot({ start, end }: { start?: ReactNode; end: ReactNode
 /**
  * The autosizing composer textarea. `dim` greys the text while a rewrite
  * still holds the original message unedited.
+ *
+ * The one-line min-height is load-bearing. Deleting a whole draft makes Chrome
+ * lay the empty field-sizing box out at zero lines for an instant, before the
+ * placeholder line comes back; the transcript above grows by that line, clamps
+ * its scrollTop, and is left a line above the bottom when the box regrows.
  */
 export const ComposerTextarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttributes<HTMLTextAreaElement> & { dim?: boolean }>(
   function ComposerTextarea({ dim = false, ...props }, ref) {
@@ -180,7 +185,7 @@ export const ComposerTextarea = forwardRef<HTMLTextAreaElement, TextareaHTMLAttr
         {...props}
         rows={1}
         style={FIELD_SIZING_STYLE}
-        className={`block w-full [grid-area:1/1] bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-y-auto max-h-[var(--composer-max-h,45vh)] leading-relaxed py-1 ${dim ? "text-sol-text-dim italic" : "text-sol-text"}`}
+        className={`block w-full [grid-area:1/1] bg-transparent text-sm placeholder:text-sol-text-dim focus:outline-none disabled:opacity-50 resize-none overflow-y-auto min-h-[calc(1lh+0.5rem)] max-h-[var(--composer-max-h,45vh)] leading-relaxed py-1 ${dim ? "text-sol-text-dim italic" : "text-sol-text"}`}
       />
     );
   },
