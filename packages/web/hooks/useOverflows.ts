@@ -1,5 +1,6 @@
 import { useLayoutEffect, useState, type DependencyList, type RefObject } from "react";
 import { flushSync } from "react-dom";
+import { measureInFrame } from "../lib/frameMeasure";
 
 // One observer for every hook, and one batch for every first answer. Every
 // element in a batch is read before any answer is set, so the reads find the
@@ -7,35 +8,39 @@ import { flushSync } from "react-dom";
 // its own effect laid the page out once per mounted row, against a page the
 // transcript had just rewritten.
 //
-// The first answer is read in a microtask after the commit and applied with
-// flushSync, so the clamp is in the DOM before the browser paints. A state set
-// from the observer callback renders on a later task, after paint: a long
-// session message painted at full height, the virtualizer measured it, then it
-// clamped, and near the tail the 900px swing remounted the rows above in a
-// loop that shook the conversation several times a second.
+// The first answers are read at the start of the next frame (measureInFrame),
+// beside every other read queued there, and applied with flushSync, so the
+// clamp is in the DOM before the browser paints. Read in a microtask after
+// the commit, they laid out the page the commit had just written, inside the
+// commit's own task (ct-101461). A state set from the observer callback
+// renders on a later task, after paint: a long session message painted at
+// full height, the virtualizer measured it, then it clamped, and near the
+// tail the 900px swing remounted the rows above in a loop that shook the
+// conversation several times a second.
 type Watch = { read: () => boolean; set: (v: boolean) => void };
 const firstAnswers = new Set<Watch>();
-let firstAnswersQueued = false;
 
 function answerBeforePaint(w: Watch) {
+  if (firstAnswers.size === 0) {
+    measureInFrame(() => {
+      const answers = [...firstAnswers].map((d) => [d, d.read()] as const);
+      firstAnswers.clear();
+      return answers;
+    }, (answers) => {
+      flushSync(() => { for (const [d, v] of answers) d.set(v); });
+    });
+  }
   firstAnswers.add(w);
-  if (firstAnswersQueued) return;
-  firstAnswersQueued = true;
-  queueMicrotask(() => {
-    firstAnswersQueued = false;
-    const due = [...firstAnswers];
-    firstAnswers.clear();
-    const answers = due.map((d) => [d, d.read()] as const);
-    flushSync(() => { for (const [d, v] of answers) d.set(v); });
-  });
 }
 const watchesByTarget = new Map<Element, Set<Watch>>();
 let shared: ResizeObserver | null = null;
 
+// The observer reads in its callback, after the browser laid the page out. A
+// watch still waiting for its first answer is left to that answer.
 function observer(): ResizeObserver {
   shared ??= new ResizeObserver((entries) => {
     const due = new Set<Watch>();
-    for (const e of entries) for (const w of watchesByTarget.get(e.target) ?? []) due.add(w);
+    for (const e of entries) for (const w of watchesByTarget.get(e.target) ?? []) if (!firstAnswers.has(w)) due.add(w);
     for (const w of due) w.set(w.read());
   });
   return shared;

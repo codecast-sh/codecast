@@ -162,7 +162,12 @@ const push = (seq: number, text: string, receivedAt = Date.now()) => act(async (
 });
 const tick = (ms: number) => act(async () => { await new Promise((r) => setTimeout(r, ms)); });
 const renders = () => ((w as any).__renderCounts?.() ?? {})["ConversationView2"] ?? 0;
-const resizeObserved = () => act(async () => { for (const o of sizeObservers) for (const el of o.targets) if (el.isConnected) o.report(el); });
+// A browser frame runs animation frame callbacks, lays out, then reports
+// resizes: a read the page queued for the frame start lands before the report.
+const resizeObserved = () => act(async () => {
+  await new Promise((r) => requestAnimationFrame(() => r(null)));
+  for (const o of sizeObservers) for (const el of o.targets) if (el.isConnected) o.report(el);
+});
 
 async function mount(props: { targetMessageId?: string } = {}) {
   const host = w.document.createElement("div");
