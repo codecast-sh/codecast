@@ -17,6 +17,7 @@ import { requireUserOrToken } from "./lib/auth";
 import { workspaceHasFeature } from "./lib/teamFeatureGuard";
 import { checkConversationAccess } from "./privacy";
 import { PRESENCE_FRESH_MS } from "./presencePolicy";
+import { redactSecrets } from "./redact";
 import {
   REPLY_STREAM_LOAD_MAX_AGE_MS,
   REPLY_STREAM_MAX_CHARS,
@@ -53,23 +54,33 @@ export const push = mutation({
     }
 
     const now = Date.now();
+    // A closed tab never clears its presence row, so the range is everyone
+    // whose last view was this conversation: capped, like attendingOwner's.
     const viewers = await ctx.db
       .query("user_presence")
       .withIndex("by_viewing_conversation", (q) => q.eq("viewing_conversation_id", args.conversation_id))
-      .collect();
+      .take(50);
     if (!viewers.some((p) => now - p.last_seen < PRESENCE_FRESH_MS)) return { state: "unwatched" };
 
     const row = await ctx.db
       .query("reply_streams")
       .withIndex("by_conversation", (q) => q.eq("conversation_id", args.conversation_id))
       .first();
-    // A late or reordered push: an older line of this message, or an older message.
-    if (row && ((row.message_id === args.message_id && args.seq <= row.seq) || args.started_at < row.started_at)) {
+    // A late or reordered push: an older line of this message, or an older
+    // message. Only a row still being written orders anything: started_at is
+    // the pushing machine's clock, and a session that moved to a machine
+    // whose clock runs behind must not be shut out by the row it left.
+    const live = row && now - row.updated_at <= REPLY_STREAM_LOAD_MAX_AGE_MS;
+    if (live && ((row.message_id === args.message_id && args.seq <= row.seq) || args.started_at < row.started_at)) {
       return { state: "written" };
     }
 
+    // The same last pass addMessages gives a message, so the row never holds
+    // what the message would not, and the stream still opens the message that
+    // hands it off.
     let text = args.text.slice(0, REPLY_STREAM_MAX_CHARS);
     if (/[\ud800-\udbff]$/.test(text)) text = text.slice(0, -1);
+    text = redactSecrets(text);
     const fields = { message_id: args.message_id, text, seq: args.seq, started_at: args.started_at, updated_at: now };
     if (row) await ctx.db.patch(row._id, fields);
     else await ctx.db.insert("reply_streams", { conversation_id: args.conversation_id, user_id: userId, ...fields });
@@ -87,12 +98,13 @@ export const get = query({
       .query("reply_streams")
       .withIndex("by_conversation", (q) => q.eq("conversation_id", args.conversation_id))
       .first();
-    if (!row) return null;
+    // Before the conversation is read: a finished reply's row then depends on
+    // nothing a busy conversation keeps changing.
+    if (!row || Date.now() - row.updated_at > REPLY_STREAM_LOAD_MAX_AGE_MS) return null;
     const conv = await ctx.db.get(args.conversation_id);
     if (!conv) return null;
     // listMessagesTail's rule: a teammate holding only Summary access is "denied".
     if ((await checkConversationAccess(ctx, await getAuthUserId(ctx), conv)) === "denied") return null;
-    if (Date.now() - row.updated_at > REPLY_STREAM_LOAD_MAX_AGE_MS) return null;
     return {
       conversation_id: row.conversation_id,
       message_id: row.message_id,

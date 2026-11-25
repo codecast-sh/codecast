@@ -5,6 +5,8 @@ import { api, internal } from "./_generated/api";
 import { allModules } from "./testModules.testkit";
 import { hashToken } from "./apiTokens";
 import { PRESENCE_FRESH_MS } from "./presencePolicy";
+import { redactSecrets } from "./redact";
+import { CONVERSATION_ROW_TABLES } from "./lib/conversationRows";
 import { REPLY_STREAM_LOAD_MAX_AGE_MS, REPLY_STREAM_MAX_CHARS } from "@codecast/shared/contracts";
 
 const TOKEN = "owner-token";
@@ -102,6 +104,32 @@ describe("push", () => {
     await view(s);
     await push(s, { text: "x".repeat(REPLY_STREAM_MAX_CHARS + 50) });
     expect((await rows(s))[0].text).toHaveLength(REPLY_STREAM_MAX_CHARS);
+  });
+
+  test("a secret in the text is redacted as a message's would be", async () => {
+    const s = await seed({ flag: true });
+    await view(s);
+    // Built at runtime: push protection rejects credential-shaped literals.
+    const secret = "DEPLOY" + "_TOKEN=" + "a1b2c3d4e5f6g7h8";
+    await push(s, { text: `Run it with ${secret} set.` });
+    const text = (await rows(s))[0].text;
+    expect(text).not.toContain("a1b2c3d4e5f6g7h8");
+    expect(text).toBe(redactSecrets(`Run it with ${secret} set.`));
+  });
+
+  test("a row nobody has written to for the load age no longer orders pushes", async () => {
+    const s = await seed({ flag: true });
+    await view(s);
+    await push(s, { message_id: "m1", started_at: 5000, text: "From the first machine" });
+    const [row] = await rows(s);
+    await s.t.run((ctx) => ctx.db.patch(row._id, { updated_at: Date.now() - REPLY_STREAM_LOAD_MAX_AGE_MS - 1 }));
+    // A machine whose clock runs behind takes the session over.
+    await push(s, { message_id: "m2", seq: 1, started_at: 4000, text: "From the second" });
+    expect((await rows(s))[0]).toMatchObject({ message_id: "m2", started_at: 4000, text: "From the second" });
+  });
+
+  test("deleting the conversation's rows takes the stream with them", () => {
+    expect(CONVERSATION_ROW_TABLES).toContainEqual(["reply_streams", "by_conversation"]);
   });
 
   test("another user's token throws", async () => {
