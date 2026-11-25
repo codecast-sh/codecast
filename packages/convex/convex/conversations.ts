@@ -14294,6 +14294,17 @@ export const killSession = mutation({
   },
 });
 
+// A line station the person dismissed from the blocked banner (accountSwitch.acknowledgeBlocked).
+// Its run waits on the park and re-stamps a cleared flag (restampStationPark), so the only way the
+// dismissal holds is to stop the hand: the runner reads it killed and routes the step. The worktree
+// is the run's, shared by its stations, so it stays.
+export const killDismissedStation = internalMutation({
+  args: { user_id: v.id("users"), conversation_id: v.id("conversations") },
+  handler: async (ctx, args) => {
+    await killConversation(ctx, args.user_id, { conversation_id: args.conversation_id, mark_completed: true }, { cause: "station_dismissed", keepWorkspace: true });
+  },
+});
+
 // A restart the dispatch outbox delivers twice: answer from the command the
 // first delivery queued, before a ghost restore can mint a second conversation.
 async function replayedRestart(ctx: MutationCtx, userId: Id<"users">, requestId: string | undefined) {

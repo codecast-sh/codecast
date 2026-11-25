@@ -350,7 +350,7 @@ const releaseOf = (s: ShipEvent): typeof releaseArg.type => ({
 });
 
 /** The fields prose owns. Cleared when a story loses a session or a session narrows, so text drawn from it cannot outlive its access. */
-const PROSE_CLEARED = { body: undefined, why_source: undefined, risk_lines: undefined } as const;
+const PROSE_CLEARED = { body: undefined, why_source: undefined, risk_lines: undefined, screens: undefined } as const;
 
 /** A story whose prose call failed this many times keeps layer 0's text until its inputs move. */
 export const PROSE_ATTEMPTS = 3;

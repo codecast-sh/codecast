@@ -30,7 +30,7 @@ export async function askCheckoutCore(ctx: any, userId: Id<"users">, checkoutId:
   const mine = who === "finding" ? nobody : writers.find((w) => w.conversation_id === who)?.files ?? [];
   if (!mine.length) throw new ConvexError(who === "finding" ? "Every conflicting file has a session that wrote it" : "That session wrote none of the conflicting files");
   const host = row.device_label?.trim() || "its machine";
-  const { title, body } = levelAskWords({ path: row.path, upstream: report.upstream, behind: report.behind }, level, mine, null, { host, whose: who === "finding" ? "nobody" : "session" });
+  const { title, body, sender } = levelAskWords({ path: row.path, upstream: report.upstream, behind: report.behind }, level, mine, null, { host, whose: who === "finding" ? "nobody" : "session" });
   const now = typeof at === "number" && Number.isFinite(at) ? Math.min(at, Date.now()) : Date.now();
   if (who === "finding") {
     await ctx.scheduler.runAfter(0, internal.signals.ingestAs, {
@@ -47,7 +47,7 @@ export async function askCheckoutCore(ctx: any, userId: Id<"users">, checkoutId:
   } else {
     // The daemon's ask carries the same client id, so the writer hears this episode once, whichever asks first.
     const client_id = levelAskClientId({ device_id: row.device_id, path: row.path, files: level.files, since: level.since, conversation: who });
-    await performSessionSend(ctx, userId, { to: who, body: `${title}\n\n${body}`, intent: "request", wake: true, client_id });
+    await performSessionSend(ctx, userId, { to: who, body: `${title}\n\n${body}`, name: sender, intent: "request", wake: true, client_id });
   }
   const ask: CheckoutPageAsk = who === "finding"
     ? { at: now, since: level.since, files: mine.length, to: "finding" }

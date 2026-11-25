@@ -24,6 +24,9 @@ import { restoreToInbox } from "./inboxFilters";
 import { resurfaceViewerTriageOnPin } from "./lib/viewerTriage";
 import { configuredCloudWakeHosts, getCloudWakeHostForConversation } from "./cloudWake";
 import { enqueuePendingMessage, reachableRole } from "./pendingMessages";
+import { roleReportsOf } from "./orgPeople";
+import { roleManagers } from "@codecast/shared/contracts/orgLead";
+import { reportWaitsWords } from "@codecast/shared/contracts/personProfile";
 import { isHostedAgentType, triggerFiringSource, triggerFiringContinues, TRIGGER_PRECHECK_MESSAGE_CHARS, normalizeThreadState, runOwnerWakeOf, runParentOf, runResultThreadOf, triggerRunFrame, formatScheduledTask, isChatTriggerEvent, isPageTriggerEvent, type RoleCard, type RunOutcome, type WaitingSession } from "@codecast/shared/contracts";
 import type { AreaChange } from "@codecast/shared/contracts/orgAreas";
 import { isOrgReviewFocusKey, type OrgReviewFocusKey } from "@codecast/shared/contracts/orgReview";
@@ -974,16 +977,23 @@ async function cloudTriggerConversation(ctx: TaskCtx, task: Doc<"agent_tasks">) 
 // card when the trigger belongs to a role, the waiting session when one fired
 // it, and a note when the session is stashed out of the person's sight.
 
-export async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefined): Promise<RoleCard | null> {
+/** `viewerId` is whose grants the people's waits are read with: the person
+ *  behind the role for a wake, the caller for `cast org where`. */
+export async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefined, viewerId?: Id<"users">): Promise<RoleCard | null> {
   const role: any = roleId ? await ctx.db.get(roleId) : null;
   if (!role || role.status === "retired") return null;
-  const to = role.reports_to;
-  const parent: any = to?.kind === "role" ? await ctx.db.get(to.role_id) : to?.kind === "user" ? await ctx.db.get(to.user_id) : null;
-  const reports_to = to?.kind === "role" ? (parent ? `@${parent.handle}` : "") : (parent?.name ?? "");
+  // Every manager, all equal (org-people.md P3), in one name.
+  const reports_to = (await Promise.all(roleManagers(role).map(async (to: any) => {
+    const parent: any = await ctx.db.get(to.kind === "role" ? to.role_id : to.user_id);
+    return to.kind === "role" ? (parent ? `@${parent.handle}` : "") : (parent?.name ?? "");
+  }))).filter(Boolean).join(" and ");
   const charter = await roleCharterOf(ctx, role);
   const projects: any[] = (await Promise.all((role.scope?.project_ids ?? []).map((id: any) => ctx.db.get(id)))).filter(Boolean);
   const plans: any[] = (await Promise.all((role.scope?.plan_ids ?? []).map((id: any) => ctx.db.get(id)))).filter(Boolean);
   const served = await roleServedInitiatives(ctx, role);
+  // The people who report to it and what of its area waits on each, read as
+  // the person behind the role unless a reader is named: reporting grants nothing.
+  const people = await roleReportsOf(ctx, role, viewerId ?? role.host_user_id, Date.now());
   const firstLine = (t: unknown, n: number) => {
     const line = String(t ?? "").split("\n")[0].trim();
     if (line.length <= n) return line;
@@ -1000,6 +1010,7 @@ export async function roleCardOf(ctx: TaskCtx, roleId: Id<"org_roles"> | undefin
     // What the area feeds, up to the top level goal, with each number read
     // against its target: the link from a role's day to the company's goals.
     ...(served.length ? { initiatives: served.map((i) => ({ short_id: i.short_id, title: i.title, metrics: servedMetricLines(i), chain: i.chain.map((c) => c.title) })) } : {}),
+    ...(people.length ? { people: people.map((p) => ({ line: p.line, waits: reportWaitsWords(p.waits) })) } : {}),
   };
 }
 
@@ -1027,22 +1038,26 @@ async function roleHearing(ctx: TaskCtx, roleId: Id<"org_roles">, spec: RoleEven
   return task && task.status === "scheduled" ? { standing: reached.standing, task } : null;
 }
 
-/** The role that hears for a waiting session: its role for a session under
- *  one, the parent role for a role's own standing session, null otherwise. A
- *  worker nested under the session that started it tells that session instead
- *  (workerSettle.tellParent), so no role hears for it. */
-async function routeUpTarget(ctx: TaskCtx, conv: Doc<"conversations">): Promise<{ target: Id<"org_roles"> | null; standingRole: any }> {
-  if (isSpawnedWorker(conv as any)) return { target: null, standingRole: null };
+/** The roles that hear for a waiting session: its role for a session under
+ *  one; for a role's own standing session, every role among its role's equal
+ *  managers (org-people.md P3); none otherwise. A worker nested under the
+ *  session that started it tells that session instead (workerSettle.tellParent),
+ *  so no role hears for it. */
+async function routeUpTargets(ctx: TaskCtx, conv: Doc<"conversations">): Promise<{ targets: Id<"org_roles">[]; standingRole: any }> {
+  if (isSpawnedWorker(conv as any)) return { targets: [], standingRole: null };
   const standingRole = conv.standing_role_id ? await ctx.db.get(conv.standing_role_id) : null;
-  const target = standingRole ? (standingRole.reports_to?.kind === "role" ? standingRole.reports_to.role_id : null) : conv.org_role_id ?? null;
-  return { target, standingRole };
+  const targets = standingRole
+    ? roleManagers(standingRole).flatMap((p: any) => (p.kind === "role" ? [p.role_id as Id<"org_roles">] : []))
+    : conv.org_role_id ? [conv.org_role_id] : [];
+  return { targets, standingRole };
 }
 
 /** Whether a waiting session's route up has a listener, without firing it. */
 export async function routeUpHears(ctx: TaskCtx, conv: Doc<"conversations">): Promise<"hears" | "nobody" | "unreachable"> {
-  const { target } = await routeUpTarget(ctx, conv);
-  if (!target) return "nobody";
-  return (await roleHearing(ctx, target)) ? "hears" : "unreachable";
+  const { targets } = await routeUpTargets(ctx, conv);
+  if (!targets.length) return "nobody";
+  for (const t of targets) if (await roleHearing(ctx, t)) return "hears";
+  return "unreachable";
 }
 
 export async function fireRoleNeedsInput(
@@ -1133,18 +1148,22 @@ export async function routeUpWaitingSession(
       .first();
     if (openDecision) return "already";
   }
-  const { target, standingRole } = await routeUpTarget(ctx, conv);
-  if (!target) return "nobody";
+  const { targets, standingRole } = await routeUpTargets(ctx, conv);
+  if (!targets.length) return "nobody";
   const episode = `${count}:${state}`;
-  const id = await fireRoleNeedsInput(ctx, target, {
-    short_id: conv.short_id ?? String(conv._id).slice(0, 7),
-    title: (conv.title ?? "").slice(0, 80),
-    why: wait.why,
-    since: wait.since,
-    ...(standingRole ? { role: standingRole.handle } : {}),
-    state,
-  }, `session-waits:${conv._id}:${episode}`);
-  if (!id) return "unreachable";
+  let told = false;
+  for (const target of targets) {
+    const id = await fireRoleNeedsInput(ctx, target, {
+      short_id: conv.short_id ?? String(conv._id).slice(0, 7),
+      title: (conv.title ?? "").slice(0, 80),
+      why: wait.why,
+      since: wait.since,
+      ...(standingRole ? { role: standingRole.handle } : {}),
+      state,
+    }, `session-waits:${conv._id}:${episode}`);
+    told = told || !!id;
+  }
+  if (!told) return "unreachable";
   await ctx.db.patch(conv._id, { hand_wake_notified_key: episode });
   return "told";
 }

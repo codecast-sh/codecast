@@ -5,7 +5,7 @@ import { makeFunctionReference } from "convex/server";
 const listMine = makeFunctionReference<"query">("machineResources:listMine");
 const getMine = makeFunctionReference<"query">("machineResources:getMine");
 import { hashToken } from "./apiTokens";
-import { ATTENDED_AFTER_MESSAGE_MS, OVERLOAD_REALERT_MS, overloadAlertDue, overloadMessage, storeResourceSnapshot } from "./machineResources";
+import { ATTENDANCE_REREAD_MS, ATTENDED_AFTER_MESSAGE_MS, OVERLOAD_REALERT_MS, overloadAlertDue, overloadMessage, storeResourceSnapshot, validateResourceSnapshot } from "./machineResources";
 import type { MachineResourceSnapshot } from "@codecast/shared/contracts";
 
 const modules = {
@@ -41,6 +41,16 @@ test("resource report to authenticated read uses real schema and isolates machin
   expect(await t.run(ctx => storeResourceSnapshot(ctx, owner, sample(now + 30_000), now + 30_000))).toEqual({ accepted: false, background_sessions: [] });
   await t.run(ctx => storeResourceSnapshot(ctx, owner, sample(now + 60_000), now + 60_000));
   expect((await t.withIdentity({ subject: owner }).query(listMine, {}))[0].history).toHaveLength(2);
+});
+
+test("a refused measurement names the field that failed", () => {
+  const now = Date.now();
+  const proc = { pid: 7, ppid: 1, name: "node", kind: "tool" as const, cpu: 1, rss: 10 };
+  const bad = { ...sample(now), processes: [proc, { ...proc, pid: 8, startedAt: Number.NaN }] };
+  expect(() => validateResourceSnapshot(bad, now)).toThrow("Invalid resource measurement: snapshot.processes[1].startedAt=NaN");
+  expect(() => validateResourceSnapshot({ ...sample(now), sample: { ...sample(now).sample, swapUsedBytes: -4096 } }, now)).toThrow("snapshot.sample.swapUsedBytes=-4096");
+  expect(() => validateResourceSnapshot(bad, now)).toThrow(`(device ${bad.deviceId}, ${bad.platform})`);
+  expect(() => validateResourceSnapshot(sample(now), now)).not.toThrow();
 });
 
 test("malformed or oversized reports cannot overwrite the last good reading", async () => {
@@ -197,6 +207,31 @@ test("the governor's unattended set leaves out a session with a message still on
   expect((await report(now)).unattended_sessions).toEqual([]);
   await t.run(ctx => ctx.db.patch(waiting, { status: "delivered" }));
   expect((await report(now + 60_000)).unattended_sessions).toEqual(["role"]);
+});
+
+test("a report reads a session's conversation once per reread window, so the session's own message writes cannot collide with it", async () => {
+  const t = convexTest(schema, modules);
+  const now = Date.now();
+  const { user, conversation_id } = await t.run(async ctx => {
+    const id = await ctx.db.insert("users", {});
+    await ctx.db.insert("devices", { user_id: id, device_id: "mac", label: "Mac", platform: "darwin", last_seen: now });
+    const conversation_id = await ctx.db.insert("conversations", {
+      user_id: id, agent_type: "claude_code", session_id: "s", status: "active", message_count: 0, started_at: now, updated_at: now, is_private: true,
+    } as any);
+    await ctx.db.insert("managed_sessions", { session_id: "s", conversation_id, user_id: id, pid: 1, started_at: now, last_heartbeat: now, agent_status: "working" });
+    return { user: id, conversation_id };
+  });
+  const report = (at: number) => t.run(ctx => storeResourceSnapshot(ctx, user, {
+    ...sample(at),
+    processes: [{ pid: 100, name: "claude", cpu: 1, rss: 1, sessionId: "s" }],
+  } as MachineResourceSnapshot, at));
+  expect((await report(now)).unattended_sessions).toEqual([]);
+  // The flag changes underneath; inside the window the cached verdict answers without reading the row.
+  await t.run(ctx => ctx.db.patch(conversation_id, { is_subagent: true }));
+  expect((await report(now + 60_000)).unattended_sessions).toEqual([]);
+  expect((await report(now + ATTENDANCE_REREAD_MS + 60_000)).unattended_sessions).toEqual(["s"]);
+  const row = await t.run(ctx => ctx.db.query("machine_resources").first());
+  expect(row?.session_attendance).toEqual([{ session_id: "s", conversation_id, unattended: true, at: now + ATTENDANCE_REREAD_MS + 60_000 }]);
 });
 
 test("one device's report reads alone, scoped to its owner", async () => {

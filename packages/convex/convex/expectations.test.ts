@@ -36,11 +36,18 @@ async function makeCtx(asUser: string | null = null) {
       { _id: "session_decisions_96", short_id: "sd-96", user_id: MATE, status: "answered", answered_by: { kind: "role", id: "org_roles_1" }, answer_text: "yes we should track the bounce as an object with the email on it.", options: [], created_at: 1 },
     ],
     // cl-96: Ashot says the line QUOTED cites, at the segment its ref names.
-    transcripts: [{ _id: "transcripts_96", short_id: "cl-96", team_id: TEAM, room_key: "r", started_by: OWNER, status: "ended", started_at: 1 }],
+    transcripts: [
+      { _id: "transcripts_96", short_id: "cl-96", team_id: TEAM, room_key: "r", started_by: OWNER, status: "ended", started_at: 1 },
+      // cl-97: a voice note. Cam's voice was named by a person; Ashot's is only a voice match.
+      { _id: "transcripts_97", short_id: "cl-97", team_id: TEAM, room_key: "rec:v", started_by: OWNER, status: "ended", started_at: 1,
+        speakers: [{ key: "spk:0", user_id: MATE, source: "person" }, { key: "spk:1", user_id: OWNER, source: "voice", score: 0.9 }] },
+    ],
     transcript_segments: [
       { _id: "transcript_segments_1", transcript_id: "transcripts_96", seq: 717, speaker_id: MATE, speaker_name: "Cam", text: "So what does the card show the caller?", t0: 0, t1: 1 },
       { _id: "transcript_segments_2", transcript_id: "transcripts_96", seq: 718, speaker_id: OWNER, speaker_name: "Ashot", text: "I think a call card's facts should", t0: 1, t1: 2 },
       { _id: "transcript_segments_3", transcript_id: "transcripts_96", seq: 719, speaker_id: OWNER, speaker_name: "Ashot", text: "hold true for every caller.", t0: 2, t1: 3 },
+      { _id: "transcript_segments_4", transcript_id: "transcripts_97", seq: 1, speaker_id: "spk:0", speaker_name: "Speaker 1", text: "Voicemail drops after thirty seconds.", t0: 0, t1: 1 },
+      { _id: "transcript_segments_5", transcript_id: "transcripts_97", seq: 2, speaker_id: "spk:1", speaker_name: "Speaker 2", text: "Missed calls ring twice before voicemail.", t0: 1, t1: 2 },
     ],
     chat_messages: [
       { _id: "chat_messages_person", team_id: TEAM, channel_id: "chat_channels_team", user_id: MATE, content: "Callbacks only when the contact asked for one.", created_at: 1 },
@@ -163,6 +170,12 @@ describe("an addition applies on its own only in a person's own words", () => {
     expect(await statusOf({ kind: "call", ref: "cl-96:718", quote: "a call card's facts should hold true for every caller", when: "2026-09-30" }, "A call card's facts hold true for every caller.")).toBe("applied");
     // Cam is a person in the team too: the rule checks who said the words, never whether they rule.
     expect(await statusOf({ kind: "call", ref: "cl-96", quote: "what does the card show the caller", when: "2026-09-30" }, "The card shows the caller who they are calling.")).toBe("applied");
+  });
+
+  test("a voice note's line grounds an expectation only when a person said whose voice it is", async () => {
+    expect(await statusOf({ kind: "call", ref: "cl-97:1", quote: "Voicemail drops after thirty seconds", when: "2026-11-21" }, "Voicemail drops after thirty seconds.")).toBe("applied");
+    // A voice match's guess is not a person's word.
+    expect(await statusOf({ kind: "call", ref: "cl-97:2", quote: "Missed calls ring twice before voicemail", when: "2026-11-21" }, "Missed calls ring twice before voicemail.")).toBe("open");
   });
 
   test("an agent's words, another team's line, a role's answer, a quote the record lacks or a task note wait for the person", async () => {

@@ -9,13 +9,24 @@ import type { Doc } from "./_generated/dataModel";
 import type { MutationCtx, QueryCtx } from "./_generated/server";
 import type { Id } from "./_generated/dataModel";
 
+/** The first number in a snapshot that is negative or not finite, as `path=value`; the error names it and the device so a refused report says which collector misread, and where. */
+function invalidMeasurement(value: unknown, path: string): string | null {
+  if (typeof value === "number") return Number.isFinite(value) && value >= 0 ? null : `${path}=${value}`;
+  if (!value || typeof value !== "object") return null;
+  for (const [key, child] of Object.entries(value)) {
+    const hit = invalidMeasurement(child, Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`);
+    if (hit) return hit;
+  }
+  return null;
+}
+
 export function validateResourceSnapshot(snapshot: MachineResourceSnapshot, now: number): void {
   if (snapshot.processes.length > RESOURCE_PROCESS_LIMIT || snapshot.groups.length > 6 || snapshot.limitations.length > 12) throw new Error("Resource snapshot exceeds its bounds");
   if (Math.abs(snapshot.sample.at - now) > 300_000) throw new Error("Resource snapshot clock is stale or skewed");
   if (snapshot.deviceId.length > 128 || snapshot.platform.length > 32 || snapshot.limitations.some(s => s.length > 240)) throw new Error("Resource snapshot text exceeds its bounds");
   if (snapshot.processes.some(p => p.name.length > 120 || (p.sessionId?.length ?? 0) > 128 || (p.sharedSessionIds?.length ?? 0) > 32 || p.sharedSessionIds?.some(s => s.length > 128) || (p.localData?.root.length ?? 0) > 240)) throw new Error("Resource process exceeds its bounds");
-  const finite = (value: unknown): boolean => typeof value === "number" ? Number.isFinite(value) && value >= 0 : Array.isArray(value) ? value.every(finite) : value && typeof value === "object" ? Object.values(value).every(finite) : true;
-  if (!finite(snapshot)) throw new Error("Invalid resource measurement");
+  const invalid = invalidMeasurement(snapshot, "snapshot");
+  if (invalid) throw new Error(`Invalid resource measurement: ${invalid} (device ${snapshot.deviceId}, ${snapshot.platform})`);
   if (snapshot.sample.memoryAvailable > snapshot.sample.memoryTotal || (snapshot.sample.cpuPercent ?? 0) > 100 || snapshot.sample.logicalCpus < 1) throw new Error("Invalid machine totals");
   if (new Set(snapshot.processes.map(p => p.pid)).size !== snapshot.processes.length) throw new Error("Duplicate resource process");
   if (snapshot.sample.processCount === undefined && (snapshot.processes.length || snapshot.groups.length || snapshot.omittedProcessCount)) throw new Error("Unavailable process measurements cannot carry attribution");
@@ -67,10 +78,11 @@ export async function storeResourceSnapshot(ctx: MutationCtx, userId: Id<"users"
   const incident = device.is_remote ? null : sustainedResourcePressure(history, now);
   const alert = overloadAlertDue(incident, existing?.overload_alert, now);
   const stamp = alert ? { overload_alert: { since: alert.since, level: alert.level, at: now } } : {};
-  if (existing) await ctx.db.patch(existing._id, { ...data, ...stamp });
-  else await ctx.db.insert("machine_resources", { ...data, ...stamp });
+  const session_attendance = await sessionAttendance(ctx, snapshot, existing?.session_attendance ?? [], now);
+  if (existing) await ctx.db.patch(existing._id, { ...data, ...stamp, session_attendance });
+  else await ctx.db.insert("machine_resources", { ...data, ...stamp, session_attendance });
   if (alert) await notifyOverload(ctx, userId, device, snapshot, alert, now);
-  return { accepted: true, background_sessions, unattended_sessions: await unattendedSessions(ctx, snapshot, now) };
+  return { accepted: true, background_sessions, unattended_sessions: await unattendedSessions(ctx, session_attendance, now) };
 }
 
 /** A person who wrote to a session this recently is watching it, whatever its flags say. */
@@ -84,23 +96,55 @@ export const ATTENDED_AFTER_MESSAGE_MS = 30 * 60_000;
  * never goes there. Sent with accepted reports only; the daemon keeps the last
  * answer between them.
  */
-async function unattendedSessions(ctx: MutationCtx, snapshot: MachineResourceSnapshot, now: number): Promise<string[]> {
+/** How long a session's attended/unattended verdict is trusted before its conversation is read again. */
+export const ATTENDANCE_REREAD_MS = 10 * 60_000;
+
+type SessionAttendance = NonNullable<Doc<"machine_resources">["session_attendance"]>[number];
+
+/**
+ * Each local session's isUnattendedConversation verdict, read from its
+ * conversation only when this machine has none younger than
+ * ATTENDANCE_REREAD_MS. The conversation row is rewritten with every message,
+ * so reading it in every report put each live session's own writes in the
+ * report's way: on a busy Mac the report lost every retry to addMessages and
+ * the snapshot was dropped (~60 per 6h, 2026-11-23).
+ */
+async function sessionAttendance(ctx: MutationCtx, snapshot: MachineResourceSnapshot, known: SessionAttendance[], now: number): Promise<SessionAttendance[]> {
+  const cached = new Map(known.map(a => [a.session_id, a]));
   const ids = new Set<string>();
   for (const p of snapshot.processes) if (p.sessionId) ids.add(p.sessionId);
-  const out: string[] = [];
-  for (const sessionId of ids) {
-    const managed = await ctx.db.query("managed_sessions").withIndex("by_session_id", q => q.eq("session_id", sessionId)).first();
+  const out: SessionAttendance[] = [];
+  for (const session_id of ids) {
+    const hit = cached.get(session_id);
+    if (hit && now - hit.at < ATTENDANCE_REREAD_MS) { out.push(hit); continue; }
+    const managed = await ctx.db.query("managed_sessions").withIndex("by_session_id", q => q.eq("session_id", session_id)).first();
     const conv = managed?.conversation_id ? await ctx.db.get(managed.conversation_id) : null;
-    if (!conv || !isUnattendedConversation(conv)) continue;
+    out.push({ session_id, ...(conv ? { conversation_id: conv._id } : {}), unattended: isUnattendedConversation(conv), at: now });
+  }
+  return out;
+}
+
+/**
+ * The sessions on this machine nobody is watching (isUnattendedConversation),
+ * no person has written to lately, and no message is waiting to reach. The daemon's load governor runs them at
+ * background priority while the machine is over its budget, where a busy Mac
+ * can leave them without CPU for an hour, so a session a person is talking to
+ * never goes there. Sent with accepted reports only; the daemon keeps the last
+ * answer between them.
+ */
+async function unattendedSessions(ctx: MutationCtx, attendance: SessionAttendance[], now: number): Promise<string[]> {
+  const out: string[] = [];
+  for (const { session_id, conversation_id, unattended } of attendance) {
+    if (!unattended || !conversation_id) continue;
     const recent = await ctx.db.query("pending_messages")
-      .withIndex("by_conversation_id", q => q.eq("conversation_id", conv._id))
+      .withIndex("by_conversation_id", q => q.eq("conversation_id", conversation_id))
       .order("desc")
       .take(5);
     // A message still on its way in needs the agent awake to read it: caged at background
     // priority, a resumed session took 21s of CPU in 40 minutes and never took one (jx751p3,
     // 2026-11-08).
     if (recent.some(m => (m.human && now - m._creationTime < ATTENDED_AFTER_MESSAGE_MS) || m.status === "pending" || m.status === "injected")) continue;
-    out.push(sessionId);
+    out.push(session_id);
   }
   return out;
 }

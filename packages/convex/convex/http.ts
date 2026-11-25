@@ -3396,6 +3396,11 @@ cliRoute("/cli/org/tree", async (ctx, body) => {
 cliRoute("/cli/org/roles", async (ctx, body) => ctx.runQuery(api.org.roles, body));
 // Where the calling session sits (`cast org where`, the session-start org context).
 cliRoute("/cli/org/where", async (ctx, body) => ctx.runQuery((api as any).orgWhere.where, body));
+// One person's profile and place in the chart (`cast org person`), and its edit.
+cliRoute("/cli/org/person", async (ctx, body) => ctx.runQuery((api as any).orgPeople.person, body));
+cliRoute("/cli/org/person/set", async (ctx, body) => ctx.runMutation((api as any).orgPeople.setProfile, body));
+cliRoute("/cli/org/reparent-person", async (ctx, body) => ctx.runMutation((api as any).orgPeople.reparentPerson, body));
+cliRoute("/cli/org/role-managers", async (ctx, body) => ctx.runMutation((api as any).orgRoles.setManagers, body));
 cliRoute("/cli/org/sessions-under", async (ctx, body) => {
   return await ctx.runQuery(api.org.sessionsUnder, body);
 });

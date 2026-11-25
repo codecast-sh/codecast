@@ -539,6 +539,12 @@ export const answerLocalRead = mutation({
 
     const now = Date.now();
     if (args.error !== undefined) {
+      // Every machine publishing the repository answers, most of them as the
+      // same person (a laptop and its cloud hosts), and they decline at once.
+      // A decline that changes nothing writes nothing: a rewrite here only
+      // collides with the other decliners on this one row, and on a request
+      // already failed it would hand GitHub the read a second time.
+      if (request.status !== "pending" || request.declined_by?.includes(userId)) return { ok: true, reason: "declined" };
       const declined_by = [...new Set([...(request.declined_by ?? []), userId])];
       const error = args.error.slice(0, 500);
       const publishers = (await localSourcesFor(ctx, request.repository))

@@ -187,6 +187,18 @@ describe("send with a sender that resolves to nothing", () => {
     expect(tables.pending_messages[0].content).toContain('<session-message from="jxghost"');
     expect(tables.pending_messages[1].content).toContain('<session-message from="unknown"');
   });
+
+  // The daemon's checkout sweep has no session, so its asks read as "another session" until it names itself.
+  test("a send from no session into your own names its source; a session or another person cannot borrow a name", async () => {
+    const { ctx, tables } = world({ now: Date.now() });
+    await ctx.db.patch("uAlice", { name: "Alice" });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxalice", name: "Checkout sweep on laptop", body: "a" });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", name: "Checkout sweep on laptop", body: "b" });
+    await performSessionSend(ctx as any, "uAlice" as any, { to: "jxbob01", from: "jxalice", name: "Bob", body: "c" });
+    expect(tables.pending_messages[0].content).toContain('<session-message from="unknown" name="Checkout sweep on laptop">');
+    expect(tables.pending_messages[1].content).toContain('<session-message from="unknown" name="Alice">');
+    expect(tables.pending_messages[2].content).toContain('<session-message from="jxalice" name="Alice">');
+  });
 });
 
 // jx74yqy (moved under Cam's account) could not answer jx75sbx, the private session that

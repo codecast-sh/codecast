@@ -508,6 +508,25 @@ export const getGroup = query({
   },
 });
 
+/**
+ * An issue as a reference names it (`eg-N` or Convex id), for the pill and the
+ * card a conversation or doc renders: the list row with its source named, or
+ * null when it is missing or the reader's workspace does not hold it, never an
+ * error, so the reference reads as text. Never the samples: a card draws the
+ * count and the last 72 hours, and the samples are the issue page's.
+ */
+export const webGetGroup = query({
+  args: { ref: v.string(), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token).catch(() => null);
+    if (!userId) return null;
+    const row: Doc<"event_groups"> | null = await readableRowByRef(ctx, "event_groups", userId, args.ref);
+    if (!row) return null;
+    const source = await ctx.db.get(row.source_id);
+    return { ...groupView(await withTally(ctx, row), Date.now()), source_name: source?.name ?? null, source_short_id: source?.short_id ?? null, provider: source?.provider ?? null };
+  },
+});
+
 const HEX_SHA = /^[0-9a-f]{7,40}$/i;
 
 /**

@@ -774,7 +774,17 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
     return await ctx.runMutation!((api as any).orgRoles.reparent, { role_id: roleId, reports_to: reportsTo, ...(note ? { note } : {}) });
   },
   // A person reports to a person (orgPeople.ts); null lets them report to nobody.
-  reparentOrgPerson: async (ctx, _userId, [teamId, userId, to]: [string, string, string | null]) => ctx.runMutation!((api as any).orgPeople.reparentPerson, { team_id: teamId, user_id: userId, reports_to_user_id: to }),
+  // `to` is the whole list of managers (org-people.md P3); a bare id or null is the one-person shape queued before it.
+  // Who reports to a team role (org-people.md P3): written into each person's managers by orgRoles.performSetReports.
+  setRolePeople: async (ctx, _userId, [_teamId, roleId, userIds]: [string, string, string[]]) => ctx.runMutation!((api as any).orgRoles.setReports, { role_id: roleId, set: userIds }),
+  reparentOrgPerson: async (ctx, _userId, [teamId, userId, to]: [string, string, Array<{ kind: "user"; user_id: string } | { kind: "role"; role_id: string }> | string | null]) =>
+    ctx.runMutation!((api as any).orgPeople.reparentPerson, { team_id: teamId, user_id: userId, ...(Array.isArray(to) ? { managers: to } : { reports_to_user_id: to }) }),
+  // Everyone a role reports to, the drawn line first (orgRoles.setManagers, org-people.md P3).
+  setOrgRoleManagers: async (ctx, _userId, [roleId, managers]: [string, Array<{ kind: "user"; user_id: string } | { kind: "role"; role_id: string }>]) =>
+    ctx.runMutation!((api as any).orgRoles.setManagers, { role_id: roleId, managers }),
+  // A person's profile (orgPeople.setProfile, org-people.md P4); the store paints it first.
+  setOrgPersonProfile: async (ctx, _userId, [teamId, userId, patch]: [string, string, { title?: string; focus?: string; labels?: string[]; about?: string }]) =>
+    ctx.runMutation!((api as any).orgPeople.setProfile, { team_id: teamId, user_id: userId, ...patch }),
   createOrgRole: async (ctx, _userId, [input]: [any]) => {
     // The hire form (org-init.md O3) creates and provisions in one gesture and
     // may set caps; the plain add-a-role path passes neither. Caps have their
@@ -2538,6 +2548,9 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   setTeamDefaultFlow: async (ctx, _userId, [teamId, slug]: [string, string | null]) => {
     return await ctx.runMutation!((api as any).teams.setDefaultFlow, { team_id: teamId as Id<"teams">, slug });
   },
+  setTeamAppsPolicy: async (ctx, _userId, [teamId, fields]: [string, { install?: boolean; full_access?: boolean }]) => {
+    return await ctx.runMutation!((api as any).teams.setAppsPolicy, { team_id: teamId as Id<"teams">, install: fields.install, full_access: fields.full_access });
+  },
   setTeamWorkspaceAgent: async (ctx, _userId, [teamId, roleId]: [string, string | null]) => {
     return await ctx.runMutation!((api as any).anchors.setWorkspaceAgent, { team_id: teamId as Id<"teams">, role_id: roleId as Id<"org_roles"> | null });
   },
@@ -3484,6 +3497,34 @@ const SIDE_EFFECTS: Record<string, HandlerFn> = {
   // An agent's video avatar in a live call (store setCallAgentFace moves the toggle first).
   setCallAgentFace: async (ctx, _userId, [transcriptId, target, face]: [string, string, boolean]) => {
     return await ctx.runMutation!(api.transcripts.setAgentFace, { transcript_id: transcriptId as Id<"transcripts">, target, face: !!face });
+  },
+  // A voice note's speaker corrections (store assignCallSpeaker,
+  // confirmCallSpeaker, moveCallLineSpeaker paint them first).
+  assignCallSpeaker: async (
+    ctx,
+    _userId,
+    [transcriptId, key, assignment]: [string, string, { user_id?: string; name?: string; clear?: boolean }],
+  ) => {
+    return await ctx.runMutation!(api.transcripts.assignSpeaker, {
+      transcript_id: transcriptId as Id<"transcripts">,
+      key,
+      ...(assignment.user_id ? { user_id: assignment.user_id as Id<"users"> } : {}),
+      ...(assignment.name !== undefined ? { name: assignment.name } : {}),
+      ...(assignment.clear ? { clear: true } : {}),
+    });
+  },
+  confirmCallSpeaker: async (ctx, _userId, [transcriptId, key]: [string, string]) => {
+    return await ctx.runMutation!(api.transcripts.confirmSpeaker, { transcript_id: transcriptId as Id<"transcripts">, key });
+  },
+  moveCallLineSpeaker: async (ctx, _userId, [transcriptId, seq, key]: [string, number, string]) => {
+    return await ctx.runMutation!(api.transcripts.moveLineSpeaker, { transcript_id: transcriptId as Id<"transcripts">, seq, key });
+  },
+  // Settings › Voice (store setVoiceIdEnabled / deleteMyVoiceprints paint first).
+  setVoiceIdEnabled: async (ctx, _userId, [enabled]: [boolean]) => {
+    return await ctx.runMutation!(api.voiceprints.setVoiceIdEnabled, { enabled: !!enabled });
+  },
+  deleteMyVoiceprints: async (ctx) => {
+    return await ctx.runMutation!(api.voiceprints.deleteMyVoiceprints, {});
   },
   // A picture of the call taken off its public link (store
   // deleteCallFrameShare drops the row first). Already gone is acknowledged.

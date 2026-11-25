@@ -18,7 +18,7 @@ import {
 } from "./artifacts";
 import { kTokenFor, eTokenFor } from "./lib/artifactGates";
 import { brandArtifactHtml } from "./artifactPages";
-import { pageAgentChip, PAGE_AGENT_PICKUP_MS } from "@codecast/shared/contracts";
+import { pageAgentChip, PAGE_AGENT_PICKUP_MS, PAGE_HOSTED_JS } from "@codecast/shared/contracts";
 import { normalizeAssetPath } from "./artifactsHttp";
 
 // Minimal hand-rolled ctx in the style of docs.test.ts: enough db surface for
@@ -309,9 +309,9 @@ describe("version rows (historyBySlug / ownerPanel)", () => {
     const { ctx } = makeCtx([{ ...art }, { ...h1 }, { ...h2 }]);
     const out = await (historyBySlug as any)._handler(ctx, { slug: art.slug });
     expect(out.versions).toEqual([
-      { version: 3, title: "Old title", size: 100, published_at: 2000, edited_by: null, storage_id: "st_old", source_storage_id: "src_cur", kind: "markdown" },
-      { version: 2, title: "T2", size: 20, published_at: 1200, edited_by: null, storage_id: "st_v2", source_storage_id: undefined, kind: "html" },
-      { version: 1, title: "T1", size: 10, published_at: 1100, edited_by: "link editor", storage_id: "st_v1", source_storage_id: "src_v1", kind: "markdown" },
+      { version: 3, title: "Old title", size: 100, published_at: 2000, edited_by: null, storage_id: "st_old", source_storage_id: "src_cur", kind: "markdown", app: null },
+      { version: 2, title: "T2", size: 20, published_at: 1200, edited_by: null, storage_id: "st_v2", source_storage_id: undefined, kind: "html", app: null },
+      { version: 1, title: "T1", size: 10, published_at: 1100, edited_by: "link editor", storage_id: "st_v1", source_storage_id: "src_v1", kind: "markdown", app: null },
     ]);
   });
 
@@ -953,7 +953,8 @@ describe("brandArtifactHtml", () => {
     // Embeds (conversation, decision queue) frame the page and supply their
     // own chrome; the bar collapses into the corner pill by default there.
     const out = brandArtifactHtml("<body></body>", opts);
-    expect(out).toContain("framed=window.self!==window.top");
+    // Framed by an iframe embed, or hosted by the phone app's WebView.
+    expect(out).toContain(`framed=${PAGE_HOSTED_JS}`);
     expect(out).toContain('(framed&&minPref!=="0"))setMin(true,false)');
     // The framed default is not persisted; only a click is remembered.
     expect(out).toContain("setMin(false,true)");

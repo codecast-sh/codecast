@@ -25,17 +25,21 @@ import { codeAnchorValidator } from "./lib/codeAnchorValidator";
 import { lineSlotsValidator } from "./lib/lineSlotsValidator";
 import { workflowEdgeValidator, workflowNodeValidator, workflowSnapshotValidator } from "./lib/workflowGraphValidators";
 import { ccAccountsValidator, ccAutoSwitchStateValidator, ccLoginFlowValidator, ccMintFlowValidator } from "./ccAccountsShared";
+import { mcpLoginFlowValidator } from "./lib/mcpLoginFlow";
 import { cloudAgentBlocksValidator, cloudSessionSyncFields, deviceSettingsValidator, modelInventoryValidator } from "./deviceSettingsShared";
 import { metricValidator } from "./lib/metricSeries";
+import { callSpeakerValidator } from "./lib/callSpeakers";
 import { capabilityTables, teamKitTables } from "./capabilitiesSchema";
 import { externalAuthorValidator } from "./lib/externalAuthor";
 import { chatAttachmentValidator } from "./lib/chatAttachment";
+import { storyScreenValidator } from "./lib/storyScreens";
 import { publishedLineProfileValidator } from "./lib/lineProfileValidator";
 import { signalPlacedValidator } from "./lib/signalPlacedValidator";
 import { predictedValidator, realisedValidator } from "./lib/predictionValidators";
 import { callTables } from "./callsSchema";
 import { googleOAuthTables } from "./googleOAuthSchema";
 import { mcpTables } from "./mcpSchema";
+import { pageAppValidator } from "./lib/pageAppValidator";
 import { roleIconValidator } from "./lib/roleIconValidator";
 import { deliveryTargetValidator } from "./lib/registerOnly";
 import { assistantTables } from "./assistantSchema";
@@ -199,6 +203,11 @@ export default defineSchema({
     // refuses a bot as the owner value (bots may still CALL it to park
     // sessions on humans).
     is_bot: v.optional(v.boolean()),
+    // Whether this person may be recognized by voice in voice notes
+    // (voiceprints.ts). Absent is off: consent comes before collection, so
+    // with it off nothing about their voice is stored and they are never
+    // suggested as a speaker. Written only by the person (setVoiceIdEnabled).
+    voice_id_enabled: v.optional(v.boolean()),
     // "anchor" is an anchor's synthetic identity. "slack" is the bridge identity
     // a Slack workspace speaks through when a Slack person has no codecast
     // account (slackSync): one per installation, named after the workspace, and
@@ -495,6 +504,12 @@ export default defineSchema({
     // The library flow a session's change is offered first (flows.md FL4): a
     // flow's slug, set by an admin on /flows. Unset: the shipped `change`.
     default_flow: v.optional(v.string()),
+    // Installed apps (docs/architecture/installed-apps.md), set by an admin
+    // in Team settings (teams.setAppsPolicy): may members install the team's
+    // pages as desktop apps (unset: yes), and may those apps get full access
+    // (unset: no). Read by the page route's ?app=1 (artifacts.appInfoFor).
+    apps_install: v.optional(v.boolean()),
+    apps_full_access: v.optional(v.boolean()),
     // The role that answers for the team: Slack, team chat, @anchor and
     // decision talk (anchors.workspaceAgentRoleOf). Set by an admin in Team
     // settings. Unset: the Head of People.
@@ -634,7 +649,17 @@ export default defineSchema({
     // The member this person reports to in the org chart (orgPeople.ts), a
     // member of the same team. Routing for the chart and the inbox's By
     // reports lens only: it grants no access to anyone's sessions.
+    // Superseded by `managers`: read as a one item list on rows written
+    // before it (orgPeople.managersOf), cleared by the next write.
     reports_to_user_id: v.optional(v.id("users")),
+    // Everyone this person reports to, people and roles, all equal
+    // (docs/architecture/org-people.md P2, P3): an escalation reaches every
+    // one of them and the first answer wins. Written whole by
+    // orgPeople.performSetManagers. Routing only; it grants nobody anything.
+    managers: v.optional(v.array(v.union(
+      v.object({ kind: v.literal("user"), user_id: v.id("users") }),
+      v.object({ kind: v.literal("role"), role_id: v.id("org_roles") }),
+    ))),
     // Decision areas (decisionAreas.ts): whether this member takes the team's
     // decisions, and the projects they decide for. Routing only; an
     // unaddressed decision about one of these projects may be shared to them
@@ -644,6 +669,17 @@ export default defineSchema({
     // Whether this member may pause, lift and roll back the team's production (deploys.md DP17), granted by an
     // admin; admins hold it without the flag. Separate from any deploy grant.
     production_pause: v.optional(v.boolean()),
+    // What this person does here (docs/architecture/org-people.md P4,
+    // shared/contracts/personProfile.ts): a title and a one line focus every
+    // session reads at start, labels from the team's vocabulary, and a longer
+    // markdown `about` read on demand (`cast org person`). Written by the
+    // person or an admin (orgPeople.setProfile); `profile_updated` says who
+    // and when.
+    title: v.optional(v.string()),
+    focus: v.optional(v.string()),
+    labels: v.optional(v.array(v.string())),
+    about: v.optional(v.string()),
+    profile_updated: v.optional(v.object({ by: v.id("users"), at: v.number() })),
   })
     .index("by_user_id", ["user_id"])
     .index("by_team_id", ["team_id"])
@@ -1966,6 +2002,15 @@ export default defineSchema({
       v.object({ kind: v.literal("user"), user_id: v.id("users") }),
       v.object({ kind: v.literal("role"), role_id: v.id("org_roles") }),
     ),
+    // Everyone else the role reports to, each a full manager equal to
+    // `reports_to` (docs/architecture/org-people.md P3). `reports_to` is only
+    // the line the chart draws it on; routing reads all of them through
+    // shared/contracts/orgLead.roleManagers. Written with reports_to by
+    // orgRoles.performSetRoleManagers.
+    also_reports_to: v.optional(v.array(v.union(
+      v.object({ kind: v.literal("user"), user_id: v.id("users") }),
+      v.object({ kind: v.literal("role"), role_id: v.id("org_roles") }),
+    ))),
     status: v.union(v.literal("active"), v.literal("paused"), v.literal("retired")),
     anchor_id: v.optional(v.id("anchors")), // reserved: the standing session
     // Chat channels whose lines ride the role's wake frame (agent-channels.md
@@ -3576,6 +3621,8 @@ export default defineSchema({
     // The in-flight browser sign-in round trip (web CTA → daemon `claude auth
     // login` → outcome). Web-set to pending; daemon-set to confirmed/rejected.
     cc_login_flow: v.optional(ccLoginFlowValidator),
+    // The in-flight MCP server sign-in on this machine (convex/mcpLogin.ts).
+    mcp_login_flow: v.optional(mcpLoginFlowValidator),
     // Deprecated rollout field. Per-session account tokens are always enabled;
     // retained while existing device rows and older clients still carry it.
     cc_session_tokens: v.optional(v.boolean()),
@@ -5144,6 +5191,9 @@ export default defineSchema({
       v.literal("none"),
     )),
     risk_lines: v.optional(v.record(v.string(), v.string())),
+    // Screenshots and pages its sessions made (lib/storyScreens), shown
+    // whether or not prose placed them. Gated and cleared like the body.
+    screens: v.optional(v.array(storyScreenValidator)),
     prose_status: v.union(
       v.literal("pending"),
       v.literal("written"),
@@ -8066,6 +8116,10 @@ export default defineSchema({
     task_id: v.optional(v.id("tasks")),
     plan_id: v.optional(v.id("plans")),
     station: v.optional(v.string()),
+    // The current version's installed-app manifest, parsed from the "app"
+    // block of its declaration (docs/architecture/installed-apps.md). Absent:
+    // the page declares none and installs with the defaults.
+    app: v.optional(pageAppValidator),
     created_at: v.number(),
     updated_at: v.number(),
   })
@@ -8095,6 +8149,8 @@ export default defineSchema({
     // Name of the link/team collaborator who published this version via the
     // in-browser editor; absent for owner publishes.
     edited_by: v.optional(v.string()),
+    // This version's installed-app manifest, snapshotted from artifacts.app.
+    app: v.optional(pageAppValidator),
   }).index("by_artifact", ["artifact_id", "version"]),
 
   // Files of a bundle artifact, one row per (version, path). Pruned with their
@@ -8784,6 +8840,13 @@ export default defineSchema({
     // prose (`cl-42`, `cl-42:15-25` for turns 15 to 25), like ct-/pl-.
     // Optional only for rows older than the backfill.
     short_id: v.optional(v.string()),
+    // Who each voice cluster of a diarized voice note is, one entry per
+    // `spk:<n>` its lines carry (docs/architecture/speaker-attribution.md):
+    // a teammate, a typed name, or unknown; suggested by a voice match or said
+    // by a person. The one home of a speaker's identity: lines keep their key
+    // and every surface names them through resolveLineSpeaker. Absent on
+    // huddles (structural attribution) and on recordings not yet diarized.
+    speakers: v.optional(v.array(callSpeakerValidator)),
   })
     .index("by_short_id", ["short_id"])
     .index("by_share_token", ["share_token"])
@@ -8810,6 +8873,31 @@ export default defineSchema({
     // Search over what was said, one call at a time (transcripts.webSearchCalls
     // filters by the calls the viewer may read, so access never rides on it).
     .searchIndex("search_text", { searchField: "text", filterFields: ["transcript_id"] }),
+
+  // A person's voice, one row per sample, for recognizing them in voice notes
+  // (docs/architecture/speaker-attribution.md, voiceprints.ts). Stored only
+  // for a person who turned recognition on (users.voice_id_enabled); turning
+  // it off deletes every row. Readable by its owner alone, and then only the
+  // count and dates (voiceprints.myVoiceprint): the samples themselves are
+  // read server-side, as match candidates, and never sent to any client.
+  // `engine` names the speaker engine whose embedding space `vector` (or the
+  // engine-side handle `ref`) belongs to, so a later engine never compares
+  // against another's samples.
+  voiceprints: defineTable({
+    user_id: v.id("users"),
+    engine: v.string(),
+    vector: v.optional(v.array(v.float64())),
+    ref: v.optional(v.string()),
+    seconds: v.number(),
+    source: v.object({
+      transcript_id: v.id("transcripts"),
+      key: v.string(),
+      kind: v.union(v.literal("assigned"), v.literal("self")),
+    }),
+    created_at: v.number(),
+  })
+    .index("by_user", ["user_id"])
+    .index("by_user_engine", ["user_id", "engine"]),
 
   ...callTables,
 

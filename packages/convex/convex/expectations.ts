@@ -27,6 +27,7 @@ import { getAuthenticatedUserId } from "./pendingMessages";
 import { createWorkContext } from "./data";
 import { canAccessProject, computeWorkspaceKey } from "./lib/access";
 import { notFound } from "./lib/auth";
+import { lineSpeakerNames } from "./lib/callSpeakers";
 import { resolveWorkspaceProject } from "./lib/projectRef";
 import { nextShortId } from "./counters";
 import { finalizeAnswer, personMayResolve, withdrawCore } from "./sessionDecisions";
@@ -249,7 +250,7 @@ async function sourceSpeakers(ctx: Ctx, project: Doc<"projects">, citations: Exp
       const t = await ctx.db.query("transcripts").withIndex("by_short_id", (q: any) => q.eq("short_id", short)).first();
       if (!t || t.team_id !== project.team_id) continue;
       const seg = at && /^\d+$/.test(at) ? await ctx.db.query("transcript_segments").withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id).eq("seq", Number(at))).first() : null;
-      if (seg?.speaker_name) out[key] = { who: seg.speaker_name };
+      if (seg?.speaker_name) out[key] = { who: (await lineSpeakerNames(ctx, t))(seg) };
     }
   }
   return out;
@@ -505,11 +506,16 @@ async function personSaid(ctx: Ctx, project: Doc<"projects">, c: ExpectationCita
     const seq = at && /^\d+$/.test(at) ? Number(at) : null;
     const segments: any[] = (await ctx.db.query("transcript_segments").withIndex("by_transcript_seq", (q: any) => q.eq("transcript_id", t._id)).take(CALL_SEGMENTS_READ))
       .filter((s: any) => seq === null || Math.abs(s.seq - seq) <= 3);
+    // A voice note's line carries a voice key; the person it is counts only
+    // when a person said so (source "person"), never a voice match's guess.
+    const voiceOf = new Map<string, string>();
+    for (const sp of t.speakers ?? []) if (sp.source === "person" && sp.user_id) voiceOf.set(sp.key, String(sp.user_id));
     const runs: Array<{ speaker: string; text: string }> = [];
     for (const s of segments) {
+      const speaker = voiceOf.get(s.speaker_id) ?? s.speaker_id;
       const last = runs[runs.length - 1];
-      if (last && last.speaker === s.speaker_id) last.text += ` ${s.text}`;
-      else runs.push({ speaker: s.speaker_id, text: s.text });
+      if (last && last.speaker === speaker) last.text += ` ${s.text}`;
+      else runs.push({ speaker, text: s.text });
     }
     for (const r of runs) if (holdsQuote(r.text, quote) && (await inProjectWorkspace(ctx, project, r.speaker))) return true;
     return false;

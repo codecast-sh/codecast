@@ -24,7 +24,7 @@ const PIN_PATH = `<path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0Z"/><cir
 
 import { escAttr, escHtml } from "./htmlEscape";
 import { MD_THEME_CSS } from "./artifactMarkdown";
-import { PAGE_AGENT_LABELS, PAGE_AGENT_PICKUP_MS } from "@codecast/shared/contracts";
+import { PAGE_AGENT_LABELS, PAGE_AGENT_PICKUP_MS, PAGE_HOSTED_JS } from "@codecast/shared/contracts";
 import { PAGE_GATE_SIGNAL } from "@codecast/shared/render";
 import { PAGE_VIEWS_CSS, PAGE_VIEWS_JS } from "./lib/pageViews";
 export { escAttr, escHtml };
@@ -81,6 +81,9 @@ export interface BrandOpts {
   // A publishing session exists: comments can be sent to its agent, and the
   // bar shows the agent's state.
   hasAgent?: boolean;
+  // The menu offers Install as app (docs/architecture/installed-apps.md):
+  // false when the page's team turned installs off.
+  installable?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -134,6 +137,7 @@ function barHtml(o: BrandOpts): string {
     editMode: o.editMode ?? "owner",
     gated: o.gated ?? { password: false, email: false },
     hasAgent: !!o.hasAgent,
+    installable: !!o.installable,
     agentLabels: PAGE_AGENT_LABELS,
     agentPickupMs: PAGE_AGENT_PICKUP_MS,
   };
@@ -229,6 +233,7 @@ function barHtml(o: BrandOpts): string {
   .__cc_panel a { color: inherit; text-decoration: none; }
   .__cc_panel .__cc_row { display: flex; justify-content: space-between; gap: 14px; align-items: baseline; padding: 6px 8px; border-radius: 7px; }
   .__cc_panel .__cc_row:hover { background: var(--cc-hov); }
+  .__cc_panel .__cc_row:focus-visible { background: var(--cc-hov); outline: 2px solid var(--cc-blue); outline-offset: -2px; }
   .__cc_panel .__cc_vlabel { font-weight: 600; color: var(--cc-ink); }
   .__cc_panel a.__cc_cur .__cc_vlabel::after { content: " · current"; font-weight: 400; color: var(--cc-green); }
   .__cc_panel a.__cc_viewing { background: rgba(232,108,93,.12); }
@@ -605,7 +610,7 @@ ${PAGE_VIEWS_CSS}
   // bar inside a 420px frame is mostly bar. The pill still restores it, and
   // an explicit restore ("0") wins over the framed default where storage holds.
   var minKey="__cc_min:"+(CC.slug||location.pathname);
-  var framed=false;try{framed=window.self!==window.top;}catch(e){framed=true;}
+  var framed=${PAGE_HOSTED_JS};
   var setMin=function(on,remember){
     document.documentElement.classList.toggle("__cc_min",on);
     if(remember)sSet(minKey,on?"1":"0");
@@ -1711,6 +1716,37 @@ ${PAGE_VIEWS_JS}
   // --- overflow menu: source, views, edit, manage (owner) ---
   var menuBtn=document.getElementById("__cc_menu");
   var menu=document.getElementById("__cc_menupanel");
+  // Install as app hands the page to the desktop app (codecast://install,
+  // with the gate keys this document cleared), whose install sheet decides
+  // the rest. The page still focused 1.5s later means nothing took it (the app
+  // coming forward takes focus; Chrome flips visibility for a moment even for
+  // a scheme nobody handles, so a passing blur proves nothing), and the menu
+  // offers the desktop app's download instead. The link goes through a hidden
+  // frame, not this document's location: Safari answers a top-level navigation
+  // to a scheme nobody handles with its own "invalid address" alert, which
+  // takes the focus this test reads; a frame's failed navigation is silent.
+  var installApp=function(row){
+    var keys=new URLSearchParams();
+    if(gateK)keys.set("k",gateK);if(gateE)keys.set("e",gateE);if(gateM)keys.set("m",gateM);
+    var ks=keys.toString();
+    var s=row.querySelector("span");if(s)s.textContent="Opening Codecast\u2026";
+    var fr=document.createElement("iframe");fr.style.display="none";fr.setAttribute("aria-hidden","true");
+    fr.src="codecast://install/"+encodeURIComponent(CC.slug)+(ks?"?"+ks:"");
+    document.body.appendChild(fr);setTimeout(function(){fr.remove();},3000);
+    setTimeout(function(){
+      if(document.hidden||!document.hasFocus()){closeAll();return;}
+      menu.innerHTML="";
+      menu.appendChild(el("div","__cc_h2","Get Codecast"));
+      var dl=[["Download for Mac","https://codecast.sh/download/mac"],["Download for Windows","https://codecast.sh/download/windows"]];
+      if(/Win/i.test(navigator.platform||navigator.userAgent||""))dl.reverse();
+      dl.forEach(function(d){
+        var a=el("a","__cc_row");a.href=d[1];a.target="_blank";a.rel="noopener noreferrer";
+        a.appendChild(el("span",null,d[0]));a.addEventListener("click",function(){setTimeout(closeAll,300);});menu.appendChild(a);
+      });
+      show(menu);
+      var first=menu.querySelector("a");if(first)first.focus();
+    },1500);
+  };
   if(menuBtn&&menu){
     menuBtn.addEventListener("click",function(e){
       e.stopPropagation();
@@ -1728,6 +1764,9 @@ ${PAGE_VIEWS_JS}
       add("View source",function(){var x={src:1};if(CC.version!==CC.currentVersion)x.v=CC.version;location.href=withQ(x);});
       if(ownerKey||editKey||CC.editMode==="link"){
         add("Edit this page",function(){location.href=withQ({edit:1});});
+      }
+      if(CC.installable){
+        var ins=add("Install as app",function(){installApp(ins);});
       }
       if(ownerKey){
         add("Manage sharing…",openManage);

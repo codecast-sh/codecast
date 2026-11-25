@@ -13,6 +13,8 @@
 import { Marked, type Tokens } from "marked";
 import hljs from "highlight.js/lib/common";
 import { escHtml, escAttr } from "./htmlEscape";
+import { PAGE_WHEEL_JS, PAGE_WHEEL_MESSAGE } from "@codecast/shared/render";
+import { PAGE_HOSTED_JS } from "@codecast/shared/contracts";
 
 // GitHub-style heading slugs: lowercase, strip punctuation, spaces to hyphens,
 // numeric suffix on repeats. One `seen` map per render keeps ids unique
@@ -237,8 +239,7 @@ export const MD_THEME_CSS = `
 // wears the right palette. The artifact origin is opaque, so storage throws:
 // the reader's choice also rides the address (?theme=) to survive a reload.
 const MD_THEME_BOOT = `<script>(function(){
-  var d=document.documentElement,t=null,framed=false;
-  try{framed=window.self!==window.top;}catch(e){framed=true;}
+  var d=document.documentElement,t=null,framed=${PAGE_HOSTED_JS};
   try{t=new URLSearchParams(location.search).get("theme");}catch(e){}
   if(t!=="dark"&&t!=="light"){try{t=localStorage.getItem("cc-md-theme");}catch(e){t=null;}}
   if(t==="dark"||t==="light"){d.setAttribute("data-theme",t);if(framed)d.setAttribute("data-theme-host","");}
@@ -300,8 +301,10 @@ const MD_SCRIPT = `<script>(function(){
     try{var u=new URL(location.href);u.searchParams.set("theme",t);history.replaceState(history.state,"",u.href);}catch(err){}
   });
   if(os&&os.addEventListener) os.addEventListener("change",label);
+  ${PAGE_WHEEL_JS}
   window.addEventListener("message",function(e){
     var m=e.data;
+    if(e.source===window.parent&&m&&m.type===${JSON.stringify(PAGE_WHEEL_MESSAGE)}){ccWheel(m);return;}
     if(e.source!==window.parent||!m||m.type!=="codecast:theme"||(m.theme!=="dark"&&m.theme!=="light")) return;
     d.setAttribute("data-theme-host","");
     setTheme(m.theme,null);

@@ -47,6 +47,8 @@ import { mayDeleteRegulated, startDeletion } from "./regulatedDeletion";
 import { recordRowAccess } from "./lib/accessLog";
 import { decisionPageSlugs, findDecision, userMayRead } from "./lib/decisionAccess";
 import { bumpWindow } from "./ipRateLimit";
+import { pageAppValidator } from "./lib/pageAppValidator";
+import { resolvePageApp, teamAppsPolicy, type AppRelation, type AppsPolicy, type ResolvedPageApp } from "@codecast/shared/contracts/pageApp";
 
 // Superseded versions kept per artifact (beyond the current one). Old blobs
 // are snapshotted into artifact_versions on republish; past this cap the
@@ -345,6 +347,7 @@ export const historyBySlug = internalQuery({
           storage_id: artifact.storage_id,
           source_storage_id: artifact.source_storage_id,
           kind: artifact.kind ?? "html",
+          app: artifact.app ?? null,
         },
         ...history
           .map((h) => ({
@@ -352,6 +355,7 @@ export const historyBySlug = internalQuery({
             storage_id: h.storage_id,
             source_storage_id: h.source_storage_id,
             kind: h.kind ?? artifact.kind ?? "html",
+            app: h.app ?? null,
           }))
           .sort((a, b) => b.version - a.version),
       ],
@@ -624,6 +628,8 @@ async function bumpVersion(
     edited_by?: string;
     assets?: AssetInput;
     thumb_storage_id?: Id<"_storage">;
+    /** The new version's app manifest; undefined means it declares none. */
+    app?: Doc<"artifacts">["app"];
   },
 ): Promise<number> {
   const version = artifact.version + 1;
@@ -639,6 +645,7 @@ async function bumpVersion(
     session_short_id: artifact.session_short_id,
     // Who created the version being snapshotted (set when it was published).
     edited_by: artifact.last_edited_by,
+    app: artifact.app,
   });
   const patch: Record<string, unknown> = {
     storage_id: next.storage_id,
@@ -650,6 +657,7 @@ async function bumpVersion(
     // Editor attribution for the NEW current version; cleared on owner
     // publishes so a later snapshot doesn't misattribute.
     last_edited_by: next.edited_by,
+    app: next.app,
     updated_at: Date.now(),
   };
   if (next.kind !== undefined) patch.kind = next.kind === "html" ? undefined : next.kind;
@@ -738,6 +746,8 @@ export const upsertFromPublish = internalMutation({
     access: v.optional(accessPatchValidator),
     assets: v.optional(assetInputValidator),
     thumb_storage_id: v.optional(v.id("_storage")),
+    // The parsed "app" block of the page's declaration (shared/contracts/pageApp).
+    app: v.optional(pageAppValidator),
     // Evidence (the-line.md L6), already resolved by resolveEvidence: the task
     // and station this page was produced for. Absent fields leave a
     // republished page attached where it was.
@@ -804,6 +814,7 @@ export const upsertFromPublish = internalMutation({
         session_conversation_id: args.session_conversation_id,
         assets: args.assets,
         thumb_storage_id: args.thumb_storage_id,
+        app: args.app,
       });
       const fresh = (await ctx.db.get(existing._id))!;
       return {
@@ -840,6 +851,7 @@ export const upsertFromPublish = internalMutation({
       session_conversation_id: args.session_conversation_id,
       owner_key: ownerKey,
       thumb_storage_id: args.thumb_storage_id,
+      app: args.app,
       created_at: now,
       updated_at: now,
       ...accessPatch,
@@ -880,11 +892,15 @@ export const appendVersion = internalMutation({
     content_hash: v.optional(v.string()),
     edited_by: v.optional(v.string()),
     assets: v.optional(assetInputValidator),
+    // A rollback restores its version's manifest (null: that version declared
+    // none). Absent, as on an in-browser edit, the current one carries over.
+    app: v.optional(v.union(pageAppValidator, v.null())),
   },
   handler: async (ctx, args) => {
     const artifact = await ctx.db.get(args.artifact_id);
     if (!artifact) throw new Error("Page not found");
     const version = await bumpVersion(ctx, artifact, {
+      app: args.app === undefined ? artifact.app : (args.app ?? undefined),
       storage_id: args.storage_id,
       size: args.size,
       title: args.title ?? artifact.title,
@@ -2156,6 +2172,139 @@ export const embedInfo = query({
       rows.push({ slug, gated: false as const, title: artifact.title, version: artifact.version, kind: artifact.kind ?? "html", thumb: !!artifact.thumb_storage_id });
     }
     return rows;
+  },
+});
+
+// ── Installed apps (docs/architecture/installed-apps.md) ──────────────────
+
+export type GateKeys = { k?: string; e?: string; m?: string };
+
+/** What a host installs a page as, for one viewer: the manifest with its defaults, the icon, and what policy allows. */
+export type AppInfo = {
+  slug: string;
+  title: string;
+  version: number;
+  updated_at: number;
+  app: ResolvedPageApp;
+  /** Who made it, for the install sheet. */
+  owner: { name: string | null };
+  /** PNG icon URLs by size, carrying the gate keys the page needs. */
+  icons: { "512": string; "1024": string };
+  relation: AppRelation;
+  policy: AppsPolicy;
+};
+
+/** The page's icon route at `size`, with the gate keys appended. */
+function appIconUrl(slug: string, size: number, gate: GateKeys): string {
+  const q = new URLSearchParams({ icon: String(size) });
+  for (const k of ["k", "e", "m"] as const) if (gate[k]) q.set(k, gate[k]!);
+  return `${artifactUrl(slug)}?${q}`;
+}
+
+/** The apps policy of the team whose workspace the page is in (a personal page allows everything). */
+async function pageAppsPolicy(ctx: { db: QueryCtx["db"] }, artifact: Doc<"artifacts">): Promise<AppsPolicy> {
+  const workspace = await pageWorkspace(ctx, artifact, new Map());
+  if (!workspace.startsWith("team:")) return teamAppsPolicy(null);
+  const teamId = ctx.db.normalizeId("teams", workspace.slice("team:".length));
+  return teamAppsPolicy((teamId && (await ctx.db.get(teamId))) || {});
+}
+
+/**
+ * Whether the page bar offers Install as app: the page's own policy only,
+ * read without auth, because the branded document is cached for every viewer.
+ */
+export const pageInstallAllowed = internalQuery({
+  args: { artifact_id: v.id("artifacts") },
+  handler: async (ctx, args): Promise<boolean> => {
+    const artifact = await ctx.db.get(args.artifact_id);
+    return artifact ? (await pageAppsPolicy(ctx, artifact)).install : false;
+  },
+});
+
+/**
+ * A page as an installed app for `viewerId` (null: nobody proved who they
+ * are). The relation is the gallery's rule: the owner, a teammate who sees
+ * the page (teammatesWhoCanSee), or anyone else. Policy: full access follows
+ * the policy of the team whose workspace the page is in (a personal page
+ * allows it); installing also stops when any team the viewer belongs to
+ * turned installs off, since that setting is about its members.
+ */
+export async function appInfoFor(ctx: { db: QueryCtx["db"] }, artifact: Doc<"artifacts">, viewerId: Id<"users"> | null, gate: GateKeys): Promise<AppInfo> {
+  const pagePolicy = await pageAppsPolicy(ctx, artifact);
+  const relation: AppRelation = !viewerId
+    ? "anonymous"
+    : viewerId === artifact.user_id
+      ? "owner"
+      : (await teammatesWhoCanSee(ctx, artifact)).has(String(viewerId))
+        ? "team"
+        : "other";
+  let install = pagePolicy.install;
+  if (install && viewerId) {
+    const memberships = await ctx.db.query("team_memberships").withIndex("by_user_id", (q) => q.eq("user_id", viewerId)).collect();
+    for (const m of memberships) {
+      const team = await ctx.db.get(m.team_id);
+      if (team && !team.deleted_at && !teamAppsPolicy(team).install) {
+        install = false;
+        break;
+      }
+    }
+  }
+  const owner = await ctx.db.get(artifact.user_id);
+  return {
+    slug: artifact.slug,
+    title: artifact.title,
+    version: artifact.version,
+    updated_at: artifact.updated_at,
+    app: resolvePageApp(artifact.app, artifact.title),
+    owner: { name: owner ? commenterDisplayName(owner) : null },
+    icons: { "512": appIconUrl(artifact.slug, 512, gate), "1024": appIconUrl(artifact.slug, 1024, gate) },
+    relation,
+    policy: { install, fullAccess: pagePolicy.fullAccess },
+  };
+}
+
+/**
+ * For the page route's ?app=1, after its gates admitted the request. The
+ * viewer is whoever the request proves: the app's own sign-in (a Convex auth
+ * token as `Authorization: Bearer`), else the page's identity token (#i=,
+ * minted by mintCommentIdentity), else the holder of a team gate's member
+ * token. None of them: anonymous.
+ */
+export const appInfoBySlug = internalQuery({
+  args: { slug: v.string(), identity_token: v.optional(v.string()), gate: v.object({ k: v.optional(v.string()), e: v.optional(v.string()), m: v.optional(v.string()) }) },
+  handler: async (ctx, args): Promise<AppInfo | null> => {
+    const artifact = await ctx.db.query("artifacts").withIndex("by_slug", (q) => q.eq("slug", args.slug)).first();
+    if (!artifact) return null;
+    let viewerId: Id<"users"> | null = await getAuthUserId(ctx).catch(() => null);
+    if (!viewerId && args.identity_token) viewerId = (await resolveCommentIdentity(ctx, artifact._id, args.identity_token))?.user._id ?? null;
+    if (!viewerId && args.gate.m) {
+      const holder = await mTokenHolder(artifact, args.gate.m);
+      viewerId = holder ? ctx.db.normalizeId("users", holder) : null;
+    }
+    return await appInfoFor(ctx, artifact, viewerId, args.gate);
+  },
+});
+
+/**
+ * The same answer for the signed-in app (the install sheet, Settings >
+ * Installed apps), live. The page's gates apply as on every page read
+ * (pageAdmission); `gate` is the keys a host stores for the install: the
+ * presented ones, else those the app hands this reader.
+ */
+export const appInfo = query({
+  args: { slug: v.string(), k: v.optional(v.string()), e: v.optional(v.string()), m: v.optional(v.string()) },
+  handler: async (ctx, args): Promise<(AppInfo & { gate: GateKeys }) | { error: string }> => {
+    const artifact = await ctx.db.query("artifacts").withIndex("by_slug", (q) => q.eq("slug", args.slug)).first();
+    if (!artifact) return { error: "Page not found" };
+    const admission = await pageAdmission(ctx, artifact, { k: args.k, e: args.e, m: args.m });
+    if (admission.blocked) return { error: admission.blocked };
+    const handed = await keysHandedTo(ctx, artifact, admission.role, admission.identity);
+    const gate: GateKeys = {};
+    for (const k of ["k", "e", "m"] as const) {
+      const key = args[k] ?? handed?.[k];
+      if (key) gate[k] = key;
+    }
+    return { ...(await appInfoFor(ctx, artifact, admission.identity?.user._id ?? null, gate)), gate };
   },
 });
 

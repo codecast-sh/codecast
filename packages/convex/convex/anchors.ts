@@ -269,7 +269,7 @@ export async function provisionStandingAgent(
     await ctx.db.patch(adoptedAnchor._id, { org_role_id: args.role!._id, updated_at: now });
     await ctx.db.patch(adoptedAnchor.bot_user_id, { bot_kind: "role" });
     await ctx.db.patch(args.role!.adopt._id, { standing_role_id: args.role!._id, ...seat, persistent: true, updated_at: now, ...seatTitlePatch(args.role!.adopt, name) });
-    await stampSeatOwners(ctx, args.role!.adopt._id, seatRole?.reports_to, hostUserId);
+    await stampSeatOwners(ctx, args.role!.adopt._id, seatRole, hostUserId);
     await announceSeating(ctx, args.role!.adopt._id, hostUserId, args.role!.announce);
     if (args.bootstrap !== false) {
       await enqueuePendingMessage(ctx, await ctx.db.get(args.role!.adopt._id), hostUserId, {
@@ -397,7 +397,7 @@ export async function provisionStandingAgent(
     status: "active",
     updated_at: now,
   });
-  if (seatRole) await stampSeatOwners(ctx, conversationId, seatRole.reports_to, hostUserId);
+  if (seatRole) await stampSeatOwners(ctx, conversationId, seatRole, hostUserId);
 
   if (args.bootstrap !== false) {
     const conversation = await ctx.db.get(conversationId);

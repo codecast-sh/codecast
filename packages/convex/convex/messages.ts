@@ -48,7 +48,7 @@ import { isCurrentBlock } from "./ccAccountsShared";
 import { safetyBlockPatch } from "./conversationSafety";
 import { stripContextTags, navPromptField, navPromptPatch } from "./userMessagesFilter";
 import { dropMirroredMessage } from "./searchMirror";
-import { countMatches, parseSearchTerms } from "@codecast/shared/search";
+import { countMatches, drawnText, parseSearchTerms } from "@codecast/shared/search";
 import { batchHasLoopEvent, deriveLoopState } from "./loopState";
 import { nextAgentStatusOnAddMessages, classifyApiErrorBanner, apiErrorBatchAction, nextPendingApiError, parkWalk, liftsPark, isBannerTurn, NEEDS_INPUT_AUQ_CHECK_DELAY_MS } from "./inboxFilters";
 import { markAnsweredReviewNotes } from "./lib/reviewAnswered";
@@ -2428,7 +2428,7 @@ export function searchMessageMatches<T extends { _id: Id<"messages">; timestamp:
   const matches: { message_id: Id<"messages">; timestamp: number; match_count: number }[] = [];
   for (const msg of rows) {
     if (!msg.content) continue;
-    const count = countMatches(stripContextTags(msg.content), terms);
+    const count = countMatches(drawnText(stripContextTags(msg.content)), terms);
     if (count > 0) matches.push({ message_id: msg._id, timestamp: msg.timestamp, match_count: count });
   }
   return matches;

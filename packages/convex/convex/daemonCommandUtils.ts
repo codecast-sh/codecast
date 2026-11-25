@@ -233,6 +233,10 @@ export async function insertEscapeCommand(
   conv: Doc<"conversations">,
   args: { pressed_at?: number; request_id?: string; release_queued?: boolean },
 ): Promise<void> {
+  // A replayed press (the web's outbox resends a mutation whose answer it
+  // lost) queues nothing: a second row under one request id makes the result
+  // feed refuse the whole batch (findSessionCommandByRequest is unique()).
+  if (args.request_id !== undefined && await findSessionCommandByRequest(ctx, conv.user_id, args.request_id)) return;
   await ctx.db.insert("daemon_commands", {
     user_id: conv.user_id,
     command: "escape",
@@ -262,6 +266,8 @@ export async function stopAndSendForUser(
   requestId?: string,
 ): Promise<{ interrupted: boolean }> {
   const conv = await requireSessionCommandTarget(ctx, userId, conversationId);
+  // A replay of a press that already stopped the turn queues neither the message nor a second stop.
+  if (requestId !== undefined && await findSessionCommandByRequest(ctx, conv.user_id, requestId)) return { interrupted: true };
   await enqueuePendingMessage(ctx, conv, userId, { content, client_id: clientId, human: true, queue: true });
   const sessions: Array<{ agent_status?: string }> = await ctx.db.query("managed_sessions")
     .withIndex("by_conversation_id", (q: any) => q.eq("conversation_id", conversationId)).collect();

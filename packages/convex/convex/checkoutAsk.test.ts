@@ -48,7 +48,7 @@ describe("asking about a stuck checkout from the page", () => {
     sent.length = 0;
     expect(await askCheckoutCore(ctx, ME as any, id, "conv_1")).toEqual({ told: 1 });
     expect(sent).toHaveLength(1);
-    expect(sent[0]).toMatchObject({ userId: ME, to: "conv_1", intent: "request", wake: true });
+    expect(sent[0]).toMatchObject({ userId: ME, to: "conv_1", name: "Checkout sweep on Mac-mini", intent: "request", wake: true });
     // The daemon's ask for this episode carries the same id, so the server answers it with this row.
     expect(sent[0].client_id).toBe(levelAskClientId({ device_id: "dev-1", path: "/work/app", files: ["y.md", "x.ts"], since: 10, conversation: "conv_1" }));
     expect(sent[0].body.split("\n")[0]).toBe("app on Mac-mini: 1 of your files conflicts with origin/main");

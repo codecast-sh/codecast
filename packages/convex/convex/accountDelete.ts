@@ -5,6 +5,7 @@ import { internal } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import type { MutationCtx } from "./_generated/server";
 import { deleteBookmarkWithRevision } from "./bookmarkViewWrites";
+import { forgetVoice } from "./lib/voiceForget";
 
 // Deleting an account runs in budgeted background passes: an account with a
 // few hundred sessions holds far more rows than one mutation can delete inside
@@ -30,6 +31,8 @@ const AFTER_CONVERSATIONS: ReadonlyArray<readonly [string, string, string]> = [
   ["priority_pass_schedules", "by_user_workspace", "user_id"],
   ["priority_classifications", "by_user_workspace_at", "user_id"],
   ["priority_corrections", "by_user_workspace_created", "user_id"],
+  // A person's voice samples (biometric): gone with the account.
+  ["voiceprints", "by_user", "user_id"],
   ["suggestion_outcomes", "by_user_created", "user_id"],
   ["notifications", "by_recipient", "recipient_user_id"],
   ["daemon_logs", "by_user_timestamp", "user_id"],
@@ -110,6 +113,9 @@ export async function startAccountDeletion(ctx: MutationCtx) {
   const userId = await getAuthUserId(ctx);
   if (!userId) throw new Error("Not authenticated");
   if (!(await ctx.db.get(userId))) throw new Error("User not found");
+  // Before the memberships go: forgetting a voice scrubs the suggestions
+  // naming it in each of the person's teams, and asks engines to drop copies.
+  await forgetVoice(ctx, userId);
   await ctx.scheduler.runAfter(0, internal.accountDelete.purgeAccount, { user_id: userId });
   return { completed: true, message: "Account permanently deleted" };
 }

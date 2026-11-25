@@ -20,7 +20,7 @@ import { nextShortId } from "./counters";
 import { scopeArgs, scopeOf, sourceByRef } from "./ingest";
 import { upsertGroup } from "./lib/groupWrite";
 import { patchSourceStats } from "./lib/sourceStats";
-import { rowByRef } from "./lib/rowByRef";
+import { readableRowByRef, rowByRef } from "./lib/rowByRef";
 import { workspaceGrantsAccess } from "./lib/access";
 import { planMetric } from "./lib/ingestGroups";
 import { appendMetricPoint, mergeMetricHistory, mergeReaderSeries } from "./lib/watchSeries";
@@ -387,6 +387,31 @@ export const getWatch = query({
     return {
       watch: watchView(row, await ctx.db.get(row.source_id)),
       group: group ? { _id: group._id, short_id: group.short_id, status: group.status, title: group.title, count: group.count, last_transition: group.last_transition ?? null, last_transition_at: group.last_transition_at ?? null } : null,
+    };
+  },
+});
+
+/**
+ * A watch as a reference names it (`mw-N` or Convex id), for the pill and the
+ * live chart card a conversation or doc renders: the watch with its latest
+ * value and its stored points, or null when it is missing or the reader's
+ * workspace does not hold it, never an error, so the reference reads as text.
+ */
+export const webGetWatch = query({
+  args: { ref: v.string(), api_token: v.optional(v.string()) },
+  handler: async (ctx, args) => {
+    const userId = await requireUserOrToken(ctx, args.api_token).catch(() => null);
+    if (!userId) return null;
+    const row: Doc<"metric_watches"> | null = await readableRowByRef(ctx, "metric_watches", userId, args.ref);
+    if (!row) return null;
+    const group = row.group_id ? await ctx.db.get(row.group_id) : null;
+    const source = await ctx.db.get(row.source_id);
+    return {
+      ...watchView(row, source),
+      provider: source?.provider ?? null,
+      group_short_id: group?.short_id ?? null,
+      group_last_transition: group?.last_transition ?? null,
+      group_last_transition_at: group?.last_transition_at ?? null,
     };
   },
 });

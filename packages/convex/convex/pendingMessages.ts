@@ -990,7 +990,8 @@ export async function performSessionSend(
   authUserId: Id<"users">,
   // `target`: a session the caller already resolved and checked (a role's
   // standing session behind `cast role wake`); it skips the `to` lookup.
-  args: { to: string; from?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; queue?: boolean; quiet?: boolean; intent?: SessionMessageIntent; image_storage_ids?: Id<"_storage">[]; target?: any }
+  // `name`: what a send from no session reads as (the daemon's checkout sweep); a session or another person names itself.
+  args: { to: string; from?: string; name?: string; body: string; client_id?: string; raw?: boolean; direct?: boolean; wake?: boolean; queue?: boolean; quiet?: boolean; intent?: SessionMessageIntent; image_storage_ids?: Id<"_storage">[]; target?: any }
 ): Promise<{
   // null when the send waits as a suggestion for the owner (suggestion_id).
   message_id: Id<"pending_messages"> | null;
@@ -1147,9 +1148,11 @@ export async function performSessionSend(
   // Display name for the sender: the direct wrapper always carries it, and a
   // session wrapper carries it when `from` has no clickable session (the common
   // case for a link collaborator). A self-send from a session is already
-  // attributed by its own session pill.
+  // attributed by its own session pill. A send from no session into the caller's
+  // own (the daemon's checkout sweep) may name its source; across users the
+  // person's own name stands, so a caller cannot speak as someone else.
   const senderName = senderUser?.name || senderUser?.github_username || senderUser?.email?.split("@")[0] || undefined;
-  const fromName = isCrossUser ? senderName : undefined;
+  const fromName = isCrossUser ? senderName : !fromRef ? args.name?.trim() || undefined : undefined;
 
   const messageId = await enqueuePendingMessage(ctx, target, authUserId, {
     content: args.raw
@@ -1243,6 +1246,8 @@ export const sendSessionMessage = mutation({
   args: {
     to: v.string(),
     from: v.optional(v.string()),
+    // What a send from no session reads as (performSessionSend).
+    name: v.optional(v.string()),
     body: v.string(),
     client_id: v.optional(v.string()),
     api_token: v.optional(v.string()),

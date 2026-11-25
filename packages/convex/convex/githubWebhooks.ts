@@ -63,6 +63,9 @@ import { noticeCaptainRevertMerged, postApprovalFromAction, repostOnJudgesPush, 
 import { anchorFromDiffHunk } from "@codecast/shared/comments";
 
 const MERGE_STATE_DELAY_MS = 15 * 1000;
+// Long enough that a run of pushes to a base branch coalesces into the last
+// push's sweep: an earlier sweep sees the branch has moved and stands down.
+const BASE_PUSH_SWEEP_DELAY_MS = 45 * 1000;
 // A finished check changes whether GitHub will let the branch merge, but it
 // recomputes mergeable_state lazily: until something asks, the PR reads
 // "unstable" and `cast pr show` disagrees with itself. Asking shortly after the
@@ -1774,8 +1777,11 @@ export const processPushEvent = internalMutation({
 
     // A push to a base branch leaves every PR aimed at it a little further
     // behind, and GitHub says nothing about that. Ask again shortly.
+    // A sweep stands down when a later push has moved the branch by the time it
+    // runs (prShepherd SweepBase), so pushes inside the delay share one sweep.
     const behind = (await openPRsInRepository(ctx, repository)).filter((pr) => pr.base_ref === branch);
-    await scheduleMergeStateRefreshes(ctx, behind.map((pr) => pr._id), MERGE_STATE_DELAY_MS);
+    const pushed: string | undefined = payload.after ?? commits[commits.length - 1]?.id;
+    await scheduleMergeStateRefreshes(ctx, behind.map((pr) => pr._id), BASE_PUSH_SWEEP_DELAY_MS, pushed ? { branch, sha: pushed } : undefined);
 
     return { success: true, commits_created: created };
   },

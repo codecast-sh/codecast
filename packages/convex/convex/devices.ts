@@ -924,6 +924,12 @@ export async function performReparentSessionToDevice(
   if (crossUser) await stampPriorOwnerPage(ctx, { conversation_id: conv._id, user_id: previousConversation.user_id, until: patch.updated_at });
   // Moved onto a team machine: the caller keeps the session as an owner.
   if (onTeamMachine) await retainSessionCreator(ctx, conv._id, userId, runnerId);
+  // A role's failover line (roleFailover.ts) describes where its standing
+  // session sits; any move elsewhere makes it false, so it goes with the move.
+  if (conv.standing_role_id) {
+    const role = await ctx.db.get(conv.standing_role_id);
+    if (role?.failover && role.failover.to?.device_id !== args.device_id) await ctx.db.patch(role._id, { failover: undefined });
+  }
 
   if (deviceChanged) {
     await insertMachineSwitchDivider(ctx, conv, { to: device, from: priorDevice });
@@ -1253,6 +1259,8 @@ export const listDevices = query({
             }
           : undefined,
         cloud_autoscale: d.cloud_autoscale ?? undefined,
+        // A sign-in to an MCP server running on this machine (convex/mcpLogin.ts).
+        mcp_login_flow: d.mcp_login_flow ?? undefined,
         // Per-device daemon health (web: useDaemonHealth).
         daemon_started_at: d.daemon_started_at ?? undefined,
         loop_freeze_ms: d.loop_freeze_ms ?? undefined,
@@ -1950,8 +1958,8 @@ export const enqueueAgentToolSetupCommand = mutation({
   },
 });
 
-/** Commands whose page watches the daemon's verdict: a provider key set, a cloud agent sign-in or action, an agent tool's setup, a run's re-ask. */
-const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "cloud_agent_login", "cloud_agent_action", "agent_tool_setup", "run_reask", "line_trial_reask"]);
+/** Commands whose page watches the daemon's verdict: a provider key set, a cloud agent sign-in or action, an agent tool's setup, a run's re-ask, an MCP sign-in. */
+const WATCHED_COMMANDS: ReadonlySet<string> = new Set(["set_provider_key", "cloud_agent_login", "cloud_agent_action", "agent_tool_setup", "run_reask", "line_trial_reask", "mcp_login"]);
 
 /**
  * How a watched command went, for the page that sent it: still waiting, or

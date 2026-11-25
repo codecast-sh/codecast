@@ -931,15 +931,26 @@ export const acknowledgeBlocked = mutation({
   handler: async (ctx, args) => {
     const userId = await getAuthenticatedUserId(ctx, args.api_token);
     if (!userId) throw new Error("Authentication failed: invalid token or session");
-    let acknowledged = 0;
+    const convs: Doc<"conversations">[] = [];
     for (const convId of args.conversation_ids.slice(0, 200)) {
       const conv = await ctx.db.get(convId);
       if (!conv || conv.user_id.toString() !== userId.toString()) continue;
       if (conv.pending_api_error !== true) continue;
-      await ctx.db.patch(convId, BLOCKED_FLAG_CLEAR);
-      acknowledged++;
+      convs.push(conv);
     }
-    return { acknowledged };
+    // A live line station's run waits on its park and re-stamps a cleared flag from the transcript
+    // (restampStationPark), so a bare clear comes back on the runner's next poll. Never restarting a
+    // station means stopping it: its run reads the hand killed and moves on.
+    const parents = await parentsOf(ctx, convs);
+    let stopped = 0;
+    for (const conv of convs) {
+      await ctx.db.patch(conv._id, BLOCKED_FLAG_CLEAR);
+      if (isLiveStation(conv, parents)) {
+        await ctx.scheduler.runAfter(0, internal.conversations.killDismissedStation, { user_id: conv.user_id, conversation_id: conv._id });
+        stopped++;
+      }
+    }
+    return { acknowledged: convs.length, stopped_stations: stopped };
   },
 });
 

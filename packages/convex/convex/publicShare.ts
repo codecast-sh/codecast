@@ -29,6 +29,7 @@ import { canViewTask } from "./agentTasks";
 import { canReadRun } from "./workflow_runs";
 import { CALL_LINK_REFUSED_WORDS, isRecRoomKey } from "@codecast/shared/contracts";
 import { publicName } from "./lib/displayNames";
+import { lineSpeakerNames } from "./lib/callSpeakers";
 import { publicWeekCard, weeklyCardAllowed, type WeekCardStats } from "@codecast/shared/contracts/weeklyCard";
 import { runWorkflowOf } from "./lib/runGraph";
 
@@ -190,6 +191,8 @@ export const getSharedCall = query({
       .query("transcript_segments")
       .withIndex("by_transcript_seq", (q) => q.eq("transcript_id", t._id))
       .collect();
+    // A voice note's diarized lines show who each voice is (lib/callSpeakers).
+    const nameOf = await lineSpeakerNames(ctx, t);
     // Speakers are told apart by position, never by their user ids.
     const speakerKey = new Map<string, string>();
     const keyOf = (id: string) => {
@@ -218,7 +221,7 @@ export const getSharedCall = query({
       segments: segs.map((s) => ({
         seq: s.seq,
         speaker_id: keyOf(s.speaker_id),
-        speaker_name: s.speaker_name,
+        speaker_name: nameOf(s),
         text: s.text,
         t0: s.t0,
         t1: s.t1,

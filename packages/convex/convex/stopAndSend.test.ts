@@ -54,6 +54,14 @@ describe("stop and send", () => {
     expect(JSON.parse(cmd.args)).toEqual({ conversation_id: "c1", pressed_at: 1000, release_queued: true });
   });
 
+  test("a replayed press queues neither a second message nor a second stop", async () => {
+    const { ctx, tables } = world("working");
+    await stopAndSendForUser(ctx, "uAnn" as any, "c1" as any, "do this instead", "cl1", 1000, "req1");
+    expect(await stopAndSendForUser(ctx, "uAnn" as any, "c1" as any, "do this instead", "cl1", 1000, "req1")).toEqual({ interrupted: true });
+    expect(tables.pending_messages).toHaveLength(1);
+    expect(tables.daemon_commands).toHaveLength(1);
+  });
+
   test("a turn stopped at a permission prompt is still a turn to stop", async () => {
     const { ctx, tables } = world("permission_blocked");
     expect(await stopAndSendForUser(ctx, "uAnn" as any, "c1" as any, "x", "cl1", 1000)).toEqual({ interrupted: true });
