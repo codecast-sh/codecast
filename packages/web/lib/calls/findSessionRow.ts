@@ -28,5 +28,9 @@ export const NEW_AGENT_NAME = "new agent";
 export function agentRoomName(row: any, prefs: IdentityPrefs = PERSONIFY_ALL_PREFS): string {
   // A viewer with characters off calls it by its title (a role by the role's).
   const id = sessionIdentity(row, prefs.characters ? PERSONIFY_ALL_PREFS : prefs);
-  return id.kind === "plain" ? row.title || NEW_AGENT_NAME : id.name;
+  if (id.kind !== "plain") return id.name;
+  // A new agent has no title until its first prompt, and the room briefs it
+  // before then: it goes by the character the rest of the room already calls
+  // it, never the word for a row that has not arrived.
+  return row.title || (sessionIdentity(row, PERSONIFY_ALL_PREFS) as { name: string }).name;
 }

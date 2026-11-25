@@ -29,6 +29,7 @@ import type { ChatAttachment } from "../../store/chatSlice";
 import { LivePulseDot } from "../SessionActivityLine";
 import { prefersReducedMotion } from "../../hooks/useBottomAnchoredList";
 import { FeedChip } from "./FeedChip";
+import { NEW_AGENT_NAME } from "../../lib/calls/findSessionRow";
 import { SessionFace } from "../identity";
 import { TranscribeSwitch } from "./TranscribePanel";
 import { TranscriptTurnList } from "./TranscriptTurns";
@@ -629,7 +630,7 @@ export const RoomThread = memo(function RoomThread({
             <span className="rt-chip" title="Joining the room">
               <FeedChip
                 route={{ kind: joining.kind === "new-session" ? "session" : joining.kind, target: "", mode: "live" }}
-                label={joining.kind === "new-session" ? "new agent" : "label" in joining ? joining.label : undefined}
+                label={joining.kind === "new-session" ? NEW_AGENT_NAME : "label" in joining ? joining.label : undefined}
                 removable={false}
                 onRemove={() => {}}
               />
