@@ -248,16 +248,18 @@ export async function livePriorities(ctx: { db: any }, userId: Id<"users">, work
 }
 
 /**
- * A session's pin as it stood at `now`. A live pass's `now` is the clock, so
- * it sees the pin as it is, none when the person cleared it. A calibration
- * replay of a past window runs with `now` behind the clock: a pin written
- * after it is the future and is withheld, and the session's newest pin event
- * in the window stands in.
+ * A session's pin for the pass. A live pass (`asOf` null) sees the pin as it
+ * is, none when the person cleared it. A calibration replay of a past window
+ * passes its `now` as `asOf` and sees the pin as it stood then: the current
+ * pin when it was written by then, else the newest pin event at or before it,
+ * with its status. Nothing written after the window reaches a replay.
  */
-function pinAsOf(conv: Doc<"conversations">, events: PassSession["pin_events"], now: number): PassSession["pin"] {
-  if ((conv.thread_state_at ?? 0) <= now) return conv.thread_state ? { text: conv.thread_state, ...(conv.thread_state_status ? { status: conv.thread_state_status } : {}) } : null;
-  const last = events.at(-1);
-  return last ? { text: last.text } : null;
+async function pinAsOf(ctx: { db: any }, conv: Doc<"conversations">, asOf: number | null): Promise<PassSession["pin"]> {
+  if (asOf === null || (conv.thread_state && (conv.thread_state_at ?? 0) <= asOf)) {
+    return conv.thread_state ? { text: conv.thread_state, ...(conv.thread_state_status ? { status: conv.thread_state_status } : {}) } : null;
+  }
+  const then: Doc<"thread_state_events"> | null = await ctx.db.query("thread_state_events").withIndex("by_conversation_at", (q: any) => q.eq("conversation_id", conv._id).lte("at", asOf)).order("desc").first();
+  return then?.text ? { text: then.text, status: then.status } : null;
 }
 
 /**
@@ -344,7 +346,7 @@ export const passInputs = internalQuery({
         ...(await sessionKind(ctx, conv)),
         title: conv.title ?? "",
         first_prompt: conv.first_prompt ?? "",
-        pin: pinAsOf(conv, t.pin_events, now),
+        pin: await pinAsOf(ctx, conv, args.now ?? null),
         idle_summary: conv.idle_summary ?? null,
         last_active: t.last,
         tasks: await sessionTasks(ctx, conv, args.workspace),
